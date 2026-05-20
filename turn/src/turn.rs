@@ -131,12 +131,18 @@ pub struct TurnReceipt {
     pub computrons_used: u64,
     /// Number of actions in the forest.
     pub action_count: usize,
+    /// Hash of the previous receipt in this agent's chain, or None for the first receipt.
+    /// This links receipts into a per-agent chain for proof-carrying state.
+    pub previous_receipt_hash: Option<[u8; 32]>,
+    /// The agent cell that produced this receipt (for chain attribution).
+    pub agent: CellId,
 }
 
 impl TurnReceipt {
     /// Compute the BLAKE3 hash of this receipt (for chaining/inclusion proofs).
     pub fn receipt_hash(&self) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new();
+        hasher.update(b"pyana-receipt-v1");
         hasher.update(&self.turn_hash);
         hasher.update(&self.forest_hash);
         hasher.update(&self.pre_state_hash);
@@ -145,6 +151,16 @@ impl TurnReceipt {
         hasher.update(&self.effects_hash);
         hasher.update(&self.computrons_used.to_le_bytes());
         hasher.update(&(self.action_count as u64).to_le_bytes());
+        hasher.update(self.agent.as_bytes());
+        match &self.previous_receipt_hash {
+            Some(h) => {
+                hasher.update(&[1u8]);
+                hasher.update(h);
+            }
+            None => {
+                hasher.update(&[0u8]);
+            }
+        }
         *hasher.finalize().as_bytes()
     }
 }

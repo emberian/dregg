@@ -304,6 +304,8 @@ impl TurnExecutor {
             effects_hash,
             computrons_used,
             action_count: turn.call_forest.action_count(),
+            previous_receipt_hash: None,
+            agent: turn.agent,
         };
 
         TurnResult::Committed {

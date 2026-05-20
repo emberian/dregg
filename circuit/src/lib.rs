@@ -78,6 +78,7 @@ pub mod presentation;
 pub mod mock_prover;
 pub mod ivc;
 
+pub mod note_spending_air;
 pub mod stark;
 
 #[cfg(feature = "plonky3")]
@@ -85,6 +86,9 @@ pub mod plonky3_prover;
 
 #[cfg(feature = "plonky3")]
 pub mod plonky3_recursion;
+
+#[cfg(feature = "plonky3")]
+pub mod plonky3_verifier_air;
 
 pub mod backends;
 
@@ -95,8 +99,14 @@ mod tests;
 pub use field::BabyBear;
 pub use mock_prover::{Air, MockProof, MockProver, MockProofResult};
 pub use presentation::{PresentationAir, PresentationProof, PresentationWitness, PresentationVerification, RealPresentationProof, AuthorizationProof, prove_authorization};
-pub use multi_step_air::{MultiStepDerivationAir, MultiStepWitness, ALLOW_PREDICATE};
+pub use multi_step_air::{
+    MultiStepDerivationAir, MultiStepStarkAir, MultiStepWitness, ALLOW_PREDICATE,
+    prove_authorization_stark, verify_authorization_stark,
+};
 pub use ivc::{
     IvcProof, IvcBuilder, IvcVerification, IvcPresentationProof,
     prove_ivc, verify_ivc, FoldDelta,
+};
+pub use note_spending_air::{
+    NoteSpendingAir, NoteSpendingWitness, prove_note_spend, verify_note_spend,
 };

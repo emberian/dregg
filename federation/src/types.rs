@@ -312,6 +312,43 @@ impl AttestedRoot {
     }
 }
 
+impl AttestedRoot {
+    /// Verify an agent's state using a receipt chain as an alternative to
+    /// Merkle membership proof.
+    ///
+    /// This is the "federation exit" path: an agent with a valid receipt chain
+    /// can prove their state without the federation vouching for it. The chain
+    /// proves that the state was produced by a sequence of valid, executor-checked
+    /// turns from genesis.
+    ///
+    /// # Arguments
+    ///
+    /// * `receipts` - The agent's full receipt chain from genesis.
+    /// * `expected_post_state` - The state commitment the chain should prove.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if the receipt chain is valid and its head matches the expected
+    /// state commitment. This is equivalent to a Merkle membership proof for the
+    /// purposes of state verification.
+    pub fn verify_via_receipt_chain(
+        receipts: &[pyana_turn::TurnReceipt],
+        expected_post_state: Option<[u8; 32]>,
+    ) -> Result<(), pyana_turn::VerifyError> {
+        let head_state = pyana_turn::verify_receipt_chain_head(receipts)?;
+        if let Some(expected) = expected_post_state {
+            if head_state != expected {
+                return Err(pyana_turn::VerifyError::StateChainBreak {
+                    index: receipts.len() - 1,
+                    expected_pre_state: expected,
+                    actual_pre_state: head_state,
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
 impl fmt::Display for AttestedRoot {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.qc.is_some() {

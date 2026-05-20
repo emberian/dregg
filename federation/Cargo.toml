@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 pyana-commit = { path = "../commit" }
+pyana-turn = { path = "../turn" }
 pyana-types = { path = "../types" }
 hints = { path = "../hints" }
 blake3 = "1"

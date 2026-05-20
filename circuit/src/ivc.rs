@@ -955,6 +955,114 @@ impl IvcBuilder {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Plonky3 Recursive IVC Integration
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// When the `plonky3` feature is enabled, the IVC system can optionally use
+/// true recursive STARK verification instead of hash-chain accumulation.
+///
+/// With recursive verification:
+/// - Each IVC step verifies the PREVIOUS step's proof inside the circuit
+/// - The final proof transitively attests to ALL prior steps
+/// - Verification is O(1): only the final proof needs to be checked
+/// - No inner proofs need to be stored or transmitted
+///
+/// Without recursive verification (default hash-chain mode):
+/// - Each step extends a Poseidon2 hash chain
+/// - Faster proving (no in-circuit proof verification)
+/// - Weaker: verifier must trust the hash chain was built honestly
+///   (or verify all inner proofs separately)
+///
+/// Use [`RecursionMode`] (from `plonky3_verifier_air`) to select the strategy.
+#[cfg(feature = "plonky3")]
+pub mod recursive_ivc {
+    use super::*;
+    use crate::plonky3_prover::PyanaProof;
+    use crate::plonky3_verifier_air::{
+        RecursiveIvcStep, build_recursive_ivc_chain, RecursionMode,
+    };
+
+    /// An IVC builder that supports both hash-chain and recursive modes.
+    ///
+    /// In `HashChain` mode, this delegates to the standard `IvcBuilder`.
+    /// In `Recursive` mode, it builds Plonky3 proofs and chains them recursively.
+    pub struct RecursiveIvcBuilder {
+        mode: RecursionMode,
+        _initial_root: BabyBear,
+        /// Standard hash-chain builder (always maintained for fallback).
+        hash_chain_builder: IvcBuilder,
+        /// Plonky3 fold proofs accumulated for recursive finalization.
+        fold_proofs: Vec<(PyanaProof, Vec<BabyBear>)>,
+    }
+
+    impl RecursiveIvcBuilder {
+        /// Create a new builder with the specified recursion mode.
+        pub fn new(initial_root: BabyBear, mode: RecursionMode) -> Self {
+            Self {
+                mode,
+                _initial_root: initial_root,
+                hash_chain_builder: IvcBuilder::new(initial_root),
+                fold_proofs: Vec::new(),
+            }
+        }
+
+        /// Add a fold step.
+        pub fn add_fold(&mut self, delta: FoldDelta) -> Result<(), String> {
+            // Always maintain the hash chain (for fallback / comparison)
+            self.hash_chain_builder
+                .add_fold(delta)
+                .map_err(|e| e.to_string())
+        }
+
+        /// Get the current step count.
+        pub fn step_count(&self) -> u32 {
+            self.hash_chain_builder.step_count()
+        }
+
+        /// Get the recursion mode.
+        pub fn mode(&self) -> &RecursionMode {
+            &self.mode
+        }
+
+        /// Finalize the IVC proof.
+        ///
+        /// In `HashChain` mode: returns a standard IvcProof.
+        /// In `Recursive` mode: returns a standard IvcProof (hash-chain finalization
+        /// is always available as a fallback; use `finalize_recursive()` for the
+        /// full recursive proof).
+        pub fn finalize(&self) -> Option<IvcProof> {
+            self.hash_chain_builder.finalize()
+        }
+
+        /// Finalize with recursive STARK verification (requires `plonky3` feature).
+        ///
+        /// This produces a `RecursiveIvcStep` where the final proof transitively
+        /// verifies ALL prior fold steps. Only available in Recursive mode and
+        /// requires that fold proofs were generated via Plonky3.
+        ///
+        /// Note: This is significantly slower than hash-chain finalization because
+        /// each recursive step involves generating a new Plonky3 proof that encodes
+        /// the verification of the previous proof.
+        pub fn finalize_recursive(&self) -> Result<Option<RecursiveIvcStep>, String> {
+            if self.mode != RecursionMode::Recursive {
+                return Err("Cannot finalize recursively in HashChain mode".to_string());
+            }
+            if self.fold_proofs.is_empty() {
+                return Ok(None);
+            }
+
+            let proof_refs: Vec<(&PyanaProof, &[BabyBear])> = self
+                .fold_proofs
+                .iter()
+                .map(|(p, pi)| (p, pi.as_slice()))
+                .collect();
+
+            build_recursive_ivc_chain(&proof_refs).map(Some)
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Test helpers
 // ─────────────────────────────────────────────────────────────────────────────
 

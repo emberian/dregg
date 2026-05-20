@@ -61,3 +61,4 @@ pub use pyana_types::{PublicKey, Signature};
 pub use pyana_cell::{CellId, Ledger};
 pub use pyana_token::{Attenuation, AuthRequest, AuthToken};
 pub use pyana_turn::{Turn, TurnReceipt, TurnBuilder, Effect};
+pub use pyana_turn::{VerifyError, verify_receipt_chain, verify_receipt_chain_head, verify_receipt_extends};

@@ -153,6 +153,7 @@ pub struct SignedTurn {
 /// - Token delegation (handing attenuated tokens to other agents)
 /// - Turn signing (authorizing execution requests)
 /// - Proof generation (ZK presentation of authorization)
+/// - Receipt chain management (proof-carrying state)
 pub struct AgentWallet {
     /// The agent's Ed25519 signing key.
     signing_key: ed25519_dalek::SigningKey,
@@ -162,6 +163,11 @@ pub struct AgentWallet {
     tokens: Vec<HeldToken>,
     /// Counter for generating unique token IDs.
     next_token_id: u64,
+    /// The agent's receipt chain: a linked sequence of TurnReceipts proving
+    /// the complete history of state transitions from genesis. This is the
+    /// proof-carrying state representation — anyone can verify the chain
+    /// without contacting a federation.
+    receipt_chain: Vec<pyana_turn::TurnReceipt>,
 }
 
 impl AgentWallet {
@@ -191,6 +197,7 @@ impl AgentWallet {
             public_key,
             tokens: Vec::new(),
             next_token_id: 0,
+            receipt_chain: Vec::new(),
         }
     }
 
@@ -345,6 +352,65 @@ impl AgentWallet {
     /// is added to the wallet's held tokens.
     pub fn receive_delegation(&mut self, delegated: DelegatedToken) {
         self.tokens.push(delegated.token);
+    }
+
+    // =========================================================================
+    // Receipt Chain (Proof-Carrying State)
+    // =========================================================================
+
+    /// Append a receipt to this wallet's chain after a successful turn execution.
+    ///
+    /// The receipt's `previous_receipt_hash` will be set to the hash of the
+    /// current chain head (or None if this is the first receipt). The receipt's
+    /// `agent` field must match this wallet's agent identity for the given domain.
+    ///
+    /// This is the primary method for building the proof-carrying state chain.
+    /// Call this after `TurnExecutor::execute()` returns a committed result.
+    pub fn append_receipt(&mut self, mut receipt: pyana_turn::TurnReceipt) {
+        // Link to the previous receipt.
+        receipt.previous_receipt_hash = self.receipt_chain.last().map(|r| r.receipt_hash());
+        self.receipt_chain.push(receipt);
+    }
+
+    /// Get the head (most recent) receipt in this wallet's chain.
+    ///
+    /// Returns `None` if no turns have been executed yet (empty chain).
+    pub fn receipt_head(&self) -> Option<&pyana_turn::TurnReceipt> {
+        self.receipt_chain.last()
+    }
+
+    /// Get the number of receipts in this wallet's chain.
+    ///
+    /// This is the number of successfully committed turns in this agent's history.
+    pub fn receipt_chain_length(&self) -> usize {
+        self.receipt_chain.len()
+    }
+
+    /// Get the full receipt chain for verification or export.
+    ///
+    /// The chain can be presented to any verifier who can check its integrity
+    /// using [`pyana_turn::verify_receipt_chain`] without contacting a federation.
+    pub fn receipt_chain(&self) -> &[pyana_turn::TurnReceipt] {
+        &self.receipt_chain
+    }
+
+    /// Get the current state commitment (post_state_hash of the chain head).
+    ///
+    /// This is the state that the receipt chain proves. Returns `None` if the
+    /// chain is empty.
+    pub fn current_state_commitment(&self) -> Option<[u8; 32]> {
+        self.receipt_chain.last().map(|r| r.post_state_hash)
+    }
+
+    /// Verify this wallet's own receipt chain integrity.
+    ///
+    /// Returns `Ok(())` if the chain is valid, or an error describing the break.
+    /// An empty chain is considered valid (no receipts to verify).
+    pub fn verify_own_chain(&self) -> Result<(), pyana_turn::VerifyError> {
+        if self.receipt_chain.is_empty() {
+            return Ok(());
+        }
+        pyana_turn::verify_receipt_chain(&self.receipt_chain)
     }
 
     // =========================================================================
@@ -704,6 +770,125 @@ impl std::fmt::Debug for AgentWallet {
         f.debug_struct("AgentWallet")
             .field("public_key", &self.public_key)
             .field("tokens_held", &self.tokens.len())
+            .field("receipt_chain_length", &self.receipt_chain.len())
             .finish()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyana_turn::TurnReceipt;
+
+    /// Helper: create a mock receipt with given state hashes.
+    fn mock_receipt(
+        agent: CellId,
+        pre_state: [u8; 32],
+        post_state: [u8; 32],
+    ) -> TurnReceipt {
+        TurnReceipt {
+            turn_hash: [0u8; 32],
+            forest_hash: [0u8; 32],
+            pre_state_hash: pre_state,
+            post_state_hash: post_state,
+            timestamp: 1000,
+            effects_hash: [0u8; 32],
+            computrons_used: 50,
+            action_count: 1,
+            previous_receipt_hash: None,
+            agent,
+        }
+    }
+
+    #[test]
+    fn test_wallet_receipt_chain_empty() {
+        let wallet = AgentWallet::new();
+        assert_eq!(wallet.receipt_chain_length(), 0);
+        assert!(wallet.receipt_head().is_none());
+        assert!(wallet.current_state_commitment().is_none());
+        assert!(wallet.verify_own_chain().is_ok());
+    }
+
+    #[test]
+    fn test_wallet_append_single_receipt() {
+        let mut wallet = AgentWallet::new();
+        let cell_id = wallet.cell_id("test");
+        let receipt = mock_receipt(cell_id, [1u8; 32], [2u8; 32]);
+
+        wallet.append_receipt(receipt);
+
+        assert_eq!(wallet.receipt_chain_length(), 1);
+        assert!(wallet.receipt_head().is_some());
+        assert_eq!(wallet.receipt_head().unwrap().post_state_hash, [2u8; 32]);
+        assert_eq!(wallet.current_state_commitment(), Some([2u8; 32]));
+        // Genesis receipt should have None as previous.
+        assert_eq!(wallet.receipt_head().unwrap().previous_receipt_hash, None);
+        assert!(wallet.verify_own_chain().is_ok());
+    }
+
+    #[test]
+    fn test_wallet_append_chain_links_correctly() {
+        let mut wallet = AgentWallet::new();
+        let cell_id = wallet.cell_id("test");
+
+        // Append first receipt.
+        let r1 = mock_receipt(cell_id, [1u8; 32], [2u8; 32]);
+        wallet.append_receipt(r1);
+
+        // Append second receipt (pre_state matches first post_state).
+        let r2 = mock_receipt(cell_id, [2u8; 32], [3u8; 32]);
+        wallet.append_receipt(r2);
+
+        assert_eq!(wallet.receipt_chain_length(), 2);
+        assert_eq!(wallet.current_state_commitment(), Some([3u8; 32]));
+
+        // The second receipt should have previous_receipt_hash linking to the first.
+        let chain = wallet.receipt_chain();
+        assert_eq!(chain[0].previous_receipt_hash, None);
+        assert_eq!(chain[1].previous_receipt_hash, Some(chain[0].receipt_hash()));
+
+        assert!(wallet.verify_own_chain().is_ok());
+    }
+
+    #[test]
+    fn test_wallet_chain_of_five() {
+        let mut wallet = AgentWallet::new();
+        let cell_id = wallet.cell_id("test");
+
+        let mut state = [0u8; 32];
+        for i in 0..5u8 {
+            let pre = state;
+            state[0] = i + 1;
+            let post = state;
+            let receipt = mock_receipt(cell_id, pre, post);
+            wallet.append_receipt(receipt);
+        }
+
+        assert_eq!(wallet.receipt_chain_length(), 5);
+        assert!(wallet.verify_own_chain().is_ok());
+
+        // Verify using the standalone function too.
+        let chain = wallet.receipt_chain();
+        assert!(pyana_turn::verify_receipt_chain(chain).is_ok());
+    }
+
+    #[test]
+    fn test_wallet_verify_chain_with_external_function() {
+        let mut wallet = AgentWallet::new();
+        let cell_id = wallet.cell_id("test");
+
+        let r1 = mock_receipt(cell_id, [1u8; 32], [2u8; 32]);
+        wallet.append_receipt(r1);
+
+        let r2 = mock_receipt(cell_id, [2u8; 32], [3u8; 32]);
+        wallet.append_receipt(r2);
+
+        let r3 = mock_receipt(cell_id, [3u8; 32], [4u8; 32]);
+        wallet.append_receipt(r3);
+
+        // External verification.
+        let head = pyana_turn::verify_receipt_chain_head(wallet.receipt_chain()).unwrap();
+        assert_eq!(head, [4u8; 32]);
+    }
+}
+

@@ -43,6 +43,7 @@ pub mod executor;
 pub mod forest;
 pub(crate) mod journal;
 pub mod turn;
+pub mod verify;
 
 #[cfg(test)]
 mod tests;
@@ -55,3 +56,4 @@ pub use error::TurnError;
 pub use executor::{ComputronCosts, ProofVerifier, TurnExecutor};
 pub use forest::{CallForest, CallTree};
 pub use turn::{Turn, TurnReceipt, TurnResult};
+pub use verify::{VerifyError, verify_receipt_chain, verify_receipt_chain_head, verify_receipt_extends};
