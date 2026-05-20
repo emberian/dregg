@@ -3508,3 +3508,276 @@ fn test_permission_change_doesnt_affect_same_action() {
     assert_eq!(target.permissions.send, AuthRequired::Signature,
         "permissions must not be changed when action is rejected");
 }
+
+// =============================================================================
+// Test: proved_state set to true when all 8 fields set by proof authorization
+// =============================================================================
+
+#[test]
+fn test_proved_state_set_by_proof() {
+    let mut ledger = Ledger::new();
+    let (agent, _) = make_open_cell(1, 5000);
+    let agent_id = agent.id;
+
+    let (mut target, _) = make_open_cell(2, 0);
+    target.permissions = Permissions::zkapp();
+    target.verification_key = Some(VerificationKey::new(vec![1, 2, 3, 4]));
+    let target_id = target.id;
+
+    let mut agent_with_cap = agent;
+    agent_with_cap.capabilities.grant(target_id, AuthRequired::None);
+    ledger.insert_cell(agent_with_cap).unwrap();
+    ledger.insert_cell(target).unwrap();
+
+    // Verify initial proved_state is false.
+    assert!(!ledger.get(&target_id).unwrap().state.proved_state);
+
+    let mut executor = zero_cost_executor();
+    executor.set_proof_verifier(Box::new(AlwaysAcceptVerifier));
+
+    // Set ALL 8 fields with proof authorization.
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action = builder.action(target_id, "prove_all");
+        action.authorize_proof(vec![1, 2, 3, 4]);
+        for i in 0..STATE_SLOTS {
+            action.set_field(target_id, i, [(i + 1) as u8; 32]);
+        }
+    }
+    let turn = builder.fee(500).build();
+
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed());
+
+    // proved_state should now be true.
+    assert!(ledger.get(&target_id).unwrap().state.proved_state);
+}
+
+// =============================================================================
+// Test: proved_state cleared to false by signature authorization
+// =============================================================================
+
+#[test]
+fn test_proved_state_cleared_by_signature() {
+    let mut ledger = Ledger::new();
+    let (agent, _) = make_open_cell(1, 10000);
+    let agent_id = agent.id;
+
+    let (mut target, _) = make_open_cell(2, 0);
+    target.permissions = Permissions::zkapp();
+    target.verification_key = Some(VerificationKey::new(vec![1, 2, 3, 4]));
+    let target_id = target.id;
+
+    let mut agent_with_cap = agent;
+    agent_with_cap.capabilities.grant(target_id, AuthRequired::None);
+    ledger.insert_cell(agent_with_cap).unwrap();
+    ledger.insert_cell(target).unwrap();
+
+    let mut executor = zero_cost_executor();
+    executor.set_proof_verifier(Box::new(AlwaysAcceptVerifier));
+
+    // First: set all 8 fields by proof -> proved_state = true.
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action = builder.action(target_id, "prove_all");
+        action.authorize_proof(vec![1, 2, 3, 4]);
+        for i in 0..STATE_SLOTS {
+            action.set_field(target_id, i, [(i + 1) as u8; 32]);
+        }
+    }
+    let turn = builder.fee(500).build();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed());
+    assert!(ledger.get(&target_id).unwrap().state.proved_state);
+
+    // Now change permissions to allow None auth for set_state so we can test non-proof field set.
+    ledger.get_mut(&target_id).unwrap().permissions.set_state = AuthRequired::None;
+
+    // Second: set a field with no authorization (not proof) -> proved_state = false.
+    let mut builder = TurnBuilder::new(agent_id, 1);
+    {
+        let action = builder.action(target_id, "non_proof_set");
+        action.set_field(target_id, 0, [0xFF; 32]);
+    }
+    let turn = builder.fee(500).build();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed());
+
+    // proved_state should now be false.
+    assert!(!ledger.get(&target_id).unwrap().state.proved_state);
+}
+
+// =============================================================================
+// Test: proved_state unchanged when no fields are modified
+// =============================================================================
+
+#[test]
+fn test_proved_state_unchanged_when_no_fields_modified() {
+    let mut ledger = Ledger::new();
+    let (agent, _) = make_open_cell(1, 10000);
+    let agent_id = agent.id;
+
+    let (mut target, _) = make_open_cell(2, 500);
+    target.permissions = Permissions::zkapp();
+    target.verification_key = Some(VerificationKey::new(vec![1, 2, 3, 4]));
+    let target_id = target.id;
+
+    let mut agent_with_cap = agent;
+    agent_with_cap.capabilities.grant(target_id, AuthRequired::None);
+    ledger.insert_cell(agent_with_cap).unwrap();
+    ledger.insert_cell(target).unwrap();
+
+    let mut executor = zero_cost_executor();
+    executor.set_proof_verifier(Box::new(AlwaysAcceptVerifier));
+
+    // Set all 8 fields by proof -> proved_state = true.
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action = builder.action(target_id, "prove_all");
+        action.authorize_proof(vec![1, 2, 3, 4]);
+        for i in 0..STATE_SLOTS {
+            action.set_field(target_id, i, [(i + 1) as u8; 32]);
+        }
+    }
+    let turn = builder.fee(500).build();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed());
+    assert!(ledger.get(&target_id).unwrap().state.proved_state);
+
+    // Now perform an action that doesn't touch any fields (just emit an event).
+    // This should NOT clear proved_state.
+    let mut builder = TurnBuilder::new(agent_id, 1);
+    {
+        let action = builder.action(target_id, "emit_only");
+        action.authorize_proof(vec![5, 6, 7, 8]);
+        action.emit_event(target_id, "hello", vec![[42u8; 32]]);
+    }
+    let turn = builder.fee(500).build();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed());
+
+    // proved_state should still be true (no fields modified).
+    assert!(ledger.get(&target_id).unwrap().state.proved_state);
+}
+
+// =============================================================================
+// Test: precondition proved_state = true passes when true
+// =============================================================================
+
+#[test]
+fn test_precondition_proved_state_true() {
+    let mut ledger = Ledger::new();
+    let (agent, _) = make_open_cell(1, 10000);
+    let agent_id = agent.id;
+
+    let (mut target, _) = make_open_cell(2, 0);
+    target.permissions = Permissions::zkapp();
+    target.verification_key = Some(VerificationKey::new(vec![1, 2, 3, 4]));
+    let target_id = target.id;
+
+    let mut agent_with_cap = agent;
+    agent_with_cap.capabilities.grant(target_id, AuthRequired::None);
+    ledger.insert_cell(agent_with_cap).unwrap();
+    ledger.insert_cell(target).unwrap();
+
+    let mut executor = zero_cost_executor();
+    executor.set_proof_verifier(Box::new(AlwaysAcceptVerifier));
+
+    // Set all 8 fields by proof -> proved_state = true.
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action = builder.action(target_id, "prove_all");
+        action.authorize_proof(vec![1, 2, 3, 4]);
+        for i in 0..STATE_SLOTS {
+            action.set_field(target_id, i, [(i + 1) as u8; 32]);
+        }
+    }
+    let turn = builder.fee(500).build();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed());
+
+    // Now use a precondition that asserts proved_state = true.
+    let mut builder = TurnBuilder::new(agent_id, 1);
+    {
+        let action = builder.action(target_id, "check_proved");
+        action.authorize_proof(vec![9, 10]);
+        action.require_proved_state(true);
+        action.emit_event(target_id, "checked", vec![]);
+    }
+    let turn = builder.fee(500).build();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed());
+}
+
+// =============================================================================
+// Test: precondition proved_state = true fails when false
+// =============================================================================
+
+#[test]
+fn test_precondition_proved_state_false_rejects() {
+    let (mut ledger, agent_id, target_id) = setup_two_open_cells(5000, 0);
+    let executor = zero_cost_executor();
+
+    // proved_state starts as false for a new cell.
+    assert!(!ledger.get(&target_id).unwrap().state.proved_state);
+
+    // Use a precondition that asserts proved_state = true (should fail).
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action = builder.action(target_id, "check_proved");
+        action.require_proved_state(true);
+        action.set_field(target_id, 0, [1u8; 32]);
+    }
+    let turn = builder.fee(500).build();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_rejected());
+
+    let (error, _) = result.unwrap_rejected();
+    match error {
+        TurnError::PreconditionFailed { description } => {
+            assert!(description.contains("ProvedStateMismatch"), "got: {description}");
+        }
+        other => panic!("expected PreconditionFailed, got {other:?}"),
+    }
+}
+
+// =============================================================================
+// Test: partial proof fields (< 8) does not set proved_state
+// =============================================================================
+
+#[test]
+fn test_partial_proof_fields_doesnt_set_proved() {
+    let mut ledger = Ledger::new();
+    let (agent, _) = make_open_cell(1, 5000);
+    let agent_id = agent.id;
+
+    let (mut target, _) = make_open_cell(2, 0);
+    target.permissions = Permissions::zkapp();
+    target.verification_key = Some(VerificationKey::new(vec![1, 2, 3, 4]));
+    let target_id = target.id;
+
+    let mut agent_with_cap = agent;
+    agent_with_cap.capabilities.grant(target_id, AuthRequired::None);
+    ledger.insert_cell(agent_with_cap).unwrap();
+    ledger.insert_cell(target).unwrap();
+
+    let mut executor = zero_cost_executor();
+    executor.set_proof_verifier(Box::new(AlwaysAcceptVerifier));
+
+    // Set only 3 out of 8 fields with proof authorization.
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action = builder.action(target_id, "partial_prove");
+        action.authorize_proof(vec![1, 2, 3, 4]);
+        action.set_field(target_id, 0, [10u8; 32]);
+        action.set_field(target_id, 1, [20u8; 32]);
+        action.set_field(target_id, 2, [30u8; 32]);
+    }
+    let turn = builder.fee(500).build();
+
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed());
+
+    // proved_state should still be false (only 3/8 fields set).
+    assert!(!ledger.get(&target_id).unwrap().state.proved_state);
+}
