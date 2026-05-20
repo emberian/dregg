@@ -2282,9 +2282,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 5.3.0",
  "wasip2",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -2294,11 +2296,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0de51e6874e94e7bf76d726fc5d13ba782deca734ff60d5bb2fb2607c7406555"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 6.0.0",
  "rand_core 0.10.1",
  "wasip2",
  "wasip3",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -2948,7 +2952,7 @@ dependencies = [
  "base64 0.22.1",
  "chacha20poly1305",
  "criterion",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "hmac 0.12.1",
  "rmp-serde",
  "serde",
@@ -4086,7 +4090,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "ed25519-dalek",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "postcard",
  "pyana-bridge",
  "pyana-cell",
@@ -4105,7 +4109,7 @@ name = "pyana-store"
 version = "0.1.0"
 dependencies = [
  "blake3",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "postcard",
  "pyana-types",
  "redb",
@@ -4162,13 +4166,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "pyana-wasm"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.2.17",
+ "getrandom 0.3.4",
+ "getrandom 0.4.2",
+ "js-sys",
+ "macaroon",
+ "pyana-circuit",
+ "pyana-commit",
+ "pyana-trace",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_json",
+ "token",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "pyana-wire"
 version = "0.1.0"
 dependencies = [
  "blake3",
  "criterion",
  "ed25519-dalek",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "postcard",
  "pyana-circuit",
  "pyana-federation",
@@ -4629,7 +4653,7 @@ dependencies = [
  "aes-gcm",
  "base64 0.22.1",
  "directories",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "keyring",
  "serde",
  "serde_json",
@@ -4702,6 +4726,17 @@ dependencies = [
  "base64 0.22.1",
  "hex",
  "serde",
+]
+
+[[package]]
+name = "serde-wasm-bindgen"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8302e169f0eddcc139c70f139d19d6467353af16f9fce27e8c30158036a1e16b"
+dependencies = [
+ "js-sys",
+ "serde",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -5097,7 +5132,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -5257,7 +5292,7 @@ dependencies = [
  "biscuit-auth",
  "blake3",
  "criterion",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "globset",
  "macaroon",
  "pyana-commit",
@@ -5277,7 +5312,7 @@ dependencies = [
  "chacha20poly1305",
  "criterion",
  "directories",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "postcard",
  "serde",
  "thiserror 2.0.18",

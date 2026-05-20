@@ -1,0 +1,60 @@
+name: Nightly Features
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  binius:
+    name: Check (binius)
+    runs-on: ubuntu-latest
+    # NOTE: binius requires path deps to /Users/ember/src/binius/ — this job
+    # will fail until binius deps are published or vendored as git deps.
+    # Kept here as documentation of intent; enable when binius is available in CI.
+    if: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p pyana-circuit --features binius
+
+  plonky3:
+    name: Test (plonky3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-01-01
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p pyana-circuit --features plonky3
+
+  # NOTE: The `mina` feature requires path deps to /Users/ember/dev/proof-systems/
+  # and cannot be built in CI without vendoring or converting to git deps.
+  # The `halo2` and `nova` features use git deps and should work in CI.
+  halo2:
+    name: Check (halo2)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-01-01
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p pyana-circuit --features halo2
+
+  nova:
+    name: Check (nova)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-01-01
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p pyana-circuit --features nova

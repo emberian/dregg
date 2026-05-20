@@ -259,6 +259,21 @@ impl TurnExecutor {
             };
         }
 
+        // Check note conservation: for each asset type, sum of spent values must
+        // equal sum of created values. This is checked independently of the cell
+        // balance excess (notes are a separate value domain).
+        if let Err(error) = self.check_note_conservation(turn) {
+            journal.rollback(ledger);
+            return TurnResult::Rejected {
+                reason: TurnError::NoteConservationViolation {
+                    asset_type: error.0,
+                    inputs: error.1,
+                    outputs: error.2,
+                },
+                at_action: vec![],
+            };
+        }
+
         // Check excess conservation law: must be zero at turn end.
         if excess != 0 {
             journal.rollback(ledger);
@@ -1223,6 +1238,12 @@ impl TurnExecutor {
                 c.verification_key = new_vk.clone();
                 Ok(())
             }
+
+            // Note effects are recorded for conservation checking but do not
+            // modify the cell ledger directly. The note tree and nullifier set
+            // are updated by the note layer above the executor.
+            Effect::NoteSpend { .. } => Ok(()),
+            Effect::NoteCreate { .. } => Ok(()),
         }
     }
 
@@ -1295,6 +1316,8 @@ impl TurnExecutor {
             Effect::IncrementNonce { .. } => 0,
             Effect::SetPermissions { .. } => self.costs.effect_base,
             Effect::SetVerificationKey { .. } => self.costs.effect_base,
+            Effect::NoteSpend { .. } => self.costs.proof_verify, // note spends carry a proof
+            Effect::NoteCreate { .. } => self.costs.effect_base,
         };
         base.saturating_add(extra).saturating_add(
             (effect.data_bytes() as u64).saturating_mul(self.costs.per_byte),
@@ -1340,6 +1363,69 @@ impl TurnExecutor {
             }
         }
         *hasher.finalize().as_bytes()
+    }
+
+    /// Check note conservation across all effects in the turn.
+    ///
+    /// For each asset type that appears in NoteSpend/NoteCreate effects,
+    /// the total value spent must equal the total value created.
+    /// Returns Ok(()) if conservation holds, or Err((asset_type, inputs, outputs)).
+    fn check_note_conservation(&self, turn: &Turn) -> Result<(), (u64, u64, u64)> {
+        let mut inputs: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
+        let mut outputs: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
+
+        self.collect_note_effects(&turn.call_forest, &mut inputs, &mut outputs);
+
+        // Check conservation for each asset type.
+        let all_asset_types: std::collections::HashSet<u64> = inputs.keys()
+            .chain(outputs.keys())
+            .copied()
+            .collect();
+
+        for asset_type in all_asset_types {
+            let input_total = inputs.get(&asset_type).copied().unwrap_or(0);
+            let output_total = outputs.get(&asset_type).copied().unwrap_or(0);
+            if input_total != output_total {
+                return Err((asset_type, input_total, output_total));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Recursively collect NoteSpend/NoteCreate effects from the call forest.
+    fn collect_note_effects(
+        &self,
+        forest: &crate::forest::CallForest,
+        inputs: &mut std::collections::HashMap<u64, u64>,
+        outputs: &mut std::collections::HashMap<u64, u64>,
+    ) {
+        for tree in &forest.roots {
+            self.collect_note_effects_tree(tree, inputs, outputs);
+        }
+    }
+
+    /// Recursively collect note effects from a single tree.
+    fn collect_note_effects_tree(
+        &self,
+        tree: &CallTree,
+        inputs: &mut std::collections::HashMap<u64, u64>,
+        outputs: &mut std::collections::HashMap<u64, u64>,
+    ) {
+        for effect in &tree.action.effects {
+            match effect {
+                Effect::NoteSpend { value, asset_type, .. } => {
+                    *inputs.entry(*asset_type).or_insert(0) += value;
+                }
+                Effect::NoteCreate { value, asset_type, .. } => {
+                    *outputs.entry(*asset_type).or_insert(0) += value;
+                }
+                _ => {}
+            }
+        }
+        for child in &tree.children {
+            self.collect_note_effects_tree(child, inputs, outputs);
+        }
     }
 
     /// Compute the BLAKE3 hash of all effect hashes combined.

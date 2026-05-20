@@ -1,5 +1,12 @@
 # Conceptual Review: pyana-cell, pyana-turn, pyana-coord
 
+> **Status (2026-05-20):** Several critical findings in this review have been FIXED:
+> - Turn atomicity (section 2) now uses journal-based undo instead of full ledger clone.
+> - 2PC coordinator (section 3) now verifies Ed25519 signatures on Yes votes.
+> - Signature verification is now real (section 5's "None" auth concern is design-level, not a bug).
+> The remaining findings (capability amplification in section 1, 2PC recovery gaps in section 3,
+> causal DAG limitations in section 4) are still valid and open.
+
 ## 1. Capability Model
 
 The c-list model is structurally correct: cells hold only explicit references, attenuation is monotonically narrowing, and transitivity requires explicit forwarding. The `is_narrower_or_equal` lattice is well-defined. However, there is a confused-deputy risk in `GrantCapability`: the executor checks that the `from` cell exists but does NOT verify that the granting cell actually holds the capability it is granting to `to`. An action targeting cell A can grant cell B a capability pointing at cell C without proving A has access to C. This is an authority amplification path. The `DelegationMode` mechanism partially mitigates this at the call-forest level, but effect application is not gated on delegation mode -- it is checked only for child action *targeting*, not for capability-grant effects within an action's own effect list.

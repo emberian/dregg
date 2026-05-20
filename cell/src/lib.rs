@@ -14,6 +14,8 @@ pub mod capability;
 pub mod cell;
 pub mod id;
 pub mod ledger;
+pub mod note;
+pub mod nullifier_set;
 pub mod permissions;
 pub mod preconditions;
 pub mod program;
@@ -27,6 +29,8 @@ pub use capability::{CapabilityRef, CapabilitySet, is_attenuation};
 pub use cell::{Cell, VerificationKey};
 pub use id::CellId;
 pub use ledger::{CellStateDelta, Ledger, LedgerDelta, LedgerError, MembershipProof, Side};
+pub use note::{Note, NoteCommitment, NoteError, Nullifier, PositionedNote};
+pub use nullifier_set::{NonMembershipProof, NullifierSet};
 pub use permissions::{Action, AuthKind, AuthRequired, Permissions};
 pub use preconditions::{
     CellStatePrecondition, EvalContext, NetworkPrecondition, Preconditions, TimeRange,

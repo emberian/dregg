@@ -1,0 +1,50 @@
+name: Benchmarks
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  bench:
+    name: Run benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-01-01
+      - uses: Swatinem/rust-cache@v2
+
+      # Run criterion benchmarks for each crate that has them.
+      # NOTE: hints benchmarks are excluded — they require large fixture files
+      # (committee*.json, *.bincode) that are gitignored and not available in CI.
+      - name: Bench circuit (mock backend)
+        run: cargo bench -p pyana-circuit
+
+      - name: Bench bridge
+        run: cargo bench -p pyana-bridge
+
+      - name: Bench token
+        run: cargo bench -p token
+
+      - name: Bench federation
+        run: cargo bench -p pyana-federation
+
+      - name: Bench wire
+        run: cargo bench -p pyana-wire
+
+      - name: Bench macaroon
+        run: cargo bench -p macaroon
+
+      - name: Bench tokenizer
+        run: cargo bench -p tokenizer
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-reports
+          path: target/criterion/
+          retention-days: 30

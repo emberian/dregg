@@ -4,7 +4,7 @@
 //! Each action targets a cell, specifies a method, carries authorization, declares
 //! preconditions, and produces effects.
 
-use pyana_cell::{CellId, CapabilityRef, Preconditions};
+use pyana_cell::{CellId, CapabilityRef, NoteCommitment, Nullifier, Preconditions};
 use pyana_cell::state::FieldElement;
 use serde::{Deserialize, Serialize};
 
@@ -177,6 +177,28 @@ pub enum Effect {
         cell: CellId,
         new_vk: Option<pyana_cell::VerificationKey>,
     },
+    /// Spend (consume) a note by revealing its nullifier.
+    /// The proof must demonstrate: the nullifier corresponds to a valid note
+    /// in the note tree, and the spender has authority.
+    NoteSpend {
+        nullifier: Nullifier,
+        /// Root of the note tree at the time of proof generation.
+        note_tree_root: [u8; 32],
+        /// The value being released (for conservation tracking).
+        value: u64,
+        /// The asset type of the note being spent.
+        asset_type: u64,
+    },
+    /// Create a new note (add commitment to note tree).
+    NoteCreate {
+        commitment: NoteCommitment,
+        /// The value being locked in this note (for conservation tracking).
+        value: u64,
+        /// The asset type of the note being created.
+        asset_type: u64,
+        /// Encrypted note content (only recipient can decrypt).
+        encrypted_note: Vec<u8>,
+    },
 }
 
 /// An event emitted by an action.
@@ -320,6 +342,21 @@ impl Effect {
                     hasher.update(&[0u8]);
                 }
             }
+            Effect::NoteSpend { nullifier, note_tree_root, value, asset_type } => {
+                hasher.update(&[9u8]);
+                hasher.update(&nullifier.0);
+                hasher.update(note_tree_root);
+                hasher.update(&value.to_le_bytes());
+                hasher.update(&asset_type.to_le_bytes());
+            }
+            Effect::NoteCreate { commitment, value, asset_type, encrypted_note } => {
+                hasher.update(&[10u8]);
+                hasher.update(&commitment.0);
+                hasher.update(&value.to_le_bytes());
+                hasher.update(&asset_type.to_le_bytes());
+                hasher.update(&(encrypted_note.len() as u64).to_le_bytes());
+                hasher.update(encrypted_note);
+            }
         }
         *hasher.finalize().as_bytes()
     }
@@ -337,6 +374,10 @@ impl Effect {
             Effect::SetPermissions { .. } => 32 + 8 * 1, // cell + 8 permission fields
             Effect::SetVerificationKey { new_vk, .. } => {
                 32 + new_vk.as_ref().map_or(1, |vk| 1 + vk.data.len())
+            }
+            Effect::NoteSpend { .. } => 32 + 32 + 8 + 8, // nullifier + root + value + asset_type
+            Effect::NoteCreate { encrypted_note, .. } => {
+                32 + 8 + 8 + encrypted_note.len() // commitment + value + asset_type + ciphertext
             }
         }
     }

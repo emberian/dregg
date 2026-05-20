@@ -1,0 +1,11 @@
+[package]
+name = "pyana-sp1-program"
+version = "0.1.0"
+edition = "2021"
+# Note: SP1 guest programs use edition 2021 and target riscv32im-succinct-zkvm-elf.
+# They are built by sp1-build, NOT by the workspace's normal cargo build.
+
+[dependencies]
+sp1-zkvm = "6"
+serde = { version = "1", features = ["derive"] }
+blake3 = { version = "1", default-features = false }

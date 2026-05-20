@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Whitepaper — Pyana</title>
+  <meta name="description" content="Pyana whitepaper: design rationale and formal specification for distributed object-capability authorization with ZK proofs.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f1f17'/%3E%3Ctext x='16' y='22' font-size='16' text-anchor='middle' fill='%235b8a5a' font-family='monospace'%3E%CF%80%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="nav">
+  <span class="nav__mark">&pi;</span>
+  <span class="nav__name">Pyana</span>
+  <span class="nav__tag">distributed object-capability authorization</span>
+  <div class="nav__links">
+    <a class="nav__link" href="index.html">Home</a>
+    <a class="nav__link" href="docs.html">Docs</a>
+    <a class="nav__link nav__link--active" href="paper.html">Paper</a>
+    <a class="nav__link" href="demo.html">Demo</a>
+    <a class="nav__link" href="https://github.com/emberian/pyana">GitHub</a>
+  </div>
+</nav>
+
+<main class="wrap">
+  <div class="page-header">
+    <h1>Whitepaper</h1>
+    <p>Design rationale and formal specification for the Pyana authorization system. Covers the core insight (capability attenuation as IVC), the STARK proof construction, and the federation consensus model.</p>
+  </div>
+
+  <section>
+    <h2>Abstract</h2>
+    <p>We present Pyana, a distributed authorization system that combines object-capability semantics with zero-knowledge proofs to enable AI agents to prove authorization across organizational boundaries without revealing their delegation chain. The core insight is that capability attenuation &mdash; the monotonic narrowing of permissions through delegation &mdash; is structurally identical to incrementally verifiable computation, allowing ZK presentation to emerge naturally from the authorization model rather than being bolted on post hoc.</p>
+    <p>The system achieves sub-second proof generation (~24 KiB STARK proofs in 300&ndash;560ms), sub-millisecond verification, offline operation without blockchain liveness, and post-quantum security for external interfaces through exclusively hash-based verification.</p>
+  </section>
+
+  <section>
+    <h2>Paper (Typst source)</h2>
+    <p>The paper is authored in Typst. A rendered PDF will be available here when the first public version is finalized.</p>
+    <div class="placeholder" style="margin-top: var(--s5);">
+      <div class="placeholder__title">PDF pending</div>
+      <p>The paper source is in <code>paper/pyana.typ</code>. A compiled PDF will be hosted here on the next release.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Key references</h2>
+    <ul style="list-style: none; padding: 0;">
+      <li style="margin: var(--s3) 0; padding-left: 1.5em; text-indent: -1.5em; color: var(--fg2);">
+        <strong style="color: var(--ink)">Lewis-Pye &amp; Shapiro.</strong> Adaptive BFT consensus. The foundation for Pyana's <code>morpheus</code> federation layer.
+      </li>
+      <li style="margin: var(--s3) 0; padding-left: 1.5em; text-indent: -1.5em; color: var(--fg2);">
+        <strong style="color: var(--ink)">Stingray (arXiv:2501.06531).</strong> Bounded counters for budget enforcement without per-operation consensus.
+      </li>
+      <li style="margin: var(--s3) 0; padding-left: 1.5em; text-indent: -1.5em; color: var(--fg2);">
+        <strong style="color: var(--ink)">Mina Protocol.</strong> zkApp execution model. Pyana's Cells/Turns/Call Forests are adapted from Mina's architecture.
+      </li>
+      <li style="margin: var(--s3) 0; padding-left: 1.5em; text-indent: -1.5em; color: var(--fg2);">
+        <strong style="color: var(--ink)">Macaroons (Birgisson et al.).</strong> HMAC-chained authorization cookies. Pyana's token layer supports both Macaroon and Biscuit formats.
+      </li>
+    </ul>
+  </section>
+
+  <footer class="site-foot">
+    <div class="row">
+      <span>Pyana &middot; distributed object-capability authorization with ZK proofs</span>
+      <a href="https://github.com/emberian/pyana">GitHub</a>
+    </div>
+  </footer>
+</main>
+</body>
+</html>

@@ -1,0 +1,306 @@
+/* ============================================================
+   Pyana — site.css
+   Dark-first design in the Stella design language:
+   forest / parchment / lantern; Cormorant Garamond / Spectral / JetBrains Mono.
+   Self-contained (tokens inlined).
+   ============================================================ */
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,500&family=Spectral:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  /* ---- COLOR PRIMITIVES (dark-first) ---- */
+  --canopy:    #0f1f17;
+  --loam:      #1a2b22;
+  --moss:      #5b8a5a;
+  --fern:      #9bb87a;
+  --bark:      #8a6a47;
+  --parchment: #0d1a13;
+  --cream:     #152420;
+  --twilight:  #1a2838;
+  --lantern:   #d99a3f;
+  --mushroom:  #d4685c;
+  --moonlight: #9fb1bd;
+  --ink:       #e8e0d0;
+
+  /* ---- SEMANTIC ---- */
+  --bg:        var(--parchment);
+  --card:      var(--cream);
+  --fg:        var(--ink);
+  --fg2:       color-mix(in oklab, var(--ink) 72%, var(--parchment));
+  --fg3:       color-mix(in oklab, var(--ink) 48%, var(--parchment));
+  --fg4:       color-mix(in oklab, var(--ink) 30%, var(--parchment));
+  --line:      color-mix(in oklab, var(--ink) 12%, transparent);
+  --line2:     color-mix(in oklab, var(--ink) 22%, transparent);
+  --accent:    var(--moss);
+  --accent-soft: color-mix(in oklab, var(--moss) 22%, var(--parchment));
+  --warm-soft: color-mix(in oklab, var(--lantern) 18%, var(--parchment));
+  --danger-soft: color-mix(in oklab, var(--mushroom) 18%, var(--parchment));
+
+  /* ---- TYPOGRAPHY ---- */
+  --disp: 'Cormorant Garamond', Georgia, serif;
+  --body: 'Spectral', 'Source Serif Pro', Georgia, serif;
+  --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* ---- SPACING ---- */
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px;
+  --s6: 36px; --s7: 56px; --s8: 80px;
+
+  /* ---- RADII ---- */
+  --r1: 4px; --r2: 8px; --r3: 12px; --r4: 16px;
+
+  /* ---- SHADOWS ---- */
+  --shadow-1: 0 1px 2px rgba(0,0,0,0.3), 0 2px 6px rgba(0,0,0,0.2);
+  --shadow-2: 0 2px 4px rgba(0,0,0,0.3), 0 8px 16px rgba(0,0,0,0.25);
+  --shadow-3: 0 8px 16px rgba(0,0,0,0.3), 0 24px 48px rgba(0,0,0,0.35);
+
+  /* ---- MOTION ---- */
+  --ease: cubic-bezier(.2, .7, .2, 1);
+  --dur-micro: 120ms;
+  --dur-small: 200ms;
+
+  color-scheme: dark;
+}
+
+/* ---- RESET ---- */
+*, *::before, *::after { box-sizing: border-box; margin: 0; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--body);
+  font-size: 17px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+
+a { color: var(--fern); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+a:hover { color: var(--lantern); }
+
+code, kbd, samp {
+  font-family: var(--mono); font-size: 0.85em;
+  background: color-mix(in oklab, var(--fern) 12%, var(--parchment));
+  color: var(--fern);
+  padding: 2px 6px; border-radius: var(--r1);
+}
+pre {
+  font-family: var(--mono); font-size: 13.5px;
+  background: var(--canopy);
+  color: var(--ink);
+  border: 1px solid var(--line2);
+  padding: var(--s4) var(--s5);
+  border-radius: var(--r3);
+  overflow-x: auto;
+  line-height: 1.55;
+}
+pre code { background: transparent; color: inherit; padding: 0; }
+
+h1, h2, h3 { font-family: var(--disp); font-weight: 600; line-height: 1.14; color: var(--ink); }
+
+.wrap { max-width: 960px; margin: 0 auto; padding: 0 var(--s5); }
+
+/* ============================================================
+   NAV
+   ============================================================ */
+.nav {
+  display: flex; align-items: center; gap: var(--s4);
+  padding: 14px var(--s5);
+  background: color-mix(in oklab, var(--canopy) 95%, black);
+  position: sticky; top: 0; z-index: 20;
+  border-bottom: 1px solid var(--line2);
+}
+.nav__mark {
+  width: 28px; height: 28px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--moss); color: var(--canopy);
+  font-weight: 700; font-family: var(--mono); font-size: 14px;
+}
+.nav__name { font-family: var(--disp); font-size: 1.2rem; font-weight: 600; color: var(--ink); }
+.nav__tag { color: var(--fg3); font-size: 0.8rem; }
+.nav__links { margin-left: auto; display: flex; gap: var(--s3); align-items: center; }
+.nav__link {
+  font-family: var(--body); font-size: 13px;
+  color: var(--fg3); text-decoration: none;
+  padding: 6px 12px; border-radius: 999px;
+  transition: background var(--dur-micro) var(--ease), color var(--dur-micro) var(--ease);
+}
+.nav__link:hover { color: var(--ink); background: color-mix(in oklab, var(--ink) 8%, transparent); }
+.nav__link--active { color: var(--fern); background: var(--accent-soft); }
+
+/* ============================================================
+   HERO
+   ============================================================ */
+.hero {
+  position: relative; overflow: hidden;
+  background:
+    radial-gradient(120% 80% at 80% 10%, color-mix(in oklab, var(--twilight) 50%, var(--canopy)) 0%, transparent 55%),
+    radial-gradient(100% 100% at 10% 100%, color-mix(in oklab, var(--moss) 14%, var(--canopy)) 0%, transparent 50%),
+    linear-gradient(180deg, var(--canopy), var(--parchment));
+  color: var(--ink);
+  padding: var(--s8) var(--s5) var(--s7);
+}
+.hero__inner { max-width: 960px; margin: 0 auto; position: relative; z-index: 1; }
+.hero__eyebrow {
+  font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.2em;
+  text-transform: uppercase; color: var(--lantern); font-weight: 500;
+}
+.hero h1 {
+  font-size: clamp(2.4rem, 6vw, 3.8rem); margin: 0.3em 0 0.2em;
+  letter-spacing: -0.015em; max-width: 18ch; text-wrap: balance;
+}
+.hero h1 em { font-style: italic; color: var(--fern); }
+.hero__lede {
+  font-family: var(--disp); font-style: italic;
+  font-size: clamp(1.15rem, 2vw, 1.5rem); line-height: 1.5;
+  color: var(--fg2); max-width: 52ch;
+}
+.hero__cta { display: flex; flex-wrap: wrap; gap: var(--s3); margin-top: var(--s5); }
+
+/* ============================================================
+   BUTTONS
+   ============================================================ */
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-family: var(--body); font-size: 14px; font-weight: 500;
+  padding: 11px 20px; border-radius: var(--r2);
+  border: 1px solid transparent;
+  cursor: pointer; text-decoration: none; white-space: nowrap;
+  transition: background var(--dur-micro) var(--ease), box-shadow var(--dur-micro) var(--ease);
+}
+.btn--primary { background: var(--moss); color: var(--canopy); box-shadow: var(--shadow-1); }
+.btn--primary:hover { background: color-mix(in oklab, var(--moss) 86%, var(--ink)); color: var(--canopy); }
+.btn--secondary {
+  background: color-mix(in oklab, var(--ink) 8%, transparent);
+  color: var(--ink); border-color: var(--line2);
+}
+.btn--secondary:hover { background: color-mix(in oklab, var(--ink) 14%, transparent); color: var(--ink); }
+
+/* ============================================================
+   SECTIONS
+   ============================================================ */
+main { padding: var(--s7) 0 var(--s8); }
+section { margin-bottom: var(--s7); }
+section h2 {
+  font-size: 1.9rem; margin-bottom: var(--s4);
+  padding-bottom: 8px; border-bottom: 1px solid var(--line2);
+}
+section h3 { font-size: 1.2rem; margin: var(--s5) 0 var(--s3); color: var(--fern); }
+section p { margin: var(--s3) 0; color: var(--fg2); }
+section p strong { color: var(--ink); }
+
+/* ============================================================
+   FEATURE GRID
+   ============================================================ */
+.features {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--s4); margin-top: var(--s5);
+}
+.feature {
+  background: var(--card);
+  border: 1px solid var(--line); border-top: 2px solid var(--moss);
+  border-radius: var(--r3);
+  padding: var(--s5);
+  box-shadow: var(--shadow-1);
+  transition: box-shadow var(--dur-small) var(--ease), transform var(--dur-small) var(--ease);
+}
+.feature:hover { box-shadow: var(--shadow-2); transform: translateY(-2px); }
+.feature__icon { font-size: 1.6rem; margin-bottom: var(--s2); }
+.feature h3 {
+  font-family: var(--disp); font-size: 1.3rem; font-weight: 600;
+  margin: 0 0 var(--s2); color: var(--ink); border: none; padding: 0;
+}
+.feature p { font-size: 0.92rem; color: var(--fg2); margin: 0; line-height: 1.6; }
+
+/* ============================================================
+   ARCHITECTURE DIAGRAM
+   ============================================================ */
+.arch {
+  background: var(--canopy);
+  border: 1px solid var(--line2);
+  border-radius: var(--r3);
+  padding: var(--s5);
+  overflow-x: auto;
+  margin: var(--s5) 0;
+}
+.arch pre { background: transparent; border: none; padding: 0; margin: 0; font-size: 12.5px; line-height: 1.5; }
+.arch pre code { color: var(--fg2); }
+
+/* ============================================================
+   QUICK START
+   ============================================================ */
+.quickstart { margin: var(--s5) 0; }
+.quickstart__steps {
+  display: flex; flex-direction: column; gap: var(--s4);
+  margin-top: var(--s4);
+}
+.quickstart__step {
+  display: grid; grid-template-columns: 32px 1fr; gap: var(--s3); align-items: start;
+}
+.quickstart__n {
+  width: 28px; height: 28px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--accent-soft); color: var(--fern);
+  font-family: var(--mono); font-size: 13px; font-weight: 600;
+}
+.quickstart__step pre { margin: var(--s2) 0 0; }
+.quickstart__step p { margin: 0; color: var(--fg2); font-size: 0.95rem; }
+
+/* ============================================================
+   LINKS SECTION
+   ============================================================ */
+.links {
+  display: flex; flex-wrap: wrap; gap: var(--s4);
+  margin-top: var(--s5);
+}
+.link-card {
+  display: flex; flex-direction: column; gap: var(--s2);
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: var(--r3); padding: var(--s4) var(--s5);
+  text-decoration: none; min-width: 200px; flex: 1;
+  transition: box-shadow var(--dur-small) var(--ease), transform var(--dur-small) var(--ease);
+}
+.link-card:hover { box-shadow: var(--shadow-2); transform: translateY(-2px); }
+.link-card__title { font-family: var(--disp); font-size: 1.1rem; color: var(--ink); }
+.link-card__desc { font-size: 0.85rem; color: var(--fg3); }
+
+/* ============================================================
+   FOOTER
+   ============================================================ */
+.site-foot {
+  border-top: 1px solid var(--line);
+  padding: var(--s5) 0 var(--s7);
+  font-family: var(--mono); font-size: 0.82rem;
+  color: var(--fg3); line-height: 1.7;
+}
+.site-foot a { color: var(--moss); }
+.site-foot .row { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: baseline; }
+
+/* ============================================================
+   PAGES: docs, paper, demo
+   ============================================================ */
+.page-header {
+  padding: var(--s7) 0 var(--s5);
+  border-bottom: 1px solid var(--line2);
+  margin-bottom: var(--s6);
+}
+.page-header h1 { font-size: 2.4rem; margin: 0; }
+.page-header p { color: var(--fg2); margin: var(--s3) 0 0; max-width: 60ch; }
+
+.placeholder {
+  background: var(--card); border: 2px dashed var(--line2);
+  border-radius: var(--r3); padding: var(--s7) var(--s5);
+  text-align: center; color: var(--fg3);
+  font-family: var(--mono); font-size: 0.9rem;
+}
+.placeholder__title { font-family: var(--disp); font-size: 1.5rem; color: var(--fg2); margin-bottom: var(--s3); }
+
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
+@media (max-width: 768px) {
+  .hero { padding: var(--s6) var(--s4) var(--s6); }
+  .nav { padding: 12px var(--s4); }
+  .nav__tag { display: none; }
+  .wrap { padding: 0 var(--s4); }
+  .features { grid-template-columns: 1fr; }
+  .links { flex-direction: column; }
+}

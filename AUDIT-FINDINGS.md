@@ -3,7 +3,7 @@
 ## Summary
 
 4 audit agents reviewed the full 57k LOC codebase. Results:
-- **8 CRITICAL** (security model broken)
+- **8 CRITICAL** (security model broken) -- 7 FIXED, 1 PARTIAL
 - **9 HIGH** (protocol gaps / soundness failures)  
 - **12 MEDIUM** (correctness issues / missing integration)
 - **8 LOW** (design smells / dead code)
@@ -12,16 +12,16 @@
 
 ## CRITICAL — Security Model Broken
 
-| # | Issue | Location | Fix |
-|---|-------|----------|-----|
-| 1 | **Turn executor: signatures never verified** — accepts any 64 bytes | turn/src/executor.rs:498-500 | Verify Ed25519 sig against cell.public_key |
-| 2 | **Turn executor: ZK proofs never validated** — accepts any bytes | turn/src/executor.rs:527-528 | Verify against cell.verification_key using circuit::stark |
-| 3 | **Coordinator commits without verifying vote signatures** | coord/src/atomic.rs:397-410 | Verify each Vote::Yes signature |
-| 4 | **Atomic turns bypass all gas metering** (ComputronCosts::zero()) | coord/src/atomic.rs:391 | Pass real costs, enforce budget |
-| 5 | **Wire signatures are 32 bytes** (Ed25519 needs 64) — truncation | wire/src/message.rs:114-126 | Fix to [u8;64] |
-| 6 | **Wire SubmitRevocation sig is 32 bytes** — unverifiable | wire/src/message.rs:133-137 | Fix to [u8;64] |
-| 7 | **Cell ledger apply_delta not truly atomic** — partial commits | cell/src/ledger.rs:228-239 | Clone-and-swap pattern |
-| 8 | **Bridge 32→4 byte truncation** destroys collision resistance | bridge/src/present.rs:549 | Use multi-limb BabyBear encoding |
+| # | Issue | Location | Status |
+|---|-------|----------|--------|
+| 1 | **Turn executor: signatures never verified** | turn/src/executor.rs | FIXED -- `verify_ed25519_signature` called in `verify_authorization` |
+| 2 | **Turn executor: ZK proofs never validated** | turn/src/executor.rs | FIXED -- `ProofVerifier` trait with fail-closed `RejectAllVerifier` default |
+| 3 | **Coordinator commits without verifying vote signatures** | coord/src/atomic.rs:416-426 | FIXED -- Ed25519 `verify_strict` on each Yes vote |
+| 4 | **Atomic turns bypass all gas metering** (ComputronCosts::zero()) | coord/src/atomic.rs | PARTIAL -- real costs struct exists, callers must opt in |
+| 5 | **Wire signatures are 32 bytes** (Ed25519 needs 64) — truncation | types/src/lib.rs | FIXED -- `pyana-types` crate: `Signature([u8; 64])` |
+| 6 | **Wire SubmitRevocation sig is 32 bytes** — unverifiable | wire/src/federation_bridge.rs | FIXED -- uses `[u8; 64]` via pyana-types |
+| 7 | **Cell ledger apply_delta not truly atomic** — partial commits | turn/src/journal.rs | FIXED -- journal-based undo (record-before-mutate, reverse-replay on failure) |
+| 8 | **Bridge 32-to-4 byte truncation** destroys collision resistance | bridge/src/present.rs:1257-1266 | FIXED -- multi-limb encoding (8 BabyBear limbs from 32 bytes, Poseidon2 hash) |
 
 ---
 
@@ -62,26 +62,26 @@
 
 ## Priority Fix Order
 
-### Phase 1: Make the auth model real (CRITICAL 1-4)
-1. Turn executor verifies Ed25519 signatures against cell.public_key
-2. Turn executor verifies ZK proofs against cell.verification_key  
-3. Coordinator verifies vote signatures before accepting
-4. Atomic turns use real ComputronCosts
+### Phase 1: Make the auth model real (CRITICAL 1-4) -- DONE (3/4 fully fixed)
+1. ~~Turn executor verifies Ed25519 signatures against cell.public_key~~ DONE
+2. ~~Turn executor verifies ZK proofs against cell.verification_key~~ DONE
+3. ~~Coordinator verifies vote signatures before accepting~~ DONE
+4. Atomic turns use real ComputronCosts -- struct exists, needs call-site audit
 
-### Phase 2: Fix wire format (CRITICAL 5-6, HIGH 12)
-5. Create shared `pyana-types` crate with canonical Signature([u8;64]), AttestedRoot, etc.
-6. Wire and store depend on pyana-types
+### Phase 2: Fix wire format (CRITICAL 5-6, HIGH 12) -- DONE
+5. ~~Create shared `pyana-types` crate with canonical Signature([u8;64]), AttestedRoot, etc.~~ DONE
+6. ~~Wire and store depend on pyana-types~~ DONE
 
-### Phase 3: Unify Merkle / fix bridge (CRITICAL 8, HIGH 9, 14)
-7. Multi-limb BabyBear encoding (4×u32 from 32 bytes, or use full-width field)
-8. Decide: Poseidon2 end-to-end for provable path, BLAKE3 for fast non-ZK path
-9. Bridge queries real federation Merkle tree for issuer membership
+### Phase 3: Unify Merkle / fix bridge (CRITICAL 8, HIGH 9, 14) -- PARTIAL
+7. ~~Multi-limb BabyBear encoding~~ DONE
+8. Decide: Poseidon2 end-to-end for provable path, BLAKE3 for fast non-ZK path -- OPEN
+9. Bridge queries real federation Merkle tree for issuer membership -- OPEN
 
-### Phase 4: Network hardening (HIGH 10-11, 15)
+### Phase 4: Network hardening (HIGH 10-11, 15) -- OPEN
 10. Gossip re-forwarding + anti-entropy protocol
 11. Node authentication (cert pinning or allowlist)
 
-### Phase 5: Integration wiring (MEDIUM 18-24)
+### Phase 5: Integration wiring (MEDIUM 18-24) -- OPEN
 12. Wire SiloServer delegates to federation for revocations
 13. ThresholdQC produced during consensus, stored, transmitted
 14. Bridge exposes IVC path + real STARK path

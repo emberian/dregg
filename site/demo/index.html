@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>pyana playground</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <h1>pyana <span class="accent">playground</span></h1>
+        <p class="subtitle">Interactive demos for cryptographic token primitives</p>
+    </header>
+
+    <nav class="tabs">
+        <button class="tab active" data-panel="tokens">Tokens</button>
+        <button class="tab" data-panel="stark">STARK Proofs</button>
+        <button class="tab" data-panel="merkle">Merkle Trees</button>
+        <button class="tab" data-panel="datalog">Datalog</button>
+        <button class="tab" data-panel="fold">Fold Chain</button>
+    </nav>
+
+    <!-- Token Playground -->
+    <section id="tokens" class="panel active">
+        <div class="panel-grid">
+            <div class="card">
+                <h2>Mint Token</h2>
+                <div class="field">
+                    <label>Root Key (hex, 32 bytes)</label>
+                    <div class="input-row">
+                        <input type="text" id="mint-key" placeholder="64 hex chars..." maxlength="64">
+                        <button id="btn-gen-key" class="btn-small">Random</button>
+                    </div>
+                </div>
+                <div class="field">
+                    <label>Location</label>
+                    <input type="text" id="mint-location" value="pyana.dev" placeholder="e.g. pyana.dev">
+                </div>
+                <button id="btn-mint" class="btn-primary">Mint</button>
+                <div id="mint-result" class="result hidden"></div>
+            </div>
+
+            <div class="card">
+                <h2>Attenuate</h2>
+                <div class="field">
+                    <label>Token (from mint)</label>
+                    <textarea id="att-token" rows="3" placeholder="Paste em2_... token here"></textarea>
+                </div>
+                <div class="field">
+                    <label>Service</label>
+                    <input type="text" id="att-service" value="dns" placeholder="e.g. dns, http, auth">
+                </div>
+                <div class="field">
+                    <label>Actions</label>
+                    <input type="text" id="att-actions" value="read,write" placeholder="e.g. read,write">
+                </div>
+                <div class="field">
+                    <label>Expires in (seconds, 0 = no expiry)</label>
+                    <input type="number" id="att-expires" value="3600" min="0">
+                </div>
+                <button id="btn-attenuate" class="btn-primary">Attenuate</button>
+                <div id="att-result" class="result hidden"></div>
+            </div>
+
+            <div class="card">
+                <h2>Verify</h2>
+                <div class="field">
+                    <label>Token</label>
+                    <textarea id="ver-token" rows="3" placeholder="Paste token to verify"></textarea>
+                </div>
+                <div class="field">
+                    <label>App ID</label>
+                    <input type="text" id="ver-app" placeholder="e.g. my-app">
+                </div>
+                <div class="field">
+                    <label>Action</label>
+                    <input type="text" id="ver-action" placeholder="e.g. read">
+                </div>
+                <button id="btn-verify" class="btn-primary">Verify</button>
+                <div id="ver-result" class="result hidden"></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- STARK Proof Viewer -->
+    <section id="stark" class="panel">
+        <div class="panel-grid">
+            <div class="card">
+                <h2>Generate STARK Proof</h2>
+                <p class="desc">Generates a real STARK proof for a Merkle membership claim over BabyBear (p = 2^31 - 2^27 + 1).</p>
+                <div class="field">
+                    <label>Leaf Value (u32)</label>
+                    <input type="number" id="stark-leaf" value="42" min="1" max="2013265920">
+                </div>
+                <div class="field">
+                    <label>Tree Depth (2-8)</label>
+                    <input type="number" id="stark-depth" value="4" min="2" max="8">
+                </div>
+                <button id="btn-stark-prove" class="btn-primary">Generate Proof</button>
+                <div id="stark-result" class="result hidden"></div>
+            </div>
+
+            <div class="card">
+                <h2>Verify / Tamper</h2>
+                <p class="desc">Verify the proof, or tamper with it to see verification fail.</p>
+                <div class="field">
+                    <label>Proof (auto-filled from generation)</label>
+                    <textarea id="stark-proof-json" rows="4" placeholder="Generate a proof first..."></textarea>
+                </div>
+                <div class="button-row">
+                    <button id="btn-stark-verify" class="btn-primary">Verify</button>
+                    <button id="btn-stark-tamper" class="btn-danger">Tamper</button>
+                </div>
+                <div id="stark-verify-result" class="result hidden"></div>
+            </div>
+
+            <div class="card wide">
+                <h2>Proof Stats</h2>
+                <div id="stark-stats" class="stats-grid">
+                    <div class="stat">
+                        <span class="stat-label">Size</span>
+                        <span class="stat-value" id="stat-size">--</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Prove Time</span>
+                        <span class="stat-value" id="stat-prove-time">--</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Verify Time</span>
+                        <span class="stat-value" id="stat-verify-time">--</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Trace Rows</span>
+                        <span class="stat-value" id="stat-rows">--</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">FRI Layers</span>
+                        <span class="stat-value" id="stat-fri">--</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Queries</span>
+                        <span class="stat-value" id="stat-queries">--</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Merkle Tree Visualizer -->
+    <section id="merkle" class="panel">
+        <div class="panel-grid">
+            <div class="card">
+                <h2>Build Merkle Tree</h2>
+                <p class="desc">Add leaves to a 4-ary BLAKE3 Merkle tree and compute the root commitment.</p>
+                <div class="field">
+                    <label>Leaves (one per line)</label>
+                    <textarea id="merkle-leaves" rows="6" placeholder="alice
+bob
+carol
+dave"></textarea>
+                </div>
+                <button id="btn-merkle-root" class="btn-primary">Compute Root</button>
+                <div id="merkle-root-result" class="result hidden"></div>
+            </div>
+
+            <div class="card">
+                <h2>Membership Proof</h2>
+                <div class="field">
+                    <label>Check leaf</label>
+                    <input type="text" id="merkle-check-leaf" placeholder="e.g. alice">
+                </div>
+                <button id="btn-merkle-member" class="btn-primary">Prove Membership</button>
+                <div id="merkle-member-result" class="result hidden"></div>
+            </div>
+
+            <div class="card">
+                <h2>Non-Membership Proof</h2>
+                <div class="field">
+                    <label>Absent leaf</label>
+                    <input type="text" id="merkle-absent-leaf" placeholder="e.g. eve">
+                </div>
+                <button id="btn-merkle-absent" class="btn-primary">Prove Absence</button>
+                <div id="merkle-absent-result" class="result hidden"></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Datalog Evaluator -->
+    <section id="datalog" class="panel">
+        <div class="panel-grid">
+            <div class="card wide">
+                <h2>Datalog Policy Evaluator</h2>
+                <p class="desc">Evaluate authorization requests against a fact set using the standard pyana policy rules.</p>
+                <div class="field">
+                    <label>Facts (JSON array)</label>
+                    <textarea id="datalog-facts" rows="8">[
+  {"predicate": "app", "terms": ["my-app", "read,write"]},
+  {"predicate": "service", "terms": ["dns", "read"]},
+  {"predicate": "unrestricted", "terms": ["true"]}
+]</textarea>
+                </div>
+                <div class="field">
+                    <label>Request (JSON)</label>
+                    <textarea id="datalog-request" rows="5">{
+  "app_id": "my-app",
+  "action": "read",
+  "now": 1700000000
+}</textarea>
+                </div>
+                <button id="btn-datalog-eval" class="btn-primary">Evaluate</button>
+                <div id="datalog-result" class="result hidden"></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Fold Chain -->
+    <section id="fold" class="panel">
+        <div class="panel-grid">
+            <div class="card wide">
+                <h2>Fold Chain (Attenuation)</h2>
+                <p class="desc">Demonstrate cryptographic attenuation: removing capabilities from a token state and verifying the fold delta.</p>
+                <div class="field">
+                    <label>Initial Facts (format: "predicate:term", one per line)</label>
+                    <textarea id="fold-facts" rows="6">owns:secret.txt
+owns:public.txt
+can_read:secret.txt
+can_read:public.txt
+can_write:secret.txt
+can_write:public.txt</textarea>
+                </div>
+                <div class="field">
+                    <label>Facts to Remove (same format)</label>
+                    <textarea id="fold-remove" rows="3">can_write:secret.txt
+can_read:secret.txt</textarea>
+                </div>
+                <button id="btn-fold" class="btn-primary">Execute Fold</button>
+                <div id="fold-result" class="result hidden"></div>
+            </div>
+        </div>
+    </section>
+
+    <footer>
+        <p>pyana &mdash; cryptographic authorization tokens with ZK proofs</p>
+        <p class="footer-links">
+            <a href="https://github.com/pyana-dev/breadstuffs">source</a> |
+            <a href="https://pyana.dev">docs</a>
+        </p>
+    </footer>
+
+    <script type="module" src="main.js"></script>
+</body>
+</html>

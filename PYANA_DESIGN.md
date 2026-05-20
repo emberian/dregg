@@ -270,11 +270,11 @@ The critical property: **everything that crosses a trust boundary is PQ-secure.*
 
 1. **No recursive proof composition.** IVC currently uses hash-chain accumulation (prove each step individually, verify the chain). True STARK-in-STARK recursion (a single proof that verifies a previous proof) is not yet implemented. This means proof size grows with chain length rather than staying constant.
 
-2. **Dual Merkle systems.** `commit/` uses BLAKE3 (fast but not algebraic); `circuit/` uses Poseidon2 (algebraic, provable in-circuit). These need unification — currently the commit layer's Merkle proofs cannot be directly verified inside a STARK.
+2. **Dual Merkle systems.** `commit/` uses BLAKE3 (fast but not algebraic); `circuit/` uses Poseidon2 (algebraic, provable in-circuit). These need unification -- currently the commit layer's Merkle proofs cannot be directly verified inside a STARK.
 
-3. **Bridge integration incomplete.** 8 test failures from API mismatches between `bridge/` and `token/`. The presentation builder works end-to-end but has rough edges.
+3. **Bridge integration incomplete.** Some test failures remain from API mismatches between `bridge/` and `token/`. The presentation builder works end-to-end but has rough edges.
 
-4. **Audit-identified critical issues.** The recent security audit found 8 critical issues (turn executor not verifying signatures/proofs, coordinator not checking vote sigs, wire signature truncation). These are straightforward fixes but represent defense-in-depth gaps in the execution layer. See AUDIT-FINDINGS.md for the full list.
+4. **~~Audit-identified critical issues.~~** 7 of 8 critical audit findings are now FIXED (signature verification in turn executor, proof verification via ProofVerifier trait, coordinator vote sig checks, pyana-types with 64-byte signatures, journal-based atomicity, multi-limb bridge encoding). One partial: atomic turn gas metering struct exists but call-site audit needed. See AUDIT-FINDINGS.md.
 
 5. **Federation-to-wire integration.** Federation consensus currently uses in-process channels. The wire protocol exists and works for presentation/revocation, but federation consensus messages don't yet flow over it.
 
@@ -322,10 +322,12 @@ The pyana-sdk crate (`AgentWallet`, `AgentRuntime`, `SiloClient`) is the integra
 
 The codebase is at `github.com/pyana-dev/breadstuffs`. Priority work items:
 
-1. Fix the 8 critical audit findings (AUDIT-FINDINGS.md, Phase 1)
+1. ~~Fix the 8 critical audit findings~~ (7/8 DONE, see AUDIT-FINDINGS.md)
 2. Unify the Merkle systems (Poseidon2 end-to-end for provable path)
-3. Complete bridge integration (8 failing tests)
+3. Complete bridge integration (remaining test failures)
 4. Wire federation consensus into the TCP protocol
 5. Recursive STARK-in-STARK for constant-size IVC proofs
+6. Fix BabyBear field (currently Mersenne prime 2^31-1, should be 2^31-2^27+1 for NTT support)
+7. Cache Poseidon2 round constants (trivial but high-impact performance fix)
 
 License: MIT OR Apache-2.0.

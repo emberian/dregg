@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pyana — Distributed object-capability authorization with ZK proofs</title>
+  <meta name="description" content="Pyana: distributed authorization for AI agents. Prove authorization across trust domains without revealing delegation chains, using STARK proofs and federated BFT consensus.">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Pyana">
+  <meta property="og:title" content="Pyana — Distributed object-capability authorization with ZK proofs">
+  <meta property="og:description" content="Prove authorization across trust domains without revealing delegation chains. STARK proofs, federated BFT, offline verification.">
+  <meta name="twitter:card" content="summary">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f1f17'/%3E%3Ctext x='16' y='22' font-size='16' text-anchor='middle' fill='%235b8a5a' font-family='monospace'%3E%CF%80%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="nav">
+  <span class="nav__mark">&pi;</span>
+  <span class="nav__name">Pyana</span>
+  <span class="nav__tag">distributed object-capability authorization</span>
+  <div class="nav__links">
+    <a class="nav__link nav__link--active" href="index.html">Home</a>
+    <a class="nav__link" href="docs.html">Docs</a>
+    <a class="nav__link" href="paper.html">Paper</a>
+    <a class="nav__link" href="demo.html">Demo</a>
+    <a class="nav__link" href="https://github.com/emberian/pyana">GitHub</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="hero__inner">
+    <p class="hero__eyebrow">zero-knowledge &middot; object-capabilities &middot; post-quantum</p>
+    <h1>Authorization that <em>proves</em> without revealing.</h1>
+    <p class="hero__lede">
+      Distributed object-capability authorization with ZK proofs. Agents prove they
+      are authorized to act across organizational boundaries &mdash; without revealing
+      their delegation chain, the identities of intermediate authorities, or what
+      other capabilities they hold.
+    </p>
+    <div class="hero__cta">
+      <a class="btn btn--primary" href="#quickstart">Get started</a>
+      <a class="btn btn--secondary" href="paper.html">Read the paper</a>
+      <a class="btn btn--secondary" href="https://github.com/emberian/pyana">View source</a>
+    </div>
+  </div>
+</header>
+
+<main>
+  <section class="wrap">
+    <h2>Key capabilities</h2>
+    <div class="features">
+      <div class="feature">
+        <div class="feature__icon">&#x1f510;</div>
+        <h3>ZK-private presentation</h3>
+        <p>Present authorization as a STARK proof. The verifier learns only that you are authorized &mdash; nothing about your delegation chain, other capabilities, or intermediate authorities.</p>
+      </div>
+      <div class="feature">
+        <div class="feature__icon">&#x1f517;</div>
+        <h3>Capability attenuation</h3>
+        <p>Capabilities can only be restricted, never amplified. Each delegation step produces a strictly smaller capability set. The type system enforces monotonic narrowing.</p>
+      </div>
+      <div class="feature">
+        <div class="feature__icon">&#x1f30d;</div>
+        <h3>Federated BFT consensus</h3>
+        <p>Small federations (3&ndash;64 nodes) share trust roots via adaptive BFT consensus with BLS12-381 threshold signatures. No global chain dependency.</p>
+      </div>
+      <div class="feature">
+        <div class="feature__icon">&#x2708;&#xfe0f;</div>
+        <h3>Offline verification</h3>
+        <p>No blockchain liveness required. Verify a presentation with only the STARK proof, the federation root, and the authorization request.</p>
+      </div>
+      <div class="feature">
+        <div class="feature__icon">&#x1f916;</div>
+        <h3>Built for AI agents</h3>
+        <p>The execution model (Cells, Turns, Call Forests) is designed for agents that span multiple organizations, each with independent security policies.</p>
+      </div>
+      <div class="feature">
+        <div class="feature__icon">&#x1f9ec;</div>
+        <h3>Post-quantum ready</h3>
+        <p>External verification is entirely hash-based (STARK proofs, Merkle commitments). Classical signatures are confined within federation trust boundaries.</p>
+      </div>
+      <div class="feature">
+        <div class="feature__icon">&#x26a1;</div>
+        <h3>Sub-second proofs</h3>
+        <p>BabyBear STARK with FRI produces ~24 KiB proofs in 300&ndash;560ms. Verification is sub-millisecond. Real proofs, not simulations.</p>
+      </div>
+      <div class="feature">
+        <div class="feature__icon">&#x1f4ca;</div>
+        <h3>Computron budgets</h3>
+        <p>Bounded counters (adapted from Stingray) enable parallel multi-silo execution without per-operation consensus while preventing overspend by Byzantine silos.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <h2>Architecture</h2>
+    <div class="arch">
+      <pre><code>
+  SDK Layer ─────────── AgentWallet &middot; AgentRuntime &middot; SiloClient
+       │
+  Network Layer ─────── TCP wire protocol &middot; STARK verification on receive
+       │                 QUIC gossip (Plumtree lazy-push) [planned]
+       │
+  Federation Layer ──── morpheus: Adaptive BFT (Lewis-Pye &amp; Shapiro)
+       │                 hints: BLS12-381 threshold signatures
+       │                 federation: Ed25519 consensus, revocation trees
+       │
+  Coordination Layer ── Causal async DAG &middot; Atomic 2PC &middot; Budget (Stingray)
+       │
+  Execution Layer ───── cell: Isolated accounts with c-lists
+       │                 turn: Atomic transactions (call forests)
+       │                 coord: Multi-silo coordination
+       │
+  Proof Layer ──────── BabyBear STARK + FRI (~24 KiB, sub-second)
+       │                 Poseidon2 algebraic hash (SNARK-friendly)
+       │                 IVC: hash-chain accumulation
+       │
+  Commitment Layer ──── 4-ary Merkle trees (BLAKE3 fast / Poseidon2 ZK)
+       │                 Fold deltas: monotonic state transitions
+       │
+  Policy Layer ─────── trace: Datalog evaluator + derivation traces
+       │                 token: Macaroon (HMAC) + Biscuit (Ed25519+Datalog)
+       │                 tokenizer: X25519-ChaCha20Poly1305 seal/unseal
+       │
+  Storage Layer ─────── store: redb persistence &middot; secrets: OS keychain
+                         audit: Usage log, budget enforcement
+</code></pre>
+    </div>
+    <p style="color:var(--fg3); font-size: 0.9rem; margin-top: var(--s3);">
+      <strong style="color:var(--ink)">Core insight:</strong> Capability attenuation
+      <em>is</em> incrementally verifiable computation. Each delegation with restrictions
+      is a fold over a committed fact set. The prover demonstrates a valid chain of
+      attenuations; the verifier checks a single STARK proof.
+    </p>
+  </section>
+
+  <section class="wrap" id="quickstart">
+    <h2>Quick start</h2>
+    <div class="quickstart">
+      <div class="quickstart__steps">
+        <div class="quickstart__step">
+          <span class="quickstart__n">1</span>
+          <div>
+            <p>Add Pyana to your Cargo.toml:</p>
+            <pre><code>[dependencies]
+pyana-sdk = "0.1"</code></pre>
+          </div>
+        </div>
+        <div class="quickstart__step">
+          <span class="quickstart__n">2</span>
+          <div>
+            <p>Create a wallet and mint a root capability:</p>
+            <pre><code>use pyana_sdk::prelude::*;
+
+let wallet = AgentWallet::create()?;
+let root = wallet.mint_root(&["dns:read", "compute:execute"])?;</code></pre>
+          </div>
+        </div>
+        <div class="quickstart__step">
+          <span class="quickstart__n">3</span>
+          <div>
+            <p>Attenuate and present with ZK proof:</p>
+            <pre><code>let restricted = root.attenuate(Attenuation {
+    services: vec![("dns".into(), "read".into())],
+    max_ttl: Some(Duration::from_secs(3600)),
+    ..Default::default()
+})?;
+
+let proof = restricted.prove(&federation_root)?;
+// proof is ~24 KiB, verifiable offline in &lt;1ms</code></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <h2>Links</h2>
+    <div class="links">
+      <a class="link-card" href="https://docs.rs/pyana-sdk">
+        <span class="link-card__title">API documentation</span>
+        <span class="link-card__desc">Rustdoc on docs.rs (published on release)</span>
+      </a>
+      <a class="link-card" href="https://github.com/emberian/pyana">
+        <span class="link-card__title">Source code</span>
+        <span class="link-card__desc">22-crate Rust workspace on GitHub</span>
+      </a>
+      <a class="link-card" href="paper.html">
+        <span class="link-card__title">Whitepaper</span>
+        <span class="link-card__desc">Design rationale and formal specification</span>
+      </a>
+      <a class="link-card" href="demo.html">
+        <span class="link-card__title">Live demo</span>
+        <span class="link-card__desc">WASM proof generation in the browser</span>
+      </a>
+    </div>
+  </section>
+
+  <footer class="site-foot wrap">
+    <div class="row">
+      <span>Pyana &middot; distributed object-capability authorization with ZK proofs</span>
+      <a href="https://github.com/emberian/pyana">GitHub</a>
+    </div>
+  </footer>
+</main>
+</body>
+</html>

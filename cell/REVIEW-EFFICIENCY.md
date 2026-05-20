@@ -1,5 +1,9 @@
 # Efficiency Review: cell/, turn/, coord/, circuit/
 
+> **Status (2026-05-20):** Issue #2 (TurnExecutor full ledger clone) is FIXED -- now uses
+> journal-based undo (turn/src/journal.rs). Remaining issues (#5 capability linear scan,
+> #6 Merkle root full rebuild, #8 Poseidon2 round constant regen) are still open.
+
 ## 1. Ledger HashMap<CellId, Cell> -- ACCEPTABLE WITH CAVEATS
 
 HashMap gives O(1) lookup/insert, which is correct for random-access by CellId. However:

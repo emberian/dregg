@@ -3,7 +3,8 @@
 //! Proves one authorization derivation step:
 //! - Rule ID + substitution (witness)
 //! - Body facts exist (Merkle membership for each, up to 4 body atoms)
-//! - Derived fact = rule head under substitution (equality constraints)
+//! - Derived fact = rule head under substitution (substitution verification)
+//! - Equal constraint checks pass under the substitution
 //! - Output: the derived fact's hash
 //!
 //! This AIR validates that a single Datalog rule application is correct:
@@ -22,22 +23,37 @@
 //! | 13: derived_hash | Hash of the derived fact                            |
 //! | 14..17: sub_values | Substitution values for up to 4 variables         |
 //! | 18..21: body_roots | Merkle roots the body facts are verified against  |
+//! | 22..24: head_is_var | 1 if head term i is a variable, 0 if constant    |
+//! | 25..27: head_raw_value | Variable index (if var) or constant value      |
+//! | 28..39: head_sel_var | Selector columns for variable lookup (3 terms x 4 vars) |
+//! | 40: eq_check_0_active | 1 if first Equal check is active               |
+//! | 41: eq_check_0_term_a | Resolved value of Equal check 0 LHS            |
+//! | 42: eq_check_0_term_b | Resolved value of Equal check 0 RHS            |
+//! | 43: eq_check_1_active | 1 if second Equal check is active              |
+//! | 44: eq_check_1_term_a | Resolved value of Equal check 1 LHS            |
+//! | 45: eq_check_1_term_b | Resolved value of Equal check 1 RHS            |
 //!
 //! Public inputs: [state_root, derived_fact_hash]
 //!
 //! Constraints:
-//! 1. Each used body fact hash is non-zero
-//! 2. Body membership flags are binary (0 or 1)
-//! 3. Derived hash = hash(head_pred, head_terms)
-//! 4. At least one body fact must be used (rule must have a body)
+//! 1. Body membership flags are binary (0 or 1)
+//! 2. If membership flag is 1, body hash must be non-zero
+//! 3. At least one body fact must be used (rule must have a body)
+//! 4. Derived hash = hash(head_pred, head_terms)
 //! 5. All body roots equal the state root (single state commitment)
+//! 6. Derived hash matches public input
+//! 7. head_is_var columns are binary
+//! 8. Selector columns are binary and exactly one is set when is_var=1
+//! 9. Substitution application: derived_term[i] = is_var * (sum_j sel_j * sub[j]) + (1-is_var) * raw_value
+//! 10. Equal check: eq_active * (term_a - term_b) = 0
+//! 11. Equal check active flags are binary
 
 use crate::field::BabyBear;
 use crate::mock_prover::{Air, Constraint};
 use crate::poseidon2::hash_fact;
 
 /// Trace width for the derivation AIR.
-pub const DERIVATION_AIR_WIDTH: usize = 22;
+pub const DERIVATION_AIR_WIDTH: usize = 46;
 
 /// Maximum body atoms per rule.
 pub const MAX_BODY_ATOMS: usize = 4;
@@ -45,8 +61,16 @@ pub const MAX_BODY_ATOMS: usize = 4;
 /// Maximum substitution variables.
 pub const MAX_SUB_VARS: usize = 4;
 
+/// Maximum head terms.
+pub const MAX_HEAD_TERMS: usize = 3;
+
+/// Maximum Equal checks per rule.
+pub const MAX_EQUAL_CHECKS: usize = 2;
+
 /// Column indices.
 pub mod col {
+    use super::{MAX_HEAD_TERMS, MAX_SUB_VARS};
+
     pub const RULE_ID: usize = 0;
     pub const BODY_HASH_START: usize = 1;
     pub const BODY_MEMBERSHIP_START: usize = 5;
@@ -55,6 +79,41 @@ pub mod col {
     pub const DERIVED_HASH: usize = 13;
     pub const SUB_VALUE_START: usize = 14;
     pub const BODY_ROOT_START: usize = 18;
+
+    // --- Substitution verification columns ---
+    /// head_is_var[i]: 1 if head term i is a variable reference, 0 if constant.
+    pub const HEAD_IS_VAR_START: usize = 22;
+    /// head_raw_value[i]: the variable index (when is_var=1) or the constant value (when is_var=0).
+    pub const HEAD_RAW_VALUE_START: usize = 25;
+    /// head_sel_var[term_i][var_j]: selector for which substitution variable to use.
+    /// Layout: term 0 uses columns 28..31, term 1 uses 32..35, term 2 uses 36..39.
+    pub const HEAD_SEL_VAR_START: usize = 28;
+
+    /// Get the column index for head_sel_var[term_idx][var_idx].
+    #[inline]
+    pub const fn head_sel_var(term_idx: usize, var_idx: usize) -> usize {
+        HEAD_SEL_VAR_START + term_idx * MAX_SUB_VARS + var_idx
+    }
+
+    // --- Equal check columns ---
+    /// Each Equal check has 3 columns: (active, term_a_resolved, term_b_resolved).
+    pub const EQ_CHECK_START: usize = 28 + MAX_HEAD_TERMS * MAX_SUB_VARS; // 28 + 12 = 40
+
+    /// Get the column for eq_check[check_idx].active.
+    #[inline]
+    pub const fn eq_check_active(check_idx: usize) -> usize {
+        EQ_CHECK_START + check_idx * 3
+    }
+    /// Get the column for eq_check[check_idx].term_a.
+    #[inline]
+    pub const fn eq_check_term_a(check_idx: usize) -> usize {
+        EQ_CHECK_START + check_idx * 3 + 1
+    }
+    /// Get the column for eq_check[check_idx].term_b.
+    #[inline]
+    pub const fn eq_check_term_b(check_idx: usize) -> usize {
+        EQ_CHECK_START + check_idx * 3 + 2
+    }
 }
 
 /// A rule definition for the circuit (simplified representation).
@@ -73,6 +132,22 @@ pub struct CircuitRule {
     pub head_terms: [(bool, BabyBear); 3],
     /// Body atom patterns: predicate + term patterns for each body atom.
     pub body_atoms: Vec<BodyAtomPattern>,
+    /// Equal checks: each is (term_a_is_var, term_a_value, term_b_is_var, term_b_value).
+    /// Up to MAX_EQUAL_CHECKS.
+    pub equal_checks: Vec<CircuitEqualCheck>,
+}
+
+/// An Equal check in circuit form.
+#[derive(Clone, Debug)]
+pub struct CircuitEqualCheck {
+    /// Is the left-hand term a variable?
+    pub lhs_is_var: bool,
+    /// The variable index or constant value for the left-hand term.
+    pub lhs_value: BabyBear,
+    /// Is the right-hand term a variable?
+    pub rhs_is_var: bool,
+    /// The variable index or constant value for the right-hand term.
+    pub rhs_value: BabyBear,
 }
 
 /// Pattern for a body atom in a rule.
@@ -182,9 +257,6 @@ impl Air for DerivationAir {
                         let flag = row[col::BODY_MEMBERSHIP_START + i];
                         let hash = row[col::BODY_HASH_START + i];
                         // If flag=1 and hash=0, that's invalid.
-                        // Encode: flag * (1 - hash * hash_inv) should be 0
-                        // Simpler: we just check flag * is_zero(hash) = 0
-                        // In mock, we directly check:
                         if flag == BabyBear::ONE && hash == BabyBear::ZERO {
                             result = result + BabyBear::ONE;
                         }
@@ -200,8 +272,6 @@ impl Air for DerivationAir {
                     for i in 0..MAX_BODY_ATOMS {
                         sum = sum + row[col::BODY_MEMBERSHIP_START + i];
                     }
-                    // sum must be >= 1, i.e., sum = 0 is invalid
-                    // Encode as: if sum = 0 then constraint = 1 else 0
                     if sum == BabyBear::ZERO {
                         BabyBear::ONE
                     } else {
@@ -233,7 +303,6 @@ impl Air for DerivationAir {
                     for i in 0..MAX_BODY_ATOMS {
                         let flag = row[col::BODY_MEMBERSHIP_START + i];
                         let root = row[col::BODY_ROOT_START + i];
-                        // If flag=1, root must equal state_root
                         result = result + flag * (root - state_root);
                     }
                     result
@@ -244,6 +313,106 @@ impl Air for DerivationAir {
                 name: "derived_hash_public".to_string(),
                 eval: Box::new(|row, _, public_inputs| {
                     row[col::DERIVED_HASH] - public_inputs[1]
+                }),
+            },
+            // Constraint 7: head_is_var columns are binary.
+            Constraint {
+                name: "head_is_var_binary".to_string(),
+                eval: Box::new(|row, _, _| {
+                    let mut result = BabyBear::ZERO;
+                    for i in 0..MAX_HEAD_TERMS {
+                        let flag = row[col::HEAD_IS_VAR_START + i];
+                        result = result + flag * (flag - BabyBear::ONE);
+                    }
+                    result
+                }),
+            },
+            // Constraint 8: Selector columns are binary.
+            Constraint {
+                name: "head_sel_var_binary".to_string(),
+                eval: Box::new(|row, _, _| {
+                    let mut result = BabyBear::ZERO;
+                    for term_i in 0..MAX_HEAD_TERMS {
+                        for var_j in 0..MAX_SUB_VARS {
+                            let sel = row[col::head_sel_var(term_i, var_j)];
+                            result = result + sel * (sel - BabyBear::ONE);
+                        }
+                    }
+                    result
+                }),
+            },
+            // Constraint 9: When is_var=1, exactly one selector must be 1.
+            // sum(sel_j) = is_var for each term.
+            Constraint {
+                name: "head_sel_var_sum_equals_is_var".to_string(),
+                eval: Box::new(|row, _, _| {
+                    let mut result = BabyBear::ZERO;
+                    for term_i in 0..MAX_HEAD_TERMS {
+                        let is_var = row[col::HEAD_IS_VAR_START + term_i];
+                        let mut sel_sum = BabyBear::ZERO;
+                        for var_j in 0..MAX_SUB_VARS {
+                            sel_sum = sel_sum + row[col::head_sel_var(term_i, var_j)];
+                        }
+                        // sel_sum must equal is_var
+                        result = result + (sel_sum - is_var) * (sel_sum - is_var);
+                    }
+                    result
+                }),
+            },
+            // Constraint 10: Substitution application correctness.
+            // derived_term[i] = is_var * (sum_j sel_j * sub[j]) + (1-is_var) * raw_value
+            Constraint {
+                name: "substitution_application".to_string(),
+                eval: Box::new(|row, _, _| {
+                    let mut result = BabyBear::ZERO;
+                    for term_i in 0..MAX_HEAD_TERMS {
+                        let is_var = row[col::HEAD_IS_VAR_START + term_i];
+                        let raw_value = row[col::HEAD_RAW_VALUE_START + term_i];
+                        let derived_term = row[col::HEAD_TERM_START + term_i];
+
+                        // Compute the resolved value via selectors
+                        let mut var_resolved = BabyBear::ZERO;
+                        for var_j in 0..MAX_SUB_VARS {
+                            let sel = row[col::head_sel_var(term_i, var_j)];
+                            let sub_val = row[col::SUB_VALUE_START + var_j];
+                            var_resolved = var_resolved + sel * sub_val;
+                        }
+
+                        // expected = is_var * var_resolved + (1 - is_var) * raw_value
+                        let expected = is_var * var_resolved
+                            + (BabyBear::ONE - is_var) * raw_value;
+
+                        result = result + (derived_term - expected) * (derived_term - expected);
+                    }
+                    result
+                }),
+            },
+            // Constraint 11: Equal check active flags are binary.
+            Constraint {
+                name: "eq_check_active_binary".to_string(),
+                eval: Box::new(|row, _, _| {
+                    let mut result = BabyBear::ZERO;
+                    for i in 0..MAX_EQUAL_CHECKS {
+                        let active = row[col::eq_check_active(i)];
+                        result = result + active * (active - BabyBear::ONE);
+                    }
+                    result
+                }),
+            },
+            // Constraint 12: Equal check enforcement.
+            // When active=1: term_a must equal term_b.
+            // Encoded as: active * (term_a - term_b) = 0
+            Constraint {
+                name: "eq_check_enforced".to_string(),
+                eval: Box::new(|row, _, _| {
+                    let mut result = BabyBear::ZERO;
+                    for i in 0..MAX_EQUAL_CHECKS {
+                        let active = row[col::eq_check_active(i)];
+                        let term_a = row[col::eq_check_term_a(i)];
+                        let term_b = row[col::eq_check_term_b(i)];
+                        result = result + active * (term_a - term_b);
+                    }
+                    result
                 }),
             },
         ]
@@ -276,6 +445,64 @@ impl Air for DerivationAir {
         // Substitution values
         for (i, &val) in w.substitution.iter().enumerate().take(MAX_SUB_VARS) {
             row[col::SUB_VALUE_START + i] = val;
+        }
+
+        // --- Substitution verification columns ---
+        for (term_i, &(is_var, value)) in w.rule.head_terms.iter().enumerate().take(MAX_HEAD_TERMS)
+        {
+            row[col::HEAD_IS_VAR_START + term_i] = if is_var {
+                BabyBear::ONE
+            } else {
+                BabyBear::ZERO
+            };
+            row[col::HEAD_RAW_VALUE_START + term_i] = value;
+
+            // Set selector: if is_var, set the selector for the variable index
+            if is_var {
+                let var_idx = value.as_u32() as usize;
+                if var_idx < MAX_SUB_VARS {
+                    row[col::head_sel_var(term_i, var_idx)] = BabyBear::ONE;
+                }
+            }
+            // If not a variable, all selectors stay zero (sum=0=is_var=0).
+        }
+
+        // --- Equal check columns ---
+        for (check_i, eq_check) in w
+            .rule
+            .equal_checks
+            .iter()
+            .enumerate()
+            .take(MAX_EQUAL_CHECKS)
+        {
+            row[col::eq_check_active(check_i)] = BabyBear::ONE;
+
+            // Resolve LHS
+            let term_a = if eq_check.lhs_is_var {
+                let idx = eq_check.lhs_value.as_u32() as usize;
+                if idx < w.substitution.len() {
+                    w.substitution[idx]
+                } else {
+                    BabyBear::ZERO
+                }
+            } else {
+                eq_check.lhs_value
+            };
+
+            // Resolve RHS
+            let term_b = if eq_check.rhs_is_var {
+                let idx = eq_check.rhs_value.as_u32() as usize;
+                if idx < w.substitution.len() {
+                    w.substitution[idx]
+                } else {
+                    BabyBear::ZERO
+                }
+            } else {
+                eq_check.rhs_value
+            };
+
+            row[col::eq_check_term_a(check_i)] = term_a;
+            row[col::eq_check_term_b(check_i)] = term_b;
         }
 
         let public_inputs = vec![w.state_root, derived_hash];
@@ -320,6 +547,7 @@ pub fn create_test_derivation() -> DerivationWitness {
                 ],
             },
         ],
+        equal_checks: vec![],
     };
 
     // Body fact hashes (simulated — in real use these come from Merkle proofs)
@@ -346,7 +574,11 @@ mod tests {
         let witness = create_test_derivation();
         let air = DerivationAir::new(witness);
         let result = MockProver::verify(&air);
-        assert!(result.is_valid(), "Derivation AIR should verify: {:?}", result.violations());
+        assert!(
+            result.is_valid(),
+            "Derivation AIR should verify: {:?}",
+            result.violations()
+        );
     }
 
     #[test]
@@ -354,13 +586,11 @@ mod tests {
         let mut witness = create_test_derivation();
         // Tamper with derived predicate (hash will be wrong)
         witness.derived_predicate = BabyBear::new(999);
-        // But keep derived_terms the same — hash won't match the formula
         let air = DerivationAir::new(witness);
         let result = MockProver::verify(&air);
-        // The trace generator computes the correct hash from the (tampered) predicate,
-        // but the public input won't match because we need to manually check.
-        // Actually the trace generator recomputes, so let's tamper differently.
-        assert!(result.is_valid()); // trace gen recomputes, so this is consistent
+        // The trace generator recomputes hash from the (tampered) predicate,
+        // so the trace is internally consistent.
+        assert!(result.is_valid());
     }
 
     #[test]
@@ -376,10 +606,6 @@ mod tests {
     fn derivation_air_body_root_mismatch_fails() {
         let mut witness = create_test_derivation();
         witness.state_root = BabyBear::new(11111);
-        let _air = DerivationAir::new(witness.clone());
-        // The public input state_root should be 11111
-        // But if we manually override the body_roots to differ...
-        // We need to construct a scenario where body_root != state_root
 
         // Create witness where body roots in trace differ from state_root
         struct TamperedDerivationAir {
@@ -387,8 +613,12 @@ mod tests {
             tampered_root: BabyBear,
         }
         impl Air for TamperedDerivationAir {
-            fn trace_width(&self) -> usize { DERIVATION_AIR_WIDTH }
-            fn num_public_inputs(&self) -> usize { 2 }
+            fn trace_width(&self) -> usize {
+                DERIVATION_AIR_WIDTH
+            }
+            fn num_public_inputs(&self) -> usize {
+                2
+            }
             fn constraints(&self) -> Vec<Constraint> {
                 DerivationAir::new(self.witness.clone()).constraints()
             }
@@ -420,5 +650,331 @@ mod tests {
         // Change a derived term without changing substitution
         witness.derived_terms[0] = BabyBear::new(9999);
         assert!(!witness.check_head_match());
+    }
+
+    // --- Substitution verification tests ---
+
+    #[test]
+    fn test_derivation_air_substitution_correct() {
+        // The standard test derivation has head_terms = [(var 0), (var 1), (const 0)]
+        // with substitution = [alice=1000, file=2000]
+        // and derived_terms = [1000, 2000, 0]
+        // This should verify successfully.
+        let witness = create_test_derivation();
+        let air = DerivationAir::new(witness);
+        let result = MockProver::verify(&air);
+        assert!(
+            result.is_valid(),
+            "Correct substitution should verify: {:?}",
+            result.violations()
+        );
+    }
+
+    #[test]
+    fn test_derivation_air_wrong_substitution_rejected() {
+        // Create a witness where the derived terms don't match the substitution application.
+        // Rule head: access(X, Y) -> head_terms = [(var 0), (var 1), (const 0)]
+        // Substitution: X=1000, Y=2000
+        // But we claim derived_terms = [9999, 2000, 0] (wrong X value)
+        let mut witness = create_test_derivation();
+        // Tamper: change derived_terms[0] to wrong value
+        witness.derived_terms[0] = BabyBear::new(9999);
+        // We need to keep the hash consistent with the tampered terms, otherwise
+        // the hash constraint would fail first. The point is that the SUBSTITUTION
+        // constraint catches the mismatch between the rule pattern and derived fact.
+        let air = DerivationAir::new(witness);
+        let result = MockProver::verify(&air);
+        assert!(
+            !result.is_valid(),
+            "Wrong substitution should fail verification"
+        );
+        // Verify the substitution_application constraint is among the failures
+        let has_sub_violation = result
+            .violations()
+            .iter()
+            .any(|v| v.constraint_name == "substitution_application");
+        assert!(
+            has_sub_violation,
+            "Should have substitution_application violation, got: {:?}",
+            result.violations()
+        );
+    }
+
+    #[test]
+    fn test_derivation_air_constant_head_term() {
+        // Test rule with a constant in the head: result(X, "fixed_val", Y)
+        // head_terms = [(var 0), (const 500), (var 1)]
+        let access_pred = BabyBear::new(300);
+        let owns_pred = BabyBear::new(100);
+        let alice = BabyBear::new(1000);
+        let file = BabyBear::new(2000);
+        let fixed_val = BabyBear::new(500);
+
+        let rule = CircuitRule {
+            id: 2,
+            num_body_atoms: 1,
+            num_variables: 2,
+            head_predicate: access_pred,
+            head_terms: [
+                (true, BabyBear::new(0)),   // X -> substitution[0] = alice
+                (false, fixed_val),          // constant 500
+                (true, BabyBear::new(1)),   // Y -> substitution[1] = file
+            ],
+            body_atoms: vec![BodyAtomPattern {
+                predicate: owns_pred,
+                terms: [
+                    (true, BabyBear::new(0)),
+                    (true, BabyBear::new(1)),
+                    (false, BabyBear::ZERO),
+                ],
+            }],
+            equal_checks: vec![],
+        };
+
+        let body_fact = hash_fact(owns_pred, &[alice, file, BabyBear::ZERO]);
+
+        let witness = DerivationWitness {
+            rule,
+            state_root: BabyBear::new(99999),
+            body_fact_hashes: vec![body_fact],
+            substitution: vec![alice, file],
+            derived_predicate: access_pred,
+            derived_terms: [alice, fixed_val, file], // X=1000, const=500, Y=2000
+        };
+
+        let air = DerivationAir::new(witness);
+        let result = MockProver::verify(&air);
+        assert!(
+            result.is_valid(),
+            "Constant head term should pass: {:?}",
+            result.violations()
+        );
+    }
+
+    #[test]
+    fn test_derivation_air_constant_head_term_wrong_value() {
+        // Same as above but with wrong constant in the derived fact
+        let access_pred = BabyBear::new(300);
+        let owns_pred = BabyBear::new(100);
+        let alice = BabyBear::new(1000);
+        let file = BabyBear::new(2000);
+        let fixed_val = BabyBear::new(500);
+
+        let rule = CircuitRule {
+            id: 2,
+            num_body_atoms: 1,
+            num_variables: 2,
+            head_predicate: access_pred,
+            head_terms: [
+                (true, BabyBear::new(0)),
+                (false, fixed_val),          // expects constant 500
+                (true, BabyBear::new(1)),
+            ],
+            body_atoms: vec![BodyAtomPattern {
+                predicate: owns_pred,
+                terms: [
+                    (true, BabyBear::new(0)),
+                    (true, BabyBear::new(1)),
+                    (false, BabyBear::ZERO),
+                ],
+            }],
+            equal_checks: vec![],
+        };
+
+        let body_fact = hash_fact(owns_pred, &[alice, file, BabyBear::ZERO]);
+
+        let witness = DerivationWitness {
+            rule,
+            state_root: BabyBear::new(99999),
+            body_fact_hashes: vec![body_fact],
+            substitution: vec![alice, file],
+            derived_predicate: access_pred,
+            derived_terms: [alice, BabyBear::new(777), file], // WRONG: 777 instead of 500
+        };
+
+        let air = DerivationAir::new(witness);
+        let result = MockProver::verify(&air);
+        assert!(
+            !result.is_valid(),
+            "Wrong constant in derived fact should fail"
+        );
+    }
+
+    // --- Equal check tests ---
+
+    #[test]
+    fn test_derivation_air_equal_check_enforced() {
+        // Rule: access(X, Y) :- owns(X, Y), can_read(X, Y), X == Y.
+        // With X=alice, Y=alice (equal), this should pass.
+        let access_pred = BabyBear::new(300);
+        let owns_pred = BabyBear::new(100);
+        let alice = BabyBear::new(1000);
+
+        let rule = CircuitRule {
+            id: 3,
+            num_body_atoms: 1,
+            num_variables: 2,
+            head_predicate: access_pred,
+            head_terms: [
+                (true, BabyBear::new(0)),  // X
+                (true, BabyBear::new(1)),  // Y
+                (false, BabyBear::ZERO),
+            ],
+            body_atoms: vec![BodyAtomPattern {
+                predicate: owns_pred,
+                terms: [
+                    (true, BabyBear::new(0)),
+                    (true, BabyBear::new(1)),
+                    (false, BabyBear::ZERO),
+                ],
+            }],
+            equal_checks: vec![CircuitEqualCheck {
+                lhs_is_var: true,
+                lhs_value: BabyBear::new(0), // X
+                rhs_is_var: true,
+                rhs_value: BabyBear::new(1), // Y
+            }],
+        };
+
+        // X=alice, Y=alice (they are equal, so the check passes)
+        let body_fact = hash_fact(owns_pred, &[alice, alice, BabyBear::ZERO]);
+
+        let witness = DerivationWitness {
+            rule,
+            state_root: BabyBear::new(99999),
+            body_fact_hashes: vec![body_fact],
+            substitution: vec![alice, alice], // X=alice, Y=alice
+            derived_predicate: access_pred,
+            derived_terms: [alice, alice, BabyBear::ZERO],
+        };
+
+        let air = DerivationAir::new(witness);
+        let result = MockProver::verify(&air);
+        assert!(
+            result.is_valid(),
+            "Equal check with matching values should pass: {:?}",
+            result.violations()
+        );
+    }
+
+    #[test]
+    fn test_derivation_air_equal_check_violation() {
+        // Rule: access(X, Y) :- owns(X, Y), X == Y.
+        // With X=alice, Y=file (not equal), this should FAIL.
+        // But the prover must honestly report the resolved values.
+        let access_pred = BabyBear::new(300);
+        let owns_pred = BabyBear::new(100);
+        let alice = BabyBear::new(1000);
+        let file = BabyBear::new(2000);
+
+        let rule = CircuitRule {
+            id: 3,
+            num_body_atoms: 1,
+            num_variables: 2,
+            head_predicate: access_pred,
+            head_terms: [
+                (true, BabyBear::new(0)),  // X
+                (true, BabyBear::new(1)),  // Y
+                (false, BabyBear::ZERO),
+            ],
+            body_atoms: vec![BodyAtomPattern {
+                predicate: owns_pred,
+                terms: [
+                    (true, BabyBear::new(0)),
+                    (true, BabyBear::new(1)),
+                    (false, BabyBear::ZERO),
+                ],
+            }],
+            equal_checks: vec![CircuitEqualCheck {
+                lhs_is_var: true,
+                lhs_value: BabyBear::new(0), // X
+                rhs_is_var: true,
+                rhs_value: BabyBear::new(1), // Y
+            }],
+        };
+
+        // X=alice (1000), Y=file (2000) — NOT equal
+        let body_fact = hash_fact(owns_pred, &[alice, file, BabyBear::ZERO]);
+
+        let witness = DerivationWitness {
+            rule,
+            state_root: BabyBear::new(99999),
+            body_fact_hashes: vec![body_fact],
+            substitution: vec![alice, file], // X=alice, Y=file (different!)
+            derived_predicate: access_pred,
+            derived_terms: [alice, file, BabyBear::ZERO],
+        };
+
+        let air = DerivationAir::new(witness);
+        let result = MockProver::verify(&air);
+        assert!(
+            !result.is_valid(),
+            "Equal check with non-matching values should fail"
+        );
+        // Verify the eq_check_enforced constraint is violated
+        let has_eq_violation = result
+            .violations()
+            .iter()
+            .any(|v| v.constraint_name == "eq_check_enforced");
+        assert!(
+            has_eq_violation,
+            "Should have eq_check_enforced violation, got: {:?}",
+            result.violations()
+        );
+    }
+
+    #[test]
+    fn test_derivation_air_equal_check_var_vs_constant() {
+        // Equal check: X == 1000 (variable compared to constant)
+        let access_pred = BabyBear::new(300);
+        let owns_pred = BabyBear::new(100);
+        let alice = BabyBear::new(1000);
+        let file = BabyBear::new(2000);
+
+        let rule = CircuitRule {
+            id: 4,
+            num_body_atoms: 1,
+            num_variables: 2,
+            head_predicate: access_pred,
+            head_terms: [
+                (true, BabyBear::new(0)),
+                (true, BabyBear::new(1)),
+                (false, BabyBear::ZERO),
+            ],
+            body_atoms: vec![BodyAtomPattern {
+                predicate: owns_pred,
+                terms: [
+                    (true, BabyBear::new(0)),
+                    (true, BabyBear::new(1)),
+                    (false, BabyBear::ZERO),
+                ],
+            }],
+            equal_checks: vec![CircuitEqualCheck {
+                lhs_is_var: true,
+                lhs_value: BabyBear::new(0),  // X
+                rhs_is_var: false,
+                rhs_value: alice,              // constant 1000
+            }],
+        };
+
+        // X=alice=1000, check is X==1000, should pass
+        let body_fact = hash_fact(owns_pred, &[alice, file, BabyBear::ZERO]);
+
+        let witness = DerivationWitness {
+            rule,
+            state_root: BabyBear::new(99999),
+            body_fact_hashes: vec![body_fact],
+            substitution: vec![alice, file],
+            derived_predicate: access_pred,
+            derived_terms: [alice, file, BabyBear::ZERO],
+        };
+
+        let air = DerivationAir::new(witness);
+        let result = MockProver::verify(&air);
+        assert!(
+            result.is_valid(),
+            "Equal check var==const with matching values should pass: {:?}",
+            result.violations()
+        );
     }
 }
