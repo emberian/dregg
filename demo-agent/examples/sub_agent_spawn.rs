@@ -144,13 +144,15 @@ fn main() {
     let mut sub_agents: Vec<SubAgent> = Vec::new();
 
     for (name, service, budget_limit) in sub_agent_configs {
-        // Attenuate parent token to a single service with 1/3 budget
+        // Attenuate the unrestricted parent token to a single service + budget.
+        // Since the parent has NO service caveats, adding one here restricts
+        // the sub-agent to ONLY this service (match-any semantics: if any
+        // service caveat exists, the request must match one of them).
         let sub_attenuation = Attenuation {
             services: vec![((*service).into(), "rw".into())],
-            apps: vec![("orchestrator".into(), "rw".into())],
             budget: Some(BudgetSpec {
                 id: format!("{}-budget", name),
-                parent_id: Some("parent-budget".into()),
+                parent_id: None,
                 class: "computrons".into(),
                 limit: *budget_limit,
                 window: Some("1h".into()),
@@ -188,7 +190,6 @@ fn main() {
     for agent in &sub_agents {
         let req = AuthRequest {
             service: Some(agent.service.into()),
-            app_id: Some("orchestrator".into()),
             action: Some("rw".into()),
             user_id: Some(agent.name.into()),
             now: Some(1750000000),
@@ -211,7 +212,6 @@ fn main() {
     let compute_agent = &sub_agents[0];
     let cross_service_req = AuthRequest {
         service: Some("storage".into()), // Not authorized!
-        app_id: Some("orchestrator".into()),
         action: Some("rw".into()),
         user_id: Some(compute_agent.name.into()),
         now: Some(1750000000),
@@ -227,7 +227,6 @@ fn main() {
     let storage_agent = &sub_agents[1];
     let cross_req_2 = AuthRequest {
         service: Some("network".into()), // Not authorized!
-        app_id: Some("orchestrator".into()),
         action: Some("rw".into()),
         user_id: Some(storage_agent.name.into()),
         now: Some(1750000000),
@@ -243,7 +242,6 @@ fn main() {
     let network_agent = &sub_agents[2];
     let impersonate_req = AuthRequest {
         service: Some("network".into()),
-        app_id: Some("orchestrator".into()),
         action: Some("rw".into()),
         user_id: Some("compute-worker".into()), // Wrong user!
         now: Some(1750000000),
@@ -264,23 +262,6 @@ fn main() {
     // Set up a ledger with cells for each sub-agent and a shared target
     let mut ledger = Ledger::new();
 
-    // Create sub-agent cells
-    for agent in &sub_agents {
-        let sub_key = *blake3::hash(format!("sub-agent:{}", agent.name).as_bytes()).as_bytes();
-        let mut cell = Cell::with_balance(sub_key, token_domain, 50_000);
-        cell.permissions = Permissions {
-            send: AuthRequired::None,
-            receive: AuthRequired::None,
-            set_state: AuthRequired::None,
-            set_permissions: AuthRequired::None,
-            set_verification_key: AuthRequired::None,
-            increment_nonce: AuthRequired::None,
-            delegate: AuthRequired::None,
-            access: AuthRequired::None,
-        };
-        ledger.insert_cell(cell).unwrap();
-    }
-
     // Create a shared target cell that each sub-agent writes to
     let target_key = *blake3::hash(b"shared-target:result-aggregator").as_bytes();
     let mut target_cell = Cell::with_balance(target_key, token_domain, 10_000);
@@ -298,12 +279,6 @@ fn main() {
     ledger.insert_cell(target_cell).unwrap();
 
     println!("  Target cell: {} (shared result aggregator)", short_id(&target_id));
-    println!();
-
-    // Execute each sub-agent's turn
-    let costs = ComputronCosts::default_costs();
-    let executor = TurnExecutor::new(costs);
-    let mut receipts: Vec<TurnReceipt> = Vec::new();
 
     // We use a shared parent agent cell for the receipt chain
     let parent_cell_key = *blake3::hash(b"parent-orchestrator:cell").as_bytes();
@@ -318,8 +293,18 @@ fn main() {
         delegate: AuthRequired::None,
         access: AuthRequired::None,
     };
+    // Grant the parent cell a capability to reach the target cell
+    parent_cell.capabilities.grant(target_id, AuthRequired::None);
     let parent_cell_id = parent_cell.id;
     ledger.insert_cell(parent_cell).unwrap();
+
+    println!("  Parent cell: {} (orchestrator, has capability to target)", short_id(&parent_cell_id));
+    println!();
+
+    // Execute each sub-agent's turn
+    let costs = ComputronCosts::default_costs();
+    let executor = TurnExecutor::new(costs);
+    let mut receipts: Vec<TurnReceipt> = Vec::new();
 
     for (i, agent) in sub_agents.iter().enumerate() {
         // Build a turn: sub-agent writes its result to the target cell
@@ -409,7 +394,8 @@ fn main() {
     println!();
 
     for agent in &sub_agents {
-        // Build a presentation proof for this sub-agent
+        // Build a presentation proof for this sub-agent.
+        // The chain mirrors the actual delegation: root -> sub-agent attenuation.
         let mut builder = BridgePresentationBuilder::new_with_root_bb(
             issuer_key,
             federation_root_bytes,
@@ -419,19 +405,7 @@ fn main() {
         let root = MacaroonToken::mint(issuer_key, b"parent-orchestrator-v1", "platform.internal");
         builder.set_root_token(root);
 
-        // Add the parent-level attenuation
-        let parent_att = Attenuation {
-            services: vec![
-                ("compute".into(), "rw".into()),
-                ("storage".into(), "rw".into()),
-                ("network".into(), "rw".into()),
-            ],
-            apps: vec![("orchestrator".into(), "rw".into())],
-            ..Default::default()
-        };
-        builder.add_attenuation(&parent_att);
-
-        // Add the sub-agent-level attenuation (further narrows)
+        // Add the sub-agent-level attenuation (narrows from unrestricted to one service)
         let sub_att = Attenuation {
             services: vec![(agent.service.into(), "rw".into())],
             ..Default::default()
@@ -442,7 +416,6 @@ fn main() {
 
         let req = AuthRequest {
             service: Some(agent.service.into()),
-            app_id: Some("orchestrator".into()),
             action: Some("rw".into()),
             now: Some(1750000000),
             ..Default::default()
@@ -456,7 +429,7 @@ fn main() {
                     .map(|r| r.is_ok())
                     .unwrap_or(false);
                 println!("  {} proof:", agent.name);
-                println!("    Chain depth: {} (root -> parent -> sub-agent)", presentation.chain_length);
+                println!("    Chain depth: {} (root -> sub-agent)", presentation.chain_length);
                 println!("    Proof size: {}", presentation.proof_size_display());
                 println!("    Valid: {} | STARK: {}", valid, stark_ok);
             }

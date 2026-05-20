@@ -1,0 +1,114 @@
+name: Pyana Relay Node
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Run every 5 hours to restart before the 6-hour job limit
+    - cron: '0 */5 * * *'
+
+concurrency:
+  group: pyana-relay
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_LOG: info
+
+jobs:
+  relay:
+    name: Run Relay Node
+    runs-on: ubuntu-latest
+    timeout-minutes: 350  # ~5h50m, just under the 6h limit
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Build pyana-relay
+        run: cargo build --release -p pyana-relay
+
+      - name: Start relay node
+        id: relay
+        env:
+          PYANA_ROOT_KEY: ${{ secrets.PYANA_ROOT_KEY }}
+          PYANA_RELAY_SECRET_KEY: ${{ secrets.PYANA_RELAY_SECRET_KEY }}
+          PYANA_VALIDATORS: ${{ secrets.PYANA_VALIDATORS }}
+          PYANA_THRESHOLD: ${{ vars.PYANA_THRESHOLD || '1' }}
+        run: |
+          # Start the relay in the background, capturing output
+          ./target/release/pyana-relay > /tmp/relay-output.log 2>&1 &
+          RELAY_PID=$!
+          echo "relay_pid=$RELAY_PID" >> "$GITHUB_OUTPUT"
+
+          # Wait for the relay to come online (look for the info line)
+          for i in $(seq 1 60); do
+            if grep -q "PYANA_RELAY_INFO=" /tmp/relay-output.log 2>/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+
+          # Extract relay info
+          if grep -q "PYANA_RELAY_INFO=" /tmp/relay-output.log; then
+            RELAY_INFO=$(grep "PYANA_RELAY_INFO=" /tmp/relay-output.log | sed 's/PYANA_RELAY_INFO=//')
+            echo "relay_info=$RELAY_INFO" >> "$GITHUB_OUTPUT"
+            echo "Relay node online:"
+            echo "$RELAY_INFO" | jq .
+          else
+            echo "ERROR: Relay failed to start within 120s"
+            cat /tmp/relay-output.log
+            kill $RELAY_PID 2>/dev/null || true
+            exit 1
+          fi
+
+      - name: Publish relay address
+        if: steps.relay.outputs.relay_info != ''
+        run: |
+          echo "## Pyana Relay Node" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          echo '${{ steps.relay.outputs.relay_info }}' | jq . >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save relay info artifact
+        if: steps.relay.outputs.relay_info != ''
+        run: |
+          mkdir -p /tmp/relay-artifact
+          echo '${{ steps.relay.outputs.relay_info }}' > /tmp/relay-artifact/relay-info.json
+
+      - uses: actions/upload-artifact@v4
+        if: steps.relay.outputs.relay_info != ''
+        with:
+          name: pyana-relay-info
+          path: /tmp/relay-artifact/relay-info.json
+          retention-days: 1
+          overwrite: true
+
+      - name: Keep relay alive
+        env:
+          RELAY_PID: ${{ steps.relay.outputs.relay_pid }}
+        run: |
+          # Tail the log while the relay runs, until the job times out or is cancelled
+          echo "Relay running as PID $RELAY_PID, tailing logs..."
+          tail -f /tmp/relay-output.log &
+          TAIL_PID=$!
+
+          # Wait for the relay process; if it dies, exit with error
+          wait $RELAY_PID
+          EXIT_CODE=$?
+          kill $TAIL_PID 2>/dev/null || true
+
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "Relay exited with code $EXIT_CODE"
+            echo "Last 50 lines of log:"
+            tail -50 /tmp/relay-output.log
+            exit $EXIT_CODE
+          fi

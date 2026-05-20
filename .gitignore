@@ -4,3 +4,4 @@ hints/benches/committee_1024.json
 hints/benches/committee.json
 hints/benches/committee_128.json
 /chain/target/
+relay/target/

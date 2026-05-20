@@ -1,0 +1,41 @@
+[package]
+name = "pyana-relay"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89.0"
+authors = ["Pyana Contributors"]
+license = "MIT OR Apache-2.0"
+homepage = "https://pyana.dev"
+repository = "https://github.com/pyana-dev/breadstuffs"
+description = "Lightweight iroh relay node for the pyana federation — holds attested roots, relays peer connections, and mints root tokens"
+
+[[bin]]
+name = "pyana-relay"
+path = "src/main.rs"
+
+[dependencies]
+pyana-types = { path = "../types" }
+
+# Networking: iroh for QUIC + relay + hole-punching
+iroh = { version = "0.94", default-features = false }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+futures-util = "0.3"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+postcard = { version = "1", features = ["use-std"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Crypto (for root key handling — uses same ed25519 as pyana-types)
+ed25519-dalek = { version = "2", features = ["std"] }
+blake3 = "1"
+
+# Utilities
+anyhow = "1"
+rand = "0.9"
