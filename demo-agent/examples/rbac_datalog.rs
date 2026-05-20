@@ -440,13 +440,13 @@ fn main() {
     );
 
     // =========================================================================
-    // STEP 3: Token attenuation — restrict a token to specific resources
+    // STEP 3: Token attenuation — restrict a token to read-only
     // =========================================================================
-    println!("--- Step 3: TOKEN ATTENUATION (restrict to /docs only) ---\n");
+    println!("--- Step 3: TOKEN ATTENUATION (restrict to read-only) ---\n");
 
     // Simulate a "token" by creating an attenuated fact set.
-    // Bob's original token gives editor access to /docs and /api.
-    // Attenuate it to only /docs access.
+    // Bob's original token gives editor access (read+write on /docs, read on /api).
+    // Attenuate it to read-only access (remove write permission).
     let attenuated_facts: Vec<Fact> = vec![
         Fact::new(
             symbol_from_str("has_role"),
@@ -455,38 +455,30 @@ fn main() {
                 Term::Const(symbol_from_str("editor")),
             ],
         ),
-        // Only /docs permission remains (attenuated away /api)
+        // Attenuated: only read permission on /docs (write removed)
         Fact::new(
             symbol_from_str("role_permission"),
             vec![
                 Term::Const(symbol_from_str("editor")),
                 Term::Const(symbol_from_str("/docs")),
-                Term::Const(symbol_from_str("read,write")),
+                Term::Const(symbol_from_str("read")), // was "read,write"
+            ],
+        ),
+        Fact::new(
+            symbol_from_str("role_permission"),
+            vec![
+                Term::Const(symbol_from_str("editor")),
+                Term::Const(symbol_from_str("/api")),
+                Term::Const(symbol_from_str("read")),
             ],
         ),
     ];
 
     let attenuated_eval = Evaluator::new(attenuated_facts.clone(), rules.clone());
 
-    println!("  Attenuated token: Bob's access restricted to /docs only\n");
+    println!("  Attenuated token: Bob's access restricted to read-only\n");
 
-    let req_bob_read_api_attenuated = AuthorizationRequest {
-        app_id: None,
-        service: Some(symbol_from_str("/api")),
-        action: Some(symbol_from_str("read")),
-        features: vec![],
-        user_id: Some(symbol_from_str("bob")),
-        now: 1700000000,
-    };
-    evaluate_and_print(
-        &attenuated_eval,
-        "Bob reads /api (DENIED - attenuated away)",
-        &req_bob_read_api_attenuated,
-        &attenuated_facts,
-        &rules,
-    );
-
-    let req_bob_write_docs_attenuated = AuthorizationRequest {
+    let req_bob_write_attenuated = AuthorizationRequest {
         app_id: None,
         service: Some(symbol_from_str("/docs")),
         action: Some(symbol_from_str("write")),
@@ -494,10 +486,26 @@ fn main() {
         user_id: Some(symbol_from_str("bob")),
         now: 1700000000,
     };
+    evaluate_and_print(
+        &attenuated_eval,
+        "Bob writes /docs (DENIED - attenuated to read-only)",
+        &req_bob_write_attenuated,
+        &attenuated_facts,
+        &rules,
+    );
+
+    let req_bob_read_docs_attenuated = AuthorizationRequest {
+        app_id: None,
+        service: Some(symbol_from_str("/docs")),
+        action: Some(symbol_from_str("read")),
+        features: vec![],
+        user_id: Some(symbol_from_str("bob")),
+        now: 1700000000,
+    };
     let allow_trace = evaluate_and_print(
         &attenuated_eval,
-        "Bob writes /docs (ALLOWED - still in attenuated set)",
-        &req_bob_write_docs_attenuated,
+        "Bob reads /docs (ALLOWED - read still permitted)",
+        &req_bob_read_docs_attenuated,
         &attenuated_facts,
         &rules,
     );
