@@ -22,6 +22,8 @@ pub struct CellStatePrecondition {
     pub min_balance: Option<u64>,
     /// Fields that must equal specific values: (slot_index, expected_value).
     pub field_equals: Vec<(usize, FieldElement)>,
+    /// Assert that the cell's proved_state flag equals this value.
+    pub proved_state: Option<bool>,
 }
 
 /// Assertions about the network/ledger state.
@@ -120,6 +122,14 @@ impl CellStatePrecondition {
                 }
             }
         }
+        if let Some(expected_proved) = self.proved_state
+            && state.proved_state != expected_proved
+        {
+            return Err(PreconditionError::ProvedStateMismatch {
+                expected: expected_proved,
+                actual: state.proved_state,
+            });
+        }
         Ok(())
     }
 }
@@ -157,4 +167,5 @@ pub enum PreconditionError {
     HeightTooLow { required: u64, actual: u64 },
     HeightTooHigh { max: u64, actual: u64 },
     TimeOutOfRange { timestamp: i64, start: i64, end: i64 },
+    ProvedStateMismatch { expected: bool, actual: bool },
 }

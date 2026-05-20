@@ -8,6 +8,27 @@ use pyana_cell::{CellId, CapabilityRef, Preconditions};
 use pyana_cell::state::FieldElement;
 use serde::{Deserialize, Serialize};
 
+/// How much of the turn an action's signer commits to.
+///
+/// This controls what goes into the signing message:
+/// - `Full`: signs over the entire turn hash (maximum binding, current default)
+/// - `Partial`: signs over only this action's content + its position in the forest,
+///   allowing composability where signers don't need to see other actions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CommitmentMode {
+    /// Sign over the entire turn hash (current behavior — maximum binding).
+    Full,
+    /// Sign over only this action's hash + its position in the forest.
+    /// Allows composability: signer doesn't need to see other actions.
+    Partial,
+}
+
+impl Default for CommitmentMode {
+    fn default() -> Self {
+        CommitmentMode::Full
+    }
+}
+
 /// A Symbol is a BLAKE3-hashed method or topic name, stored as a field element.
 pub type Symbol = FieldElement;
 
@@ -36,6 +57,21 @@ pub struct Action {
     pub effects: Vec<Effect>,
     /// Can children use parent's capabilities?
     pub may_delegate: DelegationMode,
+    /// How much of the turn this action's signer commits to.
+    /// Full = signs over entire turn hash (default, maximum binding).
+    /// Partial = signs over only this action + position (enables multi-party composition).
+    #[serde(default)]
+    pub commitment_mode: CommitmentMode,
+    /// Signed balance modification (Mina-style).
+    ///
+    /// When set, this applies a signed delta to the target cell's balance:
+    /// - Negative values withdraw (produce excess available to other actions)
+    /// - Positive values deposit (consume excess from other actions)
+    ///
+    /// At turn end, the sum of all balance_change deltas must be zero (conservation law).
+    /// This enables composable patterns like DEX fills without explicit Transfer pairing.
+    #[serde(default)]
+    pub balance_change: Option<i64>,
 }
 
 /// How an action is authorized.
@@ -123,6 +159,24 @@ pub enum Effect {
         token_id: [u8; 32],
         balance: u64,
     },
+    /// Update the permissions on a cell.
+    ///
+    /// SECURITY: This effect is always applied LAST within an action, after all
+    /// other effects. Permission checks for all effects use the ORIGINAL permissions
+    /// (snapshotted before any effects in this action run). This prevents an action
+    /// from weakening permissions and then exploiting the weakened permissions in
+    /// subsequent effects within the same action.
+    SetPermissions {
+        cell: CellId,
+        new_permissions: pyana_cell::Permissions,
+    },
+    /// Update the verification key on a cell.
+    ///
+    /// SECURITY: Like SetPermissions, this is applied LAST within an action.
+    SetVerificationKey {
+        cell: CellId,
+        new_vk: Option<pyana_cell::VerificationKey>,
+    },
 }
 
 /// An event emitted by an action.
@@ -167,6 +221,15 @@ impl Action {
         }
         // Hash delegation mode.
         hasher.update(&[self.may_delegate as u8]);
+        // Hash commitment mode.
+        hasher.update(&[self.commitment_mode as u8]);
+        // Hash balance_change.
+        if let Some(delta) = self.balance_change {
+            hasher.update(&[1u8]); // discriminant: Some
+            hasher.update(&delta.to_le_bytes());
+        } else {
+            hasher.update(&[0u8]); // discriminant: None
+        }
         // Hash effects.
         for effect in &self.effects {
             hasher.update(&effect.hash());
@@ -222,6 +285,41 @@ impl Effect {
                 hasher.update(token_id);
                 hasher.update(&balance.to_le_bytes());
             }
+            Effect::SetPermissions { cell, new_permissions } => {
+                hasher.update(&[7u8]);
+                hasher.update(cell.as_bytes());
+                // Hash each permission field's discriminant.
+                let perms = [
+                    &new_permissions.send,
+                    &new_permissions.receive,
+                    &new_permissions.set_state,
+                    &new_permissions.set_permissions,
+                    &new_permissions.set_verification_key,
+                    &new_permissions.increment_nonce,
+                    &new_permissions.delegate,
+                    &new_permissions.access,
+                ];
+                for p in perms {
+                    let disc = match p {
+                        pyana_cell::AuthRequired::None => 0u8,
+                        pyana_cell::AuthRequired::Signature => 1u8,
+                        pyana_cell::AuthRequired::Proof => 2u8,
+                        pyana_cell::AuthRequired::Either => 3u8,
+                        pyana_cell::AuthRequired::Impossible => 4u8,
+                    };
+                    hasher.update(&[disc]);
+                }
+            }
+            Effect::SetVerificationKey { cell, new_vk } => {
+                hasher.update(&[8u8]);
+                hasher.update(cell.as_bytes());
+                if let Some(vk) = new_vk {
+                    hasher.update(&[1u8]);
+                    hasher.update(&vk.data);
+                } else {
+                    hasher.update(&[0u8]);
+                }
+            }
         }
         *hasher.finalize().as_bytes()
     }
@@ -236,7 +334,20 @@ impl Effect {
             Effect::EmitEvent { event, .. } => 32 + 32 + event.data.len() * 32,
             Effect::IncrementNonce { .. } => 32,
             Effect::CreateCell { .. } => 32 + 32 + 8,
+            Effect::SetPermissions { .. } => 32 + 8 * 1, // cell + 8 permission fields
+            Effect::SetVerificationKey { new_vk, .. } => {
+                32 + new_vk.as_ref().map_or(1, |vk| 1 + vk.data.len())
+            }
         }
+    }
+
+    /// Returns true if this effect is a permission-changing effect.
+    ///
+    /// Permission-changing effects (SetPermissions, SetVerificationKey) are always
+    /// applied LAST within an action to prevent an action from weakening permissions
+    /// and exploiting the weakened state in subsequent effects.
+    pub fn is_permission_effect(&self) -> bool {
+        matches!(self, Effect::SetPermissions { .. } | Effect::SetVerificationKey { .. })
     }
 }
 

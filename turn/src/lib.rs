@@ -37,6 +37,7 @@
 
 pub mod action;
 pub mod builder;
+pub mod composer;
 pub mod error;
 pub mod executor;
 pub mod forest;
@@ -47,8 +48,9 @@ pub mod turn;
 mod tests;
 
 // Re-export primary types at crate root.
-pub use action::{Action, Authorization, DelegationMode, Effect, Event};
+pub use action::{Action, Authorization, CommitmentMode, DelegationMode, Effect, Event};
 pub use builder::{ActionBuilder, TurnBuilder};
+pub use composer::{ComposeError, SignedFragment, TurnComposer};
 pub use error::TurnError;
 pub use executor::{ComputronCosts, ProofVerifier, TurnExecutor};
 pub use forest::{CallForest, CallTree};

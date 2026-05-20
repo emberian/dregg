@@ -16,6 +16,7 @@ pub mod id;
 pub mod ledger;
 pub mod permissions;
 pub mod preconditions;
+pub mod program;
 pub mod state;
 
 #[cfg(test)]
@@ -30,4 +31,5 @@ pub use permissions::{Action, AuthKind, AuthRequired, Permissions};
 pub use preconditions::{
     CellStatePrecondition, EvalContext, NetworkPrecondition, Preconditions, TimeRange,
 };
-pub use state::{CellState, FieldElement, FIELD_ZERO, STATE_SLOTS};
+pub use program::{CellProgram, ProgramError, StateConstraint};
+pub use state::{CellState, FieldElement, FieldVisibility, FIELD_ZERO, PublicFieldView, STATE_SLOTS};

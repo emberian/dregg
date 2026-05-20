@@ -11,20 +11,19 @@
 //! - Extension field: BinomialExtensionField<BabyBear, 4> (degree-4 extension)
 //! - DFT: Radix2DitParallel (parallel NTT)
 //! - FRI: log_blowup=2 (4x), 50 queries, 16 PoW bits
-//!
-//! ## Usage
-//!
-//! ```no_run
-//! use pyana_circuit::plonky3_prover::{prove_plonky3, verify_plonky3, PyanaStarkConfig};
-//! ```
 
-use p3_air::{Air, BaseAir};
-use p3_baby_bear::{BabyBear as P3BabyBear, default_babybear_poseidon2_16, default_babybear_poseidon2_24};
+use p3_air::{Air, AirBuilder, BaseAir};
+use p3_air::WindowAccess;
+use p3_baby_bear::{
+    BabyBear as P3BabyBear,
+    Poseidon2BabyBear,
+    default_babybear_poseidon2_16, default_babybear_poseidon2_24,
+};
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::{Field, PrimeCharacteristicRing, PrimeField32};
 use p3_fri::{FriParameters, TwoAdicFriPcs};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
@@ -32,20 +31,17 @@ use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{Proof, StarkConfig, prove, verify};
 
 use crate::field::BabyBear;
-use crate::poseidon2::hash_4_to_1;
-use crate::poseidon2_air::{MerklePoseidon2StarkAir, generate_merkle_poseidon2_trace};
+use crate::poseidon2_air::generate_merkle_poseidon2_trace;
 
 // ============================================================================
 // Type definitions for our Plonky3 configuration
 // ============================================================================
 
 /// The Poseidon2 permutation over width-16 arrays (for Merkle tree compression).
-type Perm16 = p3_poseidon2::Poseidon2<P3BabyBear, p3_poseidon2::GenericPoseidon2LinearLayers<
-    p3_baby_bear::BabyBearInternalLayerParameters, 16>, 16, 7>;
+type Perm16 = Poseidon2BabyBear<16>;
 
 /// The Poseidon2 permutation over width-24 arrays (for sponge hashing).
-type Perm24 = p3_poseidon2::Poseidon2<P3BabyBear, p3_poseidon2::GenericPoseidon2LinearLayers<
-    p3_baby_bear::BabyBearInternalLayerParameters, 24>, 24, 7>;
+type Perm24 = Poseidon2BabyBear<24>;
 
 /// Sponge hash using Poseidon2 width-24.
 type PyanaHash = PaddingFreeSponge<Perm24, 24, 16, 8>;
@@ -112,7 +108,7 @@ pub fn create_config() -> PyanaStarkConfig {
         mmcs: challenge_mmcs,
     };
 
-    let dft = Radix2DitParallel::new();
+    let dft = Radix2DitParallel::default();
     let pcs = TwoAdicFriPcs::new(dft, val_mmcs, fri_params);
 
     let challenger = DuplexChallenger::new(perm24);
@@ -144,36 +140,29 @@ impl<F: PrimeCharacteristicRing + Sync> BaseAir<F> for P3MerklePoseidon2Air {
         2 // [leaf_hash, root]
     }
 
-    /// This AIR does not access the next row in constraints (single-row constraints).
+    /// This AIR does not access the next row in constraints (single-row constraints only).
     fn main_next_row_columns(&self) -> Vec<usize> {
         vec![]
     }
 }
 
-impl<AB> Air<AB> for P3MerklePoseidon2Air
-where
-    AB: p3_air::AirBuilder,
-    AB::F: PrimeCharacteristicRing,
-    AB::Expr: From<AB::Var>,
-{
+impl<AB: AirBuilder> Air<AB> for P3MerklePoseidon2Air {
     fn eval(&self, builder: &mut AB) {
-        use p3_air::AirBuilder;
-        use p3_field::PrimeCharacteristicRing as PCR;
-
         let main = builder.main();
         let local = main.current_slice();
 
-        let position = local[4].into();
+        // Get position as Expr
+        let position: AB::Expr = local[4].into();
 
         // Constraint 1: Position validity
         // pos * (pos - 1) * (pos - 2) * (pos - 3) = 0
-        let one: AB::Expr = AB::Expr::ONE;
-        let two: AB::Expr = one.clone() + one.clone();
-        let three: AB::Expr = two.clone() + one.clone();
+        let one = AB::Expr::ONE;
+        let two = AB::Expr::TWO;
+        let three = two.clone() + one.clone();
 
-        let pos_m_1 = position.clone() - one;
-        let pos_m_2 = position.clone() - two;
-        let pos_m_3 = position.clone() - three;
+        let pos_m_1: AB::Expr = position.clone() - one;
+        let pos_m_2: AB::Expr = position.clone() - two;
+        let pos_m_3: AB::Expr = position.clone() - three;
 
         let pos_valid = position * pos_m_1 * pos_m_2 * pos_m_3;
         builder.assert_zero(pos_valid);
@@ -185,13 +174,13 @@ where
 // ============================================================================
 
 /// Convert our BabyBear values to Plonky3's BabyBear.
-fn to_p3(val: BabyBear) -> P3BabyBear {
-    P3BabyBear::from_canonical_u32(val.0)
+pub fn to_p3(val: BabyBear) -> P3BabyBear {
+    P3BabyBear::new(val.0)
 }
 
 /// Convert Plonky3's BabyBear back to ours.
 #[allow(dead_code)]
-fn from_p3(val: P3BabyBear) -> BabyBear {
+pub fn from_p3(val: P3BabyBear) -> BabyBear {
     BabyBear(val.as_canonical_u32())
 }
 

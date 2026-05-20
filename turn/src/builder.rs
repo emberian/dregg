@@ -6,7 +6,7 @@
 use pyana_cell::{CapabilityRef, CellId, Preconditions};
 use pyana_cell::state::FieldElement;
 
-use crate::action::{Action, Authorization, DelegationMode, Effect, Event, symbol};
+use crate::action::{Action, Authorization, CommitmentMode, DelegationMode, Effect, Event, symbol};
 use crate::forest::CallForest;
 use crate::turn::Turn;
 
@@ -95,6 +95,28 @@ impl TurnBuilder {
             valid_until: self.valid_until,
         }
     }
+
+    /// Validate that the excess of all balance_change deltas sums to zero.
+    ///
+    /// This is a client-side check before submission — the executor will also
+    /// enforce this at execution time, but this gives immediate feedback.
+    pub fn validate_excess(&self) -> Result<(), crate::error::TurnError> {
+        let excess = self.compute_excess();
+        if excess != 0 {
+            Err(crate::error::TurnError::ExcessNotZero { excess })
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Compute the total excess from all action builders (recursively).
+    fn compute_excess(&self) -> i64 {
+        let mut total: i64 = 0;
+        for ab in &self.action_builders {
+            total = total.saturating_add(ab.compute_excess_recursive());
+        }
+        total
+    }
 }
 
 /// Builder for constructing an Action with its children.
@@ -106,6 +128,8 @@ pub struct ActionBuilder {
     preconditions: Preconditions,
     effects: Vec<Effect>,
     may_delegate: DelegationMode,
+    commitment_mode: CommitmentMode,
+    balance_change: Option<i64>,
     children: Vec<ActionBuilder>,
 }
 
@@ -120,6 +144,8 @@ impl ActionBuilder {
             preconditions: Preconditions::default(),
             effects: Vec::new(),
             may_delegate: DelegationMode::None,
+            commitment_mode: CommitmentMode::Full,
+            balance_change: None,
             children: Vec::new(),
         }
     }
@@ -181,6 +207,13 @@ impl ActionBuilder {
         self
     }
 
+    /// Set a proved_state precondition.
+    pub fn require_proved_state(&mut self, expected: bool) -> &mut Self {
+        let cell_pre = self.preconditions.cell_state.get_or_insert_with(Default::default);
+        cell_pre.proved_state = Some(expected);
+        self
+    }
+
     /// Set preconditions directly.
     pub fn preconditions(&mut self, pre: Preconditions) -> &mut Self {
         self.preconditions = pre;
@@ -193,6 +226,18 @@ impl ActionBuilder {
         self.children.last_mut().unwrap()
     }
 
+    /// Set the commitment mode for this action.
+    pub fn commitment_mode(&mut self, mode: CommitmentMode) -> &mut Self {
+        self.commitment_mode = mode;
+        self
+    }
+
+    /// Set a signed balance change for this action (Mina-style excess tracking).
+    pub fn balance_change(&mut self, delta: i64) -> &mut Self {
+        self.balance_change = Some(delta);
+        self
+    }
+
     /// Build the Action (without children — those are attached separately).
     fn build_action(&self) -> Action {
         Action {
@@ -203,6 +248,8 @@ impl ActionBuilder {
             preconditions: self.preconditions.clone(),
             effects: self.effects.clone(),
             may_delegate: self.may_delegate,
+            commitment_mode: self.commitment_mode,
+            balance_change: self.balance_change,
         }
     }
 
@@ -271,5 +318,38 @@ impl ActionBuilder {
     ) -> &mut Self {
         self.effects.push(Effect::CreateCell { public_key, token_id, balance });
         self
+    }
+
+    /// Add a SetPermissions effect.
+    ///
+    /// NOTE: Permission effects are always applied LAST within an action,
+    /// regardless of declaration order. All other effects in the same action
+    /// are checked against the ORIGINAL permissions.
+    pub fn set_permissions(&mut self, cell: CellId, new_permissions: pyana_cell::Permissions) -> &mut Self {
+        self.effects.push(Effect::SetPermissions { cell, new_permissions });
+        self
+    }
+
+    /// Add a SetVerificationKey effect.
+    ///
+    /// NOTE: Like SetPermissions, this is applied LAST within an action.
+    pub fn set_verification_key(&mut self, cell: CellId, new_vk: Option<pyana_cell::VerificationKey>) -> &mut Self {
+        self.effects.push(Effect::SetVerificationKey { cell, new_vk });
+        self
+    }
+
+    /// Compute the total excess contribution from this action and its children.
+    /// Excess is the negation of balance_change: withdrawal (-delta) produces excess (+),
+    /// deposit (+delta) consumes excess (-).
+    fn compute_excess_recursive(&self) -> i64 {
+        let mut total: i64 = 0;
+        if let Some(delta) = self.balance_change {
+            // excess += -delta (withdrawal produces, deposit consumes)
+            total = total.saturating_sub(delta);
+        }
+        for child in &self.children {
+            total = total.saturating_add(child.compute_excess_recursive());
+        }
+        total
     }
 }

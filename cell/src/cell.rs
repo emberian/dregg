@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::capability::CapabilitySet;
 use crate::id::CellId;
 use crate::permissions::Permissions;
+use crate::program::CellProgram;
 use crate::state::CellState;
 
 /// A verification key associated with a cell's proof circuit.
@@ -47,6 +48,9 @@ pub struct Cell {
     pub token_id: [u8; 32],
     /// The c-list: what other cells this cell can reference.
     pub capabilities: CapabilitySet,
+    /// The cell's program: defines valid state transitions.
+    /// If `CellProgram::None`, any authorized state change is valid (backward compat).
+    pub program: CellProgram,
 }
 
 impl Cell {
@@ -62,6 +66,7 @@ impl Cell {
             delegate: None,
             token_id,
             capabilities: CapabilitySet::new(),
+            program: CellProgram::None,
         }
     }
 
@@ -77,6 +82,7 @@ impl Cell {
             delegate: None,
             token_id,
             capabilities: CapabilitySet::new(),
+            program: CellProgram::None,
         }
     }
 
@@ -92,6 +98,7 @@ impl Cell {
             delegate: Some(self.id),
             token_id: child_token_id,
             capabilities: CapabilitySet::new(),
+            program: CellProgram::None,
         }
     }
 }

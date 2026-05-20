@@ -201,22 +201,27 @@ impl TurnExecutor {
             };
         }
 
-        // Phase 1: Compute pre-state hash and create journal for rollback.
+        // Compute pre-state hash before any mutations.
         let pre_state_hash = ledger.root();
-        let mut journal = LedgerJournal::with_capacity(16);
 
-        // Phase 2: Deduct fee from agent (recording undo entries in journal).
+        // =====================================================================
+        // PHASE 1: Commit fee + nonce (NEVER rolled back).
+        // This prevents DoS via expensive-but-failing turns that never pay.
+        // =====================================================================
         {
             let agent = ledger.get_mut(&turn.agent).unwrap();
-            journal.record_set_balance(turn.agent, agent.state.balance);
             agent.state.balance -= turn.fee;
-            journal.record_set_nonce(turn.agent, agent.state.nonce);
             agent.state.increment_nonce();
         }
 
-        // Phase 3: Walk the call forest depth-first.
+        // =====================================================================
+        // PHASE 2: Execute call forest (rolled back on failure).
+        // The journal only records forest effects — fee/nonce are already final.
+        // =====================================================================
+        let mut journal = LedgerJournal::with_capacity(16);
         let mut computrons_used: u64 = 0;
         let mut all_effects_hashes: Vec<[u8; 32]> = Vec::new();
+        let mut excess: i64 = 0; // Mina-style excess: must be zero at turn end.
 
         for (root_idx, root_tree) in turn.call_forest.roots.iter().enumerate() {
             let result = self.execute_tree(
@@ -229,6 +234,7 @@ impl TurnExecutor {
                 &mut all_effects_hashes,
                 vec![root_idx],
                 &mut journal,
+                &mut excess,
             );
 
             if let Err((error, path)) = result {
@@ -253,6 +259,15 @@ impl TurnExecutor {
             };
         }
 
+        // Check excess conservation law: must be zero at turn end.
+        if excess != 0 {
+            journal.rollback(ledger);
+            return TurnResult::Rejected {
+                reason: TurnError::ExcessNotZero { excess },
+                at_action: vec![],
+            };
+        }
+
         // Phase 4: Compute receipt.
         let post_state_hash = ledger.root();
         let effects_hash = self.compute_effects_hash(&all_effects_hashes);
@@ -262,8 +277,8 @@ impl TurnExecutor {
         let turn_hash = turn_clone.hash();
         let forest_hash = turn_clone.call_forest.forest_hash;
 
-        // Build ledger delta from the journal (no snapshot needed).
-        let delta = Self::compute_delta_from_journal(&journal, ledger);
+        // Build ledger delta from the journal and Phase 1 (fee + nonce) commitment.
+        let delta = Self::compute_delta_from_journal_with_fee(&journal, ledger, &turn.agent, turn.fee);
 
         let receipt = TurnReceipt {
             turn_hash,
@@ -351,6 +366,7 @@ impl TurnExecutor {
         effects_hashes: &mut Vec<[u8; 32]>,
         path: Vec<usize>,
         journal: &mut LedgerJournal,
+        excess: &mut i64,
     ) -> Result<(), (TurnError, Vec<usize>)> {
         let action = &tree.action;
 
@@ -427,8 +443,53 @@ impl TurnExecutor {
             ));
         }
 
-        // Apply effects.
-        for effect in &action.effects {
+        // Capture the target cell's state before effects are applied (for program enforcement).
+        let old_target_state = ledger.get(&action.target).map(|c| c.state.clone());
+
+        // =====================================================================
+        // PERMISSION UPDATE ORDERING (Fix 2):
+        // Split effects into regular effects and permission-changing effects.
+        // Regular effects are applied first, permission effects are applied LAST.
+        // All permission checks use the ORIGINAL permissions (already verified above
+        // in verify_authorization which ran before any effects were applied).
+        // This prevents an action from SetPermissions -> exploit weakened perms.
+        // =====================================================================
+        let (regular_effects, permission_effects): (Vec<&Effect>, Vec<&Effect>) =
+            action.effects.iter().partition(|e| !e.is_permission_effect());
+
+        // Apply effects, tracking which cells have fields set (for proved_state).
+        let is_proof_auth = matches!(&action.authorization, Authorization::Proof(_));
+        let mut proof_field_sets: std::collections::HashMap<CellId, std::collections::HashSet<usize>> =
+            std::collections::HashMap::new();
+        let mut non_proof_field_cells: std::collections::HashSet<CellId> =
+            std::collections::HashSet::new();
+
+        // Apply regular effects first.
+        for effect in &regular_effects {
+            let effect_cost = self.compute_effect_cost(effect);
+            *computrons_used = computrons_used.saturating_add(effect_cost);
+            if *computrons_used > budget {
+                return Err((
+                    TurnError::BudgetExceeded { limit: budget, used: *computrons_used },
+                    path.clone(),
+                ));
+            }
+
+            // Track SetField effects for proved_state logic.
+            if let Effect::SetField { cell, index, .. } = effect {
+                if is_proof_auth {
+                    proof_field_sets.entry(*cell).or_default().insert(*index);
+                } else {
+                    non_proof_field_cells.insert(*cell);
+                }
+            }
+
+            self.apply_effect(effect, ledger, &path, &action.target, parent_cell, journal)?;
+            effects_hashes.push(effect.hash());
+        }
+
+        // Apply permission-changing effects LAST.
+        for effect in &permission_effects {
             let effect_cost = self.compute_effect_cost(effect);
             *computrons_used = computrons_used.saturating_add(effect_cost);
             if *computrons_used > budget {
@@ -440,6 +501,103 @@ impl TurnExecutor {
 
             self.apply_effect(effect, ledger, &path, &action.target, parent_cell, journal)?;
             effects_hashes.push(effect.hash());
+        }
+
+        // Update proved_state based on authorization type and fields touched.
+        if is_proof_auth {
+            // If ALL 8 fields were set by this proof-authorized action, proved_state = true.
+            for (cell_id, indices) in &proof_field_sets {
+                if indices.len() == STATE_SLOTS {
+                    if let Some(c) = ledger.get_mut(cell_id) {
+                        if !c.state.proved_state {
+                            journal.record_set_proved_state(*cell_id, c.state.proved_state);
+                            c.state.proved_state = true;
+                        }
+                    }
+                }
+            }
+        } else {
+            // Non-proof authorization: if any field was modified, proved_state = false.
+            for cell_id in &non_proof_field_cells {
+                if let Some(c) = ledger.get_mut(cell_id) {
+                    if c.state.proved_state {
+                        journal.record_set_proved_state(*cell_id, c.state.proved_state);
+                        c.state.proved_state = false;
+                    }
+                }
+            }
+        }
+
+        // Apply balance_change (Mina-style excess tracking).
+        if let Some(delta) = action.balance_change {
+            let target = ledger.get(&action.target).ok_or_else(|| {
+                (TurnError::CellNotFound { id: action.target }, path.clone())
+            })?;
+            let current_balance = target.state.balance;
+
+            // Check for underflow on withdrawal (negative delta).
+            if delta < 0 {
+                let abs_delta = delta.unsigned_abs();
+                if current_balance < abs_delta {
+                    return Err((
+                        TurnError::BalanceChangeUnderflow {
+                            cell: action.target,
+                            current: current_balance,
+                            delta,
+                        },
+                        path.clone(),
+                    ));
+                }
+            } else {
+                // Check for overflow on deposit (positive delta).
+                let abs_delta = delta as u64;
+                if current_balance.checked_add(abs_delta).is_none() {
+                    return Err((
+                        TurnError::BalanceOverflow { cell: action.target },
+                        path.clone(),
+                    ));
+                }
+            }
+
+            // Record old balance for rollback and apply the delta.
+            let cell_mut = ledger.get_mut(&action.target).unwrap();
+            journal.record_set_balance(action.target, cell_mut.state.balance);
+            if delta < 0 {
+                cell_mut.state.balance -= delta.unsigned_abs();
+            } else {
+                cell_mut.state.balance += delta as u64;
+            }
+
+            // Update excess: withdrawal (negative delta) PRODUCES excess (adds to excess),
+            // deposit (positive delta) CONSUMES excess (subtracts from excess).
+            // excess += -delta
+            *excess = excess.saturating_sub(delta);
+        }
+
+        // Enforce cell program constraints on the post-transition state.
+        if let Some(target_cell) = ledger.get(&action.target) {
+            if !target_cell.program.is_none() {
+                // For Circuit programs, the action must carry a proof (already verified above).
+                // For Predicate programs, evaluate constraints against new state.
+                if !target_cell.program.requires_proof() {
+                    let result = target_cell.program.evaluate(
+                        &target_cell.state,
+                        old_target_state.as_ref(),
+                    );
+                    if let Err(e) = result {
+                        return Err((
+                            TurnError::ProgramViolation {
+                                cell: action.target,
+                                reason: e.to_string(),
+                            },
+                            path,
+                        ));
+                    }
+                }
+                // Circuit programs: we rely on the proof verification done in verify_authorization.
+                // The cell's verification_key corresponds to the circuit. If the proof passed
+                // verification, the state transition is valid by construction.
+            }
         }
 
         // Recurse into children.
@@ -478,6 +636,7 @@ impl TurnExecutor {
                 effects_hashes,
                 child_path,
                 journal,
+                excess,
             )?;
         }
 
@@ -772,6 +931,10 @@ impl TurnExecutor {
     }
 
     /// Compute the message that should be signed for an action.
+    ///
+    /// For actions with `CommitmentMode::Full`, this produces the standard signing
+    /// message based on the action's content. For `CommitmentMode::Partial`, use
+    /// [`compute_partial_signing_message`] which includes position and forest root.
     pub fn compute_signing_message(action: &Action) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new();
         hasher.update(action.target.as_bytes());
@@ -786,6 +949,27 @@ impl TurnExecutor {
         *hasher.finalize().as_bytes()
     }
 
+    /// Compute the signing message for an action in partial commitment mode.
+    ///
+    /// The signer commits to:
+    /// - The action's own content hash (what they are doing)
+    /// - Their position index in the forest (where they are)
+    /// - The forest root hash (binding to the overall structure)
+    ///
+    /// This allows a party to sign their part without knowing about other actions,
+    /// enabling multi-party composition (DEX fills, atomic swaps, etc.)
+    pub fn compute_partial_signing_message(
+        action: &Action,
+        position: usize,
+        forest_root_hash: &[u8; 32],
+    ) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&action.hash());
+        hasher.update(&(position as u64).to_le_bytes());
+        hasher.update(forest_root_hash);
+        *hasher.finalize().as_bytes()
+    }
+
     /// Determine ALL required permissions for an action based on its effects.
     fn determine_required_permissions(
         &self,
@@ -796,6 +980,14 @@ impl TurnExecutor {
         let mut has_set_state = false;
         let mut has_increment_nonce = false;
         let mut has_delegate = false;
+
+        // A negative balance_change (withdrawal) requires Send permission.
+        if let Some(delta) = action.balance_change {
+            if delta < 0 && !has_send {
+                result.push((pyana_cell::permissions::Action::Send, "Send"));
+                has_send = true;
+            }
+        }
 
         for effect in &action.effects {
             match effect {
@@ -818,6 +1010,12 @@ impl TurnExecutor {
                 Effect::RevokeCapability { .. } if !has_delegate => {
                     result.push((pyana_cell::permissions::Action::Delegate, "Delegate"));
                     has_delegate = true;
+                }
+                Effect::SetPermissions { .. } => {
+                    result.push((pyana_cell::permissions::Action::SetPermissions, "SetPermissions"));
+                }
+                Effect::SetVerificationKey { .. } => {
+                    result.push((pyana_cell::permissions::Action::SetVerificationKey, "SetVerificationKey"));
                 }
                 _ => {}
             }
@@ -995,6 +1193,36 @@ impl TurnExecutor {
                 journal.record_create_cell(id);
                 Ok(())
             }
+
+            Effect::SetPermissions { cell, new_permissions } => {
+                if cell != action_target {
+                    self.check_cross_cell_permission(
+                        ledger, actor, cell,
+                        pyana_cell::permissions::Action::SetPermissions, "SetPermissions", path,
+                    )?;
+                }
+                let c = ledger.get_mut(cell).ok_or_else(|| {
+                    (TurnError::CellNotFound { id: *cell }, path.to_vec())
+                })?;
+                journal.record_set_permissions(*cell, c.permissions.clone());
+                c.permissions = new_permissions.clone();
+                Ok(())
+            }
+
+            Effect::SetVerificationKey { cell, new_vk } => {
+                if cell != action_target {
+                    self.check_cross_cell_permission(
+                        ledger, actor, cell,
+                        pyana_cell::permissions::Action::SetVerificationKey, "SetVerificationKey", path,
+                    )?;
+                }
+                let c = ledger.get_mut(cell).ok_or_else(|| {
+                    (TurnError::CellNotFound { id: *cell }, path.to_vec())
+                })?;
+                journal.record_set_verification_key(*cell, c.verification_key.clone());
+                c.verification_key = new_vk.clone();
+                Ok(())
+            }
         }
     }
 
@@ -1065,6 +1293,8 @@ impl TurnExecutor {
                 (event.data.len() as u64) * self.costs.per_byte * 32
             }
             Effect::IncrementNonce { .. } => 0,
+            Effect::SetPermissions { .. } => self.costs.effect_base,
+            Effect::SetVerificationKey { .. } => self.costs.effect_base,
         };
         base.saturating_add(extra).saturating_add(
             (effect.data_bytes() as u64).saturating_mul(self.costs.per_byte),
@@ -1179,6 +1409,23 @@ impl TurnExecutor {
                         e.capability_revocations.push(old_cap.slot);
                     }
                 }
+                JournalEntry::SetProvedState { .. } => {
+                    // proved_state changes are tracked implicitly through the cell's state;
+                    // no separate delta field needed for now.
+                }
+                JournalEntry::SetPermissions { cell, .. } => {
+                    if !created_cells.contains(cell) {
+                        let e = updated_cells.entry(*cell).or_insert_with(CellStateDelta::empty);
+                        // Record that permissions changed (the new perms are on the cell now).
+                        if let Some(c) = ledger.get(cell) {
+                            e.permission_changes = Some(c.permissions.clone());
+                        }
+                    }
+                }
+                JournalEntry::SetVerificationKey { .. } => {
+                    // Verification key changes don't have a delta field currently;
+                    // tracked via the cell's state.
+                }
             }
         }
 
@@ -1223,6 +1470,42 @@ impl TurnExecutor {
             {
                 delta.updated.push((cell_id, cell_delta));
             }
+        }
+
+        delta
+    }
+
+    /// Compute a LedgerDelta including the Phase 1 fee + nonce commitment.
+    ///
+    /// Since Phase 1 (fee/nonce) is committed outside the journal, we need to
+    /// account for it separately in the delta. The agent's balance decreased by
+    /// `fee` and nonce incremented by 1 in addition to any journal-recorded changes.
+    fn compute_delta_from_journal_with_fee(
+        journal: &LedgerJournal,
+        ledger: &Ledger,
+        agent: &CellId,
+        fee: u64,
+    ) -> LedgerDelta {
+        let mut delta = Self::compute_delta_from_journal(journal, ledger);
+
+        // Check if the agent already appears in updated cells.
+        let agent_already_updated = delta.updated.iter().any(|(id, _)| id == agent);
+
+        if agent_already_updated {
+            // Adjust the existing delta for the agent to include the fee.
+            for (id, cell_delta) in &mut delta.updated {
+                if id == agent {
+                    cell_delta.balance_change -= fee as i64;
+                    cell_delta.nonce_increment = true;
+                    break;
+                }
+            }
+        } else {
+            // Agent only had Phase 1 changes (fee + nonce), add a new delta entry.
+            let mut cell_delta = CellStateDelta::empty();
+            cell_delta.balance_change = -(fee as i64);
+            cell_delta.nonce_increment = true;
+            delta.updated.push((*agent, cell_delta));
         }
 
         delta

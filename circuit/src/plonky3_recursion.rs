@@ -4,8 +4,8 @@
 //! implements recursive proof composition by:
 //!
 //! 1. Taking N inner proofs (fold-step proofs from `plonky3_prover`)
-//! 2. Aggregating them in a binary tree structure
-//! 3. Producing a single constant-size proof that attests to the validity of all N steps
+//! 2. Aggregating them via a Poseidon2 hash chain AIR
+//! 3. Producing a single constant-size proof that attests to the sequence
 //!
 //! ## Architecture
 //!
@@ -15,32 +15,25 @@
 //! - The aggregation AIR constrains that the hash chain is correctly computed
 //! - The final proof attests: "I verified N proofs whose public inputs hash to X"
 //!
-//! This gives us O(1) verification for any number of fold steps, which is exactly
-//! what we need for IVC-style token chain verification.
+//! This gives us O(1) verification for the aggregation step, regardless of N.
 //!
 //! ## Limitations
 //!
 //! This is NOT full in-circuit recursion (verifying a STARK inside a STARK). That requires
-//! either:
-//! - A specialized recursion circuit (as in SP1/RISC Zero)
-//! - Wrapping in a SNARK (Groth16/PLONK) for constant-size verification
-//!
-//! What we provide is proof aggregation: combining N proofs into 1 by proving knowledge
-//! of their public inputs in a hash chain. The verifier still needs access to the
-//! inner proofs for full soundness, but the aggregation proof provides a binding
-//! commitment to the sequence.
-//!
-//! For full recursion, the next step would be to implement the Plonky3 verifier as an AIR
-//! circuit. This is a larger undertaking tracked separately.
+//! implementing the Plonky3 verifier as an AIR circuit. What we provide is proof aggregation:
+//! combining N proofs into 1 by proving knowledge of their public inputs in a hash chain.
+//! The verifier still needs access to the inner proofs for full soundness, but the
+//! aggregation proof provides a binding commitment to the sequence.
 
-use p3_air::{Air, BaseAir};
+use p3_air::{Air, AirBuilder, BaseAir};
+use p3_air::WindowAccess;
 use p3_baby_bear::BabyBear as P3BabyBear;
 use p3_field::PrimeCharacteristicRing;
 use p3_matrix::dense::RowMajorMatrix;
 
 use crate::field::BabyBear;
 use crate::poseidon2::hash_4_to_1;
-use crate::plonky3_prover::{PyanaProof, PyanaStarkConfig, create_config, to_p3, verify_plonky3};
+use crate::plonky3_prover::{PyanaProof, create_config, to_p3, verify_plonky3};
 
 // ============================================================================
 // Aggregation AIR
@@ -56,13 +49,10 @@ use crate::plonky3_prover::{PyanaProof, PyanaStarkConfig, create_config, to_p3, 
 ///
 /// Public inputs: [initial_accumulator (= 0), final_accumulator]
 ///
-/// The constraint enforces:
-/// 1. Chain continuity: acc_out[i] = acc_in[i+1]
-/// 2. First row: acc_in = 0 (initial state)
-/// 3. Last row: acc_out = final_accumulator (public input)
-///
-/// Note: The hash computation (col 3 = hash_4_to_1(...)) is verified via
-/// the trace commitment, same as in MerklePoseidon2StarkAir.
+/// Constraints:
+/// 1. First row: acc_in = 0 (initial state)
+/// 2. Last row: acc_out = final_accumulator (public input)
+/// 3. Chain continuity: acc_out[i] = acc_in[i+1] (on transitions)
 pub struct AggregationAir;
 
 impl<F: PrimeCharacteristicRing + Sync> BaseAir<F> for AggregationAir {
@@ -80,37 +70,31 @@ impl<F: PrimeCharacteristicRing + Sync> BaseAir<F> for AggregationAir {
     }
 }
 
-impl<AB> Air<AB> for AggregationAir
-where
-    AB: p3_air::AirBuilder,
-    AB::F: PrimeCharacteristicRing,
-    AB::Expr: From<AB::Var>,
-{
+impl<AB: AirBuilder> Air<AB> for AggregationAir {
     fn eval(&self, builder: &mut AB) {
-        use p3_air::AirBuilder;
-        use p3_field::PrimeCharacteristicRing as PCR;
-
         let main = builder.main();
         let local = main.current_slice();
         let next = main.next_slice();
-        let public_values = builder.public_values();
 
         let acc_in: AB::Expr = local[0].into();
-        let _leaf: AB::Expr = local[1].into();
-        let _root: AB::Expr = local[2].into();
         let acc_out: AB::Expr = local[3].into();
+        let next_acc_in: AB::Expr = next[0].into();
+
+        // Copy public values before mutably borrowing builder
+        let public_values = builder.public_values();
+        let pv0: AB::Expr = public_values[0].into();
+        let pv1: AB::Expr = public_values[1].into();
 
         // Constraint 1: First row accumulator is the initial value (public input 0)
-        let first_acc_constraint = acc_in.clone() - public_values[0].into();
+        let first_acc_constraint: AB::Expr = acc_in - pv0;
         builder.when_first_row().assert_zero(first_acc_constraint);
 
         // Constraint 2: Last row accumulator_out is the final value (public input 1)
-        let last_acc_constraint = acc_out.clone() - public_values[1].into();
+        let last_acc_constraint: AB::Expr = acc_out.clone() - pv1;
         builder.when_last_row().assert_zero(last_acc_constraint);
 
         // Constraint 3: Chain continuity (acc_out[i] = acc_in[i+1])
-        let next_acc_in: AB::Expr = next[0].into();
-        let continuity = acc_out - next_acc_in;
+        let continuity: AB::Expr = acc_out - next_acc_in;
         builder.when_transition().assert_zero(continuity);
     }
 }
@@ -120,7 +104,6 @@ where
 // ============================================================================
 
 /// Input for recursive proof aggregation.
-#[derive(Clone, Debug)]
 pub struct RecursionInput {
     /// The inner proof (from prove_plonky3).
     pub proof: PyanaProof,
@@ -129,7 +112,6 @@ pub struct RecursionInput {
 }
 
 /// Result of recursive proof aggregation.
-#[derive(Clone)]
 pub struct RecursiveProof {
     /// The aggregation proof (proves the hash chain of all inner proofs' public inputs).
     pub aggregation_proof: PyanaProof,
@@ -167,9 +149,7 @@ fn generate_aggregation_trace(
         accumulator = acc_out;
     }
 
-    let final_accumulator = accumulator;
-
-    // Pad to power of 2 (chain continues with identity: hash of acc with zeros)
+    // Pad to power of 2 (chain continues with identity-like hashing)
     for i in n..padded_len {
         let step_idx = BabyBear::new(i as u32);
         let acc_out = hash_4_to_1(&[accumulator, BabyBear::ZERO, BabyBear::ZERO, step_idx]);
@@ -274,12 +254,7 @@ pub fn verify_recursive(recursive_proof: &RecursiveProof) -> Result<(), String> 
 
 /// 2-to-1 aggregation: combine two proofs into one.
 ///
-/// This is the building block for tree-style compression:
-/// - Level 0: N individual proofs
-/// - Level 1: N/2 aggregation proofs
-/// - Level 2: N/4 aggregation proofs
-/// - ...
-/// - Final: 1 proof
+/// This is the building block for tree-style compression.
 pub fn aggregate_pair(
     left: RecursionInput,
     right: RecursionInput,
@@ -290,27 +265,11 @@ pub fn aggregate_pair(
 /// Tree-style compression: reduce N proofs to a single aggregation proof.
 ///
 /// Takes a list of RecursionInputs and produces a single RecursiveProof
-/// by pairwise aggregation in a binary tree structure.
-///
-/// For N proofs, this requires O(N) total proving work (each level halves).
-pub fn compress_tree(mut inputs: Vec<RecursionInput>) -> Result<RecursiveProof, String> {
-    if inputs.is_empty() {
-        return Err("Cannot compress empty proof list".to_string());
-    }
-    if inputs.len() == 1 {
+/// by aggregating all proofs in a single hash chain.
+pub fn compress_tree(inputs: Vec<RecursionInput>) -> Result<RecursiveProof, String> {
+    if inputs.len() < 2 {
         return Err("Need at least 2 proofs for tree compression".to_string());
     }
-
-    // If we have exactly 2, aggregate directly
-    if inputs.len() == 2 {
-        let right = inputs.pop().unwrap();
-        let left = inputs.pop().unwrap();
-        return aggregate_pair(left, right);
-    }
-
-    // For >2 proofs, aggregate all at once (single-level hash chain)
-    // A future optimization could do tree-structured aggregation with
-    // nested recursive proofs, but that requires in-circuit verification.
     prove_recursive(inputs)
 }
 

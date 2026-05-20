@@ -15,15 +15,16 @@
 //! - Proof verification (fail-closed without verifier)
 //! - Receive permission enforcement
 
-use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 use pyana_cell::{
     AuthRequired, CapabilityRef, Cell, CellId, Ledger, Permissions, VerificationKey,
     preconditions::Preconditions as CellPreconditions,
     state::{FIELD_ZERO, STATE_SLOTS},
 };
 
-use crate::action::{Action, Authorization, DelegationMode, Effect, symbol};
+use crate::action::{Action, Authorization, CommitmentMode, DelegationMode, Effect, symbol};
 use crate::builder::TurnBuilder;
+use crate::composer::{ComposeError, SignedFragment, TurnComposer};
 use crate::error::TurnError;
 use crate::executor::{ComputronCosts, ProofVerifier, TurnExecutor};
 use crate::forest::{CallForest, CallTree};
@@ -465,6 +466,8 @@ fn test_real_signature_verification() {
         preconditions: CellPreconditions::default(),
         effects: effects.clone(),
         may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Full,
+        balance_change: None,
     };
     let message = TurnExecutor::compute_signing_message(&unsigned_action);
 
@@ -482,6 +485,8 @@ fn test_real_signature_verification() {
         preconditions: CellPreconditions::default(),
         effects,
         may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Full,
+        balance_change: None,
     };
 
     let mut forest = CallForest::new();
@@ -577,6 +582,8 @@ fn test_wrong_key_signature_rejected() {
         preconditions: CellPreconditions::default(),
         effects: effects.clone(),
         may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Full,
+        balance_change: None,
     };
     let message = TurnExecutor::compute_signing_message(&unsigned_action);
 
@@ -593,6 +600,8 @@ fn test_wrong_key_signature_rejected() {
         preconditions: CellPreconditions::default(),
         effects,
         may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Full,
+        balance_change: None,
     };
 
     let mut forest = CallForest::new();
@@ -755,9 +764,9 @@ fn test_atomicity_child_failure_rollback() {
     assert_eq!(cell.state.fields[0], initial_target_field);
     assert_eq!(cell.state.balance, initial_target_balance);
 
-    // Agent nonce was NOT incremented (full rollback).
+    // Agent nonce IS incremented (fee+nonce commit is permanent, prevents DoS).
     let agent = ledger.get(&agent_id).unwrap();
-    assert_eq!(agent.state.nonce, 0);
+    assert_eq!(agent.state.nonce, 1);
 }
 
 // =============================================================================
@@ -1060,6 +1069,8 @@ fn test_call_forest_hash() {
         preconditions: CellPreconditions::default(),
         effects: vec![],
         may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Full,
+        balance_change: None,
     };
 
     let mut forest = CallForest::new();
@@ -1091,6 +1102,8 @@ fn test_call_forest_dfs_iteration() {
         preconditions: CellPreconditions::default(),
         effects: vec![],
         may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Full,
+        balance_change: None,
     };
 
     let mut forest = CallForest::new();
@@ -1128,6 +1141,8 @@ fn test_call_tree_depth() {
         preconditions: CellPreconditions::default(),
         effects: vec![],
         may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Full,
+        balance_change: None,
     };
 
     let mut tree = CallTree::new(make_action());
@@ -1716,6 +1731,8 @@ fn test_forest_total_effects() {
             .map(|i| Effect::SetField { cell: id, index: i % STATE_SLOTS, value: [i as u8; 32] })
             .collect(),
         may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Full,
+        balance_change: None,
     };
 
     let mut forest = CallForest::new();
@@ -1792,6 +1809,8 @@ fn test_action_hash_sensitivity() {
         preconditions: CellPreconditions::default(),
         effects: vec![],
         may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Full,
+        balance_change: None,
     };
 
     // Different method -> different hash.
@@ -2370,4 +2389,1122 @@ fn test_grant_capability_attenuation_succeeds() {
     assert!(t1.capabilities.has_access(&target2_id));
     let granted = t1.capabilities.lookup_by_target(&target2_id).unwrap();
     assert_eq!(granted.permissions, AuthRequired::Signature);
+}
+
+// =============================================================================
+// Multi-party composition tests
+// =============================================================================
+
+/// Helper: create a partial-commitment action and sign it for composition.
+fn sign_partial_action(
+    action: &Action,
+    position: usize,
+    forest_root_hash: &[u8; 32],
+    signing_key: &SigningKey,
+) -> [u8; 64] {
+    let message = TurnExecutor::compute_partial_signing_message(action, position, forest_root_hash);
+    let sig = signing_key.sign(&message);
+    sig.to_bytes()
+}
+
+// =============================================================================
+// Test: Partial commitment signature valid
+// =============================================================================
+
+#[test]
+fn test_partial_commitment_signature_valid() {
+    // Create a partial-commitment action, sign it, verify signature independently.
+    let kp = TestKeypair::from_seed(10);
+    let cell_id = CellId::from_bytes(kp.public_key);
+
+    let action = Action {
+        target: cell_id,
+        method: symbol("withdraw"),
+        args: vec![],
+        authorization: Authorization::None,
+        preconditions: CellPreconditions::default(),
+        effects: vec![Effect::SetField { cell: cell_id, index: 0, value: [42u8; 32] }],
+        may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Partial,
+        balance_change: Some(-100),
+    };
+
+    // Simulate a forest root hash (in reality computed from the assembled forest).
+    let forest_root_hash = [0xAA; 32];
+    let position = 0;
+
+    // Sign.
+    let sig_bytes = sign_partial_action(&action, position, &forest_root_hash, &kp.signing_key);
+
+    // Verify manually.
+    let message = TurnExecutor::compute_partial_signing_message(&action, position, &forest_root_hash);
+    let verifying_key: VerifyingKey = (&kp.signing_key).into();
+    let signature = ed25519_dalek::Signature::from_bytes(&sig_bytes);
+    assert!(verifying_key.verify(&message, &signature).is_ok());
+}
+
+// =============================================================================
+// Test: Partial commitment independent of other actions
+// =============================================================================
+
+#[test]
+fn test_partial_commitment_independent_of_other_actions() {
+    // A partial commitment signature remains valid even when other actions in the
+    // forest change, as long as the signer's action and position stay the same.
+    let kp = TestKeypair::from_seed(11);
+    let cell_id = CellId::from_bytes(kp.public_key);
+
+    let action = Action {
+        target: cell_id,
+        method: symbol("withdraw"),
+        args: vec![],
+        authorization: Authorization::None,
+        preconditions: CellPreconditions::default(),
+        effects: vec![Effect::SetField { cell: cell_id, index: 0, value: [1u8; 32] }],
+        may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Partial,
+        balance_change: Some(-50),
+    };
+
+    // Build a forest with just this action to get a root hash.
+    let mut forest1 = CallForest::new();
+    forest1.add_root(action.clone());
+    let hash1 = forest1.hash();
+
+    // Sign with that forest's root hash.
+    let sig = sign_partial_action(&action, 0, &hash1, &kp.signing_key);
+
+    // The signing message only depends on action.hash(), position, and forest_root.
+    // If we build a DIFFERENT forest (adding another action), the root hash changes
+    // and the signature would need to be for THAT root hash.
+    // But importantly, the signing message does NOT include the other action's content.
+    let message = TurnExecutor::compute_partial_signing_message(&action, 0, &hash1);
+    let verifying_key: VerifyingKey = (&kp.signing_key).into();
+    let signature = ed25519_dalek::Signature::from_bytes(&sig);
+    assert!(verifying_key.verify(&message, &signature).is_ok());
+
+    // Verify that a full-commitment approach WOULD include other actions:
+    // The full signing message only depends on the action's own content
+    // (target, method, args, effects, delegation), not the turn structure.
+    // But the key difference is that partial commitment includes forest_root_hash,
+    // which binds to the structure that the COMPOSER determines.
+    let full_message = TurnExecutor::compute_signing_message(&action);
+    // Full message is different from partial message (different hash construction).
+    assert_ne!(full_message, message);
+}
+
+// =============================================================================
+// Test: Full commitment invalidated by changes
+// =============================================================================
+
+#[test]
+fn test_full_commitment_invalidated_by_changes() {
+    // With full commitment, signing the action content means the signature is tied
+    // to the action's exact state. Changing any field invalidates it.
+    let kp = TestKeypair::from_seed(12);
+    let cell_id = CellId::from_bytes(kp.public_key);
+
+    let action = Action {
+        target: cell_id,
+        method: symbol("transfer"),
+        args: vec![],
+        authorization: Authorization::None,
+        preconditions: CellPreconditions::default(),
+        effects: vec![Effect::SetField { cell: cell_id, index: 0, value: [1u8; 32] }],
+        may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Full,
+        balance_change: None,
+    };
+
+    // Sign with full commitment message.
+    let message = TurnExecutor::compute_signing_message(&action);
+    let sig = kp.signing_key.sign(&message);
+
+    // Verify: original action verifies.
+    let verifying_key: VerifyingKey = (&kp.signing_key).into();
+    assert!(verifying_key.verify(&message, &sig).is_ok());
+
+    // Now modify the action (change effect value) and re-compute message.
+    let mut modified = action.clone();
+    modified.effects = vec![Effect::SetField { cell: cell_id, index: 0, value: [99u8; 32] }];
+    let modified_message = TurnExecutor::compute_signing_message(&modified);
+
+    // The original signature does NOT verify for the modified message.
+    assert_ne!(message, modified_message);
+    assert!(verifying_key.verify(&modified_message, &sig).is_err());
+}
+
+// =============================================================================
+// Test: Compose two-party swap
+// =============================================================================
+
+#[test]
+fn test_compose_two_party_swap() {
+    let alice_kp = TestKeypair::from_seed(20);
+    let bob_kp = TestKeypair::from_seed(21);
+    let matcher_kp = TestKeypair::from_seed(22);
+
+    let alice_cell = CellId::from_bytes(alice_kp.public_key);
+    let bob_cell = CellId::from_bytes(bob_kp.public_key);
+    let matcher_cell = CellId::from_bytes(matcher_kp.public_key);
+
+    // Alice's action: withdraw 100 (balance_change = -100)
+    let alice_action = Action {
+        target: alice_cell,
+        method: symbol("withdraw"),
+        args: vec![],
+        authorization: Authorization::None, // will be set after signing
+        preconditions: CellPreconditions::default(),
+        effects: vec![],
+        may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Partial,
+        balance_change: Some(-100),
+    };
+
+    // Bob's action: withdraw 50 (balance_change = -50)
+    let bob_action = Action {
+        target: bob_cell,
+        method: symbol("withdraw"),
+        args: vec![],
+        authorization: Authorization::None,
+        preconditions: CellPreconditions::default(),
+        effects: vec![],
+        may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Partial,
+        balance_change: Some(-50),
+    };
+
+    // Settlement actions from the matcher (deposit into opposite parties):
+    // Alice gets +50 (what Bob withdrew), Bob gets +100 (what Alice withdrew).
+    let settle_alice = Action {
+        target: alice_cell,
+        method: symbol("deposit"),
+        args: vec![],
+        authorization: Authorization::None,
+        preconditions: CellPreconditions::default(),
+        effects: vec![],
+        may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Full,
+        balance_change: Some(50),
+    };
+
+    let settle_bob = Action {
+        target: bob_cell,
+        method: symbol("deposit"),
+        args: vec![],
+        authorization: Authorization::None,
+        preconditions: CellPreconditions::default(),
+        effects: vec![],
+        may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Full,
+        balance_change: Some(100),
+    };
+
+    // Build the forest to compute root hash (needed for partial signing).
+    // Order: alice_action, bob_action, settle_alice, settle_bob
+    let mut preview_forest = CallForest::new();
+    preview_forest.add_root(alice_action.clone());
+    preview_forest.add_root(bob_action.clone());
+    preview_forest.add_root(settle_alice.clone());
+    preview_forest.add_root(settle_bob.clone());
+    let forest_root_hash = preview_forest.hash();
+
+    // Alice signs her action at position 0.
+    let alice_sig = sign_partial_action(&alice_action, 0, &forest_root_hash, &alice_kp.signing_key);
+
+    // Bob signs his action at position 1.
+    let bob_sig = sign_partial_action(&bob_action, 1, &forest_root_hash, &bob_kp.signing_key);
+
+    // Compose.
+    let mut composer = TurnComposer::new(matcher_cell, 1000, 0);
+    composer.add_fragment(SignedFragment {
+        actions: vec![alice_action],
+        signatures: vec![alice_sig],
+        signer: alice_kp.public_key,
+    }).unwrap();
+    composer.add_fragment(SignedFragment {
+        actions: vec![bob_action],
+        signatures: vec![bob_sig],
+        signer: bob_kp.public_key,
+    }).unwrap();
+    composer.add_settlement_action(settle_alice);
+    composer.add_settlement_action(settle_bob);
+
+    let turn = composer.compose().unwrap();
+
+    // Verify turn structure.
+    assert_eq!(turn.agent, matcher_cell);
+    assert_eq!(turn.fee, 1000);
+    assert_eq!(turn.call_forest.action_count(), 4);
+}
+
+// =============================================================================
+// Test: Compose rejects invalid signature
+// =============================================================================
+
+#[test]
+fn test_compose_rejects_invalid_signature() {
+    let alice_kp = TestKeypair::from_seed(30);
+    let wrong_kp = TestKeypair::from_seed(31);
+    let matcher_kp = TestKeypair::from_seed(32);
+
+    let alice_cell = CellId::from_bytes(alice_kp.public_key);
+    let matcher_cell = CellId::from_bytes(matcher_kp.public_key);
+
+    let alice_action = Action {
+        target: alice_cell,
+        method: symbol("withdraw"),
+        args: vec![],
+        authorization: Authorization::None,
+        preconditions: CellPreconditions::default(),
+        effects: vec![],
+        may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Partial,
+        balance_change: Some(-100),
+    };
+
+    let settle = Action {
+        target: alice_cell,
+        method: symbol("deposit"),
+        args: vec![],
+        authorization: Authorization::None,
+        preconditions: CellPreconditions::default(),
+        effects: vec![],
+        may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Full,
+        balance_change: Some(100),
+    };
+
+    // Build forest to get root hash.
+    let mut preview_forest = CallForest::new();
+    preview_forest.add_root(alice_action.clone());
+    preview_forest.add_root(settle.clone());
+    let forest_root_hash = preview_forest.hash();
+
+    // Sign with the WRONG key (not Alice's).
+    let wrong_sig = sign_partial_action(&alice_action, 0, &forest_root_hash, &wrong_kp.signing_key);
+
+    let mut composer = TurnComposer::new(matcher_cell, 1000, 0);
+    composer.add_fragment(SignedFragment {
+        actions: vec![alice_action],
+        signatures: vec![wrong_sig],
+        signer: alice_kp.public_key, // claims to be Alice, but signed by wrong key
+    }).unwrap();
+    composer.add_settlement_action(settle);
+
+    let result = composer.compose();
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        ComposeError::InvalidSignature { fragment_index, action_index, .. } => {
+            assert_eq!(fragment_index, 0);
+            assert_eq!(action_index, 0);
+        }
+        other => panic!("expected InvalidSignature, got {other:?}"),
+    }
+}
+
+// =============================================================================
+// Test: Compose validates excess balance (must sum to zero)
+// =============================================================================
+
+#[test]
+fn test_compose_validates_excess_balance() {
+    let alice_kp = TestKeypair::from_seed(40);
+    let matcher_kp = TestKeypair::from_seed(41);
+
+    let alice_cell = CellId::from_bytes(alice_kp.public_key);
+    let matcher_cell = CellId::from_bytes(matcher_kp.public_key);
+
+    // Alice withdraws 100 but there's no matching deposit (imbalanced).
+    let alice_action = Action {
+        target: alice_cell,
+        method: symbol("withdraw"),
+        args: vec![],
+        authorization: Authorization::None,
+        preconditions: CellPreconditions::default(),
+        effects: vec![],
+        may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Partial,
+        balance_change: Some(-100),
+    };
+
+    // Build forest for root hash (only the withdrawal, no deposit).
+    let mut preview_forest = CallForest::new();
+    preview_forest.add_root(alice_action.clone());
+    let forest_root_hash = preview_forest.hash();
+
+    let alice_sig = sign_partial_action(&alice_action, 0, &forest_root_hash, &alice_kp.signing_key);
+
+    let mut composer = TurnComposer::new(matcher_cell, 1000, 0);
+    composer.add_fragment(SignedFragment {
+        actions: vec![alice_action],
+        signatures: vec![alice_sig],
+        signer: alice_kp.public_key,
+    }).unwrap();
+    // No settlement action to balance the -100.
+
+    let result = composer.compose();
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        ComposeError::ExcessImbalance { total_excess } => {
+            assert_eq!(total_excess, -100);
+        }
+        other => panic!("expected ExcessImbalance, got {other:?}"),
+    }
+}
+
+// =============================================================================
+// Test: Fragment with Full commitment mode is rejected
+// =============================================================================
+
+#[test]
+fn test_fragment_full_commitment_rejected() {
+    let kp = TestKeypair::from_seed(50);
+    let cell_id = CellId::from_bytes(kp.public_key);
+    let matcher_cell = CellId::from_bytes([99u8; 32]);
+
+    let action = Action {
+        target: cell_id,
+        method: symbol("op"),
+        args: vec![],
+        authorization: Authorization::None,
+        preconditions: CellPreconditions::default(),
+        effects: vec![],
+        may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Full, // Wrong! Should be Partial.
+        balance_change: None,
+    };
+
+    let mut composer = TurnComposer::new(matcher_cell, 1000, 0);
+    let result = composer.add_fragment(SignedFragment {
+        actions: vec![action],
+        signatures: vec![[0u8; 64]],
+        signer: kp.public_key,
+    });
+
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        ComposeError::FullCommitmentInFragment { fragment_index, action_index } => {
+            assert_eq!(fragment_index, 0);
+            assert_eq!(action_index, 0);
+        }
+        other => panic!("expected FullCommitmentInFragment, got {other:?}"),
+    }
+}
+
+// =============================================================================
+// Test: Fragment signature count mismatch rejected
+// =============================================================================
+
+#[test]
+fn test_fragment_signature_count_mismatch() {
+    let kp = TestKeypair::from_seed(51);
+    let cell_id = CellId::from_bytes(kp.public_key);
+    let matcher_cell = CellId::from_bytes([99u8; 32]);
+
+    let action = Action {
+        target: cell_id,
+        method: symbol("op"),
+        args: vec![],
+        authorization: Authorization::None,
+        preconditions: CellPreconditions::default(),
+        effects: vec![],
+        may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Partial,
+        balance_change: None,
+    };
+
+    let mut composer = TurnComposer::new(matcher_cell, 1000, 0);
+    // One action but zero signatures.
+    let result = composer.add_fragment(SignedFragment {
+        actions: vec![action],
+        signatures: vec![],
+        signer: kp.public_key,
+    });
+
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        ComposeError::SignatureCountMismatch { fragment_index, actions, signatures } => {
+            assert_eq!(fragment_index, 0);
+            assert_eq!(actions, 1);
+            assert_eq!(signatures, 0);
+        }
+        other => panic!("expected SignatureCountMismatch, got {other:?}"),
+    }
+}
+
+// =============================================================================
+// Tests: Cell program enforcement in executor
+// =============================================================================
+
+/// Helper: create a cell with a program and open permissions.
+fn make_programmed_cell(seed: u8, balance: u64, program: pyana_cell::CellProgram) -> Cell {
+    let kp = TestKeypair::from_seed(seed);
+    let token_id = [0u8; 32];
+    let mut cell = Cell::with_balance(kp.public_key, token_id, balance);
+    cell.permissions = Permissions {
+        send: AuthRequired::None,
+        receive: AuthRequired::None,
+        set_state: AuthRequired::None,
+        set_permissions: AuthRequired::None,
+        set_verification_key: AuthRequired::None,
+        increment_nonce: AuthRequired::None,
+        delegate: AuthRequired::None,
+        access: AuthRequired::None,
+    };
+    cell.program = program;
+    cell
+}
+
+#[test]
+fn test_program_predicate_gte_enforced() {
+    // A cell with FieldGte(index=0, value=100) rejects transitions that set field[0] < 100.
+    use pyana_cell::program::{StateConstraint, field_from_u64};
+
+    let program = pyana_cell::CellProgram::Predicate(vec![StateConstraint::FieldGte {
+        index: 0,
+        value: field_from_u64(100),
+    }]);
+
+    let mut ledger = Ledger::new();
+    let (agent, _) = make_open_cell(1, 5000);
+    let target = make_programmed_cell(2, 0, program);
+    let agent_id = agent.id;
+    let target_id = target.id;
+
+    let mut agent_with_cap = agent;
+    agent_with_cap.capabilities.grant(target_id, AuthRequired::None);
+    ledger.insert_cell(agent_with_cap).unwrap();
+    ledger.insert_cell(target).unwrap();
+
+    let executor = zero_cost_executor();
+
+    // Try to set field[0] = 50 (violates FieldGte 100) -> should be rejected.
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action = builder.action(target_id, "bad_set");
+        action.set_field(target_id, 0, field_from_u64(50));
+    }
+    let turn = builder.fee(500).build();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_rejected(), "expected rejection for field < 100");
+    let (error, _) = result.unwrap_rejected();
+    match error {
+        TurnError::ProgramViolation { cell, .. } => {
+            assert_eq!(cell, target_id);
+        }
+        other => panic!("expected ProgramViolation, got {other:?}"),
+    }
+
+    // Set field[0] = 200 (satisfies FieldGte 100) -> should succeed.
+    // Nonce is now 1 because fee+nonce commit is permanent even on failure.
+    let mut builder = TurnBuilder::new(agent_id, 1);
+    {
+        let action = builder.action(target_id, "good_set");
+        action.set_field(target_id, 0, field_from_u64(200));
+    }
+    let turn = builder.fee(500).build();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed(), "expected success for field >= 100, got: {result:?}");
+}
+
+#[test]
+fn test_program_immutable_field_enforced() {
+    // A cell with Immutable(index=1) rejects transitions that change field[1].
+    use pyana_cell::program::{StateConstraint, field_from_u64};
+
+    let program = pyana_cell::CellProgram::Predicate(vec![StateConstraint::Immutable {
+        index: 1,
+    }]);
+
+    let mut ledger = Ledger::new();
+    let (agent, _) = make_open_cell(1, 5000);
+    let mut target = make_programmed_cell(2, 0, program);
+    // Initialize field[1] with a value.
+    target.state.fields[1] = field_from_u64(42);
+    let agent_id = agent.id;
+    let target_id = target.id;
+
+    let mut agent_with_cap = agent;
+    agent_with_cap.capabilities.grant(target_id, AuthRequired::None);
+    ledger.insert_cell(agent_with_cap).unwrap();
+    ledger.insert_cell(target).unwrap();
+
+    let executor = zero_cost_executor();
+
+    // Try to change field[1] -> should be rejected.
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action = builder.action(target_id, "mutate_immutable");
+        action.set_field(target_id, 1, field_from_u64(99));
+    }
+    let turn = builder.fee(500).build();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_rejected(), "expected rejection for mutating immutable field");
+    let (error, _) = result.unwrap_rejected();
+    match error {
+        TurnError::ProgramViolation { cell, .. } => {
+            assert_eq!(cell, target_id);
+        }
+        other => panic!("expected ProgramViolation, got {other:?}"),
+    }
+
+    // Changing field[0] (not immutable) should succeed.
+    // Nonce is now 1 because fee+nonce commit is permanent even on failure.
+    let mut builder = TurnBuilder::new(agent_id, 1);
+    {
+        let action = builder.action(target_id, "mutate_mutable");
+        action.set_field(target_id, 0, field_from_u64(77));
+    }
+    let turn = builder.fee(500).build();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed(), "expected success for mutable field, got: {result:?}");
+}
+
+#[test]
+fn test_program_none_backward_compat() {
+    // A cell with CellProgram::None works exactly as before.
+    use pyana_cell::program::field_from_u64;
+
+    let (mut ledger, agent_id, target_id) = setup_two_open_cells(5000, 0);
+    let executor = zero_cost_executor();
+
+    // Set any field to any value -> should succeed.
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action = builder.action(target_id, "set_field");
+        action.set_field(target_id, 0, field_from_u64(999));
+    }
+    let turn = builder.fee(500).build();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed(), "CellProgram::None should allow any state change");
+}
+
+#[test]
+fn test_program_sum_conservation_enforced() {
+    // SumEquals constraint enforces that fields[0] + fields[1] + fields[2] = 1000.
+    use pyana_cell::program::{StateConstraint, field_from_u64};
+
+    let program = pyana_cell::CellProgram::Predicate(vec![StateConstraint::SumEquals {
+        indices: vec![0, 1, 2],
+        value: field_from_u64(1000),
+    }]);
+
+    let mut ledger = Ledger::new();
+    let (agent, _) = make_open_cell(1, 5000);
+    let mut target = make_programmed_cell(2, 0, program);
+    // Initialize to satisfy conservation: 500 + 300 + 200 = 1000.
+    target.state.fields[0] = field_from_u64(500);
+    target.state.fields[1] = field_from_u64(300);
+    target.state.fields[2] = field_from_u64(200);
+    let agent_id = agent.id;
+    let target_id = target.id;
+
+    let mut agent_with_cap = agent;
+    agent_with_cap.capabilities.grant(target_id, AuthRequired::None);
+    ledger.insert_cell(agent_with_cap).unwrap();
+    ledger.insert_cell(target).unwrap();
+
+    let executor = zero_cost_executor();
+
+    // Violate conservation: set field[0] = 600 (600 + 300 + 200 = 1100 != 1000).
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action = builder.action(target_id, "bad_update");
+        action.set_field(target_id, 0, field_from_u64(600));
+    }
+    let turn = builder.fee(500).build();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_rejected(), "expected rejection for conservation violation");
+
+    // Maintain conservation: set field[0] = 400, field[1] = 400 (400 + 400 + 200 = 1000).
+    // Nonce is now 1 because fee+nonce commit is permanent even on failure.
+    let mut builder = TurnBuilder::new(agent_id, 1);
+    {
+        let action = builder.action(target_id, "good_update");
+        action.set_field(target_id, 0, field_from_u64(400));
+        action.set_field(target_id, 1, field_from_u64(400));
+    }
+    let turn = builder.fee(500).build();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed(), "expected success for conserving sum, got: {result:?}");
+}
+
+// =============================================================================
+// Tests: Mina-style balance_change and excess tracking
+// =============================================================================
+
+/// Helper: create a ledger with three open cells (agent, cell_a, cell_b).
+fn setup_three_open_cells(
+    agent_balance: u64,
+    a_balance: u64,
+    b_balance: u64,
+) -> (Ledger, CellId, CellId, CellId) {
+    let mut ledger = Ledger::new();
+    let (agent, _) = make_open_cell(1, agent_balance);
+    let (cell_a, _) = make_open_cell(2, a_balance);
+    let (cell_b, _) = make_open_cell(3, b_balance);
+    let agent_id = agent.id;
+    let a_id = cell_a.id;
+    let b_id = cell_b.id;
+
+    let mut agent_with_caps = agent;
+    agent_with_caps.capabilities.grant(a_id, AuthRequired::None);
+    agent_with_caps.capabilities.grant(b_id, AuthRequired::None);
+
+    ledger.insert_cell(agent_with_caps).unwrap();
+    ledger.insert_cell(cell_a).unwrap();
+    ledger.insert_cell(cell_b).unwrap();
+    (ledger, agent_id, a_id, b_id)
+}
+
+// =============================================================================
+// Test: Balanced transfer via excess — withdraw from A, deposit to B
+// =============================================================================
+
+#[test]
+fn test_balanced_transfer_via_excess() {
+    let (mut ledger, agent_id, a_id, b_id) = setup_three_open_cells(5000, 1000, 500);
+    let executor = zero_cost_executor();
+
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        // Withdraw 200 from A (produces 200 excess).
+        let action_a = builder.action(a_id, "withdraw");
+        action_a.balance_change(-200);
+    }
+    {
+        // Deposit 200 into B (consumes 200 excess).
+        let action_b = builder.action(b_id, "deposit");
+        action_b.balance_change(200);
+    }
+    let turn = builder.fee(100).build();
+
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed(), "balanced excess should commit: {result:?}");
+
+    // A lost 200.
+    let a = ledger.get(&a_id).unwrap();
+    assert_eq!(a.state.balance, 800);
+
+    // B gained 200.
+    let b = ledger.get(&b_id).unwrap();
+    assert_eq!(b.state.balance, 700);
+}
+
+// =============================================================================
+// Test: Unbalanced excess rejected — withdraw without matching deposit
+// =============================================================================
+
+#[test]
+fn test_unbalanced_excess_rejected() {
+    let (mut ledger, agent_id, a_id, _b_id) = setup_three_open_cells(5000, 1000, 500);
+    let executor = zero_cost_executor();
+
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        // Withdraw 200 from A, but no matching deposit anywhere.
+        let action_a = builder.action(a_id, "withdraw");
+        action_a.balance_change(-200);
+    }
+    let turn = builder.fee(100).build();
+
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_rejected(), "unbalanced excess should be rejected");
+
+    let (error, _) = result.unwrap_rejected();
+    match error {
+        TurnError::ExcessNotZero { excess } => {
+            // Withdrawal of 200 produces +200 excess (excess = -delta = -(-200) = 200).
+            assert_eq!(excess, 200);
+        }
+        other => panic!("expected ExcessNotZero, got {other:?}"),
+    }
+
+    // A's balance should be unchanged (atomicity).
+    let a = ledger.get(&a_id).unwrap();
+    assert_eq!(a.state.balance, 1000);
+}
+
+// =============================================================================
+// Test: Multiple sources, one sink — A withdraws 50, B withdraws 50, C deposits 100
+// =============================================================================
+
+#[test]
+fn test_multiple_sources_one_sink() {
+    let mut ledger = Ledger::new();
+    let (agent, _) = make_open_cell(1, 5000);
+    let (cell_a, _) = make_open_cell(2, 500);
+    let (cell_b, _) = make_open_cell(3, 500);
+    let (cell_c, _) = make_open_cell(4, 0);
+    let agent_id = agent.id;
+    let a_id = cell_a.id;
+    let b_id = cell_b.id;
+    let c_id = cell_c.id;
+
+    let mut agent_with_caps = agent;
+    agent_with_caps.capabilities.grant(a_id, AuthRequired::None);
+    agent_with_caps.capabilities.grant(b_id, AuthRequired::None);
+    agent_with_caps.capabilities.grant(c_id, AuthRequired::None);
+
+    ledger.insert_cell(agent_with_caps).unwrap();
+    ledger.insert_cell(cell_a).unwrap();
+    ledger.insert_cell(cell_b).unwrap();
+    ledger.insert_cell(cell_c).unwrap();
+
+    let executor = zero_cost_executor();
+
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action_a = builder.action(a_id, "withdraw_a");
+        action_a.balance_change(-50);
+    }
+    {
+        let action_b = builder.action(b_id, "withdraw_b");
+        action_b.balance_change(-50);
+    }
+    {
+        let action_c = builder.action(c_id, "deposit_c");
+        action_c.balance_change(100); // consumes the 100 total excess
+    }
+    let turn = builder.fee(100).build();
+
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed(), "multi-source single-sink should commit: {result:?}");
+
+    assert_eq!(ledger.get(&a_id).unwrap().state.balance, 450);
+    assert_eq!(ledger.get(&b_id).unwrap().state.balance, 450);
+    assert_eq!(ledger.get(&c_id).unwrap().state.balance, 100);
+}
+
+// =============================================================================
+// Test: Proof circuit withdraw without destination — fails alone, succeeds composed
+// =============================================================================
+
+#[test]
+fn test_proof_circuit_withdraw_without_destination() {
+    let (mut ledger, agent_id, a_id, b_id) = setup_three_open_cells(5000, 1000, 0);
+    let executor = zero_cost_executor();
+
+    // First: a lone withdrawal should fail (excess not zero).
+    {
+        let mut builder = TurnBuilder::new(agent_id, 0);
+        {
+            let action_a = builder.action(a_id, "withdraw");
+            action_a.balance_change(-100);
+        }
+        let turn = builder.fee(100).build();
+
+        let result = executor.execute(&turn, &mut ledger);
+        assert!(result.is_rejected(), "lone withdrawal should fail");
+        let (error, _) = result.unwrap_rejected();
+        assert!(matches!(error, TurnError::ExcessNotZero { excess: 100 }));
+    }
+
+    // Second: composed with a matching deposit, it succeeds.
+    // Note: nonce is now 1 because Phase 1 (fee+nonce) is never rolled back.
+    {
+        let mut builder = TurnBuilder::new(agent_id, 1);
+        {
+            let action_a = builder.action(a_id, "withdraw");
+            action_a.balance_change(-100);
+        }
+        {
+            let action_b = builder.action(b_id, "deposit");
+            action_b.balance_change(100);
+        }
+        let turn = builder.fee(100).build();
+
+        let result = executor.execute(&turn, &mut ledger);
+        assert!(result.is_committed(), "composed withdrawal+deposit should succeed: {result:?}");
+
+        assert_eq!(ledger.get(&a_id).unwrap().state.balance, 900);
+        assert_eq!(ledger.get(&b_id).unwrap().state.balance, 100);
+    }
+}
+
+// =============================================================================
+// Test: Explicit Transfer effect still works (backward compatibility)
+// =============================================================================
+
+#[test]
+fn test_explicit_transfer_still_works() {
+    let (mut ledger, agent_id, a_id, b_id) = setup_three_open_cells(5000, 1000, 500);
+    let executor = zero_cost_executor();
+
+    // Use the old-style explicit Transfer effect (no balance_change).
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action = builder.action(a_id, "transfer");
+        action.transfer(a_id, b_id, 200);
+    }
+    let turn = builder.fee(100).build();
+
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed(), "explicit transfer should still work: {result:?}");
+
+    assert_eq!(ledger.get(&a_id).unwrap().state.balance, 800);
+    assert_eq!(ledger.get(&b_id).unwrap().state.balance, 700);
+}
+
+// =============================================================================
+// Test: balance_change underflow rejected
+// =============================================================================
+
+#[test]
+fn test_balance_change_underflow_rejected() {
+    let (mut ledger, agent_id, a_id, _b_id) = setup_three_open_cells(5000, 100, 500);
+    let executor = zero_cost_executor();
+
+    // Try to withdraw 200 from A which only has 100.
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action_a = builder.action(a_id, "overdraw");
+        action_a.balance_change(-200);
+    }
+    let turn = builder.fee(100).build();
+
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_rejected());
+
+    let (error, _) = result.unwrap_rejected();
+    match error {
+        TurnError::BalanceChangeUnderflow { cell, current, delta } => {
+            assert_eq!(cell, a_id);
+            assert_eq!(current, 100);
+            assert_eq!(delta, -200);
+        }
+        other => panic!("expected BalanceChangeUnderflow, got {other:?}"),
+    }
+
+    // A's balance unchanged (atomicity).
+    assert_eq!(ledger.get(&a_id).unwrap().state.balance, 100);
+}
+
+// =============================================================================
+// Test: TurnBuilder.validate_excess catches imbalance before submission
+// =============================================================================
+
+#[test]
+fn test_validate_excess_catches_imbalance() {
+    let agent_id = CellId::from_bytes([1u8; 32]);
+    let a_id = CellId::from_bytes([2u8; 32]);
+    let b_id = CellId::from_bytes([3u8; 32]);
+
+    // Balanced: should pass validation.
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action_a = builder.action(a_id, "withdraw");
+        action_a.balance_change(-100);
+    }
+    {
+        let action_b = builder.action(b_id, "deposit");
+        action_b.balance_change(100);
+    }
+    builder.set_fee(100);
+    assert!(builder.validate_excess().is_ok());
+
+    // Unbalanced: should fail validation.
+    let mut builder2 = TurnBuilder::new(agent_id, 0);
+    {
+        let action_a = builder2.action(a_id, "withdraw");
+        action_a.balance_change(-100);
+    }
+    builder2.set_fee(100);
+    let err = builder2.validate_excess().unwrap_err();
+    match err {
+        TurnError::ExcessNotZero { excess } => {
+            assert_eq!(excess, 100);
+        }
+        other => panic!("expected ExcessNotZero, got {other:?}"),
+    }
+}
+
+// =============================================================================
+// Test: balance_change combined with explicit effects in same action
+// =============================================================================
+
+#[test]
+fn test_balance_change_with_effects() {
+    let (mut ledger, agent_id, a_id, b_id) = setup_three_open_cells(5000, 1000, 500);
+    let executor = zero_cost_executor();
+
+    // Action on A: withdraw 100 via balance_change AND set a state field.
+    // Action on B: deposit 100 via balance_change.
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action_a = builder.action(a_id, "withdraw_and_mark");
+        action_a.balance_change(-100);
+        action_a.set_field(a_id, 0, [0xAA; 32]);
+    }
+    {
+        let action_b = builder.action(b_id, "deposit");
+        action_b.balance_change(100);
+    }
+    let turn = builder.fee(100).build();
+
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed(), "balance_change with effects should commit: {result:?}");
+
+    let a = ledger.get(&a_id).unwrap();
+    assert_eq!(a.state.balance, 900);
+    assert_eq!(a.state.fields[0], [0xAA; 32]);
+
+    let b = ledger.get(&b_id).unwrap();
+    assert_eq!(b.state.balance, 600);
+}
+
+// =============================================================================
+// Test: zero balance_change does not affect excess
+// =============================================================================
+
+#[test]
+fn test_zero_balance_change_no_effect() {
+    let (mut ledger, agent_id, a_id, _b_id) = setup_three_open_cells(5000, 1000, 500);
+    let executor = zero_cost_executor();
+
+    // A balance_change of 0 should be a no-op for excess.
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action_a = builder.action(a_id, "noop");
+        action_a.balance_change(0);
+    }
+    let turn = builder.fee(100).build();
+
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed(), "zero balance_change should commit: {result:?}");
+
+    // Balance unchanged.
+    assert_eq!(ledger.get(&a_id).unwrap().state.balance, 1000);
+}
+
+// =============================================================================
+// Test: Two-phase fee — fee is charged even when turn fails
+// =============================================================================
+
+#[test]
+fn test_fee_charged_on_failure() {
+    let (mut ledger, agent_id, target_id) = setup_two_open_cells(5000, 100);
+    let executor = zero_cost_executor();
+
+    let initial_agent_balance = ledger.get(&agent_id).unwrap().state.balance;
+    let initial_agent_nonce = ledger.get(&agent_id).unwrap().state.nonce;
+
+    // This turn will FAIL because it tries to transfer more than target has.
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action = builder.action(target_id, "bad_transfer");
+        action.transfer(target_id, agent_id, 999_999); // impossible
+    }
+    let turn = builder.fee(500).build();
+
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_rejected());
+
+    let (error, _) = result.unwrap_rejected();
+    match error {
+        TurnError::InsufficientBalance { .. } => {}
+        other => panic!("expected InsufficientBalance, got {other:?}"),
+    }
+
+    // TWO-PHASE FEE COMMITMENT: Even though the turn failed, the fee is charged
+    // and the nonce is incremented. This prevents DoS via expensive-but-failing turns.
+    let agent = ledger.get(&agent_id).unwrap();
+    assert_eq!(agent.state.balance, initial_agent_balance - 500,
+        "fee must be charged even on failure");
+    assert_eq!(agent.state.nonce, initial_agent_nonce + 1,
+        "nonce must increment even on failure");
+
+    // Target cell should be completely unaffected (Phase 2 rolled back).
+    let target = ledger.get(&target_id).unwrap();
+    assert_eq!(target.state.balance, 100, "target balance must not change on failed turn");
+}
+
+// =============================================================================
+// Test: Permission change does not affect same action (Fix 2)
+// =============================================================================
+
+#[test]
+fn test_permission_change_doesnt_affect_same_action() {
+    // An action that SetPermissions to None (open) and also tries to transfer
+    // from the same cell. The transfer should be checked against the ORIGINAL
+    // permissions (which require Signature), not the weakened ones.
+    //
+    // Without Fix 2, an attacker could:
+    //   1. SetPermissions { send: None } on the target
+    //   2. Transfer from target (now allowed because send=None)
+    // With Fix 2, permission effects are applied LAST, so step 2 is checked
+    // against the ORIGINAL permissions.
+
+    let mut ledger = Ledger::new();
+    let (agent, _) = make_open_cell(1, 5000);
+    let agent_id = agent.id;
+
+    // Target has Signature required for send but open for set_permissions.
+    let (mut target, _) = make_open_cell(2, 1000);
+    target.permissions = pyana_cell::Permissions {
+        send: AuthRequired::Signature,
+        receive: AuthRequired::None,
+        set_state: AuthRequired::None,
+        set_permissions: AuthRequired::None,
+        set_verification_key: AuthRequired::None,
+        increment_nonce: AuthRequired::None,
+        delegate: AuthRequired::None,
+        access: AuthRequired::None,
+    };
+    let target_id = target.id;
+
+    let mut agent_with_cap = agent;
+    agent_with_cap.capabilities.grant(target_id, AuthRequired::None);
+    ledger.insert_cell(agent_with_cap).unwrap();
+    ledger.insert_cell(target).unwrap();
+
+    let executor = zero_cost_executor();
+
+    // Try to SetPermissions (weakening send to None) and Transfer in the same action.
+    // The Transfer should be checked against ORIGINAL permissions (send=Signature),
+    // so it should be DENIED even though SetPermissions would weaken it.
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action = builder.action(target_id, "exploit_attempt");
+        // First effect: weaken permissions.
+        action.set_permissions(target_id, pyana_cell::Permissions {
+            send: AuthRequired::None,
+            receive: AuthRequired::None,
+            set_state: AuthRequired::None,
+            set_permissions: AuthRequired::None,
+            set_verification_key: AuthRequired::None,
+            increment_nonce: AuthRequired::None,
+            delegate: AuthRequired::None,
+            access: AuthRequired::None,
+        });
+        // Second effect: try to exploit the weakened permissions.
+        action.transfer(target_id, agent_id, 500);
+    }
+    let turn = builder.fee(100).build();
+
+    let result = executor.execute(&turn, &mut ledger);
+
+    // The turn should be REJECTED because the authorization check
+    // (verify_authorization) checks ALL effects against the ORIGINAL permissions.
+    // The action has a Transfer from target, which requires Send permission.
+    // The ORIGINAL permissions require Signature for Send, but we have None auth.
+    assert!(result.is_rejected(), "permission exploit should be blocked, got: {result:?}");
+
+    let (error, _) = result.unwrap_rejected();
+    match error {
+        TurnError::PermissionDenied { action, .. } => {
+            assert_eq!(action, "Send", "should fail on Send permission check");
+        }
+        other => panic!("expected PermissionDenied for Send, got {other:?}"),
+    }
+
+    // Verify target balance is unchanged (transfer was blocked).
+    let target = ledger.get(&target_id).unwrap();
+    assert_eq!(target.state.balance, 1000);
+
+    // Verify permissions were NOT changed (entire action was rejected in Phase 2,
+    // since verify_authorization fails before any effects are applied).
+    assert_eq!(target.permissions.send, AuthRequired::Signature,
+        "permissions must not be changed when action is rejected");
 }

@@ -57,6 +57,16 @@ pub enum TurnError {
 
     /// Balance overflow on receiving cell.
     BalanceOverflow { cell: CellId },
+
+    /// The sum of all balance_change deltas in the turn is not zero.
+    /// This violates the conservation law: withdrawals must be matched by deposits.
+    ExcessNotZero { excess: i64 },
+
+    /// A balance_change would underflow the target cell's balance (withdrawal exceeds holdings).
+    BalanceChangeUnderflow { cell: CellId, current: u64, delta: i64 },
+
+    /// The cell's program rejected the state transition.
+    ProgramViolation { cell: CellId, reason: String },
 }
 
 impl core::fmt::Display for TurnError {
@@ -115,6 +125,21 @@ impl core::fmt::Display for TurnError {
             }
             TurnError::BalanceOverflow { cell } => {
                 write!(f, "balance overflow on cell {cell}")
+            }
+            TurnError::ExcessNotZero { excess } => {
+                write!(
+                    f,
+                    "excess not zero at turn end: {excess} (conservation law violated)"
+                )
+            }
+            TurnError::BalanceChangeUnderflow { cell, current, delta } => {
+                write!(
+                    f,
+                    "balance_change underflow on cell {cell}: balance={current}, delta={delta}"
+                )
+            }
+            TurnError::ProgramViolation { cell, reason } => {
+                write!(f, "program violation on cell {cell}: {reason}")
             }
         }
     }

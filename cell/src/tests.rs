@@ -1161,6 +1161,7 @@ fn preconditions_combined_all_pass() {
             nonce: Some(3),
             min_balance: Some(100),
             field_equals: vec![(0, field_from_u64(7))],
+            ..Default::default()
         }),
         network: Some(NetworkPrecondition {
             min_height: Some(50),
@@ -1529,4 +1530,84 @@ fn ledger_incremental_root_matches_full_rebuild() {
     };
     ledger.apply_delta(&delta3).unwrap();
     assert_eq!(ledger.root(), ledger.recompute_root_standalone());
+}
+
+// ============================================================
+// Field visibility / progressive disclosure tests
+// ============================================================
+
+use crate::state::{FieldVisibility, PublicFieldView};
+
+#[test]
+fn test_committed_field_not_visible() {
+    // A committed field returns its hash, not the actual value.
+    let mut state = CellState::new(0);
+    let secret_value = field_from_u64(12345);
+    state.set_field(0, secret_value);
+    state.set_field_visibility(0, FieldVisibility::Committed, 42);
+
+    // The public view should be a commitment hash, not the value.
+    let view = state.get_field_public(0).unwrap();
+    match view {
+        PublicFieldView::Committed(hash) => {
+            // The hash should NOT equal the raw value.
+            assert_ne!(hash, secret_value);
+            // The hash should be deterministic.
+            let expected = {
+                let mut hasher = blake3::Hasher::new();
+                hasher.update(&secret_value);
+                hasher.update(&42u64.to_le_bytes());
+                *hasher.finalize().as_bytes()
+            };
+            assert_eq!(hash, expected);
+        }
+        PublicFieldView::Revealed(_) => {
+            panic!("expected Committed view, got Revealed");
+        }
+    }
+
+    // A public field returns the actual value.
+    state.set_field(1, field_from_u64(99));
+    let view = state.get_field_public(1).unwrap();
+    assert_eq!(view, PublicFieldView::Revealed(field_from_u64(99)));
+}
+
+#[test]
+fn test_selectively_disclosable_field() {
+    let mut state = CellState::new(0);
+    let value = field_from_u64(777);
+    state.set_field(3, value);
+    state.set_field_visibility(3, FieldVisibility::SelectivelyDisclosable, 100);
+
+    // Also returns committed view.
+    let view = state.get_field_public(3).unwrap();
+    assert!(matches!(view, PublicFieldView::Committed(_)));
+
+    // The underlying value is still accessible internally.
+    assert_eq!(state.fields[3], value);
+}
+
+#[test]
+fn test_visibility_default_is_public() {
+    let state = CellState::new(0);
+    for i in 0..STATE_SLOTS {
+        assert_eq!(state.field_visibility[i], FieldVisibility::Public);
+        assert_eq!(state.commitments[i], None);
+    }
+}
+
+#[test]
+fn test_visibility_transition_to_public_clears_commitment() {
+    let mut state = CellState::new(0);
+    state.set_field(0, field_from_u64(42));
+    state.set_field_visibility(0, FieldVisibility::Committed, 1);
+    assert!(state.commitments[0].is_some());
+
+    // Transition back to public.
+    state.set_field_visibility(0, FieldVisibility::Public, 0);
+    assert!(state.commitments[0].is_none());
+    assert_eq!(
+        state.get_field_public(0).unwrap(),
+        PublicFieldView::Revealed(field_from_u64(42))
+    );
 }

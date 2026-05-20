@@ -6,7 +6,7 @@
 //! to restore the ledger to its exact pre-turn state.
 
 use pyana_cell::{
-    CapabilityRef, CellId, Ledger,
+    CapabilityRef, CellId, Ledger, Permissions, VerificationKey,
     state::FieldElement,
 };
 
@@ -45,6 +45,21 @@ pub(crate) enum JournalEntry {
     /// A new cell was created. Records the cell ID so we can remove it on rollback.
     CreateCell {
         cell: CellId,
+    },
+    /// A cell's proved_state flag was changed. Records the old value.
+    SetProvedState {
+        cell: CellId,
+        old_value: bool,
+    },
+    /// A cell's permissions were changed. Records the old permissions.
+    SetPermissions {
+        cell: CellId,
+        old_permissions: Permissions,
+    },
+    /// A cell's verification key was changed. Records the old VK.
+    SetVerificationKey {
+        cell: CellId,
+        old_vk: Option<VerificationKey>,
     },
 }
 
@@ -105,6 +120,21 @@ impl LedgerJournal {
         self.entries.push(JournalEntry::CreateCell { cell });
     }
 
+    /// Record a proved_state change.
+    pub fn record_set_proved_state(&mut self, cell: CellId, old_value: bool) {
+        self.entries.push(JournalEntry::SetProvedState { cell, old_value });
+    }
+
+    /// Record a permissions change.
+    pub fn record_set_permissions(&mut self, cell: CellId, old_permissions: Permissions) {
+        self.entries.push(JournalEntry::SetPermissions { cell, old_permissions });
+    }
+
+    /// Record a verification key change.
+    pub fn record_set_verification_key(&mut self, cell: CellId, old_vk: Option<VerificationKey>) {
+        self.entries.push(JournalEntry::SetVerificationKey { cell, old_vk });
+    }
+
     /// Roll back all recorded changes in reverse order.
     ///
     /// After this call, the ledger is restored to the state it was in before
@@ -142,6 +172,21 @@ impl LedgerJournal {
                 }
                 JournalEntry::CreateCell { cell } => {
                     ledger.remove(&cell);
+                }
+                JournalEntry::SetProvedState { cell, old_value } => {
+                    if let Some(c) = ledger.get_mut(&cell) {
+                        c.state.proved_state = old_value;
+                    }
+                }
+                JournalEntry::SetPermissions { cell, old_permissions } => {
+                    if let Some(c) = ledger.get_mut(&cell) {
+                        c.permissions = old_permissions;
+                    }
+                }
+                JournalEntry::SetVerificationKey { cell, old_vk } => {
+                    if let Some(c) = ledger.get_mut(&cell) {
+                        c.verification_key = old_vk;
+                    }
                 }
             }
         }
