@@ -41,7 +41,7 @@ function addListener(event, callback) {
   if (typeof callback !== 'function') {
     throw new TypeError('pyana.on: callback must be a function');
   }
-  const validEvents = ['ready', 'authorization', 'revoked'];
+  const validEvents = ['ready', 'authorization', 'revoked', 'intentMatch'];
   if (!validEvents.includes(event)) {
     throw new Error(`pyana.on: unknown event "${event}". Valid: ${validEvents.join(', ')}`);
   }
@@ -88,6 +88,52 @@ const pyana = {
     return sendMessage('pyana:getCapabilities');
   },
 
+  // ---------------------------------------------------------------------------
+  // Intent API — privacy-preserving capability discovery
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Broadcast an intent: "I need a capability matching this spec".
+   * The intent propagates through the gossip network. Wallets holding matching
+   * tokens will be notified and can choose to fulfill the request.
+   *
+   * @param {object} matchSpec - What capabilities are needed.
+   * @param {Array<{action?: string, resource?: string}>} matchSpec.actions - Required action patterns.
+   * @param {Array<object>} [matchSpec.constraints] - Additional constraints.
+   * @param {number} [matchSpec.minBudget] - Minimum budget required.
+   * @param {string} [matchSpec.resourcePattern] - Glob/prefix for resource matching.
+   * @param {object} [options] - Options for the intent.
+   * @param {number} [options.expiry] - Unix timestamp for intent expiry (default: 5 minutes from now).
+   * @returns {Promise<{intentId: string, expiry: number}>}
+   */
+  postIntent(matchSpec, options) {
+    return sendMessage('pyana:postIntent', { matchSpec, options });
+  },
+
+  /**
+   * Broadcast an offer: "I can provide capabilities matching this spec".
+   * Other pages/services looking for this capability will be notified.
+   *
+   * @param {object} matchSpec - What capabilities are offered.
+   * @param {object} [options] - Options for the offer.
+   * @param {number} [options.expiry] - Unix timestamp for offer expiry.
+   * @returns {Promise<{intentId: string, expiry: number}>}
+   */
+  offerCapability(matchSpec, options) {
+    return sendMessage('pyana:offerCapability', { matchSpec, options });
+  },
+
+  /**
+   * List active intents in the local pool.
+   *
+   * @param {object} [filter] - Optional filter.
+   * @param {string} [filter.kind] - Filter by kind: 'need', 'offer', 'query'.
+   * @returns {Promise<Array<{id: string, kind: string, matcher: object, expiry: number}>>}
+   */
+  listIntents(filter) {
+    return sendMessage('pyana:listIntents', { filter });
+  },
+
   /**
    * Provision a capability token into the wallet.
    * The extension will show a confirmation dialog to the user.
@@ -126,11 +172,23 @@ const pyana = {
   /**
    * Remove an event listener.
    *
-   * @param {'ready'|'authorization'|'revoked'} event
+   * @param {'ready'|'authorization'|'revoked'|'intentMatch'} event
    * @param {function} callback
    */
   off(event, callback) {
     removeListener(event, callback);
+  },
+
+  /**
+   * Register a callback for when the wallet finds a matching intent.
+   * Convenience wrapper for on('intentMatch', callback).
+   *
+   * The callback receives: { intentId, actions, resource, mode }
+   *
+   * @param {function} callback
+   */
+  onMatch(callback) {
+    addListener('intentMatch', callback);
   },
 };
 

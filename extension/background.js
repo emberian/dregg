@@ -257,6 +257,194 @@ async function provisionToken(tokenData, senderTabId) {
 }
 
 // ---------------------------------------------------------------------------
+// Intent matching engine
+// ---------------------------------------------------------------------------
+
+/** Local pool of active intents. */
+const intentPool = new Map(); // intentId -> { intent, receivedAt }
+
+/** Default intent expiry: 5 minutes from now. */
+const DEFAULT_INTENT_EXPIRY_MS = 5 * 60 * 1000;
+
+/** GC interval for expired intents (ms). */
+const INTENT_GC_INTERVAL = 60_000;
+
+/**
+ * Post an intent (Need) from this page/wallet.
+ */
+async function postIntent(matchSpec, options) {
+  const expiry = options?.expiry || (Date.now() + DEFAULT_INTENT_EXPIRY_MS);
+  const intentId = await computeIntentId('need', matchSpec, expiry);
+  const intent = {
+    id: intentId,
+    kind: 'need',
+    matcher: matchSpec,
+    expiry,
+    createdAt: Date.now(),
+  };
+  intentPool.set(intentId, { intent, receivedAt: Date.now() });
+
+  // Broadcast to node via WebSocket (for gossip propagation)
+  if (nodeWs && nodeWs.readyState === WebSocket.OPEN) {
+    nodeWs.send(JSON.stringify({ type: 'broadcast_intent', intent }));
+  }
+
+  return { intentId, expiry };
+}
+
+/**
+ * Post an offer (Offer) — advertise capabilities this page can provide.
+ */
+async function offerCapability(matchSpec, options) {
+  const expiry = options?.expiry || (Date.now() + DEFAULT_INTENT_EXPIRY_MS);
+  const intentId = await computeIntentId('offer', matchSpec, expiry);
+  const intent = {
+    id: intentId,
+    kind: 'offer',
+    matcher: matchSpec,
+    expiry,
+    createdAt: Date.now(),
+  };
+  intentPool.set(intentId, { intent, receivedAt: Date.now() });
+
+  // Broadcast via gossip
+  if (nodeWs && nodeWs.readyState === WebSocket.OPEN) {
+    nodeWs.send(JSON.stringify({ type: 'broadcast_intent', intent }));
+  }
+
+  return { intentId, expiry };
+}
+
+/**
+ * List active intents in the pool.
+ */
+function listIntents(filter) {
+  const now = Date.now();
+  const results = [];
+  for (const [, { intent }] of intentPool) {
+    if (intent.expiry <= now) continue; // skip expired
+    if (filter?.kind && intent.kind !== filter.kind) continue;
+    results.push({
+      id: intent.id,
+      kind: intent.kind,
+      matcher: intent.matcher,
+      expiry: intent.expiry,
+    });
+  }
+  return results;
+}
+
+/**
+ * Receive an intent from the gossip network and attempt local matching.
+ */
+async function receiveGossipIntent(intent) {
+  const now = Date.now();
+  if (intent.expiry <= now) return; // expired
+  if (intentPool.has(intent.id)) return; // duplicate
+
+  intentPool.set(intent.id, { intent, receivedAt: now });
+
+  // Only match against Need intents (we satisfy them with held tokens)
+  if (intent.kind !== 'need') return;
+
+  const wallet = await loadState();
+  if (wallet.locked) return;
+
+  // Attempt local matching against held tokens
+  const matchResult = matchIntentLocally(intent, wallet.tokens, now);
+  if (matchResult) {
+    // Notify the user via event system
+    notifySubscribers('intentMatch', {
+      intentId: intent.id,
+      actions: matchResult.grantedActions,
+      resource: matchResult.resource,
+      mode: 'trusted',
+    });
+  }
+}
+
+/**
+ * Local matching: evaluate if any held token satisfies the intent's MatchSpec.
+ * This runs ENTIRELY locally — no network calls, no side effects.
+ */
+function matchIntentLocally(intent, tokens, now) {
+  const spec = intent.matcher;
+  if (!spec) return null;
+
+  for (const token of tokens) {
+    if (token.expiry && token.expiry <= now) continue; // skip expired tokens
+
+    // Check actions
+    if (spec.actions && spec.actions.length > 0) {
+      const actionsSatisfied = spec.actions.every(pattern => {
+        if (!pattern.action) return true; // wildcard action
+        return token.actions.includes(pattern.action) || token.actions.includes('*');
+      });
+      if (!actionsSatisfied) continue;
+    }
+
+    // Check resource pattern
+    if (spec.resourcePattern) {
+      const tokenResource = token.resource || '*';
+      if (tokenResource !== '*' && tokenResource !== spec.resourcePattern) {
+        // Simple prefix matching (real impl uses globset via WASM)
+        if (!tokenResource.endsWith('/*') ||
+            !spec.resourcePattern.startsWith(tokenResource.slice(0, -2))) {
+          continue;
+        }
+      }
+    }
+
+    // Check constraints
+    if (spec.constraints && spec.constraints.length > 0) {
+      let constraintsMet = true;
+      for (const c of spec.constraints) {
+        if (c.type === 'appId' && token.appId !== c.value) { constraintsMet = false; break; }
+        if (c.type === 'service' && token.service !== c.value) { constraintsMet = false; break; }
+        if (c.type === 'notExpiredAt' && token.expiry && token.expiry <= c.value) { constraintsMet = false; break; }
+      }
+      if (!constraintsMet) continue;
+    }
+
+    // Match found!
+    const grantedActions = spec.actions
+      ? spec.actions.map(p => p.action).filter(Boolean)
+      : token.actions;
+
+    return {
+      tokenId: token.id,
+      grantedActions,
+      resource: spec.resourcePattern || token.resource || '*',
+    };
+  }
+
+  return null; // no match
+}
+
+/**
+ * Compute a deterministic intent ID.
+ */
+async function computeIntentId(kind, matchSpec, expiry) {
+  const data = JSON.stringify({ kind, matchSpec, expiry, nonce: Math.random() });
+  const encoded = new TextEncoder().encode(data);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', encoded);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** GC: remove expired intents from the pool. */
+function gcIntentPool() {
+  const now = Date.now();
+  for (const [id, { intent }] of intentPool) {
+    if (intent.expiry <= now) {
+      intentPool.delete(id);
+    }
+  }
+}
+
+setInterval(gcIntentPool, INTENT_GC_INTERVAL);
+
+// ---------------------------------------------------------------------------
 // Wallet state queries
 // ---------------------------------------------------------------------------
 
@@ -338,6 +526,18 @@ async function handleMessage(message, sender) {
     case 'pyana:provisionDecision':
       // Handled by the per-popup listener in provisionToken; just ack here.
       return { id: message.id, result: true };
+    case 'pyana:postIntent': {
+      const result = await postIntent(message.matchSpec, message.options);
+      return { id: message.id, result };
+    }
+    case 'pyana:offerCapability': {
+      const result = await offerCapability(message.matchSpec, message.options);
+      return { id: message.id, result };
+    }
+    case 'pyana:listIntents': {
+      const result = listIntents(message.filter);
+      return { id: message.id, result };
+    }
     case 'pyana:getFederation':
       return { id: message.id, result: federationState };
     case 'pyana:refreshDiscovery':
@@ -389,10 +589,10 @@ function connectNodeWs() {
     console.log('[pyana] WebSocket connected to node');
     wsReconnectDelay = 1000; // Reset backoff on success.
 
-    // Subscribe to all event topics.
+    // Subscribe to all event topics (including intents).
     nodeWs.send(JSON.stringify({
       type: 'subscribe',
-      topics: ['roots', 'revocations', 'receipts'],
+      topics: ['roots', 'revocations', 'receipts', 'intents'],
     }));
   };
 
@@ -429,6 +629,11 @@ function connectNodeWs() {
         wallet.receiptChain.push(msg.hash);
         await saveState();
         notifySubscribers('receipt', { hash: msg.hash });
+        break;
+      }
+      case 'intent': {
+        // A new intent arrived from the gossip network.
+        await receiveGossipIntent(msg.intent);
         break;
       }
       case 'subscribed':

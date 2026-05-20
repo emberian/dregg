@@ -205,7 +205,6 @@ impl RelayState {
 // =============================================================================
 
 const STATE_FILENAME: &str = "state.json";
-const DISCOVERY_NODE_FILENAME: &str = "discovery.json";
 
 /// Load persisted state from state_dir if it exists.
 fn load_state(state_dir: &PathBuf) -> Option<PersistedState> {

@@ -4397,7 +4397,7 @@ name = "pyana-intent"
 version = "0.1.0"
 dependencies = [
  "blake3",
- "getrandom 0.2.17",
+ "getrandom 0.4.2",
  "globset",
  "pyana-cell",
  "pyana-trace",
