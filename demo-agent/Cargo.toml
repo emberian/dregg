@@ -75,3 +75,9 @@ name = "rbac_datalog"
 
 [[example]]
 name = "token_revocation"
+
+[[example]]
+name = "progressive_disclosure"
+
+[[example]]
+name = "note_privacy"

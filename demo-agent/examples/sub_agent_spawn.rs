@@ -96,52 +96,30 @@ fn main() {
     println!();
 
     // =========================================================================
-    // STEP 1: Parent holds a broad token (multiple services, large budget)
+    // STEP 1: Parent holds a broad token (unrestricted, large budget)
     // =========================================================================
-    println!("--- Step 1: PARENT MINTS BROAD TOKEN ---");
+    println!("--- Step 1: PARENT HOLDS BROAD TOKEN ---");
 
-    let parent_root_token = MacaroonToken::mint(
+    // The parent's root token is unrestricted -- it can access any service.
+    // This models a platform-level orchestrator with full authority.
+    let parent_token = MacaroonToken::mint(
         issuer_key,
         b"parent-orchestrator-v1",
         "platform.internal",
     );
 
-    // Attenuate to the parent's scope: 3 services, total budget of 9000
-    let parent_attenuation = Attenuation {
-        services: vec![
-            ("compute".into(), "rw".into()),
-            ("storage".into(), "rw".into()),
-            ("network".into(), "rw".into()),
-        ],
-        apps: vec![("orchestrator".into(), "rw".into())],
-        not_after: Some(1900000000),
-        budget: Some(BudgetSpec {
-            id: "parent-budget".into(),
-            parent_id: None,
-            class: "computrons".into(),
-            limit: 9000,
-            window: Some("1h".into()),
-        }),
-        ..Default::default()
-    };
-
-    let parent_token = parent_root_token.attenuate(&parent_attenuation).unwrap();
-
     println!("  Parent token scope:");
-    println!("    Services: compute (rw), storage (rw), network (rw)");
-    println!("    Budget: 9000 computrons / 1h");
-    println!("    Expires: 1900000000 (~2030)");
+    println!("    Services: UNRESTRICTED (can access any service)");
+    println!("    Budget: unlimited (root token)");
+    println!("    This models a trusted orchestrator with platform-level access.");
     println!();
 
-    // Verify parent token works for all three services
+    // Verify parent token works for all three services (unrestricted = allows all)
     for svc in &["compute", "storage", "network"] {
         let req = AuthRequest {
             service: Some((*svc).to_string()),
-            app_id: Some("orchestrator".into()),
             action: Some("rw".into()),
             now: Some(1750000000),
-            budget_states: [("parent-budget".into(), 9000)].into_iter().collect(),
-            request_cost: Some(100),
             ..Default::default()
         };
         let result = parent_token.verify(&req);
