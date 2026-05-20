@@ -16,6 +16,20 @@ use crate::{
     VerificationMode,
 };
 
+/// Sensitivity level for a held capability.
+///
+/// Controls whether a capability can be automatically matched against incoming intents.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sensitivity {
+    /// Public capabilities: freely matchable by the engine.
+    Public,
+    /// Normal capabilities: matchable, but not against Query intents.
+    Normal,
+    /// Sensitive capabilities: NEVER matched automatically.
+    /// Requires explicit user action to match against any intent.
+    Sensitive,
+}
+
 /// A held capability token in the wallet's simplified representation.
 ///
 /// This is the wallet-side view of a token -- enough information to evaluate
@@ -42,6 +56,10 @@ pub struct HeldCapability {
     pub expiry: Option<u64>,
     /// Remaining budget, if budgeted.
     pub budget: Option<u64>,
+    /// Sensitivity level: controls automatic matching behavior.
+    /// Sensitive capabilities are never matched against incoming intents without
+    /// explicit user action.
+    pub sensitivity: Sensitivity,
 }
 
 /// Result of attempting to match an intent against held capabilities.
@@ -83,14 +101,19 @@ pub fn match_intent(
         return MatchResult::Expired;
     }
 
-    // Only match against Need intents (we satisfy them) or Query intents
-    // For Offer intents, the matching direction is reversed (handled elsewhere)
-    if intent.kind == IntentKind::Offer {
+    // Only match against Need intents (we satisfy them).
+    // For Offer intents, the matching direction is reversed (handled elsewhere).
+    // Query intents NEVER trigger automatic matching -- they are a probing vector.
+    // Queries require explicit user opt-in (handled via a separate API).
+    if intent.kind == IntentKind::Offer || intent.kind == IntentKind::Query {
         return MatchResult::WrongKind;
     }
 
-    // Try each held token
+    // Try each held token (skip Sensitive tokens -- they require explicit user action)
     for (idx, token) in held_tokens.iter().enumerate() {
+        if token.sensitivity == Sensitivity::Sensitive {
+            continue;
+        }
         if satisfies_spec(token, &intent.matcher, now) {
             let matched = Match {
                 intent_id: intent.id,
@@ -313,6 +336,7 @@ mod tests {
             oauth_provider: None,
             expiry: None,
             budget: None,
+            sensitivity: Sensitivity::Normal,
         }
     }
 
@@ -673,5 +697,78 @@ mod tests {
             resource_pattern: Some("api/*".into()),
         };
         assert!(satisfies_spec(&token, &spec, 100));
+    }
+
+    #[test]
+    fn test_query_intent_returns_wrong_kind() {
+        let token = make_token(&["read"], "*");
+        let spec = MatchSpec {
+            actions: vec![ActionPattern {
+                action: Some("read".into()),
+                resource: None,
+            }],
+            constraints: vec![],
+            min_budget: None,
+            resource_pattern: None,
+        };
+        let intent = Intent::new(
+            IntentKind::Query,
+            spec,
+            CommitmentId([0xAA; 32]),
+            u64::MAX,
+            None,
+        );
+        let our_id = CommitmentId([0xBB; 32]);
+        let result = match_intent(&intent, &[token], our_id, VerificationMode::Trusted, 100);
+        assert!(matches!(result, MatchResult::WrongKind));
+    }
+
+    #[test]
+    fn test_sensitive_token_never_auto_matched() {
+        let mut token = make_token(&["read", "write", "admin"], "*");
+        token.sensitivity = Sensitivity::Sensitive;
+
+        let intent = make_intent(
+            vec![ActionPattern {
+                action: Some("read".into()),
+                resource: None,
+            }],
+            vec![],
+        );
+        let our_id = CommitmentId([0xBB; 32]);
+        let result = match_intent(&intent, &[token], our_id, VerificationMode::Trusted, 100);
+        // Even though the token satisfies the spec, it's Sensitive so it's skipped
+        assert!(matches!(result, MatchResult::NoMatch));
+    }
+
+    #[test]
+    fn test_sensitive_token_skipped_but_normal_still_matches() {
+        let mut sensitive_token = make_token(&["read", "admin"], "*");
+        sensitive_token.sensitivity = Sensitivity::Sensitive;
+
+        let normal_token = make_token(&["read"], "*");
+
+        let intent = make_intent(
+            vec![ActionPattern {
+                action: Some("read".into()),
+                resource: None,
+            }],
+            vec![],
+        );
+        let our_id = CommitmentId([0xBB; 32]);
+        let result = match_intent(
+            &intent,
+            &[sensitive_token, normal_token],
+            our_id,
+            VerificationMode::Trusted,
+            100,
+        );
+        match result {
+            MatchResult::Matched { token_index, .. } => {
+                // Should match the second (Normal) token, not the first (Sensitive)
+                assert_eq!(token_index, 1);
+            }
+            _ => panic!("expected Matched"),
+        }
     }
 }

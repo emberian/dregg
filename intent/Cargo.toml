@@ -12,6 +12,7 @@ description = "Distributed intent engine for privacy-preserving capability disco
 [dependencies]
 blake3 = "1"
 getrandom = "0.4"
+postcard = { version = "1", features = ["alloc"] }
 pyana-cell = { path = "../cell" }
 pyana-trace = { path = "../trace" }
 token = { path = "../token", default-features = false, features = ["macaroon", "datalog"] }

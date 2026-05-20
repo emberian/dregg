@@ -1,4 +1,14 @@
 // Injected into page context. Defines window.pyana API.
+// Security: uses nonce-based event channels to prevent spoofing (Bug 7 fix).
+
+// Retrieve the session nonce from the script tag's data attribute.
+const currentScript = document.currentScript || document.querySelector('script[data-pyana-nonce]');
+const SESSION_NONCE = currentScript?.dataset?.pyanaNonce;
+
+if (!SESSION_NONCE) {
+  console.error('[pyana] Failed to initialize: missing session nonce.');
+  throw new Error('pyana: injection integrity check failed');
+}
 
 const pending = new Map();
 let idCounter = 0;
@@ -7,7 +17,7 @@ function sendMessage(type, payload) {
   return new Promise((resolve, reject) => {
     const id = `pyana_${Date.now()}_${idCounter++}`;
     pending.set(id, { resolve, reject });
-    window.dispatchEvent(new CustomEvent('pyana:request', {
+    window.dispatchEvent(new CustomEvent(`pyana:request:${SESSION_NONCE}`, {
       detail: { type, id, ...payload },
     }));
     setTimeout(() => {
@@ -19,8 +29,9 @@ function sendMessage(type, payload) {
   });
 }
 
-window.addEventListener('pyana:response', (event) => {
+window.addEventListener(`pyana:response:${SESSION_NONCE}`, (event) => {
   const detail = event.detail;
+  if (!detail) return;
   const resolver = pending.get(detail.id);
   if (!resolver) return;
   pending.delete(detail.id);
@@ -41,13 +52,14 @@ function addListener(event, callback) {
   if (typeof callback !== 'function') {
     throw new TypeError('pyana.on: callback must be a function');
   }
-  const validEvents = ['ready', 'authorization', 'revoked', 'intentMatch'];
+  // Only expose non-sensitive event types to pages.
+  const validEvents = ['ready', 'authorization', 'revoked'];
   if (!validEvents.includes(event)) {
     throw new Error(`pyana.on: unknown event "${event}". Valid: ${validEvents.join(', ')}`);
   }
   if (!eventListeners.has(event)) {
     eventListeners.set(event, new Set());
-    // Subscribe to this event type in the background
+    // Subscribe to this event type in the background.
     sendMessage('pyana:subscribe', { event }).catch(() => {});
   }
   eventListeners.get(event).add(callback);
@@ -60,9 +72,9 @@ function removeListener(event, callback) {
   }
 }
 
-// Listen for event notifications forwarded from content script.
-window.addEventListener('pyana:event', (event) => {
-  const { eventName, payload } = event.detail;
+// Listen for event notifications forwarded from content script (nonce-secured channel).
+window.addEventListener(`pyana:event:${SESSION_NONCE}`, (event) => {
+  const { eventName, payload } = event.detail || {};
   const listeners = eventListeners.get(eventName);
   if (listeners) {
     for (const cb of listeners) {
@@ -72,80 +84,52 @@ window.addEventListener('pyana:event', (event) => {
 });
 
 // ---------------------------------------------------------------------------
-// Public API
+// Public API (minimal, security-hardened surface)
 // ---------------------------------------------------------------------------
 
 const pyana = {
+  /**
+   * Request authorization for an action on a resource.
+   * The wallet evaluates internally and produces a ZK proof if allowed.
+   *
+   * @param {{action: string, resource: string, mode?: 'trusted'|'private'|'selective'}} request
+   * @returns {Promise<{allowed: boolean, proof?: number[], facts?: string[], error?: string}>}
+   */
   authorize(request) {
     return sendMessage('pyana:authorize', { request });
   },
 
+  /**
+   * Check if the pyana wallet extension is connected and available.
+   * @returns {Promise<boolean>}
+   */
   isConnected() {
     return sendMessage('pyana:isConnected').then(() => true).catch(() => false);
   },
 
-  getCapabilities() {
-    return sendMessage('pyana:getCapabilities');
-  },
-
-  // ---------------------------------------------------------------------------
-  // Intent API — privacy-preserving capability discovery
-  // ---------------------------------------------------------------------------
-
   /**
-   * Broadcast an intent: "I need a capability matching this spec".
-   * The intent propagates through the gossip network. Wallets holding matching
-   * tokens will be notified and can choose to fulfill the request.
+   * Check whether the wallet CAN authorize a given action/resource, without
+   * producing a proof. Returns only a boolean — does NOT reveal what capabilities
+   * the wallet holds or how many tokens match.
    *
-   * @param {object} matchSpec - What capabilities are needed.
-   * @param {Array<{action?: string, resource?: string}>} matchSpec.actions - Required action patterns.
-   * @param {Array<object>} [matchSpec.constraints] - Additional constraints.
-   * @param {number} [matchSpec.minBudget] - Minimum budget required.
-   * @param {string} [matchSpec.resourcePattern] - Glob/prefix for resource matching.
-   * @param {object} [options] - Options for the intent.
-   * @param {number} [options.expiry] - Unix timestamp for intent expiry (default: 5 minutes from now).
-   * @returns {Promise<{intentId: string, expiry: number}>}
+   * @param {{action: string, resource: string}} request
+   * @returns {Promise<boolean>}
    */
-  postIntent(matchSpec, options) {
-    return sendMessage('pyana:postIntent', { matchSpec, options });
-  },
-
-  /**
-   * Broadcast an offer: "I can provide capabilities matching this spec".
-   * Other pages/services looking for this capability will be notified.
-   *
-   * @param {object} matchSpec - What capabilities are offered.
-   * @param {object} [options] - Options for the offer.
-   * @param {number} [options.expiry] - Unix timestamp for offer expiry.
-   * @returns {Promise<{intentId: string, expiry: number}>}
-   */
-  offerCapability(matchSpec, options) {
-    return sendMessage('pyana:offerCapability', { matchSpec, options });
-  },
-
-  /**
-   * List active intents in the local pool.
-   *
-   * @param {object} [filter] - Optional filter.
-   * @param {string} [filter.kind] - Filter by kind: 'need', 'offer', 'query'.
-   * @returns {Promise<Array<{id: string, kind: string, matcher: object, expiry: number}>>}
-   */
-  listIntents(filter) {
-    return sendMessage('pyana:listIntents', { filter });
+  canAuthorize(request) {
+    return sendMessage('pyana:canAuthorize', { request });
   },
 
   /**
    * Provision a capability token into the wallet.
    * The extension will show a confirmation dialog to the user.
+   * Requires origin to be in the user-approved allowlist (prompted on first use).
    *
-   * @param {Uint8Array|object} tokenBytes - Token data. If an object, it should
-   *   have: { actions: string[], resource: string, expiry?: number, issuer?: string }
+   * @param {Uint8Array|object} tokenBytes - Token data.
    * @returns {Promise<{accepted: boolean, tokenId?: string}>}
    */
   provision(tokenBytes) {
     let tokenData;
     if (tokenBytes instanceof Uint8Array) {
-      // Decode token bytes — for now treat as JSON-encoded token descriptor.
       try {
         tokenData = JSON.parse(new TextDecoder().decode(tokenBytes));
       } catch (e) {
@@ -160,7 +144,19 @@ const pyana = {
   },
 
   /**
-   * Register an event listener.
+   * Broadcast an intent: "I need a capability matching this spec".
+   * Requires user confirmation popup AND origin allowlist approval.
+   *
+   * @param {object} matchSpec - What capabilities are needed.
+   * @param {object} [options] - Options for the intent.
+   * @returns {Promise<{intentId: string, expiry: number}>}
+   */
+  postIntent(matchSpec, options) {
+    return sendMessage('pyana:postIntent', { matchSpec, options });
+  },
+
+  /**
+   * Register an event listener for non-sensitive wallet events.
    *
    * @param {'ready'|'authorization'|'revoked'} event
    * @param {function} callback
@@ -172,23 +168,11 @@ const pyana = {
   /**
    * Remove an event listener.
    *
-   * @param {'ready'|'authorization'|'revoked'|'intentMatch'} event
+   * @param {'ready'|'authorization'|'revoked'} event
    * @param {function} callback
    */
   off(event, callback) {
     removeListener(event, callback);
-  },
-
-  /**
-   * Register a callback for when the wallet finds a matching intent.
-   * Convenience wrapper for on('intentMatch', callback).
-   *
-   * The callback receives: { intentId, actions, resource, mode }
-   *
-   * @param {function} callback
-   */
-  onMatch(callback) {
-    addListener('intentMatch', callback);
   },
 };
 

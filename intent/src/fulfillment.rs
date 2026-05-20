@@ -255,6 +255,7 @@ mod tests {
             oauth_provider: None,
             expiry: Some(10000),
             budget: None,
+            sensitivity: crate::matcher::Sensitivity::Normal,
         }
     }
 

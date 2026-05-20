@@ -31,6 +31,7 @@
 pub mod fulfillment;
 pub mod gossip;
 pub mod matcher;
+pub mod validation;
 
 use serde::{Deserialize, Serialize};
 
@@ -57,6 +58,58 @@ impl CommitmentId {
     pub fn derive(secret: &[u8], domain: &str) -> Self {
         let hash = blake3::derive_key(domain, secret);
         Self(hash)
+    }
+}
+
+/// Stake requirement for intent propagation via gossip.
+///
+/// Intents that wish to propagate over the gossip network must have a committed
+/// stake. Local-only intents (from the wallet's own page) may skip the stake
+/// requirement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StakeRequirement {
+    /// No stake required -- intent is local-only and will not be propagated via gossip.
+    None,
+    /// A committed note stake, making the intent eligible for gossip propagation.
+    /// The commitment must be well-formed (non-zero, correct length).
+    Committed(pyana_cell::NoteCommitment),
+}
+
+impl StakeRequirement {
+    /// Convert from the legacy `Option<NoteCommitment>` representation.
+    pub fn from_option(opt: Option<pyana_cell::NoteCommitment>) -> Self {
+        match opt {
+            Some(commitment) => Self::Committed(commitment),
+            None => Self::None,
+        }
+    }
+
+    /// Check whether this requirement includes a valid stake.
+    pub fn has_valid_stake(&self) -> bool {
+        match self {
+            Self::None => false,
+            Self::Committed(c) => verify_stake_commitment(c),
+        }
+    }
+}
+
+/// Verify that a stake commitment is well-formed.
+///
+/// Checks:
+/// - The commitment is non-zero (all-zeros would be an invalid/empty commitment)
+/// - The commitment has proper length (always true for `[u8; 32]`, but checked for semantics)
+pub fn verify_stake_commitment(commitment: &pyana_cell::NoteCommitment) -> bool {
+    // Reject all-zeros as invalid
+    commitment.0 != [0u8; 32]
+}
+
+/// Verify that an intent has a valid stake for gossip propagation.
+///
+/// Returns true if the intent carries a non-zero, well-formed note commitment.
+pub fn verify_stake(intent: &Intent) -> bool {
+    match &intent.proof_of_stake {
+        Some(commitment) => verify_stake_commitment(commitment),
+        None => false,
     }
 }
 
@@ -166,22 +219,32 @@ impl Intent {
     }
 
     /// Compute the content-addressed ID from the intent's fields.
+    ///
+    /// Uses canonical postcard serialization to ensure deterministic hashing
+    /// that won't break if Debug formatting changes.
     fn compute_id(&self) -> [u8; 32] {
-        let mut hasher = blake3::Hasher::new_derive_key("pyana-intent-id-v1");
-        // Hash kind
-        hasher.update(&[self.kind as u8]);
-        // Hash matcher (deterministic serialization via rmp would be better,
-        // but for now we hash the debug repr -- the real implementation would
-        // use a canonical encoding)
-        hasher.update(format!("{:?}", self.matcher).as_bytes());
-        // Hash creator
-        hasher.update(&self.creator.0);
-        // Hash expiry
-        hasher.update(&self.expiry.to_le_bytes());
-        // Hash stake if present
-        if let Some(stake) = &self.proof_of_stake {
-            hasher.update(&stake.0);
+        // Serialize the semantically-relevant fields in a canonical order.
+        // We build a struct specifically for hashing (excludes the `id` field itself).
+        #[derive(Serialize)]
+        struct IntentBody<'a> {
+            kind: &'a IntentKind,
+            matcher: &'a MatchSpec,
+            creator: &'a CommitmentId,
+            expiry: u64,
+            proof_of_stake: &'a Option<pyana_cell::NoteCommitment>,
         }
+
+        let body = IntentBody {
+            kind: &self.kind,
+            matcher: &self.matcher,
+            creator: &self.creator,
+            expiry: self.expiry,
+            proof_of_stake: &self.proof_of_stake,
+        };
+
+        let canonical = postcard::to_allocvec(&body).unwrap_or_default();
+        let mut hasher = blake3::Hasher::new_derive_key("pyana-intent-id-v1");
+        hasher.update(&canonical);
         *hasher.finalize().as_bytes()
     }
 
@@ -192,7 +255,7 @@ impl Intent {
 }
 
 /// A successful match: a held token can satisfy an intent.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Match {
     /// The intent that was matched.
     pub intent_id: [u8; 32],
