@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["macaroon", "secrets", "token", "tokenizer", "hints", "morpheus", "commit", "trace", "demo", "demo-agent", "federation", "circuit", "audit", "bridge", "wire", "store", "cell", "turn", "coord", "tests", "types", "sdk", "wasm", "chain"]
-exclude = ["net", "chain/program"]
+members = ["macaroon", "secrets", "token", "tokenizer", "hints", "morpheus", "commit", "trace", "demo", "demo-agent", "federation", "circuit", "audit", "bridge", "wire", "store", "cell", "turn", "coord", "tests", "types", "sdk", "wasm"]
+exclude = ["net", "chain", "chain/program"]
 
 [workspace.package]
 version = "0.1.0"

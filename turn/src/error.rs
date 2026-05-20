@@ -67,6 +67,10 @@ pub enum TurnError {
 
     /// The cell's program rejected the state transition.
     ProgramViolation { cell: CellId, reason: String },
+
+    /// Note conservation law violated: for a given asset type, the total value
+    /// of spent notes does not equal the total value of created notes.
+    NoteConservationViolation { asset_type: u64, inputs: u64, outputs: u64 },
 }
 
 impl core::fmt::Display for TurnError {
@@ -140,6 +144,12 @@ impl core::fmt::Display for TurnError {
             }
             TurnError::ProgramViolation { cell, reason } => {
                 write!(f, "program violation on cell {cell}: {reason}")
+            }
+            TurnError::NoteConservationViolation { asset_type, inputs, outputs } => {
+                write!(
+                    f,
+                    "note conservation violated for asset {asset_type}: inputs={inputs}, outputs={outputs}"
+                )
             }
         }
     }

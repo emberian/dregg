@@ -12,17 +12,17 @@ description = "EVM on-chain verification of pyana STARK proofs via SP1 wrapping 
 # Requires `sp1up` toolchain: https://docs.succinct.xyz/docs/sp1/getting-started/install
 # The SP1 prover compiles the guest program for riscv32im-succinct-zkvm-elf,
 # then generates a Groth16/PLONK proof verifiable on EVM.
-sp1-sdk = { version = "6", default-features = false }
-sp1-build = "6"
+sp1-sdk = { version = "6", default-features = false, optional = true }
 
 # EVM interaction (contract calls for on-chain verification)
-alloy = { version = "1", features = ["providers", "contract", "signer-local", "reqwest"] }
+alloy = { version = "1", features = ["providers", "contract", "signer-local", "reqwest"], optional = true }
 
 # Pyana types for proof serialization
 pyana-types = { path = "../types" }
 
 # Shared with the circuit crate (STARK proof format)
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 blake3 = "1"
 bincode = "1"
 
@@ -30,20 +30,22 @@ bincode = "1"
 tokio = { version = "1", features = ["rt", "macros"] }
 
 # Error handling
-thiserror = { workspace = true }
+thiserror = "2"
 anyhow = "1"
 
 # Hex encoding for contract addresses / proof bytes
 hex = "0.4"
 
 [build-dependencies]
-sp1-build = "6"
+sp1-build = { version = "6", optional = true }
 
 [features]
 default = ["mock"]
-# Mock mode: stubs out SP1 proving for development without the SP1 toolchain
+# Mock mode: stubs out SP1 proving for development without the SP1 toolchain.
+# All APIs are available but produce simulated proofs.
 mock = []
-# Enable real SP1 proving (requires `cargo prove` toolchain installed)
-prove = []
-# Enable on-chain submission
-on-chain = []
+# Enable real SP1 proving (requires `sp1up` toolchain installed).
+# Pulls in sp1-sdk and its full dependency tree.
+prove = ["dep:sp1-sdk", "dep:sp1-build"]
+# Enable on-chain submission via alloy.
+on-chain = ["dep:alloy"]

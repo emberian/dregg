@@ -3781,3 +3781,224 @@ fn test_partial_proof_fields_doesnt_set_proved() {
     // proved_state should still be false (only 3/8 fields set).
     assert!(!ledger.get(&target_id).unwrap().state.proved_state);
 }
+
+// =============================================================================
+// Note layer tests
+// =============================================================================
+
+#[test]
+fn test_note_spend_and_create_conservation() {
+    // Spend 100, create 60 + 40 = valid.
+    let kp = TestKeypair::from_seed(1);
+    let mut ledger = Ledger::new();
+    let agent = Cell::with_balance(kp.public_key, [0u8; 32], 10000);
+    let agent_id = agent.id;
+    ledger.insert_cell(agent).unwrap();
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+
+    let nullifier = pyana_cell::Nullifier([0xAA; 32]);
+    let commitment1 = pyana_cell::NoteCommitment([0xBB; 32]);
+    let commitment2 = pyana_cell::NoteCommitment([0xCC; 32]);
+
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action = builder.action(agent_id, "note_transfer");
+        action.effect(Effect::NoteSpend {
+            nullifier,
+            note_tree_root: [0u8; 32],
+            value: 100,
+            asset_type: 1,
+        });
+        action.effect(Effect::NoteCreate {
+            commitment: commitment1,
+            value: 60,
+            asset_type: 1,
+            encrypted_note: vec![],
+        });
+        action.effect(Effect::NoteCreate {
+            commitment: commitment2,
+            value: 40,
+            asset_type: 1,
+            encrypted_note: vec![],
+        });
+    }
+    let turn = builder.fee(10000).build();
+
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed(), "conservation-valid note turn should commit");
+}
+
+#[test]
+fn test_note_conservation_violated() {
+    // Spend 100, create 200 = rejected.
+    let kp = TestKeypair::from_seed(1);
+    let mut ledger = Ledger::new();
+    let agent = Cell::with_balance(kp.public_key, [0u8; 32], 10000);
+    let agent_id = agent.id;
+    ledger.insert_cell(agent).unwrap();
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+
+    let nullifier = pyana_cell::Nullifier([0xAA; 32]);
+    let commitment = pyana_cell::NoteCommitment([0xBB; 32]);
+
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action = builder.action(agent_id, "note_inflate");
+        action.effect(Effect::NoteSpend {
+            nullifier,
+            note_tree_root: [0u8; 32],
+            value: 100,
+            asset_type: 1,
+        });
+        action.effect(Effect::NoteCreate {
+            commitment,
+            value: 200,
+            asset_type: 1,
+            encrypted_note: vec![],
+        });
+    }
+    let turn = builder.fee(10000).build();
+
+    let result = executor.execute(&turn, &mut ledger);
+    match result {
+        crate::turn::TurnResult::Rejected { reason, .. } => {
+            assert!(
+                matches!(reason, TurnError::NoteConservationViolation { asset_type: 1, inputs: 100, outputs: 200 }),
+                "expected NoteConservationViolation, got: {reason:?}"
+            );
+        }
+        _ => panic!("expected rejection for conservation violation"),
+    }
+}
+
+#[test]
+fn test_note_nft_transfer() {
+    // NFT transfer: spend a note with value=0 (NFT), create a note with value=0.
+    // Conservation: 0 == 0 for both asset types.
+    let kp = TestKeypair::from_seed(1);
+    let mut ledger = Ledger::new();
+    let agent = Cell::with_balance(kp.public_key, [0u8; 32], 10000);
+    let agent_id = agent.id;
+    ledger.insert_cell(agent).unwrap();
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+
+    let unique_asset_id: u64 = 0xDEAD_BEEF;
+    let nullifier = pyana_cell::Nullifier([0xAA; 32]);
+    let commitment = pyana_cell::NoteCommitment([0xBB; 32]);
+
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action = builder.action(agent_id, "nft_transfer");
+        // Spend the NFT note (value=0 for NFTs, asset_type is the unique ID).
+        action.effect(Effect::NoteSpend {
+            nullifier,
+            note_tree_root: [0u8; 32],
+            value: 0,
+            asset_type: unique_asset_id,
+        });
+        // Create a new note for the recipient (same asset_type, value=0).
+        action.effect(Effect::NoteCreate {
+            commitment,
+            value: 0,
+            asset_type: unique_asset_id,
+            encrypted_note: vec![1, 2, 3], // encrypted for recipient
+        });
+    }
+    let turn = builder.fee(10000).build();
+
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed(), "NFT transfer should commit (0==0 conservation)");
+}
+
+#[test]
+fn test_note_multiple_asset_types_conservation() {
+    // Spend asset_type=1 (100) + asset_type=2 (50).
+    // Create asset_type=1 (100) + asset_type=2 (50).
+    // Should pass.
+    let kp = TestKeypair::from_seed(1);
+    let mut ledger = Ledger::new();
+    let agent = Cell::with_balance(kp.public_key, [0u8; 32], 10000);
+    let agent_id = agent.id;
+    ledger.insert_cell(agent).unwrap();
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action = builder.action(agent_id, "multi_asset");
+        action.effect(Effect::NoteSpend {
+            nullifier: pyana_cell::Nullifier([1u8; 32]),
+            note_tree_root: [0u8; 32],
+            value: 100,
+            asset_type: 1,
+        });
+        action.effect(Effect::NoteSpend {
+            nullifier: pyana_cell::Nullifier([2u8; 32]),
+            note_tree_root: [0u8; 32],
+            value: 50,
+            asset_type: 2,
+        });
+        action.effect(Effect::NoteCreate {
+            commitment: pyana_cell::NoteCommitment([3u8; 32]),
+            value: 100,
+            asset_type: 1,
+            encrypted_note: vec![],
+        });
+        action.effect(Effect::NoteCreate {
+            commitment: pyana_cell::NoteCommitment([4u8; 32]),
+            value: 50,
+            asset_type: 2,
+            encrypted_note: vec![],
+        });
+    }
+    let turn = builder.fee(10000).build();
+
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed(), "multi-asset conservation should pass");
+}
+
+#[test]
+fn test_note_cross_asset_conservation_fails() {
+    // Spend asset_type=1 (100), create asset_type=2 (100).
+    // Should fail: each asset type must independently conserve.
+    let kp = TestKeypair::from_seed(1);
+    let mut ledger = Ledger::new();
+    let agent = Cell::with_balance(kp.public_key, [0u8; 32], 10000);
+    let agent_id = agent.id;
+    ledger.insert_cell(agent).unwrap();
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action = builder.action(agent_id, "cross_asset_cheat");
+        action.effect(Effect::NoteSpend {
+            nullifier: pyana_cell::Nullifier([1u8; 32]),
+            note_tree_root: [0u8; 32],
+            value: 100,
+            asset_type: 1,
+        });
+        action.effect(Effect::NoteCreate {
+            commitment: pyana_cell::NoteCommitment([2u8; 32]),
+            value: 100,
+            asset_type: 2, // different asset type!
+            encrypted_note: vec![],
+        });
+    }
+    let turn = builder.fee(10000).build();
+
+    let result = executor.execute(&turn, &mut ledger);
+    match result {
+        crate::turn::TurnResult::Rejected { reason, .. } => {
+            // Either asset 1 or asset 2 conservation will fail.
+            assert!(
+                matches!(reason, TurnError::NoteConservationViolation { .. }),
+                "expected NoteConservationViolation, got: {reason:?}"
+            );
+        }
+        _ => panic!("expected rejection for cross-asset conservation violation"),
+    }
+}

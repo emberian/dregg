@@ -1325,6 +1325,7 @@ mod tests {
                     (false, BabyBear::ZERO),
                 ],
                 body_atoms: vec![],
+                equal_checks: vec![],
             },
             state_root: final_root,
             body_fact_hashes: vec![body_hash],

@@ -1,0 +1,13 @@
+/Users/ember/dev/breadstuffs/chain/target/debug/deps/thiserror-344110ad8a84594e.d: /Users/ember/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /Users/ember/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /Users/ember/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /Users/ember/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/provide.rs /Users/ember/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /Users/ember/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /Users/ember/dev/breadstuffs/chain/target/debug/build/thiserror-8be54e97483de25d/out/private.rs
+
+/Users/ember/dev/breadstuffs/chain/target/debug/deps/libthiserror-344110ad8a84594e.rmeta: /Users/ember/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /Users/ember/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /Users/ember/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /Users/ember/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/provide.rs /Users/ember/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /Users/ember/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /Users/ember/dev/breadstuffs/chain/target/debug/build/thiserror-8be54e97483de25d/out/private.rs
+
+/Users/ember/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs:
+/Users/ember/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs:
+/Users/ember/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs:
+/Users/ember/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/provide.rs:
+/Users/ember/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs:
+/Users/ember/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs:
+/Users/ember/dev/breadstuffs/chain/target/debug/build/thiserror-8be54e97483de25d/out/private.rs:
+
+# env-dep:OUT_DIR=/Users/ember/dev/breadstuffs/chain/target/debug/build/thiserror-8be54e97483de25d/out
