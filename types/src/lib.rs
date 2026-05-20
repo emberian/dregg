@@ -99,6 +99,13 @@ impl fmt::Debug for Signature {
 #[derive(Clone)]
 pub struct SigningKey(ed25519_dalek::SigningKey);
 
+impl SigningKey {
+    /// Derive the corresponding public key from this signing key.
+    pub fn public_key(&self) -> PublicKey {
+        PublicKey(self.0.verifying_key().to_bytes())
+    }
+}
+
 impl fmt::Debug for SigningKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "SigningKey(<redacted>)")
@@ -144,8 +151,14 @@ pub struct ThresholdQC(pub Vec<u8>);
 /// This is the canonical definition. It carries FULL 64-byte signatures.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AttestedRoot {
-    /// The Merkle root of the revocation tree.
+    /// The Merkle root of the revocation tree (cell state).
     pub merkle_root: [u8; 32],
+    /// The note commitment tree root (append-only Merkle tree of note commitments).
+    /// `None` if the federation has not yet integrated note tree attestation.
+    pub note_tree_root: Option<[u8; 32]>,
+    /// The nullifier set root (commitment to all spent nullifiers).
+    /// `None` if the federation has not yet integrated nullifier attestation.
+    pub nullifier_set_root: Option<[u8; 32]>,
     /// The block height at which this root was finalized.
     pub height: u64,
     /// Unix timestamp (seconds) when finalized.
@@ -202,6 +215,12 @@ impl AttestedRoot {
         let mut msg = Vec::new();
         msg.extend_from_slice(b"pyana-attested-root-v1");
         msg.extend_from_slice(&self.merkle_root);
+        if let Some(ref note_root) = self.note_tree_root {
+            msg.extend_from_slice(note_root);
+        }
+        if let Some(ref nullifier_root) = self.nullifier_set_root {
+            msg.extend_from_slice(nullifier_root);
+        }
         msg.extend_from_slice(&self.height.to_le_bytes());
         msg.extend_from_slice(&self.timestamp.to_le_bytes());
         msg
@@ -365,6 +384,8 @@ mod tests {
     fn attested_root_has_quorum() {
         let root = AttestedRoot {
             merkle_root: [0xAB; 32],
+            note_tree_root: None,
+            nullifier_set_root: None,
             height: 42,
             timestamp: 1700000000,
             quorum_signatures: vec![
@@ -401,6 +422,8 @@ mod tests {
 
         let mut root = AttestedRoot {
             merkle_root: [0xAB; 32],
+            note_tree_root: None,
+            nullifier_set_root: None,
             height: 42,
             timestamp: 1700000000,
             quorum_signatures: vec![],
@@ -432,6 +455,8 @@ mod tests {
     fn postcard_roundtrip_attested_root() {
         let root = AttestedRoot {
             merkle_root: [0x01; 32],
+            note_tree_root: Some([0x02; 32]),
+            nullifier_set_root: Some([0x03; 32]),
             height: 99,
             timestamp: 1700000000,
             quorum_signatures: vec![

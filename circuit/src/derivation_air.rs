@@ -5,6 +5,8 @@
 //! - Body facts exist (Merkle membership for each, up to 4 body atoms)
 //! - Derived fact = rule head under substitution (substitution verification)
 //! - Equal constraint checks pass under the substitution
+//! - MemberOf checks pass (hash equality for set membership)
+//! - GreaterThanOrEqual checks pass (bit-decomposition range check)
 //! - Output: the derived fact's hash
 //!
 //! This AIR validates that a single Datalog rule application is correct:
@@ -26,12 +28,9 @@
 //! | 22..24: head_is_var | 1 if head term i is a variable, 0 if constant    |
 //! | 25..27: head_raw_value | Variable index (if var) or constant value      |
 //! | 28..39: head_sel_var | Selector columns for variable lookup (3 terms x 4 vars) |
-//! | 40: eq_check_0_active | 1 if first Equal check is active               |
-//! | 41: eq_check_0_term_a | Resolved value of Equal check 0 LHS            |
-//! | 42: eq_check_0_term_b | Resolved value of Equal check 0 RHS            |
-//! | 43: eq_check_1_active | 1 if second Equal check is active              |
-//! | 44: eq_check_1_term_a | Resolved value of Equal check 1 LHS            |
-//! | 45: eq_check_1_term_b | Resolved value of Equal check 1 RHS            |
+//! | 40..45: eq_check[0..1] | Equal checks: (active, term_a, term_b) x 2    |
+//! | 46..51: memberof_check[0..1] | MemberOf checks: (active, term_a, term_b) x 2 |
+//! | 52..86: gte_check | GTE check: active, term_a, term_b, diff, diff_bits[0..30] |
 //!
 //! Public inputs: [state_root, derived_fact_hash]
 //!
@@ -47,13 +46,21 @@
 //! 9. Substitution application: derived_term[i] = is_var * (sum_j sel_j * sub[j]) + (1-is_var) * raw_value
 //! 10. Equal check: eq_active * (term_a - term_b) = 0
 //! 11. Equal check active flags are binary
+//! 12. MemberOf check: memberof_active * (term_a - term_b) = 0
+//! 13. MemberOf check active flags are binary
+//! 14. GTE check active flag is binary
+//! 15. GTE diff = term_a - term_b (when active)
+//! 16. GTE bit decomposition: sum(bit_i * 2^i) = diff (when active)
+//! 17. GTE bits are binary
+//! 18. GTE high bit is 0 (diff < 2^30 < p/2, meaning a >= b)
 
 use crate::field::BabyBear;
 use crate::mock_prover::{Air, Constraint};
 use crate::poseidon2::hash_fact;
 
 /// Trace width for the derivation AIR.
-pub const DERIVATION_AIR_WIDTH: usize = 46;
+/// 46 (original) + 6 (memberof) + 35 (gte) = 87
+pub const DERIVATION_AIR_WIDTH: usize = 87;
 
 /// Maximum body atoms per rule.
 pub const MAX_BODY_ATOMS: usize = 4;
@@ -67,9 +74,16 @@ pub const MAX_HEAD_TERMS: usize = 3;
 /// Maximum Equal checks per rule.
 pub const MAX_EQUAL_CHECKS: usize = 2;
 
+/// Maximum MemberOf checks per rule.
+pub const MAX_MEMBEROF_CHECKS: usize = 2;
+
+/// Number of bits for GTE range check (BabyBear has ~31-bit modulus).
+/// We use 31 bits: if the high bit (bit 30) is 0, diff < 2^30 < p/2.
+pub const GTE_DIFF_BITS: usize = 31;
+
 /// Column indices.
 pub mod col {
-    use super::{MAX_HEAD_TERMS, MAX_SUB_VARS};
+    use super::{GTE_DIFF_BITS, MAX_EQUAL_CHECKS, MAX_HEAD_TERMS, MAX_MEMBEROF_CHECKS, MAX_SUB_VARS};
 
     pub const RULE_ID: usize = 0;
     pub const BODY_HASH_START: usize = 1;
@@ -114,6 +128,52 @@ pub mod col {
     pub const fn eq_check_term_b(check_idx: usize) -> usize {
         EQ_CHECK_START + check_idx * 3 + 2
     }
+
+    // --- MemberOf check columns ---
+    /// Each MemberOf check has 3 columns: (active, term_a_resolved, term_b_resolved).
+    /// Starts after Equal checks: 40 + MAX_EQUAL_CHECKS * 3 = 46
+    pub const MEMBEROF_CHECK_START: usize = EQ_CHECK_START + MAX_EQUAL_CHECKS * 3; // 46
+
+    /// Get the column for memberof_check[check_idx].active.
+    #[inline]
+    pub const fn memberof_check_active(check_idx: usize) -> usize {
+        MEMBEROF_CHECK_START + check_idx * 3
+    }
+    /// Get the column for memberof_check[check_idx].term_a.
+    #[inline]
+    pub const fn memberof_check_term_a(check_idx: usize) -> usize {
+        MEMBEROF_CHECK_START + check_idx * 3 + 1
+    }
+    /// Get the column for memberof_check[check_idx].term_b.
+    #[inline]
+    pub const fn memberof_check_term_b(check_idx: usize) -> usize {
+        MEMBEROF_CHECK_START + check_idx * 3 + 2
+    }
+
+    // --- GTE check columns ---
+    /// GTE check layout: active, term_a, term_b, diff, diff_bits[0..30]
+    /// Starts after MemberOf checks: 46 + MAX_MEMBEROF_CHECKS * 3 = 52
+    pub const GTE_CHECK_START: usize = MEMBEROF_CHECK_START + MAX_MEMBEROF_CHECKS * 3; // 52
+
+    /// GTE active flag column.
+    pub const GTE_CHECK_ACTIVE: usize = GTE_CHECK_START; // 52
+    /// GTE term_a (the larger value) column.
+    pub const GTE_CHECK_TERM_A: usize = GTE_CHECK_START + 1; // 53
+    /// GTE term_b (the smaller value) column.
+    pub const GTE_CHECK_TERM_B: usize = GTE_CHECK_START + 2; // 54
+    /// GTE diff = term_a - term_b column.
+    pub const GTE_CHECK_DIFF: usize = GTE_CHECK_START + 3; // 55
+    /// GTE diff bit decomposition starts here (31 bits, columns 56..86).
+    pub const GTE_CHECK_DIFF_BITS_START: usize = GTE_CHECK_START + 4; // 56
+
+    /// Get the column for gte_check_diff_bits[bit_idx].
+    #[inline]
+    pub const fn gte_diff_bit(bit_idx: usize) -> usize {
+        GTE_CHECK_DIFF_BITS_START + bit_idx
+    }
+
+    /// Total columns: GTE_CHECK_DIFF_BITS_START + GTE_DIFF_BITS = 56 + 31 = 87
+    pub const _TOTAL: usize = GTE_CHECK_DIFF_BITS_START + GTE_DIFF_BITS;
 }
 
 /// A rule definition for the circuit (simplified representation).
@@ -135,6 +195,11 @@ pub struct CircuitRule {
     /// Equal checks: each is (term_a_is_var, term_a_value, term_b_is_var, term_b_value).
     /// Up to MAX_EQUAL_CHECKS.
     pub equal_checks: Vec<CircuitEqualCheck>,
+    /// MemberOf checks: same structure as Equal (hash equality).
+    /// Up to MAX_MEMBEROF_CHECKS.
+    pub memberof_checks: Vec<CircuitMemberOfCheck>,
+    /// GTE check: at most one per rule (for budget enforcement).
+    pub gte_check: Option<CircuitGteCheck>,
 }
 
 /// An Equal check in circuit form.
@@ -147,6 +212,39 @@ pub struct CircuitEqualCheck {
     /// Is the right-hand term a variable?
     pub rhs_is_var: bool,
     /// The variable index or constant value for the right-hand term.
+    pub rhs_value: BabyBear,
+}
+
+/// A MemberOf check in circuit form.
+///
+/// Semantically: "element is a member of the set identified by set_element".
+/// In the circuit, this reduces to hash equality (both sides are resolved to
+/// field elements and must be equal).
+#[derive(Clone, Debug)]
+pub struct CircuitMemberOfCheck {
+    /// Is the left-hand term (element) a variable?
+    pub lhs_is_var: bool,
+    /// The variable index or constant value for the element term.
+    pub lhs_value: BabyBear,
+    /// Is the right-hand term (set element) a variable?
+    pub rhs_is_var: bool,
+    /// The variable index or constant value for the set element term.
+    pub rhs_value: BabyBear,
+}
+
+/// A GreaterThanOrEqual check in circuit form.
+///
+/// Semantically: "term_a >= term_b" (used for budget enforcement).
+/// Proven via bit decomposition of (a - b) and asserting the high bit is 0.
+#[derive(Clone, Debug)]
+pub struct CircuitGteCheck {
+    /// Is the left-hand term (a, the larger value) a variable?
+    pub lhs_is_var: bool,
+    /// The variable index or constant value for term_a.
+    pub lhs_value: BabyBear,
+    /// Is the right-hand term (b, the smaller value) a variable?
+    pub rhs_is_var: bool,
+    /// The variable index or constant value for term_b.
     pub rhs_value: BabyBear,
 }
 
@@ -415,6 +513,94 @@ impl Air for DerivationAir {
                     result
                 }),
             },
+            // Constraint 13: MemberOf check active flags are binary.
+            Constraint {
+                name: "memberof_check_active_binary".to_string(),
+                eval: Box::new(|row, _, _| {
+                    let mut result = BabyBear::ZERO;
+                    for i in 0..MAX_MEMBEROF_CHECKS {
+                        let active = row[col::memberof_check_active(i)];
+                        result = result + active * (active - BabyBear::ONE);
+                    }
+                    result
+                }),
+            },
+            // Constraint 14: MemberOf check enforcement.
+            // When active=1: term_a must equal term_b (hash equality).
+            // Encoded as: active * (term_a - term_b) = 0
+            Constraint {
+                name: "memberof_check_enforced".to_string(),
+                eval: Box::new(|row, _, _| {
+                    let mut result = BabyBear::ZERO;
+                    for i in 0..MAX_MEMBEROF_CHECKS {
+                        let active = row[col::memberof_check_active(i)];
+                        let term_a = row[col::memberof_check_term_a(i)];
+                        let term_b = row[col::memberof_check_term_b(i)];
+                        result = result + active * (term_a - term_b);
+                    }
+                    result
+                }),
+            },
+            // Constraint 15: GTE check active flag is binary.
+            Constraint {
+                name: "gte_check_active_binary".to_string(),
+                eval: Box::new(|row, _, _| {
+                    let active = row[col::GTE_CHECK_ACTIVE];
+                    active * (active - BabyBear::ONE)
+                }),
+            },
+            // Constraint 16: GTE diff consistency.
+            // When active: diff = term_a - term_b
+            Constraint {
+                name: "gte_check_diff_correct".to_string(),
+                eval: Box::new(|row, _, _| {
+                    let active = row[col::GTE_CHECK_ACTIVE];
+                    let term_a = row[col::GTE_CHECK_TERM_A];
+                    let term_b = row[col::GTE_CHECK_TERM_B];
+                    let diff = row[col::GTE_CHECK_DIFF];
+                    active * (diff - (term_a - term_b))
+                }),
+            },
+            // Constraint 17: GTE bit decomposition is correct.
+            // When active: sum(bit_i * 2^i) = diff
+            Constraint {
+                name: "gte_check_bit_decomposition".to_string(),
+                eval: Box::new(|row, _, _| {
+                    let active = row[col::GTE_CHECK_ACTIVE];
+                    let diff = row[col::GTE_CHECK_DIFF];
+                    let mut recomposed = BabyBear::ZERO;
+                    let mut power_of_two = BabyBear::ONE;
+                    for i in 0..GTE_DIFF_BITS {
+                        let bit = row[col::gte_diff_bit(i)];
+                        recomposed = recomposed + bit * power_of_two;
+                        power_of_two = power_of_two + power_of_two; // 2^(i+1)
+                    }
+                    active * (recomposed - diff)
+                }),
+            },
+            // Constraint 18: GTE bits are binary.
+            Constraint {
+                name: "gte_check_bits_binary".to_string(),
+                eval: Box::new(|row, _, _| {
+                    let active = row[col::GTE_CHECK_ACTIVE];
+                    let mut result = BabyBear::ZERO;
+                    for i in 0..GTE_DIFF_BITS {
+                        let bit = row[col::gte_diff_bit(i)];
+                        result = result + bit * (bit - BabyBear::ONE);
+                    }
+                    active * result
+                }),
+            },
+            // Constraint 19: GTE high bit is 0 (ensures diff < 2^30 < p/2).
+            // When active: diff_bits[30] = 0
+            Constraint {
+                name: "gte_check_high_bit_zero".to_string(),
+                eval: Box::new(|row, _, _| {
+                    let active = row[col::GTE_CHECK_ACTIVE];
+                    let high_bit = row[col::gte_diff_bit(GTE_DIFF_BITS - 1)];
+                    active * high_bit
+                }),
+            },
         ]
     }
 
@@ -505,6 +691,87 @@ impl Air for DerivationAir {
             row[col::eq_check_term_b(check_i)] = term_b;
         }
 
+        // --- MemberOf check columns ---
+        for (check_i, mo_check) in w
+            .rule
+            .memberof_checks
+            .iter()
+            .enumerate()
+            .take(MAX_MEMBEROF_CHECKS)
+        {
+            row[col::memberof_check_active(check_i)] = BabyBear::ONE;
+
+            // Resolve LHS (element)
+            let term_a = if mo_check.lhs_is_var {
+                let idx = mo_check.lhs_value.as_u32() as usize;
+                if idx < w.substitution.len() {
+                    w.substitution[idx]
+                } else {
+                    BabyBear::ZERO
+                }
+            } else {
+                mo_check.lhs_value
+            };
+
+            // Resolve RHS (set element)
+            let term_b = if mo_check.rhs_is_var {
+                let idx = mo_check.rhs_value.as_u32() as usize;
+                if idx < w.substitution.len() {
+                    w.substitution[idx]
+                } else {
+                    BabyBear::ZERO
+                }
+            } else {
+                mo_check.rhs_value
+            };
+
+            row[col::memberof_check_term_a(check_i)] = term_a;
+            row[col::memberof_check_term_b(check_i)] = term_b;
+        }
+
+        // --- GTE check columns ---
+        if let Some(gte_check) = &w.rule.gte_check {
+            row[col::GTE_CHECK_ACTIVE] = BabyBear::ONE;
+
+            // Resolve LHS (a, the larger value)
+            let term_a = if gte_check.lhs_is_var {
+                let idx = gte_check.lhs_value.as_u32() as usize;
+                if idx < w.substitution.len() {
+                    w.substitution[idx]
+                } else {
+                    BabyBear::ZERO
+                }
+            } else {
+                gte_check.lhs_value
+            };
+
+            // Resolve RHS (b, the smaller value)
+            let term_b = if gte_check.rhs_is_var {
+                let idx = gte_check.rhs_value.as_u32() as usize;
+                if idx < w.substitution.len() {
+                    w.substitution[idx]
+                } else {
+                    BabyBear::ZERO
+                }
+            } else {
+                gte_check.rhs_value
+            };
+
+            row[col::GTE_CHECK_TERM_A] = term_a;
+            row[col::GTE_CHECK_TERM_B] = term_b;
+
+            // Compute diff = a - b in the field
+            let diff = term_a - term_b;
+            row[col::GTE_CHECK_DIFF] = diff;
+
+            // Bit decomposition of diff
+            let diff_val = diff.as_u32();
+            for i in 0..GTE_DIFF_BITS {
+                let bit = (diff_val >> i) & 1;
+                row[col::gte_diff_bit(i)] = BabyBear::new(bit);
+            }
+        }
+
         let public_inputs = vec![w.state_root, derived_hash];
         (vec![row], public_inputs)
     }
@@ -548,6 +815,8 @@ pub fn create_test_derivation() -> DerivationWitness {
             },
         ],
         equal_checks: vec![],
+        memberof_checks: vec![],
+        gte_check: None,
     };
 
     // Body fact hashes (simulated — in real use these come from Merkle proofs)
@@ -729,6 +998,8 @@ mod tests {
                 ],
             }],
             equal_checks: vec![],
+            memberof_checks: vec![],
+            gte_check: None,
         };
 
         let body_fact = hash_fact(owns_pred, &[alice, file, BabyBear::ZERO]);
@@ -779,6 +1050,8 @@ mod tests {
                 ],
             }],
             equal_checks: vec![],
+            memberof_checks: vec![],
+            gte_check: None,
         };
 
         let body_fact = hash_fact(owns_pred, &[alice, file, BabyBear::ZERO]);
@@ -834,6 +1107,8 @@ mod tests {
                 rhs_is_var: true,
                 rhs_value: BabyBear::new(1), // Y
             }],
+            memberof_checks: vec![],
+            gte_check: None,
         };
 
         // X=alice, Y=alice (they are equal, so the check passes)
@@ -891,6 +1166,8 @@ mod tests {
                 rhs_is_var: true,
                 rhs_value: BabyBear::new(1), // Y
             }],
+            memberof_checks: vec![],
+            gte_check: None,
         };
 
         // X=alice (1000), Y=file (2000) — NOT equal
@@ -955,6 +1232,8 @@ mod tests {
                 rhs_is_var: false,
                 rhs_value: alice,              // constant 1000
             }],
+            memberof_checks: vec![],
+            gte_check: None,
         };
 
         // X=alice=1000, check is X==1000, should pass
@@ -974,6 +1253,375 @@ mod tests {
         assert!(
             result.is_valid(),
             "Equal check var==const with matching values should pass: {:?}",
+            result.violations()
+        );
+    }
+
+    // --- MemberOf check tests ---
+
+    #[test]
+    fn test_derivation_air_memberof_check_passes() {
+        // Rule: access(X, Y) :- owns(X, Y), member_of(X, X).
+        // X bound to same hash on both sides -> passes.
+        let access_pred = BabyBear::new(300);
+        let owns_pred = BabyBear::new(100);
+        let action_hash = BabyBear::new(12345); // simulated action hash
+
+        let rule = CircuitRule {
+            id: 5,
+            num_body_atoms: 1,
+            num_variables: 2,
+            head_predicate: access_pred,
+            head_terms: [
+                (true, BabyBear::new(0)), // X
+                (true, BabyBear::new(1)), // Y
+                (false, BabyBear::ZERO),
+            ],
+            body_atoms: vec![BodyAtomPattern {
+                predicate: owns_pred,
+                terms: [
+                    (true, BabyBear::new(0)),
+                    (true, BabyBear::new(1)),
+                    (false, BabyBear::ZERO),
+                ],
+            }],
+            equal_checks: vec![],
+            memberof_checks: vec![CircuitMemberOfCheck {
+                lhs_is_var: true,
+                lhs_value: BabyBear::new(0), // X (the request action hash)
+                rhs_is_var: true,
+                rhs_value: BabyBear::new(1), // Y (the allowed action hash)
+            }],
+            gte_check: None,
+        };
+
+        // X=action_hash, Y=action_hash (matching -> member)
+        let body_fact = hash_fact(owns_pred, &[action_hash, action_hash, BabyBear::ZERO]);
+
+        let witness = DerivationWitness {
+            rule,
+            state_root: BabyBear::new(99999),
+            body_fact_hashes: vec![body_fact],
+            substitution: vec![action_hash, action_hash],
+            derived_predicate: access_pred,
+            derived_terms: [action_hash, action_hash, BabyBear::ZERO],
+        };
+
+        let air = DerivationAir::new(witness);
+        let result = MockProver::verify(&air);
+        assert!(
+            result.is_valid(),
+            "MemberOf check with matching hashes should pass: {:?}",
+            result.violations()
+        );
+    }
+
+    #[test]
+    fn test_derivation_air_memberof_check_fails() {
+        // Rule: access(X, Y) :- owns(X, Y), member_of(X, Y).
+        // X != Y -> should fail the MemberOf check.
+        let access_pred = BabyBear::new(300);
+        let owns_pred = BabyBear::new(100);
+        let request_hash = BabyBear::new(12345);
+        let allowed_hash = BabyBear::new(67890);
+
+        let rule = CircuitRule {
+            id: 5,
+            num_body_atoms: 1,
+            num_variables: 2,
+            head_predicate: access_pred,
+            head_terms: [
+                (true, BabyBear::new(0)),
+                (true, BabyBear::new(1)),
+                (false, BabyBear::ZERO),
+            ],
+            body_atoms: vec![BodyAtomPattern {
+                predicate: owns_pred,
+                terms: [
+                    (true, BabyBear::new(0)),
+                    (true, BabyBear::new(1)),
+                    (false, BabyBear::ZERO),
+                ],
+            }],
+            equal_checks: vec![],
+            memberof_checks: vec![CircuitMemberOfCheck {
+                lhs_is_var: true,
+                lhs_value: BabyBear::new(0), // X (request action)
+                rhs_is_var: true,
+                rhs_value: BabyBear::new(1), // Y (allowed action)
+            }],
+            gte_check: None,
+        };
+
+        // X=request_hash, Y=allowed_hash (DIFFERENT -> not a member)
+        let body_fact = hash_fact(owns_pred, &[request_hash, allowed_hash, BabyBear::ZERO]);
+
+        let witness = DerivationWitness {
+            rule,
+            state_root: BabyBear::new(99999),
+            body_fact_hashes: vec![body_fact],
+            substitution: vec![request_hash, allowed_hash],
+            derived_predicate: access_pred,
+            derived_terms: [request_hash, allowed_hash, BabyBear::ZERO],
+        };
+
+        let air = DerivationAir::new(witness);
+        let result = MockProver::verify(&air);
+        assert!(
+            !result.is_valid(),
+            "MemberOf check with non-matching hashes should fail"
+        );
+        // Verify the memberof_check_enforced constraint is violated
+        let has_memberof_violation = result
+            .violations()
+            .iter()
+            .any(|v| v.constraint_name == "memberof_check_enforced");
+        assert!(
+            has_memberof_violation,
+            "Should have memberof_check_enforced violation, got: {:?}",
+            result.violations()
+        );
+    }
+
+    // --- GTE check tests ---
+
+    #[test]
+    fn test_derivation_air_gte_check_passes() {
+        // budget_remaining(50) >= request_cost(10)
+        let access_pred = BabyBear::new(300);
+        let owns_pred = BabyBear::new(100);
+        let budget = BabyBear::new(50);
+        let cost = BabyBear::new(10);
+
+        let rule = CircuitRule {
+            id: 6,
+            num_body_atoms: 1,
+            num_variables: 2,
+            head_predicate: access_pred,
+            head_terms: [
+                (true, BabyBear::new(0)),
+                (true, BabyBear::new(1)),
+                (false, BabyBear::ZERO),
+            ],
+            body_atoms: vec![BodyAtomPattern {
+                predicate: owns_pred,
+                terms: [
+                    (true, BabyBear::new(0)),
+                    (true, BabyBear::new(1)),
+                    (false, BabyBear::ZERO),
+                ],
+            }],
+            equal_checks: vec![],
+            memberof_checks: vec![],
+            gte_check: Some(CircuitGteCheck {
+                lhs_is_var: true,
+                lhs_value: BabyBear::new(0), // X = budget_remaining
+                rhs_is_var: true,
+                rhs_value: BabyBear::new(1), // Y = request_cost
+            }),
+        };
+
+        let body_fact = hash_fact(owns_pred, &[budget, cost, BabyBear::ZERO]);
+
+        let witness = DerivationWitness {
+            rule,
+            state_root: BabyBear::new(99999),
+            body_fact_hashes: vec![body_fact],
+            substitution: vec![budget, cost], // X=50, Y=10
+            derived_predicate: access_pred,
+            derived_terms: [budget, cost, BabyBear::ZERO],
+        };
+
+        let air = DerivationAir::new(witness);
+        let result = MockProver::verify(&air);
+        assert!(
+            result.is_valid(),
+            "GTE check 50 >= 10 should pass: {:?}",
+            result.violations()
+        );
+    }
+
+    #[test]
+    fn test_derivation_air_gte_check_fails() {
+        // budget_remaining(5) >= request_cost(10) — should FAIL
+        // diff = 5 - 10 in BabyBear = p - 5 (wraps around, high bit set)
+        let access_pred = BabyBear::new(300);
+        let owns_pred = BabyBear::new(100);
+        let budget = BabyBear::new(5);
+        let cost = BabyBear::new(10);
+
+        let rule = CircuitRule {
+            id: 6,
+            num_body_atoms: 1,
+            num_variables: 2,
+            head_predicate: access_pred,
+            head_terms: [
+                (true, BabyBear::new(0)),
+                (true, BabyBear::new(1)),
+                (false, BabyBear::ZERO),
+            ],
+            body_atoms: vec![BodyAtomPattern {
+                predicate: owns_pred,
+                terms: [
+                    (true, BabyBear::new(0)),
+                    (true, BabyBear::new(1)),
+                    (false, BabyBear::ZERO),
+                ],
+            }],
+            equal_checks: vec![],
+            memberof_checks: vec![],
+            gte_check: Some(CircuitGteCheck {
+                lhs_is_var: true,
+                lhs_value: BabyBear::new(0), // X = budget_remaining
+                rhs_is_var: true,
+                rhs_value: BabyBear::new(1), // Y = request_cost
+            }),
+        };
+
+        let body_fact = hash_fact(owns_pred, &[budget, cost, BabyBear::ZERO]);
+
+        let witness = DerivationWitness {
+            rule,
+            state_root: BabyBear::new(99999),
+            body_fact_hashes: vec![body_fact],
+            substitution: vec![budget, cost], // X=5, Y=10 (5 < 10, so GTE fails)
+            derived_predicate: access_pred,
+            derived_terms: [budget, cost, BabyBear::ZERO],
+        };
+
+        let air = DerivationAir::new(witness);
+        let result = MockProver::verify(&air);
+        assert!(
+            !result.is_valid(),
+            "GTE check 5 >= 10 should fail"
+        );
+        // The high bit constraint should catch this
+        let has_gte_violation = result
+            .violations()
+            .iter()
+            .any(|v| v.constraint_name == "gte_check_high_bit_zero");
+        assert!(
+            has_gte_violation,
+            "Should have gte_check_high_bit_zero violation, got: {:?}",
+            result.violations()
+        );
+    }
+
+    #[test]
+    fn test_derivation_air_budget_scenario() {
+        // Full budget scenario: budget_remaining(50) >= request_cost(10)
+        // Combined with a MemberOf check for action verification.
+        let grant_pred = BabyBear::new(400);
+        let budget_pred = BabyBear::new(100);
+        let action_hash = BabyBear::new(55555);
+        let budget = BabyBear::new(50);
+        let cost = BabyBear::new(10);
+
+        let rule = CircuitRule {
+            id: 7,
+            num_body_atoms: 1,
+            num_variables: 3,
+            head_predicate: grant_pred,
+            head_terms: [
+                (true, BabyBear::new(0)),  // action_hash
+                (true, BabyBear::new(1)),  // budget_remaining
+                (true, BabyBear::new(2)),  // request_cost
+            ],
+            body_atoms: vec![BodyAtomPattern {
+                predicate: budget_pred,
+                terms: [
+                    (true, BabyBear::new(0)),
+                    (true, BabyBear::new(1)),
+                    (true, BabyBear::new(2)),
+                ],
+            }],
+            equal_checks: vec![],
+            memberof_checks: vec![CircuitMemberOfCheck {
+                // Action hash matches (self-check for illustration)
+                lhs_is_var: true,
+                lhs_value: BabyBear::new(0), // action_hash from request
+                rhs_is_var: false,
+                rhs_value: action_hash, // expected action hash (constant)
+            }],
+            gte_check: Some(CircuitGteCheck {
+                lhs_is_var: true,
+                lhs_value: BabyBear::new(1), // budget_remaining
+                rhs_is_var: true,
+                rhs_value: BabyBear::new(2), // request_cost
+            }),
+        };
+
+        let body_fact = hash_fact(budget_pred, &[action_hash, budget, cost]);
+
+        let witness = DerivationWitness {
+            rule,
+            state_root: BabyBear::new(99999),
+            body_fact_hashes: vec![body_fact],
+            substitution: vec![action_hash, budget, cost],
+            derived_predicate: grant_pred,
+            derived_terms: [action_hash, budget, cost],
+        };
+
+        let air = DerivationAir::new(witness);
+        let result = MockProver::verify(&air);
+        assert!(
+            result.is_valid(),
+            "Budget scenario (50>=10, action matches) should pass: {:?}",
+            result.violations()
+        );
+    }
+
+    #[test]
+    fn test_derivation_air_gte_check_equal_values_passes() {
+        // Edge case: 10 >= 10 should pass (diff = 0, all bits zero)
+        let access_pred = BabyBear::new(300);
+        let owns_pred = BabyBear::new(100);
+        let val = BabyBear::new(10);
+
+        let rule = CircuitRule {
+            id: 8,
+            num_body_atoms: 1,
+            num_variables: 2,
+            head_predicate: access_pred,
+            head_terms: [
+                (true, BabyBear::new(0)),
+                (true, BabyBear::new(1)),
+                (false, BabyBear::ZERO),
+            ],
+            body_atoms: vec![BodyAtomPattern {
+                predicate: owns_pred,
+                terms: [
+                    (true, BabyBear::new(0)),
+                    (true, BabyBear::new(1)),
+                    (false, BabyBear::ZERO),
+                ],
+            }],
+            equal_checks: vec![],
+            memberof_checks: vec![],
+            gte_check: Some(CircuitGteCheck {
+                lhs_is_var: true,
+                lhs_value: BabyBear::new(0),
+                rhs_is_var: true,
+                rhs_value: BabyBear::new(1),
+            }),
+        };
+
+        let body_fact = hash_fact(owns_pred, &[val, val, BabyBear::ZERO]);
+
+        let witness = DerivationWitness {
+            rule,
+            state_root: BabyBear::new(99999),
+            body_fact_hashes: vec![body_fact],
+            substitution: vec![val, val], // 10 >= 10
+            derived_predicate: access_pred,
+            derived_terms: [val, val, BabyBear::ZERO],
+        };
+
+        let air = DerivationAir::new(witness);
+        let result = MockProver::verify(&air);
+        assert!(
+            result.is_valid(),
+            "GTE check 10 >= 10 should pass: {:?}",
             result.violations()
         );
     }

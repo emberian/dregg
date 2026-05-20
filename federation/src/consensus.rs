@@ -32,11 +32,17 @@ pub struct ConsensusConfig {
     pub threshold: usize,
     /// Maximum Byzantine faults tolerated (f = (n-1)/3).
     pub max_faults: usize,
+    /// The current epoch number. Increments on reconfiguration.
+    pub epoch: u64,
+    /// Explicit member list (public keys). Empty means legacy mode (count-only).
+    pub members: Vec<PublicKey>,
 }
 
 impl ConsensusConfig {
     /// Create a new consensus configuration for n nodes.
     /// Threshold is set to n - f where f = floor((n-1)/3).
+    ///
+    /// This is the legacy constructor that does not set explicit members.
     pub fn new(num_nodes: usize) -> Self {
         let max_faults = (num_nodes - 1) / 3;
         let threshold = num_nodes - max_faults;
@@ -44,6 +50,36 @@ impl ConsensusConfig {
             num_nodes,
             threshold,
             max_faults,
+            epoch: 0,
+            members: Vec::new(),
+        }
+    }
+
+    /// Create an initial (genesis) configuration with an explicit member set.
+    pub fn genesis(members: Vec<PublicKey>) -> Self {
+        let num_nodes = members.len();
+        let max_faults = (num_nodes - 1) / 3;
+        let threshold = num_nodes - max_faults;
+        Self {
+            num_nodes,
+            threshold,
+            max_faults,
+            epoch: 0,
+            members,
+        }
+    }
+
+    /// Create the next epoch configuration with a new member set.
+    pub fn next_epoch(&self, new_members: Vec<PublicKey>) -> Self {
+        let num_nodes = new_members.len();
+        let max_faults = (num_nodes - 1) / 3;
+        let threshold = num_nodes - max_faults;
+        Self {
+            num_nodes,
+            threshold,
+            max_faults,
+            epoch: self.epoch + 1,
+            members: new_members,
         }
     }
 
@@ -51,6 +87,102 @@ impl ConsensusConfig {
     pub fn leader_for_view(&self, view: u64) -> usize {
         (view as usize) % self.num_nodes
     }
+}
+
+// =============================================================================
+// Reconfiguration
+// =============================================================================
+
+/// Error type for consensus operations.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ConsensusError {
+    /// The proposal's epoch does not match the current epoch.
+    EpochMismatch { expected: u64, got: u64 },
+    /// The proposer is not a current member.
+    NotAMember,
+    /// A reconfiguration is already pending.
+    ReconfigAlreadyPending,
+    /// No pending reconfiguration to vote on.
+    NoPendingReconfig,
+    /// The voter has already voted.
+    AlreadyVoted,
+    /// The voter is not a current member.
+    VoterNotMember,
+    /// The new member set is empty.
+    EmptyMemberSet,
+}
+
+impl std::fmt::Display for ConsensusError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EpochMismatch { expected, got } => {
+                write!(f, "epoch mismatch: expected {}, got {}", expected, got)
+            }
+            Self::NotAMember => write!(f, "proposer is not a current member"),
+            Self::ReconfigAlreadyPending => write!(f, "reconfiguration already pending"),
+            Self::NoPendingReconfig => write!(f, "no pending reconfiguration"),
+            Self::AlreadyVoted => write!(f, "voter already voted"),
+            Self::VoterNotMember => write!(f, "voter is not a current member"),
+            Self::EmptyMemberSet => write!(f, "new member set cannot be empty"),
+        }
+    }
+}
+
+impl std::error::Error for ConsensusError {}
+
+/// A proposal to reconfigure the federation at the next epoch boundary.
+#[derive(Clone, Debug)]
+pub struct ReconfigurationProposal {
+    /// The current epoch (must match the orchestrator's current epoch).
+    pub epoch: u64,
+    /// The proposed new member set for the next epoch.
+    pub new_members: Vec<PublicKey>,
+    /// The proposer's public key (must be a current member).
+    pub proposer: PublicKey,
+    /// Signature over the proposal content by the proposer.
+    pub signature: Signature,
+}
+
+impl ReconfigurationProposal {
+    /// Compute the canonical message to sign for a reconfiguration proposal.
+    pub fn signing_message(epoch: u64, new_members: &[PublicKey]) -> Vec<u8> {
+        let mut msg = Vec::new();
+        msg.extend_from_slice(b"pyana-reconfig-proposal-v1");
+        msg.extend_from_slice(&epoch.to_le_bytes());
+        for member in new_members {
+            msg.extend_from_slice(&member.0);
+        }
+        msg
+    }
+
+    /// Compute a hash of this proposal (for vote tracking).
+    pub fn hash(&self) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new_derive_key("pyana-reconfig-proposal-hash-v1");
+        hasher.update(&self.epoch.to_le_bytes());
+        for member in &self.new_members {
+            hasher.update(&member.0);
+        }
+        hasher.update(&self.proposer.0);
+        hasher.update(&self.signature.0);
+        *hasher.finalize().as_bytes()
+    }
+
+    /// Verify that the proposer's signature is valid.
+    pub fn verify_signature(&self) -> bool {
+        let msg = Self::signing_message(self.epoch, &self.new_members);
+        self.proposer.verify(&msg, &self.signature)
+    }
+}
+
+/// Tracks votes on a pending reconfiguration proposal.
+#[derive(Clone, Debug)]
+pub struct ReconfigurationVotes {
+    /// The proposal being voted on.
+    pub proposal: ReconfigurationProposal,
+    /// Hash of the proposal.
+    pub proposal_hash: [u8; 32],
+    /// Public keys of members who have voted in favor.
+    pub voters: Vec<PublicKey>,
 }
 
 // =============================================================================
@@ -84,6 +216,10 @@ pub struct ConsensusState {
     pub config: ConsensusConfig,
     /// Finalized blocks history.
     pub finalized_blocks: Vec<(RevocationBlock, QuorumCertificate)>,
+    /// The current epoch number (mirrors config.epoch).
+    pub epoch: u64,
+    /// Pending reconfiguration proposal and its votes.
+    pub pending_reconfig: Option<ReconfigurationVotes>,
 }
 
 impl ConsensusState {
@@ -91,6 +227,7 @@ impl ConsensusState {
     pub fn new(node_id: usize, signing_key: SigningKey, config: ConsensusConfig) -> Self {
         // Genesis block hash.
         let genesis_hash = compute_genesis_hash(&config);
+        let epoch = config.epoch;
 
         Self {
             node_id,
@@ -105,6 +242,8 @@ impl ConsensusState {
             is_online: true,
             config,
             finalized_blocks: Vec::new(),
+            epoch,
+            pending_reconfig: None,
         }
     }
 
@@ -294,6 +433,8 @@ pub struct ConsensusOrchestrator {
     /// Optional BLS member secrets, indexed by node_id.
     /// Required for producing BLS partial signatures during `run_round`.
     pub member_secrets: Vec<crate::threshold::MemberSecret>,
+    /// Pending reconfiguration proposal and its collected votes.
+    pub pending_reconfig: Option<ReconfigurationVotes>,
 }
 
 impl ConsensusOrchestrator {
@@ -303,6 +444,7 @@ impl ConsensusOrchestrator {
             config,
             committee: None,
             member_secrets: Vec::new(),
+            pending_reconfig: None,
         }
     }
 
@@ -321,12 +463,127 @@ impl ConsensusOrchestrator {
         self
     }
 
+    /// Propose a reconfiguration of the federation.
+    ///
+    /// The proposal must be signed by a current member and target the current epoch.
+    /// Only one reconfiguration may be pending at a time.
+    pub fn propose_reconfiguration(
+        &mut self,
+        proposal: ReconfigurationProposal,
+    ) -> Result<(), ConsensusError> {
+        // Check epoch matches.
+        if proposal.epoch != self.config.epoch {
+            return Err(ConsensusError::EpochMismatch {
+                expected: self.config.epoch,
+                got: proposal.epoch,
+            });
+        }
+
+        // Check proposer is a current member (only if members are tracked).
+        if !self.config.members.is_empty()
+            && !self.config.members.contains(&proposal.proposer)
+        {
+            return Err(ConsensusError::NotAMember);
+        }
+
+        // Check no pending reconfig.
+        if self.pending_reconfig.is_some() {
+            return Err(ConsensusError::ReconfigAlreadyPending);
+        }
+
+        // Check new member set is non-empty.
+        if proposal.new_members.is_empty() {
+            return Err(ConsensusError::EmptyMemberSet);
+        }
+
+        // Verify the proposer's signature.
+        if !proposal.verify_signature() {
+            return Err(ConsensusError::NotAMember);
+        }
+
+        let proposal_hash = proposal.hash();
+        // The proposer's vote counts as the first vote.
+        let voters = vec![proposal.proposer.clone()];
+
+        self.pending_reconfig = Some(ReconfigurationVotes {
+            proposal,
+            proposal_hash,
+            voters,
+        });
+
+        Ok(())
+    }
+
+    /// Vote on a pending reconfiguration proposal.
+    ///
+    /// The voter must be a current member and must provide the correct proposal hash.
+    pub fn vote_reconfiguration(
+        &mut self,
+        proposal_hash: [u8; 32],
+        voter: &SigningKey,
+    ) -> Result<(), ConsensusError> {
+        let reconfig = self
+            .pending_reconfig
+            .as_mut()
+            .ok_or(ConsensusError::NoPendingReconfig)?;
+
+        // Verify the proposal hash matches.
+        if reconfig.proposal_hash != proposal_hash {
+            return Err(ConsensusError::NoPendingReconfig);
+        }
+
+        let voter_pubkey = voter.public_key();
+
+        // Check voter is a current member (only if members are tracked).
+        if !self.config.members.is_empty()
+            && !self.config.members.contains(&voter_pubkey)
+        {
+            return Err(ConsensusError::VoterNotMember);
+        }
+
+        // Check voter hasn't already voted.
+        if reconfig.voters.contains(&voter_pubkey) {
+            return Err(ConsensusError::AlreadyVoted);
+        }
+
+        reconfig.voters.push(voter_pubkey);
+        Ok(())
+    }
+
+    /// Get the pending reconfiguration proposal, if any.
+    pub fn pending_reconfiguration(&self) -> Option<&ReconfigurationProposal> {
+        self.pending_reconfig.as_ref().map(|r| &r.proposal)
+    }
+
+    /// Check if the pending reconfiguration has reached the vote threshold.
+    pub fn reconfig_has_quorum(&self) -> bool {
+        match &self.pending_reconfig {
+            Some(reconfig) => reconfig.voters.len() >= self.config.threshold,
+            None => false,
+        }
+    }
+
+    /// Apply the pending reconfiguration if it has reached quorum.
+    ///
+    /// Returns the new `ConsensusConfig` if applied, or `None` if there is no
+    /// pending reconfig or it hasn't reached threshold.
+    pub fn apply_pending_reconfiguration(&mut self) -> Option<ConsensusConfig> {
+        if !self.reconfig_has_quorum() {
+            return None;
+        }
+
+        let reconfig = self.pending_reconfig.take()?;
+        let new_config = self.config.next_epoch(reconfig.proposal.new_members);
+        self.config = new_config.clone();
+        Some(new_config)
+    }
+
     /// Run a single consensus round: propose, vote, finalize.
     ///
     /// Returns the finalized block and QC, or None if consensus failed
     /// (e.g., not enough online nodes).
     pub fn run_round(
-        &self,
+        &mut self,
         states: &mut [ConsensusState],
     ) -> Option<(RevocationBlock, QuorumCertificate)> {
         // Find the leader.
@@ -434,6 +691,21 @@ impl ConsensusOrchestrator {
             }
         }
 
+        // After finalization, check if a pending reconfiguration has reached quorum.
+        // If so, apply it: the new config takes effect for the NEXT round.
+        if self.reconfig_has_quorum() {
+            if let Some(new_config) = self.apply_pending_reconfiguration() {
+                // Update all online nodes to use the new configuration.
+                for state in states.iter_mut() {
+                    if state.is_online {
+                        state.config = new_config.clone();
+                        state.epoch = new_config.epoch;
+                        state.pending_reconfig = None;
+                    }
+                }
+            }
+        }
+
         Some((proposal, qc))
     }
 }
@@ -496,7 +768,7 @@ mod tests {
     #[test]
     fn basic_consensus_round() {
         let (config, mut states) = setup_nodes(4);
-        let orchestrator = ConsensusOrchestrator::new(config);
+        let mut orchestrator = ConsensusOrchestrator::new(config);
 
         // Submit a revocation event.
         let event = RevocationEvent {
@@ -521,7 +793,7 @@ mod tests {
     #[test]
     fn consensus_with_fault() {
         let (config, mut states) = setup_nodes(4);
-        let orchestrator = ConsensusOrchestrator::new(config);
+        let mut orchestrator = ConsensusOrchestrator::new(config);
 
         // Take one node offline.
         states[3].set_online(false);
@@ -545,7 +817,7 @@ mod tests {
     #[test]
     fn consensus_fails_with_too_many_faults() {
         let (config, mut states) = setup_nodes(4);
-        let orchestrator = ConsensusOrchestrator::new(config);
+        let mut orchestrator = ConsensusOrchestrator::new(config);
 
         // Take two nodes offline (exceeds f=1).
         states[2].set_online(false);
@@ -566,7 +838,7 @@ mod tests {
     #[test]
     fn multiple_rounds() {
         let (config, mut states) = setup_nodes(4);
-        let orchestrator = ConsensusOrchestrator::new(config);
+        let mut orchestrator = ConsensusOrchestrator::new(config);
 
         // Round 1.
         states[0].submit_revocation(RevocationEvent {

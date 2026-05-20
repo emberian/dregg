@@ -45,6 +45,7 @@
 pub mod audit;
 pub mod federation;
 pub mod keys;
+pub mod note_tree;
 pub mod recovery;
 pub mod tables;
 pub mod tokens;
@@ -54,10 +55,11 @@ mod tests;
 
 use std::path::Path;
 
-use redb::Database;
+use redb::{Database, ReadableTable};
 
 pub use audit::StoredAuditEvent;
 pub use federation::StoredAttestedRoot;
+pub use note_tree::{NoteTree, PersistentNullifierSet};
 pub use recovery::RecoveredState;
 pub use tokens::{StoredFoldStep, TokenChain};
 
@@ -175,6 +177,9 @@ impl PersistentStore {
             // Audit log tables.
             let _ = write_txn.open_table(tables::AUDIT_LOG)?;
             let _ = write_txn.open_table(tables::AUDIT_TOKEN_INDEX)?;
+            // Note tree tables.
+            let _ = write_txn.open_table(tables::NOTE_COMMITMENTS)?;
+            let _ = write_txn.open_table(tables::NULLIFIERS)?;
             // Metadata table.
             let _ = write_txn.open_table(tables::METADATA)?;
         }
@@ -185,5 +190,122 @@ impl PersistentStore {
     /// Compact the database file, reclaiming unused space.
     pub fn compact(&mut self) -> Result<bool> {
         self.db.compact().map_err(|e| StoreError::Database(e.to_string()))
+    }
+
+    // =========================================================================
+    // Note Tree Storage
+    // =========================================================================
+
+    /// Store a note commitment at the next position. Returns the position assigned.
+    pub fn store_note_commitment(&self, commitment: &pyana_cell::note::NoteCommitment) -> Result<u64> {
+        let write_txn = self.db.begin_write()?;
+        let position;
+        {
+            let mut meta = write_txn.open_table(tables::METADATA)?;
+            let current_size = meta
+                .get(tables::META_NOTE_TREE_SIZE)?
+                .map(|g| g.value())
+                .unwrap_or(0);
+            position = current_size;
+
+            let mut table = write_txn.open_table(tables::NOTE_COMMITMENTS)?;
+            table.insert(position, &commitment.0)?;
+
+            meta.insert(tables::META_NOTE_TREE_SIZE, position + 1)?;
+        }
+        write_txn.commit()?;
+        Ok(position)
+    }
+
+    /// Store a nullifier (mark a note as spent).
+    ///
+    /// Returns Ok(()) if the nullifier was newly added, or an integrity error
+    /// if it was already present (double-spend).
+    pub fn store_nullifier(&self, nullifier: &pyana_cell::note::Nullifier) -> Result<()> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(tables::NULLIFIERS)?;
+            if table.get(&nullifier.0)?.is_some() {
+                return Err(StoreError::Integrity(
+                    "nullifier already spent (double-spend)".to_string(),
+                ));
+            }
+            table.insert(&nullifier.0, ())?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    /// Check whether a nullifier has been spent (is in the set).
+    pub fn is_nullifier_spent(&self, nullifier: &pyana_cell::note::Nullifier) -> Result<bool> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(tables::NULLIFIERS)?;
+        Ok(table.get(&nullifier.0)?.is_some())
+    }
+
+    /// Compute the current note tree root by loading all commitments and
+    /// rebuilding the Merkle tree.
+    pub fn note_tree_root(&self) -> Result<[u8; 32]> {
+        let commitments = self.load_all_note_commitments()?;
+        let mut tree = note_tree::NoteTree::from_commitments(commitments);
+        Ok(tree.root())
+    }
+
+    /// Get the number of note commitments stored.
+    pub fn note_count(&self) -> Result<u64> {
+        let read_txn = self.db.begin_read()?;
+        let meta = read_txn.open_table(tables::METADATA)?;
+        Ok(meta
+            .get(tables::META_NOTE_TREE_SIZE)?
+            .map(|g| g.value())
+            .unwrap_or(0))
+    }
+
+    /// Load all note commitments in order (for tree reconstruction).
+    pub fn load_all_note_commitments(&self) -> Result<Vec<pyana_cell::note::NoteCommitment>> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(tables::NOTE_COMMITMENTS)?;
+        let meta = read_txn.open_table(tables::METADATA)?;
+
+        let count = meta
+            .get(tables::META_NOTE_TREE_SIZE)?
+            .map(|g| g.value())
+            .unwrap_or(0);
+
+        let mut commitments = Vec::with_capacity(count as usize);
+        for pos in 0..count {
+            match table.get(pos)? {
+                Some(guard) => {
+                    commitments.push(pyana_cell::note::NoteCommitment(*guard.value()));
+                }
+                None => {
+                    return Err(StoreError::Integrity(format!(
+                        "missing note commitment at position {pos}"
+                    )));
+                }
+            }
+        }
+        Ok(commitments)
+    }
+
+    /// Load all nullifiers from persistent storage.
+    pub fn load_all_nullifiers(&self) -> Result<Vec<pyana_cell::note::Nullifier>> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(tables::NULLIFIERS)?;
+
+        let mut nullifiers = Vec::new();
+        let iter = table.iter()?;
+        for entry in iter {
+            let entry = entry.map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
+            nullifiers.push(pyana_cell::note::Nullifier(*entry.0.value()));
+        }
+        Ok(nullifiers)
+    }
+
+    /// Compute the nullifier set root from all stored nullifiers.
+    pub fn nullifier_set_root(&self) -> Result<[u8; 32]> {
+        let nullifiers = self.load_all_nullifiers()?;
+        let set = note_tree::PersistentNullifierSet::from_nullifiers(nullifiers);
+        Ok(set.root())
     }
 }

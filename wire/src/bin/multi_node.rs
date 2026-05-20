@@ -179,7 +179,7 @@ async fn main() {
     );
 
     // Run the consensus orchestrator
-    let orchestrator = ConsensusOrchestrator::new(config.clone());
+    let mut orchestrator = ConsensusOrchestrator::new(config.clone());
     let consensus_result = orchestrator.run_round(&mut consensus_states);
 
     match consensus_result {
@@ -212,6 +212,8 @@ async fn main() {
             // Store the attested root in all nodes' persistent stores
             let attested = pyana_store::StoredAttestedRoot {
                 merkle_root: block.block_hash,
+                note_tree_root: None,
+                nullifier_set_root: None,
                 height: block.height,
                 timestamp: pyana_federation::types::current_timestamp(),
                 quorum_signatures: qc
@@ -470,6 +472,126 @@ async fn main() {
     drop(conn_check3);
 
     // =========================================================================
+    // Phase 6: Note tree management (mint, transfer, double-spend rejection)
+    // =========================================================================
+    println!("[Phase 6] Note tree management...");
+    println!();
+
+    use pyana_cell::note::Note;
+    use pyana_store::NoteTree;
+
+    // Create a shared note tree (in practice each node has one in its store).
+    let store = &stores[0];
+
+    // 6a: Mint a note (100 units of asset type 1).
+    let owner_key: [u8; 32] = nodes[0].public_key.0;
+    let spending_key: [u8; 32] = {
+        let mut k = [0u8; 32];
+        k[..8].copy_from_slice(b"secret!!");
+        k
+    };
+    let mint_note = Note::with_randomness(
+        owner_key,
+        [1, 100, 0, 0, 0, 0, 0, 0], // asset_type=1, amount=100
+        [0x42; 32], // deterministic randomness for demo
+    );
+    let mint_commitment = mint_note.commitment();
+    let mint_pos = store.store_note_commitment(&mint_commitment).unwrap();
+    println!(
+        "  [Node 1] Minted note: 100 units of asset 1 (commitment: {}..., position: {})",
+        short_hex(&mint_commitment.0, 4),
+        mint_pos,
+    );
+
+    // Show the note tree root after minting.
+    let root_after_mint = store.note_tree_root().unwrap();
+    println!(
+        "  [Node 1] Note tree root: {}... ({} notes)",
+        short_hex(&root_after_mint, 4),
+        store.note_count().unwrap(),
+    );
+
+    // 6b: Transfer: spend the original note, create two new notes (60 + 40).
+    let nullifier = mint_note.nullifier(&spending_key, mint_pos);
+    store.store_nullifier(&nullifier).unwrap();
+    println!(
+        "  [Node 1] Spent note (nullifier: {}...)",
+        short_hex(&nullifier.0, 4),
+    );
+
+    // Create output note 1: 60 units to self.
+    let output_note_1 = Note::with_randomness(
+        owner_key,
+        [1, 60, 0, 0, 0, 0, 0, 0],
+        [0x60; 32],
+    );
+    let out_pos_1 = store.store_note_commitment(&output_note_1.commitment()).unwrap();
+    println!(
+        "  [Node 1] Created note: 60 units of asset 1 (position: {})",
+        out_pos_1,
+    );
+
+    // Create output note 2: 40 units to a recipient.
+    let recipient_key: [u8; 32] = nodes[1].public_key.0;
+    let output_note_2 = Note::with_randomness(
+        recipient_key,
+        [1, 40, 0, 0, 0, 0, 0, 0],
+        [0x40; 32],
+    );
+    let out_pos_2 = store.store_note_commitment(&output_note_2.commitment()).unwrap();
+    println!(
+        "  [Node 1] Created note: 40 units of asset 1 to recipient (position: {})",
+        out_pos_2,
+    );
+
+    // Show updated tree.
+    let root_after_transfer = store.note_tree_root().unwrap();
+    println!(
+        "  [Node 1] Note tree root: {}... ({} notes, nullifier recorded)",
+        short_hex(&root_after_transfer, 4),
+        store.note_count().unwrap(),
+    );
+    assert_ne!(root_after_mint, root_after_transfer);
+
+    // 6c: Attempt double-spend (re-use the same nullifier).
+    let double_spend_result = store.store_nullifier(&nullifier);
+    match double_spend_result {
+        Err(ref e) => {
+            println!(
+                "  [Node 1] Double-spend REJECTED: {}",
+                e,
+            );
+        }
+        Ok(()) => {
+            println!("  [Node 1] ERROR: double-spend was NOT rejected!");
+        }
+    }
+    assert!(double_spend_result.is_err());
+
+    // 6d: Verify membership proofs work.
+    let commitments = store.load_all_note_commitments().unwrap();
+    let mut tree = NoteTree::from_commitments(commitments);
+    let tree_root = tree.root();
+    let proof = tree.prove_membership(mint_pos).unwrap();
+    assert!(NoteTree::verify_proof(&tree_root, &proof));
+    println!(
+        "  [Node 1] Membership proof for minted note: VALID",
+    );
+
+    // Show the note tree root + nullifier root (federation would attest to these).
+    let note_root = store.note_tree_root().unwrap();
+    let nullifier_root = store.nullifier_set_root().unwrap();
+    println!(
+        "  [Federation] Note tree root:     {}...",
+        short_hex(&note_root, 8),
+    );
+    println!(
+        "  [Federation] Nullifier set root: {}...",
+        short_hex(&nullifier_root, 8),
+    );
+    println!();
+
+    // =========================================================================
     // Summary
     // =========================================================================
     let elapsed = start.elapsed();
@@ -491,6 +613,7 @@ async fn main() {
     println!("    3. Cross-silo STARK presentation   OK");
     println!("    4. Revocation propagation          OK");
     println!("    5. Revoked token rejection         OK");
+    println!("    6. Note tree management            OK");
     println!();
     println!("==========================================================================");
     println!();

@@ -10,7 +10,21 @@ pyana-bridge = { path = "../bridge" }
 pyana-circuit = { path = "../circuit" }
 token = { path = "../token", default-features = false, features = ["macaroon"] }
 blake3 = "1"
+ed25519-dalek = { version = "2", features = ["hazmat"] }
+getrandom = { workspace = true }
 
 [[bin]]
 name = "pyana-agent-demo"
 path = "src/main.rs"
+
+[[example]]
+name = "nft_demo"
+
+[[example]]
+name = "escrow_demo"
+
+[[example]]
+name = "auction_demo"
+
+[[example]]
+name = "atomic_swap_demo"

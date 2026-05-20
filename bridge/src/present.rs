@@ -952,6 +952,9 @@ impl BridgePresentationBuilder {
                 (false, derived_terms[2]),
             ],
             body_atoms: vec![],
+            equal_checks: vec![],
+            memberof_checks: vec![],
+            gte_check: None,
         };
 
         Ok(DerivationWitness {

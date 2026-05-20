@@ -72,6 +72,7 @@ pub mod poseidon2;
 pub mod poseidon2_air;
 pub mod merkle_air;
 pub mod derivation_air;
+pub mod multi_step_air;
 pub mod fold_air;
 pub mod presentation;
 pub mod mock_prover;
@@ -93,7 +94,8 @@ mod tests;
 // Re-export primary types.
 pub use field::BabyBear;
 pub use mock_prover::{Air, MockProof, MockProver, MockProofResult};
-pub use presentation::{PresentationAir, PresentationProof, PresentationWitness, PresentationVerification, RealPresentationProof};
+pub use presentation::{PresentationAir, PresentationProof, PresentationWitness, PresentationVerification, RealPresentationProof, AuthorizationProof, prove_authorization};
+pub use multi_step_air::{MultiStepDerivationAir, MultiStepWitness, ALLOW_PREDICATE};
 pub use ivc::{
     IvcProof, IvcBuilder, IvcVerification, IvcPresentationProof,
     prove_ivc, verify_ivc, FoldDelta,

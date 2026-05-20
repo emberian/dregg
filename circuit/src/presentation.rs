@@ -24,6 +24,7 @@ use crate::fold_air::{FoldAir, FoldWitness, RemovedFact};
 use crate::ivc::{FoldDelta, IvcPresentationProof, prove_ivc};
 use crate::merkle_air::{MerkleAir, MerkleLevelWitness, MerkleWitness};
 use crate::mock_prover::{Air, Constraint, MockProof, MockProver};
+use crate::multi_step_air;
 use crate::poseidon2::hash_fact;
 use crate::stark::{self, MerkleStarkAir, StarkProof};
 
@@ -587,6 +588,70 @@ impl Air for PresentationAir {
     }
 }
 
+// ============================================================================
+// Multi-step authorization proof (Datalog derivation chain -> ALLOW)
+// ============================================================================
+
+/// Result of a multi-step authorization proof.
+#[derive(Clone, Debug)]
+pub struct AuthorizationProof {
+    /// The mock proof (or STARK proof in future).
+    pub proof: MockProof,
+    /// The conclusion: true = ALLOW, false = DENY.
+    pub conclusion_is_allow: bool,
+    /// Number of derivation steps in the proof.
+    pub num_steps: usize,
+    /// The initial state root the proof is bound to.
+    pub initial_state_root: BabyBear,
+    /// The final accumulated hash (commitment to the derivation trace).
+    pub final_accumulated_hash: BabyBear,
+}
+
+/// Prove a multi-step authorization derivation.
+///
+/// Takes:
+/// - `initial_state_root`: The committed fact set root (matches the fold chain's final root)
+/// - `request_hash`: Hash of the authorization request
+/// - `derivation_steps`: Sequence of single-step derivation witnesses, where the last
+///   step must derive the "allow" predicate for the conclusion to be ALLOW.
+///
+/// Returns an `AuthorizationProof` that cryptographically proves:
+/// "This Datalog evaluation, starting from the committed state, concluded ALLOW (or DENY)
+///  in N derivation steps, with each step correctly applying a rule."
+///
+/// The full presentation proof now proves:
+/// ```text
+/// prove_membership (issuer in federation)    - Poseidon2 Merkle AIR
+/// + prove_fold (attenuation chain valid)     - FoldAir / IVC
+/// + prove_authorization (Datalog -> ALLOW)   - MultiStepDerivationAir [THIS]
+/// = complete ZK authorization proof
+/// ```
+pub fn prove_authorization(
+    initial_state_root: BabyBear,
+    request_hash: BabyBear,
+    derivation_steps: Vec<DerivationWitness>,
+) -> Option<AuthorizationProof> {
+    let witness = multi_step_air::build_multi_step_witness(
+        initial_state_root,
+        request_hash,
+        derivation_steps,
+    );
+
+    let conclusion_is_allow = witness.conclusion() == BabyBear::ONE;
+    let num_steps = witness.steps.len();
+    let final_accumulated_hash = witness.final_accumulated_hash();
+
+    let proof = multi_step_air::prove_authorization(witness)?;
+
+    Some(AuthorizationProof {
+        proof,
+        conclusion_is_allow,
+        num_steps,
+        initial_state_root,
+        final_accumulated_hash,
+    })
+}
+
 /// Builder for constructing a presentation witness step by step.
 pub struct PresentationBuilder {
     federation_root: BabyBear,
@@ -1007,6 +1072,8 @@ pub fn create_test_presentation() -> PresentationWitness {
             ],
             body_atoms: vec![],
             equal_checks: vec![],
+            memberof_checks: vec![],
+            gte_check: None,
         },
         state_root: final_root,
         body_fact_hashes: vec![body_hash_1, body_hash_2],
@@ -1283,6 +1350,8 @@ mod tests {
                 head_terms: [(true, BabyBear::new(0)), (false, BabyBear::ZERO), (false, BabyBear::ZERO)],
                 body_atoms: vec![],
                 equal_checks: vec![],
+                memberof_checks: vec![],
+                gte_check: None,
             },
             state_root: BabyBear::new(200),
             body_fact_hashes: vec![BabyBear::new(555)],

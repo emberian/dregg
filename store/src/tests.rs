@@ -42,6 +42,8 @@ fn sample_token_chain() -> TokenChain {
 fn sample_attested_root(height: u64) -> StoredAttestedRoot {
     StoredAttestedRoot {
         merkle_root: [height as u8; 32],
+        note_tree_root: None,
+        nullifier_set_root: None,
         height,
         timestamp: 1000 + height as i64 * 100,
         quorum_signatures: vec![
@@ -999,4 +1001,149 @@ fn store_root_hex() {
     let root = sample_attested_root(0xAB);
     // Height 0xAB = 171, so merkle_root = [171; 32].
     assert_eq!(root.root_hex(), "abababab");
+}
+
+// =============================================================================
+// Note Tree & Nullifier Tests
+// =============================================================================
+
+#[test]
+fn test_store_note_roundtrip() {
+    use pyana_cell::note::Note;
+
+    let store = new_store();
+
+    // Create notes with deterministic randomness.
+    let note1 = Note::with_randomness([1u8; 32], [1, 100, 0, 0, 0, 0, 0, 0], [10u8; 32]);
+    let note2 = Note::with_randomness([2u8; 32], [1, 200, 0, 0, 0, 0, 0, 0], [20u8; 32]);
+    let note3 = Note::with_randomness([3u8; 32], [2, 50, 0, 0, 0, 0, 0, 0], [30u8; 32]);
+
+    let c1 = note1.commitment();
+    let c2 = note2.commitment();
+    let c3 = note3.commitment();
+
+    // Store commitments.
+    let pos1 = store.store_note_commitment(&c1).unwrap();
+    let pos2 = store.store_note_commitment(&c2).unwrap();
+    let pos3 = store.store_note_commitment(&c3).unwrap();
+
+    assert_eq!(pos1, 0);
+    assert_eq!(pos2, 1);
+    assert_eq!(pos3, 2);
+    assert_eq!(store.note_count().unwrap(), 3);
+
+    // Recover and verify tree root matches.
+    let commitments = store.load_all_note_commitments().unwrap();
+    assert_eq!(commitments.len(), 3);
+    assert_eq!(commitments[0], c1);
+    assert_eq!(commitments[1], c2);
+    assert_eq!(commitments[2], c3);
+
+    // Rebuild tree and check root.
+    let mut tree = crate::note_tree::NoteTree::from_commitments(commitments);
+    let root = tree.root();
+    let stored_root = store.note_tree_root().unwrap();
+    assert_eq!(root, stored_root);
+}
+
+#[test]
+fn test_nullifier_persistence() {
+    use pyana_cell::note::{Note, Nullifier};
+
+    let store = new_store();
+    let note = Note::with_randomness([1u8; 32], [1, 100, 0, 0, 0, 0, 0, 0], [10u8; 32]);
+    let spending_key = [0xBB; 32];
+    let nullifier = note.nullifier(&spending_key, 0);
+
+    // Not spent initially.
+    assert!(!store.is_nullifier_spent(&nullifier).unwrap());
+
+    // Store it.
+    store.store_nullifier(&nullifier).unwrap();
+
+    // Now it's spent.
+    assert!(store.is_nullifier_spent(&nullifier).unwrap());
+
+    // Double-spend is rejected.
+    let result = store.store_nullifier(&nullifier);
+    assert!(matches!(result, Err(StoreError::Integrity(_))));
+
+    // A different nullifier is not spent.
+    let other_nullifier = Nullifier([0xFF; 32]);
+    assert!(!store.is_nullifier_spent(&other_nullifier).unwrap());
+}
+
+#[test]
+fn test_nullifier_persistence_across_restart() {
+    use pyana_cell::note::Note;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("note_test.redb");
+    let note = Note::with_randomness([1u8; 32], [1, 100, 0, 0, 0, 0, 0, 0], [10u8; 32]);
+    let spending_key = [0xBB; 32];
+    let nullifier = note.nullifier(&spending_key, 0);
+
+    // First session: store commitment and nullifier.
+    {
+        let store = PersistentStore::open(&path).unwrap();
+        store.store_note_commitment(&note.commitment()).unwrap();
+        store.store_nullifier(&nullifier).unwrap();
+    }
+
+    // Second session: verify persistence.
+    {
+        let store = PersistentStore::open(&path).unwrap();
+        assert_eq!(store.note_count().unwrap(), 1);
+        assert!(store.is_nullifier_spent(&nullifier).unwrap());
+
+        let commitments = store.load_all_note_commitments().unwrap();
+        assert_eq!(commitments[0], note.commitment());
+    }
+}
+
+#[test]
+fn test_attested_root_includes_note_tree() {
+    use pyana_cell::note::Note;
+
+    let store = new_store();
+
+    // Add some notes.
+    let note1 = Note::with_randomness([1u8; 32], [1, 100, 0, 0, 0, 0, 0, 0], [10u8; 32]);
+    let note2 = Note::with_randomness([2u8; 32], [1, 200, 0, 0, 0, 0, 0, 0], [20u8; 32]);
+    store.store_note_commitment(&note1.commitment()).unwrap();
+    store.store_note_commitment(&note2.commitment()).unwrap();
+
+    // Add a nullifier.
+    let spending_key = [0xBB; 32];
+    let nullifier = note1.nullifier(&spending_key, 0);
+    store.store_nullifier(&nullifier).unwrap();
+
+    // Get the roots.
+    let note_root = store.note_tree_root().unwrap();
+    let nullifier_root = store.nullifier_set_root().unwrap();
+
+    // Both should be non-zero (non-empty sets).
+    assert_ne!(note_root, [0u8; 32]);
+    assert_ne!(nullifier_root, [0u8; 32]);
+
+    // Create an attested root that includes all three components.
+    let attested = StoredAttestedRoot {
+        merkle_root: [0xAB; 32], // Cell state root.
+        note_tree_root: Some(note_root),
+        nullifier_set_root: Some(nullifier_root),
+        height: 1,
+        timestamp: 1700000000,
+        quorum_signatures: vec![
+            (PublicKey([0x11; 32]), Signature([0x22; 64])),
+        ],
+        threshold_qc: None,
+        threshold: 1,
+    };
+
+    // Store and recover.
+    store.store_attested_root(&attested).unwrap();
+    let loaded = store.latest_attested_root().unwrap().unwrap();
+    assert_eq!(loaded.note_tree_root, Some(note_root));
+    assert_eq!(loaded.nullifier_set_root, Some(nullifier_root));
+    assert_eq!(loaded.merkle_root, [0xAB; 32]);
 }

@@ -62,6 +62,20 @@ pub const AUDIT_TOKEN_INDEX: TableDefinition<&str, u64> =
 pub const METADATA: TableDefinition<&str, u64> =
     TableDefinition::new("metadata");
 
+/// Note commitment tree: position (u64) -> 32-byte commitment hash.
+///
+/// Key: position in the append-only tree (0-based, monotonically increasing).
+/// Value: 32-byte note commitment.
+pub const NOTE_COMMITMENTS: TableDefinition<u64, &[u8; 32]> =
+    TableDefinition::new("note_commitments");
+
+/// Nullifier set: nullifier hash (32 bytes) -> unit (presence = spent).
+///
+/// Key: 32-byte nullifier hash.
+/// Value: empty (presence in the table means the note is spent).
+pub const NULLIFIERS: TableDefinition<&[u8; 32], ()> =
+    TableDefinition::new("nullifiers");
+
 // Metadata key constants.
 
 /// Key for the next audit sequence number.
@@ -69,3 +83,6 @@ pub const META_AUDIT_NEXT_SEQ: &str = "audit_next_sequence";
 
 /// Key for the latest attested root height.
 pub const META_LATEST_ROOT_HEIGHT: &str = "latest_root_height";
+
+/// Key for the note tree size (number of commitments).
+pub const META_NOTE_TREE_SIZE: &str = "note_tree_size";

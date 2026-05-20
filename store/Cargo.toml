@@ -14,6 +14,8 @@ postcard = { version = "1", features = ["use-std"] }
 blake3 = "1"
 getrandom = "0"
 pyana-types = { path = "../types" }
+pyana-commit = { path = "../commit" }
+pyana-cell = { path = "../cell" }
 
 [dev-dependencies]
 tempfile = "3"

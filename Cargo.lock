@@ -4042,6 +4042,8 @@ name = "pyana-demo-agent"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "ed25519-dalek",
+ "getrandom 0.2.17",
  "pyana-bridge",
  "pyana-cell",
  "pyana-circuit",
@@ -4111,6 +4113,8 @@ dependencies = [
  "blake3",
  "getrandom 0.4.2",
  "postcard",
+ "pyana-cell",
+ "pyana-commit",
  "pyana-types",
  "redb",
  "serde",
@@ -4194,6 +4198,7 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.4.2",
  "postcard",
+ "pyana-cell",
  "pyana-circuit",
  "pyana-federation",
  "pyana-store",

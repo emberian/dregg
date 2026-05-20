@@ -1326,6 +1326,8 @@ mod tests {
                 ],
                 body_atoms: vec![],
                 equal_checks: vec![],
+                memberof_checks: vec![],
+                gte_check: None,
             },
             state_root: final_root,
             body_fact_hashes: vec![body_hash],

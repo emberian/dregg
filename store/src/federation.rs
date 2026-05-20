@@ -21,8 +21,14 @@ pub use pyana_types::{PublicKey, Signature, ThresholdQC};
 /// `pyana_types::Signature` (64 bytes) for correct Ed25519 representation.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredAttestedRoot {
-    /// The Merkle root of the revocation tree.
+    /// The Merkle root of the revocation tree (cell state).
     pub merkle_root: [u8; 32],
+    /// The note commitment tree root.
+    #[serde(default)]
+    pub note_tree_root: Option<[u8; 32]>,
+    /// The nullifier set root.
+    #[serde(default)]
+    pub nullifier_set_root: Option<[u8; 32]>,
     /// The block height at which this root was agreed upon.
     pub height: u64,
     /// Unix timestamp (seconds) when finalized.
