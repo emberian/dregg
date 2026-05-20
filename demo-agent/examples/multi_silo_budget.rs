@@ -117,21 +117,16 @@ fn main() {
     println!("--- Step 3: SLICE EXHAUSTION ---");
     println!();
 
-    // Exhaust silo A's budget to demonstrate the error path
+    // Demonstrate what happens when a silo tries to exceed its ceiling.
     let remaining_a = coord.remaining(&silo_a).unwrap();
     println!("  Silo A remaining: {}", remaining_a);
-    println!("  Attempting to spend {} (entire remaining)...", remaining_a);
-    coord.try_debit(silo_a, remaining_a, debit_digest(tx_counter)).unwrap();
-    tx_counter += 1;
-    println!("  Success! Silo A now has {} remaining.", coord.remaining(&silo_a).unwrap());
-    println!();
-
-    println!("  Attempting to spend 1 more computron from Silo A...");
-    let err = coord.try_debit(silo_a, 1, debit_digest(tx_counter)).unwrap_err();
+    println!("  Attempting to spend {} (more than remaining)...", remaining_a + 1);
+    let err = coord.try_debit(silo_a, remaining_a + 1, debit_digest(tx_counter)).unwrap_err();
     tx_counter += 1;
     println!("  REJECTED: {}", err);
     println!();
-    println!("  Silo A's slice is exhausted. It must request rebalancing.");
+    println!("  The silo cannot exceed its ceiling — not even by 1 computron.");
+    println!("  It must wait for a rebalance to get a fresh slice.");
     println!();
 
     // ─── Step 4: Rebalancing ─────────────────────────────────────────────────
@@ -184,7 +179,6 @@ fn main() {
     println!("    Silo A: debit 50 -> remaining {}", coord.remaining(&silo_a).unwrap());
 
     coord.try_debit(silo_b, 30, debit_digest(tx_counter)).unwrap();
-    tx_counter += 1;
     println!("    Silo B: debit 30 -> remaining {}", coord.remaining(&silo_b).unwrap());
     println!();
 
