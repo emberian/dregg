@@ -35,10 +35,28 @@ pub enum Check {
     LessThan(Term, Term),
     /// `lhs > rhs`
     GreaterThan(Term, Term),
+    /// `lhs >= rhs`
+    GreaterThanOrEqual(Term, Term),
     /// `lhs == rhs`
     Equal(Term, Term),
     /// `lhs` contains `rhs` (set membership / string containment).
+    ///
+    /// DEPRECATED for action checking — use `MemberOf` instead to avoid
+    /// the substring vulnerability where e.g. `"threadwrite"` would match
+    /// `"write"` via substring. Retained for backward compatibility with
+    /// existing serialized traces and non-action use cases.
     Contains(Term, Term),
+    /// `element` is a member of the action set.
+    ///
+    /// Semantics: the element (a BLAKE3 action hash stored as a 32-byte
+    /// Const) must exactly match one of the `action_allowed` facts for the
+    /// same resource. Unlike `Contains`, this does exact hash equality —
+    /// no substring matching, no prefix/suffix collisions.
+    ///
+    /// In the local evaluator: implemented as equality check on the resolved
+    /// action hash against each element in the action set body atom.
+    /// In the ZK path: Merkle membership proof against the action set root.
+    MemberOf(Term, Term),
 }
 
 /// A Datalog rule with head, body atoms, and constraint checks.

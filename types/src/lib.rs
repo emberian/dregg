@@ -15,10 +15,14 @@
 //! All types derive `Serialize`/`Deserialize` and are compatible with both
 //! postcard (compact binary) and JSON serialization.
 
+pub mod causal;
+
 use std::fmt;
 
 use ed25519_dalek::Verifier;
 use serde::{Deserialize, Serialize};
+
+pub use causal::{CausalDag, CausalError};
 
 // =============================================================================
 // Cryptographic Primitives

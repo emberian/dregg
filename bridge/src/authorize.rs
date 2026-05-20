@@ -69,7 +69,10 @@ pub fn authorize_with_trace(
     }
 
     // Convert committed facts to trace-format facts.
-    let trace_facts = committed_facts_to_trace(state, symbols);
+    let mut trace_facts = committed_facts_to_trace(state, symbols);
+
+    // Inject budget and revocation state facts from the request.
+    trace_facts.extend(budget_revocation_facts(request));
 
     // Convert the AuthRequest to a TraceRequest.
     let trace_request = auth_request_to_trace(request)?;
@@ -80,6 +83,14 @@ pub fn authorize_with_trace(
     // Run the evaluator.
     let evaluator = Evaluator::new(trace_facts, rules);
     let trace = evaluator.evaluate(&trace_request);
+
+    // Check for explicit deny derivations first (budget/revocation).
+    let deny_pred = symbol_from_str("deny");
+    for step in &trace.steps {
+        if step.derived_fact.predicate == deny_pred {
+            return Err(AuthError::Denied);
+        }
+    }
 
     // Check conclusion.
     match &trace.conclusion {
@@ -213,6 +224,48 @@ fn auth_request_to_trace(request: &AuthRequest) -> Result<TraceRequest, AuthErro
         user_id,
         now,
     })
+}
+
+/// Emit budget and revocation state as trace facts from the AuthRequest.
+///
+/// These facts are injected alongside the committed token facts so that
+/// the Datalog rules can enforce budget and revocation locally.
+///
+/// Emits:
+/// - `budget_remaining(budget_id, amount)` for each entry in `budget_states`
+/// - `request_cost(cost)` if `request_cost` is Some
+/// - `not_revoked(token_id)` for each entry in `not_revoked`
+pub fn budget_revocation_facts(request: &AuthRequest) -> Vec<TraceFact> {
+    let mut facts = Vec::new();
+
+    // Emit budget_remaining facts
+    for (budget_id, remaining) in &request.budget_states {
+        facts.push(TraceFact::new(
+            symbol_from_str("budget_remaining"),
+            vec![
+                pyana_trace::Term::Const(symbol_from_str(budget_id)),
+                pyana_trace::Term::Int(*remaining as i64),
+            ],
+        ));
+    }
+
+    // Emit request_cost fact
+    if let Some(cost) = request.request_cost {
+        facts.push(TraceFact::new(
+            symbol_from_str("request_cost"),
+            vec![pyana_trace::Term::Int(cost as i64)],
+        ));
+    }
+
+    // Emit not_revoked facts
+    for token_id in &request.not_revoked {
+        facts.push(TraceFact::new(
+            symbol_from_str("not_revoked"),
+            vec![pyana_trace::Term::Const(symbol_from_str(token_id))],
+        ));
+    }
+
+    facts
 }
 
 /// Verify an existing authorization trace against a state.

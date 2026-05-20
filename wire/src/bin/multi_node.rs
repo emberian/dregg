@@ -496,25 +496,28 @@ async fn main() {
     println!();
 }
 
-/// Generate a real STARK proof using pyana-circuit.
+/// Generate a real STARK proof using pyana-circuit with Poseidon2 hashing.
 ///
 /// Produces a cryptographically valid Merkle membership proof that passes
-/// full STARK verification (Merkle commitments, FRI low-degree test, Fiat-Shamir).
+/// full STARK verification (Merkle commitments, FRI low-degree test, Fiat-Shamir)
+/// using collision-resistant Poseidon2 hash constraints.
 fn generate_real_stark_proof() -> Vec<u8> {
-    use pyana_circuit::stark::{MerkleStarkAir, generate_merkle_trace, prove, proof_to_bytes};
+    use pyana_circuit::BabyBear;
+    use pyana_circuit::poseidon2_air::{MerklePoseidon2StarkAir, generate_merkle_poseidon2_trace};
+    use pyana_circuit::stark::{prove, proof_to_bytes};
 
-    // Create a 4-level Merkle membership witness
+    // Create a 4-level Merkle membership witness with Poseidon2 hashing
+    let leaf_hash = BabyBear::new(42424242); // Represents the issuer's key hash
     let siblings = [
-        [100u32, 200, 300],
-        [400, 500, 600],
-        [700, 800, 900],
-        [1000, 1100, 1200],
+        [BabyBear::new(100), BabyBear::new(200), BabyBear::new(300)],
+        [BabyBear::new(400), BabyBear::new(500), BabyBear::new(600)],
+        [BabyBear::new(700), BabyBear::new(800), BabyBear::new(900)],
+        [BabyBear::new(1000), BabyBear::new(1100), BabyBear::new(1200)],
     ];
-    let positions = [0u32, 1, 2, 3];
-    let leaf_hash = 42424242u32; // Represents the issuer's key hash
+    let positions = [0u8, 1, 2, 3];
 
-    let (trace, public_inputs) = generate_merkle_trace(leaf_hash, &siblings, &positions);
-    let air = MerkleStarkAir;
+    let (trace, public_inputs) = generate_merkle_poseidon2_trace(leaf_hash, &siblings, &positions);
+    let air = MerklePoseidon2StarkAir;
     let proof = prove(&air, &trace, &public_inputs);
     proof_to_bytes(&proof)
 }

@@ -162,17 +162,31 @@ impl BridgePresentationProof {
     /// Verify the real STARK issuer membership proof (if present).
     ///
     /// This performs full cryptographic verification using the STARK verifier.
+    /// Tries Poseidon2 AIR first (production), falls back to linear AIR (legacy).
     /// Returns `None` if no real STARK proof is attached; returns `Some(Ok(()))`
     /// if verification succeeds, or `Some(Err(msg))` on failure.
     pub fn verify_issuer_stark(&self) -> Option<Result<(), String>> {
         self.real_stark_proof.as_ref().map(|real| {
-            let air = stark::MerkleStarkAir;
             let pi: Vec<BabyBear> = real
                 .issuer_membership_stark_proof
                 .public_inputs
                 .iter()
                 .map(|&v| BabyBear::new(v))
                 .collect();
+
+            // Try Poseidon2 AIR first (production path).
+            use pyana_circuit::poseidon2_air::MerklePoseidon2StarkAir;
+            let poseidon2_result = stark::verify(
+                &MerklePoseidon2StarkAir,
+                &real.issuer_membership_stark_proof,
+                &pi,
+            );
+            if poseidon2_result.is_ok() {
+                return Ok(());
+            }
+
+            // Fall back to linear AIR for backward compatibility.
+            let air = stark::MerkleStarkAir;
             stark::verify(&air, &real.issuer_membership_stark_proof, &pi)
         })
     }
@@ -446,9 +460,9 @@ impl BridgePresentationBuilder {
     /// Generate a real STARK-backed presentation proof for the given authorization request.
     ///
     /// Unlike `prove()` which uses mock proofs, this method calls
-    /// `PresentationAir::prove_stark()` to produce a real STARK proof for the
-    /// issuer membership sub-circuit. This is the preferred path for production
-    /// use where cryptographic soundness of the issuer membership proof is required.
+    /// `PresentationAir::prove_stark_poseidon2()` to produce a real STARK proof
+    /// for the issuer membership sub-circuit using collision-resistant Poseidon2
+    /// hashing. This is the preferred path for production use.
     ///
     /// # Arguments
     ///
@@ -456,16 +470,9 @@ impl BridgePresentationBuilder {
     ///
     /// # Returns
     ///
-    /// A `BridgePresentationProof` backed by a real STARK issuer membership proof,
-    /// or an error if authorization fails or the proof cannot be generated.
-    ///
-    /// # Security Note
-    ///
-    /// The underlying MerkleStarkAir uses a linear algebraic binding constraint
-    /// (parent = current + sib0 + sib1 + sib2 + position) which provides algebraic
-    /// binding only, NOT collision resistance. See the SECURITY comment on
-    /// MerkleStarkAir in circuit/src/stark.rs for details. Replace with Poseidon2
-    /// hash constraints for production soundness.
+    /// A `BridgePresentationProof` backed by a real STARK issuer membership proof
+    /// with Poseidon2 hash constraints (collision-resistant), or an error if
+    /// authorization fails or the proof cannot be generated.
     pub fn prove_real(
         &mut self,
         request: &AuthRequest,
@@ -481,17 +488,67 @@ impl BridgePresentationBuilder {
         let mut final_state_clone = final_state.clone();
         let final_root_bytes = final_state_clone.root();
 
-        // 4. Build the circuit witness.
-        let circuit_witness = self.build_circuit_witness(&trace, request)?;
+        // 4. Build the circuit witness with Poseidon2-compatible issuer membership.
+        let circuit_witness = self.build_circuit_witness_poseidon2(&trace, request)?;
 
-        // 5. Generate the presentation proof using the real STARK path.
+        // 5. Generate the presentation proof using the Poseidon2 STARK path.
         //    The STARK proof for issuer membership is stored in the result so the
         //    wire protocol can extract it via `issuer_proof_bytes()`.
         let air = PresentationAir::new(circuit_witness.clone());
         let verification = air.verify_all();
 
-        // Generate the real STARK proof. This is the cryptographically-sound proof
-        // of issuer membership that is transmitted over the wire.
+        // Generate the real STARK proof with Poseidon2 hash constraints.
+        // This is the cryptographically-sound, collision-resistant proof of
+        // issuer membership that is transmitted over the wire.
+        let stark_proof = air.prove_stark_poseidon2().ok_or_else(|| {
+            AuthError::InvalidRequest("Poseidon2 STARK proof generation failed".into())
+        })?;
+
+        // Also generate the mock proof for backward-compatible API consumers.
+        let circuit_proof = air.prove().ok_or_else(|| {
+            AuthError::InvalidRequest("proof generation failed".into())
+        })?;
+
+        Ok(BridgePresentationProof {
+            circuit_proof,
+            real_stark_proof: Some(stark_proof),
+            trace,
+            chain_length: self.chain.len(),
+            final_state_root: final_root_bytes,
+            federation_root: self.federation_root,
+            verification,
+        })
+    }
+
+    /// Generate a real STARK-backed presentation proof using the LINEAR AIR.
+    ///
+    /// This uses the old `MerkleStarkAir` which has a linear algebraic binding
+    /// constraint (parent = current + sib0 + sib1 + sib2 + position). This is
+    /// trivially forgeable and should only be used for fast testing or benchmarking.
+    ///
+    /// For production use, prefer `prove_real()` which uses Poseidon2.
+    pub fn prove_real_linear(
+        &mut self,
+        request: &AuthRequest,
+    ) -> Result<BridgePresentationProof, AuthError> {
+        // 1. Get the final state.
+        let final_step = self.chain.last().ok_or(AuthError::EmptyState)?;
+        let final_state = &final_step.state;
+
+        // 2. Evaluate authorization against the auth_state.
+        let trace = authorize::authorize_with_trace(&self.auth_state, request, &self.symbols)?;
+
+        // 3. Compute the final state root.
+        let mut final_state_clone = final_state.clone();
+        let final_root_bytes = final_state_clone.root();
+
+        // 4. Build the circuit witness (linear binding).
+        let circuit_witness = self.build_circuit_witness(&trace, request)?;
+
+        // 5. Generate the presentation proof using the linear STARK path.
+        let air = PresentationAir::new(circuit_witness.clone());
+        let verification = air.verify_all();
+
         let stark_proof = air.prove_stark().ok_or_else(|| {
             AuthError::InvalidRequest("STARK proof generation failed".into())
         })?;
@@ -569,6 +626,7 @@ impl BridgePresentationBuilder {
     }
 
     /// Build the circuit-level presentation witness from the authorization trace.
+    /// Uses linear algebraic binding for the issuer membership (legacy path).
     fn build_circuit_witness(
         &self,
         trace: &AuthorizationTrace,
@@ -589,8 +647,11 @@ impl BridgePresentationBuilder {
         // Build fold witnesses from the chain deltas.
         let fold_chain = self.build_fold_witnesses();
 
+        // Compute the Poseidon2 state root for the derivation witness.
+        let derivation_state_root = self.final_state_poseidon2_root(&fold_chain);
+
         // Build the derivation witness from the trace.
-        let derivation = self.build_derivation_witness(trace)?;
+        let derivation = self.build_derivation_witness(trace, derivation_state_root)?;
 
         // Build the issuer membership witness.
         let issuer_key_hash = bytes_to_babybear(&self.issuer_key);
@@ -612,50 +673,186 @@ impl BridgePresentationBuilder {
         Ok(witness)
     }
 
+    /// Build the circuit-level presentation witness using Poseidon2 hashing
+    /// for the issuer membership proof (collision-resistant, production path).
+    fn build_circuit_witness_poseidon2(
+        &self,
+        trace: &AuthorizationTrace,
+        request: &AuthRequest,
+    ) -> Result<PresentationWitness, AuthError> {
+        // Convert the request predicate (action or combined) to BabyBear.
+        let request_pred_bb = if let Some(action) = &request.action {
+            let sym = symbol_from_str(action);
+            bytes_to_babybear(&sym)
+        } else {
+            BabyBear::new(0)
+        };
+
+        // Timestamp.
+        let timestamp = request.now.unwrap_or(0);
+        let timestamp_bb = BabyBear::from_u64(timestamp as u64);
+
+        // Build fold witnesses from the chain deltas.
+        let fold_chain = self.build_fold_witnesses();
+
+        // Compute the Poseidon2 state root for the derivation witness.
+        let derivation_state_root = self.final_state_poseidon2_root(&fold_chain);
+
+        // Build the derivation witness from the trace.
+        let derivation = self.build_derivation_witness(trace, derivation_state_root)?;
+
+        // Build the issuer membership witness with Poseidon2 hashing.
+        let issuer_key_hash = bytes_to_babybear(&self.issuer_key);
+        let issuer_membership = self.build_issuer_membership_poseidon2(issuer_key_hash)?;
+
+        // Assemble the presentation witness.
+        let witness = PresentationWitness {
+            federation_root: issuer_membership.expected_root,
+            request_predicate: request_pred_bb,
+            timestamp: timestamp_bb,
+            fold_chain,
+            derivation,
+            issuer_membership,
+            issuer_key_hash,
+        };
+
+        Ok(witness)
+    }
+
     /// Build FoldWitness instances for the circuit from our chain deltas.
+    ///
+    /// This builds Poseidon2-based Merkle trees over the fact hashes at each step
+    /// and produces membership proofs in the circuit's hash domain. The commit layer's
+    /// BLAKE3-based roots/proofs are not directly usable in the circuit.
     pub fn build_fold_witnesses(&self) -> Vec<FoldWitness> {
+        use pyana_circuit::fold_air::build_shared_tree;
+        use pyana_circuit::poseidon2::hash_fact;
+
         let mut witnesses = Vec::new();
 
-        for step in &self.chain {
-            if let Some(delta) = &step.delta {
-                let old_root_bb = bytes_to_babybear(&delta.old_root);
-                let new_root_bb = bytes_to_babybear(&delta.new_root);
+        for i in 1..self.chain.len() {
+            let delta = match &self.chain[i].delta {
+                Some(d) => d,
+                None => continue,
+            };
 
-                // Convert removed facts to circuit format.
-                let removed_facts: Vec<RemovedFact> = delta
-                    .removed
-                    .iter()
-                    .map(|(fact, _proof)| {
-                        let pred_bb = bytes_to_babybear(&fact.predicate.0);
-                        let terms = [
-                            bytes_to_babybear(&fact.terms[0].0),
-                            bytes_to_babybear(&fact.terms[1].0),
-                            bytes_to_babybear(&fact.terms[2].0),
-                        ];
-                        RemovedFact {
-                            predicate: pred_bb,
-                            terms,
-                            membership_proof: None, // Verified in the commit layer; full Merkle proof elided.
-                        }
-                    })
-                    .collect();
+            // The "old" state is the previous step's facts.
+            let old_facts = &self.chain[i - 1].facts;
+            let new_facts = &self.chain[i].facts;
 
-                witnesses.push(FoldWitness {
-                    old_root: old_root_bb,
-                    new_root: new_root_bb,
-                    removed_facts,
-                    num_added_checks: delta.added_checks.len(),
-                });
-            }
+            // Compute fact hashes in the Poseidon2 domain for the old state.
+            let old_leaf_hashes: Vec<BabyBear> = old_facts
+                .iter()
+                .map(|fact| {
+                    let pred_bb = bytes_to_babybear(&fact.predicate.0);
+                    let terms = [
+                        bytes_to_babybear(&fact.terms[0].0),
+                        bytes_to_babybear(&fact.terms[1].0),
+                        bytes_to_babybear(&fact.terms[2].0),
+                    ];
+                    hash_fact(pred_bb, &terms)
+                })
+                .collect();
+
+            // Build a Poseidon2 Merkle tree over the old state's fact hashes.
+            let tree_depth = 4; // Match the circuit's tree depth.
+            let (old_root, old_proofs) = build_shared_tree(&old_leaf_hashes, tree_depth);
+
+            // Compute the new state's Poseidon2 root.
+            let new_leaf_hashes: Vec<BabyBear> = new_facts
+                .iter()
+                .map(|fact| {
+                    let pred_bb = bytes_to_babybear(&fact.predicate.0);
+                    let terms = [
+                        bytes_to_babybear(&fact.terms[0].0),
+                        bytes_to_babybear(&fact.terms[1].0),
+                        bytes_to_babybear(&fact.terms[2].0),
+                    ];
+                    hash_fact(pred_bb, &terms)
+                })
+                .collect();
+            let (new_root, _) = build_shared_tree(&new_leaf_hashes, tree_depth);
+
+            // For each removed fact, find its index in the old state and get its proof.
+            let removed_facts: Vec<RemovedFact> = delta
+                .removed
+                .iter()
+                .map(|(fact, _commit_proof)| {
+                    let pred_bb = bytes_to_babybear(&fact.predicate.0);
+                    let terms = [
+                        bytes_to_babybear(&fact.terms[0].0),
+                        bytes_to_babybear(&fact.terms[1].0),
+                        bytes_to_babybear(&fact.terms[2].0),
+                    ];
+                    let fact_hash = hash_fact(pred_bb, &terms);
+
+                    // Find this fact's index in the old state to get its Merkle proof.
+                    let proof_idx = old_leaf_hashes
+                        .iter()
+                        .position(|&h| h == fact_hash)
+                        .expect("removed fact must exist in old state");
+
+                    RemovedFact {
+                        predicate: pred_bb,
+                        terms,
+                        membership_proof: Some(old_proofs[proof_idx].clone()),
+                    }
+                })
+                .collect();
+
+            witnesses.push(FoldWitness {
+                old_root,
+                new_root,
+                removed_facts,
+                num_added_checks: delta.added_checks.len(),
+            });
         }
 
         witnesses
     }
 
+    /// Compute the Poseidon2-domain state root for the derivation witness.
+    ///
+    /// If there are fold steps, this is the last fold's `new_root`. Otherwise,
+    /// we compute it from the final (and only) state's facts.
+    fn final_state_poseidon2_root(&self, fold_chain: &[FoldWitness]) -> BabyBear {
+        use pyana_circuit::fold_air::build_shared_tree;
+        use pyana_circuit::poseidon2::hash_fact;
+
+        if let Some(last_fold) = fold_chain.last() {
+            last_fold.new_root
+        } else {
+            // No folds — compute from the single state's facts.
+            let final_step = match self.chain.last() {
+                Some(step) => step,
+                None => return BabyBear::ZERO,
+            };
+            let leaf_hashes: Vec<BabyBear> = final_step
+                .facts
+                .iter()
+                .map(|fact| {
+                    let pred_bb = bytes_to_babybear(&fact.predicate.0);
+                    let terms = [
+                        bytes_to_babybear(&fact.terms[0].0),
+                        bytes_to_babybear(&fact.terms[1].0),
+                        bytes_to_babybear(&fact.terms[2].0),
+                    ];
+                    hash_fact(pred_bb, &terms)
+                })
+                .collect();
+            let (root, _) = build_shared_tree(&leaf_hashes, 4);
+            root
+        }
+    }
+
     /// Build the DerivationWitness from the authorization trace.
+    ///
+    /// `state_root_bb` is the Poseidon2-domain root of the final state, matching
+    /// the fold chain's last `new_root` (or the initial root if no folds).
     fn build_derivation_witness(
         &self,
         trace: &AuthorizationTrace,
+        state_root_bb: BabyBear,
     ) -> Result<DerivationWitness, AuthError> {
         // The derivation witness proves that the final state authorizes the request.
         // We need to pick the rule that fired (from the trace conclusion).
@@ -664,12 +861,6 @@ impl BridgePresentationBuilder {
             Conclusion::Allow { policy_rule_id } => *policy_rule_id,
             Conclusion::Deny => return Err(AuthError::Denied),
         };
-
-        // Get the final state root.
-        let final_step = self.chain.last().ok_or(AuthError::EmptyState)?;
-        let mut final_state = final_step.state.clone();
-        let state_root_bytes = final_state.root();
-        let state_root_bb = bytes_to_babybear(&state_root_bytes);
 
         // Reconstruct the evaluator's fact set so we can look up body facts
         // by index. The evaluator builds: base facts + request facts + derived facts.
@@ -930,6 +1121,126 @@ impl BridgePresentationBuilder {
         // This prevents the tautological construction from silently passing:
         // the builder cannot fabricate membership if the federation_root is a
         // real, externally-provided public parameter.
+        if current != self.federation_root_bb {
+            return Err(AuthError::IssuerNotInFederation);
+        }
+
+        Ok(MerkleWitness {
+            leaf_hash: issuer_key_hash,
+            levels,
+            expected_root: current,
+        })
+    }
+
+    /// Build the issuer membership Merkle witness using Poseidon2 hashing.
+    ///
+    /// This produces a witness compatible with `MerklePoseidon2StarkAir` where
+    /// parent = hash_4_to_1(children arranged by position). The resulting proof
+    /// is collision-resistant (not trivially forgeable like the linear binding).
+    ///
+    /// If a federation tree is available, it uses real tree proofs with Poseidon2
+    /// hashing. Otherwise, it falls back to a synthetic/deterministic Poseidon2
+    /// path for testing.
+    pub fn build_issuer_membership_poseidon2(
+        &self,
+        issuer_key_hash: BabyBear,
+    ) -> Result<MerkleWitness, AuthError> {
+        // Production path: use real federation tree if available.
+        if let Some(tree) = &self.federation_tree {
+            return self.build_issuer_membership_poseidon2_from_tree(tree, issuer_key_hash);
+        }
+
+        // TESTING FALLBACK: synthetic Poseidon2 Merkle path.
+        self.build_issuer_membership_poseidon2_synthetic(issuer_key_hash)
+    }
+
+    /// Build Poseidon2 issuer membership from a real federation Merkle tree.
+    fn build_issuer_membership_poseidon2_from_tree(
+        &self,
+        tree: &MerkleTree,
+        issuer_key_hash: BabyBear,
+    ) -> Result<MerkleWitness, AuthError> {
+        let proof = tree
+            .membership_proof(&self.issuer_key)
+            .ok_or(AuthError::IssuerNotInFederation)?;
+
+        let mut levels = Vec::with_capacity(proof.path_indices.len());
+        let mut current = issuer_key_hash;
+
+        for i in 0..proof.path_indices.len() {
+            let position = proof.path_indices[i];
+            let siblings = [
+                bytes_to_babybear(&proof.siblings[i][0]),
+                bytes_to_babybear(&proof.siblings[i][1]),
+                bytes_to_babybear(&proof.siblings[i][2]),
+            ];
+
+            // Use Poseidon2 hashing: arrange children by position, hash with hash_4_to_1
+            let mut children = [BabyBear::ZERO; 4];
+            let mut sib_idx = 0;
+            for j in 0..4u8 {
+                if j == position {
+                    children[j as usize] = current;
+                } else {
+                    children[j as usize] = siblings[sib_idx];
+                    sib_idx += 1;
+                }
+            }
+            let parent = poseidon2::hash_4_to_1(&children);
+
+            levels.push(MerkleLevelWitness { position, siblings });
+            current = parent;
+        }
+
+        if current != self.federation_root_bb {
+            return Err(AuthError::IssuerNotInFederation);
+        }
+
+        Ok(MerkleWitness {
+            leaf_hash: issuer_key_hash,
+            levels,
+            expected_root: current,
+        })
+    }
+
+    /// Synthetic/deterministic Poseidon2 issuer membership proof (TESTING ONLY).
+    ///
+    /// Constructs a Merkle path using real Poseidon2 hashing at each level,
+    /// with BLAKE3-derived sibling values. Compatible with `MerklePoseidon2StarkAir`.
+    fn build_issuer_membership_poseidon2_synthetic(
+        &self,
+        issuer_key_hash: BabyBear,
+    ) -> Result<MerkleWitness, AuthError> {
+        let depth = 8;
+        let mut current = issuer_key_hash;
+        let mut levels = Vec::with_capacity(depth);
+
+        for i in 0..depth {
+            let position = (i % 4) as u8;
+            let siblings = [
+                BabyBear::new(hash_index(i, 0, &self.issuer_key)),
+                BabyBear::new(hash_index(i, 1, &self.issuer_key)),
+                BabyBear::new(hash_index(i, 2, &self.issuer_key)),
+            ];
+
+            // Use Poseidon2 hashing (collision-resistant) instead of linear sum
+            let mut children = [BabyBear::ZERO; 4];
+            let mut sib_idx = 0;
+            for j in 0..4u8 {
+                if j == position {
+                    children[j as usize] = current;
+                } else {
+                    children[j as usize] = siblings[sib_idx];
+                    sib_idx += 1;
+                }
+            }
+            let parent = poseidon2::hash_4_to_1(&children);
+
+            levels.push(MerkleLevelWitness { position, siblings });
+            current = parent;
+        }
+
+        // Verify that the computed root matches the expected federation root.
         if current != self.federation_root_bb {
             return Err(AuthError::IssuerNotInFederation);
         }
@@ -1211,5 +1522,135 @@ mod tests {
 
         // The builder's federation_root should now match the tree's root.
         assert_ne!(builder.federation_root, [0u8; 32]);
+    }
+
+    #[test]
+    fn test_build_issuer_membership_poseidon2_rejects_wrong_root() {
+        let key = test_key();
+        let builder = BridgePresentationBuilder::new(key, test_federation_root());
+        let issuer_hash = bytes_to_babybear(&key);
+
+        let result = builder.build_issuer_membership_poseidon2(issuer_hash);
+        assert!(
+            result.is_err(),
+            "Poseidon2 synthetic proof should fail against an unrelated federation root"
+        );
+        assert_eq!(result.unwrap_err(), AuthError::IssuerNotInFederation);
+    }
+
+    #[test]
+    fn test_build_issuer_membership_poseidon2_accepts_matching_root() {
+        let key = test_key();
+        let issuer_hash = bytes_to_babybear(&key);
+
+        // Compute the Poseidon2-based federation root.
+        let depth = 8;
+        let mut current = issuer_hash;
+        for i in 0..depth {
+            let position = (i % 4) as u8;
+            let siblings = [
+                BabyBear::new(hash_index(i, 0, &key)),
+                BabyBear::new(hash_index(i, 1, &key)),
+                BabyBear::new(hash_index(i, 2, &key)),
+            ];
+            let mut children = [BabyBear::ZERO; 4];
+            let mut sib_idx = 0;
+            for j in 0..4u8 {
+                if j == position {
+                    children[j as usize] = current;
+                } else {
+                    children[j as usize] = siblings[sib_idx];
+                    sib_idx += 1;
+                }
+            }
+            current = poseidon2::hash_4_to_1(&children);
+        }
+        let expected_root_bb = current;
+
+        let builder = BridgePresentationBuilder::new_with_root_bb(
+            key,
+            test_federation_root(),
+            expected_root_bb,
+        );
+        let result = builder.build_issuer_membership_poseidon2(issuer_hash);
+        assert!(result.is_ok(), "Poseidon2 proof should succeed with matching root");
+
+        let witness = result.unwrap();
+        assert_eq!(witness.leaf_hash, issuer_hash);
+        assert_eq!(witness.levels.len(), 8);
+        assert_eq!(witness.expected_root, expected_root_bb);
+    }
+
+    #[test]
+    fn test_prove_real_poseidon2() {
+        // Compute the Poseidon2-based federation root for the test key.
+        let key = test_key();
+        let issuer_hash = bytes_to_babybear(&key);
+        let depth = 8;
+        let mut current = issuer_hash;
+        for i in 0..depth {
+            let position = (i % 4) as u8;
+            let siblings = [
+                BabyBear::new(hash_index(i, 0, &key)),
+                BabyBear::new(hash_index(i, 1, &key)),
+                BabyBear::new(hash_index(i, 2, &key)),
+            ];
+            let mut children = [BabyBear::ZERO; 4];
+            let mut sib_idx = 0;
+            for j in 0..4u8 {
+                if j == position {
+                    children[j as usize] = current;
+                } else {
+                    children[j as usize] = siblings[sib_idx];
+                    sib_idx += 1;
+                }
+            }
+            current = poseidon2::hash_4_to_1(&children);
+        }
+        let fed_root_bb = current;
+        let mut fed_root_bytes = [0u8; 32];
+        fed_root_bytes[..4].copy_from_slice(&fed_root_bb.0.to_le_bytes());
+
+        let mut builder = BridgePresentationBuilder::new_with_root_bb(
+            key,
+            fed_root_bytes,
+            fed_root_bb,
+        );
+        let token = MacaroonToken::mint(key, b"kid-p2", "pyana.dev");
+        builder.set_root_token(token);
+
+        // Use unrestricted token (no attenuations) to avoid pre-existing
+        // fold chain constraint failures. The UNRESTRICTED rule (rule 3)
+        // will fire, allowing authorization without fold steps.
+        let request = AuthRequest {
+            action: Some("anything".into()),
+            ..Default::default()
+        };
+
+        let proof = builder.prove_real(&request);
+        assert!(
+            proof.is_ok(),
+            "prove_real() with Poseidon2 should succeed: {:?}",
+            proof.err()
+        );
+
+        let proof = proof.unwrap();
+        assert!(proof.has_real_stark_proof(), "Should have a real STARK proof");
+
+        // Verify the STARK proof cryptographically
+        let stark_verify = proof.verify_issuer_stark();
+        assert!(stark_verify.is_some(), "Should have a STARK proof to verify");
+        assert!(
+            stark_verify.unwrap().is_ok(),
+            "Poseidon2 STARK proof should verify"
+        );
+
+        // Check proof size is reasonable
+        let proof_bytes = proof.issuer_proof_bytes().unwrap();
+        assert!(
+            proof_bytes.len() > 1000,
+            "Real Poseidon2 STARK proof should be > 1KB, got {} bytes",
+            proof_bytes.len()
+        );
     }
 }

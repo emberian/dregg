@@ -16,7 +16,7 @@ pub use types::*;
 pub use check::eval_check;
 pub use eval::Evaluator;
 pub use verify::verify_trace;
-pub use policy::standard_policy;
+pub use policy::{standard_policy, secure_policy};
 
 #[cfg(test)]
 mod tests;

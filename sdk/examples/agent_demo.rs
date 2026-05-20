@@ -31,7 +31,7 @@ fn main() {
     // -------------------------------------------------------------------------
     let root_key: [u8; 32] = {
         let mut k = [0u8; 32];
-        getrandom::getrandom(&mut k).unwrap();
+        getrandom::fill(&mut k).unwrap();
         k
     };
     let root_token = wallet.mint_token(&root_key, "compute");

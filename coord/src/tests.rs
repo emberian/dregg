@@ -267,7 +267,7 @@ mod causal_dag {
         dag.insert_genesis(h1).unwrap();
 
         let err = dag.insert_genesis(h1).unwrap_err();
-        assert_eq!(err, CoordError::DuplicateTurn { hash: h1 });
+        assert_eq!(err, pyana_types::CausalError::Duplicate(h1));
     }
 
     #[test]
@@ -278,7 +278,7 @@ mod causal_dag {
 
         // Try to insert h2 depending on h1, but h1 is not in the DAG.
         let err = dag.insert(h2, &[h1]).unwrap_err();
-        assert!(matches!(err, CoordError::MissingDependency { .. }));
+        assert!(matches!(err, pyana_types::CausalError::MissingDeps { .. }));
     }
 
     #[test]

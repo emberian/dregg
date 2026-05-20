@@ -6,13 +6,33 @@
 //!
 //! No global ordering needed — just local causal consistency.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
 
 use pyana_cell::Ledger;
 use pyana_turn::{Turn, TurnReceipt, TurnResult};
 use serde::{Deserialize, Serialize};
 
 use crate::error::CoordError;
+
+// Re-export the shared CausalDag from pyana-types.
+pub use pyana_types::CausalDag;
+
+// ─── CoordError conversion ────────────────────────────────────────────────────
+
+/// Convert a `pyana_types::CausalError` into a `CoordError`.
+impl From<pyana_types::CausalError> for CoordError {
+    fn from(err: pyana_types::CausalError) -> Self {
+        match err {
+            pyana_types::CausalError::MissingDeps { turn_hash, missing } => {
+                CoordError::MissingDependency {
+                    turn_hash,
+                    dep_hash: missing.into_iter().next().unwrap_or([0; 32]),
+                }
+            }
+            pyana_types::CausalError::Duplicate(hash) => CoordError::DuplicateTurn { hash },
+        }
+    }
+}
 
 // ─── CausalTurn ────────────────────────────────────────────────────────────────
 
@@ -76,245 +96,6 @@ impl CausalTurn {
         let computed =
             Self::compute_hash(&turn_hash, &self.causal_deps, &self.node_id, self.sequence);
         computed == self.hash
-    }
-}
-
-// ─── CausalDag ─────────────────────────────────────────────────────────────────
-
-/// The causal DAG: a directed acyclic graph of happened-before relationships.
-///
-/// Nodes are turn hashes, edges point from a turn to its causal dependencies.
-/// This lets us answer queries like:
-/// - "Did T1 happen before T2?" (T1 is an ancestor of T2)
-/// - "Are T1 and T2 concurrent?" (neither is ancestor of the other)
-/// - "What is the current frontier?" (turns with no successors)
-#[derive(Clone, Debug, Default)]
-pub struct CausalDag {
-    /// Forward edges: turn_hash -> set of turns that depend on it (successors).
-    successors: HashMap<[u8; 32], HashSet<[u8; 32]>>,
-    /// Backward edges: turn_hash -> set of turns it depends on (dependencies).
-    dependencies: HashMap<[u8; 32], HashSet<[u8; 32]>>,
-    /// All turn hashes in the DAG.
-    all_turns: HashSet<[u8; 32]>,
-    /// The current frontier: turns that have no successors yet.
-    frontier: HashSet<[u8; 32]>,
-}
-
-impl CausalDag {
-    /// Create a new empty causal DAG.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Insert a turn into the DAG with its causal dependencies.
-    ///
-    /// Returns an error if:
-    /// - The turn already exists (duplicate).
-    /// - Any dependency is missing from the DAG (use `has_all_deps` to check first).
-    pub fn insert(
-        &mut self,
-        turn_hash: [u8; 32],
-        deps: &[[u8; 32]],
-    ) -> Result<(), CoordError> {
-        if self.all_turns.contains(&turn_hash) {
-            return Err(CoordError::DuplicateTurn { hash: turn_hash });
-        }
-
-        // Verify all dependencies are present.
-        for dep in deps {
-            if !self.all_turns.contains(dep) {
-                return Err(CoordError::MissingDependency {
-                    turn_hash,
-                    dep_hash: *dep,
-                });
-            }
-        }
-
-        // Insert the turn.
-        self.all_turns.insert(turn_hash);
-        self.dependencies.insert(turn_hash, deps.iter().copied().collect());
-        self.successors.entry(turn_hash).or_default();
-
-        // Register as successor of each dependency.
-        for dep in deps {
-            self.successors.entry(*dep).or_default().insert(turn_hash);
-            // Remove dep from frontier since it now has a successor.
-            self.frontier.remove(dep);
-        }
-
-        // New turn is on the frontier (no successors yet).
-        self.frontier.insert(turn_hash);
-
-        Ok(())
-    }
-
-    /// Insert a genesis turn (no dependencies required).
-    pub fn insert_genesis(&mut self, turn_hash: [u8; 32]) -> Result<(), CoordError> {
-        self.insert(turn_hash, &[])
-    }
-
-    /// Check if all dependencies for a turn are present in the DAG.
-    pub fn has_all_deps(&self, deps: &[[u8; 32]]) -> bool {
-        deps.iter().all(|d| self.all_turns.contains(d))
-    }
-
-
-    /// Get the missing dependencies for a set of required deps.
-    pub fn missing_deps(&self, deps: &[[u8; 32]]) -> Vec<[u8; 32]> {
-        deps.iter()
-            .filter(|d| !self.all_turns.contains(*d))
-            .copied()
-            .collect()
-    }
-
-    /// Check if `ancestor` happened before `descendant` (ancestor is reachable from descendant
-    /// by following dependency edges backward).
-    pub fn happened_before(&self, ancestor: &[u8; 32], descendant: &[u8; 32]) -> bool {
-        if ancestor == descendant {
-            return false; // A turn does not happen before itself.
-        }
-        if !self.all_turns.contains(ancestor) || !self.all_turns.contains(descendant) {
-            return false;
-        }
-
-        // BFS backward from descendant through dependencies.
-        let mut visited = HashSet::new();
-        let mut queue = VecDeque::new();
-        queue.push_back(*descendant);
-        visited.insert(*descendant);
-
-        while let Some(current) = queue.pop_front() {
-            if let Some(deps) = self.dependencies.get(&current) {
-                for dep in deps {
-                    if dep == ancestor {
-                        return true;
-                    }
-                    if visited.insert(*dep) {
-                        queue.push_back(*dep);
-                    }
-                }
-            }
-        }
-
-        false
-    }
-
-    /// Check if two turns are concurrent (neither happened before the other).
-    pub fn are_concurrent(&self, a: &[u8; 32], b: &[u8; 32]) -> bool {
-        if a == b {
-            return false;
-        }
-        !self.happened_before(a, b) && !self.happened_before(b, a)
-    }
-
-    /// Get the current causal frontier: turns with no successors.
-    pub fn frontier(&self) -> Vec<[u8; 32]> {
-        self.frontier.iter().copied().collect()
-    }
-
-    /// Get all direct dependencies of a turn.
-    pub fn deps_of(&self, turn_hash: &[u8; 32]) -> Option<&HashSet<[u8; 32]>> {
-        self.dependencies.get(turn_hash)
-    }
-
-    /// Get all direct successors of a turn.
-    pub fn successors_of(&self, turn_hash: &[u8; 32]) -> Option<&HashSet<[u8; 32]>> {
-        self.successors.get(turn_hash)
-    }
-
-    /// Number of turns in the DAG.
-    pub fn len(&self) -> usize {
-        self.all_turns.len()
-    }
-
-    /// Whether the DAG is empty.
-    pub fn is_empty(&self) -> bool {
-        self.all_turns.is_empty()
-    }
-
-    /// Whether a turn exists in the DAG.
-    pub fn contains(&self, turn_hash: &[u8; 32]) -> bool {
-        self.all_turns.contains(turn_hash)
-    }
-
-    /// Get the causal depth of a turn (longest path from any genesis turn to this one).
-    pub fn depth(&self, turn_hash: &[u8; 32]) -> Option<usize> {
-        if !self.all_turns.contains(turn_hash) {
-            return None;
-        }
-
-        let mut max_depth = 0;
-        let mut stack: Vec<([u8; 32], usize)> = vec![(*turn_hash, 0)];
-        let mut visited = HashSet::new();
-
-        while let Some((current, depth)) = stack.pop() {
-            if !visited.insert(current) {
-                continue;
-            }
-            if let Some(deps) = self.dependencies.get(&current) {
-                if deps.is_empty() {
-                    max_depth = max_depth.max(depth);
-                } else {
-                    for dep in deps {
-                        stack.push((*dep, depth + 1));
-                    }
-                }
-            } else {
-                max_depth = max_depth.max(depth);
-            }
-        }
-
-        Some(max_depth)
-    }
-
-    /// Get all turns in causal (topological) order.
-    /// Returns turns such that if T1 happened before T2, T1 appears first.
-    pub fn topological_order(&self) -> Vec<[u8; 32]> {
-        let mut in_degree: HashMap<[u8; 32], usize> = HashMap::new();
-        for turn in &self.all_turns {
-            in_degree.entry(*turn).or_insert(0);
-            if let Some(succs) = self.successors.get(turn) {
-                for succ in succs {
-                    *in_degree.entry(*succ).or_insert(0) += 1;
-                }
-            }
-        }
-
-        // Note: we're treating "dependencies" as incoming edges.
-        // A turn with no deps has in_degree 0 in the dependency sense.
-        let mut in_deg: HashMap<[u8; 32], usize> = HashMap::new();
-        for turn in &self.all_turns {
-            let dep_count = self
-                .dependencies
-                .get(turn)
-                .map(|d| d.len())
-                .unwrap_or(0);
-            in_deg.insert(*turn, dep_count);
-        }
-
-        let mut queue: VecDeque<[u8; 32]> = VecDeque::new();
-        for (turn, &deg) in &in_deg {
-            if deg == 0 {
-                queue.push_back(*turn);
-            }
-        }
-
-        let mut result = Vec::with_capacity(self.all_turns.len());
-        while let Some(turn) = queue.pop_front() {
-            result.push(turn);
-            if let Some(succs) = self.successors.get(&turn) {
-                for succ in succs {
-                    if let Some(deg) = in_deg.get_mut(succ) {
-                        *deg -= 1;
-                        if *deg == 0 {
-                            queue.push_back(*succ);
-                        }
-                    }
-                }
-            }
-        }
-
-        result
     }
 }
 

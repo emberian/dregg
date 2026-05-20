@@ -4,8 +4,15 @@
 //! across all peers, respecting causal dependencies (happened-before relations).
 //! Each turn declares which previous turns it causally depends on (its "deps"),
 //! forming a directed acyclic graph.
+//!
+//! This module layers domain-specific entry storage (`DagEntry`) on top of the
+//! shared `pyana_types::CausalDag` graph structure.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
+
+// Re-export the shared CausalDag and CausalError from pyana-types.
+pub use pyana_types::causal::hex_short;
+pub use pyana_types::{CausalDag as DagGraph, CausalError};
 
 /// A single entry in the causal DAG, representing one turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,47 +29,10 @@ pub struct DagEntry {
     pub node_id: [u8; 32],
 }
 
-/// Errors from causal DAG operations.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CausalError {
-    /// The entry has a dependency that is not yet in the DAG.
-    MissingDeps(Vec<[u8; 32]>),
-    /// A turn with this hash already exists.
-    Duplicate([u8; 32]),
-    /// Detected a cycle (should be impossible with proper hashing, but checked).
-    Cycle,
-    /// The turn hash does not match the claimed hash.
-    HashMismatch {
-        claimed: [u8; 32],
-        computed: [u8; 32],
-    },
-}
-
-impl std::fmt::Display for CausalError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            CausalError::MissingDeps(deps) => {
-                write!(f, "missing {} causal dependencies", deps.len())
-            }
-            CausalError::Duplicate(h) => {
-                write!(f, "duplicate turn: {}", hex_short(h))
-            }
-            CausalError::Cycle => write!(f, "causal cycle detected"),
-            CausalError::HashMismatch { claimed, computed } => {
-                write!(
-                    f,
-                    "hash mismatch: claimed {} != computed {}",
-                    hex_short(claimed),
-                    hex_short(computed)
-                )
-            }
-        }
-    }
-}
-
-impl std::error::Error for CausalError {}
-
 /// The causal DAG tracks turns and their happened-before relationships.
+///
+/// Wraps the shared `pyana_types::CausalDag` graph with per-entry metadata
+/// storage needed by the gossip network layer.
 ///
 /// Invariants:
 /// - Every entry's deps must be present in the DAG before (or at) insertion time.
@@ -70,21 +40,18 @@ impl std::error::Error for CausalError {}
 /// - The graph is always a DAG (no cycles).
 #[derive(Debug, Clone)]
 pub struct CausalDag {
-    /// All turns indexed by their hash.
+    /// The underlying graph structure (shared with pyana-coord).
+    graph: DagGraph,
+    /// All turns indexed by their hash (entry metadata).
     turns: HashMap<[u8; 32], DagEntry>,
-    /// Reverse index: for each turn, which turns depend on it.
-    dependents: HashMap<[u8; 32], HashSet<[u8; 32]>>,
-    /// Set of turns that have no dependents (the "frontier" or "latest" set).
-    frontier: HashSet<[u8; 32]>,
 }
 
 impl CausalDag {
     /// Create a new empty causal DAG.
     pub fn new() -> Self {
         Self {
+            graph: DagGraph::new(),
             turns: HashMap::new(),
-            dependents: HashMap::new(),
-            frontier: HashSet::new(),
         }
     }
 
@@ -93,38 +60,9 @@ impl CausalDag {
     /// Fails if:
     /// - Any dependency is missing (use `missing_deps` to check first).
     /// - The turn hash is already present.
-    /// - Optionally verifies the hash matches `blake3(turn_data)`.
     pub fn insert(&mut self, entry: DagEntry) -> Result<(), CausalError> {
-        // Check for duplicate
-        if self.turns.contains_key(&entry.turn_hash) {
-            return Err(CausalError::Duplicate(entry.turn_hash));
-        }
-
-        // Check all deps are present
-        let missing = self.missing_deps(&entry);
-        if !missing.is_empty() {
-            return Err(CausalError::MissingDeps(missing));
-        }
-
-        let hash = entry.turn_hash;
-
-        // Update dependents index: each dep now has us as a dependent
-        for dep in &entry.deps {
-            self.dependents
-                .entry(*dep)
-                .or_default()
-                .insert(hash);
-            // This dep is no longer in the frontier (it has a dependent now)
-            self.frontier.remove(dep);
-        }
-
-        // The new entry starts as a frontier node (no dependents yet)
-        self.frontier.insert(hash);
-        self.dependents.entry(hash).or_default();
-
-        // Store the entry
-        self.turns.insert(hash, entry);
-
+        self.graph.insert(entry.turn_hash, &entry.deps)?;
+        self.turns.insert(entry.turn_hash, entry);
         Ok(())
     }
 
@@ -132,84 +70,29 @@ impl CausalDag {
     /// If all deps are present, inserts and returns Ok(None).
     /// If deps are missing, returns Ok(Some(missing_deps)) without inserting.
     pub fn try_insert(&mut self, entry: DagEntry) -> Result<Option<Vec<[u8; 32]>>, CausalError> {
-        if self.turns.contains_key(&entry.turn_hash) {
-            return Err(CausalError::Duplicate(entry.turn_hash));
-        }
-        let missing = self.missing_deps(&entry);
-        if missing.is_empty() {
-            self.insert(entry)?;
-            Ok(None)
-        } else {
-            Ok(Some(missing))
+        match self.graph.try_insert(entry.turn_hash, &entry.deps)? {
+            None => {
+                self.turns.insert(entry.turn_hash, entry);
+                Ok(None)
+            }
+            Some(missing) => Ok(Some(missing)),
         }
     }
 
     /// Check whether an entry's causal dependencies are all present.
     pub fn is_causally_valid(&self, entry: &DagEntry) -> bool {
-        entry.deps.iter().all(|dep| self.turns.contains_key(dep))
+        self.graph.has_all_deps(&entry.deps)
     }
 
     /// Return the list of missing dependencies for an entry.
     pub fn missing_deps(&self, entry: &DagEntry) -> Vec<[u8; 32]> {
-        entry
-            .deps
-            .iter()
-            .filter(|dep| !self.turns.contains_key(*dep))
-            .copied()
-            .collect()
+        self.graph.missing_deps(&entry.deps)
     }
 
     /// Return a topological ordering of all entries (respecting happened-before).
-    /// Uses Kahn's algorithm.
     pub fn causal_order(&self) -> Vec<&DagEntry> {
-        if self.turns.is_empty() {
-            return Vec::new();
-        }
-
-        // Count in-degree (number of deps each node has that are IN the dag)
-        let mut in_degree: HashMap<[u8; 32], usize> = HashMap::new();
-        for (hash, entry) in &self.turns {
-            in_degree.entry(*hash).or_insert(0);
-            // Each dep that exists in our dag contributes to in-degree
-            // Actually, in-degree = number of deps (all should be present)
-            *in_degree.entry(*hash).or_insert(0) = entry.deps.len();
-        }
-
-        // Start with nodes that have zero in-degree (no deps, i.e., genesis turns)
-        let mut queue: VecDeque<[u8; 32]> = in_degree
-            .iter()
-            .filter(|&(_, deg)| *deg == 0)
-            .map(|(&hash, _)| hash)
-            .collect();
-
-        // Sort the initial queue for determinism
-        let mut sorted_queue: Vec<[u8; 32]> = queue.drain(..).collect();
-        sorted_queue.sort();
-        queue.extend(sorted_queue);
-
-        let mut result = Vec::with_capacity(self.turns.len());
-
-        while let Some(hash) = queue.pop_front() {
-            result.push(hash);
-            // For each turn that depends on `hash`, decrement its in-degree
-            if let Some(deps_of) = self.dependents.get(&hash) {
-                let mut next: Vec<[u8; 32]> = Vec::new();
-                for &dependent in deps_of {
-                    if let Some(deg) = in_degree.get_mut(&dependent) {
-                        *deg -= 1;
-                        if *deg == 0 {
-                            next.push(dependent);
-                        }
-                    }
-                }
-                // Sort for determinism
-                next.sort();
-                queue.extend(next);
-            }
-        }
-
-        // Map hashes back to entries
-        result
+        self.graph
+            .topological_order()
             .iter()
             .filter_map(|h| self.turns.get(h))
             .collect()
@@ -217,7 +100,8 @@ impl CausalDag {
 
     /// Get the frontier: entries with no dependents (the "latest" set).
     pub fn latest(&self) -> Vec<&DagEntry> {
-        self.frontier
+        self.graph
+            .frontier()
             .iter()
             .filter_map(|h| self.turns.get(h))
             .collect()
@@ -226,14 +110,7 @@ impl CausalDag {
     /// Compute a deterministic hash of the current frontier.
     /// This can be used to compare DAG states between peers.
     pub fn merge_frontier(&self) -> [u8; 32] {
-        let mut frontier_hashes: Vec<[u8; 32]> = self.frontier.iter().copied().collect();
-        frontier_hashes.sort();
-
-        let mut hasher = blake3::Hasher::new();
-        for h in &frontier_hashes {
-            hasher.update(h);
-        }
-        *hasher.finalize().as_bytes()
+        self.graph.merge_frontier()
     }
 
     /// Get a turn by its hash.
@@ -243,62 +120,54 @@ impl CausalDag {
 
     /// Check if the DAG contains a turn with the given hash.
     pub fn contains(&self, hash: &[u8; 32]) -> bool {
-        self.turns.contains_key(hash)
+        self.graph.contains(hash)
     }
 
     /// Get the number of turns in the DAG.
     pub fn len(&self) -> usize {
-        self.turns.len()
+        self.graph.len()
     }
 
     /// Check if the DAG is empty.
     pub fn is_empty(&self) -> bool {
-        self.turns.is_empty()
+        self.graph.is_empty()
     }
 
     /// Get all turns that transitively depend on the given turn (descendants).
     pub fn descendants(&self, hash: &[u8; 32]) -> HashSet<[u8; 32]> {
-        let mut result = HashSet::new();
-        let mut queue = VecDeque::new();
-        queue.push_back(*hash);
-
-        while let Some(current) = queue.pop_front() {
-            if let Some(deps) = self.dependents.get(&current) {
-                for &dep in deps {
-                    if result.insert(dep) {
-                        queue.push_back(dep);
-                    }
-                }
-            }
-        }
-
-        result
+        self.graph.descendants(hash)
     }
 
     /// Get all turns that this turn transitively depends on (ancestors).
     pub fn ancestors(&self, hash: &[u8; 32]) -> HashSet<[u8; 32]> {
-        let mut result = HashSet::new();
-        let mut queue = VecDeque::new();
-        queue.push_back(*hash);
+        self.graph.ancestors(hash)
+    }
 
-        while let Some(current) = queue.pop_front() {
-            if let Some(entry) = self.turns.get(&current) {
-                for &dep in &entry.deps {
-                    if result.insert(dep) {
-                        queue.push_back(dep);
-                    }
-                }
-            }
-        }
+    /// Check if `ancestor` happened before `descendant`.
+    pub fn happened_before(&self, ancestor: &[u8; 32], descendant: &[u8; 32]) -> bool {
+        self.graph.happened_before(ancestor, descendant)
+    }
 
-        result
+    /// Check if two turns are concurrent (neither happened before the other).
+    pub fn are_concurrent(&self, a: &[u8; 32], b: &[u8; 32]) -> bool {
+        self.graph.are_concurrent(a, b)
+    }
+
+    /// Get the causal depth of a turn.
+    pub fn depth(&self, hash: &[u8; 32]) -> Option<usize> {
+        self.graph.depth(hash)
+    }
+
+    /// Access the underlying graph structure.
+    pub fn graph(&self) -> &DagGraph {
+        &self.graph
     }
 
     /// Verify that a turn's hash matches blake3(turn_data).
-    pub fn verify_hash(entry: &DagEntry) -> Result<(), CausalError> {
+    pub fn verify_hash(entry: &DagEntry) -> Result<(), HashMismatch> {
         let computed = *blake3::hash(&entry.turn_data).as_bytes();
         if computed != entry.turn_hash {
-            return Err(CausalError::HashMismatch {
+            return Err(HashMismatch {
                 claimed: entry.turn_hash,
                 computed,
             });
@@ -313,18 +182,25 @@ impl Default for CausalDag {
     }
 }
 
-/// Format a hash in short hex for display.
-pub fn hex_short(h: &[u8; 32]) -> String {
-    let full = hex::encode(h);
-    format!("{}..{}", &full[..6], &full[full.len() - 6..])
+/// Hash verification error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HashMismatch {
+    pub claimed: [u8; 32],
+    pub computed: [u8; 32],
 }
 
-/// Simple hex encoding (no external dep needed beyond what we have).
-mod hex {
-    pub fn encode(data: &[u8]) -> String {
-        data.iter().map(|b| format!("{b:02x}")).collect()
+impl std::fmt::Display for HashMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "hash mismatch: claimed {} != computed {}",
+            hex_short(&self.claimed),
+            hex_short(&self.computed)
+        )
     }
 }
+
+impl std::error::Error for HashMismatch {}
 
 #[cfg(test)]
 mod tests {
@@ -424,7 +300,7 @@ mod tests {
         let t = make_turn(b"orphan", vec![fake_dep], 1);
 
         let result = dag.insert(t);
-        assert!(matches!(result, Err(CausalError::MissingDeps(_))));
+        assert!(matches!(result, Err(CausalError::MissingDeps { .. })));
     }
 
     #[test]
@@ -444,10 +320,7 @@ mod tests {
 
         let mut bad = t.clone();
         bad.turn_hash = [0xff; 32];
-        assert!(matches!(
-            CausalDag::verify_hash(&bad),
-            Err(CausalError::HashMismatch { .. })
-        ));
+        assert!(CausalDag::verify_hash(&bad).is_err());
     }
 
     #[test]
@@ -509,5 +382,22 @@ mod tests {
         let result = dag.try_insert(t2).unwrap();
         assert_eq!(result, None);
         assert_eq!(dag.len(), 2);
+    }
+
+    #[test]
+    fn happened_before_and_concurrent() {
+        let mut dag = CausalDag::new();
+        let t1 = make_turn(b"t1", vec![], 1);
+        let t2 = make_turn(b"t2", vec![t1.turn_hash], 1);
+        let t3 = make_turn(b"t3", vec![t1.turn_hash], 2);
+
+        dag.insert(t1.clone()).unwrap();
+        dag.insert(t2.clone()).unwrap();
+        dag.insert(t3.clone()).unwrap();
+
+        assert!(dag.happened_before(&t1.turn_hash, &t2.turn_hash));
+        assert!(dag.happened_before(&t1.turn_hash, &t3.turn_hash));
+        assert!(!dag.happened_before(&t2.turn_hash, &t3.turn_hash));
+        assert!(dag.are_concurrent(&t2.turn_hash, &t3.turn_hash));
     }
 }

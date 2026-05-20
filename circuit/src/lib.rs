@@ -79,6 +79,14 @@ pub mod ivc;
 
 pub mod stark;
 
+#[cfg(feature = "plonky3")]
+pub mod plonky3_prover;
+
+#[cfg(feature = "plonky3")]
+pub mod plonky3_recursion;
+
+pub mod backends;
+
 #[cfg(test)]
 mod tests;
 

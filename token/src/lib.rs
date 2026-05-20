@@ -21,6 +21,7 @@
 //!
 //! Use [`TokenFormat::detect`] to auto-detect from an encoded string.
 
+pub mod action_set;
 pub mod pyana;
 pub mod error;
 pub mod format;
@@ -36,7 +37,14 @@ pub mod pyana_caveats;
 #[cfg(feature = "macaroon")]
 pub mod macaroon_backend;
 
+#[cfg(all(feature = "macaroon", feature = "datalog"))]
+pub mod factset;
+
+#[cfg(all(feature = "macaroon", feature = "datalog"))]
+pub mod datalog_verify;
+
 // Re-export primary types.
+pub use action_set::{ActionId, ActionSet};
 pub use error::TokenError;
 pub use format::TokenFormat;
 pub use revocation::RevocationFilter;

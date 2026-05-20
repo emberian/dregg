@@ -55,6 +55,9 @@ pub mod connection;
 pub mod message;
 pub mod server;
 
+#[cfg(feature = "federation")]
+pub mod federation_bridge;
+
 /// Convenience re-exports for common usage.
 pub mod prelude {
     pub use crate::codec::{CodecError, FrameStats, MAX_MESSAGE_SIZE};

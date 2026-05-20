@@ -108,7 +108,7 @@ pub enum PyanaGrant {
     include: Vec<String>,
     exclude: Vec<String>,
   },
-  /// Budget enrollment (passthrough locally; enforced by counter service).
+  /// Budget enrollment (locally enforced when budget state is provided).
   Budget {
     id: String,
     parent_id: Option<String>,
@@ -116,7 +116,7 @@ pub enum PyanaGrant {
     limit: u64,
     window: Option<String>,
   },
-  /// Revocable marker (passthrough locally; checked by revocation mesh).
+  /// Revocable marker (locally enforced when revocation state is provided).
   Revocable(String),
   /// Unrecognized caveat type — preserved but not enforced.
   Unknown(CaveatType, Vec<u8>),
@@ -126,7 +126,7 @@ pub enum PyanaGrant {
 // Encoding helpers (MsgPack via rmp-serde)
 // ============================================================================
 
-fn encode_name_actions(name: &str, actions: &str) -> Vec<u8> {
+pub(crate) fn encode_name_actions(name: &str, actions: &str) -> Vec<u8> {
   rmp_serde::to_vec(&(name, actions)).expect("msgpack encode of fixed-schema tuple cannot fail")
 }
 
@@ -135,7 +135,7 @@ fn decode_name_actions(body: &[u8]) -> Result<(String, String), TokenError> {
     .map_err(|e| TokenError::Malformed(format!("caveat body decode: {e}")))
 }
 
-fn encode_string(s: &str) -> Vec<u8> {
+pub(crate) fn encode_string(s: &str) -> Vec<u8> {
   rmp_serde::to_vec(s).expect("msgpack encode should not fail")
 }
 
@@ -153,7 +153,7 @@ fn decode_u64(body: &[u8]) -> Result<u64, TokenError> {
     .map_err(|e| TokenError::Malformed(format!("caveat body decode: {e}")))
 }
 
-fn encode_validity_window(not_before: Option<i64>, not_after: Option<i64>) -> Vec<u8> {
+pub(crate) fn encode_validity_window(not_before: Option<i64>, not_after: Option<i64>) -> Vec<u8> {
   rmp_serde::to_vec(&(not_before, not_after)).expect("msgpack encode should not fail")
 }
 
@@ -162,7 +162,7 @@ fn decode_validity_window(body: &[u8]) -> Result<(Option<i64>, Option<i64>), Tok
     .map_err(|e| TokenError::Malformed(format!("caveat body decode: {e}")))
 }
 
-fn encode_feature_glob(include: &[String], exclude: &[String]) -> Vec<u8> {
+pub(crate) fn encode_feature_glob(include: &[String], exclude: &[String]) -> Vec<u8> {
   rmp_serde::to_vec(&(include, exclude)).expect("msgpack encode should not fail")
 }
 
@@ -337,6 +337,7 @@ pub fn attenuation_to_wire_caveats(att: &Attenuation) -> Vec<WireCaveat> {
 /// actually permits the requested access.
 ///
 /// Result of caveat verification, containing both capabilities and metadata.
+#[derive(Debug)]
 pub struct CaveatVerifyResult {
   /// Effective capabilities after verification.
   pub capabilities: Vec<Capability>,
@@ -347,6 +348,16 @@ pub struct CaveatVerifyResult {
 }
 
 /// Returns the effective capabilities and token metadata on success.
+///
+/// # Deprecation
+///
+/// This function uses imperative string-matching logic that is NOT the canonical
+/// semantics. Use [`crate::datalog_verify::verify_token_datalog_full`] instead,
+/// which evaluates via Datalog (the ground truth for both trusted and trustless modes).
+#[deprecated(
+  since = "0.1.0",
+  note = "Use datalog_verify::verify_token_datalog_full for canonical Datalog semantics"
+)]
 pub fn verify_caveats(
   caveat_set: &CaveatSet,
   request: &AuthRequest,
@@ -363,6 +374,8 @@ pub fn verify_caveats(
   let mut machines: Vec<String> = Vec::new();
   let mut commands: Vec<String> = Vec::new();
   let mut feature_globs: Vec<(Vec<String>, Vec<String>)> = Vec::new();
+  let mut budgets: Vec<(String, u64)> = Vec::new(); // (budget_id, limit)
+  let mut revocable_ids: Vec<String> = Vec::new();
 
   for wc in caveat_set.first_party_caveats() {
     match decode_grant(wc)? {
@@ -382,8 +395,8 @@ pub fn verify_caveats(
       PyanaGrant::FromMachine(mid) => machines.push(mid),
       PyanaGrant::Command(cmd) => commands.push(cmd),
       PyanaGrant::FeatureGlob { include, exclude } => feature_globs.push((include, exclude)),
-      // Budget and Revocable are passthrough — enforced by external services.
-      PyanaGrant::Budget { .. } | PyanaGrant::Revocable(_) => {}
+      PyanaGrant::Budget { id, limit, .. } => budgets.push((id, limit)),
+      PyanaGrant::Revocable(token_id) => revocable_ids.push(token_id),
       PyanaGrant::Unknown(_, _) => {}
     }
   }
@@ -565,6 +578,51 @@ pub fn verify_caveats(
             )));
           }
         }
+      }
+    }
+  }
+
+  // --- Budget enforcement: locally verified, not passthrough ---
+  if !budgets.is_empty() {
+    if request.budget_states.is_empty() {
+      return Err(TokenError::Denied(
+        "budget state required for verification: token has budget caveats but no budget state was provided".into(),
+      ));
+    }
+    let request_cost = request.request_cost.unwrap_or(1);
+    for (budget_id, _limit) in &budgets {
+      match request.budget_states.get(budget_id) {
+        Some(&remaining) => {
+          if remaining < request_cost {
+            return Err(TokenError::Denied(format!(
+              "budget '{}' exhausted: {} remaining, {} required",
+              budget_id, remaining, request_cost
+            )));
+          }
+        }
+        None => {
+          return Err(TokenError::Denied(format!(
+            "budget state required for budget '{}' but not provided",
+            budget_id
+          )));
+        }
+      }
+    }
+  }
+
+  // --- Revocation enforcement: locally verified, not passthrough ---
+  if !revocable_ids.is_empty() {
+    if request.not_revoked.is_empty() {
+      return Err(TokenError::Denied(
+        "revocation state required for verification: token is revocable but no revocation proof was provided".into(),
+      ));
+    }
+    for token_id in &revocable_ids {
+      if !request.not_revoked.contains(token_id) {
+        return Err(TokenError::Denied(format!(
+          "token '{}' has been revoked or no non-revocation proof provided",
+          token_id
+        )));
       }
     }
   }
@@ -1227,8 +1285,8 @@ mod tests {
   }
 
   #[test]
-  fn test_budget_passthrough_in_verification() {
-    // Budget caveats should not block verification locally
+  fn test_budget_enforcement_allows_when_sufficient() {
+    // Budget caveat with sufficient remaining budget should ALLOW.
     let mut set = CaveatSet::new();
     set.push(WireCaveat::new(
       CAV_BUDGET,
@@ -1239,13 +1297,57 @@ mod tests {
       encode_name_actions("my-app", "rw"),
     ));
 
+    let mut budget_states = std::collections::HashMap::new();
+    budget_states.insert("agent:daily".into(), 50u64);
+
     let request = AuthRequest {
       app_id: Some("my-app".into()),
       action: Some("r".into()),
       now: Some(1700000000),
+      budget_states,
+      request_cost: Some(10),
       ..Default::default()
     };
     assert!(verify_caveats(&set, &request).is_ok());
+  }
+
+  #[test]
+  fn test_budget_enforcement_denies_when_exhausted() {
+    // Budget caveat with insufficient remaining budget should DENY.
+    let mut set = CaveatSet::new();
+    set.push(WireCaveat::new(
+      CAV_BUDGET,
+      encode_budget("agent:daily", None, "api_calls", 100, Some("1d")),
+    ));
+
+    let mut budget_states = std::collections::HashMap::new();
+    budget_states.insert("agent:daily".into(), 5u64);
+
+    let request = AuthRequest {
+      now: Some(1700000000),
+      budget_states,
+      request_cost: Some(10),
+      ..Default::default()
+    };
+    let err = verify_caveats(&set, &request).unwrap_err();
+    assert!(format!("{err}").contains("exhausted"));
+  }
+
+  #[test]
+  fn test_budget_enforcement_requires_state() {
+    // Budget caveat without budget_states should ERROR.
+    let mut set = CaveatSet::new();
+    set.push(WireCaveat::new(
+      CAV_BUDGET,
+      encode_budget("agent:daily", None, "api_calls", 500, Some("1d")),
+    ));
+
+    let request = AuthRequest {
+      now: Some(1700000000),
+      ..Default::default()
+    };
+    let err = verify_caveats(&set, &request).unwrap_err();
+    assert!(format!("{err}").contains("budget state required"));
   }
 
   // --- Revocable tests ---
@@ -1261,18 +1363,58 @@ mod tests {
   }
 
   #[test]
-  fn test_revocable_passthrough_in_verification() {
+  fn test_revocable_enforcement_allows_when_not_revoked() {
     let mut set = CaveatSet::new();
     set.push(WireCaveat::new(
       CAV_REVOCABLE,
-      encode_string("revoke.pyana.dev"),
+      encode_string("token-id-abc"),
+    ));
+
+    let mut not_revoked = std::collections::HashSet::new();
+    not_revoked.insert("token-id-abc".into());
+
+    let request = AuthRequest {
+      now: Some(1700000000),
+      not_revoked,
+      ..Default::default()
+    };
+    assert!(verify_caveats(&set, &request).is_ok());
+  }
+
+  #[test]
+  fn test_revocable_enforcement_denies_when_no_proof() {
+    let mut set = CaveatSet::new();
+    set.push(WireCaveat::new(
+      CAV_REVOCABLE,
+      encode_string("token-id-abc"),
     ));
 
     let request = AuthRequest {
       now: Some(1700000000),
       ..Default::default()
     };
-    assert!(verify_caveats(&set, &request).is_ok());
+    let err = verify_caveats(&set, &request).unwrap_err();
+    assert!(format!("{err}").contains("revocation state required"));
+  }
+
+  #[test]
+  fn test_revocable_enforcement_denies_wrong_token_id() {
+    let mut set = CaveatSet::new();
+    set.push(WireCaveat::new(
+      CAV_REVOCABLE,
+      encode_string("token-id-abc"),
+    ));
+
+    let mut not_revoked = std::collections::HashSet::new();
+    not_revoked.insert("token-id-xyz".into());
+
+    let request = AuthRequest {
+      now: Some(1700000000),
+      not_revoked,
+      ..Default::default()
+    };
+    let err = verify_caveats(&set, &request).unwrap_err();
+    assert!(format!("{err}").contains("revoked"));
   }
 
   // --- Attenuation with new types ---

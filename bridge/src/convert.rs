@@ -4,6 +4,13 @@
 //! [`FactSet`] suitable for Merkle commitment. Each caveat/fact is mapped to
 //! one or more `Fact` entries (predicate + up to 3 terms as field elements).
 //!
+//! # Canonical Implementation
+//!
+//! The canonical fact encoding now lives in `pyana_token::factset`. This module
+//! re-exports and delegates to that implementation. The encoding is part of the
+//! token semantics (it defines what a token MEANS in Datalog), so it belongs
+//! with the token crate.
+//!
 //! # Mapping Strategy
 //!
 //! Macaroon caveats map to facts as follows:
@@ -30,6 +37,12 @@
 use pyana_commit::{Fact, FactSet, FieldElement, SymbolTable};
 use pyana_token::{Attenuation, AuthToken, MacaroonToken};
 use pyana_token::pyana_caveats::{self, PyanaGrant};
+
+// Re-export the canonical implementations from token::factset.
+// The bridge delegates to the token crate for fact encoding since
+// Datalog is now the sole canonical evaluator and the encoding defines
+// what tokens MEAN.
+pub use pyana_token::factset::grant_to_facts as canonical_grant_to_facts;
 
 /// Convert a MacaroonToken's caveats into a `FactSet` and `SymbolTable`.
 ///
@@ -207,6 +220,117 @@ pub fn attenuation_to_facts(
     facts
 }
 
+// ============================================================================
+// Secure action-set conversion (hash-based, no substring vulnerability)
+// ============================================================================
+
+/// Convert a MacaroonToken's caveats into a `FactSet` using secure hash-based
+/// action membership instead of string-based Contains matching.
+///
+/// Instead of emitting `app(id, "rw")` facts (which rely on substring matching),
+/// this function emits individual `action_allowed(app_id, action_hash)` facts
+/// for each action in the action set. The policy rules then use `MemberOf`
+/// (exact hash equality) instead of `Contains` (substring matching).
+///
+/// This eliminates the vulnerability where e.g. "threadwrite" matches "write"
+/// via substring.
+pub fn macaroon_to_factset_secure(token: &MacaroonToken) -> (FactSet, SymbolTable) {
+    let mut factset = FactSet::new();
+    let mut symbols = SymbolTable::new();
+
+    let caveats = token.inner().caveats.first_party_caveats();
+
+    if caveats.is_empty() {
+        let pred = symbols.intern("unrestricted");
+        let fact = Fact::unary(pred, FieldElement::from_u64(1));
+        factset.insert(fact);
+        return (factset, symbols);
+    }
+
+    for wc in &caveats {
+        let grant = match pyana_caveats::decode_grant(wc) {
+            Ok(g) => g,
+            Err(_) => continue,
+        };
+
+        let facts = grant_to_facts_secure(&grant, &mut symbols);
+        for fact in facts {
+            factset.insert(fact);
+        }
+    }
+
+    (factset, symbols)
+}
+
+/// Convert a grant to facts using the secure per-action-hash pattern.
+///
+/// For App and Service grants, instead of storing a single fact with a
+/// comma-separated action string, emits one `action_allowed` or
+/// `svc_action_allowed` fact per action in the set.
+pub fn grant_to_facts_secure(grant: &PyanaGrant, symbols: &mut SymbolTable) -> Vec<Fact> {
+    match grant {
+        PyanaGrant::App { id, actions } => {
+            let id_fe = symbols.intern(id);
+            // Emit one action_allowed fact per action bit in the bitmask.
+            let mut facts = Vec::new();
+            let action_names = action_to_names(actions);
+            for name in &action_names {
+                let pred = symbols.intern("action_allowed");
+                // Hash the action name the same way FieldElement::from_symbol does
+                // (BLAKE3 hash truncated to 253 bits).
+                let action_hash = FieldElement::from_symbol(name);
+                facts.push(Fact::binary(pred, id_fe, action_hash));
+            }
+            // Also emit the app predicate for app-matching (without actions string).
+            let app_pred = symbols.intern("app_registered");
+            facts.push(Fact::unary(app_pred, id_fe));
+            facts
+        }
+
+        PyanaGrant::Service { name, actions } => {
+            let name_fe = symbols.intern(name);
+            let mut facts = Vec::new();
+            let action_names = action_to_names(actions);
+            for action_name in &action_names {
+                let pred = symbols.intern("svc_action_allowed");
+                let action_hash = FieldElement::from_symbol(action_name);
+                facts.push(Fact::binary(pred, name_fe, action_hash));
+            }
+            let svc_pred = symbols.intern("svc_registered");
+            facts.push(Fact::unary(svc_pred, name_fe));
+            facts
+        }
+
+        // All other grant types use the same conversion as before.
+        other => grant_to_facts(other, symbols),
+    }
+}
+
+/// Convert an `Action` bitmask to a list of human-readable action names.
+///
+/// This bridges the compact bitmask representation (used in macaroons) to
+/// the named-action representation (used in the secure hash-based policy).
+fn action_to_names(action: &pyana_macaroon::action::Action) -> Vec<String> {
+    use pyana_macaroon::action::Action;
+    let mut names = Vec::new();
+    if action.contains(Action::READ) {
+        names.push("read".to_string());
+    }
+    if action.contains(Action::WRITE) {
+        names.push("write".to_string());
+    }
+    if action.contains(Action::CREATE) {
+        names.push("create".to_string());
+    }
+    if action.contains(Action::DELETE) {
+        names.push("delete".to_string());
+    }
+    if action.contains(Action::CONTROL) {
+        names.push("control".to_string());
+    }
+    names
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,5 +477,144 @@ mod tests {
             facts[1].predicate,
             FieldElement::from_symbol("feature_glob_exclude")
         );
+    }
+
+    // ======================================================================
+    // Secure (hash-based) conversion tests
+    // ======================================================================
+
+    #[test]
+    fn test_secure_app_grant_emits_per_action_facts() {
+        use pyana_macaroon::action::Action;
+        let mut symbols = SymbolTable::new();
+        let grant = PyanaGrant::App {
+            id: "my-app".into(),
+            actions: Action::READ.union(Action::WRITE),
+        };
+        let facts = grant_to_facts_secure(&grant, &mut symbols);
+
+        // Should have: 2 action_allowed facts + 1 app_registered fact = 3
+        assert_eq!(facts.len(), 3);
+
+        let action_allowed_pred = FieldElement::from_symbol("action_allowed");
+        let app_registered_pred = FieldElement::from_symbol("app_registered");
+
+        let action_facts: Vec<_> = facts.iter().filter(|f| f.predicate == action_allowed_pred).collect();
+        let app_facts: Vec<_> = facts.iter().filter(|f| f.predicate == app_registered_pred).collect();
+
+        assert_eq!(action_facts.len(), 2);
+        assert_eq!(app_facts.len(), 1);
+
+        // Both action facts should have the same app_id as first term.
+        let app_id_fe = FieldElement::from_symbol("my-app");
+        for fact in &action_facts {
+            assert_eq!(fact.terms[0], app_id_fe);
+        }
+
+        // The action hashes should be different (read != write).
+        assert_ne!(action_facts[0].terms[1], action_facts[1].terms[1]);
+
+        // The action hashes should match FieldElement::from_symbol("read") and from_symbol("write").
+        let read_hash = FieldElement::from_symbol("read");
+        let write_hash = FieldElement::from_symbol("write");
+        let action_hashes: Vec<_> = action_facts.iter().map(|f| f.terms[1]).collect();
+        assert!(action_hashes.contains(&read_hash));
+        assert!(action_hashes.contains(&write_hash));
+    }
+
+    #[test]
+    fn test_secure_service_grant_emits_per_action_facts() {
+        use pyana_macaroon::action::Action;
+        let mut symbols = SymbolTable::new();
+        let grant = PyanaGrant::Service {
+            name: "http".into(),
+            actions: Action::READ.union(Action::WRITE).union(Action::DELETE),
+        };
+        let facts = grant_to_facts_secure(&grant, &mut symbols);
+
+        // Should have: 3 svc_action_allowed facts + 1 svc_registered fact = 4
+        assert_eq!(facts.len(), 4);
+
+        let svc_action_pred = FieldElement::from_symbol("svc_action_allowed");
+        let svc_registered_pred = FieldElement::from_symbol("svc_registered");
+
+        let action_facts: Vec<_> = facts.iter().filter(|f| f.predicate == svc_action_pred).collect();
+        let svc_facts: Vec<_> = facts.iter().filter(|f| f.predicate == svc_registered_pred).collect();
+
+        assert_eq!(action_facts.len(), 3);
+        assert_eq!(svc_facts.len(), 1);
+    }
+
+    #[test]
+    fn test_secure_conversion_no_substring_vulnerability() {
+        use pyana_macaroon::action::Action;
+        let mut symbols = SymbolTable::new();
+        let grant = PyanaGrant::App {
+            id: "my-app".into(),
+            actions: Action::WRITE, // only write
+        };
+        let facts = grant_to_facts_secure(&grant, &mut symbols);
+
+        let action_allowed_pred = FieldElement::from_symbol("action_allowed");
+        let action_facts: Vec<_> = facts.iter().filter(|f| f.predicate == action_allowed_pred).collect();
+
+        assert_eq!(action_facts.len(), 1);
+        let write_hash = FieldElement::from_symbol("write");
+        assert_eq!(action_facts[0].terms[1], write_hash);
+
+        // "threadwrite" should NOT match — it hashes to a completely different value.
+        let threadwrite_hash = FieldElement::from_symbol("threadwrite");
+        assert_ne!(write_hash, threadwrite_hash);
+        // The fact set does not contain a fact for "threadwrite".
+        assert!(!action_facts.iter().any(|f| f.terms[1] == threadwrite_hash));
+    }
+
+    #[test]
+    fn test_secure_unrestricted_token() {
+        let key = test_key();
+        let token = MacaroonToken::mint(key, b"kid-sec", "pyana.dev");
+
+        let (factset, symbols) = macaroon_to_factset_secure(&token);
+        assert_eq!(factset.len(), 1);
+
+        let pred = FieldElement::from_symbol("unrestricted");
+        assert!(factset.iter().any(|f| f.predicate == pred));
+        assert_eq!(symbols.resolve(pred), Some("unrestricted"));
+    }
+
+    #[test]
+    fn test_secure_attenuated_token() {
+        let key = test_key();
+        let token = MacaroonToken::mint(key, b"kid-sec", "pyana.dev");
+
+        let restricted = token
+            .attenuate(&Attenuation {
+                apps: vec![("dashboard".into(), "rw".into())],
+                services: vec![("http".into(), "r".into())],
+                confine_user: Some("alice".into()),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let encoded = restricted.to_encoded().unwrap();
+        let mac_token = MacaroonToken::from_encoded(&encoded, key).unwrap();
+
+        let (factset, _symbols) = macaroon_to_factset_secure(&mac_token);
+
+        // App "rw" = 2 action_allowed facts + 1 app_registered
+        // Service "r" = 1 svc_action_allowed fact + 1 svc_registered
+        // confine_user = 1
+        // Total = 6
+        let action_allowed_pred = FieldElement::from_symbol("action_allowed");
+        let svc_action_pred = FieldElement::from_symbol("svc_action_allowed");
+        let user_pred = FieldElement::from_symbol("confine_user");
+
+        let app_actions = factset.iter().filter(|f| f.predicate == action_allowed_pred).count();
+        let svc_actions = factset.iter().filter(|f| f.predicate == svc_action_pred).count();
+        let user_facts = factset.iter().filter(|f| f.predicate == user_pred).count();
+
+        assert_eq!(app_actions, 2); // read + write
+        assert_eq!(svc_actions, 1); // read only
+        assert_eq!(user_facts, 1);
     }
 }

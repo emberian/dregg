@@ -1,0 +1,116 @@
+stingray:
+  type: article
+  title: "Stingray: Bounded Counters for BFT Payment Channels"
+  author: ["Auvolat, Alex", "Beyer, Simon", "Kuznetsov, Petr"]
+  date: 2025-01
+  serial-number: "arXiv:2501.06531"
+  url: "https://arxiv.org/abs/2501.06531"
+
+morpheus:
+  type: article
+  title: "Morpheus: Optimal-Latency BFT Under Partial Synchrony"
+  author: ["Lewis-Pye, Andrew", "Shapiro, Ehud"]
+  date: 2025
+  url: "https://arxiv.org/abs/2502.08465"
+  serial-number: "arXiv:2502.08465"
+
+macaroons:
+  type: article
+  title: "Macaroons: Cookies with Contextual Caveats for Decentralized Authorization in the Cloud"
+  author: ["Birgisson, Arnar", "Politz, Joe Gibbs", "Erlingsson, Ulfar", "Taly, Ankur", "Vrable, Michael", "Lentczner, Mark"]
+  date: 2014
+  parent:
+    type: proceedings
+    title: "Network and Distributed System Security Symposium (NDSS)"
+
+mina:
+  type: article
+  title: "Mina: Decentralized Cryptocurrency at Scale"
+  author: ["Bonneau, Joseph", "Meckler, Izaak", "Rao, Vanishree", "Shapiro, Evan"]
+  date: 2020
+  url: "https://minaprotocol.com/wp-content/uploads/technicalWhitepaper.pdf"
+
+poseidon2:
+  type: article
+  title: "Poseidon2: A Faster Version of the Poseidon Hash Function"
+  author: ["Grassi, Lorenzo", "Khovratovich, Dmitry", "Lüftenegger, Reinhard", "Rechberger, Christian", "Schofnegger, Markus", "Walch, Roman"]
+  date: 2023
+  serial-number: "IACR ePrint 2023/323"
+
+fri:
+  type: article
+  title: "Fast Reed-Solomon Interactive Oracle Proofs of Proximity"
+  author: ["Ben-Sasson, Eli", "Bentov, Iddo", "Horesh, Yinon", "Riabzev, Michael"]
+  date: 2018
+  parent:
+    type: proceedings
+    title: "International Colloquium on Automata, Languages, and Programming (ICALP)"
+
+biscuit:
+  type: web
+  title: "Biscuit: Authorization Tokens with Decentralized Verification"
+  author: ["Sonntag, Geoffroy"]
+  url: "https://www.biscuitsec.org/"
+  date: 2023
+
+bls:
+  type: article
+  title: "BLS12-381: For the Rest of Us"
+  author: ["Bowe, Sean"]
+  date: 2019
+  url: "https://hackmd.io/@benjaminion/bls12-381"
+
+ucan:
+  type: web
+  title: "UCAN: User Controlled Authorization Networks"
+  author: ["Fission"]
+  url: "https://ucan.xyz/"
+  date: 2023
+
+coconut:
+  type: article
+  title: "Coconut: Threshold Issuance Selective Disclosure Credentials with Applications to Distributed Ledgers"
+  author: ["Sonnino, Alberto", "Al-Bassam, Mustafa", "Bano, Shehar", "Meiklejohn, Sarah", "Danezis, George"]
+  date: 2019
+  parent:
+    type: proceedings
+    title: "Network and Distributed System Security Symposium (NDSS)"
+
+midnight:
+  type: web
+  title: "Midnight: A Data Protection Blockchain"
+  author: ["Input Output Global"]
+  url: "https://midnight.network/"
+  date: 2024
+
+ibc:
+  type: article
+  title: "The Interblockchain Communication Protocol: An Overview"
+  author: ["Goes, Christopher"]
+  date: 2020
+  serial-number: "arXiv:2006.15918"
+
+nova:
+  type: article
+  title: "Nova: Recursive Zero-Knowledge Arguments from Folding Schemes"
+  author: ["Kothapalli, Abhiram", "Setty, Srinath", "Tzialla, Ioanna"]
+  date: 2022
+  parent:
+    type: proceedings
+    title: "Annual International Cryptology Conference (CRYPTO)"
+
+plumtree:
+  type: article
+  title: "Epidemic Broadcast Trees"
+  author: ["Leitao, Joao", "Pereira, Jose", "Rodrigues, Luis"]
+  date: 2007
+  parent:
+    type: proceedings
+    title: "IEEE Symposium on Reliable Distributed Systems (SRDS)"
+
+babybear:
+  type: web
+  title: "The BabyBear Prime"
+  author: ["Polygon Labs"]
+  url: "https://docs.polygon.technology/miden/"
+  date: 2024

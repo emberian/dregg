@@ -83,6 +83,15 @@ pub struct AuthRequest {
   pub command: Option<String>,
   /// Current timestamp (Unix seconds). Auto-filled if None.
   pub now: Option<i64>,
+  /// Current budget states for any budget caveats on this token.
+  /// Maps budget_id to remaining units. Required when the token has Budget caveats.
+  pub budget_states: std::collections::HashMap<String, u64>,
+  /// Cost of this specific request (in budget units).
+  /// Required when the token has Budget caveats.
+  pub request_cost: Option<u64>,
+  /// Revocation non-membership proofs: set of token IDs confirmed not-revoked.
+  /// Required when the token has Revocable caveats.
+  pub not_revoked: std::collections::HashSet<String>,
 }
 
 /// Restrictions to apply when attenuating a token.

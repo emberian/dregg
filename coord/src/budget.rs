@@ -286,6 +286,25 @@ impl BudgetCoordinator {
         self.silo_states.values().map(|s| s.spent).sum()
     }
 
+    /// Get the budget state for an authorization request on a specific silo.
+    ///
+    /// Returns a map from budget_id to remaining units, suitable for populating
+    /// `AuthRequest::budget_states`. The budget_id is constructed from the agent
+    /// cell ID (hex-encoded).
+    ///
+    /// In trusted mode, this is called by the verifier before evaluating a token.
+    /// The returned state is then fed as an input fact to the Datalog evaluator.
+    pub fn budget_state_for_request(&self, silo: &SiloId) -> HashMap<String, u64> {
+        let mut states = HashMap::new();
+        if let Some(slice) = self.silo_states.get(silo) {
+            // Budget ID is the hex-encoded agent cell ID.
+            let bytes = slice.agent.as_bytes();
+            let budget_id = bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+            states.insert(budget_id, slice.remaining());
+        }
+        states
+    }
+
     /// Rebalance: process spending certificates and redistribute slices.
     ///
     /// This is the expensive coordination step that happens periodically.

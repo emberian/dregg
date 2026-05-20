@@ -12,6 +12,7 @@ description = "Two-layer turn coordination: causal chaining + atomic multi-party
 [dependencies]
 pyana-cell = { path = "../cell" }
 pyana-turn = { path = "../turn" }
+pyana-types = { path = "../types" }
 blake3 = "1"
 ed25519-dalek = { version = "2", features = ["std"] }
 serde = { version = "1", features = ["derive"] }

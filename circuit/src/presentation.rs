@@ -430,7 +430,9 @@ impl PresentationAir {
         let derivation_proof = MockProof::generate(&derivation_air)?;
 
         // 3. Prove issuer membership with REAL STARK + Poseidon2 hashing.
-        let merkle_stark_proof = generate_merkle_stark_proof(&w.issuer_membership)?;
+        //    This uses MerklePoseidon2StarkAir (collision-resistant) instead of
+        //    MerkleStarkAir (linear, trivially forgeable).
+        let merkle_stark_proof = generate_merkle_poseidon2_stark_proof(&w.issuer_membership)?;
 
         // Compute public inputs
         let initial_root = if let Some(first_fold) = w.fold_chain.first() {
@@ -680,6 +682,9 @@ impl RealPresentationProof {
     ///
     /// Uses `stark::verify()` for the issuer membership proof, and structural
     /// checks (root chain continuity) for the fold/derivation mock proofs.
+    ///
+    /// Supports both Poseidon2-based proofs (production, collision-resistant) and
+    /// legacy linear proofs. Tries Poseidon2 first; falls back to linear.
     pub fn verify(&self) -> PresentationVerification {
         // 1. Check fold chain continuity
         let mut current_root = self.public_inputs.initial_root;
@@ -708,7 +713,6 @@ impl RealPresentationProof {
         }
 
         // 4. Verify issuer membership with real STARK verifier
-        let merkle_stark_air = MerkleStarkAir;
         let issuer_public_inputs: Vec<BabyBear> = self
             .issuer_membership_stark_proof
             .public_inputs
@@ -727,8 +731,19 @@ impl RealPresentationProof {
             return PresentationVerification::IssuerNotInFederation;
         }
 
-        // Verify the STARK proof cryptographically
-        match stark::verify(&merkle_stark_air, &self.issuer_membership_stark_proof, &issuer_public_inputs) {
+        // Try Poseidon2 AIR first (production path), fall back to linear AIR (legacy).
+        use crate::poseidon2_air::MerklePoseidon2StarkAir;
+        let poseidon2_result = stark::verify(
+            &MerklePoseidon2StarkAir,
+            &self.issuer_membership_stark_proof,
+            &issuer_public_inputs,
+        );
+        if poseidon2_result.is_ok() {
+            return PresentationVerification::Valid;
+        }
+
+        // Fall back to linear AIR for backward compatibility with old proofs
+        match stark::verify(&MerkleStarkAir, &self.issuer_membership_stark_proof, &issuer_public_inputs) {
             Ok(()) => PresentationVerification::Valid,
             Err(_) => PresentationVerification::InvalidIssuerProof,
         }
@@ -844,8 +859,7 @@ pub fn create_stark_compatible_witness(leaf_hash: BabyBear, depth: usize) -> Mer
 ///
 /// This uses `MerklePoseidon2StarkAir` with real Poseidon2 hash computations,
 /// providing collision-resistant Merkle membership proofs.
-#[allow(dead_code)]
-fn generate_merkle_poseidon2_stark_proof(witness: &MerkleWitness) -> Option<StarkProof> {
+pub fn generate_merkle_poseidon2_stark_proof(witness: &MerkleWitness) -> Option<StarkProof> {
     use crate::poseidon2_air::{self, MerklePoseidon2StarkAir};
 
     let depth = witness.levels.len();

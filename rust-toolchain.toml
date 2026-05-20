@@ -1,4 +1,6 @@
 [toolchain]
+# NOTE: nightly required for --features binius (binius uses #![feature(array_try_map, array_try_from_fn)])
+# Binius source at /Users/ember/src/binius/ pins nightly-2025-02-20; we use a newer nightly which is compatible.
 version = "2026-01-01"
 channel = "nightly-2026-01-01"
 profile = "default"

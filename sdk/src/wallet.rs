@@ -94,7 +94,7 @@ impl AgentWallet {
     /// ```
     pub fn new() -> Self {
         let mut key_bytes = [0u8; 32];
-        getrandom::getrandom(&mut key_bytes).expect("getrandom failed");
+        getrandom::fill(&mut key_bytes).expect("getrandom failed");
         Self::from_key_bytes(key_bytes)
     }
 

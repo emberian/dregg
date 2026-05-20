@@ -1234,7 +1234,7 @@ fn test_create_cell_effect() {
 
     let new_pk = [77u8; 32];
     let new_token = [88u8; 32];
-    let new_id = CellId::derive(&new_pk, &new_token);
+    let new_id = CellId::derive_raw(&new_pk, &new_token);
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {

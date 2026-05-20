@@ -123,16 +123,27 @@ impl AuthToken for MacaroonToken {
       .verify(&*self.root_key, &self.discharges)
       .map_err(|e| TokenError::VerificationFailed(e.to_string()))?;
 
-    // 2. Check authorization: do the caveats permit this request?
-    let result = crate::pyana_caveats::verify_caveats(&cleared, request)?;
-
-    Ok(TokenClearance {
-      matched_policy: Some("hmac_chain_valid".into()),
-      capabilities: result.capabilities,
-      format: TokenFormat::Macaroon,
-      expires_at: result.expires_at,
-      subject: result.subject,
-    })
+    // 2. Check authorization via Datalog (canonical semantics).
+    //    The Datalog evaluator is the sole ground truth for authorization.
+    //    Both trusted (local eval) and trustless (STARK proof) modes use
+    //    the same semantics.
+    #[cfg(feature = "datalog")]
+    {
+      crate::datalog_verify::verify_token_datalog_full(&cleared, request)
+    }
+    #[cfg(not(feature = "datalog"))]
+    {
+      // Fallback: imperative verification when datalog feature is disabled.
+      #[allow(deprecated)]
+      let result = crate::pyana_caveats::verify_caveats(&cleared, request)?;
+      Ok(TokenClearance {
+        matched_policy: Some("hmac_chain_valid".into()),
+        capabilities: result.capabilities,
+        format: TokenFormat::Macaroon,
+        expires_at: result.expires_at,
+        subject: result.subject,
+      })
+    }
   }
 
   fn attenuate(&self, restrictions: &Attenuation) -> Result<Box<dyn AuthToken>, TokenError> {
