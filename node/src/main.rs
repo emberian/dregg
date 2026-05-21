@@ -8,6 +8,7 @@
 
 mod api;
 mod federation_sync;
+mod genesis;
 mod mcp;
 mod routing_table;
 mod state;
@@ -63,6 +64,12 @@ enum Command {
         /// Checkpoint interval in blocks (default: 1000).
         #[arg(long, default_value = "1000")]
         checkpoint_interval: u64,
+
+        /// Enable the faucet endpoint (POST /api/faucet).
+        /// Only suitable for devnets. Allows anyone to request computrons from the
+        /// genesis faucet cell.
+        #[arg(long)]
+        enable_faucet: bool,
     },
 
     /// Initialize the data directory and generate a node keypair.
@@ -92,6 +99,25 @@ enum Command {
         #[arg(long, value_delimiter = ',')]
         federation_peers: Vec<String>,
     },
+
+    /// Generate devnet genesis configuration (keys, genesis.json, env files).
+    Genesis {
+        /// Number of validator nodes to generate keys for.
+        #[arg(long, default_value = "4")]
+        validators: usize,
+
+        /// Epoch length in blocks.
+        #[arg(long, default_value = "1000")]
+        epoch_length: u64,
+
+        /// Checkpoint interval in blocks.
+        #[arg(long, default_value = "100")]
+        checkpoint_interval: u64,
+
+        /// Output directory for the generated configuration.
+        #[arg(long, default_value = "./devnet-config")]
+        output: PathBuf,
+    },
 }
 
 #[tokio::main]
@@ -116,6 +142,7 @@ async fn main() {
             federation_size,
             enable_pruning,
             checkpoint_interval,
+            enable_faucet,
         } => {
             run_node(
                 port,
@@ -126,6 +153,7 @@ async fn main() {
                 federation_size,
                 enable_pruning,
                 checkpoint_interval,
+                enable_faucet,
             )
             .await
         }
@@ -135,6 +163,12 @@ async fn main() {
             data_dir,
             federation_peers,
         } => run_mcp(&data_dir, federation_peers).await,
+        Command::Genesis {
+            validators,
+            epoch_length,
+            checkpoint_interval,
+            output,
+        } => genesis::run_genesis(validators, epoch_length, checkpoint_interval, &output),
     }
 }
 
@@ -148,6 +182,7 @@ async fn run_node(
     federation_size: usize,
     enable_pruning: bool,
     checkpoint_interval: u64,
+    enable_faucet: bool,
 ) {
     let data_path = expand_path(data_dir);
 
@@ -180,6 +215,7 @@ async fn run_node(
         data_dir = %data_path.display(),
         pruning = enable_pruning,
         checkpoint_interval = checkpoint_interval,
+        faucet = enable_faucet,
         "starting pyana-node"
     );
 
@@ -198,7 +234,8 @@ async fn run_node(
     });
 
     // Build and serve the HTTP API.
-    let app = api::router(node_state.clone()).into_make_service_with_connect_info::<SocketAddr>();
+    let app = api::router(node_state.clone(), enable_faucet)
+        .into_make_service_with_connect_info::<SocketAddr>();
     let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), port);
 
     info!(%addr, "HTTP API listening");

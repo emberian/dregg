@@ -332,8 +332,10 @@ fn main() {
     temp_forest.add_root(bob_action.clone());
     let forest_root = temp_forest.hash();
 
-    let alice_signing_msg = TurnExecutor::compute_partial_signing_message(&alice_action, 0);
-    let bob_signing_msg = TurnExecutor::compute_partial_signing_message(&bob_action, 1);
+    let alice_signing_msg =
+        TurnExecutor::compute_partial_signing_message(&alice_action, 0, &[0u8; 32], 0);
+    let bob_signing_msg =
+        TurnExecutor::compute_partial_signing_message(&bob_action, 1, &[0u8; 32], 0);
 
     let alice_sig = alice_revealed.signing_key.sign(&alice_signing_msg);
     let bob_sig = bob_revealed.signing_key.sign(&bob_signing_msg);

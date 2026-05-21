@@ -6,7 +6,7 @@
  */
 
 const STORAGE_KEY = 'pyana_node_url';
-const DEFAULT_URL = 'http://localhost:8420';
+const DEFAULT_URL = 'https://pyana.commonquant.com';
 
 /** Get the configured node URL. */
 export function getNodeUrl() {
@@ -83,29 +83,29 @@ export async function getCells() {
   return get('/api/cells');
 }
 
-/** Get a single cell by hex ID. */
+/** Get a single cell by hex ID (detailed view). */
 export async function getCell(id) {
-  return get(`/cell/${id}`);
+  return get(`/api/cell/${id}`);
 }
 
 /** Get wallet tokens (capabilities). */
 export async function getTokens() {
-  return get('/wallet/tokens');
+  return get('/api/tokens');
 }
 
 /** Get the receipt chain. */
 export async function getReceipts() {
-  return get('/wallet/receipts');
+  return get('/api/receipts');
 }
 
 /** Get active intents in the pool. */
 export async function getIntents() {
-  return get('/intents');
+  return get('/api/intents');
 }
 
 /** Get pending conditional turns. */
 export async function getPendingConditionals() {
-  return get('/turn/pending');
+  return get('/api/conditionals');
 }
 
 /** Get PIR index info. */

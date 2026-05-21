@@ -15,6 +15,7 @@ env:
   CARGO_INCREMENTAL: 0
   NODE_ID: "1"
   STATE_DIR: /tmp/pyana-state
+  GATEWAY_PEER: "pyana.commonquant.com:9420"
 
 jobs:
   run-node:
@@ -86,7 +87,7 @@ jobs:
           ./target/release/pyana-node run \
             --data-dir "$STATE_DIR" \
             --port 8420 \
-            --federation-peers "${{ steps.peers.outputs.peer_list }}" &
+            --federation-peers "$GATEWAY_PEER,${{ steps.peers.outputs.peer_list }}" &
           NODE_PID=$!
 
           echo "Node started with PID $NODE_PID"

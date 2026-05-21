@@ -1603,13 +1603,13 @@ impl StarkAir for ArithmeticPredicateStarkAir {
         public_inputs: &[BabyBear],
         alpha: BabyBear,
     ) -> BabyBear {
-        // Simplified constraint: threshold matches public input,
-        // fact_commitment matches public input, and bit decomposition holds.
+        // Column layout (from ArithLayout):
+        // [...slots...] threshold diff diff_bits[31] fact_commitment
         let w = self.width;
         let fact_commitment_col = w - 1;
-        let diff_bits_start = w - 1 - PREDICATE_DIFF_BITS - 1; // before fact_commitment
-        let diff_col = diff_bits_start - 1;
-        let threshold_col = diff_col - 1;
+        let diff_bits_start = fact_commitment_col - PREDICATE_DIFF_BITS; // = w - 32
+        let diff_col = diff_bits_start - 1; // = w - 33
+        let threshold_col = diff_col - 1; // = w - 34
 
         let c1 = if threshold_col < local.len() && !public_inputs.is_empty() {
             local[threshold_col] - public_inputs[0]

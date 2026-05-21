@@ -128,7 +128,7 @@ pub struct SignedFragment {
     /// The actions this party contributes (must all be CommitmentMode::Partial).
     pub actions: Vec<Action>,
     /// Ed25519 signatures for each action (one per action, in order).
-    /// Each signature is over `compute_partial_signing_message(action, position, forest_root)`.
+    /// Each signature is over `compute_partial_signing_message(action, position, federation_id, nonce)`.
     pub signatures: Vec<[u8; 64]>,
     /// The public key that signed these actions (for pre-verification).
     pub signer: [u8; 32],
@@ -154,6 +154,8 @@ pub struct TurnComposer {
     memo: Option<String>,
     /// Optional expiration.
     valid_until: Option<i64>,
+    /// Federation identity for signature verification context binding.
+    federation_id: [u8; 32],
 }
 
 impl TurnComposer {
@@ -167,7 +169,33 @@ impl TurnComposer {
             settlement_actions: Vec::new(),
             memo: None,
             valid_until: None,
+            federation_id: [0u8; 32],
         }
+    }
+
+    /// Create a new composer bound to a specific federation.
+    pub fn new_with_federation(
+        fee_payer: CellId,
+        fee: u64,
+        nonce: u64,
+        federation_id: [u8; 32],
+    ) -> Self {
+        TurnComposer {
+            fee_payer,
+            fee,
+            nonce,
+            fragments: Vec::new(),
+            settlement_actions: Vec::new(),
+            memo: None,
+            valid_until: None,
+            federation_id,
+        }
+    }
+
+    /// Set the federation identity for signature verification.
+    pub fn set_federation_id(&mut self, federation_id: [u8; 32]) -> &mut Self {
+        self.federation_id = federation_id;
+        self
     }
 
     /// Set an optional memo for the composed turn.
@@ -254,13 +282,17 @@ impl TurnComposer {
         }
 
         // Phase 3: Verify fragment signatures against partial commitment messages.
-        // Partial signers commit to their own action content + position only (not forest root).
+        // Partial signers commit to their own action content + position + federation_id + nonce.
         // The forest root binding is provided by the coordinator_signature on the composed turn.
         let mut position = 0usize;
         for (frag_idx, fragment) in self.fragments.iter().enumerate() {
             for (action_idx, action) in fragment.actions.iter().enumerate() {
-                let signing_message =
-                    TurnExecutor::compute_partial_signing_message(action, position);
+                let signing_message = TurnExecutor::compute_partial_signing_message(
+                    action,
+                    position,
+                    &self.federation_id,
+                    self.nonce,
+                );
 
                 // Verify the signature.
                 let sig_bytes = fragment.signatures[action_idx];

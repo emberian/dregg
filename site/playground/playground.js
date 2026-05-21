@@ -33,6 +33,8 @@ export const state = {
     nodes: 0,
     commit: null,
   },
+  liveConnection: null,  // WebSocket connection to gateway
+  liveMode: false,       // Whether using live network vs local WASM
 };
 
 // ============================================================================
@@ -177,8 +179,105 @@ async function fetchFederation() {
     state.federation.status = 'online';
     state.federation.nodes = data.federation?.length || 0;
     state.federation.commit = data.commit || null;
+    state.federation.gateway = data.gateway || null;
   } catch {
     state.federation.status = 'offline';
+  }
+  notifyStateChange();
+}
+
+// ============================================================================
+// Live Network Connection
+// ============================================================================
+
+/**
+ * Connect to the live gateway node via WebSocket.
+ * When connected, operations can be routed to the live network instead of
+ * running locally in WASM.
+ */
+export async function connectToLiveNetwork() {
+  // Fetch discovery to get gateway address
+  let gatewayWs = 'wss://pyana.commonquant.com/ws';
+  try {
+    const resp = await fetch('../discovery.json');
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data.gateway?.ws) {
+        gatewayWs = data.gateway.ws;
+      }
+    }
+  } catch {
+    // Fall back to hardcoded gateway address
+  }
+
+  if (state.liveConnection) {
+    state.liveConnection.close();
+    state.liveConnection = null;
+  }
+
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(gatewayWs);
+
+    ws.onopen = () => {
+      state.liveConnection = ws;
+      state.liveMode = true;
+      console.log('[pyana] Connected to live network:', gatewayWs);
+      notifyStateChange();
+      resolve(ws);
+    };
+
+    ws.onclose = () => {
+      state.liveConnection = null;
+      state.liveMode = false;
+      console.log('[pyana] Disconnected from live network');
+      notifyStateChange();
+    };
+
+    ws.onerror = (err) => {
+      console.error('[pyana] WebSocket error:', err);
+      state.liveMode = false;
+      notifyStateChange();
+      reject(err);
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        handleLiveMessage(msg);
+      } catch (e) {
+        console.warn('[pyana] Failed to parse live message:', e);
+      }
+    };
+  });
+}
+
+/** Disconnect from the live network. */
+export function disconnectFromLiveNetwork() {
+  if (state.liveConnection) {
+    state.liveConnection.close();
+    state.liveConnection = null;
+  }
+  state.liveMode = false;
+  notifyStateChange();
+}
+
+/** Handle incoming messages from the live gateway. */
+function handleLiveMessage(msg) {
+  switch (msg.type) {
+    case 'state_update':
+      // Sync federation state from live node
+      if (msg.merkle_root) state.merkleRoot = msg.merkle_root;
+      if (msg.nullifiers) state.nullifiers = msg.nullifiers;
+      break;
+    case 'new_block':
+      // A new attested root was produced
+      state.federation.status = 'online';
+      break;
+    case 'receipt':
+      state.receipts.push(msg.receipt);
+      break;
+    default:
+      console.log('[pyana] Unknown live message type:', msg.type);
   }
   notifyStateChange();
 }

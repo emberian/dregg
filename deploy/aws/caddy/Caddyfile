@@ -1,0 +1,69 @@
+pyana.commonquant.com {
+    # HTTP API
+    handle /api/* {
+        reverse_proxy localhost:8420
+    }
+
+    # WebSocket endpoint
+    handle /ws {
+        reverse_proxy localhost:8420
+    }
+
+    # Node status/health
+    handle /status {
+        reverse_proxy localhost:8420
+    }
+
+    # Federation endpoints
+    handle /federation/* {
+        reverse_proxy localhost:8420
+    }
+
+    # Checkpoint endpoints
+    handle /checkpoint/* {
+        reverse_proxy localhost:8420
+    }
+
+    # PIR endpoints
+    handle /pir/* {
+        reverse_proxy localhost:8420
+    }
+
+    # Wallet endpoints
+    handle /wallet {
+        reverse_proxy localhost:8420
+    }
+
+    # Faucet
+    handle /faucet/* {
+        reverse_proxy localhost:8420
+    }
+
+    # Chain explorer (static files)
+    handle /explorer/* {
+        root * /opt/pyana/site
+        file_server
+    }
+
+    # Playground (static files)
+    handle /playground/* {
+        root * /opt/pyana/site
+        file_server
+    }
+
+    # Root serves explorer by default
+    handle {
+        root * /opt/pyana/site/explorer
+        file_server
+    }
+
+    # CORS headers for browser clients
+    header Access-Control-Allow-Origin "*"
+    header Access-Control-Allow-Methods "GET, POST, OPTIONS"
+    header Access-Control-Allow-Headers "Content-Type, Authorization"
+
+    # Security headers
+    header X-Content-Type-Options "nosniff"
+    header X-Frame-Options "DENY"
+    header Referrer-Policy "strict-origin-when-cross-origin"
+}

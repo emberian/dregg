@@ -18,7 +18,9 @@
 //! 3. `MerklePoseidon2StarkAir` -- Merkle AIR with per-row hash binding constraints.
 
 use crate::field::BabyBear;
-use crate::poseidon2::{TOTAL_ROUNDS, WIDTH, compute_round, hash_4_to_1, poseidon2_trace};
+use crate::poseidon2::{
+    Poseidon2State, TOTAL_ROUNDS, WIDTH, compute_round, hash_4_to_1, poseidon2_trace,
+};
 use crate::stark::{BoundaryConstraint, StarkAir};
 
 /// State width for the Merkle Poseidon2 AIR.
@@ -102,16 +104,14 @@ impl StarkAir for Poseidon2Air {
         }
 
         // Compute the REAL Poseidon2 permutation.
-        let mut state = input_state;
-        for round_idx in 0..TOTAL_ROUNDS {
-            state = compute_round(&state, round_idx);
-        }
+        let mut ps = Poseidon2State::from_elements(&input_state);
+        ps.permute();
 
         // Constraint: claimed_output == computed output
         let mut combined = BabyBear::ZERO;
         let mut alpha_pow = BabyBear::ONE;
         for i in 0..WIDTH {
-            combined = combined + alpha_pow * (claimed_output[i] - state[i]);
+            combined = combined + alpha_pow * (claimed_output[i] - ps.state[i]);
             alpha_pow = alpha_pow * alpha;
         }
         combined
@@ -755,22 +755,18 @@ mod tests {
 
     #[test]
     fn poseidon2_air_trace_generation() {
-        let input = [
-            BabyBear::new(1),
-            BabyBear::new(2),
-            BabyBear::new(3),
-            BabyBear::new(4),
-            BabyBear::new(4),
-            BabyBear::ZERO,
-            BabyBear::ZERO,
-            BabyBear::ZERO,
-        ];
+        let mut input = [BabyBear::ZERO; WIDTH];
+        input[0] = BabyBear::new(1);
+        input[1] = BabyBear::new(2);
+        input[2] = BabyBear::new(3);
+        input[3] = BabyBear::new(4);
+        input[4] = BabyBear::new(4);
         let (trace, pi) = Poseidon2Air::generate_trace(&input);
 
         assert_eq!(trace.len(), 2);
-        assert_eq!(trace[0].len(), 16);
-        assert_eq!(pi.len(), 16);
-        for i in 0..8 {
+        assert_eq!(trace[0].len(), WIDTH * 2);
+        assert_eq!(pi.len(), WIDTH * 2);
+        for i in 0..WIDTH {
             assert_eq!(pi[i], input[i]);
         }
         assert_eq!(trace[0], trace[1]);
@@ -778,16 +774,12 @@ mod tests {
 
     #[test]
     fn poseidon2_air_stark_prove_verify() {
-        let input = [
-            BabyBear::new(10),
-            BabyBear::new(20),
-            BabyBear::new(30),
-            BabyBear::new(40),
-            BabyBear::new(4),
-            BabyBear::ZERO,
-            BabyBear::ZERO,
-            BabyBear::ZERO,
-        ];
+        let mut input = [BabyBear::ZERO; WIDTH];
+        input[0] = BabyBear::new(10);
+        input[1] = BabyBear::new(20);
+        input[2] = BabyBear::new(30);
+        input[3] = BabyBear::new(40);
+        input[4] = BabyBear::new(4);
         let (trace, public_inputs) = Poseidon2Air::generate_trace(&input);
         let air = Poseidon2Air;
         let proof = stark::prove(&air, &trace, &public_inputs);
@@ -801,43 +793,35 @@ mod tests {
 
     #[test]
     fn poseidon2_air_tampered_trace_fails() {
-        let input = [
-            BabyBear::new(10),
-            BabyBear::new(20),
-            BabyBear::new(30),
-            BabyBear::new(40),
-            BabyBear::new(4),
-            BabyBear::ZERO,
-            BabyBear::ZERO,
-            BabyBear::ZERO,
-        ];
+        let mut input = [BabyBear::ZERO; WIDTH];
+        input[0] = BabyBear::new(10);
+        input[1] = BabyBear::new(20);
+        input[2] = BabyBear::new(30);
+        input[3] = BabyBear::new(40);
+        input[4] = BabyBear::new(4);
         let (trace, public_inputs) = Poseidon2Air::generate_trace(&input);
         let air = Poseidon2Air;
         let proof = stark::prove(&air, &trace, &public_inputs);
 
         let mut bad_pi = public_inputs.clone();
-        bad_pi[8] = BabyBear::new(999);
+        bad_pi[WIDTH] = BabyBear::new(999);
         let result = stark::verify(&air, &proof, &bad_pi);
         assert!(result.is_err(), "Should fail with tampered public inputs");
     }
 
     #[test]
     fn poseidon2_air_wrong_output_rejected() {
-        let input = [
-            BabyBear::new(10),
-            BabyBear::new(20),
-            BabyBear::new(30),
-            BabyBear::new(40),
-            BabyBear::new(4),
-            BabyBear::ZERO,
-            BabyBear::ZERO,
-            BabyBear::ZERO,
-        ];
+        let mut input = [BabyBear::ZERO; WIDTH];
+        input[0] = BabyBear::new(10);
+        input[1] = BabyBear::new(20);
+        input[2] = BabyBear::new(30);
+        input[3] = BabyBear::new(40);
+        input[4] = BabyBear::new(4);
         let (mut trace, _) = Poseidon2Air::generate_trace(&input);
 
         // Tamper with output
-        trace[0][8] = BabyBear::new(999999);
-        trace[1][8] = BabyBear::new(999999);
+        trace[0][WIDTH] = BabyBear::new(999999);
+        trace[1][WIDTH] = BabyBear::new(999999);
 
         let pi: Vec<BabyBear> = trace[0].clone();
         let air = Poseidon2Air;
@@ -848,16 +832,12 @@ mod tests {
 
     #[test]
     fn poseidon2_air_constraint_nonzero_on_wrong_output() {
-        let input = [
-            BabyBear::new(10),
-            BabyBear::new(20),
-            BabyBear::new(30),
-            BabyBear::new(40),
-            BabyBear::new(4),
-            BabyBear::ZERO,
-            BabyBear::ZERO,
-            BabyBear::ZERO,
-        ];
+        let mut input = [BabyBear::ZERO; WIDTH];
+        input[0] = BabyBear::new(10);
+        input[1] = BabyBear::new(20);
+        input[2] = BabyBear::new(30);
+        input[3] = BabyBear::new(40);
+        input[4] = BabyBear::new(4);
         let (trace, pi) = Poseidon2Air::generate_trace(&input);
         let air = Poseidon2Air;
         let alpha = BabyBear::new(7);
@@ -870,7 +850,7 @@ mod tests {
         );
 
         let mut bad_row = trace[0].clone();
-        bad_row[8] = BabyBear::new(12345678);
+        bad_row[WIDTH] = BabyBear::new(12345678);
         let c_invalid = air.eval_constraints(&bad_row, &trace[1], &pi, alpha);
         assert_ne!(
             c_invalid,
@@ -881,16 +861,10 @@ mod tests {
 
     #[test]
     fn poseidon2_air_all_rows_valid() {
-        let input = [
-            BabyBear::new(1),
-            BabyBear::new(2),
-            BabyBear::new(3),
-            BabyBear::new(4),
-            BabyBear::new(5),
-            BabyBear::new(6),
-            BabyBear::new(7),
-            BabyBear::new(8),
-        ];
+        let mut input = [BabyBear::ZERO; WIDTH];
+        for i in 0..8 {
+            input[i] = BabyBear::new((i + 1) as u32);
+        }
         let (trace, pi) = Poseidon2Air::generate_trace(&input);
         let air = Poseidon2Air;
         let alpha = BabyBear::new(42);

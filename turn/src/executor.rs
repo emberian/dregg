@@ -447,6 +447,7 @@ impl TurnExecutor {
                 vec![root_idx],
                 &mut journal,
                 &mut excess,
+                turn.nonce,
             );
 
             if let Err((error, path)) = result {
@@ -659,6 +660,7 @@ impl TurnExecutor {
         path: Vec<usize>,
         journal: &mut LedgerJournal,
         excess: &mut i64,
+        turn_nonce: u64,
     ) -> Result<(), (TurnError, Vec<usize>)> {
         let action = &tree.action;
 
@@ -783,7 +785,7 @@ impl TurnExecutor {
         self.check_preconditions(&action.preconditions, target_cell, &path)?;
 
         // Verify authorization (including signature/proof verification).
-        self.verify_authorization(action, target_cell, ledger, parent_cell, &path)?;
+        self.verify_authorization(action, target_cell, ledger, parent_cell, &path, turn_nonce)?;
 
         // Meter authorization cost.
         let auth_cost = match &action.authorization {
@@ -1020,6 +1022,7 @@ impl TurnExecutor {
                 child_path,
                 journal,
                 excess,
+                turn_nonce,
             )?;
         }
 
@@ -1066,6 +1069,7 @@ impl TurnExecutor {
         ledger: &Ledger,
         actor_cell_id: &CellId,
         path: &[usize],
+        turn_nonce: u64,
     ) -> Result<(), (TurnError, Vec<usize>)> {
         // Determine ALL required permissions for this action's effects.
         let required_actions = self.determine_required_permissions(action);
@@ -1083,6 +1087,7 @@ impl TurnExecutor {
                 access_req,
                 "Access",
                 path,
+                turn_nonce,
             )?;
         } else {
             // Check EACH permission requirement independently. This avoids the
@@ -1098,6 +1103,7 @@ impl TurnExecutor {
                     auth_req,
                     action_name,
                     path,
+                    turn_nonce,
                 )?;
             }
         }
@@ -1146,6 +1152,7 @@ impl TurnExecutor {
         auth_required: &AuthRequired,
         action_name: &str,
         path: &[usize],
+        turn_nonce: u64,
     ) -> Result<(), (TurnError, Vec<usize>)> {
         match auth_required {
             AuthRequired::None => Ok(()),
@@ -1159,7 +1166,7 @@ impl TurnExecutor {
             )),
             AuthRequired::Signature => match &action.authorization {
                 Authorization::Signature(r, s) => {
-                    self.verify_ed25519_signature(action, target_cell, r, s, path)
+                    self.verify_ed25519_signature(action, target_cell, r, s, path, turn_nonce)
                 }
                 Authorization::Breadstuff(token) => self.check_breadstuff(
                     ledger,
@@ -1194,7 +1201,7 @@ impl TurnExecutor {
             },
             AuthRequired::Either => match &action.authorization {
                 Authorization::Signature(r, s) => {
-                    self.verify_ed25519_signature(action, target_cell, r, s, path)
+                    self.verify_ed25519_signature(action, target_cell, r, s, path, turn_nonce)
                 }
                 Authorization::Proof(proof_bytes) => {
                     self.verify_zk_proof(action, target_cell, proof_bytes, path)
@@ -1223,8 +1230,8 @@ impl TurnExecutor {
     /// Verify an Ed25519 signature against the target cell's public key.
     ///
     /// When the action uses `CommitmentMode::Partial`, the signing message is computed
-    /// via `compute_partial_signing_message` (action hash + position only). This allows
-    /// composed turns with partial signers to be verified correctly by the executor.
+    /// via `compute_partial_signing_message` (action hash + position + federation_id + nonce).
+    /// This allows composed turns with partial signers to be verified correctly by the executor.
     fn verify_ed25519_signature(
         &self,
         action: &Action,
@@ -1232,17 +1239,26 @@ impl TurnExecutor {
         r: &[u8; 32],
         s: &[u8; 32],
         path: &[usize],
+        turn_nonce: u64,
     ) -> Result<(), (TurnError, Vec<usize>)> {
         use crate::action::CommitmentMode;
 
         let message = match action.commitment_mode {
             CommitmentMode::Partial => {
-                // For partial commitment, the signer committed to their action hash + position.
+                // For partial commitment, the signer committed to their action hash + position
+                // + federation_id + turn_nonce.
                 // The position is encoded in the path (root index).
                 let position = path.first().copied().unwrap_or(0);
-                Self::compute_partial_signing_message(action, position)
+                Self::compute_partial_signing_message(
+                    action,
+                    position,
+                    &self.local_federation_id,
+                    turn_nonce,
+                )
             }
-            CommitmentMode::Full => Self::compute_signing_message(action),
+            CommitmentMode::Full => {
+                Self::compute_signing_message(action, &self.local_federation_id)
+            }
         };
 
         let mut sig_bytes = [0u8; 64];
@@ -1316,7 +1332,7 @@ impl TurnExecutor {
             )
         })?;
 
-        let public_inputs = Self::compute_signing_message(action);
+        let public_inputs = Self::compute_signing_message(action, &self.local_federation_id);
 
         let method_str = format!("{:?}", action.method);
         let target_str = action.target.to_string();
@@ -1376,9 +1392,16 @@ impl TurnExecutor {
     ///
     /// For actions with `CommitmentMode::Full`, this produces the standard signing
     /// message based on the action's content. For `CommitmentMode::Partial`, use
-    /// [`compute_partial_signing_message`] which includes position and forest root.
-    pub fn compute_signing_message(action: &Action) -> [u8; 32] {
+    /// [`compute_partial_signing_message`] which includes position, federation_id, and nonce.
+    ///
+    /// The `federation_id` binds the signature to a specific federation, preventing
+    /// cross-federation replay where a valid signature from federation A could be
+    /// submitted to federation B.
+    pub fn compute_signing_message(action: &Action, federation_id: &[u8; 32]) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new();
+        // Domain separation: version-bumped to v2 when federation binding was added.
+        hasher.update(b"pyana-action-sig-v2:");
+        hasher.update(federation_id);
         hasher.update(action.target.as_bytes());
         hasher.update(&action.method);
         for arg in &action.args {
@@ -1412,6 +1435,8 @@ impl TurnExecutor {
     /// The signer commits to:
     /// - The action's own content hash (what they are doing)
     /// - Their position index in the forest (where they are)
+    /// - The federation identity (prevents cross-federation replay)
+    /// - The turn nonce (prevents replay within the same federation across turns)
     ///
     /// The forest root is NOT included because it creates a chicken-and-egg problem:
     /// the forest root is only computable after all fragments are assembled, but signers
@@ -1420,10 +1445,19 @@ impl TurnExecutor {
     ///
     /// This allows a party to sign their part without knowing about other actions,
     /// enabling multi-party composition (DEX fills, atomic swaps, etc.)
-    pub fn compute_partial_signing_message(action: &Action, position: usize) -> [u8; 32] {
+    pub fn compute_partial_signing_message(
+        action: &Action,
+        position: usize,
+        federation_id: &[u8; 32],
+        turn_nonce: u64,
+    ) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new();
+        // Domain separation: version-bumped to v2 when federation/nonce binding was added.
+        hasher.update(b"pyana-partial-sig-v2:");
+        hasher.update(federation_id);
         hasher.update(&action.hash());
         hasher.update(&(position as u64).to_le_bytes());
+        hasher.update(&turn_nonce.to_le_bytes());
         *hasher.finalize().as_bytes()
     }
 

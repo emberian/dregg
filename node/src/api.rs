@@ -134,6 +134,32 @@ pub struct AttestedRootInfo {
 }
 
 #[derive(Serialize)]
+pub struct CellListEntry {
+    pub id: String,
+    pub balance: u64,
+    pub nonce: u64,
+    pub capability_count: usize,
+    pub has_delegate: bool,
+    pub has_program: bool,
+    pub found: bool,
+}
+
+#[derive(Serialize)]
+pub struct CellDetailResponse {
+    pub id: String,
+    pub found: bool,
+    pub balance: u64,
+    pub nonce: u64,
+    pub capability_count: usize,
+    pub has_delegate: bool,
+    pub delegate: Option<String>,
+    pub has_program: bool,
+    pub public_key: String,
+    pub token_id: String,
+    pub proved_state: bool,
+}
+
+#[derive(Serialize)]
 pub struct CheckpointResponse {
     pub height: u64,
     pub ledger_state_root: String,
@@ -457,8 +483,7 @@ const MAX_BODY_SIZE: usize = 1_024 * 1_024;
 ///
 /// Includes CORS, body size limits, rate limiting on passphrase endpoints,
 /// and Bearer token authentication on protected routes.
-pub fn router(state: NodeState) -> Router {
-    let enable_faucet = false;
+pub fn router(state: NodeState, enable_faucet: bool) -> Router {
     // Rate limiter for passphrase/unlock endpoints: 5 attempts per 60 seconds.
     let passphrase_limiter = RateLimiter::new(5, 60);
 
@@ -466,6 +491,13 @@ pub fn router(state: NodeState) -> Router {
     let mut public_routes = Router::new()
         .route("/status", get(get_status))
         .route("/federation/roots", get(get_federation_roots))
+        .route("/api/blocks", get(get_federation_roots))
+        .route("/api/cells", get(get_all_cells))
+        .route("/api/cell/{id}", get(get_cell_detail))
+        .route("/api/intents", get(get_intents))
+        .route("/api/conditionals", get(get_pending_conditionals))
+        .route("/api/receipts", get(get_receipts))
+        .route("/api/tokens", get(get_tokens))
         .route("/checkpoint/latest", get(get_checkpoint_latest))
         .route("/checkpoint/{height}", get(get_checkpoint_at_height))
         .route("/pir/info", get(get_pir_info))
@@ -494,7 +526,7 @@ pub fn router(state: NodeState) -> Router {
         let faucet_limiter = FaucetRateLimiter::new();
         public_routes = public_routes.route(
             "/api/faucet",
-            post({ move |state, body| post_faucet(state, body, faucet_limiter) }),
+            post(move |state, body| post_faucet(state, body, faucet_limiter)),
         );
     }
 
@@ -748,6 +780,69 @@ async fn get_cell(
         found,
         balance: None,
     }))
+}
+
+// =============================================================================
+// Explorer API Handlers (public, read-only)
+// =============================================================================
+
+/// GET /api/cells — list all cells in the ledger with summary info.
+async fn get_all_cells(State(state): State<NodeState>) -> Json<Vec<CellListEntry>> {
+    let s = state.read().await;
+    let entries: Vec<CellListEntry> = s
+        .ledger
+        .iter()
+        .map(|(id, cell)| CellListEntry {
+            id: hex_encode(&id.0),
+            balance: cell.state.balance,
+            nonce: cell.state.nonce,
+            capability_count: cell.capabilities.len(),
+            has_delegate: cell.delegate.is_some(),
+            has_program: !matches!(cell.program, pyana_cell::CellProgram::None),
+            found: true,
+        })
+        .collect();
+    Json(entries)
+}
+
+/// GET /api/cell/:id — detailed cell information for the explorer.
+async fn get_cell_detail(
+    State(state): State<NodeState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<CellDetailResponse>, StatusCode> {
+    let s = state.read().await;
+
+    let cell_id_bytes: [u8; 32] = hex_decode(&id).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let cell_id = pyana_cell::CellId(cell_id_bytes);
+
+    match s.ledger.get(&cell_id) {
+        Some(cell) => Ok(Json(CellDetailResponse {
+            id: id.clone(),
+            found: true,
+            balance: cell.state.balance,
+            nonce: cell.state.nonce,
+            capability_count: cell.capabilities.len(),
+            has_delegate: cell.delegate.is_some(),
+            delegate: cell.delegate.as_ref().map(|d| hex_encode(&d.0)),
+            has_program: !matches!(cell.program, pyana_cell::CellProgram::None),
+            public_key: hex_encode(&cell.public_key),
+            token_id: hex_encode(&cell.token_id),
+            proved_state: cell.state.proved_state,
+        })),
+        None => Ok(Json(CellDetailResponse {
+            id,
+            found: false,
+            balance: 0,
+            nonce: 0,
+            capability_count: 0,
+            has_delegate: false,
+            delegate: None,
+            has_program: false,
+            public_key: String::new(),
+            token_id: String::new(),
+            proved_state: false,
+        })),
+    }
 }
 
 /// P1 Fix 4: Rate-limited passphrase unlock endpoint.

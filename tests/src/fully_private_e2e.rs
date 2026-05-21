@@ -300,7 +300,7 @@ fn test_fully_private_end_to_end() {
     }
     let temp_turn = turn_builder.build();
     let action_signing_msg =
-        TurnExecutor::compute_signing_message(&temp_turn.call_forest.roots[0].action);
+        TurnExecutor::compute_signing_message(&temp_turn.call_forest.roots[0].action, &[0u8; 32]);
     let action_commitment_bb = bytes_to_babybear(&action_signing_msg);
 
     // Generate the Poseidon2 STARK proof bound to this action

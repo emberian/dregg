@@ -231,7 +231,10 @@ impl AgentRuntime {
 
         // Compute the signing message and sign with the wallet's key (read lock).
         // We sign before acquiring the ledger lock since signing is pure.
-        let message = TurnExecutor::compute_signing_message(&action_unsigned);
+        let message = TurnExecutor::compute_signing_message(
+            &action_unsigned,
+            &self.executor.local_federation_id,
+        );
         let sig = self
             .wallet
             .read()
@@ -476,7 +479,11 @@ impl SubAgent {
         };
 
         // Sign with the sub-agent's wallet.
-        let message = TurnExecutor::compute_signing_message(&action_unsigned);
+        // SubAgents use the executor's default federation_id ([0; 32]) since they
+        // create a fresh executor per call. In production, this should be set to
+        // the actual federation_id by the spawning parent.
+        let message =
+            TurnExecutor::compute_signing_message(&action_unsigned, &executor.local_federation_id);
         let sig = self.wallet.sign_bytes(&message);
 
         let action_signed = Action {

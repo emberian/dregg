@@ -1,0 +1,9 @@
+target/
+.git/
+docker/devnet-config/
+node_modules/
+site/
+paper/
+docs/
+extension/
+*.md

@@ -30,6 +30,8 @@ impl Turn {
     pub fn hash(&self) -> [u8; 32] {
         let forest_hash = self.call_forest.compute_hash();
         let mut hasher = blake3::Hasher::new();
+        // Domain separation: prevents type confusion with other hash preimages.
+        hasher.update(b"pyana-turn-v2:");
         hasher.update(self.agent.as_bytes());
         hasher.update(&self.nonce.to_le_bytes());
         hasher.update(&forest_hash);

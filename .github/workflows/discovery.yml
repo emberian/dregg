@@ -92,17 +92,27 @@ jobs:
             INTENT_SERVICE="$info"
           fi
 
+          # Gateway node (always-on Graviton instance)
+          GATEWAY=$(jq -n '{
+            "url": "https://pyana.commonquant.com",
+            "ws": "wss://pyana.commonquant.com/ws",
+            "api": "https://pyana.commonquant.com/api",
+            "gossip": "pyana.commonquant.com:9420"
+          }')
+
           # Build final discovery file
           UPDATED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           COMMIT="${GITHUB_SHA:-unknown}"
 
           mkdir -p site
           jq -n \
+            --argjson gateway "$GATEWAY" \
             --argjson federation "$NODES" \
             --argjson intent_service "$INTENT_SERVICE" \
             --arg updated_at "$UPDATED_AT" \
             --arg commit "$COMMIT" \
             '{
+              gateway: $gateway,
               federation: $federation,
               intent_service: $intent_service,
               updated_at: $updated_at,

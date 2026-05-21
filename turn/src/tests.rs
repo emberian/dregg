@@ -55,8 +55,9 @@ impl TestKeypair {
     }
 
     /// Sign an action and return the Authorization.
+    /// Uses the zero federation_id (matches executor default for tests).
     fn sign_action(&self, action: &Action) -> Authorization {
-        let message = TurnExecutor::compute_signing_message(action);
+        let message = TurnExecutor::compute_signing_message(action, &[0u8; 32]);
         let signature = self.signing_key.sign(&message);
         let sig_bytes = signature.to_bytes();
         Authorization::from_sig_bytes(sig_bytes)
@@ -490,7 +491,7 @@ fn test_real_signature_verification() {
         commitment_mode: CommitmentMode::Full,
         balance_change: None,
     };
-    let message = TurnExecutor::compute_signing_message(&unsigned_action);
+    let message = TurnExecutor::compute_signing_message(&unsigned_action, &[0u8; 32]);
 
     // Sign with TARGET's key (the cell being acted upon).
     let signature = target_kp.signing_key.sign(&message);
@@ -617,7 +618,7 @@ fn test_wrong_key_signature_rejected() {
         commitment_mode: CommitmentMode::Full,
         balance_change: None,
     };
-    let message = TurnExecutor::compute_signing_message(&unsigned_action);
+    let message = TurnExecutor::compute_signing_message(&unsigned_action, &[0u8; 32]);
 
     // Sign with AGENT's key (wrong key for the target cell).
     let signature = agent_kp.signing_key.sign(&message);
@@ -2508,8 +2509,9 @@ fn test_grant_capability_attenuation_succeeds() {
 // =============================================================================
 
 /// Helper: create a partial-commitment action and sign it for composition.
+/// Uses zero federation_id and nonce=0 for test compatibility.
 fn sign_partial_action(action: &Action, position: usize, signing_key: &SigningKey) -> [u8; 64] {
-    let message = TurnExecutor::compute_partial_signing_message(action, position);
+    let message = TurnExecutor::compute_partial_signing_message(action, position, &[0u8; 32], 0);
     let sig = signing_key.sign(&message);
     sig.to_bytes()
 }
@@ -2546,7 +2548,7 @@ fn test_partial_commitment_signature_valid() {
     let sig_bytes = sign_partial_action(&action, position, &kp.signing_key);
 
     // Verify manually.
-    let message = TurnExecutor::compute_partial_signing_message(&action, position);
+    let message = TurnExecutor::compute_partial_signing_message(&action, position, &[0u8; 32], 0);
     let verifying_key: VerifyingKey = (&kp.signing_key).into();
     let signature = ed25519_dalek::Signature::from_bytes(&sig_bytes);
     assert!(verifying_key.verify(&message, &signature).is_ok());
@@ -2586,7 +2588,7 @@ fn test_partial_commitment_independent_of_other_actions() {
     // If we build a DIFFERENT forest (adding another action), the signature remains valid
     // because partial signers do NOT commit to the forest root.
     // The coordinator_signature on the composed turn provides the forest root binding.
-    let message = TurnExecutor::compute_partial_signing_message(&action, 0);
+    let message = TurnExecutor::compute_partial_signing_message(&action, 0, &[0u8; 32], 0);
     let verifying_key: VerifyingKey = (&kp.signing_key).into();
     let signature = ed25519_dalek::Signature::from_bytes(&sig);
     assert!(verifying_key.verify(&message, &signature).is_ok());
@@ -2594,7 +2596,7 @@ fn test_partial_commitment_independent_of_other_actions() {
     // Verify that a full-commitment approach produces a DIFFERENT message:
     // The full signing message depends on the action's own content
     // (target, method, args, effects, delegation) but NOT position.
-    let full_message = TurnExecutor::compute_signing_message(&action);
+    let full_message = TurnExecutor::compute_signing_message(&action, &[0u8; 32]);
     // Full message is different from partial message (different hash construction).
     assert_ne!(full_message, message);
 }
@@ -2627,7 +2629,7 @@ fn test_full_commitment_invalidated_by_changes() {
     };
 
     // Sign with full commitment message.
-    let message = TurnExecutor::compute_signing_message(&action);
+    let message = TurnExecutor::compute_signing_message(&action, &[0u8; 32]);
     let sig = kp.signing_key.sign(&message);
 
     // Verify: original action verifies.
@@ -2641,7 +2643,7 @@ fn test_full_commitment_invalidated_by_changes() {
         index: 0,
         value: [99u8; 32],
     }];
-    let modified_message = TurnExecutor::compute_signing_message(&modified);
+    let modified_message = TurnExecutor::compute_signing_message(&modified, &[0u8; 32]);
 
     // The original signature does NOT verify for the modified message.
     assert_ne!(message, modified_message);

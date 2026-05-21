@@ -245,60 +245,59 @@ impl PendingTurnRegistry {
                     receipt: receipt.clone(),
                 }];
 
-                // Check dependents: are their conditions now met?
-                let dependents = entry.dependents;
-                for dep_hash in dependents {
-                    if let Some(dep_entry) = self.pending.get(&dep_hash) {
-                        if self.condition_met_by_receipt(&dep_entry.condition, &turn_hash) {
-                            // The dependent's condition is satisfied by this receipt.
-                            // Remove it and emit a resolution event.
-                            // Note: in a full implementation, we'd actually EXECUTE the
-                            // dependent turn here. For now, we emit a Resolved event
-                            // with a synthetic receipt indicating the condition was met.
-                            let dep_entry_clone = dep_entry.clone();
-                            self.pending.remove(&dep_hash);
-                            let dep_receipt = TurnReceipt {
-                                turn_hash: dep_hash,
-                                forest_hash: dep_entry_clone.turn.call_forest.compute_hash(),
-                                pre_state_hash: [0u8; 32],
-                                post_state_hash: [0u8; 32],
-                                timestamp: receipt.timestamp,
-                                effects_hash: [0u8; 32],
-                                computrons_used: 0,
-                                action_count: dep_entry_clone.turn.action_count(),
-                                previous_receipt_hash: Some(turn_hash),
-                                agent: dep_entry_clone.turn.agent,
-                                routing_directives: vec![],
-                                derivation_records: vec![],
-                                executor_signature: None,
-                            };
-                            events.push(ResolutionEvent::Resolved {
-                                turn_hash: dep_hash,
-                                receipt: dep_receipt.clone(),
-                            });
-
-                            // Recursively resolve dependents of this dependent.
-                            let sub_events =
-                                self.resolve(dep_hash, ResolutionOutcome::Resolved(dep_receipt));
-                            // Only include sub-events that are new (avoid duplicates).
-                            for ev in sub_events {
-                                match &ev {
-                                    ResolutionEvent::Resolved { turn_hash: h, .. }
-                                    | ResolutionEvent::Broken { turn_hash: h, .. } => {
-                                        if *h != dep_hash {
-                                            events.push(ev);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                // Cascade resolution to dependents whose conditions are now met.
+                self.cascade_resolved(turn_hash, &entry.dependents, &receipt, &mut events);
 
                 events
             }
             ResolutionOutcome::Broken(reason) => {
                 self.propagate_broken(turn_hash, &entry.dependents, reason)
+            }
+        }
+    }
+
+    /// Recursively cascade resolution to dependents whose conditions are met.
+    fn cascade_resolved(
+        &mut self,
+        resolved_hash: [u8; 32],
+        dependents: &[[u8; 32]],
+        trigger_receipt: &TurnReceipt,
+        events: &mut Vec<ResolutionEvent>,
+    ) {
+        for &dep_hash in dependents {
+            // Check condition without removing first.
+            let should_resolve = self
+                .pending
+                .get(&dep_hash)
+                .map(|e| self.condition_met_by_receipt(&e.condition, &resolved_hash))
+                .unwrap_or(false);
+
+            if should_resolve {
+                // Remove the entry and cascade.
+                let dep_entry = self.pending.remove(&dep_hash).unwrap();
+                let dep_receipt = TurnReceipt {
+                    turn_hash: dep_hash,
+                    forest_hash: dep_entry.turn.call_forest.compute_hash(),
+                    pre_state_hash: [0u8; 32],
+                    post_state_hash: [0u8; 32],
+                    timestamp: trigger_receipt.timestamp,
+                    effects_hash: [0u8; 32],
+                    computrons_used: 0,
+                    action_count: dep_entry.turn.action_count(),
+                    previous_receipt_hash: Some(resolved_hash),
+                    agent: dep_entry.turn.agent,
+                    routing_directives: vec![],
+                    derivation_records: vec![],
+                    executor_signature: None,
+                };
+                events.push(ResolutionEvent::Resolved {
+                    turn_hash: dep_hash,
+                    receipt: dep_receipt.clone(),
+                });
+
+                // Recursively cascade to this dependent's own dependents.
+                let sub_dependents = dep_entry.dependents;
+                self.cascade_resolved(dep_hash, &sub_dependents, &dep_receipt, events);
             }
         }
     }

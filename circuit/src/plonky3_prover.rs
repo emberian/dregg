@@ -162,22 +162,22 @@ static P3_INTERNAL_DIAG: LazyLock<[P3BabyBear; WIDTH]> = LazyLock::new(|| {
 // Trace layout constants
 // ============================================================================
 
-/// Number of auxiliary columns per round (full 8-element post-state).
-const ROUND_COLS: usize = WIDTH; // 8
+/// Number of auxiliary columns per round (full 16-element post-state).
+const ROUND_COLS: usize = WIDTH; // 16
 
 /// Half the number of external rounds.
 const HALF_EXTERNAL: usize = EXTERNAL_ROUNDS / 2; // 4
 
 /// Total auxiliary columns for Poseidon2 intermediate states:
-/// 30 rounds * 8 state elements = 240
-const POSEIDON2_AUX_COLS: usize = TOTAL_ROUNDS * ROUND_COLS; // 240
+/// (1 + TOTAL_ROUNDS) * 16 = 352
+const POSEIDON2_AUX_COLS: usize = (TOTAL_ROUNDS + 1) * ROUND_COLS; // 352
 
 /// Total trace width:
 /// - 5 witness columns: current, sib0, sib1, sib2, position
-/// - 240 auxiliary columns for Poseidon2 round states
+/// - 352 auxiliary columns for Poseidon2 states
 /// - 1 parent column (== final_state[0])
-/// Total: 246
-pub const P3_TRACE_WIDTH: usize = 5 + POSEIDON2_AUX_COLS + 1; // 246
+/// Total: 358
+pub const P3_TRACE_WIDTH: usize = 5 + POSEIDON2_AUX_COLS + 1; // 358
 
 /// Offset where round states begin in the trace row.
 const ROUND_STATES_OFFSET: usize = 5;
@@ -193,7 +193,7 @@ const PARENT_COL: usize = P3_TRACE_WIDTH - 1; // 245
 ///
 /// Each trace row represents one Merkle tree level. The row contains:
 /// - The Merkle witness data (current hash, siblings, position)
-/// - All intermediate Poseidon2 permutation states (30 rounds x 8 = 240 columns)
+/// - All intermediate Poseidon2 permutation states ((1+21) x 16 = 352 columns)
 /// - The parent hash output
 ///
 /// The AIR constraints enforce:
@@ -303,23 +303,31 @@ where
         let one_minus_l3: AB::Expr = one.clone() - l3.clone();
         let child3: AB::Expr = sib2.clone() * one_minus_l3 + current.clone() * l3.clone();
 
-        // Initial Poseidon2 state: [child0, child1, child2, child3, 4, 0, 0, 0]
+        // Initial Poseidon2 state: [child0, child1, child2, child3, 4, 0, ..., 0]
         let four = AB::F::from_u32(4);
-        let mut state: [AB::Expr; WIDTH] = [
-            child0,
-            child1,
-            child2,
-            child3,
-            AB::Expr::from(four),
-            AB::Expr::ZERO,
-            AB::Expr::ZERO,
-            AB::Expr::ZERO,
-        ];
+        let mut state: [AB::Expr; WIDTH] = core::array::from_fn(|i| match i {
+            0 => child0.clone(),
+            1 => child1.clone(),
+            2 => child2.clone(),
+            3 => child3.clone(),
+            4 => AB::Expr::from(four),
+            _ => AB::Expr::ZERO,
+        });
 
         let rc = &*P3_ROUND_CONSTANTS;
         let diag = &*P3_INTERNAL_DIAG;
 
+        // Apply initial linear layer
+        external_linear_layer_expr::<AB>(&mut state);
+
+        // Constrain initial linear layer output
         let mut round_col_offset = ROUND_STATES_OFFSET;
+        for j in 0..WIDTH {
+            let aux: AB::Expr = local[round_col_offset + j].into();
+            builder.assert_eq(state[j].clone(), aux.clone());
+            state[j] = aux;
+        }
+        round_col_offset += ROUND_COLS;
 
         // --- First half of external rounds (4 rounds) ---
         for round in 0..HALF_EXTERNAL {
@@ -344,7 +352,7 @@ where
             round_col_offset += ROUND_COLS;
         }
 
-        // --- Internal rounds (22 rounds) ---
+        // --- Internal rounds (13 rounds) ---
         for round in 0..INTERNAL_ROUNDS {
             let rc_idx = HALF_EXTERNAL + round;
             // Add round constant to element 0 only
@@ -417,48 +425,37 @@ where
 // Algebraic linear layers over AB::Expr
 // ============================================================================
 
-/// Apply the external linear layer (matching poseidon2.rs) over abstract expressions.
+/// Apply the external linear layer (MDSMat4 + wider) over abstract expressions.
 fn external_linear_layer_expr<AB: AirBuilder>(state: &mut [AB::Expr; WIDTH])
 where
     AB::F: PrimeField32,
 {
-    // Pairwise butterfly
-    for i in (0..WIDTH).step_by(2) {
-        let t = state[i].clone() + state[i + 1].clone();
-        state[i + 1] = state[i].clone() - state[i + 1].clone();
-        state[i] = t;
+    // Apply 4x4 MDS [2,3,1,1] to each chunk of 4
+    for cs in (0..WIDTH).step_by(4) {
+        let x0 = state[cs].clone();
+        let x1 = state[cs + 1].clone();
+        let x2 = state[cs + 2].clone();
+        let x3 = state[cs + 3].clone();
+        let t01 = x0.clone() + x1.clone();
+        let t23 = x2.clone() + x3.clone();
+        let t0123 = t01.clone() + t23.clone();
+        let t01123 = t0123.clone() + x1.clone();
+        let t01233 = t0123 + x3.clone();
+        state[cs] = t01123.clone() + t01;
+        state[cs + 1] = t01123 + x2.clone() + x2;
+        state[cs + 2] = t01233.clone() + t23;
+        state[cs + 3] = t01233 + x0.clone() + x0;
     }
-
-    // Quad butterfly
-    for i in (0..WIDTH).step_by(4) {
-        let t0 = state[i].clone() + state[i + 2].clone();
-        let t1 = state[i + 1].clone() + state[i + 3].clone();
-        state[i + 2] = state[i].clone() - state[i + 2].clone();
-        state[i + 3] = state[i + 1].clone() - state[i + 3].clone();
-        state[i] = t0;
-        state[i + 1] = t1;
-    }
-
-    // Full butterfly across halves
-    for i in 0..4 {
-        let t = state[i].clone() + state[i + 4].clone();
-        state[i + 4] = state[i].clone() - state[i + 4].clone();
-        state[i] = t;
-    }
-
-    // Multiply by small constants [2, 3, 4, 5, 6, 7, 8, 9]
-    let multipliers: [AB::F; WIDTH] = [
-        AB::F::from_u32(2),
-        AB::F::from_u32(3),
-        AB::F::from_u32(4),
-        AB::F::from_u32(5),
-        AB::F::from_u32(6),
-        AB::F::from_u32(7),
-        AB::F::from_u32(8),
-        AB::F::from_u32(9),
-    ];
+    // Wider: add column sums
+    let sums: [AB::Expr; 4] = core::array::from_fn(|k| {
+        let mut s = state[k].clone();
+        for j in (4..WIDTH).step_by(4) {
+            s = s + state[j + k].clone();
+        }
+        s
+    });
     for i in 0..WIDTH {
-        state[i] = state[i].clone() * multipliers[i];
+        state[i] = state[i].clone() + sums[i % 4].clone();
     }
 }
 
@@ -544,8 +541,8 @@ pub fn generate_sound_merkle_trace(
         row.push(siblings[i][2]);
         row.push(BabyBear::new(pos as u32));
 
-        // Auxiliary: 30 rounds x 8 elements
-        for round_idx in 1..=TOTAL_ROUNDS {
+        // Auxiliary: (1 + TOTAL_ROUNDS) x WIDTH elements
+        for round_idx in 0..=TOTAL_ROUNDS {
             for j in 0..WIDTH {
                 row.push(round_states[round_idx][j]);
             }
@@ -578,7 +575,7 @@ pub fn generate_sound_merkle_trace(
         ext_row.push(BabyBear::ZERO);
         ext_row.push(BabyBear::ZERO); // position = 0
 
-        for round_idx in 1..=TOTAL_ROUNDS {
+        for round_idx in 0..=TOTAL_ROUNDS {
             for j in 0..WIDTH {
                 ext_row.push(ext_states[round_idx][j]);
             }
@@ -816,8 +813,8 @@ mod tests {
 
     #[test]
     fn plonky3_trace_width_correct() {
-        assert_eq!(P3_TRACE_WIDTH, 5 + TOTAL_ROUNDS * WIDTH + 1);
-        assert_eq!(P3_TRACE_WIDTH, 246);
+        assert_eq!(P3_TRACE_WIDTH, 5 + (TOTAL_ROUNDS + 1) * WIDTH + 1);
+        assert_eq!(P3_TRACE_WIDTH, 358);
     }
 
     #[test]

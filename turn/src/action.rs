@@ -373,6 +373,8 @@ impl Action {
     /// Compute the BLAKE3 hash of this action (for Merkle tree inclusion).
     pub fn hash(&self) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new();
+        // Domain separation: prevents type confusion with other hash preimages.
+        hasher.update(b"pyana-action-v2:");
         hasher.update(self.target.as_bytes());
         hasher.update(&self.method);
         for arg in &self.args {
@@ -412,6 +414,10 @@ impl Action {
         for effect in &self.effects {
             hasher.update(&effect.hash());
         }
+        // Hash preconditions to prevent downgrade attacks where an attacker removes
+        // preconditions (e.g., minimum balance guards) from a signed action.
+        let preconds_bytes = postcard::to_allocvec(&self.preconditions).unwrap_or_default();
+        hasher.update(&preconds_bytes);
         *hasher.finalize().as_bytes()
     }
 }

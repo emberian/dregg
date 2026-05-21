@@ -408,6 +408,34 @@ pub async fn run_federation_sync(state: NodeState, morpheus_config: Option<Morph
         }
     });
 
+    // Spawn a periodic pending turn timeout checker.
+    // Checks every 30 seconds for pending turns that have exceeded their timeout
+    // height and propagates broken-promise notifications to dependents.
+    let state_pending = state.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            let current_height = {
+                let s = state_pending.read().await;
+                s.store
+                    .latest_attested_root()
+                    .ok()
+                    .flatten()
+                    .map(|r| r.height)
+                    .unwrap_or(0)
+            };
+            let mut s = state_pending.write().await;
+            let events = s.pending_turns.check_timeouts(current_height);
+            if !events.is_empty() {
+                info!(
+                    timed_out = events.len(),
+                    height = current_height,
+                    "pending turns timed out, broken promises propagated"
+                );
+            }
+        }
+    });
+
     // If Morpheus consensus is enabled, spawn the consensus driver.
     if let Some(_mcfg) = morpheus_config {
         // TODO: implement spawn_morpheus_driver once pyana-federation
@@ -492,6 +520,21 @@ async fn handle_turn_message(state: &NodeState, from: SocketAddr, message: PeerM
                             directives = directive_count,
                             routing_table_size = s.routing_table.len(),
                             "applied routing directives from gossiped turn"
+                        );
+                    }
+
+                    // Check if this receipt resolves any pending turns in the
+                    // distributed promise registry. Cascading resolution will
+                    // propagate to all dependents whose conditions are now met.
+                    let resolution_events = s.pending_turns.resolve(
+                        computed_hash,
+                        pyana_turn::ResolutionOutcome::Resolved(receipt.clone()),
+                    );
+                    if !resolution_events.is_empty() {
+                        info!(
+                            turn_hash = %hash_hex,
+                            resolved_count = resolution_events.len(),
+                            "receipt resolved pending turns"
                         );
                     }
 
