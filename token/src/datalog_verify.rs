@@ -141,18 +141,16 @@ pub mod rule_ids {
 /// Returns the full pyana authorization policy rule set.
 ///
 /// This extends the standard policy with rules for every caveat dimension.
-/// The semantics match the imperative `verify_caveats` logic:
+/// The Datalog rules handle POSITIVE authorization only:
 ///
-/// - Unrestricted dimensions (no facts for that predicate) always pass.
-/// - Restricted dimensions require matching.
+/// - Restricted dimensions require matching (app/service + action).
 /// - Time bounds are checked via LessThan/GreaterThan checks.
+/// - Rule 3 (unrestricted) fires ONLY for tokens with an explicit `unrestricted(1)` fact.
 ///
-/// The core insight: the imperative verifier uses "if there are no caveats of
-/// this type, pass" semantics. In Datalog, we encode this by having the ALLOW
-/// rules fire when the relevant request fact matches a token fact. When there
-/// are NO restricting facts for a dimension, the request simply doesn't need
-/// to match anything in that dimension -- we handle this by having multiple
-/// rule variants and the evaluator tries all of them.
+/// Least-privilege enforcement (missing dimension = DENY) is handled BEFORE
+/// Datalog evaluation in `verify_token_datalog_full()`. The Datalog engine
+/// only runs when we already know the request targets a dimension the token
+/// explicitly grants.
 fn full_policy() -> Vec<Rule> {
     use pyana_trace::{Atom, Check};
 
@@ -1462,5 +1460,167 @@ mod tests {
             }
             Conclusion::Deny => panic!("expected Allow"),
         }
+    }
+
+    // =========================================================================
+    // Least-privilege dimension enforcement tests (P2 security fix)
+    // =========================================================================
+
+    #[test]
+    fn test_app_scoped_token_cannot_auth_service_request() {
+        // Token: app=dashboard with rw
+        // Request: service=compute-api with r
+        // Expected: DENY (token does not grant service access)
+        let mut set = CaveatSet::new();
+        set.push(WireCaveat::new(
+            CAV_APP,
+            encode_name_actions("dashboard", "rw"),
+        ));
+
+        let request = AuthRequest {
+            service: Some("compute-api".into()),
+            action: Some("r".into()),
+            now: Some(1700000000),
+            ..Default::default()
+        };
+
+        let result = verify_token_datalog_full(&set, &request);
+        assert!(result.is_err(), "app-scoped token must NOT authorize service requests");
+        match result.unwrap_err() {
+            TokenError::Denied(msg) => {
+                assert!(msg.contains("service"), "denial reason: {}", msg);
+            }
+            other => panic!("expected Denied, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_service_scoped_token_cannot_auth_app_request() {
+        // Token: service=compute-api with rw
+        // Request: app=dashboard with r
+        // Expected: DENY (token does not grant app access)
+        let mut set = CaveatSet::new();
+        set.push(WireCaveat::new(
+            CAV_SERVICE,
+            encode_name_actions("compute-api", "rw"),
+        ));
+
+        let request = AuthRequest {
+            app_id: Some("dashboard".into()),
+            action: Some("r".into()),
+            now: Some(1700000000),
+            ..Default::default()
+        };
+
+        let result = verify_token_datalog_full(&set, &request);
+        assert!(result.is_err(), "service-scoped token must NOT authorize app requests");
+        match result.unwrap_err() {
+            TokenError::Denied(msg) => {
+                assert!(msg.contains("app"), "denial reason: {}", msg);
+            }
+            other => panic!("expected Denied, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_token_with_both_dimensions_can_auth_either() {
+        // Token: app=dashboard rw + service=compute-api rw
+        // Request for app: should ALLOW
+        // Request for service: should ALLOW
+        let mut set = CaveatSet::new();
+        set.push(WireCaveat::new(
+            CAV_APP,
+            encode_name_actions("dashboard", "rw"),
+        ));
+        set.push(WireCaveat::new(
+            CAV_SERVICE,
+            encode_name_actions("compute-api", "rw"),
+        ));
+
+        let app_request = AuthRequest {
+            app_id: Some("dashboard".into()),
+            action: Some("r".into()),
+            now: Some(1700000000),
+            ..Default::default()
+        };
+        let result = verify_token_datalog_full(&set, &app_request);
+        assert!(result.is_ok(), "token with both dimensions should allow app request");
+
+        let svc_request = AuthRequest {
+            service: Some("compute-api".into()),
+            action: Some("r".into()),
+            now: Some(1700000000),
+            ..Default::default()
+        };
+        let result = verify_token_datalog_full(&set, &svc_request);
+        assert!(result.is_ok(), "token with both dimensions should allow service request");
+    }
+
+    #[test]
+    fn test_token_with_neither_dimension_is_useless_for_app_and_service() {
+        // Token: only has a confine_user caveat (no app, no service)
+        // Request for app: should DENY
+        // Request for service: should DENY
+        let mut set = CaveatSet::new();
+        set.push(WireCaveat::new(CAV_CONFINE_USER, encode_string("alice")));
+
+        let app_request = AuthRequest {
+            app_id: Some("dashboard".into()),
+            action: Some("r".into()),
+            user_id: Some("alice".into()),
+            now: Some(1700000000),
+            ..Default::default()
+        };
+        let result = verify_token_datalog_full(&set, &app_request);
+        assert!(result.is_err(), "token without app/service grants must deny app requests");
+
+        let svc_request = AuthRequest {
+            service: Some("compute-api".into()),
+            action: Some("r".into()),
+            user_id: Some("alice".into()),
+            now: Some(1700000000),
+            ..Default::default()
+        };
+        let result = verify_token_datalog_full(&set, &svc_request);
+        assert!(result.is_err(), "token without app/service grants must deny service requests");
+    }
+
+    #[test]
+    fn test_empty_token_is_unrestricted() {
+        // Empty caveat set = root/unrestricted token (no caveats to restrict)
+        // Should allow anything.
+        let set = CaveatSet::new();
+
+        let request = AuthRequest {
+            app_id: Some("anything".into()),
+            service: Some("anything".into()),
+            action: Some("r".into()),
+            now: Some(1700000000),
+            ..Default::default()
+        };
+        let result = verify_token_datalog_full(&set, &request);
+        assert!(result.is_ok(), "empty (unrestricted) token should allow all requests");
+    }
+
+    #[test]
+    fn test_least_privilege_old_path_agrees() {
+        // Verify the old verify_caveats path also denies cross-dimension requests.
+        let mut set = CaveatSet::new();
+        set.push(WireCaveat::new(
+            CAV_APP,
+            encode_name_actions("dashboard", "rw"),
+        ));
+
+        // App token -> service request: both paths should deny
+        let request = AuthRequest {
+            service: Some("compute-api".into()),
+            action: Some("r".into()),
+            now: Some(1700000000),
+            ..Default::default()
+        };
+        let old_result = crate::pyana_caveats::verify_caveats(&set, &request);
+        let new_result = verify_token_datalog_full(&set, &request);
+        assert!(old_result.is_err(), "old path must also deny cross-dimension");
+        assert!(new_result.is_err(), "new path must deny cross-dimension");
     }
 }

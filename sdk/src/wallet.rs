@@ -146,9 +146,37 @@ impl HeldToken {
         }
     }
 
+    /// Create a new attenuated HeldToken (zeroed root_key — cannot mint or forge).
+    ///
+    /// Attenuated tokens carry only the encoded macaroon chain. They can be
+    /// further attenuated and presented for verification, but cannot mint new
+    /// root tokens or produce federation membership proofs.
+    pub(crate) fn new_attenuated(
+        label: String,
+        service: String,
+        encoded: String,
+        id: String,
+    ) -> Self {
+        Self {
+            label,
+            service,
+            encoded,
+            root_key: [0u8; 32],
+            id,
+        }
+    }
+
     /// Access the root key by reference (internal use only).
     pub(crate) fn root_key(&self) -> &[u8; 32] {
         &self.root_key
+    }
+
+    /// Returns `true` if this token holds the root forging key.
+    ///
+    /// Attenuated and delegated tokens have a zeroed root_key and return `false`.
+    /// Only root tokens minted by this wallet return `true`.
+    pub fn can_mint(&self) -> bool {
+        self.root_key != [0u8; 32]
     }
 
     /// Decode this held token into a [`MacaroonToken`] for operations.
@@ -436,11 +464,13 @@ impl AgentWallet {
         let id = format!("{}:att:{}", token.id, self.next_token_id);
         self.next_token_id += 1;
 
-        let held = HeldToken::new(
+        // SECURITY: Attenuated tokens do NOT carry the root forging key.
+        // They can be further attenuated and presented for verification,
+        // but cannot mint new root tokens or bypass the attenuation chain.
+        let held = HeldToken::new_attenuated(
             format!("attenuated:{}", token.service),
             token.service.clone(),
             encoded,
-            *token.root_key(),
             id,
         );
 
@@ -854,6 +884,17 @@ impl AgentWallet {
         token: &HeldToken,
         request: &AuthRequest,
     ) -> Result<BridgePresentationProof, SdkError> {
+        // SECURITY: Use the token's actual root_key for the federation membership proof.
+        // Attenuated tokens (root_key == zeroed) cannot generate federation membership
+        // proofs — they must be proven through their delegation chain instead.
+        if !token.can_mint() {
+            return Err(SdkError::MissingKey(
+                "attenuated tokens cannot generate federation membership proofs; \
+                 use the root token holder to prove, or present the attenuated chain directly"
+                    .into(),
+            ));
+        }
+
         let issuer_key = *token.root_key();
         let federation_root_bb = Self::compute_federation_root_bb(&issuer_key);
         let federation_root = Self::bb_to_bytes(federation_root_bb);
@@ -864,10 +905,10 @@ impl AgentWallet {
             federation_root_bb,
         );
 
-        // Mint a fresh token from the root key for the builder
-        // (since MacaroonToken is not Clone, we create a new one from the key).
-        let fresh_token = MacaroonToken::mint(*token.root_key(), token.id.as_bytes(), &token.service);
-        builder.set_root_token(fresh_token);
+        // Use the ACTUAL encoded token (which includes all attenuations/caveats)
+        // rather than minting a fresh unrestricted token from the root key.
+        let actual_token = token.decode()?;
+        builder.set_root_token(actual_token);
 
         let proof = builder.prove(request)?;
         Ok(proof)
@@ -886,6 +927,14 @@ impl AgentWallet {
         token: &HeldToken,
         request: &AuthRequest,
     ) -> Result<BridgePresentationProof, SdkError> {
+        if !token.can_mint() {
+            return Err(SdkError::MissingKey(
+                "attenuated tokens cannot generate federation membership proofs; \
+                 use the root token holder to prove, or present the attenuated chain directly"
+                    .into(),
+            ));
+        }
+
         let issuer_key = *token.root_key();
         let federation_root_bb = Self::compute_federation_root_bb(&issuer_key);
         let federation_root = Self::bb_to_bytes(federation_root_bb);
@@ -896,8 +945,9 @@ impl AgentWallet {
             federation_root_bb,
         );
 
-        let fresh_token = MacaroonToken::mint(*token.root_key(), token.id.as_bytes(), &token.service);
-        builder.set_root_token(fresh_token);
+        // Use the ACTUAL encoded token rather than minting fresh.
+        let actual_token = token.decode()?;
+        builder.set_root_token(actual_token);
 
         let proof = builder.prove_fast(request)?;
         Ok(proof)
@@ -919,6 +969,14 @@ impl AgentWallet {
         attenuations: &[Attenuation],
         request: &AuthRequest,
     ) -> Result<BridgePresentationProof, SdkError> {
+        if !root_token.can_mint() {
+            return Err(SdkError::MissingKey(
+                "attenuated tokens cannot generate federation membership proofs; \
+                 use the root token holder to prove"
+                    .into(),
+            ));
+        }
+
         let issuer_key = *root_token.root_key();
         let federation_root_bb = Self::compute_federation_root_bb(&issuer_key);
         let federation_root = Self::bb_to_bytes(federation_root_bb);
@@ -929,12 +987,9 @@ impl AgentWallet {
             federation_root_bb,
         );
 
-        let fresh_token = MacaroonToken::mint(
-            *root_token.root_key(),
-            root_token.id.as_bytes(),
-            &root_token.service,
-        );
-        builder.set_root_token(fresh_token);
+        // Use the actual encoded token (preserves existing caveats).
+        let actual_token = root_token.decode()?;
+        builder.set_root_token(actual_token);
 
         for att in attenuations {
             builder.add_attenuation(att);
@@ -1257,5 +1312,69 @@ mod tests {
         assert!(wallet.export_mnemonic().is_none());
         assert!(wallet.export_seed().is_none());
         assert!(wallet.derivation_path().is_none());
+    }
+
+    #[test]
+    fn test_attenuated_token_has_zeroed_root_key() {
+        let mut wallet = AgentWallet::new();
+        let root_key = [42u8; 32];
+        let root_token = wallet.mint_token(&root_key, "compute");
+
+        // Root token holds the actual key.
+        assert!(root_token.can_mint());
+        assert_eq!(root_token.root_key(), &root_key);
+
+        // Attenuate: restrict to read-only on "compute" service.
+        let restrictions = Attenuation {
+            services: vec![("compute".to_string(), "r".to_string())],
+            ..Default::default()
+        };
+        let attenuated = wallet.attenuate(&root_token, &restrictions).unwrap();
+
+        // SECURITY: The attenuated token must NOT carry the root forging key.
+        assert!(!attenuated.can_mint());
+        assert_eq!(attenuated.root_key(), &[0u8; 32]);
+
+        // The attenuated token cannot be used to mint new tokens (prove_authorization fails).
+        let request = pyana_token::AuthRequest {
+            service: Some("compute".into()),
+            action: Some("r".into()),
+            ..Default::default()
+        };
+        let proof_result = wallet.prove_authorization(&attenuated, &request);
+        assert!(proof_result.is_err(), "attenuated token should not be able to generate federation membership proofs");
+
+        // But the ROOT token can still prove.
+        let root_proof_result = wallet.prove_authorization(&root_token, &request);
+        assert!(root_proof_result.is_ok(), "root token should still be able to prove");
+    }
+
+    #[test]
+    fn test_delegated_token_has_zeroed_root_key() {
+        let mut wallet = AgentWallet::new();
+        let root_key = [99u8; 32];
+        let root_token = wallet.mint_token(&root_key, "storage");
+
+        let delegatee_wallet = AgentWallet::new();
+        let delegatee_pk = delegatee_wallet.public_key();
+
+        let restrictions = Attenuation {
+            services: vec![("storage".to_string(), "r".to_string())],
+            ..Default::default()
+        };
+        let delegated = wallet.delegate(&root_token, &delegatee_pk, &restrictions).unwrap();
+
+        // The delegated token's underlying attenuated HeldToken in the wallet
+        // should also have zeroed root_key.
+        let attenuated_in_wallet = wallet.tokens().iter().find(|t| t.id.contains("att")).unwrap();
+        assert!(!attenuated_in_wallet.can_mint());
+        assert_eq!(attenuated_in_wallet.root_key(), &[0u8; 32]);
+
+        // When the delegatee receives it, they also don't get root_key.
+        let mut recv_wallet = AgentWallet::new();
+        recv_wallet.receive_delegation(delegated);
+        let held = recv_wallet.tokens().first().unwrap();
+        assert!(!held.can_mint());
+        assert_eq!(held.root_key(), &[0u8; 32]);
     }
 }

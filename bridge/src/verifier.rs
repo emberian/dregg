@@ -91,7 +91,8 @@ impl ProofVerifier for StarkProofVerifier {
             .map(|&v| BabyBear::new(v))
             .collect();
 
-        if pi.len() < 2 {
+        // Expect at least [leaf_hash, merkle_root, action_commitment]
+        if pi.len() < 3 {
             return false;
         }
 

@@ -433,7 +433,12 @@ impl PresentationAir {
         // 3. Prove issuer membership with REAL STARK + Poseidon2 hashing.
         //    This uses MerklePoseidon2StarkAir (collision-resistant) instead of
         //    MerkleStarkAir (linear).
-        let merkle_stark_proof = generate_merkle_poseidon2_stark_proof(&w.issuer_membership)?;
+        //    The proof is bound to the request_predicate (action commitment) to
+        //    prevent replay across different authorization requests.
+        let merkle_stark_proof = generate_merkle_poseidon2_stark_proof_bound(
+            &w.issuer_membership,
+            w.request_predicate,
+        )?;
 
         // Compute public inputs
         let initial_root = if let Some(first_fold) = w.fold_chain.first() {
@@ -949,6 +954,56 @@ pub fn generate_merkle_poseidon2_stark_proof(witness: &MerkleWitness) -> Option<
     if trace.len() < 2 {
         return None;
     }
+
+    // Generate the STARK proof with Poseidon2 constraints
+    let air = MerklePoseidon2StarkAir;
+    let proof = stark::prove(&air, &trace, &public_inputs);
+
+    // Sanity check: verify our own proof
+    match stark::verify(&air, &proof, &public_inputs) {
+        Ok(()) => Some(proof),
+        Err(_) => None,
+    }
+}
+
+/// Generate a real STARK proof for Merkle membership with Poseidon2 hashing,
+/// binding the proof to a specific action via an action commitment.
+///
+/// The action commitment is appended as an additional public input, producing
+/// public inputs of the form `[leaf_hash, root, action_commitment]`. This
+/// prevents the proof from being replayed against a different action.
+///
+/// The `action_commitment` should be computed as:
+/// `poseidon2::hash_many(&BabyBear::encode_hash(&blake3_hash_of_action))`
+pub fn generate_merkle_poseidon2_stark_proof_bound(
+    witness: &MerkleWitness,
+    action_commitment: BabyBear,
+) -> Option<StarkProof> {
+    use crate::poseidon2_air::{self, MerklePoseidon2StarkAir};
+
+    let depth = witness.levels.len();
+    if depth < 2 {
+        return None;
+    }
+
+    let siblings: Vec<[BabyBear; 3]> = witness.levels.iter().map(|l| l.siblings).collect();
+    let positions: Vec<u8> = witness.levels.iter().map(|l| l.position).collect();
+
+    let (trace, mut public_inputs) =
+        poseidon2_air::generate_merkle_poseidon2_trace(witness.leaf_hash, &siblings, &positions);
+
+    // The trace's computed root must match the witness's expected_root
+    if public_inputs.len() < 2 || public_inputs[1] != witness.expected_root {
+        return None;
+    }
+
+    if trace.len() < 2 {
+        return None;
+    }
+
+    // Append the action commitment as an additional public input.
+    // This binds the proof to a specific action, preventing replay.
+    public_inputs.push(action_commitment);
 
     // Generate the STARK proof with Poseidon2 constraints
     let air = MerklePoseidon2StarkAir;

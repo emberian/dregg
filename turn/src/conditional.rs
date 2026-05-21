@@ -438,9 +438,31 @@ pub fn validate_conditional_submission(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pyana_circuit::poseidon2_air::generate_merkle_poseidon2_trace;
+    use pyana_circuit::stark::{self as circuit_stark, proof_to_bytes};
 
     fn nullifiers() -> HashSet<[u8; 32]> {
         HashSet::new()
+    }
+
+    /// Generate a valid STARK proof for MerklePoseidon2StarkAir with the given
+    /// public outputs (as raw u32 values). Returns (proof_bytes, public_outputs).
+    fn generate_valid_stark_proof(leaf_val: u32) -> (Vec<u8>, Vec<u32>) {
+        let leaf_hash = BabyBear::new(leaf_val);
+        let siblings = [
+            [BabyBear::new(100), BabyBear::new(200), BabyBear::new(300)],
+            [BabyBear::new(400), BabyBear::new(500), BabyBear::new(600)],
+            [BabyBear::new(700), BabyBear::new(800), BabyBear::new(900)],
+            [BabyBear::new(1000), BabyBear::new(1100), BabyBear::new(1200)],
+        ];
+        let positions: [u8; 4] = [0, 1, 2, 3];
+        let (trace, public_inputs) =
+            generate_merkle_poseidon2_trace(leaf_hash, &siblings, &positions);
+        let air = MerklePoseidon2StarkAir;
+        let proof = circuit_stark::prove(&air, &trace, &public_inputs);
+        let proof_bytes = proof_to_bytes(&proof);
+        let public_outputs: Vec<u32> = public_inputs.iter().map(|bb| bb.0).collect();
+        (proof_bytes, public_outputs)
     }
 
     #[test]
@@ -479,16 +501,17 @@ mod tests {
     #[test]
     fn test_remote_proof_resolved() {
         let fed_root = [1u8; 32];
+        let (proof_bytes, public_outputs) = generate_valid_stark_proof(12345);
         let condition = ProofCondition::RemoteProof {
             federation_root: fed_root,
-            expected_air: "transfer_air".to_string(),
-            expected_conclusion: 1,
+            expected_air: "pyana-merkle-poseidon2-v1".to_string(),
+            expected_conclusion: public_outputs[0],
         };
         let proof = ConditionProof::StarkProof {
-            proof_bytes: vec![0xDE, 0xAD, 0xBE, 0xEF],
+            proof_bytes,
             federation_root: fed_root,
-            public_outputs: vec![1],
-            air_name: "transfer_air".to_string(),
+            public_outputs,
+            air_name: "pyana-merkle-poseidon2-v1".to_string(),
         };
         let trusted = vec![(fed_root, 5u64)];
         let mut n = nullifiers();
@@ -537,15 +560,16 @@ mod tests {
 
     #[test]
     fn test_local_proof_resolved() {
+        let (proof_bytes, public_outputs) = generate_valid_stark_proof(54321);
         let condition = ProofCondition::LocalProof {
-            expected_air: "compute_air".to_string(),
-            expected_public_inputs: vec![100, 200, 300],
+            expected_air: "pyana-merkle-poseidon2-v1".to_string(),
+            expected_public_inputs: public_outputs.clone(),
         };
         let proof = ConditionProof::StarkProof {
-            proof_bytes: vec![0xFF; 64],
+            proof_bytes,
             federation_root: [0u8; 32],
-            public_outputs: vec![100, 200, 300],
-            air_name: "compute_air".to_string(),
+            public_outputs,
+            air_name: "pyana-merkle-poseidon2-v1".to_string(),
         };
         let mut n = nullifiers();
         let result = resolve_condition(&condition, &proof, 10, 100, &[], DEFAULT_MAX_ROOT_AGE, &mut n);
@@ -806,25 +830,27 @@ mod tests {
         let fed_root = [0x01; 32];
         let trusted = vec![(fed_root, 50u64)];
 
+        let (proof_bytes, public_outputs) = generate_valid_stark_proof(99999);
+
         // Two different conditions (same AIR, same root — different turns) that
         // could both be satisfied by the same proof if we didn't have nullifiers.
         let condition_1 = ProofCondition::RemoteProof {
             federation_root: fed_root,
-            expected_air: "transfer_air".to_string(),
-            expected_conclusion: 1,
+            expected_air: "pyana-merkle-poseidon2-v1".to_string(),
+            expected_conclusion: public_outputs[0],
         };
         let condition_2 = ProofCondition::RemoteProof {
             federation_root: fed_root,
-            expected_air: "transfer_air".to_string(),
-            expected_conclusion: 1,
+            expected_air: "pyana-merkle-poseidon2-v1".to_string(),
+            expected_conclusion: public_outputs[0],
         };
 
         // The same valid proof.
         let proof = ConditionProof::StarkProof {
-            proof_bytes: vec![0xDE, 0xAD, 0xBE, 0xEF],
+            proof_bytes,
             federation_root: fed_root,
-            public_outputs: vec![1],
-            air_name: "transfer_air".to_string(),
+            public_outputs,
+            air_name: "pyana-merkle-poseidon2-v1".to_string(),
         };
 
         let mut used = nullifiers();
@@ -1054,13 +1080,8 @@ mod tests {
 
     /// Adversarial test 7: Huge proof bytes (DoS).
     ///
-    /// Present a 100MB proof_bytes. The system should fail fast (due to empty-content
-    /// or size checks) without attempting to parse/verify the entire blob.
-    /// NOTE: We allocate only the length needed to exceed a reasonable limit, but
-    /// since the current code only checks `is_empty()`, a large proof that passes
-    /// all other checks will be "Resolved". This test documents that the current
-    /// protection is the `is_empty()` check — a full STARK verifier would reject
-    /// malformed bytes. We verify it does NOT panic or OOM.
+    /// Present a huge garbage proof_bytes blob. The STARK deserializer should
+    /// fail fast with an invalid header error. We verify it does NOT panic or OOM.
     #[test]
     fn adversarial_huge_proof_bytes_no_panic() {
         let fed_root = [0x07; 32];
@@ -1083,19 +1104,14 @@ mod tests {
         };
 
         let mut used = nullifiers();
-        // This should not panic or OOM. Since we don't have a real STARK verifier,
-        // the proof passes the structural checks and resolves. The important thing
-        // is no crash.
+        // This should not panic or OOM. The STARK verifier rejects it as malformed.
         let result = resolve_condition(
             &condition, &proof, 60, 100, &trusted, DEFAULT_MAX_ROOT_AGE, &mut used,
         );
-        // The proof is non-empty, AIR matches, root is trusted and fresh,
-        // conclusion >= expected. Without a real verifier, it resolves.
-        // This test verifies no panic/OOM — a production system would add a size cap.
+        // The garbage bytes will fail deserialization, returning InvalidProof.
         assert!(
-            result == ConditionalResult::Resolved
-                || matches!(result, ConditionalResult::InvalidProof(_)),
-            "huge proof must not panic: got {:?}", result
+            matches!(result, ConditionalResult::InvalidProof(_)),
+            "huge garbage proof must be rejected: got {:?}", result
         );
     }
 }

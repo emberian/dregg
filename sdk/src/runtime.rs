@@ -330,12 +330,12 @@ impl AgentRuntime {
         let token_id = format!("sub:{}:{}", token.id, sub_pk.short_hex());
         let delegated_label = format!("delegated:{}", token.service);
 
-        // Build the HeldToken for the sub-agent before consuming `encoded`.
-        let delegated_token = HeldToken::new(
+        // SECURITY: The sub-agent receives an attenuated token with zeroed root_key.
+        // It cannot mint new root tokens or bypass the attenuation chain.
+        let delegated_token = HeldToken::new_attenuated(
             delegated_label.clone(),
             token.service.clone(),
             encoded.clone(),
-            *token.root_key(),
             token_id.clone(),
         );
 

@@ -1024,10 +1024,11 @@ mod tests {
     }
 
     #[test]
-    fn test_verify_unrestricted_dimension_allowed() {
+    fn test_verify_unrestricted_dimension_denied() {
         // Token restricted to an app, but request asks for a service (no
-        // service caveats) — should be allowed since the service dimension
-        // is unrestricted.
+        // service caveats) — must be DENIED under least-privilege semantics.
+        // A token that doesn't restrict a dimension must NOT be usable for
+        // requests in that dimension.
         let mut set = CaveatSet::new();
         set.push(WireCaveat::new(
             CAV_APP,
@@ -1040,7 +1041,8 @@ mod tests {
             now: Some(1700000000),
             ..Default::default()
         };
-        assert!(verify_caveats(&set, &request).is_ok());
+        assert!(verify_caveats(&set, &request).is_err(),
+            "app-scoped token must not authorize service requests");
     }
 
     #[test]
