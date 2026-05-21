@@ -11,7 +11,7 @@
 //! that reference outputs of earlier turns, and the executor resolves them
 //! in causal order — all in a single network round-trip.
 
-use pyana_cell::{AuthRequired, CapabilityRef, CellId, Ledger, Permissions};
+use pyana_cell::{AuthRequired, CellId, Ledger, Permissions};
 use pyana_turn::{
     Action, Authorization, CallForest, ComputronCosts, CommitmentMode,
     DelegationMode, Effect, Pipeline, PipelineError, TurnExecutor,

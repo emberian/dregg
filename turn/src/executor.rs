@@ -1285,7 +1285,7 @@ impl TurnExecutor {
                 let sealer_slot = sealer_cell.capabilities.grant_with_breadstuff(
                     sealer_cap_id,
                     pyana_cell::AuthRequired::None,
-                    Some(pair.unsealer_secret),
+                    Some(pair.sealer_public),
                 );
                 journal.record_grant_capability(*sealer_holder, sealer_slot);
 

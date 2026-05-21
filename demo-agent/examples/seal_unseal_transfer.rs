@@ -55,8 +55,8 @@ fn main() {
 
     let pair = SealPair::generate();
     println!("  Pair ID: {:02x}{:02x}{:02x}{:02x}...", pair.id[0], pair.id[1], pair.id[2], pair.id[3]);
-    println!("  Sealer key (Alice keeps): {:02x}{:02x}...", pair.sealer_key[0], pair.sealer_key[1]);
-    println!("  Unsealer key (given to Bob): {:02x}{:02x}...", pair.unsealer_key[0], pair.unsealer_key[1]);
+    println!("  Sealer public key (Alice keeps): {:02x}{:02x}...", pair.sealer_public[0], pair.sealer_public[1]);
+    println!("  Unsealer secret key (given to Bob): {:02x}{:02x}...", pair.unsealer_secret[0], pair.unsealer_secret[1]);
     println!();
     println!("  In practice: Alice submits a CreateSealPair effect naming herself as");
     println!("  sealer_holder and Bob as unsealer_holder. The executor grants the");
@@ -117,7 +117,7 @@ fn main() {
     println!("  VERIFIED: recovered capability == original capability");
     println!();
     println!("  In practice: Bob submits an Unseal effect with the SealedBox.");
-    println!("  The executor decrypts it using the sealer_key stored in Bob's unsealer");
+    println!("  The executor decrypts it using the unsealer_secret stored in Bob's unsealer");
     println!("  capability breadstuff, then grants the recovered cap to Bob's c-list.");
     println!();
 

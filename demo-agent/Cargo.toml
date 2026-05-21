@@ -83,3 +83,6 @@ name = "progressive_disclosure"
 
 [[example]]
 name = "note_privacy"
+
+[[example]]
+name = "pipeline_demo"
