@@ -1,34 +1,32 @@
 //! Key management with encryption at rest.
 //!
-//! Signing keys are stored encrypted: the master key is used to derive an
-//! encryption key via BLAKE3's keyed hash, and then XOR-based authenticated
-//! encryption is applied (BLAKE3 as a stream cipher + MAC).
-//!
-//! This is a simplified authenticated encryption scheme suitable for 32-byte
-//! keys. For production, a proper AEAD (XChaCha20-Poly1305) would be used,
-//! but we keep dependencies minimal here.
+//! Signing keys are stored encrypted using ChaCha20-Poly1305 (a standard AEAD).
+//! The encryption key is derived from the master key via BLAKE3's KDF mode with
+//! a domain-separated context string.
 //!
 //! Public keys are stored in plaintext since they are not secret.
 
+use chacha20poly1305::{ChaCha20Poly1305, KeyInit, aead::Aead};
 use redb::ReadableTable;
+use subtle::ConstantTimeEq;
 
 use crate::tables;
 use crate::{PersistentStore, Result, StoreError};
 
-/// Size of the nonce used for key encryption.
-const NONCE_SIZE: usize = 16;
+/// Size of the nonce used for ChaCha20-Poly1305.
+const NONCE_SIZE: usize = 12;
 
-/// Size of the authentication tag.
-const TAG_SIZE: usize = 32;
+/// Size of the Poly1305 authentication tag.
+const TAG_SIZE: usize = 16;
 
-/// Total size of an encrypted key blob: nonce + ciphertext(32) + tag.
+/// Total size of an encrypted key blob: nonce(12) + ciphertext(32) + tag(16).
 const ENCRYPTED_BLOB_SIZE: usize = NONCE_SIZE + 32 + TAG_SIZE;
 
 impl PersistentStore {
     /// Store a signing key encrypted with the given master key.
     ///
-    /// The key is encrypted using a BLAKE3-derived keystream and authenticated
-    /// with a BLAKE3-keyed MAC. The nonce is randomly generated and stored
+    /// The key is encrypted using ChaCha20-Poly1305 with a key derived from the
+    /// master key via BLAKE3's KDF mode. The nonce is randomly generated and stored
     /// alongside the ciphertext.
     pub fn store_signing_key(
         &self,
@@ -159,42 +157,42 @@ impl PersistentStore {
 }
 
 // =============================================================================
-// Key Encryption/Decryption
+// Key Encryption/Decryption (ChaCha20-Poly1305)
 // =============================================================================
 
-/// Encrypt a 32-byte key using BLAKE3-based authenticated encryption.
+/// Encrypt a 32-byte key using ChaCha20-Poly1305.
 ///
-/// Format: nonce (16 bytes) || ciphertext (32 bytes) || tag (32 bytes)
+/// Format: nonce (12 bytes) || ciphertext+tag (32 + 16 bytes)
 ///
-/// The encryption key is derived as: BLAKE3-keyed(master_key, "pyana-store key-enc v1" || nonce)
-/// The keystream is: first 32 bytes of the derived output.
-/// The tag is: BLAKE3-keyed(master_key, "pyana-store key-mac v1" || nonce || ciphertext)
+/// The AEAD key is derived from the master key using BLAKE3's KDF mode with
+/// a domain-separated context string. This is a standard AEAD construction
+/// providing both confidentiality and authenticity.
 fn encrypt_key(key: &[u8; 32], master_key: &[u8; 32]) -> Result<Vec<u8>> {
     // Generate random nonce.
-    let mut nonce = [0u8; NONCE_SIZE];
-    getrandom::fill(&mut nonce).map_err(|e| StoreError::Crypto(e.to_string()))?;
+    let mut nonce_bytes = [0u8; NONCE_SIZE];
+    getrandom::fill(&mut nonce_bytes).map_err(|e| StoreError::Crypto(e.to_string()))?;
 
-    // Derive encryption keystream.
-    let keystream = derive_keystream(master_key, &nonce);
+    // Derive the AEAD key from the master key.
+    let aead_key = derive_aead_key(master_key);
+    let cipher = ChaCha20Poly1305::new((&aead_key).into());
+    let nonce = chacha20poly1305::Nonce::from(nonce_bytes);
 
-    // XOR to encrypt.
-    let mut ciphertext = [0u8; 32];
-    for i in 0..32 {
-        ciphertext[i] = key[i] ^ keystream[i];
-    }
+    let ciphertext = cipher
+        .encrypt(&nonce, key.as_slice())
+        .map_err(|e| StoreError::Crypto(format!("encryption failed: {e}")))?;
 
-    // Compute authentication tag.
-    let tag = compute_tag(master_key, &nonce, &ciphertext);
-
-    // Assemble blob.
-    let mut blob = Vec::with_capacity(ENCRYPTED_BLOB_SIZE);
-    blob.extend_from_slice(&nonce);
+    // Assemble blob: nonce || ciphertext (which includes the 16-byte Poly1305 tag).
+    let mut blob = Vec::with_capacity(NONCE_SIZE + ciphertext.len());
+    blob.extend_from_slice(&nonce_bytes);
     blob.extend_from_slice(&ciphertext);
-    blob.extend_from_slice(&tag);
     Ok(blob)
 }
 
 /// Decrypt a 32-byte key from an encrypted blob.
+///
+/// Uses ChaCha20-Poly1305 which provides authenticated decryption: if the master
+/// key is wrong or the data has been tampered with, decryption will fail with an
+/// authentication error (constant-time tag verification is built into the AEAD).
 fn decrypt_key(blob: &[u8], master_key: &[u8; 32]) -> Result<[u8; 32]> {
     if blob.len() != ENCRYPTED_BLOB_SIZE {
         return Err(StoreError::Crypto(format!(
@@ -203,56 +201,46 @@ fn decrypt_key(blob: &[u8], master_key: &[u8; 32]) -> Result<[u8; 32]> {
         )));
     }
 
-    let nonce = &blob[..NONCE_SIZE];
-    let ciphertext = &blob[NONCE_SIZE..NONCE_SIZE + 32];
-    let stored_tag = &blob[NONCE_SIZE + 32..];
+    let nonce_bytes = &blob[..NONCE_SIZE];
+    let ciphertext_and_tag = &blob[NONCE_SIZE..];
 
-    // Verify authentication tag first.
-    let nonce_arr: [u8; NONCE_SIZE] = nonce.try_into().unwrap();
-    let ct_arr: [u8; 32] = ciphertext.try_into().unwrap();
-    let expected_tag = compute_tag(master_key, &nonce_arr, &ct_arr);
+    // Derive the AEAD key from the master key.
+    let aead_key = derive_aead_key(master_key);
+    let cipher = ChaCha20Poly1305::new((&aead_key).into());
+    let nonce = chacha20poly1305::Nonce::from_slice(nonce_bytes);
 
-    if !constant_time_eq(&expected_tag, stored_tag) {
-        return Err(StoreError::Crypto(
-            "authentication failed: invalid master key or corrupted data".to_string(),
-        ));
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext_and_tag)
+        .map_err(|_| {
+            StoreError::Crypto(
+                "authentication failed: invalid master key or corrupted data".to_string(),
+            )
+        })?;
+
+    let mut key = [0u8; 32];
+    if plaintext.len() != 32 {
+        return Err(StoreError::Crypto(format!(
+            "decrypted key has wrong length: expected 32, got {}",
+            plaintext.len()
+        )));
     }
-
-    // Derive keystream and decrypt.
-    let keystream = derive_keystream(master_key, &nonce_arr);
-    let mut plaintext = [0u8; 32];
-    for i in 0..32 {
-        plaintext[i] = ciphertext[i] ^ keystream[i];
-    }
-
-    Ok(plaintext)
+    key.copy_from_slice(&plaintext);
+    Ok(key)
 }
 
-/// Derive a 32-byte keystream from master key and nonce.
-fn derive_keystream(master_key: &[u8; 32], nonce: &[u8; NONCE_SIZE]) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new_derive_key("pyana-store key-enc v1");
-    hasher.update(master_key);
-    hasher.update(nonce);
-    *hasher.finalize().as_bytes()
+/// Derive a 32-byte AEAD key from the master key using BLAKE3's KDF mode.
+///
+/// The context string provides domain separation ensuring the derived key
+/// cannot be confused with keys derived for other purposes from the same master.
+fn derive_aead_key(master_key: &[u8; 32]) -> [u8; 32] {
+    blake3::derive_key("pyana-store key-encryption v2", master_key)
 }
 
-/// Compute an authentication tag over nonce + ciphertext.
-fn compute_tag(master_key: &[u8; 32], nonce: &[u8; NONCE_SIZE], ciphertext: &[u8; 32]) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new_derive_key("pyana-store key-mac v1");
-    hasher.update(master_key);
-    hasher.update(nonce);
-    hasher.update(ciphertext);
-    *hasher.finalize().as_bytes()
-}
-
-/// Constant-time comparison of two byte slices.
-fn constant_time_eq(a: &[u8; 32], b: &[u8]) -> bool {
-    if b.len() != 32 {
-        return false;
-    }
-    let mut diff = 0u8;
-    for i in 0..32 {
-        diff |= a[i] ^ b[i];
-    }
-    diff == 0
+/// Constant-time comparison using the `subtle` crate.
+///
+/// This is used for any security-sensitive comparisons where timing side-channels
+/// could leak information about the expected value.
+#[allow(dead_code)]
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    a.ct_eq(b).into()
 }

@@ -29,4 +29,6 @@ pub mod node;
 pub use causal::{CausalDag, CausalError, DagEntry, HashMismatch};
 pub use gossip::{GossipEvent, GossipNetwork, MessageStream, TopicHandle};
 pub use message::PeerMessage;
-pub use node::{AllowlistVerifier, NodeId, PeerConnection, PeerNode, PeerNodeConfig};
+pub use node::{
+    AllowlistVerifier, ConnectionRateLimiter, NodeId, PeerConnection, PeerNode, PeerNodeConfig,
+};

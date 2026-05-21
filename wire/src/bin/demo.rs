@@ -205,10 +205,17 @@ async fn main() {
     let authority_sig = pyana_wire::prelude::Signature(authority_sig_bytes);
     let authority = pyana_wire::prelude::PublicKey([0xAC; 32]);
 
+    let mut revoke_nonce = [0u8; 16];
+    getrandom::fill(&mut revoke_nonce).expect("getrandom failed");
     let revoke_msg = WireMessage::SubmitRevocation {
         token_id: token_id.to_string(),
         authority,
         authority_sig,
+        nonce: revoke_nonce,
+        timestamp: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0),
     };
 
     println!("  \u{2192} acme.corp \u{2192} partner.org: SubmitRevocation(\"{token_id}\")");

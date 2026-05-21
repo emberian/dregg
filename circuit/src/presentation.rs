@@ -133,10 +133,18 @@ impl PresentationProof {
 }
 
 /// Result of presentation proof verification.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PresentationVerification {
-    /// The proof is valid.
+    /// The proof is valid (cryptographically verified via STARK).
     Valid,
+    /// Local constraint check passed, but NO cryptographic proof was generated.
+    ///
+    /// This is the result from `prove_fast()`: the circuit constraints were
+    /// satisfied locally, but without a STARK proof this provides zero security
+    /// to a remote verifier. The prover could have fabricated any witness.
+    ///
+    /// **Do NOT treat this as equivalent to `Valid` in verification code.**
+    LocalOnly,
     /// A fold proof in the chain failed.
     InvalidFoldProof { index: usize },
     /// The fold chain has a break (root mismatch between steps).

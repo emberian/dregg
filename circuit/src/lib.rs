@@ -67,6 +67,7 @@
 //! - [`constraint_prover`]: Constraint satisfaction evaluator.
 //! - [`stark`]: Real STARK prover/verifier (FRI + Merkle + Fiat-Shamir).
 
+pub mod binding;
 pub mod body_membership;
 pub mod chunked_derivation;
 pub mod derivation_air;
@@ -146,3 +147,4 @@ pub use presentation::{
     AuthorizationProof, PresentationAir, PresentationProof, PresentationVerification,
     PresentationWitness, RealPresentationProof, prove_authorization,
 };
+pub use binding::compute_action_binding;

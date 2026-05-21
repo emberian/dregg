@@ -61,8 +61,8 @@ use crate::poseidon2::hash_fact;
 /// Trace width for the derivation AIR.
 /// rule_id(1) + body_hashes(8) + body_membership(8) + head_pred(1) + head_terms(4) +
 /// derived_hash(1) + sub_values(8) + body_roots(8) + head_is_var(4) + head_raw_value(4) +
-/// head_sel_var(4*8=32) + eq_checks(3*4=12) + memberof_checks(3*4=12) + gte(4+31=35) = 138
-pub const DERIVATION_AIR_WIDTH: usize = 138;
+/// head_sel_var(4*8=32) + eq_checks(3*4=12) + memberof_checks(3*4=12) + gte(4+31=35) + lt(4+31=35) = 173
+pub const DERIVATION_AIR_WIDTH: usize = 173;
 
 /// Maximum body atoms per rule.
 pub const MAX_BODY_ATOMS: usize = 8;
@@ -175,8 +175,29 @@ pub mod col {
         GTE_CHECK_DIFF_BITS_START + bit_idx
     }
 
-    /// Total columns: GTE_CHECK_DIFF_BITS_START + GTE_DIFF_BITS = 107 + 31 = 138
-    pub const _TOTAL: usize = GTE_CHECK_DIFF_BITS_START + GTE_DIFF_BITS;
+    // --- LT check columns ---
+    /// LT check layout: active, term_a, term_b, diff, diff_bits[0..30]
+    /// where diff = term_b - term_a - 1 (must be non-negative for a < b).
+    pub const LT_CHECK_START: usize = GTE_CHECK_DIFF_BITS_START + GTE_DIFF_BITS; // 138
+    /// LT active flag column.
+    pub const LT_CHECK_ACTIVE: usize = LT_CHECK_START; // 138
+    /// LT term_a (the smaller value) column.
+    pub const LT_CHECK_TERM_A: usize = LT_CHECK_START + 1; // 139
+    /// LT term_b (the larger value) column.
+    pub const LT_CHECK_TERM_B: usize = LT_CHECK_START + 2; // 140
+    /// LT diff = term_b - term_a - 1 column.
+    pub const LT_CHECK_DIFF: usize = LT_CHECK_START + 3; // 141
+    /// LT diff bit decomposition starts here (31 bits, columns 142..172).
+    pub const LT_CHECK_DIFF_BITS_START: usize = LT_CHECK_START + 4; // 142
+
+    /// Get the column for lt_check_diff_bits[bit_idx].
+    #[inline]
+    pub const fn lt_diff_bit(bit_idx: usize) -> usize {
+        LT_CHECK_DIFF_BITS_START + bit_idx
+    }
+
+    /// Total columns: LT_CHECK_DIFF_BITS_START + GTE_DIFF_BITS = 142 + 31 = 173
+    pub const _TOTAL: usize = LT_CHECK_DIFF_BITS_START + GTE_DIFF_BITS;
 }
 
 /// A rule definition for the circuit (simplified representation).
@@ -203,6 +224,10 @@ pub struct CircuitRule {
     pub memberof_checks: Vec<CircuitMemberOfCheck>,
     /// GTE check: at most one per rule (for budget enforcement).
     pub gte_check: Option<CircuitGteCheck>,
+    /// LT check: at most one per rule (for time-bounded rules).
+    /// Semantics: `term_a < term_b` (e.g., request_time < expiry).
+    /// Proven via bit decomposition of `(term_b - term_a - 1)` with high bit = 0.
+    pub lt_check: Option<CircuitLtCheck>,
 }
 
 /// An Equal check in circuit form.
@@ -246,6 +271,24 @@ pub struct CircuitGteCheck {
     /// The variable index or constant value for term_a.
     pub lhs_value: BabyBear,
     /// Is the right-hand term (b, the smaller value) a variable?
+    pub rhs_is_var: bool,
+    /// The variable index or constant value for term_b.
+    pub rhs_value: BabyBear,
+}
+
+/// A LessThan check in circuit form.
+///
+/// Semantics: "term_a < term_b" (used for time-bounded rules, e.g., `$t < $exp`).
+/// Proven via bit decomposition of `(term_b - term_a - 1)` and asserting the high bit is 0.
+/// This works because if `a < b`, then `b - a - 1 >= 0` and fits in a small positive range.
+/// If `a >= b`, then `b - a - 1` wraps to a large field element (high bit set).
+#[derive(Clone, Debug)]
+pub struct CircuitLtCheck {
+    /// Is the left-hand term (a, the smaller value) a variable?
+    pub lhs_is_var: bool,
+    /// The variable index or constant value for term_a.
+    pub lhs_value: BabyBear,
+    /// Is the right-hand term (b, the larger value) a variable?
     pub rhs_is_var: bool,
     /// The variable index or constant value for term_b.
     pub rhs_value: BabyBear,
@@ -602,6 +645,65 @@ impl Air for DerivationAir {
                     active * high_bit
                 }),
             },
+            // Constraint 20: LT check active flag is binary.
+            Constraint {
+                name: "lt_check_active_binary".to_string(),
+                eval: Box::new(|row, _, _| {
+                    let active = row[col::LT_CHECK_ACTIVE];
+                    active * (active - BabyBear::ONE)
+                }),
+            },
+            // Constraint 21: LT diff consistency.
+            // When active: diff = term_b - term_a - 1
+            Constraint {
+                name: "lt_check_diff_correct".to_string(),
+                eval: Box::new(|row, _, _| {
+                    let active = row[col::LT_CHECK_ACTIVE];
+                    let term_a = row[col::LT_CHECK_TERM_A];
+                    let term_b = row[col::LT_CHECK_TERM_B];
+                    let diff = row[col::LT_CHECK_DIFF];
+                    active * (diff - (term_b - term_a - BabyBear::ONE))
+                }),
+            },
+            // Constraint 22: LT bit decomposition is correct.
+            // When active: sum(bit_i * 2^i) = diff
+            Constraint {
+                name: "lt_check_bit_decomposition".to_string(),
+                eval: Box::new(|row, _, _| {
+                    let active = row[col::LT_CHECK_ACTIVE];
+                    let diff = row[col::LT_CHECK_DIFF];
+                    let mut recomposed = BabyBear::ZERO;
+                    let mut power_of_two = BabyBear::ONE;
+                    for i in 0..GTE_DIFF_BITS {
+                        let bit = row[col::lt_diff_bit(i)];
+                        recomposed = recomposed + bit * power_of_two;
+                        power_of_two = power_of_two + power_of_two;
+                    }
+                    active * (recomposed - diff)
+                }),
+            },
+            // Constraint 23: LT bits are binary.
+            Constraint {
+                name: "lt_check_bits_binary".to_string(),
+                eval: Box::new(|row, _, _| {
+                    let active = row[col::LT_CHECK_ACTIVE];
+                    let mut result = BabyBear::ZERO;
+                    for i in 0..GTE_DIFF_BITS {
+                        let bit = row[col::lt_diff_bit(i)];
+                        result = result + bit * (bit - BabyBear::ONE);
+                    }
+                    active * result
+                }),
+            },
+            // Constraint 24: LT high bit is 0 (ensures diff < 2^30 < p/2, meaning a < b).
+            Constraint {
+                name: "lt_check_high_bit_zero".to_string(),
+                eval: Box::new(|row, _, _| {
+                    let active = row[col::LT_CHECK_ACTIVE];
+                    let high_bit = row[col::lt_diff_bit(GTE_DIFF_BITS - 1)];
+                    active * high_bit
+                }),
+            },
         ]
     }
 
@@ -773,6 +875,49 @@ impl Air for DerivationAir {
             }
         }
 
+        // --- LT check columns ---
+        if let Some(lt_check) = &w.rule.lt_check {
+            row[col::LT_CHECK_ACTIVE] = BabyBear::ONE;
+
+            // Resolve LHS (a, the smaller value)
+            let term_a = if lt_check.lhs_is_var {
+                let idx = lt_check.lhs_value.as_u32() as usize;
+                if idx < w.substitution.len() {
+                    w.substitution[idx]
+                } else {
+                    BabyBear::ZERO
+                }
+            } else {
+                lt_check.lhs_value
+            };
+
+            // Resolve RHS (b, the larger value)
+            let term_b = if lt_check.rhs_is_var {
+                let idx = lt_check.rhs_value.as_u32() as usize;
+                if idx < w.substitution.len() {
+                    w.substitution[idx]
+                } else {
+                    BabyBear::ZERO
+                }
+            } else {
+                lt_check.rhs_value
+            };
+
+            row[col::LT_CHECK_TERM_A] = term_a;
+            row[col::LT_CHECK_TERM_B] = term_b;
+
+            // Compute diff = b - a - 1 in the field
+            let diff = term_b - term_a - BabyBear::ONE;
+            row[col::LT_CHECK_DIFF] = diff;
+
+            // Bit decomposition of diff
+            let diff_val = diff.as_u32();
+            for i in 0..GTE_DIFF_BITS {
+                let bit = (diff_val >> i) & 1;
+                row[col::lt_diff_bit(i)] = BabyBear::new(bit);
+            }
+        }
+
         let public_inputs = vec![w.state_root, derived_hash];
         (vec![row], public_inputs)
     }
@@ -819,6 +964,7 @@ pub fn create_test_derivation() -> DerivationWitness {
         equal_checks: vec![],
         memberof_checks: vec![],
         gte_check: None,
+        lt_check: None,
     };
 
     // Body fact hashes (simulated — in real use these come from Merkle proofs)
@@ -1003,6 +1149,7 @@ mod tests {
             equal_checks: vec![],
             memberof_checks: vec![],
             gte_check: None,
+        lt_check: None,
         };
 
         let body_fact = hash_fact(owns_pred, &[alice, file, BabyBear::ZERO]);
@@ -1056,6 +1203,7 @@ mod tests {
             equal_checks: vec![],
             memberof_checks: vec![],
             gte_check: None,
+        lt_check: None,
         };
 
         let body_fact = hash_fact(owns_pred, &[alice, file, BabyBear::ZERO]);
@@ -1114,6 +1262,7 @@ mod tests {
             }],
             memberof_checks: vec![],
             gte_check: None,
+        lt_check: None,
         };
 
         // X=alice, Y=alice (they are equal, so the check passes)
@@ -1174,6 +1323,7 @@ mod tests {
             }],
             memberof_checks: vec![],
             gte_check: None,
+        lt_check: None,
         };
 
         // X=alice (1000), Y=file (2000) — NOT equal
@@ -1241,6 +1391,7 @@ mod tests {
             }],
             memberof_checks: vec![],
             gte_check: None,
+        lt_check: None,
         };
 
         // X=alice=1000, check is X==1000, should pass
@@ -1301,6 +1452,7 @@ mod tests {
                 rhs_value: BabyBear::new(1), // Y (the allowed action hash)
             }],
             gte_check: None,
+        lt_check: None,
         };
 
         // X=action_hash, Y=action_hash (matching -> member)
@@ -1360,6 +1512,7 @@ mod tests {
                 rhs_value: BabyBear::new(1), // Y (allowed action)
             }],
             gte_check: None,
+        lt_check: None,
         };
 
         // X=request_hash, Y=allowed_hash (DIFFERENT -> not a member)

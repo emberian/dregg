@@ -60,17 +60,25 @@ impl AuthorizationRequest {
     }
 
     /// Compute a BLAKE3 hash of this request for signing/binding.
+    ///
+    /// Uses length-prefixed encoding to avoid ambiguity when field values contain
+    /// arbitrary bytes (a null-byte separator would be collision-prone).
     pub fn digest(&self) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new_derive_key("pyana-wire authorization-request v1");
+        // Length-prefixed encoding: each variable-length field is preceded by its
+        // byte length as a u32 LE value. This eliminates collision ambiguity
+        // regardless of field contents (e.g., fields containing null bytes).
+        hasher.update(&(self.resource.len() as u32).to_le_bytes());
         hasher.update(self.resource.as_bytes());
-        hasher.update(&[0u8]); // separator
+        hasher.update(&(self.action.len() as u32).to_le_bytes());
         hasher.update(self.action.as_bytes());
-        hasher.update(&[0u8]);
+        hasher.update(&(self.principal.len() as u32).to_le_bytes());
         hasher.update(self.principal.as_bytes());
-        hasher.update(&[0u8]);
+        // Scope count + length-prefixed scope values
+        hasher.update(&(self.scopes.len() as u32).to_le_bytes());
         for scope in &self.scopes {
+            hasher.update(&(scope.len() as u32).to_le_bytes());
             hasher.update(scope.as_bytes());
-            hasher.update(&[0u8]);
         }
         hasher.update(&self.timestamp.to_le_bytes());
         hasher.update(&self.nonce);
@@ -150,6 +158,10 @@ pub enum WireMessage {
         authority: PublicKey,
         /// Signature from the revoking authority (64 bytes, Ed25519).
         authority_sig: Signature,
+        /// Unique nonce to prevent replay attacks on revocation submissions.
+        nonce: [u8; 16],
+        /// Unix timestamp when the revocation was submitted.
+        timestamp: i64,
     },
 
     /// Acknowledgment of a revocation submission.
@@ -322,6 +334,46 @@ pub mod error_codes {
 /// The current protocol version.
 pub const PROTOCOL_VERSION: u32 = 1;
 
+/// Maximum age (in seconds) for a request timestamp to be considered fresh.
+/// Requests older than this are rejected as stale (anti-replay).
+pub const MAX_REQUEST_AGE_SECS: i64 = 300; // 5 minutes
+
+/// Maximum number of nonces to track for replay prevention.
+/// Once this limit is reached, the oldest entries are evicted.
+pub const MAX_NONCE_CACHE_SIZE: usize = 100_000;
+
+// =============================================================================
+// Wire Envelope (version-tagged wrapper)
+// =============================================================================
+
+/// A version-tagged envelope that wraps every wire message.
+///
+/// All messages on the wire MUST be wrapped in an `Envelope`. The receiver
+/// checks the version field and rejects messages with unsupported protocol
+/// versions before attempting to interpret the payload.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Envelope {
+    /// Protocol version of the sender.
+    pub version: u32,
+    /// The actual wire message payload.
+    pub message: WireMessage,
+}
+
+impl Envelope {
+    /// Wrap a message in an envelope with the current protocol version.
+    pub fn wrap(message: WireMessage) -> Self {
+        Self {
+            version: PROTOCOL_VERSION,
+            message,
+        }
+    }
+
+    /// Check whether this envelope's version is supported.
+    pub fn is_version_supported(&self) -> bool {
+        self.version == PROTOCOL_VERSION
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -368,6 +420,8 @@ mod tests {
                 token_id: "tok-123".to_string(),
                 authority: PublicKey([4; 32]),
                 authority_sig: Signature([4; 64]),
+                nonce: [0x05; 16],
+                timestamp: 1700000000,
             },
             WireMessage::RevocationAck {
                 new_root: [5; 32],

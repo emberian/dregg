@@ -346,7 +346,7 @@ impl AgentRuntime {
             id: token_id,
             delegatee: sub_pk,
             restrictions: restrictions.clone(),
-        });
+        })?;
 
         // Create the sub-agent's cell in the ledger.
         let sub_cell_id = sub_wallet.cell_id(&self.domain);

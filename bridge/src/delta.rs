@@ -202,6 +202,12 @@ pub fn initial_attenuation_delta(
     // Each new restriction becomes a named check.
     for (i, fact) in new_facts.iter().enumerate() {
         let pred_name = symbols.resolve(fact.predicate).unwrap_or("restriction");
+
+        // SECURITY: Validate the predicate is a known restriction type.
+        if !is_valid_check_predicate(pred_name) {
+            return None;
+        }
+
         let check_name = format!("{}_{}", pred_name, i);
         builder = builder.add_named_check(&check_name, &[]);
     }
@@ -210,6 +216,43 @@ pub fn initial_attenuation_delta(
     let new_state = fold_delta.reconstruct_new_state(&old_state)?;
 
     Some((old_state, new_state, fold_delta))
+}
+
+/// Known valid check predicates that can be added during attenuation.
+///
+/// Only predicates in this set are accepted as valid check prefixes.
+/// This prevents an attacker from injecting arbitrary rule-prefixed facts
+/// that could influence the derivation engine.
+const VALID_CHECK_PREDICATES: &[&str] = &[
+    "app",
+    "service",
+    "feature",
+    "organization",
+    "confine_user",
+    "valid_until",
+    "valid_after",
+    "oauth_provider",
+    "oauth_scope",
+    "from_machine",
+    "command",
+    "feature_glob_include",
+    "feature_glob_exclude",
+    "budget",
+    "revocable",
+    "action_allowed",
+    "svc_action_allowed",
+    "app_registered",
+    "svc_registered",
+];
+
+/// Validate that a check predicate name corresponds to a known derivation rule.
+///
+/// Returns `true` if the predicate is a recognized restriction type that can
+/// legitimately appear as a fold check. Returns `false` for unknown predicates,
+/// which would indicate either a bug or an attacker trying to inject arbitrary
+/// rule-prefixed facts.
+fn is_valid_check_predicate(pred_name: &str) -> bool {
+    VALID_CHECK_PREDICATES.contains(&pred_name)
 }
 
 /// Compute a fold delta for subsequent attenuations (not from root).
@@ -226,7 +269,8 @@ pub fn initial_attenuation_delta(
 ///
 /// # Returns
 ///
-/// A tuple of (new_state, fold_delta) if valid.
+/// A tuple of (new_state, fold_delta) if valid. Returns `None` if any restriction
+/// has an unrecognized predicate (fail-closed: unknown check types are rejected).
 pub fn further_attenuation_delta(
     current_state: &TokenState,
     new_restrictions: &[Fact],
@@ -241,6 +285,15 @@ pub fn further_attenuation_delta(
     // Each new restriction becomes a check.
     for (_i, fact) in new_restrictions.iter().enumerate() {
         let pred_name = symbols.resolve(fact.predicate).unwrap_or("check");
+
+        // SECURITY: Validate the predicate is a known restriction type.
+        // Unknown predicates are rejected (fail-closed) because they could be
+        // attacker-controlled values that influence the derivation engine in
+        // unexpected ways.
+        if !is_valid_check_predicate(pred_name) {
+            return None;
+        }
+
         let terms: Vec<String> = fact
             .terms
             .iter()

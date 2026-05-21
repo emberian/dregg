@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::error::SecretStoreError;
 
@@ -60,13 +60,14 @@ impl SecretValue {
         std::str::from_utf8(&self.inner).ok()
     }
 
-    /// Clone and return the inner bytes.
+    /// Clone and return the inner bytes wrapped in [`Zeroizing`].
     ///
-    /// Note: returns a clone because `SecretValue` implements `ZeroizeOnDrop`,
-    /// which prevents moving the inner vec out. The caller is responsible for
-    /// zeroizing the returned vec when done.
-    pub fn to_bytes(&self) -> Vec<u8> {
-        self.inner.clone()
+    /// The returned `Zeroizing<Vec<u8>>` will automatically zero its contents
+    /// when dropped, ensuring secret material does not linger in memory after use.
+    /// This is necessary because `SecretValue` implements `ZeroizeOnDrop`, which
+    /// prevents moving the inner vec out directly.
+    pub fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
+        Zeroizing::new(self.inner.clone())
     }
 
     /// Length of the secret value.
@@ -124,6 +125,14 @@ pub trait SecretStore: Send + Sync {
 /// A composite secret store that tries multiple backends in order.
 ///
 /// Typically: try keychain first, fall back to encrypted file.
+///
+/// # Timing side-channel
+///
+/// The `get()` and `exists()` methods return early when a key is found in an
+/// earlier backend, which reveals to a timing observer which backend holds the
+/// secret. This is an accepted trade-off for performance: the identity of the
+/// backend (keychain vs. encrypted file) is not considered secret. If backend
+/// identity must be hidden, use a single backend or add synthetic delays.
 pub struct CompositeStore {
     backends: Vec<Box<dyn SecretStore>>,
 }

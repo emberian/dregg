@@ -193,7 +193,7 @@ pub fn resolve_condition(
 }
 
 /// Compute a BLAKE3 hash of the proof for nullifier tracking.
-fn compute_proof_hash(proof: &ConditionProof) -> [u8; 32] {
+pub fn compute_proof_hash(proof: &ConditionProof) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new_derive_key("pyana-proof-nullifier-v1");
     match proof {
         ConditionProof::Preimage(preimage) => {

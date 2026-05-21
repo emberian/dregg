@@ -27,6 +27,7 @@
 //! the action's target cell can accept it).
 
 use pyana_circuit::BabyBear;
+use pyana_circuit::binding::compute_action_binding;
 use pyana_circuit::stark;
 use pyana_turn::ProofVerifier;
 
@@ -36,21 +37,43 @@ use pyana_turn::ProofVerifier;
 /// The verifier checks that:
 /// 1. The proof bytes deserialize to a valid `StarkProof`.
 /// 2. The proof's public inputs include the expected federation root (passed as `vk`).
-/// 3. The STARK proof verifies against the `MerkleStarkAir` constraint system.
+/// 3. The action binding matches the requested action and resource.
+/// 4. The STARK proof verifies against the Poseidon2 `MerklePoseidon2StarkAir` constraint system.
+///
+/// # Timestamp Freshness
+///
+/// When `max_proof_age_secs` is set (non-zero), the verifier also checks that the
+/// proof's timestamp (if present as the 4th public input) is within the allowed window.
+/// The current time is obtained from `std::time::SystemTime::now()`.
 ///
 /// # Usage
 ///
 /// ```ignore
-/// let verifier = StarkProofVerifier::new();
+/// let verifier = StarkProofVerifier::with_max_age(300); // 5 minutes
 /// let mut executor = TurnExecutor::new(costs);
 /// executor.set_proof_verifier(Box::new(verifier));
 /// ```
-pub struct StarkProofVerifier;
+pub struct StarkProofVerifier {
+    /// Maximum age of a proof in seconds. 0 means no freshness check.
+    max_proof_age_secs: i64,
+}
 
 impl StarkProofVerifier {
-    /// Create a new STARK proof verifier.
+    /// Create a new STARK proof verifier with no timestamp freshness check.
     pub fn new() -> Self {
-        Self
+        Self {
+            max_proof_age_secs: 0,
+        }
+    }
+
+    /// Create a new STARK proof verifier with timestamp freshness enforcement.
+    ///
+    /// Proofs with a timestamp older than `max_age_secs` from the current time
+    /// will be rejected. Use `DEFAULT_MAX_PROOF_AGE_SECS` (300s) for typical use.
+    pub fn with_max_age(max_age_secs: i64) -> Self {
+        Self {
+            max_proof_age_secs: max_age_secs,
+        }
     }
 }
 
@@ -61,22 +84,8 @@ impl Default for StarkProofVerifier {
 }
 
 impl ProofVerifier for StarkProofVerifier {
-    /// Verify a STARK proof.
-    ///
-    /// # Arguments
-    ///
-    /// * `proof` - Serialized STARK proof bytes (from `stark::proof_to_bytes()`).
-    /// * `public_inputs` - The action's signing message (32 bytes, BLAKE3 hash).
-    ///   This binds the proof to the specific action being authorized: the proof
-    ///   is only valid for this exact action. The binding is checked by verifying
-    ///   that the leaf_hash (pi[0]) incorporates the action commitment.
-    /// * `vk` - The verification key from the target cell. For STARK-authorized cells,
-    ///   this is the federation root (32 bytes) that the issuer must be a member of.
-    ///
-    /// # Returns
-    ///
-    /// `true` if the proof is valid and the federation root matches.
-    fn verify(&self, proof: &[u8], public_inputs: &[u8], vk: &[u8]) -> bool {
+    /// Verify a STARK proof bound to (action, resource) against a verification key.
+    fn verify(&self, proof: &[u8], action: &str, resource: &str, vk: &[u8]) -> bool {
         // 1. Deserialize the STARK proof.
         let stark_proof = match stark::proof_from_bytes(proof) {
             Ok(p) => p,
@@ -84,41 +93,24 @@ impl ProofVerifier for StarkProofVerifier {
         };
 
         // 2. Extract the public inputs from the proof itself.
-        // For MerklePoseidon2StarkAir, public inputs are [leaf_hash, merkle_root].
+        // SECURITY: Use new_canonical() for values from external (potentially adversarial)
+        // proof data to prevent non-canonical BabyBear representations.
         let pi: Vec<BabyBear> = stark_proof
             .public_inputs
             .iter()
-            .map(|&v| BabyBear::new(v))
+            .map(|&v| BabyBear::new_canonical(v))
             .collect();
 
-        // Expect at least [leaf_hash, merkle_root, action_commitment]
+        // Expect at least [leaf_hash, merkle_root, action_binding]
         if pi.len() < 3 {
             return false;
         }
 
-        // 3. Bind the proof to the specific action being authorized.
-        //    The public_inputs (action signing message) must be non-empty.
-        //    The proof's public inputs must include a commitment to the action,
-        //    preventing replay of a valid proof across different actions.
-        if public_inputs.is_empty() {
+        // 3. Verify the action binding commitment.
+        let expected_binding = compute_action_binding(action, resource);
+        let proof_binding = pi.last().copied().unwrap_or(BabyBear::ZERO);
+        if proof_binding != expected_binding {
             return false;
-        }
-        // Compute the action commitment from the action's signing message.
-        // The action signing message is the BLAKE3 hash of action contents;
-        // we compress it to a BabyBear field element for comparison with the
-        // proof's embedded action commitment (the last public input).
-        if public_inputs.len() >= 32 {
-            let mut action_bytes = [0u8; 32];
-            action_bytes.copy_from_slice(&public_inputs[..32]);
-            let action_commitment = crate::present::bytes_to_babybear(&action_bytes);
-
-            // The proof's public inputs must include the action commitment as the
-            // last element. This binds the proof to this specific action: a proof
-            // generated for action A cannot be replayed against action B.
-            let proof_action_commitment = pi.last().copied().unwrap_or(BabyBear::ZERO);
-            if proof_action_commitment != action_commitment {
-                return false;
-            }
         }
 
         // 4. Check that the merkle_root (pi[1]) corresponds to the federation root
@@ -129,19 +121,14 @@ impl ProofVerifier for StarkProofVerifier {
         let mut vk_bytes = [0u8; 32];
         vk_bytes.copy_from_slice(&vk[..32]);
 
-        // The vk stored on the cell is the BabyBear representation of the federation
-        // root (serialized as a u32 in little-endian in the first 4 bytes, for cells
-        // that store BabyBear values directly), OR a 32-byte hash that we compress.
         let expected_root = if vk_bytes[4..].iter().all(|&b| b == 0) {
-            // Case (a): raw BabyBear value in first 4 bytes
-            BabyBear::new(u32::from_le_bytes([
+            BabyBear::new_canonical(u32::from_le_bytes([
                 vk_bytes[0],
                 vk_bytes[1],
                 vk_bytes[2],
                 vk_bytes[3],
             ]))
         } else {
-            // Case (b): full 32-byte hash, compress to BabyBear
             crate::present::bytes_to_babybear(&vk_bytes)
         };
 
@@ -150,9 +137,25 @@ impl ProofVerifier for StarkProofVerifier {
             return false;
         }
 
-        // 5. Verify the STARK proof cryptographically using Poseidon2 AIR
-        //    (collision-resistant, production path). The legacy MerkleStarkAir
-        //    uses a LINEAR binding constraint that is trivially forgeable.
+        // 5. Timestamp freshness check (if configured).
+        // The timestamp is the 4th public input (index 3) when present.
+        if self.max_proof_age_secs > 0 && pi.len() >= 4 {
+            let proof_timestamp = pi[3].0 as i64;
+            if proof_timestamp == 0 {
+                // No timestamp in proof — reject when freshness is required.
+                return false;
+            }
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+            let age = now.saturating_sub(proof_timestamp);
+            if age > self.max_proof_age_secs || age < -self.max_proof_age_secs {
+                return false;
+            }
+        }
+
+        // 6. Verify the STARK proof cryptographically using Poseidon2 AIR.
         use pyana_circuit::poseidon2_air::MerklePoseidon2StarkAir;
         let air = MerklePoseidon2StarkAir;
         stark::verify(&air, &stark_proof, &pi).is_ok()
@@ -162,12 +165,13 @@ impl ProofVerifier for StarkProofVerifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyana_circuit::poseidon2;
     use pyana_circuit::poseidon2_air::{MerklePoseidon2StarkAir, generate_merkle_poseidon2_trace};
     use pyana_circuit::stark::{proof_to_bytes, prove};
+    use pyana_circuit::binding::compute_action_binding;
 
     /// Helper: generate a valid proof with action binding (3 public inputs).
-    fn generate_bound_proof(action_msg: &[u8; 32]) -> (Vec<u8>, Vec<BabyBear>) {
+    /// Uses the canonical `compute_action_binding` to produce the binding commitment.
+    fn generate_bound_proof(action: &str, resource: &str) -> (Vec<u8>, Vec<BabyBear>) {
         let siblings = [
             [BabyBear::new(100), BabyBear::new(200), BabyBear::new(300)],
             [BabyBear::new(400), BabyBear::new(500), BabyBear::new(600)],
@@ -179,10 +183,9 @@ mod tests {
         let (trace, mut public_inputs) =
             generate_merkle_poseidon2_trace(leaf_hash, &siblings, &positions);
 
-        // Append action commitment as third public input
-        let action_commitment =
-            poseidon2::hash_many(&BabyBear::encode_hash(action_msg));
-        public_inputs.push(action_commitment);
+        // Append the canonical action binding as third public input.
+        let binding = compute_action_binding(action, resource);
+        public_inputs.push(binding);
 
         let air = MerklePoseidon2StarkAir;
         let proof = prove(&air, &trace, &public_inputs);
@@ -192,38 +195,32 @@ mod tests {
 
     #[test]
     fn test_stark_verifier_valid_proof() {
-        // Generate a valid Poseidon2 Merkle membership proof bound to an action.
-        let action_msg = [0x42u8; 32];
-        let (proof_bytes, public_inputs) = generate_bound_proof(&action_msg);
+        let (proof_bytes, public_inputs) = generate_bound_proof("read", "api/v1/users");
 
         // The federation root is public_inputs[1] (the Merkle root).
         let root_bb = public_inputs[1];
-        // Store as BabyBear value in first 4 bytes of vk.
         let mut vk = [0u8; 32];
         vk[..4].copy_from_slice(&root_bb.0.to_le_bytes());
 
         let verifier = StarkProofVerifier::new();
-        assert!(verifier.verify(&proof_bytes, &action_msg, &vk));
+        assert!(verifier.verify(&proof_bytes, "read", "api/v1/users", &vk));
     }
 
     #[test]
     fn test_stark_verifier_wrong_federation_root() {
-        let action_msg = [0x42u8; 32];
-        let (proof_bytes, _public_inputs) = generate_bound_proof(&action_msg);
+        let (proof_bytes, _public_inputs) = generate_bound_proof("read", "api/v1/users");
 
         // Use a WRONG federation root.
         let mut vk = [0u8; 32];
         vk[..4].copy_from_slice(&99999u32.to_le_bytes());
 
         let verifier = StarkProofVerifier::new();
-        let action_msg = [0x42u8; 32];
-        assert!(!verifier.verify(&proof_bytes, &action_msg, &vk));
+        assert!(!verifier.verify(&proof_bytes, "read", "api/v1/users", &vk));
     }
 
     #[test]
     fn test_stark_verifier_tampered_proof() {
-        let action_msg = [0x42u8; 32];
-        let (mut proof_bytes, public_inputs) = generate_bound_proof(&action_msg);
+        let (mut proof_bytes, public_inputs) = generate_bound_proof("read", "api/v1/users");
 
         // Tamper with the proof.
         if proof_bytes.len() > 10 {
@@ -235,46 +232,39 @@ mod tests {
         vk[..4].copy_from_slice(&root_bb.0.to_le_bytes());
 
         let verifier = StarkProofVerifier::new();
-        assert!(!verifier.verify(&proof_bytes, &action_msg, &vk));
+        assert!(!verifier.verify(&proof_bytes, "read", "api/v1/users", &vk));
     }
 
     #[test]
     fn test_stark_verifier_empty_proof() {
         let verifier = StarkProofVerifier::new();
         let vk = [0u8; 32];
-        let action_msg = [0x42u8; 32];
-        assert!(!verifier.verify(&[], &action_msg, &vk));
-    }
-
-    #[test]
-    fn test_stark_verifier_empty_public_inputs_rejected() {
-        // Empty public_inputs (action message) should be rejected.
-        let action_msg = [0x42u8; 32];
-        let (proof_bytes, public_inputs) = generate_bound_proof(&action_msg);
-
-        let root_bb = public_inputs[1];
-        let mut vk = [0u8; 32];
-        vk[..4].copy_from_slice(&root_bb.0.to_le_bytes());
-
-        let verifier = StarkProofVerifier::new();
-        // Empty action message should be rejected.
-        assert!(!verifier.verify(&proof_bytes, &[], &vk));
+        assert!(!verifier.verify(&[], "read", "api/v1/users", &vk));
     }
 
     #[test]
     fn test_stark_verifier_wrong_action_rejected() {
-        // A proof bound to action A should be rejected when presented for action B.
-        let action_a = [0x42u8; 32];
-        let action_b = [0x99u8; 32]; // Different action
-
-        let (proof_bytes, public_inputs) = generate_bound_proof(&action_a);
+        // A proof bound to (read, api/v1/users) should be rejected for (write, api/v1/users).
+        let (proof_bytes, public_inputs) = generate_bound_proof("read", "api/v1/users");
 
         let root_bb = public_inputs[1];
         let mut vk = [0u8; 32];
         vk[..4].copy_from_slice(&root_bb.0.to_le_bytes());
 
         let verifier = StarkProofVerifier::new();
-        // Proof bound to action_a must fail when verified against action_b.
-        assert!(!verifier.verify(&proof_bytes, &action_b, &vk));
+        assert!(!verifier.verify(&proof_bytes, "write", "api/v1/users", &vk));
+    }
+
+    #[test]
+    fn test_stark_verifier_wrong_resource_rejected() {
+        // A proof bound to (read, api/v1/users) should be rejected for (read, api/v1/posts).
+        let (proof_bytes, public_inputs) = generate_bound_proof("read", "api/v1/users");
+
+        let root_bb = public_inputs[1];
+        let mut vk = [0u8; 32];
+        vk[..4].copy_from_slice(&root_bb.0.to_le_bytes());
+
+        let verifier = StarkProofVerifier::new();
+        assert!(!verifier.verify(&proof_bytes, "read", "api/v1/posts", &vk));
     }
 }

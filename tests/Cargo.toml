@@ -10,19 +10,12 @@ path = "src/main.rs"
 
 [dependencies]
 pyana-circuit = { path = "../circuit" }
-pyana-commit = { path = "../commit" }
-pyana-trace = { path = "../trace" }
-pyana-federation = { path = "../federation" }
-pyana-audit = { path = "../audit" }
-pyana-bridge = { path = "../bridge" }
 pyana-turn = { path = "../turn" }
 pyana-cell = { path = "../cell" }
-pyana-sdk = { path = "../sdk" }
-pyana-types = { path = "../types" }
-hints = { path = "../hints" }
 token = { path = "../token", default-features = false, features = ["macaroon", "datalog"] }
 blake3 = "1"
 getrandom = { workspace = true }
+proptest = { workspace = true }
 
 [[example]]
 name = "bench_summary"

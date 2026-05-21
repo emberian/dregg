@@ -3,7 +3,7 @@
 //! TurnError covers all the ways a turn can fail: authorization issues,
 //! precondition violations, resource limits, and structural problems.
 
-use pyana_cell::{AuthRequired, CellId};
+use pyana_cell::{AuthRequired, CellId, ChannelId};
 use serde::{Deserialize, Serialize};
 
 /// All possible failure modes when executing a turn.
@@ -112,6 +112,36 @@ pub enum TurnError {
     /// A BridgeMint effect failed verification (untrusted root, invalid proof,
     /// or double-bridge attempt).
     BridgeMintFailed { reason: String },
+
+    /// A BridgeLock effect failed (note already locked, etc.).
+    BridgeLockFailed { reason: String },
+
+    /// A BridgeFinalize effect failed (invalid receipt, bridge not found, etc.).
+    BridgeFinalizeFailed { reason: String },
+
+    /// A BridgeCancel effect failed (timeout not reached, bridge not found, etc.).
+    BridgeCancelFailed { reason: String },
+
+    /// A delegated capability snapshot is stale (exceeded max_staleness).
+    /// The delegation must be refreshed before it can be exercised.
+    StaleDelegation {
+        actor: CellId,
+        source: CellId,
+        refreshed_at: u64,
+        max_staleness: u64,
+        now: u64,
+    },
+
+    /// A delegated capability has been revoked via its revocation channel.
+    /// The channel was tripped, meaning the capability is no longer valid.
+    CapabilityRevoked {
+        actor: CellId,
+        channel_id: ChannelId,
+        tripped_at: u64,
+    },
+
+    /// The capability slot counter overflowed (2^32 grants exhausted).
+    CapabilitySlotOverflow { cell: CellId },
 }
 
 impl core::fmt::Display for TurnError {
@@ -243,6 +273,46 @@ impl core::fmt::Display for TurnError {
             }
             TurnError::BridgeMintFailed { reason } => {
                 write!(f, "bridge mint failed: {reason}")
+            }
+            TurnError::BridgeLockFailed { reason } => {
+                write!(f, "bridge lock failed: {reason}")
+            }
+            TurnError::BridgeFinalizeFailed { reason } => {
+                write!(f, "bridge finalize failed: {reason}")
+            }
+            TurnError::BridgeCancelFailed { reason } => {
+                write!(f, "bridge cancel failed: {reason}")
+            }
+            TurnError::StaleDelegation {
+                actor,
+                source,
+                refreshed_at,
+                max_staleness,
+                now,
+            } => {
+                write!(
+                    f,
+                    "stale delegation: actor {actor}'s delegation from {source} expired \
+                     (refreshed_at={refreshed_at}, max_staleness={max_staleness}, now={now})"
+                )
+            }
+            TurnError::CapabilityRevoked {
+                actor,
+                channel_id,
+                tripped_at,
+            } => {
+                write!(
+                    f,
+                    "capability revoked: actor {actor}'s delegation revoked via channel \
+                     {:02x}{:02x}... (tripped_at={tripped_at})",
+                    channel_id[0], channel_id[1]
+                )
+            }
+            TurnError::CapabilitySlotOverflow { cell } => {
+                write!(
+                    f,
+                    "capability slot counter overflow on cell {cell} (2^32 grants exhausted)"
+                )
             }
         }
     }

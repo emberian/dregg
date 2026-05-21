@@ -99,6 +99,12 @@ pub trait FederationTransport: Send + Sync {
         qc: &QuorumCertificate,
     ) -> Pin<Box<dyn Future<Output = Result<(), TransportError>> + Send + '_>>;
 
+    /// Broadcast a view-change message to all federation members.
+    fn broadcast_view_change(
+        &self,
+        vc: &ViewChangeMessage,
+    ) -> Pin<Box<dyn Future<Output = Result<(), TransportError>> + Send + '_>>;
+
     /// Receive the next consensus message for this node.
     /// Returns None if no message is available within a reasonable timeout.
     fn recv(
@@ -200,6 +206,24 @@ impl FederationTransport for LocalTransport {
                 }
                 if sender.try_send(msg.clone()).is_err() {
                     tracing::warn!(peer_id = i, "failed to send finalized block to peer");
+                }
+            }
+            Ok(())
+        })
+    }
+
+    fn broadcast_view_change(
+        &self,
+        vc: &ViewChangeMessage,
+    ) -> Pin<Box<dyn Future<Output = Result<(), TransportError>> + Send + '_>> {
+        let msg = ConsensusMessage::ViewChange(vc.clone());
+        Box::pin(async move {
+            for (i, sender) in self.senders.iter().enumerate() {
+                if i == self.node_id {
+                    continue;
+                }
+                if sender.try_send(msg.clone()).is_err() {
+                    tracing::warn!(peer_id = i, "failed to send view-change to peer");
                 }
             }
             Ok(())
@@ -517,6 +541,27 @@ impl FederationTransport for TcpFederationTransport {
         })
     }
 
+    fn broadcast_view_change(
+        &self,
+        vc: &ViewChangeMessage,
+    ) -> Pin<Box<dyn Future<Output = Result<(), TransportError>> + Send + '_>> {
+        let envelope = FederationEnvelope {
+            from: self.node_id,
+            message: ConsensusMessage::ViewChange(vc.clone()),
+        };
+        Box::pin(async move {
+            for &peer_id in self.peers.keys() {
+                if peer_id == self.node_id {
+                    continue;
+                }
+                if self.send_to(peer_id, &envelope).await.is_err() {
+                    tracing::warn!(peer_id, "failed to send view-change to peer");
+                }
+            }
+            Ok(())
+        })
+    }
+
     fn recv(
         &self,
     ) -> Pin<Box<dyn Future<Output = Result<Option<ConsensusMessage>, TransportError>> + Send + '_>>
@@ -538,11 +583,20 @@ impl FederationTransport for TcpFederationTransport {
 // NetworkConsensusNode: drives consensus over a transport
 // =============================================================================
 
+/// Timeout for proposals: if no proposal is seen within this duration,
+/// the node initiates a view change.
+pub const PROPOSAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// An async consensus node that drives the Morpheus-shaped protocol over a
 /// [`FederationTransport`].
 ///
 /// Each `NetworkConsensusNode` runs the propose/vote/finalize loop for one
 /// federation member using real (or simulated) network I/O.
+///
+/// Includes a pacemaker that detects leader failures: if no proposal is seen
+/// within [`PROPOSAL_TIMEOUT`], this node broadcasts a signed view-change
+/// message. Once n-f view-change messages for the same view are collected,
+/// the view advances and the next leader takes over.
 pub struct NetworkConsensusNode {
     /// The consensus state for this node.
     pub state: ConsensusState,
@@ -550,6 +604,12 @@ pub struct NetworkConsensusNode {
     pub transport: Arc<dyn FederationTransport>,
     /// The consensus configuration.
     pub config: ConsensusConfig,
+    /// Timestamp of the last proposal seen (for timeout/pacemaker).
+    pub last_proposal_seen: std::time::Instant,
+    /// Whether we have already broadcast a view-change for the current view.
+    pub view_change_sent: bool,
+    /// Collected view-change messages for the next view, keyed by voter node ID.
+    pub view_change_votes: std::collections::HashMap<usize, ViewChangeMessage>,
 }
 
 impl NetworkConsensusNode {
@@ -563,6 +623,9 @@ impl NetworkConsensusNode {
             state,
             transport,
             config,
+            last_proposal_seen: std::time::Instant::now(),
+            view_change_sent: false,
+            view_change_votes: std::collections::HashMap::new(),
         }
     }
 
@@ -586,7 +649,76 @@ impl NetworkConsensusNode {
             self.state.collect_vote(vote);
         }
 
+        // Reset pacemaker since we just proposed.
+        self.last_proposal_seen = std::time::Instant::now();
+
         Ok(Some(proposal))
+    }
+
+    /// Check if the proposal timeout has expired and initiate a view change.
+    ///
+    /// If no proposal has been seen within [`PROPOSAL_TIMEOUT`], this node
+    /// broadcasts a signed view-change message requesting the next view.
+    /// Returns `true` if a view-change message was sent.
+    pub async fn check_timeout(&mut self) -> Result<bool, TransportError> {
+        if self.view_change_sent {
+            return Ok(false);
+        }
+
+        let elapsed = std::time::Instant::now().duration_since(self.last_proposal_seen);
+        if elapsed < PROPOSAL_TIMEOUT {
+            return Ok(false);
+        }
+
+        // Timeout expired -- broadcast a view-change.
+        let new_view = self.state.current_view + 1;
+        let height = self.state.current_height;
+        let msg_bytes = ViewChangeMessage::signing_message(new_view, height);
+        let signature = sign(&self.state.signing_key, &msg_bytes);
+
+        let vc_msg = ViewChangeMessage {
+            new_view,
+            height,
+            voter: self.state.node_id,
+            signature,
+        };
+
+        // Record our own view-change vote.
+        self.view_change_votes
+            .insert(self.state.node_id, vc_msg.clone());
+
+        // Broadcast the view-change to all peers via the transport.
+        self.transport.broadcast_view_change(&vc_msg).await?;
+
+        self.view_change_sent = true;
+
+        // Check if we already have enough view-change votes to advance.
+        self.try_advance_view();
+
+        Ok(true)
+    }
+
+    /// Try to advance the view if we have collected n-f view-change votes
+    /// for the same new_view.
+    fn try_advance_view(&mut self) {
+        let new_view = self.state.current_view + 1;
+        let vc_count = self
+            .view_change_votes
+            .values()
+            .filter(|vc| vc.new_view == new_view)
+            .count();
+
+        // Need n - f (threshold) view-change messages to advance.
+        if vc_count >= self.config.threshold {
+            self.state.advance_view();
+            self.last_proposal_seen = std::time::Instant::now();
+            self.view_change_sent = false;
+            self.view_change_votes.clear();
+            tracing::info!(
+                new_view = new_view,
+                "view change completed -- advanced to new view"
+            );
+        }
     }
 
     /// Process incoming messages. Returns a QC if finalization is reached.
@@ -599,6 +731,11 @@ impl NetworkConsensusNode {
             match msg {
                 None => break,
                 Some(ConsensusMessage::Propose(block)) => {
+                    // Reset pacemaker -- we received a proposal.
+                    self.last_proposal_seen = std::time::Instant::now();
+                    self.view_change_sent = false;
+                    self.view_change_votes.clear();
+
                     // Validate and vote.
                     if let Some(vote) = self.state.vote_on_proposal(&block) {
                         let leader_id = self.config.leader_for_view(block.view);
@@ -616,12 +753,38 @@ impl NetworkConsensusNode {
                     }
                 }
                 Some(ConsensusMessage::Finalize(qc, block)) => {
-                    // Another node finalized — apply it.
+                    // Reset pacemaker -- finalization received.
+                    self.last_proposal_seen = std::time::Instant::now();
+                    self.view_change_sent = false;
+                    self.view_change_votes.clear();
+
                     self.state.finalize_block(block.clone(), qc.clone());
                     return Ok(Some((block, qc)));
                 }
                 Some(ConsensusMessage::RevokeRequest(event)) => {
                     self.state.submit_revocation(event);
+                }
+                Some(ConsensusMessage::ViewChange(vc_msg)) => {
+                    // Verify the view-change signature if members are configured.
+                    let valid = if !self.config.members.is_empty() {
+                        if let Some(voter_pk) = self.config.members.get(vc_msg.voter) {
+                            let msg_bytes = ViewChangeMessage::signing_message(
+                                vc_msg.new_view,
+                                vc_msg.height,
+                            );
+                            voter_pk.verify(&msg_bytes, &vc_msg.signature)
+                        } else {
+                            false
+                        }
+                    } else {
+                        // Legacy mode: accept view-change without signature check.
+                        true
+                    };
+
+                    if valid && vc_msg.new_view == self.state.current_view + 1 {
+                        self.view_change_votes.insert(vc_msg.voter, vc_msg);
+                        self.try_advance_view();
+                    }
                 }
                 Some(_) => {
                     // Ignore other message types.
@@ -688,6 +851,7 @@ mod tests {
             events: vec![],
             prev_hash: [0; 32],
             block_hash: [0xFF; 32],
+            proposer_signature: None,
         };
 
         transports[0].broadcast_proposal(&block).await.unwrap();

@@ -9,7 +9,8 @@ use std::sync::Mutex;
 use ed25519_dalek::{Signature, VerifyingKey};
 use pyana_cell::{
     AuthRequired, Cell, CellId, CellStateDelta, Ledger, LedgerDelta, Preconditions,
-    note_bridge::BridgedNullifierSet, preconditions::EvalContext, state::STATE_SLOTS,
+    note_bridge::{BridgedNullifierSet, PendingBridgeSet},
+    preconditions::EvalContext, state::STATE_SLOTS,
 };
 use pyana_types::AttestedRoot;
 use serde::{Deserialize, Serialize};
@@ -30,7 +31,7 @@ pub trait ProofVerifier: Send + Sync {
     /// Verify a proof against public inputs and a verification key.
     ///
     /// Returns true if the proof is valid for the given public inputs and verification key.
-    fn verify(&self, proof: &[u8], public_inputs: &[u8], vk: &[u8]) -> bool;
+    fn verify(&self, proof: &[u8], action: &str, resource: &str, vk: &[u8]) -> bool;
 }
 
 /// Cost configuration for computron metering.
@@ -113,9 +114,19 @@ pub struct TurnExecutor {
     /// When a BridgeMint effect is processed, the portable proof's source root
     /// must be in this set. Empty = no cross-federation bridges accepted.
     pub trusted_federation_roots: Vec<AttestedRoot>,
+    /// This federation's identity (genesis root hash or configured ID).
+    /// Prevents cross-federation double-spend via destination binding.
+    pub local_federation_id: [u8; 32],
     /// Bridged nullifier set: tracks nullifiers from OTHER federations that have
     /// been bridged into this one. Prevents the same note from being bridged twice.
     pub bridged_nullifiers: Mutex<BridgedNullifierSet>,
+    /// Pending bridges: notes locked for cross-federation transfer (two-phase protocol).
+    /// Tracks notes that are committed-to-burn but not yet permanently spent.
+    pub pending_bridges: Mutex<PendingBridgeSet>,
+    /// Trusted Ed25519 public keys for destination federation receipt verification.
+    /// Used during BridgeFinalize to validate that the receipt was signed by a
+    /// legitimate destination federation.
+    pub trusted_destination_keys: Vec<[u8; 32]>,
 }
 
 impl TurnExecutor {
@@ -128,7 +139,10 @@ impl TurnExecutor {
             proof_verifier: None,
             budget_gate: None,
             trusted_federation_roots: Vec::new(),
+            local_federation_id: [0u8; 32],
             bridged_nullifiers: Mutex::new(BridgedNullifierSet::new()),
+            pending_bridges: Mutex::new(PendingBridgeSet::new()),
+            trusted_destination_keys: Vec::new(),
         }
     }
 
@@ -145,7 +159,10 @@ impl TurnExecutor {
             proof_verifier: None,
             budget_gate: Some(Mutex::new(gate)),
             trusted_federation_roots: Vec::new(),
+            local_federation_id: [0u8; 32],
             bridged_nullifiers: Mutex::new(BridgedNullifierSet::new()),
+            pending_bridges: Mutex::new(PendingBridgeSet::new()),
+            trusted_destination_keys: Vec::new(),
         }
     }
 
@@ -158,7 +175,10 @@ impl TurnExecutor {
             proof_verifier: Some(verifier),
             budget_gate: None,
             trusted_federation_roots: Vec::new(),
+            local_federation_id: [0u8; 32],
             bridged_nullifiers: Mutex::new(BridgedNullifierSet::new()),
+            pending_bridges: Mutex::new(PendingBridgeSet::new()),
+            trusted_destination_keys: Vec::new(),
         }
     }
 
@@ -239,6 +259,24 @@ impl TurnExecutor {
     /// Add a single trusted federation root.
     pub fn add_trusted_federation_root(&mut self, root: AttestedRoot) {
         self.trusted_federation_roots.push(root);
+    }
+
+    /// Set the local federation identity for cross-federation bridge verification.
+    pub fn set_local_federation_id(&mut self, id: [u8; 32]) {
+        self.local_federation_id = id;
+    }
+
+    /// Set the trusted destination federation keys for bridge receipt verification.
+    ///
+    /// These Ed25519 public keys are used during BridgeFinalize to verify that a
+    /// receipt was signed by a legitimate destination federation.
+    pub fn set_trusted_destination_keys(&mut self, keys: Vec<[u8; 32]>) {
+        self.trusted_destination_keys = keys;
+    }
+
+    /// Add a single trusted destination federation key.
+    pub fn add_trusted_destination_key(&mut self, key: [u8; 32]) {
+        self.trusted_destination_keys.push(key);
     }
 
     /// Execute a turn against a ledger, returning the result.
@@ -1076,7 +1114,7 @@ impl TurnExecutor {
         })?;
 
         use ed25519_dalek::Verifier;
-        verifying_key.verify(&message, &signature).map_err(|_| {
+        verifying_key.verify_strict(&message, &signature).map_err(|_| {
             (
                 TurnError::InvalidAuthorization {
                     reason: "Ed25519 signature verification failed".to_string(),
@@ -1131,7 +1169,9 @@ impl TurnExecutor {
 
         let public_inputs = Self::compute_signing_message(action);
 
-        if verifier.verify(proof_bytes, &public_inputs, &vk.data) {
+        let method_str = format!("{:?}", action.method);
+        let target_str = action.target.to_string();
+        if verifier.verify(proof_bytes, &method_str, &target_str, &vk.data) {
             Ok(())
         } else {
             Err((
@@ -1199,6 +1239,22 @@ impl TurnExecutor {
             hasher.update(&effect.hash());
         }
         hasher.update(&[action.may_delegate as u8]);
+        // Include balance_change to prevent malleability: without this, an attacker
+        // could take a signed action and modify the balance_change field to drain funds.
+        match action.balance_change {
+            Some(delta) => {
+                hasher.update(&[1u8]); // discriminant: Some
+                hasher.update(&delta.to_le_bytes());
+            }
+            None => {
+                hasher.update(&[0u8]); // discriminant: None
+            }
+        }
+        // Include preconditions hash to prevent downgrade attacks where an attacker
+        // removes preconditions (e.g., minimum balance guards) from a signed action.
+        // Hash preconditions inline: use their serialized form for binding.
+        let preconds_bytes = postcard::to_allocvec(&action.preconditions).unwrap_or_default();
+        hasher.update(&preconds_bytes);
         *hasher.finalize().as_bytes()
     }
 
@@ -1326,6 +1382,10 @@ impl TurnExecutor {
                     .ok_or_else(|| (TurnError::CellNotFound { id: *cell }, path.to_vec()))?;
                 journal.record_set_field(*cell, *index, c.state.fields[*index]);
                 c.state.fields[*index] = *value;
+                // Invalidate stale field commitment (the old hash no longer matches).
+                if c.state.commitments[*index].is_some() {
+                    c.state.commitments[*index] = None;
+                }
                 Ok(())
             }
 
@@ -1412,11 +1472,15 @@ impl TurnExecutor {
                 let to_cell = ledger
                     .get_mut(to)
                     .ok_or_else(|| (TurnError::CellNotFound { id: *to }, path.to_vec()))?;
-                let granted_slot = to_cell.capabilities.grant_with_breadstuff(
-                    cap.target,
-                    cap.permissions.clone(),
-                    cap.breadstuff,
-                );
+                let granted_slot = to_cell
+                    .capabilities
+                    .grant_with_breadstuff(cap.target, cap.permissions.clone(), cap.breadstuff)
+                    .ok_or_else(|| {
+                        (
+                            TurnError::CapabilitySlotOverflow { cell: *to },
+                            path.to_vec(),
+                        )
+                    })?;
                 journal.record_grant_capability(*to, granted_slot);
                 Ok(())
             }
@@ -1538,10 +1602,134 @@ impl TurnExecutor {
             Effect::NoteSpend { .. } => Ok(()),
             Effect::NoteCreate { .. } => Ok(()),
 
-            // BridgeMint: verification happens at the note layer above the executor.
-            // The executor records it for conservation tracking (it contributes to
-            // the output side of note conservation, like NoteCreate).
-            Effect::BridgeMint { .. } => Ok(()),
+            // BridgeMint: verify the portable proof against trusted federation roots
+            // and track the nullifier to prevent double-bridge attacks.
+            // The destination_federation in the proof must match our local_federation_id
+            // to prevent cross-federation replay (inflation bug).
+            Effect::BridgeMint { portable_proof } => {
+                let verify_stark = |nullifier: &[u8; 32],
+                                    root: &[u8; 32],
+                                    dest_federation: &[u8; 32],
+                                    proof_bytes: &[u8]|
+                 -> Result<(), String> {
+                    match &self.proof_verifier {
+                        Some(verifier) => {
+                            let mut public_inputs = Vec::with_capacity(96);
+                            public_inputs.extend_from_slice(nullifier);
+                            public_inputs.extend_from_slice(root);
+                            public_inputs.extend_from_slice(dest_federation);
+                            if verifier.verify(proof_bytes, "", "", &public_inputs) {
+                                Ok(())
+                            } else {
+                                Err("STARK spending proof verification failed".to_string())
+                            }
+                        }
+                        None => {
+                            Err("no proof verifier configured for bridge mint verification"
+                                .to_string())
+                        }
+                    }
+                };
+
+                pyana_cell::note_bridge::verify_portable_note(
+                    portable_proof,
+                    &self.local_federation_id,
+                    &self.trusted_federation_roots,
+                    verify_stark,
+                )
+                .map_err(|e| {
+                    (
+                        TurnError::BridgeMintFailed {
+                            reason: e.to_string(),
+                        },
+                        path.to_vec(),
+                    )
+                })?;
+
+                self.bridged_nullifiers
+                    .lock()
+                    .unwrap()
+                    .insert(portable_proof.nullifier)
+                    .map_err(|e| {
+                        (
+                            TurnError::BridgeMintFailed {
+                                reason: e.to_string(),
+                            },
+                            path.to_vec(),
+                        )
+                    })?;
+
+                Ok(())
+            }
+
+            // BridgeLock: Phase 1 — lock a note for conditional cross-federation transfer.
+            // The note's nullifier is committed-to but NOT added to the permanent set.
+            // Instead a PendingBridge record is created in pending_bridges.
+            Effect::BridgeLock {
+                nullifier,
+                destination,
+                value,
+                asset_type,
+                timeout_height,
+                spending_proof,
+            } => {
+                let mut pending = self.pending_bridges.lock().unwrap();
+                pyana_cell::note_bridge::initiate_bridge(
+                    *nullifier,
+                    *destination,
+                    *value,
+                    *asset_type,
+                    *timeout_height,
+                    spending_proof.clone(),
+                    &mut pending,
+                )
+                .map_err(|e| {
+                    (
+                        TurnError::BridgeLockFailed {
+                            reason: e.to_string(),
+                        },
+                        path.to_vec(),
+                    )
+                })?;
+                Ok(())
+            }
+
+            // BridgeFinalize: Phase 3 — present a destination receipt to finalize the burn.
+            Effect::BridgeFinalize { nullifier, receipt } => {
+                let mut pending = self.pending_bridges.lock().unwrap();
+                let mut bridged = self.bridged_nullifiers.lock().unwrap();
+                pyana_cell::note_bridge::finalize_bridge(
+                    nullifier,
+                    receipt,
+                    &self.trusted_destination_keys,
+                    &mut pending,
+                    &mut bridged,
+                )
+                .map_err(|e| {
+                    (
+                        TurnError::BridgeFinalizeFailed {
+                            reason: e.to_string(),
+                        },
+                        path.to_vec(),
+                    )
+                })?;
+                Ok(())
+            }
+
+            // BridgeCancel: Phase 4 — cancel a bridge after timeout (value returned to owner).
+            Effect::BridgeCancel { nullifier } => {
+                let mut pending = self.pending_bridges.lock().unwrap();
+                pyana_cell::note_bridge::cancel_bridge(nullifier, self.block_height, &mut pending)
+                    .map_err(|e| {
+                        (
+                            TurnError::BridgeCancelFailed {
+                                reason: e.to_string(),
+                            },
+                            path.to_vec(),
+                        )
+                    })?;
+                Ok(())
+            }
 
             // Obligation effects: tracking happens at the obligation layer above
             // the executor. The executor just needs to not reject them.
@@ -1641,21 +1829,37 @@ impl TurnExecutor {
                 // Grant sealer capability (breadstuff = sealer_key).
                 let sealer_cap_id = Self::seal_capability_id(&pair.id, true);
                 let sealer_cell = ledger.get_mut(sealer_holder).unwrap();
-                let sealer_slot = sealer_cell.capabilities.grant_with_breadstuff(
-                    sealer_cap_id,
-                    pyana_cell::AuthRequired::None,
-                    Some(pair.sealer_public),
-                );
+                let sealer_slot = sealer_cell
+                    .capabilities
+                    .grant_with_breadstuff(
+                        sealer_cap_id,
+                        pyana_cell::AuthRequired::None,
+                        Some(pair.sealer_public),
+                    )
+                    .ok_or_else(|| {
+                        (
+                            TurnError::CapabilitySlotOverflow { cell: *sealer_holder },
+                            path.to_vec(),
+                        )
+                    })?;
                 journal.record_grant_capability(*sealer_holder, sealer_slot);
 
                 // Grant unsealer capability (breadstuff = sealer_key for symmetric decrypt).
                 let unsealer_cap_id = Self::seal_capability_id(&pair.id, false);
                 let unsealer_cell = ledger.get_mut(unsealer_holder).unwrap();
-                let unsealer_slot = unsealer_cell.capabilities.grant_with_breadstuff(
-                    unsealer_cap_id,
-                    pyana_cell::AuthRequired::None,
-                    Some(pair.unsealer_secret),
-                );
+                let unsealer_slot = unsealer_cell
+                    .capabilities
+                    .grant_with_breadstuff(
+                        unsealer_cap_id,
+                        pyana_cell::AuthRequired::None,
+                        Some(pair.unsealer_secret),
+                    )
+                    .ok_or_else(|| {
+                        (
+                            TurnError::CapabilitySlotOverflow { cell: *unsealer_holder },
+                            path.to_vec(),
+                        )
+                    })?;
                 journal.record_grant_capability(*unsealer_holder, unsealer_slot);
 
                 Ok(())
@@ -1669,7 +1873,7 @@ impl TurnExecutor {
                 let actor_cell = ledger
                     .get(actor)
                     .ok_or_else(|| (TurnError::CellNotFound { id: *actor }, path.to_vec()))?;
-                let _sealer_cap = actor_cell
+                let sealer_cap = actor_cell
                     .capabilities
                     .lookup_by_target(&sealer_cap_id)
                     .ok_or_else(|| {
@@ -1681,7 +1885,26 @@ impl TurnExecutor {
                             path.to_vec(),
                         )
                     })?;
-                let _ = capability;
+                // Extract sealer public key from breadstuff and produce sealed box.
+                let sealer_public = sealer_cap.breadstuff.ok_or_else(|| {
+                    (
+                        TurnError::InvalidAuthorization {
+                            reason: "sealer capability missing key material".to_string(),
+                        },
+                        path.to_vec(),
+                    )
+                })?;
+                let seal_pair = pyana_cell::SealPair::sealer_only(sealer_public);
+                let sealed = seal_pair.seal(capability);
+                // Store seal commitment in actor's field 7 for on-chain discoverability.
+                let actor_mut = ledger.get_mut(actor).ok_or_else(|| {
+                    (TurnError::CellNotFound { id: *actor }, path.to_vec())
+                })?;
+                journal.record_set_field(*actor, 7, actor_mut.state.fields[7]);
+                actor_mut.state.fields[7] = sealed.commitment;
+                if actor_mut.state.commitments[7].is_some() {
+                    actor_mut.state.commitments[7] = None;
+                }
                 Ok(())
             }
 
@@ -1738,7 +1961,13 @@ impl TurnExecutor {
                 let recipient_cell = ledger.get_mut(recipient).unwrap();
                 let granted_slot = recipient_cell
                     .capabilities
-                    .grant(*target, permissions.clone());
+                    .grant(*target, permissions.clone())
+                    .ok_or_else(|| {
+                        (
+                            TurnError::CapabilitySlotOverflow { cell: *recipient },
+                            path.to_vec(),
+                        )
+                    })?;
                 journal.record_grant_capability(*recipient, granted_slot);
                 Ok(())
             }
@@ -1784,11 +2013,19 @@ impl TurnExecutor {
                         let recipient_cell = ledger.get_mut(recipient).ok_or_else(|| {
                             (TurnError::CellNotFound { id: *recipient }, path.to_vec())
                         })?;
-                        let granted_slot = recipient_cell.capabilities.grant_with_breadstuff(
-                            cap.target,
-                            cap.permissions.clone(),
-                            cap.breadstuff,
-                        );
+                        let granted_slot = recipient_cell
+                            .capabilities
+                            .grant_with_breadstuff(
+                                cap.target,
+                                cap.permissions.clone(),
+                                cap.breadstuff,
+                            )
+                            .ok_or_else(|| {
+                                (
+                                    TurnError::CapabilitySlotOverflow { cell: *recipient },
+                                    path.to_vec(),
+                                )
+                            })?;
                         journal.record_grant_capability(*recipient, granted_slot);
                         Ok(())
                     }
@@ -2018,6 +2255,9 @@ impl TurnExecutor {
                     .map(|e| self.compute_effect_cost(e))
                     .sum::<u64>()
             }
+            Effect::BridgeLock { .. }
+            | Effect::BridgeFinalize { .. }
+            | Effect::BridgeCancel { .. } => self.costs.effect_base,
         };
         base.saturating_add(extra)
             .saturating_add((effect.data_bytes() as u64).saturating_mul(self.costs.per_byte))
@@ -2686,7 +2926,10 @@ fn rewrite_effect_targets(effects: &mut [Effect], placeholder: &CellId, resolved
             | Effect::RefreshDelegation
             | Effect::RevokeDelegation { .. }
             | Effect::FulfillObligation { .. }
-            | Effect::SlashObligation { .. } => {}
+            | Effect::SlashObligation { .. }
+            | Effect::BridgeLock { .. }
+            | Effect::BridgeFinalize { .. }
+            | Effect::BridgeCancel { .. } => {}
         }
     }
 }

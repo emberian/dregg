@@ -51,6 +51,13 @@ pub struct SiloClient {
     wallet: Arc<AgentWallet>,
     /// The underlying TCP connection.
     connection: PeerConnection,
+    /// The federation root obtained from the trusted handshake with the remote silo.
+    ///
+    /// SECURITY: This MUST come from the authenticated handshake (Welcome message),
+    /// NOT from token-derived data. Using a token-derived federation root would allow
+    /// an attacker to choose their own "federation" by crafting a malicious token.
+    /// Set to `None` until `handshake()` completes successfully.
+    trusted_federation_root: Option<[u8; 32]>,
 }
 
 impl SiloClient {
@@ -77,6 +84,7 @@ impl SiloClient {
             address: addr,
             wallet,
             connection: conn,
+            trusted_federation_root: None,
         })
     }
 
@@ -94,6 +102,7 @@ impl SiloClient {
             address: addr,
             wallet,
             connection: conn,
+            trusted_federation_root: None,
         })
     }
 
@@ -132,7 +141,14 @@ impl SiloClient {
         match response {
             WireMessage::Welcome {
                 federation_root, ..
-            } => Ok(federation_root),
+            } => {
+                // SECURITY: Store the federation root from the trusted handshake.
+                // This is the only legitimate source of the federation root -- it
+                // comes from the authenticated silo, not from attacker-controlled
+                // token data.
+                self.trusted_federation_root = Some(federation_root);
+                Ok(federation_root)
+            }
             WireMessage::Error { message, .. } => Err(SdkError::Rejected(message)),
             other => Err(SdkError::Wire(format!(
                 "unexpected handshake response: {}",
@@ -160,6 +176,16 @@ impl SiloClient {
         token: &HeldToken,
         request: &pyana_token::AuthRequest,
     ) -> Result<PresentationResult, SdkError> {
+        // SECURITY: Use the federation root from the trusted handshake, NOT from
+        // the token-derived proof. An attacker who controls the token could choose
+        // an arbitrary federation root, effectively placing themselves in a
+        // self-created "federation" that the silo would accept.
+        let federation_root = self.trusted_federation_root.ok_or_else(|| {
+            SdkError::Wire(
+                "no trusted federation root: call handshake() before present_token()".into(),
+            )
+        })?;
+
         // Generate the ZK proof.
         let proof = self.wallet.prove_authorization(token, request)?;
 
@@ -170,7 +196,6 @@ impl SiloClient {
             &self.wallet.public_key().hex(),
         );
 
-        let federation_root = proof.federation_root;
         // Serialize the STARK proof for transmission using the canonical binary format
         // (proof_to_bytes / proof_from_bytes). The wire server deserializes with
         // proof_from_bytes() which expects the PYNA header format, not postcard.
@@ -294,10 +319,17 @@ impl SiloClient {
     pub async fn submit_revocation(&mut self, token_id: &str) -> Result<([u8; 32], u64), SdkError> {
         let sig = self.wallet.sign_bytes(token_id.as_bytes());
 
+        let mut nonce = [0u8; 16];
+        getrandom::fill(&mut nonce).expect("getrandom failed");
         let msg = WireMessage::SubmitRevocation {
             token_id: token_id.to_string(),
             authority: PublicKey(self.wallet.public_key().0),
             authority_sig: Signature(sig.0),
+            nonce,
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0),
         };
 
         let response = self

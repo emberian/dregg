@@ -1,5 +1,9 @@
 //! # pyana-chain: EVM On-Chain Verification via SP1
 //!
+//! **STATUS: In Development. The guest program's STARK verifier is incompatible with the
+//! current circuit crate (which uses Plonky3). Do not use for real proofs until the guest
+//! is regenerated against the Plonky3 backend. See chain/README.md for details.**
+//!
 //! This crate wraps pyana STARK proofs in SP1's zkVM to produce Groth16 proofs
 //! that are cheaply verifiable on Ethereum/Base (~200k gas).
 //!

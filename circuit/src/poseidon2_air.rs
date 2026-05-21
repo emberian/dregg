@@ -295,25 +295,30 @@ impl StarkAir for MerklePoseidon2Air {
     fn boundary_constraints(
         &self,
         public_inputs: &[BabyBear],
-        _trace_len: usize,
+        trace_len: usize,
     ) -> Vec<BoundaryConstraint> {
-        // Public inputs: [leaf_hash, root]
-        // The trace for this round-by-round AIR is complex, but the first row's
-        // state[0] holds the leaf hash (placed according to position at level 0).
-        // We bind the first row's col 0 state to the leaf_hash public input since
-        // at level 0, row 0, state[0] is the arranged children[0].
-        //
-        // For a simplified binding, we only constrain what's directly accessible.
-        // The full algebraic binding comes from the round constraint chain.
-        // Binding even one cell prevents the "lie about public inputs" attack.
-        let constraints = vec![];
-        if public_inputs.len() >= 2 {
-            // Row 0, col 0 is children[0] at level 0.
-            // This may or may not equal leaf_hash depending on position.
-            // For soundness, we skip this AIR's boundary constraints since the
-            // round-by-round structure is self-binding through the constraints.
-            // The MerklePoseidon2StarkAir below has the proper 6-column layout.
-            let _ = &public_inputs;
+        let mut constraints = vec![];
+        if public_inputs.len() >= 2 && trace_len > 0 {
+            // Public inputs: [leaf_hash, root]
+            //
+            // The trace for this round-by-round AIR stores the Poseidon2 state at
+            // each round. The last row's state[0] = root (the output of the final
+            // level's permutation). Padding rows repeat the last real row, so the
+            // padded last row also has col 0 = root.
+            //
+            // We bind the last row col 0 to public_inputs[1] (root). This prevents
+            // the prover from claiming an arbitrary root value disconnected from the
+            // trace computation.
+            //
+            // Note: We cannot directly bind leaf_hash to a specific cell because
+            // its position within the level-0 children array depends on the witness
+            // position value. The round constraints chain ensures computational
+            // integrity from children through to the root output.
+            constraints.push(BoundaryConstraint {
+                row: trace_len - 1,
+                col: 0,
+                value: public_inputs[1], // root
+            });
         }
         constraints
     }
@@ -462,16 +467,12 @@ pub fn generate_merkle_poseidon2_trace(
     }
 
     let root = current;
-    let padding_parent = hash_4_to_1(&[root, BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO]);
+    // Padding: repeat the last real row so that boundary constraints (last row col 5 = root)
+    // remain valid regardless of padding. The hash constraint is also satisfied since the
+    // row is an exact copy of a valid row.
+    let last_row = trace.last().unwrap().clone();
     for _ in depth..padded {
-        trace.push(vec![
-            root,
-            BabyBear::ZERO,
-            BabyBear::ZERO,
-            BabyBear::ZERO,
-            BabyBear::ZERO,
-            padding_parent,
-        ]);
+        trace.push(last_row.clone());
     }
 
     let public_inputs = vec![leaf_hash, root];

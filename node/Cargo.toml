@@ -34,6 +34,7 @@ ed25519-dalek = { version = "2", features = ["std"] }
 quinn = { version = "0.11", features = ["runtime-tokio", "rustls-ring"] }
 blake3 = "1"
 postcard = { version = "1", features = ["use-std"] }
+zeroize = { workspace = true }
 
 [[bin]]
 name = "pyana-node"

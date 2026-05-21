@@ -53,10 +53,14 @@ pub fn verify_authorization_proof(
         SdkError::Wire("proof bytes could not be deserialized as a STARK proof".into())
     })?;
 
+    // SECURITY: Use new_canonical() for values from external (potentially adversarial)
+    // proof data. This ensures modular reduction is applied, preventing non-canonical
+    // representations that could cause malleability (same field element with different
+    // byte encodings comparing as unequal).
     let pi: Vec<BabyBear> = stark_proof
         .public_inputs
         .iter()
-        .map(|&v| BabyBear::new(v))
+        .map(|&v| BabyBear::new_canonical(v))
         .collect();
 
     if pi.len() < 2 {

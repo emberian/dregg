@@ -239,6 +239,9 @@ impl GlobalData {
             ),
             vanishing_com: KZG::commit_g2(params, &z_of_x).unwrap(),
             x_monomial_com: KZG::commit_g2(params, &x_monomial).unwrap(),
+            pks: keys.clone(),
+            weights: weights.clone(),
+            failed_hint_indices: failed_hint_indices.clone(),
         };
 
         // --- Compute AK ---

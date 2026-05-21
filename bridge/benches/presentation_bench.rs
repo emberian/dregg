@@ -225,8 +225,8 @@ fn bench_end_to_end_cycle(c: &mut Criterion) {
             };
             let proof = builder.prove_fast(&request).unwrap();
 
-            // Verify
-            black_box(proof.is_valid());
+            // Verify (constraint-checked only, no cryptographic proof)
+            black_box(proof.is_constraint_checked());
         });
     });
 }
@@ -237,7 +237,7 @@ fn bench_verify_presentation(c: &mut Criterion) {
 
     c.bench_function("bridge_verify_presentation", |b| {
         b.iter(|| {
-            black_box(proof.is_valid());
+            black_box(proof.is_constraint_checked());
         });
     });
 }

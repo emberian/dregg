@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 8b3e6e815df3a353cf5ed6ec39f7785c9140d460ceed97804d7122ed992a4fc5 # shrinks to expiry1 = 1700000000, expiry2 = 1700000000
+cc fbf849822cc96bdfc347df4f5a135f26f68c18b33e306e04d7381a6f067395cb # shrinks to tamper_pos = 170, tamper_byte = 0

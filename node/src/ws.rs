@@ -205,7 +205,11 @@ async fn handle_socket(socket: WebSocket, state: NodeState) {
                                     }
                                 } else {
                                     let mut s = state.write().await;
-                                    let hash = *blake3::hash(passphrase.as_bytes()).as_bytes();
+                                    // Issue 1 fix: use derive_key (domain-separated) matching api.rs
+                                    let hash = blake3::derive_key(
+                                        "pyana-wallet-passphrase-v1",
+                                        passphrase.as_bytes(),
+                                    );
                                     match s.passphrase_hash {
                                         Some(stored_hash) => {
                                             if hash != stored_hash {
@@ -215,6 +219,8 @@ async fn handle_socket(socket: WebSocket, state: NodeState) {
                                                 }
                                             } else {
                                                 s.unlocked = true;
+                                                // Persist unlock state is not needed; passphrase_hash
+                                                // is already persisted on first set.
                                                 ServerMessage::UnlockResult {
                                                     success: true,
                                                     error: None,
@@ -224,6 +230,11 @@ async fn handle_socket(socket: WebSocket, state: NodeState) {
                                         None => {
                                             // First unlock sets the passphrase.
                                             s.passphrase_hash = Some(hash);
+                                            // Persist to store (Issue 3)
+                                            let _ = s.store.set_config(
+                                                "passphrase_hash",
+                                                &hash,
+                                            );
                                             s.unlocked = true;
                                             ServerMessage::UnlockResult {
                                                 success: true,

@@ -259,6 +259,9 @@ impl ConsensusState {
 
     /// As leader: create a proposal block from pending events.
     /// Returns None if there are no pending events or this node isn't the leader.
+    ///
+    /// The proposal is signed with this node's signing key, proving the proposer's
+    /// identity. Recipients verify this signature before accepting the proposal.
     pub fn create_proposal(&mut self) -> Option<RevocationBlock> {
         if !self.is_leader() || self.pending_events.is_empty() {
             return None;
@@ -273,6 +276,9 @@ impl ConsensusState {
             &self.last_finalized_hash,
         );
 
+        // Sign the block hash to prove proposer identity.
+        let proposer_signature = sign(&self.signing_key, &block_hash);
+
         let block = RevocationBlock {
             height: self.current_height,
             view: self.current_view,
@@ -280,6 +286,7 @@ impl ConsensusState {
             events,
             prev_hash: self.last_finalized_hash,
             block_hash,
+            proposer_signature: Some(proposer_signature),
         };
 
         self.current_proposal = Some(block.clone());
@@ -315,6 +322,11 @@ impl ConsensusState {
     }
 
     /// Collect a vote. Returns a QuorumCertificate if threshold is reached.
+    ///
+    /// Verifies the vote's Ed25519 signature against the voter's public key
+    /// before counting it. If the federation has explicit members configured,
+    /// the voter must be a member and the signature must be valid. This prevents
+    /// a single Byzantine node from forging votes on behalf of other nodes.
     pub fn collect_vote(&mut self, vote: Vote) -> Option<QuorumCertificate> {
         // Verify the vote is for the current proposal.
         if let Some(ref proposal) = self.current_proposal {
@@ -328,6 +340,22 @@ impl ConsensusState {
         // Don't count duplicate votes from the same node.
         if self.collected_votes.iter().any(|v| v.voter == vote.voter) {
             return None;
+        }
+
+        // Verify the vote signature against the voter's public key.
+        // If explicit members are configured, use those for verification.
+        if !self.config.members.is_empty() {
+            if let Some(voter_pubkey) = self.config.members.get(vote.voter) {
+                let vote_msg =
+                    QuorumCertificate::vote_message(&vote.block_hash, vote.height, vote.view);
+                if !voter_pubkey.verify(&vote_msg, &vote.signature) {
+                    // Invalid signature -- reject the vote.
+                    return None;
+                }
+            } else {
+                // Voter ID out of range -- reject.
+                return None;
+            }
         }
 
         self.collected_votes.push(vote);
@@ -378,6 +406,13 @@ impl ConsensusState {
     }
 
     /// Validate a proposed block.
+    ///
+    /// Verifies:
+    /// - Height, view, and prev_hash match local state
+    /// - Block hash is correctly computed
+    /// - Block has at least one event
+    /// - The proposer is the expected leader for this view
+    /// - The proposer's signature over block_hash is valid (if members are configured)
     fn validate_block(&self, block: &RevocationBlock) -> bool {
         // Check height.
         if block.height != self.current_height {
@@ -405,6 +440,30 @@ impl ConsensusState {
         // Block must have at least one event.
         if block.events.is_empty() {
             return false;
+        }
+        // Verify the proposer is the expected leader for this view.
+        let expected_leader = self.config.leader_for_view(block.view);
+        if block.proposer != expected_leader {
+            return false;
+        }
+        // Verify the proposer's signature over the block hash.
+        // This prevents any node from impersonating the leader.
+        if !self.config.members.is_empty() {
+            match &block.proposer_signature {
+                Some(sig) => {
+                    if let Some(proposer_pubkey) = self.config.members.get(block.proposer) {
+                        if !proposer_pubkey.verify(&block.block_hash, sig) {
+                            return false;
+                        }
+                    } else {
+                        return false;
+                    }
+                }
+                None => {
+                    // No signature on proposal -- reject when members are configured.
+                    return false;
+                }
+            }
         }
         true
     }

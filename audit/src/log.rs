@@ -17,6 +17,11 @@ use crate::proofs::{ConsistencyProof, CountProof, LastUseProof, RangeProof};
 /// 4^12 = ~16 million events capacity, sufficient for demo purposes.
 const TREE_DEPTH: usize = 12;
 
+/// Default maximum number of historical roots to retain.
+/// Older roots beyond this limit are pruned on each append.
+/// This prevents unbounded memory growth in long-running systems.
+pub const DEFAULT_HISTORICAL_ROOTS_LIMIT: usize = 10_000;
+
 /// An append-only audit log backed by a 4-ary Merkle tree.
 ///
 /// Each event is hashed and inserted as a leaf. The tree is addressed by
@@ -43,7 +48,14 @@ pub struct AuditLog {
     /// is the parent of children `tree_levels[level-1][i*4 .. i*4+3]`.
     tree_levels: Vec<Vec<[u8; 32]>>,
     /// Historical roots: root after each append, for consistency proofs.
+    /// Pruned to at most `historical_roots_limit` entries (oldest are dropped).
     historical_roots: Vec<[u8; 32]>,
+    /// The global index offset of the first entry in `historical_roots`.
+    /// When roots are pruned, this advances so that `historical_root(size)`
+    /// can still map correctly.
+    historical_roots_offset: usize,
+    /// Maximum number of historical roots to retain. Configurable.
+    historical_roots_limit: usize,
 }
 
 /// Snapshot of the log state at a point in time, for consistency proofs.
@@ -56,8 +68,18 @@ pub struct LogSnapshot {
 }
 
 impl AuditLog {
-    /// Create a new empty audit log.
+    /// Create a new empty audit log with the default historical roots retention limit.
     pub fn new() -> Self {
+        Self::with_roots_limit(DEFAULT_HISTORICAL_ROOTS_LIMIT)
+    }
+
+    /// Create a new empty audit log with a custom historical roots retention limit.
+    ///
+    /// The limit controls how many historical roots are kept in memory. Once the
+    /// limit is exceeded, the oldest roots are pruned. A limit of 0 means no
+    /// historical roots are retained (consistency proofs will be unavailable for
+    /// old snapshots).
+    pub fn with_roots_limit(limit: usize) -> Self {
         // Initialize tree_levels with TREE_DEPTH + 1 empty levels.
         // Level 0 = leaves, level TREE_DEPTH = root.
         let mut tree_levels = Vec::with_capacity(TREE_DEPTH + 1);
@@ -70,6 +92,8 @@ impl AuditLog {
             token_events: HashMap::new(),
             tree_levels,
             historical_roots: Vec::new(),
+            historical_roots_offset: 0,
+            historical_roots_limit: limit,
         }
     }
 
@@ -175,6 +199,15 @@ impl AuditLog {
         // Root is now at tree_levels[TREE_DEPTH][0].
         let new_root = self.tree_levels[TREE_DEPTH][0];
         self.historical_roots.push(new_root);
+
+        // Prune historical roots if they exceed the retention limit.
+        if self.historical_roots_limit > 0
+            && self.historical_roots.len() > self.historical_roots_limit
+        {
+            let excess = self.historical_roots.len() - self.historical_roots_limit;
+            self.historical_roots.drain(..excess);
+            self.historical_roots_offset += excess;
+        }
 
         // Generate inclusion proof.
         let inclusion_proof = self.prove_inclusion_at(global_index);
@@ -337,11 +370,39 @@ impl AuditLog {
     }
 
     /// Get the historical root at a given size.
+    ///
+    /// Returns `None` if the requested root has been pruned (older than the
+    /// retention limit) or is beyond the current log size.
     pub fn historical_root(&self, size: usize) -> Option<[u8; 32]> {
         if size == 0 {
             return Some(empty_hash_at_depth(TREE_DEPTH));
         }
-        self.historical_roots.get(size - 1).copied()
+        // Convert 1-based size to 0-based index, then adjust for the offset.
+        let absolute_idx = size - 1;
+        if absolute_idx < self.historical_roots_offset {
+            // This root has been pruned.
+            return None;
+        }
+        let local_idx = absolute_idx - self.historical_roots_offset;
+        self.historical_roots.get(local_idx).copied()
+    }
+
+    /// Get the current historical roots retention limit.
+    pub fn historical_roots_limit(&self) -> usize {
+        self.historical_roots_limit
+    }
+
+    /// Set a new historical roots retention limit.
+    ///
+    /// If the new limit is smaller than the current number of retained roots,
+    /// excess old roots are immediately pruned.
+    pub fn set_historical_roots_limit(&mut self, limit: usize) {
+        self.historical_roots_limit = limit;
+        if limit > 0 && self.historical_roots.len() > limit {
+            let excess = self.historical_roots.len() - limit;
+            self.historical_roots.drain(..excess);
+            self.historical_roots_offset += excess;
+        }
     }
 
     // ─── Internal helpers ───────────────────────────────────────────────

@@ -17,6 +17,8 @@ serde = { version = "1", features = ["derive"] }
 postcard = { version = "1", features = ["use-std"] }
 blake3 = "1"
 getrandom = { workspace = true }
+chacha20poly1305 = { workspace = true }
+subtle = "2"
 pyana-types = { path = "../types" }
 pyana-commit = { path = "../commit" }
 pyana-cell = { path = "../cell" }

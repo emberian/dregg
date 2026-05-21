@@ -922,8 +922,8 @@ mod tests {
                 .iter()
                 .any(|s| s.rule_id == rule_ids::BUDGET_DENY)
         );
-        // Note: the evaluator still returns Allow because the deny fact doesn't block
-        // allow derivation in pure Datalog. The bridge layer checks for deny facts explicitly.
+        // deny overrides allow — conclusion should be Deny even though unrestricted(1) fires allow
+        assert_eq!(trace.conclusion, Conclusion::Deny);
     }
 
     #[test]
@@ -960,6 +960,8 @@ mod tests {
                 .iter()
                 .any(|s| s.rule_id == rule_ids::REVOCATION_DENY)
         );
+        // deny overrides allow — conclusion should be Deny
+        assert_eq!(trace.conclusion, Conclusion::Deny);
     }
 
     #[test]

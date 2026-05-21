@@ -66,6 +66,62 @@ pub struct EvalContext {
 }
 
 impl Preconditions {
+    /// Compute a deterministic hash of these preconditions for inclusion in signing messages.
+    ///
+    /// Uses BLAKE3 over a canonical byte representation. Empty (default) preconditions
+    /// hash to all-zeros for efficiency (no hashing needed for the common case).
+    pub fn hash(&self) -> [u8; 32] {
+        // Fast path: default (empty) preconditions are represented as zero hash.
+        if self.cell_state.is_none() && self.network.is_none() && self.valid_while.is_none() {
+            return [0u8; 32];
+        }
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"preconditions-v1");
+        // Cell state precondition
+        if let Some(ref cs) = self.cell_state {
+            hasher.update(b"\x01");
+            if let Some(nonce) = cs.nonce {
+                hasher.update(b"\x01");
+                hasher.update(&nonce.to_le_bytes());
+            } else {
+                hasher.update(b"\x00");
+            }
+            if let Some(min_bal) = cs.min_balance {
+                hasher.update(b"\x01");
+                hasher.update(&min_bal.to_le_bytes());
+            } else {
+                hasher.update(b"\x00");
+            }
+            hasher.update(&(cs.field_equals.len() as u64).to_le_bytes());
+            for &(index, ref value) in &cs.field_equals {
+                hasher.update(&(index as u64).to_le_bytes());
+                hasher.update(value);
+            }
+            if let Some(proved) = cs.proved_state {
+                hasher.update(if proved { b"\x01" } else { b"\x00" });
+            }
+        } else {
+            hasher.update(b"\x00");
+        }
+        // Network precondition
+        if let Some(ref net) = self.network {
+            hasher.update(b"\x01");
+            hasher.update(&net.min_height.unwrap_or(0).to_le_bytes());
+            hasher.update(&net.max_height.unwrap_or(u64::MAX).to_le_bytes());
+        } else {
+            hasher.update(b"\x00");
+        }
+        // Time range
+        if let Some(ref tr) = self.valid_while {
+            hasher.update(b"\x01");
+            hasher.update(&tr.start.to_le_bytes());
+            hasher.update(&tr.end.to_le_bytes());
+        } else {
+            hasher.update(b"\x00");
+        }
+        *hasher.finalize().as_bytes()
+    }
+
     /// Evaluate all preconditions against the given cell state and context.
     /// Returns Ok(()) if all preconditions pass, or Err with a description of the failure.
     pub fn evaluate(&self, state: &CellState, ctx: &EvalContext) -> Result<(), PreconditionError> {

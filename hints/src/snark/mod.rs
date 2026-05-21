@@ -209,6 +209,15 @@ impl FiatShamirTranscriptData for VerifierKey {
         mix_object(transcript, "sk_com", &self.sk_of_x_com)?;
         mix_object(transcript, "vanish_com", &self.vanishing_com)?;
         mix_object(transcript, "x_mono_com", &self.x_monomial_com)?;
+        // Bind individual PKs, weights, and excluded indices to prevent
+        // selective-disclosure attacks on the aggregate
+        for pk in self.pks.iter() {
+            mix_object(transcript, "pk", &pk.0)?;
+        }
+        for w in self.weights.iter() {
+            mix_object(transcript, "weight", w)?;
+        }
+        mix_object(transcript, "failed_indices", &self.failed_hint_indices)?;
         Ok(())
     }
 }
@@ -221,6 +230,14 @@ impl FiatShamirTranscriptData for AggregationKey {
         mix_object(transcript, "sk_com", &self.vk_sk_of_x_com)?;
         mix_object(transcript, "vanish_com", &self.vk_vanishing_com)?;
         mix_object(transcript, "x_mono_com", &self.vk_x_monomial_com)?;
+        // Bind individual PKs, weights, and excluded indices (must match VerifierKey)
+        for pk in self.pks.iter() {
+            mix_object(transcript, "pk", &pk.0)?;
+        }
+        for w in self.weights.iter() {
+            mix_object(transcript, "weight", w)?;
+        }
+        mix_object(transcript, "failed_indices", &self.failed_hint_indices)?;
         Ok(())
     }
 }

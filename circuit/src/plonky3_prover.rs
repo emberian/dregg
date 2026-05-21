@@ -140,9 +140,9 @@ impl<F: PrimeCharacteristicRing + Sync> BaseAir<F> for P3MerklePoseidon2Air {
         2 // [leaf_hash, root]
     }
 
-    /// This AIR does not access the next row in constraints (single-row constraints only).
+    /// We access next row columns 0 and 5 for chain continuity.
     fn main_next_row_columns(&self) -> Vec<usize> {
-        vec![]
+        vec![0, 5]
     }
 }
 
@@ -150,6 +150,11 @@ impl<AB: AirBuilder> Air<AB> for P3MerklePoseidon2Air {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
         let local = main.current_slice();
+        let next = main.next_slice();
+
+        let current: AB::Expr = local[0].into();
+        let parent: AB::Expr = local[5].into();
+        let next_current: AB::Expr = next[0].into();
 
         // Get position as Expr
         let position: AB::Expr = local[4].into();
@@ -166,6 +171,25 @@ impl<AB: AirBuilder> Air<AB> for P3MerklePoseidon2Air {
 
         let pos_valid = position * pos_m_1 * pos_m_2 * pos_m_3;
         builder.assert_zero(pos_valid);
+
+        // Constraint 2: Chain continuity (transition constraint)
+        // next_row.current == this_row.parent
+        // This ensures the Merkle path forms a connected chain from leaf to root.
+        let continuity: AB::Expr = next_current - parent.clone();
+        builder.when_transition().assert_zero(continuity);
+
+        // Constraint 3: Boundary constraints binding public inputs to trace cells.
+        // public_inputs[0] (leaf_hash) == row 0, col 0 (current)
+        // public_inputs[1] (root) == last row, col 5 (parent)
+        let public_values = builder.public_values();
+        let leaf_hash: AB::Expr = public_values[0].into();
+        let root: AB::Expr = public_values[1].into();
+
+        let first_row_constraint: AB::Expr = current - leaf_hash;
+        builder.when_first_row().assert_zero(first_row_constraint);
+
+        let last_row_constraint: AB::Expr = parent - root;
+        builder.when_last_row().assert_zero(last_row_constraint);
     }
 }
 

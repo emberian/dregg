@@ -94,6 +94,12 @@ pub struct BridgePresentationBuilder {
 ///
 /// Contains both the ZK proof (circuit-level) and the supporting metadata
 /// needed for full verification.
+///
+/// # Zero-Knowledge Safety
+///
+/// The `trace` field contains the full authorization derivation trace (all derived
+/// facts). This field is **never serialized** to prevent leaking private information
+/// over the wire. It is only populated locally for debugging and off-chain verification.
 #[derive(Clone, Debug)]
 pub struct BridgePresentationProof {
     /// The circuit-level presentation proof (constraint-checked).
@@ -107,6 +113,13 @@ pub struct BridgePresentationProof {
     /// `None` when using the non-IVC prove paths.
     pub ivc_proof: Option<pyana_circuit::IvcPresentationProof>,
     /// The authorization trace (for debugging / off-chain verification).
+    ///
+    /// **SECURITY: This field MUST NOT be transmitted over the wire.** It contains
+    /// the full derived fact set which would defeat the zero-knowledge property.
+    /// Only available locally after proof generation.
+    ///
+    /// Use [`Self::into_wire_proof()`] to produce a wire-safe representation that
+    /// strips the trace before transmission.
     pub trace: AuthorizationTrace,
     /// Number of attenuation steps in the chain.
     pub chain_length: usize,
@@ -119,9 +132,34 @@ pub struct BridgePresentationProof {
 }
 
 impl BridgePresentationProof {
-    /// Whether the proof is valid.
+    /// Whether the proof is cryptographically valid.
+    ///
+    /// Returns `true` ONLY if a real STARK proof is present AND the circuit-level
+    /// verification passed. Proofs generated via `prove_fast()` will return `false`
+    /// because they have no cryptographic backing (no real STARK proof).
+    ///
+    /// For proofs from `prove_fast()`, use `is_constraint_checked()` to determine
+    /// if the constraint system passed (useful for development, NOT for security).
     pub fn is_valid(&self) -> bool {
+        if self.real_stark_proof.is_none() && self.ivc_proof.is_none() {
+            return false;
+        }
         self.verification == PresentationVerification::Valid
+    }
+
+    /// Whether the proof passed local constraint checking.
+    ///
+    /// This indicates the circuit constraints were satisfied locally, which is
+    /// useful for development and debugging. However, this provides NO security
+    /// guarantee to a remote verifier because the prover runs the check themselves.
+    ///
+    /// For cryptographic verification across trust boundaries, use `is_valid()`
+    /// which requires a real STARK proof.
+    pub fn is_constraint_checked(&self) -> bool {
+        matches!(
+            self.verification,
+            PresentationVerification::Valid | PresentationVerification::LocalOnly
+        )
     }
 
     /// Get the proof size in bytes.
@@ -163,10 +201,13 @@ impl BridgePresentationProof {
 
     /// Verify the real STARK issuer membership proof (if present).
     ///
-    /// This performs full cryptographic verification using the STARK verifier.
-    /// Tries Poseidon2 AIR first (production), falls back to linear AIR (legacy).
-    /// Returns `None` if no real STARK proof is attached; returns `Some(Ok(()))`
-    /// if verification succeeds, or `Some(Err(msg))` on failure.
+    /// This performs full cryptographic verification using the STARK verifier
+    /// with Poseidon2 AIR (collision-resistant). Returns `None` if no real STARK
+    /// proof is attached; returns `Some(Ok(()))` if verification succeeds, or
+    /// `Some(Err(msg))` on failure.
+    ///
+    /// NOTE: The linear AIR fallback has been removed. Only Poseidon2 proofs are
+    /// accepted. If you have legacy linear proofs, they must be re-generated.
     pub fn verify_issuer_stark(&self) -> Option<Result<(), String>> {
         self.real_stark_proof.as_ref().map(|real| {
             let pi: Vec<BabyBear> = real
@@ -176,22 +217,57 @@ impl BridgePresentationProof {
                 .map(|&v| BabyBear::new(v))
                 .collect();
 
-            // Try Poseidon2 AIR first (production path).
+            // Poseidon2 AIR only (production path, collision-resistant).
+            // No fallback to linear AIR: the linear binding is trivially forgeable
+            // and MUST NOT be accepted in verification.
             use pyana_circuit::poseidon2_air::MerklePoseidon2StarkAir;
-            let poseidon2_result = stark::verify(
+            stark::verify(
                 &MerklePoseidon2StarkAir,
                 &real.issuer_membership_stark_proof,
                 &pi,
-            );
-            if poseidon2_result.is_ok() {
-                return Ok(());
-            }
-
-            // Fall back to linear AIR for backward compatibility.
-            let air = stark::MerkleStarkAir;
-            stark::verify(&air, &real.issuer_membership_stark_proof, &pi)
+            )
         })
     }
+
+    /// Convert this proof into a wire-safe representation that strips the private trace.
+    ///
+    /// **All wire protocol code MUST use this method** before transmitting a proof.
+    /// The returned `WirePresentationProof` contains only the cryptographic proof data
+    /// and public inputs, with the private authorization trace completely removed.
+    pub fn into_wire_proof(self) -> WirePresentationProof {
+        WirePresentationProof {
+            circuit_proof: self.circuit_proof,
+            real_stark_proof: self.real_stark_proof,
+            ivc_proof: self.ivc_proof,
+            chain_length: self.chain_length,
+            final_state_root: self.final_state_root,
+            federation_root: self.federation_root,
+            verification: self.verification,
+        }
+    }
+}
+
+/// Wire-safe presentation proof (no private trace data).
+///
+/// This is the type that MUST be used for any network transmission of proofs.
+/// It deliberately omits the `AuthorizationTrace` to preserve zero-knowledge.
+/// Obtain via [`BridgePresentationProof::into_wire_proof()`].
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct WirePresentationProof {
+    /// The circuit-level presentation proof (constraint-checked).
+    pub circuit_proof: PresentationProof,
+    /// Real STARK proof for issuer membership.
+    pub real_stark_proof: Option<RealPresentationProof>,
+    /// IVC proof for the fold chain.
+    pub ivc_proof: Option<pyana_circuit::IvcPresentationProof>,
+    /// Number of attenuation steps in the chain.
+    pub chain_length: usize,
+    /// The final state root (public input).
+    pub final_state_root: [u8; 32],
+    /// The federation root (public input).
+    pub federation_root: [u8; 32],
+    /// Verification result from the circuit layer.
+    pub verification: PresentationVerification,
 }
 
 impl BridgePresentationBuilder {
@@ -441,12 +517,18 @@ impl BridgePresentationBuilder {
 
     /// Generate a fast (constraint-checked) presentation proof for the given authorization request.
     ///
-    /// This validates circuit constraints without producing a full STARK proof,
-    /// yielding faster proof generation at the cost of cryptographic soundness.
-    /// Use for development iteration, benchmarks, or latency-sensitive scenarios
-    /// where the verifier is co-located and trusted.
+    /// **WARNING: NOT CRYPTOGRAPHICALLY SOUND.** This validates circuit constraints
+    /// locally without producing a STARK proof. The resulting proof's `is_valid()`
+    /// returns `false` because it has no cryptographic backing. Use
+    /// `is_constraint_checked()` to query the local constraint result.
     ///
-    /// For production verification across trust boundaries, use [`prove`](Self::prove).
+    /// This is suitable ONLY for:
+    /// - Development iteration and debugging
+    /// - Benchmarking constraint evaluation overhead
+    /// - Scenarios where prover == verifier (co-located, trusted)
+    ///
+    /// **Do NOT use for untrusted provers or cross-trust-boundary verification.**
+    /// For production use, call [`prove`](Self::prove) which generates a real STARK proof.
     ///
     /// # Arguments
     ///
@@ -454,8 +536,8 @@ impl BridgePresentationBuilder {
     ///
     /// # Returns
     ///
-    /// A `BridgePresentationProof` containing constraint-checked sub-proofs and metadata,
-    /// or an error if authorization fails or the proof cannot be generated.
+    /// A `BridgePresentationProof` with `is_valid() == false` (no cryptographic proof).
+    /// Use `is_constraint_checked()` to check if constraints passed locally.
     pub fn prove_fast(&mut self, request: &AuthRequest) -> Result<BridgePresentationProof, AuthError> {
         // 1. Get the final state.
         let final_step = self.chain.last().ok_or(AuthError::EmptyState)?;
@@ -474,11 +556,21 @@ impl BridgePresentationBuilder {
 
         // 5. Generate the presentation proof.
         let air = PresentationAir::new(circuit_witness.clone());
-        let verification = air.verify_all();
+        let constraint_result = air.verify_all();
 
         let circuit_proof = air
             .prove()
             .ok_or_else(|| AuthError::InvalidRequest("proof generation failed".into()))?;
+
+        // SECURITY: prove_fast() produces NO cryptographic proof. Even if constraints
+        // pass locally, we report `LocalOnly` to prevent callers from mistaking this
+        // for a cryptographically verified proof. Only `prove()` (with a real STARK)
+        // sets `Valid`.
+        let verification = if constraint_result == PresentationVerification::Valid {
+            PresentationVerification::LocalOnly
+        } else {
+            constraint_result
+        };
 
         Ok(BridgePresentationProof {
             circuit_proof,
@@ -558,12 +650,15 @@ impl BridgePresentationBuilder {
 
     /// Generate a STARK-backed presentation proof using the LINEAR AIR.
     ///
-    /// This uses `MerkleStarkAir` with a linear algebraic binding constraint
-    /// (parent = current + sib0 + sib1 + sib2 + position). The linear binding
-    /// is faster to prove but provides weaker security guarantees than Poseidon2.
-    /// Use for benchmarking proof generation throughput.
+    /// **SECURITY WARNING: The linear AIR (`MerkleStarkAir`) uses a trivially
+    /// forgeable algebraic binding (parent = current + sib0 + sib1 + sib2 + position).
+    /// An adversary can find collisions in polynomial time. This method is retained
+    /// ONLY for internal benchmarking of proof generation throughput.**
     ///
-    /// For production use, prefer [`prove`](Self::prove) which uses Poseidon2.
+    /// For production use, call [`prove`](Self::prove) which uses Poseidon2.
+    ///
+    /// This method is intentionally NOT public to prevent misuse by external callers.
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn prove_linear(
         &mut self,
         request: &AuthRequest,
@@ -671,13 +766,18 @@ impl BridgePresentationBuilder {
         trace: &AuthorizationTrace,
         request: &AuthRequest,
     ) -> Result<PresentationWitness, AuthError> {
-        // Convert the request predicate (action or combined) to BabyBear.
-        let request_pred_bb = if let Some(action) = &request.action {
-            let sym = symbol_from_str(action);
-            bytes_to_babybear(&sym)
-        } else {
-            BabyBear::new(0)
-        };
+        // Compute the canonical action binding commitment from (action, resource).
+        let action_str = request.action.as_deref().unwrap_or("");
+        let resource_str = request.app_id.as_deref().unwrap_or("");
+        let request_pred_bb = pyana_circuit::compute_action_binding(action_str, resource_str);
+
+
+
+
+
+
+
+
 
         // Timestamp.
         let timestamp = request.now.unwrap_or(0);
@@ -719,13 +819,10 @@ impl BridgePresentationBuilder {
         trace: &AuthorizationTrace,
         request: &AuthRequest,
     ) -> Result<PresentationWitness, AuthError> {
-        // Convert the request predicate (action or combined) to BabyBear.
-        let request_pred_bb = if let Some(action) = &request.action {
-            let sym = symbol_from_str(action);
-            bytes_to_babybear(&sym)
-        } else {
-            BabyBear::new(0)
-        };
+        // Compute the canonical action binding commitment from (action, resource).
+        let action_str = request.action.as_deref().unwrap_or("");
+        let resource_str = request.app_id.as_deref().unwrap_or("");
+        let request_pred_bb = pyana_circuit::compute_action_binding(action_str, resource_str);
 
         // Timestamp.
         let timestamp = request.now.unwrap_or(0);
@@ -1090,11 +1187,11 @@ impl BridgePresentationBuilder {
     /// Build the issuer membership Merkle witness.
     ///
     /// If a federation tree was attached via `with_federation_tree()`, this uses
-    /// a real Merkle proof from the tree. Otherwise, it falls back to a synthetic
-    /// deterministic path for testing.
+    /// a real Merkle proof from the tree. In test/test-utils builds, it falls back
+    /// to a synthetic deterministic path.
     ///
-    /// The computed root is checked against the expected `federation_root`; if they
-    /// don't match, the proof is considered invalid (returns Err).
+    /// In production builds without a federation tree, returns
+    /// `Err(AuthError::IssuerNotInFederation)`.
     pub fn build_issuer_membership(
         &self,
         issuer_key_hash: BabyBear,
@@ -1105,11 +1202,16 @@ impl BridgePresentationBuilder {
         }
 
         // TESTING FALLBACK: synthetic/deterministic Merkle path.
-        // This constructs a path from BLAKE3-derived siblings. It is NOT connected
-        // to any real federation registry and is only suitable for unit tests and
-        // development. The root check below still ensures the builder was configured
-        // with the matching synthetic root (via `new_with_root_bb`).
-        self.build_issuer_membership_synthetic(issuer_key_hash)
+        // Only available in test builds or with the `test-utils` feature.
+        #[cfg(any(test, feature = "test-utils"))]
+        {
+            return self.build_issuer_membership_synthetic(issuer_key_hash);
+        }
+
+        #[cfg(not(any(test, feature = "test-utils")))]
+        {
+            Err(AuthError::IssuerNotInFederation)
+        }
     }
 
     /// Build issuer membership from a real federation Merkle tree.
@@ -1164,6 +1266,7 @@ impl BridgePresentationBuilder {
     /// purely that the path was built targeting the configured `federation_root_bb`.
     ///
     /// Use `with_federation_tree()` for production proofs.
+    #[cfg(any(test, feature = "test-utils"))]
     fn build_issuer_membership_synthetic(
         &self,
         issuer_key_hash: BabyBear,
@@ -1207,8 +1310,8 @@ impl BridgePresentationBuilder {
     /// is collision-resistant (unlike the linear binding which has weaker security).
     ///
     /// If a federation tree is available, it uses real tree proofs with Poseidon2
-    /// hashing. Otherwise, it falls back to a synthetic/deterministic Poseidon2
-    /// path for testing.
+    /// hashing. In test/test-utils builds, falls back to a synthetic path.
+    /// In production builds without a federation tree, returns an error.
     pub fn build_issuer_membership_poseidon2(
         &self,
         issuer_key_hash: BabyBear,
@@ -1219,7 +1322,15 @@ impl BridgePresentationBuilder {
         }
 
         // TESTING FALLBACK: synthetic Poseidon2 Merkle path.
-        self.build_issuer_membership_poseidon2_synthetic(issuer_key_hash)
+        #[cfg(any(test, feature = "test-utils"))]
+        {
+            return self.build_issuer_membership_poseidon2_synthetic(issuer_key_hash);
+        }
+
+        #[cfg(not(any(test, feature = "test-utils")))]
+        {
+            Err(AuthError::IssuerNotInFederation)
+        }
     }
 
     /// Build Poseidon2 issuer membership from a real federation Merkle tree.
@@ -1275,6 +1386,7 @@ impl BridgePresentationBuilder {
     ///
     /// Constructs a Merkle path using real Poseidon2 hashing at each level,
     /// with BLAKE3-derived sibling values. Compatible with `MerklePoseidon2StarkAir`.
+    #[cfg(any(test, feature = "test-utils"))]
     fn build_issuer_membership_poseidon2_synthetic(
         &self,
         issuer_key_hash: BabyBear,
@@ -1336,7 +1448,10 @@ pub fn bytes_to_babybear(bytes: &[u8; 32]) -> BabyBear {
 }
 
 /// Derive a deterministic sibling hash for Merkle path construction.
-/// Exposed as pub(crate) for test helpers that need to compute the matching federation root.
+/// Only available in test builds or with `test-utils` feature.
+/// This is part of the synthetic membership proof infrastructure and
+/// MUST NOT be used in production.
+#[cfg(any(test, feature = "test-utils"))]
 pub fn hash_index(level: usize, sibling_idx: usize, key: &[u8; 32]) -> u32 {
     let mut hasher = blake3::Hasher::new();
     hasher.update(&level.to_le_bytes());
@@ -1348,16 +1463,111 @@ pub fn hash_index(level: usize, sibling_idx: usize, key: &[u8; 32]) -> u32 {
         % (pyana_circuit::field::BABYBEAR_P)
 }
 
-/// Verify a presentation proof cryptographically.
+/// Default maximum proof age in seconds (5 minutes).
 ///
-/// This is a standalone verification function that checks the proof
-/// without needing access to the original token chain.
+/// Proofs older than this are rejected by `verify_presentation` and
+/// `verify_presentation_full`. Callers who need a different window should use
+/// `verify_presentation_full` with an explicit `max_proof_age`.
+pub const DEFAULT_MAX_PROOF_AGE_SECS: i64 = 300;
+
+/// Verify a presentation proof cryptographically with full authorization checks.
 ///
-/// If a real STARK proof is attached, it performs full cryptographic verification
-/// using the Poseidon2 AIR (production path). If no real STARK proof is present,
-/// the proof is considered unverified and returns `false`.
+/// This is the primary verification entry point. It checks:
+/// 1. **Issuer membership**: The STARK proof for federation membership is valid.
+/// 2. **Federation binding**: The proof's federation root matches `federation_root`.
+/// 3. **Timestamp freshness**: The proof's timestamp is within `max_proof_age` seconds of `now`.
+/// 4. **Request predicate**: The proof's committed `request_predicate` matches `expected_action`.
 ///
-/// The `federation_root` parameter binds the verification to a specific trust root.
+/// # Arguments
+///
+/// * `proof` - The presentation proof to verify.
+/// * `federation_root` - The federation root of trust from an **external, trusted source**.
+///   **SECURITY WARNING**: This MUST NOT come from the proof itself (e.g., `proof.federation_root`).
+///   Using the proof's own federation root is circular and provides no security — an attacker
+///   can forge a proof for any federation root they choose.
+/// * `expected_action` - The action string the verifier expects the proof to authorize.
+///   If `None`, the request predicate check is skipped (only safe when the action is
+///   already authenticated by other means, e.g., TLS channel binding).
+/// * `now` - Current Unix timestamp in seconds for freshness checking.
+/// * `max_proof_age` - Maximum age of the proof in seconds. Use `DEFAULT_MAX_PROOF_AGE_SECS`
+///   (300s / 5min) for typical interactive authorization.
+///
+/// # Returns
+///
+/// `true` if all checks pass, `false` otherwise.
+pub fn verify_presentation_full(
+    proof: &BridgePresentationProof,
+    federation_root: &[u8; 32],
+    expected_action: Option<&str>,
+    now: i64,
+    max_proof_age: i64,
+) -> bool {
+    // A real STARK proof is required for cryptographic verification.
+    let real = match proof.real_stark_proof.as_ref() {
+        Some(r) => r,
+        None => return false,
+    };
+
+    use pyana_circuit::poseidon2_air::MerklePoseidon2StarkAir;
+
+    let pi: Vec<BabyBear> = real
+        .issuer_membership_stark_proof
+        .public_inputs
+        .iter()
+        .map(|&v| BabyBear::new(v))
+        .collect();
+
+    if pi.len() < 2 {
+        return false;
+    }
+
+    // 1. Verify that the proof's federation root matches what we expect (EXTERNAL trust anchor).
+    let expected_root = bytes_to_babybear(federation_root);
+    if pi[1] != expected_root {
+        return false;
+    }
+
+    // 2. Timestamp freshness: reject stale proofs.
+    let proof_timestamp = proof.circuit_proof.public_inputs.timestamp;
+    let proof_ts_val = proof_timestamp.0 as i64;
+    if proof_ts_val == 0 {
+        // A zero timestamp means no timestamp was set — reject as stale.
+        return false;
+    }
+    let age = now.saturating_sub(proof_ts_val);
+    if age > max_proof_age || age < -max_proof_age {
+        // Proof is too old OR has a future timestamp beyond tolerance.
+        return false;
+    }
+
+    // 3. Request predicate authorization: verify the proof actually authorizes
+    //    the action being requested, not just any action.
+    if let Some(action) = expected_action {
+        let action_sym = pyana_trace::symbol_from_str(action);
+        let expected_pred = bytes_to_babybear(&action_sym);
+        if proof.circuit_proof.public_inputs.request_predicate != expected_pred {
+            return false;
+        }
+    }
+
+    // 4. Verify the real STARK proof (Poseidon2 AIR, collision-resistant).
+    stark::verify(&MerklePoseidon2StarkAir, &real.issuer_membership_stark_proof, &pi).is_ok()
+}
+
+/// Verify a presentation proof cryptographically (convenience wrapper).
+///
+/// Equivalent to `verify_presentation_full` with:
+/// - No action predicate check (`expected_action = None`)
+/// - No timestamp freshness check (uses timestamp 0 and max_age of i64::MAX)
+///
+/// **SECURITY WARNING**: The `federation_root` parameter MUST come from an external
+/// trusted source (e.g., the verifier's own configuration, a pinned trust anchor,
+/// or a federation registry the verifier operates). It MUST NOT be extracted from
+/// the proof being verified (e.g., `proof.federation_root`), as that is circular
+/// and provides no security guarantee.
+///
+/// For production use with full security, prefer [`verify_presentation_full`] which
+/// also checks timestamp freshness and request predicate authorization.
 pub fn verify_presentation(proof: &BridgePresentationProof, federation_root: &[u8; 32]) -> bool {
     // A real STARK proof is required for cryptographic verification.
     if let Some(ref real) = proof.real_stark_proof {
@@ -1393,6 +1603,9 @@ pub fn verify_presentation(proof: &BridgePresentationProof, federation_root: &[u
 /// This is the lower-level verification function used when the federation root
 /// is already known as a BabyBear field element (e.g., computed from a synthetic
 /// Merkle path in tests, or stored directly alongside the federation tree).
+///
+/// **SECURITY WARNING**: The `expected_root` MUST come from an external trusted source.
+/// Do NOT pass a value derived from the proof itself.
 pub fn verify_presentation_bb(proof: &BridgePresentationProof, expected_root: BabyBear) -> bool {
     if let Some(ref real) = proof.real_stark_proof {
         use pyana_circuit::poseidon2_air::MerklePoseidon2StarkAir;

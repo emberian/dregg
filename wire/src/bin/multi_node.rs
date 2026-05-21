@@ -435,10 +435,17 @@ async fn main() {
     let mut conn2 = PeerConnection::connect(&addrs[1].to_string())
         .await
         .unwrap();
+    let mut revoke_nonce2 = [0u8; 16];
+    getrandom::fill(&mut revoke_nonce2).expect("getrandom failed");
     let revoke_msg = WireMessage::SubmitRevocation {
         token_id: revoke_token_id.to_string(),
         authority: authority_pk,
         authority_sig: authority_sig.clone(),
+        nonce: revoke_nonce2,
+        timestamp: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0),
     };
     conn2.send(revoke_msg).await.unwrap();
     let ack2 = conn2.recv().await.unwrap();
@@ -460,10 +467,17 @@ async fn main() {
     let mut conn3 = PeerConnection::connect(&addrs[2].to_string())
         .await
         .unwrap();
+    let mut revoke_nonce3 = [0u8; 16];
+    getrandom::fill(&mut revoke_nonce3).expect("getrandom failed");
     let revoke_msg3 = WireMessage::SubmitRevocation {
         token_id: revoke_token_id.to_string(),
         authority: PublicKey(nodes[0].public_key.0),
         authority_sig: authority_sig.clone(),
+        nonce: revoke_nonce3,
+        timestamp: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0),
     };
     conn3.send(revoke_msg3).await.unwrap();
     let ack3 = conn3.recv().await.unwrap();

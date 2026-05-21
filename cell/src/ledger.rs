@@ -709,17 +709,188 @@ impl Ledger {
     }
 
     /// Hash a cell for Merkle tree inclusion.
+    ///
+    /// ALL security-relevant fields are included in the hash to ensure the Merkle
+    /// tree commits to the complete cell state. Omitting any field would allow an
+    /// attacker to present a valid Merkle proof for a cell with tampered fields.
     fn hash_cell(cell: &Cell) -> [u8; 32] {
-        let mut hasher = blake3::Hasher::new();
+        let mut hasher = blake3::Hasher::new_derive_key("pyana-cell:merkle-leaf v2");
+
+        // Identity fields
         hasher.update(cell.id.as_bytes());
         hasher.update(&cell.public_key);
         hasher.update(&cell.token_id);
+
+        // Core state: nonce, balance, fields
         hasher.update(&cell.state.nonce.to_le_bytes());
         hasher.update(&cell.state.balance.to_le_bytes());
         for field in &cell.state.fields {
             hasher.update(field);
         }
+
+        // Field visibility and commitments
+        for vis in &cell.state.field_visibility {
+            let vis_byte = match vis {
+                crate::state::FieldVisibility::Public => 0u8,
+                crate::state::FieldVisibility::Committed => 1u8,
+                crate::state::FieldVisibility::SelectivelyDisclosable => 2u8,
+            };
+            hasher.update(&[vis_byte]);
+        }
+        for commitment in &cell.state.commitments {
+            match commitment {
+                Some(hash) => {
+                    hasher.update(&[1u8]);
+                    hasher.update(hash);
+                }
+                None => {
+                    hasher.update(&[0u8]);
+                }
+            }
+        }
+
+        // proved_state flag
+        hasher.update(&[cell.state.proved_state as u8]);
+
+        // delegation_epoch
+        hasher.update(&cell.state.delegation_epoch.to_le_bytes());
+
+        // Permissions (hash each field's AuthRequired variant)
+        let perms = &cell.permissions;
+        let perm_fields = [
+            &perms.send,
+            &perms.receive,
+            &perms.set_state,
+            &perms.set_permissions,
+            &perms.set_verification_key,
+            &perms.increment_nonce,
+            &perms.delegate,
+            &perms.access,
+        ];
+        for perm in perm_fields {
+            let perm_byte = match perm {
+                crate::permissions::AuthRequired::None => 0u8,
+                crate::permissions::AuthRequired::Signature => 1u8,
+                crate::permissions::AuthRequired::Proof => 2u8,
+                crate::permissions::AuthRequired::Either => 3u8,
+                crate::permissions::AuthRequired::Impossible => 4u8,
+            };
+            hasher.update(&[perm_byte]);
+        }
+
+        // Capabilities (c-list)
+        let cap_count = cell.capabilities.len() as u64;
+        hasher.update(&cap_count.to_le_bytes());
+        for cap in cell.capabilities.iter() {
+            hasher.update(cap.target.as_bytes());
+            hasher.update(&cap.slot.to_le_bytes());
+            if let Some(ref bs) = cap.breadstuff {
+                hasher.update(&[1u8]);
+                hasher.update(bs);
+            } else {
+                hasher.update(&[0u8]);
+            }
+        }
+
+        // Program
+        match &cell.program {
+            crate::program::CellProgram::None => {
+                hasher.update(&[0u8]);
+            }
+            crate::program::CellProgram::Predicate(constraints) => {
+                hasher.update(&[1u8]);
+                // Hash serialized constraints for determinism
+                let serialized = postcard::to_allocvec(constraints).unwrap_or_default();
+                hasher.update(&(serialized.len() as u64).to_le_bytes());
+                hasher.update(&serialized);
+            }
+            crate::program::CellProgram::Circuit { circuit_hash } => {
+                hasher.update(&[2u8]);
+                hasher.update(circuit_hash);
+            }
+        }
+
+        // Verification key
+        match &cell.verification_key {
+            Some(vk) => {
+                hasher.update(&[1u8]);
+                hasher.update(&vk.hash);
+            }
+            None => {
+                hasher.update(&[0u8]);
+            }
+        }
+
+        // Delegate
+        match &cell.delegate {
+            Some(delegate_id) => {
+                hasher.update(&[1u8]);
+                hasher.update(delegate_id.as_bytes());
+            }
+            None => {
+                hasher.update(&[0u8]);
+            }
+        }
+
+        // Delegation (snapshot+refresh)
+        match &cell.delegation {
+            Some(deleg) => {
+                hasher.update(&[1u8]);
+                hasher.update(deleg.source.as_bytes());
+                hasher.update(&deleg.delegation_epoch.to_le_bytes());
+                hasher.update(&deleg.refreshed_at.to_le_bytes());
+                hasher.update(&deleg.max_staleness.to_le_bytes());
+                let snap_count = deleg.snapshot.len() as u64;
+                hasher.update(&snap_count.to_le_bytes());
+                for cap in &deleg.snapshot {
+                    hasher.update(cap.target.as_bytes());
+                    hasher.update(&cap.slot.to_le_bytes());
+                }
+            }
+            None => {
+                hasher.update(&[0u8]);
+            }
+        }
+
         *hasher.finalize().as_bytes()
+    }
+
+    /// Hash a single state constraint into the hasher for deterministic program hashing.
+    fn hash_constraint(hasher: &mut blake3::Hasher, constraint: &crate::program::StateConstraint) {
+        use crate::program::StateConstraint;
+        match constraint {
+            StateConstraint::FieldEquals { index, value } => {
+                hasher.update(&[0u8]);
+                hasher.update(&[*index]);
+                hasher.update(value);
+            }
+            StateConstraint::FieldGte { index, value } => {
+                hasher.update(&[1u8]);
+                hasher.update(&[*index]);
+                hasher.update(value);
+            }
+            StateConstraint::FieldLte { index, value } => {
+                hasher.update(&[2u8]);
+                hasher.update(&[*index]);
+                hasher.update(value);
+            }
+            StateConstraint::SumEquals { indices, value } => {
+                hasher.update(&[3u8]);
+                hasher.update(&(indices.len() as u64).to_le_bytes());
+                for &idx in indices {
+                    hasher.update(&[idx]);
+                }
+                hasher.update(value);
+            }
+            StateConstraint::Immutable { index } => {
+                hasher.update(&[4u8]);
+                hasher.update(&[*index]);
+            }
+            StateConstraint::Custom { constraint_hash } => {
+                hasher.update(&[5u8]);
+                hasher.update(constraint_hash);
+            }
+        }
     }
 
     /// The root of an empty tree.

@@ -12,14 +12,16 @@ description = "Agent cell model — capability-secure isolated execution context
 [dependencies]
 blake3 = "1"
 chacha20poly1305 = { workspace = true }
+ed25519-dalek = { version = "2", features = ["hazmat"] }
 getrandom = { workspace = true }
+postcard = { version = "1", features = ["alloc"] }
 pyana-types = { path = "../types" }
 serde = { version = "1", features = ["derive", "std"] }
+serde_json = { workspace = true }
 x25519-dalek = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
-serde_json = { workspace = true }
 
 [lints]
 workspace = true

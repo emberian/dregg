@@ -137,9 +137,17 @@ impl CellState {
     }
 
     /// Set a state field by index.
+    ///
+    /// Invalidates any stale commitment for this field. Callers that need the
+    /// commitment to remain valid must call `set_field_visibility` with a fresh
+    /// nonce after updating the value.
     pub fn set_field(&mut self, index: usize, value: FieldElement) -> bool {
         if index < STATE_SLOTS {
             self.fields[index] = value;
+            // Invalidate stale commitment — old hash no longer matches new value.
+            if self.commitments[index].is_some() {
+                self.commitments[index] = None;
+            }
             true
         } else {
             false

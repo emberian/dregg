@@ -39,8 +39,9 @@
 //!
 //! # Encryption
 //!
-//! Signing keys are encrypted at rest using XChaCha20-Poly1305 (via BLAKE3
-//! key derivation from the master key). Public keys are stored in plaintext.
+//! Signing keys are encrypted at rest using ChaCha20-Poly1305. The AEAD key is
+//! derived from the master key via BLAKE3's KDF mode with domain-separated context.
+//! Public keys are stored in plaintext.
 
 pub mod audit;
 pub mod federation;
@@ -183,8 +184,9 @@ impl PersistentStore {
             // Note tree tables.
             let _ = write_txn.open_table(tables::NOTE_COMMITMENTS)?;
             let _ = write_txn.open_table(tables::NULLIFIERS)?;
-            // Metadata table.
+            // Metadata tables.
             let _ = write_txn.open_table(tables::METADATA)?;
+            let _ = write_txn.open_table(tables::METADATA_BYTES)?;
         }
         write_txn.commit()?;
         Ok(())
@@ -202,6 +204,9 @@ impl PersistentStore {
     // =========================================================================
 
     /// Store a note commitment at the next position. Returns the position assigned.
+    ///
+    /// Invalidates the cached note tree root so the next call to `note_tree_root()`
+    /// will recompute from the updated tree.
     pub fn store_note_commitment(
         &self,
         commitment: &pyana_cell::note::NoteCommitment,
@@ -220,6 +225,10 @@ impl PersistentStore {
             table.insert(position, &commitment.0)?;
 
             meta.insert(tables::META_NOTE_TREE_SIZE, position + 1)?;
+
+            // Invalidate the cached root within the same transaction.
+            let mut meta_bytes = write_txn.open_table(tables::METADATA_BYTES)?;
+            meta_bytes.remove(tables::META_NOTE_TREE_ROOT_CACHE)?;
         }
         write_txn.commit()?;
         Ok(position)
@@ -251,12 +260,41 @@ impl PersistentStore {
         Ok(table.get(&nullifier.0)?.is_some())
     }
 
-    /// Compute the current note tree root by loading all commitments and
-    /// rebuilding the Merkle tree.
+    /// Get the current note tree root.
+    ///
+    /// Returns the cached root if available (O(1) read from metadata). Falls back
+    /// to full tree reconstruction only if the cache is missing (e.g., first call
+    /// on a database created before the cache was introduced, or after corruption
+    /// recovery).
     pub fn note_tree_root(&self) -> Result<[u8; 32]> {
+        // Try to read the cached root first.
+        let read_txn = self.db.begin_read()?;
+        let meta_bytes = read_txn.open_table(tables::METADATA_BYTES)?;
+        if let Some(guard) = meta_bytes.get(tables::META_NOTE_TREE_ROOT_CACHE)? {
+            let cached = guard.value();
+            if cached.len() == 32 {
+                let mut root = [0u8; 32];
+                root.copy_from_slice(cached);
+                return Ok(root);
+            }
+        }
+        drop(meta_bytes);
+        drop(read_txn);
+
+        // Cache miss: rebuild from scratch and persist the result.
         let commitments = self.load_all_note_commitments()?;
         let mut tree = note_tree::NoteTree::from_commitments(commitments);
-        Ok(tree.root())
+        let root = tree.root();
+
+        // Persist the computed root for future calls.
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut meta_bytes = write_txn.open_table(tables::METADATA_BYTES)?;
+            meta_bytes.insert(tables::META_NOTE_TREE_ROOT_CACHE, root.as_slice())?;
+        }
+        write_txn.commit()?;
+
+        Ok(root)
     }
 
     /// Get the number of note commitments stored.
@@ -318,6 +356,83 @@ impl PersistentStore {
         Ok(set.root())
     }
 
+    // =========================================================================
+    // Generic Config Storage (METADATA_BYTES)
+    // =========================================================================
+
+    /// Store a byte blob under a config key.
+    pub fn set_config(&self, key: &str, value: &[u8]) -> Result<()> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(tables::METADATA_BYTES)?;
+            table.insert(key, value)?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    /// Load a byte blob stored under a config key.
+    pub fn get_config(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(tables::METADATA_BYTES)?;
+        match table.get(key)? {
+            Some(guard) => Ok(Some(guard.value().to_vec())),
+            None => Ok(None),
+        }
+    }
+
+    // =========================================================================
+    // Proof Hash Nullifier Storage (for conditional turn replay prevention)
+    // =========================================================================
+
+    /// Store a proof hash (used in conditional turn resolution) to prevent replay.
+    ///
+    /// Returns Ok(true) if newly inserted, Ok(false) if already present.
+    pub fn insert_proof_hash(&self, hash: &[u8; 32]) -> Result<bool> {
+        // We reuse METADATA_BYTES with a "proof_hash:" prefix key.
+        let key = format!("proof_hash:{}", hex_encode_bytes(hash));
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(tables::METADATA_BYTES)?;
+        if table.get(key.as_str())?.is_some() {
+            return Ok(false);
+        }
+        drop(table);
+        drop(read_txn);
+
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(tables::METADATA_BYTES)?;
+            table.insert(key.as_str(), &[1u8] as &[u8])?;
+        }
+        write_txn.commit()?;
+        Ok(true)
+    }
+
+    /// Load all stored proof hashes (for populating the in-memory set on startup).
+    pub fn load_all_proof_hashes(&self) -> Result<std::collections::HashSet<[u8; 32]>> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(tables::METADATA_BYTES)?;
+        let mut hashes = std::collections::HashSet::new();
+
+        let prefix = "proof_hash:";
+        let range = table.range(prefix..)?;
+        for entry in range {
+            let entry = entry.map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
+            let key = entry.0.value();
+            if !key.starts_with(prefix) {
+                break;
+            }
+            // Parse the hex suffix back to [u8; 32].
+            let hex_part = &key[prefix.len()..];
+            if hex_part.len() == 64 {
+                if let Ok(bytes) = hex_decode_bytes(hex_part) {
+                    hashes.insert(bytes);
+                }
+            }
+        }
+        Ok(hashes)
+    }
+
     /// Atomically spend a note: insert the nullifier and store the new commitment
     /// in a single transaction.
     ///
@@ -355,8 +470,42 @@ impl PersistentStore {
             commitment_table.insert(position, &new_commitment.0)?;
 
             meta.insert(tables::META_NOTE_TREE_SIZE, position + 1)?;
+
+            // Invalidate the cached note tree root.
+            let mut meta_bytes = write_txn.open_table(tables::METADATA_BYTES)?;
+            meta_bytes.remove(tables::META_NOTE_TREE_ROOT_CACHE)?;
         }
         write_txn.commit()?;
         Ok(position)
+    }
+}
+
+// =============================================================================
+// Internal hex helpers
+// =============================================================================
+
+fn hex_encode_bytes(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn hex_decode_bytes(s: &str) -> std::result::Result<[u8; 32], ()> {
+    if s.len() != 64 {
+        return Err(());
+    }
+    let mut out = [0u8; 32];
+    for (i, chunk) in s.as_bytes().chunks(2).enumerate() {
+        let high = hex_nibble(chunk[0]).ok_or(())?;
+        let low = hex_nibble(chunk[1]).ok_or(())?;
+        out[i] = (high << 4) | low;
+    }
+    Ok(out)
+}
+
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
     }
 }

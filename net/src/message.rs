@@ -41,6 +41,13 @@ pub enum PeerMessage {
     /// Response with the serialized cell state (or None if unknown).
     CellStateResponse { cell: Option<Vec<u8>> },
 
+    // ─── Intent dissemination ─────────────────────────────────────────
+    /// Publish an intent to the gossip network (dedicated variant).
+    PublishIntent {
+        intent_hash: [u8; 32],
+        intent_data: Vec<u8>,
+    },
+
     // ─── Atomic multi-party coordination ────────────────────────────
     /// Propose an atomic turn affecting multiple cells.
     ProposeAtomicTurn {
@@ -158,6 +165,10 @@ mod tests {
             PeerMessage::RevocationGossip {
                 token_id: "token-xyz-123".to_string(),
                 signature: vec![0xaa; 64],
+            },
+            PeerMessage::PublishIntent {
+                intent_hash: [10; 32],
+                intent_data: vec![11, 12, 13],
             },
             PeerMessage::CellStateRequest { cell_id: [3; 32] },
             PeerMessage::CellStateResponse {

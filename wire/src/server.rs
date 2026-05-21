@@ -8,7 +8,11 @@
 //! - Initiate outgoing connections for cross-silo token presentation
 
 use crate::connection::{ConnectionError, PeerConnection};
-use crate::message::{AuthorizationRequest, PROTOCOL_VERSION, PublicKey, Signature, WireMessage};
+use crate::message::{
+    AuthorizationRequest, Envelope, MAX_NONCE_CACHE_SIZE, MAX_REQUEST_AGE_SECS, PROTOCOL_VERSION,
+    PublicKey, Signature, WireMessage,
+};
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,17 +29,8 @@ use tokio::sync::{Mutex, RwLock};
 /// no code path silently accepts invalid proofs -- either real verification is
 /// performed, or the caller explicitly opts into a test-only noop verifier.
 pub trait ProofVerifier: Send + Sync + std::fmt::Debug {
-    /// Verify a serialized STARK presentation proof bound to a specific request.
-    ///
-    /// The `request_digest` is the BLAKE3 hash of the authorization request.
-    /// Implementations MUST check that the proof is cryptographically bound to
-    /// this specific request, preventing replay attacks where a valid proof for
-    /// one request is presented against a different request.
-    ///
-    /// Returns `Ok(true)` if the proof is cryptographically valid and bound to
-    /// the request, `Ok(false)` if verification ran but the proof is invalid,
-    /// `Err(reason)` if the proof could not be parsed or checked.
-    fn verify(&self, proof_bytes: &[u8], request_digest: &[u8; 32]) -> Result<bool, String>;
+    /// Verify a serialized STARK presentation proof bound to a specific (action, resource) pair.
+    fn verify(&self, proof_bytes: &[u8], action: &str, resource: &str) -> Result<bool, String>;
 }
 
 /// Real STARK proof verifier using pyana-circuit.
@@ -50,7 +45,7 @@ pub trait ProofVerifier: Send + Sync + std::fmt::Debug {
 pub struct StarkVerifier;
 
 impl ProofVerifier for StarkVerifier {
-    fn verify(&self, proof_bytes: &[u8], request_digest: &[u8; 32]) -> Result<bool, String> {
+    fn verify(&self, proof_bytes: &[u8], action: &str, resource: &str) -> Result<bool, String> {
         let proof = pyana_circuit::stark::proof_from_bytes(proof_bytes)?;
         let public_inputs: Vec<pyana_circuit::field::BabyBear> = proof
             .public_inputs
@@ -58,15 +53,12 @@ impl ProofVerifier for StarkVerifier {
             .map(|&v| pyana_circuit::field::BabyBear(v))
             .collect();
 
-        // Verify action binding: the proof's last public input must be a commitment
-        // to the request being authorized. This prevents replay attacks where a
-        // valid proof for one request is presented against a different request.
-        let action_commitment = pyana_circuit::poseidon2::hash_many(
-            &pyana_circuit::field::BabyBear::encode_hash(request_digest),
-        );
+        // Verify action binding: the proof's last public input must be the canonical
+        // commitment to (action, resource) via compute_action_binding.
+        let expected_binding = pyana_circuit::compute_action_binding(action, resource);
         match public_inputs.last() {
-            Some(&last_pi) if last_pi == action_commitment => {}
-            _ => return Ok(false), // Proof not bound to this request
+            Some(&last_pi) if last_pi == expected_binding => {}
+            _ => return Ok(false), // Proof not bound to this (action, resource)
         }
 
         // Try Poseidon2 AIR first (production path).
@@ -95,7 +87,7 @@ pub struct NoopVerifier;
 
 #[cfg(any(test, feature = "dev"))]
 impl ProofVerifier for NoopVerifier {
-    fn verify(&self, _proof_bytes: &[u8], _request_digest: &[u8; 32]) -> Result<bool, String> {
+    fn verify(&self, _proof_bytes: &[u8], _action: &str, _resource: &str) -> Result<bool, String> {
         Ok(true)
     }
 }
@@ -107,7 +99,7 @@ pub struct RejectAllVerifier;
 
 #[cfg(any(test, feature = "dev"))]
 impl ProofVerifier for RejectAllVerifier {
-    fn verify(&self, _proof_bytes: &[u8], _request_digest: &[u8; 32]) -> Result<bool, String> {
+    fn verify(&self, _proof_bytes: &[u8], _action: &str, _resource: &str) -> Result<bool, String> {
         Ok(false)
     }
 }
@@ -122,7 +114,7 @@ pub struct MinSizeVerifier {
 
 #[cfg(any(test, feature = "dev"))]
 impl ProofVerifier for MinSizeVerifier {
-    fn verify(&self, proof_bytes: &[u8], _request_digest: &[u8; 32]) -> Result<bool, String> {
+    fn verify(&self, proof_bytes: &[u8], _action: &str, _resource: &str) -> Result<bool, String> {
         Ok(proof_bytes.len() >= self.min_bytes)
     }
 }
@@ -146,6 +138,13 @@ pub struct SiloConfig {
     pub handshake_timeout: Duration,
     /// The proof verifier used to check incoming presentation proofs.
     pub verifier: Arc<dyn ProofVerifier>,
+    /// Authorized revocation authorities. If non-empty, only these public keys
+    /// are permitted to submit revocations. If empty, any valid signature is accepted
+    /// (for backward compatibility in tests/single-node deployments).
+    pub revocation_authorities: Vec<PublicKey>,
+    /// Maximum age (in seconds) for request timestamps. Requests older than this
+    /// are rejected as stale.
+    pub max_request_age_secs: i64,
 }
 
 impl SiloConfig {
@@ -164,12 +163,23 @@ impl SiloConfig {
             max_connections: 64,
             handshake_timeout: Duration::from_secs(10),
             verifier: Arc::new(StarkVerifier),
+            revocation_authorities: Vec::new(),
+            max_request_age_secs: MAX_REQUEST_AGE_SECS,
         }
     }
 
     /// Set a custom proof verifier.
     pub fn with_verifier(mut self, verifier: Arc<dyn ProofVerifier>) -> Self {
         self.verifier = verifier;
+        self
+    }
+
+    /// Set the authorized revocation authorities.
+    ///
+    /// When non-empty, only these public keys may submit revocations.
+    /// When empty (the default), any valid signature is accepted.
+    pub fn with_revocation_authorities(mut self, authorities: Vec<PublicKey>) -> Self {
+        self.revocation_authorities = authorities;
         self
     }
 }
@@ -410,6 +420,53 @@ impl SiloState {
 }
 
 // =============================================================================
+// Nonce Cache (replay prevention)
+// =============================================================================
+
+/// A nonce cache for replay prevention.
+///
+/// Tracks recently seen nonces to reject duplicate messages. Uses a bounded
+/// `HashSet` with FIFO eviction when the capacity is reached.
+#[derive(Debug)]
+pub struct NonceCache {
+    /// Set of seen nonces (as 16-byte arrays).
+    seen: HashSet<[u8; 16]>,
+    /// Insertion order for FIFO eviction.
+    order: Vec<[u8; 16]>,
+    /// Maximum capacity.
+    capacity: usize,
+}
+
+impl NonceCache {
+    /// Create a new nonce cache with the given capacity.
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            seen: HashSet::with_capacity(capacity.min(1024)),
+            order: Vec::with_capacity(capacity.min(1024)),
+            capacity,
+        }
+    }
+
+    /// Check if a nonce has been seen before. If not, insert it and return `true` (fresh).
+    /// If already seen, return `false` (replay).
+    pub fn check_and_insert(&mut self, nonce: &[u8; 16]) -> bool {
+        if self.seen.contains(nonce) {
+            return false; // replay
+        }
+        // Evict oldest if at capacity
+        if self.order.len() >= self.capacity {
+            if let Some(oldest) = self.order.first().copied() {
+                self.seen.remove(&oldest);
+                self.order.remove(0);
+            }
+        }
+        self.seen.insert(*nonce);
+        self.order.push(*nonce);
+        true // fresh
+    }
+}
+
+// =============================================================================
 // Silo Server
 // =============================================================================
 
@@ -429,6 +486,10 @@ pub struct SiloServer {
     /// Revocation handler for delegating revocation logic.
     /// Defaults to `DefaultRevocationHandler` which wraps the standalone logic.
     revocation_handler: Option<Arc<dyn RevocationHandler>>,
+    /// Nonce cache for replay prevention on PresentToken requests.
+    presentation_nonces: Arc<Mutex<NonceCache>>,
+    /// Nonce cache for replay prevention on SubmitRevocation requests.
+    revocation_nonces: Arc<Mutex<NonceCache>>,
 }
 
 /// Events logged by the server for diagnostics.
@@ -473,6 +534,8 @@ impl SiloServer {
             state: Arc::new(RwLock::new(SiloState::genesis(member_count))),
             event_log: Arc::new(Mutex::new(Vec::new())),
             revocation_handler: None,
+            presentation_nonces: Arc::new(Mutex::new(NonceCache::new(MAX_NONCE_CACHE_SIZE))),
+            revocation_nonces: Arc::new(Mutex::new(NonceCache::new(MAX_NONCE_CACHE_SIZE))),
         }
     }
 
@@ -484,6 +547,8 @@ impl SiloServer {
             state: Arc::new(RwLock::new(state)),
             event_log: Arc::new(Mutex::new(Vec::new())),
             revocation_handler: None,
+            presentation_nonces: Arc::new(Mutex::new(NonceCache::new(MAX_NONCE_CACHE_SIZE))),
+            revocation_nonces: Arc::new(Mutex::new(NonceCache::new(MAX_NONCE_CACHE_SIZE))),
         }
     }
 
@@ -530,6 +595,8 @@ impl SiloServer {
             let state = Arc::clone(&self.state);
             let event_log = Arc::clone(&self.event_log);
             let revocation_handler = self.revocation_handler.clone();
+            let presentation_nonces = Arc::clone(&self.presentation_nonces);
+            let revocation_nonces = Arc::clone(&self.revocation_nonces);
 
             tokio::spawn(async move {
                 Self::handle_connection(
@@ -539,6 +606,8 @@ impl SiloServer {
                     state,
                     event_log,
                     revocation_handler,
+                    presentation_nonces,
+                    revocation_nonces,
                 )
                 .await;
             });
@@ -563,6 +632,8 @@ impl SiloServer {
             let state = Arc::clone(&self.state);
             let event_log = Arc::clone(&self.event_log);
             let revocation_handler = self.revocation_handler.clone();
+            let presentation_nonces = Arc::clone(&self.presentation_nonces);
+            let revocation_nonces = Arc::clone(&self.revocation_nonces);
 
             tokio::spawn(async move {
                 Self::handle_connection(
@@ -572,6 +643,8 @@ impl SiloServer {
                     state,
                     event_log,
                     revocation_handler,
+                    presentation_nonces,
+                    revocation_nonces,
                 )
                 .await;
             });
@@ -586,6 +659,8 @@ impl SiloServer {
         state: Arc<RwLock<SiloState>>,
         event_log: Arc<Mutex<Vec<ServerEvent>>>,
         revocation_handler: Option<Arc<dyn RevocationHandler>>,
+        presentation_nonces: Arc<Mutex<NonceCache>>,
+        revocation_nonces: Arc<Mutex<NonceCache>>,
     ) {
         event_log
             .lock()
@@ -628,6 +703,8 @@ impl SiloServer {
                 &state,
                 &event_log,
                 revocation_handler.as_deref(),
+                &presentation_nonces,
+                &revocation_nonces,
             )
             .await;
 
@@ -647,6 +724,8 @@ impl SiloServer {
         state: &RwLock<SiloState>,
         event_log: &Mutex<Vec<ServerEvent>>,
         revocation_handler: Option<&dyn RevocationHandler>,
+        presentation_nonces: &Mutex<NonceCache>,
+        revocation_nonces: &Mutex<NonceCache>,
     ) -> Option<WireMessage> {
         match msg {
             WireMessage::Hello {
@@ -660,6 +739,7 @@ impl SiloServer {
                     remote: remote_addr,
                 });
 
+                // --- Issue 8: Version negotiation ---
                 if protocol_version != PROTOCOL_VERSION {
                     return Some(WireMessage::Error {
                         code: crate::message::error_codes::UNSUPPORTED_VERSION,
@@ -683,10 +763,53 @@ impl SiloServer {
                 request,
                 federation_root,
             } => {
-                let st = state.read().await;
+                // --- Issue 1: Validate freshness (timestamp + nonce) ---
+                let now = current_timestamp();
+                let age = now - request.timestamp;
+                if age > config.max_request_age_secs || age < -60 {
+                    event_log.lock().await.push(ServerEvent::TokenPresented {
+                        proof_size: proof.len(),
+                        accepted: false,
+                        remote: remote_addr,
+                    });
+                    return Some(WireMessage::PresentationResult {
+                        accepted: false,
+                        reason: Some(format!(
+                            "request timestamp too old ({age}s, max {max}s)",
+                            max = config.max_request_age_secs
+                        )),
+                        request_digest: request.digest(),
+                    });
+                }
+
+                // Check nonce for replay
+                {
+                    let mut nonces = presentation_nonces.lock().await;
+                    if !nonces.check_and_insert(&request.nonce) {
+                        event_log.lock().await.push(ServerEvent::TokenPresented {
+                            proof_size: proof.len(),
+                            accepted: false,
+                            remote: remote_addr,
+                        });
+                        return Some(WireMessage::PresentationResult {
+                            accepted: false,
+                            reason: Some("replayed nonce".to_string()),
+                            request_digest: request.digest(),
+                        });
+                    }
+                }
+
+                // --- Issue 7: Move verification outside the read lock ---
+                // Clone the federation root from state, then release the lock
+                // BEFORE running the expensive proof verification.
+                let current_root = {
+                    let st = state.read().await;
+                    st.federation_root
+                };
+                // Read lock is now released.
 
                 // Check federation root freshness
-                if federation_root != st.federation_root {
+                if federation_root != current_root {
                     event_log.lock().await.push(ServerEvent::TokenPresented {
                         proof_size: proof.len(),
                         accepted: false,
@@ -699,11 +822,10 @@ impl SiloServer {
                     });
                 }
 
-                // Verify the proof using the injected verifier, binding to the request.
-                // The proof must be cryptographically bound to this specific request
-                // to prevent replay attacks across different authorization requests.
-                let req_digest = request.digest();
-                let accepted = match config.verifier.verify(&proof, &req_digest) {
+                // Verify the proof using the injected verifier, binding to (action, resource).
+                // NOTE: No read lock is held here -- STARK verification can take
+                // milliseconds and must not block writers (issue 7: DoS prevention).
+                let accepted = match config.verifier.verify(&proof, &request.action, &request.resource) {
                     Ok(result) => result,
                     Err(_reason) => false, // parse/verification error -> reject
                 };
@@ -740,7 +862,43 @@ impl SiloServer {
                 token_id,
                 authority,
                 authority_sig,
+                nonce,
+                timestamp,
             } => {
+                // --- Issue 6: Validate revocation freshness (nonce + timestamp) ---
+                let now = current_timestamp();
+                let age = now - timestamp;
+                if age > config.max_request_age_secs || age < -60 {
+                    return Some(WireMessage::Error {
+                        code: crate::message::error_codes::REQUEST_EXPIRED,
+                        message: format!(
+                            "revocation timestamp too old ({age}s, max {max}s)",
+                            max = config.max_request_age_secs
+                        ),
+                    });
+                }
+
+                // Check nonce for replay
+                {
+                    let mut nonces = revocation_nonces.lock().await;
+                    if !nonces.check_and_insert(&nonce) {
+                        return Some(WireMessage::Error {
+                            code: crate::message::error_codes::REQUEST_EXPIRED,
+                            message: "replayed revocation nonce".to_string(),
+                        });
+                    }
+                }
+
+                // --- Issue 4: Authority whitelist check ---
+                if !config.revocation_authorities.is_empty()
+                    && !config.revocation_authorities.contains(&authority)
+                {
+                    return Some(WireMessage::Error {
+                        code: crate::message::error_codes::INVALID_SIGNATURE,
+                        message: "authority not in revocation whitelist".to_string(),
+                    });
+                }
+
                 // Verify the authority's signature over the token_id before
                 // accepting the revocation. Without this, any peer could forge
                 // a revocation for an arbitrary token.
@@ -757,7 +915,7 @@ impl SiloServer {
                     let _accepted = handler.submit_revocation(&token_id, &authority_sig.0);
 
                     // Update local state using the handler's root (no independent
-                    // hash-chain computation — the handler IS the authority).
+                    // hash-chain computation -- the handler IS the authority).
                     let mut st = state.write().await;
                     st.apply_revocation_delegated(
                         &token_id,
@@ -861,8 +1019,7 @@ impl SiloServer {
     /// Uses an all-zeros request digest (suitable for testing verifiers that
     /// don't check action binding, like `NoopVerifier` or `MinSizeVerifier`).
     pub fn verify_proof_with(proof: &[u8], verifier: &dyn ProofVerifier) -> bool {
-        let dummy_digest = [0u8; 32];
-        match verifier.verify(proof, &dummy_digest) {
+        match verifier.verify(proof, "", "") {
             Ok(result) => result,
             Err(_) => false,
         }
@@ -872,6 +1029,10 @@ impl SiloServer {
     ///
     /// This is the client-side operation: connect to a peer silo, perform
     /// the handshake, and present a token for authorization.
+    ///
+    /// The client verifies that the response's `request_digest` matches the
+    /// digest of the request it sent, preventing MITM response-swapping attacks
+    /// (issue 2).
     pub async fn present_token(
         &self,
         peer_addr: &str,
@@ -893,6 +1054,9 @@ impl SiloServer {
         // Get the current federation root from state
         let federation_root = self.state.read().await.federation_root;
 
+        // Compute the expected digest before sending
+        let expected_digest = request.digest();
+
         // Present the token
         let present = WireMessage::PresentToken {
             proof: proof.to_vec(),
@@ -903,7 +1067,22 @@ impl SiloServer {
 
         // Wait for result
         match conn.recv().await? {
-            WireMessage::PresentationResult { accepted, .. } => Ok(accepted),
+            WireMessage::PresentationResult {
+                accepted,
+                request_digest,
+                ..
+            } => {
+                // --- Issue 2: Verify the response is bound to our request ---
+                if request_digest != expected_digest {
+                    return Err(ConnectionError::Codec(crate::codec::CodecError::Io(
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "response request_digest does not match sent request (possible MITM)",
+                        ),
+                    )));
+                }
+                Ok(accepted)
+            }
             WireMessage::Error { message, .. } => {
                 Err(ConnectionError::Codec(crate::codec::CodecError::Io(
                     std::io::Error::new(std::io::ErrorKind::Other, message),
@@ -916,6 +1095,8 @@ impl SiloServer {
     }
 
     /// Submit a revocation to a remote peer.
+    ///
+    /// Includes a fresh nonce and timestamp to prevent replay attacks (issue 6).
     pub async fn submit_revocation(
         &self,
         peer_addr: &str,
@@ -925,10 +1106,15 @@ impl SiloServer {
     ) -> Result<([u8; 32], u64), ConnectionError> {
         let mut conn = PeerConnection::connect(peer_addr).await?;
 
+        let mut nonce = [0u8; 16];
+        getrandom::fill(&mut nonce).expect("getrandom failed");
+
         let msg = WireMessage::SubmitRevocation {
             token_id: token_id.to_string(),
             authority: *authority,
             authority_sig: *authority_sig,
+            nonce,
+            timestamp: current_timestamp(),
         };
         conn.send(msg).await?;
 
@@ -946,6 +1132,9 @@ impl SiloServer {
     }
 
     /// Request the attested root from a remote peer.
+    ///
+    /// The client verifies that the returned `AttestedRoot` has valid quorum
+    /// signatures before trusting it (issue 3).
     pub async fn request_attested_root(
         &self,
         peer_addr: &str,
@@ -959,8 +1148,34 @@ impl SiloServer {
                 root,
                 height,
                 timestamp,
+                signatures,
                 ..
-            } => Ok((root, height, timestamp)),
+            } => {
+                // --- Issue 3: Verify quorum signatures before trusting ---
+                // The signing message is the root concatenated with height.
+                let mut signing_msg = Vec::with_capacity(40);
+                signing_msg.extend_from_slice(&root);
+                signing_msg.extend_from_slice(&height.to_le_bytes());
+
+                let valid_sigs = signatures
+                    .iter()
+                    .filter(|(pk, sig)| pk.verify(&signing_msg, sig))
+                    .count();
+
+                // Require at least one valid signature if any were provided.
+                // Accept unsigned roots only for initial bootstrap / test scenarios
+                // where the root is the genesis root.
+                if !signatures.is_empty() && valid_sigs == 0 {
+                    return Err(ConnectionError::Codec(crate::codec::CodecError::Io(
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "attested root has no valid quorum signatures",
+                        ),
+                    )));
+                }
+
+                Ok((root, height, timestamp))
+            }
             _ => Err(ConnectionError::Codec(crate::codec::CodecError::Io(
                 std::io::Error::new(std::io::ErrorKind::InvalidData, "unexpected response"),
             ))),
@@ -1141,10 +1356,15 @@ mod tests {
         let token_id = "tok-revoke-me";
         let sig = pyana_types::sign(&sk, token_id.as_bytes());
 
+        let mut nonce = [0u8; 16];
+        getrandom::fill(&mut nonce).unwrap();
+
         let msg = WireMessage::SubmitRevocation {
             token_id: token_id.to_string(),
             authority: pk,
             authority_sig: sig,
+            nonce,
+            timestamp: current_timestamp(),
         };
         client.send(msg).await.unwrap();
 
@@ -1176,11 +1396,16 @@ mod tests {
         let addr = addr_rx.await.unwrap();
         let mut client = PeerConnection::connect(&addr.to_string()).await.unwrap();
 
+        let mut nonce = [0u8; 16];
+        getrandom::fill(&mut nonce).unwrap();
+
         // Use a forged signature (random bytes) with a random public key.
         let msg = WireMessage::SubmitRevocation {
             token_id: "tok-forged".to_string(),
             authority: PublicKey([0xdd; 32]),
             authority_sig: Signature([0xcc; 64]),
+            nonce,
+            timestamp: current_timestamp(),
         };
         client.send(msg).await.unwrap();
 

@@ -91,8 +91,10 @@ impl<T: CanonicalSerialize + CanonicalDeserialize> ThreshSigned<T> {
         let verifier = keybook.hints_setup.verifier();
         let mut buf = Vec::new();
         T::serialize_compressed(&self.data, &mut buf).unwrap();
+        // Check the SNARK-verified aggregate weight (proof.agg_weight) against the threshold,
+        // not the aggregator-declared self.signature.threshold which is untrusted.
         hints::verify_aggregate(&verifier, &self.signature, &buf).is_ok()
-            && self.signature.threshold >= hints::F::from(threshold)
+            && self.signature.proof.agg_weight >= hints::F::from(threshold)
     }
 }
 

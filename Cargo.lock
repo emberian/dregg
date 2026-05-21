@@ -4346,7 +4346,9 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "chacha20poly1305",
+ "ed25519-dalek",
  "getrandom 0.3.4",
+ "postcard",
  "proptest",
  "pyana-types",
  "serde",
@@ -4562,6 +4564,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber 0.3.23",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -4611,6 +4614,7 @@ name = "pyana-store"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "chacha20poly1305",
  "getrandom 0.3.4",
  "postcard",
  "pyana-audit",
@@ -4620,6 +4624,7 @@ dependencies = [
  "pyana-types",
  "redb",
  "serde",
+ "subtle",
  "tempfile",
 ]
 
@@ -4629,17 +4634,10 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "getrandom 0.3.4",
- "hints",
- "pyana-audit",
- "pyana-bridge",
+ "proptest",
  "pyana-cell",
  "pyana-circuit",
- "pyana-commit",
- "pyana-federation",
- "pyana-sdk",
- "pyana-trace",
  "pyana-turn",
- "pyana-types",
  "token",
 ]
 
@@ -4658,6 +4656,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "ed25519-dalek",
+ "postcard",
  "proptest",
  "pyana-cell",
  "pyana-circuit",
@@ -6073,6 +6072,7 @@ dependencies = [
  "macaroon",
  "pyana-commit",
  "pyana-trace",
+ "rand 0.9.4",
  "rmp-serde",
  "scalable_cuckoo_filter",
  "serde",

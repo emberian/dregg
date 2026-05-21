@@ -33,27 +33,28 @@ impl CapabilitySet {
     }
 
     /// Grant a capability to reach `target` with the given authorization requirement.
-    /// Returns the assigned slot number.
-    pub fn grant(&mut self, target: CellId, permissions: AuthRequired) -> u32 {
+    /// Returns the assigned slot number, or `None` if the slot counter would overflow.
+    pub fn grant(&mut self, target: CellId, permissions: AuthRequired) -> Option<u32> {
         self.grant_with_breadstuff(target, permissions, None)
     }
 
     /// Grant a capability with an optional breadstuff token hash.
+    /// Returns the assigned slot number, or `None` if the slot counter would overflow.
     pub fn grant_with_breadstuff(
         &mut self,
         target: CellId,
         permissions: AuthRequired,
         breadstuff: Option<[u8; 32]>,
-    ) -> u32 {
+    ) -> Option<u32> {
         let slot = self.next_slot;
-        self.next_slot += 1;
+        self.next_slot = self.next_slot.checked_add(1)?;
         self.refs.push(CapabilityRef {
             target,
             slot,
             permissions,
             breadstuff,
         });
-        slot
+        Some(slot)
     }
 
     /// Revoke a capability by slot number. Returns true if found and removed.
@@ -68,9 +69,14 @@ impl CapabilitySet {
         self.refs.iter().find(|r| r.slot == slot)
     }
 
-    /// Check if this set contains any capability referencing the given target.
+    /// Check if this set contains any non-revoked capability referencing the given target.
+    ///
+    /// A capability with `permissions: Impossible` is treated as revoked/frozen and
+    /// does NOT count as a valid access path.
     pub fn has_access(&self, target: &CellId) -> bool {
-        self.refs.iter().any(|r| &r.target == target)
+        self.refs
+            .iter()
+            .any(|r| &r.target == target && r.permissions != AuthRequired::Impossible)
     }
 
     /// Attenuate a capability: create a new CapabilityRef with narrower permissions.

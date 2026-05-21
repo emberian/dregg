@@ -453,7 +453,7 @@ fn test_service_scoped_full_pipeline() {
     );
 
     let proof = proof.unwrap();
-    assert!(proof.is_valid());
+    assert!(proof.is_constraint_checked());
 
     // Should be allowed by the SERVICE_ACTION rule (rule ID 2).
     match &proof.trace.conclusion {
@@ -489,7 +489,7 @@ fn test_unrestricted_token_proof() {
     );
 
     let proof = proof.unwrap();
-    assert!(proof.is_valid());
+    assert!(proof.is_constraint_checked());
 
     // Should be allowed by the UNRESTRICTED rule (rule ID 3).
     match &proof.trace.conclusion {
@@ -580,8 +580,10 @@ fn test_presentation_air_full_verification() {
     assert!(!proof.circuit_proof.fold_proofs.is_empty());
     assert!(proof.circuit_proof.total_proof_size_bytes > 0);
 
-    // The presentation-level verification should pass.
-    assert_eq!(proof.verification, PresentationVerification::Valid);
+    // prove_fast() returns LocalOnly (no cryptographic proof) when constraints pass.
+    assert_eq!(proof.verification, PresentationVerification::LocalOnly);
+    // is_constraint_checked() should still return true.
+    assert!(proof.is_constraint_checked());
 }
 
 /// Test: proof metadata is correct.
@@ -657,9 +659,9 @@ fn test_deterministic_verification() {
     let proof1 = build_and_prove();
     let proof2 = build_and_prove();
 
-    // Both should be valid.
-    assert!(proof1.is_valid());
-    assert!(proof2.is_valid());
+    // Both should pass constraint checking (no real STARK in prove_fast).
+    assert!(proof1.is_constraint_checked());
+    assert!(proof2.is_constraint_checked());
 
     // Chain lengths should match.
     assert_eq!(proof1.chain_length, proof2.chain_length);

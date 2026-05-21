@@ -63,10 +63,12 @@ pub mod prelude {
     pub use crate::codec::{CodecError, FrameStats, MAX_MESSAGE_SIZE};
     pub use crate::connection::{ConnectionError, ConnectionPool, ConnectionStats, PeerConnection};
     pub use crate::message::{
-        AuthorizationRequest, PROTOCOL_VERSION, PublicKey, Signature, ThresholdQC, WireMessage,
-        error_codes,
+        AuthorizationRequest, Envelope, MAX_NONCE_CACHE_SIZE, MAX_REQUEST_AGE_SECS,
+        PROTOCOL_VERSION, PublicKey, Signature, ThresholdQC, WireMessage, error_codes,
     };
-    pub use crate::server::{ProofVerifier, SiloConfig, SiloServer, SiloState, StarkVerifier};
+    pub use crate::server::{
+        NonceCache, ProofVerifier, SiloConfig, SiloServer, SiloState, StarkVerifier,
+    };
 
     #[cfg(any(test, feature = "dev"))]
     pub use crate::server::{

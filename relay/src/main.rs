@@ -133,8 +133,13 @@ pub struct Intent {
     pub submitted_at: i64,
     /// Unix timestamp when the intent expires.
     pub expires_at: i64,
-    /// Submitter's public key.
-    pub submitter: PublicKey,
+    /// Blinded commitment ID for the submitter (Fix 2).
+    ///
+    /// This is NOT the submitter's real Ed25519 public key. It is a blinded
+    /// commitment (e.g., BLAKE3 derivation with a secret nonce) that prevents
+    /// deanonymization of intent creators at the relay/gossip level.
+    /// The real public key is never exposed in gossip messages.
+    pub submitter_commitment: [u8; 32],
 }
 
 // =============================================================================

@@ -45,6 +45,9 @@ mod tests;
 pub use authorize::{AuthError, authorize_with_trace};
 pub use convert::{grant_to_facts, macaroon_to_factset};
 pub use delta::attenuation_to_delta;
-pub use present::{BridgePresentationBuilder, BridgePresentationProof, FederationRegistry};
+pub use present::{
+    BridgePresentationBuilder, BridgePresentationProof, FederationRegistry,
+    WirePresentationProof, DEFAULT_MAX_PROOF_AGE_SECS, verify_presentation_full,
+};
 #[cfg(feature = "turn")]
 pub use verifier::StarkProofVerifier;

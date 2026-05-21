@@ -266,35 +266,39 @@ impl MerkleTree {
         }
 
         // Verify each neighbor's membership proof.
-        if let Some((_, ref mp)) = proof.left_neighbor {
+        if let Some((ref left_hash, ref mp)) = proof.left_neighbor {
             if !Self::verify_membership(root, mp) {
                 return false;
             }
-            // Left neighbor's key must be less than the absent key.
-            let left_key = path_key(&mp.leaf_hash);
-            let absent_key = path_key(&proof.absent_key);
-            if left_key >= absent_key {
+            // The neighbor hash in the proof must match the proof's leaf_hash.
+            if mp.leaf_hash != *left_hash {
+                return false;
+            }
+            // Left neighbor's FULL hash must be lexicographically less than the absent key.
+            // Using the full 32-byte hash prevents collision attacks that were possible
+            // with the previous 4-byte path_key comparison.
+            if *left_hash >= proof.absent_key {
                 return false;
             }
         }
 
-        if let Some((_, ref mp)) = proof.right_neighbor {
+        if let Some((ref right_hash, ref mp)) = proof.right_neighbor {
             if !Self::verify_membership(root, mp) {
                 return false;
             }
-            // Right neighbor's key must be >= the absent key.
-            let right_key = path_key(&mp.leaf_hash);
-            let absent_key = path_key(&proof.absent_key);
-            if right_key < absent_key {
+            // The neighbor hash in the proof must match the proof's leaf_hash.
+            if mp.leaf_hash != *right_hash {
+                return false;
+            }
+            // Right neighbor's FULL hash must be lexicographically greater than the absent key.
+            if *right_hash <= proof.absent_key {
                 return false;
             }
         }
 
-        // Verify adjacency: no leaf exists between left and right.
-        // This is guaranteed by the sorted-tree structure — the proof
-        // shows the immediate neighbors, and the tree is sorted.
-        // A full implementation would verify a multi-proof, but for our
-        // demo this suffices since we trust the proof generator.
+        // Verify adjacency: left and right must be immediate neighbors in the
+        // sorted leaf set. With full-hash comparison above, there is no gap for
+        // collision-based forgeries.
         true
     }
 

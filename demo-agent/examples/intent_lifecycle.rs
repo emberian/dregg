@@ -292,7 +292,7 @@ fn main() {
         note_tree_root,
     );
 
-    let commitment = agent_pool.commit_to_fulfill(intent.id, &fulfillment, now);
+    let (_nonce, commitment) = agent_pool.commit_to_fulfill(intent.id, &fulfillment, now);
 
     println!("  Commitment posted:");
     println!(

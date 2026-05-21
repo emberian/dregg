@@ -109,7 +109,8 @@ async fn run_node(port: u16, peers: Vec<String>, data_dir: &str) {
     });
 
     // Build and serve the HTTP API.
-    let app = api::router(node_state);
+    let app = api::router(node_state.clone())
+        .into_make_service_with_connect_info::<SocketAddr>();
     let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), port);
 
     info!(%addr, "HTTP API listening");
@@ -118,7 +119,13 @@ async fn run_node(port: u16, peers: Vec<String>, data_dir: &str) {
         .await
         .expect("failed to bind HTTP listener");
 
-    axum::serve(listener, app).await.expect("HTTP server error");
+    // P2 Fix 8: Graceful shutdown on Ctrl-C.
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .expect("HTTP server error");
+
+    info!("HTTP server shut down gracefully");
 }
 
 /// Initialize the data directory: create it and generate a keypair.
@@ -191,4 +198,12 @@ fn expand_path(path: &str) -> PathBuf {
 /// Get the home directory.
 fn dirs_home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
+}
+
+/// P2 Fix 8: Wait for Ctrl-C (SIGINT) to trigger graceful shutdown.
+async fn shutdown_signal() {
+    tokio::signal::ctrl_c()
+        .await
+        .expect("failed to listen for Ctrl-C");
+    info!("received Ctrl-C, initiating graceful shutdown");
 }

@@ -60,8 +60,8 @@ pub use builder::{ActionBuilder, TurnBuilder};
 pub use composer::{ComposeError, SignedFragment, TurnComposer};
 pub use conditional::{
     ConditionProof, ConditionalResult, ConditionalTurn, DEFAULT_MAX_ROOT_AGE,
-    MAX_CONDITIONAL_DEADLINE, ProofCondition, TrustedRoot, resolve_condition,
-    validate_conditional_submission,
+    MAX_CONDITIONAL_DEADLINE, ProofCondition, TrustedRoot, compute_proof_hash,
+    resolve_condition, validate_conditional_submission,
 };
 pub use obligation::{
     MAX_OBLIGATION_DEADLINE, ObligationError, ObligationOutcome, ProofObligation, check_expiry,

@@ -68,6 +68,10 @@ pub struct RevocationBlock {
     pub prev_hash: [u8; 32],
     /// Hash of this block's content.
     pub block_hash: [u8; 32],
+    /// Signature over `block_hash` by the proposer (proves identity).
+    /// If `None`, the block is unsigned (legacy/test mode).
+    #[serde(default)]
+    pub proposer_signature: Option<Signature>,
 }
 
 impl RevocationBlock {
@@ -298,6 +302,30 @@ pub struct RevocationProof {
 // Network Messages
 // =============================================================================
 
+/// A signed view-change message indicating a node wants to advance the view.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ViewChangeMessage {
+    /// The new view being requested.
+    pub new_view: u64,
+    /// The current block height.
+    pub height: u64,
+    /// The voter's node ID.
+    pub voter: usize,
+    /// Signature over the view-change content by the voter.
+    pub signature: Signature,
+}
+
+impl ViewChangeMessage {
+    /// Compute the canonical message that is signed for a view-change.
+    pub fn signing_message(new_view: u64, height: u64) -> Vec<u8> {
+        let mut msg = Vec::new();
+        msg.extend_from_slice(b"pyana-view-change-v1");
+        msg.extend_from_slice(&new_view.to_le_bytes());
+        msg.extend_from_slice(&height.to_le_bytes());
+        msg
+    }
+}
+
 /// Messages exchanged between federation nodes.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ConsensusMessage {
@@ -313,6 +341,8 @@ pub enum ConsensusMessage {
     GetAttestedRoot,
     /// Response with the current attested root.
     AttestedRootResponse(AttestedRoot),
+    /// A view-change request (leader timeout).
+    ViewChange(ViewChangeMessage),
 }
 
 /// An addressed message (source, destination, payload).

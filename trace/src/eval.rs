@@ -274,8 +274,24 @@ impl Evaluator {
     }
 
     /// Determine the conclusion by scanning derived facts for allow/deny.
+    ///
+    /// If any `deny` fact was derived, the conclusion is always Deny regardless
+    /// of whether `allow` was also derived. Deny takes precedence over allow.
     fn find_conclusion(facts: &[Fact], steps: &[DerivationStep]) -> Conclusion {
         let allow_pred = predicates::allow();
+        let deny_pred = predicates::deny();
+
+        // Check for explicit deny first — deny always wins over allow.
+        for step in steps {
+            if step.derived_fact.predicate == deny_pred {
+                return Conclusion::Deny;
+            }
+        }
+        for fact in facts {
+            if fact.predicate == deny_pred {
+                return Conclusion::Deny;
+            }
+        }
 
         // Look for any allow fact — return the rule that derived it
         for step in steps {

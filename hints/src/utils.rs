@@ -135,6 +135,8 @@ type H = MapToCurveBasedHasher<
     WBMap<<ark_bls12_381::Config as Bls12Config>::G2Config>,
 >;
 pub fn hash_to_g2(msg: &[u8]) -> crate::G2 {
-    let hasher = H::new(b"hints BLS12-381 signature").unwrap();
+    // DST follows RFC 9380 / draft-irtf-cfrg-bls-signature format:
+    // BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NUL_
+    let hasher = H::new(b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NUL_").unwrap();
     hasher.hash(msg).unwrap()
 }

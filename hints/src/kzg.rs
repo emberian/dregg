@@ -62,6 +62,9 @@ pub enum Error {
         /// The maximum number of powers provided in `Powers`.
         num_powers: usize,
     },
+
+    /// The setup produced degenerate parameters (zero secret or identity points).
+    DegenerateSetup,
 }
 
 impl<E, P> KZG10<E, P>
@@ -72,6 +75,9 @@ where
     for<'a, 'b> &'a P: Sub<&'b P, Output = P>,
 {
     /// Setup: Generate a random Common Reference String (CRS) for a maximum degree.
+    ///
+    /// Rejects degenerate parameters: the secret scalar must be non-zero
+    /// and the generator points must not be the identity element.
     pub fn setup<R: RngCore>(max_degree: usize, rng: &mut R) -> Result<UniversalParams<E>, Error> {
         if max_degree < 1 {
             return Err(Error::DegreeIsZero);
@@ -79,8 +85,17 @@ where
 
         //let setup_time = start_timer!(|| format!("KZG10::Setup with degree {}", max_degree));
         let beta = E::ScalarField::rand(rng);
+        if beta.is_zero() {
+            return Err(Error::DegenerateSetup);
+        }
+
         let g = E::G1::rand(rng);
         let h = E::G2::rand(rng);
+
+        // Reject identity elements as generators
+        if g.is_zero() || h.is_zero() {
+            return Err(Error::DegenerateSetup);
+        }
 
         let mut powers_of_beta = vec![E::ScalarField::one()];
 
@@ -95,6 +110,11 @@ where
 
         let h_table = BatchMulPreprocessing::new(h, max_degree);
         let powers_of_h = h_table.batch_mul(&powers_of_beta);
+
+        // Verify resulting points are not identity (sanity check)
+        if powers_of_g.iter().any(|p| p.is_zero()) || powers_of_h.iter().any(|p| p.is_zero()) {
+            return Err(Error::DegenerateSetup);
+        }
 
         let pp = UniversalParams {
             powers_of_g,

@@ -4,7 +4,7 @@
 //! Each action targets a cell, specifies a method, carries authorization, declares
 //! preconditions, and produces effects.
 
-use pyana_cell::note_bridge::PortableNoteProof;
+use pyana_cell::note_bridge::{BridgeReceipt, PortableNoteProof};
 use pyana_cell::state::FieldElement;
 use pyana_cell::{CapabilityRef, CellId, NoteCommitment, Nullifier, Preconditions, SealedBox};
 use serde::{Deserialize, Serialize};
@@ -262,6 +262,45 @@ pub enum Effect {
     BridgeMint {
         /// The portable proof carrying the STARK spending proof from the source federation.
         portable_proof: PortableNoteProof,
+    },
+    /// Phase 1: Lock a note for cross-federation bridge transfer.
+    ///
+    /// Instead of immediately burning the note, this creates a conditional lock.
+    /// The note cannot be spent or re-locked until the bridge is finalized or cancelled.
+    /// If the destination federation is offline or refuses, the note can be recovered
+    /// after the timeout.
+    BridgeLock {
+        /// The nullifier of the note being locked.
+        nullifier: [u8; 32],
+        /// The destination federation's identity.
+        destination: [u8; 32],
+        /// The value being bridged.
+        value: u64,
+        /// The asset type being bridged.
+        asset_type: u64,
+        /// Block height at which this lock expires (can be cancelled after).
+        timeout_height: u64,
+        /// The serialized spending proof for destination to verify.
+        spending_proof: Vec<u8>,
+    },
+    /// Phase 3: Finalize a bridge by presenting a valid receipt from the destination.
+    ///
+    /// The receipt proves the destination federation minted the value. On success,
+    /// the note's nullifier becomes permanently spent.
+    BridgeFinalize {
+        /// The nullifier of the pending bridge to finalize.
+        nullifier: [u8; 32],
+        /// The signed receipt from the destination federation.
+        receipt: BridgeReceipt,
+    },
+    /// Phase 4: Cancel a bridge after the timeout has expired.
+    ///
+    /// If the bridge was not finalized before the timeout height, the note is
+    /// unlocked and returned to the owner. Prevents value-trapping when the
+    /// destination federation is offline or refuses the bridge.
+    BridgeCancel {
+        /// The nullifier of the pending bridge to cancel.
+        nullifier: [u8; 32],
     },
     /// Pipelined send: dispatch an action to the result of a pending turn.
     /// Three-party introduction.
@@ -528,6 +567,35 @@ impl Effect {
                 hasher.update(&portable_proof.source_root.merkle_root);
                 hasher.update(&portable_proof.source_root.height.to_le_bytes());
             }
+            Effect::BridgeLock {
+                nullifier,
+                destination,
+                value,
+                asset_type,
+                timeout_height,
+                spending_proof,
+            } => {
+                hasher.update(&[26u8]);
+                hasher.update(nullifier);
+                hasher.update(destination);
+                hasher.update(&value.to_le_bytes());
+                hasher.update(&asset_type.to_le_bytes());
+                hasher.update(&timeout_height.to_le_bytes());
+                hasher.update(&(spending_proof.len() as u64).to_le_bytes());
+                hasher.update(spending_proof);
+            }
+            Effect::BridgeFinalize { nullifier, receipt } => {
+                hasher.update(&[27u8]);
+                hasher.update(nullifier);
+                hasher.update(&receipt.nullifier);
+                hasher.update(&receipt.destination_federation);
+                hasher.update(&receipt.mint_height.to_le_bytes());
+                hasher.update(&receipt.signature);
+            }
+            Effect::BridgeCancel { nullifier } => {
+                hasher.update(&[28u8]);
+                hasher.update(nullifier);
+            }
             Effect::Introduce {
                 introducer,
                 recipient,
@@ -687,6 +755,15 @@ impl Effect {
             Effect::BridgeMint { portable_proof } => {
                 32 + 32 + 8 + 8 + portable_proof.spending_proof.len() // nullifier + commitment + value + asset + proof
             }
+            Effect::BridgeLock {
+                spending_proof, ..
+            } => {
+                32 + 32 + 8 + 8 + 8 + spending_proof.len() // nullifier + dest + value + asset + timeout + proof
+            }
+            Effect::BridgeFinalize { .. } => {
+                32 + 32 + 32 + 8 + 64 // nullifier + receipt(nullifier + dest + height + sig)
+            }
+            Effect::BridgeCancel { .. } => 32, // nullifier
             Effect::PipelinedSend { .. } => 32 + 4 + 32,
             Effect::Introduce { .. } => 97,
             Effect::SpawnWithDelegation { .. } => 32 + 32 + 8,

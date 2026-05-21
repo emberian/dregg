@@ -61,6 +61,7 @@ fn mock_attested_root(fed_name: &str, height: u64) -> AttestedRoot {
 fn mock_stark_verify(
     _nullifier: &[u8; 32],
     _merkle_root: &[u8; 32],
+    _dest_federation: &[u8; 32],
     proof_bytes: &[u8],
 ) -> Result<(), String> {
     // In a real system, this would call verify_note_spend from pyana-circuit.
@@ -106,6 +107,9 @@ fn main() {
     let fed_b_trusted_roots: Vec<AttestedRoot> = vec![fed_a_root.clone()];
     println!("  Federation B trusts Federation A's attested roots.");
     println!();
+
+    // Federation B's identity (derived deterministically for the demo).
+    let fed_b_identity: [u8; 32] = *blake3::hash(b"federation-beta-identity-v1").as_bytes();
 
     // Each federation has its own nullifier set and bridged-nullifier set.
     let mut fed_a_nullifiers = NullifierSet::new();
@@ -179,6 +183,7 @@ fn main() {
         alice_nullifier,
         mock_proof_bytes,
         fed_a_root.clone(),
+        fed_b_identity,
         bob_commitment,
         100,
         ASSET_GOLD,
@@ -220,7 +225,7 @@ fn main() {
 
     // Federation B verifies the portable proof.
     let verify_result =
-        verify_portable_note(&portable_proof, &fed_b_trusted_roots, mock_stark_verify);
+        verify_portable_note(&portable_proof, &fed_b_identity, &fed_b_trusted_roots, mock_stark_verify);
 
     match &verify_result {
         Ok(()) => println!("  Verification: [PASS]"),
@@ -288,6 +293,7 @@ fn main() {
     let evil_root = mock_attested_root("federation-evil", 666);
     let evil_proof = PortableNoteProof {
         nullifier: [0xEE; 32],
+        destination_federation: fed_b_identity,
         source_root: evil_root,
         spending_proof: b"valid-stark-proof-evil".to_vec(),
         destination_commitment: bob_commitment,
@@ -296,7 +302,7 @@ fn main() {
     };
 
     let untrusted_result =
-        verify_portable_note(&evil_proof, &fed_b_trusted_roots, mock_stark_verify);
+        verify_portable_note(&evil_proof, &fed_b_identity, &fed_b_trusted_roots, mock_stark_verify);
     match &untrusted_result {
         Ok(()) => println!("  Untrusted root: [UNEXPECTED PASS]"),
         Err(e) => println!("  Untrusted root: [REJECTED] {e}"),
@@ -316,6 +322,7 @@ fn main() {
     // Create a proof with invalid STARK bytes.
     let bad_proof = PortableNoteProof {
         nullifier: [0xFF; 32],
+        destination_federation: fed_b_identity,
         source_root: fed_a_root.clone(),
         spending_proof: b"garbage-not-a-real-proof".to_vec(),
         destination_commitment: bob_commitment,
@@ -324,7 +331,7 @@ fn main() {
     };
 
     let bad_stark_result =
-        verify_portable_note(&bad_proof, &fed_b_trusted_roots, mock_stark_verify);
+        verify_portable_note(&bad_proof, &fed_b_identity, &fed_b_trusted_roots, mock_stark_verify);
     match &bad_stark_result {
         Ok(()) => println!("  Invalid STARK proof: [UNEXPECTED PASS]"),
         Err(e) => println!("  Invalid STARK proof: [REJECTED] {e}"),

@@ -273,6 +273,18 @@ impl Drop for SecretKey {
 #[serde(from = "CompressedChecked<Self>", into = "CompressedChecked<Self>")]
 pub struct PublicKey(pub G1);
 
+impl PublicKey {
+    /// Deserialize a public key from compressed bytes with subgroup check.
+    ///
+    /// Returns an error if the point is not on the curve or not in the
+    /// correct prime-order subgroup (rejects small-order/invalid-curve points).
+    pub fn from_compressed_checked(bytes: &[u8]) -> Result<Self, SerializationError> {
+        use ark_serialize::{Compress, Validate};
+        let point = G1::deserialize_with_mode(&mut &bytes[..], Compress::Yes, Validate::Yes)?;
+        Ok(Self(point))
+    }
+}
+
 impl PartialOrd for PublicKey {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
@@ -303,6 +315,18 @@ impl Ord for PublicKey {
 )]
 #[serde(from = "CompressedChecked<Self>", into = "CompressedChecked<Self>")]
 pub struct PartialSignature(pub G2);
+
+impl PartialSignature {
+    /// Deserialize a partial signature from compressed bytes with subgroup check.
+    ///
+    /// Returns an error if the point is not on the curve or not in the
+    /// correct prime-order subgroup (rejects small-order/invalid-curve points).
+    pub fn from_compressed_checked(bytes: &[u8]) -> Result<Self, SerializationError> {
+        use ark_serialize::{Compress, Validate};
+        let point = G2::deserialize_with_mode(&mut &bytes[..], Compress::Yes, Validate::Yes)?;
+        Ok(Self(point))
+    }
+}
 
 impl PartialOrd for PartialSignature {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {

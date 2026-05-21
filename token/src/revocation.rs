@@ -32,6 +32,13 @@ const DEFAULT_INITIAL_CAPACITY: usize = 1024;
 #[derive(Debug)]
 struct SendRng(StdRng);
 
+impl Clone for SendRng {
+    fn clone(&self) -> Self {
+        // StdRng doesn't implement Clone in rand 0.9; create a fresh one from OS.
+        Self(StdRng::from_os_rng())
+    }
+}
+
 impl Default for SendRng {
     fn default() -> Self {
         Self(StdRng::from_os_rng())

@@ -93,12 +93,22 @@ pub fn sign(sk: &SecretKey, msg: &[u8]) -> PartialSignature {
 }
 
 /// Verify a BLS partial signature.
+///
+/// Includes subgroup checks on the public key and signature points to
+/// prevent invalid-curve / small-order subgroup attacks.
 pub fn verify_partial(
     gd: &GlobalData,
     pk: &PublicKey,
     msg: &[u8],
     partial_sig: &PartialSignature,
 ) -> bool {
+    // Reject identity or points not in the prime-order subgroup
+    if pk.0.is_zero() || !pk.0.is_in_correct_subgroup_assuming_on_curve() {
+        return false;
+    }
+    if partial_sig.0.is_zero() || !partial_sig.0.is_in_correct_subgroup_assuming_on_curve() {
+        return false;
+    }
     let g1 = gd.params.powers_of_g[0];
     let h_m = utils::hash_to_g2(msg);
     Curve::pairing(pk.0, h_m) == Curve::pairing(g1, partial_sig.0)
@@ -122,9 +132,9 @@ fn sign_aggregate_inner(
 
     // Verify partial signatures and build bitmap
     for (i, partial_sig) in partial_sigs {
-        if *i >= n {
+        if *i >= n - 1 {
             continue;
-        } // Index out of bounds
+        } // Index out of bounds (bitmap has n-1 elements)
         if agg.agg_key.failed_hint_indices.contains(i) {
             continue;
         } // Skip party if hint failed

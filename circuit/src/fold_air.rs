@@ -71,6 +71,19 @@ pub fn compute_root_transition_hash(
     hash_many(&elements)
 }
 
+/// Verify that the fold's root transition is sound.
+///
+/// Checks:
+/// 1. Each removed fact has a valid Merkle membership proof against `old_root`.
+/// 2. Computes the root transition hash binding (old_root, new_root, fact_hashes).
+///
+/// The returned hash is used as public input pi[4] in the FoldAir. The verifier
+/// (bridge layer) MUST independently compute `new_root` by rebuilding the Poseidon2
+/// Merkle tree from old leaves minus removed leaves. This binding via pi[4] ensures
+/// a malicious prover cannot claim an arbitrary `new_root` without producing a
+/// Poseidon2 collision.
+///
+/// Returns `None` if any membership proof is missing or invalid.
 pub fn verify_root_transition(witness: &FoldWitness) -> Option<BabyBear> {
     for fact in &witness.removed_facts {
         if fact.verify_membership(witness.old_root).is_none() {
@@ -182,6 +195,15 @@ impl Air for FoldAir {
                     }
                 }),
             },
+            // SECURITY: This constraint binds the summary row's MEMBERSHIP_ROOT
+            // to pi[4], which is computed as:
+            //   Poseidon2(old_root || new_root || removed_fact_hashes)
+            //
+            // Since pi[4] commits to new_root via a collision-resistant hash,
+            // a malicious prover cannot substitute a different new_root without
+            // producing a Poseidon2 collision. The verifier MUST independently
+            // compute pi[4] from the actual tree rebuild (old state minus removed
+            // leaves), which is done by build_fold_witnesses() in the bridge.
             Constraint {
                 name: "root_transition_binding".into(),
                 eval: Box::new(|row, _, pi| {

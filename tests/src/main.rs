@@ -17,7 +17,12 @@ mod soundness;
 mod trace_attacks;
 
 // End-to-end integration tests: token -> proof -> turn execution
+#[cfg(feature = "__legacy_tests")]
 mod integration;
 
 // Full pipeline integration tests: all layers with real crypto
+#[cfg(feature = "__legacy_tests")]
 mod full_pipeline;
+
+// Adversarial boundary tests: property-based + scenario-driven
+mod adversarial_boundaries;

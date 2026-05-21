@@ -228,8 +228,10 @@ fn main() {
     println!("    3. The request predicate (what action is being authorized)");
     println!();
 
-    // Verify the presentation proof
-    let is_valid = verify_presentation(&presentation, &presentation.federation_root);
+    // Verify the presentation proof.
+    // SECURITY: Org B uses its own copy of Org A's federation root (shared out-of-band),
+    // NOT the proof's embedded root. Using proof.federation_root would be circular.
+    let is_valid = verify_presentation(&presentation, &org_a_federation_root_bytes);
     println!(
         "  Presentation valid: {} [{}]",
         is_valid,

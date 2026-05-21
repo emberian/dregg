@@ -107,8 +107,11 @@ fn verify_step(step: &DerivationStep, known_facts: &[Fact], rules: &[Rule]) -> b
     true
 }
 
-/// Check that two substitutions are consistent (no conflicting bindings).
+/// Check that two substitutions are consistent (no conflicting bindings)
+/// and the claimed substitution does not contain extra unbound variables
+/// that don't appear in the rule's body or head.
 fn substitutions_consistent(claimed: &Substitution, reconstructed: &Substitution) -> bool {
+    // All reconstructed bindings must match claimed bindings
     for (var, term) in &reconstructed.bindings {
         if let Some(claimed_term) = claimed.get(*var) {
             if claimed_term != term {
@@ -116,15 +119,39 @@ fn substitutions_consistent(claimed: &Substitution, reconstructed: &Substitution
             }
         }
     }
+    // Reject extra variables in claimed substitution that were never bound
+    // during reconstruction (i.e., variables not referenced by any body atom).
+    for (var, _) in &claimed.bindings {
+        if reconstructed.get(*var).is_none() {
+            return false;
+        }
+    }
     true
 }
 
 /// Verify the conclusion is consistent with the derived facts.
+///
+/// A Deny conclusion is valid if:
+/// - An explicit `deny` fact was derived (deny overrides allow), OR
+/// - No `allow` fact exists in facts or steps.
+///
+/// An Allow conclusion is valid if:
+/// - No `deny` fact was derived (deny always wins), AND
+/// - An `allow` fact exists derived by the claimed rule.
 fn verify_conclusion(facts: &[Fact], steps: &[DerivationStep], conclusion: &Conclusion) -> bool {
     let allow_pred = predicates::allow();
+    let deny_pred = predicates::deny();
+
+    // Check if any deny fact was derived or exists in base facts
+    let has_deny = steps.iter().any(|s| s.derived_fact.predicate == deny_pred)
+        || facts.iter().any(|f| f.predicate == deny_pred);
 
     match conclusion {
         Conclusion::Allow { policy_rule_id } => {
+            // Deny always overrides allow — an Allow conclusion is invalid if deny exists
+            if has_deny {
+                return false;
+            }
             // There must be an allow fact derived by the claimed rule
             let has_allow_in_steps = steps
                 .iter()
@@ -134,7 +161,10 @@ fn verify_conclusion(facts: &[Fact], steps: &[DerivationStep], conclusion: &Conc
             has_allow_in_steps || has_allow_in_base
         }
         Conclusion::Deny => {
-            // No allow fact should exist
+            // Deny is valid if: explicit deny was derived, OR no allow exists
+            if has_deny {
+                return true;
+            }
             let no_allow_in_facts = !facts.iter().any(|f| f.predicate == allow_pred);
             let no_allow_in_steps = !steps.iter().any(|s| s.derived_fact.predicate == allow_pred);
             no_allow_in_facts && no_allow_in_steps

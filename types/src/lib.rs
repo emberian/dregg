@@ -54,11 +54,14 @@ impl PublicKey {
     }
 
     /// Verify that a signature over `message` was produced by this key.
+    ///
+    /// Uses `verify_strict` to reject non-canonical S values, preventing
+    /// signature malleability (transaction malleability attacks).
     pub fn verify(&self, message: &[u8], signature: &Signature) -> bool {
         match self.to_verifying_key() {
             Some(vk) => {
                 let sig = ed25519_dalek::Signature::from_bytes(&signature.0);
-                vk.verify(message, &sig).is_ok()
+                vk.verify_strict(message, &sig).is_ok()
             }
             None => false,
         }

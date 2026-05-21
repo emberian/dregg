@@ -11,6 +11,21 @@
 //! - A revocation at any node can claim "all descendants of this cap are revoked."
 //! - Verifiers can check: "was this cap derived from a revoked ancestor?"
 //!
+//! # Revocation Model
+//!
+//! **Runtime (executor) revocation** is handled by the [`RevocationChannelSet`]
+//! (see `revocation_channel.rs`). When a delegated capability has a `channel_id`,
+//! the executor checks the channel set before allowing exercise. This provides
+//! O(1) instant revocation without CDT traversal.
+//!
+//! **The CDT is NOT consulted during turn execution.** It is an off-chain/verifier-side
+//! data structure reconstructed from `DerivationRecord`s emitted in turn receipts.
+//! External verifiers and auditors use `has_revoked_ancestor()` to verify that a
+//! capability's provenance chain is untainted. The ZK circuit (future) will prove
+//! non-revocation against the CDT's nullifier set without revealing the chain.
+//!
+//! [`RevocationChannelSet`]: crate::revocation_channel::RevocationChannelSet
+//!
 //! # ZK Integration (Poseidon2MerkleProof)
 //!
 //! The derivation path FROM a cap TO the original minting root can be proven in

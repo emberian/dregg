@@ -16,7 +16,10 @@ pub struct JsonTrustedSetup {
 
 impl Default for JsonTrustedSetup {
     fn default() -> Self {
+        // The embedded data is a compile-time constant; a parse failure here
+        // indicates a build corruption and is unrecoverable.
         JsonTrustedSetup::from_embed()
+            .expect("embedded trusted setup data is corrupt")
     }
 }
 
@@ -43,6 +46,8 @@ pub enum TrustedSetupError {
     PointCountMismatch(usize, usize),
     InvalidSubgroup,
     IntoFailed,
+    /// JSON parsing failed.
+    JsonParseError,
 }
 
 impl From<SerializationError> for TrustedSetupError {
@@ -80,48 +85,41 @@ impl JsonTrustedSetup {
       ]
     }
     */
-    pub fn from_json<E: Pairing>(json: &str) -> JsonTrustedSetup {
-        let trusted_setup = Self::from_json_unchecked(json);
-        assert!(trusted_setup.deserialize::<E>().is_ok());
-        trusted_setup
+    pub fn from_json<E: Pairing>(json: &str) -> Result<JsonTrustedSetup, TrustedSetupError> {
+        let trusted_setup = Self::from_json_unchecked(json)?;
+        trusted_setup.deserialize::<E>()?;
+        Ok(trusted_setup)
     }
 
     /// Parse a Json string in the format specified by the ethereum trusted setup.
     ///
     /// This method does not check that the points are in the correct subgroup.
-    pub fn from_json_unchecked(json: &str) -> JsonTrustedSetup {
-        // Note: it is fine to panic here since this method is called on startup
-        // and we want to fail fast if the trusted setup is malformed.
-        serde_json::from_str(json)
-            .expect("could not parse json string into a TrustedSetup structure")
+    pub fn from_json_unchecked(json: &str) -> Result<JsonTrustedSetup, TrustedSetupError> {
+        serde_json::from_str(json).map_err(|_| TrustedSetupError::JsonParseError)
+    }
+
+    /// Load the embedded mainnet trusted setup, returning an error on parse failure.
+    pub fn load_embedded() -> Result<Self, TrustedSetupError> {
+        Self::from_embed()
     }
 
     /// Loads the official trusted setup file being used on mainnet from the embedded data folder.
-    fn from_embed() -> JsonTrustedSetup {
+    fn from_embed() -> Result<JsonTrustedSetup, TrustedSetupError> {
         Self::from_json_unchecked(ETHSETUP_JSON)
     }
 
     /// Deserialize the JSON into a `TrustedSetup` struct.
     pub fn deserialize<E: Pairing>(&self) -> Result<TrustedSetup<E>, TrustedSetupError> {
-        assert_eq!(
-            E::G1Affine::serialized_size(&E::G1Affine::zero(), Compress::Yes),
-            48
-        );
-        assert_eq!(
-            E::G2Affine::serialized_size(&E::G2Affine::zero(), Compress::Yes),
-            96
-        );
+        let g1_size = E::G1Affine::serialized_size(&E::G1Affine::zero(), Compress::Yes);
+        let g2_size = E::G2Affine::serialized_size(&E::G2Affine::zero(), Compress::Yes);
+        if g1_size != 48 || g2_size != 96 {
+            return Err(TrustedSetupError::PointCountMismatch(g1_size, g2_size));
+        }
 
         let g1_points =
-            deserialize_points::<_, E::G1Affine, 48>(&self.g1_monomial, SubgroupCheck::Check)
-                .expect("g1 points?");
+            deserialize_points::<_, E::G1Affine, 48>(&self.g1_monomial, SubgroupCheck::Check)?;
         let g2_points =
-            deserialize_points::<_, E::G2Affine, 96>(&self.g2_monomial, SubgroupCheck::Check)
-                .expect("g2 points?");
-
-        // if g1_points.len() != g2_points.len() {
-        //     return Err(TrustedSetupError::PointCountMismatch(g1_points.len(), g2_points.len()));
-        // }
+            deserialize_points::<_, E::G2Affine, 96>(&self.g2_monomial, SubgroupCheck::Check)?;
 
         Ok(TrustedSetup {
             g1_points,
@@ -143,8 +141,7 @@ fn deserialize_points<T: AsRef<str>, G: AffineRepr, const N: usize>(
             .ok_or(TrustedSetupError::BadHexPrefix)?;
         let g_point_bytes: [u8; N] = hex::decode(g_hex_str_without_0x)?
             .try_into()
-            .map_err(|_| TrustedSetupError::IntoFailed)
-            .unwrap();
+            .map_err(|_| TrustedSetupError::IntoFailed)?;
         let point = G::deserialize_with_mode(
             &mut &g_point_bytes[..],
             Compress::Yes,

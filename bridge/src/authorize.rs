@@ -259,8 +259,11 @@ fn auth_request_to_trace(request: &AuthRequest) -> Result<TraceRequest, AuthErro
 /// - `budget_remaining(budget_id, amount)` for each entry in `budget_states`
 /// - `request_cost(cost)` if `request_cost` is Some
 /// - `not_revoked(token_id)` for each entry in `not_revoked`
-#[deprecated(note = "Self-asserted budget/revocation facts are not trustworthy. Use Merkle membership proofs.")]
-pub fn budget_revocation_facts(request: &AuthRequest) -> Vec<TraceFact> {
+#[deprecated(
+    note = "Self-asserted budget/revocation facts are not trustworthy. Use Merkle membership proofs."
+)]
+#[doc(hidden)]
+pub(crate) fn budget_revocation_facts(request: &AuthRequest) -> Vec<TraceFact> {
     let mut facts = Vec::new();
 
     // Emit budget_remaining facts

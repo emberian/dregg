@@ -8,7 +8,7 @@
 //! - Zero-knowledge proof generation via the bridge layer
 
 use ed25519_dalek::Signer;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use pyana_bridge::BridgePresentationProof;
 use pyana_cell::CellId;
@@ -257,6 +257,14 @@ pub struct AgentWallet {
 }
 
 impl AgentWallet {
+    /// Domain separation prefix for all signatures produced by this wallet.
+    /// Prevents cross-protocol signature reuse (e.g., a signed message being
+    /// replayed as a turn signature or vice versa).
+    const DOMAIN_PREFIX: &'static [u8] = b"pyana-v1:";
+
+    /// Domain separation prefix for turn signing specifically.
+    const TURN_DOMAIN_PREFIX: &'static [u8] = b"pyana-turn-v1:";
+
     /// Create a new wallet with a randomly generated Ed25519 identity.
     ///
     /// # Example
@@ -266,18 +274,29 @@ impl AgentWallet {
     /// println!("Agent identity: {}", wallet.public_key());
     /// ```
     pub fn new() -> Self {
-        let mut key_bytes = [0u8; 32];
-        getrandom::fill(&mut key_bytes).expect("getrandom failed");
+        let mut key_bytes = Zeroizing::new([0u8; 32]);
+        getrandom::fill(&mut *key_bytes).expect("getrandom failed");
         Self::from_key_bytes(key_bytes)
     }
 
     /// Create a wallet from an existing 32-byte Ed25519 secret key.
     ///
     /// Use this when restoring a wallet from persisted key material.
-    pub fn from_key_bytes(secret: [u8; 32]) -> Self {
+    ///
+    /// # Security
+    ///
+    /// The key material is wrapped in [`Zeroizing`] to ensure it is erased from
+    /// memory when no longer needed. This prevents the caller's copy from
+    /// persisting on the stack or heap after wallet construction. Callers should
+    /// always wrap key bytes in `Zeroizing` before passing them to this function
+    /// to benefit from automatic zeroization on drop.
+    pub fn from_key_bytes(mut secret: Zeroizing<[u8; 32]>) -> Self {
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&secret);
         let verifying_key = signing_key.verifying_key();
         let public_key = PublicKey(verifying_key.to_bytes());
+        // Explicitly zeroize before drop for defense-in-depth (Zeroizing's Drop
+        // impl will also do this, but we want to be clear about intent).
+        secret.zeroize();
         AgentWallet {
             signing_key,
             public_key,
@@ -318,8 +337,10 @@ impl AgentWallet {
 
     /// Create a wallet from a seed at a specific derivation path.
     fn from_seed_at_path(seed: [u8; 64], path: &str) -> Self {
-        let (_pub_bytes, sec_bytes) = mnemonic::derive_keypair(&seed, path);
+        let (_pub_bytes, mut sec_bytes) = mnemonic::derive_keypair(&seed, path);
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&sec_bytes);
+        // Zeroize the derived secret key bytes now that we have the SigningKey.
+        sec_bytes.zeroize();
         let verifying_key = signing_key.verifying_key();
         let public_key = PublicKey(verifying_key.to_bytes());
         AgentWallet {
@@ -521,13 +542,62 @@ impl AgentWallet {
         }
     }
 
+    /// Maximum size (in bytes) for a delegated token's encoded payload.
+    ///
+    /// Tokens exceeding this size are rejected to prevent memory DoS attacks
+    /// where an attacker sends an enormous token string.
+    const MAX_DELEGATED_TOKEN_SIZE: usize = 64 * 1024; // 64 KiB
+
     /// Receive a delegated token into this wallet.
     ///
     /// Call this when another agent has delegated a token to us. The token
     /// is added to the wallet's held tokens. The delegatee does NOT receive the
     /// root key -- they can present the token for verification but cannot mint
     /// new root tokens.
-    pub fn receive_delegation(&mut self, delegated: DelegatedToken) {
+    ///
+    /// # Validation
+    ///
+    /// This method validates the delegated token before accepting it:
+    /// - Size: token payload must not exceed 64 KiB (memory DoS prevention).
+    /// - Deserializable: the token must parse as a valid macaroon structure.
+    /// - Expiry: if the delegation restrictions specify `not_after`, it must not be in the past.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SdkError`] if any validation check fails.
+    pub fn receive_delegation(&mut self, delegated: DelegatedToken) -> Result<(), SdkError> {
+        // (a) Size check: reject oversized tokens to prevent memory DoS.
+        if delegated.token_bytes.len() > Self::MAX_DELEGATED_TOKEN_SIZE {
+            return Err(SdkError::InvalidDelegation(format!(
+                "token payload too large: {} bytes exceeds {} byte limit",
+                delegated.token_bytes.len(),
+                Self::MAX_DELEGATED_TOKEN_SIZE,
+            )));
+        }
+
+        // (b) Deserialization check: ensure the token can be decoded as a valid macaroon.
+        // We use a zeroed root_key since we don't have the issuer key -- this verifies
+        // structural validity (parse, caveat structure) without HMAC chain verification.
+        let _decoded = MacaroonToken::from_encoded(&delegated.token_bytes, [0u8; 32])
+            .map_err(|e| {
+                SdkError::InvalidDelegation(format!("token failed to deserialize: {e}"))
+            })?;
+
+        // (c) Expiry check: if the delegation restrictions specify not_after, ensure
+        // the token hasn't already expired. This catches the common case where an
+        // attacker replays an old delegation with an expired time window.
+        if let Some(not_after) = delegated.restrictions.not_after {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            if not_after <= now {
+                return Err(SdkError::InvalidDelegation(format!(
+                    "delegated token has expired: not_after={not_after}, now={now}"
+                )));
+            }
+        }
+
         let held = HeldToken::new(
             delegated.label,
             delegated.service,
@@ -536,6 +606,7 @@ impl AgentWallet {
             delegated.id,
         );
         self.tokens.push(held);
+        Ok(())
     }
 
     // =========================================================================
@@ -983,16 +1054,60 @@ impl AgentWallet {
     // =========================================================================
 
     /// Compute a stable byte representation of a turn for signing.
+    ///
+    /// This MUST cover ALL semantically-relevant fields of the Turn to prevent
+    /// an attacker from substituting fields that are not covered by the signature.
+    /// The domain prefix prevents cross-protocol signature reuse.
+    ///
+    /// # Serialization format
+    ///
+    /// All variable-length fields are length-prefixed (8-byte little-endian u64)
+    /// to prevent ambiguous concatenation attacks. For example, without length
+    /// prefixes, `fee=12, memo="3"` and `fee=1, memo="23"` could hash identically
+    /// if the field boundaries are not explicit. Fixed-size fields (u64, [u8; 32])
+    /// do not need length prefixes since their boundaries are unambiguous.
     fn compute_turn_bytes(&self, turn: &Turn) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new();
+        // Domain separation: prevent reuse of turn signatures in other contexts.
+        hasher.update(Self::TURN_DOMAIN_PREFIX);
         hasher.update(turn.agent.as_bytes());
         hasher.update(&turn.nonce.to_le_bytes());
+        // CRITICAL: include the call_forest hash -- this is the actual payload of
+        // actions being authorized. Without this, an attacker could substitute
+        // arbitrary actions under an existing signature.
+        let forest_hash = turn.call_forest.compute_hash();
+        hasher.update(&forest_hash);
         hasher.update(&turn.fee.to_le_bytes());
         if let Some(ref memo) = turn.memo {
-            hasher.update(memo.as_bytes());
+            hasher.update(b"\x01");
+            // Length-prefix the memo to prevent boundary ambiguity with subsequent fields.
+            let memo_bytes = memo.as_bytes();
+            hasher.update(&(memo_bytes.len() as u64).to_le_bytes());
+            hasher.update(memo_bytes);
+        } else {
+            hasher.update(b"\x00");
         }
         if let Some(valid_until) = turn.valid_until {
+            hasher.update(b"\x01");
             hasher.update(&valid_until.to_le_bytes());
+        } else {
+            hasher.update(b"\x00");
+        }
+        // Include previous_receipt_hash to bind this turn to a specific chain position.
+        match &turn.previous_receipt_hash {
+            Some(h) => {
+                hasher.update(b"\x01");
+                hasher.update(h);
+            }
+            None => {
+                hasher.update(b"\x00");
+            }
+        }
+        // Include dependency hashes to prevent reordering attacks in pipelines.
+        // Length prefix prevents confusion between no-deps and empty-deps-followed-by-data.
+        hasher.update(&(turn.depends_on.len() as u64).to_le_bytes());
+        for dep in &turn.depends_on {
+            hasher.update(dep);
         }
         *hasher.finalize().as_bytes()
     }
@@ -1351,7 +1466,7 @@ mod tests {
 
         // When the delegatee receives it, they also don't get root_key.
         let mut recv_wallet = AgentWallet::new();
-        recv_wallet.receive_delegation(delegated);
+        recv_wallet.receive_delegation(delegated).unwrap();
         let held = recv_wallet.tokens().first().unwrap();
         assert!(!held.can_mint());
         assert_eq!(held.root_key(), &[0u8; 32]);

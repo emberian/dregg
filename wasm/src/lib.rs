@@ -677,9 +677,10 @@ pub fn blake3_hash(input: &str) -> String {
 ///   "constraints": [{"AppId": "x"}, {"Service": "y"}, ...],
 ///   "min_budget": null | 1000,
 ///   "resource_pattern": null | "docs/*",
+///   "compound": null | [{ "actions": [...], ... }],
 ///   "expiry": 1716000000,
 ///   "creator": [170, 170, ...] (32 bytes),
-///   "proof_of_stake": null | [1, 2, 3, ...] (32 bytes)
+///   "stake_commitment": null | [1, 2, 3, ...] (32 bytes)
 /// }
 /// ```
 #[wasm_bindgen]
@@ -747,6 +748,64 @@ pub fn compute_intent_id(intent_json: &str) -> Result<String, JsError> {
         constraints,
         min_budget: input.min_budget,
         resource_pattern: input.resource_pattern,
+        compound: input.compound.map(|specs| {
+            specs
+                .into_iter()
+                .map(|s| {
+                    let actions: Vec<CanonicalActionPattern> = s
+                        .actions
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|a| CanonicalActionPattern {
+                            action: a.action,
+                            resource: a.resource,
+                        })
+                        .collect();
+                    let constraints: Vec<CanonicalConstraint> = s
+                        .constraints
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|c| {
+                            if let Some(v) = c.app_id {
+                                return CanonicalConstraint::AppId(v);
+                            }
+                            if let Some(v) = c.service {
+                                return CanonicalConstraint::Service(v);
+                            }
+                            if let Some(v) = c.user_id {
+                                return CanonicalConstraint::UserId(v);
+                            }
+                            if let Some(v) = c.not_expired_at {
+                                return CanonicalConstraint::NotExpiredAt(v);
+                            }
+                            if let Some(v) = c.feature {
+                                return CanonicalConstraint::Feature(v);
+                            }
+                            if let Some(v) = c.oauth_provider {
+                                return CanonicalConstraint::OAuthProvider(v);
+                            }
+                            if let (Some(p), Some(v)) = (c.predicate, c.value) {
+                                return CanonicalConstraint::Custom {
+                                    predicate: p,
+                                    value: v,
+                                };
+                            }
+                            CanonicalConstraint::Custom {
+                                predicate: String::new(),
+                                value: String::new(),
+                            }
+                        })
+                        .collect();
+                    CanonicalMatchSpec {
+                        actions,
+                        constraints,
+                        min_budget: s.min_budget,
+                        resource_pattern: s.resource_pattern,
+                        compound: None, // Nested compounds not supported
+                    }
+                })
+                .collect()
+        }),
     };
 
     let creator = CanonicalCommitmentId(
@@ -757,12 +816,13 @@ pub fn compute_intent_id(intent_json: &str) -> Result<String, JsError> {
             .map_err(|_| JsError::new("creator must be exactly 32 bytes"))?,
     );
 
-    let proof_of_stake: Option<CanonicalNoteCommitment> = input.proof_of_stake.map(|bytes| {
-        let arr: [u8; 32] = bytes
+    // stake_commitment: matches IntentBody in intent/src/lib.rs which hashes
+    // the commitment bytes from the stake proof (if present).
+    let stake_commitment: Option<[u8; 32]> = input.stake_commitment.map(|bytes| {
+        bytes
             .try_into()
-            .map_err(|_| JsError::new("proof_of_stake must be exactly 32 bytes"))
-            .unwrap();
-        CanonicalNoteCommitment(arr)
+            .map_err(|_| JsError::new("stake_commitment must be exactly 32 bytes"))
+            .unwrap()
     });
 
     // Build the body struct that matches IntentBody in intent/src/lib.rs
@@ -771,13 +831,13 @@ pub fn compute_intent_id(intent_json: &str) -> Result<String, JsError> {
         matcher: &matcher,
         creator: &creator,
         expiry: input.expiry,
-        proof_of_stake: &proof_of_stake,
+        stake_commitment: stake_commitment.as_ref(),
     };
 
     let canonical = postcard::to_allocvec(&body)
         .map_err(|e| JsError::new(&format!("postcard serialization failed: {e}")))?;
 
-    let mut hasher = blake3::Hasher::new_derive_key("pyana-intent-id-v1");
+    let mut hasher = blake3::Hasher::new_derive_key("pyana-intent-id-v2");
     hasher.update(&canonical);
     let hash = hasher.finalize();
 
@@ -793,9 +853,20 @@ struct IntentIdInput {
     constraints: Option<Vec<ConstraintInput>>,
     min_budget: Option<u64>,
     resource_pattern: Option<String>,
+    compound: Option<Vec<MatchSpecInput>>,
     expiry: u64,
     creator: Option<Vec<u8>>,
-    proof_of_stake: Option<Vec<u8>>,
+    /// The 32-byte commitment from the stake proof (if present).
+    /// This matches `stake_commitment` in the Rust IntentBody.
+    stake_commitment: Option<Vec<u8>>,
+}
+
+#[derive(serde::Deserialize)]
+struct MatchSpecInput {
+    actions: Option<Vec<ActionPatternInput>>,
+    constraints: Option<Vec<ConstraintInput>>,
+    min_budget: Option<u64>,
+    resource_pattern: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -854,13 +925,11 @@ struct CanonicalMatchSpec {
     constraints: Vec<CanonicalConstraint>,
     min_budget: Option<u64>,
     resource_pattern: Option<String>,
+    compound: Option<Vec<CanonicalMatchSpec>>,
 }
 
 #[derive(Serialize)]
 struct CanonicalCommitmentId(pub [u8; 32]);
-
-#[derive(Serialize)]
-struct CanonicalNoteCommitment(pub [u8; 32]);
 
 #[derive(Serialize)]
 struct CanonicalIntentBody<'a> {
@@ -868,7 +937,8 @@ struct CanonicalIntentBody<'a> {
     matcher: &'a CanonicalMatchSpec,
     creator: &'a CanonicalCommitmentId,
     expiry: u64,
-    proof_of_stake: &'a Option<CanonicalNoteCommitment>,
+    /// We hash the commitment bytes from the stake proof (if present) for ID binding.
+    stake_commitment: Option<&'a [u8; 32]>,
 }
 
 // ============================================================================

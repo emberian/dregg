@@ -177,6 +177,30 @@ fn seed_from_entropy(entropy: &[u8; 32], passphrase: &str) -> [u8; 64] {
 /// input key material. This produces a deterministic 32-byte secret key from
 /// which the Ed25519 public key is derived.
 ///
+/// # Non-standard derivation (deviation from BIP32/SLIP-10)
+///
+/// This intentionally deviates from BIP32 (which targets secp256k1) and SLIP-10
+/// (which defines Ed25519 HD derivation using HMAC-SHA512 with hardened-only paths).
+/// Our reasons:
+///
+/// 1. **BLAKE3 `derive_key` is a proper KDF**: It uses domain separation (the path
+///    string becomes the context) and produces uniformly random output. This is
+///    equivalent in security to HMAC-SHA512 with the context acting as the "key".
+///
+/// 2. **Ed25519 clamping is handled by `ed25519-dalek`**: The `SigningKey::from_bytes`
+///    constructor uses the raw 32-byte secret as the "seed" input to Ed25519 key
+///    generation (per RFC 8032, Section 5.1.5). The actual scalar is derived by
+///    hashing the seed with SHA-512 and clamping the lower 32 bytes. Thus, any
+///    uniformly random 32-byte input is safe -- no additional reduction or clamping
+///    is needed at the derivation layer.
+///
+/// 3. **Simpler path model**: BIP32/SLIP-10 use integer indices with hardened/normal
+///    distinction. We use descriptive string paths (`"pyana/0"`) which are more
+///    readable and naturally domain-separated.
+///
+/// 4. **Performance**: BLAKE3 is ~5x faster than HMAC-SHA512, relevant when deriving
+///    many sub-agent keys.
+///
 /// # Derivation paths
 ///
 /// - `"pyana/0"` - Main agent identity
@@ -203,6 +227,11 @@ fn seed_from_entropy(entropy: &[u8; 32], passphrase: &str) -> [u8; 64] {
 /// ```
 pub fn derive_keypair(seed: &[u8; 64], path: &str) -> ([u8; 32], [u8; 32]) {
     let derived = blake3::derive_key(path, seed);
+    // SAFETY: ed25519-dalek's SigningKey::from_bytes treats the 32-byte input as an
+    // Ed25519 "seed" (per RFC 8032). Internally it hashes with SHA-512 and clamps
+    // the result before scalar multiplication. The BLAKE3 KDF output is uniformly
+    // random over {0,1}^256, which is the correct input domain for Ed25519 key
+    // generation. No manual clamping or modular reduction is required here.
     let secret = ed25519_dalek::SigningKey::from_bytes(&derived);
     let public = secret.verifying_key();
     (public.to_bytes(), derived)

@@ -20,6 +20,12 @@ pub struct VerifierKey {
     pub sk_of_x_com: G2, //commitment to the sigma_{i \in [N]} sk_i l_i(x) polynomial
     pub vanishing_com: G2, //commitment to Z(x) = x^n - 1
     pub x_monomial_com: G2, //commentment to f(x) = x
+    /// All participant public keys (bound into Fiat-Shamir transcript)
+    pub pks: Vec<PublicKey>,
+    /// All participant weights (bound into Fiat-Shamir transcript)
+    pub weights: Vec<F>,
+    /// Indices of participants whose hints failed verification
+    pub failed_hint_indices: Vec<usize>,
 }
 
 macro_rules! lhs_rhs_eq {

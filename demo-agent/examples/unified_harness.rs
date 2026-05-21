@@ -454,7 +454,9 @@ fn run_multi_org_delegation(_issuer_key: &[u8; 32]) -> Result<(), Box<dyn Error>
     });
     match proof_result {
         Ok(presentation) => {
-            assert!(verify_presentation(&presentation, &presentation.federation_root));
+            // SECURITY: Verify against the externally-derived federation root, NOT the
+            // proof's own embedded root (which would be circular and provide no security).
+            assert!(verify_presentation(&presentation, &federation_root_bytes));
             assert!(presentation.verify_issuer_stark().unwrap().is_ok());
         }
         Err(_) => {

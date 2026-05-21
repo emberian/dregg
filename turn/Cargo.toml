@@ -15,6 +15,7 @@ pyana-circuit = { path = "../circuit" }
 pyana-types = { path = "../types" }
 blake3 = "1"
 ed25519-dalek = { version = "2", features = ["hazmat"] }
+postcard = { version = "1", features = ["alloc"] }
 serde = { workspace = true }
 
 [dev-dependencies]

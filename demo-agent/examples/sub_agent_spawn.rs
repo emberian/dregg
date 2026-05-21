@@ -481,7 +481,9 @@ fn main() {
         let proof = builder.prove(&req);
         match proof {
             Ok(presentation) => {
-                let valid = verify_presentation(&presentation, &presentation.federation_root);
+                // SECURITY: Verify against the externally-derived federation root,
+                // NOT the proof's own embedded root (which would be circular).
+                let valid = verify_presentation(&presentation, &federation_root_bytes);
                 let stark_ok = presentation
                     .verify_issuer_stark()
                     .map(|r| r.is_ok())

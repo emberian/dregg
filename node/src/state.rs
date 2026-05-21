@@ -64,14 +64,18 @@ pub struct NodeStateInner {
     /// When `Some`, unlock attempts must provide a passphrase whose BLAKE3 hash
     /// matches this value. When `None`, the first unlock sets the passphrase.
     pub passphrase_hash: Option<[u8; 32]>,
-    /// Local intent pool: id -> intent JSON.
-    pub intent_pool: HashMap<String, serde_json::Value>,
+    /// Local intent pool: content-addressed ID -> validated Intent.
+    pub intent_pool: HashMap<[u8; 32], pyana_intent::Intent>,
     /// Pending conditional turns awaiting proof resolution.
     /// Garbage-collected on access when timeout_height is exceeded.
     pub pending_conditionals: Vec<pyana_turn::ConditionalTurn>,
     /// Set of proof hashes that have already been used (nullifiers).
     /// Prevents the same proof from satisfying multiple conditional turns.
     pub used_proof_hashes: HashSet<[u8; 32]>,
+    /// Known federation public keys for attested root quorum verification.
+    pub known_federation_keys: Vec<pyana_types::PublicKey>,
+    /// Maximum age (in seconds) for accepting incoming attested roots. Default: 3600.
+    pub max_root_age_secs: u64,
 }
 
 /// Summary of the node's sync state for the status endpoint.
@@ -94,14 +98,56 @@ pub struct WalletStatus {
 
 impl NodeState {
     /// Create a new NodeState from a data directory path and peer list.
+    ///
+    /// Issue 4 fix: Loads `node.key` from the data directory to initialize
+    /// the wallet identity. If no key file exists, generates a fresh identity
+    /// and writes the key (first-run behavior).
+    ///
+    /// Issue 3 fix: Loads persisted passphrase hash from the store.
+    /// Issue 5 fix: Loads persisted proof hashes (nullifiers) from the store.
     pub fn new(data_dir: &Path, peers: Vec<String>) -> Result<Self, String> {
         let db_path = data_dir.join("pyana.redb");
         let store =
             PersistentStore::open(&db_path).map_err(|e| format!("failed to open store: {e}"))?;
 
-        let wallet = AgentWallet::new();
+        // Issue 4: Load or generate node identity key.
+        let key_path = data_dir.join("node.key");
+        let wallet = if key_path.exists() {
+            let key_bytes_vec = std::fs::read(&key_path)
+                .map_err(|e| format!("failed to read node.key: {e}"))?;
+            if key_bytes_vec.len() != 32 {
+                return Err(format!(
+                    "node.key has invalid length: expected 32, got {}",
+                    key_bytes_vec.len()
+                ));
+            }
+            let mut key_bytes = [0u8; 32];
+            key_bytes.copy_from_slice(&key_bytes_vec);
+            AgentWallet::from_key_bytes(zeroize::Zeroizing::new(key_bytes))
+        } else {
+            // First run: generate a key and persist it.
+            let mut key_bytes = [0u8; 32];
+            getrandom::fill(&mut key_bytes).map_err(|e| format!("getrandom failed: {e}"))?;
+            std::fs::write(&key_path, key_bytes)
+                .map_err(|e| format!("failed to write node.key: {e}"))?;
+            AgentWallet::from_key_bytes(zeroize::Zeroizing::new(key_bytes))
+        };
+
+        // Issue 3: Load persisted passphrase hash from the store.
+        let passphrase_hash = match store.get_config("passphrase_hash") {
+            Ok(Some(bytes)) if bytes.len() == 32 => {
+                let mut hash = [0u8; 32];
+                hash.copy_from_slice(&bytes);
+                Some(hash)
+            }
+            _ => None,
+        };
+
+        // Issue 5: Load persisted proof hashes from the store.
+        let used_proof_hashes = store.load_all_proof_hashes().unwrap_or_default();
+
         let ledger = Ledger::new();
-        let (events_tx, _) = broadcast::channel(256);
+        let (events_tx, _) = broadcast::channel(4096);
 
         Ok(Self {
             inner: Arc::new(RwLock::new(NodeStateInner {
@@ -110,10 +156,12 @@ impl NodeState {
                 store,
                 peers,
                 unlocked: false,
-                passphrase_hash: None,
+                passphrase_hash,
                 intent_pool: HashMap::new(),
                 pending_conditionals: Vec::new(),
-                used_proof_hashes: HashSet::new(),
+                used_proof_hashes,
+                known_federation_keys: Vec::new(),
+                max_root_age_secs: 3600,
             })),
             events_tx,
             gossip: Arc::new(RwLock::new(None)),
@@ -131,9 +179,9 @@ impl NodeState {
         let store =
             PersistentStore::open(&db_path).map_err(|e| format!("failed to open store: {e}"))?;
 
-        let wallet = AgentWallet::from_key_bytes(key_bytes);
+        let wallet = AgentWallet::from_key_bytes(zeroize::Zeroizing::new(key_bytes));
         let ledger = Ledger::new();
-        let (events_tx, _) = broadcast::channel(256);
+        let (events_tx, _) = broadcast::channel(4096);
 
         Ok(Self {
             inner: Arc::new(RwLock::new(NodeStateInner {
@@ -146,6 +194,8 @@ impl NodeState {
                 intent_pool: HashMap::new(),
                 pending_conditionals: Vec::new(),
                 used_proof_hashes: HashSet::new(),
+                known_federation_keys: Vec::new(),
+                max_root_age_secs: 3600,
             })),
             events_tx,
             gossip: Arc::new(RwLock::new(None)),

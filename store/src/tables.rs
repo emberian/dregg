@@ -67,6 +67,12 @@ pub const NOTE_COMMITMENTS: TableDefinition<u64, &[u8; 32]> =
 /// Value: empty (presence in the table means the note is spent).
 pub const NULLIFIERS: TableDefinition<&[u8; 32], ()> = TableDefinition::new("nullifiers");
 
+/// Byte-blob metadata table for values that don't fit in a u64.
+///
+/// Key: metadata key name.
+/// Value: arbitrary byte blob (e.g., cached Merkle roots).
+pub const METADATA_BYTES: TableDefinition<&str, &[u8]> = TableDefinition::new("metadata_bytes");
+
 // Metadata key constants.
 
 /// Key for the next audit sequence number.
@@ -77,3 +83,6 @@ pub const META_LATEST_ROOT_HEIGHT: &str = "latest_root_height";
 
 /// Key for the note tree size (number of commitments).
 pub const META_NOTE_TREE_SIZE: &str = "note_tree_size";
+
+/// Key for the cached note tree root (stored in METADATA_BYTES).
+pub const META_NOTE_TREE_ROOT_CACHE: &str = "note_tree_root_cache";

@@ -274,7 +274,7 @@ impl TurnComposer {
                 })?;
 
                 verifying_key
-                    .verify(&signing_message, &signature)
+                    .verify_strict(&signing_message, &signature)
                     .map_err(|_| ComposeError::InvalidSignature {
                         fragment_index: frag_idx,
                         action_index: action_idx,

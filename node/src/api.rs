@@ -3,14 +3,26 @@
 //! Serves a localhost-only API that the browser extension wallet talks to.
 //! All handlers access shared [`NodeState`] via Axum's state extraction.
 
+use std::collections::HashMap;
+use std::net::IpAddr;
+use std::sync::Arc;
+use std::time::Instant;
+
 use axum::{
     Json, Router,
     extract::Path as AxumPath,
     extract::State,
+    extract::ConnectInfo,
     http::StatusCode,
+    middleware,
     routing::{get, post},
 };
+use axum::extract::DefaultBodyLimit;
+use axum::http::Request;
+use axum::http::{HeaderValue, Method, header};
+use axum::response::Response;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 
 use pyana_sdk::{Attenuation, AuthRequest, CellId};
 use pyana_turn::{CallForest, Turn};
@@ -154,7 +166,7 @@ pub struct IntentSubmitResponse {
 #[derive(Serialize)]
 pub struct IntentListEntry {
     pub id: String,
-    pub intent: serde_json::Value,
+    pub intent: pyana_intent::Intent,
 }
 
 // =============================================================================
@@ -196,17 +208,217 @@ pub struct PendingConditionalInfo {
 }
 
 // =============================================================================
+// Rate Limiting (P1 Fix 4)
+// =============================================================================
+
+/// Simple in-memory rate limiter: max attempts per window.
+#[derive(Clone)]
+struct RateLimiter {
+    /// Map of IP -> (attempt_count, window_start)
+    state: Arc<Mutex<HashMap<IpAddr, (u32, Instant)>>>,
+    max_attempts: u32,
+    window_secs: u64,
+}
+
+impl RateLimiter {
+    fn new(max_attempts: u32, window_secs: u64) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(HashMap::new())),
+            max_attempts,
+            window_secs,
+        }
+    }
+
+    /// Returns true if the request should be allowed, false if rate-limited.
+    async fn check(&self, ip: IpAddr) -> bool {
+        let mut map = self.state.lock().await;
+        let now = Instant::now();
+        let entry = map.entry(ip).or_insert((0, now));
+
+        // Reset window if expired.
+        if now.duration_since(entry.1).as_secs() >= self.window_secs {
+            *entry = (0, now);
+        }
+
+        entry.0 += 1;
+        entry.0 <= self.max_attempts
+    }
+}
+
+// =============================================================================
+// Authentication
+// =============================================================================
+
+/// Authentication middleware requiring Bearer token for protected endpoints.
+///
+/// The API token is derived from the wallet passphrase:
+/// `BLAKE3_derive_key("pyana-api-bearer-v1", passphrase_hash)`.
+/// If no passphrase is set, all requests are allowed (initial setup phase).
+async fn require_auth(
+    State(state): State<NodeState>,
+    req: Request<axum::body::Body>,
+    next: middleware::Next,
+) -> Result<Response, StatusCode> {
+    let s = state.read().await;
+
+    // If no passphrase is set yet, allow all requests (initial setup).
+    let Some(passphrase_hash) = s.passphrase_hash else {
+        drop(s);
+        return Ok(next.run(req).await);
+    };
+
+    // Check for Bearer token in Authorization header.
+    let auth_header = req
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok());
+
+    match auth_header {
+        Some(header) if header.starts_with("Bearer ") => {
+            let token = &header[7..];
+            let expected_token_bytes =
+                blake3::derive_key("pyana-api-bearer-v1", &passphrase_hash);
+            let expected_token: String =
+                expected_token_bytes.iter().map(|b| format!("{b:02x}")).collect();
+            drop(s);
+
+            if token == expected_token {
+                Ok(next.run(req).await)
+            } else {
+                Err(StatusCode::UNAUTHORIZED)
+            }
+        }
+        _ => {
+            drop(s);
+            Err(StatusCode::UNAUTHORIZED)
+        }
+    }
+}
+
+// =============================================================================
+// CORS Middleware (P2 Fix 7)
+// =============================================================================
+
+/// Middleware that adds CORS headers to every response.
+async fn cors_middleware(
+    req: Request<axum::body::Body>,
+    next: middleware::Next,
+) -> Response {
+    let origin = req
+        .headers()
+        .get(header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    // Handle preflight OPTIONS
+    let is_preflight = req.method() == Method::OPTIONS;
+
+    let mut response = if is_preflight {
+        Response::builder()
+            .status(StatusCode::NO_CONTENT)
+            .body(axum::body::Body::empty())
+            .unwrap()
+    } else {
+        next.run(req).await
+    };
+
+    // Check if origin is allowed.
+    let allowed = is_origin_allowed(&origin);
+    if allowed {
+        let headers = response.headers_mut();
+        headers.insert(
+            header::ACCESS_CONTROL_ALLOW_ORIGIN,
+            HeaderValue::from_str(&origin).unwrap_or_else(|_| HeaderValue::from_static("*")),
+        );
+        headers.insert(
+            header::ACCESS_CONTROL_ALLOW_METHODS,
+            HeaderValue::from_static("GET, POST, PUT, DELETE, OPTIONS"),
+        );
+        headers.insert(
+            header::ACCESS_CONTROL_ALLOW_HEADERS,
+            HeaderValue::from_static("Content-Type, Authorization"),
+        );
+        headers.insert(
+            header::ACCESS_CONTROL_MAX_AGE,
+            HeaderValue::from_static("3600"),
+        );
+    }
+
+    response
+}
+
+/// Check whether an origin is allowed by our CORS policy.
+fn is_origin_allowed(origin: &str) -> bool {
+    // Allow localhost on any port.
+    if origin.starts_with("http://localhost:") || origin.starts_with("http://localhost") {
+        return true;
+    }
+    if origin.starts_with("http://127.0.0.1:") || origin.starts_with("http://127.0.0.1") {
+        return true;
+    }
+    // Allow browser extension origins.
+    if origin.starts_with("chrome-extension://") {
+        return true;
+    }
+    if origin.starts_with("moz-extension://") {
+        return true;
+    }
+    false
+}
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+/// Maximum number of intents in the node's local pool (P1 Fix 5: unbounded growth).
+pub const MAX_NODE_INTENT_POOL: usize = 10_000;
+
+/// Maximum number of pending conditional turns (P1 Fix 6).
+pub const MAX_PENDING_CONDITIONALS: usize = 1_000;
+
+/// Maximum request body size in bytes (P2 Fix 11: 1 MB).
+const MAX_BODY_SIZE: usize = 1_024 * 1_024;
+
+// =============================================================================
 // Router
 // =============================================================================
 
 /// Build the Axum router with all API routes.
+///
+/// Includes CORS, body size limits, rate limiting on passphrase endpoints,
+/// and Bearer token authentication on protected routes.
 pub fn router(state: NodeState) -> Router {
-    Router::new()
+    // Rate limiter for passphrase/unlock endpoints: 5 attempts per 60 seconds.
+    let passphrase_limiter = RateLimiter::new(5, 60);
+
+    // Public routes (no auth required)
+    let public_routes = Router::new()
         .route("/status", get(get_status))
+        .route("/federation/roots", get(get_federation_roots))
+        .route(
+            "/wallet/unlock",
+            post({
+                let limiter = passphrase_limiter.clone();
+                move |connect_info, state, body| {
+                    post_wallet_unlock(connect_info, state, body, limiter)
+                }
+            }),
+        )
+        .route(
+            "/wallet/set-passphrase",
+            post({
+                let limiter = passphrase_limiter.clone();
+                move |connect_info, state, body| {
+                    post_set_passphrase(connect_info, state, body, limiter)
+                }
+            }),
+        );
+
+    // Protected routes (require bearer token after passphrase is set)
+    let protected_routes = Router::new()
         .route("/ws", get(handle_ws))
         .route("/wallet", get(get_wallet))
-        .route("/wallet/unlock", post(post_wallet_unlock))
-        .route("/wallet/set-passphrase", post(post_set_passphrase))
         .route("/wallet/authorize", post(post_authorize))
         .route("/wallet/mint", post(post_mint))
         .route("/wallet/attenuate", post(post_attenuate))
@@ -218,7 +430,12 @@ pub fn router(state: NodeState) -> Router {
         .route("/turn/resolve-conditional", post(post_resolve_conditional))
         .route("/turn/pending", get(get_pending_conditionals))
         .route("/cell/{id}", get(get_cell))
-        .route("/federation/roots", get(get_federation_roots))
+        .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
+
+    public_routes
+        .merge(protected_routes)
+        .layer(DefaultBodyLimit::max(MAX_BODY_SIZE))
+        .layer(middleware::from_fn(cors_middleware))
         .with_state(state)
 }
 
@@ -226,14 +443,32 @@ pub fn router(state: NodeState) -> Router {
 // Handlers
 // =============================================================================
 
+/// P2 Fix 9: Status checks store accessibility and wallet initialization.
 async fn get_status(State(state): State<NodeState>) -> Json<StatusResponse> {
-    let sync = state.sync_status().await;
+    let s = state.read().await;
+
+    // Check store accessibility.
+    let store_ok = s.store.latest_attested_root().is_ok();
+    // Check wallet is initialized (has a passphrase set or is unlocked).
+    let wallet_ok = s.unlocked || s.passphrase_hash.is_some();
+
+    let latest_height = s
+        .store
+        .latest_attested_root()
+        .ok()
+        .flatten()
+        .map(|r| r.height)
+        .unwrap_or(0);
+    let revocation_count = s.store.revocation_count().unwrap_or(0);
+    let note_count = s.store.note_count().unwrap_or(0);
+    let peer_count = s.peers.len();
+
     Json(StatusResponse {
-        healthy: true,
-        peer_count: sync.peer_count,
-        latest_height: sync.latest_height,
-        revocation_count: sync.revocation_count,
-        note_count: sync.note_count,
+        healthy: store_ok && wallet_ok,
+        peer_count,
+        latest_height,
+        revocation_count,
+        note_count,
     })
 }
 
@@ -388,7 +623,7 @@ async fn post_submit_turn(
 
     // Sign the turn.
     let signed = s.wallet.sign_turn(&turn);
-    let turn_hash_bytes: [u8; 32] = signed.signature.0[..32].try_into().unwrap_or([0u8; 32]);
+    let turn_hash_bytes = turn.hash();
     let turn_hash = hex_encode(&turn_hash_bytes);
     let turn_data = signed.signature.0.to_vec();
 
@@ -419,8 +654,6 @@ async fn get_cell(
 ) -> Result<Json<CellResponse>, StatusCode> {
     let s = state.read().await;
 
-    // Try to find the cell in the ledger by parsing the ID.
-    // For now, return a simple not-found if not present.
     let cell_id_bytes: [u8; 32] = hex_decode(&id).map_err(|_| StatusCode::BAD_REQUEST)?;
     let cell_id = pyana_cell::CellId(cell_id_bytes);
 
@@ -429,14 +662,22 @@ async fn get_cell(
     Ok(Json(CellResponse {
         id,
         found,
-        balance: None, // Cell balance requires domain-specific lookup.
+        balance: None,
     }))
 }
 
+/// P1 Fix 4: Rate-limited passphrase unlock endpoint.
 async fn post_wallet_unlock(
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     State(state): State<NodeState>,
     Json(req): Json<UnlockRequest>,
+    limiter: RateLimiter,
 ) -> Result<Json<UnlockResponse>, StatusCode> {
+    // Rate limit check.
+    if !limiter.check(addr.ip()).await {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
+
     if req.passphrase.is_empty() {
         return Ok(Json(UnlockResponse {
             success: false,
@@ -445,11 +686,10 @@ async fn post_wallet_unlock(
     }
 
     let mut s = state.write().await;
-    let hash = *blake3::hash(req.passphrase.as_bytes()).as_bytes();
+    let hash = blake3::derive_key("pyana-wallet-passphrase-v1", req.passphrase.as_bytes());
 
     match s.passphrase_hash {
         Some(stored_hash) => {
-            // Verify against the stored passphrase hash.
             if hash != stored_hash {
                 return Ok(Json(UnlockResponse {
                     success: false,
@@ -463,7 +703,6 @@ async fn post_wallet_unlock(
             }))
         }
         None => {
-            // First unlock: set the passphrase hash.
             s.passphrase_hash = Some(hash);
             s.unlocked = true;
             Ok(Json(UnlockResponse {
@@ -474,10 +713,18 @@ async fn post_wallet_unlock(
     }
 }
 
+/// P1 Fix 4: Rate-limited set-passphrase endpoint.
 async fn post_set_passphrase(
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     State(state): State<NodeState>,
     Json(req): Json<SetPassphraseRequest>,
+    limiter: RateLimiter,
 ) -> Result<Json<SetPassphraseResponse>, StatusCode> {
+    // Rate limit check.
+    if !limiter.check(addr.ip()).await {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
+
     if req.passphrase.is_empty() {
         return Ok(Json(SetPassphraseResponse {
             success: false,
@@ -488,14 +735,13 @@ async fn post_set_passphrase(
     let mut s = state.write().await;
 
     if s.passphrase_hash.is_some() {
-        // Passphrase already set — cannot overwrite without the old one.
         return Ok(Json(SetPassphraseResponse {
             success: false,
             error: Some("passphrase already set; unlock first to change it".to_string()),
         }));
     }
 
-    let hash = *blake3::hash(req.passphrase.as_bytes()).as_bytes();
+    let hash = blake3::derive_key("pyana-wallet-passphrase-v1", req.passphrase.as_bytes());
     s.passphrase_hash = Some(hash);
 
     Ok(Json(SetPassphraseResponse {
@@ -506,36 +752,53 @@ async fn post_set_passphrase(
 
 async fn post_intent(
     State(state): State<NodeState>,
-    Json(intent): Json<serde_json::Value>,
+    Json(raw): Json<serde_json::Value>,
 ) -> Result<Json<IntentSubmitResponse>, StatusCode> {
-    // Extract or generate an intent ID.
-    let intent_id = intent
-        .get("id")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    // P0 Fix 3: Deserialize into a proper Intent struct for validation.
+    let intent: pyana_intent::Intent =
+        serde_json::from_value(raw.clone()).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    // Store in the intent pool.
+    // Validate the intent using pyana-intent's validation logic.
+    pyana_intent::validation::validate_intent(&intent).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    // Verify the content-addressed ID is correct (prevents ID spoofing).
+    let recomputed = pyana_intent::Intent::new(
+        intent.kind,
+        intent.matcher.clone(),
+        intent.creator,
+        intent.expiry,
+        intent.stake_proof.clone(),
+    );
+    if recomputed.id != intent.id {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let intent_id_hex = hex_encode(&intent.id);
+
+    // P1 Fix 5: enforce size limit.
     {
         let mut s = state.write().await;
-        s.intent_pool.insert(intent_id.clone(), intent.clone());
+        if s.intent_pool.len() >= MAX_NODE_INTENT_POOL {
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
+        s.intent_pool.insert(intent.id, intent.clone());
     }
 
     // Broadcast to WS subscribers.
     state.emit(NodeEvent::Intent {
-        intent: intent.clone(),
+        intent: serde_json::to_value(&intent).unwrap_or_default(),
     });
 
     // Gossip the intent to federation peers.
     if let Some(gossip) = state.gossip().await {
-        let intent_clone = intent.clone();
+        let intent_json = raw;
         tokio::spawn(async move {
-            gossip.gossip_intent(&intent_clone).await;
+            gossip.gossip_intent(&intent_json).await;
         });
     }
 
     Ok(Json(IntentSubmitResponse {
-        intent_id,
+        intent_id: intent_id_hex,
         stored: true,
     }))
 }
@@ -546,7 +809,7 @@ async fn get_intents(State(state): State<NodeState>) -> Json<Vec<IntentListEntry
         .intent_pool
         .iter()
         .map(|(id, intent)| IntentListEntry {
-            id: id.clone(),
+            id: hex_encode(id),
             intent: intent.clone(),
         })
         .collect();
@@ -589,7 +852,6 @@ async fn post_submit_conditional(
         .unwrap_or(0);
     drop(s);
 
-    // Deserialize the condition and turn from JSON.
     let condition: pyana_turn::ProofCondition =
         serde_json::from_value(req.condition).map_err(|_| StatusCode::BAD_REQUEST)?;
     let turn: pyana_turn::Turn =
@@ -602,7 +864,6 @@ async fn post_submit_conditional(
         submitted_at: current_height,
     };
 
-    // Validate: fee > 0 and deadline not too far in the future.
     if let Err(_e) = pyana_turn::validate_conditional_submission(&conditional, current_height) {
         return Ok(Json(SubmitConditionalResponse {
             accepted: false,
@@ -613,9 +874,24 @@ async fn post_submit_conditional(
     let hash = conditional.hash();
     let hash_hex = hex_encode(&hash);
 
-    // Store in pending pool.
+    // P1 Fix 6: enforce max size with proactive GC.
     {
         let mut s = state.write().await;
+
+        // Proactive GC: remove expired conditionals before checking capacity.
+        let gc_height = s
+            .store
+            .latest_attested_root()
+            .ok()
+            .flatten()
+            .map(|r| r.height)
+            .unwrap_or(0);
+        s.pending_conditionals
+            .retain(|ct| !ct.is_expired(gc_height));
+
+        if s.pending_conditionals.len() >= MAX_PENDING_CONDITIONALS {
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
         s.pending_conditionals.push(conditional);
     }
 
@@ -643,7 +919,6 @@ async fn post_resolve_conditional(
         .map(|r| r.height)
         .unwrap_or(0);
 
-    // Find the conditional turn by hash.
     let idx = s
         .pending_conditionals
         .iter()
@@ -660,8 +935,6 @@ async fn post_resolve_conditional(
         }
     };
 
-    // Resolve: check the condition against the proof.
-    // Clone fields needed for resolution to avoid borrow conflict with used_proof_hashes.
     let condition = s.pending_conditionals[idx].condition.clone();
     let timeout_height = s.pending_conditionals[idx].timeout_height;
     let trusted_roots: Vec<pyana_turn::TrustedRoot> = s
@@ -686,14 +959,12 @@ async fn post_resolve_conditional(
         pyana_turn::ConditionalResult::Resolved => {
             let conditional = s.pending_conditionals.remove(idx);
 
-            // Actually execute the turn against the ledger.
             let executor = pyana_turn::TurnExecutor::new(pyana_turn::ComputronCosts::default());
             let exec_result = executor.execute(&conditional.turn, &mut s.ledger);
 
             match exec_result {
                 pyana_turn::TurnResult::Committed { receipt, .. } => {
                     let turn_hash = hex_encode(&receipt.turn_hash);
-                    // Emit receipt event to WebSocket subscribers.
                     drop(s);
                     state.emit(NodeEvent::Receipt {
                         hash: turn_hash.clone(),
@@ -711,20 +982,16 @@ async fn post_resolve_conditional(
                         reason: Some(format!("turn rejected: {reason}")),
                     }))
                 }
-                pyana_turn::TurnResult::Expired => {
-                    Ok(Json(ResolveConditionalResponse {
-                        resolved: false,
-                        turn_hash: None,
-                        reason: Some("turn expired during execution".to_string()),
-                    }))
-                }
-                pyana_turn::TurnResult::Pending => {
-                    Ok(Json(ResolveConditionalResponse {
-                        resolved: false,
-                        turn_hash: None,
-                        reason: Some("turn pending during execution".to_string()),
-                    }))
-                }
+                pyana_turn::TurnResult::Expired => Ok(Json(ResolveConditionalResponse {
+                    resolved: false,
+                    turn_hash: None,
+                    reason: Some("turn expired during execution".to_string()),
+                })),
+                pyana_turn::TurnResult::Pending => Ok(Json(ResolveConditionalResponse {
+                    resolved: false,
+                    turn_hash: None,
+                    reason: Some("turn pending during execution".to_string()),
+                })),
             }
         }
         pyana_turn::ConditionalResult::Expired => {

@@ -17,17 +17,20 @@
 //! - Per-creator rate limiting prevents spam floods
 //! - Commit-reveal protocol prevents fulfillment frontrunning
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use pyana_circuit::field::BabyBear;
 
 use crate::fulfillment::Fulfillment;
-use crate::matcher::{HeldCapability, MatchResult, match_intent};
+use crate::matcher::{match_intent, HeldCapability, MatchResult};
 use crate::validation::{self, ValidationError};
 use crate::{CommitmentId, Intent, IntentKind, Match, MatchSpec, StakeProof};
 
 /// Maximum intents allowed per creator per minute.
 pub const MAX_INTENTS_PER_CREATOR_PER_MINUTE: usize = 10;
+
+/// Global maximum intents allowed per time window (prevents Sybil floods).
+pub const MAX_GLOBAL_INTENTS_PER_WINDOW: usize = 500;
 
 /// Rate limiting window duration in seconds.
 pub const RATE_LIMIT_WINDOW_SECS: u64 = 60;
@@ -54,14 +57,18 @@ pub enum ReceiveError {
     MissingStake,
     /// The stake proof failed Merkle verification against the known note tree root.
     InvalidStakeProof,
-    /// The stake's claimed minimum value is below the pool's required minimum.
-    InsufficientStakeValue { claimed: u64, minimum: u64 },
+    /// The stake commitment has already been used by another intent (nullifier).
+    StakeAlreadyUsed,
     /// The creator has exceeded the rate limit.
     RateLimited {
         creator: CommitmentId,
         count: usize,
         max: usize,
     },
+    /// The global rate limit has been exceeded (Sybil flood protection).
+    GlobalRateLimited { count: usize, max: usize },
+    /// The intent has already been fulfilled.
+    AlreadyFulfilled,
 }
 
 impl std::fmt::Display for ReceiveError {
@@ -78,11 +85,8 @@ impl std::fmt::Display for ReceiveError {
                     "stake proof failed Merkle verification against known root"
                 )
             }
-            Self::InsufficientStakeValue { claimed, minimum } => {
-                write!(
-                    f,
-                    "stake value {claimed} is below required minimum {minimum}"
-                )
+            Self::StakeAlreadyUsed => {
+                write!(f, "stake commitment has already been used (nullifier)")
             }
             Self::RateLimited {
                 creator,
@@ -95,6 +99,13 @@ impl std::fmt::Display for ReceiveError {
                     &creator.0[..4]
                 )
             }
+            Self::GlobalRateLimited { count, max } => {
+                write!(
+                    f,
+                    "global rate limit exceeded: {count} intents exceeds max {max}"
+                )
+            }
+            Self::AlreadyFulfilled => write!(f, "intent has already been fulfilled"),
         }
     }
 }
@@ -142,9 +153,12 @@ pub struct IntentPoolConfig {
     pub gc_interval_secs: u64,
     /// Whether to automatically match incoming intents against held tokens.
     pub auto_match: bool,
-    /// Minimum claimed stake value required for gossip propagation.
-    /// Intents with `stake_proof.minimum_value < minimum_stake_value` are rejected.
-    /// Set to 0 to disable the value check (only Merkle membership is verified).
+    /// Claimed minimum stake value (informational only).
+    ///
+    /// NOTE: This value CANNOT be trusted for access control because the staker
+    /// can claim any value without opening the commitment. The Merkle proof only
+    /// proves the note EXISTS in the tree, not its value. This field is retained
+    /// for informational/display purposes only.
     pub minimum_stake_value: u64,
 }
 
@@ -173,13 +187,22 @@ pub enum AutoFulfillPolicy {
 /// Callback type for match notifications.
 pub type MatchCallback = Box<dyn Fn(&Intent, &Match) + Send + Sync>;
 
+/// Stored intent with arrival metadata.
+#[derive(Clone, Debug)]
+struct StoredIntent {
+    /// The intent itself.
+    intent: Intent,
+    /// When this intent arrived in the pool (Unix seconds).
+    arrived_at: u64,
+}
+
 /// The local pool of known intents (like a mempool for capabilities).
 ///
 /// Stores active intents, performs garbage collection on expired ones,
 /// and triggers local matching when new intents arrive.
 pub struct IntentPool {
     /// Active intents indexed by their content-addressed ID.
-    intents: HashMap<[u8; 32], Intent>,
+    intents: HashMap<[u8; 32], StoredIntent>,
     /// Our wallet's held capabilities (for matching).
     held_tokens: Vec<HeldCapability>,
     /// Our anonymous commitment identity.
@@ -194,11 +217,18 @@ pub struct IntentPool {
     our_intent_ids: Vec<[u8; 32]>,
     /// Rate limiting: tracks (window_start, count) per creator.
     recent_by_creator: HashMap<CommitmentId, (u64, usize)>,
+    /// Global rate limiting: (window_start, count).
+    global_rate: (u64, usize),
     /// Pending fulfillment commitments (commit-reveal anti-frontrunning).
     pending_commitments: HashMap<[u8; 32], FulfillmentCommitment>,
     /// The latest attested Poseidon2 note tree root from the federation.
     /// Stake proofs are verified against this root.
     known_note_root: BabyBear,
+    /// Nullifier set: stake commitments that have already been used.
+    /// Prevents reuse of the same stake for multiple intents.
+    used_stake_commitments: HashSet<[u8; 32]>,
+    /// Set of intent IDs that have been fulfilled (replay protection).
+    fulfilled_intents: HashSet<[u8; 32]>,
 }
 
 impl IntentPool {
@@ -221,8 +251,11 @@ impl IntentPool {
             pending_matches: Vec::new(),
             our_intent_ids: Vec::new(),
             recent_by_creator: HashMap::new(),
+            global_rate: (0, 0),
             pending_commitments: HashMap::new(),
             known_note_root,
+            used_stake_commitments: HashSet::new(),
+            fulfilled_intents: HashSet::new(),
         }
     }
 
@@ -243,7 +276,8 @@ impl IntentPool {
 
     /// Broadcast a new intent from this wallet.
     ///
-    /// Returns the intent (with computed ID) ready for gossip propagation.
+    /// Returns the intent (with computed ID) ready for gossip propagation, or an error
+    /// if the intent fails validation.
     /// `stake_proof`: a valid stake proof for gossip propagation (or None for local-only).
     pub fn broadcast_intent(
         &mut self,
@@ -251,11 +285,21 @@ impl IntentPool {
         matcher: MatchSpec,
         expiry: u64,
         stake_proof: Option<StakeProof>,
-    ) -> Intent {
+    ) -> Result<Intent, ReceiveError> {
         let intent = Intent::new(kind, matcher, self.our_commitment, expiry, stake_proof);
+
+        // Validate self-submitted intents too (issue #11)
+        validation::validate_intent(&intent).map_err(ReceiveError::Invalid)?;
+
         self.our_intent_ids.push(intent.id);
-        self.intents.insert(intent.id, intent.clone());
-        intent
+        self.intents.insert(
+            intent.id,
+            StoredIntent {
+                intent: intent.clone(),
+                arrived_at: 0, // own intents arrive at time 0 (not evictable by arrival)
+            },
+        );
+        Ok(intent)
     }
 
     /// Receive an intent from the gossip network.
@@ -391,19 +435,22 @@ impl IntentPool {
         self.intents.retain(|_, intent| !intent.is_expired(now));
 
         // Clean our_intent_ids: remove IDs no longer in the pool
-        self.our_intent_ids.retain(|id| self.intents.contains_key(id));
+        self.our_intent_ids
+            .retain(|id| self.intents.contains_key(id));
 
         // Clean pending_matches: remove matches whose intent has been GC'd
         self.pending_matches
             .retain(|(intent, _)| self.intents.contains_key(&intent.id));
 
         // Clean recent_by_creator: remove entries whose window has expired
-        self.recent_by_creator
-            .retain(|_, (window_start, _)| now.saturating_sub(*window_start) < RATE_LIMIT_WINDOW_SECS);
+        self.recent_by_creator.retain(|_, (window_start, _)| {
+            now.saturating_sub(*window_start) < RATE_LIMIT_WINDOW_SECS
+        });
 
         // Clean pending_commitments: remove commitments older than max age
-        self.pending_commitments
-            .retain(|_, commitment| now.saturating_sub(commitment.timestamp) < MAX_COMMITMENT_AGE_SECS);
+        self.pending_commitments.retain(|_, commitment| {
+            now.saturating_sub(commitment.timestamp) < MAX_COMMITMENT_AGE_SECS
+        });
     }
 
     /// Get all active (non-expired) intents in the pool.
@@ -489,12 +536,15 @@ impl IntentPool {
     /// Creates a blinded commitment that hides which fulfillment will be revealed.
     /// The commitment is stored locally and should be broadcast to the network.
     /// First valid commitment wins priority.
+    ///
+    /// Returns `(nonce, commitment)`. The caller MUST retain the nonce to later
+    /// construct a valid [`FulfillmentReveal`].
     pub fn commit_to_fulfill(
         &mut self,
         intent_id: [u8; 32],
         fulfillment: &Fulfillment,
         now: u64,
-    ) -> FulfillmentCommitment {
+    ) -> ([u8; 32], FulfillmentCommitment) {
         // Generate random nonce
         let mut nonce = [0u8; 32];
         crate::getrandom(&mut nonce);
@@ -521,7 +571,7 @@ impl IntentPool {
         self.pending_commitments
             .insert(commitment_key, commitment.clone());
 
-        commitment
+        (nonce, commitment)
     }
 
     /// Phase 2: Reveal a previously committed fulfillment.
@@ -692,7 +742,7 @@ mod tests {
     use super::*;
     use crate::matcher::Sensitivity;
     use crate::{ActionPattern, CommitmentId, IntentKind, MatchSpec, StakeProof};
-    use pyana_commit::{Poseidon2MerkleTree, commitment_to_field};
+    use pyana_commit::{commitment_to_field, Poseidon2MerkleTree};
 
     /// Build a test Poseidon2 tree and return the root along with a valid stake proof
     /// for note commitment [0xDE; 32].
@@ -983,7 +1033,7 @@ mod tests {
                 constraints: vec![],
                 min_budget: None,
                 resource_pattern: None,
-            compound: None,
+                compound: None,
             };
             let intent = Intent::new(
                 IntentKind::Need,
@@ -1181,7 +1231,7 @@ mod tests {
                 constraints: vec![],
                 min_budget: None,
                 resource_pattern: None,
-            compound: None,
+                compound: None,
             };
             let intent = Intent::new(IntentKind::Need, spec, creator, 9999, valid_stake());
             let result = pool.receive_intent_checked(intent, 100, true);
@@ -1219,7 +1269,7 @@ mod tests {
                 constraints: vec![],
                 min_budget: None,
                 resource_pattern: None,
-            compound: None,
+                compound: None,
             };
             let intent = Intent::new(IntentKind::Need, spec, creator, 9999, valid_stake());
             pool.receive_intent_checked(intent, 100, true).unwrap();
@@ -1286,7 +1336,7 @@ mod tests {
         };
 
         // Phase 1: Commit
-        let commitment = pool.commit_to_fulfill([0x01; 32], &fulfillment, 100);
+        let (_nonce, commitment) = pool.commit_to_fulfill([0x01; 32], &fulfillment, 100);
         assert!(pool.has_commitment_for(&[0x01; 32]));
         assert_eq!(pool.pending_commitment_count(), 1);
 

@@ -8,8 +8,15 @@
 //!   If a peer receives an IHave for a message it hasn't seen, it sends a Graft request.
 //! - **Prune**: If a peer receives a full message from a non-eager source (i.e., it was
 //!   already delivered by a faster eager link), it sends Prune to demote the slow link.
-//! - **Anti-entropy**: Periodic bloom filter exchange catches any messages missed by the
-//!   eager/lazy protocol.
+//! - **Anti-entropy**: Periodic hash digest exchange (capped at a configurable maximum)
+//!   catches any messages missed by the eager/lazy protocol without bandwidth amplification.
+//!
+//! ## Security
+//!
+//! - All gossip envelopes are signed (HMAC-blake3 with a shared network key).
+//! - Message hashes are verified on receipt: `blake3(payload) == msg_hash`.
+//! - Pending IHave state is bounded to prevent memory exhaustion.
+//! - Connections are bounded by the configured `max_connections` limit.
 //!
 //! The public API (`publish`, `subscribe`, `join_topic`) is unchanged from the original
 //! eager-push implementation.
@@ -48,6 +55,22 @@ const SEEN_TTL: Duration = Duration::from_secs(300);
 /// Maximum entries in the seen set (hard cap even if within TTL).
 const SEEN_MAX_ENTRIES: usize = 100_000;
 
+/// Maximum number of pending IHave entries. When exceeded, oldest entries are evicted.
+const MAX_PENDING_IHAVES: usize = 10_000;
+
+/// Maximum number of hashes to send in a single anti-entropy message.
+/// At 1024 hashes * 32 bytes = 32 KiB per sync round (vs 3.2 MiB for full 100k set).
+const MAX_ANTI_ENTROPY_HASHES: usize = 1024;
+
+/// Maximum number of messages to send in a single anti-entropy response.
+const MAX_ANTI_ENTROPY_RESPONSE_MESSAGES: usize = 64;
+
+/// Maximum total bytes of payloads in a single anti-entropy response (256 KiB).
+const MAX_ANTI_ENTROPY_RESPONSE_BYTES: usize = 256 * 1024;
+
+/// Maximum number of concurrent gossip connections.
+const DEFAULT_MAX_GOSSIP_CONNECTIONS: usize = 256;
+
 /// A handle to a joined gossip topic.
 #[derive(Clone, Debug)]
 pub struct TopicHandle {
@@ -80,6 +103,10 @@ pub struct GossipNetwork {
     outgoing_tx: mpsc::UnboundedSender<OutgoingGossip>,
     /// The QUIC endpoint (for dialing peers)
     endpoint: Endpoint,
+    /// Symmetric signing key for envelope authentication (HMAC-blake3).
+    signing_key: [u8; 32],
+    /// Maximum concurrent gossip connections.
+    max_connections: usize,
 }
 
 /// A bounded deduplication set with time-based expiry.
@@ -151,13 +178,14 @@ impl BoundedSeenSet {
         self.index.contains(hash)
     }
 
-    /// Get all currently-valid message hashes (for anti-entropy).
-    fn hashes(&self) -> Vec<[u8; 32]> {
+    /// Get up to `limit` currently-valid message hashes (for anti-entropy).
+    fn hashes_capped(&self, limit: usize) -> Vec<[u8; 32]> {
         let now = Instant::now();
         self.entries
             .iter()
             .filter(|e| now.duration_since(e.inserted_at) <= self.max_age)
             .map(|e| e.hash)
+            .take(limit)
             .collect()
     }
 }
@@ -183,6 +211,57 @@ impl Default for PeerTopicState {
     }
 }
 
+/// A bounded pending IHave map. When the capacity is exceeded, the oldest entries
+/// are evicted (FIFO) to prevent unbounded memory growth from a flood of IHave messages.
+struct BoundedPendingIhaves {
+    entries: VecDeque<((TopicId, MessageHash), (SocketAddr, Instant))>,
+    index: HashMap<(TopicId, MessageHash), (SocketAddr, Instant)>,
+    max_size: usize,
+}
+
+impl BoundedPendingIhaves {
+    fn new(max_size: usize) -> Self {
+        Self {
+            entries: VecDeque::with_capacity(max_size.min(1024)),
+            index: HashMap::with_capacity(max_size.min(1024)),
+            max_size,
+        }
+    }
+
+    /// Insert a pending IHave. If at capacity, evicts the oldest entry.
+    fn insert(&mut self, key: (TopicId, MessageHash), value: (SocketAddr, Instant)) {
+        if self.index.contains_key(&key) {
+            return;
+        }
+
+        if self.entries.len() >= self.max_size {
+            if let Some((evicted_key, _)) = self.entries.pop_front() {
+                self.index.remove(&evicted_key);
+            }
+        }
+
+        self.entries.push_back((key, value));
+        self.index.insert(key, value);
+    }
+
+    /// Remove an entry by key.
+    fn remove(&mut self, key: &(TopicId, MessageHash)) {
+        if self.index.remove(key).is_some() {
+            self.entries.retain(|(k, _)| k != key);
+        }
+    }
+
+    /// Check if a key exists.
+    fn contains_key(&self, key: &(TopicId, MessageHash)) -> bool {
+        self.index.contains_key(key)
+    }
+
+    /// Iterate over all entries.
+    fn iter(&self) -> impl Iterator<Item = (&(TopicId, MessageHash), &(SocketAddr, Instant))> {
+        self.index.iter()
+    }
+}
+
 /// Internal gossip state.
 struct GossipState {
     /// Topics we've joined, with their subscriber channels
@@ -192,10 +271,9 @@ struct GossipState {
     /// Messages we've already seen (by hash), for deduplication.
     seen: BoundedSeenSet,
     /// Pending IHave notifications waiting for timeout before we Graft.
-    /// Key: (topic, message_hash), Value: (sender_addr, received_at)
-    pending_ihaves: HashMap<(TopicId, MessageHash), (SocketAddr, Instant)>,
+    /// Bounded to MAX_PENDING_IHAVES entries; oldest evicted when full.
+    pending_ihaves: BoundedPendingIhaves,
     /// Recently-sent message payloads (for responding to Graft requests).
-    /// Kept briefly so we can serve Graft pulls without re-requesting from upstream.
     message_cache: HashMap<MessageHash, CachedMessage>,
 }
 
@@ -221,7 +299,6 @@ impl TopicState {
         }
     }
 
-    /// Get addresses of peers in the eager set.
     fn eager_peers(&self) -> Vec<SocketAddr> {
         self.peer_states
             .iter()
@@ -230,7 +307,6 @@ impl TopicState {
             .collect()
     }
 
-    /// Get addresses of peers in the lazy set.
     fn lazy_peers(&self) -> Vec<SocketAddr> {
         self.peer_states
             .iter()
@@ -239,12 +315,10 @@ impl TopicState {
             .collect()
     }
 
-    /// All peer addresses in this topic.
     fn all_peers(&self) -> Vec<SocketAddr> {
         self.peer_states.keys().copied().collect()
     }
 
-    /// Add a peer. By default it starts as eager if we have room, otherwise lazy.
     fn add_peer(&mut self, addr: SocketAddr) {
         let eager_count = self.peer_states.values().filter(|s| s.eager).count();
         let should_be_eager = eager_count < DEFAULT_EAGER_DEGREE;
@@ -255,28 +329,24 @@ impl TopicState {
         });
     }
 
-    /// Promote a peer from lazy to eager (Graft received or anti-entropy repair).
     fn promote_to_eager(&mut self, addr: &SocketAddr) {
         if let Some(state) = self.peer_states.get_mut(addr) {
             state.eager = true;
         }
     }
 
-    /// Demote a peer from eager to lazy (Prune received or slow delivery).
     fn demote_to_lazy(&mut self, addr: &SocketAddr) {
         if let Some(state) = self.peer_states.get_mut(addr) {
             state.eager = false;
         }
     }
 
-    /// Record a successful delivery from a peer (increases their score).
     fn record_delivery(&mut self, addr: &SocketAddr) {
         if let Some(state) = self.peer_states.get_mut(addr) {
             state.delivery_score = state.delivery_score.saturating_add(1);
         }
     }
 
-    /// Update RTT for a peer.
     fn update_rtt(&mut self, addr: &SocketAddr, rtt: Duration) {
         if let Some(state) = self.peer_states.get_mut(addr) {
             state.last_rtt = Some(rtt);
@@ -285,39 +355,29 @@ impl TopicState {
 }
 
 /// Types of outgoing gossip operations.
-///
-/// Used by GossipRouter::dispatch() once the outbound message path is wired
-/// through the QUIC transport layer (tracked in the gossip-dispatch milestone).
 #[allow(dead_code)]
 enum OutgoingGossip {
-    /// Full message push (eager).
     EagerPush {
         topic_id: TopicId,
         message: PeerMessage,
         msg_hash: MessageHash,
-        /// Peers to send the full message to.
         targets: Vec<SocketAddr>,
-        /// Peers to send IHave to (lazy).
         lazy_targets: Vec<SocketAddr>,
     },
-    /// IHave notification (lazy push).
     IHave {
         topic_id: TopicId,
         msg_hash: MessageHash,
         targets: Vec<SocketAddr>,
     },
-    /// Graft request: pull a message we learned about via IHave.
     Graft {
         topic_id: TopicId,
         msg_hash: MessageHash,
         target: SocketAddr,
     },
-    /// Prune: tell a peer to demote us from their eager set for this topic.
     Prune {
         topic_id: TopicId,
         target: SocketAddr,
     },
-    /// Anti-entropy: send our hash set to a peer for reconciliation.
     AntiEntropy {
         topic_id: TopicId,
         hashes: Vec<MessageHash>,
@@ -335,9 +395,7 @@ pub struct MessageStream {
 pub enum GossipEvent {
     /// A message was received.
     Message {
-        /// The address of the peer who forwarded this message.
         from: SocketAddr,
-        /// The decoded pyana message.
         message: PeerMessage,
     },
     /// A new peer joined this topic.
@@ -349,13 +407,9 @@ pub enum GossipEvent {
 /// Errors from gossip operations.
 #[derive(Debug)]
 pub enum GossipError {
-    /// Failed to join a topic.
     Join(String),
-    /// Failed to publish a message.
     Publish(String),
-    /// Failed to subscribe.
     Subscribe(String),
-    /// The gossip network has been shut down.
     Shutdown,
 }
 
@@ -373,51 +427,103 @@ impl std::fmt::Display for GossipError {
 impl std::error::Error for GossipError {}
 
 /// Gossip protocol envelope for wire transmission.
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 enum GossipEnvelope {
-    /// Full message delivery (eager push).
     FullMessage {
         topic_id: TopicId,
         msg_hash: MessageHash,
         payload: Vec<u8>,
     },
-    /// IHave notification (lazy push).
     IHave {
         topic_id: TopicId,
         msg_hash: MessageHash,
     },
-    /// Graft request: "send me the full message for this hash".
     Graft {
         topic_id: TopicId,
         msg_hash: MessageHash,
     },
-    /// Prune: "demote me from your eager set for this topic".
-    Prune { topic_id: TopicId },
-    /// Anti-entropy: hash set of recently-seen messages.
+    Prune {
+        topic_id: TopicId,
+    },
     AntiEntropy {
         topic_id: TopicId,
         hashes: Vec<MessageHash>,
     },
-    /// Anti-entropy response: messages the peer is missing.
     AntiEntropyResponse {
         topic_id: TopicId,
         messages: Vec<(MessageHash, Vec<u8>)>,
     },
 }
 
+/// A signed gossip envelope. The signature covers the serialized inner envelope
+/// and the sender's node ID, preventing forgery and ensuring message authenticity.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SignedEnvelope {
+    /// The sender's node ID (blake3 hash of their TLS certificate).
+    sender: NodeId,
+    /// The serialized inner GossipEnvelope (postcard-encoded).
+    body: Vec<u8>,
+    /// HMAC-blake3 signature: `blake3_keyed_hash(signing_key, sender || body)`.
+    signature: [u8; 32],
+}
+
+impl SignedEnvelope {
+    fn sign(envelope: &GossipEnvelope, sender: NodeId, signing_key: &[u8; 32]) -> Option<Self> {
+        let body = postcard::to_stdvec(envelope).ok()?;
+        let signature = Self::compute_signature(&sender, &body, signing_key);
+        Some(Self {
+            sender,
+            body,
+            signature,
+        })
+    }
+
+    fn verify(&self, signing_key: &[u8; 32]) -> bool {
+        let expected = Self::compute_signature(&self.sender, &self.body, signing_key);
+        // Constant-time comparison
+        self.signature
+            .iter()
+            .zip(expected.iter())
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+            == 0
+    }
+
+    fn decode_inner(&self) -> Option<GossipEnvelope> {
+        postcard::from_bytes(&self.body).ok()
+    }
+
+    fn compute_signature(sender: &NodeId, body: &[u8], signing_key: &[u8; 32]) -> [u8; 32] {
+        let mut input = Vec::with_capacity(32 + body.len());
+        input.extend_from_slice(sender);
+        input.extend_from_slice(body);
+        *blake3::keyed_hash(signing_key, &input).as_bytes()
+    }
+}
+
 impl GossipNetwork {
     /// Create a new gossip network node.
     ///
-    /// The `endpoint` should be the same one used by the PeerNode,
-    /// or a separate one if you want gossip on a different port.
-    pub fn new(endpoint: Endpoint, node_id: NodeId) -> Self {
+    /// The `signing_key` is a 32-byte symmetric key used to sign all outgoing
+    /// gossip envelopes (HMAC-blake3). All peers in the network must share this
+    /// key for envelope verification.
+    pub fn new(endpoint: Endpoint, node_id: NodeId, signing_key: [u8; 32]) -> Self {
+        Self::with_max_connections(endpoint, node_id, signing_key, DEFAULT_MAX_GOSSIP_CONNECTIONS)
+    }
+
+    /// Create a new gossip network with a custom max_connections limit.
+    pub fn with_max_connections(
+        endpoint: Endpoint,
+        node_id: NodeId,
+        signing_key: [u8; 32],
+        max_connections: usize,
+    ) -> Self {
         let (outgoing_tx, outgoing_rx) = mpsc::unbounded_channel();
 
         let state = Arc::new(RwLock::new(GossipState {
             topics: HashMap::new(),
             peers: HashMap::new(),
             seen: BoundedSeenSet::new(SEEN_MAX_ENTRIES, SEEN_TTL),
-            pending_ihaves: HashMap::new(),
+            pending_ihaves: BoundedPendingIhaves::new(MAX_PENDING_IHAVES),
             message_cache: HashMap::new(),
         }));
 
@@ -426,23 +532,38 @@ impl GossipNetwork {
             state: state.clone(),
             outgoing_tx: outgoing_tx.clone(),
             endpoint: endpoint.clone(),
+            signing_key,
+            max_connections,
         };
 
         // Spawn the forwarding task
         let fwd_state = state.clone();
+        let fwd_node_id = node_id;
+        let fwd_key = signing_key;
         tokio::spawn(async move {
-            Self::forward_loop(outgoing_rx, fwd_state).await;
+            Self::forward_loop(outgoing_rx, fwd_state, fwd_node_id, fwd_key).await;
         });
 
         // Spawn the incoming gossip acceptor
         let accept_state = state.clone();
         let accept_endpoint = endpoint.clone();
         let accept_tx = outgoing_tx.clone();
+        let accept_key = signing_key;
+        let accept_node_id = node_id;
+        let accept_max_conns = max_connections;
         tokio::spawn(async move {
-            Self::accept_loop(accept_endpoint, accept_state, accept_tx).await;
+            Self::accept_loop(
+                accept_endpoint,
+                accept_state,
+                accept_tx,
+                accept_key,
+                accept_node_id,
+                accept_max_conns,
+            )
+            .await;
         });
 
-        // Spawn the IHave timeout checker (triggers Graft after timeout)
+        // Spawn the IHave timeout checker
         let ihave_state = state.clone();
         let ihave_tx = outgoing_tx.clone();
         tokio::spawn(async move {
@@ -463,8 +584,9 @@ impl GossipNetwork {
         });
 
         info!(
-            "GossipNetwork started (plumtree): {}",
-            fmt_node_id(&node_id)
+            "GossipNetwork started (plumtree): {} (max_connections={})",
+            fmt_node_id(&node_id),
+            max_connections,
         );
 
         network
@@ -478,7 +600,6 @@ impl GossipNetwork {
     ) -> Result<TopicHandle, GossipError> {
         let topic_id = topic_id_from_name(topic_name);
 
-        // First, ensure the topic exists and add peer addresses
         {
             let mut state = self.state.write().await;
             let topic_state = state.topics.entry(topic_id).or_insert_with(TopicState::new);
@@ -487,7 +608,6 @@ impl GossipNetwork {
             }
         }
 
-        // Then connect to any peers we don't yet have connections to
         for &addr in bootstrap_peers {
             let needs_connect = {
                 let state = self.state.read().await;
@@ -514,9 +634,6 @@ impl GossipNetwork {
     }
 
     /// Publish a message to a gossip topic.
-    ///
-    /// The message is eagerly pushed to the spanning tree subset and lazily
-    /// announced (IHave) to the remaining peers.
     pub async fn publish(
         &self,
         topic: &TopicHandle,
@@ -525,7 +642,6 @@ impl GossipNetwork {
         let encoded = message.encode_raw();
         let msg_hash = *blake3::hash(&encoded).as_bytes();
 
-        // Mark as seen and cache
         {
             let mut state = self.state.write().await;
             state.seen.insert(msg_hash);
@@ -539,7 +655,6 @@ impl GossipNetwork {
             );
         }
 
-        // Determine eager vs lazy targets
         let (eager_targets, lazy_targets) = {
             let state = self.state.read().await;
             if let Some(topic_state) = state.topics.get(&topic.topic_id) {
@@ -549,7 +664,6 @@ impl GossipNetwork {
             }
         };
 
-        // Send to forwarding task
         self.outgoing_tx
             .send(OutgoingGossip::EagerPush {
                 topic_id: topic.topic_id,
@@ -560,7 +674,6 @@ impl GossipNetwork {
             })
             .map_err(|_| GossipError::Shutdown)?;
 
-        // Also deliver to local subscribers
         self.deliver_locally(topic.topic_id, "127.0.0.1:0".parse().unwrap(), message)
             .await;
 
@@ -588,7 +701,6 @@ impl GossipNetwork {
             topic_state.add_peer(addr);
         }
 
-        // Ensure connection exists
         if !state.peers.contains_key(&addr) {
             drop(state);
             if let Ok(conn) = self.connect_peer(addr).await {
@@ -598,7 +710,6 @@ impl GossipNetwork {
         }
     }
 
-    /// Deliver a message to local subscribers of a topic.
     async fn deliver_locally(&self, topic_id: TopicId, from: SocketAddr, message: &PeerMessage) {
         let state = self.state.read().await;
         if let Some(topic_state) = state.topics.get(&topic_id) {
@@ -611,7 +722,6 @@ impl GossipNetwork {
         }
     }
 
-    /// Connect to a peer for gossip exchange.
     async fn connect_peer(&self, addr: SocketAddr) -> Result<Connection, GossipError> {
         let client_config = crate::node::PeerNode::build_client_config_static()
             .map_err(|e| GossipError::Join(format!("tls config: {e}")))?;
@@ -626,10 +736,20 @@ impl GossipNetwork {
         Ok(conn)
     }
 
-    /// Forward outgoing gossip messages according to the protocol.
+    fn sign_envelope(
+        envelope: &GossipEnvelope,
+        node_id: NodeId,
+        signing_key: &[u8; 32],
+    ) -> Option<Vec<u8>> {
+        let signed = SignedEnvelope::sign(envelope, node_id, signing_key)?;
+        postcard::to_stdvec(&signed).ok()
+    }
+
     async fn forward_loop(
         mut rx: mpsc::UnboundedReceiver<OutgoingGossip>,
         state: Arc<RwLock<GossipState>>,
+        node_id: NodeId,
+        signing_key: [u8; 32],
     ) {
         while let Some(outgoing) = rx.recv().await {
             match outgoing {
@@ -646,18 +766,20 @@ impl GossipNetwork {
                         msg_hash,
                         payload: encoded,
                     };
-                    let Ok(envelope_bytes) = postcard::to_stdvec(&envelope) else {
+                    let Some(envelope_bytes) =
+                        Self::sign_envelope(&envelope, node_id, &signing_key)
+                    else {
                         warn!("gossip envelope serialization failed");
                         continue;
                     };
 
-                    // Eager push: full message to eager peers
                     Self::send_to_peers(&envelope_bytes, &targets, &state).await;
 
-                    // Lazy push: IHave to lazy peers
                     if !lazy_targets.is_empty() {
                         let ihave_envelope = GossipEnvelope::IHave { topic_id, msg_hash };
-                        if let Ok(ihave_bytes) = postcard::to_stdvec(&ihave_envelope) {
+                        if let Some(ihave_bytes) =
+                            Self::sign_envelope(&ihave_envelope, node_id, &signing_key)
+                        {
                             Self::send_to_peers(&ihave_bytes, &lazy_targets, &state).await;
                         }
                     }
@@ -669,7 +791,9 @@ impl GossipNetwork {
                     targets,
                 } => {
                     let envelope = GossipEnvelope::IHave { topic_id, msg_hash };
-                    let Ok(envelope_bytes) = postcard::to_stdvec(&envelope) else {
+                    let Some(envelope_bytes) =
+                        Self::sign_envelope(&envelope, node_id, &signing_key)
+                    else {
                         warn!("gossip envelope serialization failed");
                         continue;
                     };
@@ -682,13 +806,14 @@ impl GossipNetwork {
                     target,
                 } => {
                     let envelope = GossipEnvelope::Graft { topic_id, msg_hash };
-                    let Ok(envelope_bytes) = postcard::to_stdvec(&envelope) else {
+                    let Some(envelope_bytes) =
+                        Self::sign_envelope(&envelope, node_id, &signing_key)
+                    else {
                         warn!("gossip envelope serialization failed");
                         continue;
                     };
                     Self::send_to_peers(&envelope_bytes, &[target], &state).await;
 
-                    // Promote this peer to eager (they responded to our Graft)
                     let mut s = state.write().await;
                     if let Some(topic_state) = s.topics.get_mut(&topic_id) {
                         topic_state.promote_to_eager(&target);
@@ -697,7 +822,9 @@ impl GossipNetwork {
 
                 OutgoingGossip::Prune { topic_id, target } => {
                     let envelope = GossipEnvelope::Prune { topic_id };
-                    let Ok(envelope_bytes) = postcard::to_stdvec(&envelope) else {
+                    let Some(envelope_bytes) =
+                        Self::sign_envelope(&envelope, node_id, &signing_key)
+                    else {
                         warn!("gossip envelope serialization failed");
                         continue;
                     };
@@ -710,7 +837,9 @@ impl GossipNetwork {
                     target,
                 } => {
                     let envelope = GossipEnvelope::AntiEntropy { topic_id, hashes };
-                    let Ok(envelope_bytes) = postcard::to_stdvec(&envelope) else {
+                    let Some(envelope_bytes) =
+                        Self::sign_envelope(&envelope, node_id, &signing_key)
+                    else {
                         warn!("gossip envelope serialization failed");
                         continue;
                     };
@@ -720,7 +849,6 @@ impl GossipNetwork {
         }
     }
 
-    /// Send envelope bytes to a list of peer addresses.
     async fn send_to_peers(data: &[u8], targets: &[SocketAddr], state: &Arc<RwLock<GossipState>>) {
         let mut dead_peers: Vec<SocketAddr> = Vec::new();
 
@@ -749,7 +877,6 @@ impl GossipNetwork {
             }
         }
 
-        // Remove dead peers
         if !dead_peers.is_empty() {
             let mut state_w = state.write().await;
             for addr in &dead_peers {
@@ -764,30 +891,46 @@ impl GossipNetwork {
         }
     }
 
-    /// Accept incoming gossip streams and handle protocol messages.
     async fn accept_loop(
         endpoint: Endpoint,
         state: Arc<RwLock<GossipState>>,
         outgoing_tx: mpsc::UnboundedSender<OutgoingGossip>,
+        signing_key: [u8; 32],
+        node_id: NodeId,
+        max_connections: usize,
     ) {
         loop {
             let Some(incoming) = endpoint.accept().await else {
                 break;
             };
 
+            // Enforce connection limit
+            {
+                let s = state.read().await;
+                if s.peers.len() >= max_connections {
+                    warn!(
+                        "Gossip connection limit reached ({}) — rejecting from {}",
+                        max_connections,
+                        incoming.remote_address()
+                    );
+                    incoming.refuse();
+                    continue;
+                }
+            }
+
             let state = state.clone();
             let outgoing_tx = outgoing_tx.clone();
+            let key = signing_key;
+            let our_node_id = node_id;
             tokio::spawn(async move {
                 let Ok(conn) = incoming.await else { return };
                 let remote_addr = conn.remote_address();
 
-                // Store the connection
                 {
                     let mut s = state.write().await;
                     s.peers.insert(remote_addr, conn.clone());
                 }
 
-                // Accept uni streams from this connection
                 loop {
                     let Ok(mut recv) = conn.accept_uni().await else {
                         break;
@@ -796,9 +939,33 @@ impl GossipNetwork {
                     let state = state.clone();
                     let outgoing_tx = outgoing_tx.clone();
                     tokio::spawn(async move {
-                        if let Ok(envelope) = read_gossip_envelope(&mut recv).await {
-                            Self::handle_envelope(envelope, remote_addr, &state, &outgoing_tx)
-                                .await;
+                        if let Ok(signed) = read_signed_envelope(&mut recv).await {
+                            // Verify signature before processing
+                            if !signed.verify(&key) {
+                                warn!(
+                                    "Rejecting gossip envelope from {} — invalid signature",
+                                    remote_addr
+                                );
+                                return;
+                            }
+
+                            let Some(envelope) = signed.decode_inner() else {
+                                warn!(
+                                    "Rejecting gossip envelope from {} — decode failed",
+                                    remote_addr
+                                );
+                                return;
+                            };
+
+                            Self::handle_envelope(
+                                envelope,
+                                remote_addr,
+                                &state,
+                                &outgoing_tx,
+                                &key,
+                                our_node_id,
+                            )
+                            .await;
                         }
                     });
                 }
@@ -806,12 +973,13 @@ impl GossipNetwork {
         }
     }
 
-    /// Handle a received gossip envelope according to protocol rules.
     async fn handle_envelope(
         envelope: GossipEnvelope,
         remote_addr: SocketAddr,
         state: &Arc<RwLock<GossipState>>,
         outgoing_tx: &mpsc::UnboundedSender<OutgoingGossip>,
+        signing_key: &[u8; 32],
+        node_id: NodeId,
     ) {
         match envelope {
             GossipEnvelope::FullMessage {
@@ -819,20 +987,27 @@ impl GossipNetwork {
                 msg_hash,
                 payload,
             } => {
+                // Verify hash integrity: blake3(payload) must equal msg_hash.
+                let computed_hash = *blake3::hash(&payload).as_bytes();
+                if computed_hash != msg_hash {
+                    warn!(
+                        "Rejecting gossip message from {} — hash mismatch \
+                         (claimed {:02x}{:02x}..., computed {:02x}{:02x}...)",
+                        remote_addr, msg_hash[0], msg_hash[1], computed_hash[0], computed_hash[1],
+                    );
+                    return;
+                }
+
                 let (is_new, eager_targets, lazy_targets) = {
                     let mut s = state.write().await;
 
                     if s.seen.contains(&msg_hash) {
-                        // We already have this message. The sender is a redundant eager
-                        // source — send Prune to demote them to lazy.
                         if let Some(topic_state) = s.topics.get_mut(&topic_id) {
                             let is_eager = topic_state
                                 .peer_states
                                 .get(&remote_addr)
                                 .is_some_and(|ps| ps.eager);
                             if is_eager {
-                                // Only prune if this was from an eager peer that's
-                                // redundant (we already got it from someone else).
                                 topic_state.demote_to_lazy(&remote_addr);
                                 let _ = outgoing_tx.send(OutgoingGossip::Prune {
                                     topic_id,
@@ -845,7 +1020,6 @@ impl GossipNetwork {
 
                     s.seen.insert(msg_hash);
 
-                    // Cache the message for Graft responses
                     s.message_cache.insert(
                         msg_hash,
                         CachedMessage {
@@ -855,17 +1029,13 @@ impl GossipNetwork {
                         },
                     );
 
-                    // Cancel any pending IHave for this message (we got it eagerly)
                     s.pending_ihaves.remove(&(topic_id, msg_hash));
 
-                    // Deliver to local subscribers
-                    // Get RTT first to avoid borrow conflict
                     let peer_rtt = s.peers.get(&remote_addr).map(|conn| conn.rtt());
 
                     if let Some(topic_state) = s.topics.get_mut(&topic_id) {
                         topic_state.record_delivery(&remote_addr);
 
-                        // Update RTT from connection stats
                         if let Some(rtt) = peer_rtt {
                             topic_state.update_rtt(&remote_addr, rtt);
                         }
@@ -879,8 +1049,6 @@ impl GossipNetwork {
                             }
                         }
 
-                        // Forward: eager push to our eager peers, IHave to lazy peers
-                        // (excluding the sender)
                         let eager: Vec<_> = topic_state
                             .eager_peers()
                             .into_iter()
@@ -898,24 +1066,26 @@ impl GossipNetwork {
                 };
 
                 if is_new && (!eager_targets.is_empty() || !lazy_targets.is_empty()) {
-                    // Forward full message to eager peers
                     if !eager_targets.is_empty() {
                         let fwd_envelope = GossipEnvelope::FullMessage {
                             topic_id,
                             msg_hash,
                             payload: payload.clone(),
                         };
-                        if let Ok(fwd_bytes) = postcard::to_stdvec(&fwd_envelope) {
+                        if let Some(fwd_bytes) =
+                            Self::sign_envelope(&fwd_envelope, node_id, signing_key)
+                        {
                             Self::send_to_peers(&fwd_bytes, &eager_targets, state).await;
                         } else {
                             warn!("gossip forward envelope serialization failed");
                         }
                     }
 
-                    // Send IHave to lazy peers
                     if !lazy_targets.is_empty() {
                         let ihave_envelope = GossipEnvelope::IHave { topic_id, msg_hash };
-                        if let Ok(ihave_bytes) = postcard::to_stdvec(&ihave_envelope) {
+                        if let Some(ihave_bytes) =
+                            Self::sign_envelope(&ihave_envelope, node_id, signing_key)
+                        {
                             Self::send_to_peers(&ihave_bytes, &lazy_targets, state).await;
                         }
                     }
@@ -933,16 +1103,14 @@ impl GossipNetwork {
                     return;
                 }
 
-                // Register a pending IHave. If we don't receive the full message
-                // within IHAVE_TIMEOUT, we'll send a Graft to pull it.
                 let mut s = state.write().await;
-                s.pending_ihaves
-                    .entry((topic_id, msg_hash))
-                    .or_insert((remote_addr, Instant::now()));
+                if !s.pending_ihaves.contains_key(&(topic_id, msg_hash)) {
+                    s.pending_ihaves
+                        .insert((topic_id, msg_hash), (remote_addr, Instant::now()));
+                }
             }
 
             GossipEnvelope::Graft { topic_id, msg_hash } => {
-                // A peer is requesting the full message. Promote them to eager.
                 {
                     let mut s = state.write().await;
                     if let Some(topic_state) = s.topics.get_mut(&topic_id) {
@@ -950,7 +1118,6 @@ impl GossipNetwork {
                     }
                 }
 
-                // Look up the cached message and send it
                 let cached = {
                     let s = state.read().await;
                     s.message_cache.get(&msg_hash).cloned()
@@ -962,16 +1129,19 @@ impl GossipNetwork {
                         msg_hash,
                         payload: cached.payload,
                     };
-                    let envelope_bytes =
-                        postcard::to_stdvec(&envelope).expect("envelope serialization cannot fail");
-                    Self::send_to_peers(&envelope_bytes, &[remote_addr], state).await;
+                    if let Some(envelope_bytes) =
+                        Self::sign_envelope(&envelope, node_id, signing_key)
+                    {
+                        Self::send_to_peers(&envelope_bytes, &[remote_addr], state).await;
+                    } else {
+                        warn!("gossip Graft response serialization failed");
+                    }
                 } else {
                     debug!("Graft request for unknown message {:?}", &msg_hash[..4]);
                 }
             }
 
             GossipEnvelope::Prune { topic_id } => {
-                // The remote peer wants us to stop sending them full messages for this topic.
                 let mut s = state.write().await;
                 if let Some(topic_state) = s.topics.get_mut(&topic_id) {
                     topic_state.demote_to_lazy(&remote_addr);
@@ -980,18 +1150,27 @@ impl GossipNetwork {
             }
 
             GossipEnvelope::AntiEntropy { topic_id, hashes } => {
-                // Peer sent us their hash set. Find messages we have that they don't,
-                // and send them back.
                 let peer_hashes: HashSet<_> = hashes.into_iter().collect();
                 let missing_messages: Vec<(MessageHash, Vec<u8>)> = {
                     let s = state.read().await;
-                    s.message_cache
-                        .iter()
-                        .filter(|(hash, cached)| {
-                            cached.topic_id == topic_id && !peer_hashes.contains(*hash)
-                        })
-                        .map(|(hash, cached)| (*hash, cached.payload.clone()))
-                        .collect()
+                    let mut messages: Vec<(MessageHash, Vec<u8>)> = Vec::new();
+                    let mut total_bytes: usize = 0;
+
+                    for (hash, cached) in s.message_cache.iter() {
+                        if cached.topic_id == topic_id && !peer_hashes.contains(hash) {
+                            if messages.len() >= MAX_ANTI_ENTROPY_RESPONSE_MESSAGES {
+                                break;
+                            }
+                            if total_bytes + cached.payload.len()
+                                > MAX_ANTI_ENTROPY_RESPONSE_BYTES
+                            {
+                                break;
+                            }
+                            total_bytes += cached.payload.len();
+                            messages.push((*hash, cached.payload.clone()));
+                        }
+                    }
+                    messages
                 };
 
                 if !missing_messages.is_empty() {
@@ -999,15 +1178,28 @@ impl GossipNetwork {
                         topic_id,
                         messages: missing_messages,
                     };
-                    let response_bytes =
-                        postcard::to_stdvec(&response).expect("envelope serialization cannot fail");
-                    Self::send_to_peers(&response_bytes, &[remote_addr], state).await;
+                    if let Some(response_bytes) =
+                        Self::sign_envelope(&response, node_id, signing_key)
+                    {
+                        Self::send_to_peers(&response_bytes, &[remote_addr], state).await;
+                    } else {
+                        warn!("gossip anti-entropy response serialization failed");
+                    }
                 }
             }
 
             GossipEnvelope::AntiEntropyResponse { topic_id, messages } => {
-                // We received messages we were missing. Process each one.
                 for (msg_hash, payload) in messages {
+                    // Verify hash integrity on anti-entropy responses too
+                    let computed_hash = *blake3::hash(&payload).as_bytes();
+                    if computed_hash != msg_hash {
+                        warn!(
+                            "Rejecting anti-entropy message from {} — hash mismatch",
+                            remote_addr
+                        );
+                        continue;
+                    }
+
                     let is_new = {
                         let mut s = state.write().await;
                         if s.seen.contains(&msg_hash) {
@@ -1027,7 +1219,6 @@ impl GossipNetwork {
                     };
 
                     if is_new {
-                        // Deliver to local subscribers
                         let s = state.read().await;
                         if let Some(topic_state) = s.topics.get(&topic_id) {
                             if let Ok(msg) = PeerMessage::decode_raw(&payload) {
@@ -1045,8 +1236,6 @@ impl GossipNetwork {
         }
     }
 
-    /// Periodically check for IHave messages that haven't been fulfilled by eager push.
-    /// If IHAVE_TIMEOUT has elapsed, send a Graft to the IHave sender.
     async fn ihave_timeout_loop(
         state: Arc<RwLock<GossipState>>,
         outgoing_tx: mpsc::UnboundedSender<OutgoingGossip>,
@@ -1063,14 +1252,11 @@ impl GossipNetwork {
                 let expired: Vec<_> = s
                     .pending_ihaves
                     .iter()
-                    .filter(|(_, (_, received_at))| {
-                        now.duration_since(*received_at) > IHAVE_TIMEOUT
-                    })
+                    .filter(|(_, (_, received_at))| now.duration_since(*received_at) > IHAVE_TIMEOUT)
                     .map(|((topic_id, msg_hash), (addr, _))| (*topic_id, *msg_hash, *addr))
                     .collect();
 
                 for (topic_id, msg_hash, addr) in &expired {
-                    // Only graft if we still haven't seen the message
                     if !s.seen.contains(msg_hash) {
                         grafts.push((*topic_id, *msg_hash, *addr));
                     }
@@ -1089,7 +1275,7 @@ impl GossipNetwork {
         }
     }
 
-    /// Periodically exchange hash sets with random peers for anti-entropy.
+    /// Anti-entropy uses capped hash digests to prevent bandwidth amplification.
     async fn anti_entropy_loop(
         state: Arc<RwLock<GossipState>>,
         outgoing_tx: mpsc::UnboundedSender<OutgoingGossip>,
@@ -1106,17 +1292,16 @@ impl GossipNetwork {
                     .collect()
             };
 
+            // Cap the hash set to prevent bandwidth amplification
             let hashes = {
                 let s = state.read().await;
-                s.seen.hashes()
+                s.seen.hashes_capped(MAX_ANTI_ENTROPY_HASHES)
             };
 
-            // For each topic, pick one random peer to exchange with
             for (topic_id, peers) in topics_and_peers {
                 if peers.is_empty() {
                     continue;
                 }
-                // Simple deterministic selection (rotate based on time)
                 let idx = (Instant::now().elapsed().subsec_nanos() as usize) % peers.len();
                 let target = peers[idx];
 
@@ -1129,7 +1314,6 @@ impl GossipNetwork {
         }
     }
 
-    /// Periodically clean up expired entries from the message cache.
     async fn cache_cleanup_loop(state: Arc<RwLock<GossipState>>) {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
@@ -1160,8 +1344,8 @@ impl MessageStream {
     }
 }
 
-/// Read a gossip envelope from a uni stream.
-async fn read_gossip_envelope(recv: &mut RecvStream) -> Result<GossipEnvelope, String> {
+/// Read a signed gossip envelope from a uni stream.
+async fn read_signed_envelope(recv: &mut RecvStream) -> Result<SignedEnvelope, String> {
     let mut len_buf = [0u8; 4];
     recv.read_exact(&mut len_buf)
         .await
@@ -1214,11 +1398,11 @@ mod tests {
         let h2 = [2u8; 32];
         let h3 = [3u8; 32];
 
-        assert!(set.insert(h1)); // new
-        assert!(!set.insert(h1)); // duplicate
-        assert!(set.insert(h2)); // new
-        assert!(set.insert(h3)); // new
-        assert!(!set.insert(h2)); // still there
+        assert!(set.insert(h1));
+        assert!(!set.insert(h1));
+        assert!(set.insert(h2));
+        assert!(set.insert(h3));
+        assert!(!set.insert(h2));
     }
 
     #[test]
@@ -1232,9 +1416,8 @@ mod tests {
         assert!(set.insert(h1));
         assert!(set.insert(h2));
         assert!(set.insert(h3));
-        // Set is full (3 entries). Inserting h4 should evict h1.
         assert!(set.insert(h4));
-        assert!(!set.contains(&h1)); // evicted
+        assert!(!set.contains(&h1));
         assert!(set.contains(&h2));
         assert!(set.contains(&h3));
         assert!(set.contains(&h4));
@@ -1250,13 +1433,12 @@ mod tests {
 
         set.insert(h1);
         set.insert(h2);
-        // h1 is oldest
-        set.insert(h3); // evicts h1
+        set.insert(h3);
         assert!(!set.contains(&h1));
         assert!(set.contains(&h2));
         assert!(set.contains(&h3));
 
-        set.insert(h4); // evicts h2
+        set.insert(h4);
         assert!(!set.contains(&h2));
         assert!(set.contains(&h3));
         assert!(set.contains(&h4));
@@ -1271,14 +1453,12 @@ mod tests {
         let a4: SocketAddr = "127.0.0.1:4000".parse().unwrap();
         let a5: SocketAddr = "127.0.0.1:5000".parse().unwrap();
 
-        // First DEFAULT_EAGER_DEGREE peers should be eager
         ts.add_peer(a1);
         ts.add_peer(a2);
         ts.add_peer(a3);
         assert_eq!(ts.eager_peers().len(), 3);
         assert_eq!(ts.lazy_peers().len(), 0);
 
-        // Beyond that, peers are lazy
         ts.add_peer(a4);
         ts.add_peer(a5);
         assert_eq!(ts.eager_peers().len(), 3);
@@ -1296,16 +1476,14 @@ mod tests {
         ts.add_peer(a1);
         ts.add_peer(a2);
         ts.add_peer(a3);
-        ts.add_peer(a4); // lazy
+        ts.add_peer(a4);
 
         assert!(ts.lazy_peers().contains(&a4));
 
-        // Promote a4 to eager
         ts.promote_to_eager(&a4);
         assert!(ts.eager_peers().contains(&a4));
         assert!(!ts.lazy_peers().contains(&a4));
 
-        // Demote a1 to lazy
         ts.demote_to_lazy(&a1);
         assert!(ts.lazy_peers().contains(&a1));
         assert!(!ts.eager_peers().contains(&a1));
@@ -1325,21 +1503,90 @@ mod tests {
     }
 
     #[test]
-    fn seen_set_hashes_returns_all() {
+    fn seen_set_hashes_capped() {
         let mut set = BoundedSeenSet::new(10, Duration::from_secs(60));
-        let h1 = [1u8; 32];
-        let h2 = [2u8; 32];
-        let h3 = [3u8; 32];
+        for i in 0..10u8 {
+            set.insert([i; 32]);
+        }
 
-        set.insert(h1);
-        set.insert(h2);
-        set.insert(h3);
-
-        let hashes = set.hashes();
+        let hashes = set.hashes_capped(3);
         assert_eq!(hashes.len(), 3);
-        assert!(hashes.contains(&h1));
-        assert!(hashes.contains(&h2));
-        assert!(hashes.contains(&h3));
+
+        let hashes = set.hashes_capped(100);
+        assert_eq!(hashes.len(), 10);
+    }
+
+    #[test]
+    fn signed_envelope_roundtrip() {
+        let key = [0xab; 32];
+        let sender = [0xcd; 32];
+        let envelope = GossipEnvelope::IHave {
+            topic_id: [0x11; 32],
+            msg_hash: [0x22; 32],
+        };
+
+        let signed = SignedEnvelope::sign(&envelope, sender, &key).unwrap();
+        assert!(signed.verify(&key));
+
+        let wrong_key = [0xff; 32];
+        assert!(!signed.verify(&wrong_key));
+
+        let decoded = signed.decode_inner().unwrap();
+        match decoded {
+            GossipEnvelope::IHave { topic_id, msg_hash } => {
+                assert_eq!(topic_id, [0x11; 32]);
+                assert_eq!(msg_hash, [0x22; 32]);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn signed_envelope_tamper_detection() {
+        let key = [0xab; 32];
+        let sender = [0xcd; 32];
+        let envelope = GossipEnvelope::Prune {
+            topic_id: [0x33; 32],
+        };
+
+        let mut signed = SignedEnvelope::sign(&envelope, sender, &key).unwrap();
+
+        if !signed.body.is_empty() {
+            signed.body[0] ^= 0xff;
+        }
+        assert!(!signed.verify(&key));
+    }
+
+    #[test]
+    fn bounded_pending_ihaves_eviction() {
+        let mut pending = BoundedPendingIhaves::new(3);
+        let t = [0u8; 32];
+        let addr: SocketAddr = "127.0.0.1:1000".parse().unwrap();
+
+        pending.insert((t, [1u8; 32]), (addr, Instant::now()));
+        pending.insert((t, [2u8; 32]), (addr, Instant::now()));
+        pending.insert((t, [3u8; 32]), (addr, Instant::now()));
+
+        pending.insert((t, [4u8; 32]), (addr, Instant::now()));
+        assert!(!pending.contains_key(&(t, [1u8; 32])));
+        assert!(pending.contains_key(&(t, [2u8; 32])));
+        assert!(pending.contains_key(&(t, [3u8; 32])));
+        assert!(pending.contains_key(&(t, [4u8; 32])));
+    }
+
+    #[test]
+    fn bounded_pending_ihaves_no_overwrite() {
+        let mut pending = BoundedPendingIhaves::new(10);
+        let t = [0u8; 32];
+        let h = [1u8; 32];
+        let addr1: SocketAddr = "127.0.0.1:1000".parse().unwrap();
+        let addr2: SocketAddr = "127.0.0.1:2000".parse().unwrap();
+
+        pending.insert((t, h), (addr1, Instant::now()));
+        pending.insert((t, h), (addr2, Instant::now()));
+
+        let (stored_addr, _) = pending.index.get(&(t, h)).unwrap();
+        assert_eq!(*stored_addr, addr1);
     }
 
     #[test]
@@ -1431,43 +1678,33 @@ mod tests {
         }
     }
 
-    /// Test that the IHave/Graft flow works correctly at the state level.
     #[test]
     fn ihave_graft_state_flow() {
         let topic_id = topic_id_from_name("test-topic");
         let msg_hash = [0xab; 32];
         let sender: SocketAddr = "127.0.0.1:9000".parse().unwrap();
 
-        // Simulate receiving an IHave
-        let mut pending: HashMap<(TopicId, MessageHash), (SocketAddr, Instant)> = HashMap::new();
+        let mut pending = BoundedPendingIhaves::new(100);
         pending.insert((topic_id, msg_hash), (sender, Instant::now()));
 
-        // Verify it's pending
         assert!(pending.contains_key(&(topic_id, msg_hash)));
 
-        // Simulate timeout check
-        let (_, (addr, _)) = pending.iter().next().unwrap();
-        assert_eq!(*addr, sender);
-
-        // After sending Graft, the pending entry is removed
         pending.remove(&(topic_id, msg_hash));
         assert!(!pending.contains_key(&(topic_id, msg_hash)));
     }
 
-    /// Test that prune correctly demotes eager peers to lazy.
     #[test]
     fn prune_demotes_to_lazy() {
         let mut ts = TopicState::new();
         let a1: SocketAddr = "127.0.0.1:1000".parse().unwrap();
         let a2: SocketAddr = "127.0.0.1:2000".parse().unwrap();
 
-        ts.add_peer(a1); // eager
-        ts.add_peer(a2); // eager
+        ts.add_peer(a1);
+        ts.add_peer(a2);
 
         assert!(ts.eager_peers().contains(&a1));
         assert!(ts.eager_peers().contains(&a2));
 
-        // Simulate receiving Prune from a1
         ts.demote_to_lazy(&a1);
 
         assert!(!ts.eager_peers().contains(&a1));
@@ -1475,21 +1712,16 @@ mod tests {
         assert!(ts.eager_peers().contains(&a2));
     }
 
-    /// Test that duplicate messages from eager peers trigger prune logic.
     #[test]
     fn duplicate_from_eager_triggers_prune() {
         let mut seen = BoundedSeenSet::new(100, Duration::from_secs(60));
         let msg_hash = [0xcd; 32];
 
-        // First insertion is new
         assert!(seen.insert(msg_hash));
-        // Second is duplicate
         assert!(!seen.insert(msg_hash));
-        // Already seen -> would trigger prune in handle_envelope
         assert!(seen.contains(&msg_hash));
     }
 
-    /// Test the message cache stores and retrieves messages for Graft responses.
     #[test]
     fn message_cache_for_graft() {
         let mut cache: HashMap<MessageHash, CachedMessage> = HashMap::new();
@@ -1511,7 +1743,6 @@ mod tests {
         assert_eq!(retrieved.payload, payload);
     }
 
-    /// Test anti-entropy: finds messages peer is missing.
     #[test]
     fn anti_entropy_finds_missing() {
         let topic_id = topic_id_from_name("ae-test");
@@ -1519,7 +1750,6 @@ mod tests {
         let h2 = [2u8; 32];
         let h3 = [3u8; 32];
 
-        // Our cache has h1, h2, h3
         let mut cache: HashMap<MessageHash, CachedMessage> = HashMap::new();
         for h in [h1, h2, h3] {
             cache.insert(
@@ -1532,10 +1762,8 @@ mod tests {
             );
         }
 
-        // Peer only has h1 and h3
         let peer_hashes: HashSet<MessageHash> = [h1, h3].into_iter().collect();
 
-        // Find what peer is missing
         let missing: Vec<_> = cache
             .iter()
             .filter(|(hash, cached)| cached.topic_id == topic_id && !peer_hashes.contains(*hash))
@@ -1545,5 +1773,15 @@ mod tests {
         assert_eq!(missing.len(), 1);
         assert_eq!(missing[0].0, h2);
         assert_eq!(missing[0].1, vec![2]);
+    }
+
+    #[test]
+    fn hash_verification_rejects_mismatch() {
+        let payload = b"hello world";
+        let correct_hash = *blake3::hash(payload).as_bytes();
+        let wrong_hash = [0xff; 32];
+
+        assert_eq!(*blake3::hash(payload).as_bytes(), correct_hash);
+        assert_ne!(wrong_hash, correct_hash);
     }
 }

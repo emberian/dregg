@@ -13,9 +13,29 @@ pub const BABYBEAR_P: u32 = (1 << 31) - (1 << 27) + 1;
 
 /// A BabyBear field element: integers modulo p = 2^31 - 2^27 + 1.
 ///
-/// Stored in canonical form [0, p-1].
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Stored in canonical form [0, p-1]. All construction paths (including
+/// deserialization) perform modular reduction to ensure canonical representation.
+/// This prevents malleability attacks where the same logical value could have
+/// multiple byte representations (e.g., both `v` and `v + p` representing the
+/// same field element but comparing as different).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct BabyBear(pub u32);
+
+/// Custom deserialization that always reduces modulo p to enforce canonical form.
+///
+/// Without this, an attacker could submit `v >= p` values that deserialize to
+/// non-canonical representations, potentially causing equality checks to produce
+/// incorrect results (two BabyBear values representing the same field element
+/// but comparing as different).
+impl<'de> Deserialize<'de> for BabyBear {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = u32::deserialize(deserializer)?;
+        Ok(Self(raw % BABYBEAR_P))
+    }
+}
 
 impl BabyBear {
     /// The zero element.
