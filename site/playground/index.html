@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Playground — Pyana</title>
+  <meta name="description" content="Unified interactive playground for pyana: tokens, STARK proofs, Merkle trees, Datalog policies, private notes, capabilities, and cross-federation composition.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0f0d'/%3E%3Ctext x='16' y='22' font-size='16' text-anchor='middle' fill='%235b8a5a' font-family='monospace'%3E%CF%80%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Header -->
+  <header class="pg-header">
+    <div class="pg-header__left">
+      <span class="pg-header__logo">pi</span>
+      <span class="pg-header__title">pyana <span class="accent">playground</span></span>
+    </div>
+    <div class="pg-header__right">
+      <a class="pg-header__link" href="../index.html">Home</a>
+      <a class="pg-header__link" href="../docs.html">Docs</a>
+      <a class="pg-header__link" href="../demos/">CI Results</a>
+      <span class="pg-header__status" id="wasm-status">loading...</span>
+    </div>
+  </header>
+
+  <!-- Main layout: sidebar + content + state panel -->
+  <div class="pg-layout">
+
+    <!-- Left sidebar: Navigation -->
+    <nav class="pg-nav" id="pg-nav">
+      <div class="pg-nav__section">
+        <button class="pg-nav__item active" data-section="overview">
+          <span class="pg-nav__icon">&#9670;</span>
+          <span class="pg-nav__label">Overview</span>
+        </button>
+        <button class="pg-nav__item" data-section="tokens">
+          <span class="pg-nav__icon">&#9679;</span>
+          <span class="pg-nav__label">Tokens</span>
+          <span class="pg-nav__badge" id="nav-badge-tokens"></span>
+        </button>
+        <button class="pg-nav__item" data-section="proofs">
+          <span class="pg-nav__icon">&#9651;</span>
+          <span class="pg-nav__label">Proofs</span>
+        </button>
+        <button class="pg-nav__item" data-section="merkle">
+          <span class="pg-nav__icon">&#9732;</span>
+          <span class="pg-nav__label">Merkle Trees</span>
+        </button>
+        <button class="pg-nav__item" data-section="datalog">
+          <span class="pg-nav__icon">&#9655;</span>
+          <span class="pg-nav__label">Datalog</span>
+        </button>
+        <button class="pg-nav__item" data-section="notes">
+          <span class="pg-nav__icon">&#9674;</span>
+          <span class="pg-nav__label">Notes</span>
+          <span class="pg-nav__badge" id="nav-badge-notes"></span>
+        </button>
+        <button class="pg-nav__item" data-section="capabilities">
+          <span class="pg-nav__icon">&#8669;</span>
+          <span class="pg-nav__label">Capabilities</span>
+        </button>
+        <button class="pg-nav__item" data-section="crossfed">
+          <span class="pg-nav__icon">&#8644;</span>
+          <span class="pg-nav__label">Cross-Federation</span>
+        </button>
+        <button class="pg-nav__item" data-section="sandbox">
+          <span class="pg-nav__icon">&#9654;</span>
+          <span class="pg-nav__label">Code Sandbox</span>
+        </button>
+      </div>
+      <div class="pg-nav__footer">
+        <span class="pg-nav__hint">Follow the guided tour from top to bottom</span>
+      </div>
+    </nav>
+
+    <!-- Main content area -->
+    <main class="pg-main" id="pg-main">
+      <!-- Sections are rendered dynamically by each section module -->
+      <div class="pg-section active" id="section-overview"></div>
+      <div class="pg-section" id="section-tokens"></div>
+      <div class="pg-section" id="section-proofs"></div>
+      <div class="pg-section" id="section-merkle"></div>
+      <div class="pg-section" id="section-datalog"></div>
+      <div class="pg-section" id="section-notes"></div>
+      <div class="pg-section" id="section-capabilities"></div>
+      <div class="pg-section" id="section-crossfed"></div>
+      <div class="pg-section" id="section-sandbox"></div>
+    </main>
+
+    <!-- Right sidebar: System state -->
+    <aside class="pg-state" id="pg-state">
+      <div class="pg-state__header">
+        <h3 class="pg-state__title">System State</h3>
+        <button class="pg-state__reset" id="btn-reset-state" title="Reset all state">Reset</button>
+      </div>
+
+      <div class="pg-state__section">
+        <div class="pg-state__label">Tokens Held</div>
+        <div class="pg-state__value" id="state-token-count">0</div>
+        <div class="pg-state__detail" id="state-token-list"></div>
+      </div>
+
+      <div class="pg-state__section">
+        <div class="pg-state__label">Merkle Root</div>
+        <div class="pg-state__value pg-state__mono" id="state-merkle-root">--</div>
+      </div>
+
+      <div class="pg-state__section">
+        <div class="pg-state__label">Nullifier Set</div>
+        <div class="pg-state__value" id="state-nullifier-count">0</div>
+        <div class="pg-state__detail" id="state-nullifier-list"></div>
+      </div>
+
+      <div class="pg-state__section">
+        <div class="pg-state__label">Receipt Chain</div>
+        <div class="pg-state__value" id="state-receipt-count">0</div>
+      </div>
+
+      <div class="pg-state__section">
+        <div class="pg-state__label">Proofs Generated</div>
+        <div class="pg-state__value" id="state-proof-count">0</div>
+      </div>
+
+      <div class="pg-state__section">
+        <div class="pg-state__label">Federation</div>
+        <div class="pg-state__detail" id="state-federation">
+          <div class="pg-state__fed-row">
+            <span>Status</span>
+            <span id="state-fed-status">loading...</span>
+          </div>
+          <div class="pg-state__fed-row">
+            <span>Nodes</span>
+            <span id="state-fed-nodes">--</span>
+          </div>
+          <div class="pg-state__fed-row">
+            <span>Commit</span>
+            <span id="state-fed-commit">--</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <script type="module" src="playground.js"></script>
+</body>
+</html>
