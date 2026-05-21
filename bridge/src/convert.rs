@@ -332,7 +332,7 @@ fn action_to_names(action: &pyana_macaroon::action::Action) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyana_token::{Attenuation, MacaroonToken};
+    use pyana_token::{Attenuation, AuthToken, MacaroonToken};
 
     fn test_key() -> [u8; 32] {
         let mut key = [0u8; 32];

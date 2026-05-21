@@ -590,6 +590,21 @@ pub fn verify_ivc_stark(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Utility: BabyBear <-> bytes conversion for cross-backend interop
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Convert a BabyBear field element to a 32-byte representation.
+/// The value is stored in the first 4 bytes (little-endian), with the
+/// remaining 28 bytes zeroed. This is used when bridging BabyBear state
+/// roots to the Pickles backend which operates over 255-bit Pasta fields.
+#[cfg(feature = "mina")]
+fn babybear_to_bytes32(val: BabyBear) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[0..4].copy_from_slice(&val.0.to_le_bytes());
+    out
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Prover / Verifier API
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1135,6 +1150,61 @@ impl IvcBuilder {
             return None;
         }
         prove_ivc(self.initial_root, self.deltas.clone())
+    }
+
+    /// Finalize using the Pickles/Kimchi recursive IVC backend.
+    ///
+    /// Instead of using the BabyBear STARK, this produces a constant-size
+    /// recursive proof over the Pasta cycle (Pallas/Vesta) using Kimchi.
+    /// Each step's proof transitively verifies all prior steps, so the
+    /// final proof is ~5-10 KiB regardless of chain length.
+    ///
+    /// This is an alternative to `finalize()` / `finalize_with_air()` which
+    /// use the BabyBear STARK backend. The Pickles backend trades:
+    /// - Slower proving (~1-2s per step vs ~64us for STARK)
+    /// - Smaller proofs (~5-10 KiB vs ~48 KiB)
+    /// - True recursion (verifier checks ONE proof, not a STARK)
+    /// - NOT post-quantum secure (relies on elliptic curve DLP)
+    ///
+    /// Returns `None` if no steps have been added.
+    /// Returns `Err` if Kimchi proving fails.
+    ///
+    /// Requires the `mina` feature.
+    #[cfg(feature = "mina")]
+    pub fn finalize_pickles(
+        &self,
+    ) -> Option<Result<crate::backends::mina::PicklesRecursiveProof, String>> {
+        use crate::backends::mina::{PicklesStateTransition, prove_recursive_step};
+
+        if self.deltas.is_empty() {
+            return None;
+        }
+
+        // Convert each fold delta into a Pickles state transition.
+        // The state hashes are derived from the BabyBear roots by encoding
+        // them as 32-byte little-endian values.
+        let mut prev_proof: Option<crate::backends::mina::PicklesRecursiveProof> = None;
+
+        let mut current_old_root = self.initial_root;
+        for delta in &self.deltas {
+            let pre_hash = babybear_to_bytes32(current_old_root);
+            let post_hash = babybear_to_bytes32(delta.fold.new_root);
+
+            let transition = PicklesStateTransition {
+                pre_state_hash: pre_hash,
+                post_state_hash: post_hash,
+            };
+
+            let result = prove_recursive_step(prev_proof.as_ref(), &transition);
+            match result {
+                Ok(proof) => prev_proof = Some(proof),
+                Err(e) => return Some(Err(e)),
+            }
+
+            current_old_root = delta.fold.new_root;
+        }
+
+        Some(Ok(prev_proof.unwrap()))
     }
 }
 

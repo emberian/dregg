@@ -271,6 +271,8 @@ fn main() {
         fee: 5000,
         memo: None,
         valid_until: None,
+        previous_receipt_hash: None,
+        depends_on: Vec::new(),
         call_forest: {
             let mut f = CallForest::new();
             f.add_root(action_no_proof);
@@ -330,6 +332,8 @@ fn main() {
         fee: 5000,
         memo: None,
         valid_until: None,
+        previous_receipt_hash: None,
+        depends_on: Vec::new(),
         call_forest: {
             let mut f = CallForest::new();
             f.add_root(action_with_proof);
@@ -402,6 +406,8 @@ fn main() {
         fee: 5000,
         memo: None,
         valid_until: None,
+        previous_receipt_hash: None,
+        depends_on: Vec::new(),
         call_forest: {
             let mut f = CallForest::new();
             f.add_root(action_bad_proof);

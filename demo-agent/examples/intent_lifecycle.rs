@@ -13,13 +13,19 @@
 //! with commit-reveal). The STARK proof uses the mock path for speed but would
 //! be a real proof in production.
 
+use pyana_circuit::multi_step_air::{ALLOW_PREDICATE, build_multi_step_witness};
+use pyana_circuit::derivation_air::{BodyAtomPattern, CircuitRule, DerivationWitness};
+use pyana_circuit::poseidon2::hash_fact;
+use pyana_circuit::BabyBear;
 use pyana_intent::fulfillment::{self, FulfillOptions, Fulfillment};
 use pyana_intent::gossip::{
     AutoFulfillPolicy, CommitRevealError, FulfillmentReveal, IntentPool, IntentPoolConfig,
 };
 use pyana_intent::matcher::{self, HeldCapability, MatchResult, Sensitivity};
+use pyana_commit::{Poseidon2MerkleTree, commitment_to_field};
 use pyana_intent::{
-    ActionPattern, CommitmentId, Intent, IntentKind, Match, MatchSpec, VerificationMode,
+    ActionPattern, CommitmentId, Intent, IntentKind, Match, MatchSpec, StakeProof,
+    VerificationMode,
 };
 
 fn main() {
@@ -37,6 +43,33 @@ fn main() {
     // The service's anonymous identity (commitment, NOT a public key)
     let service_commitment = CommitmentId::derive(b"treasury-service-secret", "service-identity");
 
+    // Build a real Poseidon2 note tree for stake proofs
+    let stake_commitment = pyana_cell::NoteCommitment([0xAB; 32]);
+    let mut note_tree = Poseidon2MerkleTree::with_depth(4);
+    // Populate with some other notes
+    for i in 0..5u8 {
+        let mut c = [0u8; 32];
+        c[0] = i;
+        note_tree.append(commitment_to_field(&c));
+    }
+    // Insert the service's stake note
+    let stake_leaf = commitment_to_field(&stake_commitment.0);
+    let stake_pos = note_tree.append(stake_leaf);
+    for i in 10..15u8 {
+        let mut c = [0u8; 32];
+        c[0] = i;
+        note_tree.append(commitment_to_field(&c));
+    }
+    let note_tree_root = note_tree.root();
+    let stake_merkle_proof = note_tree.prove_membership(stake_pos).unwrap();
+
+    let stake_proof = StakeProof {
+        commitment: stake_commitment,
+        merkle_root: note_tree_root,
+        merkle_proof: stake_merkle_proof,
+        minimum_value: 1000,
+    };
+
     // Service creates an IntentPool and broadcasts the intent
     let mut service_pool = IntentPool::new(
         service_commitment,
@@ -44,8 +77,10 @@ fn main() {
             max_intents: 1000,
             gc_interval_secs: 60,
             auto_match: false, // service doesn't match, it POSTS
+            minimum_stake_value: 0,
         },
         AutoFulfillPolicy::Never,
+        note_tree_root,
     );
 
     // The MatchSpec: what capabilities are needed
@@ -59,13 +94,15 @@ fn main() {
         resource_pattern: Some("treasury/*".into()),
     };
 
-    // A valid stake commitment (proves the service is serious, not spam)
-    let stake = Some(pyana_cell::NoteCommitment([0xAB; 32]));
-
     // Broadcast: service posts the intent with expiry 1 hour from now
     let now = 1_700_000_000u64; // simulated timestamp
     let expiry = now + 3600; // 1 hour
-    let intent = service_pool.broadcast_intent(IntentKind::Need, match_spec, expiry, stake);
+    let intent = service_pool.broadcast_intent(
+        IntentKind::Need,
+        match_spec,
+        expiry,
+        Some(stake_proof),
+    );
 
     println!("  Intent posted:");
     println!(
@@ -173,12 +210,55 @@ fn main() {
     println!("  Before revealing HOW it will fulfill the intent, the agent posts a");
     println!("  BLINDED commitment. This prevents other agents from copying the solution.\n");
 
-    // First, create the actual fulfillment (attenuated token)
+    // First, create the actual fulfillment with a real STARK proof.
+    // Build a STARK witness proving authorization (simulates what the matcher produces)
+    let stark_state_root = BabyBear::new(99999);
+    let stark_alice = BabyBear::new(1000);
+    let stark_app = BabyBear::new(2000);
+    let allow_pred = BabyBear::new(ALLOW_PREDICATE);
+    let has_role_pred = BabyBear::new(600);
+    let body_hash = hash_fact(has_role_pred, &[stark_alice, stark_app, BabyBear::ZERO]);
+    let stark_witness = build_multi_step_witness(
+        stark_state_root,
+        BabyBear::new(42),
+        vec![DerivationWitness {
+            rule: CircuitRule {
+                id: 1,
+                num_body_atoms: 1,
+                num_variables: 2,
+                head_predicate: allow_pred,
+                head_terms: [
+                    (true, BabyBear::new(0)),
+                    (true, BabyBear::new(1)),
+                    (false, BabyBear::ZERO),
+                ],
+                body_atoms: vec![BodyAtomPattern {
+                    predicate: has_role_pred,
+                    terms: [
+                        (true, BabyBear::new(0)),
+                        (true, BabyBear::new(1)),
+                        (false, BabyBear::ZERO),
+                    ],
+                }],
+                equal_checks: vec![],
+                memberof_checks: vec![],
+                gte_check: None,
+            },
+            state_root: stark_state_root,
+            body_fact_hashes: vec![body_hash],
+            substitution: vec![stark_alice, stark_app],
+            derived_predicate: allow_pred,
+            derived_terms: [stark_alice, stark_app, BabyBear::ZERO],
+        }],
+    );
+
     let fulfill_options = FulfillOptions {
         mode: VerificationMode::Private,
         max_expiry: Some(now + 3600), // cap at 1 hour (same as intent)
         restrict_actions: Some(vec!["sign_treasury".into()]), // ONLY sign, not view
         restrict_resource: Some("treasury/*".into()),
+        stark_witness: Some(stark_witness),
+        ..Default::default()
     };
 
     let fulfillment = fulfillment::fulfill(
@@ -187,7 +267,8 @@ fn main() {
         &agent_token,
         agent_commitment,
         &fulfill_options,
-    );
+    )
+    .expect("fulfillment should succeed");
 
     println!("  Fulfillment prepared (not yet revealed):");
     println!("    Granted actions: {:?}", fulfillment.granted_actions);
@@ -211,6 +292,7 @@ fn main() {
         agent_commitment,
         IntentPoolConfig::default(),
         AutoFulfillPolicy::Always,
+        note_tree_root,
     );
 
     let commitment = agent_pool.commit_to_fulfill(intent.id, &fulfillment, now);
@@ -268,7 +350,7 @@ fn main() {
     println!("    Expiry: {:?}", fulfillment.expiry);
     println!(
         "    STARK proof: {} bytes (proves capability without revealing token)",
-        fulfillment.matched.proof.as_ref().map_or(0, |p| p.len())
+        fulfillment.proof.as_ref().map_or(0, |p| p.len())
     );
     println!("    Fulfiller: [anonymous commitment]\n");
     println!("  Key attenuation properties:");
@@ -285,16 +367,29 @@ fn main() {
     println!("=========================================================================\n");
     println!("  The service checks three things:\n");
 
-    // Check 1: STARK proof is valid
-    let proof_valid = fulfillment.matched.proof.is_some()
-        && fulfillment.matched.proof.as_ref().unwrap().len() == 32;
+    // Check 1: Verify the real STARK proof cryptographically
+    let proof_valid = if let Some(proof_bytes) = fulfillment.proof.as_ref() {
+        match pyana_circuit::stark::proof_from_bytes(proof_bytes) {
+            Ok(proof) => {
+                let conclusion = BabyBear(proof.public_inputs[2]);
+                let acc_hash = BabyBear(proof.public_inputs[4]);
+                pyana_circuit::multi_step_air::verify_authorization_stark(
+                    conclusion, acc_hash, &proof,
+                )
+                .is_ok()
+            }
+            Err(_) => false,
+        }
+    } else {
+        false
+    };
     println!(
         "  [{}] 1. STARK proof is valid (proves agent CAN satisfy the intent)",
         if proof_valid { "PASS" } else { "FAIL" }
     );
     println!(
-        "       Proof bytes: {} (mock proof; real would be ~100KB STARK)",
-        fulfillment.matched.proof.as_ref().map_or(0, |p| p.len())
+        "       Proof bytes: {} (real FRI-based STARK proof)",
+        fulfillment.proof.as_ref().map_or(0, |p| p.len())
     );
 
     // Check 2: Attenuated token grants sign_treasury
@@ -352,23 +447,20 @@ fn main() {
         service_commitment,
         IntentPoolConfig::default(),
         AutoFulfillPolicy::Never,
+        note_tree_root,
     );
 
     // Eve's fake fulfillment
     let eve_commitment = CommitmentId::derive(b"eve-attacker", "eve");
     let eve_fulfillment = Fulfillment {
         intent_id: intent.id,
-        matched: Match {
-            intent_id: intent.id,
-            satisfier: eve_commitment,
-            proof: Some(vec![0xDE, 0xAD]), // fake proof
-            mode: VerificationMode::Private,
-        },
+        fulfiller: eve_commitment,
+        mode: VerificationMode::Private,
         token_data: None,
+        proof: Some(vec![0xDE, 0xAD]), // fake proof
         granted_actions: vec!["sign_treasury".into()],
         granted_resource: "treasury/*".into(),
         expiry: Some(now + 3600),
-        fulfiller: eve_commitment,
     };
 
     // Eve tries to reveal without committing first
@@ -406,13 +498,13 @@ fn main() {
         resource_pattern: None,
     };
 
-    // Create a Query intent (probe)
+    // Create a Query intent (probe) -- Eve provides no real stake
     let probe_intent = Intent::new(
         IntentKind::Query, // KEY: this is a Query, not a Need
         probe_spec,
         eve_commitment,
         now + 3600,
-        Some(pyana_cell::NoteCommitment([0xEE; 32])),
+        None, // no stake (Eve doesn't have a real note)
     );
 
     // Agent's wallet tries to match against it
