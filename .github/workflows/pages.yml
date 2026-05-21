@@ -41,6 +41,19 @@ jobs:
       - name: Build WASM
         run: wasm-pack build wasm --target web --out-dir ../site/demo/pkg
 
+      - name: Build extension with WASM
+        run: |
+          # Build WASM for extension
+          wasm-pack build wasm --target web --out-dir ../extension/pkg --no-typescript
+          # Create installable zip
+          mkdir -p site/extension
+          cd extension
+          zip -r ../site/extension/pyana-wallet.zip \
+            manifest.json background.js content.js page.js \
+            popup.html popup-script.js provision.html provision.js \
+            recovery.html recovery.js confirm-intent.html origin-permission.html \
+            bip39_english.txt pkg/
+
       - name: Install typst
         run: |
           curl -fsSL https://github.com/typst/typst/releases/latest/download/typst-x86_64-unknown-linux-musl.tar.xz | tar xJ

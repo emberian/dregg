@@ -83,6 +83,13 @@ pub use error::ChainError;
 pub use prove::{wrap_for_evm, EvmProof};
 pub use verify::verify_on_chain;
 
+/// Re-export canonical types used by callers when constructing proofs for settlement.
+///
+/// The typical flow is: attest a root via federation consensus (`AttestedRoot`),
+/// generate a STARK proof of Merkle inclusion/exclusion (circuit crate), then wrap
+/// that proof for EVM verification via this crate.
+pub use pyana_types::AttestedRoot;
+
 /// The SP1 program verification key (vkey).
 /// This is computed from the guest program ELF and identifies what program was proven.
 /// On-chain, the verifier checks `proof.vkey == expected_vkey` to ensure the correct
@@ -94,7 +101,7 @@ pub const SP1_PROGRAM_VKEY: &str = "PLACEHOLDER_VKEY_BUILD_WITH_SP1_TOOLCHAIN";
 
 /// Known SP1 verifier contract addresses (Succinct deployments via CREATE2).
 /// These are the ISP1Verifier gateway contracts.
-/// See: https://docs.succinct.xyz/docs/sp1/verification/onchain/contract-addresses
+/// See: <https://docs.succinct.xyz/docs/sp1/verification/onchain/contract-addresses>
 pub mod contracts {
     /// SP1 Verifier Gateway on Ethereum Mainnet
     pub const ETHEREUM_MAINNET: &str = "0x3B6041173B80E77f038f3F2C0f9744f04837185e";
