@@ -314,7 +314,8 @@ mod tests {
 
         // Fulfill with valid proof before deadline.
         let proof = ConditionProof::Preimage(preimage);
-        let result = fulfill_obligation(&obligation, &proof, 50, &[]);
+        let mut nullifiers = HashSet::new();
+        let result = fulfill_obligation(&obligation, &proof, 50, &[], DEFAULT_MAX_ROOT_AGE, &mut nullifiers);
         assert!(result.is_ok());
         assert!(matches!(result.unwrap(), ObligationOutcome::Fulfilled { .. }));
     }
