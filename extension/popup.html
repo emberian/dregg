@@ -43,10 +43,33 @@
       width: 100%; padding: 10px; border: none;
       border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;
     }
-    #lockBtn { background: #a78bfa; color: #1a1a2e; }
+    #lockBtn { background: #a78bfa; color: #1a1a2e; margin-bottom: 8px; }
     #lockBtn:hover { background: #8b5cf6; }
     #lockBtn.locked { background: #4ade80; }
+    #backupBtn { background: #f59e0b; color: #1a1a2e; margin-bottom: 8px; }
+    #backupBtn:hover { background: #d97706; }
+    #recoverBtn { background: #16213e; color: #e0e0e0; border: 1px solid #374151; }
+    #recoverBtn:hover { background: #1e293b; }
     .empty { color: #6b7280; font-size: 12px; padding: 8px 0; }
+    .passphrase-input {
+      width: 100%; padding: 8px 12px; margin-bottom: 8px;
+      background: #16213e; border: 1px solid #374151; border-radius: 6px;
+      color: #e0e0e0; font-size: 13px;
+    }
+    .passphrase-input::placeholder { color: #6b7280; }
+    .mnemonic-display {
+      padding: 12px; background: #0f172a; border-radius: 8px;
+      border: 1px solid #374151; margin-bottom: 12px;
+      font-family: 'Courier New', monospace; font-size: 12px;
+      line-height: 1.6; word-spacing: 4px; color: #fbbf24;
+      display: none;
+    }
+    .warning {
+      padding: 8px 12px; background: #451a03; border-radius: 6px;
+      border: 1px solid #92400e; color: #fbbf24; font-size: 11px;
+      margin-bottom: 8px; display: none;
+    }
+    .hidden { display: none; }
   </style>
 </head>
 <body>
@@ -72,7 +95,16 @@
       <div class="empty">No recent authorizations</div>
     </div>
   </div>
+  <div id="passphraseSection" class="hidden">
+    <input type="password" id="passphraseInput" class="passphrase-input" placeholder="Enter passphrase to unlock">
+  </div>
+  <div id="mnemonicWarning" class="warning">
+    Write down these 24 words and store them safely. They are the ONLY way to recover your wallet.
+  </div>
+  <div id="mnemonicDisplay" class="mnemonic-display"></div>
   <button id="lockBtn">Lock Wallet</button>
+  <button id="backupBtn">Backup (Show Recovery Phrase)</button>
+  <button id="recoverBtn">Recover Wallet</button>
   <script src="popup-script.js"></script>
 </body>
 </html>

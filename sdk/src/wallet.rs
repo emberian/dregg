@@ -8,6 +8,7 @@
 //! - Zero-knowledge proof generation via the bridge layer
 
 use ed25519_dalek::Signer;
+use zeroize::Zeroize;
 
 use pyana_bridge::BridgePresentationProof;
 use pyana_cell::CellId;
@@ -22,6 +23,7 @@ use pyana_turn::Turn;
 use pyana_types::{PublicKey, Signature};
 
 use crate::error::SdkError;
+use crate::mnemonic;
 
 // =============================================================================
 // Verification Modes
@@ -156,6 +158,7 @@ pub struct SignedTurn {
 /// - Turn signing (authorizing execution requests)
 /// - Proof generation (ZK presentation of authorization)
 /// - Receipt chain management (proof-carrying state)
+/// - HD key derivation from mnemonic (BIP39 + BLAKE3)
 pub struct AgentWallet {
     /// The agent's Ed25519 signing key.
     signing_key: ed25519_dalek::SigningKey,
@@ -175,6 +178,14 @@ pub struct AgentWallet {
     /// constant-size proof of the entire state transition history.
     /// Skipped during serialization as it is runtime-only state.
     ivc_builder: Option<IvcBuilder>,
+    /// The HD seed from which this wallet's key was derived (if created from mnemonic).
+    /// Stored encrypted at rest; zeroized on drop.
+    seed: Option<[u8; 64]>,
+    /// The mnemonic phrase used to create this wallet (if created from mnemonic).
+    /// Stored encrypted at rest; zeroized on drop.
+    mnemonic_phrase: Option<String>,
+    /// The derivation path used for this wallet's key (e.g., "pyana/0").
+    derivation_path: Option<String>,
 }
 
 impl AgentWallet {
@@ -206,7 +217,90 @@ impl AgentWallet {
             next_token_id: 0,
             receipt_chain: Vec::new(),
             ivc_builder: None,
+            seed: None,
+            mnemonic_phrase: None,
+            derivation_path: None,
         }
+    }
+
+    /// Create a wallet from a BIP39 mnemonic phrase.
+    ///
+    /// Derives the main agent identity at path `pyana/0`. The mnemonic and seed
+    /// are retained in memory (encrypted at rest) for sub-agent derivation and
+    /// backup export.
+    ///
+    /// # Arguments
+    ///
+    /// * `mnemonic_str` - A valid 24-word BIP39 mnemonic.
+    /// * `passphrase` - Optional passphrase for additional protection. Use `""` for none.
+    pub fn from_mnemonic(mnemonic_str: &str, passphrase: &str) -> Result<Self, SdkError> {
+        let seed = mnemonic::mnemonic_to_seed(mnemonic_str, passphrase)
+            .map_err(|e| SdkError::MissingKey(e.to_string()))?;
+        let mut wallet = Self::from_seed_at_path(seed, "pyana/0");
+        wallet.mnemonic_phrase = Some(mnemonic_str.to_string());
+        Ok(wallet)
+    }
+
+    /// Create a wallet from a raw 64-byte seed, deriving the main identity at `pyana/0`.
+    ///
+    /// Use this when the seed was obtained externally (e.g., from an encrypted backup).
+    pub fn from_seed(seed: [u8; 64]) -> Self {
+        Self::from_seed_at_path(seed, "pyana/0")
+    }
+
+    /// Create a wallet from a seed at a specific derivation path.
+    fn from_seed_at_path(seed: [u8; 64], path: &str) -> Self {
+        let (_pub_bytes, sec_bytes) = mnemonic::derive_keypair(&seed, path);
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&sec_bytes);
+        let verifying_key = signing_key.verifying_key();
+        let public_key = PublicKey(verifying_key.to_bytes());
+        AgentWallet {
+            signing_key,
+            public_key,
+            tokens: Vec::new(),
+            next_token_id: 0,
+            receipt_chain: Vec::new(),
+            ivc_builder: None,
+            seed: Some(seed),
+            mnemonic_phrase: None,
+            derivation_path: Some(path.to_string()),
+        }
+    }
+
+    /// Derive a sub-agent wallet at the given index.
+    ///
+    /// The sub-agent's key is derived from the same seed at path `pyana/{index}`.
+    /// Requires that this wallet was created from a mnemonic or seed.
+    ///
+    /// # Arguments
+    ///
+    /// * `index` - The derivation index. Use 1, 2, 3, ... (0 is the main identity).
+    pub fn derive_sub_agent(&self, index: u32) -> Result<Self, SdkError> {
+        let seed = self
+            .seed
+            .ok_or_else(|| SdkError::MissingKey("wallet has no seed for derivation".into()))?;
+        let path = format!("pyana/{}", index);
+        Ok(Self::from_seed_at_path(seed, &path))
+    }
+
+    /// Export the mnemonic phrase if this wallet was created from one.
+    ///
+    /// Returns `None` if the wallet was created from raw key bytes or if the
+    /// mnemonic has been explicitly cleared.
+    pub fn export_mnemonic(&self) -> Option<&str> {
+        self.mnemonic_phrase.as_deref()
+    }
+
+    /// Export the raw seed if available.
+    ///
+    /// Returns `None` if the wallet was created from raw key bytes without a seed.
+    pub fn export_seed(&self) -> Option<&[u8; 64]> {
+        self.seed.as_ref()
+    }
+
+    /// Get the derivation path used for this wallet's key.
+    pub fn derivation_path(&self) -> Option<&str> {
+        self.derivation_path.as_deref()
     }
 
     /// Get this agent's public key (identity).
@@ -910,6 +1004,18 @@ impl Default for AgentWallet {
     }
 }
 
+impl Drop for AgentWallet {
+    fn drop(&mut self) {
+        // Zeroize sensitive key material on drop.
+        if let Some(ref mut seed) = self.seed {
+            seed.zeroize();
+        }
+        if let Some(ref mut phrase) = self.mnemonic_phrase {
+            phrase.zeroize();
+        }
+    }
+}
+
 impl std::fmt::Debug for AgentWallet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentWallet")
@@ -917,6 +1023,9 @@ impl std::fmt::Debug for AgentWallet {
             .field("tokens_held", &self.tokens.len())
             .field("receipt_chain_length", &self.receipt_chain.len())
             .field("ivc_enabled", &self.ivc_builder.is_some())
+            .field("has_seed", &self.seed.is_some())
+            .field("has_mnemonic", &self.mnemonic_phrase.is_some())
+            .field("derivation_path", &self.derivation_path)
             .finish()
     }
 }
@@ -1037,5 +1146,64 @@ mod tests {
         // External verification.
         let head = pyana_turn::verify_receipt_chain_head(wallet.receipt_chain()).unwrap();
         assert_eq!(head, [4u8; 32]);
+    }
+
+    #[test]
+    fn test_wallet_from_mnemonic() {
+        let mnemonic = crate::mnemonic::generate_mnemonic();
+        let wallet = AgentWallet::from_mnemonic(&mnemonic, "").unwrap();
+        assert!(wallet.export_mnemonic().is_some());
+        assert_eq!(wallet.export_mnemonic().unwrap(), mnemonic);
+        assert!(wallet.export_seed().is_some());
+        assert_eq!(wallet.derivation_path(), Some("pyana/0"));
+    }
+
+    #[test]
+    fn test_wallet_from_mnemonic_deterministic() {
+        let mnemonic = crate::mnemonic::generate_mnemonic();
+        let w1 = AgentWallet::from_mnemonic(&mnemonic, "pass").unwrap();
+        let w2 = AgentWallet::from_mnemonic(&mnemonic, "pass").unwrap();
+        assert_eq!(w1.public_key(), w2.public_key());
+    }
+
+    #[test]
+    fn test_wallet_from_seed() {
+        let mnemonic = crate::mnemonic::generate_mnemonic();
+        let seed = crate::mnemonic::mnemonic_to_seed(&mnemonic, "").unwrap();
+        let w1 = AgentWallet::from_mnemonic(&mnemonic, "").unwrap();
+        let w2 = AgentWallet::from_seed(seed);
+        assert_eq!(w1.public_key(), w2.public_key());
+    }
+
+    #[test]
+    fn test_wallet_derive_sub_agent() {
+        let mnemonic = crate::mnemonic::generate_mnemonic();
+        let wallet = AgentWallet::from_mnemonic(&mnemonic, "").unwrap();
+        let sub1 = wallet.derive_sub_agent(1).unwrap();
+        let sub2 = wallet.derive_sub_agent(2).unwrap();
+
+        // Sub-agents have different keys from the main wallet.
+        assert_ne!(wallet.public_key(), sub1.public_key());
+        assert_ne!(wallet.public_key(), sub2.public_key());
+        assert_ne!(sub1.public_key(), sub2.public_key());
+
+        // Derivation is deterministic.
+        let sub1_again = wallet.derive_sub_agent(1).unwrap();
+        assert_eq!(sub1.public_key(), sub1_again.public_key());
+    }
+
+    #[test]
+    fn test_wallet_derive_sub_agent_no_seed() {
+        let wallet = AgentWallet::new();
+        let result = wallet.derive_sub_agent(1);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_wallet_new_has_no_mnemonic() {
+        let wallet = AgentWallet::new();
+        assert!(wallet.export_mnemonic().is_none());
+        assert!(wallet.export_seed().is_none());
+        assert!(wallet.derivation_path().is_none());
     }
 }

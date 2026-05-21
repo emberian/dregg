@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Pyana Wallet Recovery</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      padding: 32px;
+      max-width: 640px;
+      margin: 0 auto;
+    }
+    h1 { font-size: 24px; margin-bottom: 8px; color: #a78bfa; }
+    .subtitle { color: #9ca3af; font-size: 14px; margin-bottom: 24px; }
+    .section { margin-bottom: 24px; }
+    .section-title {
+      font-size: 12px; text-transform: uppercase;
+      letter-spacing: 0.05em; color: #9ca3af; margin-bottom: 12px;
+    }
+    .word-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-bottom: 24px;
+    }
+    .word-input-wrapper {
+      display: flex; align-items: center; gap: 4px;
+    }
+    .word-number {
+      font-size: 10px; color: #6b7280; width: 20px; text-align: right;
+    }
+    .word-input {
+      flex: 1; padding: 8px;
+      background: #16213e; border: 1px solid #374151; border-radius: 6px;
+      color: #e0e0e0; font-size: 13px; font-family: 'Courier New', monospace;
+    }
+    .word-input:focus {
+      outline: none; border-color: #a78bfa;
+    }
+    .word-input.invalid { border-color: #f87171; }
+    .word-input.valid { border-color: #4ade80; }
+    .passphrase-section { margin-bottom: 24px; }
+    .passphrase-input {
+      width: 100%; padding: 10px 12px;
+      background: #16213e; border: 1px solid #374151; border-radius: 6px;
+      color: #e0e0e0; font-size: 14px;
+    }
+    .passphrase-input:focus { outline: none; border-color: #a78bfa; }
+    .passphrase-input::placeholder { color: #6b7280; }
+    .hint { font-size: 11px; color: #6b7280; margin-top: 4px; }
+    button {
+      width: 100%; padding: 12px; border: none;
+      border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;
+    }
+    #recoverBtn {
+      background: #a78bfa; color: #1a1a2e;
+      margin-bottom: 8px;
+    }
+    #recoverBtn:hover { background: #8b5cf6; }
+    #recoverBtn:disabled { background: #4b5563; color: #9ca3af; cursor: not-allowed; }
+    #pasteBtn {
+      background: #16213e; color: #e0e0e0; border: 1px solid #374151;
+      margin-bottom: 24px;
+    }
+    #pasteBtn:hover { background: #1e293b; }
+    .result {
+      padding: 12px; border-radius: 8px; margin-top: 16px; display: none;
+    }
+    .result.success { background: #052e16; border: 1px solid #166534; color: #4ade80; }
+    .result.error { background: #450a0a; border: 1px solid #991b1b; color: #f87171; }
+    .warning-box {
+      padding: 12px; background: #451a03; border: 1px solid #92400e;
+      border-radius: 8px; color: #fbbf24; font-size: 12px; margin-bottom: 24px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Recover Wallet</h1>
+  <p class="subtitle">Enter your 24-word recovery phrase to restore your wallet.</p>
+
+  <div class="warning-box">
+    This will replace your current wallet. Make sure you have backed up any existing tokens or recovery phrase before proceeding.
+  </div>
+
+  <div class="section">
+    <div class="section-title">Recovery Phrase (24 words)</div>
+    <button id="pasteBtn">Paste from clipboard</button>
+    <div class="word-grid" id="wordGrid"></div>
+  </div>
+
+  <div class="passphrase-section">
+    <div class="section-title">Passphrase (optional)</div>
+    <input type="password" id="passphrase" class="passphrase-input" placeholder="Enter passphrase (leave blank if none was used)">
+    <div class="hint">If you used a passphrase when creating the wallet, enter it here. This also becomes the unlock passphrase.</div>
+  </div>
+
+  <button id="recoverBtn" disabled>Recover Wallet</button>
+
+  <div id="result" class="result"></div>
+
+  <script src="recovery.js"></script>
+</body>
+</html>

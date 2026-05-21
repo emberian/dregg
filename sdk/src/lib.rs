@@ -43,8 +43,10 @@
 
 pub mod client;
 pub mod error;
+pub mod mnemonic;
 pub mod runtime;
 pub mod wallet;
+pub mod wordlist;
 
 // Re-export primary types at crate root for convenience.
 pub use client::{PresentationResult, SiloClient};

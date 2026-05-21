@@ -17,7 +17,8 @@
     "resources": [
       "page.js",
       "pyana_wasm_bg.wasm",
-      "pyana_wasm.js"
+      "pyana_wasm.js",
+      "bip39_english.txt"
     ],
     "matches": ["<all_urls>"]
   }],
