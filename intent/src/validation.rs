@@ -155,6 +155,7 @@ mod tests {
             constraints: vec![Constraint::AppId("myapp".into())],
             min_budget: None,
             resource_pattern: Some("documents/*".into()),
+            compound: None,
         };
         Intent::new(IntentKind::Need, spec, CommitmentId([0xAA; 32]), 9999, None)
     }
@@ -178,6 +179,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         let intent = Intent::new(IntentKind::Need, spec, CommitmentId([0xAA; 32]), 9999, None);
         let err = validate_intent(&intent).unwrap_err();
@@ -197,6 +199,7 @@ mod tests {
             constraints,
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         let intent = Intent::new(IntentKind::Need, spec, CommitmentId([0xAA; 32]), 9999, None);
         let err = validate_intent(&intent).unwrap_err();
@@ -217,6 +220,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         let intent = Intent::new(IntentKind::Need, spec, CommitmentId([0xAA; 32]), 9999, None);
         let err = validate_intent(&intent).unwrap_err();
@@ -231,6 +235,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: Some(long_pattern),
+            compound: None,
         };
         let intent = Intent::new(IntentKind::Need, spec, CommitmentId([0xAA; 32]), 9999, None);
         let err = validate_intent(&intent).unwrap_err();
@@ -248,6 +253,7 @@ mod tests {
             constraints: vec![Constraint::AppId(long_string)],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         let intent = Intent::new(IntentKind::Need, spec, CommitmentId([0xAA; 32]), 9999, None);
         let err = validate_intent(&intent).unwrap_err();
@@ -273,6 +279,7 @@ mod tests {
             constraints,
             min_budget: None,
             resource_pattern: Some(max_string),
+            compound: None,
         };
         let intent = Intent::new(IntentKind::Need, spec, CommitmentId([0xAA; 32]), 9999, None);
         assert!(validate_intent(&intent).is_ok());

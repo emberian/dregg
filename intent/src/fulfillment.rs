@@ -507,6 +507,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: resource_pattern.map(String::from),
+            compound: None,
         };
         Intent::new(IntentKind::Need, spec, CommitmentId([0xAA; 32]), 5000, None)
     }

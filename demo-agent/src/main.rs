@@ -403,6 +403,7 @@ fn main() {
         TurnResult::Rejected { reason, at_action } => {
             panic!("Turn rejected at action {at_action:?}: {reason}");
         }
+        other => panic!("Unexpected turn result: {other:?}"),
     }
 
     // ─── Step 9: Demonstrate rejection with invalid proof ───────────────────
@@ -443,6 +444,7 @@ fn main() {
         TurnResult::Committed { .. } => {
             panic!("Tampered proof should NOT have been accepted!");
         }
+        other => panic!("Unexpected turn result: {other:?}"),
     }
 
     // ─── Summary ────────────────────────────────────────────────────────────

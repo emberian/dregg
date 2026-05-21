@@ -91,6 +91,7 @@ fn main() {
         constraints: vec![],
         min_budget: Some(10_000), // need at least 10k budget
         resource_pattern: Some("treasury/*".into()),
+        compound: None,
     };
 
     // Broadcast: service posts the intent with expiry 1 hour from now
@@ -491,6 +492,7 @@ fn main() {
         constraints: vec![],
         min_budget: None,
         resource_pattern: None,
+        compound: None,
     };
 
     // Create a Query intent (probe) -- Eve provides no real stake

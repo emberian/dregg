@@ -9,6 +9,8 @@ use pyana_cell::state::FieldElement;
 use pyana_cell::{CapabilityRef, CellId, NoteCommitment, Nullifier, Preconditions, SealedBox};
 use serde::{Deserialize, Serialize};
 
+use crate::conditional::{ConditionProof, ProofCondition};
+
 /// How much of the turn an action's signer commits to.
 ///
 /// This controls what goes into the signing message:
@@ -275,6 +277,33 @@ pub enum Effect {
         /// The action to send to the resolved target.
         action: Box<Action>,
     },
+    /// Create a bonded proof obligation: the actor commits to delivering a proof
+    /// satisfying `condition` before `deadline_height`, with `stake` locked as bond.
+    /// If the proof is not delivered, the stake is slashed to the beneficiary.
+    CreateObligation {
+        /// Who benefits (receives stake on failure, or whose ConditionalTurn resolves).
+        beneficiary: CellId,
+        /// What must be proven.
+        condition: ProofCondition,
+        /// Federation height deadline.
+        deadline_height: u64,
+        /// Note commitment representing the locked stake.
+        stake: NoteCommitment,
+    },
+    /// Fulfill a proof obligation by presenting the required proof.
+    /// On success, the locked stake is returned to the obligor.
+    FulfillObligation {
+        /// ID of the obligation being fulfilled.
+        obligation_id: [u8; 32],
+        /// The proof satisfying the obligation's condition.
+        proof: ConditionProof,
+    },
+    /// Slash an expired obligation: transfer the locked stake to the beneficiary.
+    /// Only valid after the obligation's deadline has passed without fulfillment.
+    SlashObligation {
+        /// ID of the obligation to slash.
+        obligation_id: [u8; 32],
+    },
 }
 
 /// An event emitted by an action.
@@ -511,6 +540,82 @@ impl Effect {
                 hasher.update(&target.output_slot.to_le_bytes());
                 hasher.update(&action.hash());
             }
+            Effect::CreateObligation {
+                beneficiary,
+                condition,
+                deadline_height,
+                stake,
+            } => {
+                hasher.update(&[22u8]);
+                hasher.update(beneficiary.as_bytes());
+                hasher.update(&deadline_height.to_le_bytes());
+                hasher.update(&stake.0);
+                // Include condition discriminant.
+                match condition {
+                    ProofCondition::HashPreimage { hash } => {
+                        hasher.update(&[0u8]);
+                        hasher.update(hash);
+                    }
+                    ProofCondition::RemoteProof {
+                        federation_root,
+                        expected_air,
+                        expected_conclusion,
+                    } => {
+                        hasher.update(&[1u8]);
+                        hasher.update(federation_root);
+                        hasher.update(expected_air.as_bytes());
+                        hasher.update(&expected_conclusion.to_le_bytes());
+                    }
+                    ProofCondition::LocalProof {
+                        expected_air,
+                        expected_public_inputs,
+                    } => {
+                        hasher.update(&[2u8]);
+                        hasher.update(expected_air.as_bytes());
+                        for pi in expected_public_inputs {
+                            hasher.update(&pi.to_le_bytes());
+                        }
+                    }
+                    ProofCondition::TurnExecuted { turn_hash } => {
+                        hasher.update(&[3u8]);
+                        hasher.update(turn_hash);
+                    }
+                }
+            }
+            Effect::FulfillObligation {
+                obligation_id,
+                proof,
+            } => {
+                hasher.update(&[23u8]);
+                hasher.update(obligation_id);
+                match proof {
+                    ConditionProof::Preimage(preimage) => {
+                        hasher.update(&[0u8]);
+                        hasher.update(preimage);
+                    }
+                    ConditionProof::StarkProof {
+                        proof_bytes,
+                        federation_root,
+                        public_outputs,
+                    } => {
+                        hasher.update(&[1u8]);
+                        hasher.update(&(proof_bytes.len() as u64).to_le_bytes());
+                        hasher.update(proof_bytes);
+                        hasher.update(federation_root);
+                        for po in public_outputs {
+                            hasher.update(&po.to_le_bytes());
+                        }
+                    }
+                    ConditionProof::Receipt(receipt) => {
+                        hasher.update(&[2u8]);
+                        hasher.update(&receipt.turn_hash);
+                    }
+                }
+            }
+            Effect::SlashObligation { obligation_id } => {
+                hasher.update(&[24u8]);
+                hasher.update(obligation_id);
+            }
             Effect::SpawnWithDelegation {
                 child_public_key,
                 child_token_id,
@@ -563,6 +668,17 @@ impl Effect {
             Effect::SpawnWithDelegation { .. } => 32 + 32 + 8,
             Effect::RefreshDelegation => 0,
             Effect::RevokeDelegation { .. } => 32,
+            Effect::CreateObligation { stake, .. } => {
+                32 + 32 + 8 + stake.0.len() // beneficiary + condition + deadline + stake
+            }
+            Effect::FulfillObligation { proof, .. } => {
+                32 + match proof {
+                    ConditionProof::Preimage(_) => 32,
+                    ConditionProof::StarkProof { proof_bytes, .. } => proof_bytes.len() + 32 + 32,
+                    ConditionProof::Receipt(_) => 32,
+                }
+            }
+            Effect::SlashObligation { .. } => 32,
         }
     }
 

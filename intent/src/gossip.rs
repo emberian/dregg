@@ -786,6 +786,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         let intent = pool.broadcast_intent(IntentKind::Need, spec, 9999, None);
         assert_eq!(pool.len(), 1);
@@ -805,6 +806,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         let intent = Intent::new(
             IntentKind::Need,
@@ -831,6 +833,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         let intent = pool.broadcast_intent(IntentKind::Need, spec, 9999, valid_stake());
 
@@ -849,6 +852,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         let intent = Intent::new(
             IntentKind::Need,
@@ -871,6 +875,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
 
         // Add intent that expires at t=200
@@ -905,6 +910,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         let intent = Intent::new(
             IntentKind::Need,
@@ -936,6 +942,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         let intent = Intent::new(IntentKind::Need, spec, CommitmentId([0x77; 32]), 9999, None);
         pool.intents.insert(intent.id, intent);
@@ -976,6 +983,7 @@ mod tests {
                 constraints: vec![],
                 min_budget: None,
                 resource_pattern: None,
+            compound: None,
             };
             let intent = Intent::new(
                 IntentKind::Need,
@@ -1000,6 +1008,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         let i1 = Intent::new(
             IntentKind::Need,
@@ -1034,6 +1043,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         // Intent with no stake
         let intent = Intent::new(IntentKind::Need, spec, CommitmentId([0x22; 32]), 9999, None);
@@ -1056,6 +1066,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         // Intent with a fake stake proof (random commitment not in the tree)
         let fake_commitment = pyana_cell::NoteCommitment([0xFF; 32]);
@@ -1099,6 +1110,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         let intent = Intent::new(
             IntentKind::Need,
@@ -1134,6 +1146,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         let intent = Intent::new(
             IntentKind::Need,
@@ -1168,6 +1181,7 @@ mod tests {
                 constraints: vec![],
                 min_budget: None,
                 resource_pattern: None,
+            compound: None,
             };
             let intent = Intent::new(IntentKind::Need, spec, creator, 9999, valid_stake());
             let result = pool.receive_intent_checked(intent, 100, true);
@@ -1183,6 +1197,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         let intent = Intent::new(IntentKind::Need, spec, creator, 9999, valid_stake());
         let result = pool.receive_intent_checked(intent, 100, true);
@@ -1204,6 +1219,7 @@ mod tests {
                 constraints: vec![],
                 min_budget: None,
                 resource_pattern: None,
+            compound: None,
             };
             let intent = Intent::new(IntentKind::Need, spec, creator, 9999, valid_stake());
             pool.receive_intent_checked(intent, 100, true).unwrap();
@@ -1218,6 +1234,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         let intent = Intent::new(IntentKind::Need, spec, creator, 9999, valid_stake());
         let result = pool.receive_intent_checked(intent, 161, true);
@@ -1240,6 +1257,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         let intent = Intent::new(
             IntentKind::Need,

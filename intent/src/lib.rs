@@ -202,6 +202,10 @@ pub struct MatchSpec {
     pub min_budget: Option<u64>,
     /// Glob or prefix pattern for resource matching.
     pub resource_pattern: Option<String>,
+    /// Compound requirement: ALL of these sub-specs must be satisfiable
+    /// by the same wallet (possibly from different tokens).
+    #[serde(default)]
+    pub compound: Option<Vec<MatchSpec>>,
 }
 
 /// A broadcast intent: someone needs/offers/queries a capability.
@@ -357,6 +361,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: None,
+               compound: None,
         };
         let creator = CommitmentId([0xAA; 32]);
         let i1 = Intent::new(IntentKind::Need, spec.clone(), creator, 1000, None);
@@ -374,6 +379,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: None,
+               compound: None,
         };
         let spec2 = MatchSpec {
             actions: vec![ActionPattern {
@@ -383,6 +389,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: None,
+               compound: None,
         };
         let creator = CommitmentId([0xBB; 32]);
         let i1 = Intent::new(IntentKind::Need, spec1, creator, 1000, None);
@@ -397,6 +404,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: None,
+               compound: None,
         };
         let creator = CommitmentId([0xCC; 32]);
         let intent = Intent::new(IntentKind::Need, spec, creator, 1000, None);
@@ -461,6 +469,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: None,
+               compound: None,
         };
         let intent = Intent::new(
             IntentKind::Need,
@@ -480,6 +489,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: None,
+               compound: None,
         };
         let intent = Intent::new(IntentKind::Need, spec, CommitmentId([0xAA; 32]), 9999, None);
 

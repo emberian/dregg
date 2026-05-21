@@ -116,5 +116,11 @@ name = "agent_network"
 [[example]]
 name = "note_bridge"
 
+[[example]]
+name = "cross_fed_atomic"
+
+[[example]]
+name = "proof_obligation"
+
 [lints]
 workspace = true

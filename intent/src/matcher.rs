@@ -71,6 +71,14 @@ pub enum MatchResult {
         /// The match result ready for fulfillment.
         matched: Match,
     },
+    /// A compound match was found. Multiple sub-specs were each satisfied
+    /// (possibly by different tokens in the same wallet).
+    CompoundMatched {
+        /// For each sub-spec in the compound list, the index of the token that satisfied it.
+        token_indices: Vec<usize>,
+        /// The overall match result ready for fulfillment.
+        matched: Match,
+    },
     /// No held token satisfies this intent.
     NoMatch,
     /// The intent has expired.
@@ -86,6 +94,10 @@ pub enum MatchResult {
 /// 1. Checks intent validity (not expired, correct kind)
 /// 2. For each held token, evaluates whether it satisfies the MatchSpec
 /// 3. Returns the first match found (or NoMatch)
+///
+/// For compound intents (MatchSpec with a `compound` list), ALL sub-specs must be
+/// satisfiable by some token in the wallet. Different sub-specs may be satisfied by
+/// different tokens. The fulfillment produces multiple attenuated tokens (one per sub-spec).
 ///
 /// All evaluation is LOCAL -- no network calls, no side effects.
 pub fn match_intent(
@@ -108,6 +120,14 @@ pub fn match_intent(
         return MatchResult::WrongKind;
     }
 
+    // Handle compound intents: ALL sub-specs must be satisfiable.
+    if let Some(sub_specs) = &intent.matcher.compound {
+        if !sub_specs.is_empty() {
+            return match_compound(intent, sub_specs, held_tokens, our_commitment, mode, now);
+        }
+    }
+
+    // Simple (non-compound) matching: find the first token that satisfies the spec.
     // Try each held token (skip Sensitive tokens -- they require explicit user action)
     for (idx, token) in held_tokens.iter().enumerate() {
         if token.sensitivity == Sensitivity::Sensitive {
@@ -128,6 +148,48 @@ pub fn match_intent(
     }
 
     MatchResult::NoMatch
+}
+
+/// Match a compound intent: every sub-spec must be satisfiable by some token in the wallet.
+/// Different sub-specs can be satisfied by different tokens.
+fn match_compound(
+    intent: &Intent,
+    sub_specs: &[MatchSpec],
+    held_tokens: &[HeldCapability],
+    our_commitment: CommitmentId,
+    mode: VerificationMode,
+    now: u64,
+) -> MatchResult {
+    let mut token_indices = Vec::with_capacity(sub_specs.len());
+
+    for sub_spec in sub_specs {
+        let mut found = false;
+        for (idx, token) in held_tokens.iter().enumerate() {
+            if token.sensitivity == Sensitivity::Sensitive {
+                continue;
+            }
+            if satisfies_spec(token, sub_spec, now) {
+                token_indices.push(idx);
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return MatchResult::NoMatch;
+        }
+    }
+
+    // All sub-specs satisfied — produce the compound match.
+    let matched = Match {
+        intent_id: intent.id,
+        satisfier: our_commitment,
+        proof: generate_proof(&held_tokens[token_indices[0]], intent, mode),
+        mode,
+    };
+    MatchResult::CompoundMatched {
+        token_indices,
+        matched,
+    }
 }
 
 /// Check if a single held token satisfies a MatchSpec.
@@ -352,6 +414,7 @@ mod tests {
             constraints,
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         Intent::new(
             IntentKind::Need,
@@ -418,6 +481,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: Some("documents/reports/*".into()),
+            compound: None,
         };
         assert!(satisfies_spec(&token, &spec, 100));
 
@@ -429,6 +493,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: Some("secrets/*".into()),
+            compound: None,
         };
         assert!(!satisfies_spec(&token, &spec_miss, 100));
     }
@@ -443,6 +508,7 @@ mod tests {
             constraints: vec![Constraint::AppId("my-app".into())],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         assert!(satisfies_spec(&token, &spec, 100));
 
@@ -451,6 +517,7 @@ mod tests {
             constraints: vec![Constraint::AppId("other-app".into())],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         assert!(!satisfies_spec(&token, &spec_miss, 100));
     }
@@ -468,6 +535,7 @@ mod tests {
             constraints: vec![Constraint::Service("http".into())],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         assert!(satisfies_spec(&token, &spec, 100));
     }
@@ -482,6 +550,7 @@ mod tests {
             constraints: vec![Constraint::NotExpiredAt(3000)],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         assert!(satisfies_spec(&token, &spec, 100));
 
@@ -490,6 +559,7 @@ mod tests {
             constraints: vec![Constraint::NotExpiredAt(6000)],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         assert!(!satisfies_spec(&token, &spec_expired, 100));
     }
@@ -504,6 +574,7 @@ mod tests {
             constraints: vec![Constraint::Feature("gpu".into())],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         assert!(satisfies_spec(&token, &spec, 100));
 
@@ -512,6 +583,7 @@ mod tests {
             constraints: vec![Constraint::Feature("quantum".into())],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         assert!(!satisfies_spec(&token, &spec_miss, 100));
     }
@@ -529,6 +601,7 @@ mod tests {
             constraints: vec![],
             min_budget: Some(500),
             resource_pattern: None,
+            compound: None,
         };
         assert!(satisfies_spec(&token, &spec, 100));
 
@@ -540,6 +613,7 @@ mod tests {
             constraints: vec![],
             min_budget: Some(2000),
             resource_pattern: None,
+            compound: None,
         };
         assert!(!satisfies_spec(&token, &spec_too_much, 100));
     }
@@ -555,6 +629,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         let intent = Intent::new(
             IntentKind::Need,
@@ -577,6 +652,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         let intent = Intent::new(
             IntentKind::Offer,
@@ -648,6 +724,7 @@ mod tests {
             constraints: vec![Constraint::UserId("alice".into())],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         assert!(satisfies_spec(&token, &spec, 100));
     }
@@ -662,6 +739,7 @@ mod tests {
             constraints: vec![Constraint::UserId("alice".into())],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         assert!(satisfies_spec(&token, &spec_ok, 100));
 
@@ -670,6 +748,7 @@ mod tests {
             constraints: vec![Constraint::UserId("bob".into())],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         assert!(!satisfies_spec(&token, &spec_wrong, 100));
     }
@@ -695,6 +774,7 @@ mod tests {
             ],
             min_budget: None,
             resource_pattern: Some("api/*".into()),
+            compound: None,
         };
         assert!(satisfies_spec(&token, &spec, 100));
     }
@@ -710,6 +790,7 @@ mod tests {
             constraints: vec![],
             min_budget: None,
             resource_pattern: None,
+            compound: None,
         };
         let intent = Intent::new(
             IntentKind::Query,
@@ -769,6 +850,192 @@ mod tests {
                 assert_eq!(token_index, 1);
             }
             _ => panic!("expected Matched"),
+        }
+    }
+
+    // =========================================================================
+    // Compound intent tests
+    // =========================================================================
+
+    #[test]
+    fn test_compound_intent_both_satisfied() {
+        // Wallet has a read token for documents and an execute token for compute
+        let read_token = make_token(&["read"], "documents/*");
+        let mut compute_token = make_token(&["execute"], "compute/*");
+        compute_token.token_id = "tok_compute".into();
+
+        // Compound intent: need read on documents AND execute on compute
+        let spec = MatchSpec {
+            actions: vec![],
+            constraints: vec![],
+            min_budget: None,
+            resource_pattern: None,
+            compound: Some(vec![
+                MatchSpec {
+                    actions: vec![ActionPattern {
+                        action: Some("read".into()),
+                        resource: None,
+                    }],
+                    constraints: vec![],
+                    min_budget: None,
+                    resource_pattern: Some("documents/*".into()),
+                    compound: None,
+                },
+                MatchSpec {
+                    actions: vec![ActionPattern {
+                        action: Some("execute".into()),
+                        resource: None,
+                    }],
+                    constraints: vec![],
+                    min_budget: None,
+                    resource_pattern: Some("compute/*".into()),
+                    compound: None,
+                },
+            ]),
+        };
+        let intent = Intent::new(
+            IntentKind::Need,
+            spec,
+            CommitmentId([0xAA; 32]),
+            u64::MAX,
+            None,
+        );
+
+        let our_id = CommitmentId([0xBB; 32]);
+        let result = match_intent(
+            &intent,
+            &[read_token, compute_token],
+            our_id,
+            VerificationMode::Trusted,
+            100,
+        );
+        match result {
+            MatchResult::CompoundMatched {
+                token_indices,
+                matched,
+            } => {
+                assert_eq!(token_indices.len(), 2);
+                assert_eq!(token_indices[0], 0); // read_token matched first sub-spec
+                assert_eq!(token_indices[1], 1); // compute_token matched second sub-spec
+                assert_eq!(matched.intent_id, intent.id);
+            }
+            other => panic!("expected CompoundMatched, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_compound_intent_missing_one_capability() {
+        // Wallet has only the read token, no compute token
+        let read_token = make_token(&["read"], "documents/*");
+
+        // Compound intent: need read on documents AND execute on compute
+        let spec = MatchSpec {
+            actions: vec![],
+            constraints: vec![],
+            min_budget: None,
+            resource_pattern: None,
+            compound: Some(vec![
+                MatchSpec {
+                    actions: vec![ActionPattern {
+                        action: Some("read".into()),
+                        resource: None,
+                    }],
+                    constraints: vec![],
+                    min_budget: None,
+                    resource_pattern: Some("documents/*".into()),
+                    compound: None,
+                },
+                MatchSpec {
+                    actions: vec![ActionPattern {
+                        action: Some("execute".into()),
+                        resource: None,
+                    }],
+                    constraints: vec![],
+                    min_budget: None,
+                    resource_pattern: Some("compute/*".into()),
+                    compound: None,
+                },
+            ]),
+        };
+        let intent = Intent::new(
+            IntentKind::Need,
+            spec,
+            CommitmentId([0xAA; 32]),
+            u64::MAX,
+            None,
+        );
+
+        let our_id = CommitmentId([0xBB; 32]);
+        let result = match_intent(
+            &intent,
+            &[read_token],
+            our_id,
+            VerificationMode::Trusted,
+            100,
+        );
+        assert!(
+            matches!(result, MatchResult::NoMatch),
+            "expected NoMatch when wallet is missing a required capability"
+        );
+    }
+
+    #[test]
+    fn test_compound_intent_same_token_satisfies_multiple() {
+        // A single wildcard token satisfies both sub-specs
+        let wildcard_token = make_token(&["read", "execute"], "*");
+
+        let spec = MatchSpec {
+            actions: vec![],
+            constraints: vec![],
+            min_budget: None,
+            resource_pattern: None,
+            compound: Some(vec![
+                MatchSpec {
+                    actions: vec![ActionPattern {
+                        action: Some("read".into()),
+                        resource: None,
+                    }],
+                    constraints: vec![],
+                    min_budget: None,
+                    resource_pattern: None,
+                    compound: None,
+                },
+                MatchSpec {
+                    actions: vec![ActionPattern {
+                        action: Some("execute".into()),
+                        resource: None,
+                    }],
+                    constraints: vec![],
+                    min_budget: None,
+                    resource_pattern: None,
+                    compound: None,
+                },
+            ]),
+        };
+        let intent = Intent::new(
+            IntentKind::Need,
+            spec,
+            CommitmentId([0xAA; 32]),
+            u64::MAX,
+            None,
+        );
+
+        let our_id = CommitmentId([0xBB; 32]);
+        let result = match_intent(
+            &intent,
+            &[wildcard_token],
+            our_id,
+            VerificationMode::Trusted,
+            100,
+        );
+        match result {
+            MatchResult::CompoundMatched {
+                token_indices, ..
+            } => {
+                // Both sub-specs satisfied by the same token
+                assert_eq!(token_indices, vec![0, 0]);
+            }
+            other => panic!("expected CompoundMatched, got {:?}", other),
         }
     }
 }

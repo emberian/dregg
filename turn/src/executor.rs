@@ -1539,6 +1539,12 @@ impl TurnExecutor {
             // the output side of note conservation, like NoteCreate).
             Effect::BridgeMint { .. } => Ok(()),
 
+            // Obligation effects: tracking happens at the obligation layer above
+            // the executor. The executor just needs to not reject them.
+            Effect::CreateObligation { .. } => Ok(()),
+            Effect::FulfillObligation { .. } => Ok(()),
+            Effect::SlashObligation { .. } => Ok(()),
+
             // PipelinedSend must be resolved by the pipeline executor's resolution pass
             // before the turn reaches apply_effect. If we get here, it means the turn
             // was executed outside of a pipeline without resolution — which is a bug.
@@ -1945,6 +1951,9 @@ impl TurnExecutor {
             Effect::SpawnWithDelegation { .. } => self.costs.create_cell,
             Effect::RefreshDelegation => self.costs.effect_base,
             Effect::RevokeDelegation { .. } => self.costs.effect_base,
+            Effect::CreateObligation { .. } => self.costs.effect_base,
+            Effect::FulfillObligation { .. } => self.costs.proof_verify,
+            Effect::SlashObligation { .. } => self.costs.effect_base,
         };
         base.saturating_add(extra)
             .saturating_add((effect.data_bytes() as u64).saturating_mul(self.costs.per_byte))
@@ -2602,7 +2611,10 @@ fn rewrite_effect_targets(effects: &mut [Effect], placeholder: &CellId, resolved
             | Effect::PipelinedSend { .. }
             | Effect::SpawnWithDelegation { .. }
             | Effect::RefreshDelegation
-            | Effect::RevokeDelegation { .. } => {}
+            | Effect::RevokeDelegation { .. }
+            | Effect::CreateObligation { .. }
+            | Effect::FulfillObligation { .. }
+            | Effect::SlashObligation { .. } => {}
         }
     }
 }

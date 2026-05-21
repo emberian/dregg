@@ -162,6 +162,7 @@ fn test_mint_attenuate_prove_execute_verify() {
         TurnResult::Rejected { reason, .. } => {
             panic!("Turn should have committed but was rejected: {reason}");
         }
+        _ => panic!("unexpected turn result"),
     }
 
     // Verify state was actually modified
