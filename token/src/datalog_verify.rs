@@ -226,7 +226,8 @@ fn full_policy() -> Vec<Rule> {
         checks: vec![],
     });
 
-    // Rule 4: allow if app($app, $actions), request_app($app), no_action_required(1)
+    // Rule 4: allow if action_allowed($app, $any_act), request_app($app), no_action_required(1)
+    // (the existence of any action_allowed fact for this app is sufficient)
     rules.push(Rule {
         id: rule_ids::APP_ANY_ACTION,
         head: Atom {
@@ -235,12 +236,12 @@ fn full_policy() -> Vec<Rule> {
         },
         body: vec![
             Atom {
-                predicate: symbol_from_str("app"),
-                terms: vec![Term::Var(0), Term::Var(1)],
+                predicate: symbol_from_str("action_allowed"),
+                terms: vec![Term::Var(0), Term::Var(1)], // $app, $any_act
             },
             Atom {
                 predicate: symbol_from_str("request_app"),
-                terms: vec![Term::Var(0)],
+                terms: vec![Term::Var(0)], // $app
             },
             Atom {
                 predicate: symbol_from_str("no_action_required"),
@@ -250,7 +251,7 @@ fn full_policy() -> Vec<Rule> {
         checks: vec![],
     });
 
-    // Rule 5: allow if service($svc, $actions), request_service($svc), no_action_required(1)
+    // Rule 5: allow if svc_action_allowed($svc, $any_act), request_service($svc), no_action_required(1)
     rules.push(Rule {
         id: rule_ids::SERVICE_ANY_ACTION,
         head: Atom {
@@ -259,12 +260,12 @@ fn full_policy() -> Vec<Rule> {
         },
         body: vec![
             Atom {
-                predicate: symbol_from_str("service"),
-                terms: vec![Term::Var(0), Term::Var(1)],
+                predicate: symbol_from_str("svc_action_allowed"),
+                terms: vec![Term::Var(0), Term::Var(1)], // $svc, $any_act
             },
             Atom {
                 predicate: symbol_from_str("request_service"),
-                terms: vec![Term::Var(0)],
+                terms: vec![Term::Var(0)], // $svc
             },
             Atom {
                 predicate: symbol_from_str("no_action_required"),
@@ -274,7 +275,10 @@ fn full_policy() -> Vec<Rule> {
         checks: vec![],
     });
 
-    // Rule 10: Time-bounded app + action
+    // Rule 10: Time-bounded app + action (secure)
+    // allow if action_allowed($app, $act), request_app($app), request_action($act),
+    //          valid_until($exp), request_time($t)
+    //   checks: MemberOf($act, $act), $t < $exp
     rules.push(Rule {
         id: rule_ids::APP_ACTION_TIME_BOUNDED,
         head: Atom {
@@ -283,33 +287,33 @@ fn full_policy() -> Vec<Rule> {
         },
         body: vec![
             Atom {
-                predicate: symbol_from_str("app"),
-                terms: vec![Term::Var(0), Term::Var(1)],
+                predicate: symbol_from_str("action_allowed"),
+                terms: vec![Term::Var(0), Term::Var(1)], // $app, $act
             },
             Atom {
                 predicate: symbol_from_str("request_app"),
-                terms: vec![Term::Var(0)],
+                terms: vec![Term::Var(0)], // $app
             },
             Atom {
                 predicate: symbol_from_str("request_action"),
-                terms: vec![Term::Var(2)],
+                terms: vec![Term::Var(1)], // $act
             },
             Atom {
                 predicate: symbol_from_str("valid_until"),
-                terms: vec![Term::Var(3)],
+                terms: vec![Term::Var(2)], // $exp
             },
             Atom {
                 predicate: symbol_from_str("request_time"),
-                terms: vec![Term::Var(4)],
+                terms: vec![Term::Var(3)], // $t
             },
         ],
         checks: vec![
-            Check::MemberOf(Term::Var(1), Term::Var(2)),
-            Check::LessThan(Term::Var(4), Term::Var(3)), // $t < $exp
+            Check::MemberOf(Term::Var(1), Term::Var(1)),
+            Check::LessThan(Term::Var(3), Term::Var(2)), // $t < $exp
         ],
     });
 
-    // Rule 11: Time-bounded service + action
+    // Rule 11: Time-bounded service + action (secure)
     rules.push(Rule {
         id: rule_ids::SERVICE_ACTION_TIME_BOUNDED,
         head: Atom {
@@ -318,29 +322,29 @@ fn full_policy() -> Vec<Rule> {
         },
         body: vec![
             Atom {
-                predicate: symbol_from_str("service"),
-                terms: vec![Term::Var(0), Term::Var(1)],
+                predicate: symbol_from_str("svc_action_allowed"),
+                terms: vec![Term::Var(0), Term::Var(1)], // $svc, $act
             },
             Atom {
                 predicate: symbol_from_str("request_service"),
-                terms: vec![Term::Var(0)],
+                terms: vec![Term::Var(0)], // $svc
             },
             Atom {
                 predicate: symbol_from_str("request_action"),
-                terms: vec![Term::Var(2)],
+                terms: vec![Term::Var(1)], // $act
             },
             Atom {
                 predicate: symbol_from_str("valid_until"),
-                terms: vec![Term::Var(3)],
+                terms: vec![Term::Var(2)], // $exp
             },
             Atom {
                 predicate: symbol_from_str("request_time"),
-                terms: vec![Term::Var(4)],
+                terms: vec![Term::Var(3)], // $t
             },
         ],
         checks: vec![
-            Check::MemberOf(Term::Var(1), Term::Var(2)),
-            Check::LessThan(Term::Var(4), Term::Var(3)), // $t < $exp
+            Check::MemberOf(Term::Var(1), Term::Var(1)),
+            Check::LessThan(Term::Var(3), Term::Var(2)), // $t < $exp
         ],
     });
 
@@ -378,34 +382,90 @@ fn full_policy() -> Vec<Rule> {
 // ============================================================================
 
 /// Convert committed facts (FieldElement-based) to trace-format facts (Symbol-based).
+///
+/// App and service facts are expanded into per-action facts for the secure
+/// MemberOf-based policy:
+/// - `app(id, "rw")` -> `action_allowed(id, "r")`, `action_allowed(id, "w")`
+/// - `service(name, "rw")` -> `svc_action_allowed(name, "r")`, `svc_action_allowed(name, "w")`
 fn committed_facts_to_trace(state: &TokenState, symbols: &SymbolTable) -> Vec<TraceFact> {
+    use pyana_macaroon::action::Action;
+
     let mut trace_facts = Vec::new();
 
     for fact in state.all_facts() {
-        let pred_symbol = if let Some(name) = symbols.resolve(fact.predicate) {
+        let pred_name = symbols.resolve(fact.predicate);
+        let pred_symbol = if let Some(name) = pred_name {
             symbol_from_str(name)
         } else {
             fact.predicate.0
         };
 
+        // Expand app facts into per-action facts
+        if pred_name == Some("app") {
+            let id_term = resolve_term(&fact.terms[0], symbols);
+            let actions_str = symbols
+                .resolve(fact.terms[1])
+                .unwrap_or("");
+            let action_set = Action::parse(actions_str);
+            let action_allowed_pred = symbol_from_str("action_allowed");
+
+            for action_char in ["r", "w", "c", "d", "C"] {
+                let single = Action::parse(action_char);
+                if action_set.contains(single) {
+                    trace_facts.push(TraceFact::new(
+                        action_allowed_pred,
+                        vec![id_term.clone(), Term::Const(symbol_from_str(action_char))],
+                    ));
+                }
+            }
+            continue;
+        }
+
+        // Expand service facts into per-action facts
+        if pred_name == Some("service") {
+            let id_term = resolve_term(&fact.terms[0], symbols);
+            let actions_str = symbols
+                .resolve(fact.terms[1])
+                .unwrap_or("");
+            let action_set = Action::parse(actions_str);
+            let svc_action_allowed_pred = symbol_from_str("svc_action_allowed");
+
+            for action_char in ["r", "w", "c", "d", "C"] {
+                let single = Action::parse(action_char);
+                if action_set.contains(single) {
+                    trace_facts.push(TraceFact::new(
+                        svc_action_allowed_pred,
+                        vec![id_term.clone(), Term::Const(symbol_from_str(action_char))],
+                    ));
+                }
+            }
+            continue;
+        }
+
+        // All other facts: convert directly
         let mut terms = Vec::new();
         for term_fe in &fact.terms {
             if term_fe.is_zero() {
                 break;
             }
-            if let Some(name) = symbols.resolve(*term_fe) {
-                terms.push(Term::Const(symbol_from_str(name)));
-            } else if let Some(int_val) = field_element_to_int(term_fe) {
-                terms.push(Term::Int(int_val));
-            } else {
-                terms.push(Term::Const(term_fe.0));
-            }
+            terms.push(resolve_term(term_fe, symbols));
         }
 
         trace_facts.push(TraceFact::new(pred_symbol, terms));
     }
 
     trace_facts
+}
+
+/// Resolve a single FieldElement term into a trace Term.
+fn resolve_term(fe: &FieldElement, symbols: &SymbolTable) -> Term {
+    if let Some(name) = symbols.resolve(*fe) {
+        Term::Const(symbol_from_str(name))
+    } else if let Some(int_val) = field_element_to_int(fe) {
+        Term::Int(int_val)
+    } else {
+        Term::Const(fe.0)
+    }
 }
 
 /// Try to interpret a `FieldElement` as a small integer.

@@ -200,7 +200,7 @@ impl NoteSpendingWitness {
     /// * `asset_type` - The asset type (field element)
     /// * `creation_nonce` - The creation nonce (field element)
     /// * `randomness` - The randomness/blinding factor (field element)
-    /// * `spending_key` - The spending key (secret, field element)
+    /// * `spending_key` - The spending key (8 BabyBear limbs = 248-bit secret)
     /// * `merkle_siblings` - Siblings from the Poseidon2MerkleProof
     /// * `merkle_positions` - Positions from the Poseidon2MerkleProof
     ///
@@ -213,7 +213,7 @@ impl NoteSpendingWitness {
         asset_type: BabyBear,
         creation_nonce: BabyBear,
         randomness: BabyBear,
-        spending_key: BabyBear,
+        spending_key: [BabyBear; SPENDING_KEY_LIMBS],
         merkle_siblings: Vec<[BabyBear; 3]>,
         merkle_positions: Vec<u8>,
     ) -> Self {
@@ -280,7 +280,10 @@ impl NoteSpendingAir {
         row0[col::ASSET_TYPE] = witness.asset_type;
         row0[col::CREATION_NONCE] = witness.creation_nonce;
         row0[col::COMMITMENT] = commitment;
-        row0[col::SPENDING_KEY] = witness.spending_key;
+        // Place all 8 spending key limbs in columns 6..14
+        for (j, &limb) in witness.spending_key.iter().enumerate() {
+            row0[col::SPENDING_KEY_START + j] = limb;
+        }
         row0[col::NULLIFIER] = nullifier;
         row0[col::RANDOMNESS] = witness.randomness;
         row0[col::IS_MERKLE] = BabyBear::ZERO; // This is the commitment row
@@ -434,9 +437,15 @@ impl StarkAir for NoteSpendingAir {
         alpha_pow = alpha_pow * alpha;
 
         // Constraint 4: Nullifier derivation (only on commitment row)
-        let spending_key = local[col::SPENDING_KEY];
+        // Hash all 8 spending key limbs: nullifier = hash(commitment, key[0..8], creation_nonce)
         let nullifier = local[col::NULLIFIER];
-        let expected_nullifier = hash_many(&[commitment, spending_key, creation_nonce]);
+        let mut nullifier_inputs = Vec::with_capacity(1 + SPENDING_KEY_LIMBS + 1);
+        nullifier_inputs.push(commitment);
+        for j in 0..SPENDING_KEY_LIMBS {
+            nullifier_inputs.push(local[col::SPENDING_KEY_START + j]);
+        }
+        nullifier_inputs.push(creation_nonce);
+        let expected_nullifier = hash_many(&nullifier_inputs);
         let c_nullifier = is_commitment_row * (nullifier - expected_nullifier);
         combined = combined + alpha_pow * c_nullifier;
 
@@ -491,11 +500,12 @@ pub fn verify_note_spend(
 /// Create a test witness for note spending proofs.
 ///
 /// Generates a deterministic witness with the given parameters and a Merkle path of the specified depth.
+/// The spending key is provided as 8 BabyBear limbs (248 bits).
 pub fn create_test_witness(
     owner: BabyBear,
     value: BabyBear,
     asset_type: BabyBear,
-    spending_key: BabyBear,
+    spending_key: [BabyBear; SPENDING_KEY_LIMBS],
     depth: usize,
 ) -> NoteSpendingWitness {
     // Deterministic creation nonce and randomness
@@ -529,6 +539,18 @@ pub fn create_test_witness(
     }
 }
 
+/// Create a deterministic 8-limb test spending key from a single seed value.
+///
+/// Each limb is derived deterministically from the seed, giving a full 248-bit key
+/// while keeping tests reproducible.
+pub fn test_spending_key(seed: u32) -> [BabyBear; SPENDING_KEY_LIMBS] {
+    let mut limbs = [BabyBear::ZERO; SPENDING_KEY_LIMBS];
+    for i in 0..SPENDING_KEY_LIMBS {
+        limbs[i] = hash_many(&[BabyBear::new(seed), BabyBear::new(i as u32)]);
+    }
+    limbs
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -539,18 +561,19 @@ mod tests {
 
     #[test]
     fn witness_commitment_deterministic() {
+        let key = test_spending_key(0xDEAD);
         let w1 = create_test_witness(
             BabyBear::new(1000),
             BabyBear::new(500),
             BabyBear::new(1),
-            BabyBear::new(0xDEAD),
+            key,
             4,
         );
         let w2 = create_test_witness(
             BabyBear::new(1000),
             BabyBear::new(500),
             BabyBear::new(1),
-            BabyBear::new(0xDEAD),
+            key,
             4,
         );
         assert_eq!(w1.commitment(), w2.commitment());
@@ -560,18 +583,20 @@ mod tests {
 
     #[test]
     fn witness_different_key_different_nullifier() {
+        let key1 = test_spending_key(0xDEAD);
+        let key2 = test_spending_key(0xBEEF);
         let w1 = create_test_witness(
             BabyBear::new(1000),
             BabyBear::new(500),
             BabyBear::new(1),
-            BabyBear::new(0xDEAD),
+            key1,
             4,
         );
         let w2 = create_test_witness(
             BabyBear::new(1000),
             BabyBear::new(500),
             BabyBear::new(1),
-            BabyBear::new(0xBEEF), // different key
+            key2, // different key
             4,
         );
         // Same commitment (key doesn't affect commitment)
@@ -582,11 +607,12 @@ mod tests {
 
     #[test]
     fn trace_generation_correct_dimensions() {
+        let key = test_spending_key(0xFF);
         let witness = create_test_witness(
             BabyBear::new(42),
             BabyBear::new(100),
             BabyBear::new(1),
-            BabyBear::new(0xFF),
+            key,
             4,
         );
         let (trace, public_inputs) = NoteSpendingAir::generate_trace(&witness);
@@ -595,7 +621,7 @@ mod tests {
         assert_eq!(trace.len(), 8);
         assert!(trace.len().is_power_of_two());
 
-        // Width is NOTE_SPENDING_WIDTH
+        // Width is NOTE_SPENDING_WIDTH (19)
         for row in &trace {
             assert_eq!(row.len(), NOTE_SPENDING_WIDTH);
         }
@@ -608,11 +634,12 @@ mod tests {
 
     #[test]
     fn trace_commitment_row_has_correct_hashes() {
+        let key = test_spending_key(0xFF);
         let witness = create_test_witness(
             BabyBear::new(42),
             BabyBear::new(100),
             BabyBear::new(1),
-            BabyBear::new(0xFF),
+            key,
             4,
         );
         let (trace, _) = NoteSpendingAir::generate_trace(&witness);
@@ -625,7 +652,10 @@ mod tests {
         assert_eq!(row0[col::CREATION_NONCE], witness.creation_nonce);
         assert_eq!(row0[col::RANDOMNESS], witness.randomness);
         assert_eq!(row0[col::COMMITMENT], witness.commitment());
-        assert_eq!(row0[col::SPENDING_KEY], witness.spending_key);
+        // All 8 spending key limbs are in the trace
+        for j in 0..SPENDING_KEY_LIMBS {
+            assert_eq!(row0[col::SPENDING_KEY_START + j], witness.spending_key[j]);
+        }
         assert_eq!(row0[col::NULLIFIER], witness.nullifier());
         // Position column is zero for commitment row (satisfies position validity)
         assert_eq!(row0[merkle_col::POSITION], BabyBear::ZERO);
@@ -633,11 +663,12 @@ mod tests {
 
     #[test]
     fn trace_merkle_chain_continuity() {
+        let key = test_spending_key(0xFF);
         let witness = create_test_witness(
             BabyBear::new(42),
             BabyBear::new(100),
             BabyBear::new(1),
-            BabyBear::new(0xFF),
+            key,
             4,
         );
         let (trace, _) = NoteSpendingAir::generate_trace(&witness);
@@ -657,11 +688,12 @@ mod tests {
 
     #[test]
     fn constraint_zero_on_all_valid_rows() {
+        let key = test_spending_key(0xDEAD_BEEF);
         let witness = create_test_witness(
             BabyBear::new(1000),
             BabyBear::new(500),
             BabyBear::new(1),
-            BabyBear::new(0xDEAD_BEEF),
+            key,
             4,
         );
         let (trace, public_inputs) = NoteSpendingAir::generate_trace(&witness);
@@ -682,11 +714,12 @@ mod tests {
 
     #[test]
     fn tampered_commitment_detected() {
+        let key = test_spending_key(0xDEAD_BEEF);
         let witness = create_test_witness(
             BabyBear::new(1000),
             BabyBear::new(500),
             BabyBear::new(1),
-            BabyBear::new(0xDEAD_BEEF),
+            key,
             4,
         );
         let (mut trace, pi) = NoteSpendingAir::generate_trace(&witness);
@@ -699,11 +732,12 @@ mod tests {
 
     #[test]
     fn tampered_nullifier_detected() {
+        let key = test_spending_key(0xDEAD_BEEF);
         let witness = create_test_witness(
             BabyBear::new(1000),
             BabyBear::new(500),
             BabyBear::new(1),
-            BabyBear::new(0xDEAD_BEEF),
+            key,
             4,
         );
         let (mut trace, pi) = NoteSpendingAir::generate_trace(&witness);
@@ -716,11 +750,12 @@ mod tests {
 
     #[test]
     fn tampered_merkle_parent_detected() {
+        let key = test_spending_key(0xDEAD_BEEF);
         let witness = create_test_witness(
             BabyBear::new(1000),
             BabyBear::new(500),
             BabyBear::new(1),
-            BabyBear::new(0xDEAD_BEEF),
+            key,
             4,
         );
         let (mut trace, pi) = NoteSpendingAir::generate_trace(&witness);
@@ -733,11 +768,12 @@ mod tests {
 
     #[test]
     fn prove_and_verify_note_spend() {
+        let key = test_spending_key(0xDEAD_BEEF);
         let witness = create_test_witness(
             BabyBear::new(1000),
             BabyBear::new(500),
             BabyBear::new(1),
-            BabyBear::new(0xDEAD_BEEF),
+            key,
             4,
         );
 
@@ -765,11 +801,12 @@ mod tests {
 
     #[test]
     fn wrong_nullifier_rejected() {
+        let key = test_spending_key(0xDEAD_BEEF);
         let witness = create_test_witness(
             BabyBear::new(1000),
             BabyBear::new(500),
             BabyBear::new(1),
-            BabyBear::new(0xDEAD_BEEF),
+            key,
             4,
         );
 
@@ -784,11 +821,12 @@ mod tests {
 
     #[test]
     fn wrong_merkle_root_rejected() {
+        let key = test_spending_key(0xDEAD_BEEF);
         let witness = create_test_witness(
             BabyBear::new(1000),
             BabyBear::new(500),
             BabyBear::new(1),
-            BabyBear::new(0xDEAD_BEEF),
+            key,
             4,
         );
 
@@ -805,16 +843,18 @@ mod tests {
     fn wrong_spending_key_produces_wrong_nullifier() {
         // If the prover uses the wrong spending key, the nullifier will be different,
         // and the proof won't verify against the expected nullifier.
+        let correct_key = test_spending_key(0xDEAD_BEEF);
         let witness_correct = create_test_witness(
             BabyBear::new(1000),
             BabyBear::new(500),
             BabyBear::new(1),
-            BabyBear::new(0xDEAD_BEEF), // correct key
+            correct_key,
             4,
         );
 
         let mut witness_wrong = witness_correct.clone();
-        witness_wrong.spending_key = BabyBear::new(0xBAD_0EE); // wrong key
+        // Flip just ONE limb of the 8-limb key
+        witness_wrong.spending_key[0] = BabyBear::new(0xBAD_0EE);
 
         // The wrong key produces a different nullifier
         assert_ne!(witness_correct.nullifier(), witness_wrong.nullifier());
@@ -836,11 +876,12 @@ mod tests {
 
     #[test]
     fn tampered_proof_rejected() {
+        let key = test_spending_key(0xDEAD_BEEF);
         let witness = create_test_witness(
             BabyBear::new(1000),
             BabyBear::new(500),
             BabyBear::new(1),
-            BabyBear::new(0xDEAD_BEEF),
+            key,
             4,
         );
 
@@ -857,11 +898,12 @@ mod tests {
 
     #[test]
     fn depth_8_works() {
+        let key = test_spending_key(0xCAFE_BABE);
         let witness = create_test_witness(
             BabyBear::new(7777),
             BabyBear::new(1000000),
             BabyBear::new(42),
-            BabyBear::new(0xCAFE_BABE),
+            key,
             8,
         );
 
@@ -889,11 +931,12 @@ mod tests {
     fn wrong_commitment_wrong_merkle_path() {
         // If the prover uses wrong note contents, the commitment changes,
         // and the Merkle path won't match the expected root.
+        let key = test_spending_key(0xDEAD_BEEF);
         let witness_correct = create_test_witness(
             BabyBear::new(1000),
             BabyBear::new(500),
             BabyBear::new(1),
-            BabyBear::new(0xDEAD_BEEF),
+            key,
             4,
         );
 
@@ -924,11 +967,12 @@ mod tests {
 
     #[test]
     fn proof_serialization_roundtrip() {
+        let key = test_spending_key(0xFF);
         let witness = create_test_witness(
             BabyBear::new(42),
             BabyBear::new(100),
             BabyBear::new(1),
-            BabyBear::new(0xFF),
+            key,
             4,
         );
 
@@ -943,5 +987,81 @@ mod tests {
         // Verify the deserialized proof
         let result = verify_note_spend(nullifier, merkle_root, &proof2);
         assert!(result.is_ok(), "Deserialized proof should verify");
+    }
+
+    #[test]
+    fn spending_key_not_brute_forceable() {
+        // With 8 limbs, brute-forcing requires ~2^248 attempts.
+        // This test verifies the key space is > 2^31 (the old vulnerability).
+        let key = test_spending_key(0xDEAD_BEEF);
+        let witness = create_test_witness(
+            BabyBear::new(1000),
+            BabyBear::new(500),
+            BabyBear::new(1),
+            key,
+            4,
+        );
+
+        // The spending key is 8 limbs, each ~31 bits, totalling ~248 bits.
+        assert_eq!(witness.spending_key.len(), SPENDING_KEY_LIMBS);
+        assert_eq!(SPENDING_KEY_LIMBS, 8);
+
+        // Verify that all limbs are non-trivial (not all zero — the test key is derived)
+        let non_zero_limbs = witness
+            .spending_key
+            .iter()
+            .filter(|&&l| l != BabyBear::ZERO)
+            .count();
+        assert!(
+            non_zero_limbs >= 6,
+            "Test key should have most limbs non-zero, got {non_zero_limbs}"
+        );
+    }
+
+    #[test]
+    fn key_to_field_elements_roundtrip() {
+        // Verify the conversion from 256-bit external key to 8 BabyBear limbs.
+        let external_key: [u8; 32] = [
+            0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+            0x07, 0x08, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC,
+            0xDD, 0xEE, 0xFF, 0x00,
+        ];
+        let limbs = key_to_field_elements(&external_key);
+        assert_eq!(limbs.len(), 8);
+
+        // Each limb should be a valid BabyBear element (< p)
+        for limb in &limbs {
+            assert!(limb.0 < (1u32 << 31) - 1); // BabyBear p = 2^31 - 1
+        }
+
+        // Deterministic
+        let limbs2 = key_to_field_elements(&external_key);
+        assert_eq!(limbs, limbs2);
+    }
+
+    #[test]
+    fn flipping_single_key_limb_changes_nullifier() {
+        // Verify that changing ANY single limb of the 8-limb key changes the nullifier.
+        let base_key = test_spending_key(0x12345678);
+        let witness = create_test_witness(
+            BabyBear::new(42),
+            BabyBear::new(100),
+            BabyBear::new(1),
+            base_key,
+            4,
+        );
+        let base_nullifier = witness.nullifier();
+
+        for i in 0..SPENDING_KEY_LIMBS {
+            let mut modified_key = base_key;
+            modified_key[i] = BabyBear::new(modified_key[i].0.wrapping_add(1) % ((1u32 << 31) - 1));
+            let mut modified_witness = witness.clone();
+            modified_witness.spending_key = modified_key;
+            assert_ne!(
+                modified_witness.nullifier(),
+                base_nullifier,
+                "Flipping limb {i} must change the nullifier"
+            );
+        }
     }
 }

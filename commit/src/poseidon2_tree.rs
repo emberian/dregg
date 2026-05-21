@@ -556,7 +556,7 @@ mod tests {
         let asset_type = BabyBear::new(1);
         let creation_nonce = BabyBear::new(0xCAFE);
         let randomness = BabyBear::new(0xBEEF);
-        let spending_key = BabyBear::new(0xDEAD_BEEF);
+        let spending_key = pyana_circuit::note_spending_air::test_spending_key(0xDEAD_BEEF);
 
         // Step 2: Compute the commitment (same formula as NoteSpendingWitness::commitment)
         let commitment = hash_many(&[owner, value, asset_type, creation_nonce, randomness]);
