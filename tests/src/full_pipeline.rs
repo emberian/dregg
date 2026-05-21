@@ -116,9 +116,11 @@ fn test_full_private_authorization_pipeline() {
         now: Some(1700000000),
         ..Default::default()
     };
+    let verify_result = attenuated2.verify(&request);
     assert!(
-        attenuated2.verify(&request).is_ok(),
-        "doubly-attenuated token should verify for intended request"
+        verify_result.is_ok(),
+        "doubly-attenuated token should verify for intended request: {:?}",
+        verify_result.err()
     );
 
     // --- Step 3: Build BridgePresentationBuilder ---

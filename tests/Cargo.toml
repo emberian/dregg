@@ -15,7 +15,6 @@ pyana-trace = { path = "../trace" }
 pyana-federation = { path = "../federation" }
 pyana-audit = { path = "../audit" }
 pyana-bridge = { path = "../bridge" }
-pyana-wire = { path = "../wire" }
 pyana-turn = { path = "../turn" }
 pyana-cell = { path = "../cell" }
 pyana-sdk = { path = "../sdk" }

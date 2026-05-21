@@ -933,16 +933,21 @@ pub fn pre_evaluation_deny_checks(
 ///
 /// This is the complete replacement for `verify_caveats`:
 /// 1. Run deny checks (time, org, user, machine, etc.)
-/// 2. Run Datalog evaluation for positive authorization (app/service/action)
-/// 3. Return clearance or denial
+/// 2. Enforce least-privilege dimension checks
+/// 3. Run Datalog evaluation for positive authorization (app/service/action)
+/// 4. Return clearance or denial
 ///
-/// # Semantics
+/// # Semantics (Least-Privilege)
 ///
-/// The old `verify_caveats` has "unrestricted dimension" semantics: if a token
-/// has only APP caveats but the request asks for a SERVICE, the service dimension
-/// is unrestricted and the request is allowed. We preserve this by only running
-/// Datalog evaluation when the request's target dimension (app/service) actually
-/// has restricting facts.
+/// A token only authorizes requests in dimensions it EXPLICITLY grants:
+/// - Token with `app=X` can only authorize app=X requests; service requests are DENIED.
+/// - Token with `service=Y` can only authorize service=Y requests; app requests are DENIED.
+/// - Token with both app and service caveats can authorize either dimension.
+/// - Token with NO app/service caveats (empty caveat set) is unrestricted.
+///
+/// Missing caveats mean DENY, not ALLOW. This prevents privilege escalation
+/// where an app-scoped token could authorize service requests simply because
+/// no service caveat existed.
 pub fn verify_token_datalog_full(
     caveat_set: &CaveatSet,
     request: &AuthRequest,
@@ -961,6 +966,22 @@ pub fn verify_token_datalog_full(
         .any(|wc| wc.caveat_type == crate::pyana_caveats::CAV_SERVICE);
     let is_empty = caveats.is_empty(); // unrestricted root token
 
+    // Phase 2b: Least-privilege dimension enforcement.
+    // If the request specifies a dimension that the token does NOT grant, DENY.
+    // A token must explicitly grant each dimension it's used for.
+    if !is_empty {
+        if request.service.is_some() && !has_service_caveats {
+            return Err(TokenError::Denied(
+                "token does not grant service access".into(),
+            ));
+        }
+        if request.app_id.is_some() && !has_app_caveats {
+            return Err(TokenError::Denied(
+                "token does not grant app access".into(),
+            ));
+        }
+    }
+
     // Determine if the request targets a restricted dimension
     let request_targets_restricted_app = request.app_id.is_some() && has_app_caveats;
     let request_targets_restricted_service = request.service.is_some() && has_service_caveats;
@@ -970,14 +991,13 @@ pub fn verify_token_datalog_full(
         return verify_token_datalog_trusted(caveat_set, request);
     }
 
-    // If the token has positive grants but the request doesn't target any
-    // restricted dimension (e.g., token restricts APP but request asks for SERVICE
-    // which is unrestricted), allow it. This matches the old "unrestricted dimension"
-    // semantics.
+    // If we reach here, the token has caveats (not empty) but the request
+    // doesn't specify app_id or service — e.g., a features-only or time-only
+    // request. Allow it (the deny checks already validated other dimensions).
     let capabilities = extract_capabilities(caveat_set);
     let (expires_at, subject) = extract_metadata(caveat_set);
     Ok(TokenClearance {
-        matched_policy: Some("unrestricted_dimension".into()),
+        matched_policy: Some("dimension_passthrough".into()),
         capabilities,
         format: TokenFormat::Macaroon,
         expires_at,
@@ -1178,6 +1198,7 @@ mod tests {
 
     #[test]
     fn test_comparison_unrestricted_dimension() {
+        // An app-scoped token must NOT authorize service requests (least-privilege).
         let mut set = CaveatSet::new();
         set.push(WireCaveat::new(
             CAV_APP,
@@ -1190,7 +1211,10 @@ mod tests {
             now: Some(1700000000),
             ..Default::default()
         };
+        // Both paths should now DENY this cross-dimension request.
         assert_paths_agree(&set, &request);
+        let result = verify_token_datalog_full(&set, &request);
+        assert!(result.is_err(), "app-scoped token must not authorize service requests");
     }
 
     #[test]

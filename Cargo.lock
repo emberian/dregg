@@ -4640,7 +4640,6 @@ dependencies = [
  "pyana-trace",
  "pyana-turn",
  "pyana-types",
- "pyana-wire",
  "token",
 ]
 

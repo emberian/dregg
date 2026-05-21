@@ -450,6 +450,23 @@ pub fn verify_caveats(
     // Parse the requested action once
     let req_action = request.action.as_deref().map(Action::parse);
 
+    // --- Least-privilege dimension enforcement ---
+    // If the token has ANY positive grants (app/service), it can only authorize
+    // requests in dimensions it explicitly grants. Missing dimension = DENY.
+    let has_any_positive_grants = !apps.is_empty() || !services.is_empty();
+    if has_any_positive_grants {
+        if request.service.is_some() && services.is_empty() {
+            return Err(TokenError::Denied(
+                "token does not grant service access".into(),
+            ));
+        }
+        if request.app_id.is_some() && apps.is_empty() {
+            return Err(TokenError::Denied(
+                "token does not grant app access".into(),
+            ));
+        }
+    }
+
     // --- App: match-any with action containment ---
     if let Some(req_app) = &request.app_id {
         if !apps.is_empty() {

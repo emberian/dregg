@@ -54,13 +54,23 @@ fn format_size(bytes: usize) -> String {
 struct Poseidon2StarkVerifier;
 
 impl ProofVerifier for Poseidon2StarkVerifier {
-    fn verify(&self, proof_bytes: &[u8]) -> Result<bool, String> {
+    fn verify(&self, proof_bytes: &[u8], request_digest: &[u8; 32]) -> Result<bool, String> {
         let proof = pyana_circuit::stark::proof_from_bytes(proof_bytes)?;
         let public_inputs: Vec<pyana_circuit::BabyBear> = proof
             .public_inputs
             .iter()
             .map(|&v| pyana_circuit::BabyBear::new(v))
             .collect();
+
+        // Verify action binding: the proof's last public input must commit to
+        // the request being authorized.
+        let action_commitment = pyana_circuit::poseidon2::hash_many(
+            &pyana_circuit::BabyBear::encode_hash(request_digest),
+        );
+        match public_inputs.last() {
+            Some(&last_pi) if last_pi == action_commitment => {}
+            _ => return Ok(false), // Proof not bound to this request
+        }
 
         // Try Poseidon2 AIR first (production path).
         let poseidon2_result = pyana_circuit::stark::verify(

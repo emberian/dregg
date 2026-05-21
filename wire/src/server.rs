@@ -699,8 +699,11 @@ impl SiloServer {
                     });
                 }
 
-                // Verify the proof using the injected verifier
-                let accepted = match config.verifier.verify(&proof) {
+                // Verify the proof using the injected verifier, binding to the request.
+                // The proof must be cryptographically bound to this specific request
+                // to prevent replay attacks across different authorization requests.
+                let req_digest = request.digest();
+                let accepted = match config.verifier.verify(&proof, &req_digest) {
                     Ok(result) => result,
                     Err(_reason) => false, // parse/verification error -> reject
                 };
@@ -854,8 +857,12 @@ impl SiloServer {
     }
 
     /// Verify a proof using the provided verifier. Exposed for testing.
+    ///
+    /// Uses an all-zeros request digest (suitable for testing verifiers that
+    /// don't check action binding, like `NoopVerifier` or `MinSizeVerifier`).
     pub fn verify_proof_with(proof: &[u8], verifier: &dyn ProofVerifier) -> bool {
-        match verifier.verify(proof) {
+        let dummy_digest = [0u8; 32];
+        match verifier.verify(proof, &dummy_digest) {
             Ok(result) => result,
             Err(_) => false,
         }
