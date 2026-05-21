@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["macaroon", "secrets", "token", "tokenizer", "hints", "morpheus", "commit", "trace", "demo", "demo-agent", "federation", "circuit", "audit", "bridge", "wire", "store", "cell", "turn", "coord", "tests", "types", "sdk", "wasm", "node", "relay", "intent"]
-exclude = ["net", "chain", "chain/program"]
+members = ["macaroon", "secrets", "token", "tokenizer", "hints", "morpheus", "commit", "trace", "demo", "demo-agent", "federation", "circuit", "audit", "bridge", "wire", "store", "cell", "turn", "coord", "tests", "types", "sdk", "wasm", "node", "relay", "intent", "net"]
+exclude = ["chain", "chain/program"]
 
 [workspace.package]
 version = "0.1.0"
@@ -19,6 +19,7 @@ ark-serialize-derive = { git = "https://github.com/emberian/algebra", branch = "
 [workspace.dependencies]
 ## Local
 macaroon = { path = "macaroon" }
+pyana-net = { path = "net" }
 pyana-types = { path = "types" }
 secrets = { path = "secrets" }
 token = { path = "token" }
