@@ -341,13 +341,14 @@ pub fn compute_pir_response(query: &PirQuery, database: &[Vec<BabyBear>]) -> Pir
     let row_width = database[0].len();
     let mut response = vec![BabyBear::ZERO; row_width];
 
-    for (i, row) in database.iter().enumerate() {
-        let qi = query.query_vector[i];
-        if qi == BabyBear::ZERO {
-            continue; // Skip zero multiplications for performance.
-        }
-        for (j, &entry) in row.iter().enumerate() {
-            response[j] = response[j] + qi * entry;
+    // SECURITY: We must process ALL rows unconditionally to prevent timing
+    // side-channels that would leak which row the client queried. Skipping
+    // zero-valued query elements would allow an observer to infer the query
+    // structure from response latency variations.
+    for (row_idx, row) in database.iter().enumerate() {
+        let qi = query.query_vector[row_idx];
+        for (col_idx, &elem) in row.iter().enumerate() {
+            response[col_idx] = response[col_idx] + qi * elem;
         }
     }
 

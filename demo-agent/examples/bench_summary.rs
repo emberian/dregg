@@ -224,6 +224,14 @@ fn main() {
             BabyBear::new(6),
             BabyBear::new(7),
             BabyBear::new(8),
+            BabyBear::new(9),
+            BabyBear::new(10),
+            BabyBear::new(11),
+            BabyBear::new(12),
+            BabyBear::new(13),
+            BabyBear::new(14),
+            BabyBear::new(15),
+            BabyBear::new(16),
         ];
         let (trace, pi) = Poseidon2Air::generate_trace(&input);
         let air = Poseidon2Air;

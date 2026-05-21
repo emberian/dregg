@@ -14,7 +14,7 @@
 //! This replaces the imperative `verify_caveats` function as the canonical
 //! authorization evaluator.
 
-use pyana_commit::{Fact, FieldElement, SymbolTable, TokenState};
+use pyana_commit::{FieldElement, SymbolTable, TokenState};
 use pyana_trace::{
     AuthorizationRequest as TraceRequest, AuthorizationTrace, Conclusion, Evaluator,
     Fact as TraceFact, Rule, Term, symbol_from_str,
@@ -40,18 +40,26 @@ pub struct DatalogVerifyResult {
 /// Verify a token's caveats using Datalog evaluation (canonical semantics).
 ///
 /// This is the ground-truth verifier. It:
-/// 1. Decodes the caveat set into a FactSet
-/// 2. Converts the FactSet to trace-format facts
-/// 3. Runs the Datalog evaluator with standard + extended policy
-/// 4. Returns Allow/Deny with a derivation trace
+/// 1. Runs pre-evaluation deny checks (time, org, user, machine, etc.)
+/// 2. Decodes the caveat set into a FactSet
+/// 3. Converts the FactSet to trace-format facts
+/// 4. Runs the Datalog evaluator with standard + extended policy
+/// 5. Returns Allow/Deny with a derivation trace
 ///
 /// The derivation trace can be fed into the STARK prover for trustless verification.
+///
+/// **Security**: This function always runs deny checks before Datalog evaluation.
+/// There is no public entry point that bypasses deny checks.
 pub fn verify_token_datalog(
     caveat_set: &CaveatSet,
     request: &AuthRequest,
 ) -> Result<DatalogVerifyResult, TokenError> {
+    // Phase 0: Run pre-evaluation deny checks (time, org, user, machine, etc.)
+    // These MUST run before any Datalog evaluation to prevent bypasses.
+    pre_evaluation_deny_checks(caveat_set, request)?;
+
     // 1. Decode caveats to FactSet + SymbolTable
-    let (factset, mut symbols) = caveat_set_to_factset(caveat_set);
+    let (factset, symbols) = caveat_set_to_factset(caveat_set);
 
     // 2. Build TokenState from FactSet
     let mut state = TokenState::new();
@@ -65,10 +73,7 @@ pub fn verify_token_datalog(
         ));
     }
 
-    // 2b. If the token has NO app/service dimension facts but DOES have
-    // non-dimensional caveats (time, user, org, machine, etc.), inject
-    // `unrestricted(1)` so the unrestricted rule can fire. Without this,
-    // tokens with only time/user caveats would produce no matching allow rule.
+    // 2b. Determine token dimensions from user-supplied facts.
     let has_app_facts = state
         .all_facts()
         .iter()
@@ -77,21 +82,35 @@ pub fn verify_token_datalog(
         .all_facts()
         .iter()
         .any(|f| symbols.resolve(f.predicate) == Some("service"));
-    let has_unrestricted_fact = state
+    let has_valid_until = state
         .all_facts()
         .iter()
-        .any(|f| symbols.resolve(f.predicate) == Some("unrestricted"));
+        .any(|f| symbols.resolve(f.predicate) == Some("valid_until"));
 
-    if !has_app_facts && !has_service_facts && !has_unrestricted_fact {
-        // Token has facts (non-empty) but none are app/service dimensional.
-        // Inject unrestricted(1) so the unrestricted rule can fire.
-        let pred = symbols.intern("unrestricted");
-        let fact = Fact::unary(pred, FieldElement::from_u64(1));
-        state.add_fact(fact);
+    // 3. Convert committed facts to trace-format facts.
+    // This filters out reserved predicates to prevent policy injection attacks.
+    let mut trace_facts = committed_facts_to_trace(&state, &symbols);
+
+    // 3b. Inject engine-controlled facts AFTER user facts are converted and filtered.
+    // These are added directly to trace_facts (not to state) so they cannot be
+    // spoofed by user-supplied caveats with reserved predicate names.
+    if !has_app_facts && !has_service_facts {
+        // Token has no app/service dimensional facts -- inject unrestricted(1)
+        // so the unrestricted rules can fire.
+        trace_facts.push(TraceFact::new(
+            symbol_from_str("unrestricted"),
+            vec![Term::Int(1)],
+        ));
     }
 
-    // 3. Convert committed facts to trace-format facts
-    let trace_facts = committed_facts_to_trace(&state, &symbols);
+    if !has_valid_until {
+        // Token has no time bound -- inject no_time_bound(1) so Rule 3 can
+        // distinguish truly unbounded tokens from time-bounded ones.
+        trace_facts.push(TraceFact::new(
+            symbol_from_str("no_time_bound"),
+            vec![Term::Int(1)],
+        ));
+    }
 
     // 4. Convert AuthRequest to trace format
     let trace_request = auth_request_to_trace(request)?;
@@ -131,7 +150,11 @@ pub fn verify_token_datalog(
 
 /// Verify with just the clearance result (no trace). Convenience wrapper
 /// for the common trusted-mode case.
-pub fn verify_token_datalog_trusted(
+///
+/// This is `pub(crate)` because external callers should use either:
+/// - `verify_token_datalog_full()` for the complete verification path, or
+/// - `verify_token_datalog()` for the trace-producing path (which includes deny checks).
+pub(crate) fn verify_token_datalog_trusted(
     caveat_set: &CaveatSet,
     request: &AuthRequest,
 ) -> Result<TokenClearance, TokenError> {
@@ -233,19 +256,27 @@ fn full_policy() -> Vec<Rule> {
         checks: vec![Check::MemberOf(Term::Var(1), Term::Var(1))],
     });
 
-    // Rule 3: allow if unrestricted(1)
-    // Note: Unlike the standard policy, we don't require request_action here.
-    // An unrestricted token permits EVERYTHING including requests with no action.
+    // Rule 3: allow if unrestricted(1) AND no valid_until fact exists.
+    // This rule ONLY fires for truly unbounded tokens (no time caveat at all).
+    // Time-bounded unrestricted tokens MUST go through Rule 12, which enforces
+    // the time check. Without this guard, an expired time-bounded token could
+    // match Rule 3 and bypass expiry enforcement.
     rules.push(Rule {
         id: rule_ids::UNRESTRICTED,
         head: Atom {
             predicate: symbol_from_str("allow"),
             terms: vec![],
         },
-        body: vec![Atom {
-            predicate: symbol_from_str("unrestricted"),
-            terms: vec![Term::Int(1)],
-        }],
+        body: vec![
+            Atom {
+                predicate: symbol_from_str("unrestricted"),
+                terms: vec![Term::Int(1)],
+            },
+            Atom {
+                predicate: symbol_from_str("no_time_bound"),
+                terms: vec![Term::Int(1)],
+            },
+        ],
         checks: vec![],
     });
 
@@ -404,12 +435,34 @@ fn full_policy() -> Vec<Rule> {
 // Internal conversion helpers
 // ============================================================================
 
+/// Predicate names reserved by the policy engine.
+///
+/// These predicates have special semantics in the Datalog evaluation and MUST NOT
+/// be injectable from token facts. If a committed fact uses one of these predicates,
+/// it could bypass authorization logic (e.g., injecting `allow()` or `unrestricted(1)`
+/// directly into the fact set).
+const RESERVED_PREDICATES: &[&str] = &[
+    "allow",
+    "deny",
+    "request_app",
+    "request_service",
+    "request_action",
+    "request_time",
+    "no_action_required",
+    "unrestricted",
+    "no_time_bound",
+    "action_allowed",
+    "svc_action_allowed",
+];
+
 /// Convert committed facts (FieldElement-based) to trace-format facts (Symbol-based).
 ///
 /// App and service facts are expanded into per-action facts for the secure
 /// MemberOf-based policy:
 /// - `app(id, "rw")` -> `action_allowed(id, "r")`, `action_allowed(id, "w")`
 /// - `service(name, "rw")` -> `svc_action_allowed(name, "r")`, `svc_action_allowed(name, "w")`
+///
+/// Facts with reserved predicate names are rejected to prevent policy injection attacks.
 fn committed_facts_to_trace(state: &TokenState, symbols: &SymbolTable) -> Vec<TraceFact> {
     use pyana_macaroon::action::Action;
 
@@ -422,6 +475,19 @@ fn committed_facts_to_trace(state: &TokenState, symbols: &SymbolTable) -> Vec<Tr
         } else {
             fact.predicate.0
         };
+
+        // SECURITY: Reject facts with reserved predicate names.
+        // A malicious token could try to inject `allow()`, `unrestricted(1)`, or
+        // `request_app(X)` directly into the fact set to bypass policy evaluation.
+        if let Some(name) = pred_name {
+            if RESERVED_PREDICATES.contains(&name) {
+                // Skip reserved predicates silently -- they are injected by the
+                // engine itself (unrestricted, no_time_bound) or derived by rules
+                // (allow, action_allowed, svc_action_allowed). User-supplied facts
+                // must never use these names.
+                continue;
+            }
+        }
 
         // Expand app facts into per-action facts
         if pred_name == Some("app") {

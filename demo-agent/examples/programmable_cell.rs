@@ -315,7 +315,11 @@ fn main() {
         target: target_id,
         method: symbol("set_state"),
         args: vec![],
-        authorization: Authorization::Proof(valid_proof.clone()),
+        authorization: Authorization::Proof {
+            proof_bytes: valid_proof.clone(),
+            bound_action: "set_state".to_string(),
+            bound_resource: String::new(),
+        },
         preconditions: Default::default(),
         effects: vec![Effect::SetField {
             cell: target_id,
@@ -390,7 +394,11 @@ fn main() {
         target: target_id,
         method: symbol("set_state"),
         args: vec![],
-        authorization: Authorization::Proof(invalid_proof),
+        authorization: Authorization::Proof {
+            proof_bytes: invalid_proof,
+            bound_action: "set_state".to_string(),
+            bound_resource: String::new(),
+        },
         preconditions: Default::default(),
         effects: vec![Effect::SetField {
             cell: target_id,

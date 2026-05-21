@@ -634,30 +634,89 @@ async fn handle_revocation_message(state: &NodeState, from: SocketAddr, message:
 /// Process an incoming intent from the gossip network.
 ///
 /// P1 Fix (issue 10): Uses the dedicated PublishIntent variant instead of abusing PublishTurn.
+/// CRITICAL 2 Fix: Verifies stake proof for gossip-propagated intents.
 async fn handle_intent_message(state: &NodeState, from: SocketAddr, message: PeerMessage) {
     match message {
         PeerMessage::PublishIntent { intent_data, .. } => {
             // Decode and validate the intent from intent_data.
-            if let Ok(intent) = serde_json::from_slice::<pyana_intent::Intent>(&intent_data) {
-                // Validate the intent before accepting.
-                if pyana_intent::validation::validate_intent(&intent).is_ok() {
-                    let intent_id_hex: String =
-                        intent.id.iter().map(|b| format!("{b:02x}")).collect();
-                    info!(from = %from, intent_id = %intent_id_hex, "received intent via gossip");
+            let intent = match serde_json::from_slice::<pyana_intent::Intent>(&intent_data) {
+                Ok(i) => i,
+                Err(_) => return,
+            };
 
-                    // Add to local intent pool (respecting size limit).
-                    let mut s = state.write().await;
-                    if s.intent_pool.len() < crate::api::MAX_NODE_INTENT_POOL {
-                        s.intent_pool.insert(intent.id, intent.clone());
-                    }
-                    drop(s);
-
-                    // Broadcast to local WS clients.
-                    state.emit(NodeEvent::Intent {
-                        intent: serde_json::to_value(&intent).unwrap_or_default(),
-                    });
-                }
+            // Validate the intent structure before accepting.
+            if pyana_intent::validation::validate_intent(&intent).is_err() {
+                return;
             }
+
+            let intent_id_hex: String =
+                intent.id.iter().map(|b| format!("{b:02x}")).collect();
+
+            // CRITICAL 2: Verify stake proof for gossip-propagated intents.
+            // Intents arriving via gossip MUST carry a valid stake proof to prevent
+            // spam. The stake proves the sender controls a note in the Poseidon2
+            // note tree, binding real economic cost to intent propagation.
+            if let Some(stake_proof) = &intent.stake_proof {
+                // Build the Poseidon2 note tree root from stored commitments for
+                // verification. This ensures the stake is against the current
+                // federation state, not an outdated or fabricated root.
+                let s = state.read().await;
+                let known_root = match s.store.load_all_note_commitments() {
+                    Ok(commitments) => {
+                        let blake3_commits: Vec<[u8; 32]> =
+                            commitments.iter().map(|c| c.0).collect();
+                        let depth = 20; // Standard tree depth
+                        let mut tree = pyana_store::Poseidon2NoteTree::from_blake3_commitments(
+                            &blake3_commits,
+                            depth,
+                        );
+                        tree.root()
+                    }
+                    Err(e) => {
+                        warn!(
+                            from = %from,
+                            intent_id = %intent_id_hex,
+                            error = %e,
+                            "cannot verify intent stake: failed to load note commitments"
+                        );
+                        return;
+                    }
+                };
+                drop(s);
+
+                // Verify the stake proof against the known Poseidon2 root.
+                if !pyana_intent::verify_intent_stake(&intent, known_root) {
+                    warn!(
+                        from = %from,
+                        intent_id = %intent_id_hex,
+                        "rejecting intent: stake proof verification failed"
+                    );
+                    return;
+                }
+            } else {
+                // Gossip-propagated intents without a stake proof are rejected.
+                // Only local intents (submitted directly via API) may omit the stake.
+                warn!(
+                    from = %from,
+                    intent_id = %intent_id_hex,
+                    "rejecting intent: no stake proof (required for gossip propagation)"
+                );
+                return;
+            }
+
+            info!(from = %from, intent_id = %intent_id_hex, "received intent via gossip (stake verified)");
+
+            // Add to local intent pool (respecting size limit).
+            let mut s = state.write().await;
+            if s.intent_pool.len() < crate::api::MAX_NODE_INTENT_POOL {
+                s.intent_pool.insert(intent.id, intent.clone());
+            }
+            drop(s);
+
+            // Broadcast to local WS clients.
+            state.emit(NodeEvent::Intent {
+                intent: serde_json::to_value(&intent).unwrap_or_default(),
+            });
         }
         // Reject PublishTurn messages on the intents topic. Intents MUST use the
         // dedicated PublishIntent variant. Accepting JSON-encoded intents inside

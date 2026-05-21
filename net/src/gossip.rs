@@ -31,6 +31,8 @@ use quinn::{Connection, Endpoint, RecvStream};
 use tokio::sync::{RwLock, mpsc};
 use tracing::{debug, info, trace, warn};
 
+use pyana_types::{PublicKey, Signature as Ed25519Signature, SigningKey};
+
 use crate::message::PeerMessage;
 use crate::node::{NodeId, fmt_node_id};
 
@@ -104,10 +106,14 @@ pub struct GossipNetwork {
     outgoing_tx: mpsc::UnboundedSender<OutgoingGossip>,
     /// The QUIC endpoint (for dialing peers)
     endpoint: Endpoint,
-    /// Symmetric signing key for envelope authentication (HMAC-blake3).
-    signing_key: [u8; 32],
+    /// Ed25519 signing key for envelope authentication (asymmetric).
+    /// Each node signs with its own key; receivers verify with the sender's public key.
+    signing_key: Arc<SigningKey>,
     /// Maximum concurrent gossip connections.
     max_connections: usize,
+    /// Registry of known peer public keys for signature verification.
+    /// Maps NodeId -> PublicKey. Populated from federation configuration.
+    peer_keys: Arc<RwLock<HashMap<NodeId, PublicKey>>>,
 }
 
 /// A bounded deduplication set with time-based expiry.
@@ -458,18 +464,23 @@ enum GossipEnvelope {
 
 /// A signed gossip envelope. The signature covers the serialized inner envelope
 /// and the sender's node ID, preventing forgery and ensuring message authenticity.
+///
+/// Uses Ed25519 asymmetric signatures: each node signs with its own private key,
+/// and receivers verify using the sender's public key (looked up by NodeId from
+/// the peer registry). This eliminates the broken shared-key HMAC scheme where
+/// verification always failed between different nodes.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SignedEnvelope {
     /// The sender's node ID (blake3 hash of their TLS certificate).
     sender: NodeId,
     /// The serialized inner GossipEnvelope (postcard-encoded).
     body: Vec<u8>,
-    /// HMAC-blake3 signature: `blake3_keyed_hash(signing_key, sender || body)`.
-    signature: [u8; 32],
+    /// Ed25519 signature over `sender || body` using the sender's private key.
+    signature: [u8; 64],
 }
 
 impl SignedEnvelope {
-    fn sign(envelope: &GossipEnvelope, sender: NodeId, signing_key: &[u8; 32]) -> Option<Self> {
+    fn sign(envelope: &GossipEnvelope, sender: NodeId, signing_key: &SigningKey) -> Option<Self> {
         let body = postcard::to_stdvec(envelope).ok()?;
         let signature = Self::compute_signature(&sender, &body, signing_key);
         Some(Self {
@@ -479,39 +490,52 @@ impl SignedEnvelope {
         })
     }
 
-    fn verify(&self, signing_key: &[u8; 32]) -> bool {
-        let expected = Self::compute_signature(&self.sender, &self.body, signing_key);
-        // Constant-time comparison
-        self.signature
-            .iter()
-            .zip(expected.iter())
-            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-            == 0
+    /// Verify the envelope's Ed25519 signature using the sender's public key.
+    ///
+    /// The caller must look up the sender's public key from the peer registry
+    /// using `self.sender` (NodeId). Returns false if the signature is invalid.
+    fn verify(&self, sender_public_key: &PublicKey) -> bool {
+        let mut message = Vec::with_capacity(32 + self.body.len());
+        message.extend_from_slice(&self.sender);
+        message.extend_from_slice(&self.body);
+        let sig = Ed25519Signature(self.signature);
+        sender_public_key.verify(&message, &sig)
     }
 
     fn decode_inner(&self) -> Option<GossipEnvelope> {
         postcard::from_bytes(&self.body).ok()
     }
 
-    fn compute_signature(sender: &NodeId, body: &[u8], signing_key: &[u8; 32]) -> [u8; 32] {
-        let mut input = Vec::with_capacity(32 + body.len());
-        input.extend_from_slice(sender);
-        input.extend_from_slice(body);
-        *blake3::keyed_hash(signing_key, &input).as_bytes()
+    fn compute_signature(sender: &NodeId, body: &[u8], signing_key: &SigningKey) -> [u8; 64] {
+        let mut message = Vec::with_capacity(32 + body.len());
+        message.extend_from_slice(sender);
+        message.extend_from_slice(body);
+        let sig = pyana_types::sign(signing_key, &message);
+        sig.0
     }
 }
 
 impl GossipNetwork {
     /// Create a new gossip network node.
     ///
-    /// The `signing_key` is a 32-byte symmetric key used to sign all outgoing
-    /// gossip envelopes (HMAC-blake3). All peers in the network must share this
-    /// key for envelope verification.
-    pub fn new(endpoint: Endpoint, node_id: NodeId, signing_key: [u8; 32]) -> Self {
+    /// The `signing_key` is this node's Ed25519 signing key, used to authenticate
+    /// all outgoing gossip envelopes. Receivers verify using the sender's public
+    /// key looked up from the peer registry.
+    ///
+    /// `peer_keys` maps known peer NodeIds to their Ed25519 public keys. This
+    /// registry must be populated with federation member keys for signature
+    /// verification to succeed.
+    pub fn new(
+        endpoint: Endpoint,
+        node_id: NodeId,
+        signing_key: SigningKey,
+        peer_keys: HashMap<NodeId, PublicKey>,
+    ) -> Self {
         Self::with_max_connections(
             endpoint,
             node_id,
             signing_key,
+            peer_keys,
             DEFAULT_MAX_GOSSIP_CONNECTIONS,
         )
     }
@@ -520,7 +544,8 @@ impl GossipNetwork {
     pub fn with_max_connections(
         endpoint: Endpoint,
         node_id: NodeId,
-        signing_key: [u8; 32],
+        signing_key: SigningKey,
+        peer_keys: HashMap<NodeId, PublicKey>,
         max_connections: usize,
     ) -> Self {
         let (outgoing_tx, outgoing_rx) = mpsc::unbounded_channel();
@@ -533,19 +558,23 @@ impl GossipNetwork {
             message_cache: HashMap::new(),
         }));
 
+        let signing_key = Arc::new(signing_key);
+        let peer_keys = Arc::new(RwLock::new(peer_keys));
+
         let network = Self {
             node_id,
             state: state.clone(),
             outgoing_tx: outgoing_tx.clone(),
             endpoint: endpoint.clone(),
-            signing_key,
+            signing_key: signing_key.clone(),
             max_connections,
+            peer_keys: peer_keys.clone(),
         };
 
         // Spawn the forwarding task
         let fwd_state = state.clone();
         let fwd_node_id = node_id;
-        let fwd_key = signing_key;
+        let fwd_key = signing_key.clone();
         tokio::spawn(async move {
             Self::forward_loop(outgoing_rx, fwd_state, fwd_node_id, fwd_key).await;
         });
@@ -554,9 +583,10 @@ impl GossipNetwork {
         let accept_state = state.clone();
         let accept_endpoint = endpoint.clone();
         let accept_tx = outgoing_tx.clone();
-        let accept_key = signing_key;
+        let accept_key = signing_key.clone();
         let accept_node_id = node_id;
         let accept_max_conns = max_connections;
+        let accept_peer_keys = peer_keys.clone();
         tokio::spawn(async move {
             Self::accept_loop(
                 accept_endpoint,
@@ -565,6 +595,7 @@ impl GossipNetwork {
                 accept_key,
                 accept_node_id,
                 accept_max_conns,
+                accept_peer_keys,
             )
             .await;
         });
@@ -596,6 +627,15 @@ impl GossipNetwork {
         );
 
         network
+    }
+
+    /// Register a peer's public key for signature verification.
+    ///
+    /// Call this when a new federation member is discovered (e.g., from genesis
+    /// configuration or peer discovery protocol).
+    pub async fn register_peer_key(&self, node_id: NodeId, public_key: PublicKey) {
+        let mut keys = self.peer_keys.write().await;
+        keys.insert(node_id, public_key);
     }
 
     /// Join a gossip topic, connecting to bootstrap peers.
@@ -745,7 +785,7 @@ impl GossipNetwork {
     fn sign_envelope(
         envelope: &GossipEnvelope,
         node_id: NodeId,
-        signing_key: &[u8; 32],
+        signing_key: &SigningKey,
     ) -> Option<Vec<u8>> {
         let signed = SignedEnvelope::sign(envelope, node_id, signing_key)?;
         postcard::to_stdvec(&signed).ok()
@@ -755,7 +795,7 @@ impl GossipNetwork {
         mut rx: mpsc::UnboundedReceiver<OutgoingGossip>,
         state: Arc<RwLock<GossipState>>,
         node_id: NodeId,
-        signing_key: [u8; 32],
+        signing_key: Arc<SigningKey>,
     ) {
         while let Some(outgoing) = rx.recv().await {
             match outgoing {
@@ -901,9 +941,10 @@ impl GossipNetwork {
         endpoint: Endpoint,
         state: Arc<RwLock<GossipState>>,
         outgoing_tx: mpsc::UnboundedSender<OutgoingGossip>,
-        signing_key: [u8; 32],
+        signing_key: Arc<SigningKey>,
         node_id: NodeId,
         max_connections: usize,
+        peer_keys: Arc<RwLock<HashMap<NodeId, PublicKey>>>,
     ) {
         loop {
             let Some(incoming) = endpoint.accept().await else {
@@ -926,8 +967,9 @@ impl GossipNetwork {
 
             let state = state.clone();
             let outgoing_tx = outgoing_tx.clone();
-            let key = signing_key;
+            let key = signing_key.clone();
             let our_node_id = node_id;
+            let peer_keys = peer_keys.clone();
             tokio::spawn(async move {
                 let Ok(conn) = incoming.await else { return };
                 let remote_addr = conn.remote_address();
@@ -944,12 +986,32 @@ impl GossipNetwork {
 
                     let state = state.clone();
                     let outgoing_tx = outgoing_tx.clone();
+                    let key = key.clone();
+                    let peer_keys = peer_keys.clone();
                     tokio::spawn(async move {
                         if let Ok(signed) = read_signed_envelope(&mut recv).await {
-                            // Verify signature before processing
-                            if !signed.verify(&key) {
+                            // Look up the sender's public key from the peer registry.
+                            let sender_pk = {
+                                let keys = peer_keys.read().await;
+                                keys.get(&signed.sender).copied()
+                            };
+
+                            let sender_pk = match sender_pk {
+                                Some(pk) => pk,
+                                None => {
+                                    warn!(
+                                        "Rejecting gossip envelope from {} — unknown sender {:?}",
+                                        remote_addr,
+                                        &signed.sender[..4]
+                                    );
+                                    return;
+                                }
+                            };
+
+                            // Verify Ed25519 signature using the sender's public key.
+                            if !signed.verify(&sender_pk) {
                                 warn!(
-                                    "Rejecting gossip envelope from {} — invalid signature",
+                                    "Rejecting gossip envelope from {} — invalid Ed25519 signature",
                                     remote_addr
                                 );
                                 return;
@@ -984,7 +1046,7 @@ impl GossipNetwork {
         remote_addr: SocketAddr,
         state: &Arc<RwLock<GossipState>>,
         outgoing_tx: &mpsc::UnboundedSender<OutgoingGossip>,
-        signing_key: &[u8; 32],
+        signing_key: &SigningKey,
         node_id: NodeId,
     ) {
         match envelope {

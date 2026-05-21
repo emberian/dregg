@@ -17,9 +17,5 @@ blake3 = "1"
 getrandom = { workspace = true }
 proptest = { workspace = true }
 
-[[example]]
-name = "bench_summary"
-path = "../benches/summary.rs"
-
 [lints]
 workspace = true

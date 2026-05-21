@@ -790,7 +790,7 @@ impl TurnExecutor {
         // Meter authorization cost.
         let auth_cost = match &action.authorization {
             Authorization::Signature(_, _) => self.costs.signature_verify,
-            Authorization::Proof(_) => self.costs.proof_verify,
+            Authorization::Proof { .. } => self.costs.proof_verify,
             Authorization::Breadstuff(_) => self.costs.signature_verify / 2, // cheaper
             Authorization::None => 0,
         };
@@ -822,7 +822,7 @@ impl TurnExecutor {
             .partition(|e| !e.is_permission_effect());
 
         // Apply effects, tracking which cells have fields set (for proved_state).
-        let is_proof_auth = matches!(&action.authorization, Authorization::Proof(_));
+        let is_proof_auth = matches!(&action.authorization, Authorization::Proof { .. });
         let mut proof_field_sets: std::collections::HashMap<
             CellId,
             std::collections::HashSet<usize>,
@@ -1187,8 +1187,8 @@ impl TurnExecutor {
                 )),
             },
             AuthRequired::Proof => match &action.authorization {
-                Authorization::Proof(proof_bytes) => {
-                    self.verify_zk_proof(action, target_cell, proof_bytes, path)
+                Authorization::Proof { proof_bytes, bound_action, bound_resource } => {
+                    self.verify_zk_proof(target_cell, proof_bytes, bound_action, bound_resource, path)
                 }
                 _ => Err((
                     TurnError::PermissionDenied {
@@ -1203,8 +1203,8 @@ impl TurnExecutor {
                 Authorization::Signature(r, s) => {
                     self.verify_ed25519_signature(action, target_cell, r, s, path, turn_nonce)
                 }
-                Authorization::Proof(proof_bytes) => {
-                    self.verify_zk_proof(action, target_cell, proof_bytes, path)
+                Authorization::Proof { proof_bytes, bound_action, bound_resource } => {
+                    self.verify_zk_proof(target_cell, proof_bytes, bound_action, bound_resource, path)
                 }
                 Authorization::Breadstuff(token) => self.check_breadstuff(
                     ledger,
@@ -1290,11 +1290,17 @@ impl TurnExecutor {
     }
 
     /// Verify a ZK proof against the target cell's verification key.
+    ///
+    /// Uses the `bound_action` and `bound_resource` that were committed to at
+    /// proving time (carried in the `Authorization::Proof` variant) rather than
+    /// deriving from the action's method/target. This ensures the verifier checks
+    /// against the same binding the prover created.
     fn verify_zk_proof(
         &self,
-        action: &Action,
         target_cell: &Cell,
         proof_bytes: &[u8],
+        bound_action: &str,
+        bound_resource: &str,
         path: &[usize],
     ) -> Result<(), (TurnError, Vec<usize>)> {
         if proof_bytes.is_empty() {
@@ -1332,11 +1338,7 @@ impl TurnExecutor {
             )
         })?;
 
-        let public_inputs = Self::compute_signing_message(action, &self.local_federation_id);
-
-        let method_str = format!("{:?}", action.method);
-        let target_str = action.target.to_string();
-        if verifier.verify(proof_bytes, &method_str, &target_str, &vk.data) {
+        if verifier.verify(proof_bytes, bound_action, bound_resource, &vk.data) {
             Ok(())
         } else {
             Err((
@@ -1800,7 +1802,11 @@ impl TurnExecutor {
                             public_inputs.extend_from_slice(nullifier);
                             public_inputs.extend_from_slice(root);
                             public_inputs.extend_from_slice(dest_federation);
-                            if verifier.verify(proof_bytes, "", "", &public_inputs) {
+                            // Use well-known constants for bridge-mint proofs so the
+                            // verifier can distinguish them from authorization proofs.
+                            // action = "bridge-mint", resource = hex(destination_federation).
+                            let dest_hex: String = dest_federation.iter().map(|b| format!("{b:02x}")).collect();
+                            if verifier.verify(proof_bytes, "bridge-mint", &dest_hex, &public_inputs) {
                                 Ok(())
                             } else {
                                 Err("STARK spending proof verification failed".to_string())
@@ -2567,7 +2573,7 @@ impl TurnExecutor {
 
         total = total.saturating_add(match &tree.action.authorization {
             Authorization::Signature(_, _) => self.costs.signature_verify,
-            Authorization::Proof(_) => self.costs.proof_verify,
+            Authorization::Proof { .. } => self.costs.proof_verify,
             Authorization::Breadstuff(_) => self.costs.signature_verify / 2,
             Authorization::None => 0,
         });

@@ -165,9 +165,21 @@ impl ActionBuilder {
         self
     }
 
-    /// Set the authorization to a ZK proof.
-    pub fn authorize_proof(&mut self, proof: Vec<u8>) -> &mut Self {
-        self.authorization = Authorization::Proof(proof);
+    /// Set the authorization to a ZK proof with its bound (action, resource) pair.
+    ///
+    /// The `bound_action` and `bound_resource` must match what was committed to
+    /// at proving time (derived from `AuthRequest.action` and `app_id.or(service)`).
+    pub fn authorize_proof(
+        &mut self,
+        proof: Vec<u8>,
+        bound_action: impl Into<String>,
+        bound_resource: impl Into<String>,
+    ) -> &mut Self {
+        self.authorization = Authorization::Proof {
+            proof_bytes: proof,
+            bound_action: bound_action.into(),
+            bound_resource: bound_resource.into(),
+        };
         self
     }
 

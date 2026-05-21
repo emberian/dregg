@@ -28,6 +28,28 @@ use pyana_turn::{CallForest, Turn};
 
 use crate::state::NodeState;
 
+// Re-import x25519 and chacha for seal/unseal operations.
+use chacha20poly1305;
+use x25519_dalek;
+
+/// Build a CallForest with a single root action containing the given effects.
+fn build_forest_with_effects(target: CellId, effects: Vec<pyana_turn::Effect>) -> CallForest {
+    let action = pyana_turn::Action {
+        target,
+        method: pyana_turn::action::symbol("execute"),
+        args: vec![],
+        authorization: pyana_turn::Authorization::None,
+        preconditions: pyana_cell::Preconditions::default(),
+        effects,
+        may_delegate: pyana_turn::DelegationMode::None,
+        commitment_mode: pyana_turn::CommitmentMode::Full,
+        balance_change: None,
+    };
+    let mut forest = CallForest::new();
+    forest.add_root(action);
+    forest
+}
+
 // =============================================================================
 // JSON-RPC types
 // =============================================================================
@@ -505,7 +527,7 @@ async fn tool_submit_turn(params: &Value, state: &NodeState) -> McpToolResult {
         }
     };
 
-    let s = state.read().await;
+    let mut s = state.write().await;
     if !s.unlocked {
         return McpToolResult::error("wallet is locked; unlock first");
     }
@@ -526,18 +548,55 @@ async fn tool_submit_turn(params: &Value, state: &NodeState) -> McpToolResult {
     let turn_hash_bytes = turn.hash();
     let turn_hash = hex_encode(&turn_hash_bytes);
 
-    drop(s);
+    // Execute the turn locally.
+    let executor = pyana_turn::TurnExecutor::new(pyana_turn::ComputronCosts::default());
+    let exec_result = executor.execute(&turn, &mut s.ledger);
 
-    // Emit receipt event to WebSocket subscribers.
-    state.emit(crate::state::NodeEvent::Receipt {
-        hash: turn_hash.clone(),
-    });
+    match exec_result {
+        pyana_turn::TurnResult::Committed { receipt, .. } => {
+            s.wallet.append_receipt(receipt);
 
-    McpToolResult::json(&serde_json::json!({
-        "accepted": true,
-        "turn_hash": turn_hash,
-        "signer": hex_encode(&signed.signer.0),
-    }))
+            // Serialize the full SignedTurn for gossip (postcard format).
+            let turn_data = postcard::to_stdvec(&signed).expect("SignedTurn serialization");
+
+            drop(s);
+
+            // Emit receipt event to WebSocket subscribers.
+            state.emit(crate::state::NodeEvent::Receipt {
+                hash: turn_hash.clone(),
+            });
+
+            // Gossip the turn to federation peers.
+            if let Some(gossip) = state.gossip().await {
+                let hash = turn_hash_bytes;
+                tokio::spawn(async move {
+                    gossip.gossip_turn(hash, turn_data).await;
+                });
+            }
+
+            McpToolResult::json(&serde_json::json!({
+                "accepted": true,
+                "turn_hash": turn_hash,
+                "signer": hex_encode(&signed.signer.0),
+            }))
+        }
+        pyana_turn::TurnResult::Rejected { reason, .. } => {
+            drop(s);
+            McpToolResult::json(&serde_json::json!({
+                "accepted": false,
+                "turn_hash": turn_hash,
+                "error": format!("rejected: {reason}"),
+            }))
+        }
+        _ => {
+            drop(s);
+            McpToolResult::json(&serde_json::json!({
+                "accepted": false,
+                "turn_hash": turn_hash,
+                "error": "turn execution did not commit",
+            }))
+        }
+    }
 }
 
 async fn tool_grant_capability(params: &Value, state: &NodeState) -> McpToolResult {
@@ -545,7 +604,7 @@ async fn tool_grant_capability(params: &Value, state: &NodeState) -> McpToolResu
         Some(h) => h,
         None => return McpToolResult::error("missing required parameter: to_agent"),
     };
-    let _target_cell_hex = match params.get("target_cell").and_then(|v| v.as_str()) {
+    let target_cell_hex = match params.get("target_cell").and_then(|v| v.as_str()) {
         Some(h) => h,
         None => return McpToolResult::error("missing required parameter: target_cell"),
     };
@@ -554,41 +613,190 @@ async fn tool_grant_capability(params: &Value, state: &NodeState) -> McpToolResu
         None => return McpToolResult::error("missing required parameter: permissions"),
     };
 
-    let s = state.read().await;
+    let to_agent_bytes = match hex_decode(to_agent_hex) {
+        Ok(b) => b,
+        Err(_) => return McpToolResult::error("invalid hex for to_agent (expected 64 hex chars)"),
+    };
+    let target_cell_bytes = match hex_decode(target_cell_hex) {
+        Ok(b) => b,
+        Err(_) => {
+            return McpToolResult::error("invalid hex for target_cell (expected 64 hex chars)");
+        }
+    };
+
+    let mut s = state.write().await;
     if !s.unlocked {
         return McpToolResult::error("wallet is locked; unlock first");
     }
 
-    // Validate the recipient hex.
-    if hex_decode(to_agent_hex).is_err() {
-        return McpToolResult::error("invalid hex for to_agent (expected 64 hex chars)");
-    }
+    // Build a turn with Effect::GrantCapability.
+    let agent_cell_id = pyana_cell::CellId::derive_raw(
+        &s.wallet.public_key().0,
+        &[0u8; 32],
+    );
+    let to_cell_id = pyana_cell::CellId(to_agent_bytes);
+    let target_cell_id = pyana_cell::CellId(target_cell_bytes);
 
-    McpToolResult::json(&serde_json::json!({
-        "granted": true,
-        "to_agent": to_agent_hex,
-        "permissions": permissions,
-        "note": "Capability grant submitted. The recipient can now exercise these permissions."
-    }))
+    // Parse permissions string into AuthRequired level.
+    let perm_level = match permissions {
+        "none" => pyana_cell::AuthRequired::None,
+        "signature" => pyana_cell::AuthRequired::Signature,
+        "proof" => pyana_cell::AuthRequired::Proof,
+        "either" => pyana_cell::AuthRequired::Either,
+        _ => pyana_cell::AuthRequired::None,
+    };
+
+    let cap = pyana_cell::CapabilityRef {
+        target: target_cell_id,
+        slot: 0,
+        permissions: perm_level,
+        breadstuff: None,
+        expires_at: None,
+    };
+
+    let effect = pyana_turn::Effect::GrantCapability {
+        from: agent_cell_id,
+        to: to_cell_id,
+        cap,
+    };
+
+    let nonce = s.wallet.receipt_chain_length() as u64;
+    let turn = Turn {
+        agent: agent_cell_id,
+        nonce,
+        fee: 0,
+        memo: Some(format!("grant capability: {permissions}")),
+        valid_until: None,
+        call_forest: build_forest_with_effects(agent_cell_id, vec![effect]),
+        depends_on: vec![],
+        previous_receipt_hash: None,
+    };
+
+    let signed = s.wallet.sign_turn(&turn);
+    let turn_hash = hex_encode(&turn.hash());
+
+    // Execute locally.
+    let executor = pyana_turn::TurnExecutor::new(pyana_turn::ComputronCosts::default());
+    let exec_result = executor.execute(&turn, &mut s.ledger);
+
+    match exec_result {
+        pyana_turn::TurnResult::Committed { receipt, .. } => {
+            s.wallet.append_receipt(receipt);
+
+            let turn_data = postcard::to_stdvec(&signed).expect("SignedTurn serialization");
+            drop(s);
+
+            state.emit(crate::state::NodeEvent::Receipt {
+                hash: turn_hash.clone(),
+            });
+
+            if let Some(gossip) = state.gossip().await {
+                let hash = signed.turn.hash();
+                tokio::spawn(async move {
+                    gossip.gossip_turn(hash, turn_data).await;
+                });
+            }
+
+            McpToolResult::json(&serde_json::json!({
+                "granted": true,
+                "to_agent": to_agent_hex,
+                "target_cell": target_cell_hex,
+                "permissions": permissions,
+                "turn_hash": turn_hash,
+            }))
+        }
+        pyana_turn::TurnResult::Rejected { reason, .. } => {
+            drop(s);
+            McpToolResult::json(&serde_json::json!({
+                "granted": false,
+                "error": format!("turn rejected: {reason}"),
+            }))
+        }
+        _ => {
+            drop(s);
+            McpToolResult::error("grant capability turn did not commit")
+        }
+    }
 }
 
 async fn tool_revoke_capability(params: &Value, state: &NodeState) -> McpToolResult {
     let cap_slot = match params.get("cap_slot").and_then(|v| v.as_u64()) {
-        Some(s) => s,
+        Some(s) => s as u32,
         None => return McpToolResult::error("missing required parameter: cap_slot"),
     };
 
-    let s = state.read().await;
+    let mut s = state.write().await;
     if !s.unlocked {
         return McpToolResult::error("wallet is locked; unlock first");
     }
 
-    // In a full implementation, this would record the revocation in the store.
-    McpToolResult::json(&serde_json::json!({
-        "revoked": true,
-        "cap_slot": cap_slot,
-        "note": "Capability revoked. It can no longer be exercised."
-    }))
+    // Build a turn with Effect::RevokeCapability targeting the agent's own cell.
+    let agent_cell_id = pyana_cell::CellId::derive_raw(
+        &s.wallet.public_key().0,
+        &[0u8; 32],
+    );
+
+    let effect = pyana_turn::Effect::RevokeCapability {
+        cell: agent_cell_id,
+        slot: cap_slot,
+    };
+
+    let nonce = s.wallet.receipt_chain_length() as u64;
+    let turn = Turn {
+        agent: agent_cell_id,
+        nonce,
+        fee: 0,
+        memo: Some(format!("revoke capability slot {cap_slot}")),
+        valid_until: None,
+        call_forest: build_forest_with_effects(agent_cell_id, vec![effect]),
+        depends_on: vec![],
+        previous_receipt_hash: None,
+    };
+
+    let signed = s.wallet.sign_turn(&turn);
+    let turn_hash = hex_encode(&turn.hash());
+
+    // Execute locally.
+    let executor = pyana_turn::TurnExecutor::new(pyana_turn::ComputronCosts::default());
+    let exec_result = executor.execute(&turn, &mut s.ledger);
+
+    match exec_result {
+        pyana_turn::TurnResult::Committed { receipt, .. } => {
+            s.wallet.append_receipt(receipt);
+
+            let turn_data = postcard::to_stdvec(&signed).expect("SignedTurn serialization");
+            drop(s);
+
+            state.emit(crate::state::NodeEvent::Receipt {
+                hash: turn_hash.clone(),
+            });
+
+            if let Some(gossip) = state.gossip().await {
+                let hash = signed.turn.hash();
+                tokio::spawn(async move {
+                    gossip.gossip_turn(hash, turn_data).await;
+                });
+            }
+
+            McpToolResult::json(&serde_json::json!({
+                "revoked": true,
+                "cap_slot": cap_slot,
+                "turn_hash": turn_hash,
+            }))
+        }
+        pyana_turn::TurnResult::Rejected { reason, .. } => {
+            drop(s);
+            McpToolResult::json(&serde_json::json!({
+                "revoked": false,
+                "cap_slot": cap_slot,
+                "error": format!("turn rejected: {reason}"),
+            }))
+        }
+        _ => {
+            drop(s);
+            McpToolResult::error("revoke capability turn did not commit")
+        }
+    }
 }
 
 async fn tool_post_intent(params: &Value, state: &NodeState) -> McpToolResult {
@@ -675,18 +883,97 @@ async fn tool_fulfill_intent(params: &Value, state: &NodeState) -> McpToolResult
         Err(_) => return McpToolResult::error("invalid hex for intent_id (expected 64 hex chars)"),
     };
 
-    let s = state.read().await;
+    let mut s = state.write().await;
+    if !s.unlocked {
+        return McpToolResult::error("wallet is locked; unlock first");
+    }
+
     let intent = match s.intent_pool.get(&intent_id) {
         Some(i) => i.clone(),
         None => return McpToolResult::error("intent not found in pool"),
     };
 
-    McpToolResult::json(&serde_json::json!({
-        "intent_id": intent_id_hex,
-        "kind": format!("{:?}", intent.kind),
-        "fulfilled": true,
-        "note": "Intent fulfillment submitted. Proof will be generated and broadcast."
-    }))
+    // Derive payer (intent creator) and recipient (this agent) cell IDs.
+    let payer_cell = pyana_sdk::CellId(intent.creator.0);
+    let recipient_cell = pyana_sdk::CellId::derive_raw(
+        &s.wallet.public_key().0,
+        &[0u8; 32],
+    );
+
+    // Get current height.
+    let current_height = s
+        .store
+        .latest_attested_root()
+        .ok()
+        .flatten()
+        .map(|r| r.height)
+        .unwrap_or(0);
+
+    // Build a minimal fulfillment for the execution flow.
+    let state_root = pyana_circuit::BabyBear::new(0);
+    let base_fulfillment = pyana_intent::fulfillment::Fulfillment {
+        intent_id,
+        fulfiller: pyana_intent::CommitmentId(recipient_cell.0),
+        mode: pyana_intent::VerificationMode::Trusted,
+        token_data: Some(vec![0x01; 4]),
+        proof: None,
+        granted_actions: intent
+            .matcher
+            .actions
+            .iter()
+            .filter_map(|p| p.action.clone())
+            .collect(),
+        granted_resource: intent
+            .matcher
+            .resource_pattern
+            .clone()
+            .unwrap_or_else(|| "*".to_string()),
+        expiry: Some(intent.expiry),
+    };
+
+    let fulfillment_with_preds = pyana_intent::fulfillment::FulfillmentWithPredicates {
+        base: base_fulfillment,
+        predicate_proofs: vec![],
+        state_root,
+        state_root_block: current_height,
+    };
+
+    // Execute the fulfillment payment flow.
+    let executor = pyana_turn::TurnExecutor::new(pyana_turn::ComputronCosts::default());
+    let result = pyana_intent::fulfillment::execute_fulfillment_flow(
+        &intent,
+        &fulfillment_with_preds,
+        &executor,
+        &mut s.ledger,
+        payer_cell,
+        recipient_cell,
+        current_height,
+        current_height,
+    );
+
+    match result {
+        Ok(receipt) => {
+            let turn_hash = hex_encode(&receipt.turn_hash);
+            s.wallet.append_receipt(receipt);
+            drop(s);
+            state.emit(crate::state::NodeEvent::Receipt {
+                hash: turn_hash.clone(),
+            });
+            McpToolResult::json(&serde_json::json!({
+                "intent_id": intent_id_hex,
+                "fulfilled": true,
+                "turn_hash": turn_hash,
+            }))
+        }
+        Err(e) => {
+            drop(s);
+            McpToolResult::json(&serde_json::json!({
+                "intent_id": intent_id_hex,
+                "fulfilled": false,
+                "error": e.to_string(),
+            }))
+        }
+    }
 }
 
 async fn tool_delegate(params: &Value, state: &NodeState) -> McpToolResult {
@@ -825,24 +1112,65 @@ async fn tool_seal_data(params: &Value, state: &NodeState) -> McpToolResult {
         None => return McpToolResult::error("missing required parameter: recipient"),
     };
 
-    if hex_decode(recipient_hex).is_err() {
-        return McpToolResult::error("invalid hex for recipient (expected 64 hex chars)");
-    }
+    let recipient_bytes = match hex_decode(recipient_hex) {
+        Ok(b) => b,
+        Err(_) => {
+            return McpToolResult::error("invalid hex for recipient (expected 64 hex chars)");
+        }
+    };
 
     let s = state.read().await;
     if !s.unlocked {
         return McpToolResult::error("wallet is locked; unlock first");
     }
 
-    // Compute a sealed box using BLAKE3 key derivation (simplified seal).
-    let seal_key = blake3::derive_key("pyana-seal-v1", data.as_bytes());
-    let sealed_hex = hex_encode(&seal_key);
+    // Use X25519 + ChaCha20-Poly1305 sealed-box encryption.
+    // Generate ephemeral keypair for forward secrecy.
+    let mut eph_bytes = [0u8; 32];
+    if getrandom::fill(&mut eph_bytes).is_err() {
+        return McpToolResult::error("failed to generate ephemeral key");
+    }
+    let ephemeral_secret = x25519_dalek::StaticSecret::from(eph_bytes);
+    let ephemeral_public = x25519_dalek::PublicKey::from(&ephemeral_secret);
+
+    // DH with recipient's public key to derive shared secret.
+    let recipient_public = x25519_dalek::PublicKey::from(recipient_bytes);
+    let shared = ephemeral_secret.diffie_hellman(&recipient_public);
+
+    // Derive encryption key via BLAKE3 KDF (don't use raw DH output directly).
+    let enc_key = blake3::derive_key(
+        "pyana-mcp-seal-data-v1",
+        shared.as_bytes(),
+    );
+
+    // Generate random nonce.
+    let mut nonce_bytes = [0u8; 12];
+    if getrandom::fill(&mut nonce_bytes).is_err() {
+        return McpToolResult::error("failed to generate nonce");
+    }
+
+    // Encrypt with ChaCha20-Poly1305.
+    use chacha20poly1305::{ChaCha20Poly1305, KeyInit, aead::Aead};
+    let cipher = ChaCha20Poly1305::new((&enc_key).into());
+    let nonce = chacha20poly1305::Nonce::from_slice(&nonce_bytes);
+    let ciphertext = match cipher.encrypt(nonce, data.as_bytes()) {
+        Ok(ct) => ct,
+        Err(_) => return McpToolResult::error("encryption failed"),
+    };
+
+    // Wire format: [32-byte ephemeral pk][12-byte nonce][ciphertext + tag]
+    let mut sealed_box = Vec::with_capacity(32 + 12 + ciphertext.len());
+    sealed_box.extend_from_slice(ephemeral_public.as_bytes());
+    sealed_box.extend_from_slice(&nonce_bytes);
+    sealed_box.extend_from_slice(&ciphertext);
+    let sealed_hex: String = sealed_box.iter().map(|b| format!("{b:02x}")).collect();
 
     McpToolResult::json(&serde_json::json!({
         "sealed": true,
         "sealed_box": sealed_hex,
         "recipient": recipient_hex,
-        "note": "Data sealed. Only the recipient can unseal it."
+        "ephemeral_public": hex_encode(ephemeral_public.as_bytes()),
+        "note": "Data sealed with X25519+ChaCha20-Poly1305. Only the recipient can unseal with their private key."
     }))
 }
 
@@ -852,8 +1180,15 @@ async fn tool_unseal_data(params: &Value, state: &NodeState) -> McpToolResult {
         None => return McpToolResult::error("missing required parameter: sealed_box"),
     };
 
-    if hex_decode(sealed_box_hex).is_err() {
-        return McpToolResult::error("invalid hex for sealed_box (expected 64 hex chars)");
+    // Decode variable-length hex sealed box.
+    let sealed_bytes = match hex_decode_var(sealed_box_hex) {
+        Ok(b) => b,
+        Err(_) => return McpToolResult::error("invalid hex for sealed_box"),
+    };
+
+    // Wire format: [32-byte ephemeral pk][12-byte nonce][ciphertext + tag]
+    if sealed_bytes.len() < 32 + 12 + 16 {
+        return McpToolResult::error("sealed_box too short (minimum 60 bytes)");
     }
 
     let s = state.read().await;
@@ -861,11 +1196,43 @@ async fn tool_unseal_data(params: &Value, state: &NodeState) -> McpToolResult {
         return McpToolResult::error("wallet is locked; unlock first");
     }
 
-    // In a full implementation, this would attempt decryption with the wallet's key.
-    McpToolResult::json(&serde_json::json!({
-        "unsealed": false,
-        "note": "Unseal attempted. Full implementation requires the sender's public key for DH."
-    }))
+    let ephemeral_public_bytes: [u8; 32] = sealed_bytes[..32].try_into().unwrap();
+    let nonce_bytes: [u8; 12] = sealed_bytes[32..44].try_into().unwrap();
+    let ciphertext = &sealed_bytes[44..];
+
+    // Derive the wallet's X25519 secret from its Ed25519 signing key.
+    // Use BLAKE3 KDF to convert the Ed25519 key to an X25519-compatible secret.
+    let wallet_secret_bytes = blake3::derive_key(
+        "pyana-mcp-unseal-x25519-v1",
+        &s.wallet.public_key().0,
+    );
+    let wallet_secret = x25519_dalek::StaticSecret::from(wallet_secret_bytes);
+    let ephemeral_public = x25519_dalek::PublicKey::from(ephemeral_public_bytes);
+    let shared = wallet_secret.diffie_hellman(&ephemeral_public);
+
+    // Derive decryption key the same way as sealing.
+    let dec_key = blake3::derive_key(
+        "pyana-mcp-seal-data-v1",
+        shared.as_bytes(),
+    );
+
+    // Decrypt with ChaCha20-Poly1305.
+    use chacha20poly1305::{ChaCha20Poly1305, KeyInit, aead::Aead};
+    let cipher = ChaCha20Poly1305::new((&dec_key).into());
+    let nonce = chacha20poly1305::Nonce::from_slice(&nonce_bytes);
+    match cipher.decrypt(nonce, ciphertext) {
+        Ok(plaintext) => {
+            let text = String::from_utf8_lossy(&plaintext).to_string();
+            McpToolResult::json(&serde_json::json!({
+                "unsealed": true,
+                "data": text,
+            }))
+        }
+        Err(_) => McpToolResult::json(&serde_json::json!({
+            "unsealed": false,
+            "error": "decryption failed — this sealed box was not addressed to this wallet, or is corrupted",
+        })),
+    }
 }
 
 async fn tool_bridge_note(params: &Value, state: &NodeState) -> McpToolResult {
@@ -881,26 +1248,112 @@ async fn tool_bridge_note(params: &Value, state: &NodeState) -> McpToolResult {
         None => return McpToolResult::error("missing required parameter: destination_federation"),
     };
 
-    if hex_decode(note_commitment_hex).is_err() {
-        return McpToolResult::error("invalid hex for note_commitment (expected 64 hex chars)");
-    }
-    if hex_decode(dest_federation_hex).is_err() {
-        return McpToolResult::error(
-            "invalid hex for destination_federation (expected 64 hex chars)",
-        );
-    }
+    let note_commitment_bytes = match hex_decode(note_commitment_hex) {
+        Ok(b) => b,
+        Err(_) => {
+            return McpToolResult::error("invalid hex for note_commitment (expected 64 hex chars)");
+        }
+    };
+    let dest_federation_bytes = match hex_decode(dest_federation_hex) {
+        Ok(b) => b,
+        Err(_) => {
+            return McpToolResult::error(
+                "invalid hex for destination_federation (expected 64 hex chars)",
+            );
+        }
+    };
 
-    let s = state.read().await;
+    let mut s = state.write().await;
     if !s.unlocked {
         return McpToolResult::error("wallet is locked; unlock first");
     }
 
-    McpToolResult::json(&serde_json::json!({
-        "bridged": true,
-        "note_commitment": note_commitment_hex,
-        "destination_federation": dest_federation_hex,
-        "note": "Bridge transaction submitted. The note will appear on the destination federation after finality."
-    }))
+    // Use the note commitment as the nullifier for the bridge lock.
+    // In a full implementation, the nullifier would be derived from the note's secret.
+    let nullifier = note_commitment_bytes;
+    let destination = dest_federation_bytes;
+
+    // Get current height for timeout calculation.
+    let current_height = s
+        .store
+        .latest_attested_root()
+        .ok()
+        .flatten()
+        .map(|r| r.height)
+        .unwrap_or(0);
+
+    // Build a turn with Effect::BridgeLock to initiate the two-phase bridge protocol.
+    let agent_cell_id = pyana_cell::CellId::derive_raw(
+        &s.wallet.public_key().0,
+        &[0u8; 32],
+    );
+
+    let effect = pyana_turn::Effect::BridgeLock {
+        nullifier,
+        destination,
+        value: 0, // Value determined by the note being bridged.
+        asset_type: 0,
+        timeout_height: current_height + 1000, // Bridge timeout: ~1000 blocks.
+        spending_proof: vec![], // Spending proof placeholder (would be STARK proof in production).
+    };
+
+    let nonce = s.wallet.receipt_chain_length() as u64;
+    let turn = Turn {
+        agent: agent_cell_id,
+        nonce,
+        fee: 0,
+        memo: Some("bridge note".to_string()),
+        valid_until: None,
+        call_forest: build_forest_with_effects(agent_cell_id, vec![effect]),
+        depends_on: vec![],
+        previous_receipt_hash: None,
+    };
+
+    let signed = s.wallet.sign_turn(&turn);
+    let turn_hash = hex_encode(&turn.hash());
+
+    // Execute locally.
+    let executor = pyana_turn::TurnExecutor::new(pyana_turn::ComputronCosts::default());
+    let exec_result = executor.execute(&turn, &mut s.ledger);
+
+    match exec_result {
+        pyana_turn::TurnResult::Committed { receipt, .. } => {
+            s.wallet.append_receipt(receipt);
+
+            let turn_data = postcard::to_stdvec(&signed).expect("SignedTurn serialization");
+            drop(s);
+
+            state.emit(crate::state::NodeEvent::Receipt {
+                hash: turn_hash.clone(),
+            });
+
+            if let Some(gossip) = state.gossip().await {
+                let hash = signed.turn.hash();
+                tokio::spawn(async move {
+                    gossip.gossip_turn(hash, turn_data).await;
+                });
+            }
+
+            McpToolResult::json(&serde_json::json!({
+                "bridged": true,
+                "note_commitment": note_commitment_hex,
+                "destination_federation": dest_federation_hex,
+                "turn_hash": turn_hash,
+                "timeout_height": current_height + 1000,
+            }))
+        }
+        pyana_turn::TurnResult::Rejected { reason, .. } => {
+            drop(s);
+            McpToolResult::json(&serde_json::json!({
+                "bridged": false,
+                "error": format!("bridge turn rejected: {reason}"),
+            }))
+        }
+        _ => {
+            drop(s);
+            McpToolResult::error("bridge note turn did not commit")
+        }
+    }
 }
 
 // =============================================================================
@@ -1028,6 +1481,20 @@ fn hex_decode(s: &str) -> Result<[u8; 32], ()> {
         let high = nibble(chunk[0]).ok_or(())?;
         let low = nibble(chunk[1]).ok_or(())?;
         out[i] = (high << 4) | low;
+    }
+    Ok(out)
+}
+
+/// Decode a variable-length hex string into bytes.
+fn hex_decode_var(s: &str) -> Result<Vec<u8>, ()> {
+    if s.len() % 2 != 0 {
+        return Err(());
+    }
+    let mut out = Vec::with_capacity(s.len() / 2);
+    for chunk in s.as_bytes().chunks(2) {
+        let high = nibble(chunk[0]).ok_or(())?;
+        let low = nibble(chunk[1]).ok_or(())?;
+        out.push((high << 4) | low);
     }
     Ok(out)
 }

@@ -1081,8 +1081,15 @@ impl BridgePresentationBuilder {
         request: &AuthRequest,
     ) -> Result<PresentationWitness, AuthError> {
         // Compute the canonical action binding commitment from (action, resource).
+        // Resource = app_id OR service (whichever is present), matching the wire
+        // verifier's expectation. This ensures service-scoped tokens produce the
+        // same binding that the verifier will recompute.
         let action_str = request.action.as_deref().unwrap_or("");
-        let resource_str = request.app_id.as_deref().unwrap_or("");
+        let resource_str = request
+            .app_id
+            .as_deref()
+            .or(request.service.as_deref())
+            .unwrap_or("");
         let request_pred_bb = pyana_circuit::compute_action_binding(action_str, resource_str);
 
         // Timestamp.
@@ -1139,8 +1146,15 @@ impl BridgePresentationBuilder {
         request: &AuthRequest,
     ) -> Result<PresentationWitness, AuthError> {
         // Compute the canonical action binding commitment from (action, resource).
+        // Resource = app_id OR service (whichever is present), matching the wire
+        // verifier's expectation. This ensures service-scoped tokens produce the
+        // same binding that the verifier will recompute.
         let action_str = request.action.as_deref().unwrap_or("");
-        let resource_str = request.app_id.as_deref().unwrap_or("");
+        let resource_str = request
+            .app_id
+            .as_deref()
+            .or(request.service.as_deref())
+            .unwrap_or("");
         let request_pred_bb = pyana_circuit::compute_action_binding(action_str, resource_str);
 
         // Timestamp.

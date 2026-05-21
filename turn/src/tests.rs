@@ -300,7 +300,7 @@ fn test_permission_satisfied_with_proof() {
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
         let action = builder.action(target_id, "set_state");
-        action.authorize_proof(vec![1, 2, 3, 4]);
+        action.authorize_proof(vec![1, 2, 3, 4], "", "");
         action.set_field(target_id, 0, [99u8; 32]);
     }
     let turn = builder.fee(500).build();
@@ -340,7 +340,7 @@ fn test_proof_rejected_by_verifier() {
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
         let action = builder.action(target_id, "set_state");
-        action.authorize_proof(vec![1, 2, 3, 4]);
+        action.authorize_proof(vec![1, 2, 3, 4], "", "");
         action.set_field(target_id, 0, [99u8; 32]);
     }
     let turn = builder.fee(500).build();
@@ -385,7 +385,7 @@ fn test_proof_fail_closed_no_verifier() {
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
         let action = builder.action(target_id, "set_state");
-        action.authorize_proof(vec![1, 2, 3, 4]);
+        action.authorize_proof(vec![1, 2, 3, 4], "", "");
         action.set_field(target_id, 0, [99u8; 32]);
     }
     let turn = builder.fee(500).build();
@@ -430,7 +430,7 @@ fn test_proof_rejected_no_verification_key() {
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
         let action = builder.action(target_id, "set_state");
-        action.authorize_proof(vec![1, 2, 3, 4]);
+        action.authorize_proof(vec![1, 2, 3, 4], "", "");
         action.set_field(target_id, 0, [99u8; 32]);
     }
     let turn = builder.fee(500).build();
@@ -2307,7 +2307,7 @@ fn test_empty_proof_rejected() {
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
         let action = builder.action(target_id, "set_state");
-        action.authorize_proof(vec![]); // Empty proof!
+        action.authorize_proof(vec![], "", ""); // Empty proof!
         action.set_field(target_id, 0, [99u8; 32]);
     }
     let turn = builder.fee(500).build();
@@ -3720,7 +3720,7 @@ fn test_proved_state_set_by_proof() {
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
         let action = builder.action(target_id, "prove_all");
-        action.authorize_proof(vec![1, 2, 3, 4]);
+        action.authorize_proof(vec![1, 2, 3, 4], "", "");
         for i in 0..STATE_SLOTS {
             action.set_field(target_id, i, [(i + 1) as u8; 32]);
         }
@@ -3763,7 +3763,7 @@ fn test_proved_state_cleared_by_signature() {
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
         let action = builder.action(target_id, "prove_all");
-        action.authorize_proof(vec![1, 2, 3, 4]);
+        action.authorize_proof(vec![1, 2, 3, 4], "", "");
         for i in 0..STATE_SLOTS {
             action.set_field(target_id, i, [(i + 1) as u8; 32]);
         }
@@ -3819,7 +3819,7 @@ fn test_proved_state_unchanged_when_no_fields_modified() {
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
         let action = builder.action(target_id, "prove_all");
-        action.authorize_proof(vec![1, 2, 3, 4]);
+        action.authorize_proof(vec![1, 2, 3, 4], "", "");
         for i in 0..STATE_SLOTS {
             action.set_field(target_id, i, [(i + 1) as u8; 32]);
         }
@@ -3834,7 +3834,7 @@ fn test_proved_state_unchanged_when_no_fields_modified() {
     let mut builder = TurnBuilder::new(agent_id, 1);
     {
         let action = builder.action(target_id, "emit_only");
-        action.authorize_proof(vec![5, 6, 7, 8]);
+        action.authorize_proof(vec![5, 6, 7, 8], "", "");
         action.emit_event(target_id, "hello", vec![[42u8; 32]]);
     }
     let turn = builder.fee(500).build();
@@ -3874,7 +3874,7 @@ fn test_precondition_proved_state_true() {
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
         let action = builder.action(target_id, "prove_all");
-        action.authorize_proof(vec![1, 2, 3, 4]);
+        action.authorize_proof(vec![1, 2, 3, 4], "", "");
         for i in 0..STATE_SLOTS {
             action.set_field(target_id, i, [(i + 1) as u8; 32]);
         }
@@ -3887,7 +3887,7 @@ fn test_precondition_proved_state_true() {
     let mut builder = TurnBuilder::new(agent_id, 1);
     {
         let action = builder.action(target_id, "check_proved");
-        action.authorize_proof(vec![9, 10]);
+        action.authorize_proof(vec![9, 10], "", "");
         action.require_proved_state(true);
         action.emit_event(target_id, "checked", vec![]);
     }
@@ -3960,7 +3960,7 @@ fn test_partial_proof_fields_doesnt_set_proved() {
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
         let action = builder.action(target_id, "partial_prove");
-        action.authorize_proof(vec![1, 2, 3, 4]);
+        action.authorize_proof(vec![1, 2, 3, 4], "", "");
         action.set_field(target_id, 0, [10u8; 32]);
         action.set_field(target_id, 1, [20u8; 32]);
         action.set_field(target_id, 2, [30u8; 32]);

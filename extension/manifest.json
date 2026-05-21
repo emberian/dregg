@@ -14,14 +14,7 @@
     "run_at": "document_start"
   }],
   "web_accessible_resources": [{
-    "resources": [
-      "page.js",
-      "pyana_wasm_bg.wasm",
-      "pyana_wasm.js",
-      "bip39_english.txt",
-      "disclosure-picker.html",
-      "disclosure-picker.js"
-    ],
+    "resources": ["page.js"],
     "matches": ["<all_urls>"]
   }],
   "action": {

@@ -35,6 +35,7 @@ pub mod action;
 pub mod caveat;
 pub mod caveat_3p;
 pub mod crypto;
+pub mod discharge_gateway;
 pub mod error;
 pub mod format;
 pub mod macaroon;
@@ -45,6 +46,11 @@ pub use access::Access;
 pub use action::Action;
 pub use caveat::{Caveat, CaveatSet, CaveatType, WireCaveat};
 pub use caveat_3p::ThirdPartyCaveat;
+pub use discharge_gateway::{
+    AllOfEvaluator, AllowlistEvaluator, AlwaysAllow, AnyOfEvaluator, ConditionEvaluator,
+    DischargeError, DischargeGateway, DischargeRequest, DischargeResponse, PaymentEvaluator,
+    ProofRequiredEvaluator, RateLimitEvaluator, TimeWindowEvaluator,
+};
 pub use error::{CaveatError, MacaroonError, MacaroonResult};
 pub use format::{decode_token, encode_token};
 pub use macaroon::{Macaroon, Nonce, create_discharge};

@@ -101,12 +101,15 @@ pub fn binding_hash(tail: &[u8; 32]) -> [u8; 32] {
 }
 
 /// Constant-time comparison of two binding hashes (32-byte values).
+///
+/// Rejects inputs that are not exactly 32 bytes — oversized slices
+/// could indicate malformed or padded bindings.
 pub fn binding_hash_eq(a: &[u8], b: &[u8; 32]) -> bool {
     use subtle::ConstantTimeEq;
-    if a.len() < 32 {
+    if a.len() != 32 {
         return false;
     }
-    a[..32].ct_eq(b.as_slice()).into()
+    a.ct_eq(b.as_slice()).into()
 }
 
 #[cfg(test)]

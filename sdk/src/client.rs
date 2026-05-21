@@ -190,8 +190,15 @@ impl SiloClient {
         let proof = self.wallet.prove_authorization(token, request)?;
 
         // Build the wire-level authorization request.
+        // Resource = app_id OR service (whichever is present) — must match the
+        // binding the prover committed to and the verifier will recompute.
+        let wire_resource = request
+            .app_id
+            .as_deref()
+            .or(request.service.as_deref())
+            .unwrap_or("");
         let wire_request = AuthorizationRequest::new(
-            request.app_id.as_deref().unwrap_or(""),
+            wire_resource,
             request.action.as_deref().unwrap_or(""),
             &self.wallet.public_key().hex(),
         );

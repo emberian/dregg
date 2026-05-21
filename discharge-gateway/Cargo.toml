@@ -1,0 +1,34 @@
+[package]
+name = "discharge-gateway"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Standalone HTTP discharge gateway for pyana third-party macaroon caveats"
+
+[dependencies]
+macaroon = { path = "../macaroon" }
+
+axum = { version = "0.8" }
+base64 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { version = "1", features = ["full"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+
+[[bin]]
+name = "discharge-gateway"
+path = "src/main.rs"
+
+[lib]
+name = "discharge_gateway_service"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

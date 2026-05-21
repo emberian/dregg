@@ -15,7 +15,7 @@ const LOCK_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes auto-lock
 const ORIGIN_PERMISSION_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours default
 const RATE_LIMIT_MAX_CALLS = 5; // Max authorize calls per origin per window
 const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 60-second sliding window
-const INTERNAL_KDF_SALT = 'pyana-internal-default-key-v1'; // Used when no passphrase is set
+// Internal encryption key is now randomly generated per session (see getInternalEncryptionKey).
 
 // ---------------------------------------------------------------------------
 // WASM module loading
@@ -64,24 +64,25 @@ function resetLockTimer() {
 
 // ---------------------------------------------------------------------------
 // Rate limiter for authorize calls (P2-11)
+// Persisted to session storage so state survives service worker eviction.
 // ---------------------------------------------------------------------------
 
-const rateLimitBuckets = new Map(); // origin -> [timestamp, ...]
-
-function checkRateLimit(origin) {
+async function checkRateLimit(origin) {
+  const { _rateLimits } = await chrome.storage.session.get('_rateLimits') || {};
+  const limits = _rateLimits || {};
   const now = Date.now();
-  if (!rateLimitBuckets.has(origin)) {
-    rateLimitBuckets.set(origin, []);
+  const entry = limits[origin] || { count: 0, windowStart: now };
+
+  if (now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
+    entry.count = 0;
+    entry.windowStart = now;
   }
-  const bucket = rateLimitBuckets.get(origin);
-  // Evict expired entries.
-  while (bucket.length > 0 && bucket[0] <= now - RATE_LIMIT_WINDOW_MS) {
-    bucket.shift();
-  }
-  if (bucket.length >= RATE_LIMIT_MAX_CALLS) {
-    return false; // Rate limited.
-  }
-  bucket.push(now);
+
+  if (entry.count >= RATE_LIMIT_MAX_CALLS) return false;
+
+  entry.count++;
+  limits[origin] = entry;
+  await chrome.storage.session.set({ _rateLimits: limits });
   return true;
 }
 
@@ -90,13 +91,19 @@ function checkRateLimit(origin) {
 // ---------------------------------------------------------------------------
 
 /**
- * Derive an internal encryption key. This is NOT as secure as a user passphrase
- * but is strictly better than storing plaintext. The key is derived from a
- * fixed salt + the extension ID, so it is unique per extension install.
+ * Get a random internal encryption key. Generated on first use and stored in
+ * session storage (cleared when browser closes, requiring passphrase on restart).
+ * This protects the brief window between wallet creation and passphrase setup.
  */
 async function getInternalEncryptionKey() {
-  const material = `${INTERNAL_KDF_SALT}:${chrome.runtime.id}`;
-  return material;
+  let { _internalKey } = await chrome.storage.session.get('_internalKey');
+  if (!_internalKey) {
+    const keyBytes = new Uint8Array(32);
+    crypto.getRandomValues(keyBytes);
+    _internalKey = Array.from(keyBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+    await chrome.storage.session.set({ _internalKey });
+  }
+  return _internalKey;
 }
 
 // ---------------------------------------------------------------------------
@@ -1576,7 +1583,7 @@ async function handleMessage(message, sender) {
       if (isContentScript(sender) && !message.request._skipDisclosure) {
         const origin = message._origin || sender?.tab?.url && new URL(sender.tab.url).origin || 'unknown';
         // Rate limit: max RATE_LIMIT_MAX_CALLS per origin per RATE_LIMIT_WINDOW_MS.
-        if (!checkRateLimit(origin)) {
+        if (!await checkRateLimit(origin)) {
           return { id: message.id, result: { allowed: false, error: 'Rate limited. Too many authorize requests. Try again later.' } };
         }
         const result = await authorizeWithDisclosure(message.request, origin);

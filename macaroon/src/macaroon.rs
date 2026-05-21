@@ -20,13 +20,19 @@
 //!   Tₙ = HMAC(Tₙ₋₁, encode(Cₙ))
 //! ```
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
 
 use crate::caveat::{CAV_BIND_TO_PARENT, CAV_THIRD_PARTY, Caveat, CaveatSet, WireCaveat};
 use crate::caveat_3p::ThirdPartyCaveat;
 use crate::crypto;
 use crate::error::MacaroonError;
 use crate::format;
+
+/// Maximum age of a discharge macaroon in seconds (5 minutes).
+const MAX_DISCHARGE_AGE: i64 = 300;
 
 /// The nonce uniquely identifies a macaroon and seeds the HMAC chain.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,6 +43,18 @@ pub struct Nonce {
 
     /// Random bytes for uniqueness.
     pub rnd: [u8; 16],
+
+    /// Unix timestamp (seconds) when this nonce was created.
+    /// Used for discharge replay protection — discharges older than
+    /// `MAX_DISCHARGE_AGE` are rejected.
+    #[serde(default)]
+    pub created_at: i64,
+}
+
+impl Drop for Nonce {
+    fn drop(&mut self) {
+        self.rnd.zeroize();
+    }
 }
 
 impl Nonce {
@@ -45,6 +63,7 @@ impl Nonce {
         Self {
             kid,
             rnd: crypto::random_bytes::<16>(),
+            created_at: 0,
         }
     }
 
@@ -68,6 +87,12 @@ pub struct Macaroon {
 
     /// The current HMAC-SHA256 chain tail (signature tag).
     pub tail: [u8; 32],
+}
+
+impl Drop for Macaroon {
+    fn drop(&mut self) {
+        self.tail.zeroize();
+    }
 }
 
 impl Macaroon {
@@ -222,12 +247,32 @@ impl Macaroon {
     }
 
     /// Verify a discharge macaroon. Similar to `verify` but also checks
-    /// that the discharge is bound to the expected parent tail.
+    /// that the discharge is bound to the expected parent tail and is fresh
+    /// (created within `MAX_DISCHARGE_AGE` seconds).
     fn verify_discharge(
         &self,
         discharge_key: &[u8; 32],
         expected_parent_tail: &[u8; 32],
     ) -> Result<CaveatSet, MacaroonError> {
+        // Check discharge freshness (replay protection).
+        // A created_at of 0 means the discharge predates this check — reject it
+        // to force upgrade (fail-closed).
+        if self.nonce.created_at == 0 {
+            return Err(MacaroonError::Malformed(
+                "discharge missing created_at timestamp".into(),
+            ));
+        }
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before UNIX epoch")
+            .as_secs() as i64;
+        let age = now - self.nonce.created_at;
+        if age < 0 || age > MAX_DISCHARGE_AGE {
+            return Err(MacaroonError::Malformed(format!(
+                "discharge expired (age={age}s, max={MAX_DISCHARGE_AGE}s)"
+            )));
+        }
+
         let mut collected = CaveatSet::new();
         let mut found_binding = false;
 
@@ -329,6 +374,10 @@ pub fn create_discharge(
     let nonce = Nonce {
         kid: ticket,
         rnd: crypto::random_bytes::<16>(),
+        created_at: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before UNIX epoch")
+            .as_secs() as i64,
     };
     let mut macaroon = Macaroon::with_nonce(discharge_key, nonce, location);
 

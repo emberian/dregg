@@ -19,6 +19,7 @@ pyana-sdk = { path = "../sdk" }
 pyana-intent = { path = "../intent" }
 pyana-circuit = { path = "../circuit" }
 pyana-net = { path = "../net" }
+macaroon = { path = "../macaroon" }
 
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["ws"] }
@@ -35,6 +36,8 @@ quinn = { version = "0.11", features = ["runtime-tokio", "rustls-ring"] }
 blake3 = "1"
 postcard = { version = "1", features = ["use-std"] }
 zeroize = { workspace = true }
+x25519-dalek = { workspace = true }
+chacha20poly1305 = { workspace = true }
 
 [[bin]]
 name = "pyana-node"

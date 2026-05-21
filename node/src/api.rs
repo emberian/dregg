@@ -718,7 +718,7 @@ async fn post_submit_turn(
     State(state): State<NodeState>,
     Json(req): Json<SubmitTurnRequest>,
 ) -> Result<Json<SubmitTurnResponse>, StatusCode> {
-    let s = state.read().await;
+    let mut s = state.write().await;
 
     if !s.unlocked {
         return Err(StatusCode::FORBIDDEN);
@@ -741,27 +741,53 @@ async fn post_submit_turn(
     let signed = s.wallet.sign_turn(&turn);
     let turn_hash_bytes = turn.hash();
     let turn_hash = hex_encode(&turn_hash_bytes);
-    let turn_data = signed.signature.0.to_vec();
 
-    // Emit receipt event to WebSocket subscribers.
-    drop(s);
-    state.emit(crate::state::NodeEvent::Receipt {
-        hash: turn_hash.clone(),
-    });
+    // Execute the turn locally FIRST.
+    let executor = pyana_turn::TurnExecutor::new(pyana_turn::ComputronCosts::default());
+    let exec_result = executor.execute(&turn, &mut s.ledger);
 
-    // Gossip the turn to federation peers.
-    if let Some(gossip) = state.gossip().await {
-        let hash = turn_hash_bytes;
-        let data = turn_data;
-        tokio::spawn(async move {
-            gossip.gossip_turn(hash, data).await;
-        });
+    match exec_result {
+        pyana_turn::TurnResult::Committed { receipt, .. } => {
+            s.wallet.append_receipt(receipt);
+
+            // Serialize the full SignedTurn for gossip (postcard format).
+            let turn_data = postcard::to_stdvec(&signed).expect("SignedTurn serialization");
+
+            drop(s);
+
+            // Emit receipt event to WebSocket subscribers.
+            state.emit(crate::state::NodeEvent::Receipt {
+                hash: turn_hash.clone(),
+            });
+
+            // Gossip the turn to federation peers.
+            if let Some(gossip) = state.gossip().await {
+                let hash = turn_hash_bytes;
+                tokio::spawn(async move {
+                    gossip.gossip_turn(hash, turn_data).await;
+                });
+            }
+
+            Ok(Json(SubmitTurnResponse {
+                accepted: true,
+                turn_hash: Some(turn_hash),
+            }))
+        }
+        pyana_turn::TurnResult::Rejected { reason, .. } => {
+            drop(s);
+            Ok(Json(SubmitTurnResponse {
+                accepted: false,
+                turn_hash: Some(format!("rejected: {reason}")),
+            }))
+        }
+        _ => {
+            drop(s);
+            Ok(Json(SubmitTurnResponse {
+                accepted: false,
+                turn_hash: None,
+            }))
+        }
     }
-
-    Ok(Json(SubmitTurnResponse {
-        accepted: true,
-        turn_hash: Some(turn_hash),
-    }))
 }
 
 async fn get_cell(
@@ -1590,6 +1616,103 @@ async fn post_faucet(
             success: false,
             tx_hash: None,
             error: Some(format!("transfer failed: {e}")),
+        })),
+    }
+}
+
+// =============================================================================
+// Discharge Gateway Endpoint
+// =============================================================================
+
+/// POST /api/discharge request body.
+#[derive(Deserialize)]
+pub struct NodeDischargeRequest {
+    /// Base64-encoded ticket from the 3P caveat.
+    pub ticket: String,
+    /// Optional client identifier.
+    pub client_id: Option<String>,
+    /// Optional base64-encoded proof.
+    pub proof: Option<String>,
+    /// Optional payment amount.
+    pub payment: Option<u64>,
+    /// Arbitrary metadata.
+    #[serde(default)]
+    pub metadata: HashMap<String, String>,
+}
+
+/// POST /api/discharge response body.
+#[derive(Serialize)]
+pub struct NodeDischargeResponse {
+    pub success: bool,
+    pub discharge: Option<String>,
+    pub expires_at: Option<i64>,
+    pub condition_met: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// POST /api/discharge — issue a discharge macaroon from this node's gateway.
+///
+/// The node acts as a discharge gateway for its own federation's tokens.
+/// The shared key is derived from the wallet's signing key using BLAKE3 KDF
+/// with domain "pyana-discharge-gateway-v1".
+async fn post_discharge(
+    State(state): State<NodeState>,
+    Json(req): Json<NodeDischargeRequest>,
+) -> Result<Json<NodeDischargeResponse>, StatusCode> {
+    use base64::Engine;
+    let engine = base64::engine::general_purpose::STANDARD;
+
+    // Decode ticket from base64.
+    let ticket = engine
+        .decode(&req.ticket)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    // Decode optional proof from base64.
+    let proof = match &req.proof {
+        Some(p) => Some(engine.decode(p).map_err(|_| StatusCode::BAD_REQUEST)?),
+        None => None,
+    };
+
+    let s = state.read().await;
+    if !s.unlocked {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    // Derive the discharge gateway shared key from the wallet's identity.
+    let gateway_key = s.wallet.derive_symmetric_key("pyana-discharge-gateway-v1");
+
+    // Build the gateway on-the-fly (stateless per request for the node endpoint).
+    // For rate limiting, the node uses its own mechanisms; the gateway here is
+    // configured with AlwaysAllow — the node's auth middleware already gates access.
+    let mut gateway = pyana_macaroon::DischargeGateway::new(
+        gateway_key,
+        format!("pyana-node://{}", hex_encode(&s.wallet.public_key().0)),
+    );
+    gateway.add_evaluator(Box::new(pyana_macaroon::AlwaysAllow));
+
+    let discharge_req = pyana_macaroon::DischargeRequest {
+        ticket,
+        client_id: req.client_id,
+        proof,
+        payment: req.payment,
+        metadata: req.metadata,
+    };
+
+    match gateway.process_request(&discharge_req) {
+        Ok(resp) => Ok(Json(NodeDischargeResponse {
+            success: true,
+            discharge: Some(resp.discharge),
+            expires_at: Some(resp.expires_at),
+            condition_met: Some(resp.condition_met),
+            error: None,
+        })),
+        Err(e) => Ok(Json(NodeDischargeResponse {
+            success: false,
+            discharge: None,
+            expires_at: None,
+            condition_met: None,
+            error: Some(e.reason),
         })),
     }
 }

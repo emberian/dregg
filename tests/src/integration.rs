@@ -140,7 +140,7 @@ fn test_mint_attenuate_prove_execute_verify() {
     {
         let action = turn_builder.action(target_id, "compute");
         action.delegation(DelegationMode::None);
-        action.authorize_proof(proof_bytes.clone());
+        action.authorize_proof(proof_bytes.clone(), "", "");
         action.effect(Effect::SetField {
             cell: target_id,
             index: 0,
@@ -181,7 +181,7 @@ fn test_mint_attenuate_prove_execute_verify() {
     {
         let action = bad_turn_builder.action(target_id, "evil");
         action.delegation(DelegationMode::None);
-        action.authorize_proof(bad_proof);
+        action.authorize_proof(bad_proof, "", "");
         action.effect(Effect::SetField {
             cell: target_id,
             index: 1,
@@ -261,7 +261,7 @@ fn test_fail_closed_no_verifier() {
     {
         let action = turn_builder.action(target_id, "compute");
         action.delegation(DelegationMode::None);
-        action.authorize_proof(proof_bytes);
+        action.authorize_proof(proof_bytes, "", "");
         action.effect(Effect::SetField {
             cell: target_id,
             index: 0,
@@ -336,7 +336,7 @@ fn test_wrong_federation_root_rejected() {
     {
         let action = turn_builder.action(target_id, "compute");
         action.delegation(DelegationMode::None);
-        action.authorize_proof(proof_bytes);
+        action.authorize_proof(proof_bytes, "", "");
         action.effect(Effect::SetField {
             cell: target_id,
             index: 0,

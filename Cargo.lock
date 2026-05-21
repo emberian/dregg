@@ -4603,6 +4603,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "blake3",
+ "chacha20poly1305",
  "clap",
  "ed25519-dalek",
  "futures-util",
@@ -4624,6 +4625,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber 0.3.23",
  "uuid",
+ "x25519-dalek",
  "zeroize",
 ]
 

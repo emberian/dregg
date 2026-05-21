@@ -85,8 +85,17 @@ pub struct Action {
 pub enum Authorization {
     /// Ed25519 signature over the action hash (stored as two 32-byte halves).
     Signature([u8; 32], [u8; 32]),
-    /// Zero-knowledge proof bytes (opaque to the executor).
-    Proof(Vec<u8>),
+    /// Zero-knowledge proof bytes with the bound (action, resource) pair.
+    ///
+    /// The `bound_action` and `bound_resource` fields record what the prover
+    /// committed to at proving time (from `AuthRequest.action` and
+    /// `app_id.or(service)`). The verifier recomputes the binding from these
+    /// strings and checks it against the proof's public inputs.
+    Proof {
+        proof_bytes: Vec<u8>,
+        bound_action: String,
+        bound_resource: String,
+    },
     /// Capability token hash (breadstuff authorization).
     Breadstuff([u8; 32]),
     /// No authorization (only valid if the cell's permissions allow it).
@@ -99,7 +108,7 @@ impl Authorization {
     pub fn to_auth_kind(&self) -> Option<pyana_cell::AuthKind> {
         match self {
             Authorization::Signature(_, _) => Some(pyana_cell::AuthKind::Signature),
-            Authorization::Proof(_) => Some(pyana_cell::AuthKind::Proof),
+            Authorization::Proof { .. } => Some(pyana_cell::AuthKind::Proof),
             Authorization::Breadstuff(_) => None,
             Authorization::None => None,
         }
@@ -387,9 +396,11 @@ impl Action {
                 hasher.update(r);
                 hasher.update(s);
             }
-            Authorization::Proof(proof) => {
+            Authorization::Proof { proof_bytes, bound_action, bound_resource } => {
                 hasher.update(&[1u8]);
-                hasher.update(proof);
+                hasher.update(proof_bytes);
+                hasher.update(bound_action.as_bytes());
+                hasher.update(bound_resource.as_bytes());
             }
             Authorization::Breadstuff(token) => {
                 hasher.update(&[2u8]);

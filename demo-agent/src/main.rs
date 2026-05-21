@@ -335,7 +335,7 @@ fn main() {
         let action = turn_builder.action(target_id, "execute_computation");
         action.delegation(DelegationMode::None);
         // The proof bytes become the authorization
-        action.authorize_proof(proof_bytes.clone());
+        action.authorize_proof(proof_bytes.clone(), "execute_computation", "");
         // The effect: write a result to the target cell's state
         let result_hash = *blake3::hash(b"computation_result:success:42").as_bytes();
         action.effect(Effect::SetField {
@@ -419,7 +419,7 @@ fn main() {
     {
         let action = bad_turn_builder.action(target_id, "evil_computation");
         action.delegation(DelegationMode::None);
-        action.authorize_proof(bad_proof);
+        action.authorize_proof(bad_proof, "evil_computation", "");
         action.effect(Effect::SetField {
             cell: target_id,
             index: 1,

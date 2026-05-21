@@ -31,8 +31,9 @@ const ACTION_BINDING_DSK: &str = "pyana-action-binding-v1";
 ///   and `Action.method` decoded as a string (turn layer).
 ///
 /// - `resource`: The target of the operation (e.g., "api/v1/users", a cell ID).
-///   Maps to `AuthRequest.service` or `AuthRequest.app_id` (token layer),
-///   `AuthorizationRequest.resource` (wire), and `Action.target` as hex (turn layer).
+///   Canonically derived as `app_id.or(service).unwrap_or("")` from the token
+///   layer's `AuthRequest`. Maps to `AuthorizationRequest.resource` on the wire.
+///   For bridge-mint proofs, the resource is `hex(destination_federation)`.
 ///
 /// # Security
 ///
