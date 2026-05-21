@@ -10,6 +10,7 @@ repository.workspace = true
 description = "Derivation trace format and reference evaluator for the pyana ZK token system"
 
 [dependencies]
+blake3 = "1"
 serde = { workspace = true, features = ["std"] }
 
 [dev-dependencies]

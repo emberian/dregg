@@ -13,19 +13,18 @@
 //! with commit-reveal). The STARK proof uses the mock path for speed but would
 //! be a real proof in production.
 
-use pyana_circuit::multi_step_air::{ALLOW_PREDICATE, build_multi_step_witness};
-use pyana_circuit::derivation_air::{BodyAtomPattern, CircuitRule, DerivationWitness};
-use pyana_circuit::poseidon2::hash_fact;
 use pyana_circuit::BabyBear;
+use pyana_circuit::derivation_air::{BodyAtomPattern, CircuitRule, DerivationWitness};
+use pyana_circuit::multi_step_air::{ALLOW_PREDICATE, build_multi_step_witness};
+use pyana_circuit::poseidon2::hash_fact;
+use pyana_commit::{Poseidon2MerkleTree, commitment_to_field};
 use pyana_intent::fulfillment::{self, FulfillOptions, Fulfillment};
 use pyana_intent::gossip::{
     AutoFulfillPolicy, CommitRevealError, FulfillmentReveal, IntentPool, IntentPoolConfig,
 };
 use pyana_intent::matcher::{self, HeldCapability, MatchResult, Sensitivity};
-use pyana_commit::{Poseidon2MerkleTree, commitment_to_field};
 use pyana_intent::{
-    ActionPattern, CommitmentId, Intent, IntentKind, Match, MatchSpec, StakeProof,
-    VerificationMode,
+    ActionPattern, CommitmentId, Intent, IntentKind, Match, MatchSpec, StakeProof, VerificationMode,
 };
 
 fn main() {
@@ -97,12 +96,8 @@ fn main() {
     // Broadcast: service posts the intent with expiry 1 hour from now
     let now = 1_700_000_000u64; // simulated timestamp
     let expiry = now + 3600; // 1 hour
-    let intent = service_pool.broadcast_intent(
-        IntentKind::Need,
-        match_spec,
-        expiry,
-        Some(stake_proof),
-    );
+    let intent =
+        service_pool.broadcast_intent(IntentKind::Need, match_spec, expiry, Some(stake_proof));
 
     println!("  Intent posted:");
     println!(

@@ -115,12 +115,42 @@ pub struct HeldToken {
     /// The encoded token string (em2_ prefixed).
     pub encoded: String,
     /// The root key used to verify this token (needed for re-verification).
-    pub root_key: [u8; 32],
+    /// Never serialized — stays in memory only.
+    #[serde(skip)]
+    root_key: [u8; 32],
     /// Unique identifier for lookup.
     pub id: String,
 }
 
+impl Drop for HeldToken {
+    fn drop(&mut self) {
+        self.root_key.zeroize();
+    }
+}
+
 impl HeldToken {
+    /// Create a new HeldToken with the given fields.
+    pub(crate) fn new(
+        label: String,
+        service: String,
+        encoded: String,
+        root_key: [u8; 32],
+        id: String,
+    ) -> Self {
+        Self {
+            label,
+            service,
+            encoded,
+            root_key,
+            id,
+        }
+    }
+
+    /// Access the root key by reference (internal use only).
+    pub(crate) fn root_key(&self) -> &[u8; 32] {
+        &self.root_key
+    }
+
     /// Decode this held token into a [`MacaroonToken`] for operations.
     pub fn decode(&self) -> Result<MacaroonToken, pyana_token::TokenError> {
         MacaroonToken::from_encoded(&self.encoded, self.root_key)
@@ -128,10 +158,20 @@ impl HeldToken {
 }
 
 /// A token that has been delegated to another agent.
+///
+/// Contains only the serialized attenuated macaroon bytes (NOT the root key).
+/// The delegatee can present this token for verification and further attenuate it,
+/// but cannot mint new root tokens.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DelegatedToken {
-    /// The held token that was attenuated and delegated.
-    pub token: HeldToken,
+    /// The serialized attenuated token (encoded macaroon string).
+    pub token_bytes: String,
+    /// The service this token grants access to.
+    pub service: String,
+    /// Human-readable label.
+    pub label: String,
+    /// Token identifier.
+    pub id: String,
     /// The public key of the delegatee.
     pub delegatee: PublicKey,
     /// The restrictions applied during delegation.
@@ -357,13 +397,13 @@ impl AgentWallet {
         let token = MacaroonToken::mint(*root_key, kid.as_bytes(), service);
         let encoded = token.to_encoded().expect("fresh token encodes cleanly");
 
-        let held = HeldToken {
-            label: format!("root:{}", service),
-            service: service.to_string(),
+        let held = HeldToken::new(
+            format!("root:{}", service),
+            service.to_string(),
             encoded,
-            root_key: *root_key,
-            id: kid,
-        };
+            *root_key,
+            kid,
+        );
 
         self.tokens.push(held.clone());
         held
@@ -396,13 +436,13 @@ impl AgentWallet {
         let id = format!("{}:att:{}", token.id, self.next_token_id);
         self.next_token_id += 1;
 
-        let held = HeldToken {
-            label: format!("attenuated:{}", token.service),
-            service: token.service.clone(),
+        let held = HeldToken::new(
+            format!("attenuated:{}", token.service),
+            token.service.clone(),
             encoded,
-            root_key: token.root_key,
+            *token.root_key(),
             id,
-        };
+        );
 
         self.tokens.push(held.clone());
         Ok(held)
@@ -431,7 +471,10 @@ impl AgentWallet {
     ) -> Result<DelegatedToken, SdkError> {
         let attenuated = self.attenuate(token, restrictions)?;
         Ok(DelegatedToken {
-            token: attenuated,
+            token_bytes: attenuated.encoded.clone(),
+            service: attenuated.service.clone(),
+            label: attenuated.label.clone(),
+            id: attenuated.id.clone(),
             delegatee: *to,
             restrictions: restrictions.clone(),
         })
@@ -451,9 +494,18 @@ impl AgentWallet {
     /// Receive a delegated token into this wallet.
     ///
     /// Call this when another agent has delegated a token to us. The token
-    /// is added to the wallet's held tokens.
+    /// is added to the wallet's held tokens. The delegatee does NOT receive the
+    /// root key -- they can present the token for verification but cannot mint
+    /// new root tokens.
     pub fn receive_delegation(&mut self, delegated: DelegatedToken) {
-        self.tokens.push(delegated.token);
+        let held = HeldToken::new(
+            delegated.label,
+            delegated.service,
+            delegated.token_bytes,
+            [0u8; 32], // delegatee does not have the root key
+            delegated.id,
+        );
+        self.tokens.push(held);
     }
 
     // =========================================================================
@@ -724,7 +776,7 @@ impl AgentWallet {
         let decoded = token.decode()?;
         let caveat_set = decoded
             .inner()
-            .verify(&token.root_key, decoded.discharges())
+            .verify(token.root_key(), decoded.discharges())
             .map_err(|e| {
                 SdkError::Token(pyana_token::TokenError::VerificationFailed(e.to_string()))
             })?;
@@ -802,7 +854,7 @@ impl AgentWallet {
         token: &HeldToken,
         request: &AuthRequest,
     ) -> Result<BridgePresentationProof, SdkError> {
-        let issuer_key = token.root_key;
+        let issuer_key = *token.root_key();
         let federation_root_bb = Self::compute_federation_root_bb(&issuer_key);
         let federation_root = Self::bb_to_bytes(federation_root_bb);
 
@@ -814,7 +866,7 @@ impl AgentWallet {
 
         // Mint a fresh token from the root key for the builder
         // (since MacaroonToken is not Clone, we create a new one from the key).
-        let fresh_token = MacaroonToken::mint(token.root_key, token.id.as_bytes(), &token.service);
+        let fresh_token = MacaroonToken::mint(*token.root_key(), token.id.as_bytes(), &token.service);
         builder.set_root_token(fresh_token);
 
         let proof = builder.prove_real(request)?;
@@ -834,7 +886,7 @@ impl AgentWallet {
         token: &HeldToken,
         request: &AuthRequest,
     ) -> Result<BridgePresentationProof, SdkError> {
-        let issuer_key = token.root_key;
+        let issuer_key = *token.root_key();
         let federation_root_bb = Self::compute_federation_root_bb(&issuer_key);
         let federation_root = Self::bb_to_bytes(federation_root_bb);
 
@@ -844,7 +896,7 @@ impl AgentWallet {
             federation_root_bb,
         );
 
-        let fresh_token = MacaroonToken::mint(token.root_key, token.id.as_bytes(), &token.service);
+        let fresh_token = MacaroonToken::mint(*token.root_key(), token.id.as_bytes(), &token.service);
         builder.set_root_token(fresh_token);
 
         let proof = builder.prove(request)?;
@@ -867,7 +919,7 @@ impl AgentWallet {
         attenuations: &[Attenuation],
         request: &AuthRequest,
     ) -> Result<BridgePresentationProof, SdkError> {
-        let issuer_key = root_token.root_key;
+        let issuer_key = *root_token.root_key();
         let federation_root_bb = Self::compute_federation_root_bb(&issuer_key);
         let federation_root = Self::bb_to_bytes(federation_root_bb);
 
@@ -878,7 +930,7 @@ impl AgentWallet {
         );
 
         let fresh_token = MacaroonToken::mint(
-            root_token.root_key,
+            *root_token.root_key(),
             root_token.id.as_bytes(),
             &root_token.service,
         );
@@ -992,7 +1044,7 @@ impl AgentWallet {
     /// This is a helper for constructing pipelines: you hash a turn and then
     /// create a reference that downstream turns can use to target outputs of
     /// this turn.
-    pub fn eventual_ref(turn: &mut pyana_turn::Turn, slot: u32) -> pyana_turn::EventualRef {
+    pub fn eventual_ref(turn: &pyana_turn::Turn, slot: u32) -> pyana_turn::EventualRef {
         let turn_hash = turn.hash();
         pyana_turn::EventualRef::new(turn_hash, slot)
     }

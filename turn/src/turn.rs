@@ -27,8 +27,8 @@ pub struct Turn {
 }
 
 impl Turn {
-    pub fn hash(&mut self) -> [u8; 32] {
-        let forest_hash = self.call_forest.hash();
+    pub fn hash(&self) -> [u8; 32] {
+        let forest_hash = self.call_forest.compute_hash();
         let mut hasher = blake3::Hasher::new();
         hasher.update(self.agent.as_bytes());
         hasher.update(&self.nonce.to_le_bytes());

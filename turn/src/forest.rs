@@ -156,7 +156,7 @@ impl CallForest {
         self.roots.last_mut().unwrap()
     }
 
-    /// Compute the Merkle hash of the entire forest.
+    /// Compute the Merkle hash of the entire forest (mutating, caches result).
     ///
     /// forest_hash = BLAKE3(root1_hash || root2_hash || ...)
     pub fn hash(&mut self) -> [u8; 32] {
@@ -175,6 +175,39 @@ impl CallForest {
             self.forest_hash = *hasher.finalize().as_bytes();
         }
         self.forest_hash
+    }
+
+    /// Compute the Merkle hash of the entire forest without mutating self.
+    ///
+    /// This recomputes from scratch each time (no caching), making it suitable
+    /// for use with `&self` when cloning the forest is undesirable.
+    pub fn compute_hash(&self) -> [u8; 32] {
+        if self.roots.is_empty() {
+            return [0u8; 32];
+        }
+        let mut hasher = blake3::Hasher::new();
+        for root in &self.roots {
+            hasher.update(&Self::compute_tree_hash(root));
+        }
+        *hasher.finalize().as_bytes()
+    }
+
+    /// Recursively compute a tree hash without mutation.
+    fn compute_tree_hash(tree: &CallTree) -> [u8; 32] {
+        let action_hash = tree.action.hash();
+        let children_hash = if tree.children.is_empty() {
+            [0u8; 32]
+        } else {
+            let mut h = blake3::Hasher::new();
+            for child in &tree.children {
+                h.update(&Self::compute_tree_hash(child));
+            }
+            *h.finalize().as_bytes()
+        };
+        let mut h = blake3::Hasher::new();
+        h.update(&action_hash);
+        h.update(&children_hash);
+        *h.finalize().as_bytes()
     }
 
     /// Iterate depth-first over all trees in the forest.

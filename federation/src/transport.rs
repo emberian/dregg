@@ -179,7 +179,9 @@ impl FederationTransport for LocalTransport {
                 if i == self.node_id {
                     continue;
                 }
-                let _ = sender.try_send(msg.clone());
+                if sender.try_send(msg.clone()).is_err() {
+                    tracing::warn!(peer_id = i, "failed to send proposal to peer");
+                }
             }
             Ok(())
         })
@@ -196,7 +198,9 @@ impl FederationTransport for LocalTransport {
                 if i == self.node_id {
                     continue;
                 }
-                let _ = sender.try_send(msg.clone());
+                if sender.try_send(msg.clone()).is_err() {
+                    tracing::warn!(peer_id = i, "failed to send finalized block to peer");
+                }
             }
             Ok(())
         })
@@ -455,7 +459,23 @@ impl FederationTransport for TcpFederationTransport {
                 if peer_id == self.node_id {
                     continue;
                 }
-                let _ = self.send_to(peer_id, &envelope).await;
+                let mut sent = false;
+                for delay in [
+                    std::time::Duration::from_millis(0),
+                    std::time::Duration::from_millis(100),
+                    std::time::Duration::from_millis(500),
+                ] {
+                    if delay.as_millis() > 0 {
+                        tokio::time::sleep(delay).await;
+                    }
+                    if self.send_to(peer_id, &envelope).await.is_ok() {
+                        sent = true;
+                        break;
+                    }
+                }
+                if !sent {
+                    tracing::warn!(peer_id, "failed to send proposal to peer after retries");
+                }
             }
             Ok(())
         })
@@ -475,7 +495,23 @@ impl FederationTransport for TcpFederationTransport {
                 if peer_id == self.node_id {
                     continue;
                 }
-                let _ = self.send_to(peer_id, &envelope).await;
+                let mut sent = false;
+                for delay in [
+                    std::time::Duration::from_millis(0),
+                    std::time::Duration::from_millis(100),
+                    std::time::Duration::from_millis(500),
+                ] {
+                    if delay.as_millis() > 0 {
+                        tokio::time::sleep(delay).await;
+                    }
+                    if self.send_to(peer_id, &envelope).await.is_ok() {
+                        sent = true;
+                        break;
+                    }
+                }
+                if !sent {
+                    tracing::warn!(peer_id, "failed to send finalized block to peer after retries");
+                }
             }
             Ok(())
         })

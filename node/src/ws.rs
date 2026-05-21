@@ -205,10 +205,31 @@ async fn handle_socket(socket: WebSocket, state: NodeState) {
                                     }
                                 } else {
                                     let mut s = state.write().await;
-                                    s.unlocked = true;
-                                    ServerMessage::UnlockResult {
-                                        success: true,
-                                        error: None,
+                                    let hash = *blake3::hash(passphrase.as_bytes()).as_bytes();
+                                    match s.passphrase_hash {
+                                        Some(stored_hash) => {
+                                            if hash != stored_hash {
+                                                ServerMessage::UnlockResult {
+                                                    success: false,
+                                                    error: Some("invalid passphrase".to_string()),
+                                                }
+                                            } else {
+                                                s.unlocked = true;
+                                                ServerMessage::UnlockResult {
+                                                    success: true,
+                                                    error: None,
+                                                }
+                                            }
+                                        }
+                                        None => {
+                                            // First unlock sets the passphrase.
+                                            s.passphrase_hash = Some(hash);
+                                            s.unlocked = true;
+                                            ServerMessage::UnlockResult {
+                                                success: true,
+                                                error: None,
+                                            }
+                                        }
                                     }
                                 };
                                 let json = serde_json::to_string(&resp).unwrap();

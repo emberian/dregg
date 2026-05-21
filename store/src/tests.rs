@@ -1138,6 +1138,65 @@ fn test_nullifier_persistence_across_restart() {
 }
 
 #[test]
+fn test_spend_note_atomic() {
+    use pyana_cell::note::{Note, Nullifier};
+
+    let store = new_store();
+
+    let note1 = Note::with_randomness([1u8; 32], [1, 100, 0, 0, 0, 0, 0, 0], [10u8; 32]);
+    let note2 = Note::with_randomness([2u8; 32], [1, 200, 0, 0, 0, 0, 0, 0], [20u8; 32]);
+    let spending_key = [0xBB; 32];
+
+    // First: store the original commitment for note1 (simulate issuance).
+    store.store_note_commitment(&note1.commitment()).unwrap();
+    assert_eq!(store.note_count().unwrap(), 1);
+
+    // Spend note1 atomically: insert its nullifier + store the output commitment (note2).
+    let nullifier1 = note1.nullifier(&spending_key);
+    let pos = store
+        .spend_note_atomic(&nullifier1, &note2.commitment())
+        .unwrap();
+    assert_eq!(pos, 1); // Second commitment is at position 1.
+
+    // Verify both side effects occurred.
+    assert!(store.is_nullifier_spent(&nullifier1).unwrap());
+    assert_eq!(store.note_count().unwrap(), 2);
+
+    // Double-spend is rejected atomically.
+    let note3 = Note::with_randomness([3u8; 32], [2, 50, 0, 0, 0, 0, 0, 0], [30u8; 32]);
+    let result = store.spend_note_atomic(&nullifier1, &note3.commitment());
+    assert!(matches!(result, Err(StoreError::Integrity(_))));
+
+    // The failed double-spend must not have added the commitment.
+    assert_eq!(store.note_count().unwrap(), 2);
+}
+
+#[test]
+fn test_spend_note_atomic_double_spend_no_side_effects() {
+    use pyana_cell::note::Note;
+
+    let store = new_store();
+
+    let note1 = Note::with_randomness([1u8; 32], [1, 100, 0, 0, 0, 0, 0, 0], [10u8; 32]);
+    let note2 = Note::with_randomness([2u8; 32], [1, 200, 0, 0, 0, 0, 0, 0], [20u8; 32]);
+    let note3 = Note::with_randomness([3u8; 32], [2, 50, 0, 0, 0, 0, 0, 0], [30u8; 32]);
+    let spending_key = [0xBB; 32];
+    let nullifier1 = note1.nullifier(&spending_key);
+
+    // Spend note1 successfully (creating note2 as output).
+    let pos = store
+        .spend_note_atomic(&nullifier1, &note2.commitment())
+        .unwrap();
+    assert_eq!(pos, 0);
+    assert_eq!(store.note_count().unwrap(), 1);
+
+    // Attempt double-spend: should fail AND not add note3's commitment.
+    let result = store.spend_note_atomic(&nullifier1, &note3.commitment());
+    assert!(result.is_err());
+    assert_eq!(store.note_count().unwrap(), 1); // Still 1, not 2.
+}
+
+#[test]
 fn test_attested_root_includes_note_tree() {
     use pyana_cell::note::Note;
 

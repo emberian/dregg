@@ -10,7 +10,7 @@ description = "Canonical shared types for the pyana federation: PublicKey, Signa
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 blake3 = "1"
-ed25519-dalek = { version = "2", features = ["std"] }
+ed25519-dalek = { version = "2", features = ["std", "zeroize"] }
 getrandom = { workspace = true }
 
 [dev-dependencies]

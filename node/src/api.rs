@@ -133,6 +133,18 @@ pub struct UnlockResponse {
     pub error: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub struct SetPassphraseRequest {
+    pub passphrase: String,
+}
+
+#[derive(Serialize)]
+pub struct SetPassphraseResponse {
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 #[derive(Serialize)]
 pub struct IntentSubmitResponse {
     pub intent_id: String,
@@ -156,6 +168,7 @@ pub fn router(state: NodeState) -> Router {
         .route("/ws", get(handle_ws))
         .route("/wallet", get(get_wallet))
         .route("/wallet/unlock", post(post_wallet_unlock))
+        .route("/wallet/set-passphrase", post(post_set_passphrase))
         .route("/wallet/authorize", post(post_authorize))
         .route("/wallet/mint", post(post_mint))
         .route("/wallet/attenuate", post(post_attenuate))
@@ -239,8 +252,8 @@ async fn post_mint(
     let held = s.wallet.mint_token(&root_key, &req.service);
 
     Ok(Json(MintResponse {
-        token_id: held.id,
-        service: held.service,
+        token_id: held.id.clone(),
+        service: held.service.clone(),
     }))
 }
 
@@ -271,8 +284,8 @@ async fn post_attenuate(
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 
     Ok(Json(AttenuateResponse {
-        new_token_id: attenuated.id,
-        service: attenuated.service,
+        new_token_id: attenuated.id.clone(),
+        service: attenuated.service.clone(),
     }))
 }
 
@@ -390,11 +403,61 @@ async fn post_wallet_unlock(
         }));
     }
 
-    // For now, accept any non-empty passphrase (real auth comes later).
     let mut s = state.write().await;
-    s.unlocked = true;
+    let hash = *blake3::hash(req.passphrase.as_bytes()).as_bytes();
 
-    Ok(Json(UnlockResponse {
+    match s.passphrase_hash {
+        Some(stored_hash) => {
+            // Verify against the stored passphrase hash.
+            if hash != stored_hash {
+                return Ok(Json(UnlockResponse {
+                    success: false,
+                    error: Some("invalid passphrase".to_string()),
+                }));
+            }
+            s.unlocked = true;
+            Ok(Json(UnlockResponse {
+                success: true,
+                error: None,
+            }))
+        }
+        None => {
+            // First unlock: set the passphrase hash.
+            s.passphrase_hash = Some(hash);
+            s.unlocked = true;
+            Ok(Json(UnlockResponse {
+                success: true,
+                error: None,
+            }))
+        }
+    }
+}
+
+async fn post_set_passphrase(
+    State(state): State<NodeState>,
+    Json(req): Json<SetPassphraseRequest>,
+) -> Result<Json<SetPassphraseResponse>, StatusCode> {
+    if req.passphrase.is_empty() {
+        return Ok(Json(SetPassphraseResponse {
+            success: false,
+            error: Some("passphrase must not be empty".to_string()),
+        }));
+    }
+
+    let mut s = state.write().await;
+
+    if s.passphrase_hash.is_some() {
+        // Passphrase already set — cannot overwrite without the old one.
+        return Ok(Json(SetPassphraseResponse {
+            success: false,
+            error: Some("passphrase already set; unlock first to change it".to_string()),
+        }));
+    }
+
+    let hash = *blake3::hash(req.passphrase.as_bytes()).as_bytes();
+    s.passphrase_hash = Some(hash);
+
+    Ok(Json(SetPassphraseResponse {
         success: true,
         error: None,
     }))

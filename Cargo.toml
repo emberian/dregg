@@ -93,6 +93,8 @@ manual_unwrap_or_default = "allow"
 manual_unwrap_or = "allow"
 manual_flatten = "allow"
 print_literal = "allow"
+manual_saturating_arithmetic = "allow"
+large_const_arrays = "allow"
 unused_enumerate_index = "allow"
 
 [workspace.lints.rust]

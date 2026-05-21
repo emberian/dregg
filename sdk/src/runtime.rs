@@ -100,7 +100,11 @@ impl AgentRuntime {
         let cell_id;
         let public_key;
         {
-            let w = wallet.read().unwrap();
+            // Recover from poisoned lock rather than cascading panics.
+            // A poisoned RwLock means a writer panicked while holding the lock;
+            // we accept the potentially-inconsistent state as preferable to
+            // bringing down the entire runtime.
+            let w = wallet.read().unwrap_or_else(|e| e.into_inner());
             cell_id = w.cell_id(domain);
             public_key = w.public_key();
         }
@@ -137,7 +141,7 @@ impl AgentRuntime {
         domain: &str,
         ledger: Arc<Mutex<Ledger>>,
     ) -> Self {
-        let cell_id = wallet.read().unwrap().cell_id(domain);
+        let cell_id = wallet.read().unwrap_or_else(|e| e.into_inner()).cell_id(domain);
         let executor = TurnExecutor::new(ComputronCosts::default_costs());
 
         AgentRuntime {
@@ -172,8 +176,9 @@ impl AgentRuntime {
 
     /// Get a reference to the wallet (behind RwLock).
     ///
-    /// Callers should use `.read().unwrap()` for read access or
-    /// `.write().unwrap()` for mutation (e.g., enabling IVC, minting tokens).
+    /// Callers should use `.read().unwrap_or_else(|e| e.into_inner())` for read
+    /// access or `.write().unwrap_or_else(|e| e.into_inner())` for mutation
+    /// (e.g., enabling IVC, minting tokens).
     pub fn wallet(&self) -> &Arc<RwLock<AgentWallet>> {
         &self.wallet
     }
@@ -227,7 +232,7 @@ impl AgentRuntime {
 
         // Compute the signing message and sign with the wallet's key (read lock).
         let message = TurnExecutor::compute_signing_message(&action_unsigned);
-        let sig = self.wallet.read().unwrap().sign_bytes(&message);
+        let sig = self.wallet.read().unwrap_or_else(|e| e.into_inner()).sign_bytes(&message);
 
         // Rebuild the action with the signature attached.
         let action_signed = Action {
@@ -258,7 +263,7 @@ impl AgentRuntime {
             TurnResult::Committed { receipt, .. } => {
                 // Append the receipt to the wallet's chain (write lock).
                 drop(ledger); // release ledger lock before taking wallet write lock
-                self.wallet.write().unwrap().append_receipt(receipt.clone());
+                self.wallet.write().unwrap_or_else(|e| e.into_inner()).append_receipt(receipt.clone());
                 Ok(receipt)
             }
             TurnResult::Rejected { reason, .. } => Err(SdkError::Turn(reason)),
@@ -283,7 +288,7 @@ impl AgentRuntime {
                 drop(n);
                 drop(ledger);
                 // Append the receipt to the wallet's chain (write lock).
-                self.wallet.write().unwrap().append_receipt(receipt.clone());
+                self.wallet.write().unwrap_or_else(|e| e.into_inner()).append_receipt(receipt.clone());
                 Ok(receipt)
             }
             TurnResult::Rejected { reason, .. } => Err(SdkError::Turn(reason)),
@@ -318,15 +323,23 @@ impl AgentRuntime {
         let attenuated_boxed = decoded.attenuate(restrictions)?;
         let encoded = attenuated_boxed.to_encoded()?;
 
-        let delegated_token = HeldToken {
-            label: format!("delegated:{}", token.service),
-            service: token.service.clone(),
-            encoded,
-            root_key: token.root_key,
-            id: format!("sub:{}:{}", token.id, sub_pk.short_hex()),
-        };
+        let token_id = format!("sub:{}:{}", token.id, sub_pk.short_hex());
+        let delegated_label = format!("delegated:{}", token.service);
+
+        // Build the HeldToken for the sub-agent before consuming `encoded`.
+        let delegated_token = HeldToken::new(
+            delegated_label.clone(),
+            token.service.clone(),
+            encoded.clone(),
+            *token.root_key(),
+            token_id.clone(),
+        );
+
         sub_wallet.receive_delegation(DelegatedToken {
-            token: delegated_token.clone(),
+            token_bytes: encoded,
+            service: token.service.clone(),
+            label: delegated_label,
+            id: token_id,
             delegatee: sub_pk,
             restrictions: restrictions.clone(),
         });
@@ -348,7 +361,7 @@ impl AgentRuntime {
             wallet: Arc::new(sub_wallet),
             cell_id: sub_cell_id,
             token: delegated_token,
-            parent: self.wallet.read().unwrap().public_key(),
+            parent: self.wallet.read().unwrap_or_else(|e| e.into_inner()).public_key(),
             domain: self.domain.clone(),
             ledger: self.ledger.clone(),
             nonce: Mutex::new(0),

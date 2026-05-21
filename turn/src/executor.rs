@@ -241,8 +241,7 @@ impl TurnExecutor {
         // On subsequent forest failure (Phase 2), the debit is refunded (fast unlock).
         // =====================================================================
         let budget_debit_digest = if let Some(gate_cell) = &self.budget_gate {
-            let mut turn_for_hash = turn.clone();
-            let turn_hash = turn_for_hash.hash();
+            let turn_hash = turn.hash();
             let mut gate = gate_cell.borrow_mut();
             match gate.try_debit(turn.fee, &turn_hash) {
                 Ok(digest) => Some((digest, turn.fee)),
@@ -371,10 +370,9 @@ impl TurnExecutor {
         let post_state_hash = ledger.root();
         let effects_hash = self.compute_effects_hash(&all_effects_hashes);
 
-        // Compute turn hash (we need a mutable clone for hashing).
-        let mut turn_clone = turn.clone();
-        let turn_hash = turn_clone.hash();
-        let forest_hash = turn_clone.call_forest.forest_hash;
+        // Compute turn hash.
+        let turn_hash = turn.hash();
+        let forest_hash = turn.call_forest.compute_hash();
 
         // Build ledger delta from the journal and Phase 1 (fee + nonce) commitment.
         let delta =
@@ -1075,7 +1073,8 @@ impl TurnExecutor {
     ///
     /// The breadstuff token must be held in the ACTOR's (parent cell's) capability
     /// list, not the target's. The actor presents a breadstuff token they hold as
-    /// proof of their authority to act on the target cell.
+    /// proof of their authority to act on the target cell. The matching capability
+    /// must also reference the action's target cell (target-scoped).
     fn check_breadstuff(
         &self,
         ledger: &Ledger,
@@ -1095,7 +1094,7 @@ impl TurnExecutor {
         let has_matching = actor_cell
             .capabilities
             .iter()
-            .any(|cap| cap.breadstuff.as_ref() == Some(token));
+            .any(|cap| cap.breadstuff.as_ref() == Some(token) && cap.target == target_id);
         if has_matching {
             Ok(())
         } else {
@@ -1402,8 +1401,9 @@ impl TurnExecutor {
             } => {
                 if *balance != 0 {
                     return Err((
-                        TurnError::BalanceOverflow {
+                        TurnError::CreateCellNonZeroBalance {
                             cell: CellId::derive_raw(public_key, token_id),
+                            balance: *balance,
                         },
                         path.to_vec(),
                     ));
@@ -1717,6 +1717,7 @@ impl TurnExecutor {
                     .as_ref()
                     .map(|d| d.max_staleness)
                     .unwrap_or(0);
+                let old_delegation = child_cell.delegation.clone();
 
                 let parent_cell_data = ledger
                     .get(&parent_id)
@@ -1727,6 +1728,7 @@ impl TurnExecutor {
                 let now = self.current_timestamp as u64;
 
                 let child_mut = ledger.get_mut(action_target).unwrap();
+                journal.record_set_delegation(*action_target, old_delegation);
                 child_mut.delegation = Some(pyana_cell::DelegatedRef::new(
                     parent_id,
                     new_snapshot,
@@ -1750,11 +1752,15 @@ impl TurnExecutor {
                         path.to_vec(),
                     ));
                 }
+                let old_child_delegation = child_cell.delegation.clone();
 
                 let parent_mut = ledger.get_mut(action_target).unwrap();
+                let old_epoch = parent_mut.state.delegation_epoch;
+                journal.record_set_delegation_epoch(*action_target, old_epoch);
                 parent_mut.state.bump_delegation_epoch();
 
                 let child_mut = ledger.get_mut(child).unwrap();
+                journal.record_set_delegation(*child, old_child_delegation);
                 child_mut.delegation = None;
                 Ok(())
             }
@@ -2076,6 +2082,7 @@ impl TurnExecutor {
                     // Verification key changes don't have a delta field currently;
                     // tracked via the cell's state.
                 }
+                JournalEntry::SetDelegation { .. } | JournalEntry::SetDelegationEpoch { .. } => {}
             }
         }
 
@@ -2099,7 +2106,8 @@ impl TurnExecutor {
                     let e = updated_cells
                         .entry(*cell_id)
                         .or_insert_with(CellStateDelta::empty);
-                    e.balance_change = diff as i64;
+                    e.balance_change = i64::try_from(diff)
+                        .unwrap_or(if diff > 0 { i64::MAX } else { i64::MIN });
                 }
             }
         }
@@ -2539,8 +2547,7 @@ pub fn execute_pipeline(
     // Pre-compute turn hashes for resolution table keying.
     let mut turn_hashes: Vec<[u8; 32]> = Vec::with_capacity(n);
     for turn in &pipeline.turns {
-        let mut turn_clone = turn.clone();
-        turn_hashes.push(turn_clone.hash());
+        turn_hashes.push(turn.hash());
     }
 
     for &idx in &topo_order {

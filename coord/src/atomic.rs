@@ -40,12 +40,12 @@ impl AtomicForest {
     /// Create a new atomic forest, computing its hash.
     pub fn new(
         participants: Vec<[u8; 32]>,
-        mut forest: CallForest,
+        forest: CallForest,
         preconditions: Vec<(CellId, Preconditions)>,
         initiator: CellId,
         fee: u64,
     ) -> Self {
-        let forest_hash = forest.hash();
+        let forest_hash = forest.compute_hash();
         let hash = Self::compute_hash(&participants, &forest_hash, &preconditions, &initiator, fee);
         AtomicForest {
             participants,

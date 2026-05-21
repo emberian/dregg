@@ -59,6 +59,10 @@ impl Evaluator {
         Self { facts, rules }
     }
 
+    /// Maximum number of evaluation rounds before the evaluator terminates.
+    /// This prevents unbounded computation from pathological rule sets.
+    const MAX_EVAL_ROUNDS: usize = 1000;
+
     /// Evaluate an authorization request, producing a complete derivation trace.
     ///
     /// The evaluation proceeds as follows:
@@ -66,6 +70,10 @@ impl Evaluator {
     /// 2. Run bottom-up evaluation to fixpoint, recording each derivation step
     /// 3. Check if any `allow(...)` fact was derived
     /// 4. If so, conclude Allow with the rule that produced it; otherwise Deny
+    ///
+    /// The evaluation is bounded to [`Self::MAX_EVAL_ROUNDS`] iterations. If
+    /// the bound is reached without achieving fixpoint, evaluation terminates
+    /// and the current state is used (typically resulting in Deny).
     pub fn evaluate(&self, request: &AuthorizationRequest) -> AuthorizationTrace {
         let mut facts = self.facts.clone();
         let mut steps: Vec<DerivationStep> = Vec::new();
@@ -73,8 +81,12 @@ impl Evaluator {
         // Inject request facts
         Self::inject_request_facts(&mut facts, request);
 
-        // Bottom-up evaluation to fixpoint
+        // Bottom-up evaluation to fixpoint (bounded)
+        let mut round = 0;
         loop {
+            if round >= Self::MAX_EVAL_ROUNDS {
+                break;
+            }
             let new_steps = Self::derive_one_round(&self.rules, &facts);
             if new_steps.is_empty() {
                 break;
@@ -83,6 +95,7 @@ impl Evaluator {
                 facts.push(step.derived_fact.clone());
             }
             steps.extend(new_steps);
+            round += 1;
         }
 
         // Check for allow conclusions

@@ -56,7 +56,7 @@ pub struct CausalTurn {
 impl CausalTurn {
     /// Create a new CausalTurn, computing its hash from the contents.
     pub fn new(
-        mut turn: Turn,
+        turn: Turn,
         causal_deps: Vec<[u8; 32]>,
         node_id: [u8; 32],
         sequence: u64,
@@ -91,7 +91,7 @@ impl CausalTurn {
     }
 
     /// Verify that the claimed hash matches the actual content hash.
-    pub fn verify_hash(&mut self) -> bool {
+    pub fn verify_hash(&self) -> bool {
         let turn_hash = self.turn.hash();
         let computed =
             Self::compute_hash(&turn_hash, &self.causal_deps, &self.node_id, self.sequence);
@@ -182,8 +182,7 @@ impl CausalLedger {
     /// Returns the TurnResult on success.
     pub fn apply_causal_turn(&mut self, ct: &CausalTurn) -> Result<TurnResult, CoordError> {
         // Step 1: Verify hash integrity.
-        let mut turn_copy = ct.turn.clone();
-        let turn_hash = turn_copy.hash();
+        let turn_hash = ct.turn.hash();
         let computed_hash =
             CausalTurn::compute_hash(&turn_hash, &ct.causal_deps, &ct.node_id, ct.sequence);
         if computed_hash != ct.hash {

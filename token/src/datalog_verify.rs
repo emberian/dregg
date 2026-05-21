@@ -181,10 +181,10 @@ fn full_policy() -> Vec<Rule> {
                 terms: vec![Term::Var(2)],
             },
         ],
-        checks: vec![Check::Contains(Term::Var(1), Term::Var(2))],
+        checks: vec![Check::MemberOf(Term::Var(1), Term::Var(2))],
     });
 
-    // Rule 2: allow if service($svc, $actions), request_service($svc), request_action($act), $actions.contains($act)
+    // Rule 2: allow if service($svc, $actions), request_service($svc), request_action($act), MemberOf($actions, $act)
     rules.push(Rule {
         id: rule_ids::SERVICE_ACTION,
         head: Atom {
@@ -205,7 +205,7 @@ fn full_policy() -> Vec<Rule> {
                 terms: vec![Term::Var(2)],
             },
         ],
-        checks: vec![Check::Contains(Term::Var(1), Term::Var(2))],
+        checks: vec![Check::MemberOf(Term::Var(1), Term::Var(2))],
     });
 
     // Rule 3: allow if unrestricted(1)
@@ -296,8 +296,15 @@ fn full_policy() -> Vec<Rule> {
                 predicate: symbol_from_str("valid_until"),
                 terms: vec![Term::Var(3)],
             },
+            Atom {
+                predicate: symbol_from_str("request_time"),
+                terms: vec![Term::Var(4)],
+            },
         ],
-        checks: vec![Check::Contains(Term::Var(1), Term::Var(2))],
+        checks: vec![
+            Check::MemberOf(Term::Var(1), Term::Var(2)),
+            Check::LessThan(Term::Var(4), Term::Var(3)), // $t < $exp
+        ],
     });
 
     // Rule 11: Time-bounded service + action
@@ -324,8 +331,15 @@ fn full_policy() -> Vec<Rule> {
                 predicate: symbol_from_str("valid_until"),
                 terms: vec![Term::Var(3)],
             },
+            Atom {
+                predicate: symbol_from_str("request_time"),
+                terms: vec![Term::Var(4)],
+            },
         ],
-        checks: vec![Check::Contains(Term::Var(1), Term::Var(2))],
+        checks: vec![
+            Check::MemberOf(Term::Var(1), Term::Var(2)),
+            Check::LessThan(Term::Var(4), Term::Var(3)), // $t < $exp
+        ],
     });
 
     // Rule 12: Unrestricted with time bound (must still be within window)
@@ -344,8 +358,14 @@ fn full_policy() -> Vec<Rule> {
                 predicate: symbol_from_str("valid_until"),
                 terms: vec![Term::Var(0)],
             },
+            Atom {
+                predicate: symbol_from_str("request_time"),
+                terms: vec![Term::Var(1)],
+            },
         ],
-        checks: vec![],
+        checks: vec![
+            Check::LessThan(Term::Var(1), Term::Var(0)), // $t < $exp
+        ],
     });
 
     rules

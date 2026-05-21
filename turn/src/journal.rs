@@ -6,7 +6,8 @@
 //! to restore the ledger to its exact pre-turn state.
 
 use pyana_cell::{
-    CapabilityRef, CellId, Ledger, Permissions, VerificationKey, state::FieldElement,
+    CapabilityRef, CellId, DelegatedRef, Ledger, Permissions, VerificationKey,
+    state::FieldElement,
 };
 
 /// A single undo entry in the journal.
@@ -46,6 +47,13 @@ pub(crate) enum JournalEntry {
         cell: CellId,
         old_vk: Option<VerificationKey>,
     },
+    /// A cell's delegation was changed. Records the old delegation.
+    SetDelegation {
+        cell: CellId,
+        old_delegation: Option<DelegatedRef>,
+    },
+    /// A cell's delegation_epoch was changed. Records the old epoch.
+    SetDelegationEpoch { cell: CellId, old_epoch: u64 },
 }
 
 /// The undo journal for a turn's execution.
@@ -133,6 +141,18 @@ impl LedgerJournal {
             .push(JournalEntry::SetVerificationKey { cell, old_vk });
     }
 
+    /// Record a delegation change.
+    pub fn record_set_delegation(&mut self, cell: CellId, old_delegation: Option<DelegatedRef>) {
+        self.entries
+            .push(JournalEntry::SetDelegation { cell, old_delegation });
+    }
+
+    /// Record a delegation_epoch change.
+    pub fn record_set_delegation_epoch(&mut self, cell: CellId, old_epoch: u64) {
+        self.entries
+            .push(JournalEntry::SetDelegationEpoch { cell, old_epoch });
+    }
+
     /// Roll back all recorded changes in reverse order.
     ///
     /// After this call, the ledger is restored to the state it was in before
@@ -191,6 +211,19 @@ impl LedgerJournal {
                 JournalEntry::SetVerificationKey { cell, old_vk } => {
                     if let Some(c) = ledger.get_mut(&cell) {
                         c.verification_key = old_vk;
+                    }
+                }
+                JournalEntry::SetDelegation {
+                    cell,
+                    old_delegation,
+                } => {
+                    if let Some(c) = ledger.get_mut(&cell) {
+                        c.delegation = old_delegation;
+                    }
+                }
+                JournalEntry::SetDelegationEpoch { cell, old_epoch } => {
+                    if let Some(c) = ledger.get_mut(&cell) {
+                        c.state.delegation_epoch = old_epoch;
                     }
                 }
             }

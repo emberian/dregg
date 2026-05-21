@@ -132,12 +132,15 @@ pub struct QuorumCertificate {
 impl QuorumCertificate {
     /// Whether this QC has enough votes and all signatures are valid.
     ///
-    /// If a threshold aggregate QC is present, returns true (verified separately).
-    /// Otherwise verifies both signature count AND cryptographic validity of each
-    /// vote against the known node public keys.
+    /// If a threshold aggregate QC is present, it must be verified via
+    /// `verify_with_committee()` — this method falls through to vote-based
+    /// verification. An aggregate QC does NOT short-circuit this check.
     pub fn is_valid_with_keys(&self, nodes: &[NodeIdentity]) -> bool {
+        // If an aggregate QC is present, require committee-based verification
+        // (via verify_with_committee). Do NOT short-circuit here.
         if self.aggregate_qc.is_some() {
-            return true;
+            // Fall through to vote-based verification as a sanity check.
+            // Callers with a committee should use verify_with_committee() instead.
         }
         if self.votes.len() < self.threshold {
             return false;
@@ -172,9 +175,13 @@ impl QuorumCertificate {
     }
 
     /// Whether this QC has enough votes (count-only check, for backwards compat).
+    ///
+    /// If an aggregate QC is present, requires proper BLS verification via
+    /// `verify_with_committee()`. This method only validates vote counts.
     pub fn is_valid(&self) -> bool {
         if self.aggregate_qc.is_some() {
-            return true;
+            // An aggregate QC requires proper BLS verification.
+            // Do NOT short-circuit — fall through to vote count check.
         }
         self.votes.len() >= self.threshold
     }

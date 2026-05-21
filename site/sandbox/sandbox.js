@@ -151,36 +151,167 @@ async function executeCode() {
   runIndicator.classList.add('active');
   clearOutput();
 
-  const pyana = createPyanaApi();
-  const console = createSandboxConsole();
   const startTime = performance.now();
 
-  try {
-    // Wrap user code in an async function and execute
-    const asyncFn = new Function('pyana', 'console', 'performance', `
-      return (async () => {
-        ${code}
-      })();
-    `);
+  // Execute user code in a sandboxed Web Worker (no DOM/document/fetch access).
+  // The pyana WASM API calls are proxied via postMessage.
+  const workerSource = `
+    self.onmessage = async (e) => {
+      const { code, api } = e.data;
+      // Build a pyana proxy that delegates to the main thread
+      const pyana = {};
+      for (const key of Object.keys(api)) {
+        pyana[key] = (...args) => {
+          // Synchronous call results are passed in via api data
+          return api[key](...args);
+        };
+      }
 
-    await asyncFn(pyana, console, performance);
+      // Minimal console that posts messages back
+      const console = {
+        log: (...args) => self.postMessage({ type: 'log', level: 'log', args: args.map(String) }),
+        error: (...args) => self.postMessage({ type: 'log', level: 'error', args: args.map(String) }),
+        warn: (...args) => self.postMessage({ type: 'log', level: 'warn', args: args.map(String) }),
+        info: (...args) => self.postMessage({ type: 'log', level: 'info', args: args.map(String) }),
+      };
+
+      try {
+        const fn = new Function('pyana', 'console', 'performance', \`
+          return (async () => {
+            \${code}
+          })();
+        \`);
+        await fn(pyana, console, performance);
+        self.postMessage({ type: 'done' });
+      } catch (err) {
+        self.postMessage({ type: 'error', message: err.message || String(err), stack: err.stack || '' });
+      }
+    };
+  `;
+
+  // Since the Worker cannot call WASM directly, we pre-serialize the pyana API
+  // as callable functions by running in an iframe sandbox instead.
+  // Use a sandboxed iframe with allow-scripts only (no allow-same-origin).
+  let sandboxFrame = document.getElementById('sandbox-frame');
+  if (sandboxFrame) sandboxFrame.remove();
+
+  sandboxFrame = document.createElement('iframe');
+  sandboxFrame.id = 'sandbox-frame';
+  sandboxFrame.sandbox = 'allow-scripts';
+  sandboxFrame.style.display = 'none';
+
+  const pyana = createPyanaApi();
+  const sandboxConsole = createSandboxConsole();
+
+  // Build a self-contained HTML document for the iframe.
+  // The iframe communicates results via postMessage to the parent.
+  const iframeHtml = `<!DOCTYPE html><html><head><script>
+    window.addEventListener('message', async (event) => {
+      if (event.data.type !== 'execute') return;
+      const code = event.data.code;
+      const console = {
+        log: (...args) => parent.postMessage({ type: 'log', level: 'log', args: args.map(a => {
+          if (a === undefined) return 'undefined';
+          if (a === null) return 'null';
+          if (typeof a === 'object') { try { return JSON.stringify(a, null, 2); } catch { return String(a); } }
+          return String(a);
+        }) }, '*'),
+        error: (...args) => parent.postMessage({ type: 'log', level: 'error', args: args.map(String) }, '*'),
+        warn: (...args) => parent.postMessage({ type: 'log', level: 'warn', args: args.map(String) }, '*'),
+        info: (...args) => parent.postMessage({ type: 'log', level: 'info', args: args.map(String) }, '*'),
+      };
+      // pyana API calls are proxied via postMessage request/response
+      const pyana = new Proxy({}, {
+        get(target, prop) {
+          return (...args) => {
+            // Send a synchronous-style request to parent and block...
+            // Since we cannot do sync messaging from a sandboxed iframe,
+            // we pre-evaluate all pyana calls on the parent side.
+            // Instead, the parent passes the API results via a callback approach.
+            parent.postMessage({ type: 'apiCall', method: prop, args: JSON.parse(JSON.stringify(args)) }, '*');
+            return new Promise((resolve) => {
+              function handler(ev) {
+                if (ev.data.type === 'apiResult' && ev.data.callId === prop) {
+                  window.removeEventListener('message', handler);
+                  if (ev.data.error) resolve({ error: ev.data.error });
+                  else resolve(ev.data.result);
+                }
+              }
+              window.addEventListener('message', handler);
+            });
+          };
+        }
+      });
+      try {
+        const fn = new Function('pyana', 'console', 'performance', \`return (async () => { \${code} })();\`);
+        await fn(pyana, console, performance);
+        parent.postMessage({ type: 'done' }, '*');
+      } catch (err) {
+        parent.postMessage({ type: 'error', message: err.message || String(err), stack: err.stack || '' }, '*');
+      }
+    });
+    parent.postMessage({ type: 'ready' }, '*');
+  <\/script></head><body></body></html>`;
+
+  sandboxFrame.srcdoc = iframeHtml;
+  document.body.appendChild(sandboxFrame);
+
+  try {
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('Sandbox execution timed out (10s)'));
+      }, 10000);
+
+      function messageHandler(event) {
+        const msg = event.data;
+        if (!msg || !msg.type) return;
+
+        switch (msg.type) {
+          case 'ready':
+            // Iframe is ready, send the code to execute
+            sandboxFrame.contentWindow.postMessage({ type: 'execute', code }, '*');
+            break;
+          case 'log':
+            sandboxConsole[msg.level || 'log'](...(msg.args || []));
+            break;
+          case 'apiCall':
+            // Proxy the pyana API call
+            try {
+              const result = pyana[msg.method](...(msg.args || []));
+              const resolved = result instanceof Promise ? result : Promise.resolve(result);
+              resolved.then(r => {
+                sandboxFrame.contentWindow.postMessage({ type: 'apiResult', callId: msg.method, result: r }, '*');
+              }).catch(e => {
+                sandboxFrame.contentWindow.postMessage({ type: 'apiResult', callId: msg.method, error: e.message }, '*');
+              });
+            } catch (e) {
+              sandboxFrame.contentWindow.postMessage({ type: 'apiResult', callId: msg.method, error: e.message }, '*');
+            }
+            break;
+          case 'done':
+            clearTimeout(timeout);
+            window.removeEventListener('message', messageHandler);
+            resolve();
+            break;
+          case 'error':
+            clearTimeout(timeout);
+            window.removeEventListener('message', messageHandler);
+            reject(new Error(msg.message || 'Unknown error'));
+            break;
+        }
+      }
+
+      window.addEventListener('message', messageHandler);
+    });
 
     const elapsed = (performance.now() - startTime).toFixed(1);
     appendOutput('timing', `Completed in ${elapsed}ms`);
   } catch (e) {
     appendOutput('error', `Error: ${e.message || e}`);
-    if (e.stack) {
-      // Clean up the stack trace to be more readable
-      const cleanStack = e.stack
-        .split('\n')
-        .filter(line => !line.includes('sandbox.js') && !line.includes('Function'))
-        .slice(0, 5)
-        .join('\n');
-      if (cleanStack.trim()) {
-        appendOutput('error', cleanStack);
-      }
-    }
   } finally {
+    if (sandboxFrame && sandboxFrame.parentNode) {
+      sandboxFrame.remove();
+    }
     isRunning = false;
     btnRun.disabled = false;
     runIndicator.classList.remove('active');
@@ -226,6 +357,10 @@ async function fetchFederationStatus() {
   }
 }
 
+function escapeHtml(str) {
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 function renderFederationStatus(data) {
   if (!data) {
     fedPanel.innerHTML = `
@@ -239,8 +374,8 @@ function renderFederationStatus(data) {
 
   const nodeCount = data.federation?.length || 0;
   const updated = data.updated_at ? new Date(data.updated_at).toLocaleString() : '--';
-  const commit = data.commit ? data.commit.slice(0, 8) : '--';
-  const intentService = data.intent_service || 'none';
+  const commit = data.commit ? escapeHtml(data.commit.slice(0, 8)) : '--';
+  const intentService = escapeHtml(data.intent_service || 'none');
 
   fedPanel.innerHTML = `
     <div class="fed-item">
@@ -253,7 +388,7 @@ function renderFederationStatus(data) {
     </div>
     <div class="fed-item">
       <span class="fed-label">Updated</span>
-      <span class="fed-value">${updated}</span>
+      <span class="fed-value">${escapeHtml(updated)}</span>
     </div>
     <div class="fed-item">
       <span class="fed-label">Commit</span>
@@ -265,8 +400,8 @@ function renderFederationStatus(data) {
   if (data.federation && data.federation.length > 0) {
     const nodesHtml = data.federation.map(node => `
       <div class="fed-node">
-        <span class="fed-node-name">${node.name || node.id || 'node'}</span>
-        <span class="fed-node-status ${node.status || 'unknown'}">${node.status || '?'}</span>
+        <span class="fed-node-name">${escapeHtml(node.name || node.id || 'node')}</span>
+        <span class="fed-node-status ${escapeHtml(node.status || 'unknown')}">${escapeHtml(node.status || '?')}</span>
       </div>
     `).join('');
     fedPanel.innerHTML += `<div class="fed-nodes">${nodesHtml}</div>`;

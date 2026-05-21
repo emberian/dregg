@@ -294,28 +294,28 @@ impl CausalDag {
             return None;
         }
 
-        let mut max_depth = 0;
-        let mut stack: Vec<([u8; 32], usize)> = vec![(*turn_hash, 0)];
-        let mut visited = HashSet::new();
+        let mut memo: HashMap<[u8; 32], usize> = HashMap::new();
+        Some(self.depth_recursive(turn_hash, &mut memo))
+    }
 
-        while let Some((current, depth)) = stack.pop() {
-            if !visited.insert(current) {
-                continue;
-            }
-            if let Some(deps) = self.dependencies.get(&current) {
-                if deps.is_empty() {
-                    max_depth = max_depth.max(depth);
-                } else {
-                    for dep in deps {
-                        stack.push((*dep, depth + 1));
-                    }
-                }
-            } else {
-                max_depth = max_depth.max(depth);
-            }
+    /// Recursive helper for depth calculation with memoization.
+    /// Since the graph is a DAG, recursion always terminates.
+    fn depth_recursive(&self, node: &[u8; 32], memo: &mut HashMap<[u8; 32], usize>) -> usize {
+        if let Some(&d) = memo.get(node) {
+            return d;
         }
-
-        Some(max_depth)
+        let d = match self.dependencies.get(node) {
+            Some(deps) if !deps.is_empty() => {
+                1 + deps
+                    .iter()
+                    .map(|dep| self.depth_recursive(dep, memo))
+                    .max()
+                    .unwrap_or(0)
+            }
+            _ => 0,
+        };
+        memo.insert(*node, d);
+        d
     }
 
     /// Get all turns in causal (topological) order.

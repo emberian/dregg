@@ -218,14 +218,14 @@ pub struct AuthorizationTrace {
 
 // -- Helper constructors for building symbols from strings --
 
-/// Create a [`Symbol`] from a string by zero-padding or truncating to 32 bytes.
-/// This is a convenience for tests and the standard policy set.
+/// Create a [`Symbol`] from a string by BLAKE3 hashing.
+///
+/// This produces a collision-resistant 32-byte identifier for any string,
+/// regardless of length. Previously this function truncated at 32 bytes,
+/// meaning two strings sharing the same 32-byte prefix would produce
+/// identical symbols.
 pub fn symbol_from_str(s: &str) -> Symbol {
-    let mut sym = [0u8; 32];
-    let bytes = s.as_bytes();
-    let len = bytes.len().min(32);
-    sym[..len].copy_from_slice(&bytes[..len]);
-    sym
+    *blake3::hash(s.as_bytes()).as_bytes()
 }
 
 /// Create a [`Symbol`] from raw bytes by zero-padding or truncating to 32 bytes.

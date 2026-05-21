@@ -28,6 +28,7 @@
 //! # }
 //! ```
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
@@ -56,6 +57,8 @@ pub struct FederationBridge {
     node: Arc<Mutex<NetworkConsensusNode>>,
     /// Cached latest attested root, updated after each finalization.
     latest_root: Arc<std::sync::RwLock<Option<CachedAttestedRoot>>>,
+    /// Local index of revoked token IDs, updated on each submit_revocation call.
+    revoked_tokens: Arc<std::sync::RwLock<HashSet<String>>>,
 }
 
 /// A cached snapshot of the latest attested root from the federation.
@@ -77,6 +80,7 @@ impl FederationBridge {
         Self {
             node,
             latest_root: Arc::new(std::sync::RwLock::new(None)),
+            revoked_tokens: Arc::new(std::sync::RwLock::new(HashSet::new())),
         }
     }
 
@@ -85,9 +89,16 @@ impl FederationBridge {
         self.latest_root.read().unwrap().clone()
     }
 
-    /// Get the current federation root hash (the last finalized block hash).
+    /// Get the current federation root hash.
     ///
-    /// Falls back to the genesis hash if nothing has been finalized yet.
+    /// This returns the `block_hash` from the last finalized consensus block,
+    /// which incorporates the `RevocationTree` Merkle root as computed by
+    /// `pyana-federation`. This is the **canonical** revocation root that should
+    /// be used by the wire protocol — it supersedes both the standalone BLAKE3
+    /// hash-chain in `DefaultRevocationHandler` and the raw `RevocationTree::root()`
+    /// (since the block hash additionally commits to height, timestamp, and QC).
+    ///
+    /// Falls back to the genesis hash (`[0u8; 32]`) if nothing has been finalized yet.
     pub fn current_root(&self) -> [u8; 32] {
         self.latest_root
             .read()
@@ -186,6 +197,12 @@ impl FederationBridge {
 
 impl RevocationHandler for FederationBridge {
     fn submit_revocation(&self, token_id: &str, sig: &[u8; 64]) -> bool {
+        // Track revocation locally for O(1) is_revoked queries.
+        self.revoked_tokens
+            .write()
+            .unwrap()
+            .insert(token_id.to_string());
+
         let event = RevocationEvent {
             token_id: token_id.to_string(),
             authority_id: 0, // Wire protocol doesn't carry authority_id; default to 0
@@ -212,12 +229,8 @@ impl RevocationHandler for FederationBridge {
         }
     }
 
-    fn is_revoked(&self, _token_id: &str) -> bool {
-        // The federation doesn't maintain an O(1) revocation index in the
-        // consensus node itself (that's the Merkle tree's job). For now,
-        // return false and let the SiloState handle the local index.
-        // A full integration would query the revocation tree here.
-        false
+    fn is_revoked(&self, token_id: &str) -> bool {
+        self.revoked_tokens.read().unwrap().contains(token_id)
     }
 
     fn current_root(&self) -> [u8; 32] {

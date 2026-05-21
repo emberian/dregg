@@ -192,6 +192,14 @@ pub trait RevocationHandler: Send + Sync {
 /// Default revocation handler that wraps the existing standalone logic
 /// (Vec<String> + BLAKE3 hash chain). This preserves backward compatibility
 /// for existing tests and deployments.
+///
+/// # Deprecation Notice
+///
+/// This handler uses a BLAKE3 hash chain for root computation, which is **not
+/// consistent** with the 4-ary Merkle tree used by `pyana-federation`'s
+/// `RevocationTree`. For federation-connected deployments, use
+/// [`FederationBridge`](crate::federation_bridge::FederationBridge) as the
+/// `RevocationHandler` instead.
 #[derive(Clone, Debug)]
 pub struct DefaultRevocationHandler {
     /// Revoked token IDs.
@@ -251,6 +259,15 @@ impl RevocationHandler for DefaultRevocationHandler {
 #[derive(Clone, Debug)]
 pub struct SiloState {
     /// The current federation root.
+    ///
+    /// **Canonical source**: When a [`RevocationHandler`] is configured on the
+    /// [`SiloServer`], this field is updated from the handler's `current_root()`
+    /// after each revocation. The handler (typically backed by a
+    /// `pyana-federation` `RevocationTree`) is the single source of truth.
+    ///
+    /// When no handler is configured, the standalone BLAKE3 hash-chain
+    /// computation in [`SiloState::apply_revocation_standalone`] is used as a
+    /// fallback (e.g., in tests or single-node deployments).
     pub federation_root: [u8; 32],
     /// Current block height.
     pub height: u64,
@@ -276,8 +293,48 @@ impl SiloState {
         }
     }
 
-    /// Apply a revocation event and update the root.
-    pub fn apply_revocation(
+    /// Apply a revocation event using the federation's `RevocationHandler` as the
+    /// canonical root source.
+    ///
+    /// This updates the local revocation index and height, then sets
+    /// `federation_root` to the handler's `current_root()`. The handler
+    /// (backed by `pyana-federation`'s `RevocationTree`) is the single source
+    /// of truth for the Merkle root.
+    ///
+    /// If no handler is available, use [`apply_revocation_standalone`] instead.
+    pub fn apply_revocation_delegated(
+        &mut self,
+        token_id: &str,
+        authority: &PublicKey,
+        authority_sig: &Signature,
+        handler: &dyn RevocationHandler,
+    ) {
+        self.revoked_tokens.push(token_id.to_string());
+        self.height += 1;
+
+        // The handler already processed the revocation; just adopt its root.
+        self.federation_root = handler.current_root();
+
+        // Add the authority's signature to the root attestation.
+        self.root_signatures.push((*authority, *authority_sig));
+    }
+
+    /// Apply a revocation event using the standalone BLAKE3 hash-chain.
+    ///
+    /// # Deprecation Notice
+    ///
+    /// This method computes a root via a sequential BLAKE3 hash chain, which is
+    /// **not consistent** with the 4-ary Merkle tree used by `pyana-federation`'s
+    /// `RevocationTree`. It exists for backward compatibility in tests and
+    /// single-node deployments where no `RevocationHandler` is configured.
+    ///
+    /// New code should use [`apply_revocation_delegated`] with a handler backed
+    /// by `pyana-federation::RevocationTree` to ensure root consistency across
+    /// the federation.
+    #[deprecated(
+        note = "Use apply_revocation_delegated() with a RevocationHandler for consistent roots"
+    )]
+    pub fn apply_revocation_standalone(
         &mut self,
         token_id: &str,
         authority: &PublicKey,
@@ -286,7 +343,7 @@ impl SiloState {
         self.revoked_tokens.push(token_id.to_string());
         self.height += 1;
 
-        // Recompute root incorporating the new revocation
+        // Standalone BLAKE3 hash-chain root (NOT consistent with federation Merkle tree).
         let mut hasher = blake3::Hasher::new_derive_key("pyana-wire revocation-root v1");
         hasher.update(&self.federation_root);
         hasher.update(token_id.as_bytes());
@@ -294,8 +351,23 @@ impl SiloState {
         hasher.update(&self.height.to_le_bytes());
         self.federation_root = *hasher.finalize().as_bytes();
 
-        // Add the authority's signature to the root attestation
+        // Add the authority's signature to the root attestation.
         self.root_signatures.push((*authority, *authority_sig));
+    }
+
+    /// Apply a revocation event and update the root.
+    ///
+    /// **Deprecated**: This is an alias for [`apply_revocation_standalone`] kept
+    /// for source compatibility. Prefer [`apply_revocation_delegated`] when a
+    /// `RevocationHandler` is available.
+    pub fn apply_revocation(
+        &mut self,
+        token_id: &str,
+        authority: &PublicKey,
+        authority_sig: &Signature,
+    ) {
+        #[allow(deprecated)]
+        self.apply_revocation_standalone(token_id, authority, authority_sig);
     }
 
     /// Check if a token is revoked.
@@ -633,14 +705,30 @@ impl SiloServer {
                 authority,
                 authority_sig,
             } => {
-                // If a revocation handler is configured, delegate to it.
+                // Verify the authority's signature over the token_id before
+                // accepting the revocation. Without this, any peer could forge
+                // a revocation for an arbitrary token.
+                if !authority.verify(token_id.as_bytes(), &authority_sig) {
+                    return Some(WireMessage::Error {
+                        code: crate::message::error_codes::INVALID_SIGNATURE,
+                        message: "authority signature verification failed".to_string(),
+                    });
+                }
+
+                // If a revocation handler is configured, delegate to it and use
+                // its root as the canonical source of truth.
                 if let Some(handler) = revocation_handler {
                     let _accepted = handler.submit_revocation(&token_id, &authority_sig.0);
-                    let new_root = handler.current_root();
 
-                    // Also update the local state for consistency.
+                    // Update local state using the handler's root (no independent
+                    // hash-chain computation — the handler IS the authority).
                     let mut st = state.write().await;
-                    st.apply_revocation(&token_id, &authority, &authority_sig);
+                    st.apply_revocation_delegated(
+                        &token_id,
+                        &authority,
+                        &authority_sig,
+                        handler,
+                    );
 
                     event_log
                         .lock()
@@ -652,13 +740,16 @@ impl SiloServer {
                         });
 
                     Some(WireMessage::RevocationAck {
-                        new_root,
+                        new_root: st.federation_root,
                         height: st.height,
                     })
                 } else {
-                    // Fallback: use the standalone SiloState logic.
+                    // Fallback: use the standalone BLAKE3 hash-chain logic.
+                    // This is NOT consistent with the federation's Merkle tree
+                    // but preserved for single-node/test deployments.
                     let mut st = state.write().await;
-                    st.apply_revocation(&token_id, &authority, &authority_sig);
+                    #[allow(deprecated)]
+                    st.apply_revocation_standalone(&token_id, &authority, &authority_sig);
 
                     event_log
                         .lock()
@@ -1005,10 +1096,15 @@ mod tests {
         let addr = addr_rx.await.unwrap();
         let mut client = PeerConnection::connect(&addr.to_string()).await.unwrap();
 
+        // Generate a real keypair so the signature verifies.
+        let (sk, pk) = pyana_types::generate_keypair();
+        let token_id = "tok-revoke-me";
+        let sig = pyana_types::sign(&sk, token_id.as_bytes());
+
         let msg = WireMessage::SubmitRevocation {
-            token_id: "tok-revoke-me".to_string(),
-            authority: PublicKey([0xdd; 32]),
-            authority_sig: Signature([0xcc; 64]),
+            token_id: token_id.to_string(),
+            authority: pk,
+            authority_sig: sig,
         };
         client.send(msg).await.unwrap();
 
@@ -1024,6 +1120,38 @@ mod tests {
         let st = state.read().await;
         assert!(st.is_revoked("tok-revoke-me"));
         assert!(!st.is_revoked("tok-other"));
+    }
+
+    #[tokio::test]
+    async fn server_rejects_revocation_with_invalid_signature() {
+        let config = SiloConfig::new("revoker").with_verifier(Arc::new(NoopVerifier));
+        let server = SiloServer::new("127.0.0.1:0".parse().unwrap(), config);
+
+        let (addr_tx, addr_rx) = tokio::sync::oneshot::channel();
+
+        tokio::spawn(async move {
+            server.run_with_addr(addr_tx).await.unwrap();
+        });
+
+        let addr = addr_rx.await.unwrap();
+        let mut client = PeerConnection::connect(&addr.to_string()).await.unwrap();
+
+        // Use a forged signature (random bytes) with a random public key.
+        let msg = WireMessage::SubmitRevocation {
+            token_id: "tok-forged".to_string(),
+            authority: PublicKey([0xdd; 32]),
+            authority_sig: Signature([0xcc; 64]),
+        };
+        client.send(msg).await.unwrap();
+
+        let response = client.recv().await.unwrap();
+        match response {
+            WireMessage::Error { code, message } => {
+                assert_eq!(code, crate::message::error_codes::INVALID_SIGNATURE);
+                assert!(message.contains("signature"));
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
     }
 
     #[test]

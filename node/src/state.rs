@@ -60,6 +60,10 @@ pub struct NodeStateInner {
     pub peers: Vec<String>,
     /// Whether the wallet is unlocked for signing operations.
     pub unlocked: bool,
+    /// BLAKE3 hash of the wallet passphrase, set on first `set-passphrase` call.
+    /// When `Some`, unlock attempts must provide a passphrase whose BLAKE3 hash
+    /// matches this value. When `None`, the first unlock sets the passphrase.
+    pub passphrase_hash: Option<[u8; 32]>,
     /// Local intent pool: id -> intent JSON.
     pub intent_pool: HashMap<String, serde_json::Value>,
 }
@@ -100,6 +104,7 @@ impl NodeState {
                 store,
                 peers,
                 unlocked: false,
+                passphrase_hash: None,
                 intent_pool: HashMap::new(),
             })),
             events_tx,
@@ -129,6 +134,7 @@ impl NodeState {
                 store,
                 peers,
                 unlocked: false,
+                passphrase_hash: None,
                 intent_pool: HashMap::new(),
             })),
             events_tx,

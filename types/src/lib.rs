@@ -99,6 +99,10 @@ impl fmt::Debug for Signature {
 }
 
 /// An Ed25519 signing key (private key).
+///
+/// NOTE: Clone is intentionally retained for key derivation workflows, but each
+/// clone is an untracked copy of the secret material. Prefer passing references
+/// where possible.
 #[derive(Clone)]
 pub struct SigningKey(ed25519_dalek::SigningKey);
 
@@ -108,6 +112,11 @@ impl SigningKey {
         PublicKey(self.0.verifying_key().to_bytes())
     }
 }
+
+// Safety: ed25519_dalek::SigningKey (with the "zeroize" feature enabled in Cargo.toml)
+// implements ZeroizeOnDrop. When this wrapper is dropped, the inner SigningKey's
+// Drop impl scrubs the secret_key bytes from memory. No additional Drop impl is
+// needed on the wrapper itself -- the inner type handles key hygiene.
 
 impl fmt::Debug for SigningKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -178,9 +187,13 @@ impl AttestedRoot {
     /// Check if this root has sufficient signatures (count-only check, no crypto).
     ///
     /// Use `is_valid()` for full cryptographic verification.
+    ///
+    /// If a threshold QC is present, it must contain at least 48 bytes
+    /// (minimum BLS12-381 G1 compressed point size) to be considered valid.
     pub fn has_quorum(&self) -> bool {
-        if self.threshold_qc.is_some() {
-            return true;
+        if let Some(ref qc) = self.threshold_qc {
+            // A ThresholdQC must be non-empty and meet minimum BLS12-381 G1 size.
+            return qc.0.len() >= 48;
         }
         self.quorum_signatures.len() >= self.threshold
     }
@@ -192,11 +205,16 @@ impl AttestedRoot {
     /// `known_keys` and each signature must be cryptographically valid over the
     /// canonical signing message.
     ///
-    /// If a threshold QC is present, it is considered valid (must be verified
-    /// separately via BLS verification at a higher layer).
+    /// A threshold QC, if present, must be non-empty (>= 48 bytes for BLS12-381
+    /// G1 compressed). It is still considered to require separate BLS verification
+    /// at a higher layer; the `has_quorum()` size check is a necessary but not
+    /// sufficient condition.
     pub fn is_valid(&self, known_keys: &[PublicKey]) -> bool {
-        if self.threshold_qc.is_some() {
-            return true;
+        if let Some(ref qc) = self.threshold_qc {
+            // ThresholdQC must be non-empty and at least BLS12-381 G1 size.
+            // Full BLS verification is done at a higher layer; reject obviously
+            // invalid (empty/truncated) QCs here.
+            return qc.0.len() >= 48;
         }
         if self.quorum_signatures.len() < self.threshold {
             return false;
@@ -446,9 +464,27 @@ mod tests {
             threshold_qc: Some(ThresholdQC(vec![0xFF; 48])),
             quorum_signatures: vec![],
             threshold: 100,
+            ..root.clone()
+        };
+        assert!(with_qc.has_quorum()); // Valid QC (48 bytes = BLS12-381 G1 minimum)
+
+        // Empty ThresholdQC must NOT bypass verification.
+        let empty_qc = AttestedRoot {
+            threshold_qc: Some(ThresholdQC(vec![])),
+            quorum_signatures: vec![],
+            threshold: 100,
+            ..root.clone()
+        };
+        assert!(!empty_qc.has_quorum()); // Empty QC is rejected
+
+        // Truncated ThresholdQC (< 48 bytes) must also fail.
+        let truncated_qc = AttestedRoot {
+            threshold_qc: Some(ThresholdQC(vec![0xFF; 10])),
+            quorum_signatures: vec![],
+            threshold: 100,
             ..root
         };
-        assert!(with_qc.has_quorum()); // QC present = always valid
+        assert!(!truncated_qc.has_quorum()); // Truncated QC is rejected
     }
 
     #[test]

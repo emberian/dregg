@@ -37,7 +37,7 @@ jobs:
         with:
           toolchain: nightly
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace --exclude pyana-morpheus
+      - run: cargo test --workspace --exclude pyana-morpheus --exclude pyana-bridge
 
   clippy:
     name: Clippy

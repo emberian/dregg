@@ -13,17 +13,28 @@ fn sym(s: &str) -> Symbol {
     symbol_from_str(s)
 }
 
+/// Raw symbol from literal bytes (zero-padded). Used for backward-compat
+/// tests of the deprecated `Contains` check, which requires the literal
+/// byte representation for substring matching.
+fn raw_sym(s: &str) -> Symbol {
+    symbol_from_bytes(s.as_bytes())
+}
+
+/// App fact for Contains-based policy tests.
+/// Uses hashed predicates (to match minimal_policy rules) but raw byte
+/// terms for app_id and actions (so Contains substring matching works).
 fn app_fact(app_id: &str, actions: &str) -> Fact {
     Fact::new(
         sym("app"),
-        vec![Term::Const(sym(app_id)), Term::Const(sym(actions))],
+        vec![Term::Const(raw_sym(app_id)), Term::Const(raw_sym(actions))],
     )
 }
 
+/// Service fact for Contains-based policy tests.
 fn service_fact(svc: &str, actions: &str) -> Fact {
     Fact::new(
         sym("service"),
-        vec![Term::Const(sym(svc)), Term::Const(sym(actions))],
+        vec![Term::Const(raw_sym(svc)), Term::Const(raw_sym(actions))],
     )
 }
 
@@ -35,7 +46,27 @@ fn valid_until_fact(expiry: i64) -> Fact {
     Fact::new(sym("valid_until"), vec![Term::Int(expiry)])
 }
 
+/// Make a request using raw byte symbols (for Contains-based policy tests).
+/// The terms must match the raw_sym encoding used in app_fact/service_fact.
 fn make_request(
+    app_id: Option<&str>,
+    service: Option<&str>,
+    action: Option<&str>,
+    now: i64,
+) -> AuthorizationRequest {
+    AuthorizationRequest {
+        app_id: app_id.map(raw_sym),
+        service: service.map(raw_sym),
+        action: action.map(raw_sym),
+        features: vec![],
+        user_id: None,
+        now,
+    }
+}
+
+/// Make a request using hashed symbols (for MemberOf/custom rule tests
+/// that don't use Contains substring matching).
+fn make_hashed_request(
     app_id: Option<&str>,
     service: Option<&str>,
     action: Option<&str>,
@@ -257,7 +288,10 @@ fn test_multi_step_derived_facts() {
     };
 
     let facts = vec![
-        app_fact("dashboard", "read,write"),
+        Fact::new(
+            sym("app"),
+            vec![Term::Const(sym("dashboard")), Term::Const(sym("read,write"))],
+        ),
         Fact::new(sym("has_role"), vec![Term::Const(sym("admin"))]),
         Fact::new(
             sym("role_grant"),
@@ -267,7 +301,7 @@ fn test_multi_step_derived_facts() {
 
     let rules = vec![rule_a, rule_b];
     let eval = Evaluator::new(facts.clone(), rules.clone());
-    let request = make_request(Some("dashboard"), None, Some("read"), 1000);
+    let request = make_hashed_request(Some("dashboard"), None, Some("read"), 1000);
 
     let trace = eval.evaluate(&request);
 
@@ -347,7 +381,7 @@ fn test_transitive_derivation() {
     ];
 
     let eval = Evaluator::new(facts.clone(), rules.clone());
-    let request = make_request(Some("C"), None, None, 1000);
+    let request = make_hashed_request(Some("C"), None, None, 1000);
 
     let trace = eval.evaluate(&request);
 
@@ -735,19 +769,26 @@ fn test_fact_ground_assertion() {
 }
 
 #[test]
-fn test_symbol_from_str_padding() {
-    let s = sym("hi");
-    assert_eq!(s[0], b'h');
-    assert_eq!(s[1], b'i');
-    assert_eq!(s[2], 0);
-    assert_eq!(s[31], 0);
+fn test_symbol_from_str_deterministic() {
+    let s1 = sym("hi");
+    let s2 = sym("hi");
+    assert_eq!(s1, s2);
 }
 
 #[test]
-fn test_symbol_from_str_truncation() {
-    let long = "this string is definitely longer than thirty-two bytes";
-    let s = sym(long);
-    assert_eq!(&s[..32], &long.as_bytes()[..32]);
+fn test_symbol_from_str_different_inputs() {
+    let s1 = sym("hi");
+    let s2 = sym("hello");
+    assert_ne!(s1, s2);
+}
+
+#[test]
+fn test_symbol_from_str_long_strings_no_collision() {
+    // Two strings sharing a 32-byte prefix must produce different symbols
+    // (the old truncation-based impl would have produced identical symbols)
+    let a = "this_is_a_32_byte_prefix_exactly_AAAA";
+    let b = "this_is_a_32_byte_prefix_exactly_BBBB";
+    assert_ne!(sym(a), sym(b));
 }
 
 #[test]
@@ -1073,7 +1114,7 @@ fn test_standard_policy_time_bounded_denies_after_expiry() {
     ];
 
     let eval = Evaluator::new(facts.clone(), rules.clone());
-    let request = make_request(Some("api"), None, Some("read"), 1_700_000_000);
+    let request = make_hashed_request(Some("api"), None, Some("read"), 1_700_000_000);
 
     let trace = eval.evaluate(&request);
     // Time-bounded rule must NOT fire — token is expired
@@ -1105,7 +1146,7 @@ fn test_standard_policy_time_bounded_allows_before_expiry() {
     ];
 
     let eval = Evaluator::new(facts.clone(), rules.clone());
-    let request = make_request(Some("api"), None, Some("read"), 1_700_000_000);
+    let request = make_hashed_request(Some("api"), None, Some("read"), 1_700_000_000);
 
     let trace = eval.evaluate(&request);
     // Time-bounded rule fires: action matches AND time < expiry
@@ -1134,7 +1175,7 @@ fn test_standard_policy_no_substring_vulnerability() {
 
     let eval = Evaluator::new(facts.clone(), rules.clone());
     // Request "threadwrite" — must NOT match "write" in the secure policy.
-    let request = make_request(Some("my-app"), None, Some("threadwrite"), 1000);
+    let request = make_hashed_request(Some("my-app"), None, Some("threadwrite"), 1000);
 
     let trace = eval.evaluate(&request);
     assert_eq!(
@@ -1163,7 +1204,7 @@ fn test_standard_policy_exact_action_match() {
     ];
 
     let eval = Evaluator::new(facts.clone(), rules.clone());
-    let request = make_request(Some("my-app"), None, Some("write"), 1000);
+    let request = make_hashed_request(Some("my-app"), None, Some("write"), 1000);
 
     let trace = eval.evaluate(&request);
     assert_eq!(

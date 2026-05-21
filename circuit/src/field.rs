@@ -33,6 +33,14 @@ impl BabyBear {
         Self(val % BABYBEAR_P)
     }
 
+    /// Create a field element from an untrusted u32, always reducing modulo p.
+    /// Use this for all deserialization paths where the value comes from external
+    /// (potentially adversarial) data to prevent non-canonical malleability.
+    #[inline]
+    pub fn new_canonical(val: u32) -> Self {
+        Self(val % BABYBEAR_P)
+    }
+
     /// Create from a u64, reducing modulo p.
     #[inline]
     pub fn from_u64(val: u64) -> Self {

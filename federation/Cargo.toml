@@ -15,6 +15,7 @@ crossbeam-channel = "0.5"
 serde = { version = "1", features = ["derive"] }
 postcard = { version = "1", features = ["use-std"] }
 tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
 ark-serialize = { version = "0.5.0", features = ["serde_with"] }
 ark-ff = "0.5.0"
 ark-std = "0.5.0"

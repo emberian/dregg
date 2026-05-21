@@ -41,6 +41,10 @@ async function refresh() {
   chainLength.textContent = String(state.chainLength);
 }
 
+function escapeHtml(str) {
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 async function loadLog() {
   const stored = await chrome.storage.local.get('pyana_wallet');
   const wallet = stored['pyana_wallet'];
@@ -51,8 +55,8 @@ async function loadLog() {
   const entries = wallet.log.slice(-5).reverse();
   logContainer.innerHTML = entries.map(entry => {
     const time = new Date(entry.timestamp).toLocaleTimeString();
-    const icon = entry.allowed ? '✓' : '✗';
-    return `<div class="log-entry"><span>${icon} ${entry.action} on ${entry.resource}</span><div class="time">${time}</div></div>`;
+    const icon = entry.allowed ? '&#x2713;' : '&#x2717;';
+    return `<div class="log-entry"><span>${icon} ${escapeHtml(entry.action)} on ${escapeHtml(entry.resource)}</span><div class="time">${escapeHtml(time)}</div></div>`;
   }).join('');
 }
 

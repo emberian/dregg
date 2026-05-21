@@ -110,24 +110,38 @@ impl PersistentStore {
 
     /// Append a fold step to an existing token chain.
     ///
-    /// Loads the chain, appends the step, updates the current_root, and saves.
+    /// Loads the chain, appends the step, updates the current_root, and saves
+    /// within a single write transaction to prevent TOCTOU races.
     /// Returns an error if no chain exists for the token_id.
     pub fn append_fold_step(&self, token_id: &[u8; 32], step: StoredFoldStep) -> Result<()> {
-        let mut chain = self
-            .load_token_chain(token_id)?
-            .ok_or(StoreError::NotFound)?;
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(tables::TOKEN_CHAINS)?;
 
-        // Verify chain continuity: the step's old_root must match the current root.
-        if step.old_root != chain.current_root {
-            return Err(StoreError::Integrity(format!(
-                "fold step old_root {:?} does not match chain current_root {:?}",
-                &step.old_root[..4],
-                &chain.current_root[..4],
-            )));
+            // Load the existing chain within the write transaction.
+            let mut chain: TokenChain = {
+                let existing = table
+                    .get(token_id)?
+                    .ok_or(StoreError::NotFound)?;
+                postcard::from_bytes(existing.value())?
+            };
+
+            // Verify chain continuity: the step's old_root must match the current root.
+            if step.old_root != chain.current_root {
+                return Err(StoreError::Integrity(format!(
+                    "fold step old_root {:?} does not match chain current_root {:?}",
+                    &step.old_root[..4],
+                    &chain.current_root[..4],
+                )));
+            }
+
+            chain.current_root = step.new_root;
+            chain.steps.push(step);
+
+            let serialized = postcard::to_stdvec(&chain)?;
+            table.insert(token_id, serialized.as_slice())?;
         }
-
-        chain.current_root = step.new_root;
-        chain.steps.push(step);
-        self.store_token_chain(token_id, &chain)
+        write_txn.commit()?;
+        Ok(())
     }
 }

@@ -7,6 +7,10 @@ authors = ["Pyana Contributors"]
 license = "MIT OR Apache-2.0"
 description = "Persistent storage backend for pyana token chains, federation state, and audit logs"
 
+[features]
+default = ["audit-bridge"]
+audit-bridge = ["pyana-audit"]
+
 [dependencies]
 redb = "2"
 serde = { version = "1", features = ["derive"] }
@@ -17,6 +21,7 @@ pyana-types = { path = "../types" }
 pyana-commit = { path = "../commit" }
 pyana-cell = { path = "../cell" }
 pyana-circuit = { path = "../circuit" }
+pyana-audit = { path = "../audit", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

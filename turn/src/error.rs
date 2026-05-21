@@ -65,6 +65,9 @@ pub enum TurnError {
     /// Balance overflow on receiving cell.
     BalanceOverflow { cell: CellId },
 
+    /// CreateCell was called with a non-zero initial balance.
+    CreateCellNonZeroBalance { cell: CellId, balance: u64 },
+
     /// The sum of all balance_change deltas in the turn is not zero.
     /// This violates the conservation law: withdrawals must be matched by deposits.
     ExcessNotZero { excess: i64 },
@@ -171,6 +174,12 @@ impl core::fmt::Display for TurnError {
             }
             TurnError::BalanceOverflow { cell } => {
                 write!(f, "balance overflow on cell {cell}")
+            }
+            TurnError::CreateCellNonZeroBalance { cell, balance } => {
+                write!(
+                    f,
+                    "CreateCell requires zero initial balance, got {balance} for cell {cell}"
+                )
             }
             TurnError::ExcessNotZero { excess } => {
                 write!(

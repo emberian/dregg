@@ -1007,10 +1007,7 @@ mod tests {
         );
 
         // Compute Turn A's hash so we can build an EventualRef pointing to it.
-        let turn_a_hash = {
-            let mut t = turn_a.clone();
-            t.hash()
-        };
+        let turn_a_hash = turn_a.hash();
 
         // Turn B: uses PipelinedSend to act on the cell created by Turn A.
         // The inner action targets Alice (the agent), with an effect that sets
@@ -1125,10 +1122,7 @@ mod tests {
         let turn_a = make_test_turn(id_alice, 0, vec![grant_effect]);
 
         // Compute Turn A's hash.
-        let turn_a_hash = {
-            let mut t = turn_a.clone();
-            t.hash()
-        };
+        let turn_a_hash = turn_a.hash();
 
         // Turn B: PipelinedSend targeting the GrantedCapability output (slot 0).
         // The resolution yields id_bob (the cell that received the capability).
@@ -1221,10 +1215,7 @@ mod tests {
             }],
         );
 
-        let turn_a_hash = {
-            let mut t = turn_a.clone();
-            t.hash()
-        };
+        let turn_a_hash = turn_a.hash();
 
         // Turn B: PipelinedSend targeting Turn A's output.
         let eref = EventualRef::new(turn_a_hash, 0);
@@ -1376,10 +1367,7 @@ mod tests {
             ],
         );
 
-        let turn_a_hash = {
-            let mut t = turn_a.clone();
-            t.hash()
-        };
+        let turn_a_hash = turn_a.hash();
 
         // Turn B: two PipelinedSends — one targeting each created cell.
         // Inner actions target Alice (the agent), setting distinct fields.

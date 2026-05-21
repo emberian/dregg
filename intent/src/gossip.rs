@@ -32,6 +32,9 @@ pub const MAX_INTENTS_PER_CREATOR_PER_MINUTE: usize = 10;
 /// Rate limiting window duration in seconds.
 pub const RATE_LIMIT_WINDOW_SECS: u64 = 60;
 
+/// Maximum age (in seconds) for pending commitments before GC reclaims them.
+pub const MAX_COMMITMENT_AGE_SECS: u64 = 300;
+
 /// Commit-reveal window duration in seconds.
 /// First valid commitment wins priority; others must wait this long before competing.
 pub const COMMIT_REVEAL_WINDOW_SECS: u64 = 5;
@@ -377,9 +380,30 @@ impl IntentPool {
         self.receive_intent_checked(intent, now, false)
     }
 
-    /// Run garbage collection: remove expired intents.
+    /// Run garbage collection: remove expired intents and clean auxiliary structures.
+    ///
+    /// In addition to removing expired intents from the primary map, this also cleans:
+    /// - `our_intent_ids`: removes IDs whose intents have been GC'd
+    /// - `pending_matches`: removes matches whose intent has been GC'd
+    /// - `recent_by_creator`: removes entries whose rate-limit window has expired
+    /// - `pending_commitments`: removes commitments older than `MAX_COMMITMENT_AGE_SECS`
     pub fn gc(&mut self, now: u64) {
         self.intents.retain(|_, intent| !intent.is_expired(now));
+
+        // Clean our_intent_ids: remove IDs no longer in the pool
+        self.our_intent_ids.retain(|id| self.intents.contains_key(id));
+
+        // Clean pending_matches: remove matches whose intent has been GC'd
+        self.pending_matches
+            .retain(|(intent, _)| self.intents.contains_key(&intent.id));
+
+        // Clean recent_by_creator: remove entries whose window has expired
+        self.recent_by_creator
+            .retain(|_, (window_start, _)| now.saturating_sub(*window_start) < RATE_LIMIT_WINDOW_SECS);
+
+        // Clean pending_commitments: remove commitments older than max age
+        self.pending_commitments
+            .retain(|_, commitment| now.saturating_sub(commitment.timestamp) < MAX_COMMITMENT_AGE_SECS);
     }
 
     /// Get all active (non-expired) intents in the pool.

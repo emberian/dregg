@@ -313,6 +313,8 @@ pub mod error_codes {
     pub const TOKEN_REVOKED: u32 = 5;
     /// The request has expired (timestamp too old).
     pub const REQUEST_EXPIRED: u32 = 6;
+    /// A cryptographic signature failed verification.
+    pub const INVALID_SIGNATURE: u32 = 7;
     /// Internal server error.
     pub const INTERNAL_ERROR: u32 = 100;
 }

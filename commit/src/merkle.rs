@@ -74,16 +74,20 @@ pub struct SubtreeRef {
     pub hash: [u8; 32],
 }
 
-/// A 4-ary Merkle tree backed by a sorted map of leaf keys to leaf hashes.
+/// A 4-ary Merkle tree backed by a sorted map of full leaf hashes.
 ///
 /// This is a sparse implementation: we store only the populated leaves and
 /// compute internal nodes on demand.
+///
+/// The full 32-byte leaf hash is used as the map key, preventing silent
+/// overwrites that occurred with the previous 4-byte truncated key approach.
+/// Tree addressing (path computation) still uses the first 4 bytes of the hash
+/// to determine position within the 16-level, 4-ary tree structure.
 #[derive(Clone, Debug)]
 pub struct MerkleTree {
-    /// Leaves stored by their path key (derived from leaf hash).
-    /// Key: path key (first 4 bytes of leaf hash, used for tree addressing).
-    /// Value: the full leaf hash.
-    leaves: BTreeMap<u32, [u8; 32]>,
+    /// Leaves stored by their full 32-byte hash.
+    /// The tree position for each leaf is derived from the first 4 bytes via `path_key()`.
+    leaves: BTreeMap<[u8; 32], ()>,
     /// Cached root (invalidated on mutation).
     cached_root: Option<[u8; 32]>,
 }
@@ -120,16 +124,14 @@ impl MerkleTree {
     /// Insert a leaf and return the new root.
     pub fn insert(&mut self, leaf_data: &[u8]) -> [u8; 32] {
         let leaf_hash = hash_leaf(leaf_data);
-        let key = path_key(&leaf_hash);
-        self.leaves.insert(key, leaf_hash);
+        self.leaves.insert(leaf_hash, ());
         self.cached_root = None;
         self.root()
     }
 
     /// Insert a pre-hashed leaf and return the new root.
     pub fn insert_hash(&mut self, leaf_hash: [u8; 32]) -> [u8; 32] {
-        let key = path_key(&leaf_hash);
-        self.leaves.insert(key, leaf_hash);
+        self.leaves.insert(leaf_hash, ());
         self.cached_root = None;
         self.root()
     }
@@ -144,8 +146,7 @@ impl MerkleTree {
     /// Remove a leaf by its hash and return the new root.
     /// Returns None if the leaf was not present.
     pub fn remove_hash(&mut self, leaf_hash: &[u8; 32]) -> Option<[u8; 32]> {
-        let key = path_key(leaf_hash);
-        if self.leaves.remove(&key).is_some() {
+        if self.leaves.remove(leaf_hash).is_some() {
             self.cached_root = None;
             Some(self.root())
         } else {
@@ -161,8 +162,7 @@ impl MerkleTree {
 
     /// Check if a leaf (by hash) is in the tree.
     pub fn contains_hash(&self, leaf_hash: &[u8; 32]) -> bool {
-        let key = path_key(leaf_hash);
-        self.leaves.get(&key) == Some(leaf_hash)
+        self.leaves.contains_key(leaf_hash)
     }
 
     /// Generate a membership proof for a leaf (by data).
@@ -175,11 +175,11 @@ impl MerkleTree {
     /// Generate a membership proof for a leaf (by hash).
     /// Returns None if the leaf is not in the tree.
     pub fn membership_proof_hash(&self, leaf_hash: &[u8; 32]) -> Option<MerkleProof> {
-        let key = path_key(leaf_hash);
-        if self.leaves.get(&key) != Some(leaf_hash) {
+        if !self.leaves.contains_key(leaf_hash) {
             return None;
         }
 
+        let key = path_key(leaf_hash);
         // Path indices in leaf-to-root order (matching the verifier).
         let path_indices = key_to_path_leaf_to_root(key);
         let siblings = self.compute_siblings(key);
@@ -201,26 +201,24 @@ impl MerkleTree {
     /// Generate a non-membership proof for a leaf (by hash).
     /// Returns None if the leaf IS in the tree.
     pub fn non_membership_proof_hash(&self, leaf_hash: &[u8; 32]) -> Option<NonMembershipProof> {
-        let key = path_key(leaf_hash);
-
         // If it's present, can't prove non-membership.
-        if self.leaves.get(&key) == Some(leaf_hash) {
+        if self.leaves.contains_key(leaf_hash) {
             return None;
         }
 
-        // Find left and right neighbors.
-        let left_neighbor = self.leaves.range(..key).next_back().map(|(_, &hash)| {
+        // Find left and right neighbors by full hash (lexicographic order).
+        let left_neighbor = self
+            .leaves
+            .range(..*leaf_hash)
+            .next_back()
+            .map(|(&hash, _)| {
+                let proof = self.membership_proof_hash(&hash).unwrap();
+                (hash, proof)
+            });
+
+        let right_neighbor = self.leaves.range(*leaf_hash..).next().map(|(&hash, _)| {
             let proof = self.membership_proof_hash(&hash).unwrap();
             (hash, proof)
-        });
-
-        let right_neighbor = self.leaves.range(key..).next().and_then(|(k, &hash)| {
-            // Skip if same key but different hash (collision case).
-            if *k == key && hash == *leaf_hash {
-                return None;
-            }
-            let proof = self.membership_proof_hash(&hash).unwrap();
-            Some((hash, proof))
         });
 
         Some(NonMembershipProof {
@@ -310,11 +308,26 @@ impl MerkleTree {
 
     /// Recursively compute the hash of a subtree.
     /// `depth`: current depth (0 = root, TREE_DEPTH = leaf level).
-    /// `prefix`: the path bits accumulated so far (in the low bits).
+    /// `prefix`: the path bits accumulated so far (in the high bits of the u32 address).
     fn compute_subtree_hash(&self, depth: usize, prefix: u32) -> [u8; 32] {
         if depth == TREE_DEPTH {
-            // Leaf level: look up the leaf.
-            return self.leaves.get(&prefix).copied().unwrap_or(EMPTY_LEAF);
+            // Leaf level: find all leaves at this tree position.
+            let leaves_at_pos: Vec<&[u8; 32]> = self.leaves_at_path_key(prefix);
+            return match leaves_at_pos.len() {
+                0 => EMPTY_LEAF,
+                1 => *leaves_at_pos[0],
+                _ => {
+                    // Multiple leaves at the same tree position: hash them together
+                    // in sorted order (they are already sorted since BTreeMap is sorted)
+                    // to maintain determinism.
+                    let mut hasher =
+                        blake3::Hasher::new_derive_key("pyana-commit collision-bucket v1");
+                    for leaf in &leaves_at_pos {
+                        hasher.update(leaf.as_slice());
+                    }
+                    *hasher.finalize().as_bytes()
+                }
+            };
         }
 
         let mut children = [[0u8; 32]; 4];
@@ -332,9 +345,23 @@ impl MerkleTree {
         hash_node(&children)
     }
 
-    /// Check if there are any leaves in the key range [start, end].
+    /// Get all leaves whose path_key matches the given prefix.
+    /// Leaves are returned in sorted order (by full hash) for deterministic hashing.
+    fn leaves_at_path_key(&self, prefix: u32) -> Vec<&[u8; 32]> {
+        // Construct the range of [u8; 32] values whose first 4 bytes match `prefix`.
+        let lo = prefix_to_hash_lo(prefix);
+        let hi = prefix_to_hash_hi(prefix);
+        self.leaves
+            .range(lo..=hi)
+            .map(|(hash, _)| hash)
+            .collect()
+    }
+
+    /// Check if there are any leaves whose path_key falls in [start, end].
     fn has_leaves_in_range(&self, start: u32, end: u32) -> bool {
-        self.leaves.range(start..=end).next().is_some()
+        let lo = prefix_to_hash_lo(start);
+        let hi = prefix_to_hash_hi(end);
+        self.leaves.range(lo..=hi).next().is_some()
     }
 
     /// Compute the sibling hashes for a path.
@@ -367,11 +394,7 @@ impl MerkleTree {
                 let child_prefix = parent_prefix | ((i as u32) << shift);
                 if depth + 1 == TREE_DEPTH {
                     // This is the deepest internal node, its children are leaves.
-                    sibs[sib_idx] = self
-                        .leaves
-                        .get(&child_prefix)
-                        .copied()
-                        .unwrap_or(EMPTY_LEAF);
+                    sibs[sib_idx] = self.compute_subtree_hash(TREE_DEPTH, child_prefix);
                 } else {
                     let range_end = if shift == 0 {
                         child_prefix
@@ -481,6 +504,30 @@ impl Default for MerkleTree {
 /// This determines the leaf's position in the tree.
 fn path_key(hash: &[u8; 32]) -> u32 {
     u32::from_be_bytes([hash[0], hash[1], hash[2], hash[3]])
+}
+
+/// Construct the lowest [u8; 32] value whose first 4 bytes encode the given u32 prefix.
+fn prefix_to_hash_lo(prefix: u32) -> [u8; 32] {
+    let bytes = prefix.to_be_bytes();
+    let mut out = [0u8; 32];
+    out[0] = bytes[0];
+    out[1] = bytes[1];
+    out[2] = bytes[2];
+    out[3] = bytes[3];
+    // remaining bytes are 0x00 (minimum)
+    out
+}
+
+/// Construct the highest [u8; 32] value whose first 4 bytes encode the given u32 prefix.
+fn prefix_to_hash_hi(prefix: u32) -> [u8; 32] {
+    let bytes = prefix.to_be_bytes();
+    let mut out = [0xFFu8; 32];
+    out[0] = bytes[0];
+    out[1] = bytes[1];
+    out[2] = bytes[2];
+    out[3] = bytes[3];
+    // remaining bytes are 0xFF (maximum)
+    out
 }
 
 /// Convert a path key to a vector of path indices (2 bits each, from root to leaf).
@@ -642,8 +689,8 @@ mod tests {
     #[test]
     fn path_key_extraction() {
         let hash = [
-            0x12, 0x34, 0x56, 0x78, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0,
+            0x12, 0x34, 0x56, 0x78, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0,
         ];
         let key = path_key(&hash);
         assert_eq!(key, 0x12345678);
@@ -700,5 +747,43 @@ mod tests {
         assert_eq!(witness.new_root, new_tree.root());
         // There should be some unchanged subtrees.
         assert!(!witness.unchanged_subtrees.is_empty());
+    }
+
+    /// Regression test: inserting two leaves that share the same first 4 bytes
+    /// (path_key collision) must NOT silently overwrite each other.
+    #[test]
+    fn no_silent_overwrite_on_path_key_collision() {
+        let mut tree = MerkleTree::new();
+
+        // Craft two hashes that share the same first 4 bytes but differ after.
+        let mut hash_a = [0u8; 32];
+        hash_a[0] = 0xAB;
+        hash_a[1] = 0xCD;
+        hash_a[2] = 0x12;
+        hash_a[3] = 0x34;
+        hash_a[4] = 0x01; // differs here
+
+        let mut hash_b = [0u8; 32];
+        hash_b[0] = 0xAB;
+        hash_b[1] = 0xCD;
+        hash_b[2] = 0x12;
+        hash_b[3] = 0x34;
+        hash_b[4] = 0x02; // differs here
+
+        assert_eq!(path_key(&hash_a), path_key(&hash_b));
+
+        tree.insert_hash(hash_a);
+        tree.insert_hash(hash_b);
+
+        // Both leaves must be stored.
+        assert_eq!(tree.len(), 2);
+        assert!(tree.contains_hash(&hash_a));
+        assert!(tree.contains_hash(&hash_b));
+
+        // Removing one does not affect the other.
+        tree.remove_hash(&hash_a);
+        assert_eq!(tree.len(), 1);
+        assert!(!tree.contains_hash(&hash_a));
+        assert!(tree.contains_hash(&hash_b));
     }
 }

@@ -635,60 +635,60 @@ pub struct PicklesStateTransition {
 /// EndoMul + CompleteAdd gates per recursion step to encode the IPA
 /// verification equation. For now, we implement the state transition
 /// circuit and defer the in-circuit verifier to a follow-up.
-fn build_recursive_step_circuit(
-    has_previous: bool,
-) -> (Vec<CircuitGate<Fp>>, usize) {
+fn build_recursive_step_circuit(has_previous: bool) -> (Vec<CircuitGate<Fp>>, usize) {
     let mut gates = Vec::new();
-    let mut row = 0;
+
+    // Public inputs: [pre_state_hash, post_state_hash, accumulated_hash, step_count]
+    // If has_previous, also: [previous_accumulated_hash]
+    let public_count = if has_previous { 5 } else { 4 };
+
+    // Kimchi requires that the first `public_count` rows are Generic gates
+    // with coeffs[0] = 1. The constraint is: 1*w[0][row] - public[row] = 0,
+    // which is trivially satisfied since public[row] = witness[0][row].
+    //
+    // We place all public-input binding gates first, then the Poseidon gadget.
+    for i in 0..public_count {
+        let mut coeffs = vec![Fp::zero(); COLUMNS];
+        coeffs[0] = Fp::one(); // l_coeff = 1, all others zero
+        gates.push(CircuitGate::new(
+            GateType::Generic,
+            Wire::for_row(i),
+            coeffs,
+        ));
+    }
 
     // --- State transition section ---
-    // Generic gate: bind pre_state_hash and post_state_hash
-    gates.push(CircuitGate::new(
-        GateType::Generic,
-        Wire::for_row(row),
-        vec![Fp::one(); COLUMNS],
-    ));
-    row += 1;
-
     // Poseidon gadget: compute accumulated_hash = Poseidon(pre || post || step)
     let round_constants = &Vesta::sponge_params().round_constants;
-    let rounds_per_row = 5;
-    let poseidon_rows = FULL_ROUNDS / rounds_per_row; // 11
-    let first_wire = Wire::for_row(row);
-    let last_wire = Wire::for_row(row + poseidon_rows);
+    let poseidon_start = gates.len();
+    let poseidon_rows = FULL_ROUNDS / 5; // POS_ROWS_PER_HASH = 11
+    let first_wire = Wire::for_row(poseidon_start);
+    // The zero/output gate will be at poseidon_start + poseidon_rows
+    let last_wire = Wire::for_row(poseidon_start + poseidon_rows);
 
-    let (poseidon_gates, new_row) = CircuitGate::<Fp>::create_poseidon_gadget(
-        row,
-        [first_wire, last_wire],
-        round_constants,
-    );
+    let (poseidon_gates, _) =
+        CircuitGate::<Fp>::create_poseidon_gadget(poseidon_start, [first_wire, last_wire], round_constants);
     gates.extend(poseidon_gates);
-    row = new_row;
+    // After extending: gates.len() = public_count + poseidon_rows + 1 (the +1 is the zero/output gate)
 
     // --- Previous proof binding section ---
     if has_previous {
-        // Generic gate: assert previous accumulated hash matches
-        // In a full implementation, this section would contain the IPA verifier
-        // circuit (~2000 rows). For now, we bind the previous proof's public
-        // inputs via Poseidon hash commitment.
-        gates.push(CircuitGate::new(
-            GateType::Generic,
-            Wire::for_row(row),
-            vec![Fp::one(); COLUMNS],
-        ));
-        row += 1;
-
-        // Second Poseidon gadget: hash previous proof's public inputs
-        // to create the binding commitment
-        let first_wire2 = Wire::for_row(row);
-        let last_wire2 = Wire::for_row(row + poseidon_rows);
-        let (poseidon_gates2, new_row2) = CircuitGate::<Fp>::create_poseidon_gadget(
-            row,
+        // Additional Poseidon gadget for binding the previous proof's
+        // accumulated hash into the new computation.
+        //
+        // In a full Pickles implementation, this section would contain the
+        // IPA verifier circuit (~2000 rows of EndoMul + CompleteAdd gates).
+        // For now, we achieve soundness by binding the previous proof's
+        // hash into the new accumulated hash via Poseidon.
+        let poseidon2_start = gates.len();
+        let first_wire2 = Wire::for_row(poseidon2_start);
+        let last_wire2 = Wire::for_row(poseidon2_start + poseidon_rows);
+        let (poseidon_gates2, _) = CircuitGate::<Fp>::create_poseidon_gadget(
+            poseidon2_start,
             [first_wire2, last_wire2],
             round_constants,
         );
         gates.extend(poseidon_gates2);
-        row = new_row2;
 
         // TODO: Full recursive verifier section.
         // In a complete Pickles implementation, this is where we would add:
@@ -700,27 +700,26 @@ fn build_recursive_step_circuit(
         // The RecursionChallenge from the previous proof would be absorbed
         // here, with its `chals` used to compute b_poly evaluations and
         // its `comm` included in the batched opening check.
-        //
-        // For now, we achieve soundness by binding the previous proof's
-        // hash into the new accumulated hash via Poseidon.
     }
 
-    // Final check gate: accumulated hash matches public input
+    // Final Generic gate (post public-input region, so coeffs can be all-zero).
+    let final_row = gates.len();
     gates.push(CircuitGate::new(
         GateType::Generic,
-        Wire::for_row(row),
-        vec![Fp::one(); COLUMNS],
+        Wire::for_row(final_row),
+        vec![Fp::zero(); COLUMNS],
     ));
-    row += 1;
-    let _ = row;
 
-    // Public inputs: [pre_state_hash, post_state_hash, accumulated_hash, step_count]
-    // If has_previous, also: [previous_accumulated_hash]
-    let public_count = if has_previous { 5 } else { 4 };
     (gates, public_count)
 }
 
 /// Generate the witness for a recursive IVC step circuit.
+///
+/// Circuit layout matches `build_recursive_step_circuit`:
+///   rows 0..public_count:         Generic gates (public input binding)
+///   rows public_count..+12:       Poseidon gadget (state transition hash)
+///   (if recursive) rows ..+12:    Second Poseidon gadget (prev proof binding)
+///   final row:                    Generic gate (final check)
 fn generate_recursive_step_witness(
     pre_hash: Fp,
     post_hash: Fp,
@@ -728,79 +727,72 @@ fn generate_recursive_step_witness(
     prev_accumulated_hash: Option<Fp>,
 ) -> [Vec<Fp>; COLUMNS] {
     let has_previous = prev_accumulated_hash.is_some();
+    let public_count = if has_previous { 5 } else { 4 };
 
     let rounds_per_row = 5;
     let poseidon_rows = FULL_ROUNDS / rounds_per_row; // 11
-    // Base: 1 generic + poseidon(12) + 1 final = 14
-    // Recursive: + 1 generic + poseidon(12) = +13 = 27
-    let base_rows = 1 + poseidon_rows + 1 + 1; // generic + poseidon + output + final
-    let recursive_extra = if has_previous { 1 + poseidon_rows + 1 } else { 0 };
-    let total_rows = base_rows + recursive_extra;
+    let poseidon_gadget_rows = poseidon_rows + 1; // 11 poseidon + 1 output = 12
+    let recursive_extra = if has_previous {
+        poseidon_gadget_rows
+    } else {
+        0
+    };
+    let total_rows = public_count + poseidon_gadget_rows + recursive_extra + 1;
 
     let mut witness: [Vec<Fp>; COLUMNS] = std::array::from_fn(|_| vec![Fp::zero(); total_rows]);
 
-    // Row 0: Generic gate with pre/post state binding
-    witness[0][0] = pre_hash;
-    witness[1][0] = post_hash;
-    witness[2][0] = step_count;
-    if let Some(prev) = prev_accumulated_hash {
-        witness[3][0] = prev;
-    }
-
-    // Poseidon witness for accumulated hash computation
-    // Input to Poseidon: [pre_hash, post_hash, step_count]
-    let poseidon_input = [pre_hash, post_hash, step_count];
-    let poseidon_first_row = 1;
-    generate_witness(
-        poseidon_first_row,
-        Vesta::sponge_params(),
-        &mut witness,
-        poseidon_input,
-    );
-
     // Compute the accumulated hash
     let new_accumulated = if let Some(prev_hash) = prev_accumulated_hash {
-        // Recursive: hash(prev_accumulated || pre || post || step)
         let params = Vesta::sponge_params();
         let mut sponge = ArithmeticSponge::<Fp, SpongeParams, FULL_ROUNDS>::new(params);
         sponge.absorb(&[prev_hash, pre_hash, post_hash, step_count]);
         sponge.squeeze()
     } else {
-        // Base case: hash(pre || post || step)
         let params = Vesta::sponge_params();
         let mut sponge = ArithmeticSponge::<Fp, SpongeParams, FULL_ROUNDS>::new(params);
         sponge.absorb(&[pre_hash, post_hash, step_count]);
         sponge.squeeze()
     };
 
-    // Fill the output row after poseidon
-    let output_row = 1 + poseidon_rows;
-    witness[0][output_row] = new_accumulated;
+    // --- Public input rows (Generic gates) ---
+    // Each public input is witness[0][row], satisfying: 1*w[0] - public[row] = 0
+    witness[0][0] = pre_hash;
+    witness[0][1] = post_hash;
+    witness[0][2] = new_accumulated;
+    witness[0][3] = step_count;
+    if let Some(prev) = prev_accumulated_hash {
+        witness[0][4] = prev;
+    }
 
+    // --- Poseidon gadget for state transition hash ---
+    let poseidon_start = public_count;
+    let poseidon_input = if has_previous {
+        [prev_accumulated_hash.unwrap(), pre_hash, post_hash]
+    } else {
+        [pre_hash, post_hash, step_count]
+    };
+    generate_witness(
+        poseidon_start,
+        Vesta::sponge_params(),
+        &mut witness,
+        poseidon_input,
+    );
+
+    // --- Second Poseidon for recursive binding (if recursive) ---
     if has_previous {
-        let prev_hash = prev_accumulated_hash.unwrap();
-        // Recursive binding section
-        let bind_row = output_row + 1;
-        witness[0][bind_row] = prev_hash;
-        witness[1][bind_row] = new_accumulated;
-
-        // Second Poseidon for binding commitment
-        let poseidon2_first_row = bind_row + 1;
-        let binding_input = [prev_hash, new_accumulated, step_count];
+        let poseidon2_start = poseidon_start + poseidon_gadget_rows;
+        let binding_input = [new_accumulated, step_count, Fp::zero()];
         generate_witness(
-            poseidon2_first_row,
+            poseidon2_start,
             Vesta::sponge_params(),
             &mut witness,
             binding_input,
         );
     }
 
-    // Final check row
+    // --- Final check row ---
     let final_row = total_rows - 1;
     witness[0][final_row] = new_accumulated;
-    witness[1][final_row] = pre_hash;
-    witness[2][final_row] = post_hash;
-    witness[3][final_row] = step_count;
 
     witness
 }
@@ -868,7 +860,8 @@ pub fn prove_recursive_step(
     };
 
     // Compute the new accumulated hash
-    let accumulated_hash = pickles_accumulated_hash(pre_hash, post_hash, step_count, prev_accumulated);
+    let accumulated_hash =
+        pickles_accumulated_hash(pre_hash, post_hash, step_count, prev_accumulated);
 
     // Build the circuit
     let has_previous = previous.is_some();
@@ -1006,12 +999,8 @@ pub fn verify_recursive_proof(
         None
     };
 
-    let expected_accumulated = pickles_accumulated_hash(
-        pre_hash,
-        post_hash,
-        step_count,
-        prev_accumulated,
-    );
+    let expected_accumulated =
+        pickles_accumulated_hash(pre_hash, post_hash, step_count, prev_accumulated);
 
     if accumulated_hash != expected_accumulated {
         return Ok(false);
@@ -1186,8 +1175,8 @@ mod tests {
             post_state_hash: [2u8; 32],
         };
 
-        let proof = prove_recursive_step(None, &transition)
-            .expect("Base case proving should succeed");
+        let proof =
+            prove_recursive_step(None, &transition).expect("Base case proving should succeed");
 
         assert_eq!(proof.num_steps, 1);
         assert!(proof.previous_proof_hash.is_none());
@@ -1255,14 +1244,16 @@ mod tests {
             post_state_hash: [2u8; 32],
         };
 
-        let proof = prove_recursive_step(None, &transition)
-            .expect("Proving should succeed");
+        let proof = prove_recursive_step(None, &transition).expect("Proving should succeed");
 
         // Verify with WRONG expected initial hash
         let wrong_hash = [99u8; 32];
         let valid = verify_recursive_proof(&proof, Some(&wrong_hash))
             .expect("Verification should not error");
-        assert!(!valid, "Wrong initial hash should cause verification failure");
+        assert!(
+            !valid,
+            "Wrong initial hash should cause verification failure"
+        );
     }
 
     #[test]
@@ -1273,8 +1264,7 @@ mod tests {
             post_state_hash: [2u8; 32],
         };
 
-        let mut proof = prove_recursive_step(None, &transition)
-            .expect("Proving should succeed");
+        let mut proof = prove_recursive_step(None, &transition).expect("Proving should succeed");
 
         // Tamper with the accumulated hash (bytes 64..96)
         if proof.public_inputs.len() >= 96 {

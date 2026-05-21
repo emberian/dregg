@@ -317,4 +317,46 @@ impl PersistentStore {
         let set = note_tree::PersistentNullifierSet::from_nullifiers(nullifiers);
         Ok(set.root())
     }
+
+    /// Atomically spend a note: insert the nullifier and store the new commitment
+    /// in a single transaction.
+    ///
+    /// This prevents the case where a nullifier is recorded but the new commitment
+    /// is lost (or vice versa) due to a crash between two separate transactions.
+    ///
+    /// Returns the position of the new commitment in the note tree.
+    /// Returns an integrity error if the nullifier was already spent (double-spend).
+    pub fn spend_note_atomic(
+        &self,
+        nullifier: &pyana_cell::note::Nullifier,
+        new_commitment: &pyana_cell::note::NoteCommitment,
+    ) -> Result<u64> {
+        let write_txn = self.db.begin_write()?;
+        let position;
+        {
+            // Check and insert nullifier.
+            let mut nullifier_table = write_txn.open_table(tables::NULLIFIERS)?;
+            if nullifier_table.get(&nullifier.0)?.is_some() {
+                return Err(StoreError::Integrity(
+                    "nullifier already spent (double-spend)".to_string(),
+                ));
+            }
+            nullifier_table.insert(&nullifier.0, ())?;
+
+            // Insert new commitment at the next position.
+            let mut meta = write_txn.open_table(tables::METADATA)?;
+            let current_size = meta
+                .get(tables::META_NOTE_TREE_SIZE)?
+                .map(|g| g.value())
+                .unwrap_or(0);
+            position = current_size;
+
+            let mut commitment_table = write_txn.open_table(tables::NOTE_COMMITMENTS)?;
+            commitment_table.insert(position, &new_commitment.0)?;
+
+            meta.insert(tables::META_NOTE_TREE_SIZE, position + 1)?;
+        }
+        write_txn.commit()?;
+        Ok(position)
+    }
 }

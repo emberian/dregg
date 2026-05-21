@@ -87,7 +87,7 @@ fn eval_contains(collection: &Term, element: &Term) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::symbol_from_str;
+    use crate::{symbol_from_bytes, symbol_from_str};
 
     #[test]
     fn test_less_than_pass() {
@@ -128,11 +128,16 @@ mod tests {
         assert!(!eval_check(&check, &subst));
     }
 
+    // Contains tests use symbol_from_bytes (raw literal bytes) because
+    // Contains does substring matching on the UTF-8 interpretation of
+    // the symbol bytes. With blake3-based symbol_from_str, the bytes
+    // are opaque hashes and substring matching is meaningless.
+
     #[test]
     fn test_contains_exact_match() {
         let check = Check::Contains(
-            Term::Const(symbol_from_str("read")),
-            Term::Const(symbol_from_str("read")),
+            Term::Const(symbol_from_bytes(b"read")),
+            Term::Const(symbol_from_bytes(b"read")),
         );
         assert!(eval_check(&check, &Substitution::empty()));
     }
@@ -140,8 +145,8 @@ mod tests {
     #[test]
     fn test_contains_substring() {
         let check = Check::Contains(
-            Term::Const(symbol_from_str("read,write,delete")),
-            Term::Const(symbol_from_str("write")),
+            Term::Const(symbol_from_bytes(b"read,write,delete")),
+            Term::Const(symbol_from_bytes(b"write")),
         );
         assert!(eval_check(&check, &Substitution::empty()));
     }
@@ -149,8 +154,8 @@ mod tests {
     #[test]
     fn test_contains_miss() {
         let check = Check::Contains(
-            Term::Const(symbol_from_str("read,write")),
-            Term::Const(symbol_from_str("delete")),
+            Term::Const(symbol_from_bytes(b"read,write")),
+            Term::Const(symbol_from_bytes(b"delete")),
         );
         assert!(!eval_check(&check, &Substitution::empty()));
     }
@@ -159,9 +164,9 @@ mod tests {
     fn test_contains_with_vars() {
         let check = Check::Contains(Term::Var(0), Term::Var(1));
         let subst = Substitution::empty()
-            .extend(0, Term::Const(symbol_from_str("read,write")))
+            .extend(0, Term::Const(symbol_from_bytes(b"read,write")))
             .unwrap()
-            .extend(1, Term::Const(symbol_from_str("read")))
+            .extend(1, Term::Const(symbol_from_bytes(b"read")))
             .unwrap();
         assert!(eval_check(&check, &subst));
     }

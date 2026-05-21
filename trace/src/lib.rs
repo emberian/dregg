@@ -14,8 +14,7 @@ pub mod verify;
 
 pub use check::eval_check;
 pub use eval::Evaluator;
-#[allow(deprecated)]
-pub use policy::{legacy_policy, secure_policy, standard_policy};
+pub use policy::{secure_policy, standard_policy};
 pub use types::*;
 pub use verify::verify_trace;
 

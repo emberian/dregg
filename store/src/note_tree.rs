@@ -49,14 +49,18 @@ impl NoteTree {
 
     /// Append a new note commitment. Returns the position (for nullifier derivation).
     ///
-    /// Both the BLAKE3 and Poseidon2 trees are updated atomically.
+    /// Both the BLAKE3 and Poseidon2 trees are updated atomically. The field
+    /// conversion (which could theoretically panic on malformed input) is
+    /// performed BEFORE any mutation, so a panic cannot leave the two trees
+    /// in a desynchronized state.
     pub fn append(&mut self, commitment: NoteCommitment) -> u64 {
         let position = self.commitments.len() as u64;
-        self.commitments.push(commitment);
-        // Insert into the BLAKE3 Merkle tree.
-        self.tree.insert_hash(commitment.0);
-        // Insert into the Poseidon2 Merkle tree (after field conversion).
+        // Compute the Poseidon2 field element BEFORE mutating either tree.
+        // If this panics, no state has been modified.
         let field_elem = commitment_to_field(&commitment.0);
+        // Now mutate: both operations below are infallible (Vec::push internals).
+        self.commitments.push(commitment);
+        self.tree.insert_hash(commitment.0);
         self.poseidon2_tree.append(field_elem);
         position
     }

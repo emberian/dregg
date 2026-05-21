@@ -152,8 +152,8 @@
       <button id="btnCheck" onclick="checkConnection()">
         Check Connection
       </button>
-      <button id="btnCaps" onclick="showCapabilities()">
-        Show Capabilities
+      <button id="btnCanAuth" onclick="checkCanAuthorize()">
+        Can Authorize?
       </button>
     </div>
 
@@ -337,9 +337,9 @@
         logInfo('window.pyana is undefined.');
         logInfo('');
         logInfo('Expected API surface:');
-        log('  window.pyana.authorize(request)  - Request authorization');
-        log('  window.pyana.isConnected()       - Check wallet connection');
-        log('  window.pyana.getCapabilities()   - List capabilities');
+        log('  window.pyana.authorize(request)     - Request authorization');
+        log('  window.pyana.isConnected()          - Check wallet connection');
+        log('  window.pyana.canAuthorize(request)  - Dry-run authorization check');
         return;
       }
 
@@ -362,36 +362,34 @@
       }
     }
 
-    async function showCapabilities() {
+    async function checkCanAuthorize() {
       clearResults();
-      logInfo('--- Show Capabilities ---');
+      logInfo('--- Can Authorize? ---');
       log('');
 
       if (!isExtensionAvailable()) {
         logError('Extension not installed.');
-        logInfo('Cannot query capabilities without the extension.');
+        logInfo('Cannot check authorization without the extension.');
         return;
       }
 
-      logInfo('Calling window.pyana.getCapabilities()...');
+      const request = { action: 'read', resource: '/demo' };
+      logLabel('Request', JSON.stringify(request));
+      log('');
+      logInfo('Calling window.pyana.canAuthorize()...');
 
       const start = performance.now();
       try {
-        const caps = await window.pyana.getCapabilities();
+        const result = await window.pyana.canAuthorize(request);
         const elapsed = performance.now() - start;
 
         log('');
-        logSuccess('Capabilities retrieved');
-        logLabel('Count', String(caps.length));
-        log('');
-
-        for (const cap of caps) {
-          logLabel('  Service', cap.service || '(any)');
-          logLabel('  Action', cap.action || '(any)');
-          logLabel('  Expires', cap.expires ? new Date(cap.expires * 1000).toISOString() : 'never');
-          log('');
+        if (result) {
+          logSuccess('Yes -- wallet holds a matching capability');
+        } else {
+          logError('No -- no matching capability found');
         }
-
+        logLabel('Can authorize', String(result));
         logTiming('Response time', elapsed);
       } catch (err) {
         logError('Error: ' + err.message);

@@ -752,19 +752,20 @@ mod tests {
     #[test]
     fn test_minimal_policy_app_action_allow() {
         let rules = minimal_policy();
+        // Use symbol_from_bytes for terms so Contains (substring) check works
         let facts = vec![Fact::new(
             symbol_from_str("app"),
             vec![
-                Term::Const(symbol_from_str("dashboard")),
-                Term::Const(symbol_from_str("read,write")),
+                Term::Const(symbol_from_bytes(b"dashboard")),
+                Term::Const(symbol_from_bytes(b"read,write")),
             ],
         )];
 
         let eval = Evaluator::new(facts, rules);
         let request = AuthorizationRequest {
-            app_id: Some(symbol_from_str("dashboard")),
+            app_id: Some(symbol_from_bytes(b"dashboard")),
             service: None,
-            action: Some(symbol_from_str("read")),
+            action: Some(symbol_from_bytes(b"read")),
             features: vec![],
             user_id: None,
             now: 1000,
@@ -785,16 +786,16 @@ mod tests {
         let facts = vec![Fact::new(
             symbol_from_str("app"),
             vec![
-                Term::Const(symbol_from_str("dashboard")),
-                Term::Const(symbol_from_str("read")),
+                Term::Const(symbol_from_bytes(b"dashboard")),
+                Term::Const(symbol_from_bytes(b"read")),
             ],
         )];
 
         let eval = Evaluator::new(facts, rules);
         let request = AuthorizationRequest {
-            app_id: Some(symbol_from_str("dashboard")),
+            app_id: Some(symbol_from_bytes(b"dashboard")),
             service: None,
-            action: Some(symbol_from_str("delete")), // not in actions
+            action: Some(symbol_from_bytes(b"delete")), // not in actions
             features: vec![],
             user_id: None,
             now: 1000,
@@ -816,7 +817,7 @@ mod tests {
         let request = AuthorizationRequest {
             app_id: None,
             service: None,
-            action: Some(symbol_from_str("anything")),
+            action: Some(symbol_from_bytes(b"anything")),
             features: vec![],
             user_id: None,
             now: 1000,
@@ -1141,20 +1142,21 @@ mod tests {
     #[test]
     fn test_old_contains_vulnerability_demonstration() {
         let rules = minimal_policy(); // uses Contains (substring)
+        // Use symbol_from_bytes for terms so Contains (substring) works
         let facts = vec![Fact::new(
             symbol_from_str("app"),
             vec![
-                Term::Const(symbol_from_str("my-app")),
+                Term::Const(symbol_from_bytes(b"my-app")),
                 // "threadwrite" contains "write" as a substring!
-                Term::Const(symbol_from_str("threadwrite")),
+                Term::Const(symbol_from_bytes(b"threadwrite")),
             ],
         )];
 
         let eval = Evaluator::new(facts, rules);
         let request = AuthorizationRequest {
-            app_id: Some(symbol_from_str("my-app")),
+            app_id: Some(symbol_from_bytes(b"my-app")),
             service: None,
-            action: Some(symbol_from_str("write")), // "write" is a substring of "threadwrite"
+            action: Some(symbol_from_bytes(b"write")), // "write" is a substring of "threadwrite"
             features: vec![],
             user_id: None,
             now: 1000,

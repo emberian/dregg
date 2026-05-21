@@ -216,6 +216,80 @@ impl PersistentStore {
 }
 
 // =============================================================================
+// Audit Log Bridge (pyana-audit <-> pyana-store)
+// =============================================================================
+
+/// Bridge between the in-memory `pyana-audit` `AuditLog` (with Merkle proofs)
+/// and the persistent `pyana-store` audit storage.
+///
+/// The in-memory `AuditLog` is the **canonical** audit system: it maintains a
+/// 4-ary Merkle tree over events and can produce inclusion proofs, count proofs,
+/// range proofs, and consistency proofs. The persistent store provides durability
+/// across restarts.
+///
+/// Use [`PersistentStore::persist_audit_events`] to flush in-memory events to disk.
+///
+/// # Deprecation of standalone persistent audit
+///
+/// The standalone `append_audit_event` / `audit_events_for_token` methods on
+/// `PersistentStore` remain available for backward compatibility, but new code
+/// should use the in-memory `AuditLog` as the primary system and call
+/// `persist_audit_events` periodically to durably store events.
+#[cfg(feature = "audit-bridge")]
+impl PersistentStore {
+    /// Persist events from an in-memory `AuditLog` to durable storage.
+    ///
+    /// Converts each `UsageEvent` in the range `[from_index, to_index)` to a
+    /// `StoredAuditEvent` and appends them in a single batch transaction.
+    ///
+    /// Returns the number of events persisted.
+    pub fn persist_audit_events(
+        &self,
+        log: &pyana_audit::AuditLog,
+        from_index: u64,
+        to_index: u64,
+    ) -> Result<u64> {
+        let mut batch = Vec::new();
+        for idx in from_index..to_index {
+            let event = log
+                .get_event(idx)
+                .ok_or_else(|| StoreError::NotFound)?;
+            batch.push(StoredAuditEvent {
+                token_id: event.token_id,
+                event_type: AuditEventType::TokenPresented,
+                timestamp: event.timestamp,
+                action_hash: event.action_hash,
+                actor: event.verifier_id,
+                sequence: event.sequence,
+                metadata: Vec::new(),
+            });
+        }
+
+        if batch.is_empty() {
+            return Ok(0);
+        }
+
+        self.append_audit_events_batch(&batch)?;
+        Ok(batch.len() as u64)
+    }
+
+    /// Persist ALL events from an in-memory `AuditLog` that haven't been
+    /// persisted yet (based on comparing sizes).
+    ///
+    /// Returns the number of newly persisted events.
+    pub fn persist_audit_log(&self, log: &pyana_audit::AuditLog) -> Result<u64> {
+        let persisted_count = self.audit_count()?;
+        let log_size = log.len() as u64;
+
+        if log_size <= persisted_count {
+            return Ok(0);
+        }
+
+        self.persist_audit_events(log, persisted_count, log_size)
+    }
+}
+
+// =============================================================================
 // Helpers
 // =============================================================================
 

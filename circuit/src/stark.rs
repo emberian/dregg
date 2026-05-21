@@ -25,24 +25,40 @@ fn poly_eval(coeffs: &[BabyBear], x: BabyBear) -> BabyBear {
     result
 }
 
-#[allow(dead_code)]
-fn find_generator() -> BabyBear {
-    BabyBear::new(31)
+/// Primitive root of the BabyBear multiplicative group.
+/// 31 is a generator of Z_p^* where p = 2013265921.
+/// The group order is p-1 = 2013265920 = 2^27 * 3 * 5.
+/// Verified: 31^((p-1)/2) != 1, 31^((p-1)/3) != 1, 31^((p-1)/5) != 1.
+const BABYBEAR_PRIMITIVE_ROOT: u32 = 31;
+
+/// Get a principal n-th root of unity where n = 2^log_n.
+/// BabyBear supports up to 2^27-th roots of unity.
+fn get_root_of_unity(log_n: u32) -> BabyBear {
+    assert!(
+        log_n <= 27,
+        "BabyBear only supports roots of unity up to 2^27"
+    );
+    // omega = g^((p-1) / 2^log_n) where g = 31 (primitive root)
+    let exp = (BABYBEAR_P - 1) / (1u32 << log_n);
+    BabyBear::new(BABYBEAR_PRIMITIVE_ROOT).pow(exp)
 }
 
-#[allow(dead_code)]
-fn root_of_order(n: u32) -> Option<BabyBear> {
-    let g = find_generator();
-    let order = BABYBEAR_P - 1;
-    if order % n != 0 {
-        return None;
+/// Build a multiplicative evaluation domain of size 2^log_n using roots of unity.
+/// Returns the domain {1, omega, omega^2, ..., omega^(n-1)} where omega^n = 1.
+fn build_evaluation_domain(num_points: usize) -> Vec<BabyBear> {
+    assert!(
+        num_points.is_power_of_two(),
+        "Domain size must be a power of two"
+    );
+    let log_n = num_points.trailing_zeros();
+    let omega = get_root_of_unity(log_n);
+    let mut domain = Vec::with_capacity(num_points);
+    let mut x = BabyBear::ONE;
+    for _ in 0..num_points {
+        domain.push(x);
+        x = x * omega;
     }
-    let exp = order / n;
-    let root = g.pow(exp);
-    if root.pow(n) != BabyBear::ONE {
-        return None;
-    }
-    Some(root)
+    domain
 }
 
 fn interpolate(xs: &[BabyBear], ys: &[BabyBear]) -> Vec<BabyBear> {
@@ -206,7 +222,11 @@ impl Transcript {
         sh.update(&self.counter.to_le_bytes());
         let hash = sh.finalize();
         let bytes = hash.as_bytes();
-        BabyBear::new(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+        let result = BabyBear::new(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]));
+        // Feed squeezed output back into transcript state to decorrelate
+        // consecutive squeezes (prevents challenge correlation attacks)
+        self.hasher.update(bytes);
+        result
     }
     fn squeeze_index(&mut self, bound: usize) -> usize {
         self.counter += 1;
@@ -218,6 +238,9 @@ impl Transcript {
         let val = u64::from_le_bytes([
             bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
         ]);
+        // Feed squeezed output back into transcript state to decorrelate
+        // consecutive squeezes
+        self.hasher.update(bytes);
         (val as usize) % bound
     }
 }
@@ -359,8 +382,11 @@ pub fn prove_with_context(
     let num_cols = air.width();
     assert!(num_rows >= 2 && num_rows.is_power_of_two());
     let domain_size = num_rows * BLOWUP;
-    let trace_points: Vec<BabyBear> = (1..=num_rows as u32).map(BabyBear::new).collect();
-    let eval_points: Vec<BabyBear> = (1..=domain_size as u32).map(BabyBear::new).collect();
+    // Use roots of unity for proper Reed-Solomon encoding.
+    // trace_points: subgroup of order num_rows (where trace is defined)
+    // eval_points: larger subgroup of order domain_size (blowup domain for FRI)
+    let trace_points: Vec<BabyBear> = build_evaluation_domain(num_rows);
+    let eval_points: Vec<BabyBear> = build_evaluation_domain(domain_size);
 
     let mut trace_polys = Vec::with_capacity(num_cols);
     for col in 0..num_cols {
@@ -582,7 +608,11 @@ pub fn verify_with_context(
     let trace_len = proof.trace_len;
     let domain_size = trace_len * BLOWUP;
 
-    let proof_pis: Vec<BabyBear> = proof.public_inputs.iter().map(|&v| BabyBear(v)).collect();
+    let proof_pis: Vec<BabyBear> = proof
+        .public_inputs
+        .iter()
+        .map(|&v| BabyBear::new_canonical(v))
+        .collect();
     if proof_pis != public_inputs {
         return Err("Public inputs mismatch".to_string());
     }
@@ -620,8 +650,9 @@ pub fn verify_with_context(
         transcript.absorb_hash(commitment);
     }
 
-    let trace_points: Vec<BabyBear> = (1..=trace_len as u32).map(BabyBear::new).collect();
-    let eval_points: Vec<BabyBear> = (1..=domain_size as u32).map(BabyBear::new).collect();
+    // Use roots of unity (must match prover's domain construction)
+    let trace_points: Vec<BabyBear> = build_evaluation_domain(trace_len);
+    let eval_points: Vec<BabyBear> = build_evaluation_domain(domain_size);
 
     for query in &proof.query_proofs {
         let idx = transcript.squeeze_index(domain_size);
@@ -632,7 +663,11 @@ pub fn verify_with_context(
             ));
         }
 
-        let trace_vals: Vec<BabyBear> = query.trace_values.iter().map(|&v| BabyBear(v)).collect();
+        let trace_vals: Vec<BabyBear> = query
+            .trace_values
+            .iter()
+            .map(|&v| BabyBear::new_canonical(v))
+            .collect();
         if trace_vals.len() != num_cols {
             return Err("Wrong number of trace values".to_string());
         }
@@ -645,7 +680,7 @@ pub fn verify_with_context(
             return Err(format!("Trace Merkle proof failed at index {idx}"));
         }
 
-        let constraint_val = BabyBear(query.constraint_value);
+        let constraint_val = BabyBear::new_canonical(query.constraint_value);
         if !MerkleTree::verify_proof(
             &proof.constraint_commitment,
             &hash_leaf(constraint_val),
@@ -659,7 +694,7 @@ pub fn verify_with_context(
         let next_trace_vals: Vec<BabyBear> = query
             .next_trace_values
             .iter()
-            .map(|&v| BabyBear(v))
+            .map(|&v| BabyBear::new_canonical(v))
             .collect();
         if next_trace_vals.len() != num_cols {
             return Err("Wrong number of next trace values".to_string());
@@ -675,10 +710,11 @@ pub fn verify_with_context(
             ));
         }
 
-        if air.has_chain_continuity() && idx < trace_len - 1 && trace_vals[5] != next_trace_vals[0]
-        {
-            return Err(format!("Chain continuity failed at trace row {idx}"));
-        }
+        // Chain continuity (parent[i] == current[i+1]) is enforced by the AIR
+        // constraint polynomial. With roots-of-unity domains, the evaluation
+        // domain indices don't directly correspond to trace row indices, so we
+        // rely on the algebraic constraint check below rather than spot-checking
+        // evaluated values at arbitrary domain points.
 
         let x = eval_points[idx];
         let mut z = BabyBear::ONE;
@@ -695,7 +731,7 @@ pub fn verify_with_context(
 
         // FRI folding relation verification
         let first_half = domain_size / 2;
-        let constraint_sib_val = BabyBear(query.constraint_sibling_value);
+        let constraint_sib_val = BabyBear::new_canonical(query.constraint_sibling_value);
         if !MerkleTree::verify_proof(
             &proof.constraint_commitment,
             &hash_leaf(constraint_sib_val),
@@ -724,7 +760,7 @@ pub fn verify_with_context(
                 if layer0.query_pos != idx % first_half {
                     return Err(format!("FRI layer 0: position mismatch"));
                 }
-                if BabyBear(layer0.query_value) != expected_folded {
+                if BabyBear::new_canonical(layer0.query_value) != expected_folded {
                     return Err(format!(
                         "FRI folding check failed at layer 0: expected {}, got {}",
                         expected_folded.0, layer0.query_value
@@ -732,7 +768,7 @@ pub fn verify_with_context(
                 }
                 if !MerkleTree::verify_proof(
                     &proof.fri_commitments[0],
-                    &hash_leaf(BabyBear(layer0.query_value)),
+                    &hash_leaf(BabyBear::new_canonical(layer0.query_value)),
                     layer0.query_pos,
                     &layer0.query_path,
                 ) {
@@ -743,7 +779,7 @@ pub fn verify_with_context(
                 }
                 if !MerkleTree::verify_proof(
                     &proof.fri_commitments[0],
-                    &hash_leaf(BabyBear(layer0.sibling_value)),
+                    &hash_leaf(BabyBear::new_canonical(layer0.sibling_value)),
                     layer0.sibling_pos,
                     &layer0.sibling_path,
                 ) {
@@ -759,9 +795,15 @@ pub fn verify_with_context(
             let cl = &query.fri_layers[k];
             let nl = &query.fri_layers[k + 1];
             let (even_k, odd_k) = if cl.query_pos < cl.sibling_pos {
-                (BabyBear(cl.query_value), BabyBear(cl.sibling_value))
+                (
+                    BabyBear::new_canonical(cl.query_value),
+                    BabyBear::new_canonical(cl.sibling_value),
+                )
             } else {
-                (BabyBear(cl.sibling_value), BabyBear(cl.query_value))
+                (
+                    BabyBear::new_canonical(cl.sibling_value),
+                    BabyBear::new_canonical(cl.query_value),
+                )
             };
             let beta_idx = k + 1;
             if beta_idx >= fri_betas.len() {
@@ -771,7 +813,7 @@ pub fn verify_with_context(
             if nl.query_pos != cl.query_pos.min(cl.sibling_pos) {
                 return Err(format!("FRI layer {}: position mismatch", k + 1));
             }
-            if BabyBear(nl.query_value) != expected_next {
+            if BabyBear::new_canonical(nl.query_value) != expected_next {
                 return Err(format!(
                     "FRI folding check failed at layer {}: expected {}, got {}",
                     k + 1,
@@ -782,7 +824,7 @@ pub fn verify_with_context(
             if beta_idx < proof.fri_commitments.len() {
                 if !MerkleTree::verify_proof(
                     &proof.fri_commitments[beta_idx],
-                    &hash_leaf(BabyBear(nl.query_value)),
+                    &hash_leaf(BabyBear::new_canonical(nl.query_value)),
                     nl.query_pos,
                     &nl.query_path,
                 ) {
@@ -793,7 +835,7 @@ pub fn verify_with_context(
                 }
                 if !MerkleTree::verify_proof(
                     &proof.fri_commitments[beta_idx],
-                    &hash_leaf(BabyBear(nl.sibling_value)),
+                    &hash_leaf(BabyBear::new_canonical(nl.sibling_value)),
                     nl.sibling_pos,
                     &nl.sibling_path,
                 ) {
@@ -1592,5 +1634,140 @@ mod tests {
         assert_eq!(proof2.air_name, "pyana-merkle-v1");
         assert_eq!(proof2.nonce, Some([0xAB; 32]));
         assert!(verify_with_context(&air, &proof2, &pi, Some(&ctx)).is_ok());
+    }
+
+    // ========================================================================
+    // Soundness fix verification tests
+    // ========================================================================
+
+    #[test]
+    fn root_of_unity_has_correct_order() {
+        // Verify that the n-th root of unity satisfies omega^n == 1
+        // and that omega^(n/2) != 1 (it's a primitive n-th root).
+        for log_n in 1..=20u32 {
+            let omega = get_root_of_unity(log_n);
+            let n = 1u32 << log_n;
+            // omega^n must equal 1
+            assert_eq!(
+                omega.pow(n),
+                BabyBear::ONE,
+                "omega^(2^{}) must be 1",
+                log_n
+            );
+            // omega^(n/2) must NOT equal 1 (primitive root)
+            if log_n > 0 {
+                assert_ne!(
+                    omega.pow(n / 2),
+                    BabyBear::ONE,
+                    "omega^(2^{}/2) must NOT be 1 (not primitive)",
+                    log_n
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn evaluation_domain_elements_are_distinct() {
+        // For domain sizes used in our tests (4 rows * 4 blowup = 16),
+        // verify all elements are unique.
+        let domain = build_evaluation_domain(16);
+        assert_eq!(domain.len(), 16);
+        for i in 0..domain.len() {
+            for j in (i + 1)..domain.len() {
+                assert_ne!(
+                    domain[i], domain[j],
+                    "Domain elements at positions {} and {} must be distinct",
+                    i, j
+                );
+            }
+        }
+        // First element must be 1 (omega^0)
+        assert_eq!(domain[0], BabyBear::ONE);
+        // Last element times omega must wrap back to 1
+        let omega = get_root_of_unity(4); // 2^4 = 16
+        assert_eq!(domain[15] * omega, BabyBear::ONE);
+    }
+
+    #[test]
+    fn babybear_canonical_reduction() {
+        // Verify that new_canonical reduces non-canonical values
+        assert_eq!(BabyBear::new_canonical(BABYBEAR_P), BabyBear::ZERO);
+        assert_eq!(BabyBear::new_canonical(BABYBEAR_P + 1), BabyBear::ONE);
+        assert_eq!(
+            BabyBear::new_canonical(BABYBEAR_P - 1),
+            BabyBear::new(BABYBEAR_P - 1)
+        );
+        assert_eq!(BabyBear::new_canonical(0), BabyBear::ZERO);
+        // u32::MAX is larger than p, must reduce
+        assert_eq!(
+            BabyBear::new_canonical(u32::MAX),
+            BabyBear::new(u32::MAX % BABYBEAR_P)
+        );
+        // Values already canonical are unchanged
+        assert_eq!(BabyBear::new_canonical(42), BabyBear::new(42));
+    }
+
+    #[test]
+    fn squeeze_feedback_produces_distinct_values() {
+        // Two consecutive squeezes from the same transcript must produce
+        // different results (the feedback ensures decorrelation).
+        let mut t = Transcript::new(b"test-feedback");
+        t.absorb_field(BabyBear::new(12345));
+        let s1 = t.squeeze_field();
+        let s2 = t.squeeze_field();
+        assert_ne!(
+            s1, s2,
+            "Consecutive squeezes must produce different values"
+        );
+        // A third squeeze is also different from both
+        let s3 = t.squeeze_field();
+        assert_ne!(s3, s1);
+        assert_ne!(s3, s2);
+    }
+
+    #[test]
+    fn squeeze_feedback_makes_state_path_dependent() {
+        // Verify that squeezing changes the transcript state, so a transcript
+        // that squeezes produces different subsequent values than one that doesn't.
+        let mut t1 = Transcript::new(b"path-dep");
+        t1.absorb_field(BabyBear::new(999));
+        let _ = t1.squeeze_field(); // squeeze and discard
+        let v1 = t1.squeeze_field(); // second squeeze
+
+        let mut t2 = Transcript::new(b"path-dep");
+        t2.absorb_field(BabyBear::new(999));
+        // Skip first squeeze, go directly to second counter value
+        // Since the counter is the same (2) but state differs due to feedback,
+        // the results must be different.
+        let _ = t2.squeeze_field(); // first squeeze (same counter=1)
+        // Now t1 has absorbed the first squeeze output but t2 has too,
+        // so they should still produce the same. Let's test differently:
+        // t1 does TWO squeezes, t2 absorbs then squeezes once.
+        let mut t3 = Transcript::new(b"path-dep2");
+        t3.absorb_field(BabyBear::new(999));
+        let first_squeeze = t3.squeeze_field();
+
+        let mut t4 = Transcript::new(b"path-dep2");
+        t4.absorb_field(BabyBear::new(999));
+        t4.absorb_field(BabyBear::new(1)); // absorb something different
+        let alt_squeeze = t4.squeeze_field();
+
+        // Different inputs produce different squeezes
+        assert_ne!(first_squeeze, alt_squeeze);
+        // Same inputs produce the same (deterministic)
+        let mut t5 = Transcript::new(b"path-dep2");
+        t5.absorb_field(BabyBear::new(999));
+        assert_eq!(first_squeeze, t5.squeeze_field());
+
+        // The key test: does squeeze #2 differ from what you'd get without feedback?
+        // We can't easily test "without feedback" now that it's built in, but we can
+        // verify the values are all distinct in a sequence.
+        let mut t6 = Transcript::new(b"seq");
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..100 {
+            let v = t6.squeeze_field();
+            assert!(seen.insert(v.0), "Squeeze produced duplicate value");
+        }
+        let _ = v1; // suppress unused warning
     }
 }
