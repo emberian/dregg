@@ -383,7 +383,7 @@ async fn handle_root_message(
             // Attempt to deserialize and store the root.
             // The root is postcard-encoded AttestedRoot from pyana-store.
             if let Ok(attested_root) =
-                postcard::from_bytes::<pyana_store::AttestedRoot>(&root)
+                postcard::from_bytes::<pyana_store::StoredAttestedRoot>(&root)
             {
                 let height = attested_root.height;
                 let merkle_hex: String = attested_root
@@ -395,7 +395,7 @@ async fn handle_root_message(
                 // Persist to local store.
                 {
                     let s = state.read().await;
-                    if let Err(e) = s.store.put_attested_root(&attested_root) {
+                    if let Err(e) = s.store.store_attested_root(&attested_root) {
                         warn!(error = %e, "failed to persist attested root from gossip");
                     }
                 }

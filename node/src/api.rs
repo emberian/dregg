@@ -334,13 +334,26 @@ async fn post_submit_turn(
 
     // Sign the turn.
     let signed = s.wallet.sign_turn(&turn);
-    let turn_hash = hex_encode(&signed.signature.0[..32]);
+    let turn_hash_bytes: [u8; 32] = signed.signature.0[..32]
+        .try_into()
+        .unwrap_or([0u8; 32]);
+    let turn_hash = hex_encode(&turn_hash_bytes);
+    let turn_data = signed.signature.0.to_vec();
 
     // Emit receipt event to WebSocket subscribers.
     drop(s);
     state.emit(crate::state::NodeEvent::Receipt {
         hash: turn_hash.clone(),
     });
+
+    // Gossip the turn to federation peers.
+    if let Some(gossip) = state.gossip().await {
+        let hash = turn_hash_bytes;
+        let data = turn_data;
+        tokio::spawn(async move {
+            gossip.gossip_turn(hash, data).await;
+        });
+    }
 
     Ok(Json(SubmitTurnResponse {
         accepted: true,
@@ -407,7 +420,17 @@ async fn post_intent(
     }
 
     // Broadcast to WS subscribers.
-    state.emit(NodeEvent::Intent { intent });
+    state.emit(NodeEvent::Intent {
+        intent: intent.clone(),
+    });
+
+    // Gossip the intent to federation peers.
+    if let Some(gossip) = state.gossip().await {
+        let intent_clone = intent.clone();
+        tokio::spawn(async move {
+            gossip.gossip_intent(&intent_clone).await;
+        });
+    }
 
     Ok(Json(IntentSubmitResponse {
         intent_id,

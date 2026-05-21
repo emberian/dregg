@@ -104,7 +104,8 @@ pub use body_membership::{
 };
 pub use field::BabyBear;
 pub use ivc::{
-    FoldDelta, IvcBuilder, IvcPresentationProof, IvcProof, IvcVerification, prove_ivc, verify_ivc,
+    FoldDelta, IvcBuilder, IvcPresentationProof, IvcProof, IvcVerification,
+    StateTransitionAir, prove_ivc, prove_ivc_stark, verify_ivc, verify_ivc_stark,
 };
 pub use mock_prover::{Air, MockProof, MockProofResult, MockProver};
 pub use multi_step_air::{

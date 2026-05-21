@@ -14,7 +14,7 @@
 //! 10. Print timing: proof generation time, network round-trip, verification time
 //!
 //! Run with:
-//!   cargo run -p pyana-wire --bin cross_node_auth --features bridge
+//!   cargo run -p pyana-wire --bin cross_node_auth
 
 use pyana_bridge::present::{bytes_to_babybear, hash_index, BridgePresentationBuilder};
 use pyana_circuit::poseidon2;
