@@ -9,6 +9,8 @@ import { initDatalog } from './sections/datalog.js';
 import { initNotes } from './sections/notes.js';
 import { initCapabilities } from './sections/capabilities.js';
 import { initCrossfed } from './sections/crossfed.js';
+import { initFederation } from './sections/federation.js';
+import { initMarketplace } from './sections/marketplace.js';
 import { initSandbox } from './sections/sandbox.js';
 
 // ============================================================================
@@ -222,6 +224,8 @@ async function main() {
   initNotes(wasmExports);
   initCapabilities(wasmExports);
   initCrossfed(wasmExports);
+  initFederation(wasmExports);
+  initMarketplace(wasmExports);
   initSandbox(wasmExports);
 
   // Initial state render

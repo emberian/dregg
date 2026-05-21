@@ -84,8 +84,14 @@ pub fn authorize_with_trace(
     // Convert the AuthRequest to a TraceRequest.
     let trace_request = auth_request_to_trace(request)?;
 
-    // Get the standard policy rules.
-    let rules = pyana_trace::standard_policy();
+    // Use a combined policy that supports both legacy (app/service with Contains)
+    // and secure (action_allowed/svc_action_allowed with MemberOf) fact formats.
+    // The bridge converts macaroon caveats to legacy-format facts via grant_to_facts(),
+    // so we need the legacy rules. The secure rules are also included for tokens
+    // converted via macaroon_to_factset_secure().
+    #[allow(deprecated)]
+    let mut rules = pyana_trace::policy::legacy_policy();
+    rules.extend(pyana_trace::standard_policy());
 
     // Run the evaluator.
     let evaluator = Evaluator::new(trace_facts, rules);
@@ -293,7 +299,9 @@ pub fn verify_authorization_trace(
 ) -> bool {
     // Re-evaluate with the same request and check we get the same conclusion.
     let trace_facts = committed_facts_to_trace(state, symbols);
-    let rules = pyana_trace::standard_policy();
+    #[allow(deprecated)]
+    let mut rules = pyana_trace::policy::legacy_policy();
+    rules.extend(pyana_trace::standard_policy());
 
     let evaluator = Evaluator::new(trace_facts, rules);
     let new_trace = evaluator.evaluate(&trace.request);
