@@ -11,6 +11,7 @@ description = "Call-forest transaction model for atomic agent execution turns"
 
 [dependencies]
 pyana-cell = { path = "../cell" }
+pyana-circuit = { path = "../circuit" }
 pyana-types = { path = "../types" }
 blake3 = "1"
 ed25519-dalek = { version = "2", features = ["hazmat"] }

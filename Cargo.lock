@@ -4661,6 +4661,7 @@ dependencies = [
  "ed25519-dalek",
  "proptest",
  "pyana-cell",
+ "pyana-circuit",
  "pyana-types",
  "serde",
 ]

@@ -203,7 +203,7 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(150))]
 
     #[test]
-    fn capability_confinement_holds(ops in arb_cap_ops(5, 50)) {
+    fn proptest_capability_confinement_holds(ops in arb_cap_ops(5, 50)) {
         let (mut ledger, ids) = setup_ledger(5, 1000);
 
         // Bootstrap: give each cell a self-capability and capabilities to its neighbors.
@@ -264,7 +264,7 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(150))]
 
     #[test]
-    fn balance_conservation_holds(ops in arb_balance_ops(4, 30)) {
+    fn proptest_balance_conservation_holds(ops in arb_balance_ops(4, 30)) {
         let initial_balance = 10_000u64;
         let n_cells = 4u8;
         let (mut ledger, ids) = setup_ledger(n_cells, initial_balance);
@@ -424,7 +424,7 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(100))]
 
     #[test]
-    fn receipt_chain_integrity(chain_len in 2usize..15) {
+    fn proptest_receipt_chain_integrity(chain_len in 2usize..15) {
         let (mut ledger, ids) = setup_ledger(1, 100_000);
         let agent = ids[0];
 
@@ -463,7 +463,7 @@ proptest! {
 
     /// Swapping two adjacent receipts should also break the chain.
     #[test]
-    fn receipt_chain_swap_breaks(chain_len in 3usize..10) {
+    fn proptest_receipt_chain_swap_breaks(chain_len in 3usize..10) {
         let (mut ledger, ids) = setup_ledger(1, 100_000);
         let agent = ids[0];
         {
@@ -490,7 +490,7 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(100))]
 
     #[test]
-    fn delegation_snapshot_correctness(
+    fn proptest_delegation_snapshot_correctness(
         extra_caps in 0u8..5,
         revoke_before_refresh in proptest::bool::ANY,
     ) {

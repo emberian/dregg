@@ -53,7 +53,7 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(200))]
 
     #[test]
-    fn nullifier_uniqueness_holds(ops in arb_note_ops(50)) {
+    fn proptest_nullifier_uniqueness_holds(ops in arb_note_ops(50)) {
         let mut nullifier_set = NullifierSet::new();
         let mut created_notes: Vec<TrackedNote> = Vec::new();
 
@@ -132,7 +132,7 @@ proptest! {
 
     /// Property: Different notes always produce different nullifiers (collision resistance).
     #[test]
-    fn distinct_notes_produce_distinct_nullifiers(
+    fn proptest_distinct_notes_produce_distinct_nullifiers(
         seeds in proptest::collection::vec(any::<(u8, [u8; 32], [u8; 32])>(), 2..20)
     ) {
         let mut nullifiers = std::collections::HashSet::new();

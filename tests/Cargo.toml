@@ -21,7 +21,7 @@ pyana-cell = { path = "../cell" }
 pyana-sdk = { path = "../sdk" }
 pyana-types = { path = "../types" }
 hints = { path = "../hints" }
-token = { path = "../token", default-features = false, features = ["macaroon"] }
+token = { path = "../token", default-features = false, features = ["macaroon", "datalog"] }
 blake3 = "1"
 getrandom = { workspace = true }
 

@@ -15,6 +15,9 @@
 
 use std::collections::HashSet;
 
+use pyana_circuit::BabyBear;
+use pyana_circuit::poseidon2_air::MerklePoseidon2StarkAir;
+use pyana_circuit::stark;
 use serde::{Deserialize, Serialize};
 
 use crate::turn::{Turn, TurnReceipt};
@@ -284,6 +287,31 @@ fn resolve_inner(
                 return ConditionalResult::InvalidProof("proof bytes are empty".to_string());
             }
 
+            // Deserialize and verify the STARK proof cryptographically.
+            let stark_proof = match stark::proof_from_bytes(proof_bytes) {
+                Ok(p) => p,
+                Err(e) => {
+                    return ConditionalResult::InvalidProof(format!(
+                        "proof deserialization failed: {}",
+                        e
+                    ));
+                }
+            };
+
+            // Reconstruct public inputs as BabyBear field elements.
+            let pi: Vec<BabyBear> = public_outputs
+                .iter()
+                .map(|&v| BabyBear::new(v))
+                .collect();
+
+            // Verify the STARK proof against the MerklePoseidon2 AIR.
+            let air = MerklePoseidon2StarkAir;
+            if stark::verify(&air, &stark_proof, &pi).is_err() {
+                return ConditionalResult::InvalidProof(
+                    "STARK verification failed".to_string(),
+                );
+            }
+
             match public_outputs.first() {
                 Some(&c) if c >= *expected_conclusion => ConditionalResult::Resolved,
                 Some(&c) => ConditionalResult::InvalidProof(format!(
@@ -318,6 +346,31 @@ fn resolve_inner(
 
             if proof_bytes.is_empty() {
                 return ConditionalResult::InvalidProof("proof bytes are empty".to_string());
+            }
+
+            // Deserialize and verify the STARK proof cryptographically.
+            let stark_proof = match stark::proof_from_bytes(proof_bytes) {
+                Ok(p) => p,
+                Err(e) => {
+                    return ConditionalResult::InvalidProof(format!(
+                        "proof deserialization failed: {}",
+                        e
+                    ));
+                }
+            };
+
+            // Reconstruct public inputs as BabyBear field elements.
+            let pi: Vec<BabyBear> = public_outputs
+                .iter()
+                .map(|&v| BabyBear::new(v))
+                .collect();
+
+            // Verify the STARK proof against the MerklePoseidon2 AIR.
+            let air = MerklePoseidon2StarkAir;
+            if stark::verify(&air, &stark_proof, &pi).is_err() {
+                return ConditionalResult::InvalidProof(
+                    "STARK verification failed".to_string(),
+                );
             }
 
             if public_outputs.len() < expected_public_inputs.len() {

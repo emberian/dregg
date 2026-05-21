@@ -25,31 +25,60 @@ use tokio::sync::{Mutex, RwLock};
 /// no code path silently accepts invalid proofs -- either real verification is
 /// performed, or the caller explicitly opts into a test-only noop verifier.
 pub trait ProofVerifier: Send + Sync + std::fmt::Debug {
-    /// Verify a serialized STARK presentation proof.
+    /// Verify a serialized STARK presentation proof bound to a specific request.
     ///
-    /// Returns `Ok(true)` if the proof is cryptographically valid,
-    /// `Ok(false)` if verification ran but the proof is invalid,
+    /// The `request_digest` is the BLAKE3 hash of the authorization request.
+    /// Implementations MUST check that the proof is cryptographically bound to
+    /// this specific request, preventing replay attacks where a valid proof for
+    /// one request is presented against a different request.
+    ///
+    /// Returns `Ok(true)` if the proof is cryptographically valid and bound to
+    /// the request, `Ok(false)` if verification ran but the proof is invalid,
     /// `Err(reason)` if the proof could not be parsed or checked.
-    fn verify(&self, proof_bytes: &[u8]) -> Result<bool, String>;
+    fn verify(&self, proof_bytes: &[u8], request_digest: &[u8; 32]) -> Result<bool, String>;
 }
 
 /// Real STARK proof verifier using pyana-circuit.
 ///
 /// Deserializes the proof bytes and runs full STARK verification
 /// (Merkle commitments, FRI low-degree test, Fiat-Shamir checks).
+///
+/// Tries `MerklePoseidon2StarkAir` first (production path, collision-resistant),
+/// then falls back to `MerkleStarkAir` (legacy linear binding) for backward
+/// compatibility with older proofs.
 #[derive(Clone, Debug)]
 pub struct StarkVerifier;
 
 impl ProofVerifier for StarkVerifier {
-    fn verify(&self, proof_bytes: &[u8]) -> Result<bool, String> {
+    fn verify(&self, proof_bytes: &[u8], request_digest: &[u8; 32]) -> Result<bool, String> {
         let proof = pyana_circuit::stark::proof_from_bytes(proof_bytes)?;
         let public_inputs: Vec<pyana_circuit::field::BabyBear> = proof
             .public_inputs
             .iter()
             .map(|&v| pyana_circuit::field::BabyBear(v))
             .collect();
-        let air = pyana_circuit::stark::MerkleStarkAir;
-        match pyana_circuit::stark::verify(&air, &proof, &public_inputs) {
+
+        // Verify action binding: the proof's last public input must be a commitment
+        // to the request being authorized. This prevents replay attacks where a
+        // valid proof for one request is presented against a different request.
+        let action_commitment = pyana_circuit::poseidon2::hash_many(
+            &pyana_circuit::field::BabyBear::encode_hash(request_digest),
+        );
+        match public_inputs.last() {
+            Some(&last_pi) if last_pi == action_commitment => {}
+            _ => return Ok(false), // Proof not bound to this request
+        }
+
+        // Try Poseidon2 AIR first (production path).
+        let poseidon2_air = pyana_circuit::poseidon2_air::MerklePoseidon2StarkAir;
+        match pyana_circuit::stark::verify(&poseidon2_air, &proof, &public_inputs) {
+            Ok(()) => return Ok(true),
+            Err(_) => {}
+        }
+
+        // Fall back to legacy linear AIR for backward compatibility.
+        let linear_air = pyana_circuit::stark::MerkleStarkAir;
+        match pyana_circuit::stark::verify(&linear_air, &proof, &public_inputs) {
             Ok(()) => Ok(true),
             Err(_reason) => Ok(false),
         }
@@ -66,7 +95,7 @@ pub struct NoopVerifier;
 
 #[cfg(any(test, feature = "dev"))]
 impl ProofVerifier for NoopVerifier {
-    fn verify(&self, _proof_bytes: &[u8]) -> Result<bool, String> {
+    fn verify(&self, _proof_bytes: &[u8], _request_digest: &[u8; 32]) -> Result<bool, String> {
         Ok(true)
     }
 }
@@ -78,7 +107,7 @@ pub struct RejectAllVerifier;
 
 #[cfg(any(test, feature = "dev"))]
 impl ProofVerifier for RejectAllVerifier {
-    fn verify(&self, _proof_bytes: &[u8]) -> Result<bool, String> {
+    fn verify(&self, _proof_bytes: &[u8], _request_digest: &[u8; 32]) -> Result<bool, String> {
         Ok(false)
     }
 }
@@ -93,7 +122,7 @@ pub struct MinSizeVerifier {
 
 #[cfg(any(test, feature = "dev"))]
 impl ProofVerifier for MinSizeVerifier {
-    fn verify(&self, proof_bytes: &[u8]) -> Result<bool, String> {
+    fn verify(&self, proof_bytes: &[u8], _request_digest: &[u8; 32]) -> Result<bool, String> {
         Ok(proof_bytes.len() >= self.min_bytes)
     }
 }

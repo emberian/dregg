@@ -96,27 +96,28 @@ impl ProofVerifier for StarkProofVerifier {
         }
 
         // 3. Bind the proof to the specific action being authorized.
-        //    The public_inputs (action signing message) must be non-empty and
-        //    must correspond to the leaf_hash in the proof. This prevents a valid
-        //    proof for one action from being replayed against a different action.
+        //    The public_inputs (action signing message) must be non-empty.
+        //    The proof's public inputs must include a commitment to the action,
+        //    preventing replay of a valid proof across different actions.
         if public_inputs.is_empty() {
             return false;
         }
-        // Compute the expected leaf hash from the action message.
+        // Compute the action commitment from the action's signing message.
         // The action signing message is the BLAKE3 hash of action contents;
-        // we compress it to BabyBear the same way the prover did.
+        // we compress it to a BabyBear field element for comparison with the
+        // proof's embedded action commitment (the last public input).
         if public_inputs.len() >= 32 {
             let mut action_bytes = [0u8; 32];
             action_bytes.copy_from_slice(&public_inputs[..32]);
-            let action_bb = crate::present::bytes_to_babybear(&action_bytes);
-            // The leaf hash (pi[0]) must incorporate the action commitment.
-            // For issuer membership proofs, pi[0] is the issuer key hash which is
-            // independent of the action. We verify the action binding by checking
-            // that the caller provided the correct action context. The executor's
-            // fail-closed design ensures this proof was presented with this specific
-            // action — but we still verify the public_inputs are well-formed and
-            // non-trivial to prevent empty-context bypasses.
-            let _ = action_bb; // Action binding verified by executor's context association.
+            let action_commitment = crate::present::bytes_to_babybear(&action_bytes);
+
+            // The proof's public inputs must include the action commitment as the
+            // last element. This binds the proof to this specific action: a proof
+            // generated for action A cannot be replayed against action B.
+            let proof_action_commitment = pi.last().copied().unwrap_or(BabyBear::ZERO);
+            if proof_action_commitment != action_commitment {
+                return false;
+            }
         }
 
         // 4. Check that the merkle_root (pi[1]) corresponds to the federation root

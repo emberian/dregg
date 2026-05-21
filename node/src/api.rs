@@ -685,12 +685,47 @@ async fn post_resolve_conditional(
     match result {
         pyana_turn::ConditionalResult::Resolved => {
             let conditional = s.pending_conditionals.remove(idx);
-            let turn_hash = hex_encode(&conditional.turn.hash());
-            Ok(Json(ResolveConditionalResponse {
-                resolved: true,
-                turn_hash: Some(turn_hash),
-                reason: None,
-            }))
+
+            // Actually execute the turn against the ledger.
+            let executor = pyana_turn::TurnExecutor::new(pyana_turn::ComputronCosts::default());
+            let exec_result = executor.execute(&conditional.turn, &mut s.ledger);
+
+            match exec_result {
+                pyana_turn::TurnResult::Committed { receipt, .. } => {
+                    let turn_hash = hex_encode(&receipt.turn_hash);
+                    // Emit receipt event to WebSocket subscribers.
+                    drop(s);
+                    state.emit(NodeEvent::Receipt {
+                        hash: turn_hash.clone(),
+                    });
+                    Ok(Json(ResolveConditionalResponse {
+                        resolved: true,
+                        turn_hash: Some(turn_hash),
+                        reason: None,
+                    }))
+                }
+                pyana_turn::TurnResult::Rejected { reason, .. } => {
+                    Ok(Json(ResolveConditionalResponse {
+                        resolved: false,
+                        turn_hash: None,
+                        reason: Some(format!("turn rejected: {reason}")),
+                    }))
+                }
+                pyana_turn::TurnResult::Expired => {
+                    Ok(Json(ResolveConditionalResponse {
+                        resolved: false,
+                        turn_hash: None,
+                        reason: Some("turn expired during execution".to_string()),
+                    }))
+                }
+                pyana_turn::TurnResult::Pending => {
+                    Ok(Json(ResolveConditionalResponse {
+                        resolved: false,
+                        turn_hash: None,
+                        reason: Some("turn pending during execution".to_string()),
+                    }))
+                }
+            }
         }
         pyana_turn::ConditionalResult::Expired => {
             s.pending_conditionals.remove(idx);

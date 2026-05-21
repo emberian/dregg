@@ -171,8 +171,10 @@ impl SiloClient {
         );
 
         let federation_root = proof.federation_root;
-        // Serialize the circuit proof for transmission.
-        let proof_bytes = postcard::to_stdvec(&proof.circuit_proof).unwrap_or_default();
+        // Serialize the STARK proof for transmission using the canonical binary format
+        // (proof_to_bytes / proof_from_bytes). The wire server deserializes with
+        // proof_from_bytes() which expects the PYNA header format, not postcard.
+        let proof_bytes = proof.issuer_proof_bytes().unwrap_or_default();
 
         let msg = WireMessage::PresentToken {
             proof: proof_bytes,
