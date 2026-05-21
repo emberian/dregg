@@ -221,6 +221,13 @@ pub enum Effect {
         recipient: CellId,
     },
     /// Pipelined send: dispatch an action to the result of a pending turn.
+    /// Three-party introduction.
+    Introduce {
+        introducer: CellId,
+        recipient: CellId,
+        target: CellId,
+        permissions: pyana_cell::AuthRequired,
+    },
     PipelinedSend {
         /// The eventual target — resolved during pipeline execution.
         target: crate::eventual::EventualRef,
@@ -399,9 +406,17 @@ impl Effect {
             Effect::Unseal { sealed_box, recipient } => {
                 hasher.update(&[15u8]);
                 hasher.update(&sealed_box.pair_id);
+                hasher.update(&sealed_box.ephemeral_public);
                 hasher.update(&sealed_box.commitment);
                 hasher.update(&sealed_box.nonce);
                 hasher.update(recipient.as_bytes());
+            }
+            Effect::Introduce { introducer, recipient, target, permissions } => {
+                hasher.update(&[17u8]);
+                hasher.update(introducer.as_bytes());
+                hasher.update(recipient.as_bytes());
+                hasher.update(target.as_bytes());
+                hasher.update(&[match permissions { pyana_cell::AuthRequired::None => 0u8, pyana_cell::AuthRequired::Signature => 1u8, pyana_cell::AuthRequired::Proof => 2u8, pyana_cell::AuthRequired::Either => 3u8, pyana_cell::AuthRequired::Impossible => 4u8, }]);
             }
             Effect::PipelinedSend { target, action } => {
                 hasher.update(&[16u8]);
@@ -434,9 +449,10 @@ impl Effect {
             Effect::CreateSealPair { .. } => 32 + 32,
             Effect::Seal { .. } => 32 + 32 + 4,
             Effect::Unseal { sealed_box, .. } => {
-                32 + 32 + 32 + sealed_box.ciphertext.len() + 32
+                32 + 32 + 32 + sealed_box.ciphertext.len() + 32 + 32
             }
             Effect::PipelinedSend { .. } => 32 + 4 + 32,
+            Effect::Introduce { .. } => 97,
         }
     }
 

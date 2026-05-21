@@ -1260,16 +1260,16 @@ fn test_create_cell_effect() {
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
         let action = builder.action(agent_id, "create");
-        action.create_cell(new_pk, new_token, 100);
+        action.create_cell(new_pk, new_token, 0);
     }
     let turn = builder.fee(500).build();
 
     let result = executor.execute(&turn, &mut ledger);
     assert!(result.is_committed());
 
-    // New cell should exist.
+    // New cell should exist with zero balance.
     let new_cell = ledger.get(&new_id).unwrap();
-    assert_eq!(new_cell.state.balance, 100);
+    assert_eq!(new_cell.state.balance, 0);
     assert_eq!(new_cell.public_key, new_pk);
     assert_eq!(new_cell.token_id, new_token);
 }
@@ -1291,7 +1291,7 @@ fn test_create_cell_duplicate_rejected() {
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
         let action = builder.action(agent_id, "create_dup");
-        action.create_cell(existing_pk, existing_token, 100);
+        action.create_cell(existing_pk, existing_token, 0);
     }
     let turn = builder.fee(500).build();
 
@@ -1999,7 +1999,7 @@ fn test_ledger_delta_in_result() {
     {
         let action = builder.action(agent_id, "ops");
         action.set_field(agent_id, 0, [42u8; 32]);
-        action.create_cell(new_pk, new_token, 100);
+        action.create_cell(new_pk, new_token, 0);
     }
     let turn = builder.fee(100).build();
 
@@ -4007,4 +4007,119 @@ fn test_note_cross_asset_conservation_fails() {
         }
         _ => panic!("expected rejection for cross-asset conservation violation"),
     }
+}
+
+
+// =============================================================================
+// Tests: Three-Party Introduction (Effect::Introduce)
+// === Three-Party Introduction Tests ===
+fn setup_three_cells_for_introduction() -> (Ledger, CellId, CellId, CellId) {
+    let mut ledger = Ledger::new();
+    let (alice, _) = make_open_cell(10, 10000);
+    let (bob, _) = make_open_cell(20, 1000);
+    let (carol, _) = make_open_cell(30, 1000);
+    let alice_id = alice.id; let bob_id = bob.id; let carol_id = carol.id;
+    let mut alice_with_caps = alice;
+    alice_with_caps.capabilities.grant(bob_id, AuthRequired::None);
+    alice_with_caps.capabilities.grant(carol_id, AuthRequired::None);
+    ledger.insert_cell(alice_with_caps).unwrap();
+    ledger.insert_cell(bob).unwrap();
+    ledger.insert_cell(carol).unwrap();
+    (ledger, alice_id, bob_id, carol_id)
+}
+#[test]
+fn test_introduction_basic_success() {
+    let (mut ledger, alice_id, bob_id, carol_id) = setup_three_cells_for_introduction();
+    let executor = zero_cost_executor();
+    let mut builder = TurnBuilder::new(alice_id, 0);
+    { let action = builder.action(alice_id, "introduce"); action.introduce(alice_id, bob_id, carol_id, AuthRequired::None); }
+    let turn = builder.fee(100).build();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed(), "introduction should succeed");
+    let bob = ledger.get(&bob_id).unwrap();
+    assert!(bob.capabilities.has_access(&carol_id));
+    let (_, receipt, _) = result.unwrap_committed();
+    assert_eq!(receipt.routing_directives.len(), 1);
+    assert_eq!(receipt.routing_directives[0].sender, bob_id);
+    assert_eq!(receipt.routing_directives[0].target, carol_id);
+}
+#[test]
+fn test_introduction_fails_without_cap_to_target() {
+    let mut ledger = Ledger::new();
+    let (alice, _) = make_open_cell(10, 10000);
+    let (bob, _) = make_open_cell(20, 1000);
+    let (carol, _) = make_open_cell(30, 1000);
+    let alice_id = alice.id; let bob_id = bob.id; let carol_id = carol.id;
+    let mut a = alice; a.capabilities.grant(bob_id, AuthRequired::None);
+    ledger.insert_cell(a).unwrap(); ledger.insert_cell(bob).unwrap(); ledger.insert_cell(carol).unwrap();
+    let executor = zero_cost_executor();
+    let mut builder = TurnBuilder::new(alice_id, 0);
+    { let action = builder.action(alice_id, "introduce"); action.introduce(alice_id, bob_id, carol_id, AuthRequired::None); }
+    let turn = builder.fee(100).build();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_rejected());
+    let (error, _) = result.unwrap_rejected();
+    match error { TurnError::IntroductionDenied { reason, .. } => { assert!(reason.contains("no capability to target")); } other => panic!("expected IntroductionDenied, got: {:?}", other), }
+}
+#[test]
+fn test_introduction_fails_without_cap_to_recipient() {
+    let mut ledger = Ledger::new();
+    let (alice, _) = make_open_cell(10, 10000);
+    let (bob, _) = make_open_cell(20, 1000);
+    let (carol, _) = make_open_cell(30, 1000);
+    let alice_id = alice.id; let bob_id = bob.id; let carol_id = carol.id;
+    let mut a = alice; a.capabilities.grant(carol_id, AuthRequired::None);
+    ledger.insert_cell(a).unwrap(); ledger.insert_cell(bob).unwrap(); ledger.insert_cell(carol).unwrap();
+    let executor = zero_cost_executor();
+    let mut builder = TurnBuilder::new(alice_id, 0);
+    { let action = builder.action(alice_id, "introduce"); action.introduce(alice_id, bob_id, carol_id, AuthRequired::None); }
+    let turn = builder.fee(100).build();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_rejected());
+    let (error, _) = result.unwrap_rejected();
+    match error { TurnError::IntroductionDenied { reason, .. } => { assert!(reason.contains("no capability to recipient")); } other => panic!("expected IntroductionDenied, got: {:?}", other), }
+}
+#[test]
+fn test_introduction_fails_with_amplification() {
+    let mut ledger = Ledger::new();
+    let (alice, _) = make_open_cell(10, 10000);
+    let (bob, _) = make_open_cell(20, 1000);
+    let (carol, _) = make_open_cell(30, 1000);
+    let alice_id = alice.id; let bob_id = bob.id; let carol_id = carol.id;
+    let mut a = alice; a.capabilities.grant(bob_id, AuthRequired::None); a.capabilities.grant(carol_id, AuthRequired::Signature);
+    ledger.insert_cell(a).unwrap(); ledger.insert_cell(bob).unwrap(); ledger.insert_cell(carol).unwrap();
+    let executor = zero_cost_executor();
+    let mut builder = TurnBuilder::new(alice_id, 0);
+    { let action = builder.action(alice_id, "introduce"); action.introduce(alice_id, bob_id, carol_id, AuthRequired::None); }
+    let turn = builder.fee(100).build();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_rejected());
+    let (error, _) = result.unwrap_rejected();
+    match error { TurnError::IntroductionDenied { reason, .. } => { assert!(reason.contains("amplification denied")); } other => panic!("expected IntroductionDenied, got: {:?}", other), }
+}
+#[test]
+fn test_introduction_routing_directive_hash() {
+    let (mut ledger, alice_id, bob_id, carol_id) = setup_three_cells_for_introduction();
+    let executor = zero_cost_executor();
+    let mut builder = TurnBuilder::new(alice_id, 0);
+    { let action = builder.action(alice_id, "introduce"); action.introduce(alice_id, bob_id, carol_id, AuthRequired::None); }
+    let turn = builder.fee(100).build();
+    let result = executor.execute(&turn, &mut ledger);
+    let (_, receipt, _) = result.unwrap_committed();
+    let directive = &receipt.routing_directives[0];
+    assert_ne!(directive.hash(), [0u8; 32]);
+    assert_eq!(directive.authorizing_turn, receipt.turn_hash);
+}
+#[test]
+fn test_introduction_attenuation_preserves_level() {
+    let (mut ledger, alice_id, bob_id, carol_id) = setup_three_cells_for_introduction();
+    let executor = zero_cost_executor();
+    let mut builder = TurnBuilder::new(alice_id, 0);
+    { let action = builder.action(alice_id, "introduce"); action.introduce(alice_id, bob_id, carol_id, AuthRequired::Signature); }
+    let turn = builder.fee(100).build();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed());
+    let bob = ledger.get(&bob_id).unwrap();
+    let cap = bob.capabilities.lookup_by_target(&carol_id).unwrap();
+    assert_eq!(cap.permissions, AuthRequired::Signature);
 }

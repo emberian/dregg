@@ -56,7 +56,7 @@ pub use builder::{ActionBuilder, TurnBuilder};
 pub use composer::{ComposeError, SignedFragment, TurnComposer};
 pub use error::TurnError;
 pub use eventual::{CycleError, EventualRef, Pipeline, PipelineError, Target, TurnOutput};
-pub use executor::{ComputronCosts, ProofVerifier, TurnExecutor, execute_pipeline};
+pub use executor::{ComputronCosts, ProofVerifier, ResolutionTable, TurnExecutor, execute_pipeline, resolve_eventual_ref};
 pub use forest::{CallForest, CallTree};
 pub use routing::RoutingDirective;
 pub use turn::{Turn, TurnReceipt, TurnResult};

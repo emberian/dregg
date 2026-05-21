@@ -343,6 +343,12 @@ impl ActionBuilder {
     /// Compute the total excess contribution from this action and its children.
     /// Excess is the negation of balance_change: withdrawal (-delta) produces excess (+),
     /// deposit (+delta) consumes excess (-).
+    /// Add a three-party introduction effect.
+    pub fn introduce(&mut self, introducer: CellId, recipient: CellId, target: CellId, permissions: pyana_cell::AuthRequired) -> &mut Self {
+        self.effects.push(Effect::Introduce { introducer, recipient, target, permissions });
+        self
+    }
+
     fn compute_excess_recursive(&self) -> i64 {
         let mut total: i64 = 0;
         if let Some(delta) = self.balance_change {

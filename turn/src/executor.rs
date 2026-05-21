@@ -17,6 +17,7 @@ use crate::action::{Action, Authorization, DelegationMode, Effect};
 use crate::error::TurnError;
 use crate::forest::CallTree;
 use crate::journal::{JournalEntry, LedgerJournal};
+use crate::routing::RoutingDirective;
 use crate::turn::{Turn, TurnReceipt, TurnResult};
 
 /// Trait for verifying ZK proofs. Implementations provide circuit-specific verification.
@@ -304,9 +305,9 @@ impl TurnExecutor {
             effects_hash,
             computrons_used,
             action_count: turn.call_forest.action_count(),
-            previous_receipt_hash: None,
+            previous_receipt_hash: turn.previous_receipt_hash,
             agent: turn.agent,
-            routing_directives: Vec::new(),
+            routing_directives: Self::collect_routing_directives(&turn.call_forest, &turn_hash),
             executor_signature: None,
         };
 
@@ -590,7 +591,9 @@ impl TurnExecutor {
             // Update excess: withdrawal (negative delta) PRODUCES excess (adds to excess),
             // deposit (positive delta) CONSUMES excess (subtracts from excess).
             // excess += -delta
-            *excess = excess.saturating_sub(delta);
+            *excess = excess.checked_sub(delta).ok_or_else(|| {
+                (TurnError::BalanceOverflow { cell: action.target }, path.clone())
+            })?;
         }
 
         // Enforce cell program constraints on the post-transition state.
@@ -705,7 +708,7 @@ impl TurnExecutor {
 
         for (perm_action, action_name) in &required_actions {
             let auth_req = target_cell.permissions.for_action(*perm_action);
-            if auth_req.is_narrower_or_equal(most_restrictive) {
+            if !most_restrictive.is_narrower_or_equal(auth_req) {
                 most_restrictive = auth_req;
                 most_restrictive_action_name = action_name;
             }
@@ -1204,7 +1207,13 @@ impl TurnExecutor {
             }
 
             Effect::CreateCell { public_key, token_id, balance } => {
-                let new_cell = Cell::with_balance(*public_key, *token_id, *balance);
+                if *balance != 0 {
+                    return Err((
+                        TurnError::BalanceOverflow { cell: CellId::derive_raw(public_key, token_id) },
+                        path.to_vec(),
+                    ));
+                }
+                let new_cell = Cell::with_balance(*public_key, *token_id, 0);
                 let id = new_cell.id;
                 ledger.insert_cell(new_cell).map_err(|_| {
                     (TurnError::CellAlreadyExists { id }, path.to_vec())
@@ -1276,7 +1285,7 @@ impl TurnExecutor {
                 let sealer_slot = sealer_cell.capabilities.grant_with_breadstuff(
                     sealer_cap_id,
                     pyana_cell::AuthRequired::None,
-                    Some(pair.sealer_key),
+                    Some(pair.unsealer_secret),
                 );
                 journal.record_grant_capability(*sealer_holder, sealer_slot);
 
@@ -1286,7 +1295,7 @@ impl TurnExecutor {
                 let unsealer_slot = unsealer_cell.capabilities.grant_with_breadstuff(
                     unsealer_cap_id,
                     pyana_cell::AuthRequired::None,
-                    Some(pair.sealer_key),
+                    Some(pair.unsealer_secret),
                 );
                 journal.record_grant_capability(*unsealer_holder, unsealer_slot);
 
@@ -1306,6 +1315,22 @@ impl TurnExecutor {
                 Ok(())
             }
 
+            Effect::Introduce { introducer, recipient, target, permissions } => {
+                let intro_cell = ledger.get(introducer).ok_or_else(|| (TurnError::CellNotFound { id: *introducer }, path.to_vec()))?;
+                if !intro_cell.capabilities.has_access(recipient) {
+                    return Err((TurnError::IntroductionDenied { introducer: *introducer, recipient: *recipient, target: *target, reason: "introducer has no capability to recipient".to_string() }, path.to_vec()));
+                }
+                let held_cap = intro_cell.capabilities.lookup_by_target(target).ok_or_else(|| (TurnError::IntroductionDenied { introducer: *introducer, recipient: *recipient, target: *target, reason: "introducer has no capability to target".to_string() }, path.to_vec()))?;
+                if !pyana_cell::is_attenuation(&held_cap.permissions, permissions) {
+                    return Err((TurnError::IntroductionDenied { introducer: *introducer, recipient: *recipient, target: *target, reason: "granted permissions exceed introducer's own (amplification denied)".to_string() }, path.to_vec()));
+                }
+                if ledger.get(recipient).is_none() { return Err((TurnError::CellNotFound { id: *recipient }, path.to_vec())); }
+                let recipient_cell = ledger.get_mut(recipient).unwrap();
+                let granted_slot = recipient_cell.capabilities.grant(*target, permissions.clone());
+                journal.record_grant_capability(*recipient, granted_slot);
+                Ok(())
+            }
+
             Effect::Unseal { sealed_box, recipient } => {
                 if ledger.get(recipient).is_none() {
                     return Err((
@@ -1322,13 +1347,13 @@ impl TurnExecutor {
                     .ok_or_else(|| {
                         (TurnError::CapabilityNotHeld { actor: *actor, target: unsealer_cap_id }, path.to_vec())
                     })?;
-                let sealer_key = unsealer_cap.breadstuff.ok_or_else(|| {
+                let unsealer_secret = unsealer_cap.breadstuff.ok_or_else(|| {
                     (TurnError::InvalidAuthorization {
                         reason: "unsealer capability missing key material".to_string(),
                     }, path.to_vec())
                 })?;
 
-                let mut pair = pyana_cell::SealPair::from_keys(sealer_key, sealer_key);
+                let mut pair = pyana_cell::SealPair::from_keys([0u8; 32], unsealer_secret);
                 pair.id = sealed_box.pair_id;
 
                 match pair.unseal(sealed_box) {
@@ -1432,6 +1457,7 @@ impl TurnExecutor {
             Effect::CreateSealPair { .. } => self.costs.effect_base,
             Effect::Seal { .. } => self.costs.effect_base,
             Effect::Unseal { .. } => self.costs.effect_base,
+            Effect::Introduce { .. } => self.costs.effect_base,
         };
         base.saturating_add(extra).saturating_add(
             (effect.data_bytes() as u64).saturating_mul(self.costs.per_byte),
@@ -1488,7 +1514,7 @@ impl TurnExecutor {
         let mut inputs: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
         let mut outputs: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
 
-        self.collect_note_effects(&turn.call_forest, &mut inputs, &mut outputs);
+        self.collect_note_effects(&turn.call_forest, &mut inputs, &mut outputs)?;
 
         // Check conservation for each asset type.
         let all_asset_types: std::collections::HashSet<u64> = inputs.keys()
@@ -1513,10 +1539,11 @@ impl TurnExecutor {
         forest: &crate::forest::CallForest,
         inputs: &mut std::collections::HashMap<u64, u64>,
         outputs: &mut std::collections::HashMap<u64, u64>,
-    ) {
+    ) -> Result<(), (u64, u64, u64)> {
         for tree in &forest.roots {
-            self.collect_note_effects_tree(tree, inputs, outputs);
+            self.collect_note_effects_tree(tree, inputs, outputs)?;
         }
+        Ok(())
     }
 
     /// Recursively collect note effects from a single tree.
@@ -1525,21 +1552,24 @@ impl TurnExecutor {
         tree: &CallTree,
         inputs: &mut std::collections::HashMap<u64, u64>,
         outputs: &mut std::collections::HashMap<u64, u64>,
-    ) {
+    ) -> Result<(), (u64, u64, u64)> {
         for effect in &tree.action.effects {
             match effect {
                 Effect::NoteSpend { value, asset_type, .. } => {
-                    *inputs.entry(*asset_type).or_insert(0) += value;
+                    let entry = inputs.entry(*asset_type).or_insert(0);
+                    *entry = entry.checked_add(*value).ok_or((*asset_type, u64::MAX, 0))?;
                 }
                 Effect::NoteCreate { value, asset_type, .. } => {
-                    *outputs.entry(*asset_type).or_insert(0) += value;
+                    let entry = outputs.entry(*asset_type).or_insert(0);
+                    *entry = entry.checked_add(*value).ok_or((*asset_type, 0, u64::MAX))?;
                 }
                 _ => {}
             }
         }
         for child in &tree.children {
-            self.collect_note_effects_tree(child, inputs, outputs);
+            self.collect_note_effects_tree(child, inputs, outputs)?;
         }
+        Ok(())
     }
 
     /// Compute the BLAKE3 hash of all effect hashes combined.
@@ -1718,11 +1748,31 @@ impl TurnExecutor {
         hasher.update(if is_sealer { b"sealer" } else { b"unsealer" });
         CellId::from_bytes(*hasher.finalize().as_bytes())
     }
+
+    fn collect_routing_directives(forest: &crate::forest::CallForest, turn_hash: &[u8; 32]) -> Vec<RoutingDirective> {
+        let mut directives = Vec::new();
+        for tree in &forest.roots { Self::collect_routing_directives_tree(tree, turn_hash, &mut directives); }
+        directives
+    }
+
+    fn collect_routing_directives_tree(tree: &CallTree, turn_hash: &[u8; 32], directives: &mut Vec<RoutingDirective>) {
+        for effect in &tree.action.effects {
+            if let Effect::Introduce { recipient, target, .. } = effect {
+                directives.push(RoutingDirective { sender: *recipient, target: *target, authorizing_turn: *turn_hash, expires: None });
+            }
+        }
+        for child in &tree.children { Self::collect_routing_directives_tree(child, turn_hash, directives); }
+    }
+
 }
 
 // ─── Pipeline Execution ──────────────────────────────────────────────────────
 
-use crate::eventual::{Pipeline, PipelineError};
+use crate::eventual::{Pipeline, PipelineError, TurnOutput};
+use std::collections::HashMap;
+
+/// A resolution table mapping (turn_hash, output_slot) to concrete outputs.
+pub type ResolutionTable = HashMap<([u8; 32], u32), TurnOutput>;
 
 /// Execute a pipeline of turns against a ledger in topological order.
 pub fn execute_pipeline(
@@ -1744,6 +1794,14 @@ pub fn execute_pipeline(
 
     let mut results: Vec<Option<Result<TurnReceipt, PipelineError>>> = vec![None; n];
     let mut failed: Vec<bool> = vec![false; n];
+    let mut resolution_table: ResolutionTable = HashMap::new();
+
+    // Pre-compute turn hashes for resolution table keying.
+    let mut turn_hashes: Vec<[u8; 32]> = Vec::with_capacity(n);
+    for turn in &pipeline.turns {
+        let mut turn_clone = turn.clone();
+        turn_hashes.push(turn_clone.hash());
+    }
 
     for &idx in &topo_order {
         let deps = pipeline.dependencies_of(idx);
@@ -1769,13 +1827,18 @@ pub fn execute_pipeline(
 
         match result {
             TurnResult::Committed { receipt, .. } => {
+                let outputs = extract_turn_outputs(turn, ledger);
+                let turn_hash = turn_hashes[idx];
+                for (slot, output) in outputs.into_iter().enumerate() {
+                    resolution_table.insert((turn_hash, slot as u32), output);
+                }
                 results[idx] = Some(Ok(receipt));
             }
             TurnResult::Rejected { reason, .. } => {
                 failed[idx] = true;
-                results[idx] = Some(Err(PipelineError::UnresolvedRef {
-                    eventual_ref: crate::eventual::EventualRef::new([0u8; 32], 0),
-                    reason: format!("turn execution failed: {}", reason),
+                results[idx] = Some(Err(PipelineError::TurnExecutionFailed {
+                    index: idx,
+                    reason: format!("{}", reason),
                 }));
             }
         }
@@ -1785,4 +1848,59 @@ pub fn execute_pipeline(
         .into_iter()
         .map(|r| r.unwrap_or(Err(PipelineError::Empty)))
         .collect()
+}
+
+/// Extract outputs from a committed turn's effects for the resolution table.
+fn extract_turn_outputs(turn: &Turn, ledger: &Ledger) -> Vec<TurnOutput> {
+    let mut outputs = Vec::new();
+    for root in &turn.call_forest.roots {
+        extract_tree_outputs(root, ledger, &mut outputs);
+    }
+    outputs
+}
+
+fn extract_tree_outputs(
+    tree: &crate::forest::CallTree,
+    ledger: &Ledger,
+    outputs: &mut Vec<TurnOutput>,
+) {
+    for effect in &tree.action.effects {
+        match effect {
+            crate::action::Effect::CreateCell { public_key, token_id, .. } => {
+                let cell_id = pyana_cell::CellId::derive_raw(public_key, token_id);
+                outputs.push(TurnOutput::CreatedCell { cell: cell_id });
+            }
+            crate::action::Effect::GrantCapability { to, .. } => {
+                let slot = if let Some(cell) = ledger.get(to) {
+                    cell.capabilities.len().saturating_sub(1) as u32
+                } else {
+                    0
+                };
+                outputs.push(TurnOutput::GrantedCapability { target: *to, slot });
+            }
+            crate::action::Effect::SetField { cell, index, value } => {
+                outputs.push(TurnOutput::StateUpdate { cell: *cell, field: *index, hash: *value });
+            }
+            crate::action::Effect::NoteCreate { commitment, .. } => {
+                outputs.push(TurnOutput::CreatedNote { commitment: commitment.0 });
+            }
+            _ => {}
+        }
+    }
+    for child in &tree.children {
+        extract_tree_outputs(child, ledger, outputs);
+    }
+}
+
+/// Resolve an EventualRef against the resolution table.
+pub fn resolve_eventual_ref<'a>(
+    eventual_ref: &crate::eventual::EventualRef,
+    table: &'a ResolutionTable,
+) -> Result<&'a TurnOutput, PipelineError> {
+    table
+        .get(&(eventual_ref.source_turn, eventual_ref.output_slot))
+        .ok_or_else(|| PipelineError::UnresolvedRef {
+            eventual_ref: eventual_ref.clone(),
+            reason: "output slot not found in resolution table".to_string(),
+        })
 }

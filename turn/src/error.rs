@@ -71,6 +71,8 @@ pub enum TurnError {
     /// Note conservation law violated: for a given asset type, the total value
     /// of spent notes does not equal the total value of created notes.
     NoteConservationViolation { asset_type: u64, inputs: u64, outputs: u64 },
+    /// Three-party introduction denied.
+    IntroductionDenied { introducer: CellId, recipient: CellId, target: CellId, reason: String },
 }
 
 impl core::fmt::Display for TurnError {
@@ -150,6 +152,9 @@ impl core::fmt::Display for TurnError {
                     f,
                     "note conservation violated for asset {asset_type}: inputs={inputs}, outputs={outputs}"
                 )
+            }
+            TurnError::IntroductionDenied { introducer, recipient, target, reason } => {
+                write!(f, "introduction denied: {introducer} cannot introduce {recipient} to {target}: {reason}")
             }
         }
     }

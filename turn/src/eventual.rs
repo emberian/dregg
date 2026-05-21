@@ -146,6 +146,13 @@ pub enum PipelineError {
         /// Index of the dependent that cannot execute.
         dependent_index: usize,
     },
+    /// A turn failed during execution (not due to a dependency failure).
+    TurnExecutionFailed {
+        /// Index of the turn that failed.
+        index: usize,
+        /// The reason for the failure.
+        reason: String,
+    },
     /// The pipeline is empty.
     Empty,
 }
@@ -175,6 +182,9 @@ impl std::fmt::Display for PipelineError {
                     f,
                     "turn[{dependent_index}] cannot execute: dependency turn[{failed_index}] failed"
                 )
+            }
+            PipelineError::TurnExecutionFailed { index, reason } => {
+                write!(f, "turn[{index}] execution failed: {reason}")
             }
             PipelineError::Empty => write!(f, "pipeline is empty"),
         }
@@ -789,5 +799,70 @@ mod tests {
         assert!(results[0].is_err());
         // Turn 1 should succeed independently.
         assert!(results[1].is_ok(), "independent turn should succeed: {:?}", results[1]);
+    }
+
+    #[test]
+    fn test_pipeline_creates_cell_output() {
+        use crate::executor::{TurnExecutor, ComputronCosts, execute_pipeline};
+
+        let mut ledger = Ledger::new();
+        let pk_a = [1u8; 32];
+        let cell_a = make_open_cell(pk_a, 100_000);
+        let id_a = cell_a.id;
+        ledger.insert_cell(cell_a).unwrap();
+
+        // Turn 0: creates a new cell.
+        let new_pk = [99u8; 32];
+        let new_token = [0u8; 32];
+        let turn0 = make_test_turn(id_a, 0, vec![
+            Effect::CreateCell { public_key: new_pk, token_id: new_token, balance: 0 },
+        ]);
+
+        let mut pipeline = Pipeline::new();
+        pipeline.add_turn(turn0);
+        assert!(pipeline.validate().is_ok());
+
+        let executor = TurnExecutor::new(ComputronCosts::zero());
+        let results = execute_pipeline(pipeline, &mut ledger, &executor);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_ok(), "create cell pipeline should succeed: {:?}", results[0]);
+
+        // The new cell should exist in the ledger.
+        let new_cell_id = pyana_cell::CellId::derive_raw(&new_pk, &new_token);
+        assert!(ledger.get(&new_cell_id).is_some(), "new cell should exist in ledger");
+    }
+
+    #[test]
+    fn test_turn_execution_failed_error_variant() {
+        use crate::executor::{TurnExecutor, ComputronCosts, execute_pipeline};
+
+        let mut ledger = Ledger::new();
+        let pk_a = [1u8; 32];
+        let pk_b = [2u8; 32];
+        let cell_a = make_open_cell(pk_a, 100_000);
+        let cell_b = make_open_cell(pk_b, 100_000);
+        let id_a = cell_a.id;
+        let id_b = cell_b.id;
+        ledger.insert_cell(cell_a).unwrap();
+        ledger.insert_cell(cell_b).unwrap();
+
+        let turn0 = make_test_turn(id_a, 0, vec![
+            Effect::Transfer { from: id_a, to: id_b, amount: 999_999_999 },
+        ]);
+
+        let mut pipeline = Pipeline::new();
+        pipeline.add_turn(turn0);
+
+        let executor = TurnExecutor::new(ComputronCosts::zero());
+        let results = execute_pipeline(pipeline, &mut ledger, &executor);
+
+        assert_eq!(results.len(), 1);
+        match &results[0] {
+            Err(PipelineError::TurnExecutionFailed { index, reason }) => {
+                assert_eq!(*index, 0);
+                assert!(reason.contains("insufficient balance"), "reason: {}", reason);
+            }
+            other => panic!("expected TurnExecutionFailed, got {:?}", other),
+        }
     }
 }
