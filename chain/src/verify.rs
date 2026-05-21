@@ -67,7 +67,7 @@ async fn real_verify_on_chain(
     verifier_address: &str,
 ) -> Result<bool, ChainError> {
     use alloy::primitives::{Address, Bytes, FixedBytes};
-    use alloy::providers::{Provider, ProviderBuilder};
+    use alloy::providers::ProviderBuilder;
     use alloy::sol;
 
     // Define the SP1 Verifier contract interface

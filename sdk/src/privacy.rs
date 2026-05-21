@@ -28,6 +28,7 @@ use pyana_circuit::note_spending_air::{
 };
 use pyana_circuit::poseidon2;
 use pyana_circuit::stark::{self, StarkProof};
+use pyana_commit::accumulator::{AccumulatorWitness, BabyBear4, PolynomialAccumulator};
 use pyana_token::AuthRequest;
 
 use crate::discovery::{PirTransport, PrivateDiscoveryClient};
@@ -107,6 +108,34 @@ pub struct NonRevocationProof {
     ///
     /// The verifier must know this root (committed by the federation) to verify.
     pub revocation_root: BabyBear,
+}
+
+/// Proof of non-revocation using the polynomial accumulator (O(1) verification).
+///
+/// When the revocation set is large (>1000 entries), the accumulator-based approach
+/// is significantly more efficient than the sorted-Merkle tree approach used by
+/// `NonRevocationProof`. The accumulator proof is constant-size regardless of how
+/// many entries are in the revocation set.
+///
+/// # Privacy Guarantee
+///
+/// The verifier learns:
+/// - That the prover holds a non-revoked token.
+/// - The accumulator value and alpha challenge (committed by the federation).
+///
+/// The verifier does NOT learn:
+/// - Which specific token the prover holds.
+/// - The revocation hash of the token.
+#[derive(Clone, Debug)]
+pub struct AccumulatorNonMembershipProof {
+    /// The accumulator non-membership witness (quotient + nonzero remainder).
+    pub witness: AccumulatorWitness,
+    /// The current accumulator value (product of (alpha - h_i) for all revoked h_i).
+    pub accumulator_value: BabyBear4,
+    /// The alpha challenge used (derived via Fiat-Shamir from the set commitment).
+    pub alpha: BabyBear4,
+    /// The revocation hash being proved absent (derived from the token).
+    pub revocation_hash: BabyBear,
 }
 
 // =============================================================================
@@ -532,6 +561,67 @@ impl AgentWallet {
             revocation_root,
         })
     }
+
+    /// Prove a token is not in the revocation set using the polynomial accumulator.
+    ///
+    /// This is the O(1) alternative to `prove_not_revoked` for large revocation sets.
+    /// The accumulator witness is constant-size regardless of how many tokens have been
+    /// revoked, making it ideal when the revocation set exceeds ~1000 entries.
+    ///
+    /// # Privacy Guarantee
+    ///
+    /// Same as `prove_not_revoked`: the verifier learns only that the token is not
+    /// revoked. The token's identity and derivation chain remain hidden.
+    ///
+    /// # How It Works
+    ///
+    /// The federation maintains a polynomial accumulator `Acc = product(alpha - h_i)`
+    /// over all revoked hashes. To prove non-membership, the prover:
+    /// 1. Derives the revocation hash for their token.
+    /// 2. Obtains a non-membership witness from the accumulator.
+    /// 3. The verifier checks: `witness.quotient * (alpha - h) + witness.remainder == Acc`
+    ///    AND `witness.remainder != 0`.
+    ///
+    /// # Arguments
+    ///
+    /// * `token` - The held token to prove non-revocation for.
+    /// * `accumulator` - The federation's current polynomial accumulator over revoked hashes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The token's revocation hash IS in the accumulator (token is revoked).
+    /// - The witness computation fails (e.g., alpha - hash is not invertible).
+    pub fn prove_not_revoked_accumulator(
+        &self,
+        token: &HeldToken,
+        accumulator: &PolynomialAccumulator,
+    ) -> Result<AccumulatorNonMembershipProof, SdkError> {
+        // Decode the token to verify it's structurally valid.
+        let _decoded = token.decode()?;
+
+        // Derive the revocation hash for this token's root issuer.
+        let issuer_key = token.root_key();
+        let revocation_hash = revocation_hash_to_field(issuer_key);
+
+        // Compute the non-membership witness from the accumulator.
+        let witness = accumulator
+            .non_membership_witness(revocation_hash)
+            .ok_or_else(|| {
+                SdkError::Auth(pyana_bridge::AuthError::InvalidRequest(
+                    "accumulator non-membership proof failed: token's revocation hash is in the \
+                 revocation set (token is revoked)"
+                        .to_string(),
+                ))
+            })?;
+
+        Ok(AccumulatorNonMembershipProof {
+            witness,
+            accumulator_value: accumulator.accumulator_value(),
+            alpha: accumulator.alpha(),
+            revocation_hash,
+        })
+    }
 }
 
 // =============================================================================
@@ -607,6 +697,34 @@ pub fn verify_anonymous_presentation(
 /// Returns `Ok(())` if the proof is valid, `Err` with reason otherwise.
 pub fn verify_non_revocation_proof(proof: &NonRevocationProof) -> Result<(), String> {
     pyana_circuit::non_revocation_air::verify_non_revocation(proof.revocation_root, &proof.proof)
+}
+
+/// Verify an accumulator-based non-membership proof.
+///
+/// The verifier needs:
+/// - The current accumulator value (committed by the federation).
+/// - The alpha challenge (committed by the federation via Fiat-Shamir).
+///
+/// Checks: `witness.quotient * (alpha - element) + witness.remainder == accumulator_value`
+/// AND `witness.remainder != 0`.
+///
+/// Returns `Ok(())` if valid, `Err` with reason otherwise.
+pub fn verify_accumulator_non_membership(
+    proof: &AccumulatorNonMembershipProof,
+) -> Result<(), String> {
+    if PolynomialAccumulator::verify_non_membership(
+        &proof.witness,
+        proof.revocation_hash,
+        proof.alpha,
+        proof.accumulator_value,
+    ) {
+        Ok(())
+    } else {
+        Err("accumulator non-membership verification failed: \
+             witness * (alpha - element) + remainder != accumulator value, \
+             or remainder is zero"
+            .to_string())
+    }
 }
 
 /// Verify a note spending proof (used by note tree operators to validate transfers).

@@ -365,8 +365,10 @@ fn main() {
     println!("    Nullifier: {}", short_hex(&winner_nullifier.0));
     println!();
 
-    // Create the ConditionalTurn for atomic execution
-    let art_delivery_hash = *blake3::hash(&sealed_bytes).as_bytes();
+    // Create the ConditionalTurn for atomic execution.
+    // The artist commits to a delivery secret; revealing the secret proves delivery.
+    let delivery_secret = [0xDE; 32]; // Artist's delivery secret (known only to artist)
+    let delivery_hash = *blake3::hash(&delivery_secret).as_bytes();
     let current_height = 501;
     let timeout_height = 600;
     let deposit = compute_conditional_deposit(timeout_height, current_height);
@@ -383,19 +385,19 @@ fn main() {
             call_forest: pyana_turn::CallForest::new(),
         },
         condition: ProofCondition::HashPreimage {
-            hash: art_delivery_hash,
+            hash: delivery_hash,
         },
         timeout_height,
         submitted_at: current_height,
         deposit_amount: deposit,
     };
 
-    // Resolve the condition (artist delivers)
-    let art_proof = ConditionProof::Preimage(art_delivery_hash);
+    // Resolve the condition (artist reveals delivery secret = proves delivery happened)
+    let art_proof = ConditionProof::Preimage(delivery_secret);
     let mut null_set = std::collections::HashSet::new();
     let result = pyana_turn::resolve_condition(
         &ProofCondition::HashPreimage {
-            hash: art_delivery_hash,
+            hash: delivery_hash,
         },
         &art_proof,
         current_height + 1,

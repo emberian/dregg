@@ -611,6 +611,43 @@ impl DischargeGateway {
             issued.clear();
         }
     }
+
+    /// Serialize the replay prevention set for persistence.
+    ///
+    /// Returns a byte vector containing all ticket hashes in FIFO order.
+    /// Each hash is 32 bytes, concatenated sequentially.
+    pub fn serialize_issued_set(&self) -> Vec<u8> {
+        let issued = match self.issued.lock() {
+            Ok(guard) => guard,
+            Err(e) => e.into_inner(),
+        };
+        let mut data = Vec::with_capacity(issued.order.len() * 32);
+        for hash in &issued.order {
+            data.extend_from_slice(hash);
+        }
+        data
+    }
+
+    /// Load a previously persisted replay prevention set.
+    ///
+    /// The input must be a sequence of 32-byte hashes (as produced by
+    /// `serialize_issued_set`). Invalid-length data is silently ignored.
+    pub fn load_issued_set(&self, data: &[u8]) {
+        if data.len() % 32 != 0 {
+            return;
+        }
+        let mut issued = match self.issued.lock() {
+            Ok(guard) => guard,
+            Err(e) => e.into_inner(),
+        };
+        issued.clear();
+        for chunk in data.chunks_exact(32) {
+            let mut hash = [0u8; 32];
+            hash.copy_from_slice(chunk);
+            // Use insert which handles eviction of oldest entries.
+            issued.insert(hash);
+        }
+    }
 }
 
 impl Drop for DischargeGateway {

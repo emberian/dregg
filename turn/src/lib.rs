@@ -45,6 +45,7 @@ pub mod encrypted;
 pub mod error;
 pub mod eventual;
 pub mod executor;
+pub mod fast_path;
 pub mod forest;
 pub(crate) mod journal;
 pub mod obligation;
@@ -80,6 +81,11 @@ pub use eventual::{
 pub use executor::{
     ComputronCosts, ProofVerifier, ResolutionTable, TurnExecutor, execute_pipeline,
     execute_pipeline_result, resolve_eventual_ref,
+};
+pub use fast_path::{
+    CellLockEntry, CellLockTable, FastPathConfig, FastPathError, TurnCertificate, TurnSign,
+    assemble_certificate, clear_all_locks, execute_certified_turn, expire_stale_locks,
+    is_fast_path_eligible, process_fast_path_lock, verify_turn_sign,
 };
 pub use forest::{CallForest, CallTree};
 pub use obligation::{

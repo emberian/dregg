@@ -2,6 +2,7 @@
 # Standalone workspace — chain has dep conflicts with the main workspace
 # (sp1-core-machine pins generic-array =1.1.0, nova-snark needs >=1.2.0).
 # Build with: cd chain && cargo check
+exclude = ["program"]
 
 [package]
 name = "pyana-chain"

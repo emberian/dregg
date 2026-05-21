@@ -8,22 +8,30 @@ license.workspace = true
 description = "Zero-knowledge proof circuits for pyana authorization token chains"
 
 [dependencies]
-# Try plonky3 - fall back to mock if unavailable
-p3-field = { git = "https://github.com/Plonky3/Plonky3", optional = true }
-p3-baby-bear = { git = "https://github.com/Plonky3/Plonky3", optional = true }
-p3-air = { git = "https://github.com/Plonky3/Plonky3", optional = true }
-p3-matrix = { git = "https://github.com/Plonky3/Plonky3", optional = true }
-p3-uni-stark = { git = "https://github.com/Plonky3/Plonky3", optional = true }
-p3-challenger = { git = "https://github.com/Plonky3/Plonky3", optional = true }
-p3-commit = { git = "https://github.com/Plonky3/Plonky3", optional = true }
-p3-fri = { git = "https://github.com/Plonky3/Plonky3", optional = true }
-p3-symmetric = { git = "https://github.com/Plonky3/Plonky3", optional = true }
-p3-dft = { git = "https://github.com/Plonky3/Plonky3", optional = true }
-p3-poseidon2 = { git = "https://github.com/Plonky3/Plonky3", optional = true }
-p3-mds = { git = "https://github.com/Plonky3/Plonky3", optional = true }
-p3-monty-31 = { git = "https://github.com/Plonky3/Plonky3", optional = true }
-p3-merkle-tree = { git = "https://github.com/Plonky3/Plonky3", optional = true }
-p3-util = { git = "https://github.com/Plonky3/Plonky3", optional = true }
+# Plonky3 core (workspace-pinned)
+p3-field = { workspace = true, optional = true }
+p3-baby-bear = { workspace = true, optional = true }
+p3-air = { workspace = true, optional = true }
+p3-matrix = { workspace = true, optional = true }
+p3-uni-stark = { workspace = true, optional = true }
+p3-challenger = { workspace = true, optional = true }
+p3-commit = { workspace = true, optional = true }
+p3-fri = { workspace = true, optional = true }
+p3-symmetric = { workspace = true, optional = true }
+p3-dft = { workspace = true, optional = true }
+p3-poseidon2 = { workspace = true, optional = true }
+p3-mds = { workspace = true, optional = true }
+p3-monty-31 = { workspace = true, optional = true }
+p3-merkle-tree = { workspace = true, optional = true }
+p3-util = { workspace = true, optional = true }
+
+# Plonky3-recursion (workspace-pinned)
+p3-recursion = { workspace = true, optional = true }
+p3-circuit = { workspace = true, optional = true }
+p3-circuit-prover = { workspace = true, optional = true }
+p3-batch-stark = { workspace = true, optional = true }
+p3-lookup = { workspace = true, optional = true }
+p3-poseidon2-circuit-air = { workspace = true, optional = true }
 
 blake3 = "1"
 getrandom = { workspace = true }
@@ -86,6 +94,11 @@ binius = [
     "dep:binius_hal", "dep:binius_math", "dep:binius_circuits",
     "dep:binius_macros", "dep:binius_utils", "dep:bumpalo",
     "dep:groestl_crypto",
+]
+recursion = [
+    "plonky3",
+    "dep:p3-recursion", "dep:p3-circuit", "dep:p3-circuit-prover",
+    "dep:p3-batch-stark", "dep:p3-lookup", "dep:p3-poseidon2-circuit-air",
 ]
 
 [dev-dependencies]

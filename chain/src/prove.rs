@@ -3,6 +3,217 @@
 use crate::error::ChainError;
 use serde::{Deserialize, Serialize};
 
+// ============================================================================
+// Guest-compatible STARK proof types (subset of circuit crate's StarkProof)
+// ============================================================================
+
+/// STARK proof structure compatible with the SP1 guest program.
+///
+/// This mirrors the guest program's `StarkProof` struct exactly. It omits fields
+/// present in the circuit crate's version (`air_name`, `nonce`, `boundary_commitment`,
+/// `boundary_query_values`, `boundary_query_paths`) that the guest verifier doesn't use.
+#[cfg(feature = "prove")]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct GuestStarkProof {
+    trace_commitment: [u8; 32],
+    constraint_commitment: [u8; 32],
+    fri_commitments: Vec<[u8; 32]>,
+    fri_final_poly: Vec<u32>,
+    query_proofs: Vec<GuestQueryProof>,
+    public_inputs: Vec<u32>,
+    trace_len: usize,
+    num_cols: usize,
+}
+
+#[cfg(feature = "prove")]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct GuestQueryProof {
+    index: usize,
+    trace_values: Vec<u32>,
+    trace_path: Vec<[u8; 32]>,
+    next_trace_values: Vec<u32>,
+    next_trace_path: Vec<[u8; 32]>,
+    constraint_value: u32,
+    constraint_path: Vec<[u8; 32]>,
+    constraint_sibling_value: u32,
+    constraint_sibling_pos: usize,
+    constraint_sibling_path: Vec<[u8; 32]>,
+    fri_layers: Vec<GuestFriLayerQuery>,
+}
+
+#[cfg(feature = "prove")]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct GuestFriLayerQuery {
+    query_pos: usize,
+    query_value: u32,
+    query_path: Vec<[u8; 32]>,
+    sibling_pos: usize,
+    sibling_value: u32,
+    sibling_path: Vec<[u8; 32]>,
+}
+
+/// Deserialize a STARK proof from the `proof_to_bytes()` binary format into
+/// the guest-compatible struct.
+///
+/// The binary format starts with `PYNA` magic (4 bytes) + version byte (1 byte),
+/// then contains the proof fields in a fixed order. We parse this and produce
+/// a `GuestStarkProof` that can be bincode-serialized into SP1 stdin.
+#[cfg(feature = "prove")]
+fn deserialize_for_guest(bytes: &[u8]) -> Result<GuestStarkProof, String> {
+    if bytes.len() < 5 || &bytes[0..4] != b"PYNA" {
+        return Err("missing PYNA magic header".to_string());
+    }
+    let _version = bytes[4];
+    let mut pos = 5;
+
+    let ru32 = |p: &mut usize, b: &[u8]| -> Result<u32, String> {
+        if *p + 4 > b.len() {
+            return Err("unexpected end of proof bytes".to_string());
+        }
+        let val = u32::from_le_bytes([b[*p], b[*p + 1], b[*p + 2], b[*p + 3]]);
+        *p += 4;
+        Ok(val)
+    };
+    let rhash = |p: &mut usize, b: &[u8]| -> Result<[u8; 32], String> {
+        if *p + 32 > b.len() {
+            return Err("unexpected end of proof bytes (hash)".to_string());
+        }
+        let mut h = [0u8; 32];
+        h.copy_from_slice(&b[*p..*p + 32]);
+        *p += 32;
+        Ok(h)
+    };
+
+    let trace_commitment = rhash(&mut pos, bytes)?;
+    let constraint_commitment = rhash(&mut pos, bytes)?;
+
+    let fri_count = ru32(&mut pos, bytes)? as usize;
+    let mut fri_commitments = Vec::with_capacity(fri_count);
+    for _ in 0..fri_count {
+        fri_commitments.push(rhash(&mut pos, bytes)?);
+    }
+
+    let final_poly_len = ru32(&mut pos, bytes)? as usize;
+    let mut fri_final_poly = Vec::with_capacity(final_poly_len);
+    for _ in 0..final_poly_len {
+        fri_final_poly.push(ru32(&mut pos, bytes)?);
+    }
+
+    let pi_count = ru32(&mut pos, bytes)? as usize;
+    let mut public_inputs = Vec::with_capacity(pi_count);
+    for _ in 0..pi_count {
+        public_inputs.push(ru32(&mut pos, bytes)?);
+    }
+
+    let trace_len = ru32(&mut pos, bytes)? as usize;
+    let num_cols = ru32(&mut pos, bytes)? as usize;
+
+    let query_count = ru32(&mut pos, bytes)? as usize;
+    let mut query_proofs = Vec::with_capacity(query_count);
+    for _ in 0..query_count {
+        let index = ru32(&mut pos, bytes)? as usize;
+
+        let tv_len = ru32(&mut pos, bytes)? as usize;
+        let mut trace_values = Vec::with_capacity(tv_len);
+        for _ in 0..tv_len {
+            trace_values.push(ru32(&mut pos, bytes)?);
+        }
+
+        let tp_len = ru32(&mut pos, bytes)? as usize;
+        let mut trace_path = Vec::with_capacity(tp_len);
+        for _ in 0..tp_len {
+            trace_path.push(rhash(&mut pos, bytes)?);
+        }
+
+        let ntv_len = ru32(&mut pos, bytes)? as usize;
+        let mut next_trace_values = Vec::with_capacity(ntv_len);
+        for _ in 0..ntv_len {
+            next_trace_values.push(ru32(&mut pos, bytes)?);
+        }
+
+        let ntp_len = ru32(&mut pos, bytes)? as usize;
+        let mut next_trace_path = Vec::with_capacity(ntp_len);
+        for _ in 0..ntp_len {
+            next_trace_path.push(rhash(&mut pos, bytes)?);
+        }
+
+        let constraint_value = ru32(&mut pos, bytes)?;
+
+        let cp_len = ru32(&mut pos, bytes)? as usize;
+        let mut constraint_path = Vec::with_capacity(cp_len);
+        for _ in 0..cp_len {
+            constraint_path.push(rhash(&mut pos, bytes)?);
+        }
+
+        let constraint_sibling_value = ru32(&mut pos, bytes)?;
+        let constraint_sibling_pos = ru32(&mut pos, bytes)? as usize;
+
+        let csp_len = ru32(&mut pos, bytes)? as usize;
+        let mut constraint_sibling_path = Vec::with_capacity(csp_len);
+        for _ in 0..csp_len {
+            constraint_sibling_path.push(rhash(&mut pos, bytes)?);
+        }
+
+        let fri_layer_count = ru32(&mut pos, bytes)? as usize;
+        let mut fri_layers = Vec::with_capacity(fri_layer_count);
+        for _ in 0..fri_layer_count {
+            let query_pos = ru32(&mut pos, bytes)? as usize;
+            let query_value = ru32(&mut pos, bytes)?;
+
+            let qp_len = ru32(&mut pos, bytes)? as usize;
+            let mut query_path = Vec::with_capacity(qp_len);
+            for _ in 0..qp_len {
+                query_path.push(rhash(&mut pos, bytes)?);
+            }
+
+            let sibling_pos = ru32(&mut pos, bytes)? as usize;
+            let sibling_value = ru32(&mut pos, bytes)?;
+
+            let sp_len = ru32(&mut pos, bytes)? as usize;
+            let mut sibling_path = Vec::with_capacity(sp_len);
+            for _ in 0..sp_len {
+                sibling_path.push(rhash(&mut pos, bytes)?);
+            }
+
+            fri_layers.push(GuestFriLayerQuery {
+                query_pos,
+                query_value,
+                query_path,
+                sibling_pos,
+                sibling_value,
+                sibling_path,
+            });
+        }
+
+        query_proofs.push(GuestQueryProof {
+            index,
+            trace_values,
+            trace_path,
+            next_trace_values,
+            next_trace_path,
+            constraint_value,
+            constraint_path,
+            constraint_sibling_value,
+            constraint_sibling_pos,
+            constraint_sibling_path,
+            fri_layers,
+        });
+    }
+
+    // Skip remaining fields (air_name, nonce, boundary_*) - not needed by guest
+
+    Ok(GuestStarkProof {
+        trace_commitment,
+        constraint_commitment,
+        fri_commitments,
+        fri_final_poly,
+        query_proofs,
+        public_inputs,
+        trace_len,
+        num_cols,
+    })
+}
+
 /// A Groth16 proof ready for EVM on-chain verification.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EvmProof {
@@ -105,38 +316,48 @@ async fn real_wrap(
     stark_proof_bytes: &[u8],
     public_inputs: &[u32],
 ) -> Result<EvmProof, ChainError> {
-    use sp1_sdk::prelude::*;
+    use sp1_sdk::{
+        include_elf, HashableKey, ProveRequest, Prover, ProverClient, ProvingKey, SP1Stdin,
+    };
 
-    // Load the guest program ELF (built by `cargo prove build`)
-    // This macro embeds the ELF at compile time from the build artifact.
-    let elf_bytes = include_elf!("pyana-sp1-program");
+    // Load the guest program ELF (built by `cargo prove build`).
+    // include_elf! embeds the ELF at compile time from the build artifact produced
+    // by sp1-build in build.rs.
+    let elf = include_elf!("pyana-sp1-program");
 
-    // Set up the CPU prover
-    let client = sp1_sdk::ProverClient::builder().cpu().build().await;
+    // Set up the CPU prover (local proving, no network).
+    let prover = ProverClient::builder().cpu().build().await;
 
-    // Prepare stdin with the STARK proof and public inputs
+    // Prepare stdin with the STARK proof and public inputs.
     let mut stdin = SP1Stdin::new();
 
-    // Write the raw STARK proof bytes (the guest deserializes with bincode)
-    // We serialize the proof as a Vec<u8> so the guest can read it generically
-    stdin.write(&stark_proof_bytes.to_vec());
+    // Deserialize the STARK proof from the custom binary format (PYNA header + fields).
+    // The guest program expects a bincode-serialized StarkProof (matching its struct layout).
+    // We parse the proof_to_bytes() output and write the guest-compatible struct.
+    //
+    // NOTE: The guest's StarkProof struct omits `air_name`, `nonce`, and `boundary_*`
+    // fields from the circuit crate's version. The host strips these during deserialization.
+    let guest_proof = deserialize_for_guest(stark_proof_bytes)
+        .map_err(|e| ChainError::InvalidProof(format!("failed to parse STARK proof: {e}")))?;
+    stdin.write(&guest_proof);
     stdin.write(&public_inputs.to_vec());
 
-    // Setup proving key from ELF
-    let elf = Elf::decode(elf_bytes).map_err(|e| ChainError::ProvingFailed(e.to_string()))?;
-    let pk = client
+    // Setup proving key from ELF.
+    let pk = prover
         .setup(elf)
         .await
         .map_err(|e| ChainError::ProvingFailed(format!("{e}")))?;
 
-    // Generate the Groth16 proof (this is the expensive step - may take minutes)
-    let proof_result = client
+    // Generate the Groth16 proof (this is the expensive step - may take minutes).
+    // The guest executes the full STARK verifier inside the RISC-V zkVM, then SP1
+    // wraps that execution trace in a Groth16 proof verifiable on EVM (~200k gas).
+    let proof_result = prover
         .prove(&pk, stdin)
         .groth16()
         .await
         .map_err(|e| ChainError::ProvingFailed(format!("{e}")))?;
 
-    // Extract the proof bytes formatted for the EVM verifier contract
+    // Extract the proof bytes formatted for the EVM verifier contract.
     let proof_bytes = proof_result.bytes();
     let public_values = proof_result.public_values.as_slice().to_vec();
     let vkey = pk.verifying_key().bytes32();
@@ -154,12 +375,13 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_mock_wrap_rejects_invalid_proof() {
+    async fn test_wrap_rejects_invalid_proof() {
         let result = wrap_for_evm(b"garbage", &[1, 2]).await;
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), ChainError::InvalidProof(_)));
     }
 
+    #[cfg(feature = "mock")]
     #[tokio::test]
     async fn test_mock_wrap_accepts_valid_header() {
         // Minimal valid-looking proof: PYNA magic + version byte + some data
@@ -176,6 +398,7 @@ mod tests {
         assert!(!evm_proof.verifier_address.is_empty());
     }
 
+    #[cfg(feature = "mock")]
     #[tokio::test]
     async fn test_mock_wrap_deterministic() {
         let mut proof = b"PYNA".to_vec();
@@ -187,6 +410,7 @@ mod tests {
         assert_eq!(r1.proof_bytes, r2.proof_bytes);
     }
 
+    #[cfg(feature = "mock")]
     #[tokio::test]
     async fn test_evm_proof_serialization_roundtrip() {
         let mut proof = b"PYNA".to_vec();
@@ -198,5 +422,22 @@ mod tests {
         let deserialized: EvmProof = serde_json::from_str(&json).unwrap();
         assert_eq!(evm_proof.proof_bytes, deserialized.proof_bytes);
         assert_eq!(evm_proof.public_values, deserialized.public_values);
+    }
+
+    #[cfg(feature = "prove")]
+    #[test]
+    fn test_deserialize_for_guest_rejects_garbage() {
+        assert!(deserialize_for_guest(b"not a proof").is_err());
+        assert!(deserialize_for_guest(b"PYNA").is_err()); // too short, no version byte
+    }
+
+    #[cfg(feature = "prove")]
+    #[test]
+    fn test_deserialize_for_guest_rejects_truncated() {
+        // Valid header but truncated body
+        let mut bytes = b"PYNA".to_vec();
+        bytes.push(1); // version
+        bytes.extend_from_slice(&[0u8; 10]); // not enough for trace_commitment (32 bytes)
+        assert!(deserialize_for_guest(&bytes).is_err());
     }
 }

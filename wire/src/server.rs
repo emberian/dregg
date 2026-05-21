@@ -9,8 +9,8 @@
 
 use crate::connection::{ConnectionError, PeerConnection};
 use crate::message::{
-    AuthorizationRequest, Envelope, MAX_NONCE_CACHE_SIZE, MAX_REQUEST_AGE_SECS, PROTOCOL_VERSION,
-    PublicKey, Signature, WireMessage,
+    AuthorizationRequest, MAX_NONCE_CACHE_SIZE, MAX_REQUEST_AGE_SECS, PROTOCOL_VERSION, PublicKey,
+    Signature, ThresholdQC, WireMessage,
 };
 use std::collections::{HashSet, VecDeque};
 use std::net::SocketAddr;
@@ -287,7 +287,10 @@ impl SiloConfig {
 /// handler) while maintaining backward compatibility with the standalone logic.
 pub trait RevocationHandler: Send + Sync {
     /// Submit a revocation for a token, returning true if accepted.
-    fn submit_revocation(&self, token_id: &str, sig: &[u8; 64]) -> bool;
+    ///
+    /// The `authority` public key identifies which federation member issued the
+    /// revocation. Implementations should derive the authority index from this key.
+    fn submit_revocation(&self, token_id: &str, sig: &[u8; 64], authority: &PublicKey) -> bool;
     /// Check whether a token has been revoked.
     fn is_revoked(&self, token_id: &str) -> bool;
     /// Get the current revocation root hash.
@@ -327,7 +330,7 @@ impl DefaultRevocationHandler {
 }
 
 impl RevocationHandler for DefaultRevocationHandler {
-    fn submit_revocation(&self, token_id: &str, sig: &[u8; 64]) -> bool {
+    fn submit_revocation(&self, token_id: &str, sig: &[u8; 64], _authority: &PublicKey) -> bool {
         let mut tokens = self.revoked_tokens.write().unwrap();
         let new_height = self
             .height
@@ -383,6 +386,8 @@ pub struct SiloState {
     /// Signatures on the current root: (public_key, signature) pairs.
     /// Signatures are full 64-byte Ed25519.
     pub root_signatures: Vec<(PublicKey, Signature)>,
+    /// Optional threshold QC from consensus (populated when federation bridge updates state).
+    pub threshold_qc: Option<ThresholdQC>,
 }
 
 impl SiloState {
@@ -395,6 +400,7 @@ impl SiloState {
             member_count,
             revoked_tokens: Vec::new(),
             root_signatures: Vec::new(),
+            threshold_qc: None,
         }
     }
 
@@ -1157,7 +1163,7 @@ impl SiloServer {
                     height: st.height,
                     timestamp: current_timestamp(),
                     signatures: st.root_signatures.clone(),
-                    threshold_qc: None,
+                    threshold_qc: st.threshold_qc.clone(),
                 })
             }
 
@@ -1223,7 +1229,8 @@ impl SiloServer {
                 // If a revocation handler is configured, delegate to it and use
                 // its root as the canonical source of truth.
                 if let Some(handler) = revocation_handler {
-                    let _accepted = handler.submit_revocation(&token_id, &authority_sig.0);
+                    let _accepted =
+                        handler.submit_revocation(&token_id, &authority_sig.0, &authority);
 
                     // Update local state using the handler's root (no independent
                     // hash-chain computation -- the handler IS the authority).
@@ -1472,16 +1479,30 @@ impl SiloServer {
                     .filter(|(pk, sig)| pk.verify(&signing_msg, sig))
                     .count();
 
-                // Require at least one valid signature if any were provided.
-                // Accept unsigned roots only for initial bootstrap / test scenarios
-                // where the root is the genesis root.
-                if !signatures.is_empty() && valid_sigs == 0 {
-                    return Err(ConnectionError::Codec(crate::codec::CodecError::Io(
-                        std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            "attested root has no valid quorum signatures",
-                        ),
-                    )));
+                // Enforce quorum threshold: require 2f+1 valid signatures where
+                // f = (member_count - 1) / 3. Accept unsigned roots only for initial
+                // bootstrap / test scenarios where the root is the genesis root.
+                if !signatures.is_empty() {
+                    let member_count = self.state.read().await.member_count as usize;
+                    let required_threshold = if member_count > 0 {
+                        // BFT quorum: 2f+1 where f = (n-1)/3
+                        let f = (member_count - 1) / 3;
+                        2 * f + 1
+                    } else {
+                        1
+                    };
+
+                    if valid_sigs < required_threshold {
+                        return Err(ConnectionError::Codec(crate::codec::CodecError::Io(
+                            std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                format!(
+                                    "insufficient quorum: got {} valid signatures, need {}",
+                                    valid_sigs, required_threshold
+                                ),
+                            ),
+                        )));
+                    }
                 }
 
                 Ok((root, height, timestamp))
@@ -1493,6 +1514,8 @@ impl SiloServer {
     }
 
     /// Request a non-membership proof from a remote peer.
+    ///
+    /// Verifies the proof against the returned root before returning it.
     pub async fn request_non_membership(
         &self,
         peer_addr: &str,
@@ -1506,7 +1529,25 @@ impl SiloServer {
         .await?;
 
         match conn.recv().await? {
-            WireMessage::NonMembershipResponse { proof, .. } => Ok(proof),
+            WireMessage::NonMembershipResponse { proof, root, .. } => {
+                // Verify the non-membership attestation before trusting it.
+                if let Some(ref proof_bytes) = proof {
+                    let mut hasher = blake3::Hasher::new_derive_key("pyana-wire non-membership-v1");
+                    hasher.update(token_id.as_bytes());
+                    hasher.update(&root);
+                    let expected = hasher.finalize();
+
+                    if proof_bytes.as_slice() != expected.as_bytes() {
+                        return Err(ConnectionError::Codec(crate::codec::CodecError::Io(
+                            std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "non-membership proof verification failed: attestation mismatch",
+                            ),
+                        )));
+                    }
+                }
+                Ok(proof)
+            }
             _ => Err(ConnectionError::Codec(crate::codec::CodecError::Io(
                 std::io::Error::new(std::io::ErrorKind::InvalidData, "unexpected response"),
             ))),

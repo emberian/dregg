@@ -15,6 +15,7 @@ mod routing_table;
 mod state;
 mod ws;
 
+use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
@@ -162,6 +163,13 @@ enum Command {
         /// Maximum age (seconds) for accepting remote attested roots. Default: 3600.
         #[arg(long, default_value = "3600")]
         max_remote_root_age: u64,
+
+        /// Path to a JSON file containing trusted public keys for remote federations.
+        /// Format: `{"<federation_id_hex>": ["<pubkey_hex>", ...], ...}`.
+        /// If not provided, the node's known federation keys are used as a fallback.
+        /// The bridge refuses to start in relay mode if no trusted keys are available.
+        #[arg(long)]
+        remote_keys: Option<PathBuf>,
     },
 }
 
@@ -224,6 +232,7 @@ async fn main() {
             no_relay_receipts,
             no_relay_conditionals,
             max_remote_root_age,
+            remote_keys,
         } => {
             run_bridge(
                 &data_dir,
@@ -234,6 +243,7 @@ async fn main() {
                 no_relay_receipts,
                 no_relay_conditionals,
                 max_remote_root_age,
+                remote_keys,
             )
             .await
         }
@@ -317,6 +327,9 @@ async fn run_node(
         .with_graceful_shutdown(shutdown_signal())
         .await
         .expect("HTTP server error");
+
+    // Persist critical state before exiting.
+    node_state.persist_on_shutdown().await;
 
     info!("HTTP server shut down gracefully");
 }
@@ -426,6 +439,7 @@ async fn run_bridge(
     no_relay_receipts: bool,
     no_relay_conditionals: bool,
     max_remote_root_age: u64,
+    remote_keys: Option<PathBuf>,
 ) {
     let data_path = expand_path(data_dir);
 
@@ -454,6 +468,57 @@ async fn run_bridge(
         });
     }
 
+    // Load trusted remote federation keys from file or node state.
+    let remote_federation_keys: HashMap<[u8; 32], Vec<pyana_types::PublicKey>> = if let Some(
+        keys_path,
+    ) = remote_keys
+    {
+        match std::fs::read_to_string(&keys_path) {
+            Ok(json_str) => {
+                // Parse JSON: { "federation_id_hex": ["pubkey_hex", ...], ... }
+                match serde_json::from_str::<HashMap<String, Vec<String>>>(&json_str) {
+                    Ok(raw) => {
+                        let mut result = HashMap::new();
+                        for (fed_hex, key_hexes) in raw {
+                            if fed_hex.len() != 64 {
+                                error!(
+                                    federation = %fed_hex,
+                                    "invalid federation ID (expected 64 hex chars), skipping"
+                                );
+                                continue;
+                            }
+                            let fed_id = match hex_decode_32(&fed_hex) {
+                                Some(id) => id,
+                                None => {
+                                    error!(federation = %fed_hex, "invalid hex for federation ID");
+                                    continue;
+                                }
+                            };
+                            let keys: Vec<pyana_types::PublicKey> = key_hexes
+                                .iter()
+                                .filter_map(|kh| hex_decode_32(kh).map(pyana_types::PublicKey))
+                                .collect();
+                            if !keys.is_empty() {
+                                result.insert(fed_id, keys);
+                            }
+                        }
+                        result
+                    }
+                    Err(e) => {
+                        error!(error = %e, "failed to parse remote keys JSON");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            Err(e) => {
+                error!(path = %keys_path.display(), error = %e, "failed to read remote keys file");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        HashMap::new()
+    };
+
     // Build relay configuration from CLI flags.
     let relay_config = bridge::RelayConfig {
         relay_roots: !no_relay_roots,
@@ -476,7 +541,25 @@ async fn run_bridge(
     );
 
     // Run the bridge (blocks forever).
-    bridge::run_bridge(node_state, remote_peers, relay_config).await;
+    bridge::run_bridge(
+        node_state,
+        remote_peers,
+        relay_config,
+        remote_federation_keys,
+    )
+    .await;
+}
+
+/// Decode a 64-char hex string into a [u8; 32].
+fn hex_decode_32(s: &str) -> Option<[u8; 32]> {
+    if s.len() != 64 {
+        return None;
+    }
+    let mut bytes = [0u8; 32];
+    for (i, byte) in bytes.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(bytes)
 }
 
 /// P2 Fix 8: Wait for Ctrl-C (SIGINT) to trigger graceful shutdown.

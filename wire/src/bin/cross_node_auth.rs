@@ -177,6 +177,7 @@ async fn main() {
         member_count: 4,
         revoked_tokens: Vec::new(),
         root_signatures: Vec::new(),
+        threshold_qc: None,
     };
     let server_b = SiloServer::with_state("127.0.0.1:0".parse().unwrap(), config_b, state_b);
 

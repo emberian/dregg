@@ -323,14 +323,12 @@ pub struct WirePresentationProof {
     /// When present, the remote verifier calls `verify_validated_ivc()` to
     /// cryptographically verify the entire attenuation chain without trusting
     /// the prover's local constraint checks.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validated_ivc_proof: Option<pyana_circuit::ValidatedIvcProof>,
     /// Verification result from the circuit layer.
     pub verification: PresentationVerification,
     /// Commitment to the selectively revealed facts.
     pub revealed_facts_commitment: BabyBear,
     /// Composition commitment binding all sub-proofs together.
-    #[serde(default)]
     pub composition_commitment: BabyBear,
 }
 
@@ -748,6 +746,9 @@ impl BridgePresentationBuilder {
     ///
     /// This method is intentionally NOT public to prevent misuse by external callers.
     #[cfg(any(test, feature = "test-utils"))]
+    #[deprecated(
+        note = "prove_linear uses a trivially forgeable AIR (linear sum). NEVER use in production. Use prove() with Poseidon2 instead."
+    )]
     pub fn prove_linear(
         &mut self,
         request: &AuthRequest,
@@ -823,8 +824,12 @@ impl BridgePresentationBuilder {
         let mut final_state_clone = final_state.clone();
         let final_root_bytes = final_state_clone.root();
 
-        // 4. Build the circuit witness.
-        let circuit_witness = self.build_circuit_witness(&trace, request)?;
+        // 4. Build the circuit witness with Poseidon2 hashing.
+        //    SECURITY: Must use poseidon2 witness to compute a real composition_commitment
+        //    that binds the IVC proof to the issuer membership proof. Without this,
+        //    an attacker could substitute sub-proofs from different tokens.
+        let circuit_witness = self.build_circuit_witness_poseidon2(&trace, request)?;
+        let composition_commitment = circuit_witness.composition_commitment;
 
         // 5. Generate the IVC presentation proof.
         let air = PresentationAir::new(circuit_witness.clone());
@@ -850,7 +855,7 @@ impl BridgePresentationBuilder {
             federation_root: self.federation_root,
             verification,
             revealed_facts_commitment: self.revealed_facts_commitment,
-            composition_commitment: BabyBear::ZERO, // IVC path (no issuer STARK binding yet)
+            composition_commitment,
         })
     }
 
@@ -1184,8 +1189,15 @@ impl BridgePresentationBuilder {
             .unwrap_or("");
         let request_pred_bb = pyana_circuit::compute_action_binding(action_str, resource_str);
 
-        // Timestamp.
-        let timestamp = request.now.unwrap_or(0);
+        // Timestamp: use the request's `now` field if provided, otherwise default to
+        // the current system time. A non-zero timestamp is essential for proof freshness;
+        // verifiers can reject proofs with stale timestamps.
+        let timestamp = request.now.unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64
+        });
         let timestamp_bb = BabyBear::from_u64(timestamp as u64);
 
         // Build fold witnesses from the chain deltas.
@@ -2266,6 +2278,43 @@ pub fn verify_fold_chain(proof: &BridgePresentationProof) -> bool {
     }
 }
 
+/// Verify a fold chain with an expected initial root anchor.
+///
+/// This is the secure variant of [`verify_fold_chain`] that ensures the IVC proof's
+/// initial state corresponds to the expected root (e.g., derived from the issuer's
+/// original token state). Without this check, a valid IVC proof could start from
+/// an arbitrary initial state, allowing an attacker to fabricate the beginning of
+/// the attenuation chain.
+///
+/// # Arguments
+///
+/// * `proof` - The presentation proof containing the validated IVC proof.
+/// * `expected_initial_root` - The expected initial state root (before any attenuations).
+///
+/// # Security
+///
+/// Callers MUST provide `expected_initial_root` from a trusted source (e.g., the
+/// issuer's committed original state root). If this value comes from the proof itself,
+/// the check provides no security.
+pub fn verify_fold_chain_anchored(
+    proof: &BridgePresentationProof,
+    expected_initial_root: BabyBear,
+) -> bool {
+    match &proof.validated_ivc_proof {
+        Some(validated) => {
+            // First verify the IVC proof itself is structurally valid.
+            if pyana_circuit::verify_validated_ivc(validated)
+                != pyana_circuit::ValidatedIvcVerification::Valid
+            {
+                return false;
+            }
+            // Then verify the initial root matches the expected anchor.
+            validated.initial_root == expected_initial_root
+        }
+        None => false,
+    }
+}
+
 /// Verify a wire presentation proof's fold chain (validated IVC).
 ///
 /// Same as [`verify_fold_chain`] but operates on the wire-safe representation.
@@ -2306,15 +2355,29 @@ pub fn verify_presentation_complete(
     }
 
     // 2. Verify the fold chain if a validated IVC proof is present.
-    // If no validated IVC proof is attached but the proof has fold steps,
-    // return false (fold chain not STARK-proven).
     if proof.validated_ivc_proof.is_some() {
-        verify_fold_chain(proof)
-    } else {
-        // No validated IVC proof. For unrestricted tokens (chain_length <= 1),
-        // this is fine — there's no fold chain to prove.
-        proof.chain_length <= 1
+        return verify_fold_chain(proof);
     }
+
+    // 3. No validated IVC proof. Check whether the proof is still complete:
+    //    - chain_length <= 1: no fold chain to prove (single-step token).
+    //    - real_stark_proof with non-zero composition_commitment: the issuer STARK
+    //      cryptographically binds the fold chain via the composition_commitment
+    //      public input. This is the standard prove() path for multi-step chains
+    //      that don't use IVC recursion. The composition_commitment ensures no
+    //      sub-proof substitution is possible.
+    if proof.chain_length <= 1 {
+        return true;
+    }
+
+    // For multi-step chains without IVC, accept if we have a real STARK proof
+    // with a valid (non-zero) composition commitment binding the fold chain.
+    if proof.real_stark_proof.is_some() && proof.composition_commitment != BabyBear::ZERO {
+        return true;
+    }
+
+    // No valid proof binding for this chain depth.
+    false
 }
 
 // =============================================================================
@@ -2356,6 +2419,8 @@ pub enum BridgePredicateProofInner {
     Single(pyana_circuit::PredicateProof),
     /// A pair of proofs for InRange (lower bound + upper bound).
     Range(pyana_circuit::PredicateProof, pyana_circuit::PredicateProof),
+    /// A committed-threshold proof where both value and threshold are hidden.
+    CommittedThreshold(pyana_circuit::CommittedThresholdProof),
 }
 
 /// Generate a predicate proof for a specific fact attribute in a token state.
@@ -2469,6 +2534,16 @@ pub fn verify_predicate_proof(
                 high_proof,
                 low,
                 high,
+                expected_fact_commitment,
+            )
+        }
+        BridgePredicateProofInner::CommittedThreshold(ct_proof) => {
+            // For committed-threshold proofs, verify against the threshold commitment
+            // embedded in the proof. The verifier must independently check the
+            // threshold_commitment against their expected value.
+            pyana_circuit::verify_committed_threshold(
+                ct_proof,
+                ct_proof.threshold_commitment,
                 expected_fact_commitment,
             )
         }

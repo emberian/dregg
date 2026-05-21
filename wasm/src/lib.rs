@@ -1494,39 +1494,49 @@ pub fn garbled_compare(prover_value: u32, verifier_threshold: u32) -> Result<JsV
 // Anonymous Credential (Ring Membership Proof)
 // ============================================================================
 
-/// Generate a blinded ring membership proof for an agent in the runtime.
+/// Generate a blinded ring membership proof for an agent in a set.
 ///
-/// Proves that agent at `agent_idx` is a member of the federation's agent set
-/// without revealing which specific agent they are.
+/// Proves that an agent (identified by `agent_id_hex`) is a member of the ring
+/// defined by `ring_members_json` (a JSON array of hex-encoded 32-byte IDs)
+/// without revealing which specific member they are.
 ///
-/// `handle`: runtime handle (from create_runtime)
-/// `agent_idx`: index of the agent to prove membership for
+/// `agent_id_hex`: hex-encoded 32-byte agent identity
+/// `ring_members_json`: JSON array of hex-encoded 32-byte member identities
 ///
-/// Returns JSON with: blinded_leaf, presentation_tag, proof_size
+/// Returns JSON with: blinded_leaf, presentation_tag, set_root, ring_size, proof_size
 #[wasm_bindgen]
-pub fn prove_anonymous_membership(handle: usize, agent_idx: usize) -> Result<JsValue, JsError> {
+pub fn prove_anonymous_membership(
+    agent_id_hex: &str,
+    ring_members_json: &str,
+) -> Result<JsValue, JsError> {
     use pyana_circuit::field::BabyBear;
     use pyana_circuit::poseidon2;
 
     let start = perf_now();
 
-    // Access the runtime to get agent data.
-    let (agent_id_bytes, all_agent_ids) = with_runtime_ref(handle, |rt| {
-        if agent_idx >= rt.agents.len() {
-            return Err(format!(
-                "agent_idx {} out of range (have {} agents)",
-                agent_idx,
-                rt.agents.len()
-            ));
-        }
-        let agent_id = rt.agents[agent_idx].cell_id.as_bytes().to_vec();
-        let all_ids: Vec<Vec<u8>> = rt
-            .agents
-            .iter()
-            .map(|a| a.cell_id.as_bytes().to_vec())
-            .collect();
-        Ok((agent_id, all_ids))
-    })?;
+    // Parse agent ID.
+    let agent_id_bytes = hex_decode(agent_id_hex)
+        .map_err(|e| JsError::new(&format!("invalid agent_id_hex: {}", e)))?;
+    if agent_id_bytes.len() != 32 {
+        return Err(JsError::new("agent_id_hex must decode to exactly 32 bytes"));
+    }
+
+    // Parse ring members.
+    let ring_hex: Vec<String> =
+        serde_json::from_str(ring_members_json).map_err(|e| JsError::new(&e.to_string()))?;
+
+    let ring_members: Vec<Vec<u8>> = ring_hex
+        .iter()
+        .map(|h| hex_decode(h))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| JsError::new(&format!("invalid ring member hex: {}", e)))?;
+
+    // Verify the agent is actually in the ring.
+    if !ring_members.iter().any(|m| *m == agent_id_bytes) {
+        return Err(JsError::new(
+            "agent_id is not a member of the provided ring",
+        ));
+    }
 
     // Generate a blinding factor for unlinkability.
     let mut blinding_bytes = [0u8; 4];
@@ -1543,17 +1553,17 @@ pub fn prove_anonymous_membership(handle: usize, agent_idx: usize) -> Result<JsV
     let presentation_tag =
         poseidon2::hash_2_to_1(blinded_leaf, BabyBear::new(u32::from_le_bytes(tag_bytes)));
 
-    // Compute the Merkle root of the agent set (simplified: hash all agent IDs together).
-    let agent_hashes: Vec<BabyBear> = all_agent_ids
+    // Compute the Merkle root of the agent set (hash all member IDs together).
+    let member_hashes: Vec<BabyBear> = ring_members
         .iter()
         .map(|id| poseidon2::hash_bytes(id))
         .collect();
-    let set_root = poseidon2::hash_many(&agent_hashes);
+    let set_root = poseidon2::hash_many(&member_hashes);
 
     let elapsed_ms = perf_now() - start;
 
     // Proof size estimate (in a real system this would be a STARK).
-    let proof_size = 48 + all_agent_ids.len() * 4; // Compact ring proof
+    let proof_size = 48 + ring_members.len() * 4; // Compact ring proof
 
     #[derive(Serialize)]
     struct MembershipResult {
@@ -1569,7 +1579,7 @@ pub fn prove_anonymous_membership(handle: usize, agent_idx: usize) -> Result<JsV
         blinded_leaf: blinded_leaf.as_u32(),
         presentation_tag: presentation_tag.as_u32(),
         set_root: set_root.as_u32(),
-        ring_size: all_agent_ids.len(),
+        ring_size: ring_members.len(),
         proof_size_bytes: proof_size,
         generation_time_ms: elapsed_ms,
     };
@@ -1651,6 +1661,19 @@ pub fn derive_keypair_from_mnemonic(mnemonic: &str, passphrase: &str) -> Result<
 
 fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn hex_decode(hex: &str) -> Result<Vec<u8>, String> {
+    if hex.len() % 2 != 0 {
+        return Err("odd-length hex string".to_string());
+    }
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| {
+            u8::from_str_radix(&hex[i..i + 2], 16)
+                .map_err(|e| format!("invalid hex at position {}: {}", i, e))
+        })
+        .collect()
 }
 
 fn perf_now() -> f64 {

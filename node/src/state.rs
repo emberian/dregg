@@ -11,12 +11,14 @@ use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast};
 
 use pyana_cell::{CellId, Ledger};
+use pyana_circuit::field::BabyBear;
+use pyana_commit::accumulator::{BabyBear4, PolynomialAccumulator};
 use pyana_coord::budget::{
     BudgetCoordinator, BudgetError, FastUnlockManager, SiloId, SpendingCertificate,
     UnlockCertificate, UnlockRequest, UnlockVote,
 };
 use pyana_sdk::AgentWallet;
-use pyana_store::PersistentStore;
+use pyana_store::{PersistentStore, Poseidon2NoteTree};
 
 use crate::federation_sync::GossipHandle;
 use crate::routing_table::RoutingTable;
@@ -71,6 +73,11 @@ pub struct NodeStateInner {
     pub passphrase_hash: Option<[u8; 32]>,
     /// Local intent pool: content-addressed ID -> validated Intent.
     pub intent_pool: HashMap<[u8; 32], pyana_intent::Intent>,
+    /// Queue of signed turns ready for consensus ordering.
+    /// Turns are added here when they require multi-party agreement (e.g.,
+    /// fulfillment turns, cross-cell operations). The Morpheus consensus driver
+    /// drains this queue each tick.
+    pub consensus_queue: Vec<pyana_sdk::SignedTurn>,
     /// Pending conditional turns awaiting proof resolution.
     /// Garbage-collected on access when timeout_height is exceeded.
     pub pending_conditionals: Vec<pyana_turn::ConditionalTurn>,
@@ -138,11 +145,37 @@ pub struct NodeStateInner {
     /// Budget epoch version (tracks coordinator rebalance cycles).
     pub budget_epoch: u64,
 
+    // ─── Fast-Path Cell Lock Table ─────────────────────────────────────────────
+    /// Cell lock table for the owned-cell fast path (LUTRIS-style).
+    /// Maps (CellId, nonce) -> CellLockEntry. Used by the fast-path API endpoints
+    /// and periodically expired by the federation sync background task.
+    pub cell_lock_table: pyana_turn::CellLockTable,
+
     // ─── Cross-Federation Bridge State ───────────────────────────────────────
     /// Revocations from remote federations (federation_id -> set of revoked token hashes).
     /// Populated by the bridge node when it receives revocation messages from
     /// remote federation gossip networks.
     pub cross_federation_revocations: HashMap<[u8; 32], HashSet<[u8; 32]>>,
+
+    // ─── Polynomial Accumulator for Non-Revocation ─────────────────────────────
+    /// O(1) polynomial accumulator over all revoked token hashes (BabyBear elements).
+    ///
+    /// When the revocation set grows large (>1000 entries), clients can use
+    /// `prove_not_revoked_accumulator()` from the SDK which produces a constant-size
+    /// witness rather than the sorted-Merkle proof whose size grows with tree depth.
+    ///
+    /// Updated on every new revocation via `insert()`. The alpha challenge is
+    /// derived via Fiat-Shamir from the current revocation set commitment.
+    pub revocation_accumulator: Option<PolynomialAccumulator>,
+
+    // ─── Poseidon2 Note Commitment Tree ────────────────────────────────────────
+    /// ZK-friendly Poseidon2 Merkle tree tracking all note commitments.
+    ///
+    /// Used to produce membership proofs for note spending (NoteSpendingAir) and
+    /// for stake proof verification on intent submission.
+    ///
+    /// Depth 16 supports up to 4^16 = ~4 billion notes.
+    pub note_tree: Poseidon2NoteTree,
 }
 
 /// Summary of the node's sync state for the status endpoint.
@@ -243,6 +276,7 @@ impl NodeState {
                 unlocked: false,
                 passphrase_hash,
                 intent_pool: HashMap::new(),
+                consensus_queue: Vec::new(),
                 pending_conditionals: Vec::new(),
                 pending_turns: pyana_turn::PendingTurnRegistry::new(),
                 used_proof_hashes,
@@ -264,7 +298,10 @@ impl NodeState {
                 pending_spending_certificates: Vec::new(),
                 pending_unlock_requests: Vec::new(),
                 budget_epoch: 0,
+                cell_lock_table: pyana_turn::CellLockTable::with_defaults(),
                 cross_federation_revocations: HashMap::new(),
+                revocation_accumulator: None,
+                note_tree: Poseidon2NoteTree::with_depth(16),
             })),
             events_tx,
             gossip: Arc::new(RwLock::new(None)),
@@ -298,6 +335,7 @@ impl NodeState {
                 unlocked: false,
                 passphrase_hash: None,
                 intent_pool: HashMap::new(),
+                consensus_queue: Vec::new(),
                 pending_conditionals: Vec::new(),
                 pending_turns: pyana_turn::PendingTurnRegistry::new(),
                 used_proof_hashes: HashSet::new(),
@@ -319,7 +357,10 @@ impl NodeState {
                 pending_spending_certificates: Vec::new(),
                 pending_unlock_requests: Vec::new(),
                 budget_epoch: 0,
+                cell_lock_table: pyana_turn::CellLockTable::with_defaults(),
                 cross_federation_revocations: HashMap::new(),
+                revocation_accumulator: None,
+                note_tree: Poseidon2NoteTree::with_depth(16),
             })),
             events_tx,
             gossip: Arc::new(RwLock::new(None)),
@@ -390,6 +431,24 @@ impl NodeState {
     pub async fn gossip(&self) -> Option<GossipHandle> {
         let g = self.gossip.read().await;
         g.clone()
+    }
+
+    /// Persist critical state before shutdown.
+    ///
+    /// Currently persists:
+    /// - Discharge gateway replay set (prevents replay after restart)
+    pub async fn persist_on_shutdown(&self) {
+        let s = self.inner.read().await;
+        if let Some(gateway) = &s.discharge_gateway {
+            let data = gateway.serialize_issued_set();
+            if !data.is_empty() {
+                if let Err(e) = s.store.set_config("discharge_issued_set", &data) {
+                    tracing::warn!(error = %e, "failed to persist discharge replay set on shutdown");
+                } else {
+                    tracing::info!(entries = data.len() / 32, "persisted discharge replay set");
+                }
+            }
+        }
     }
 }
 
@@ -602,6 +661,81 @@ impl NodeStateInner {
         );
         self.known_federation_keys = keys;
         self.federation_configured = true;
+    }
+
+    // =========================================================================
+    // Revocation Accumulator Methods
+    // =========================================================================
+
+    /// Initialize the revocation accumulator from the current revocation set.
+    ///
+    /// Called at startup (after loading revocations from the store) or when
+    /// the federation transitions to accumulator-based non-revocation proofs.
+    ///
+    /// The alpha challenge is derived via Fiat-Shamir from a domain separator
+    /// and the BLAKE3 hash of all current revocation entries.
+    pub fn init_revocation_accumulator(&mut self, revocation_hashes: &[BabyBear]) {
+        // Compute a set commitment from the revocation hashes (deterministic).
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"pyana-revocation-accumulator-set-commitment");
+        for h in revocation_hashes {
+            hasher.update(&h.as_u32().to_le_bytes());
+        }
+        let set_commitment: [u8; 32] = *hasher.finalize().as_bytes();
+
+        // Derive alpha using the accumulator's Fiat-Shamir construction.
+        let domain = &[BabyBear::new(0x5059_414E)]; // "PYAN" domain tag
+        let alpha = PolynomialAccumulator::derive_alpha(domain, &set_commitment);
+
+        // Build the accumulator from the revocation set.
+        let accumulator = PolynomialAccumulator::from_set(revocation_hashes, alpha);
+
+        tracing::info!(
+            set_size = revocation_hashes.len(),
+            "revocation accumulator initialized"
+        );
+
+        self.revocation_accumulator = Some(accumulator);
+    }
+
+    /// Insert a newly-revoked hash into the polynomial accumulator.
+    ///
+    /// Called when a revocation message is received via gossip. The accumulator
+    /// value is updated in O(1) (single extension-field multiplication).
+    pub fn accumulator_insert_revocation(&mut self, revocation_hash: BabyBear) {
+        if let Some(ref mut acc) = self.revocation_accumulator {
+            acc.insert(revocation_hash);
+        }
+    }
+
+    // =========================================================================
+    // Poseidon2 Note Tree Methods
+    // =========================================================================
+
+    /// Append a note commitment (BLAKE3 bytes) to the Poseidon2 note tree.
+    ///
+    /// Converts the 32-byte BLAKE3 commitment to a BabyBear field element
+    /// via Poseidon2 hashing, then appends to the 4-ary Merkle tree.
+    ///
+    /// Returns the position of the newly appended leaf.
+    pub fn note_tree_append_commitment(&mut self, commitment: &[u8; 32]) -> usize {
+        self.note_tree.append_blake3_commitment(commitment)
+    }
+
+    /// Get the current Poseidon2 note tree root.
+    pub fn note_tree_root_value(&mut self) -> BabyBear {
+        self.note_tree.root()
+    }
+
+    /// Generate a Poseidon2 Merkle membership proof for a note at the given position.
+    ///
+    /// The returned proof can be used as a witness in `NoteSpendingWitness` for
+    /// STARK proof generation via `prove_note_spend`.
+    pub fn note_tree_prove_membership(
+        &self,
+        position: usize,
+    ) -> Option<pyana_commit::poseidon2_tree::Poseidon2MerkleProof> {
+        self.note_tree.prove_membership(position)
     }
 }
 

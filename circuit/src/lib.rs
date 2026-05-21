@@ -116,6 +116,9 @@ pub mod plonky3_recursion;
 #[cfg(feature = "plonky3")]
 pub mod plonky3_verifier_air;
 
+#[cfg(feature = "recursion")]
+pub mod plonky3_recursion_impl;
+
 pub mod backends;
 
 #[cfg(test)]

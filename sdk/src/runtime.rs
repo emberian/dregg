@@ -405,6 +405,7 @@ impl AgentRuntime {
                 .unwrap_or_else(|e| e.into_inner())
                 .public_key(),
             domain: self.domain.clone(),
+            federation_id: self.executor.local_federation_id,
             ledger: self.ledger.clone(),
             nonce: Mutex::new(0),
         })
@@ -437,6 +438,9 @@ pub struct SubAgent {
     pub parent: PublicKey,
     /// The domain this sub-agent operates in.
     pub domain: String,
+    /// The federation ID inherited from the parent runtime.
+    /// Used for signing messages with the correct federation context.
+    pub federation_id: [u8; 32],
     /// Shared ledger with the parent.
     ledger: Arc<Mutex<Ledger>>,
     /// Nonce counter for turn submission (incremented on each execute call).
@@ -478,12 +482,9 @@ impl SubAgent {
             balance_change: None,
         };
 
-        // Sign with the sub-agent's wallet.
-        // SubAgents use the executor's default federation_id ([0; 32]) since they
-        // create a fresh executor per call. In production, this should be set to
-        // the actual federation_id by the spawning parent.
-        let message =
-            TurnExecutor::compute_signing_message(&action_unsigned, &executor.local_federation_id);
+        // Sign with the sub-agent's wallet using the parent's federation_id
+        // for correct domain separation.
+        let message = TurnExecutor::compute_signing_message(&action_unsigned, &self.federation_id);
         let sig = self.wallet.sign_bytes(&message);
 
         let action_signed = Action {

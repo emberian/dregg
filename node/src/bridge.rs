@@ -1057,6 +1057,7 @@ pub async fn run_bridge(
     local_state: NodeState,
     remote_peers: Vec<String>,
     relay_config: RelayConfig,
+    remote_federation_keys: HashMap<[u8; 32], Vec<pyana_types::PublicKey>>,
 ) {
     let bridge = FederationBridge::new(local_state.clone(), relay_config);
 
@@ -1087,14 +1088,23 @@ pub async fn run_bridge(
             "connecting bridge to remote federation"
         );
 
-        // TODO: Load trusted keys for this federation from config/store.
-        // For now, connect in untrusted mode and log a warning.
-        let trusted_keys = Vec::new();
+        // Load trusted keys from the provided remote keys map, falling back
+        // to the node's known federation keys.
+        let trusted_keys = if let Some(keys) = remote_federation_keys.get(fed_id) {
+            keys.clone()
+        } else {
+            // Fall back to node's known federation keys.
+            let s = local_state.read().await;
+            s.known_federation_keys.clone()
+        };
+
         if trusted_keys.is_empty() {
-            warn!(
+            error!(
                 federation = %fed_hex,
-                "no trusted keys for remote federation — operating in untrusted mode"
+                "cannot start bridge without trusted remote keys. \
+                 Use --remote-keys or configure known_federation_keys."
             );
+            std::process::exit(1);
         }
 
         if let Err(e) = bridge

@@ -89,6 +89,19 @@ impl BudgetSlice {
             false
         }
     }
+
+    /// Commit a debit permanently after a turn succeeds.
+    ///
+    /// This is a no-op in terms of the budget arithmetic (the debit was already
+    /// applied by `try_debit`), but it records the digest as finalized so it
+    /// cannot be refunded later. Call this after the turn commits successfully
+    /// and before fee distribution.
+    pub fn commit_debit(&mut self, _digest: &DebitDigest) {
+        // The debit is already reflected in `spent`. This method exists to
+        // make the two-phase protocol explicit: try_debit is tentative,
+        // commit_debit is final. In a future version, committed debits could
+        // be moved to a separate set for audit or epoch-boundary compaction.
+    }
 }
 
 /// A budget gate that checks a silo's local slice before turn execution.
@@ -144,6 +157,14 @@ impl BudgetGate {
     /// Refund a debit after turn failure (fast unlock).
     pub fn fast_unlock(&mut self, fee: u64, digest: &DebitDigest) {
         self.slice.refund(fee, digest);
+    }
+
+    /// Commit a debit permanently after a turn succeeds.
+    ///
+    /// Call this after the turn commits but before fee distribution. Makes the
+    /// tentative debit permanent — it can no longer be refunded via `fast_unlock`.
+    pub fn commit_debit(&mut self, digest: &DebitDigest) {
+        self.slice.commit_debit(digest);
     }
 
     /// Compute a debit digest from a turn hash.

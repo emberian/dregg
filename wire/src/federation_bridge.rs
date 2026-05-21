@@ -196,16 +196,29 @@ impl FederationBridge {
 // =============================================================================
 
 impl RevocationHandler for FederationBridge {
-    fn submit_revocation(&self, token_id: &str, sig: &[u8; 64]) -> bool {
+    fn submit_revocation(
+        &self,
+        token_id: &str,
+        sig: &[u8; 64],
+        authority: &crate::message::PublicKey,
+    ) -> bool {
         // Track revocation locally for O(1) is_revoked queries.
         self.revoked_tokens
             .write()
             .unwrap()
             .insert(token_id.to_string());
 
+        // Derive a deterministic authority_id from the public key bytes.
+        // This maps the 32-byte public key to a usize for the federation event.
+        let authority_id = {
+            let hash = blake3::hash(&authority.0);
+            let bytes: [u8; 8] = hash.as_bytes()[..8].try_into().unwrap();
+            usize::from_le_bytes(bytes)
+        };
+
         let event = RevocationEvent {
             token_id: token_id.to_string(),
-            authority_id: 0, // Wire protocol doesn't carry authority_id; default to 0
+            authority_id,
             signature: Signature(*sig),
         };
         // We need to submit without an async context. Use try_lock to avoid
@@ -375,7 +388,8 @@ mod tests {
 
         // Use the RevocationHandler trait interface (synchronous).
         let handler: &dyn RevocationHandler = bridges[0].as_ref();
-        let accepted = handler.submit_revocation("tok-sync", &[0xBB; 64]);
+        let test_authority = crate::message::PublicKey([0xDD; 32]);
+        let accepted = handler.submit_revocation("tok-sync", &[0xBB; 64], &test_authority);
         assert!(accepted);
 
         // The revocation is now pending in the node's queue.

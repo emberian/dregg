@@ -345,7 +345,7 @@ impl Air for CommittedThresholdAir {
 }
 
 /// A complete committed-threshold proof result.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CommittedThresholdProof {
     /// The threshold commitment (public input — visible to third parties).
     pub threshold_commitment: BabyBear,

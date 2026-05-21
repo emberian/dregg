@@ -107,7 +107,6 @@ pub struct IvcProof {
     /// Real STARK proof of the state transition hash chain.
     /// When present, `verify_ivc` will verify this cryptographically instead of
     /// relying on the BLAKE3 digest check alone.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stark_proof: Option<StarkProof>,
 }
 

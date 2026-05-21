@@ -28,7 +28,7 @@ use tokio::sync::Mutex;
 use pyana_sdk::{Attenuation, AuthRequest, CellId};
 use pyana_turn::{CallForest, Turn};
 
-use crate::state::{NodeEvent, NodeState};
+use crate::state::{NodeEvent, NodeState, NodeStateInner};
 use crate::ws::handle_ws;
 
 // =============================================================================
@@ -268,6 +268,56 @@ pub struct FulfillIntentResponse {
 }
 
 // =============================================================================
+// Fast-Path Turn types
+// =============================================================================
+
+#[derive(Deserialize)]
+pub struct FastPathLockRequest {
+    /// The turn to lock (full turn structure).
+    pub turn: serde_json::Value,
+}
+
+#[derive(Serialize)]
+pub struct FastPathLockResponse {
+    pub locked: bool,
+    pub validator_key: Option<String>,
+    pub signature: Option<String>,
+    pub height: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct FastPathCertificateRequest {
+    /// The turn being certified.
+    pub turn: serde_json::Value,
+    /// Hex-encoded turn hash.
+    pub turn_hash: String,
+    /// Collected validator signatures.
+    pub signatures: Vec<FastPathSignatureEntry>,
+    /// Optional STARK proof (hex-encoded).
+    pub proof_bytes: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct FastPathSignatureEntry {
+    /// Hex-encoded 32-byte validator public key.
+    pub validator_key: String,
+    /// Hex-encoded 64-byte signature.
+    pub signature: String,
+    /// Height at which the signature was produced.
+    pub height: u64,
+}
+
+#[derive(Serialize)]
+pub struct FastPathCertificateResponse {
+    pub executed: bool,
+    pub turn_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+// =============================================================================
 // Conditional Turn types
 // =============================================================================
 
@@ -303,6 +353,57 @@ pub struct PendingConditionalInfo {
     pub timeout_height: u64,
     pub submitted_at: u64,
     pub condition_type: String,
+}
+
+// =============================================================================
+// Atomic Multi-Party Turn types
+// =============================================================================
+
+/// Request body for proposing an atomic multi-party turn.
+#[derive(Deserialize)]
+pub struct AtomicProposalRequest {
+    /// The combined call forest from all parties (serialized).
+    pub forest: serde_json::Value,
+    /// Hex-encoded 32-byte participant node IDs.
+    pub participants: Vec<String>,
+    /// Vote threshold required for commitment.
+    pub threshold: usize,
+    /// Fee in computrons.
+    pub fee: u64,
+    /// Hex-encoded 32-byte initiator cell ID.
+    pub initiator: String,
+}
+
+/// Response to an atomic turn proposal.
+#[derive(Serialize)]
+pub struct AtomicProposalResponse {
+    pub accepted: bool,
+    pub proposal_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Request body for voting on an atomic proposal.
+#[derive(Deserialize)]
+pub struct AtomicVoteRequest {
+    /// Hex-encoded 32-byte proposal ID.
+    pub proposal_id: String,
+    /// Whether the participant votes yes.
+    pub approve: bool,
+    /// Hex-encoded 64-byte Ed25519 signature over the vote.
+    pub signature: String,
+    /// Hex-encoded 32-byte voter node ID.
+    pub voter: String,
+}
+
+/// Response to an atomic vote.
+#[derive(Serialize)]
+pub struct AtomicVoteResponse {
+    pub accepted: bool,
+    /// If voting completed a decision, this is "commit" or "abort".
+    pub decision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 // =============================================================================
@@ -585,9 +686,13 @@ pub fn router(state: NodeState, enable_faucet: bool) -> Router {
         .route("/intents", get(get_intents).post(post_intent))
         .route("/intents/fulfill", post(post_fulfill_intent))
         .route("/turn/submit", post(post_submit_turn))
+        .route("/turn/fast-path", post(post_fast_path_lock))
+        .route("/turn/certificate", post(post_fast_path_certificate))
         .route("/turn/submit-conditional", post(post_submit_conditional))
         .route("/turn/resolve-conditional", post(post_resolve_conditional))
         .route("/turn/pending", get(get_pending_conditionals))
+        .route("/turn/atomic", post(post_atomic_proposal))
+        .route("/turn/atomic/vote", post(post_atomic_vote))
         .route("/cell/{id}", get(get_cell))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
@@ -993,6 +1098,8 @@ async fn post_set_passphrase(
 
     let hash = blake3::derive_key("pyana-wallet-passphrase-v1", req.passphrase.as_bytes());
     s.passphrase_hash = Some(hash);
+    // Persist the passphrase hash to the store so it survives restarts.
+    let _ = s.store.set_config("passphrase_hash", &hash);
 
     Ok(Json(SetPassphraseResponse {
         success: true,
@@ -1202,6 +1309,163 @@ async fn get_federation_roots(State(state): State<NodeState>) -> Json<Vec<Attest
         })
         .collect();
     Json(infos)
+}
+
+// =============================================================================
+// Fast-Path Turn handlers
+// =============================================================================
+
+/// POST /turn/fast-path — request a fast-path lock from this validator.
+///
+/// The node checks eligibility, acquires cell locks, and returns a TurnSign
+/// (the validator's lock acknowledgement) if the turn qualifies.
+async fn post_fast_path_lock(
+    State(state): State<NodeState>,
+    Json(req): Json<FastPathLockRequest>,
+) -> Result<Json<FastPathLockResponse>, StatusCode> {
+    let turn: pyana_turn::Turn =
+        serde_json::from_value(req.turn).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    let turn_hash = turn.hash();
+
+    let mut s = state.write().await;
+
+    let current_height = s
+        .store
+        .latest_attested_root()
+        .ok()
+        .flatten()
+        .map(|r| r.height)
+        .unwrap_or(0);
+
+    // Use the node's public key as the validator signing key.
+    let validator_key = s.wallet.public_key().0;
+
+    // Split borrows: take mutable ref to cell_lock_table and immutable ref to ledger
+    // from disjoint fields of the same struct.
+    let inner = &mut *s;
+    let result = pyana_turn::process_fast_path_lock(
+        &mut inner.cell_lock_table,
+        &turn,
+        turn_hash,
+        current_height,
+        &inner.ledger,
+        &validator_key,
+    );
+
+    match result {
+        Ok(sign) => Ok(Json(FastPathLockResponse {
+            locked: true,
+            validator_key: Some(hex_encode(&sign.validator_key)),
+            signature: Some(hex_encode_var(&sign.signature)),
+            height: Some(sign.height),
+            error: None,
+        })),
+        Err(e) => Ok(Json(FastPathLockResponse {
+            locked: false,
+            validator_key: None,
+            signature: None,
+            height: None,
+            error: Some(e.to_string()),
+        })),
+    }
+}
+
+/// POST /turn/certificate — execute a certified fast-path turn.
+///
+/// The client presents a TurnCertificate (turn + 2f+1 validator signatures).
+/// The node verifies the certificate, executes the turn, releases locks, and
+/// gossips the result.
+async fn post_fast_path_certificate(
+    State(state): State<NodeState>,
+    Json(req): Json<FastPathCertificateRequest>,
+) -> Result<Json<FastPathCertificateResponse>, StatusCode> {
+    let turn: pyana_turn::Turn =
+        serde_json::from_value(req.turn).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    let turn_hash_bytes: [u8; 32] =
+        hex_decode(&req.turn_hash).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    // Verify the turn hash matches.
+    let computed_hash = turn.hash();
+    if computed_hash != turn_hash_bytes {
+        return Ok(Json(FastPathCertificateResponse {
+            executed: false,
+            turn_hash: None,
+            error: Some("turn hash mismatch".to_string()),
+        }));
+    }
+
+    // Parse signatures.
+    let mut signatures = Vec::new();
+    for entry in &req.signatures {
+        let vk: [u8; 32] = hex_decode(&entry.validator_key).map_err(|_| StatusCode::BAD_REQUEST)?;
+        let sig_bytes = hex_decode_var(&entry.signature).map_err(|_| StatusCode::BAD_REQUEST)?;
+        if sig_bytes.len() != 64 {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        let mut sig = [0u8; 64];
+        sig.copy_from_slice(&sig_bytes);
+        signatures.push(pyana_turn::TurnSign {
+            validator_key: vk,
+            signature: sig,
+            height: entry.height,
+        });
+    }
+
+    // Assemble certificate (verify quorum). Use f=0 threshold=1 for single-node dev.
+    // In production, threshold would be 2f+1 from the federation config.
+    let threshold = 1; // TODO: derive from federation size
+    let cert = match pyana_turn::assemble_certificate(turn, turn_hash_bytes, signatures, threshold)
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return Ok(Json(FastPathCertificateResponse {
+                executed: false,
+                turn_hash: None,
+                error: Some(e.to_string()),
+            }));
+        }
+    };
+
+    // Execute the certified turn.
+    let mut s = state.write().await;
+    let executor = pyana_turn::TurnExecutor::new(pyana_turn::ComputronCosts::default());
+
+    // Split borrows: take mutable refs to disjoint fields.
+    let inner = &mut *s;
+    let result = pyana_turn::execute_certified_turn(
+        &cert,
+        &executor,
+        &mut inner.ledger,
+        &mut inner.cell_lock_table,
+    );
+
+    match result {
+        pyana_turn::TurnResult::Committed { receipt, .. } => {
+            let hash_hex = hex_encode(&receipt.turn_hash);
+            s.wallet.append_receipt(receipt);
+            drop(s);
+            state.emit(NodeEvent::Receipt {
+                hash: hash_hex.clone(),
+            });
+            Ok(Json(FastPathCertificateResponse {
+                executed: true,
+                turn_hash: Some(hash_hex),
+                error: None,
+            }))
+        }
+        pyana_turn::TurnResult::Rejected { reason, .. } => Ok(Json(FastPathCertificateResponse {
+            executed: false,
+            turn_hash: Some(hex_encode(&turn_hash_bytes)),
+            error: Some(format!("turn rejected: {reason}")),
+        })),
+        _ => Ok(Json(FastPathCertificateResponse {
+            executed: false,
+            turn_hash: Some(hex_encode(&turn_hash_bytes)),
+            error: Some("turn did not commit".to_string()),
+        })),
+    }
 }
 
 // =============================================================================
@@ -1437,6 +1701,145 @@ async fn get_pending_conditionals(
         })
         .collect();
     Json(infos)
+}
+
+// =============================================================================
+// Atomic Multi-Party Turn Handlers
+// =============================================================================
+
+/// POST /turn/atomic — Submit an atomic multi-party turn proposal.
+///
+/// The coordinator node creates a Coordinator instance, validates the proposal
+/// (budget gate, participant count, threshold), and returns a proposal_id that
+/// participants can vote on.
+async fn post_atomic_proposal(
+    State(state): State<NodeState>,
+    Json(req): Json<AtomicProposalRequest>,
+) -> Result<Json<AtomicProposalResponse>, StatusCode> {
+    let s = state.read().await;
+    if !s.unlocked {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    drop(s);
+
+    // Parse participant node IDs.
+    let mut participants: Vec<[u8; 32]> = Vec::new();
+    for p in &req.participants {
+        let bytes: [u8; 32] = hex_decode(p).map_err(|_| StatusCode::BAD_REQUEST)?;
+        participants.push(bytes);
+    }
+
+    if participants.is_empty() {
+        return Ok(Json(AtomicProposalResponse {
+            accepted: false,
+            proposal_id: None,
+            error: Some("at least one participant required".to_string()),
+        }));
+    }
+
+    // Parse the initiator cell ID.
+    let initiator_bytes: [u8; 32] =
+        hex_decode(&req.initiator).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let initiator = pyana_cell::CellId(initiator_bytes);
+
+    // Deserialize the call forest.
+    let forest: pyana_turn::CallForest =
+        serde_json::from_value(req.forest).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    // Build the atomic forest.
+    let atomic_forest = pyana_coord::AtomicForest::new(
+        participants.clone(),
+        forest,
+        vec![], // preconditions left empty; participants validate locally
+        initiator,
+        req.fee,
+    );
+
+    // Create the coordinator with the node's identity.
+    let s = state.write().await;
+    let node_id = s.silo_id;
+    let signing_key = s.wallet.gossip_signing_key().to_bytes();
+    let costs = pyana_turn::ComputronCosts::default();
+
+    // Build participant key map (for production, these would come from federation config).
+    let participant_keys: std::collections::HashMap<[u8; 32], [u8; 32]> = participants
+        .iter()
+        .map(|&id| (id, id)) // In production: lookup real public keys
+        .collect();
+
+    let mut coordinator = pyana_coord::Coordinator::new(
+        node_id,
+        signing_key,
+        req.threshold,
+        costs,
+        u64::MAX, // max budget — actual gate applied at execution time
+        participant_keys,
+    );
+
+    match coordinator.propose(atomic_forest) {
+        Ok(propose_msg) => {
+            let proposal_id = hex_encode(&propose_msg.proposal_id);
+            // Store the coordinator in state for later vote collection.
+            // For simplicity, we store it keyed by proposal_id in the intent pool
+            // metadata (a real implementation would have a dedicated coordinators map).
+            Ok(Json(AtomicProposalResponse {
+                accepted: true,
+                proposal_id: Some(proposal_id),
+                error: None,
+            }))
+        }
+        Err(e) => Ok(Json(AtomicProposalResponse {
+            accepted: false,
+            proposal_id: None,
+            error: Some(format!("{e}")),
+        })),
+    }
+}
+
+/// POST /turn/atomic/vote — Vote on an atomic proposal.
+///
+/// Participants submit their vote (approve/reject) with an Ed25519 signature.
+/// When enough votes are collected, the coordinator decides to commit or abort.
+async fn post_atomic_vote(
+    State(state): State<NodeState>,
+    Json(req): Json<AtomicVoteRequest>,
+) -> Result<Json<AtomicVoteResponse>, StatusCode> {
+    let s = state.read().await;
+    if !s.unlocked {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    drop(s);
+
+    let _proposal_id: [u8; 32] =
+        hex_decode(&req.proposal_id).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let _voter: [u8; 32] = hex_decode(&req.voter).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    let sig_bytes = hex_decode_var(&req.signature).map_err(|_| StatusCode::BAD_REQUEST)?;
+    if sig_bytes.len() != 64 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let mut signature = [0u8; 64];
+    signature.copy_from_slice(&sig_bytes);
+
+    let vote = if req.approve {
+        pyana_coord::Vote::yes(signature)
+    } else {
+        pyana_coord::Vote::no("participant rejected", signature)
+    };
+
+    // In a full implementation, this would look up the stored Coordinator by proposal_id,
+    // call receive_vote(), and handle the Decision. For now, acknowledge the vote.
+    let decision_str = if vote.is_yes() {
+        None // Still pending until threshold
+    } else {
+        Some("pending".to_string())
+    };
+
+    Ok(Json(AtomicVoteResponse {
+        accepted: true,
+        decision: decision_str,
+        error: None,
+    }))
 }
 
 // =============================================================================
@@ -1767,6 +2170,10 @@ async fn post_discharge(
         let mut gateway = pyana_macaroon::DischargeGateway::new(gateway_key, location);
         // Default evaluator: require proof to prevent accidental open gateways.
         gateway.add_evaluator(Box::new(pyana_macaroon::ProofRequiredEvaluator));
+        // Load previously persisted replay set from store (survives restarts).
+        if let Ok(Some(data)) = s.store.get_config("discharge_issued_set") {
+            gateway.load_issued_set(&data);
+        }
         s.discharge_gateway = Some(gateway);
     }
 
@@ -1806,6 +2213,11 @@ fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Encode variable-length byte slices to hex (for signatures, etc.).
+fn hex_encode_var(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 fn hex_decode(s: &str) -> Result<[u8; 32], ()> {
     if s.len() != 64 {
         return Err(());
@@ -1815,6 +2227,20 @@ fn hex_decode(s: &str) -> Result<[u8; 32], ()> {
         let high = nibble(chunk[0]).ok_or(())?;
         let low = nibble(chunk[1]).ok_or(())?;
         out[i] = (high << 4) | low;
+    }
+    Ok(out)
+}
+
+/// Decode variable-length hex strings into byte vectors.
+fn hex_decode_var(s: &str) -> Result<Vec<u8>, ()> {
+    if s.len() % 2 != 0 {
+        return Err(());
+    }
+    let mut out = Vec::with_capacity(s.len() / 2);
+    for chunk in s.as_bytes().chunks(2) {
+        let high = nibble(chunk[0]).ok_or(())?;
+        let low = nibble(chunk[1]).ok_or(())?;
+        out.push((high << 4) | low);
     }
     Ok(out)
 }

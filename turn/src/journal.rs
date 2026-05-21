@@ -6,7 +6,8 @@
 //! to restore the ledger to its exact pre-turn state.
 
 use pyana_cell::{
-    CapabilityRef, CellId, DelegatedRef, Ledger, Permissions, VerificationKey, state::FieldElement,
+    CapabilityRef, CellId, DelegatedRef, Ledger, NoteCommitment, Nullifier, Permissions,
+    VerificationKey, state::FieldElement,
 };
 
 /// A single undo entry in the journal.
@@ -53,6 +54,23 @@ pub(crate) enum JournalEntry {
     },
     /// A cell's delegation_epoch was changed. Records the old epoch.
     SetDelegationEpoch { cell: CellId, old_epoch: u64 },
+    /// A note was spent (nullifier revealed). Recorded so the note layer can
+    /// update the nullifier set after the turn commits.
+    NoteSpend { nullifier: Nullifier },
+    /// A note was created (commitment added). Recorded so the note layer can
+    /// insert into the note tree after the turn commits.
+    NoteCreate { commitment: NoteCommitment },
+    /// An obligation was created. Recorded for the obligation registry.
+    ObligationCreated {
+        obligor: CellId,
+        beneficiary: CellId,
+        deadline_height: u64,
+        stake: NoteCommitment,
+    },
+    /// An obligation was fulfilled. Recorded for the obligation registry.
+    ObligationFulfilled { obligation_id: [u8; 32] },
+    /// An obligation was slashed. Recorded for the obligation registry.
+    ObligationSlashed { obligation_id: [u8; 32] },
 }
 
 /// The undo journal for a turn's execution.
@@ -154,6 +172,44 @@ impl LedgerJournal {
             .push(JournalEntry::SetDelegationEpoch { cell, old_epoch });
     }
 
+    /// Record a note spend (nullifier revealed).
+    pub fn record_note_spend(&mut self, nullifier: Nullifier) {
+        self.entries.push(JournalEntry::NoteSpend { nullifier });
+    }
+
+    /// Record a note creation (commitment added to tree).
+    pub fn record_note_create(&mut self, commitment: NoteCommitment) {
+        self.entries.push(JournalEntry::NoteCreate { commitment });
+    }
+
+    /// Record an obligation creation.
+    pub fn record_obligation_created(
+        &mut self,
+        obligor: CellId,
+        beneficiary: CellId,
+        deadline_height: u64,
+        stake: NoteCommitment,
+    ) {
+        self.entries.push(JournalEntry::ObligationCreated {
+            obligor,
+            beneficiary,
+            deadline_height,
+            stake,
+        });
+    }
+
+    /// Record an obligation fulfillment.
+    pub fn record_obligation_fulfilled(&mut self, obligation_id: [u8; 32]) {
+        self.entries
+            .push(JournalEntry::ObligationFulfilled { obligation_id });
+    }
+
+    /// Record an obligation slash.
+    pub fn record_obligation_slashed(&mut self, obligation_id: [u8; 32]) {
+        self.entries
+            .push(JournalEntry::ObligationSlashed { obligation_id });
+    }
+
     /// Roll back all recorded changes in reverse order.
     ///
     /// After this call, the ledger is restored to the state it was in before
@@ -227,6 +283,14 @@ impl LedgerJournal {
                         c.state.delegation_epoch = old_epoch;
                     }
                 }
+                // Note/obligation entries don't modify ledger state directly.
+                // On rollback these are simply discarded — the note layer and
+                // obligation registry only process them after a successful commit.
+                JournalEntry::NoteSpend { .. }
+                | JournalEntry::NoteCreate { .. }
+                | JournalEntry::ObligationCreated { .. }
+                | JournalEntry::ObligationFulfilled { .. }
+                | JournalEntry::ObligationSlashed { .. } => {}
             }
         }
     }

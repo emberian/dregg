@@ -821,7 +821,12 @@ impl AgentWallet {
             };
             // Best-effort: if the fold fails (e.g., root mismatch on first step),
             // we still append the receipt but skip IVC extension.
-            let _ = builder.add_fold(FoldDelta::new(fold));
+            if let Err(e) = builder.add_fold(FoldDelta::new(fold)) {
+                tracing::warn!(
+                    "IVC fold failed (chain may be incomplete): {e}; \
+                     receipt will be appended but IVC state is stale"
+                );
+            }
         }
 
         self.receipt_chain.push(receipt);
@@ -1132,7 +1137,7 @@ impl AgentWallet {
                     let term_bbs = Self::trace_fact_terms_bb(fact);
                     let fact_hash = poseidon2::hash_fact(pred_bb, &term_bbs);
 
-                    let _committed_proof = pyana_bridge::prove_committed_threshold(
+                    let committed_proof = pyana_bridge::prove_committed_threshold(
                         value,
                         threshold.as_u32(),
                         blinding.as_u32(),
@@ -1147,24 +1152,17 @@ impl AgentWallet {
                         )))
                     })?;
 
-                    // The committed-threshold proof is stored separately from
-                    // standard predicate proofs. For now, we convert it to a
-                    // standard predicate proof for the presentation pipeline
-                    // (the threshold commitment is the public-facing value).
-                    let bridge_predicate = Predicate::Gte(threshold.as_u32());
-                    let standard_proof = pyana_bridge::prove_predicate_for_fact(
-                        value,
-                        fact_hash,
-                        state_root,
-                        &bridge_predicate,
-                    )
-                    .ok_or_else(|| {
-                        SdkError::Auth(pyana_bridge::AuthError::InvalidRequest(format!(
-                            "committed-threshold standard proof failed for fact[{}]",
-                            fact_index
-                        )))
-                    })?;
-                    predicate_proofs.push((*fact_index, standard_proof));
+                    // Store the committed-threshold proof directly. The verifier
+                    // sees only the threshold_commitment and fact_commitment (both
+                    // are Poseidon2 hashes that hide the actual values).
+                    let bridge_proof = BridgePredicateProof {
+                        predicate: Predicate::Gte(0), // Threshold hidden; predicate label is nominal
+                        proof: pyana_bridge::BridgePredicateProofInner::CommittedThreshold(
+                            committed_proof.proof,
+                        ),
+                        fact_commitment: committed_proof.fact_commitment,
+                    };
+                    predicate_proofs.push((*fact_index, bridge_proof));
                 }
                 FactDisclosure::ArithmeticPredicate { .. } => {
                     // Arithmetic predicates over multiple facts are not yet supported
@@ -1634,16 +1632,67 @@ impl AgentWallet {
         &self,
         token: &HeldToken,
         inputs: &[(String, u64)],
-        _expression: pyana_circuit::ArithExpr,
-        _predicate: pyana_circuit::ArithPredicate,
+        expression: pyana_circuit::ArithExpr,
+        predicate: pyana_circuit::ArithPredicate,
     ) -> Result<pyana_circuit::ArithmeticPredicateProof, SdkError> {
         // Decode the token to verify it's valid.
         let _decoded = token.decode()?;
-        let _ = inputs;
 
-        Err(SdkError::MissingKey(
-            "arithmetic predicate bridge not yet implemented".into(),
-        ))
+        // Derive the state root from the token's root key (consistent with other proofs).
+        let issuer_key = token.root_key();
+        let state_root = Self::bytes_to_babybear(issuer_key);
+
+        // Convert inputs to BabyBear values and compute per-attribute fact hashes.
+        let input_values: Vec<BabyBear> = inputs
+            .iter()
+            .map(|(_, v)| BabyBear::new(*v as u32))
+            .collect();
+
+        let fact_commitments: Vec<BabyBear> = inputs
+            .iter()
+            .map(|(attr, value)| {
+                let attr_bytes = blake3::hash(attr.as_bytes());
+                let attr_bb = Self::bytes_to_babybear(attr_bytes.as_bytes());
+                let value_bb = BabyBear::new(*value as u32);
+                let fact_hash =
+                    poseidon2::hash_fact(attr_bb, &[value_bb, BabyBear::ZERO, BabyBear::ZERO]);
+                pyana_circuit::compute_arithmetic_fact_commitment(fact_hash, state_root)
+            })
+            .collect();
+
+        // Aggregate fact commitments into a single binding commitment.
+        let aggregate_commitment = poseidon2::hash_many(&fact_commitments);
+
+        // Construct the predicate with the expression embedded.
+        let full_predicate = match predicate {
+            pyana_circuit::ArithPredicate::ExprGte(_, threshold) => {
+                pyana_circuit::ArithPredicate::ExprGte(expression, threshold)
+            }
+            pyana_circuit::ArithPredicate::ExprLte(_, threshold) => {
+                pyana_circuit::ArithPredicate::ExprLte(expression, threshold)
+            }
+            pyana_circuit::ArithPredicate::ExprEq(_, value) => {
+                pyana_circuit::ArithPredicate::ExprEq(expression, value)
+            }
+            pyana_circuit::ArithPredicate::ExprInRange(_, low, high) => {
+                pyana_circuit::ArithPredicate::ExprInRange(expression, low, high)
+            }
+            pyana_circuit::ArithPredicate::ExprCompare(_, expr_b, op) => {
+                pyana_circuit::ArithPredicate::ExprCompare(expression, expr_b, op)
+            }
+        };
+
+        let witness = pyana_circuit::ArithmeticPredicateWitness {
+            inputs: input_values,
+            predicate: full_predicate,
+            fact_commitment: aggregate_commitment,
+        };
+
+        pyana_circuit::prove_arithmetic_predicate(witness).ok_or_else(|| {
+            SdkError::Auth(pyana_bridge::AuthError::InvalidRequest(
+                "arithmetic predicate is not satisfiable for the given inputs".into(),
+            ))
+        })
     }
 
     // =========================================================================
@@ -1972,6 +2021,17 @@ impl AgentWallet {
                     // For in_range, the lower bound proof demonstrates value >= threshold.
                     low_proof
                 }
+                pyana_bridge::BridgePredicateProofInner::CommittedThreshold(p) => {
+                    // CommittedThreshold uses a committed comparison proof.
+                    // Convert to PredicateProof with Gte semantics (committed threshold
+                    // proves value >= threshold).
+                    pyana_circuit::PredicateProof {
+                        predicate_type: pyana_circuit::PredicateType::Gte,
+                        threshold: p.threshold_commitment,
+                        fact_commitment: p.fact_commitment,
+                        stark_proof: p.stark_proof,
+                    }
+                }
             };
 
             proofs.push((idx, circuit_proof));
@@ -2012,6 +2072,7 @@ impl AgentWallet {
         base_fulfillment: &pyana_intent::fulfillment::Fulfillment,
         my_values: &std::collections::HashMap<String, u64>,
         runtime: &crate::runtime::AgentRuntime,
+        current_height: u64,
     ) -> Result<pyana_turn::TurnReceipt, SdkError> {
         // Step 1: Generate predicate proofs for the intent's requirements.
         // Derive the state root from this wallet's receipt chain head. The receipt
@@ -2027,9 +2088,6 @@ impl AgentWallet {
                 )
             })?;
         let predicate_proofs = self.prove_for_intent_predicates(intent, my_values, state_root)?;
-
-        // Step 2: Determine the block height from the runtime's executor.
-        let current_height = 1000u64; // The caller should set this from federation state.
 
         // Step 3: Construct the FulfillmentWithPredicates.
         let fulfillment_with_preds = pyana_intent::fulfillment::FulfillmentWithPredicates {

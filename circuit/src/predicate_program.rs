@@ -71,6 +71,10 @@ use crate::relational_predicate_air::{
     RelationType, RelationalPredicateProof, RelationalPredicateWitness, compute_value_commitment,
     prove_relational as prove_relational_air, verify_relational as verify_relational_air,
 };
+#[cfg(feature = "plonky3")]
+use crate::temporal_predicate_air::p3_temporal::{
+    P3TemporalPredicateProof, prove_temporal_predicate_p3, verify_temporal_predicate_p3,
+};
 use crate::temporal_predicate_air::{
     TemporalPredicateProof, prove_temporal_predicate, verify_temporal_predicate,
 };
@@ -615,8 +619,12 @@ pub enum SubProof {
     Range(PredicateProof),
     /// A compound range proof (multiple range checks in one AIR).
     Compound(CompoundPredicateProof),
-    /// A temporal predicate proof.
+    /// A temporal predicate proof (legacy custom STARK, missing transition constraints).
     Temporal(TemporalPredicateProof),
+    /// A Plonky3-based temporal predicate proof with correct transition constraints.
+    /// Only available with the `plonky3` feature enabled.
+    #[cfg(feature = "plonky3")]
+    TemporalP3(P3TemporalPredicateProof),
     /// An arithmetic predicate proof (expression over multiple inputs).
     Arithmetic(crate::arithmetic_predicate_air::ArithmeticPredicateProof),
     /// A relational predicate proof (two-party value comparison).
@@ -788,17 +796,39 @@ fn prove_single(
                 values.iter().map(|v| BabyBear::new(*v as u32)).collect();
             let threshold_bb = BabyBear::new(*threshold as u32);
 
-            let proof = prove_temporal_predicate(&values_bb, roots, *predicate_type, threshold_bb)
-                .ok_or_else(|| {
-                    ProveError::NotSatisfiable(format!(
-                        "{attribute}: temporal predicate not satisfied across all steps"
-                    ))
-                })?;
+            // Use Plonky3-based prover when available (correct transition constraints).
+            #[cfg(feature = "plonky3")]
+            {
+                let proof =
+                    prove_temporal_predicate_p3(&values_bb, roots, *predicate_type, threshold_bb)
+                        .ok_or_else(|| {
+                        ProveError::NotSatisfiable(format!(
+                            "{attribute}: temporal predicate not satisfied across all steps"
+                        ))
+                    })?;
 
-            Ok(ProgramProof {
-                sub_proofs: vec![SubProof::Temporal(proof)],
-                structure: ProofStructure::Single,
-            })
+                return Ok(ProgramProof {
+                    sub_proofs: vec![SubProof::TemporalP3(proof)],
+                    structure: ProofStructure::Single,
+                });
+            }
+
+            // Fallback: legacy custom STARK prover (omits transition constraints).
+            #[cfg(not(feature = "plonky3"))]
+            {
+                let proof =
+                    prove_temporal_predicate(&values_bb, roots, *predicate_type, threshold_bb)
+                        .ok_or_else(|| {
+                            ProveError::NotSatisfiable(format!(
+                                "{attribute}: temporal predicate not satisfied across all steps"
+                            ))
+                        })?;
+
+                Ok(ProgramProof {
+                    sub_proofs: vec![SubProof::Temporal(proof)],
+                    structure: ProofStructure::Single,
+                })
+            }
         }
 
         // Membership is recognized but proof generation is deferred to Phase 2.
@@ -1232,6 +1262,30 @@ fn verify_single_proof(
             proof.num_steps as u64 >= *min_blocks
                 && proof.threshold == BabyBear::new(*threshold as u32)
                 && verify_temporal_predicate(
+                    proof,
+                    BabyBear::new(*threshold as u32),
+                    proof.num_steps,
+                    proof.initial_state_root,
+                    proof.final_state_root,
+                )
+        }
+
+        // Plonky3-based temporal proof with correct transition constraints.
+        #[cfg(feature = "plonky3")]
+        (
+            SubProof::TemporalP3(proof),
+            WitnessSpec::Temporal {
+                threshold,
+                min_blocks,
+                ..
+            },
+        ) => {
+            // Verify the Plonky3 temporal STARK proof. This proof correctly
+            // enforces transition constraints (accumulator increment) making it
+            // impossible for a malicious prover to skip or duplicate steps.
+            proof.num_steps as u64 >= *min_blocks
+                && proof.threshold == BabyBear::new(*threshold as u32)
+                && verify_temporal_predicate_p3(
                     proof,
                     BabyBear::new(*threshold as u32),
                     proof.num_steps,
@@ -1926,6 +1980,9 @@ mod tests {
         let proof = prove_program(&compiled, &private_state, state_root).unwrap();
         assert!(matches!(proof.structure, ProofStructure::Single));
         assert_eq!(proof.sub_proofs.len(), 1);
+        #[cfg(feature = "plonky3")]
+        assert!(matches!(&proof.sub_proofs[0], SubProof::TemporalP3(_)));
+        #[cfg(not(feature = "plonky3"))]
         assert!(matches!(&proof.sub_proofs[0], SubProof::Temporal(_)));
     }
 

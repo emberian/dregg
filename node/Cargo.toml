@@ -18,6 +18,7 @@ pyana-federation = { path = "../federation" }
 pyana-sdk = { path = "../sdk" }
 pyana-intent = { path = "../intent" }
 pyana-circuit = { path = "../circuit" }
+pyana-commit = { path = "../commit" }
 pyana-coord = { path = "../coord" }
 pyana-net = { path = "../net" }
 pyana-morpheus = { path = "../morpheus" }

@@ -467,12 +467,13 @@ impl Ledger {
             cell.permissions = new_perms.clone();
         }
 
-        // Capability grants.
+        // Capability grants (preserving all fields including expires_at).
         for cap_ref in &delta.capability_grants {
-            cell.capabilities.grant_with_breadstuff(
+            cell.capabilities.grant_full(
                 cap_ref.target,
                 cap_ref.permissions.clone(),
                 cap_ref.breadstuff,
+                cap_ref.expires_at,
             );
         }
 

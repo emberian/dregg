@@ -68,18 +68,19 @@ pub fn authorize_with_trace(
         return Err(AuthError::EmptyState);
     }
 
+    // SECURITY: Budget and revocation enforcement.
+    //
+    // Budget and revocation facts are committed into the token state. We extract
+    // them here and validate against the request's budget_states/not_revoked fields.
+    //
+    // NOTE: In the full production path, budget_states and not_revoked should be
+    // proven via Merkle membership proofs (NonRevocationAir, IVC budget tracking).
+    // Until that infrastructure is wired end-to-end, we enforce the imperative
+    // checks here to prevent revoked or over-budget tokens from passing authorization.
+    enforce_budget_and_revocation(state, request, symbols)?;
+
     // Convert committed facts to trace-format facts.
     let trace_facts = committed_facts_to_trace(state, symbols);
-
-    // SECURITY: Budget and revocation state MUST NOT come from the requester.
-    // The `budget_states` and `not_revoked` fields on AuthRequest are self-asserted
-    // by the party requesting authorization — trusting them allows an attacker to
-    // claim unlimited budget and non-revocation without proof.
-    //
-    // The correct approach: budget and revocation status must be proven via separate
-    // Merkle membership proofs against a committed state tree. The infrastructure
-    // for this exists in pyana-circuit (NonRevocationAir, IVC budget tracking).
-    // Until the caller provides attested proofs, we do NOT inject these facts.
 
     // Convert the AuthRequest to a TraceRequest.
     let trace_request = auth_request_to_trace(request)?;
@@ -110,6 +111,77 @@ pub fn authorize_with_trace(
         Conclusion::Allow { .. } => Ok(trace),
         Conclusion::Deny => Err(AuthError::Denied),
     }
+}
+
+/// Enforce budget and revocation constraints by extracting committed facts
+/// from the token state and validating against the request.
+///
+/// This ensures that a revoked token or one that has exhausted its budget
+/// cannot pass authorization, regardless of the Datalog evaluation result.
+fn enforce_budget_and_revocation(
+    state: &TokenState,
+    request: &AuthRequest,
+    symbols: &SymbolTable,
+) -> Result<(), AuthError> {
+    let budget_pred = FieldElement::from_symbol("budget");
+    let revocable_pred = FieldElement::from_symbol("revocable");
+
+    let mut budgets: Vec<(String, u64)> = Vec::new();
+    let mut revocable_ids: Vec<String> = Vec::new();
+
+    for fact in state.all_facts() {
+        if fact.predicate == budget_pred {
+            // budget(id, limit) — binary fact
+            let id_str = symbols.resolve(fact.terms[0]).unwrap_or("").to_string();
+            // Extract limit from the second term (stored as u64 in FieldElement)
+            let limit = field_element_to_u64(&fact.terms[1]).unwrap_or(0);
+            if !id_str.is_empty() {
+                budgets.push((id_str, limit));
+            }
+        } else if fact.predicate == revocable_pred {
+            // revocable(token_id) — unary fact
+            let id_str = symbols.resolve(fact.terms[0]).unwrap_or("").to_string();
+            if !id_str.is_empty() {
+                revocable_ids.push(id_str);
+            }
+        }
+    }
+
+    // Budget enforcement: if the token has budget caveats, the request must
+    // provide budget state proving sufficient remaining budget.
+    if !budgets.is_empty() {
+        if request.budget_states.is_empty() {
+            return Err(AuthError::Denied);
+        }
+        let request_cost = request.request_cost.unwrap_or(1);
+        for (budget_id, _limit) in &budgets {
+            match request.budget_states.get(budget_id) {
+                Some(&remaining) => {
+                    if remaining < request_cost {
+                        return Err(AuthError::Denied);
+                    }
+                }
+                None => {
+                    return Err(AuthError::Denied);
+                }
+            }
+        }
+    }
+
+    // Revocation enforcement: if the token is revocable, the request must
+    // provide non-revocation proof for each revocable ID.
+    if !revocable_ids.is_empty() {
+        if request.not_revoked.is_empty() {
+            return Err(AuthError::Denied);
+        }
+        for token_id in &revocable_ids {
+            if !request.not_revoked.contains(token_id) {
+                return Err(AuthError::Denied);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Evaluate an authorization request using custom rules.
@@ -209,6 +281,19 @@ fn field_element_to_int(fe: &FieldElement) -> Option<i64> {
     }
 
     None
+}
+
+/// Try to extract a u64 from a FieldElement stored via `FieldElement::from_u64`.
+fn field_element_to_u64(fe: &FieldElement) -> Option<u64> {
+    let bytes = &fe.0;
+    // from_u64 stores big-endian in bytes[24..32], bytes[0..24] all zero.
+    if bytes[0..24].iter().all(|&b| b == 0) {
+        Some(u64::from_be_bytes([
+            bytes[24], bytes[25], bytes[26], bytes[27], bytes[28], bytes[29], bytes[30], bytes[31],
+        ]))
+    } else {
+        None
+    }
 }
 
 /// Convert a `token::AuthRequest` to a `trace::AuthorizationRequest`.

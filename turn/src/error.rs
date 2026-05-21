@@ -146,6 +146,9 @@ pub enum TurnError {
 
     /// The capability slot counter overflowed (2^32 grants exhausted).
     CapabilitySlotOverflow { cell: CellId },
+
+    /// An effect was structurally invalid (malformed data, null identifiers, etc.).
+    InvalidEffect { reason: String },
 }
 
 impl core::fmt::Display for TurnError {
@@ -323,6 +326,9 @@ impl core::fmt::Display for TurnError {
                     f,
                     "capability slot counter overflow on cell {cell} (2^32 grants exhausted)"
                 )
+            }
+            TurnError::InvalidEffect { reason } => {
+                write!(f, "invalid effect: {reason}")
             }
         }
     }

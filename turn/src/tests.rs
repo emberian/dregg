@@ -3998,7 +3998,7 @@ fn test_note_spend_and_create_conservation() {
         let action = builder.action(agent_id, "note_transfer");
         action.effect(Effect::NoteSpend {
             nullifier,
-            note_tree_root: [0u8; 32],
+            note_tree_root: [0xFFu8; 32],
             value: 100,
             asset_type: 1,
         });
@@ -4043,7 +4043,7 @@ fn test_note_conservation_violated() {
         let action = builder.action(agent_id, "note_inflate");
         action.effect(Effect::NoteSpend {
             nullifier,
-            note_tree_root: [0u8; 32],
+            note_tree_root: [0xFFu8; 32],
             value: 100,
             asset_type: 1,
         });
@@ -4097,7 +4097,7 @@ fn test_note_nft_transfer() {
         // Spend the NFT note (value=0 for NFTs, asset_type is the unique ID).
         action.effect(Effect::NoteSpend {
             nullifier,
-            note_tree_root: [0u8; 32],
+            note_tree_root: [0xFFu8; 32],
             value: 0,
             asset_type: unique_asset_id,
         });
@@ -4136,13 +4136,13 @@ fn test_note_multiple_asset_types_conservation() {
         let action = builder.action(agent_id, "multi_asset");
         action.effect(Effect::NoteSpend {
             nullifier: pyana_cell::Nullifier([1u8; 32]),
-            note_tree_root: [0u8; 32],
+            note_tree_root: [0xFFu8; 32],
             value: 100,
             asset_type: 1,
         });
         action.effect(Effect::NoteSpend {
             nullifier: pyana_cell::Nullifier([2u8; 32]),
-            note_tree_root: [0u8; 32],
+            note_tree_root: [0xFFu8; 32],
             value: 50,
             asset_type: 2,
         });
@@ -4185,7 +4185,7 @@ fn test_note_cross_asset_conservation_fails() {
         let action = builder.action(agent_id, "cross_asset_cheat");
         action.effect(Effect::NoteSpend {
             nullifier: pyana_cell::Nullifier([1u8; 32]),
-            note_tree_root: [0u8; 32],
+            note_tree_root: [0xFFu8; 32],
             value: 100,
             asset_type: 1,
         });

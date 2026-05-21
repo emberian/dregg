@@ -968,23 +968,48 @@ pub fn pre_evaluation_deny_checks(
         }
     }
 
-    // Organization: match-any
-    if let Some(req_org) = request.org_id {
-        if !orgs.is_empty() && !orgs.contains(&req_org) {
-            return Err(TokenError::Denied(format!(
-                "token restricted to org(s) {:?}, requested org {}",
-                orgs, req_org
-            )));
+    // Organization: match-any.
+    // SECURITY: If the token has org restrictions, the request MUST specify an org_id.
+    // Otherwise, a token scoped to org=42 could be used on the passthrough path
+    // (features-only or time-only requests) without the org being verified.
+    if !orgs.is_empty() {
+        match request.org_id {
+            Some(req_org) => {
+                if !orgs.contains(&req_org) {
+                    return Err(TokenError::Denied(format!(
+                        "token restricted to org(s) {:?}, requested org {}",
+                        orgs, req_org
+                    )));
+                }
+            }
+            None => {
+                return Err(TokenError::Denied(format!(
+                    "token restricted to org(s) {:?} but request does not specify org_id",
+                    orgs
+                )));
+            }
         }
     }
 
-    // User: match-any
-    if let Some(req_user) = &request.user_id {
-        if !confined_users.is_empty() && !confined_users.contains(req_user) {
-            return Err(TokenError::Denied(format!(
-                "token confined to user(s) {:?}, request is for '{}'",
-                confined_users, req_user
-            )));
+    // User: match-any.
+    // SECURITY: If the token confines to specific users, the request MUST specify user_id.
+    // Otherwise, a user-confined token could bypass the restriction via the passthrough path.
+    if !confined_users.is_empty() {
+        match &request.user_id {
+            Some(req_user) => {
+                if !confined_users.contains(req_user) {
+                    return Err(TokenError::Denied(format!(
+                        "token confined to user(s) {:?}, request is for '{}'",
+                        confined_users, req_user
+                    )));
+                }
+            }
+            None => {
+                return Err(TokenError::Denied(format!(
+                    "token confined to user(s) {:?} but request does not specify user_id",
+                    confined_users
+                )));
+            }
         }
     }
 
@@ -1010,13 +1035,23 @@ pub fn pre_evaluation_deny_checks(
         }
     }
 
-    // Machine: match-any
-    if let Some(req_machine) = &request.machine_id {
-        if !machines.is_empty() && !machines.contains(req_machine) {
-            return Err(TokenError::Denied(format!(
-                "token not valid for machine '{}'",
-                req_machine
-            )));
+    // Machine: match-any.
+    // SECURITY: If the token is machine-restricted, the request MUST specify machine_id.
+    if !machines.is_empty() {
+        match &request.machine_id {
+            Some(req_machine) => {
+                if !machines.contains(req_machine) {
+                    return Err(TokenError::Denied(format!(
+                        "token not valid for machine '{}'",
+                        req_machine
+                    )));
+                }
+            }
+            None => {
+                return Err(TokenError::Denied(
+                    "token restricted to specific machine(s) but request does not specify machine_id".into(),
+                ));
+            }
         }
     }
 

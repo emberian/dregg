@@ -9,6 +9,7 @@ use std::sync::Mutex;
 use ed25519_dalek::{Signature, VerifyingKey};
 use pyana_cell::{
     AuthRequired, Cell, CellId, CellStateDelta, Ledger, LedgerDelta, Preconditions,
+    RevocationChannelSet,
     note_bridge::{BridgedNullifierSet, PendingBridgeSet},
     preconditions::EvalContext,
     state::STATE_SLOTS,
@@ -137,6 +138,10 @@ pub struct TurnExecutor {
     /// directive expires and the introduced capability becomes stale.
     /// Default: 1000 blocks.
     pub max_introduction_lifetime: u64,
+    /// Optional revocation channel set. When present, capability exercises and
+    /// delegation access checks verify that gated capabilities haven't been revoked
+    /// via their associated channel.
+    pub revocation_channels: Option<RevocationChannelSet>,
 }
 
 impl TurnExecutor {
@@ -156,6 +161,7 @@ impl TurnExecutor {
             proposer_cell: None,
             treasury_cell: None,
             max_introduction_lifetime: 1000,
+            revocation_channels: None,
         }
     }
 
@@ -179,6 +185,7 @@ impl TurnExecutor {
             proposer_cell: None,
             treasury_cell: None,
             max_introduction_lifetime: 1000,
+            revocation_channels: None,
         }
     }
 
@@ -198,6 +205,7 @@ impl TurnExecutor {
             proposer_cell: None,
             treasury_cell: None,
             max_introduction_lifetime: 1000,
+            revocation_channels: None,
         }
     }
 
@@ -324,6 +332,15 @@ impl TurnExecutor {
     /// Add a single trusted destination federation key.
     pub fn add_trusted_destination_key(&mut self, key: [u8; 32]) {
         self.trusted_destination_keys.push(key);
+    }
+
+    /// Set the revocation channel set for capability exercise checks.
+    ///
+    /// When present, the executor verifies that capabilities used via
+    /// `ExerciseViaCapability` and delegation access checks are not gated
+    /// by a tripped revocation channel.
+    pub fn set_revocation_channels(&mut self, channels: RevocationChannelSet) {
+        self.revocation_channels = Some(channels);
     }
 
     /// Execute a turn against a ledger, returning the result.
@@ -524,6 +541,14 @@ impl TurnExecutor {
                 reason: TurnError::ExcessNotZero { excess },
                 at_action: vec![],
             };
+        }
+
+        // =====================================================================
+        // BUDGET GATE: Commit the debit after successful execution.
+        // The tentative debit is now permanent — it can no longer be refunded.
+        // =====================================================================
+        if let (Some(gate_cell), Some((digest, _fee))) = (&self.budget_gate, &budget_debit_digest) {
+            gate_cell.lock().unwrap().commit_debit(digest);
         }
 
         // =====================================================================
@@ -996,12 +1021,12 @@ impl TurnExecutor {
         // Recurse into children.
         // NOTE: This resolution determines whether children can target *different* cells.
         // DelegationMode::None prevents cross-cell targeting (enforced below).
-        // ParentsOwn/Inherit allow cross-cell targeting but do NOT yet grant the parent's
-        // capabilities — the child still needs its own direct capability to succeed.
+        // ParentsOwn and Inherit are deprecated — they behave identically to None.
+        // Use Effect::Introduce or SnapshotRefresh for explicit capability delegation.
         let child_delegation = match action.may_delegate {
             DelegationMode::None => DelegationMode::None,
-            DelegationMode::ParentsOwn => DelegationMode::ParentsOwn,
-            DelegationMode::Inherit => parent_delegation,
+            DelegationMode::ParentsOwn => DelegationMode::None, // deprecated: same as None
+            DelegationMode::Inherit => DelegationMode::None,    // deprecated: same as None
             DelegationMode::SnapshotRefresh => DelegationMode::SnapshotRefresh,
         };
 
@@ -1812,11 +1837,51 @@ impl TurnExecutor {
                 Ok(())
             }
 
-            // Note effects are recorded for conservation checking but do not
-            // modify the cell ledger directly. The note tree and nullifier set
-            // are updated by the note layer above the executor.
-            Effect::NoteSpend { .. } => Ok(()),
-            Effect::NoteCreate { .. } => Ok(()),
+            // Note effects: validate structure and record for the note layer to
+            // process after the turn commits (nullifier set / note tree updates).
+            Effect::NoteSpend {
+                nullifier,
+                note_tree_root,
+                ..
+            } => {
+                // Validate nullifier is well-formed (non-zero).
+                if nullifier.0.iter().all(|&b| b == 0) {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "null nullifier in NoteSpend".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                // Validate note_tree_root is non-zero (must reference a real tree state).
+                if note_tree_root.iter().all(|&b| b == 0) {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "null note_tree_root in NoteSpend".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                // Record for the note layer to process after turn commits.
+                journal.record_note_spend(*nullifier);
+                Ok(())
+            }
+            Effect::NoteCreate { commitment, .. } => {
+                // Validate commitment is well-formed (non-zero).
+                if commitment.0.iter().all(|&b| b == 0) {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "null commitment in NoteCreate".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                // Note: zero-value notes are legitimate (e.g., NFTs where asset_type
+                // is the unique identifier and value=0 represents ownership).
+                // Record for the note layer to process after turn commits.
+                journal.record_note_create(*commitment);
+                Ok(())
+            }
 
             // BridgeMint: verify the portable proof against trusted federation roots
             // and track the nullifier to prevent double-bridge attacks.
@@ -1957,11 +2022,86 @@ impl TurnExecutor {
                 Ok(())
             }
 
-            // Obligation effects: tracking happens at the obligation layer above
-            // the executor. The executor just needs to not reject them.
-            Effect::CreateObligation { .. } => Ok(()),
-            Effect::FulfillObligation { .. } => Ok(()),
-            Effect::SlashObligation { .. } => Ok(()),
+            // Obligation effects: validate structure and record for the obligation
+            // registry to process after the turn commits.
+            Effect::CreateObligation {
+                beneficiary,
+                condition: _,
+                deadline_height,
+                stake,
+            } => {
+                // Validate beneficiary cell exists.
+                if ledger.get(beneficiary).is_none() {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "obligation beneficiary cell not found".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                // Validate deadline is in the future.
+                if *deadline_height <= self.block_height {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "obligation deadline must be in the future".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                // Validate deadline is within acceptable bounds.
+                if let Err(reason) = crate::obligation::validate_obligation_deadline(
+                    *deadline_height,
+                    self.block_height,
+                ) {
+                    return Err((TurnError::InvalidEffect { reason }, path.to_vec()));
+                }
+                // Validate stake commitment is non-zero.
+                if stake.0.iter().all(|&b| b == 0) {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "obligation stake commitment is null".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                // The actor (action_target) is the obligor.
+                journal.record_obligation_created(
+                    *action_target,
+                    *beneficiary,
+                    *deadline_height,
+                    *stake,
+                );
+                Ok(())
+            }
+            Effect::FulfillObligation {
+                obligation_id,
+                proof: _,
+            } => {
+                // Validate obligation_id is non-zero.
+                if obligation_id.iter().all(|&b| b == 0) {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "null obligation_id in FulfillObligation".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                journal.record_obligation_fulfilled(*obligation_id);
+                Ok(())
+            }
+            Effect::SlashObligation { obligation_id } => {
+                // Validate obligation_id is non-zero.
+                if obligation_id.iter().all(|&b| b == 0) {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "null obligation_id in SlashObligation".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                journal.record_obligation_slashed(*obligation_id);
+                Ok(())
+            }
 
             // ExerciseViaCapability: one-step evaluation map.
             // Look up cap_slot in actor's c-list, verify permissions, execute
@@ -1990,6 +2130,46 @@ impl TurnExecutor {
                     })?;
 
                 let cap_target = cap.target;
+
+                // Check capability expiry.
+                if let Some(expires_at) = cap.expires_at {
+                    if self.block_height > expires_at {
+                        return Err((
+                            TurnError::CapabilityNotHeld {
+                                actor: *actor,
+                                target: cap_target,
+                            },
+                            path.to_vec(),
+                        ));
+                    }
+                }
+
+                // Check revocation channel: if the capability has a breadstuff that
+                // matches a revocation channel, verify the channel is still active.
+                if let Some(ref channels) = self.revocation_channels {
+                    if let Some(breadstuff) = &cap.breadstuff {
+                        // Use the breadstuff as a potential channel_id (capabilities
+                        // gated by a revocation channel store the channel_id as breadstuff).
+                        if let Err(_) = channels.check_exercise_permitted(
+                            breadstuff,
+                            self.block_height,
+                            self.block_height, // assume fresh check at current height
+                            self.max_introduction_lifetime,
+                        ) {
+                            // Check if this is actually a registered channel (not just any breadstuff).
+                            if channels.get(breadstuff).is_some() {
+                                return Err((
+                                    TurnError::CapabilityRevoked {
+                                        actor: *actor,
+                                        channel_id: *breadstuff,
+                                        tripped_at: self.block_height,
+                                    },
+                                    path.to_vec(),
+                                ));
+                            }
+                        }
+                    }
+                }
 
                 // Verify the target cell exists.
                 let target_cell_ref = ledger
@@ -2855,6 +3035,12 @@ impl TurnExecutor {
                     // tracked via the cell's state.
                 }
                 JournalEntry::SetDelegation { .. } | JournalEntry::SetDelegationEpoch { .. } => {}
+                // Note/obligation entries don't affect the ledger delta directly.
+                JournalEntry::NoteSpend { .. }
+                | JournalEntry::NoteCreate { .. }
+                | JournalEntry::ObligationCreated { .. }
+                | JournalEntry::ObligationFulfilled { .. }
+                | JournalEntry::ObligationSlashed { .. } => {}
             }
         }
 

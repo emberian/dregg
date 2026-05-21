@@ -32,6 +32,9 @@ pub const TOPIC_CHECKPOINTS: &str = "pyana/checkpoints";
 /// requests, and unlock votes exchanged between silos for epoch rebalancing
 /// and fast unlock quorum collection.
 pub const TOPIC_BUDGET: &str = "pyana/budget";
+/// Gossip topic for fast-path turn signatures (lock acknowledgements).
+/// Used by clients/gateways to broadcast lock requests and collect TurnSigns.
+pub const TOPIC_FAST_PATH: &str = "pyana/fast-path/signs";
 
 /// Configuration for the Morpheus consensus mode, passed from CLI flags.
 #[derive(Clone, Debug)]
@@ -589,6 +592,60 @@ pub async fn run_federation_sync(state: NodeState, morpheus_config: Option<Morph
         }
     });
 
+    // Spawn a periodic intent expiry garbage collection task.
+    // Removes expired intents from the pool every 60 seconds.
+    let state_intent_gc = state.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let mut s = state_intent_gc.write().await;
+            let before = s.intent_pool.len();
+            s.intent_pool.retain(|_id, intent| !intent.is_expired(now));
+            let after = s.intent_pool.len();
+            if before != after {
+                info!(
+                    expired = before - after,
+                    remaining = after,
+                    "garbage-collected expired intents from pool"
+                );
+                // Invalidate PIR index cache since pool changed.
+                s.pir_index_cache = None;
+            }
+        }
+    });
+
+    // Spawn a periodic fast-path lock expiry task.
+    // At each block (approximated as every 1 second), expire stale cell locks
+    // from the CellLockTable and check for lock conflicts with consensus-path turns.
+    let state_lock_expiry = state.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            let current_height = {
+                let s = state_lock_expiry.read().await;
+                s.store
+                    .latest_attested_root()
+                    .ok()
+                    .flatten()
+                    .map(|r| r.height)
+                    .unwrap_or(0)
+            };
+            let mut s = state_lock_expiry.write().await;
+            let expired = pyana_turn::expire_stale_locks(&mut s.cell_lock_table, current_height);
+            if !expired.is_empty() {
+                info!(
+                    expired_count = expired.len(),
+                    height = current_height,
+                    "expired stale fast-path cell locks"
+                );
+            }
+        }
+    });
+
     // Spawn a periodic pending turn timeout checker.
     // Checks every 30 seconds for pending turns that have exceeded their timeout
     // height and propagates broken-promise notifications to dependents.
@@ -853,6 +910,18 @@ async fn handle_turn_message(state: &NodeState, from: SocketAddr, message: PeerM
                         );
                     }
 
+                    // Append note commitments from NoteCreate effects to the
+                    // in-memory Poseidon2 note tree. This keeps the ZK-friendly
+                    // tree in sync for membership proof generation.
+                    for tree in &signed_turn.turn.call_forest.roots {
+                        for effect in &tree.action.effects {
+                            if let pyana_turn::Effect::NoteCreate { commitment, .. } = effect {
+                                s.note_tree_append_commitment(&commitment.0);
+                                let _ = s.store.store_note_commitment(commitment);
+                            }
+                        }
+                    }
+
                     // Check if this receipt resolves any pending turns in the
                     // distributed promise registry. Cascading resolution will
                     // propagate to all dependents whose conditions are now met.
@@ -1095,6 +1164,18 @@ async fn handle_revocation_message(state: &NodeState, from: SocketAddr, message:
                 if let Err(e) = s.store.store_revocation(&token_id) {
                     warn!(error = %e, token_id = %token_id, "failed to persist revocation");
                 }
+            }
+
+            // Update the polynomial accumulator with the new revocation hash.
+            // This keeps the accumulator in sync so clients can use
+            // `prove_not_revoked_accumulator()` for O(1) non-membership proofs.
+            {
+                let mut s = state.write().await;
+                // Hash the token_id string to a fixed 32-byte value for the accumulator.
+                let token_hash: [u8; 32] = *blake3::hash(token_id.as_bytes()).as_bytes();
+                let revocation_hash =
+                    pyana_circuit::non_revocation_air::revocation_hash_to_field(&token_hash);
+                s.accumulator_insert_revocation(revocation_hash);
             }
 
             // Emit to WS subscribers.
@@ -1528,24 +1609,24 @@ fn spawn_morpheus_driver(
             logical_time += 1;
             process.set_now(logical_time);
 
-            // Collect pending turns from the intent pool as transactions.
-            // We drain intents that have been converted to signed turns.
+            // Collect pending signed turns as consensus transactions.
+            // Only actual turns (submitted via the API/fulfillment flow) are proposed
+            // to consensus. Raw intents stay in the pool until matched and converted
+            // to turns by the fulfillment pipeline.
             {
-                let s = state.read().await;
-                // Collect up to 64 intents per tick as transactions.
-                let intent_ids: Vec<[u8; 32]> = s.intent_pool.keys().take(64).copied().collect();
-                drop(s);
-
-                for intent_id in intent_ids {
-                    let mut s = state.write().await;
-                    if let Some(intent) = s.intent_pool.get(&intent_id) {
-                        // Serialize the intent as the transaction payload.
-                        let data = serde_json::to_vec(intent).unwrap_or_default();
+                let mut s = state.write().await;
+                let pending: Vec<ConsensusTx> = s
+                    .consensus_queue
+                    .drain(..)
+                    .take(64)
+                    .filter_map(|signed_turn| {
+                        let data = postcard::to_stdvec(&signed_turn).ok()?;
                         let hash = *blake3::hash(&data).as_bytes();
-                        let tx = ConsensusTx { hash, data };
-                        process.ready_transactions.push(tx);
-                        s.intent_pool.remove(&intent_id);
-                    }
+                        Some(ConsensusTx { hash, data })
+                    })
+                    .collect();
+                for tx in pending {
+                    process.ready_transactions.push(tx);
                 }
             }
 
@@ -1690,6 +1771,12 @@ async fn execute_consensus_turn(state: &NodeState, tx: &ConsensusTx) {
                     pyana_turn::ResolutionOutcome::Resolved(receipt.clone()),
                 );
                 s.wallet.append_receipt(receipt.clone());
+
+                // Mark routes as verified for any routing directives in this receipt.
+                for directive in &receipt.routing_directives {
+                    s.routing_table
+                        .mark_verified(&directive.target, &directive.authorizing_turn);
+                }
 
                 let receipt_hash_hex: String = receipt
                     .turn_hash

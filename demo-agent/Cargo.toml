@@ -125,5 +125,17 @@ name = "proof_obligation"
 [[example]]
 name = "bench_summary"
 
+[[example]]
+name = "anonymous_credit_check"
+
+[[example]]
+name = "ai_agent_mcp_workflow"
+
+[[example]]
+name = "cross_federation_nft_swap"
+
+[[example]]
+name = "payment_channel_burst"
+
 [lints]
 workspace = true

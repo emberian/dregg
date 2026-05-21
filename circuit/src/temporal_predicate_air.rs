@@ -686,12 +686,9 @@ pub mod p3_temporal {
     use super::*;
     use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
     use p3_baby_bear::BabyBear as P3BabyBear;
-    use p3_field::{Field, PrimeCharacteristicRing, PrimeField32};
-    use p3_matrix::dense::RowMajorMatrix;
+    use p3_field::{PrimeCharacteristicRing, PrimeField32};
 
-    use crate::plonky3_prover::{
-        PyanaProof, PyanaStarkConfig, create_config, from_p3, to_p3, trace_to_matrix,
-    };
+    use crate::plonky3_prover::{PyanaProof, create_config, to_p3, trace_to_matrix};
 
     /// Trace width for the P3 temporal predicate AIR.
     /// value(1) + threshold(1) + diff(1) + diff_bits(30) + accumulator(1)
@@ -996,7 +993,7 @@ pub mod p3_temporal {
             padded_len: padded_len as u32,
             initial_state_root,
             final_state_root,
-            p3_proof: proof,
+            p3_proof: std::sync::Arc::new(proof),
         })
     }
 
@@ -1060,8 +1057,36 @@ pub mod p3_temporal {
         pub initial_state_root: BabyBear,
         /// The final state root (binding to the end of the range).
         pub final_state_root: BabyBear,
-        /// The Plonky3 proof.
-        pub p3_proof: PyanaProof,
+        /// The Plonky3 proof (wrapped in Arc for Clone support since Proof doesn't impl Clone).
+        pub p3_proof: std::sync::Arc<PyanaProof>,
+    }
+
+    impl Clone for P3TemporalPredicateProof {
+        fn clone(&self) -> Self {
+            Self {
+                predicate_type: self.predicate_type,
+                threshold: self.threshold,
+                num_steps: self.num_steps,
+                padded_len: self.padded_len,
+                initial_state_root: self.initial_state_root,
+                final_state_root: self.final_state_root,
+                p3_proof: self.p3_proof.clone(),
+            }
+        }
+    }
+
+    impl std::fmt::Debug for P3TemporalPredicateProof {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("P3TemporalPredicateProof")
+                .field("predicate_type", &self.predicate_type)
+                .field("threshold", &self.threshold)
+                .field("num_steps", &self.num_steps)
+                .field("padded_len", &self.padded_len)
+                .field("initial_state_root", &self.initial_state_root)
+                .field("final_state_root", &self.final_state_root)
+                .field("p3_proof", &"<Plonky3 Proof>")
+                .finish()
+        }
     }
 
     impl P3TemporalPredicateProof {
@@ -1526,5 +1551,162 @@ mod tests {
             proof.is_none(),
             "Mismatched lengths should not produce a proof"
         );
+    }
+
+    // =========================================================================
+    // Plonky3-based temporal AIR tests
+    // =========================================================================
+
+    #[cfg(feature = "plonky3")]
+    mod p3_tests {
+        use super::*;
+        use crate::temporal_predicate_air::p3_temporal::*;
+
+        fn test_state_roots(n: usize) -> Vec<BabyBear> {
+            (0..n).map(|i| BabyBear::new(1000 + i as u32)).collect()
+        }
+
+        #[test]
+        fn test_p3_temporal_gte_basic() {
+            // Balance >= 100 for 4 steps.
+            let threshold = BabyBear::new(100);
+            let values: Vec<BabyBear> = vec![150, 200, 300, 100]
+                .into_iter()
+                .map(BabyBear::new)
+                .collect();
+            let state_roots = test_state_roots(4);
+
+            let proof =
+                prove_temporal_predicate_p3(&values, &state_roots, PredicateType::Gte, threshold);
+            assert!(proof.is_some(), "All values >= 100, proof should succeed");
+
+            let proof = proof.unwrap();
+            assert_eq!(proof.num_steps, 4);
+            assert_eq!(proof.threshold, threshold);
+
+            // Verify
+            let valid =
+                verify_temporal_predicate_p3(&proof, threshold, 4, state_roots[0], state_roots[3]);
+            assert!(valid, "P3 temporal verification should pass");
+        }
+
+        #[test]
+        fn test_p3_temporal_gte_violation_rejected() {
+            // One value dips below threshold.
+            let threshold = BabyBear::new(100);
+            let values: Vec<BabyBear> = vec![150, 200, 99, 100]
+                .into_iter()
+                .map(BabyBear::new)
+                .collect();
+            let state_roots = test_state_roots(4);
+
+            let proof =
+                prove_temporal_predicate_p3(&values, &state_roots, PredicateType::Gte, threshold);
+            assert!(
+                proof.is_none(),
+                "Value 99 < 100 should prevent proof generation"
+            );
+        }
+
+        #[test]
+        fn test_p3_temporal_wrong_threshold_rejected() {
+            let threshold = BabyBear::new(100);
+            let values: Vec<BabyBear> = vec![200, 150, 300, 100]
+                .into_iter()
+                .map(BabyBear::new)
+                .collect();
+            let state_roots = test_state_roots(4);
+
+            let proof =
+                prove_temporal_predicate_p3(&values, &state_roots, PredicateType::Gte, threshold)
+                    .unwrap();
+
+            // Verify with wrong threshold.
+            let valid = verify_temporal_predicate_p3(
+                &proof,
+                BabyBear::new(50), // wrong
+                4,
+                state_roots[0],
+                state_roots[3],
+            );
+            assert!(!valid, "Wrong threshold should fail verification");
+        }
+
+        #[test]
+        fn test_p3_temporal_wrong_state_root_rejected() {
+            let threshold = BabyBear::new(100);
+            let values: Vec<BabyBear> = vec![200, 150, 300, 100]
+                .into_iter()
+                .map(BabyBear::new)
+                .collect();
+            let state_roots = test_state_roots(4);
+
+            let proof =
+                prove_temporal_predicate_p3(&values, &state_roots, PredicateType::Gte, threshold)
+                    .unwrap();
+
+            // Verify with wrong initial state root.
+            let valid = verify_temporal_predicate_p3(
+                &proof,
+                threshold,
+                4,
+                BabyBear::new(99999), // wrong root
+                state_roots[3],
+            );
+            assert!(!valid, "Wrong initial state root should fail verification");
+        }
+
+        #[test]
+        fn test_p3_temporal_lte() {
+            // All values <= 500.
+            let threshold = BabyBear::new(500);
+            let values: Vec<BabyBear> = vec![100, 200, 500, 300]
+                .into_iter()
+                .map(BabyBear::new)
+                .collect();
+            let state_roots = test_state_roots(4);
+
+            let proof =
+                prove_temporal_predicate_p3(&values, &state_roots, PredicateType::Lte, threshold);
+            assert!(proof.is_some(), "All values <= 500, should succeed");
+
+            let proof = proof.unwrap();
+            let valid =
+                verify_temporal_predicate_p3(&proof, threshold, 4, state_roots[0], state_roots[3]);
+            assert!(valid);
+        }
+
+        #[test]
+        fn test_p3_temporal_single_step() {
+            let threshold = BabyBear::new(50);
+            let values = vec![BabyBear::new(100)];
+            let state_roots = vec![BabyBear::new(1000)];
+
+            let proof =
+                prove_temporal_predicate_p3(&values, &state_roots, PredicateType::Gte, threshold)
+                    .unwrap();
+            assert_eq!(proof.num_steps, 1);
+
+            let valid =
+                verify_temporal_predicate_p3(&proof, threshold, 1, state_roots[0], state_roots[0]);
+            assert!(valid);
+        }
+
+        #[test]
+        fn test_p3_temporal_8_steps() {
+            // 8 steps: already power-of-2, no extra padding needed beyond the base.
+            let threshold = BabyBear::new(50);
+            let values: Vec<BabyBear> = (0..8).map(|i| BabyBear::new(50 + i)).collect();
+            let state_roots = test_state_roots(8);
+
+            let proof =
+                prove_temporal_predicate_p3(&values, &state_roots, PredicateType::Gte, threshold)
+                    .unwrap();
+            assert_eq!(proof.num_steps, 8);
+
+            let valid =
+                verify_temporal_predicate_p3(&proof, threshold, 8, state_roots[0], state_roots[7]);
+            assert!(valid);
+        }
     }
 }

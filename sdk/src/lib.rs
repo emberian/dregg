@@ -82,9 +82,9 @@ pub use mnemonic::generate_mnemonic;
 
 // Re-export privacy API types at crate root for convenience.
 pub use privacy::{
-    AnonymousPresentation, NonRevocationProof, NoteSecret, NoteTransferProof,
-    UnlinkablePredicateProof, verify_anonymous_presentation, verify_non_revocation_proof,
-    verify_note_spending,
+    AccumulatorNonMembershipProof, AnonymousPresentation, NonRevocationProof, NoteSecret,
+    NoteTransferProof, UnlinkablePredicateProof, verify_accumulator_non_membership,
+    verify_anonymous_presentation, verify_non_revocation_proof, verify_note_spending,
 };
 
 // Re-export discharge gateway client functions.

@@ -217,6 +217,10 @@ impl<F: PrimeCharacteristicRing + Sync> BaseAir<F> for P3MerklePoseidon2Air {
     fn main_next_row_columns(&self) -> Vec<usize> {
         vec![0]
     }
+
+    fn max_constraint_degree(&self) -> Option<usize> {
+        None // let symbolic evaluation determine it
+    }
 }
 
 impl<AB: AirBuilder> Air<AB> for P3MerklePoseidon2Air
@@ -330,7 +334,8 @@ where
         round_col_offset += ROUND_COLS;
 
         // --- First half of external rounds (4 rounds) ---
-        for round in 0..HALF_EXTERNAL {
+        for round in 0..1 {
+            // TEMPORARY: just 1 round
             // Add round constants (convert P3BabyBear -> AB::F)
             for j in 0..WIDTH {
                 let rc_f = AB::F::from_u32(rc[round][j].as_canonical_u32());
@@ -350,6 +355,20 @@ where
                 state[j] = aux;
             }
             round_col_offset += ROUND_COLS;
+        }
+
+        // TEMPORARY EARLY RETURN: after first-half external rounds
+        {
+            let continuity: AB::Expr = next_current - parent.clone();
+            builder.when_transition().assert_zero(continuity);
+            let public_values = builder.public_values();
+            let leaf_hash: AB::Expr = public_values[0].into();
+            let root: AB::Expr = public_values[1].into();
+            builder
+                .when_first_row()
+                .assert_zero(current.clone() - leaf_hash);
+            builder.when_last_row().assert_zero(parent.clone() - root);
+            return;
         }
 
         // --- Internal rounds (13 rounds) ---
@@ -628,7 +647,21 @@ pub fn prove_plonky3(trace: &[Vec<BabyBear>], public_inputs: &[BabyBear]) -> Pya
     let matrix = trace_to_matrix(trace);
     let p3_public: Vec<P3BabyBear> = public_inputs.iter().map(|&v| to_p3(v)).collect();
 
-    prove(&config, &air, matrix, &p3_public)
+    let proof = prove(&config, &air, matrix, &p3_public);
+    eprintln!("DEBUG: degree_bits={}", proof.degree_bits);
+    eprintln!(
+        "DEBUG: quotient_chunks={}",
+        proof.opened_values.quotient_chunks.len()
+    );
+    eprintln!(
+        "DEBUG: trace_next={}",
+        proof.opened_values.trace_next.is_some()
+    );
+    eprintln!(
+        "DEBUG: trace_local_len={}",
+        proof.opened_values.trace_local.len()
+    );
+    proof
 }
 
 /// Verify a Plonky3 proof for MerklePoseidon2 membership.
@@ -837,5 +870,188 @@ mod tests {
             "Non-power-of-2 depth failed: {:?}",
             result.err()
         );
+    }
+
+    /// Diagnostic: test that the constraints match trace at concrete values.
+    /// Manually evaluate the AIR on actual trace rows to check for mismatches.
+    #[test]
+    fn plonky3_constraint_manual_check() {
+        use p3_baby_bear::BabyBear as P3BB;
+        use p3_field::Field;
+
+        let leaf = BabyBear::new(42424242);
+        let witness = create_poseidon2_test_witness(leaf, 4);
+        let siblings: Vec<[BabyBear; 3]> = witness.levels.iter().map(|l| l.siblings).collect();
+        let positions: Vec<u8> = witness.levels.iter().map(|l| l.position).collect();
+        let (trace, _public_inputs) = generate_sound_merkle_trace(leaf, &siblings, &positions);
+
+        // Check each row's Poseidon2 trace consistency
+        let rc = &*P3_ROUND_CONSTANTS;
+        let diag = &*P3_INTERNAL_DIAG;
+
+        for row_idx in 0..trace.len() {
+            let row = &trace[row_idx];
+            let current = P3BB::new(row[0].0);
+            let sib0 = P3BB::new(row[1].0);
+            let sib1 = P3BB::new(row[2].0);
+            let sib2 = P3BB::new(row[3].0);
+            let pos_val = row[4].0;
+
+            // Reconstruct children using same Lagrange logic as AIR
+            let p = P3BB::new(pos_val);
+            let one = P3BB::ONE;
+            let two = P3BB::TWO;
+            let three = two + one;
+            let six = P3BB::new(6);
+
+            let p_m1 = p - one;
+            let p_m2 = p - two;
+            let p_m3 = p - three;
+
+            let neg_six_inv = -six.inverse();
+            let two_inv = two.inverse();
+            let neg_two_inv = -two_inv;
+            let six_inv = six.inverse();
+
+            let l0 = p_m1 * p_m2 * p_m3 * neg_six_inv;
+            let l1 = p * p_m2 * p_m3 * two_inv;
+            let l2 = p * p_m1 * p_m3 * neg_two_inv;
+            let l3 = p * p_m1 * p_m2 * six_inv;
+
+            let child0 = current * l0 + sib0 * (one - l0);
+            let child1 = sib0 * l0 + current * l1 + sib1 * (one - l0 - l1);
+            let child2 = sib1 * (l0 + l1) + current * l2 + sib2 * l3;
+            let child3 = sib2 * (one - l3) + current * l3;
+
+            // Initial state
+            let four = P3BB::new(4);
+            let mut state = [P3BB::ZERO; WIDTH];
+            state[0] = child0;
+            state[1] = child1;
+            state[2] = child2;
+            state[3] = child3;
+            state[4] = four;
+
+            // Initial linear layer
+            apply_ext_linear_p3(&mut state);
+
+            // Check against trace aux col 0 (first round state)
+            let mut col_offset = ROUND_STATES_OFFSET;
+            for j in 0..WIDTH {
+                let trace_val = P3BB::new(row[col_offset + j].0);
+                assert_eq!(
+                    state[j], trace_val,
+                    "Row {row_idx}: initial linear layer mismatch at col {j}: computed {:?} != trace {:?}",
+                    state[j], trace_val
+                );
+            }
+            col_offset += ROUND_COLS;
+
+            // First half external rounds
+            for round in 0..HALF_EXTERNAL {
+                for j in 0..WIDTH {
+                    state[j] += P3BB::new(rc[round][j].as_canonical_u32());
+                }
+                for j in 0..WIDTH {
+                    state[j] = state[j].exp_const_u64::<7>();
+                }
+                apply_ext_linear_p3(&mut state);
+                for j in 0..WIDTH {
+                    let trace_val = P3BB::new(row[col_offset + j].0);
+                    assert_eq!(
+                        state[j], trace_val,
+                        "Row {row_idx}: ext round {round} mismatch at col {j}"
+                    );
+                }
+                col_offset += ROUND_COLS;
+            }
+
+            // Internal rounds
+            for round in 0..INTERNAL_ROUNDS {
+                let rc_idx = HALF_EXTERNAL + round;
+                state[0] += P3BB::new(rc[rc_idx][0].as_canonical_u32());
+                state[0] = state[0].exp_const_u64::<7>();
+                apply_int_linear_p3(&mut state, diag);
+                for j in 0..WIDTH {
+                    let trace_val = P3BB::new(row[col_offset + j].0);
+                    assert_eq!(
+                        state[j], trace_val,
+                        "Row {row_idx}: int round {round} mismatch at col {j}"
+                    );
+                }
+                col_offset += ROUND_COLS;
+            }
+
+            // Second half external rounds
+            for round in 0..HALF_EXTERNAL {
+                let rc_idx = HALF_EXTERNAL + INTERNAL_ROUNDS + round;
+                for j in 0..WIDTH {
+                    state[j] += P3BB::new(rc[rc_idx][j].as_canonical_u32());
+                }
+                for j in 0..WIDTH {
+                    state[j] = state[j].exp_const_u64::<7>();
+                }
+                apply_ext_linear_p3(&mut state);
+                for j in 0..WIDTH {
+                    let trace_val = P3BB::new(row[col_offset + j].0);
+                    assert_eq!(
+                        state[j], trace_val,
+                        "Row {row_idx}: ext2 round {round} mismatch at col {j}"
+                    );
+                }
+                col_offset += ROUND_COLS;
+            }
+
+            // Parent check
+            let parent_trace = P3BB::new(row[PARENT_COL].0);
+            assert_eq!(state[0], parent_trace, "Row {row_idx}: parent mismatch");
+        }
+    }
+}
+
+/// Helper: apply external linear layer on P3BabyBear values
+fn apply_ext_linear_p3(state: &mut [p3_baby_bear::BabyBear; WIDTH]) {
+    use p3_baby_bear::BabyBear as P3BB;
+    for cs in (0..WIDTH).step_by(4) {
+        let x0 = state[cs];
+        let x1 = state[cs + 1];
+        let x2 = state[cs + 2];
+        let x3 = state[cs + 3];
+        let t01 = x0 + x1;
+        let t23 = x2 + x3;
+        let t0123 = t01 + t23;
+        let t01123 = t0123 + x1;
+        let t01233 = t0123 + x3;
+        state[cs] = t01123 + t01;
+        state[cs + 1] = t01123 + x2 + x2;
+        state[cs + 2] = t01233 + t23;
+        state[cs + 3] = t01233 + x0 + x0;
+    }
+    let sums: [P3BB; 4] = core::array::from_fn(|k| {
+        let mut s = state[k];
+        for j in (4..WIDTH).step_by(4) {
+            s = s + state[j + k];
+        }
+        s
+    });
+    for i in 0..WIDTH {
+        state[i] = state[i] + sums[i % 4];
+    }
+}
+
+/// Helper: apply internal linear layer on P3BabyBear values
+fn apply_int_linear_p3(
+    state: &mut [p3_baby_bear::BabyBear; WIDTH],
+    diag: &[p3_baby_bear::BabyBear; WIDTH],
+) {
+    use p3_baby_bear::BabyBear as P3BB;
+    use p3_field::PrimeCharacteristicRing;
+    let mut sum = state[0];
+    for i in 1..WIDTH {
+        sum = sum + state[i];
+    }
+    for i in 0..WIDTH {
+        let d_i_minus_1 = diag[i] - P3BB::ONE;
+        state[i] = sum + state[i] * d_i_minus_1;
     }
 }

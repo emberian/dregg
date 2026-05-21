@@ -466,6 +466,72 @@ impl PersistentStore {
         Ok(true)
     }
 
+    /// Store a proof hash with an associated block height for TTL-based eviction.
+    ///
+    /// Returns Ok(true) if newly inserted, Ok(false) if already present.
+    pub fn insert_proof_hash_with_height(&self, hash: &[u8; 32], height: u64) -> Result<bool> {
+        let key = format!("proof_hash:{}", hex_encode_bytes(hash));
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(tables::METADATA_BYTES)?;
+            if table.get(key.as_str())?.is_some() {
+                return Ok(false);
+            }
+            // Store the height as 8-byte LE value for later pruning.
+            table.insert(key.as_str(), &height.to_le_bytes() as &[u8])?;
+        }
+        write_txn.commit()?;
+        Ok(true)
+    }
+
+    /// Prune proof hashes older than `max_age` blocks from the current height.
+    ///
+    /// Entries stored without a height (legacy 1-byte value) are left intact.
+    /// Returns the number of entries pruned.
+    pub fn prune_old_proof_hashes(&self, current_height: u64, max_age: u64) -> Result<u64> {
+        let min_height = current_height.saturating_sub(max_age);
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(tables::METADATA_BYTES)?;
+
+        let prefix = "proof_hash:";
+        let mut keys_to_remove = Vec::new();
+
+        let range = table.range(prefix..)?;
+        for entry in range {
+            let entry =
+                entry.map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
+            let key = entry.0.value();
+            if !key.starts_with(prefix) {
+                break;
+            }
+            let value = entry.1.value();
+            // Only prune entries that have height data (8 bytes).
+            if value.len() == 8 {
+                let stored_height = u64::from_le_bytes(value.try_into().unwrap());
+                if stored_height < min_height {
+                    keys_to_remove.push(key.to_string());
+                }
+            }
+        }
+        drop(table);
+        drop(read_txn);
+
+        if keys_to_remove.is_empty() {
+            return Ok(0);
+        }
+
+        let count = keys_to_remove.len() as u64;
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(tables::METADATA_BYTES)?;
+            for key in &keys_to_remove {
+                table.remove(key.as_str())?;
+            }
+        }
+        write_txn.commit()?;
+        Ok(count)
+    }
+
     /// Load all stored proof hashes (for populating the in-memory set on startup).
     pub fn load_all_proof_hashes(&self) -> Result<std::collections::HashSet<[u8; 32]>> {
         let read_txn = self.db.begin_read()?;

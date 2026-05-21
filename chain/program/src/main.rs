@@ -9,6 +9,7 @@
 //! SP1 then wraps this execution in a Groth16 proof (~200k gas to verify on EVM).
 
 #![no_main]
+#![allow(dead_code)]
 sp1_zkvm::entrypoint!(main);
 
 use serde::{Deserialize, Serialize};

@@ -99,8 +99,10 @@ pub use pyana_types::AttestedRoot;
 /// On-chain, the verifier checks `proof.vkey == expected_vkey` to ensure the correct
 /// program (our STARK verifier) was executed.
 ///
-/// This will be populated at build time once the guest program is compiled with `cargo prove build`.
-/// For now it's a placeholder that the build script will fill in.
+/// In `prove` mode, the vkey is computed at runtime during `prover.setup(elf)` and
+/// returned in the `EvmProof`. This constant is used only in mock mode as a placeholder.
+/// Once deployed, the on-chain verifier contract will be configured with the real vkey
+/// derived from the production guest program ELF.
 pub const SP1_PROGRAM_VKEY: &str = "PLACEHOLDER_VKEY_BUILD_WITH_SP1_TOOLCHAIN";
 
 /// Known SP1 verifier contract addresses (Succinct deployments via CREATE2).

@@ -25,6 +25,31 @@ secrets = { path = "secrets" }
 token = { path = "token" }
 tokenizer = { path = "tokenizer" }
 
+## Plonky3 core (rev 82cfad73 — the version pyana proofs were validated against)
+p3-air = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-baby-bear = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-batch-stark = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-challenger = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-commit = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-dft = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-field = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-fri = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-lookup = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-matrix = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-mds = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-merkle-tree = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-monty-31 = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-poseidon2 = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-symmetric = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-uni-stark = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-util = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+
+## Plonky3-recursion (local fork updated to match p3 rev 82cfad73)
+p3-recursion = { path = "../plonky3-recursion/recursion" }
+p3-circuit = { path = "../plonky3-recursion/circuit" }
+p3-circuit-prover = { path = "../plonky3-recursion/circuit-prover" }
+p3-poseidon2-circuit-air = { path = "../plonky3-recursion/poseidon2-circuit-air" }
+
 ## Crates.io
 ark-serialize = { version = "0.5", features = ["derive"] }
 # NOTE: RC needed for aead 0.6 trait unification with chacha20poly1305 0.10;

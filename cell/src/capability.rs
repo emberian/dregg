@@ -83,6 +83,29 @@ impl CapabilitySet {
         Some(slot)
     }
 
+    /// Grant a capability preserving ALL fields from a CapabilityRef (breadstuff + expires_at).
+    ///
+    /// Used during delta application to avoid silently dropping the `expires_at` field.
+    /// Returns the assigned slot number, or `None` if the slot counter would overflow.
+    pub fn grant_full(
+        &mut self,
+        target: CellId,
+        permissions: AuthRequired,
+        breadstuff: Option<[u8; 32]>,
+        expires_at: Option<u64>,
+    ) -> Option<u32> {
+        let slot = self.next_slot;
+        self.next_slot = self.next_slot.checked_add(1)?;
+        self.refs.push(CapabilityRef {
+            target,
+            slot,
+            permissions,
+            breadstuff,
+            expires_at,
+        });
+        Some(slot)
+    }
+
     /// Revoke a capability by slot number. Returns true if found and removed.
     pub fn revoke(&mut self, slot: u32) -> bool {
         let before = self.refs.len();
