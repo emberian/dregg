@@ -8,6 +8,7 @@ default = ["stark-verifier", "federation", "bridge"]
 stark-verifier = ["pyana-circuit"]
 federation = ["pyana-federation"]
 bridge = ["pyana-bridge", "token", "pyana-commit", "stark-verifier"]
+dev = []
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }

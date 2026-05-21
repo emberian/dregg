@@ -464,7 +464,7 @@ impl PresentationAir {
         })
     }
 
-    /// Verify the entire presentation (mock prover, validates all sub-circuits).
+    /// Verify the entire presentation (constraint prover, validates all sub-circuits).
     pub fn verify_all(&self) -> PresentationVerification {
         let w = &self.witness;
 
@@ -596,7 +596,7 @@ impl Air for PresentationAir {
 /// Result of a multi-step authorization proof.
 #[derive(Clone, Debug)]
 pub struct AuthorizationProof {
-    /// The mock proof (or STARK proof in future).
+    /// The constraint-checked proof of the derivation circuit.
     pub proof: ConstraintProof,
     /// The conclusion: true = ALLOW, false = DENY.
     pub conclusion_is_allow: bool,
@@ -722,18 +722,18 @@ impl PresentationBuilder {
 // Real STARK-backed presentation proof
 // ============================================================================
 
-/// A presentation proof backed by real STARK proofs (not mock).
+/// A presentation proof backed by real STARK proofs.
 ///
 /// The issuer membership proof uses a real STARK (FRI + Merkle commitments),
-/// providing actual cryptographic soundness. Fold and derivation proofs remain
-/// mock-backed for now (their traces are too small for meaningful FRI).
+/// providing actual cryptographic soundness. Fold and derivation proofs use
+/// constraint-checked proofs (their traces are currently too small for FRI).
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct RealPresentationProof {
     /// The public inputs.
     pub public_inputs: PresentationPublicInputs,
-    /// Mock proofs of the fold chain (TODO: upgrade to real STARK once traces grow).
+    /// Constraint-checked proofs of the fold chain.
     pub fold_proofs: Vec<ConstraintProof>,
-    /// Mock proof of the derivation (TODO: upgrade to real STARK).
+    /// Constraint-checked proof of the derivation.
     pub derivation_proof: ConstraintProof,
     /// Real STARK proof of issuer membership in the federation.
     pub issuer_membership_stark_proof: StarkProof,
@@ -743,7 +743,7 @@ impl RealPresentationProof {
     /// Verify the real presentation proof.
     ///
     /// Uses `stark::verify()` for the issuer membership proof, and structural
-    /// checks (root chain continuity) for the fold/derivation mock proofs.
+    /// checks (root chain continuity) for the fold/derivation constraint proofs.
     ///
     /// Supports both Poseidon2-based proofs (production, collision-resistant) and
     /// legacy linear proofs. Tries Poseidon2 first; falls back to linear.

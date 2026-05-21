@@ -316,18 +316,25 @@ impl BridgePresentationBuilder {
             let result = initial_attenuation_delta(attenuation, &mut self.symbols);
             match result {
                 Some((_old_state, new_state, delta)) => {
-                    // Update the authorization state: replace unrestricted with
-                    // the actual restriction facts for policy evaluation.
+                    // SECURITY: The auth_state and the fold chain's fact set must be
+                    // bound together. The circuit's DerivationWitness uses the Poseidon2
+                    // root of `ChainStep.facts` as its state_root, and the authorization
+                    // evaluator uses auth_state. By using the SAME semantic facts for
+                    // both, we ensure the authorization decision IS what gets proven.
+                    //
+                    // The new_facts (semantic: app, service, feature, etc.) are used for
+                    // auth_state AND stored as the chain step's facts (for Poseidon2 root).
+                    // The new_state (structural: check-prefixed) is only for fold delta
+                    // continuity.
                     self.auth_state = TokenState::new();
                     for fact in &new_facts {
                         self.auth_state.add_fact(*fact);
                     }
 
-                    let new_chain_facts = new_state.all_facts();
                     self.chain.push(ChainStep {
                         state: new_state,
                         delta: Some(delta),
-                        facts: new_chain_facts,
+                        facts: new_facts.clone(),
                     });
                     true
                 }
@@ -338,18 +345,23 @@ impl BridgePresentationBuilder {
             let result = further_attenuation_delta(current_state, &new_facts, &self.symbols);
             match result {
                 Some((new_state, delta)) => {
-                    // Add the new restriction facts to the authorization state.
+                    // SECURITY: Accumulate semantic facts and use them for both
+                    // auth_state and the chain step's Poseidon2 root computation.
+                    // This ensures the derivation witness's state_root covers exactly
+                    // the facts that the authorization evaluator used.
                     for fact in &new_facts {
                         if !self.auth_state.contains(fact) {
                             self.auth_state.add_fact(*fact);
                         }
                     }
 
-                    let new_chain_facts = new_state.all_facts();
+                    // The chain step facts = all semantic facts accumulated so far.
+                    let all_semantic_facts = self.auth_state.all_facts();
+
                     self.chain.push(ChainStep {
                         state: new_state,
                         delta: Some(delta),
-                        facts: new_chain_facts,
+                        facts: all_semantic_facts,
                     });
                     true
                 }
@@ -631,7 +643,7 @@ impl BridgePresentationBuilder {
         let air = PresentationAir::new(circuit_witness.clone());
         let verification = air.verify_all();
 
-        let _ivc_proof = air
+        let ivc_proof = air
             .prove_ivc()
             .ok_or_else(|| AuthError::InvalidRequest("IVC proof generation failed".into()))?;
 
@@ -643,6 +655,7 @@ impl BridgePresentationBuilder {
         Ok(BridgePresentationProof {
             circuit_proof,
             real_stark_proof: None,
+            ivc_proof: Some(ivc_proof),
             trace,
             chain_length: self.chain.len(),
             final_state_root: final_root_bytes,
@@ -1384,7 +1397,7 @@ pub fn verify_presentation_structural(proof: &BridgePresentationProof) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyana_circuit::MockProver;
+    use pyana_circuit::ConstraintProver;
 
     fn test_key() -> [u8; 32] {
         let mut key = [0u8; 32];
@@ -1600,7 +1613,7 @@ mod tests {
 
         // The Merkle AIR should verify this witness.
         let air = MerkleAir::new(witness);
-        let result = MockProver::verify(&air);
+        let result = ConstraintProver::verify(&air);
         assert!(
             result.is_valid(),
             "Issuer membership Merkle proof should verify"

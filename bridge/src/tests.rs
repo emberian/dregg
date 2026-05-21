@@ -73,11 +73,36 @@ fn compute_matching_federation_root_bb(key: &[u8; 32]) -> BabyBear {
     current
 }
 
-/// Create a builder whose federation root matches the synthetic Merkle path
-/// for the given key. Used by tests that exercise the full proof pipeline.
+/// Create a builder whose federation root matches the synthetic Poseidon2 Merkle path
+/// for the given key. Used by the `prove()` (real STARK) path.
 fn test_builder_with_matching_root(key: [u8; 32]) -> BridgePresentationBuilder {
     let federation_root = test_federation_root();
     let matching_root_bb = compute_matching_federation_root_bb(&key);
+    BridgePresentationBuilder::new_with_root_bb(key, federation_root, matching_root_bb)
+}
+
+/// Compute the LINEAR Merkle AIR federation root for testing `prove_fast()`.
+fn compute_matching_federation_root_bb_linear(key: &[u8; 32]) -> BabyBear {
+    let issuer_hash = crate::present::bytes_to_babybear(key);
+    let depth = 8;
+    let mut current = issuer_hash;
+    for i in 0..depth {
+        let position = (i % 4) as u8;
+        let siblings = [
+            BabyBear::new(crate::present::hash_index(i, 0, key)),
+            BabyBear::new(crate::present::hash_index(i, 1, key)),
+            BabyBear::new(crate::present::hash_index(i, 2, key)),
+        ];
+        current = MerkleAir::compute_parent(current, position, &siblings);
+    }
+    current
+}
+
+/// Create a builder whose federation root matches the synthetic LINEAR Merkle path
+/// for the given key. Used by `prove_fast()` tests.
+fn test_builder_with_matching_root_linear(key: [u8; 32]) -> BridgePresentationBuilder {
+    let federation_root = test_federation_root();
+    let matching_root_bb = compute_matching_federation_root_bb_linear(&key);
     BridgePresentationBuilder::new_with_root_bb(key, federation_root, matching_root_bb)
 }
 
@@ -168,7 +193,7 @@ fn test_end_to_end_macaroon_to_zk_proof() {
         ..Default::default()
     };
 
-    let proof_result = builder.prove_fast(&auth_request);
+    let proof_result = builder.prove(&auth_request);
     assert!(
         proof_result.is_ok(),
         "Proof generation should succeed: {:?}",
@@ -401,7 +426,7 @@ fn test_service_scoped_full_pipeline() {
 
     let root_token = MacaroonToken::mint(root_key, b"kid-svc", "pyana.dev");
 
-    let mut builder = test_builder_with_matching_root(root_key);
+    let mut builder = test_builder_with_matching_root_linear(root_key);
     builder.set_root_token(root_token);
 
     // Restrict to HTTP service with read access.
@@ -445,7 +470,7 @@ fn test_unrestricted_token_proof() {
 
     let root_token = MacaroonToken::mint(root_key, b"kid-unr", "pyana.dev");
 
-    let mut builder = test_builder_with_matching_root(root_key);
+    let mut builder = test_builder_with_matching_root_linear(root_key);
     builder.set_root_token(root_token);
     // No attenuations — the unrestricted root token should still authorize.
 
@@ -532,7 +557,7 @@ fn test_presentation_air_full_verification() {
 
     let root_token = MacaroonToken::mint(root_key, b"kid-full", "pyana.dev");
 
-    let mut builder = test_builder_with_matching_root(root_key);
+    let mut builder = test_builder_with_matching_root_linear(root_key);
     builder.set_root_token(root_token);
 
     let att = Attenuation {
@@ -565,7 +590,7 @@ fn test_proof_metadata() {
 
     let root_token = MacaroonToken::mint(root_key, b"kid-meta", "pyana.dev");
 
-    let mut builder = test_builder_with_matching_root(root_key);
+    let mut builder = test_builder_with_matching_root_linear(root_key);
     builder.set_root_token(root_token);
 
     let att1 = Attenuation {
@@ -609,7 +634,7 @@ fn test_deterministic_verification() {
 
     let build_and_prove = || {
         let root_token = MacaroonToken::mint(root_key, b"kid-det", "pyana.dev");
-        let mut builder = test_builder_with_matching_root(root_key);
+        let mut builder = test_builder_with_matching_root_linear(root_key);
         builder.set_root_token(root_token);
 
         let att = Attenuation {

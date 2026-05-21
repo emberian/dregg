@@ -27,7 +27,7 @@
 //! the action's target cell can accept it).
 
 use pyana_circuit::BabyBear;
-use pyana_circuit::stark::{self, MerkleStarkAir};
+use pyana_circuit::stark;
 use pyana_turn::ProofVerifier;
 
 /// A `ProofVerifier` implementation that verifies real STARK proofs from the
@@ -160,21 +160,23 @@ impl ProofVerifier for StarkProofVerifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyana_circuit::stark::{generate_merkle_trace, proof_to_bytes, prove};
+    use pyana_circuit::poseidon2_air::{MerklePoseidon2StarkAir, generate_merkle_poseidon2_trace};
+    use pyana_circuit::stark::{proof_to_bytes, prove};
 
     #[test]
     fn test_stark_verifier_valid_proof() {
-        // Generate a valid Merkle membership proof.
+        // Generate a valid Poseidon2 Merkle membership proof.
         let siblings = [
-            [100u32, 200, 300],
-            [400, 500, 600],
-            [700, 800, 900],
-            [1000, 1100, 1200],
+            [BabyBear::new(100), BabyBear::new(200), BabyBear::new(300)],
+            [BabyBear::new(400), BabyBear::new(500), BabyBear::new(600)],
+            [BabyBear::new(700), BabyBear::new(800), BabyBear::new(900)],
+            [BabyBear::new(1000), BabyBear::new(1100), BabyBear::new(1200)],
         ];
-        let positions = [0u32, 1, 2, 3];
-        let (trace, public_inputs) = generate_merkle_trace(12345, &siblings, &positions);
+        let positions: [u8; 4] = [0, 1, 2, 3];
+        let leaf_hash = BabyBear::new(12345);
+        let (trace, public_inputs) = generate_merkle_poseidon2_trace(leaf_hash, &siblings, &positions);
 
-        let air = MerkleStarkAir;
+        let air = MerklePoseidon2StarkAir;
         let proof = prove(&air, &trace, &public_inputs);
         let proof_bytes = proof_to_bytes(&proof);
 
@@ -185,22 +187,24 @@ mod tests {
         vk[..4].copy_from_slice(&root_bb.0.to_le_bytes());
 
         let verifier = StarkProofVerifier::new();
-        let dummy_action_msg = [0u8; 32]; // action signing message (not checked in STARK path)
-        assert!(verifier.verify(&proof_bytes, &dummy_action_msg, &vk));
+        // Action signing message must be non-empty (32 bytes).
+        let action_msg = [0x42u8; 32];
+        assert!(verifier.verify(&proof_bytes, &action_msg, &vk));
     }
 
     #[test]
     fn test_stark_verifier_wrong_federation_root() {
         let siblings = [
-            [100u32, 200, 300],
-            [400, 500, 600],
-            [700, 800, 900],
-            [1000, 1100, 1200],
+            [BabyBear::new(100), BabyBear::new(200), BabyBear::new(300)],
+            [BabyBear::new(400), BabyBear::new(500), BabyBear::new(600)],
+            [BabyBear::new(700), BabyBear::new(800), BabyBear::new(900)],
+            [BabyBear::new(1000), BabyBear::new(1100), BabyBear::new(1200)],
         ];
-        let positions = [0u32, 1, 2, 3];
-        let (trace, public_inputs) = generate_merkle_trace(12345, &siblings, &positions);
+        let positions: [u8; 4] = [0, 1, 2, 3];
+        let leaf_hash = BabyBear::new(12345);
+        let (trace, public_inputs) = generate_merkle_poseidon2_trace(leaf_hash, &siblings, &positions);
 
-        let air = MerkleStarkAir;
+        let air = MerklePoseidon2StarkAir;
         let proof = prove(&air, &trace, &public_inputs);
         let proof_bytes = proof_to_bytes(&proof);
 
@@ -209,22 +213,23 @@ mod tests {
         vk[..4].copy_from_slice(&99999u32.to_le_bytes());
 
         let verifier = StarkProofVerifier::new();
-        let dummy_action_msg = [0u8; 32];
-        assert!(!verifier.verify(&proof_bytes, &dummy_action_msg, &vk));
+        let action_msg = [0x42u8; 32];
+        assert!(!verifier.verify(&proof_bytes, &action_msg, &vk));
     }
 
     #[test]
     fn test_stark_verifier_tampered_proof() {
         let siblings = [
-            [100u32, 200, 300],
-            [400, 500, 600],
-            [700, 800, 900],
-            [1000, 1100, 1200],
+            [BabyBear::new(100), BabyBear::new(200), BabyBear::new(300)],
+            [BabyBear::new(400), BabyBear::new(500), BabyBear::new(600)],
+            [BabyBear::new(700), BabyBear::new(800), BabyBear::new(900)],
+            [BabyBear::new(1000), BabyBear::new(1100), BabyBear::new(1200)],
         ];
-        let positions = [0u32, 1, 2, 3];
-        let (trace, public_inputs) = generate_merkle_trace(12345, &siblings, &positions);
+        let positions: [u8; 4] = [0, 1, 2, 3];
+        let leaf_hash = BabyBear::new(12345);
+        let (trace, public_inputs) = generate_merkle_poseidon2_trace(leaf_hash, &siblings, &positions);
 
-        let air = MerkleStarkAir;
+        let air = MerklePoseidon2StarkAir;
         let proof = prove(&air, &trace, &public_inputs);
         let mut proof_bytes = proof_to_bytes(&proof);
 
@@ -238,15 +243,41 @@ mod tests {
         vk[..4].copy_from_slice(&root_bb.0.to_le_bytes());
 
         let verifier = StarkProofVerifier::new();
-        let dummy_action_msg = [0u8; 32];
-        assert!(!verifier.verify(&proof_bytes, &dummy_action_msg, &vk));
+        let action_msg = [0x42u8; 32];
+        assert!(!verifier.verify(&proof_bytes, &action_msg, &vk));
     }
 
     #[test]
     fn test_stark_verifier_empty_proof() {
         let verifier = StarkProofVerifier::new();
         let vk = [0u8; 32];
-        let dummy = [0u8; 32];
-        assert!(!verifier.verify(&[], &dummy, &vk));
+        let action_msg = [0x42u8; 32];
+        assert!(!verifier.verify(&[], &action_msg, &vk));
+    }
+
+    #[test]
+    fn test_stark_verifier_empty_public_inputs_rejected() {
+        // Empty public_inputs should be rejected (action binding check).
+        let siblings = [
+            [BabyBear::new(100), BabyBear::new(200), BabyBear::new(300)],
+            [BabyBear::new(400), BabyBear::new(500), BabyBear::new(600)],
+            [BabyBear::new(700), BabyBear::new(800), BabyBear::new(900)],
+            [BabyBear::new(1000), BabyBear::new(1100), BabyBear::new(1200)],
+        ];
+        let positions: [u8; 4] = [0, 1, 2, 3];
+        let leaf_hash = BabyBear::new(12345);
+        let (trace, public_inputs) = generate_merkle_poseidon2_trace(leaf_hash, &siblings, &positions);
+
+        let air = MerklePoseidon2StarkAir;
+        let proof = prove(&air, &trace, &public_inputs);
+        let proof_bytes = proof_to_bytes(&proof);
+
+        let root_bb = public_inputs[1];
+        let mut vk = [0u8; 32];
+        vk[..4].copy_from_slice(&root_bb.0.to_le_bytes());
+
+        let verifier = StarkProofVerifier::new();
+        // Empty public inputs should be rejected.
+        assert!(!verifier.verify(&proof_bytes, &[], &vk));
     }
 }

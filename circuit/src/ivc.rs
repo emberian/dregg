@@ -593,7 +593,7 @@ pub fn generate_state_transition_trace(
 
 /// Generate a real STARK proof for the IVC state transition hash chain.
 ///
-/// This replaces the ConstraintProof path: it produces a cryptographic STARK proof
+/// This produces a cryptographic STARK proof (replacing constraint-only verification)
 /// that the Poseidon2 hash chain from `initial_root` through all `new_roots`
 /// is correctly accumulated.
 pub fn prove_ivc_stark(
@@ -734,8 +734,9 @@ fn ivc_proof_size(step_count: u32) -> usize {
 /// and you want to extend it to cover steps 1..(N+1).
 ///
 /// In real IVC, this would recursively verify the previous proof inside the
-/// new circuit. In mock mode, we rebuild the hash chain (which is O(1) per step
-/// since we only need the accumulated_hash from the previous proof).
+/// new circuit. Without the recursion backend, we rebuild the hash chain
+/// (which is O(1) per step since we only need the accumulated_hash from the
+/// previous proof).
 pub fn fold_and_accumulate(prev: &AccumulatedProof, delta: &FoldDelta) -> Option<AccumulatedProof> {
     // Check root continuity first (cheap check before trace generation)
     if delta.fold.old_root != prev.current_root {
@@ -834,7 +835,7 @@ pub fn initial_accumulation(initial_root: BabyBear) -> AccumulatedProof {
 /// Finalize an accumulated proof into an IVC proof for verification.
 ///
 /// If `new_roots` is provided, a real STARK proof is generated for the hash chain.
-/// Otherwise, only the mock proof / digest binding is produced (legacy path).
+/// Otherwise, only the constraint proof / digest binding is produced (legacy path).
 pub fn finalize_ivc(
     initial_root: BabyBear,
     accumulated: &AccumulatedProof,

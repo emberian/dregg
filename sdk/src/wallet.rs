@@ -786,12 +786,12 @@ impl AgentWallet {
     /// Serialize a bridge presentation proof to bytes for wire transmission.
     ///
     /// Prefers the real STARK proof (issuer membership) when available,
-    /// otherwise serializes the mock circuit proof via postcard.
+    /// otherwise serializes the constraint-checked circuit proof via postcard.
     fn serialize_proof(bridge_proof: &BridgePresentationProof) -> Vec<u8> {
         if let Some(ref real) = bridge_proof.real_stark_proof {
             pyana_circuit::stark::proof_to_bytes(&real.issuer_membership_stark_proof)
         } else {
-            // Development path: serialize the mock presentation proof.
+            // Fast path: serialize the constraint-checked presentation proof.
             postcard::to_stdvec(&bridge_proof.circuit_proof).unwrap_or_default()
         }
     }

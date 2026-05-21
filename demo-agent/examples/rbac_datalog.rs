@@ -553,7 +553,6 @@ fn main() {
                     (true, BabyBear::new(0)),
                     (true, BabyBear::new(1)),
                     (false, BabyBear::ZERO),
-                    (false, BabyBear::ZERO),
                 ],
             }],
             equal_checks: vec![],

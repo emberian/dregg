@@ -454,7 +454,7 @@ fn run_multi_org_delegation(_issuer_key: &[u8; 32]) -> Result<(), Box<dyn Error>
     });
     match proof_result {
         Ok(presentation) => {
-            assert!(verify_presentation(&presentation));
+            assert!(verify_presentation(&presentation, &presentation.federation_root));
             assert!(presentation.verify_issuer_stark().unwrap().is_ok());
         }
         Err(_) => {
