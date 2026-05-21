@@ -47,6 +47,14 @@ export function initOverview() {
                           +----------------------------------+</pre>
     </div>
 
+    <div class="overview-extension-note" style="background:var(--accent-soft);border:1px solid var(--accent);border-radius:6px;padding:12px 16px;margin-bottom:24px;">
+      <strong style="color:var(--accent-bright);">Pyana Wallet Extension</strong>
+      <span style="color:var(--fg-dim);margin-left:8px;">
+        Install the browser extension to manage capabilities and generate STARK proofs from any web page.
+        <a href="../extension/" style="color:var(--accent-bright);text-decoration:underline;">Install now</a>
+      </span>
+    </div>
+
     <div class="overview-capabilities">
       <div class="overview-cap" data-nav="tokens">
         <div class="overview-cap__title">Tokens</div>

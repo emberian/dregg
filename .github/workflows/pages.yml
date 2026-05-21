@@ -8,6 +8,7 @@ on:
       - "wasm/**"
       - "crates/**"
       - "paper/**"
+      - "extension/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 

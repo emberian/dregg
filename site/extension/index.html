@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Install Pyana Wallet Extension</title>
+  <meta name="description" content="Download and install the Pyana Wallet browser extension for Chrome. Manage capabilities, generate STARK proofs, and authorize agents locally.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0f0d'/%3E%3Ctext x='16' y='22' font-size='16' text-anchor='middle' fill='%235b8a5a' font-family='monospace'%3E%CF%80%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../assets/style.css">
+  <style>
+    .install-page { max-width: 720px; margin: 0 auto; padding: var(--s7) var(--s5); }
+    .install-page h1 { font-family: var(--font-display); font-size: 2rem; margin-bottom: var(--s3); }
+    .install-page .subtitle { color: var(--fg-dim); margin-bottom: var(--s6); font-size: 1.05rem; }
+
+    .download-box {
+      background: var(--bg-raised);
+      border: 1px solid var(--line-strong);
+      border-radius: var(--r3);
+      padding: var(--s6);
+      text-align: center;
+      margin-bottom: var(--s7);
+    }
+    .download-box p { color: var(--fg-dim); margin-bottom: var(--s4); }
+    .download-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--accent);
+      color: var(--void);
+      font-weight: 600;
+      font-size: 1.05rem;
+      padding: 14px 32px;
+      border-radius: var(--r2);
+      text-decoration: none;
+      transition: background var(--dur) var(--ease);
+    }
+    .download-btn:hover { background: var(--accent-bright); color: var(--void); }
+    .download-btn svg { width: 20px; height: 20px; }
+
+    .steps { margin-bottom: var(--s7); }
+    .steps h2 {
+      font-family: var(--font-display);
+      font-size: 1.4rem;
+      margin-bottom: var(--s5);
+    }
+    .step {
+      display: flex;
+      gap: var(--s4);
+      margin-bottom: var(--s5);
+      padding: var(--s4);
+      background: var(--bg-raised);
+      border-radius: var(--r2);
+      border: 1px solid var(--line);
+    }
+    .step__num {
+      flex-shrink: 0;
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--accent-soft);
+      color: var(--accent-bright);
+      border-radius: 50%;
+      font-weight: 700;
+      font-size: 0.85rem;
+      font-family: var(--font-mono);
+    }
+    .step__content { flex: 1; }
+    .step__content p { margin: 0; }
+    .step__content code {
+      background: var(--bg-inset);
+      padding: 2px 6px;
+      border-radius: var(--r1);
+      font-family: var(--font-mono);
+      font-size: 0.88em;
+      color: var(--accent-bright);
+    }
+
+    .note-box {
+      background: var(--warm-soft);
+      border: 1px solid rgba(196, 146, 69, 0.25);
+      border-radius: var(--r2);
+      padding: var(--s4) var(--s5);
+      margin-bottom: var(--s6);
+      color: var(--fg-dim);
+    }
+    .note-box strong { color: var(--warm); }
+
+    .test-link {
+      margin-top: var(--s5);
+      padding-top: var(--s5);
+      border-top: 1px solid var(--line);
+    }
+    .test-link h3 { font-size: 1.1rem; margin-bottom: var(--s2); }
+    .test-link p { color: var(--fg-dim); margin-bottom: var(--s3); }
+  </style>
+</head>
+<body>
+
+<nav class="nav">
+  <span class="nav__mark">&pi;</span>
+  <span class="nav__name">Pyana</span>
+  <span class="nav__tag">distributed object-capability runtime</span>
+  <div class="nav__links">
+    <a class="nav__link" href="../index.html">Home</a>
+    <a class="nav__link" href="../docs.html">Docs</a>
+    <a class="nav__link" href="../paper.html">Paper</a>
+    <a class="nav__link" href="../demo.html">Demo</a>
+    <a class="nav__link" href="https://github.com/emberian/pyana">GitHub</a>
+  </div>
+</nav>
+
+<main class="install-page">
+  <h1>Install the Pyana Wallet Extension</h1>
+  <p class="subtitle">
+    The Pyana Wallet is a Chrome extension that manages your capabilities, evaluates
+    Datalog policies, and generates STARK proofs — all locally in WebAssembly.
+    No data leaves your browser.
+  </p>
+
+  <div class="download-box">
+    <p>Download the extension as a zip file and install it manually in Chrome or any Chromium-based browser.</p>
+    <a class="download-btn" href="pyana-wallet.zip" download>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="7 10 12 15 17 10"/>
+        <line x1="12" y1="15" x2="12" y2="3"/>
+      </svg>
+      Download pyana-wallet.zip
+    </a>
+  </div>
+
+  <div class="steps">
+    <h2>Installation Steps</h2>
+
+    <div class="step">
+      <span class="step__num">1</span>
+      <div class="step__content">
+        <p><strong>Download the zip</strong> using the button above. Save it anywhere convenient.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="step__num">2</span>
+      <div class="step__content">
+        <p><strong>Unzip to a folder.</strong> Extract the zip contents to a permanent location (e.g., <code>~/pyana-wallet/</code>). Do not delete this folder after installing — Chrome reads from it.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="step__num">3</span>
+      <div class="step__content">
+        <p><strong>Open the extensions page.</strong> Navigate to <code>chrome://extensions</code> in your browser address bar.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="step__num">4</span>
+      <div class="step__content">
+        <p><strong>Enable Developer Mode.</strong> Toggle the "Developer mode" switch in the top-right corner of the extensions page.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="step__num">5</span>
+      <div class="step__content">
+        <p><strong>Click "Load unpacked".</strong> A button will appear in the top-left after enabling Developer Mode. Click it.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="step__num">6</span>
+      <div class="step__content">
+        <p><strong>Select the unzipped folder.</strong> Navigate to the folder where you extracted the zip and select it. The extension will load immediately.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="note-box">
+    <p><strong>Coming to Chrome Web Store soon.</strong> We are preparing for official Chrome Web Store distribution. In the meantime, manual installation works identically — the extension has full functionality including WASM-powered STARK proof generation.</p>
+  </div>
+
+  <div class="test-link">
+    <h3>Test the Extension</h3>
+    <p>Once installed, try the auth demo to see the wallet in action — provision a demo token, request authorization at different privacy levels, and verify STARK proofs locally.</p>
+    <a class="btn btn--primary" href="../examples/auth-demo.html">Launch Auth Demo</a>
+  </div>
+</main>
+
+<footer class="site-foot">
+  <div class="site-foot__inner">
+    <span class="site-foot__left">Pyana -- distributed object-capability runtime. MIT OR Apache-2.0.</span>
+    <div class="site-foot__links">
+      <a href="../index.html">Home</a>
+      <a href="../docs.html">Docs</a>
+      <a href="../paper.html">Paper</a>
+      <a href="https://github.com/emberian/pyana">GitHub</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
