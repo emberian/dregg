@@ -1,6 +1,12 @@
 {
+  "gateway": {
+    "url": "https://pyana.commonquant.com",
+    "ws": "wss://pyana.commonquant.com/ws",
+    "api": "https://pyana.commonquant.com/api",
+    "gossip": "pyana.commonquant.com:9420"
+  },
   "federation": [],
   "intent_service": null,
-  "updated_at": "2026-05-21T06:46:20Z",
-  "commit": "b0cc0bf634f139051e5e8b500721ecea3d5ebc26"
+  "updated_at": "2026-05-21T08:11:35Z",
+  "commit": "e5bebacf49385e28d32315cb93aa7722127b0129"
 }
