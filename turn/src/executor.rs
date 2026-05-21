@@ -1545,6 +1545,59 @@ impl TurnExecutor {
             Effect::FulfillObligation { .. } => Ok(()),
             Effect::SlashObligation { .. } => Ok(()),
 
+            // ExerciseViaCapability: one-step evaluation map.
+            // Look up cap_slot in actor's c-list, verify permissions, execute
+            // inner_effects against the capability's target cell.
+            Effect::ExerciseViaCapability {
+                cap_slot,
+                inner_effects,
+            } => {
+                let actor_cell = ledger
+                    .get(actor)
+                    .ok_or_else(|| (TurnError::CellNotFound { id: *actor }, path.to_vec()))?;
+
+                // Look up the capability by slot.
+                let cap = actor_cell.capabilities.lookup(*cap_slot).cloned().ok_or_else(|| {
+                    (
+                        TurnError::CapabilityNotHeld {
+                            actor: *actor,
+                            target: CellId::from_bytes([0u8; 32]), // slot doesn't exist
+                        },
+                        path.to_vec(),
+                    )
+                })?;
+
+                let cap_target = cap.target;
+
+                // Verify the target cell exists.
+                if ledger.get(&cap_target).is_none() {
+                    return Err((
+                        TurnError::CellNotFound { id: cap_target },
+                        path.to_vec(),
+                    ));
+                }
+
+                // Permission check: the capability's permissions must allow the operations.
+                // If the capability requires Impossible, reject.
+                if matches!(cap.permissions, pyana_cell::AuthRequired::Impossible) {
+                    return Err((
+                        TurnError::PermissionDenied {
+                            cell: cap_target,
+                            action: "ExerciseViaCapability".to_string(),
+                            required: pyana_cell::AuthRequired::Impossible,
+                        },
+                        path.to_vec(),
+                    ));
+                }
+
+                // Execute each inner effect against the capability's target cell.
+                for inner_effect in inner_effects {
+                    self.apply_effect(inner_effect, ledger, path, &cap_target, actor, journal)?;
+                }
+
+                Ok(())
+            }
+
             // PipelinedSend must be resolved by the pipeline executor's resolution pass
             // before the turn reaches apply_effect. If we get here, it means the turn
             // was executed outside of a pipeline without resolution — which is a bug.
@@ -1954,6 +2007,13 @@ impl TurnExecutor {
             Effect::CreateObligation { .. } => self.costs.effect_base,
             Effect::FulfillObligation { .. } => self.costs.proof_verify,
             Effect::SlashObligation { .. } => self.costs.effect_base,
+            Effect::ExerciseViaCapability { inner_effects, .. } => {
+                // Base cost + cost of each inner effect
+                inner_effects
+                    .iter()
+                    .map(|e| self.compute_effect_cost(e))
+                    .sum::<u64>()
+            }
         };
         base.saturating_add(extra)
             .saturating_add((effect.data_bytes() as u64).saturating_mul(self.costs.per_byte))
@@ -2600,6 +2660,15 @@ fn rewrite_effect_targets(effects: &mut [Effect], placeholder: &CellId, resolved
                     *target = *resolved;
                 }
             }
+            Effect::CreateObligation { beneficiary, .. } => {
+                if beneficiary == placeholder {
+                    *beneficiary = *resolved;
+                }
+            }
+            // ExerciseViaCapability: recurse into inner_effects for rewriting.
+            Effect::ExerciseViaCapability { inner_effects, .. } => {
+                rewrite_effect_targets(inner_effects, placeholder, resolved);
+            }
             // These effects don't have mutable CellId fields needing rewrite:
             Effect::CreateCell { .. }
             | Effect::NoteSpend { .. }
@@ -2612,7 +2681,6 @@ fn rewrite_effect_targets(effects: &mut [Effect], placeholder: &CellId, resolved
             | Effect::SpawnWithDelegation { .. }
             | Effect::RefreshDelegation
             | Effect::RevokeDelegation { .. }
-            | Effect::CreateObligation { .. }
             | Effect::FulfillObligation { .. }
             | Effect::SlashObligation { .. } => {}
         }

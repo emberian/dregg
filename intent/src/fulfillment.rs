@@ -541,6 +541,7 @@ mod tests {
                     (true, BabyBear::new(0)),
                     (true, BabyBear::new(1)),
                     (false, BabyBear::ZERO),
+                    (false, BabyBear::ZERO),
                 ],
                 body_atoms: vec![BodyAtomPattern {
                     predicate: has_role_pred,
@@ -558,7 +559,7 @@ mod tests {
             body_fact_hashes: vec![body_hash],
             substitution: vec![alice, app],
             derived_predicate: allow_pred,
-            derived_terms: [alice, app, BabyBear::ZERO],
+            derived_terms: [alice, app, BabyBear::ZERO, BabyBear::ZERO],
         };
 
         build_multi_step_witness(state_root, BabyBear::new(42), vec![step])

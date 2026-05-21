@@ -5252,3 +5252,148 @@ fn test_is_stale_various_timestamps() {
     assert!(always_stale.is_stale(1000));
     assert!(always_stale.is_stale(0));
 }
+
+// =============================================================================
+// Tests: ExerciseViaCapability
+// =============================================================================
+
+/// Helper: setup a 3-cell ledger where agent has a capability (slot 0) to a
+/// third cell (cap_target). Agent also has capability to its own cell (as usual).
+fn setup_exercise_via_cap() -> (Ledger, CellId, CellId, CellId) {
+    let mut ledger = Ledger::new();
+    let (agent, _) = make_open_cell(1, 5000);
+    let (target, _) = make_open_cell(2, 1000);
+    let (cap_target, _) = make_open_cell(3, 2000);
+    let agent_id = agent.id;
+    let target_id = target.id;
+    let cap_target_id = cap_target.id;
+
+    // Grant agent capability to target (slot 0) and cap_target (slot 1).
+    let mut agent_with_caps = agent;
+    agent_with_caps
+        .capabilities
+        .grant(target_id, AuthRequired::None);
+    agent_with_caps
+        .capabilities
+        .grant(cap_target_id, AuthRequired::None);
+
+    ledger.insert_cell(agent_with_caps).unwrap();
+    ledger.insert_cell(target).unwrap();
+    ledger.insert_cell(cap_target).unwrap();
+    (ledger, agent_id, target_id, cap_target_id)
+}
+
+#[test]
+fn test_exercise_via_capability_transfer_succeeds() {
+    let (mut ledger, agent_id, _target_id, cap_target_id) = setup_exercise_via_cap();
+    let executor = zero_cost_executor();
+
+    // Exercise slot 1 (cap_target) to transfer from cap_target to agent.
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action = builder.action(agent_id, "exercise");
+        action.effect(Effect::ExerciseViaCapability {
+            cap_slot: 1, // slot 1 = capability to cap_target
+            inner_effects: vec![Effect::Transfer {
+                from: cap_target_id,
+                to: agent_id,
+                amount: 500,
+            }],
+        });
+    }
+    let turn = builder.fee(100).build();
+
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        result.is_committed(),
+        "ExerciseViaCapability should succeed: {:?}",
+        result
+    );
+
+    // cap_target lost 500, agent gained 500 (minus fee).
+    let cap_target = ledger.get(&cap_target_id).unwrap();
+    assert_eq!(cap_target.state.balance, 2000 - 500);
+
+    let agent = ledger.get(&agent_id).unwrap();
+    // Started at 5000, paid 100 fee, received 500.
+    assert_eq!(agent.state.balance, 5000 - 100 + 500);
+}
+
+#[test]
+fn test_exercise_via_capability_insufficient_permissions() {
+    let mut ledger = Ledger::new();
+    let (agent, _) = make_open_cell(1, 5000);
+    let (cap_target, _) = make_open_cell(3, 2000);
+    let agent_id = agent.id;
+    let cap_target_id = cap_target.id;
+
+    // Grant agent a capability with Impossible permissions (cannot exercise).
+    let mut agent_with_caps = agent;
+    agent_with_caps
+        .capabilities
+        .grant(cap_target_id, AuthRequired::Impossible);
+
+    ledger.insert_cell(agent_with_caps).unwrap();
+    ledger.insert_cell(cap_target).unwrap();
+
+    let executor = zero_cost_executor();
+
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action = builder.action(agent_id, "exercise");
+        action.effect(Effect::ExerciseViaCapability {
+            cap_slot: 0, // slot 0 = capability to cap_target (Impossible)
+            inner_effects: vec![Effect::Transfer {
+                from: cap_target_id,
+                to: agent_id,
+                amount: 100,
+            }],
+        });
+    }
+    let turn = builder.fee(100).build();
+
+    let result = executor.execute(&turn, &mut ledger);
+    match result {
+        crate::turn::TurnResult::Rejected { reason, .. } => {
+            assert!(
+                matches!(reason, TurnError::PermissionDenied { .. }),
+                "expected PermissionDenied, got {:?}",
+                reason
+            );
+        }
+        _ => panic!("expected Rejected, got {:?}", result),
+    }
+}
+
+#[test]
+fn test_exercise_via_capability_slot_not_found() {
+    let (mut ledger, agent_id, _target_id, _cap_target_id) = setup_exercise_via_cap();
+    let executor = zero_cost_executor();
+
+    // Try to exercise slot 99 which doesn't exist.
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action = builder.action(agent_id, "exercise");
+        action.effect(Effect::ExerciseViaCapability {
+            cap_slot: 99, // doesn't exist
+            inner_effects: vec![Effect::Transfer {
+                from: CellId::from_bytes([0xAA; 32]),
+                to: agent_id,
+                amount: 100,
+            }],
+        });
+    }
+    let turn = builder.fee(100).build();
+
+    let result = executor.execute(&turn, &mut ledger);
+    match result {
+        crate::turn::TurnResult::Rejected { reason, .. } => {
+            assert!(
+                matches!(reason, TurnError::CapabilityNotHeld { .. }),
+                "expected CapabilityNotHeld, got {:?}",
+                reason
+            );
+        }
+        _ => panic!("expected Rejected, got {:?}", result),
+    }
+}

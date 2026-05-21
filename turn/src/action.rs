@@ -304,6 +304,18 @@ pub enum Effect {
         /// ID of the obligation to slash.
         obligation_id: [u8; 32],
     },
+    /// Exercise a capability from the actor's c-list in one atomic step.
+    ///
+    /// This is the categorical "evaluation map" (eval: B^A x A -> B): look up a
+    /// capability by slot, verify permissions, and execute inner effects against
+    /// the capability's target cell. Combines c-list lookup + sub-action into a
+    /// single effect, eliminating the two-step lookup-then-submit pattern.
+    ExerciseViaCapability {
+        /// Which slot in the actor's c-list to exercise.
+        cap_slot: u32,
+        /// The effects to perform on the target cell (resolved from the capability).
+        inner_effects: Vec<Effect>,
+    },
 }
 
 /// An event emitted by an action.
@@ -633,6 +645,16 @@ impl Effect {
                 hasher.update(&[20u8]);
                 hasher.update(child.as_bytes());
             }
+            Effect::ExerciseViaCapability {
+                cap_slot,
+                inner_effects,
+            } => {
+                hasher.update(&[25u8]);
+                hasher.update(&cap_slot.to_le_bytes());
+                for inner in inner_effects {
+                    hasher.update(&inner.hash());
+                }
+            }
         }
         *hasher.finalize().as_bytes()
     }
@@ -679,6 +701,9 @@ impl Effect {
                 }
             }
             Effect::SlashObligation { .. } => 32,
+            Effect::ExerciseViaCapability { inner_effects, .. } => {
+                4 + inner_effects.iter().map(|e| e.data_bytes()).sum::<usize>()
+            }
         }
     }
 
