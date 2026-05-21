@@ -241,7 +241,7 @@ fn main() {
     match stark_result {
         Some(Ok(())) => {
             println!("  STARK cryptographic verification: PASS");
-            println!("    (50 FRI queries, ~100-bit security)");
+            println!("    (80 FRI queries, ~124-bit security)");
         }
         Some(Err(e)) => {
             panic!("  STARK verification failed: {}", e);

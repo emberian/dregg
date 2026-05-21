@@ -162,7 +162,7 @@ Capabilities are encoded as Datalog fact sets within bearer tokens. Two token ba
 
 ### BabyBear STARK with Real Poseidon2 Constraints
 
-All proofs use BabyBear4 (degree-4 extension field, |F_{p^4}| ~ 2^124, providing 124-bit challenge security). FRI with 50 queries and blowup factor 4 gives ~100-bit soundness. Poseidon2 (width 8, alpha=7, 8 external + 22 internal rounds) serves as the in-circuit hash. Proofs are ~24 KiB, generated in sub-second time on Apple M-series.
+All proofs use BabyBear4 (degree-4 extension field, |F_{p^4}| ~ 2^124, providing 124-bit challenge security). FRI with 80 queries and blowup factor 4 gives 160-bit soundness; the system bottleneck is the ~124-bit challenge security from BabyBear4, comfortably exceeding NIST PQ Level 1. Poseidon2 (width 8, alpha=7, 8 external + 22 internal rounds) serves as the in-circuit hash. Proofs are ~38 KiB, generated in sub-second time on Apple M-series.
 
 ### AIR Circuits
 

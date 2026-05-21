@@ -4,7 +4,7 @@
 //! verifying authorization, applying effects, and metering computrons at each step.
 //! If any action fails, ALL effects are rolled back via journal replay (atomicity guarantee).
 
-use std::cell::RefCell;
+use std::sync::Mutex;
 
 use ed25519_dalek::{Signature, VerifyingKey};
 use pyana_cell::{
@@ -104,9 +104,10 @@ pub struct TurnExecutor {
     /// each turn. If the slice cannot cover the turn fee, the turn is rejected with
     /// `TurnError::BudgetExhausted`. On turn failure, the debit is refunded (fast unlock).
     ///
-    /// Uses `RefCell` for interior mutability so that `execute(&self, ...)` can
-    /// debit and refund the slice without requiring `&mut self`.
-    pub budget_gate: Option<RefCell<BudgetGate>>,
+    /// Designed for single-silo-single-thread execution, but uses `Mutex` for interior
+    /// mutability to remain sound under concurrent access (future-proofing for async
+    /// execution or parallel turn processing).
+    pub budget_gate: Option<Mutex<BudgetGate>>,
 }
 
 impl TurnExecutor {
@@ -132,7 +133,7 @@ impl TurnExecutor {
             current_timestamp: 0,
             block_height: 0,
             proof_verifier: None,
-            budget_gate: Some(RefCell::new(gate)),
+            budget_gate: Some(Mutex::new(gate)),
         }
     }
 
@@ -149,7 +150,7 @@ impl TurnExecutor {
 
     /// Set the budget gate.
     pub fn set_budget_gate(&mut self, gate: BudgetGate) {
-        self.budget_gate = Some(RefCell::new(gate));
+        self.budget_gate = Some(Mutex::new(gate));
     }
 
     /// Set the proof verifier.
@@ -242,7 +243,7 @@ impl TurnExecutor {
         // =====================================================================
         let budget_debit_digest = if let Some(gate_cell) = &self.budget_gate {
             let turn_hash = turn.hash();
-            let mut gate = gate_cell.borrow_mut();
+            let mut gate = gate_cell.lock().unwrap();
             match gate.try_debit(turn.fee, &turn_hash) {
                 Ok(digest) => Some((digest, turn.fee)),
                 Err(remaining) => {
@@ -306,7 +307,7 @@ impl TurnExecutor {
                 if let (Some(gate_cell), Some((digest, fee))) =
                     (&self.budget_gate, &budget_debit_digest)
                 {
-                    gate_cell.borrow_mut().fast_unlock(*fee, digest);
+                    gate_cell.lock().unwrap().fast_unlock(*fee, digest);
                 }
                 return TurnResult::Rejected {
                     reason: error,
@@ -321,7 +322,7 @@ impl TurnExecutor {
             if let (Some(gate_cell), Some((digest, fee))) =
                 (&self.budget_gate, &budget_debit_digest)
             {
-                gate_cell.borrow_mut().fast_unlock(*fee, digest);
+                gate_cell.lock().unwrap().fast_unlock(*fee, digest);
             }
             return TurnResult::Rejected {
                 reason: TurnError::BudgetExceeded {
@@ -340,7 +341,7 @@ impl TurnExecutor {
             if let (Some(gate_cell), Some((digest, fee))) =
                 (&self.budget_gate, &budget_debit_digest)
             {
-                gate_cell.borrow_mut().fast_unlock(*fee, digest);
+                gate_cell.lock().unwrap().fast_unlock(*fee, digest);
             }
             return TurnResult::Rejected {
                 reason: TurnError::NoteConservationViolation {
@@ -358,7 +359,7 @@ impl TurnExecutor {
             if let (Some(gate_cell), Some((digest, fee))) =
                 (&self.budget_gate, &budget_debit_digest)
             {
-                gate_cell.borrow_mut().fast_unlock(*fee, digest);
+                gate_cell.lock().unwrap().fast_unlock(*fee, digest);
             }
             return TurnResult::Rejected {
                 reason: TurnError::ExcessNotZero { excess },

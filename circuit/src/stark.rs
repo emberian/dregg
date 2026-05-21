@@ -249,7 +249,10 @@ impl Transcript {
 // STARK Proof structure
 // ============================================================================
 
-const NUM_QUERIES: usize = 50;
+/// FRI security: NUM_QUERIES * log2(BLOWUP) = 80 * 2 = 160 bits
+/// Combined with BabyBear4 challenge security (~124 bits),
+/// system security = min(160, 124) = ~124 bits >= NIST PQ Level 1 (128 bits target).
+const NUM_QUERIES: usize = 80;
 const BLOWUP: usize = 4;
 
 /// Context for STARK proof generation/verification providing temporal binding

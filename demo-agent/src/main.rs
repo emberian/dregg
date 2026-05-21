@@ -300,7 +300,7 @@ fn main() {
         "  Public inputs: leaf={}, root={}",
         stark_public_inputs[0].0, stark_public_inputs[1].0
     ));
-    item("  STARK self-verification: PASS (50 FRI queries, ~100-bit security)");
+    item("  STARK self-verification: PASS (80 FRI queries, ~124-bit security)");
     item(&format!(
         "  Federation root bound to proof: {}",
         stark_federation_root.0

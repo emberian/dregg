@@ -4440,7 +4440,7 @@ fn test_budget_gate_turn_within_budget_succeeds() {
     assert!(result.is_committed());
 
     // Verify the slice was debited.
-    let gate_ref = executor.budget_gate.as_ref().unwrap().borrow();
+    let gate_ref = executor.budget_gate.as_ref().unwrap().lock().unwrap();
     assert_eq!(gate_ref.slice.spent, 500);
     assert_eq!(gate_ref.slice.remaining(), 9_500);
     assert_eq!(gate_ref.slice.debits.len(), 1);
@@ -4475,7 +4475,7 @@ fn test_budget_gate_turn_exceeding_slice_rejected() {
     }
 
     // Verify the slice was NOT debited (rejected before debit).
-    let gate_ref = executor.budget_gate.as_ref().unwrap().borrow();
+    let gate_ref = executor.budget_gate.as_ref().unwrap().lock().unwrap();
     assert_eq!(gate_ref.slice.spent, 0);
     assert_eq!(gate_ref.slice.remaining(), 100);
 }
@@ -4498,7 +4498,7 @@ fn test_budget_gate_multiple_turns_deplete_slice() {
 
     // Verify progressive depletion.
     {
-        let gate_ref = executor.budget_gate.as_ref().unwrap().borrow();
+        let gate_ref = executor.budget_gate.as_ref().unwrap().lock().unwrap();
         assert_eq!(gate_ref.slice.spent, 800);
         assert_eq!(gate_ref.slice.remaining(), 200);
         assert_eq!(gate_ref.slice.debits.len(), 4);
@@ -4558,7 +4558,7 @@ fn test_budget_gate_refund_on_turn_failure() {
     assert!(result.is_rejected());
 
     // The budget debit should have been refunded (fast unlock).
-    let gate_ref = executor.budget_gate.as_ref().unwrap().borrow();
+    let gate_ref = executor.budget_gate.as_ref().unwrap().lock().unwrap();
     assert_eq!(gate_ref.slice.spent, 0);
     assert_eq!(gate_ref.slice.remaining(), 5000);
     assert_eq!(gate_ref.slice.debits.len(), 0);
@@ -4585,7 +4585,7 @@ fn test_budget_gate_fresh_slice_after_rebalance() {
 
     // Simulate rebalance: replace the slice with a fresh one.
     {
-        let mut gate_ref = executor.budget_gate.as_ref().unwrap().borrow_mut();
+        let mut gate_ref = executor.budget_gate.as_ref().unwrap().lock().unwrap();
         gate_ref.slice = BudgetSlice::new(2000); // Fresh slice from coordinator
     }
 
@@ -4595,7 +4595,7 @@ fn test_budget_gate_fresh_slice_after_rebalance() {
     assert!(result.is_committed());
 
     // Verify new slice state.
-    let gate_ref = executor.budget_gate.as_ref().unwrap().borrow();
+    let gate_ref = executor.budget_gate.as_ref().unwrap().lock().unwrap();
     assert_eq!(gate_ref.slice.spent, 200);
     assert_eq!(gate_ref.slice.remaining(), 1800);
 }
