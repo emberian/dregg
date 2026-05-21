@@ -1014,11 +1014,14 @@ impl BridgePresentationBuilder {
     /// request facts (injected by the evaluator) + derived facts from prior steps.
     /// The `body_fact_indices` in each DerivationStep index into this growing list.
     fn reconstruct_evaluator_facts(&self, trace: &AuthorizationTrace) -> Vec<pyana_trace::Fact> {
-        use pyana_trace::{Fact as TraceFact, Term, symbol_from_str};
+        use pyana_trace::{Fact as TraceFact, Term, symbol_from_bytes, symbol_from_str};
 
         let mut facts: Vec<TraceFact> = Vec::new();
 
         // 1. Base facts from the committed auth_state.
+        // Use the same conversion as committed_facts_to_trace: symbol_from_str for
+        // predicates (matches policy rule predicates), symbol_from_bytes for terms
+        // (enables Contains check and matches what the evaluator used).
         for fact in self.auth_state.all_facts() {
             let pred_symbol = if let Some(name) = self.symbols.resolve(fact.predicate) {
                 symbol_from_str(name)
@@ -1031,7 +1034,7 @@ impl BridgePresentationBuilder {
                     break;
                 }
                 if let Some(name) = self.symbols.resolve(*term_fe) {
-                    terms.push(Term::Const(symbol_from_str(name)));
+                    terms.push(Term::Const(symbol_from_bytes(name.as_bytes())));
                 } else {
                     terms.push(Term::Const(term_fe.0));
                 }

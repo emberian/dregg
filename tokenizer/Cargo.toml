@@ -22,6 +22,7 @@ directories = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+tokio = { version = "1", features = ["time"] }
 
 [lib]
 name = "pyana_tokenizer"

@@ -11,7 +11,7 @@ use pyana_commit::{FieldElement, SymbolTable, TokenState};
 use pyana_token::AuthRequest;
 use pyana_trace::{
     AuthorizationRequest as TraceRequest, AuthorizationTrace, Conclusion, Evaluator,
-    Fact as TraceFact, Rule, Term, symbol_from_str,
+    Fact as TraceFact, Rule, Term, symbol_from_bytes, symbol_from_str,
 };
 
 /// Errors that can occur during authorization evaluation.
@@ -149,34 +149,36 @@ pub fn authorize_with_custom_rules(
 /// For the trace evaluator, we need `TraceFact` instances with `Symbol` predicates
 /// (which are [u8; 32]) and `Term` values.
 fn committed_facts_to_trace(state: &TokenState, symbols: &SymbolTable) -> Vec<TraceFact> {
+    use pyana_trace::symbol_from_bytes;
     let mut trace_facts = Vec::new();
 
     for fact in state.all_facts() {
         // The predicate field element's raw bytes become the Symbol.
         let predicate: [u8; 32] = fact.predicate.0;
 
-        // If we can resolve the predicate to a name, use the trace symbol
-        // (which is zero-padded string bytes). Otherwise use the raw hash.
+        // Predicates use symbol_from_str (BLAKE3 hash) because the policy rules
+        // define predicates via symbol_from_str and matching is by exact equality.
         let pred_symbol = if let Some(name) = symbols.resolve(fact.predicate) {
             symbol_from_str(name)
         } else {
             predicate
         };
 
-        // Convert terms.
+        // Terms use symbol_from_bytes (raw zero-padded string) so that the legacy
+        // Contains check works correctly. Contains interprets the 32-byte symbol as
+        // a UTF-8 string (trimming trailing nulls) and checks for substring matching.
+        // Using BLAKE3 for terms would destroy the string relationship needed for
+        // Contains (e.g., "rw".contains("r") must be true).
         let mut terms = Vec::new();
         for term_fe in &fact.terms {
             if term_fe.is_zero() {
                 break; // Stop at first zero term (unused slot).
             }
-            // Try to resolve as a symbol name first.
             if let Some(name) = symbols.resolve(*term_fe) {
-                terms.push(Term::Const(symbol_from_str(name)));
+                terms.push(Term::Const(symbol_from_bytes(name.as_bytes())));
             } else if let Some(int_val) = field_element_to_int(term_fe) {
-                // Small integer field element — convert to Term::Int.
                 terms.push(Term::Int(int_val));
             } else {
-                // Treat as a raw constant (the field element bytes).
                 terms.push(Term::Const(term_fe.0));
             }
         }
