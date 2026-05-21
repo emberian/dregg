@@ -22,8 +22,8 @@
 //! - The system is non-custodial (federation cannot "freeze" your state)
 
 use pyana_circuit::ivc::{IvcVerification, verify_ivc};
-use pyana_federation::types::{AttestedRoot, PublicKey};
-use pyana_federation::{Federation, generate_keypair, sign};
+use pyana_federation::types::PublicKey;
+use pyana_federation::{Federation, generate_keypair};
 use pyana_sdk::{AgentWallet, BabyBear, CellId, TurnReceipt, verify_receipt_chain};
 use pyana_turn::{sign_receipt, verify_receipt_chain_with_keys};
 
@@ -40,15 +40,15 @@ fn short_hex(bytes: &[u8]) -> String {
     }
 }
 
-/// Simulate executing a turn and producing a receipt with an executor signature.
+/// Simulate executing a turn and producing an unsigned receipt.
 ///
 /// In production, this comes from TurnExecutor::execute(). The executor signs
-/// the receipt to attest that the state transition was correctly computed.
-fn simulate_signed_turn(
+/// the receipt AFTER the chain link is set (since receipt_hash includes
+/// previous_receipt_hash). See `sign_chain_receipts` below.
+fn simulate_turn(
     agent: CellId,
     turn_number: u64,
     pre_state: [u8; 32],
-    executor_signing_key: &[u8; 32],
 ) -> TurnReceipt {
     // Deterministic state transition: hash the pre-state with the turn number.
     let mut hasher = blake3::Hasher::new();
@@ -70,7 +70,7 @@ fn simulate_signed_turn(
     hasher.update(&turn_number.to_le_bytes());
     let effects_hash = *hasher.finalize().as_bytes();
 
-    let mut receipt = TurnReceipt {
+    TurnReceipt {
         turn_hash,
         forest_hash: [0u8; 32],
         pre_state_hash: pre_state,
@@ -84,15 +84,24 @@ fn simulate_signed_turn(
         routing_directives: Vec::new(),
         derivation_records: Vec::new(),
         executor_signature: None,
-    };
+    }
+}
 
-    // The executor signs the receipt to bind it to a known execution authority.
-    // This is what makes the receipt chain verifiable by third parties without
-    // trusting the agent's self-reporting.
-    let sig = sign_receipt(&receipt, executor_signing_key);
-    receipt.executor_signature = Some(sig);
-
-    receipt
+/// Export a receipt chain with executor signatures applied.
+///
+/// The executor signs each receipt's hash (which includes previous_receipt_hash),
+/// binding the signature to the specific chain position. This is the portable
+/// proof bundle that third parties verify.
+fn export_signed_chain(receipts: &[TurnReceipt], executor_key: &[u8; 32]) -> Vec<TurnReceipt> {
+    receipts
+        .iter()
+        .map(|receipt| {
+            let mut signed = receipt.clone();
+            let sig = sign_receipt(receipt, executor_key);
+            signed.executor_signature = Some(sig);
+            signed
+        })
+        .collect()
 }
 
 fn section(title: &str) {
@@ -216,12 +225,7 @@ fn main() {
     let mut current_state = genesis_state;
 
     for turn_number in 0..5u64 {
-        let receipt = simulate_signed_turn(
-            agent_cell,
-            turn_number,
-            current_state,
-            &executor_key_bytes,
-        );
+        let receipt = simulate_turn(agent_cell, turn_number, current_state);
         let post_state = receipt.post_state_hash;
         let computrons = receipt.computrons_used;
 
@@ -229,7 +233,7 @@ fn main() {
         current_state = post_state;
 
         item(&format!(
-            "Turn {}: state={} -> {} ({} computrons, executor-signed)",
+            "Turn {}: state={} -> {} ({} computrons)",
             turn_number,
             short_hex(&current_state),
             short_hex(&post_state),
@@ -278,7 +282,9 @@ fn main() {
     item("  - Deny the agent's history to third parties");
 
     // Export the portable proof bundle.
-    let exported_chain: Vec<TurnReceipt> = wallet.receipt_chain().to_vec();
+    // The executor signs each receipt AFTER chain linking (since receipt_hash
+    // includes previous_receipt_hash). This binds signatures to chain positions.
+    let exported_chain = export_signed_chain(wallet.receipt_chain(), &executor_key_bytes);
     let ivc_proof = wallet.export_state_proof();
     let final_state = wallet.current_state_commitment().unwrap();
 

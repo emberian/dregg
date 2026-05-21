@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["stark-verifier", "federation"]
+default = ["stark-verifier", "federation", "bridge"]
 stark-verifier = ["pyana-circuit"]
 federation = ["pyana-federation"]
 bridge = ["pyana-bridge", "token", "pyana-commit", "stark-verifier"]

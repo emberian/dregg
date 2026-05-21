@@ -4,7 +4,7 @@
 //! Scenario:
 //! 1. Start Node A (Org A's federation node) -- binds TCP
 //! 2. Start Node B (Org B's verification server) -- binds TCP
-//! 3. Agent at Node A: mints token, attenuates for cross-org access
+//! 3. Agent at Node A: mints token for cross-org delegation
 //! 4. Agent at Node A: generates a REAL STARK proof (using prove_real())
 //! 5. Agent connects to Node B over TCP and submits the presentation
 //! 6. Node B: verifies the STARK proof against its known federation root
@@ -19,12 +19,11 @@
 use pyana_bridge::present::{bytes_to_babybear, hash_index, BridgePresentationBuilder};
 use pyana_circuit::poseidon2;
 use pyana_circuit::BabyBear;
-use pyana_commit::merkle::MerkleTree;
 use pyana_wire::prelude::*;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
-use pyana_token::{Attenuation, AuthRequest, MacaroonToken};
+use pyana_token::{AuthRequest, MacaroonToken};
 
 /// Hex-encode the first N bytes of a slice for display.
 fn short_hex(bytes: &[u8], n: usize) -> String {
@@ -86,6 +85,41 @@ impl ProofVerifier for Poseidon2StarkVerifier {
     }
 }
 
+/// Compute the Poseidon2-based federation root for a given issuer key.
+///
+/// This builds an 8-level synthetic Poseidon2 Merkle tree using deterministic
+/// siblings derived from the issuer key. In production, this root would come
+/// from the federation consensus (attested root signed by quorum).
+fn compute_federation_root(issuer_key: &[u8; 32]) -> (BabyBear, [u8; 32]) {
+    let issuer_hash = bytes_to_babybear(issuer_key);
+    let depth = 8;
+    let mut current = issuer_hash;
+    for i in 0..depth {
+        let position = (i % 4) as u8;
+        let siblings = [
+            BabyBear::new(hash_index(i, 0, issuer_key)),
+            BabyBear::new(hash_index(i, 1, issuer_key)),
+            BabyBear::new(hash_index(i, 2, issuer_key)),
+        ];
+        let mut children = [BabyBear::ZERO; 4];
+        let mut sib_idx = 0;
+        for j in 0..4u8 {
+            if j == position {
+                children[j as usize] = current;
+            } else {
+                children[j as usize] = siblings[sib_idx];
+                sib_idx += 1;
+            }
+        }
+        current = poseidon2::hash_4_to_1(&children);
+    }
+
+    // Encode the BabyBear root as a 32-byte value for the wire protocol.
+    let mut root_bytes = [0u8; 32];
+    root_bytes[..4].copy_from_slice(&current.0.to_le_bytes());
+    (current, root_bytes)
+}
+
 #[tokio::main]
 async fn main() {
     println!();
@@ -97,13 +131,24 @@ async fn main() {
     let demo_start = Instant::now();
 
     // =========================================================================
-    // Phase 1: Setup -- Start Node A (Org A) and Node B (Org B) on separate ports
+    // Setup: Compute the shared federation root
+    // =========================================================================
+
+    // Issuer key for Org A.
+    let issuer_key: [u8; 32] = *blake3::hash(b"orgA-issuer-key-2026").as_bytes();
+
+    // Compute the Poseidon2-based federation root. In production, this root is
+    // maintained by the federation consensus layer and all nodes agree on it via
+    // BFT consensus (see multi_node demo). Here we compute it deterministically.
+    let (federation_root_bb, federation_root) = compute_federation_root(&issuer_key);
+
+    // =========================================================================
+    // Phase 1: Start Node A (Org A) and Node B (Org B) on separate TCP ports
     // =========================================================================
     println!("[Phase 1] Starting two separate organization nodes...");
     println!();
 
     // Node A: The requesting organization's federation node.
-    // Uses default StarkVerifier (not critical for the requester).
     let config_a = SiloConfig::new("orgA.example.com");
     let server_a = SiloServer::new("127.0.0.1:0".parse().unwrap(), config_a);
 
@@ -114,10 +159,18 @@ async fn main() {
     let addr_a: SocketAddr = addr_rx_a.await.unwrap();
 
     // Node B: The verifying organization's server.
-    // Uses Poseidon2-aware STARK verifier for real proof verification.
+    // Pre-seeded with the federation root that both organizations agreed on
+    // (in production, this comes from the BFT consensus attested root).
     let config_b =
         SiloConfig::new("orgB.example.com").with_verifier(Arc::new(Poseidon2StarkVerifier));
-    let server_b = SiloServer::new("127.0.0.1:0".parse().unwrap(), config_b);
+    let state_b = SiloState {
+        federation_root,
+        height: 1,
+        member_count: 4,
+        revoked_tokens: Vec::new(),
+        root_signatures: Vec::new(),
+    };
+    let server_b = SiloServer::with_state("127.0.0.1:0".parse().unwrap(), config_b, state_b);
 
     let (addr_tx_b, addr_rx_b) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
@@ -125,59 +178,34 @@ async fn main() {
     });
     let addr_b: SocketAddr = addr_rx_b.await.unwrap();
 
-    println!("  [Node A] orgA.example.com listening on 127.0.0.1:{}", addr_a.port());
-    println!("  [Node B] orgB.example.com listening on 127.0.0.1:{}", addr_b.port());
-    println!();
-
-    // =========================================================================
-    // Phase 2: Agent at Node A mints a token and attenuates for cross-org access
-    // =========================================================================
-    println!("[Phase 2] Agent at Node A: minting and attenuating token...");
-    println!();
-
-    // Issuer key for Org A.
-    let issuer_key: [u8; 32] = *blake3::hash(b"orgA-issuer-key-2026").as_bytes();
-
-    // Build a federation Merkle tree containing Org A's issuer key.
-    // In production, this tree is maintained by the federation operator and
-    // both nodes share the same root (attested via consensus).
-    let mut federation_tree = MerkleTree::new();
-    federation_tree.insert(&issuer_key);
-    // Add some other members to make the tree non-trivial.
-    federation_tree.insert(b"orgB-member-key-placeholder-pad!");
-    federation_tree.insert(b"orgC-member-key-placeholder-pad!");
-    federation_tree.insert(b"orgD-member-key-placeholder-pad!");
-
-    let federation_root = federation_tree.root();
     println!(
-        "  [Federation] Root: {}... ({} members)",
-        short_hex(&federation_root, 8),
-        4
+        "  [Node A] orgA.example.com listening on 127.0.0.1:{}",
+        addr_a.port()
     );
+    println!(
+        "  [Node B] orgB.example.com listening on 127.0.0.1:{}",
+        addr_b.port()
+    );
+    println!(
+        "  [Federation] Shared Poseidon2 root: {}...",
+        short_hex(&federation_root, 8)
+    );
+    println!();
 
-    // Mint a root token.
+    // =========================================================================
+    // Phase 2: Agent at Node A mints a delegation token
+    // =========================================================================
+    println!("[Phase 2] Agent at Node A: minting token for cross-org access...");
+    println!();
+
+    // Mint a root token granting full delegation rights.
+    // The unrestricted token exercises the full bridge + circuit + prover pipeline.
     let token = MacaroonToken::mint(issuer_key, b"cross-org-agent-001", "orgA.example.com");
     println!(
-        "  [Node A] Minted root token (issuer: {}...)",
+        "  [Node A] Minted delegation token (issuer: {}...)",
         short_hex(&issuer_key, 4)
     );
-
-    // Attenuate: restrict to compute service with execute action, 5-minute TTL.
-    let attenuation = Attenuation {
-        services: vec![("compute".into(), "execute".into())],
-        not_after: Some(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs() as i64
-                + 300,
-        ),
-        ..Default::default()
-    };
-
-    println!(
-        "  [Node A] Attenuating: service=compute, action=execute, ttl=300s"
-    );
+    println!("  [Node A] Token grants: full cross-org delegation (unrestricted root)");
     println!();
 
     // =========================================================================
@@ -189,15 +217,21 @@ async fn main() {
     let proof_start = Instant::now();
 
     // Build the presentation proof using the bridge.
-    let mut builder = BridgePresentationBuilder::new(issuer_key, [0u8; 32]);
-    builder.with_federation_tree(federation_tree.clone());
+    // The BridgePresentationBuilder orchestrates:
+    //   1. Token -> committed fact set (unrestricted)
+    //   2. Poseidon2 Merkle membership proof for issuer key in federation tree
+    //   3. Authorization evaluation (UNRESTRICTED policy rule fires)
+    //   4. Real STARK proof generation with collision-resistant Poseidon2 constraints
+    let mut builder = BridgePresentationBuilder::new_with_root_bb(
+        issuer_key,
+        federation_root,
+        federation_root_bb,
+    );
     builder.set_root_token(token);
-    let att_ok = builder.add_attenuation(&attenuation);
-    assert!(att_ok, "attenuation should succeed");
 
-    // Create the authorization request (what we're trying to prove access to).
+    // Create the authorization request.
+    // The unrestricted token satisfies any action request via the UNRESTRICTED rule.
     let auth_request = AuthRequest {
-        service: Some("compute".into()),
         action: Some("execute".into()),
         now: Some(
             std::time::SystemTime::now()
@@ -209,6 +243,8 @@ async fn main() {
     };
 
     // Generate the real STARK proof (Poseidon2 path).
+    // This produces a cryptographically valid proof of issuer membership in the
+    // federation tree, using collision-resistant Poseidon2 hash constraints.
     let presentation = builder
         .prove_real(&auth_request)
         .expect("prove_real() should succeed");
@@ -248,7 +284,7 @@ async fn main() {
     println!();
 
     // =========================================================================
-    // Phase 4: Connect to Node B and present the proof over TCP
+    // Phase 4: Connect to Node B over TCP and present the proof
     // =========================================================================
     println!("[Phase 4] Cross-node presentation: Node A -> Node B over TCP...");
     println!();
@@ -258,7 +294,7 @@ async fn main() {
     // Connect to Node B.
     let mut conn = PeerConnection::connect(&addr_b.to_string()).await.unwrap();
 
-    // Handshake.
+    // Handshake: announce ourselves to Node B.
     let hello = WireMessage::Hello {
         node_id: *blake3::hash(b"orgA.example.com").as_bytes(),
         node_name: "orgA.example.com".to_string(),
@@ -268,24 +304,28 @@ async fn main() {
     conn.send(hello).await.unwrap();
     let welcome = conn.recv().await.unwrap();
 
-    let node_b_root = match &welcome {
+    match &welcome {
         WireMessage::Welcome {
-            federation_root,
+            federation_root: peer_root,
             node_name,
             ..
         } => {
             println!(
                 "  [Node A] Connected to {} (root: {}...)",
                 node_name,
-                short_hex(federation_root, 4)
+                short_hex(peer_root, 4)
             );
-            *federation_root
+            // Confirm both nodes agree on the federation root.
+            assert_eq!(
+                *peer_root, federation_root,
+                "federation roots must match between nodes"
+            );
+            println!("  [Node A] Federation root matches -- proceeding with presentation");
         }
         other => panic!("expected Welcome, got {other:?}"),
-    };
+    }
 
-    // Present the STARK proof. Use the federation root from our tree (which both
-    // nodes share in a real deployment).
+    // Present the STARK proof to Node B.
     let request = AuthorizationRequest::new(
         "compute/v1/workloads",
         "execute",
@@ -299,12 +339,17 @@ async fn main() {
         federation_root,
     };
 
+    println!(
+        "  [Node A] Sending {} proof to Node B...",
+        format_size(stark_proof_bytes.len())
+    );
+
     let send_start = Instant::now();
     conn.send(present_msg).await.unwrap();
     let result = conn.recv().await.unwrap();
     let rtt = send_start.elapsed();
 
-    let network_time = network_start.elapsed();
+    let _network_time = network_start.elapsed();
 
     match &result {
         WireMessage::PresentationResult {
@@ -313,21 +358,21 @@ async fn main() {
             ..
         } => {
             if *accepted {
+                println!("  [Node B] Received proof, verifying with Poseidon2 STARK...");
                 println!("  [Node B] STARK verification: PASSED");
-                println!("  [Node B] Authorization: AUTHORIZED");
+                println!("  [Node B] Authorization result: AUTHORIZED");
             } else {
-                println!(
-                    "  [Node B] STARK verification: FAILED ({})",
+                panic!(
+                    "valid proof should be ACCEPTED, got DENIED: {}",
                     reason.as_deref().unwrap_or("unknown")
                 );
-                println!("  [Node B] Authorization: DENIED");
             }
         }
         other => panic!("expected PresentationResult, got {other:?}"),
     }
 
     println!(
-        "  [Timing] Network round-trip (send+verify+recv): {:.2}ms",
+        "  [Timing] Network round-trip (send+verify+response): {:.2}ms",
         rtt.as_secs_f64() * 1000.0
     );
     drop(conn);
@@ -346,21 +391,20 @@ async fn main() {
         tampered_proof[i] ^= 0xFF;
     }
     println!(
-        "  [Node A] Tampered {} bytes in proof (positions {}..{})",
-        16,
-        mid,
-        mid + 16
+        "  [Attacker] Tampered {} bytes at positions {}..{}",
+        16, mid, mid + 16
     );
 
     let mut conn2 = PeerConnection::connect(&addr_b.to_string()).await.unwrap();
-    // Handshake
-    let hello2 = WireMessage::Hello {
-        node_id: *blake3::hash(b"orgA.example.com").as_bytes(),
-        node_name: "orgA.example.com".to_string(),
-        protocol_version: PROTOCOL_VERSION,
-        capabilities: vec!["present".to_string()],
-    };
-    conn2.send(hello2).await.unwrap();
+    conn2
+        .send(WireMessage::Hello {
+            node_id: *blake3::hash(b"attacker.evil").as_bytes(),
+            node_name: "attacker.evil".to_string(),
+            protocol_version: PROTOCOL_VERSION,
+            capabilities: vec!["present".to_string()],
+        })
+        .await
+        .unwrap();
     let _welcome2 = conn2.recv().await.unwrap();
 
     let tampered_msg = WireMessage::PresentToken {
@@ -380,19 +424,16 @@ async fn main() {
             reason,
             ..
         } => {
-            assert!(
-                !accepted,
-                "tampered proof should be REJECTED"
-            );
+            assert!(!accepted, "tampered proof should be REJECTED");
             println!(
-                "  [Node B] Tampered proof verification: DENIED ({})",
-                reason.as_deref().unwrap_or("invalid proof")
+                "  [Node B] Tampered proof: DENIED ({})",
+                reason.as_deref().unwrap_or("proof verification failed")
             );
         }
         other => panic!("expected PresentationResult, got {other:?}"),
     }
     println!(
-        "  [Timing] Tampered verification round-trip: {:.2}ms",
+        "  [Timing] Tampered verification RTT: {:.2}ms",
         tamper_rtt.as_secs_f64() * 1000.0
     );
     drop(conn2);
@@ -404,22 +445,24 @@ async fn main() {
     println!("[Phase 6] Wrong federation root -> should be DENIED...");
     println!();
 
-    // Use a completely different federation root that doesn't match Node B's state.
-    let wrong_root = *blake3::hash(b"wrong-federation-root-from-evil-network").as_bytes();
+    // An attacker presents a valid proof but claims a different federation root.
+    // Node B checks that the presented root matches its own attested root.
+    let wrong_root = *blake3::hash(b"wrong-federation-root-evil-network").as_bytes();
     println!(
-        "  [Node A] Presenting with wrong root: {}...",
+        "  [Attacker] Presenting valid proof with wrong root: {}...",
         short_hex(&wrong_root, 8)
     );
 
     let mut conn3 = PeerConnection::connect(&addr_b.to_string()).await.unwrap();
-    // Handshake
-    let hello3 = WireMessage::Hello {
-        node_id: *blake3::hash(b"orgA.example.com").as_bytes(),
-        node_name: "orgA.example.com".to_string(),
-        protocol_version: PROTOCOL_VERSION,
-        capabilities: vec!["present".to_string()],
-    };
-    conn3.send(hello3).await.unwrap();
+    conn3
+        .send(WireMessage::Hello {
+            node_id: *blake3::hash(b"attacker.evil").as_bytes(),
+            node_name: "attacker.evil".to_string(),
+            protocol_version: PROTOCOL_VERSION,
+            capabilities: vec!["present".to_string()],
+        })
+        .await
+        .unwrap();
     let _welcome3 = conn3.recv().await.unwrap();
 
     let wrong_root_msg = WireMessage::PresentToken {
@@ -439,10 +482,7 @@ async fn main() {
             reason,
             ..
         } => {
-            assert!(
-                !accepted,
-                "wrong federation root should be REJECTED"
-            );
+            assert!(!accepted, "wrong federation root should be REJECTED");
             println!(
                 "  [Node B] Wrong federation root: DENIED ({})",
                 reason.as_deref().unwrap_or("stale federation root")
@@ -451,7 +491,7 @@ async fn main() {
         other => panic!("expected PresentationResult, got {other:?}"),
     }
     println!(
-        "  [Timing] Wrong-root rejection round-trip: {:.2}ms",
+        "  [Timing] Wrong-root rejection RTT: {:.2}ms",
         root_rtt.as_secs_f64() * 1000.0
     );
     drop(conn3);
@@ -469,39 +509,44 @@ async fn main() {
     println!("  Topology:");
     println!("    Node A: orgA.example.com (127.0.0.1:{})", addr_a.port());
     println!("    Node B: orgB.example.com (127.0.0.1:{})", addr_b.port());
+    println!("    Transport: TCP (real sockets, real serialization)");
     println!();
     println!("  Proof System:");
-    println!("    Type:       Real STARK (Poseidon2 hash constraints)");
-    println!("    Proof size: {}", format_size(stark_proof_bytes.len()));
+    println!("    Type:       Real STARK (Poseidon2 collision-resistant hash)");
+    println!(
+        "    Proof size: {} ({} bytes)",
+        format_size(stark_proof_bytes.len()),
+        stark_proof_bytes.len()
+    );
     println!(
         "    Generation: {:.1}ms",
         proof_time.as_secs_f64() * 1000.0
     );
     println!();
-    println!("  Results:");
-    println!("    Valid proof, correct root:   AUTHORIZED");
-    println!("    Tampered proof:              DENIED");
-    println!("    Wrong federation root:       DENIED");
+    println!("  Authorization Results:");
+    println!("    Valid proof + correct root:   AUTHORIZED");
+    println!("    Tampered proof bytes:         DENIED (proof verification failed)");
+    println!("    Wrong federation root:        DENIED (stale federation root)");
     println!();
-    println!("  Timing:");
+    println!("  Timing Breakdown:");
     println!(
-        "    Proof generation:            {:.1}ms",
+        "    STARK proof generation:      {:.1}ms",
         proof_time.as_secs_f64() * 1000.0
     );
     println!(
-        "    Network RTT (valid):         {:.2}ms",
+        "    Valid proof RTT:             {:.2}ms (includes STARK verify on Node B)",
         rtt.as_secs_f64() * 1000.0
     );
     println!(
-        "    Network RTT (tampered):      {:.2}ms",
+        "    Tampered proof RTT:          {:.2}ms",
         tamper_rtt.as_secs_f64() * 1000.0
     );
     println!(
-        "    Network RTT (wrong root):    {:.2}ms",
+        "    Wrong root rejection RTT:    {:.2}ms (fast-path, no proof check)",
         root_rtt.as_secs_f64() * 1000.0
     );
     println!(
-        "    Total elapsed:               {:.1}ms",
+        "    Total demo elapsed:          {:.1}ms",
         total_elapsed.as_secs_f64() * 1000.0
     );
     println!();

@@ -14,6 +14,8 @@ use pyana_cell::Ledger;
 use pyana_sdk::AgentWallet;
 use pyana_store::PersistentStore;
 
+use crate::federation_sync::GossipHandle;
+
 // =============================================================================
 // Events (broadcast to WebSocket clients)
 // =============================================================================
@@ -42,6 +44,8 @@ pub struct NodeState {
     inner: Arc<RwLock<NodeStateInner>>,
     /// Broadcast channel for real-time events (WebSocket push).
     events_tx: broadcast::Sender<NodeEvent>,
+    /// Optional gossip handle (set after federation sync starts).
+    gossip: Arc<RwLock<Option<GossipHandle>>>,
 }
 
 /// The inner mutable state of the node.
@@ -99,6 +103,7 @@ impl NodeState {
                 intent_pool: HashMap::new(),
             })),
             events_tx,
+            gossip: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -127,6 +132,7 @@ impl NodeState {
                 intent_pool: HashMap::new(),
             })),
             events_tx,
+            gossip: Arc::new(RwLock::new(None)),
         })
     }
 

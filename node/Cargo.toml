@@ -18,6 +18,7 @@ pyana-federation = { path = "../federation" }
 pyana-sdk = { path = "../sdk" }
 pyana-intent = { path = "../intent" }
 pyana-circuit = { path = "../circuit" }
+pyana-net = { path = "../net" }
 
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["ws"] }
@@ -30,6 +31,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 getrandom = { workspace = true }
 uuid = { version = "1", features = ["v4"] }
 ed25519-dalek = { version = "2", features = ["std"] }
+quinn = { version = "0.11", features = ["runtime-tokio", "rustls-ring"] }
+blake3 = "1"
+postcard = { version = "1", features = ["use-std"] }
 
 [[bin]]
 name = "pyana-node"

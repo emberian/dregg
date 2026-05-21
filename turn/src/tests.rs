@@ -1979,19 +1979,15 @@ fn test_breadstuff_authorization() {
     let agent_id = agent.id;
 
     // Target with Signature-level auth requirement.
-    let (mut target, _) = make_sig_cell(2, 0);
+    let (target, _) = make_sig_cell(2, 0);
     let target_id = target.id;
 
-    // The target has a capability with a matching breadstuff token.
+    // The actor holds a capability with a matching breadstuff token (targeting the target cell).
     let token_hash = [0xAB; 32];
-    target
-        .capabilities
-        .grant_with_breadstuff(agent_id, AuthRequired::None, Some(token_hash));
-
     let mut agent_with_cap = agent;
     agent_with_cap
         .capabilities
-        .grant(target_id, AuthRequired::None);
+        .grant_with_breadstuff(target_id, AuthRequired::None, Some(token_hash));
     ledger.insert_cell(agent_with_cap).unwrap();
     ledger.insert_cell(target).unwrap();
 
