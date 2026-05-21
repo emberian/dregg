@@ -69,7 +69,7 @@ fn make_turn(agent: CellId, nonce: u64, action: Action) -> Turn {
 /// Derive a deterministic worker identity from an index.
 fn worker_identity(index: usize) -> ([u8; 32], [u8; 32], CellId) {
     let mut pk = [0u8; 32];
-    pk[0] = 0xW0;
+    pk[0] = 0xA0;
     pk[1] = index as u8;
     // Use a distinct derivation to avoid collisions
     let pk_hash = *blake3::hash(&pk).as_bytes();
@@ -152,17 +152,20 @@ fn main() {
         assert!(result.is_committed(), "Spawn worker {} failed", i);
 
         // Verify the child was created with delegation.
-        let child = ledger.get(&expected_id).unwrap();
-        assert!(child.delegation.is_some());
-        let delegation = child.delegation.as_ref().unwrap();
-        assert_eq!(delegation.snapshot.len(), service_ids.len());
-        assert_eq!(delegation.max_staleness, 60);
+        let snap_len = {
+            let child = ledger.get(&expected_id).unwrap();
+            assert!(child.delegation.is_some());
+            let delegation = child.delegation.as_ref().unwrap();
+            assert_eq!(delegation.snapshot.len(), service_ids.len());
+            assert_eq!(delegation.max_staleness, 60);
+            delegation.snapshot.len()
+        };
 
         // Give worker some balance for future turns.
         ledger.get_mut(&expected_id).unwrap().state.balance = 100_000;
 
         worker_ids.push(expected_id);
-        println!("  Worker {:2}: {} (snapshot: {} caps)", i, short_id(&expected_id), delegation.snapshot.len());
+        println!("  Worker {:2}: {} (snapshot: {} caps)", i, short_id(&expected_id), snap_len);
     }
     println!();
     println!("  All {} workers spawned with {} SpawnWithDelegation effects total.", NUM_WORKERS, NUM_WORKERS);

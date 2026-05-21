@@ -90,6 +90,9 @@ name = "note_privacy"
 name = "pipeline_demo"
 
 [[example]]
+name = "federation_exit"
+
+[[example]]
 name = "unified_harness"
 
 [[example]]
@@ -97,6 +100,9 @@ name = "cdt_revocation"
 
 [[example]]
 name = "delegation_demo"
+
+[[example]]
+name = "delegation_swarm"
 
 [[example]]
 name = "intent_lifecycle"
