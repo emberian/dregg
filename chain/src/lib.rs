@@ -103,6 +103,12 @@ pub const SP1_PROGRAM_VKEY: &str = "PLACEHOLDER_VKEY_BUILD_WITH_SP1_TOOLCHAIN";
 /// These are the ISP1Verifier gateway contracts.
 /// See: <https://docs.succinct.xyz/docs/sp1/verification/onchain/contract-addresses>
 pub mod contracts {
+    // The same address is used across all networks because Succinct deploys the
+    // SP1 Verifier Gateway at a deterministic CREATE2 address. The deployer
+    // (address + salt + init-code hash) is identical on every EVM chain, so the
+    // resulting contract lands at the same address regardless of chain ID.
+    // See: https://docs.succinct.xyz/verification/onchain
+
     /// SP1 Verifier Gateway on Ethereum Mainnet
     pub const ETHEREUM_MAINNET: &str = "0x3B6041173B80E77f038f3F2C0f9744f04837185e";
     /// SP1 Verifier Gateway on Base Mainnet

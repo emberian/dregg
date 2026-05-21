@@ -109,15 +109,15 @@ impl<T: CanonicalSerialize + CanonicalDeserialize> ThreshPartial<T> {
     }
 
     pub fn valid_signature(&self, keybook: &KeyBook) -> bool {
-        let their_key = keybook
-            .keys
-            .get(&self.author)
-            .expect("author not in keybook");
+        let Some(their_key) = keybook.keys.get(&self.author) else {
+            tracing::warn!(author = ?self.author, "unknown author in ThreshPartial signature check");
+            return false;
+        };
         let mut buf = Vec::new();
         T::serialize_compressed(&self.data, &mut buf).unwrap();
         hints::verify_partial(
             &keybook.hints_setup.global,
-            &their_key,
+            their_key,
             &buf,
             &self.signature,
         )
@@ -137,15 +137,15 @@ impl<T: CanonicalSerialize + CanonicalDeserialize> Signed<T> {
     }
 
     pub fn valid_signature(&self, keybook: &KeyBook) -> bool {
-        let their_key = keybook
-            .keys
-            .get(&self.author)
-            .expect("author not in keybook");
+        let Some(their_key) = keybook.keys.get(&self.author) else {
+            tracing::warn!(author = ?self.author, "unknown author in Signed signature check");
+            return false;
+        };
         let mut buf = Vec::new();
         T::serialize_compressed(&self.data, &mut buf).unwrap();
         hints::verify_partial(
             &keybook.hints_setup.global,
-            &their_key,
+            their_key,
             &buf,
             &self.signature,
         )

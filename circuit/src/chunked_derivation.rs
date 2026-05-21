@@ -293,10 +293,10 @@ pub fn verify_chunked_authorization(
             ));
         }
 
-        let chunk_initial_root = BabyBear(chunk_proof.public_inputs[pi::INITIAL_STATE_ROOT]);
-        let chunk_conclusion = BabyBear(chunk_proof.public_inputs[pi::CONCLUSION]);
-        let chunk_final_acc = BabyBear(chunk_proof.public_inputs[pi::FINAL_ACCUMULATED_HASH]);
-        let chunk_policy_root = BabyBear(chunk_proof.public_inputs[pi::POLICY_ROOT]);
+        let chunk_initial_root = BabyBear::new_canonical(chunk_proof.public_inputs[pi::INITIAL_STATE_ROOT]);
+        let chunk_conclusion = BabyBear::new_canonical(chunk_proof.public_inputs[pi::CONCLUSION]);
+        let chunk_final_acc = BabyBear::new_canonical(chunk_proof.public_inputs[pi::FINAL_ACCUMULATED_HASH]);
+        let chunk_policy_root = BabyBear::new_canonical(chunk_proof.public_inputs[pi::POLICY_ROOT]);
 
         // Check that the proof's embedded initial_root matches our tracked root.
         if chunk_initial_root != proof.chunk_initial_roots[chunk_idx] {

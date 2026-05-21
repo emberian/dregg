@@ -69,8 +69,8 @@ pub struct MerkleMembershipConfig {
     s_hash: Selector,
     /// Selector for swap (left/right ordering based on position bit).
     s_swap: Selector,
-    /// Fixed column for Poseidon round constants (unused in simplified version).
-    #[allow(dead_code)]
+    /// Fixed column for Poseidon round constants.
+    /// Reserved for full Poseidon chip integration (replaces simplified algebraic hash).
     rc: Column<Fixed>,
 }
 
@@ -274,7 +274,7 @@ pub struct FoldStepCircuit {
     /// Hashes of removed facts.
     pub removal_hashes: Vec<Value<Fp>>,
     /// Commitment to all removals (hash of concatenated removal hashes).
-    #[allow(dead_code)]
+    /// Exposed as a public input in the full fold verification circuit.
     pub removal_commitment: Value<Fp>,
 }
 
@@ -546,8 +546,8 @@ fn bytes_to_fp(bytes: &[u8; 32]) -> Fp {
     }
 }
 
-/// Convert a field element back to 32 bytes.
-#[allow(dead_code)]
+/// Convert a field element back to 32 bytes (inverse of `bytes_to_fp`).
+/// Used by the proof serialization path when extracting public inputs.
 fn fp_to_bytes(fp: &Fp) -> [u8; 32] {
     fp.to_repr()
 }

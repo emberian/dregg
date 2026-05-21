@@ -1,12 +1,12 @@
 [package]
 name = "pyana-relay"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.89.0"
-authors = ["Pyana Contributors"]
-license = "MIT OR Apache-2.0"
-homepage = "https://pyana.dev"
-repository = "https://github.com/pyana-dev/breadstuffs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
 description = "Lightweight QUIC relay node for the pyana federation — holds attested roots, relays peer connections, and mints root tokens"
 
 [[bin]]

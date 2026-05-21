@@ -23,6 +23,7 @@ pyana-trace = { path = "../trace", optional = true }
 pyana-commit = { path = "../commit", optional = true }
 getrandom = { workspace = true }
 globset = { workspace = true }
+rand = "0.9"
 rmp-serde = { workspace = true }
 scalable_cuckoo_filter = { workspace = true }
 serde = { workspace = true }

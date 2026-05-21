@@ -285,6 +285,9 @@ impl TopicState {
 }
 
 /// Types of outgoing gossip operations.
+///
+/// Used by GossipRouter::dispatch() once the outbound message path is wired
+/// through the QUIC transport layer (tracked in the gossip-dispatch milestone).
 #[allow(dead_code)]
 enum OutgoingGossip {
     /// Full message push (eager).
@@ -643,8 +646,10 @@ impl GossipNetwork {
                         msg_hash,
                         payload: encoded,
                     };
-                    let envelope_bytes =
-                        postcard::to_stdvec(&envelope).expect("envelope serialization cannot fail");
+                    let Ok(envelope_bytes) = postcard::to_stdvec(&envelope) else {
+                        warn!("gossip envelope serialization failed");
+                        continue;
+                    };
 
                     // Eager push: full message to eager peers
                     Self::send_to_peers(&envelope_bytes, &targets, &state).await;
@@ -652,9 +657,9 @@ impl GossipNetwork {
                     // Lazy push: IHave to lazy peers
                     if !lazy_targets.is_empty() {
                         let ihave_envelope = GossipEnvelope::IHave { topic_id, msg_hash };
-                        let ihave_bytes = postcard::to_stdvec(&ihave_envelope)
-                            .expect("envelope serialization cannot fail");
-                        Self::send_to_peers(&ihave_bytes, &lazy_targets, &state).await;
+                        if let Ok(ihave_bytes) = postcard::to_stdvec(&ihave_envelope) {
+                            Self::send_to_peers(&ihave_bytes, &lazy_targets, &state).await;
+                        }
                     }
                 }
 
@@ -664,8 +669,10 @@ impl GossipNetwork {
                     targets,
                 } => {
                     let envelope = GossipEnvelope::IHave { topic_id, msg_hash };
-                    let envelope_bytes =
-                        postcard::to_stdvec(&envelope).expect("envelope serialization cannot fail");
+                    let Ok(envelope_bytes) = postcard::to_stdvec(&envelope) else {
+                        warn!("gossip envelope serialization failed");
+                        continue;
+                    };
                     Self::send_to_peers(&envelope_bytes, &targets, &state).await;
                 }
 
@@ -675,8 +682,10 @@ impl GossipNetwork {
                     target,
                 } => {
                     let envelope = GossipEnvelope::Graft { topic_id, msg_hash };
-                    let envelope_bytes =
-                        postcard::to_stdvec(&envelope).expect("envelope serialization cannot fail");
+                    let Ok(envelope_bytes) = postcard::to_stdvec(&envelope) else {
+                        warn!("gossip envelope serialization failed");
+                        continue;
+                    };
                     Self::send_to_peers(&envelope_bytes, &[target], &state).await;
 
                     // Promote this peer to eager (they responded to our Graft)
@@ -688,8 +697,10 @@ impl GossipNetwork {
 
                 OutgoingGossip::Prune { topic_id, target } => {
                     let envelope = GossipEnvelope::Prune { topic_id };
-                    let envelope_bytes =
-                        postcard::to_stdvec(&envelope).expect("envelope serialization cannot fail");
+                    let Ok(envelope_bytes) = postcard::to_stdvec(&envelope) else {
+                        warn!("gossip envelope serialization failed");
+                        continue;
+                    };
                     Self::send_to_peers(&envelope_bytes, &[target], &state).await;
                 }
 
@@ -699,8 +710,10 @@ impl GossipNetwork {
                     target,
                 } => {
                     let envelope = GossipEnvelope::AntiEntropy { topic_id, hashes };
-                    let envelope_bytes =
-                        postcard::to_stdvec(&envelope).expect("envelope serialization cannot fail");
+                    let Ok(envelope_bytes) = postcard::to_stdvec(&envelope) else {
+                        warn!("gossip envelope serialization failed");
+                        continue;
+                    };
                     Self::send_to_peers(&envelope_bytes, &[target], &state).await;
                 }
             }
@@ -892,17 +905,19 @@ impl GossipNetwork {
                             msg_hash,
                             payload: payload.clone(),
                         };
-                        let fwd_bytes = postcard::to_stdvec(&fwd_envelope)
-                            .expect("envelope serialization cannot fail");
-                        Self::send_to_peers(&fwd_bytes, &eager_targets, state).await;
+                        if let Ok(fwd_bytes) = postcard::to_stdvec(&fwd_envelope) {
+                            Self::send_to_peers(&fwd_bytes, &eager_targets, state).await;
+                        } else {
+                            warn!("gossip forward envelope serialization failed");
+                        }
                     }
 
                     // Send IHave to lazy peers
                     if !lazy_targets.is_empty() {
                         let ihave_envelope = GossipEnvelope::IHave { topic_id, msg_hash };
-                        let ihave_bytes = postcard::to_stdvec(&ihave_envelope)
-                            .expect("envelope serialization cannot fail");
-                        Self::send_to_peers(&ihave_bytes, &lazy_targets, state).await;
+                        if let Ok(ihave_bytes) = postcard::to_stdvec(&ihave_envelope) {
+                            Self::send_to_peers(&ihave_bytes, &lazy_targets, state).await;
+                        }
                     }
                 }
             }

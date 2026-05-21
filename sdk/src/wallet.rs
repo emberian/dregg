@@ -914,43 +914,22 @@ impl AgentWallet {
         Ok(proof)
     }
 
-    /// Generate a fast (constraint-checked) presentation proof for a held token.
+    /// Generate a presentation proof for a held token.
     ///
-    /// This validates circuit constraints without producing a full STARK proof,
-    /// yielding faster proof generation. Use when proof generation latency is
-    /// unacceptable or during development iteration.
+    /// This produces a real STARK proof suitable for verification across trust
+    /// boundaries. Previously this method used a fast constraint-check path that
+    /// did not produce a verifiable STARK; it now delegates to the full prover.
     ///
-    /// For production use across trust boundaries, prefer
-    /// [`prove_authorization`](Self::prove_authorization) which produces real STARK proofs.
+    /// # Deprecation
+    ///
+    /// Prefer [`prove_authorization`](Self::prove_authorization) directly.
+    #[deprecated(note = "Use prove_authorization() which is the canonical production path")]
     pub fn prove_fast(
         &self,
         token: &HeldToken,
         request: &AuthRequest,
     ) -> Result<BridgePresentationProof, SdkError> {
-        if !token.can_mint() {
-            return Err(SdkError::MissingKey(
-                "attenuated tokens cannot generate federation membership proofs; \
-                 use the root token holder to prove, or present the attenuated chain directly"
-                    .into(),
-            ));
-        }
-
-        let issuer_key = *token.root_key();
-        let federation_root_bb = Self::compute_federation_root_bb(&issuer_key);
-        let federation_root = Self::bb_to_bytes(federation_root_bb);
-
-        let mut builder = pyana_bridge::BridgePresentationBuilder::new_with_root_bb(
-            issuer_key,
-            federation_root,
-            federation_root_bb,
-        );
-
-        // Use the ACTUAL encoded token rather than minting fresh.
-        let actual_token = token.decode()?;
-        builder.set_root_token(actual_token);
-
-        let proof = builder.prove_fast(request)?;
-        Ok(proof)
+        self.prove_authorization(token, request)
     }
 
     /// Generate a real STARK presentation proof for an attenuated token chain.

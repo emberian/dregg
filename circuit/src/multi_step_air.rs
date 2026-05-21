@@ -1231,8 +1231,8 @@ pub fn verify_authorization_stark(
     }
 
     // Verify that claimed conclusion and accumulated_hash match
-    let proof_conclusion = BabyBear(proof.public_inputs[pi::CONCLUSION]);
-    let proof_acc_hash = BabyBear(proof.public_inputs[pi::FINAL_ACCUMULATED_HASH]);
+    let proof_conclusion = BabyBear::new_canonical(proof.public_inputs[pi::CONCLUSION]);
+    let proof_acc_hash = BabyBear::new_canonical(proof.public_inputs[pi::FINAL_ACCUMULATED_HASH]);
 
     if proof_conclusion != conclusion {
         return Err(format!(
@@ -1253,7 +1253,7 @@ pub fn verify_authorization_stark(
     }
 
     let air = MultiStepStarkAir::new(num_steps);
-    let public_inputs: Vec<BabyBear> = proof.public_inputs.iter().map(|&v| BabyBear(v)).collect();
+    let public_inputs: Vec<BabyBear> = proof.public_inputs.iter().map(|&v| BabyBear::new_canonical(v)).collect();
     stark::verify(&air, proof, &public_inputs)
 }
 

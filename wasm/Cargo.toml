@@ -1,10 +1,10 @@
 [package]
 name = "pyana-wasm"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.94.0"
-authors = ["Pyana Contributors"]
-license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
 description = "WebAssembly playground for pyana token primitives"
 
 [lib]

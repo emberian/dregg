@@ -75,11 +75,11 @@ use crate::poseidon2::{hash_4_to_1, hash_many};
 // ============================================================================
 
 /// Maximum Merkle tree depth we support for in-circuit verification.
-#[allow(dead_code)]
+/// Used by multi-query verification (see TODOs at module top).
 const MAX_MERKLE_DEPTH: usize = 16;
 
 /// Maximum FRI folding layers we verify in-circuit.
-#[allow(dead_code)]
+/// Used by variable-depth FRI verification (see TODOs at module top).
 const MAX_FRI_LAYERS: usize = 8;
 
 /// Number of columns in the verifier AIR trace.
@@ -114,11 +114,12 @@ pub mod col {
     pub const DATA2: usize = 2;
     pub const DATA3: usize = 3;
     pub const DATA4: usize = 4;
-    #[allow(dead_code)]
+    /// Secondary Poseidon2 state column; used by full 8-element state hashing
+    /// in multi-query verification.
     pub const DATA5: usize = 5;
-    #[allow(dead_code)]
+    /// Secondary Poseidon2 state column; see DATA5.
     pub const DATA6: usize = 6;
-    #[allow(dead_code)]
+    /// Secondary Poseidon2 state column; see DATA5.
     pub const DATA7: usize = 7;
     pub const SECTION_TAG: usize = 8;
     pub const STEP_INDEX: usize = 9;

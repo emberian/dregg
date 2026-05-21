@@ -40,6 +40,8 @@ pub mod rule_ids {
     /// SECURE: allow if svc_action_allowed($svc, $act_hash), request_service($svc), request_action($act_hash)
     ///   check: MemberOf($act_hash, $act_hash)
     pub const SERVICE_ACTION_SECURE: u32 = 41;
+    /// deny if valid_after($start), request_time($t), $t < $start (not-before enforcement)
+    pub const NOT_BEFORE_DENY: u32 = 50;
 }
 
 /// Returns the standard pyana authorization policy rule set.
@@ -201,6 +203,28 @@ pub fn standard_policy() -> Vec<Rule> {
             checks: vec![
                 Check::MemberOf(Term::Var(1), Term::Var(1)),
                 Check::LessThan(Term::Var(3), Term::Var(2)), // $t < $exp
+            ],
+        },
+        // Rule 50: deny if valid_after($start), request_time($t), $t < $start
+        // Not-before enforcement: deny access before the token's activation time.
+        Rule {
+            id: rule_ids::NOT_BEFORE_DENY,
+            head: Atom {
+                predicate: symbol_from_str("deny"),
+                terms: vec![],
+            },
+            body: vec![
+                Atom {
+                    predicate: symbol_from_str("valid_after"),
+                    terms: vec![Term::Var(0)], // $start
+                },
+                Atom {
+                    predicate: symbol_from_str("request_time"),
+                    terms: vec![Term::Var(1)], // $t
+                },
+            ],
+            checks: vec![
+                Check::LessThan(Term::Var(1), Term::Var(0)), // $t < $start → deny
             ],
         },
     ];

@@ -75,7 +75,10 @@ impl<Tr: Transaction> MorpheusProcess<Tr> {
         to_send: &mut Vec<(Message<Tr>, Option<Identity>)>,
     ) -> bool {
         tracing::debug!(target: "try_vote", z = z, block = ?block, target = ?target);
-        let author = block.author.clone().expect("not voting for genesis block");
+        let Some(author) = block.author.clone() else {
+            tracing::warn!(target: "try_vote", "rejecting vote for genesis block");
+            return false;
+        };
 
         // Per paper Section 5: "voted_i(z, x, s, p_j)" - dedup key is (z-level, block type,
         // slot, author) WITHOUT view. This is correct: the paper guarantees that a correct

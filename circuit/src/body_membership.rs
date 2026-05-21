@@ -182,7 +182,7 @@ pub fn verify_authorization_with_membership(
     verify_authorization_stark(conclusion, accumulated_hash, &proof.derivation_proof)?;
 
     // Step 2: Extract the state_root from the derivation proof's public inputs
-    let derivation_state_root = BabyBear(proof.derivation_proof.public_inputs[0]);
+    let derivation_state_root = BabyBear::new_canonical(proof.derivation_proof.public_inputs[0]);
     if derivation_state_root != proof.state_root {
         return Err(format!(
             "State root mismatch: proof claims {} but derivation public input is {}",

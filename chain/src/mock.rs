@@ -39,28 +39,32 @@ pub fn sp1_toolchain_available() -> bool {
         .unwrap_or(false)
 }
 
+/// Setup instructions for the SP1 toolchain.
+const SP1_INSTALL_INSTRUCTIONS: &str = "\
+=== SP1 Toolchain Setup ===
+
+The SP1 toolchain is required for real proof generation.
+Install it with:
+
+  curl -L https://sp1.succinct.xyz | bash
+  sp1up
+
+Then build the guest program:
+
+  cd chain/program && cargo prove build
+
+After that, use `--features prove` instead of `--features mock`:
+
+  cargo build -p pyana-chain --no-default-features --features prove
+
+For on-chain verification, also enable the `on-chain` feature:
+
+  cargo build -p pyana-chain --no-default-features --features prove,on-chain
+";
+
 /// Print setup instructions for the SP1 toolchain.
 pub fn print_setup_instructions() {
-    eprintln!("=== SP1 Toolchain Setup ===");
-    eprintln!();
-    eprintln!("The SP1 toolchain is required for real proof generation.");
-    eprintln!("Install it with:");
-    eprintln!();
-    eprintln!("  curl -L https://sp1.succinct.xyz | bash");
-    eprintln!("  sp1up");
-    eprintln!();
-    eprintln!("Then build the guest program:");
-    eprintln!();
-    eprintln!("  cd chain/program && cargo prove build");
-    eprintln!();
-    eprintln!("After that, use `--features prove` instead of `--features mock`:");
-    eprintln!();
-    eprintln!("  cargo build -p pyana-chain --no-default-features --features prove");
-    eprintln!();
-    eprintln!("For on-chain verification, also enable the `on-chain` feature:");
-    eprintln!();
-    eprintln!("  cargo build -p pyana-chain --no-default-features --features prove,on-chain");
-    eprintln!();
+    eprintln!("{}", SP1_INSTALL_INSTRUCTIONS);
 }
 
 #[cfg(test)]

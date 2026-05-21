@@ -784,7 +784,7 @@ impl RealPresentationProof {
             .issuer_membership_stark_proof
             .public_inputs
             .iter()
-            .map(|&v| BabyBear(v))
+            .map(|&v| BabyBear::new_canonical(v))
             .collect();
 
         // The STARK proof's public inputs are [leaf_hash, root]
@@ -798,20 +798,11 @@ impl RealPresentationProof {
             return PresentationVerification::IssuerNotInFederation;
         }
 
-        // Try Poseidon2 AIR first (production path), fall back to linear AIR (legacy).
+        // Verify with Poseidon2 AIR (production path). No fallback to linear AIR
+        // which is trivially forgeable and must never be used for verification.
         use crate::poseidon2_air::MerklePoseidon2StarkAir;
-        let poseidon2_result = stark::verify(
-            &MerklePoseidon2StarkAir,
-            &self.issuer_membership_stark_proof,
-            &issuer_public_inputs,
-        );
-        if poseidon2_result.is_ok() {
-            return PresentationVerification::Valid;
-        }
-
-        // Fall back to linear AIR for backward compatibility with old proofs
         match stark::verify(
-            &MerkleStarkAir,
+            &MerklePoseidon2StarkAir,
             &self.issuer_membership_stark_proof,
             &issuer_public_inputs,
         ) {
@@ -1311,18 +1302,18 @@ mod tests {
 
     #[test]
     fn presentation_real_stark_prove_and_verify() {
-        // Create a presentation with a STARK-compatible issuer membership witness
+        // Create a presentation with a Poseidon2-compatible issuer membership witness
         let mut witness = create_test_presentation();
-        // Replace the issuer membership with one using algebraic binding
-        // (compatible with MerkleStarkAir)
-        let stark_issuer = create_stark_compatible_witness(BabyBear::new(42424242), 8);
-        witness.issuer_membership = stark_issuer;
+        // Replace the issuer membership with one using Poseidon2 hashing
+        // (compatible with MerklePoseidon2StarkAir — the only accepted verifier)
+        let poseidon2_issuer = create_poseidon2_compatible_witness(BabyBear::new(42424242), 8);
+        witness.issuer_membership = poseidon2_issuer;
         witness.federation_root = witness.issuer_membership.expected_root;
 
         let air = PresentationAir::new(witness);
 
-        // Generate real STARK proof
-        let proof = air.prove_stark();
+        // Generate real STARK proof via Poseidon2 path
+        let proof = air.prove_stark_poseidon2();
         assert!(
             proof.is_some(),
             "Real STARK proof generation should succeed"
@@ -1336,7 +1327,7 @@ mod tests {
             proof.proof_size_display()
         );
 
-        // Verify with real STARK verifier
+        // Verify with real STARK verifier (Poseidon2 only, no linear AIR fallback)
         let verification = proof.verify();
         assert_eq!(
             verification,
@@ -1389,7 +1380,7 @@ mod tests {
         let pi: Vec<BabyBear> = deserialized
             .public_inputs
             .iter()
-            .map(|&v| BabyBear(v))
+            .map(|&v| BabyBear::new_canonical(v))
             .collect();
         let result = crate::stark::verify(&crate::stark::MerkleStarkAir, &deserialized, &pi);
         assert!(result.is_ok(), "Deserialized STARK should verify");
@@ -1487,7 +1478,7 @@ mod tests {
 
         // Verify with real STARK verifier using MerklePoseidon2StarkAir
         use crate::poseidon2_air::MerklePoseidon2StarkAir;
-        let pi: Vec<BabyBear> = proof.public_inputs.iter().map(|&v| BabyBear(v)).collect();
+        let pi: Vec<BabyBear> = proof.public_inputs.iter().map(|&v| BabyBear::new_canonical(v)).collect();
         let result = crate::stark::verify(&MerklePoseidon2StarkAir, &proof, &pi);
         assert!(
             result.is_ok(),
@@ -1503,7 +1494,7 @@ mod tests {
 
         // Verify with wrong root
         use crate::poseidon2_air::MerklePoseidon2StarkAir;
-        let mut pi: Vec<BabyBear> = proof.public_inputs.iter().map(|&v| BabyBear(v)).collect();
+        let mut pi: Vec<BabyBear> = proof.public_inputs.iter().map(|&v| BabyBear::new_canonical(v)).collect();
         // Tamper: change the root
         pi[1] = BabyBear::new(999999);
         let result = crate::stark::verify(&MerklePoseidon2StarkAir, &proof, &pi);

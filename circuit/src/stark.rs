@@ -97,16 +97,21 @@ fn interpolate(xs: &[BabyBear], ys: &[BabyBear]) -> Vec<BabyBear> {
 // Merkle tree (BLAKE3-based)
 // ============================================================================
 
+/// Domain separator for leaf hashing. Must match chain/program/src/main.rs.
+pub const STARK_LEAF_DOMAIN: &[u8] = b"stark-leaf:";
+/// Domain separator for node hashing. Must match chain/program/src/main.rs.
+pub const STARK_NODE_DOMAIN: &[u8] = b"stark-node:";
+
 fn hash_leaf(value: BabyBear) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"stark-leaf:");
+    hasher.update(STARK_LEAF_DOMAIN);
     hasher.update(&value.0.to_le_bytes());
     *hasher.finalize().as_bytes()
 }
 
 fn hash_leaf_multi(values: &[BabyBear]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"stark-leaf:");
+    hasher.update(STARK_LEAF_DOMAIN);
     for v in values {
         hasher.update(&v.0.to_le_bytes());
     }
@@ -115,7 +120,7 @@ fn hash_leaf_multi(values: &[BabyBear]) -> [u8; 32] {
 
 fn hash_node(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"stark-node:");
+    hasher.update(STARK_NODE_DOMAIN);
     hasher.update(left);
     hasher.update(right);
     *hasher.finalize().as_bytes()
@@ -747,6 +752,76 @@ pub fn verify_with_context(
         transcript.absorb_hash(commitment);
     }
 
+    // ====================================================================
+    // Direct boundary constraint verification (fail-fast before FRI loop)
+    // ====================================================================
+    // Boundary constraints bind specific trace cells to public input values.
+    // The prover includes Merkle openings of the trace at boundary points
+    // (positions row * BLOWUP in the eval domain). The verifier checks:
+    // 1. Merkle proof authenticates the trace values against trace_commitment
+    // 2. The trace value at (row, col) equals the expected boundary value
+    //
+    // This is a DIRECT check (not probabilistic) and prevents the attack where
+    // a prover generates a valid trace for inputs X then lies about public inputs.
+    // Placed before the expensive FRI query loop for early rejection of invalid proofs.
+    if !boundary_cs.is_empty() {
+        if proof.boundary_query_values.len() != boundary_cs.len() {
+            return Err(format!(
+                "Boundary proof data missing: expected {} openings, got {}",
+                boundary_cs.len(),
+                proof.boundary_query_values.len()
+            ));
+        }
+        if proof.boundary_query_paths.len() != boundary_cs.len() {
+            return Err("Boundary proof paths missing".to_string());
+        }
+
+        for (i, bc) in boundary_cs.iter().enumerate() {
+            let eval_idx = bc.row * BLOWUP;
+
+            // Verify the trace values are authentic (Merkle proof against trace commitment)
+            let boundary_vals: Vec<BabyBear> = proof.boundary_query_values[i]
+                .iter()
+                .map(|&v| BabyBear::new_canonical(v))
+                .collect();
+
+            if boundary_vals.len() != num_cols {
+                return Err(format!(
+                    "Boundary opening {i} has wrong width: expected {num_cols}, got {}",
+                    boundary_vals.len()
+                ));
+            }
+
+            if !MerkleTree::verify_proof(
+                &proof.trace_commitment,
+                &hash_leaf_multi(&boundary_vals),
+                eval_idx,
+                &proof.boundary_query_paths[i],
+            ) {
+                return Err(format!(
+                    "Boundary constraint {i}: Merkle proof failed at eval index {eval_idx} \
+                     (trace row {})",
+                    bc.row
+                ));
+            }
+
+            // Direct check: trace value at boundary cell must equal expected value
+            if bc.col >= boundary_vals.len() {
+                return Err(format!(
+                    "Boundary constraint {i}: column {} out of range",
+                    bc.col
+                ));
+            }
+            if boundary_vals[bc.col] != bc.value {
+                return Err(format!(
+                    "Boundary constraint {i} violated: trace[{}][{}] = {}, expected {} \
+                     (public input binding failure)",
+                    bc.row, bc.col, boundary_vals[bc.col].0, bc.value.0
+                ));
+            }
+        }
+    }
+
     // Use roots of unity (must match prover's domain construction)
     let trace_points: Vec<BabyBear> = build_evaluation_domain(trace_len);
     let eval_points: Vec<BabyBear> = build_evaluation_domain(domain_size);
@@ -963,75 +1038,6 @@ pub fn verify_with_context(
 
     if proof.fri_final_poly.len() > 4 {
         return Err("FRI final polynomial too large".to_string());
-    }
-
-    // ====================================================================
-    // Direct boundary constraint verification
-    // ====================================================================
-    // Boundary constraints bind specific trace cells to public input values.
-    // The prover includes Merkle openings of the trace at boundary points
-    // (positions row * BLOWUP in the eval domain). The verifier checks:
-    // 1. Merkle proof authenticates the trace values against trace_commitment
-    // 2. The trace value at (row, col) equals the expected boundary value
-    //
-    // This is a DIRECT check (not probabilistic) and prevents the attack where
-    // a prover generates a valid trace for inputs X then lies about public inputs.
-    if !boundary_cs.is_empty() {
-        if proof.boundary_query_values.len() != boundary_cs.len() {
-            return Err(format!(
-                "Boundary proof data missing: expected {} openings, got {}",
-                boundary_cs.len(),
-                proof.boundary_query_values.len()
-            ));
-        }
-        if proof.boundary_query_paths.len() != boundary_cs.len() {
-            return Err("Boundary proof paths missing".to_string());
-        }
-
-        for (i, bc) in boundary_cs.iter().enumerate() {
-            let eval_idx = bc.row * BLOWUP;
-
-            // Verify the trace values are authentic (Merkle proof against trace commitment)
-            let boundary_vals: Vec<BabyBear> = proof.boundary_query_values[i]
-                .iter()
-                .map(|&v| BabyBear::new_canonical(v))
-                .collect();
-
-            if boundary_vals.len() != num_cols {
-                return Err(format!(
-                    "Boundary opening {i} has wrong width: expected {num_cols}, got {}",
-                    boundary_vals.len()
-                ));
-            }
-
-            if !MerkleTree::verify_proof(
-                &proof.trace_commitment,
-                &hash_leaf_multi(&boundary_vals),
-                eval_idx,
-                &proof.boundary_query_paths[i],
-            ) {
-                return Err(format!(
-                    "Boundary constraint {i}: Merkle proof failed at eval index {eval_idx} \
-                     (trace row {})",
-                    bc.row
-                ));
-            }
-
-            // Direct check: trace value at boundary cell must equal expected value
-            if bc.col >= boundary_vals.len() {
-                return Err(format!(
-                    "Boundary constraint {i}: column {} out of range",
-                    bc.col
-                ));
-            }
-            if boundary_vals[bc.col] != bc.value {
-                return Err(format!(
-                    "Boundary constraint {i} violated: trace[{}][{}] = {}, expected {} \
-                     (public input binding failure)",
-                    bc.row, bc.col, boundary_vals[bc.col].0, bc.value.0
-                ));
-            }
-        }
     }
 
     Ok(())

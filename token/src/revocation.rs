@@ -14,7 +14,9 @@
 //! Tokens with a `Revocable` caveat are checked against this filter during
 //! verification. Tokens without the caveat skip the check entirely.
 
-use scalable_cuckoo_filter::ScalableCuckooFilter;
+use rand::rngs::StdRng;
+use rand::SeedableRng;
+use scalable_cuckoo_filter::{ScalableCuckooFilter, ScalableCuckooFilterBuilder};
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,29 +27,52 @@ const DEFAULT_FALSE_POSITIVE_RATE: f64 = 0.001; // 0.1%
 /// Default initial capacity (number of expected entries).
 const DEFAULT_INITIAL_CAPACITY: usize = 1024;
 
+/// A Send-safe RNG wrapper that implements Default (required by ScalableCuckooFilter's
+/// serde deserialization, which skips the rng field and fills it via Default).
+#[derive(Debug)]
+struct SendRng(StdRng);
+
+impl Default for SendRng {
+    fn default() -> Self {
+        Self(StdRng::from_os_rng())
+    }
+}
+
+impl rand::RngCore for SendRng {
+    fn next_u32(&mut self) -> u32 {
+        self.0.next_u32()
+    }
+    fn next_u64(&mut self) -> u64 {
+        self.0.next_u64()
+    }
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        self.0.fill_bytes(dest)
+    }
+}
+
+/// Type alias for a cuckoo filter using a Send-safe RNG.
+type SendSafeFilter = ScalableCuckooFilter<str, scalable_cuckoo_filter::DefaultHasher, SendRng>;
+
 /// Thread-safe revocation filter backed by a scalable cuckoo filter.
 ///
 /// Provides O(1) revocation checks for token nonces. The filter can be
 /// persisted to disk and restored (via serde) for sidecar restarts.
 pub struct RevocationFilter {
-    inner: Mutex<ScalableCuckooFilter<str>>,
+    inner: Mutex<SendSafeFilter>,
     count: AtomicU64,
 }
-
-// SAFETY: The ScalableCuckooFilter is only accessed through a Mutex, which
-// guarantees exclusive access. The DefaultRng inside the filter is not Send,
-// but we never access it without holding the Mutex lock.
-unsafe impl Send for RevocationFilter {}
-unsafe impl Sync for RevocationFilter {}
 
 impl RevocationFilter {
     /// Create a new empty revocation filter with default parameters.
     pub fn new() -> Self {
         Self {
-            inner: Mutex::new(ScalableCuckooFilter::new(
-                DEFAULT_INITIAL_CAPACITY,
-                DEFAULT_FALSE_POSITIVE_RATE,
-            )),
+            inner: Mutex::new(
+                ScalableCuckooFilterBuilder::new()
+                    .initial_capacity(DEFAULT_INITIAL_CAPACITY)
+                    .false_positive_probability(DEFAULT_FALSE_POSITIVE_RATE)
+                    .rng(SendRng(StdRng::from_os_rng()))
+                    .finish(),
+            ),
             count: AtomicU64::new(0),
         }
     }
@@ -55,7 +80,13 @@ impl RevocationFilter {
     /// Create a revocation filter with custom capacity and FPR.
     pub fn with_capacity(capacity: usize, false_positive_rate: f64) -> Self {
         Self {
-            inner: Mutex::new(ScalableCuckooFilter::new(capacity, false_positive_rate)),
+            inner: Mutex::new(
+                ScalableCuckooFilterBuilder::new()
+                    .initial_capacity(capacity)
+                    .false_positive_probability(false_positive_rate)
+                    .rng(SendRng(StdRng::from_os_rng()))
+                    .finish(),
+            ),
             count: AtomicU64::new(0),
         }
     }
@@ -113,7 +144,7 @@ impl Default for RevocationFilter {
 /// Serializable snapshot of the revocation filter state.
 #[derive(Serialize, Deserialize)]
 struct RevocationSnapshot {
-    filter: ScalableCuckooFilter<str>,
+    filter: SendSafeFilter,
     count: u64,
 }
 
