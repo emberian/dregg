@@ -22,6 +22,30 @@ use serde::{Deserialize, Serialize};
 
 use crate::conditional::{ConditionProof, ConditionalResult, ProofCondition, resolve_condition};
 
+/// Maximum allowed deadline for proof obligations (in blocks from current height).
+pub const MAX_OBLIGATION_DEADLINE: u64 = 10_000;
+
+/// Validate that an obligation deadline is within acceptable bounds.
+///
+/// Returns `Ok(())` if `deadline_height - current_height <= MAX_OBLIGATION_DEADLINE`,
+/// otherwise returns an error string.
+pub fn validate_obligation_deadline(
+    deadline_height: u64,
+    current_height: u64,
+) -> Result<(), String> {
+    if deadline_height <= current_height {
+        return Err("deadline must be in the future".to_string());
+    }
+    let span = deadline_height - current_height;
+    if span > MAX_OBLIGATION_DEADLINE {
+        return Err(format!(
+            "obligation deadline {} exceeds maximum {}",
+            span, MAX_OBLIGATION_DEADLINE
+        ));
+    }
+    Ok(())
+}
+
 /// Errors arising from obligation lifecycle operations.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ObligationError {

@@ -91,5 +91,9 @@ criterion = { workspace = true }
 name = "stark_bench"
 harness = false
 
+[[bench]]
+name = "proof_benchmarks"
+harness = false
+
 [lints]
 workspace = true

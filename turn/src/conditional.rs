@@ -13,9 +13,41 @@
 //! The STARK proof replaces the HTLC hash preimage, but is strictly more general:
 //! any provable statement can serve as a condition, not just "know a preimage."
 
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 
 use crate::turn::{Turn, TurnReceipt};
+
+/// A trusted federation root with the height at which it was established.
+pub type TrustedRoot = ([u8; 32], u64);
+
+/// Default maximum age (in blocks) for a trusted root to be valid.
+pub const DEFAULT_MAX_ROOT_AGE: u64 = 1000;
+
+/// Maximum allowed deadline for conditional turns (in blocks from current height).
+pub const MAX_CONDITIONAL_DEADLINE: u64 = 10_000;
+
+/// Validate that a conditional turn submission's deadline is within acceptable bounds.
+///
+/// Returns `Ok(())` if `timeout_height - current_height <= MAX_CONDITIONAL_DEADLINE`,
+/// otherwise returns an error string.
+pub fn validate_conditional_submission(
+    timeout_height: u64,
+    current_height: u64,
+) -> Result<(), String> {
+    if timeout_height <= current_height {
+        return Err("timeout must be in the future".to_string());
+    }
+    let span = timeout_height - current_height;
+    if span > MAX_CONDITIONAL_DEADLINE {
+        return Err(format!(
+            "conditional deadline {} exceeds maximum {}",
+            span, MAX_CONDITIONAL_DEADLINE
+        ));
+    }
+    Ok(())
+}
 
 /// A condition that must be satisfied before a turn executes.
 ///

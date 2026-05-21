@@ -602,6 +602,14 @@ async fn post_submit_conditional(
         submitted_at: current_height,
     };
 
+    // Validate: fee > 0 and deadline not too far in the future.
+    if let Err(e) = pyana_turn::validate_conditional_submission(&conditional, current_height) {
+        return Ok(Json(SubmitConditionalResponse {
+            accepted: false,
+            conditional_hash: None,
+        }));
+    }
+
     let hash = conditional.hash();
     let hash_hex = hex_encode(&hash);
 

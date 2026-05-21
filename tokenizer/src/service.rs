@@ -237,109 +237,6 @@ impl TokenizerService {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn keyring_seal_unseal_roundtrip() {
-        let ring = KeyRing::generate();
-        let plaintext = b"seal-unseal-test";
-        let sealed = ring.seal(plaintext).unwrap();
-        let decrypted = ring.unseal(&sealed).unwrap();
-        assert_eq!(decrypted, plaintext);
-    }
-
-    #[test]
-    fn keyring_sealed_differs_from_plaintext() {
-        let ring = KeyRing::generate();
-        let plaintext = b"not-identity";
-        let sealed = ring.seal(plaintext).unwrap();
-        assert_ne!(&sealed, plaintext);
-        assert!(sealed.len() > plaintext.len());
-    }
-
-    #[test]
-    fn keyring_wrong_key_fails() {
-        let ring1 = KeyRing::generate();
-        let ring2 = KeyRing::generate();
-
-        let sealed = ring1.seal(b"secret-data").unwrap();
-        let result = ring2.unseal(&sealed);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn keyring_rotate_preserves_old_decryption() {
-        let mut ring = KeyRing::generate();
-        let sealed_before = ring.seal(b"before-rotate").unwrap();
-
-        ring.rotate();
-        assert_eq!(ring.len(), 2);
-
-        // Old sealed data still decrypts after rotation.
-        let decrypted = ring.unseal(&sealed_before).unwrap();
-        assert_eq!(decrypted, b"before-rotate");
-    }
-
-    #[test]
-    fn keyring_rotate_changes_public_key() {
-        let mut ring = KeyRing::generate();
-        let pk1 = ring.current_public_key();
-        let pk2 = ring.rotate();
-        assert_ne!(pk1, pk2);
-        assert_eq!(ring.current_public_key(), pk2);
-    }
-
-    #[test]
-    fn keyring_from_stored_keys() {
-        // Generate a keypair, seal something, then reconstruct from stored bytes.
-        let mut key_bytes = [0u8; 32];
-        getrandom::fill(&mut key_bytes).unwrap();
-
-        let ring = KeyRing::from_stored_keys(vec![key_bytes]);
-        assert_eq!(ring.len(), 1);
-
-        let sealed = ring.seal(b"stored-key-test").unwrap();
-        let decrypted = ring.unseal(&sealed).unwrap();
-        assert_eq!(decrypted, b"stored-key-test");
-
-        // Reconstruct again -- same key bytes should produce same public key.
-        let ring2 = KeyRing::from_stored_keys(vec![key_bytes]);
-        assert_eq!(ring.current_public_key(), ring2.current_public_key());
-        // And should decrypt the same sealed data.
-        let decrypted2 = ring2.unseal(&sealed).unwrap();
-        assert_eq!(decrypted2, b"stored-key-test");
-    }
-
-    #[test]
-    fn keyring_multiple_rotations() {
-        let mut ring = KeyRing::generate();
-        let mut sealed_data = Vec::new();
-
-        for i in 0..5 {
-            let msg = format!("message-{}", i);
-            sealed_data.push(ring.seal(msg.as_bytes()).unwrap());
-            ring.rotate();
-        }
-
-        assert_eq!(ring.len(), 6); // 1 initial + 5 rotations
-
-        // All sealed data should still decrypt.
-        for (i, sealed) in sealed_data.iter().enumerate() {
-            let decrypted = ring.unseal(sealed).unwrap();
-            assert_eq!(decrypted, format!("message-{}", i).as_bytes());
-        }
-    }
-
-    #[test]
-    fn keyring_unseal_garbage_fails() {
-        let ring = KeyRing::generate();
-        let result = ring.unseal(&[0xDE, 0xAD, 0xBE, 0xEF]);
-        assert!(result.is_err());
-    }
-}
-
 /// Handle a single client connection.
 async fn handle_connection(
     mut stream: UnixStream,
@@ -476,4 +373,105 @@ pub(crate) async fn read_frame<T: serde::de::DeserializeOwned>(
 
     postcard::from_bytes(&payload)
         .map_err(|e| TokenizerError::Encoding(format!("deserialization failed: {}", e)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keyring_seal_unseal_roundtrip() {
+        let ring = KeyRing::generate();
+        let plaintext = b"seal-unseal-test";
+        let sealed = ring.seal(plaintext).unwrap();
+        let decrypted = ring.unseal(&sealed).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn keyring_sealed_differs_from_plaintext() {
+        let ring = KeyRing::generate();
+        let plaintext = b"not-identity";
+        let sealed = ring.seal(plaintext).unwrap();
+        assert_ne!(&sealed, plaintext);
+        assert!(sealed.len() > plaintext.len());
+    }
+
+    #[test]
+    fn keyring_wrong_key_fails() {
+        let ring1 = KeyRing::generate();
+        let ring2 = KeyRing::generate();
+
+        let sealed = ring1.seal(b"secret-data").unwrap();
+        let result = ring2.unseal(&sealed);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn keyring_rotate_preserves_old_decryption() {
+        let mut ring = KeyRing::generate();
+        let sealed_before = ring.seal(b"before-rotate").unwrap();
+
+        ring.rotate();
+        assert_eq!(ring.len(), 2);
+
+        // Old sealed data still decrypts after rotation.
+        let decrypted = ring.unseal(&sealed_before).unwrap();
+        assert_eq!(decrypted, b"before-rotate");
+    }
+
+    #[test]
+    fn keyring_rotate_changes_public_key() {
+        let mut ring = KeyRing::generate();
+        let pk1 = ring.current_public_key();
+        let pk2 = ring.rotate();
+        assert_ne!(pk1, pk2);
+        assert_eq!(ring.current_public_key(), pk2);
+    }
+
+    #[test]
+    fn keyring_from_stored_keys() {
+        let mut key_bytes = [0u8; 32];
+        getrandom::fill(&mut key_bytes).unwrap();
+
+        let ring = KeyRing::from_stored_keys(vec![key_bytes]);
+        assert_eq!(ring.len(), 1);
+
+        let sealed = ring.seal(b"stored-key-test").unwrap();
+        let decrypted = ring.unseal(&sealed).unwrap();
+        assert_eq!(decrypted, b"stored-key-test");
+
+        // Reconstruct again -- same key bytes should produce same public key.
+        let ring2 = KeyRing::from_stored_keys(vec![key_bytes]);
+        assert_eq!(ring.current_public_key(), ring2.current_public_key());
+        let decrypted2 = ring2.unseal(&sealed).unwrap();
+        assert_eq!(decrypted2, b"stored-key-test");
+    }
+
+    #[test]
+    fn keyring_multiple_rotations() {
+        let mut ring = KeyRing::generate();
+        let mut sealed_data = Vec::new();
+
+        for i in 0..5 {
+            let msg = format!("message-{}", i);
+            sealed_data.push(ring.seal(msg.as_bytes()).unwrap());
+            ring.rotate();
+        }
+
+        assert_eq!(ring.len(), 6); // 1 initial + 5 rotations
+
+        // All sealed data should still decrypt.
+        for (i, sealed) in sealed_data.iter().enumerate() {
+            let decrypted = ring.unseal(sealed).unwrap();
+            assert_eq!(decrypted, format!("message-{}", i).as_bytes());
+        }
+    }
+
+    #[test]
+    fn keyring_unseal_garbage_fails() {
+        let ring = KeyRing::generate();
+        let result = ring.unseal(&[0xDE, 0xAD, 0xBE, 0xEF]);
+        assert!(result.is_err());
+    }
 }

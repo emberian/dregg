@@ -195,7 +195,9 @@ impl TurnExecutor {
         conditional: &crate::conditional::ConditionalTurn,
         proof: &crate::conditional::ConditionProof,
         current_height: u64,
-        trusted_roots: &[[u8; 32]],
+        trusted_roots: &[crate::conditional::TrustedRoot],
+        max_root_age: u64,
+        used_proof_hashes: &mut std::collections::HashSet<[u8; 32]>,
         ledger: &mut Ledger,
     ) -> TurnResult {
         // Check timeout.
@@ -210,6 +212,8 @@ impl TurnExecutor {
             current_height,
             conditional.timeout_height,
             trusted_roots,
+            max_root_age,
+            used_proof_hashes,
         ) {
             crate::conditional::ConditionalResult::Resolved => {
                 self.execute(&conditional.turn, ledger)

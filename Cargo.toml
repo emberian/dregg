@@ -102,3 +102,8 @@ unused_imports = "allow"
 unused_variables = "allow"
 dead_code = "allow"
 unexpected_cfgs = "allow"
+
+[profile.bench]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

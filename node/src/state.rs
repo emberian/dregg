@@ -4,7 +4,7 @@
 //! Arc<RwLock<>> for concurrent access from HTTP handlers and the
 //! federation sync background task.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -69,6 +69,9 @@ pub struct NodeStateInner {
     /// Pending conditional turns awaiting proof resolution.
     /// Garbage-collected on access when timeout_height is exceeded.
     pub pending_conditionals: Vec<pyana_turn::ConditionalTurn>,
+    /// Set of proof hashes that have already been used (nullifiers).
+    /// Prevents the same proof from satisfying multiple conditional turns.
+    pub used_proof_hashes: HashSet<[u8; 32]>,
 }
 
 /// Summary of the node's sync state for the status endpoint.
@@ -110,6 +113,7 @@ impl NodeState {
                 passphrase_hash: None,
                 intent_pool: HashMap::new(),
                 pending_conditionals: Vec::new(),
+                used_proof_hashes: HashSet::new(),
             })),
             events_tx,
             gossip: Arc::new(RwLock::new(None)),
@@ -141,6 +145,7 @@ impl NodeState {
                 passphrase_hash: None,
                 intent_pool: HashMap::new(),
                 pending_conditionals: Vec::new(),
+                used_proof_hashes: HashSet::new(),
             })),
             events_tx,
             gossip: Arc::new(RwLock::new(None)),
