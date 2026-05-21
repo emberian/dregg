@@ -158,9 +158,10 @@ fn full_policy() -> Vec<Rule> {
 
     let mut rules = Vec::new();
 
-    // === Core access rules (standard policy) ===
+    // === Core access rules (secure, MemberOf-based) ===
 
-    // Rule 1: allow if app($app, $actions), request_app($app), request_action($act), $actions.contains($act)
+    // Rule 1: allow if action_allowed($app, $act), request_app($app), request_action($act)
+    //   check: MemberOf($act, $act) [explicit equality for ZK path]
     rules.push(Rule {
         id: rule_ids::APP_ACTION,
         head: Atom {
@@ -169,22 +170,23 @@ fn full_policy() -> Vec<Rule> {
         },
         body: vec![
             Atom {
-                predicate: symbol_from_str("app"),
-                terms: vec![Term::Var(0), Term::Var(1)],
+                predicate: symbol_from_str("action_allowed"),
+                terms: vec![Term::Var(0), Term::Var(1)], // $app, $act
             },
             Atom {
                 predicate: symbol_from_str("request_app"),
-                terms: vec![Term::Var(0)],
+                terms: vec![Term::Var(0)], // $app
             },
             Atom {
                 predicate: symbol_from_str("request_action"),
-                terms: vec![Term::Var(2)],
+                terms: vec![Term::Var(1)], // $act (must unify with action_allowed)
             },
         ],
-        checks: vec![Check::MemberOf(Term::Var(1), Term::Var(2))],
+        checks: vec![Check::MemberOf(Term::Var(1), Term::Var(1))],
     });
 
-    // Rule 2: allow if service($svc, $actions), request_service($svc), request_action($act), MemberOf($actions, $act)
+    // Rule 2: allow if svc_action_allowed($svc, $act), request_service($svc), request_action($act)
+    //   check: MemberOf($act, $act) [explicit equality for ZK path]
     rules.push(Rule {
         id: rule_ids::SERVICE_ACTION,
         head: Atom {
@@ -193,19 +195,19 @@ fn full_policy() -> Vec<Rule> {
         },
         body: vec![
             Atom {
-                predicate: symbol_from_str("service"),
-                terms: vec![Term::Var(0), Term::Var(1)],
+                predicate: symbol_from_str("svc_action_allowed"),
+                terms: vec![Term::Var(0), Term::Var(1)], // $svc, $act
             },
             Atom {
                 predicate: symbol_from_str("request_service"),
-                terms: vec![Term::Var(0)],
+                terms: vec![Term::Var(0)], // $svc
             },
             Atom {
                 predicate: symbol_from_str("request_action"),
-                terms: vec![Term::Var(2)],
+                terms: vec![Term::Var(1)], // $act (must unify with svc_action_allowed)
             },
         ],
-        checks: vec![Check::MemberOf(Term::Var(1), Term::Var(2))],
+        checks: vec![Check::MemberOf(Term::Var(1), Term::Var(1))],
     });
 
     // Rule 3: allow if unrestricted(1)

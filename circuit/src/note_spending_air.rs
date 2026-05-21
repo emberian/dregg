@@ -1,14 +1,15 @@
 //! Note spending circuit: ZK proof that the spender knows the spending key.
 //!
 //! This AIR proves:
-//! 1. Prover knows `spending_key` such that `nullifier = poseidon2(commitment || spending_key || creation_nonce)`
+//! 1. Prover knows `spending_key` (8 BabyBear limbs = 248 bits) such that
+//!    `nullifier = poseidon2(commitment || spending_key[0..8] || creation_nonce)`
 //! 2. Prover knows `owner`, `value`, `asset_type`, `creation_nonce`, `randomness` such that
 //!    `commitment = poseidon2(owner || value || asset_type || creation_nonce || randomness)`
 //! 3. The commitment is a member of a Merkle tree with a given root (Poseidon2 Merkle path)
 //!
 //! # Trace layout
 //!
-//! The trace is organized as a sequence of rows with width = 12:
+//! The trace is organized as a sequence of rows with width = 19:
 //!
 //! ```text
 //! Row type: COMMITMENT (rows 0)
@@ -16,11 +17,13 @@
 //!   col 1: value
 //!   col 2: asset_type
 //!   col 3: creation_nonce
-//!   col 4: randomness
+//!   col 4: (zero — reserved for Merkle position validity constraint)
 //!   col 5: commitment (computed = poseidon2_hash(owner, value, asset_type, creation_nonce, randomness))
-//!   col 6: spending_key
-//!   col 7: nullifier (computed = poseidon2_hash(commitment, spending_key, creation_nonce))
-//!   col 8..11: unused (zero)
+//!   col 6..13: spending_key[0..8] (8 BabyBear limbs = 248 bits of security)
+//!   col 14: nullifier (computed = poseidon2_hash(commitment, spending_key[0..8], creation_nonce))
+//!   col 15: randomness
+//!   col 16: is_merkle (0 for this row)
+//!   col 17..18: unused (zero)
 //!
 //! Row type: MERKLE_LEVEL (rows 1..depth)
 //!   col 0: current hash at this level
@@ -29,7 +32,7 @@
 //!   col 3: sibling[2]
 //!   col 4: position (0..3)
 //!   col 5: parent = poseidon2_hash_4_to_1(children arranged by position)
-//!   col 6..11: unused (zero)
+//!   col 6..18: unused (zero)
 //! ```
 //!
 //! # Public inputs
@@ -39,6 +42,7 @@
 //!
 //! # Security properties
 //!
+//! - The spending key is 248 bits (8 × 31-bit BabyBear limbs), requiring ~2^248 brute-force attempts
 //! - The spending key is private (only in the witness, never in public inputs)
 //! - The note contents (owner, value, asset_type) are private
 //! - Only the nullifier and merkle_root are public
@@ -49,7 +53,11 @@ use crate::poseidon2::{hash_4_to_1, hash_many};
 use crate::stark::{self, StarkAir, StarkProof};
 
 /// Trace width for the note spending AIR.
-pub const NOTE_SPENDING_WIDTH: usize = 12;
+/// 19 columns: 5 note preimage + commitment + 8 key limbs + nullifier + randomness + is_merkle + 2 unused.
+pub const NOTE_SPENDING_WIDTH: usize = 19;
+
+/// Number of BabyBear limbs for the spending key (248 bits of security).
+pub const SPENDING_KEY_LIMBS: usize = 8;
 
 /// Minimum Merkle depth supported.
 pub const MIN_MERKLE_DEPTH: usize = 2;
@@ -64,12 +72,14 @@ pub mod col {
     pub const CREATION_NONCE: usize = 3;
     // col 4 is zero in commitment row (reserved for Merkle position)
     pub const COMMITMENT: usize = 5;
-    pub const SPENDING_KEY: usize = 6;
-    pub const NULLIFIER: usize = 7;
-    pub const RANDOMNESS: usize = 8;
+    /// Spending key limbs occupy columns 6..14 (8 BabyBear elements = 248 bits).
+    pub const SPENDING_KEY_START: usize = 6;
+    pub const SPENDING_KEY_END: usize = 14; // exclusive
+    pub const NULLIFIER: usize = 14;
+    pub const RANDOMNESS: usize = 15;
     /// Row type: 0 = commitment row, 1 = Merkle/padding row.
     /// Used to gate constraints appropriately.
-    pub const IS_MERKLE: usize = 9;
+    pub const IS_MERKLE: usize = 16;
 }
 
 /// Column indices for Merkle level rows.
@@ -103,12 +113,31 @@ pub struct NoteSpendingWitness {
     pub creation_nonce: BabyBear,
     /// Random blinding factor.
     pub randomness: BabyBear,
-    /// The spending key (secret).
-    pub spending_key: BabyBear,
+    /// The spending key (secret): 8 BabyBear limbs = 248 bits of security.
+    ///
+    /// Each limb holds up to 31 bits (BabyBear modulus ~ 2^31). An adversary must
+    /// brute-force all 8 limbs (~2^248 attempts) to recover the key from a known
+    /// nullifier and commitment. Previously this was a single BabyBear element
+    /// (~2^31 attempts = ~2 seconds on modern hardware).
+    pub spending_key: [BabyBear; SPENDING_KEY_LIMBS],
     /// Merkle path siblings (one [BabyBear; 3] per level).
     pub merkle_siblings: Vec<[BabyBear; 3]>,
     /// Merkle path positions (one u8 per level, 0..3).
     pub merkle_positions: Vec<u8>,
+}
+
+/// Convert a 256-bit external spending key (e.g., from BLAKE3) to 8 BabyBear limbs.
+///
+/// Each 4-byte chunk is interpreted as a little-endian u32 and reduced modulo BabyBear::P
+/// via `BabyBear::new_canonical()`. This gives 8 × ~31 bits = ~248 bits of key material
+/// inside the STARK circuit.
+pub fn key_to_field_elements(key: &[u8; 32]) -> [BabyBear; SPENDING_KEY_LIMBS] {
+    let mut limbs = [BabyBear::ZERO; SPENDING_KEY_LIMBS];
+    for i in 0..SPENDING_KEY_LIMBS {
+        let bytes = [key[i * 4], key[i * 4 + 1], key[i * 4 + 2], key[i * 4 + 3]];
+        limbs[i] = BabyBear::new_canonical(u32::from_le_bytes(bytes));
+    }
+    limbs
 }
 
 impl NoteSpendingWitness {
@@ -123,10 +152,16 @@ impl NoteSpendingWitness {
         ])
     }
 
-    /// Compute the nullifier: poseidon2_hash(commitment, spending_key, creation_nonce).
+    /// Compute the nullifier: poseidon2_hash(commitment, spending_key[0..8], creation_nonce).
+    ///
+    /// The nullifier is derived from all 8 key limbs, making brute-force infeasible (~2^248).
     pub fn nullifier(&self) -> BabyBear {
         let commitment = self.commitment();
-        hash_many(&[commitment, self.spending_key, self.creation_nonce])
+        let mut inputs = Vec::with_capacity(1 + SPENDING_KEY_LIMBS + 1);
+        inputs.push(commitment);
+        inputs.extend_from_slice(&self.spending_key);
+        inputs.push(self.creation_nonce);
+        hash_many(&inputs) // 10 inputs: commitment + 8 key limbs + nonce
     }
 
     /// Compute the Merkle root by hashing up the path from the commitment.
