@@ -32,13 +32,11 @@ use mina_poseidon::pasta::FULL_ROUNDS;
 use poly_commitment::commitment::CommitmentCurve;
 use rand_core::OsRng;
 
+use super::fold::{FpMerkleLevelWitness, FpMerkleWitness, fp_hash4};
 use super::{
     BaseSponge, GTE_DIFF_BITS, KimchiNativeCircuitType, KimchiNativeProof, MAX_BODY_ATOMS,
-    MAX_HEAD_TERMS, MAX_SUB_VARS, ScalarSponge, VestaOpeningProof,
-    fp_to_bytes32, hash_fact_fp, hash_many_fp, verify_kimchi_proof,
-};
-use super::fold::{
-    FpMerkleLevelWitness, FpMerkleWitness, fp_hash4,
+    MAX_HEAD_TERMS, MAX_SUB_VARS, ScalarSponge, VestaOpeningProof, fp_to_bytes32, hash_fact_fp,
+    hash_many_fp, verify_kimchi_proof,
 };
 
 /// Maximum MemberOf checks per rule (matching STARK AIR).
@@ -125,9 +123,17 @@ impl KimchiRule {
         match &self.gte_check {
             Some(gte) => {
                 elements.push(Fp::one());
-                elements.push(if gte.lhs_is_var { Fp::one() } else { Fp::zero() });
+                elements.push(if gte.lhs_is_var {
+                    Fp::one()
+                } else {
+                    Fp::zero()
+                });
                 elements.push(gte.lhs_value);
-                elements.push(if gte.rhs_is_var { Fp::one() } else { Fp::zero() });
+                elements.push(if gte.rhs_is_var {
+                    Fp::one()
+                } else {
+                    Fp::zero()
+                });
                 elements.push(gte.rhs_value);
             }
             None => elements.push(Fp::zero()),
@@ -406,7 +412,7 @@ impl KimchiDerivationCircuit {
             {
                 let r = gates.len();
                 let mut c = vec![Fp::zero(); COLUMNS];
-                c[3] = Fp::one();  // w[0]*w[1] coefficient
+                c[3] = Fp::one(); // w[0]*w[1] coefficient
                 c[0] = -Fp::one(); // -w[0]
                 gates.push(CircuitGate::new(GateType::Generic, Wire::for_row(r), c));
             }
@@ -436,9 +442,9 @@ impl KimchiDerivationCircuit {
             {
                 let r = gates.len();
                 let mut c = vec![Fp::zero(); COLUMNS];
-                c[0] = Fp::one();  // w[0] = sel[6]
-                c[1] = Fp::one();  // w[1] = sel[7]
-                c[2] = Fp::one();  // w[2] = partial_sum_from_gate2 (sel[0]+...+sel[5])
+                c[0] = Fp::one(); // w[0] = sel[6]
+                c[1] = Fp::one(); // w[1] = sel[7]
+                c[2] = Fp::one(); // w[2] = partial_sum_from_gate2 (sel[0]+...+sel[5])
                 c[4] = Fp::zero(); // constant (will be set to 0; the is_var subtraction goes below)
                 // Sub-gate 2: enforce w[3] - w[4] = 0 where w[3] = total_sum, w[4] = is_var
                 c[5] = Fp::one();
@@ -476,12 +482,26 @@ impl KimchiDerivationCircuit {
 
         // GTE check rows
         if let Some(gte) = &self.witness.rule.gte_check {
-            self.build_range_check_gates(&mut gates, true, gte.lhs_is_var, gte.lhs_value, gte.rhs_is_var, gte.rhs_value);
+            self.build_range_check_gates(
+                &mut gates,
+                true,
+                gte.lhs_is_var,
+                gte.lhs_value,
+                gte.rhs_is_var,
+                gte.rhs_value,
+            );
         }
 
         // LT check rows
         if let Some(lt) = &self.witness.rule.lt_check {
-            self.build_range_check_gates(&mut gates, false, lt.lhs_is_var, lt.lhs_value, lt.rhs_is_var, lt.rhs_value);
+            self.build_range_check_gates(
+                &mut gates,
+                false,
+                lt.lhs_is_var,
+                lt.lhs_value,
+                lt.rhs_is_var,
+                lt.rhs_value,
+            );
         }
 
         // Rule structure commitment: Poseidon hash of rule parameters
@@ -550,7 +570,7 @@ impl KimchiDerivationCircuit {
                 c[2] = -Fp::one();
             } else {
                 c[0] = -Fp::one(); // -term_a
-                c[1] = Fp::one();  // +term_b
+                c[1] = Fp::one(); // +term_b
                 c[2] = -Fp::one(); // -diff
                 c[4] = -Fp::one(); // -1 constant
             }
@@ -620,8 +640,16 @@ impl KimchiDerivationCircuit {
     fn count_check_terms(&self) -> usize {
         let eq_terms = self.witness.rule.equal_checks.len() * 2;
         let mo_terms = self.witness.rule.memberof_checks.len() * 2;
-        let gte_terms = if self.witness.rule.gte_check.is_some() { 2 } else { 0 };
-        let lt_terms = if self.witness.rule.lt_check.is_some() { 2 } else { 0 };
+        let gte_terms = if self.witness.rule.gte_check.is_some() {
+            2
+        } else {
+            0
+        };
+        let lt_terms = if self.witness.rule.lt_check.is_some() {
+            2
+        } else {
+            0
+        };
         eq_terms + mo_terms + gte_terms + lt_terms
     }
 
@@ -659,9 +687,17 @@ impl KimchiDerivationCircuit {
         match &rule.gte_check {
             Some(gte) => {
                 elements.push(Fp::one());
-                elements.push(if gte.lhs_is_var { Fp::one() } else { Fp::zero() });
+                elements.push(if gte.lhs_is_var {
+                    Fp::one()
+                } else {
+                    Fp::zero()
+                });
                 elements.push(gte.lhs_value);
-                elements.push(if gte.rhs_is_var { Fp::one() } else { Fp::zero() });
+                elements.push(if gte.rhs_is_var {
+                    Fp::one()
+                } else {
+                    Fp::zero()
+                });
                 elements.push(gte.rhs_value);
             }
             None => elements.push(Fp::zero()),
@@ -858,13 +894,17 @@ impl KimchiDerivationCircuit {
 
             // Gate 3: binding (w[0]=resolved_value, w[1]=computed_resolved)
             // computed_resolved = is_var * (sum sel_j * sub[j]) + (1-is_var) * raw_value
-            let selected_sub: Fp = sels.iter().enumerate().map(|(j, &s)| {
-                if j < w.substitution.len() {
-                    s * w.substitution[j]
-                } else {
-                    Fp::zero()
-                }
-            }).sum();
+            let selected_sub: Fp = sels
+                .iter()
+                .enumerate()
+                .map(|(j, &s)| {
+                    if j < w.substitution.len() {
+                        s * w.substitution[j]
+                    } else {
+                        Fp::zero()
+                    }
+                })
+                .sum();
             let computed = is_var_fp * selected_sub + (Fp::one() - is_var_fp) * *raw_value;
             wit[0][row] = resolved;
             wit[1][row] = computed;
@@ -891,12 +931,28 @@ impl KimchiDerivationCircuit {
 
         // GTE check rows
         if let Some(gte) = &w.rule.gte_check {
-            self.fill_range_check_witness(&mut wit, &mut row, true, gte.lhs_is_var, gte.lhs_value, gte.rhs_is_var, gte.rhs_value);
+            self.fill_range_check_witness(
+                &mut wit,
+                &mut row,
+                true,
+                gte.lhs_is_var,
+                gte.lhs_value,
+                gte.rhs_is_var,
+                gte.rhs_value,
+            );
         }
 
         // LT check rows
         if let Some(lt) = &w.rule.lt_check {
-            self.fill_range_check_witness(&mut wit, &mut row, false, lt.lhs_is_var, lt.lhs_value, lt.rhs_is_var, lt.rhs_value);
+            self.fill_range_check_witness(
+                &mut wit,
+                &mut row,
+                false,
+                lt.lhs_is_var,
+                lt.lhs_value,
+                lt.rhs_is_var,
+                lt.rhs_value,
+            );
         }
 
         // Rule structure commitment witness (Poseidon sponge)
@@ -944,11 +1000,7 @@ impl KimchiDerivationCircuit {
         let w = &self.witness;
         let ta = w.resolve_term(lhs_is_var, lhs_value);
         let tb = w.resolve_term(rhs_is_var, rhs_value);
-        let diff = if is_gte {
-            ta - tb
-        } else {
-            tb - ta - Fp::one()
-        };
+        let diff = if is_gte { ta - tb } else { tb - ta - Fp::one() };
 
         // First row: w[0]=term_a, w[1]=term_b, w[2]=diff
         wit[0][*row] = ta;
@@ -1047,13 +1099,22 @@ impl KimchiDerivationCircuit {
         if self.witness.has_merkle_proofs() {
             for (i, bm) in self.witness.body_merkle_proofs.iter().enumerate() {
                 if !bm.merkle_proof.verify() {
-                    return Err(format!("Body atom {}: Merkle membership proof is invalid", i));
+                    return Err(format!(
+                        "Body atom {}: Merkle membership proof is invalid",
+                        i
+                    ));
                 }
                 if bm.merkle_proof.expected_root != self.witness.state_root {
-                    return Err(format!("Body atom {}: Merkle proof root does not match state_root", i));
+                    return Err(format!(
+                        "Body atom {}: Merkle proof root does not match state_root",
+                        i
+                    ));
                 }
                 if bm.merkle_proof.leaf_hash != bm.fact_hash {
-                    return Err(format!("Body atom {}: leaf hash does not match fact_hash", i));
+                    return Err(format!(
+                        "Body atom {}: leaf hash does not match fact_hash",
+                        i
+                    ));
                 }
             }
         }
@@ -1083,7 +1144,11 @@ impl KimchiDerivationCircuit {
             // Also check that the field element's bigint fits in GTE_DIFF_BITS
             let bigint = diff.into_bigint();
             let limbs = bigint.as_ref();
-            let limb0_overflow = if GTE_DIFF_BITS < 64 { limbs[0] >> GTE_DIFF_BITS != 0 } else { false };
+            let limb0_overflow = if GTE_DIFF_BITS < 64 {
+                limbs[0] >> GTE_DIFF_BITS != 0
+            } else {
+                false
+            };
             if high_bit != 0 || limb0_overflow || limbs[1] != 0 || limbs[2] != 0 || limbs[3] != 0 {
                 return Err("GTE check failed: term_a < term_b (diff doesn't fit in range)".into());
             }
@@ -1097,7 +1162,11 @@ impl KimchiDerivationCircuit {
             let high_bit = (diff_u64 >> (GTE_DIFF_BITS - 1)) & 1;
             let bigint = diff.into_bigint();
             let limbs = bigint.as_ref();
-            let limb0_overflow = if GTE_DIFF_BITS < 64 { limbs[0] >> GTE_DIFF_BITS != 0 } else { false };
+            let limb0_overflow = if GTE_DIFF_BITS < 64 {
+                limbs[0] >> GTE_DIFF_BITS != 0
+            } else {
+                false
+            };
             if high_bit != 0 || limb0_overflow || limbs[1] != 0 || limbs[2] != 0 || limbs[3] != 0 {
                 return Err("LT check failed: term_a >= term_b (diff doesn't fit in range)".into());
             }
@@ -1232,7 +1301,11 @@ mod tests {
         // Honest proof should succeed
         let circuit = KimchiDerivationCircuit::new(w.clone());
         let result = circuit.prove();
-        assert!(result.is_ok(), "Honest proof should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Honest proof should succeed: {:?}",
+            result.err()
+        );
 
         // Now tamper: make equal check terms mismatch (lhs != rhs)
         let mut w_bad = w.clone();
@@ -1281,7 +1354,10 @@ mod tests {
         };
         let circuit = KimchiDerivationCircuit::new(w);
         let result = circuit.prove();
-        assert!(result.is_err(), "MemberOf check with mismatched terms should fail");
+        assert!(
+            result.is_err(),
+            "MemberOf check with mismatched terms should fail"
+        );
     }
 
     #[test]
@@ -1322,7 +1398,11 @@ mod tests {
         };
         let circuit = KimchiDerivationCircuit::new(w);
         let result = circuit.prove();
-        assert!(result.is_ok(), "MemberOf with equal terms should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "MemberOf with equal terms should succeed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -1363,7 +1443,11 @@ mod tests {
         };
         let circuit = KimchiDerivationCircuit::new(w);
         let result = circuit.prove();
-        assert!(result.is_ok(), "LT check (50 < 100) should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "LT check (50 < 100) should succeed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -1493,7 +1577,11 @@ mod tests {
         };
         let circuit = KimchiDerivationCircuit::new(w);
         let result = circuit.prove();
-        assert!(result.is_err(), "Invalid Merkle proof should be rejected: {:?}", result.ok());
+        assert!(
+            result.is_err(),
+            "Invalid Merkle proof should be rejected: {:?}",
+            result.ok()
+        );
     }
 
     #[test]
@@ -1545,6 +1633,10 @@ mod tests {
         };
         let circuit = KimchiDerivationCircuit::new(w);
         let result = circuit.prove();
-        assert!(result.is_ok(), "Valid Merkle proof should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Valid Merkle proof should succeed: {:?}",
+            result.err()
+        );
     }
 }

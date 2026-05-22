@@ -138,6 +138,12 @@ pub struct EngineConfig {
     pub block_height: u64,
     /// Initial timestamp (unix seconds).
     pub timestamp: i64,
+    /// Maximum age of a presentation proof in seconds for freshness checks.
+    ///
+    /// When non-zero, `verify_presentation_bytes()` rejects proofs whose embedded
+    /// timestamp is older than this many seconds from the engine's current timestamp.
+    /// Defaults to 300 seconds (5 minutes).
+    pub max_proof_age_secs: i64,
 }
 
 impl Default for EngineConfig {
@@ -147,6 +153,7 @@ impl Default for EngineConfig {
             federation_id: [0u8; 32],
             block_height: 0,
             timestamp: 0,
+            max_proof_age_secs: present::DEFAULT_MAX_PROOF_AGE_SECS,
         }
     }
 }
@@ -167,6 +174,8 @@ pub struct PyanaEngine {
     executor: TurnExecutor,
     /// The current federation root (caller updates this from their own sync).
     federation_root: [u8; 32],
+    /// Maximum proof age in seconds (0 = no freshness check).
+    max_proof_age_secs: i64,
 }
 
 impl PyanaEngine {
@@ -180,6 +189,7 @@ impl PyanaEngine {
             ledger: Ledger::new(),
             executor,
             federation_root: [0u8; 32],
+            max_proof_age_secs: config.max_proof_age_secs,
         }
     }
 
@@ -193,6 +203,7 @@ impl PyanaEngine {
             ledger,
             executor,
             federation_root: [0u8; 32],
+            max_proof_age_secs: config.max_proof_age_secs,
         }
     }
 
@@ -299,13 +310,45 @@ impl PyanaEngine {
 
     /// Verify a wire presentation proof against the current federation root.
     ///
-    /// Returns `true` if the proof cryptographically verifies, `false` otherwise.
-    /// This does NOT perform I/O — it is pure STARK verification.
-    pub fn verify_presentation_bytes(&self, proof_bytes: &[u8]) -> bool {
-        self.verify_presentation_against(proof_bytes, &self.federation_root)
+    /// Performs the SAME checks as `verify_presentation_full`:
+    /// 1. STARK proof validity (issuer membership)
+    /// 2. Federation root binding
+    /// 3. Action binding — the proof must be bound to `(expected_action, expected_resource)`
+    /// 4. Timestamp freshness — the proof must not be older than `max_proof_age_secs`
+    ///
+    /// Returns `Ok(true)` on success, `Ok(false)` if the proof is cryptographically
+    /// invalid or fails any check, or `Err` if the input cannot be decoded.
+    ///
+    /// Returns `Ok(false)` immediately if no federation root has been set (rejects
+    /// proofs forged against the zero root). Configure via `set_federation_root`.
+    pub fn verify_presentation_bytes(
+        &self,
+        proof_bytes: &[u8],
+        expected_action: &str,
+        expected_resource: &str,
+    ) -> Result<bool, EmbedError> {
+        if self.federation_root == [0u8; 32] {
+            return Ok(false);
+        }
+        self.verify_presentation_against(
+            proof_bytes,
+            &self.federation_root,
+            expected_action,
+            expected_resource,
+        )
     }
 
     /// Verify a wire presentation proof against a specific federation root.
+    ///
+    /// Performs the SAME checks as `verify_presentation_full`, plus correct
+    /// action+resource binding (which `verify_presentation_full` only partially
+    /// implements for backward compatibility):
+    ///
+    /// 1. STARK proof validity (issuer membership)
+    /// 2. Federation root binding
+    /// 3. Action binding — the proof's `request_predicate` must match
+    ///    `compute_action_binding(expected_action, expected_resource)`
+    /// 4. Timestamp freshness — the proof must not be older than `max_proof_age_secs`
     ///
     /// Use this when the caller supplies their own root (e.g., from a trusted
     /// external source or a specific block height).
@@ -313,14 +356,38 @@ impl PyanaEngine {
         &self,
         proof_bytes: &[u8],
         federation_root: &[u8; 32],
-    ) -> bool {
+        expected_action: &str,
+        expected_resource: &str,
+    ) -> Result<bool, EmbedError> {
         let wire_proof: WirePresentationProof = match postcard::from_bytes(proof_bytes) {
             Ok(p) => p,
-            Err(_) => return false,
+            Err(e) => return Err(EmbedError::ProofDecode(e.to_string())),
         };
 
-        // Reconstruct a BridgePresentationProof with just what we need for verification.
-        // The verify_presentation function only needs real_stark_proof + federation_root.
+        // 1. Action binding: verify the proof is bound to (expected_action, expected_resource).
+        //    This MUST be checked before STARK verification to fail fast on misuse.
+        let expected_binding =
+            pyana_circuit::compute_action_binding(expected_action, expected_resource);
+        if wire_proof.circuit_proof.public_inputs.request_predicate != expected_binding {
+            return Ok(false);
+        }
+
+        // 2. Timestamp freshness: reject stale proofs.
+        if self.max_proof_age_secs > 0 {
+            let proof_ts = wire_proof.circuit_proof.public_inputs.timestamp.0 as i64;
+            if proof_ts == 0 {
+                // No timestamp in proof — reject when freshness is required.
+                return Ok(false);
+            }
+            let now = self.executor.current_timestamp;
+            let age = now.saturating_sub(proof_ts);
+            if age > self.max_proof_age_secs || age < -self.max_proof_age_secs {
+                return Ok(false);
+            }
+        }
+
+        // 3. STARK proof validity + federation root binding.
+        //    Reconstruct a BridgePresentationProof for the bridge verifier.
         let dummy_trace = pyana_trace::AuthorizationTrace {
             request: pyana_trace::AuthorizationRequest {
                 app_id: None,
@@ -348,7 +415,10 @@ impl PyanaEngine {
             composition_commitment: wire_proof.composition_commitment,
         };
 
-        present::verify_presentation(&full_proof, federation_root)
+        // verify_presentation checks STARK validity + federation root binding.
+        // We already checked action binding and freshness above (more thoroughly
+        // than verify_presentation_full, which uses empty resource).
+        Ok(present::verify_presentation(&full_proof, federation_root))
     }
 
     // =========================================================================
@@ -480,6 +550,20 @@ impl PyanaEngine {
     /// Update the current timestamp (for expiration checks).
     pub fn set_timestamp(&mut self, ts: i64) {
         self.executor.set_timestamp(ts);
+    }
+
+    /// Get the maximum proof age in seconds.
+    pub fn max_proof_age_secs(&self) -> i64 {
+        self.max_proof_age_secs
+    }
+
+    /// Set the maximum proof age in seconds.
+    ///
+    /// When non-zero, `verify_presentation_bytes()` rejects proofs whose embedded
+    /// timestamp is older than this many seconds from the engine's current timestamp.
+    /// Set to 0 to disable freshness checks (not recommended for production).
+    pub fn set_max_proof_age_secs(&mut self, secs: i64) {
+        self.max_proof_age_secs = secs;
     }
 
     /// Get a reference to the underlying executor for advanced configuration.
@@ -721,8 +805,10 @@ mod tests {
     #[test]
     fn verify_rejects_garbage() {
         let engine = PyanaEngine::new(EngineConfig::default());
-        // Garbage bytes should not verify.
-        assert!(!engine.verify_presentation_bytes(&[0u8; 100]));
+        // Garbage bytes should fail to decode or not verify.
+        let result = engine.verify_presentation_bytes(&[0u8; 100], "read", "api/v1/users");
+        // Either returns Err (decode failure) or Ok(false) (verification failure).
+        assert!(result.is_err() || result == Ok(false));
     }
 
     #[test]

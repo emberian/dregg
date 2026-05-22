@@ -110,12 +110,6 @@ const NODE_DOMAIN_SEP: u64 = 0x7374_6172_6b5f_6e64; // "stark_nd" as u64
 /// then hashes via Mina's native Poseidon sponge with a domain separator.
 #[cfg(feature = "mina")]
 fn poseidon_hash_leaf(values: &[BabyBear]) -> Fp {
-    poseidon_hash_leaf_standalone(values)
-}
-
-/// Public version of poseidon_hash_leaf for testing.
-#[cfg(feature = "mina")]
-pub fn poseidon_hash_leaf_standalone(values: &[BabyBear]) -> Fp {
     let params = Vesta::sponge_params();
     let mut sponge = ArithmeticSponge::<Fp, PlonkSpongeConstantsKimchi, FULL_ROUNDS>::new(params);
 

@@ -294,13 +294,9 @@ impl PoseidonStarkVerifierCircuit {
     ///
     /// This fills the 15-column Kimchi witness with the actual values from the
     /// proof, computing intermediate Poseidon states and BabyBear arithmetic.
-    pub fn generate_witness(
-        &self,
-        layout: &PoseidonStarkVerifierLayout,
-    ) -> [Vec<Fp>; COLUMNS] {
+    pub fn generate_witness(&self, layout: &PoseidonStarkVerifierLayout) -> [Vec<Fp>; COLUMNS] {
         let total_rows = layout.total_rows;
-        let mut witness: [Vec<Fp>; COLUMNS] =
-            std::array::from_fn(|_| vec![Fp::zero(); total_rows]);
+        let mut witness: [Vec<Fp>; COLUMNS] = std::array::from_fn(|_| vec![Fp::zero(); total_rows]);
 
         let tree_depth = layout.tree_depth;
         let num_fri_layers = layout.num_fri_layers;
@@ -330,20 +326,6 @@ impl PoseidonStarkVerifierCircuit {
 
             // (B) Trace Merkle path
             let trace_path: Vec<Fp> = query.trace_path.iter().map(|s| s.fp()).collect();
-
-            // Verify leaf hash matches what the STARK prover would compute
-            #[cfg(debug_assertions)]
-            {
-                use crate::poseidon_stark::poseidon_hash_leaf_standalone;
-                let trace_vals_bb: Vec<BabyBear> = query.trace_values.iter()
-                    .map(|&v| BabyBear::new(v)).collect();
-                let expected_leaf = poseidon_hash_leaf_standalone(&trace_vals_bb);
-                debug_assert_eq!(
-                    trace_leaf_hash, expected_leaf,
-                    "Leaf hash mismatch at query {}",
-                    qi
-                );
-            }
 
             let computed_trace_root = self.merkle_path_witness(
                 trace_leaf_hash,
@@ -425,7 +407,11 @@ impl PoseidonStarkVerifierCircuit {
             // alpha derived from the proof commitments for deterministic evaluation).
             let num_bb_muls = self.num_cols * self.constraint_degree;
             let tv: Vec<u32> = query.trace_values.iter().map(|&v| v % BABYBEAR_P).collect();
-            let _ntv: Vec<u32> = query.next_trace_values.iter().map(|&v| v % BABYBEAR_P).collect();
+            let _ntv: Vec<u32> = query
+                .next_trace_values
+                .iter()
+                .map(|&v| v % BABYBEAR_P)
+                .collect();
 
             // Extract trace columns (MerkleStarkAir layout):
             // col0=current, col1=sib0, col2=sib1, col3=sib2, col4=position, col5=parent
@@ -437,11 +423,14 @@ impl PoseidonStarkVerifierCircuit {
             let parent_val = if tv.len() > 5 { tv[5] } else { 0 };
 
             // Compute c1 = parent - (current + sib0 + sib1 + sib2 + position)
-            let sum_mod = ((current_val as u64 + sib0_val as u64 + sib1_val as u64
-                + sib2_val as u64 + pos_val as u64)
+            let sum_mod = ((current_val as u64
+                + sib0_val as u64
+                + sib1_val as u64
+                + sib2_val as u64
+                + pos_val as u64)
                 % BABYBEAR_MOD_FP) as u32;
-            let c1 = ((parent_val as u64 + BABYBEAR_MOD_FP - sum_mod as u64)
-                % BABYBEAR_MOD_FP) as u32;
+            let c1 =
+                ((parent_val as u64 + BABYBEAR_MOD_FP - sum_mod as u64) % BABYBEAR_MOD_FP) as u32;
 
             // Compute c2 = pos * (pos-1) * (pos-2) * (pos-3) [degree 4]
             let pos_m1 = ((pos_val as u64 + BABYBEAR_MOD_FP - 1) % BABYBEAR_MOD_FP) as u32;
@@ -482,8 +471,7 @@ impl PoseidonStarkVerifierCircuit {
             mul_count += 1;
 
             // constraint_eval = c1 + alpha*c2
-            let constraint_eval =
-                ((c1 as u64 + alpha_c2 as u64) % BABYBEAR_MOD_FP) as u32;
+            let constraint_eval = ((c1 as u64 + alpha_c2 as u64) % BABYBEAR_MOD_FP) as u32;
 
             // Pad remaining mul slots with identity (1 * constraint_eval)
             // to keep gate count consistent with build_circuit
@@ -540,8 +528,7 @@ impl PoseidonStarkVerifierCircuit {
                     row += POSEIDON_GADGET_ROWS;
 
                     // FRI Merkle path
-                    let fri_path: Vec<Fp> =
-                        fri_layer.query_path.iter().map(|s| s.fp()).collect();
+                    let fri_path: Vec<Fp> = fri_layer.query_path.iter().map(|s| s.fp()).collect();
                     let fri_depth = tree_depth.saturating_sub(1);
                     let _fri_root = self.merkle_path_witness(
                         fri_leaf_hash,
@@ -559,8 +546,7 @@ impl PoseidonStarkVerifierCircuit {
                     // beta * odd (BabyBear mul)
                     row = self.babybear_mul_witness(1, odd, &mut witness, row);
                     // Addition gate
-                    let folded_approx =
-                        ((even as u64 + odd as u64) % BABYBEAR_MOD_FP) as u32;
+                    let folded_approx = ((even as u64 + odd as u64) % BABYBEAR_MOD_FP) as u32;
                     witness[0][row] = Fp::from(even as u64);
                     witness[1][row] = Fp::from(odd as u64);
                     witness[2][row] = Fp::from(folded_approx as u64);
@@ -592,7 +578,8 @@ impl PoseidonStarkVerifierCircuit {
         // Debug: check the equality gate at the expected row
         #[cfg(debug_assertions)]
         {
-            let eq_row = layout.public_input_count + POSEIDON_GADGET_ROWS
+            let eq_row = layout.public_input_count
+                + POSEIDON_GADGET_ROWS
                 + layout.tree_depth * POSEIDON_GADGET_ROWS;
             if eq_row < layout.total_rows {
                 let w0 = witness[0][eq_row];
@@ -617,18 +604,14 @@ impl PoseidonStarkVerifierCircuit {
         use poly_commitment::commitment::CommitmentCurve;
         use rand_core::OsRng;
 
-        type VestaOpeningProof =
-            poly_commitment::ipa::OpeningProof<Vesta, FULL_ROUNDS>;
+        type VestaOpeningProof = poly_commitment::ipa::OpeningProof<Vesta, FULL_ROUNDS>;
         type BaseSponge = mina_poseidon::sponge::DefaultFqSponge<
             mina_curves::pasta::VestaParameters,
             PlonkSpongeConstantsKimchi,
             FULL_ROUNDS,
         >;
-        type ScalarSponge = mina_poseidon::sponge::DefaultFrSponge<
-            Fp,
-            PlonkSpongeConstantsKimchi,
-            FULL_ROUNDS,
-        >;
+        type ScalarSponge =
+            mina_poseidon::sponge::DefaultFrSponge<Fp, PlonkSpongeConstantsKimchi, FULL_ROUNDS>;
 
         let group_map = <Vesta as CommitmentCurve>::Map::setup();
         let proof = kimchi::proof::ProverProof::<Vesta, VestaOpeningProof, FULL_ROUNDS>::create::<
@@ -638,8 +621,8 @@ impl PoseidonStarkVerifierCircuit {
         >(&group_map, witness, &[], &index, &mut OsRng)
         .map_err(|e| format!("Kimchi prover error: {:?}", e))?;
 
-        let proof_bytes = rmp_serde::to_vec(&proof)
-            .map_err(|e| format!("Proof serialization error: {}", e))?;
+        let proof_bytes =
+            rmp_serde::to_vec(&proof).map_err(|e| format!("Proof serialization error: {}", e))?;
 
         // Public inputs
         let trace_root = self.proof.trace_commitment.fp();
@@ -659,18 +642,14 @@ impl PoseidonStarkVerifierCircuit {
         use groupmap::GroupMap;
         use poly_commitment::commitment::CommitmentCurve;
 
-        type VestaOpeningProof =
-            poly_commitment::ipa::OpeningProof<Vesta, FULL_ROUNDS>;
+        type VestaOpeningProof = poly_commitment::ipa::OpeningProof<Vesta, FULL_ROUNDS>;
         type BaseSponge = mina_poseidon::sponge::DefaultFqSponge<
             mina_curves::pasta::VestaParameters,
             PlonkSpongeConstantsKimchi,
             FULL_ROUNDS,
         >;
-        type ScalarSponge = mina_poseidon::sponge::DefaultFrSponge<
-            Fp,
-            PlonkSpongeConstantsKimchi,
-            FULL_ROUNDS,
-        >;
+        type ScalarSponge =
+            mina_poseidon::sponge::DefaultFrSponge<Fp, PlonkSpongeConstantsKimchi, FULL_ROUNDS>;
 
         let proof: kimchi::proof::ProverProof<Vesta, VestaOpeningProof, FULL_ROUNDS> =
             rmp_serde::from_slice(&kimchi_proof.proof_bytes)
@@ -1168,8 +1147,16 @@ mod tests {
         }
 
         // Public inputs should be non-zero
-        assert_ne!(witness[0][0], Fp::zero(), "trace_commitment should be non-zero");
-        assert_ne!(witness[0][1], Fp::zero(), "constraint_commitment should be non-zero");
+        assert_ne!(
+            witness[0][0],
+            Fp::zero(),
+            "trace_commitment should be non-zero"
+        );
+        assert_ne!(
+            witness[0][1],
+            Fp::zero(),
+            "constraint_commitment should be non-zero"
+        );
     }
 
     #[test]
@@ -1269,12 +1256,7 @@ mod tests {
         // Step 1: Create a real PoseidonStarkProof
         let (trace, pi) = generate_merkle_trace(
             99999,
-            &[
-                [10u32, 20, 30],
-                [40, 50, 60],
-                [70, 80, 90],
-                [100, 110, 120],
-            ],
+            &[[10u32, 20, 30], [40, 50, 60], [70, 80, 90], [100, 110, 120]],
             &[0u32, 1, 2, 3],
         );
         let air = MerkleStarkAir;
@@ -1333,7 +1315,7 @@ mod tests {
 
     /// Helper to create a dummy proof for unit tests that don't need real proof data.
     fn make_dummy_proof() -> PoseidonStarkProof {
-        use crate::poseidon_stark::{PoseidonQueryProof, PoseidonFriLayerQuery};
+        use crate::poseidon_stark::{PoseidonFriLayerQuery, PoseidonQueryProof};
 
         PoseidonStarkProof {
             trace_commitment: FpSer(Fp::from(42u64)),

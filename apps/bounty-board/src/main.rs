@@ -15,10 +15,12 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
+use clap::Parser;
 use serde_json::json;
 use tokio::sync::RwLock;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
+use pyana_app_framework::hex::{bytes32_to_hex, hex_to_bytes32};
 use pyana_app_framework::{CellId, EngineConfig, PyanaEngine};
 use pyana_bounty_board::qualification::verify_qualification;
 use pyana_bounty_board::state::BoardState;
@@ -30,6 +32,32 @@ use pyana_bounty_board::{
 };
 
 // =============================================================================
+// CLI Arguments
+// =============================================================================
+
+/// Pyana Bounty Board — federated work marketplace with privacy-preserving qualifications.
+#[derive(Parser, Debug)]
+#[command(name = "bounty-board")]
+struct Args {
+    /// Federation root hash (64 hex chars). If not provided, fetches from a federation node.
+    #[arg(long, env = "PYANA_FEDERATION_ROOT")]
+    federation_root: Option<String>,
+
+    /// Federation node URL to sync root from (not yet implemented).
+    #[arg(long, env = "PYANA_FEDERATION_NODE")]
+    federation_node: Option<String>,
+
+    /// Run in dev mode: allows starting with an all-zeroes federation root.
+    /// WARNING: proof verification will reject all federation membership proofs.
+    #[arg(long, env = "PYANA_DEV")]
+    dev: bool,
+
+    /// Listen address.
+    #[arg(long, default_value = "127.0.0.1:3030", env = "PYANA_LISTEN")]
+    listen: SocketAddr,
+}
+
+// =============================================================================
 // Application State
 // =============================================================================
 
@@ -38,8 +66,7 @@ use pyana_bounty_board::{
 struct AppState {
     board: BoardState,
     /// The federation root used for membership/qualification checks.
-    /// In production this would be fetched from the federation periodically.
-    federation_root: [u8; 32],
+    federation_root: Arc<RwLock<[u8; 32]>>,
     /// The pyana engine for cryptographic proof verification.
     engine: Arc<RwLock<PyanaEngine>>,
 }
@@ -47,6 +74,12 @@ struct AppState {
 // =============================================================================
 // Main
 // =============================================================================
+
+/// Parse a 64-char hex string into a [u8; 32] federation root.
+fn parse_federation_root(hex: &str) -> Result<[u8; 32], String> {
+    let hex = hex.strip_prefix("0x").unwrap_or(hex);
+    hex_to_bytes32(hex).map_err(|e| format!("invalid federation root hex: {e}"))
+}
 
 #[tokio::main]
 async fn main() {
@@ -56,9 +89,41 @@ async fn main() {
         .with_level(true)
         .init();
 
+    let args = Args::parse();
+
+    // Resolve federation root.
+    let federation_root = match &args.federation_root {
+        Some(hex) => match parse_federation_root(hex) {
+            Ok(root) => {
+                info!(
+                    root = %bytes32_to_hex(&root),
+                    "federation root configured (from PYANA_FEDERATION_ROOT)"
+                );
+                root
+            }
+            Err(e) => {
+                error!("{e}");
+                std::process::exit(1);
+            }
+        },
+        None => {
+            if args.dev {
+                warn!(
+                    "running in --dev mode with zeroed federation root; federation membership proofs will be rejected"
+                );
+                [0u8; 32]
+            } else {
+                error!(
+                    "no federation root configured. Set PYANA_FEDERATION_ROOT or --federation-root, or use --dev for testing without verification."
+                );
+                std::process::exit(1);
+            }
+        }
+    };
+
     let state = AppState {
         board: BoardState::new(),
-        federation_root: [0u8; 32], // placeholder; would come from federation attestation
+        federation_root: Arc::new(RwLock::new(federation_root)),
         engine: Arc::new(RwLock::new(PyanaEngine::new(EngineConfig::default()))),
     };
 
@@ -75,10 +140,11 @@ async fn main() {
         // Admin / utility
         .route("/admin/height", post(advance_height))
         .route("/admin/expire", post(expire_bounties))
+        .route("/admin/federation-root", post(set_federation_root))
         .route("/health", get(health_check))
         .with_state(state);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3030));
+    let addr = args.listen;
     info!("pyana bounty board listening on {addr}");
 
     let listener = tokio::net::TcpListener::bind(addr)
@@ -207,7 +273,8 @@ async fn claim_bounty(
     // Verify qualification proof (real cryptographic verification).
     let proof_bytes = req.qualification_proof.as_deref().unwrap_or(&[]);
     let engine = state.engine.read().await;
-    match verify_qualification(&engine, &bounty.qualification, proof_bytes, state.federation_root) {
+    let federation_root = *state.federation_root.read().await;
+    match verify_qualification(&engine, &bounty.qualification, proof_bytes, federation_root) {
         Ok(true) => {}
         Ok(false) => {
             return (
@@ -496,6 +563,43 @@ async fn advance_height(
 async fn expire_bounties(State(state): State<AppState>) -> impl IntoResponse {
     let count = state.board.expire_stale_bounties().await;
     Json(json!({"expired": count}))
+}
+
+/// POST /admin/federation-root — set the federation root at runtime.
+///
+/// Accepts JSON: `{"root": "abcd...1234"}` (64 hex chars).
+async fn set_federation_root(
+    State(state): State<AppState>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let root_hex = match body["root"].as_str() {
+        Some(s) => s,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "missing 'root' field (64 hex chars)"})),
+            );
+        }
+    };
+
+    let root_hex = root_hex.strip_prefix("0x").unwrap_or(root_hex);
+    match hex_to_bytes32(root_hex) {
+        Ok(root) => {
+            if root == [0u8; 32] {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": "refusing to set all-zeroes federation root"})),
+                );
+            }
+            *state.federation_root.write().await = root;
+            info!(root = %bytes32_to_hex(&root), "federation root updated via admin endpoint");
+            (StatusCode::OK, Json(json!({"root": bytes32_to_hex(&root)})))
+        }
+        Err(_) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "invalid root hex (expected 64 hex chars)"})),
+        ),
+    }
 }
 
 /// GET /health — health check.

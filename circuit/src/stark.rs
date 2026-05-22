@@ -943,8 +943,10 @@ pub fn prove_full(
         .map(|q| zeta_reduce(q, zeta))
         .collect();
 
-    let constraint_leaves: Vec<[u8; 32]> =
-        reduced_quotient_evals.iter().map(|&v| hash_leaf(v)).collect();
+    let constraint_leaves: Vec<[u8; 32]> = reduced_quotient_evals
+        .iter()
+        .map(|&v| hash_leaf(v))
+        .collect();
     let constraint_tree = MerkleTree::new(constraint_leaves);
     transcript.absorb_hash(&constraint_tree.root());
 
@@ -3684,6 +3686,9 @@ mod tests {
             timestamp: None,
         };
         let result = verify_full(&air, &proof, &pi, Some(&bad_ctx), &config);
-        assert!(result.is_err(), "Wrong context must be rejected even with valid PoW");
+        assert!(
+            result.is_err(),
+            "Wrong context must be rejected even with valid PoW"
+        );
     }
 }

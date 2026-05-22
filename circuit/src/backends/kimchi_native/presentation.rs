@@ -12,12 +12,10 @@
 //! 6. Token expiry: not_after_height >= verifier_block_height (bit-decomp GTE)
 //! 7. Revealed facts commitment: Poseidon(revealed_facts...) == public revealed_facts_commitment
 //! 8. Issuer membership: blinded Poseidon Merkle path proving issuer key in federation tree
+use super::fold::{FpMerkleLevelWitness, FpMerkleWitness, build_fp_merkle_tree, fp_hash4};
 use super::{
     BaseSponge, GTE_DIFF_BITS, KimchiNativeCircuitType, KimchiNativeProof, ScalarSponge,
     SpongeParams, VestaOpeningProof, bytes32_to_fp, fp_to_bytes32, verify_kimchi_proof,
-};
-use super::fold::{
-    FpMerkleLevelWitness, FpMerkleWitness, build_fp_merkle_tree, fp_hash4,
 };
 use ark_ff::{BigInteger, Field, One, PrimeField, Zero};
 use groupmap::GroupMap;

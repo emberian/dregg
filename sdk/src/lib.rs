@@ -95,12 +95,12 @@ pub use privacy::{
 pub use discharge::{authorize_with_discharges, extract_third_party_tickets, obtain_discharge};
 
 // Re-export standalone verification functions.
+#[cfg(any(test, feature = "dev"))]
+pub use verify::verify_any_tier;
 pub use verify::{
     verify_authorization_proof, verify_disclosure_presentation, verify_production,
     verify_selective_disclosure, verify_selective_presentation, verify_validated_ivc_proof,
 };
-#[cfg(any(test, feature = "dev"))]
-pub use verify::verify_any_tier;
 
 // Re-export proof tier types for downstream use.
 pub use pyana_circuit::{CryptographicProof, ProofTier, VerifiedProof};

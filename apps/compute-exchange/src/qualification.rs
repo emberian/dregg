@@ -16,7 +16,7 @@
 //! are NEVER sufficient. The `dev` feature enables a fallback for local testing without a
 //! live federation, but it is never the default.
 
-use pyana_app_framework::{PyanaEngine, PredicateType};
+use pyana_app_framework::{PredicateType, PyanaEngine};
 use pyana_circuit::{BabyBear, PredicateProof, verify_predicate};
 use serde::{Deserialize, Serialize};
 
@@ -438,13 +438,10 @@ mod tests {
     #[test]
     fn test_no_qualification() {
         let engine = test_engine();
-        assert!(verify_compute_qualification(
-            &engine,
-            &ComputeQualification::None,
-            &[],
-            [0u8; 32]
-        )
-        .unwrap());
+        assert!(
+            verify_compute_qualification(&engine, &ComputeQualification::None, &[], [0u8; 32])
+                .unwrap()
+        );
     }
 
     #[test]

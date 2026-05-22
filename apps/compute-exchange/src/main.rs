@@ -32,9 +32,10 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
+use clap::Parser;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use pyana_app_framework::hex::{bytes32_to_hex, hex_to_bytes32};
 use pyana_app_framework::{CellId, FillConstraints};
@@ -122,8 +123,40 @@ struct CreateDisputeRequest {
 }
 
 // =============================================================================
+// CLI Arguments
+// =============================================================================
+
+/// Compute Exchange — a privacy-preserving marketplace for agent compute services.
+#[derive(Parser, Debug)]
+#[command(name = "compute-exchange")]
+struct Args {
+    /// Federation root hash (64 hex chars). If not provided, fetches from a federation node.
+    #[arg(long, env = "PYANA_FEDERATION_ROOT")]
+    federation_root: Option<String>,
+
+    /// Federation node URL to sync root from (not yet implemented).
+    #[arg(long, env = "PYANA_FEDERATION_NODE")]
+    federation_node: Option<String>,
+
+    /// Run in dev mode: allows starting with an all-zeroes federation root.
+    /// WARNING: proof verification will reject all federation membership proofs.
+    #[arg(long, env = "PYANA_DEV")]
+    dev: bool,
+
+    /// Listen address.
+    #[arg(long, default_value = "127.0.0.1:3040", env = "PYANA_LISTEN")]
+    listen: SocketAddr,
+}
+
+// =============================================================================
 // Main
 // =============================================================================
+
+/// Parse a 64-char hex string into a [u8; 32] federation root.
+fn parse_federation_root(hex: &str) -> Result<[u8; 32], String> {
+    let hex = hex.strip_prefix("0x").unwrap_or(hex);
+    hex_to_bytes32(hex).map_err(|e| format!("invalid federation root hex: {e}"))
+}
 
 #[tokio::main]
 async fn main() {
@@ -132,7 +165,39 @@ async fn main() {
         .with_level(true)
         .init();
 
-    let state = AppState::new();
+    let args = Args::parse();
+
+    // Resolve federation root.
+    let federation_root = match &args.federation_root {
+        Some(hex) => match parse_federation_root(hex) {
+            Ok(root) => {
+                info!(
+                    root = %bytes32_to_hex(&root),
+                    "federation root configured (from PYANA_FEDERATION_ROOT)"
+                );
+                root
+            }
+            Err(e) => {
+                error!("{e}");
+                std::process::exit(1);
+            }
+        },
+        None => {
+            if args.dev {
+                warn!(
+                    "running in --dev mode with zeroed federation root; federation membership proofs will be rejected"
+                );
+                [0u8; 32]
+            } else {
+                error!(
+                    "no federation root configured. Set PYANA_FEDERATION_ROOT or --federation-root, or use --dev for testing without verification."
+                );
+                std::process::exit(1);
+            }
+        }
+    };
+
+    let state = AppState::with_federation_root(federation_root);
 
     let app = Router::new()
         // Offering lifecycle
@@ -149,9 +214,10 @@ async fn main() {
         // Utility
         .route("/health", get(health_check))
         .route("/admin/height", post(advance_height))
+        .route("/admin/federation-root", post(admin_set_federation_root))
         .with_state(state);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3040));
+    let addr = args.listen;
     info!("compute exchange listening on {addr}");
 
     let listener = tokio::net::TcpListener::bind(addr)
@@ -828,6 +894,43 @@ async fn advance_height(
     state.advance_height(delta).await;
     let new_height = state.current_height().await;
     Json(json!({"height": new_height}))
+}
+
+/// POST /admin/federation-root — set the federation root at runtime.
+///
+/// Accepts JSON: `{"root": "abcd...1234"}` (64 hex chars).
+async fn admin_set_federation_root(
+    State(state): State<AppState>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let root_hex = match body["root"].as_str() {
+        Some(s) => s,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "missing 'root' field (64 hex chars)"})),
+            );
+        }
+    };
+
+    let root_hex = root_hex.strip_prefix("0x").unwrap_or(root_hex);
+    match hex_to_bytes32(root_hex) {
+        Ok(root) => {
+            if root == [0u8; 32] {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": "refusing to set all-zeroes federation root"})),
+                );
+            }
+            state.set_federation_root(root).await;
+            info!(root = %bytes32_to_hex(&root), "federation root updated via admin endpoint");
+            (StatusCode::OK, Json(json!({"root": bytes32_to_hex(&root)})))
+        }
+        Err(_) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "invalid root hex (expected 64 hex chars)"})),
+        ),
+    }
 }
 
 // =============================================================================

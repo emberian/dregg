@@ -44,7 +44,11 @@ use pyana_sdk::embed::PyanaEngine;
 /// Strict extractor: rejects unverified presentations with 403 before the handler runs.
 ///
 /// If the proof header is missing, returns 401. If decoding fails, returns 400.
-/// If STARK verification fails, returns 403. The handler never sees unverified proofs.
+/// If STARK verification fails or the proof is not from a production-tier backend,
+/// returns 403. The handler never sees unverified or non-production proofs.
+///
+/// Production tier enforcement prevents scaffold/test proofs (constraint prover,
+/// SP1 stubs, Binius stubs) from being accepted by production endpoints.
 #[derive(Clone, Debug)]
 pub struct StrictPresentation {
     /// The action field from the proof (BLAKE3 hash of action string).
@@ -53,6 +57,8 @@ pub struct StrictPresentation {
     pub resource: [u8; 32],
     /// The federation root the proof was verified against.
     pub federation_root: [u8; 32],
+    /// The verified proof carrying tier information.
+    pub verified_proof: pyana_circuit::VerifiedProof,
 }
 
 impl FromRequestParts<EngineState> for StrictPresentation {
@@ -85,22 +91,23 @@ impl FromRequestParts<EngineState> for StrictPresentation {
         let action = extract_hash_header(&parts.headers, ACTION_HEADER);
         let resource = extract_hash_header(&parts.headers, RESOURCE_HEADER);
 
-        // Verify against the engine.
+        // Verify using production-tier gating: rejects structural stubs.
         let engine = state.0.read().await;
         let federation_root = engine.federation_root();
-        let verified = engine.verify_presentation_bytes(&proof_bytes);
 
-        if !verified {
-            return Err((
-                StatusCode::FORBIDDEN,
-                "presentation proof verification failed",
-            ));
-        }
+        let verified_proof =
+            pyana_sdk::verify_production(&proof_bytes, &federation_root).map_err(|_| {
+                (
+                    StatusCode::FORBIDDEN,
+                    "proof verification failed or non-production tier",
+                )
+            })?;
 
         Ok(StrictPresentation {
             action,
             resource,
             federation_root,
+            verified_proof,
         })
     }
 }

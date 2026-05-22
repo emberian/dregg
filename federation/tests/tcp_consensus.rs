@@ -7,9 +7,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use pyana_federation::{ConsensusConfig, ConsensusState};
 use pyana_federation::transport::{NetworkConsensusNode, TcpFederationTransport};
 use pyana_federation::types::*;
+use pyana_federation::{ConsensusConfig, ConsensusState};
 
 /// Run 3 federation nodes on localhost, submit a revocation, and confirm
 /// that consensus produces a valid QC.

@@ -1718,6 +1718,7 @@ version = "0.1.0"
 dependencies = [
  "axum 0.8.9",
  "blake3",
+ "clap",
  "postcard",
  "pyana-app-framework",
  "pyana-circuit",
@@ -5837,6 +5838,7 @@ version = "0.1.0"
 dependencies = [
  "axum 0.8.9",
  "blake3",
+ "clap",
  "postcard",
  "pyana-app-framework",
  "pyana-circuit",

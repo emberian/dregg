@@ -367,9 +367,7 @@ impl ConsensusState {
                 return None;
             }
         } else if self.config.require_authentication {
-            tracing::warn!(
-                "INSECURE: accepting vote without signature verification (legacy mode)"
-            );
+            tracing::warn!("INSECURE: accepting vote without signature verification (legacy mode)");
         }
 
         self.collected_votes.push(vote);

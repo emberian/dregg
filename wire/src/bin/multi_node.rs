@@ -19,8 +19,7 @@ use std::time::{Duration, Instant};
 // Re-use federation consensus types.
 use pyana_federation::types::{NodeIdentity, hex_encode};
 use pyana_federation::{
-    ConsensusConfig, ConsensusState, NetworkConsensusNode, RevocationEvent,
-    TcpFederationTransport,
+    ConsensusConfig, ConsensusState, NetworkConsensusNode, RevocationEvent, TcpFederationTransport,
     generate_keypair, sign,
 };
 

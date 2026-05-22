@@ -78,7 +78,11 @@ impl KimchiNonMembershipCircuit {
     ///
     /// Computes polynomial evaluations internally. Returns Err if any element
     /// evaluates to zero (is in the set).
-    pub fn new(elements: Vec<Fp>, accumulator_coeffs: Vec<Fp>, accumulator_root: Fp) -> Result<Self, String> {
+    pub fn new(
+        elements: Vec<Fp>,
+        accumulator_coeffs: Vec<Fp>,
+        accumulator_root: Fp,
+    ) -> Result<Self, String> {
         if elements.is_empty() {
             return Err("No elements provided for non-membership proof".into());
         }
@@ -165,9 +169,9 @@ impl KimchiNonMembershipCircuit {
                 let r = gates.len();
                 let mut c = vec![Fp::zero(); COLUMNS];
                 let coeff = self.accumulator_coeffs[n - 1 - i];
-                c[3] = Fp::one();      // w[0]*w[1]
-                c[2] = -Fp::one();     // -w[2]
-                c[4] = coeff;          // constant
+                c[3] = Fp::one(); // w[0]*w[1]
+                c[2] = -Fp::one(); // -w[2]
+                c[4] = coeff; // constant
                 gates.push(CircuitGate::new(GateType::Generic, Wire::for_row(r), c));
             }
 
@@ -253,8 +257,8 @@ impl KimchiNonMembershipCircuit {
             for i in 0..n {
                 let coeff = self.accumulator_coeffs[n - 1 - i];
                 let acc_new = acc * elem + coeff;
-                wit[0][row] = acc;   // acc_old
-                wit[1][row] = elem;  // x
+                wit[0][row] = acc; // acc_old
+                wit[1][row] = elem; // x
                 wit[2][row] = acc_new; // acc_new
                 acc = acc_new;
                 row += 1;
@@ -426,13 +430,16 @@ impl KimchiNonMembershipCircuit {
         let circuit = KimchiNonMembershipCircuit {
             elements: elements.clone(),
             evals: {
-                elements.iter().map(|elem| {
-                    let mut eval = Fp::zero();
-                    for i in 0..n {
-                        eval = eval * elem + coeffs[n - 1 - i];
-                    }
-                    eval
-                }).collect()
+                elements
+                    .iter()
+                    .map(|elem| {
+                        let mut eval = Fp::zero();
+                        for i in 0..n {
+                            eval = eval * elem + coeffs[n - 1 - i];
+                        }
+                        eval
+                    })
+                    .collect()
             },
             accumulator_root: root,
             accumulator_coeffs: coeffs.to_vec(),

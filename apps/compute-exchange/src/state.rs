@@ -45,8 +45,8 @@ struct ScalarState {
 }
 
 impl AppState {
-    /// Create a new empty state.
-    pub fn new() -> Self {
+    /// Create a new empty state with the given federation root.
+    pub fn with_federation_root(federation_root: [u8; 32]) -> Self {
         Self {
             offerings: ContentStore::new(),
             orders: ContentStore::new(),
@@ -56,10 +56,15 @@ impl AppState {
             inner: Arc::new(RwLock::new(ScalarState {
                 fulfillment_registry: FulfillmentRegistry::new(),
                 current_height: 0,
-                federation_root: [0u8; 32],
+                federation_root,
             })),
             engine: Arc::new(RwLock::new(PyanaEngine::new(EngineConfig::default()))),
         }
+    }
+
+    /// Create a new empty state (dev mode: zeroed federation root).
+    pub fn new() -> Self {
+        Self::with_federation_root([0u8; 32])
     }
 
     // =========================================================================
@@ -77,6 +82,10 @@ impl AppState {
 
     pub async fn federation_root(&self) -> [u8; 32] {
         self.inner.read().await.federation_root
+    }
+
+    pub async fn set_federation_root(&self, root: [u8; 32]) {
+        self.inner.write().await.federation_root = root;
     }
 
     // =========================================================================

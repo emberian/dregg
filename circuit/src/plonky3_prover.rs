@@ -58,27 +58,8 @@ use crate::poseidon2::{
 // Type definitions for our Plonky3 configuration
 // ============================================================================
 
-/// The Poseidon2 permutation over width-16 arrays (for Merkle tree compression).
+/// The Poseidon2 permutation over width-16 arrays.
 type Perm16 = Poseidon2BabyBear<16>;
-
-/// The Poseidon2 permutation over width-24 arrays (for sponge hashing).
-type Perm24 = Poseidon2BabyBear<24>;
-
-/// Sponge hash using Poseidon2 width-24.
-type PyanaHash = PaddingFreeSponge<Perm24, 24, 16, 8>;
-
-/// Merkle tree compression using Poseidon2 width-16.
-type PyanaCompress = TruncatedPermutation<Perm16, 2, 8, 16>;
-
-/// Merkle tree MMCS (multi-message commitment scheme).
-type PyanaMmcs = MerkleTreeMmcs<
-    <P3BabyBear as Field>::Packing,
-    <P3BabyBear as Field>::Packing,
-    PyanaHash,
-    PyanaCompress,
-    2,
-    8,
->;
 
 /// Extension field: degree-4 extension of BabyBear.
 type EF = BinomialExtensionField<P3BabyBear, 4>;
@@ -86,48 +67,47 @@ type EF = BinomialExtensionField<P3BabyBear, 4>;
 /// The DFT implementation (parallel radix-2).
 type PyanaDft = Radix2DitParallel<P3BabyBear>;
 
-/// The FRI-based polynomial commitment scheme.
-type PyanaPcs =
-    TwoAdicFriPcs<P3BabyBear, PyanaDft, PyanaMmcs, ExtensionMmcs<P3BabyBear, EF, PyanaMmcs>>;
-
-/// The challenger (Fiat-Shamir) using Poseidon2 duplex sponge.
-type PyanaChallenger = DuplexChallenger<P3BabyBear, Perm24, 24, 16>;
-
-/// The complete STARK configuration for pyana proofs.
-pub type PyanaStarkConfig = StarkConfig<PyanaPcs, EF, PyanaChallenger>;
-
-/// A Plonky3 proof object for pyana circuits.
-pub type PyanaProof = Proof<PyanaStarkConfig>;
-
 // ============================================================================
 // Configuration builder
 // ============================================================================
 
 /// Create the Plonky3 STARK configuration with production parameters.
+/// Internal type aliases matching Plonky3's proven test configuration.
+type TestHash = PaddingFreeSponge<Perm16, 16, 8, 8>;
+type TestCompress = TruncatedPermutation<Perm16, 2, 8, 16>;
+type TestMmcs = MerkleTreeMmcs<
+    <P3BabyBear as Field>::Packing,
+    <P3BabyBear as Field>::Packing,
+    TestHash,
+    TestCompress,
+    2,
+    8,
+>;
+type TestChallenger = DuplexChallenger<P3BabyBear, Perm16, 16, 8>;
+type TestPcs =
+    TwoAdicFriPcs<P3BabyBear, PyanaDft, TestMmcs, ExtensionMmcs<P3BabyBear, EF, TestMmcs>>;
+
+/// The actual STARK config type used (matching Plonky3's own test setup).
+pub type PyanaStarkConfig = StarkConfig<TestPcs, EF, TestChallenger>;
+
+/// A Plonky3 proof object for pyana circuits.
+pub type PyanaProof = Proof<PyanaStarkConfig>;
+
 pub fn create_config() -> PyanaStarkConfig {
     let perm16 = default_babybear_poseidon2_16();
-    let perm24 = default_babybear_poseidon2_24();
 
-    let hash = PaddingFreeSponge::new(perm24.clone());
-    let compress = TruncatedPermutation::new(perm16);
-    let val_mmcs = MerkleTreeMmcs::new(hash, compress, 0);
+    let hash = PaddingFreeSponge::new(perm16.clone());
+    let compress = TruncatedPermutation::new(perm16.clone());
+    let val_mmcs = TestMmcs::new(hash, compress, 0);
 
     let challenge_mmcs = ExtensionMmcs::<P3BabyBear, EF, _>::new(val_mmcs.clone());
 
-    let fri_params = FriParameters {
-        log_blowup: 1,
-        log_final_poly_len: 3,
-        max_log_arity: 2,
-        num_queries: 40,
-        commit_proof_of_work_bits: 0,
-        query_proof_of_work_bits: 8,
-        mmcs: challenge_mmcs,
-    };
+    let fri_params = FriParameters::new_testing(challenge_mmcs, 0);
 
     let dft = Radix2DitParallel::default();
     let pcs = TwoAdicFriPcs::new(dft, val_mmcs, fri_params);
 
-    let challenger = DuplexChallenger::new(perm24);
+    let challenger = TestChallenger::new(perm16);
     StarkConfig::new(pcs, challenger)
 }
 
@@ -938,10 +918,10 @@ mod tests {
         );
     }
 
-    /// Degree-2 AIR: x^2 == witness
-    struct MinimalDegree2Air;
+    /// Parameterized degree AIR: x^D == witness
+    struct MinimalDegreeNAir<const D: u64>;
 
-    impl<F: PrimeCharacteristicRing + Sync> BaseAir<F> for MinimalDegree2Air {
+    impl<const D: u64, F: PrimeCharacteristicRing + Sync> BaseAir<F> for MinimalDegreeNAir<D> {
         fn width(&self) -> usize {
             2
         }
@@ -950,7 +930,7 @@ mod tests {
         }
     }
 
-    impl<AB: AirBuilder> Air<AB> for MinimalDegree2Air
+    impl<const D: u64, AB: AirBuilder> Air<AB> for MinimalDegreeNAir<D>
     where
         AB::F: PrimeField32,
     {
@@ -958,8 +938,9 @@ mod tests {
             let main = builder.main();
             let local = main.current_slice();
             let x: AB::Expr = local[0].into();
-            let x2_witness: AB::Expr = local[1].into();
-            builder.assert_zero(x.clone() * x - x2_witness);
+            let xd_witness: AB::Expr = local[1].into();
+            let xd_computed = x.exp_u64(D);
+            builder.assert_zero(xd_computed - xd_witness);
         }
     }
 
@@ -967,13 +948,13 @@ mod tests {
     #[ignore]
     fn plonky3_minimal_degree2() {
         let config = create_config();
-        let air = MinimalDegree2Air;
+        let air = MinimalDegreeNAir::<2>;
 
         let values: Vec<P3BabyBear> = (1u32..=16)
             .flat_map(|v| {
                 let x = P3BabyBear::new(v);
-                let x2 = x * x;
-                [x, x2]
+                let xd = x.exp_u64(2);
+                [x, xd]
             })
             .collect();
         let matrix = RowMajorMatrix::new(values, 2);
@@ -984,6 +965,31 @@ mod tests {
         assert!(
             result.is_ok(),
             "Minimal degree-2 AIR failed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn plonky3_minimal_degree3() {
+        let config = create_config();
+        let air = MinimalDegreeNAir::<3>;
+
+        let values: Vec<P3BabyBear> = (1u32..=16)
+            .flat_map(|v| {
+                let x = P3BabyBear::new(v);
+                let xd = x.exp_u64(3);
+                [x, xd]
+            })
+            .collect();
+        let matrix = RowMajorMatrix::new(values, 2);
+        let public: Vec<P3BabyBear> = vec![];
+
+        let proof = prove(&config, &air, matrix, &public);
+        let result = verify(&config, &air, &proof, &public);
+        assert!(
+            result.is_ok(),
+            "Minimal degree-3 AIR failed: {:?}",
             result.err()
         );
     }

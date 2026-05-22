@@ -225,7 +225,6 @@ pub use turn_validity_air::{
     TurnValidityAir, TurnValidityWitness, prove_turn_validity, verify_turn_validity,
 };
 
-
 // Schnorr signature scheme over BabyBear^8 elliptic curve.
 pub use babybear8::BabyBear8;
 pub use schnorr_curve::{CurvePoint, GENERATOR as SCHNORR_GENERATOR};

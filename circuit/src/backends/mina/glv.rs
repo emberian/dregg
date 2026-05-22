@@ -556,55 +556,41 @@ pub(crate) fn to_field_fq(prechallenge_fq: Fq, _endo_scalar_fq: Fq) -> Fq {
     fp_to_fq(&effective_fp)
 }
 
-/// Native scalar multiplication over Fq: compute [scalar] * point.
+/// Native scalar multiplication over Fq: compute [scalar] * point on Vesta.
 ///
-/// Uses double-and-add over all ~255 bits of the scalar. This is used for
-/// computing witness values (e.g., [u^{-1}]*L for endo_inv) outside of gate
-/// constraints. The result is the correct EC point multiplication.
+/// Uses ark-ec for correctness. The input point is a Vesta curve point with
+/// coordinates in Fq (Vesta's base field). The scalar is an Fq element
+/// interpreted as the Vesta scalar field (Fp) for the multiplication, via
+/// canonical byte mapping.
 ///
 /// This mirrors the `scale_fast` function in Pickles' plonk_curve_ops.ml,
 /// which handles full-field scalar multiplication (as opposed to EndoMul
 /// which only handles 128-bit GLV-encoded prechallenges).
 pub(crate) fn native_scalar_mul_fq(scalar: Fq, point: (Fq, Fq)) -> (Fq, Fq) {
-    let bigint = scalar.into_bigint();
-    let limbs = bigint.as_ref();
-    let num_bits = 255;
+    use ark_ec::CurveGroup;
 
-    let mut acc = point_double_fq(point); // acc = [2]*P
-    for i in (0..num_bits - 1).rev() {
-        let limb_idx = i / 64;
-        let bit_in_limb = i % 64;
-        let bit = (limbs[limb_idx] >> bit_in_limb) & 1 == 1;
-
-        // acc = acc + (if bit then point else -point), then double
-        // Following the Montgomery ladder / constant-time approach:
-        // acc = 2*acc + (bit ? P : -P)
-        let q = if bit { point } else { (point.0, -point.1) };
-        acc = point_add_fq(acc, q);
-        acc = point_add_fq(acc, acc); // This is wrong - should be doubling pattern
+    // Convert (Fq, Fq) to Vesta affine point
+    let (x, y) = point;
+    if x == Fq::zero() && y == Fq::zero() {
+        return (Fq::zero(), Fq::zero());
     }
-    // Actually, let's use simple double-and-add
-    let mut result = (Fq::zero(), Fq::zero()); // identity (we'll handle separately)
-    let mut found_one = false;
+    let vesta_point = Vesta::new_unchecked(x, y);
 
-    for i in (0..num_bits).rev() {
-        let limb_idx = i / 64;
-        let bit_in_limb = i % 64;
-        let bit = (limbs[limb_idx] >> bit_in_limb) & 1 == 1;
+    // The scalar is in Fq but Vesta's scalar field is Fp.
+    // Map it to Fp via canonical bytes (both are ~255-bit primes).
+    let scalar_bytes = fp_to_bytes32_generic(&scalar);
+    let scalar_fp = Fp::from_le_bytes_mod_order(&scalar_bytes);
 
-        if found_one {
-            result = point_double_fq(result);
-        }
-        if bit {
-            if !found_one {
-                result = point;
-                found_one = true;
-            } else {
-                result = point_add_fq(result, point);
-            }
-        }
+    // Perform the scalar multiplication using ark-ec (guaranteed correct)
+    let result = vesta_point
+        .mul_bigint(scalar_fp.into_bigint())
+        .into_affine();
+
+    // Convert back to (Fq, Fq)
+    match result.xy() {
+        Some((rx, ry)) => (rx, ry),
+        None => (Fq::zero(), Fq::zero()),
     }
-    result
 }
 
 /// Extract coordinates of a Vesta curve point as Fp elements.

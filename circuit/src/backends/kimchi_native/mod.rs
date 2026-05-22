@@ -207,11 +207,8 @@ impl KimchiNativeBackend {
         coeffs: &[Fp],
         root: Fp,
     ) -> Result<KimchiNativeProof, String> {
-        non_membership::KimchiNonMembershipCircuit::new(
-            elements.to_vec(),
-            coeffs.to_vec(),
-            root,
-        )?.prove()
+        non_membership::KimchiNonMembershipCircuit::new(elements.to_vec(), coeffs.to_vec(), root)?
+            .prove()
     }
 
     /// Verify a multi-ancestor non-membership proof.
@@ -683,21 +680,21 @@ impl KimchiNativeBackend {
                 .map_err(|_| "e".to_string())?;
             Ok(bytes32_to_fp(&b))
         };
-        let vf = extract_fp(0)?;           // federation_root
+        let vf = extract_fp(0)?; // federation_root
         let vr = [
-            extract_fp(32)?,               // request_predicate[0]
-            extract_fp(64)?,               // request_predicate[1]
-            extract_fp(96)?,               // request_predicate[2]
-            extract_fp(128)?,              // request_predicate[3]
+            extract_fp(32)?,  // request_predicate[0]
+            extract_fp(64)?,  // request_predicate[1]
+            extract_fp(96)?,  // request_predicate[2]
+            extract_fp(128)?, // request_predicate[3]
         ];
-        let vt = extract_fp(160)?;         // timestamp
-        let vn = extract_fp(192)?;         // verifier_nonce
-        let vc = extract_fp(224)?;         // composition_commitment
-        let vg = extract_fp(256)?;         // presentation_tag
-        let vbh = extract_fp(288)?;        // verifier_block_height
-        let vnah = extract_fp(320)?;       // not_after_height
-        let vrfc = extract_fp(352)?;       // revealed_facts_commitment
-        let vibl = extract_fp(384)?;       // issuer_blinded_leaf
+        let vt = extract_fp(160)?; // timestamp
+        let vn = extract_fp(192)?; // verifier_nonce
+        let vc = extract_fp(224)?; // composition_commitment
+        let vg = extract_fp(256)?; // presentation_tag
+        let vbh = extract_fp(288)?; // verifier_block_height
+        let vnah = extract_fp(320)?; // not_after_height
+        let vrfc = extract_fp(352)?; // revealed_facts_commitment
+        let vibl = extract_fp(384)?; // issuer_blinded_leaf
 
         if vf != proof.federation_root {
             return Ok(presentation::KimchiPresentationVerification::IssuerNotInFederation);
@@ -734,8 +731,7 @@ impl KimchiNativeBackend {
 
         // Reconstruct public inputs and verify with real Kimchi verifier
         let public_inputs = vec![
-            vf, vr[0], vr[1], vr[2], vr[3], vt, vn, vc, vg,
-            vbh, vnah, vrfc, vibl,
+            vf, vr[0], vr[1], vr[2], vr[3], vt, vn, vc, vg, vbh, vnah, vrfc, vibl,
         ];
         match presentation::KimchiPresentationCircuit::verify(
             &proof.proof.proof_bytes,
