@@ -88,7 +88,7 @@ impl BiscuitToken {
             user_id,
             machine_id,
             commands,
-        );
+        )?;
         Self::mint(root_keypair, &code)
     }
 
@@ -130,7 +130,7 @@ impl BiscuitToken {
         &self,
         request: &AuthRequest,
     ) -> Result<biscuit_auth::Authorizer, TokenError> {
-        let authorizer_code = pyana::authorizer_datalog(request);
+        let authorizer_code = pyana::authorizer_datalog(request)?;
         AuthorizerBuilder::new()
             .code(authorizer_code)
             .map_err(|e| TokenError::Datalog(e.to_string()))?
@@ -234,7 +234,7 @@ impl AuthToken for BiscuitToken {
     }
 
     fn attenuate(&self, restrictions: &Attenuation) -> Result<Box<dyn AuthToken>, TokenError> {
-        let code = pyana::attenuation_datalog(restrictions);
+        let code = pyana::attenuation_datalog(restrictions)?;
         if code.is_empty() {
             return Err(TokenError::Malformed(
                 "no restrictions specified for attenuation".into(),

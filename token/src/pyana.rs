@@ -35,26 +35,31 @@
 //! deny if true;
 //! ```
 
+use crate::error::TokenError;
 use crate::traits::{Attenuation, AuthRequest};
 
 /// Sanitize a string for safe interpolation into Biscuit Datalog.
 ///
 /// Uses an allowlist approach: only alphanumeric characters and a small set of
 /// safe punctuation are permitted. Returns an error if the input contains
-/// characters outside the allowlist, rather than silently stripping them.
-fn sanitize_datalog_string(s: &str) -> String {
+/// characters outside the allowlist, preventing identity confusion where two
+/// distinct inputs could map to the same sanitized output.
+fn sanitize_datalog_string(s: &str) -> Result<String, TokenError> {
     // Allowlist: alphanumeric plus safe punctuation that cannot break Datalog grammar.
     const SAFE_CHARS: &str = " -_./:@";
     if s.chars()
         .all(|c| c.is_alphanumeric() || SAFE_CHARS.contains(c))
     {
-        s.to_string()
+        Ok(s.to_string())
     } else {
-        // Reject by stripping disallowed characters. Callers should validate
-        // inputs before reaching this point; this is a defense-in-depth measure.
-        s.chars()
-            .filter(|c| c.is_alphanumeric() || SAFE_CHARS.contains(*c))
-            .collect()
+        let bad_chars: Vec<char> = s
+            .chars()
+            .filter(|c| !c.is_alphanumeric() && !SAFE_CHARS.contains(*c))
+            .collect();
+        Err(TokenError::Malformed(format!(
+            "datalog string contains disallowed characters {:?}: {:?}",
+            bad_chars, s
+        )))
     }
 }
 
@@ -90,6 +95,9 @@ pub mod authorizer_facts {
 ///
 /// This generates the facts that go into the authority block when minting
 /// a new Biscuit token.
+///
+/// Returns an error if any input string contains characters that are not safe
+/// for Datalog interpolation.
 pub fn authority_datalog(
     org_id: Option<u64>,
     apps: &[(String, String)],
@@ -100,7 +108,7 @@ pub fn authority_datalog(
     user_id: Option<&str>,
     machine_id: Option<&str>,
     commands: &[String],
-) -> String {
+) -> Result<String, TokenError> {
     let mut code = String::new();
 
     if let Some(org) = org_id {
@@ -110,58 +118,58 @@ pub fn authority_datalog(
         code.push_str(&format!(
             "{}(\"{}\", \"{}\");\n",
             facts::APP,
-            sanitize_datalog_string(app),
-            sanitize_datalog_string(actions)
+            sanitize_datalog_string(app)?,
+            sanitize_datalog_string(actions)?
         ));
     }
     for (svc, actions) in services {
         code.push_str(&format!(
             "{}(\"{}\", \"{}\");\n",
             facts::SERVICE,
-            sanitize_datalog_string(svc),
-            sanitize_datalog_string(actions),
+            sanitize_datalog_string(svc)?,
+            sanitize_datalog_string(actions)?,
         ));
     }
     for feat in features {
         code.push_str(&format!(
             "{}(\"{}\");\n",
             facts::FEATURE,
-            sanitize_datalog_string(feat)
+            sanitize_datalog_string(feat)?
         ));
     }
     for provider in oauth_providers {
         code.push_str(&format!(
             "{}(\"{}\");\n",
             facts::OAUTH_PROVIDER,
-            sanitize_datalog_string(provider)
+            sanitize_datalog_string(provider)?
         ));
     }
     for scope in oauth_scopes {
         code.push_str(&format!(
             "{}(\"{}\");\n",
             facts::OAUTH_SCOPE,
-            sanitize_datalog_string(scope)
+            sanitize_datalog_string(scope)?
         ));
     }
     if let Some(uid) = user_id {
         code.push_str(&format!(
             "{}(\"{}\");\n",
             facts::USER,
-            sanitize_datalog_string(uid)
+            sanitize_datalog_string(uid)?
         ));
     }
     if let Some(mid) = machine_id {
         code.push_str(&format!(
             "{}(\"{}\");\n",
             facts::MACHINE,
-            sanitize_datalog_string(mid)
+            sanitize_datalog_string(mid)?
         ));
     }
     for cmd in commands {
         code.push_str(&format!(
             "{}(\"{}\");\n",
             facts::COMMAND,
-            sanitize_datalog_string(cmd)
+            sanitize_datalog_string(cmd)?
         ));
     }
 
@@ -173,36 +181,39 @@ pub fn authority_datalog(
         code.push_str("unrestricted(true);\n");
     }
 
-    code
+    Ok(code)
 }
 
 /// Build Biscuit restriction block Datalog code from an [`Attenuation`].
 ///
 /// These are checks that further restrict the token's capabilities.
-pub fn attenuation_datalog(att: &Attenuation) -> String {
+///
+/// Returns an error if any input string contains characters that are not safe
+/// for Datalog interpolation.
+pub fn attenuation_datalog(att: &Attenuation) -> Result<String, TokenError> {
     let mut code = String::new();
 
     for (app, actions) in &att.apps {
         code.push_str(&format!(
             "check if {}(\"{}\", $actions), $actions.contains(\"{}\");\n",
             facts::APP,
-            sanitize_datalog_string(app),
-            sanitize_datalog_string(actions),
+            sanitize_datalog_string(app)?,
+            sanitize_datalog_string(actions)?,
         ));
     }
     for (svc, actions) in &att.services {
         code.push_str(&format!(
             "check if {}(\"{}\", $actions), $actions.contains(\"{}\");\n",
             facts::SERVICE,
-            sanitize_datalog_string(svc),
-            sanitize_datalog_string(actions),
+            sanitize_datalog_string(svc)?,
+            sanitize_datalog_string(actions)?,
         ));
     }
     for feat in &att.features {
         code.push_str(&format!(
             "check if {}(\"{}\");\n",
             facts::FEATURE,
-            sanitize_datalog_string(feat)
+            sanitize_datalog_string(feat)?
         ));
     }
     if let Some(ts) = att.not_after {
@@ -223,35 +234,35 @@ pub fn attenuation_datalog(att: &Attenuation) -> String {
         code.push_str(&format!(
             "check if {}(\"{}\");\n",
             facts::USER,
-            sanitize_datalog_string(uid)
+            sanitize_datalog_string(uid)?
         ));
     }
     for provider in &att.oauth_providers {
         code.push_str(&format!(
             "check if {}(\"{}\");\n",
             facts::OAUTH_PROVIDER,
-            sanitize_datalog_string(provider),
+            sanitize_datalog_string(provider)?,
         ));
     }
     for scope in &att.oauth_scopes {
         code.push_str(&format!(
             "check if {}(\"{}\");\n",
             facts::OAUTH_SCOPE,
-            sanitize_datalog_string(scope),
+            sanitize_datalog_string(scope)?,
         ));
     }
     if let Some(mid) = &att.from_machine {
         code.push_str(&format!(
             "check if {}(\"{}\");\n",
             facts::MACHINE,
-            sanitize_datalog_string(mid)
+            sanitize_datalog_string(mid)?
         ));
     }
     for cmd in &att.commands {
         code.push_str(&format!(
             "check if {}(\"{}\");\n",
             facts::COMMAND,
-            sanitize_datalog_string(cmd)
+            sanitize_datalog_string(cmd)?
         ));
     }
     // Feature glob restrictions are macaroon-specific (Biscuit doesn't use glob matching).
@@ -260,13 +271,16 @@ pub fn attenuation_datalog(att: &Attenuation) -> String {
     // SECURITY: raw_datalog was removed to prevent Datalog injection attacks.
     // Structured caveats cover all legitimate attenuation use cases.
 
-    code
+    Ok(code)
 }
 
 /// Build Biscuit authorizer Datalog code from an [`AuthRequest`].
 ///
 /// These are the ambient facts + policies added by the verifier.
-pub fn authorizer_datalog(req: &AuthRequest) -> String {
+///
+/// Returns an error if any input string contains characters that are not safe
+/// for Datalog interpolation.
+pub fn authorizer_datalog(req: &AuthRequest) -> Result<String, TokenError> {
     let mut code = String::new();
 
     // Ambient facts from the request
@@ -277,49 +291,49 @@ pub fn authorizer_datalog(req: &AuthRequest) -> String {
         code.push_str(&format!(
             "{}(\"{}\");\n",
             authorizer_facts::REQUEST_APP,
-            sanitize_datalog_string(app),
+            sanitize_datalog_string(app)?,
         ));
     }
     if let Some(svc) = &req.service {
         code.push_str(&format!(
             "{}(\"{}\");\n",
             authorizer_facts::REQUEST_SERVICE,
-            sanitize_datalog_string(svc),
+            sanitize_datalog_string(svc)?,
         ));
     }
     if let Some(act) = &req.action {
         code.push_str(&format!(
             "{}(\"{}\");\n",
             authorizer_facts::REQUEST_ACTION,
-            sanitize_datalog_string(act),
+            sanitize_datalog_string(act)?,
         ));
     }
     for feat in &req.features {
         code.push_str(&format!(
             "{}(\"{}\");\n",
             authorizer_facts::REQUEST_FEATURE,
-            sanitize_datalog_string(feat),
+            sanitize_datalog_string(feat)?,
         ));
     }
     if let Some(uid) = &req.user_id {
         code.push_str(&format!(
             "{}(\"{}\");\n",
             authorizer_facts::REQUEST_USER,
-            sanitize_datalog_string(uid),
+            sanitize_datalog_string(uid)?,
         ));
     }
     if let Some(mid) = &req.machine_id {
         code.push_str(&format!(
             "{}(\"{}\");\n",
             authorizer_facts::REQUEST_MACHINE,
-            sanitize_datalog_string(mid),
+            sanitize_datalog_string(mid)?,
         ));
     }
     if let Some(cmd) = &req.command {
         code.push_str(&format!(
             "{}(\"{}\");\n",
             authorizer_facts::REQUEST_COMMAND,
-            sanitize_datalog_string(cmd),
+            sanitize_datalog_string(cmd)?,
         ));
     }
 
@@ -342,7 +356,7 @@ pub fn authorizer_datalog(req: &AuthRequest) -> String {
     code.push_str("\n// Default deny\n");
     code.push_str("deny if true;\n");
 
-    code
+    Ok(code)
 }
 
 #[cfg(test)]
@@ -361,7 +375,8 @@ mod tests {
             Some("user-123"),
             None,
             &[],
-        );
+        )
+        .unwrap();
         assert!(code.contains("organization(42)"));
         assert!(code.contains("app(\"my-app\", \"rwcd\")"));
         assert!(code.contains("service(\"http\", \"rw\")"));
@@ -385,7 +400,8 @@ mod tests {
             Some("alice"),
             None,
             &[],
-        );
+        )
+        .unwrap();
         assert!(code.contains("unrestricted(true)"));
         assert!(code.contains("user(\"alice\")"));
     }
@@ -403,7 +419,8 @@ mod tests {
             None,
             None,
             &[],
-        );
+        )
+        .unwrap();
         assert!(code.contains("app(\"my-app\", \"rw\")"));
         assert!(!code.contains("unrestricted"));
     }
@@ -416,7 +433,7 @@ mod tests {
             confine_user: Some("user-456".into()),
             ..Default::default()
         };
-        let code = attenuation_datalog(&att);
+        let code = attenuation_datalog(&att).unwrap();
         assert!(code.contains("check if app(\"my-app\", $actions)"));
         assert!(code.contains("check if time($t), $t < 1700000000"));
         assert!(code.contains("check if user(\"user-456\")"));
@@ -431,7 +448,7 @@ mod tests {
             now: Some(1700000000),
             ..Default::default()
         };
-        let code = authorizer_datalog(&req);
+        let code = authorizer_datalog(&req).unwrap();
         assert!(code.contains("request_app(\"my-app\")"));
         assert!(code.contains("request_action(\"read\")"));
         assert!(code.contains("request_service(\"http\")"));
@@ -448,34 +465,58 @@ mod tests {
 
     #[test]
     fn test_sanitize_datalog_string_rejects_injection_chars() {
-        // Attempt to inject Datalog via backslash escape
-        let result = sanitize_datalog_string("app\"); allow if true; //");
-        assert!(!result.contains('"'));
-        assert!(!result.contains(';'));
-        assert!(!result.contains('\\'));
+        // Attempt to inject Datalog via backslash escape — must return Err
+        assert!(sanitize_datalog_string("app\"); allow if true; //").is_err());
 
         // Newline injection
-        let result = sanitize_datalog_string("app\nallow if true");
-        assert!(!result.contains('\n'));
+        assert!(sanitize_datalog_string("app\nallow if true").is_err());
 
         // Null byte injection
-        let result = sanitize_datalog_string("app\x00evil");
-        assert!(!result.contains('\x00'));
+        assert!(sanitize_datalog_string("app\x00evil").is_err());
 
         // Control characters
-        let result = sanitize_datalog_string("app\x01\x02\x03");
-        assert!(!result.contains('\x01'));
+        assert!(sanitize_datalog_string("app\x01\x02\x03").is_err());
 
         // Valid safe strings pass through unchanged
-        assert_eq!(sanitize_datalog_string("my-app_v2.0"), "my-app_v2.0");
         assert_eq!(
-            sanitize_datalog_string("user@domain.com"),
+            sanitize_datalog_string("my-app_v2.0").unwrap(),
+            "my-app_v2.0"
+        );
+        assert_eq!(
+            sanitize_datalog_string("user@domain.com").unwrap(),
             "user@domain.com"
         );
         assert_eq!(
-            sanitize_datalog_string("path/to/resource"),
+            sanitize_datalog_string("path/to/resource").unwrap(),
             "path/to/resource"
         );
+    }
+
+    #[test]
+    fn test_sanitize_rejects_identity_confusion() {
+        // Two inputs that would map to the same output under stripping
+        // must both be rejected (identity confusion prevention).
+        assert!(sanitize_datalog_string("my-app\"").is_err());
+        assert!(sanitize_datalog_string("my-app").is_ok());
+        // These are distinct inputs that must NOT silently normalize to the same string.
+        assert!(sanitize_datalog_string("admin;--").is_err());
+        assert!(sanitize_datalog_string("user\x00name").is_err());
+    }
+
+    #[test]
+    fn test_authority_datalog_rejects_bad_input() {
+        let result = authority_datalog(
+            None,
+            &[("my-app\"".into(), "rw".into())],
+            &[],
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            &[],
+        );
+        assert!(result.is_err());
     }
 
     #[test]
@@ -487,7 +528,7 @@ mod tests {
             apps: vec![("my-app".into(), "r".into())],
             ..Default::default()
         };
-        let code = attenuation_datalog(&att);
+        let code = attenuation_datalog(&att).unwrap();
         // Verify that only structured checks appear
         assert!(code.contains("check if app("));
         // No way to inject arbitrary code

@@ -38,10 +38,10 @@ pub mod pyana_caveats;
 #[cfg(all(feature = "macaroon", feature = "rand-deps"))]
 pub mod macaroon_backend;
 
-#[cfg(all(feature = "macaroon", feature = "datalog"))]
+#[cfg(feature = "macaroon")]
 pub mod factset;
 
-#[cfg(all(feature = "macaroon", feature = "datalog"))]
+#[cfg(feature = "macaroon")]
 pub mod datalog_verify;
 
 // Re-export primary types.

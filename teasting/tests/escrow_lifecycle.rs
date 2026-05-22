@@ -27,13 +27,25 @@ impl ProofVerifier for TestProofVerifier {
     }
 }
 
-/// Create a cell with a given balance and insert it into the ledger.
+/// Create a cell with a given balance and permissive permissions for testing.
 fn create_funded_cell(ledger: &mut Ledger, seed: u8, balance: u64) -> CellId {
+    use pyana_cell::permissions::{AuthRequired, Permissions};
     let mut pk = [0u8; 32];
     pk[0] = seed;
     pk[1] = seed.wrapping_mul(7);
     let token_id = [seed; 32];
-    let cell = Cell::with_balance(pk, token_id, balance);
+    let mut cell = Cell::with_balance(pk, token_id, balance);
+    // Set all permissions to None (no auth required) for test simplicity.
+    cell.permissions = Permissions {
+        send: AuthRequired::None,
+        receive: AuthRequired::None,
+        set_state: AuthRequired::None,
+        set_permissions: AuthRequired::None,
+        set_verification_key: AuthRequired::None,
+        increment_nonce: AuthRequired::None,
+        delegate: AuthRequired::None,
+        access: AuthRequired::None,
+    };
     let id = cell.id;
     ledger.insert_cell(cell).unwrap();
     id

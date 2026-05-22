@@ -446,12 +446,21 @@ pub fn verify_caveats(
     }
 
     // --- Organization: match-any ---
-    if let Some(req_org) = request.org_id {
-        if !orgs.is_empty() && !orgs.contains(&req_org) {
-            return Err(TokenError::Denied(format!(
-                "token restricted to org(s) {:?}, requested org {}",
-                orgs, req_org
-            )));
+    if !orgs.is_empty() {
+        match request.org_id {
+            Some(req_org) => {
+                if !orgs.contains(&req_org) {
+                    return Err(TokenError::Denied(format!(
+                        "token restricted to org(s) {:?}, requested org {}",
+                        orgs, req_org
+                    )));
+                }
+            }
+            None => {
+                return Err(TokenError::Denied(
+                    "token restricted to specific org(s) but request has no org_id".into(),
+                ));
+            }
         }
     }
 
@@ -542,12 +551,21 @@ pub fn verify_caveats(
     }
 
     // --- User: match-any ---
-    if let Some(req_user) = &request.user_id {
-        if !confined_users.is_empty() && !confined_users.contains(req_user) {
-            return Err(TokenError::Denied(format!(
-                "token confined to user(s) {:?}, request is for '{}'",
-                confined_users, req_user
-            )));
+    if !confined_users.is_empty() {
+        match &request.user_id {
+            Some(req_user) => {
+                if !confined_users.contains(req_user) {
+                    return Err(TokenError::Denied(format!(
+                        "token confined to user(s) {:?}, request is for '{}'",
+                        confined_users, req_user
+                    )));
+                }
+            }
+            None => {
+                return Err(TokenError::Denied(
+                    "token confined to specific user(s) but request has no user_id".into(),
+                ));
+            }
         }
     }
 
@@ -571,7 +589,14 @@ pub fn verify_caveats(
         }
     }
 
-    // --- OAuth scopes: set containment ---
+    // --- OAuth scopes: set containment (fail-closed) ---
+    // SECURITY: If the token has OAuth scope restrictions, the request MUST specify oauth_scopes.
+    // Otherwise, a token scoped to specific OAuth scopes could be used without scope verification.
+    if !oauth_scopes.is_empty() && request.oauth_scopes.is_empty() {
+        return Err(TokenError::Denied(
+            "token requires OAuth scopes but request specifies none".into(),
+        ));
+    }
     if !request.oauth_scopes.is_empty() && !oauth_scopes.is_empty() {
         for req_scope in &request.oauth_scopes {
             if !oauth_scopes.contains(req_scope) {
@@ -664,9 +689,17 @@ pub fn verify_caveats(
       ));
         }
         let request_cost = request.request_cost.unwrap_or(1);
-        for (budget_id, _limit) in &budgets {
+        for (budget_id, limit) in &budgets {
             match request.budget_states.get(budget_id) {
                 Some(&remaining) => {
+                    // SECURITY: Reject if caller claims more remaining than the token's limit.
+                    // This catches obvious spoofing where the caller inflates remaining to bypass.
+                    if remaining > *limit {
+                        return Err(TokenError::Denied(format!(
+                            "budget '{}' state claims remaining ({}) exceeds token limit ({})",
+                            budget_id, remaining, limit
+                        )));
+                    }
                     if remaining < request_cost {
                         return Err(TokenError::Denied(format!(
                             "budget '{}' exhausted: {} remaining, {} required",

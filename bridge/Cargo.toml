@@ -13,7 +13,7 @@ pyana-commit = { path = "../commit" }
 pyana-trace = { path = "../trace" }
 pyana-circuit = { path = "../circuit" }
 pyana-turn = { path = "../turn" }
-token = { path = "../token", default-features = false, features = ["macaroon", "datalog", "rand-deps"] }
+token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
 macaroon = { path = "../macaroon" }
 blake3 = "1"
 getrandom = { workspace = true }

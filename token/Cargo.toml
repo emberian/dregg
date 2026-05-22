@@ -11,8 +11,7 @@ license = { workspace = true }
 [features]
 biscuit = ["biscuit-auth"]
 macaroon = ["dep:macaroon", "macaroon/crypto"]
-datalog = ["dep:pyana-trace", "dep:pyana-commit"]
-default = ["biscuit", "macaroon", "datalog", "rand-deps"]
+default = ["biscuit", "macaroon", "rand-deps"]
 rand-deps = ["dep:getrandom", "dep:rand", "dep:scalable_cuckoo_filter", "dep:base64", "dep:ed25519-dalek"]
 zkvm = ["dep:macaroon", "macaroon/zkvm"]
 
@@ -22,8 +21,8 @@ biscuit-auth = { version = "6.0.0", optional = true }
 blake3 = "1"
 ed25519-dalek = { version = "2", features = ["std"], optional = true }
 macaroon = { workspace = true, optional = true }
-pyana-trace = { path = "../trace", optional = true }
-pyana-commit = { path = "../commit", optional = true }
+pyana-trace = { path = "../trace" }
+pyana-commit = { path = "../commit" }
 getrandom = { workspace = true, optional = true }
 globset = { workspace = true }
 rand = { version = "0.9", optional = true }

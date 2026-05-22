@@ -31,7 +31,7 @@ pyana-intent = { path = "../intent" }
 pyana-types = { path = "../types" }
 
 # Token crate without biscuit (biscuit-auth has complex deps)
-token = { path = "../token", default-features = false, features = ["macaroon", "datalog", "rand-deps"] }
+token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
 
 blake3 = "1"
 postcard = { version = "1", features = ["alloc"] }

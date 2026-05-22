@@ -18,7 +18,7 @@ pyana-circuit = { path = "../circuit" }
 pyana-commit = { path = "../commit" }
 pyana-trace = { path = "../trace" }
 pyana-turn = { path = "../turn" }
-token = { path = "../token", default-features = false, features = ["macaroon", "datalog", "rand-deps"] }
+token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
 serde = { workspace = true, features = ["std"] }
 serde_json = { workspace = true }
 globset = { workspace = true }

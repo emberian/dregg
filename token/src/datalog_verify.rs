@@ -86,6 +86,10 @@ pub fn verify_token_datalog(
         .all_facts()
         .iter()
         .any(|f| symbols.resolve(f.predicate) == Some("valid_until"));
+    let has_valid_after = state
+        .all_facts()
+        .iter()
+        .any(|f| symbols.resolve(f.predicate) == Some("valid_after"));
 
     // 2c. Extract temporal values from the factset BEFORE filtering.
     // Since valid_until and valid_after are now reserved predicates (Issue #6),
@@ -122,11 +126,25 @@ pub fn verify_token_datalog(
         ));
     }
 
-    if !has_valid_until {
+    if !has_valid_until && !has_valid_after {
         // Token has no time bound -- inject no_time_bound(1) so Rule 3 can
         // distinguish truly unbounded tokens from time-bounded ones.
+        // A token with valid_after but no valid_until is still time-bounded
+        // and must go through a time-checking rule.
         trace_facts.push(TraceFact::new(
             symbol_from_str("no_time_bound"),
+            vec![Term::Int(1)],
+        ));
+    }
+
+    if !has_valid_after {
+        // Token has no valid_after constraint -- inject no_valid_after(1) so
+        // Rules 10/11/12 (valid_until-only) can distinguish from tokens that
+        // also have a valid_after constraint. Without this guard, a token with
+        // both valid_after and valid_until could match Rules 10/11/12 and bypass
+        // the not-before check entirely.
+        trace_facts.push(TraceFact::new(
+            symbol_from_str("no_valid_after"),
             vec![Term::Int(1)],
         ));
     }
@@ -215,10 +233,18 @@ pub mod rule_ids {
     pub const COMMAND: u32 = 24;
     pub const ORGANIZATION: u32 = 25;
     pub const FEATURE: u32 = 26;
-    // Time-bounded variants
+    // Time-bounded variants (valid_until only)
     pub const APP_ACTION_TIME_BOUNDED: u32 = 10;
     pub const SERVICE_ACTION_TIME_BOUNDED: u32 = 11;
     pub const UNRESTRICTED_TIME_BOUNDED: u32 = 12;
+    // Time-bounded variants (valid_after only, no valid_until)
+    pub const APP_ACTION_NOT_BEFORE: u32 = 13;
+    pub const SERVICE_ACTION_NOT_BEFORE: u32 = 14;
+    pub const UNRESTRICTED_NOT_BEFORE: u32 = 15;
+    // Time-bounded variants (both valid_after AND valid_until)
+    pub const APP_ACTION_FULL_WINDOW: u32 = 16;
+    pub const SERVICE_ACTION_FULL_WINDOW: u32 = 17;
+    pub const UNRESTRICTED_FULL_WINDOW: u32 = 18;
 }
 
 /// Returns the full pyana authorization policy rule set.
@@ -364,9 +390,9 @@ fn full_policy() -> Vec<Rule> {
         checks: vec![],
     });
 
-    // Rule 10: Time-bounded app + action (secure)
+    // Rule 10: Time-bounded app + action (valid_until only, no valid_after)
     // allow if action_allowed($app, $act), request_app($app), request_action($act),
-    //          valid_until($exp), request_time($t)
+    //          valid_until($exp), request_time($t), no_valid_after(1)
     //   checks: MemberOf($act, $act), $t < $exp
     rules.push(Rule {
         id: rule_ids::APP_ACTION_TIME_BOUNDED,
@@ -395,6 +421,10 @@ fn full_policy() -> Vec<Rule> {
                 predicate: symbol_from_str("request_time"),
                 terms: vec![Term::Var(3)], // $t
             },
+            Atom {
+                predicate: symbol_from_str("no_valid_after"),
+                terms: vec![Term::Int(1)],
+            },
         ],
         checks: vec![
             Check::MemberOf(Term::Var(1), Term::Var(1)),
@@ -402,7 +432,7 @@ fn full_policy() -> Vec<Rule> {
         ],
     });
 
-    // Rule 11: Time-bounded service + action (secure)
+    // Rule 11: Time-bounded service + action (valid_until only, no valid_after)
     rules.push(Rule {
         id: rule_ids::SERVICE_ACTION_TIME_BOUNDED,
         head: Atom {
@@ -430,6 +460,10 @@ fn full_policy() -> Vec<Rule> {
                 predicate: symbol_from_str("request_time"),
                 terms: vec![Term::Var(3)], // $t
             },
+            Atom {
+                predicate: symbol_from_str("no_valid_after"),
+                terms: vec![Term::Int(1)],
+            },
         ],
         checks: vec![
             Check::MemberOf(Term::Var(1), Term::Var(1)),
@@ -437,7 +471,7 @@ fn full_policy() -> Vec<Rule> {
         ],
     });
 
-    // Rule 12: Unrestricted with time bound (must still be within window)
+    // Rule 12: Unrestricted with valid_until only (no valid_after)
     rules.push(Rule {
         id: rule_ids::UNRESTRICTED_TIME_BOUNDED,
         head: Atom {
@@ -457,9 +491,233 @@ fn full_policy() -> Vec<Rule> {
                 predicate: symbol_from_str("request_time"),
                 terms: vec![Term::Var(1)],
             },
+            Atom {
+                predicate: symbol_from_str("no_valid_after"),
+                terms: vec![Term::Int(1)],
+            },
         ],
         checks: vec![
             Check::LessThan(Term::Var(1), Term::Var(0)), // $t < $exp
+        ],
+    });
+
+    // === valid_after (not_before) rules ===
+    //
+    // These rules enforce the `valid_after` temporal constraint. Without them,
+    // a malicious prover could generate a STARK proof authorizing a token that
+    // hasn't activated yet, because the valid_after facts were injected into
+    // the trace but never consumed by any rule.
+
+    // Rule 13: App + action with valid_after only (no valid_until)
+    // allow if action_allowed($app, $act), request_app($app), request_action($act),
+    //          valid_after($nb), request_time($t)
+    //   checks: MemberOf($act, $act), $t >= $nb
+    rules.push(Rule {
+        id: rule_ids::APP_ACTION_NOT_BEFORE,
+        head: Atom {
+            predicate: symbol_from_str("allow"),
+            terms: vec![],
+        },
+        body: vec![
+            Atom {
+                predicate: symbol_from_str("action_allowed"),
+                terms: vec![Term::Var(0), Term::Var(1)], // $app, $act
+            },
+            Atom {
+                predicate: symbol_from_str("request_app"),
+                terms: vec![Term::Var(0)], // $app
+            },
+            Atom {
+                predicate: symbol_from_str("request_action"),
+                terms: vec![Term::Var(1)], // $act
+            },
+            Atom {
+                predicate: symbol_from_str("valid_after"),
+                terms: vec![Term::Var(2)], // $nb
+            },
+            Atom {
+                predicate: symbol_from_str("request_time"),
+                terms: vec![Term::Var(3)], // $t
+            },
+        ],
+        checks: vec![
+            Check::MemberOf(Term::Var(1), Term::Var(1)),
+            Check::GreaterThanOrEqual(Term::Var(3), Term::Var(2)), // $t >= $nb
+        ],
+    });
+
+    // Rule 14: Service + action with valid_after only (no valid_until)
+    rules.push(Rule {
+        id: rule_ids::SERVICE_ACTION_NOT_BEFORE,
+        head: Atom {
+            predicate: symbol_from_str("allow"),
+            terms: vec![],
+        },
+        body: vec![
+            Atom {
+                predicate: symbol_from_str("svc_action_allowed"),
+                terms: vec![Term::Var(0), Term::Var(1)], // $svc, $act
+            },
+            Atom {
+                predicate: symbol_from_str("request_service"),
+                terms: vec![Term::Var(0)], // $svc
+            },
+            Atom {
+                predicate: symbol_from_str("request_action"),
+                terms: vec![Term::Var(1)], // $act
+            },
+            Atom {
+                predicate: symbol_from_str("valid_after"),
+                terms: vec![Term::Var(2)], // $nb
+            },
+            Atom {
+                predicate: symbol_from_str("request_time"),
+                terms: vec![Term::Var(3)], // $t
+            },
+        ],
+        checks: vec![
+            Check::MemberOf(Term::Var(1), Term::Var(1)),
+            Check::GreaterThanOrEqual(Term::Var(3), Term::Var(2)), // $t >= $nb
+        ],
+    });
+
+    // Rule 15: Unrestricted with valid_after only (no valid_until)
+    rules.push(Rule {
+        id: rule_ids::UNRESTRICTED_NOT_BEFORE,
+        head: Atom {
+            predicate: symbol_from_str("allow"),
+            terms: vec![],
+        },
+        body: vec![
+            Atom {
+                predicate: symbol_from_str("unrestricted"),
+                terms: vec![Term::Int(1)],
+            },
+            Atom {
+                predicate: symbol_from_str("valid_after"),
+                terms: vec![Term::Var(0)], // $nb
+            },
+            Atom {
+                predicate: symbol_from_str("request_time"),
+                terms: vec![Term::Var(1)], // $t
+            },
+        ],
+        checks: vec![
+            Check::GreaterThanOrEqual(Term::Var(1), Term::Var(0)), // $t >= $nb
+        ],
+    });
+
+    // Rule 16: App + action with BOTH valid_after AND valid_until (full window)
+    // allow if action_allowed($app, $act), request_app($app), request_action($act),
+    //          valid_after($nb), valid_until($exp), request_time($t)
+    //   checks: MemberOf($act, $act), $t >= $nb, $t < $exp
+    rules.push(Rule {
+        id: rule_ids::APP_ACTION_FULL_WINDOW,
+        head: Atom {
+            predicate: symbol_from_str("allow"),
+            terms: vec![],
+        },
+        body: vec![
+            Atom {
+                predicate: symbol_from_str("action_allowed"),
+                terms: vec![Term::Var(0), Term::Var(1)], // $app, $act
+            },
+            Atom {
+                predicate: symbol_from_str("request_app"),
+                terms: vec![Term::Var(0)], // $app
+            },
+            Atom {
+                predicate: symbol_from_str("request_action"),
+                terms: vec![Term::Var(1)], // $act
+            },
+            Atom {
+                predicate: symbol_from_str("valid_after"),
+                terms: vec![Term::Var(2)], // $nb
+            },
+            Atom {
+                predicate: symbol_from_str("valid_until"),
+                terms: vec![Term::Var(3)], // $exp
+            },
+            Atom {
+                predicate: symbol_from_str("request_time"),
+                terms: vec![Term::Var(4)], // $t
+            },
+        ],
+        checks: vec![
+            Check::MemberOf(Term::Var(1), Term::Var(1)),
+            Check::GreaterThanOrEqual(Term::Var(4), Term::Var(2)), // $t >= $nb
+            Check::LessThan(Term::Var(4), Term::Var(3)),           // $t < $exp
+        ],
+    });
+
+    // Rule 17: Service + action with BOTH valid_after AND valid_until (full window)
+    rules.push(Rule {
+        id: rule_ids::SERVICE_ACTION_FULL_WINDOW,
+        head: Atom {
+            predicate: symbol_from_str("allow"),
+            terms: vec![],
+        },
+        body: vec![
+            Atom {
+                predicate: symbol_from_str("svc_action_allowed"),
+                terms: vec![Term::Var(0), Term::Var(1)], // $svc, $act
+            },
+            Atom {
+                predicate: symbol_from_str("request_service"),
+                terms: vec![Term::Var(0)], // $svc
+            },
+            Atom {
+                predicate: symbol_from_str("request_action"),
+                terms: vec![Term::Var(1)], // $act
+            },
+            Atom {
+                predicate: symbol_from_str("valid_after"),
+                terms: vec![Term::Var(2)], // $nb
+            },
+            Atom {
+                predicate: symbol_from_str("valid_until"),
+                terms: vec![Term::Var(3)], // $exp
+            },
+            Atom {
+                predicate: symbol_from_str("request_time"),
+                terms: vec![Term::Var(4)], // $t
+            },
+        ],
+        checks: vec![
+            Check::MemberOf(Term::Var(1), Term::Var(1)),
+            Check::GreaterThanOrEqual(Term::Var(4), Term::Var(2)), // $t >= $nb
+            Check::LessThan(Term::Var(4), Term::Var(3)),           // $t < $exp
+        ],
+    });
+
+    // Rule 18: Unrestricted with BOTH valid_after AND valid_until (full window)
+    rules.push(Rule {
+        id: rule_ids::UNRESTRICTED_FULL_WINDOW,
+        head: Atom {
+            predicate: symbol_from_str("allow"),
+            terms: vec![],
+        },
+        body: vec![
+            Atom {
+                predicate: symbol_from_str("unrestricted"),
+                terms: vec![Term::Int(1)],
+            },
+            Atom {
+                predicate: symbol_from_str("valid_after"),
+                terms: vec![Term::Var(0)], // $nb
+            },
+            Atom {
+                predicate: symbol_from_str("valid_until"),
+                terms: vec![Term::Var(1)], // $exp
+            },
+            Atom {
+                predicate: symbol_from_str("request_time"),
+                terms: vec![Term::Var(2)], // $t
+            },
+        ],
+        checks: vec![
+            Check::GreaterThanOrEqual(Term::Var(2), Term::Var(0)), // $t >= $nb
+            Check::LessThan(Term::Var(2), Term::Var(1)),           // $t < $exp
         ],
     });
 
@@ -494,6 +752,7 @@ const RESERVED_PREDICATES: &[&str] = &[
     // an expired token, or omit valid_after to bypass not-before checks).
     "valid_until",
     "valid_after",
+    "no_valid_after",
 ];
 
 /// Convert committed facts (FieldElement-based) to trace-format facts (Symbol-based).
@@ -1034,7 +1293,14 @@ pub fn pre_evaluation_deny_checks(
         }
     }
 
-    // OAuth scopes: set containment
+    // OAuth scopes: set containment (fail-closed)
+    // SECURITY: If the token has OAuth scope restrictions, the request MUST specify oauth_scopes.
+    // Otherwise, a token scoped to specific OAuth scopes could be used without scope verification.
+    if !oauth_scopes.is_empty() && request.oauth_scopes.is_empty() {
+        return Err(TokenError::Denied(
+            "token requires OAuth scopes but request specifies none".into(),
+        ));
+    }
     if !request.oauth_scopes.is_empty() && !oauth_scopes.is_empty() {
         for req_scope in &request.oauth_scopes {
             if !oauth_scopes.contains(req_scope) {
@@ -1147,9 +1413,17 @@ pub fn pre_evaluation_deny_checks(
             ));
         }
         let request_cost = request.request_cost.unwrap_or(1);
-        for (budget_id, _limit) in &budgets {
+        for (budget_id, limit) in &budgets {
             match request.budget_states.get(budget_id) {
                 Some(&remaining) => {
+                    // SECURITY: Reject if caller claims more remaining than the token's limit.
+                    // This catches obvious spoofing where the caller inflates remaining to bypass.
+                    if remaining > *limit {
+                        return Err(TokenError::Denied(format!(
+                            "budget '{}' state claims remaining ({}) exceeds token limit ({})",
+                            budget_id, remaining, limit
+                        )));
+                    }
                     if remaining < request_cost {
                         return Err(TokenError::Denied(format!(
                             "budget '{}' exhausted: {} remaining, {} required",
@@ -2147,5 +2421,422 @@ mod tests {
             "matching features should pass, got: {:?}",
             result.unwrap_err()
         );
+    }
+
+    // =========================================================================
+    // OAuth scopes fail-closed tests
+    // =========================================================================
+
+    #[test]
+    fn test_oauth_scopes_fails_closed_when_request_omits_scopes() {
+        // ATTACK: Token has OAuthScope("repo") restriction.
+        // Request omits oauth_scopes entirely.
+        // Previously this would PASS (fail-open). Now it must DENY.
+        let mut set = CaveatSet::new();
+        set.push(WireCaveat::new(CAV_OAUTH_SCOPE, encode_string("repo")));
+
+        let request = AuthRequest {
+            now: Some(1700000000),
+            oauth_scopes: vec![], // empty -- omitted!
+            ..Default::default()
+        };
+
+        let result = pre_evaluation_deny_checks(&set, &request);
+        assert!(
+            result.is_err(),
+            "token with OAuth scope restriction must deny when request omits oauth_scopes"
+        );
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("OAuth scopes"),
+            "error should mention OAuth scopes, got: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_oauth_scopes_allows_when_request_provides_matching_scopes() {
+        // Ensure the fail-closed fix doesn't break the happy path.
+        let mut set = CaveatSet::new();
+        set.push(WireCaveat::new(CAV_OAUTH_SCOPE, encode_string("repo")));
+
+        let request = AuthRequest {
+            oauth_scopes: vec!["repo".into()],
+            now: Some(1700000000),
+            ..Default::default()
+        };
+
+        let result = pre_evaluation_deny_checks(&set, &request);
+        assert!(
+            result.is_ok(),
+            "matching OAuth scopes should pass, got: {:?}",
+            result.unwrap_err()
+        );
+    }
+
+    #[test]
+    fn test_oauth_scopes_fails_closed_old_path_agrees() {
+        // Verify both paths agree on the fail-closed behavior.
+        let mut set = CaveatSet::new();
+        set.push(WireCaveat::new(CAV_OAUTH_SCOPE, encode_string("repo")));
+        set.push(WireCaveat::new(CAV_OAUTH_SCOPE, encode_string("read:org")));
+
+        let request = AuthRequest {
+            now: Some(1700000000),
+            oauth_scopes: vec![], // empty -- omitted!
+            ..Default::default()
+        };
+
+        let old_result = crate::pyana_caveats::verify_caveats(&set, &request);
+        assert!(
+            old_result.is_err(),
+            "old path must also deny when request omits oauth_scopes"
+        );
+    }
+
+    // =========================================================================
+    // valid_after (not_before) Datalog enforcement tests
+    // =========================================================================
+
+    #[test]
+    fn test_datalog_valid_after_denies_before_activation() {
+        // Token with valid_after=5000 but request time is 2000 (before activation).
+        // The STARK trace must NOT produce an allow conclusion.
+        let mut set = CaveatSet::new();
+        set.push(WireCaveat::new(
+            CAV_APP,
+            encode_name_actions("my-app", "rw"),
+        ));
+        set.push(WireCaveat::new(
+            CAV_VALIDITY_WINDOW,
+            encode_validity_window(Some(5000), None),
+        ));
+
+        let request = AuthRequest {
+            app_id: Some("my-app".into()),
+            action: Some("r".into()),
+            now: Some(2000), // before valid_after
+            ..Default::default()
+        };
+
+        // Pre-evaluation deny checks catch this (trusted mode)
+        let result = verify_token_datalog_full(&set, &request);
+        assert!(
+            result.is_err(),
+            "token with valid_after must deny requests before activation time"
+        );
+    }
+
+    #[test]
+    fn test_datalog_valid_after_allows_after_activation() {
+        // Token with valid_after=1000, request time is 3000 (after activation).
+        let mut set = CaveatSet::new();
+        set.push(WireCaveat::new(
+            CAV_APP,
+            encode_name_actions("my-app", "rw"),
+        ));
+        set.push(WireCaveat::new(
+            CAV_VALIDITY_WINDOW,
+            encode_validity_window(Some(1000), None),
+        ));
+
+        let request = AuthRequest {
+            app_id: Some("my-app".into()),
+            action: Some("r".into()),
+            now: Some(3000), // after valid_after
+            ..Default::default()
+        };
+
+        let result = verify_token_datalog_full(&set, &request);
+        assert!(
+            result.is_ok(),
+            "token with valid_after should allow requests after activation, got: {:?}",
+            result.unwrap_err()
+        );
+    }
+
+    #[test]
+    fn test_datalog_valid_after_at_exact_activation_time() {
+        // Token with valid_after=3000, request time is exactly 3000.
+        // Should ALLOW (>= semantics).
+        let mut set = CaveatSet::new();
+        set.push(WireCaveat::new(
+            CAV_APP,
+            encode_name_actions("my-app", "rw"),
+        ));
+        set.push(WireCaveat::new(
+            CAV_VALIDITY_WINDOW,
+            encode_validity_window(Some(3000), None),
+        ));
+
+        let request = AuthRequest {
+            app_id: Some("my-app".into()),
+            action: Some("r".into()),
+            now: Some(3000), // exactly at activation
+            ..Default::default()
+        };
+
+        let result = verify_token_datalog_full(&set, &request);
+        assert!(
+            result.is_ok(),
+            "token should allow at exact activation time (>= semantics), got: {:?}",
+            result.unwrap_err()
+        );
+    }
+
+    #[test]
+    fn test_datalog_full_window_allows_within() {
+        // Token with valid_after=1000 AND valid_until=5000, request at 3000.
+        let mut set = CaveatSet::new();
+        set.push(WireCaveat::new(
+            CAV_APP,
+            encode_name_actions("my-app", "rw"),
+        ));
+        set.push(WireCaveat::new(
+            CAV_VALIDITY_WINDOW,
+            encode_validity_window(Some(1000), Some(5000)),
+        ));
+
+        let request = AuthRequest {
+            app_id: Some("my-app".into()),
+            action: Some("r".into()),
+            now: Some(3000), // within window
+            ..Default::default()
+        };
+
+        let result = verify_token_datalog_full(&set, &request);
+        assert!(
+            result.is_ok(),
+            "token should allow within full window, got: {:?}",
+            result.unwrap_err()
+        );
+    }
+
+    #[test]
+    fn test_datalog_full_window_denies_before() {
+        // Token with valid_after=1000 AND valid_until=5000, request at 500.
+        let mut set = CaveatSet::new();
+        set.push(WireCaveat::new(
+            CAV_APP,
+            encode_name_actions("my-app", "rw"),
+        ));
+        set.push(WireCaveat::new(
+            CAV_VALIDITY_WINDOW,
+            encode_validity_window(Some(1000), Some(5000)),
+        ));
+
+        let request = AuthRequest {
+            app_id: Some("my-app".into()),
+            action: Some("r".into()),
+            now: Some(500), // before valid_after
+            ..Default::default()
+        };
+
+        let result = verify_token_datalog_full(&set, &request);
+        assert!(
+            result.is_err(),
+            "token should deny before activation in full window"
+        );
+    }
+
+    #[test]
+    fn test_datalog_full_window_denies_after() {
+        // Token with valid_after=1000 AND valid_until=5000, request at 6000.
+        let mut set = CaveatSet::new();
+        set.push(WireCaveat::new(
+            CAV_APP,
+            encode_name_actions("my-app", "rw"),
+        ));
+        set.push(WireCaveat::new(
+            CAV_VALIDITY_WINDOW,
+            encode_validity_window(Some(1000), Some(5000)),
+        ));
+
+        let request = AuthRequest {
+            app_id: Some("my-app".into()),
+            action: Some("r".into()),
+            now: Some(6000), // after valid_until
+            ..Default::default()
+        };
+
+        let result = verify_token_datalog_full(&set, &request);
+        assert!(result.is_err(), "token should deny after expiry in full window");
+    }
+
+    #[test]
+    fn test_datalog_valid_after_unrestricted_token() {
+        // Unrestricted token (no app/service) with valid_after=5000.
+        // Request at time 3000 should DENY.
+        let mut set = CaveatSet::new();
+        set.push(WireCaveat::new(
+            CAV_VALIDITY_WINDOW,
+            encode_validity_window(Some(5000), None),
+        ));
+
+        let request = AuthRequest {
+            now: Some(3000), // before activation
+            ..Default::default()
+        };
+
+        let result = verify_token_datalog_full(&set, &request);
+        assert!(
+            result.is_err(),
+            "unrestricted token with valid_after must deny before activation"
+        );
+    }
+
+    #[test]
+    fn test_datalog_valid_after_unrestricted_token_allows() {
+        // Unrestricted token (no app/service) with valid_after=1000.
+        // Request at time 3000 should ALLOW.
+        let mut set = CaveatSet::new();
+        set.push(WireCaveat::new(
+            CAV_VALIDITY_WINDOW,
+            encode_validity_window(Some(1000), None),
+        ));
+
+        let request = AuthRequest {
+            now: Some(3000), // after activation
+            ..Default::default()
+        };
+
+        let result = verify_token_datalog_full(&set, &request);
+        assert!(
+            result.is_ok(),
+            "unrestricted token with valid_after should allow after activation, got: {:?}",
+            result.unwrap_err()
+        );
+    }
+
+    #[test]
+    fn test_datalog_valid_after_service_token() {
+        // Service token with valid_after=5000, request at 3000 should DENY.
+        let mut set = CaveatSet::new();
+        set.push(WireCaveat::new(
+            CAV_SERVICE,
+            encode_name_actions("payments", "rw"),
+        ));
+        set.push(WireCaveat::new(
+            CAV_VALIDITY_WINDOW,
+            encode_validity_window(Some(5000), None),
+        ));
+
+        let request = AuthRequest {
+            service: Some("payments".into()),
+            action: Some("r".into()),
+            now: Some(3000), // before activation
+            ..Default::default()
+        };
+
+        let result = verify_token_datalog_full(&set, &request);
+        assert!(
+            result.is_err(),
+            "service token with valid_after must deny before activation"
+        );
+    }
+
+    #[test]
+    fn test_datalog_valid_after_service_token_allows() {
+        // Service token with valid_after=1000, request at 3000 should ALLOW.
+        let mut set = CaveatSet::new();
+        set.push(WireCaveat::new(
+            CAV_SERVICE,
+            encode_name_actions("payments", "rw"),
+        ));
+        set.push(WireCaveat::new(
+            CAV_VALIDITY_WINDOW,
+            encode_validity_window(Some(1000), None),
+        ));
+
+        let request = AuthRequest {
+            service: Some("payments".into()),
+            action: Some("r".into()),
+            now: Some(3000), // after activation
+            ..Default::default()
+        };
+
+        let result = verify_token_datalog_full(&set, &request);
+        assert!(
+            result.is_ok(),
+            "service token with valid_after should allow after activation, got: {:?}",
+            result.unwrap_err()
+        );
+    }
+
+    #[test]
+    fn test_datalog_valid_after_trace_covers_not_before() {
+        // Verify that the STARK trace actually includes the valid_after check.
+        // When a token has valid_after=1000 and request_time=3000, the trace
+        // should fire a rule that includes the GreaterThanOrEqual check.
+        let mut set = CaveatSet::new();
+        set.push(WireCaveat::new(
+            CAV_APP,
+            encode_name_actions("my-app", "rw"),
+        ));
+        set.push(WireCaveat::new(
+            CAV_VALIDITY_WINDOW,
+            encode_validity_window(Some(1000), None),
+        ));
+
+        let request = AuthRequest {
+            app_id: Some("my-app".into()),
+            action: Some("r".into()),
+            now: Some(3000),
+            ..Default::default()
+        };
+
+        let result = verify_token_datalog(&set, &request);
+        assert!(result.is_ok());
+        let dr = result.unwrap();
+        match dr.trace.conclusion {
+            Conclusion::Allow { policy_rule_id } => {
+                // Must be Rule 13 (APP_ACTION_NOT_BEFORE) since token has
+                // valid_after only (no valid_until).
+                assert_eq!(
+                    policy_rule_id,
+                    rule_ids::APP_ACTION_NOT_BEFORE,
+                    "expected rule 13 (APP_ACTION_NOT_BEFORE), got rule {}",
+                    policy_rule_id
+                );
+            }
+            Conclusion::Deny => panic!("expected Allow"),
+        }
+    }
+
+    #[test]
+    fn test_datalog_full_window_trace_fires_correct_rule() {
+        // When both valid_after and valid_until are present, the full-window
+        // rule (16) should fire, not the valid_until-only rule (10).
+        let mut set = CaveatSet::new();
+        set.push(WireCaveat::new(
+            CAV_APP,
+            encode_name_actions("my-app", "rw"),
+        ));
+        set.push(WireCaveat::new(
+            CAV_VALIDITY_WINDOW,
+            encode_validity_window(Some(1000), Some(5000)),
+        ));
+
+        let request = AuthRequest {
+            app_id: Some("my-app".into()),
+            action: Some("r".into()),
+            now: Some(3000),
+            ..Default::default()
+        };
+
+        let result = verify_token_datalog(&set, &request);
+        assert!(result.is_ok());
+        let dr = result.unwrap();
+        match dr.trace.conclusion {
+            Conclusion::Allow { policy_rule_id } => {
+                assert_eq!(
+                    policy_rule_id,
+                    rule_ids::APP_ACTION_FULL_WINDOW,
+                    "expected rule 16 (APP_ACTION_FULL_WINDOW), got rule {}",
+                    policy_rule_id
+                );
+            }
+            Conclusion::Deny => panic!("expected Allow"),
+        }
     }
 }
