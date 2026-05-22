@@ -838,6 +838,32 @@ pub fn verify_with_context(
 
     transcript.absorb_hash(&proof.constraint_commitment);
 
+    // ====================================================================
+    // CRITICAL: Validate FRI round count before processing commitments.
+    // An attacker who provides fri_commitments: vec![] would skip FRI
+    // low-degree testing entirely, making the STARK meaningless.
+    // ====================================================================
+    let mut expected_fri_rounds = 0usize;
+    let mut fri_domain_size = domain_size;
+    while fri_domain_size > 4 {
+        fri_domain_size /= 2;
+        expected_fri_rounds += 1;
+    }
+    if proof.fri_commitments.len() != expected_fri_rounds {
+        return Err(format!(
+            "Expected {} FRI commitment rounds for domain size {}, got {}",
+            expected_fri_rounds, domain_size, proof.fri_commitments.len()
+        ));
+    }
+    for query in &proof.query_proofs {
+        if query.fri_layers.len() != expected_fri_rounds {
+            return Err(format!(
+                "FRI layer count mismatch in query: expected {}, got {}",
+                expected_fri_rounds, query.fri_layers.len()
+            ));
+        }
+    }
+
     let mut fri_betas = Vec::new();
     for commitment in &proof.fri_commitments {
         fri_betas.push(transcript.squeeze_field());
@@ -1195,6 +1221,34 @@ pub fn verify_with_context(
         return Err("FRI final polynomial too large".to_string());
     }
 
+    // ====================================================================
+    // HIGH: Verify FRI final polynomial is actually low-degree (degree <= 1).
+    // If the final domain has >= 3 points, interpolate and check that the
+    // values lie on a degree-1 polynomial (a line). A malicious prover could
+    // submit arbitrary high-degree evaluations that pass folding checks but
+    // violate the low-degree guarantee.
+    // ====================================================================
+    if proof.fri_final_poly.len() >= 3 {
+        let vals: Vec<BabyBear> = proof
+            .fri_final_poly
+            .iter()
+            .map(|&v| BabyBear::new_canonical(v))
+            .collect();
+        // The final FRI domain uses indices 0, 1, 2, ... as x-coordinates.
+        // Fit a line through the first two points and verify the rest lie on it.
+        // Line: f(x) = vals[0] + (vals[1] - vals[0]) * x
+        let slope = vals[1] - vals[0];
+        for (i, &val) in vals.iter().enumerate().skip(2) {
+            let expected = vals[0] + slope * BabyBear::new(i as u32);
+            if val != expected {
+                return Err(format!(
+                    "FRI final polynomial is not low-degree: value at index {} is {}, expected {} (degree > 1)",
+                    i, val.0, expected.0
+                ));
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -1498,9 +1552,19 @@ pub fn proof_from_bytes(bytes: &[u8]) -> Result<StarkProof, String> {
     // Read boundary query data (direct openings for boundary constraints)
     let (boundary_query_values, boundary_query_paths) = if pos < bytes.len() {
         let bqv_count = ru32(&mut pos, bytes)? as usize;
+        if bqv_count > max_items {
+            return Err(format!(
+                "boundary_query_values count {bqv_count} exceeds input bounds"
+            ));
+        }
         let mut bqv = Vec::with_capacity(bqv_count);
         for _ in 0..bqv_count {
             let inner_count = ru32(&mut pos, bytes)? as usize;
+            if inner_count > max_items {
+                return Err(format!(
+                    "boundary_query_values inner count {inner_count} exceeds input bounds"
+                ));
+            }
             let mut inner = Vec::with_capacity(inner_count);
             for _ in 0..inner_count {
                 inner.push(ru32(&mut pos, bytes)?);
@@ -1508,9 +1572,19 @@ pub fn proof_from_bytes(bytes: &[u8]) -> Result<StarkProof, String> {
             bqv.push(inner);
         }
         let bqp_count = ru32(&mut pos, bytes)? as usize;
+        if bqp_count > max_items {
+            return Err(format!(
+                "boundary_query_paths count {bqp_count} exceeds input bounds"
+            ));
+        }
         let mut bqp = Vec::with_capacity(bqp_count);
         for _ in 0..bqp_count {
             let path_len = ru32(&mut pos, bytes)? as usize;
+            if path_len > max_items {
+                return Err(format!(
+                    "boundary_query_paths path_len {path_len} exceeds input bounds"
+                ));
+            }
             let mut path = Vec::with_capacity(path_len);
             for _ in 0..path_len {
                 path.push(rh(&mut pos, bytes)?);
@@ -2719,5 +2793,147 @@ mod tests {
             // Also verify the identity: (n-1)^2 mod n == 1 for power-of-two n
             assert_eq!(exp_mod_n, 1, "Expected (n-1)^2 mod n = 1 for n=2^{log_n}");
         }
+    }
+
+    // ========================================================================
+    // FRI BYPASS VULNERABILITY TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_empty_fri_commitments_rejected() {
+        // CRITICAL: An attacker who provides fri_commitments: vec![] must be
+        // rejected. Previously this would skip FRI entirely.
+        let (trace, pi) = generate_merkle_trace(
+            12345,
+            &[
+                [100u32, 200, 300],
+                [400, 500, 600],
+                [700, 800, 900],
+                [1000, 1100, 1200],
+            ],
+            &[0u32, 1, 2, 3],
+        );
+        let air = MerkleStarkAir;
+        let mut proof = prove(&air, &trace, &pi);
+
+        // Attack: empty out FRI commitments to skip low-degree testing
+        proof.fri_commitments = vec![];
+        for query in &mut proof.query_proofs {
+            query.fri_layers = vec![];
+        }
+
+        let result = verify(&air, &proof, &pi);
+        assert!(
+            result.is_err(),
+            "CRITICAL: Empty FRI commitments must be REJECTED (FRI bypass attack)"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("FRI commitment rounds"),
+            "Error should mention FRI round count, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_wrong_fri_round_count_rejected() {
+        // Provide fewer FRI rounds than expected -- must be rejected.
+        let (trace, pi) = generate_merkle_trace(
+            12345,
+            &[
+                [100u32, 200, 300],
+                [400, 500, 600],
+                [700, 800, 900],
+                [1000, 1100, 1200],
+            ],
+            &[0u32, 1, 2, 3],
+        );
+        let air = MerkleStarkAir;
+        let mut proof = prove(&air, &trace, &pi);
+
+        // Remove one FRI commitment (too few rounds)
+        if !proof.fri_commitments.is_empty() {
+            proof.fri_commitments.pop();
+        }
+
+        let result = verify(&air, &proof, &pi);
+        assert!(
+            result.is_err(),
+            "Wrong FRI round count must be REJECTED"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("FRI commitment rounds") || err.contains("FRI layer count"),
+            "Error should mention FRI round mismatch, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_fri_final_poly_high_degree_rejected() {
+        // Provide 4 values that don't lie on a line -- must be rejected.
+        let (trace, pi) = generate_merkle_trace(
+            12345,
+            &[
+                [100u32, 200, 300],
+                [400, 500, 600],
+                [700, 800, 900],
+                [1000, 1100, 1200],
+            ],
+            &[0u32, 1, 2, 3],
+        );
+        let air = MerkleStarkAir;
+        let mut proof = prove(&air, &trace, &pi);
+
+        // Replace fri_final_poly with values that are NOT on a degree-1 line.
+        // Use [0, 1, 4, 9] which is x^2, clearly degree 2.
+        if proof.fri_final_poly.len() >= 3 {
+            proof.fri_final_poly = vec![0, 1, 4, 9];
+        }
+
+        let result = verify(&air, &proof, &pi);
+        assert!(
+            result.is_err(),
+            "High-degree FRI final polynomial must be REJECTED"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("not low-degree") || err.contains("FRI"),
+            "Error should mention degree violation, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_boundary_deser_allocation_bomb() {
+        // Provide bytes with huge boundary counts -- must error, not OOM.
+        // Craft a minimal valid-looking header followed by huge boundary counts.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"PYNA");
+        bytes.push(1); // version
+        bytes.extend_from_slice(&[0u8; 32]); // trace_commitment
+        bytes.extend_from_slice(&[0u8; 32]); // constraint_commitment
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // fri_commitments count = 0
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // fri_final_poly count = 0
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // public_inputs count = 0
+        bytes.extend_from_slice(&4u32.to_le_bytes()); // trace_len = 4
+        bytes.extend_from_slice(&6u32.to_le_bytes()); // num_cols = 6
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // query_proofs count = 0
+        // air_name
+        let name = b"pyana-merkle-v1";
+        bytes.extend_from_slice(&(name.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(name);
+        // nonce = None
+        bytes.push(0);
+        // NOW: inject a huge boundary_query_values count
+        bytes.extend_from_slice(&0xFFFFFFFFu32.to_le_bytes()); // ~4 billion items
+
+        let result = proof_from_bytes(&bytes);
+        assert!(
+            result.is_err(),
+            "Huge boundary count must be rejected without OOM"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("exceeds input bounds") || err.contains("unexpected end"),
+            "Error should mention bounds or EOF, got: {err}"
+        );
     }
 }
