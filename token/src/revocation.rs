@@ -758,44 +758,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_new_filter_is_empty() {
-        let filter = RevocationFilter::new();
-        assert_eq!(filter.revoked_count(), 0);
-        assert!(!filter.is_revoked("nonce-123"));
+    fn test_new_registry_is_empty() {
+        let registry = RevocationRegistry::new();
+        assert_eq!(registry.revoked_count(), 0);
+        assert!(!registry.is_revoked("nonce-123"));
     }
 
     #[test]
     fn test_revoke_and_check() {
-        let filter = RevocationFilter::new();
-        filter.revoke("nonce-abc");
-        assert!(filter.is_revoked("nonce-abc"));
-        assert!(!filter.is_revoked("nonce-xyz"));
-        assert_eq!(filter.revoked_count(), 1);
+        let mut registry = RevocationRegistry::new();
+        registry.revoke("nonce-abc");
+        assert!(registry.is_revoked("nonce-abc"));
+        assert!(!registry.is_revoked("nonce-xyz"));
+        assert_eq!(registry.revoked_count(), 1);
     }
 
     #[test]
     fn test_multiple_revocations() {
-        let filter = RevocationFilter::new();
+        let mut registry = RevocationRegistry::new();
         for i in 0..100 {
-            filter.revoke(&format!("nonce-{i}"));
+            registry.revoke(&format!("nonce-{i}"));
         }
-        assert_eq!(filter.revoked_count(), 100);
+        assert_eq!(registry.revoked_count(), 100);
 
-        // All revoked nonces should be found
         for i in 0..100 {
-            assert!(filter.is_revoked(&format!("nonce-{i}")));
+            assert!(registry.is_revoked(&format!("nonce-{i}")));
         }
     }
 
     #[test]
     fn test_serialize_deserialize_roundtrip() {
-        let filter = RevocationFilter::new();
-        filter.revoke("revoked-1");
-        filter.revoke("revoked-2");
-        filter.revoke("revoked-3");
+        let mut registry = RevocationRegistry::new();
+        registry.revoke("revoked-1");
+        registry.revoke("revoked-2");
+        registry.revoke("revoked-3");
 
-        let bytes = filter.to_bytes().expect("serialization failed");
-        let restored = RevocationFilter::from_bytes(&bytes).expect("deserialization failed");
+        let bytes = registry.to_bytes();
+        let restored = RevocationRegistry::from_bytes(&bytes).expect("deserialization failed");
 
         assert_eq!(restored.revoked_count(), 3);
         assert!(restored.is_revoked("revoked-1"));
@@ -805,43 +804,24 @@ mod tests {
     }
 
     #[test]
-    fn test_custom_capacity() {
-        let filter = RevocationFilter::with_capacity(10_000, 0.0001);
-        filter.revoke("test-nonce");
-        assert!(filter.is_revoked("test-nonce"));
+    fn test_non_membership_proof() {
+        let mut registry = RevocationRegistry::new();
+        registry.revoke("revoked-token");
+        // Non-revoked token should produce a valid proof
+        let proof = registry.prove_non_revocation("valid-token");
+        assert!(proof.is_ok(), "should produce proof for non-revoked token");
+        // Revoked token should fail proof generation
+        let proof = registry.prove_non_revocation("revoked-token");
+        assert!(proof.is_err(), "should not produce proof for revoked token");
     }
 
     #[test]
-    fn test_concurrent_access() {
-        use std::sync::Arc;
-        use std::thread;
-
-        let filter = Arc::new(RevocationFilter::new());
-        let mut handles = Vec::new();
-
-        // Spawn writers
-        for i in 0..10 {
-            let f = Arc::clone(&filter);
-            handles.push(thread::spawn(move || {
-                for j in 0..100 {
-                    f.revoke(&format!("t{i}-n{j}"));
-                }
-            }));
-        }
-
-        // Wait for all writers
-        for h in handles {
-            h.join().unwrap();
-        }
-
-        assert_eq!(filter.revoked_count(), 1000);
-
-        // Verify all nonces are found
-        for i in 0..10 {
-            for j in 0..100 {
-                assert!(filter.is_revoked(&format!("t{i}-n{j}")));
-            }
-        }
+    fn test_registry_root_changes_on_revocation() {
+        let mut registry = RevocationRegistry::new();
+        let root_before = registry.current_root();
+        registry.revoke("some-token");
+        let root_after = registry.current_root();
+        assert_ne!(root_before, root_after, "root should change after revocation");
     }
 
     // =========================================================================
