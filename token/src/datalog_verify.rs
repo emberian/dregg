@@ -149,6 +149,18 @@ pub fn verify_token_datalog(
         ));
     }
 
+    if !has_valid_until {
+        // Token has no valid_until constraint -- inject no_valid_until(1) so
+        // Rules 13/14/15 (valid_after-only) can distinguish from tokens that
+        // also have a valid_until constraint. Without this guard, a token with
+        // both valid_after and valid_until could match Rules 13/14/15 and bypass
+        // the expiry check entirely.
+        trace_facts.push(TraceFact::new(
+            symbol_from_str("no_valid_until"),
+            vec![Term::Int(1)],
+        ));
+    }
+
     // 3c. Inject temporal facts as engine-controlled facts.
     // These were extracted from the factset before filtering (step 2c) and are
     // injected here so they CANNOT be spoofed by user-supplied facts with reserved names.
@@ -267,8 +279,13 @@ fn full_policy() -> Vec<Rule> {
 
     // === Core access rules (secure, MemberOf-based) ===
 
-    // Rule 1: allow if action_allowed($app, $act), request_app($app), request_action($act)
+    // Rule 1: allow if action_allowed($app, $act), request_app($app), request_action($act),
+    //          no_time_bound(1)
     //   check: MemberOf($act, $act) [explicit equality for ZK path]
+    // SECURITY: The no_time_bound guard ensures this rule ONLY fires for tokens
+    // with NO temporal constraints. Time-bounded tokens MUST go through Rules 10-18
+    // which enforce the temporal checks. Without this guard, a malicious STARK prover
+    // could prove authorization using Rule 1, completely bypassing valid_after/valid_until.
     rules.push(Rule {
         id: rule_ids::APP_ACTION,
         head: Atom {
@@ -288,12 +305,18 @@ fn full_policy() -> Vec<Rule> {
                 predicate: symbol_from_str("request_action"),
                 terms: vec![Term::Var(1)], // $act (must unify with action_allowed)
             },
+            Atom {
+                predicate: symbol_from_str("no_time_bound"),
+                terms: vec![Term::Int(1)],
+            },
         ],
         checks: vec![Check::MemberOf(Term::Var(1), Term::Var(1))],
     });
 
-    // Rule 2: allow if svc_action_allowed($svc, $act), request_service($svc), request_action($act)
+    // Rule 2: allow if svc_action_allowed($svc, $act), request_service($svc), request_action($act),
+    //          no_time_bound(1)
     //   check: MemberOf($act, $act) [explicit equality for ZK path]
+    // SECURITY: Same temporal guard as Rule 1. See Rule 1 comment.
     rules.push(Rule {
         id: rule_ids::SERVICE_ACTION,
         head: Atom {
@@ -312,6 +335,10 @@ fn full_policy() -> Vec<Rule> {
             Atom {
                 predicate: symbol_from_str("request_action"),
                 terms: vec![Term::Var(1)], // $act (must unify with svc_action_allowed)
+            },
+            Atom {
+                predicate: symbol_from_str("no_time_bound"),
+                terms: vec![Term::Int(1)],
             },
         ],
         checks: vec![Check::MemberOf(Term::Var(1), Term::Var(1))],
@@ -341,8 +368,10 @@ fn full_policy() -> Vec<Rule> {
         checks: vec![],
     });
 
-    // Rule 4: allow if action_allowed($app, $any_act), request_app($app), no_action_required(1)
+    // Rule 4: allow if action_allowed($app, $any_act), request_app($app), no_action_required(1),
+    //          no_time_bound(1)
     // (the existence of any action_allowed fact for this app is sufficient)
+    // SECURITY: Same temporal guard as Rule 1. See Rule 1 comment.
     rules.push(Rule {
         id: rule_ids::APP_ANY_ACTION,
         head: Atom {
@@ -362,11 +391,17 @@ fn full_policy() -> Vec<Rule> {
                 predicate: symbol_from_str("no_action_required"),
                 terms: vec![Term::Int(1)],
             },
+            Atom {
+                predicate: symbol_from_str("no_time_bound"),
+                terms: vec![Term::Int(1)],
+            },
         ],
         checks: vec![],
     });
 
-    // Rule 5: allow if svc_action_allowed($svc, $any_act), request_service($svc), no_action_required(1)
+    // Rule 5: allow if svc_action_allowed($svc, $any_act), request_service($svc), no_action_required(1),
+    //          no_time_bound(1)
+    // SECURITY: Same temporal guard as Rule 1. See Rule 1 comment.
     rules.push(Rule {
         id: rule_ids::SERVICE_ANY_ACTION,
         head: Atom {
@@ -384,6 +419,10 @@ fn full_policy() -> Vec<Rule> {
             },
             Atom {
                 predicate: symbol_from_str("no_action_required"),
+                terms: vec![Term::Int(1)],
+            },
+            Atom {
+                predicate: symbol_from_str("no_time_bound"),
                 terms: vec![Term::Int(1)],
             },
         ],
@@ -510,7 +549,7 @@ fn full_policy() -> Vec<Rule> {
 
     // Rule 13: App + action with valid_after only (no valid_until)
     // allow if action_allowed($app, $act), request_app($app), request_action($act),
-    //          valid_after($nb), request_time($t)
+    //          valid_after($nb), request_time($t), no_valid_until(1)
     //   checks: MemberOf($act, $act), $t >= $nb
     rules.push(Rule {
         id: rule_ids::APP_ACTION_NOT_BEFORE,
@@ -538,6 +577,10 @@ fn full_policy() -> Vec<Rule> {
             Atom {
                 predicate: symbol_from_str("request_time"),
                 terms: vec![Term::Var(3)], // $t
+            },
+            Atom {
+                predicate: symbol_from_str("no_valid_until"),
+                terms: vec![Term::Int(1)],
             },
         ],
         checks: vec![
@@ -574,6 +617,10 @@ fn full_policy() -> Vec<Rule> {
                 predicate: symbol_from_str("request_time"),
                 terms: vec![Term::Var(3)], // $t
             },
+            Atom {
+                predicate: symbol_from_str("no_valid_until"),
+                terms: vec![Term::Int(1)],
+            },
         ],
         checks: vec![
             Check::MemberOf(Term::Var(1), Term::Var(1)),
@@ -600,6 +647,10 @@ fn full_policy() -> Vec<Rule> {
             Atom {
                 predicate: symbol_from_str("request_time"),
                 terms: vec![Term::Var(1)], // $t
+            },
+            Atom {
+                predicate: symbol_from_str("no_valid_until"),
+                terms: vec![Term::Int(1)],
             },
         ],
         checks: vec![
@@ -753,6 +804,7 @@ const RESERVED_PREDICATES: &[&str] = &[
     "valid_until",
     "valid_after",
     "no_valid_after",
+    "no_valid_until",
 ];
 
 /// Convert committed facts (FieldElement-based) to trace-format facts (Symbol-based).

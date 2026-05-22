@@ -1456,6 +1456,53 @@ mod tests {
         assert!(format!("{err}").contains("budget state required"));
     }
 
+    #[test]
+    fn test_budget_enforcement_denies_spoofed_remaining() {
+        // If caller claims remaining (600) exceeds the token's limit (500),
+        // that's obviously spoofed — must be rejected.
+        let mut set = CaveatSet::new();
+        set.push(WireCaveat::new(
+            CAV_BUDGET,
+            encode_budget("agent:daily", None, "api_calls", 500, Some("1d")),
+        ));
+
+        let mut budget_states = std::collections::HashMap::new();
+        budget_states.insert("agent:daily".into(), 600u64); // exceeds limit of 500
+
+        let request = AuthRequest {
+            now: Some(1700000000),
+            budget_states,
+            request_cost: Some(1),
+            ..Default::default()
+        };
+        let err = verify_caveats(&set, &request).unwrap_err();
+        assert!(
+            format!("{err}").contains("exceeds token limit"),
+            "expected 'exceeds token limit' error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_budget_enforcement_allows_remaining_at_limit() {
+        // remaining == limit is fine (freshly-issued token).
+        let mut set = CaveatSet::new();
+        set.push(WireCaveat::new(
+            CAV_BUDGET,
+            encode_budget("agent:daily", None, "api_calls", 500, Some("1d")),
+        ));
+
+        let mut budget_states = std::collections::HashMap::new();
+        budget_states.insert("agent:daily".into(), 500u64); // exactly at limit
+
+        let request = AuthRequest {
+            now: Some(1700000000),
+            budget_states,
+            request_cost: Some(1),
+            ..Default::default()
+        };
+        assert!(verify_caveats(&set, &request).is_ok());
+    }
+
     // --- Revocable tests ---
 
     #[test]

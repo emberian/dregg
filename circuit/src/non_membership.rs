@@ -217,6 +217,13 @@ impl NonMembershipProver {
     ///
     /// The verifier only needs the accumulator value and alpha (not the full set).
     pub fn verify_non_membership(&self, proof: &NonMembershipProof) -> Result<(), String> {
+        // Cross-set replay protection: the proof's parameters must match this prover's set.
+        if proof.accumulator != self.accumulator {
+            return Err("accumulator mismatch: proof was generated for a different set".into());
+        }
+        if proof.alpha != self.alpha {
+            return Err("alpha mismatch: proof was generated for a different set".into());
+        }
         verify_accumulator_non_membership(
             proof.accumulator,
             proof.alpha,

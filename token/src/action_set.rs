@@ -25,32 +25,32 @@ impl ActionId {
 
     /// Well-known action: read access.
     pub const READ: ActionId = ActionId(hex_const(
-        "5f7d7ca34bc0ea76de7a1b24b7b952c3e0d9de15e2bc46bc8eb94dfe6e3c8e2e",
+        "a9cc9a632386985a99c73c4c75981fb8b29caaed5bc1046b47f40b57d2d8f8c0",
     ));
 
     /// Well-known action: write/update access.
     pub const WRITE: ActionId = ActionId(hex_const(
-        "e5e03fa2e2cb42b7aa1d1a0e8b18c5f3f8e2c1d4a7b6e9d2c5f8a1b4e7d0c3f6",
+        "e3930a88b657fd5e365f4b81a4ef0dd2594a5bb39e7b4408681dbfaaf5a9ba68",
     ));
 
     /// Well-known action: delete access.
     pub const DELETE: ActionId = ActionId(hex_const(
-        "a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192",
+        "b9f665a80ba3af1628e0214e66b05d47e1476fc8519f99a8a06ec89bf0ff448b",
     ));
 
     /// Well-known action: execute access.
     pub const EXECUTE: ActionId = ActionId(hex_const(
-        "1a2b3c4d5e6f70819a2b3c4d5e6f70819a2b3c4d5e6f70819a2b3c4d5e6f7081",
+        "5381d6d395f7f4437aec78942de726af4c3f4fb6492567eedef744db0f034019",
     ));
 
     /// Well-known action: delegate permission to others.
     pub const DELEGATE: ActionId = ActionId(hex_const(
-        "b1c2d3e4f5061728394a5b6c7d8e9f0a1b2c3d4e5f6071829a0b1c2d3e4f5061",
+        "3dcf79005744d4c73e21d8c594c709f553e901751b1f1b8229b2f26f5ac5e126",
     ));
 
     /// Well-known action: administrative control.
     pub const ADMIN: ActionId = ActionId(hex_const(
-        "c3d4e5f607182930a1b2c3d4e5f607182930a1b2c3d4e5f607182930a1b2c3d4",
+        "d289b2da9b7051f36b4e396e0af3e069e78cf119a7fdcb6437b685c4875e9f9e",
     ));
 
     /// Return the raw bytes.
@@ -227,9 +227,9 @@ impl ActionSet {
 
 /// Compile-time hex string to bytes (for well-known action constants).
 ///
-/// These are placeholder values — the actual runtime constants are computed
-/// by `ActionId::from_name()` at first use. The constants here are used
-/// for documentation and as stable identifiers in serialized tokens.
+/// The hex values are the actual BLAKE3 hashes of the action name strings
+/// (e.g., `blake3::hash(b"read")`), ensuring that `ActionId::READ` is
+/// identical to `ActionId::from_name("read")` at all times.
 const fn hex_const(hex: &str) -> [u8; 32] {
     let bytes = hex.as_bytes();
     let mut result = [0u8; 32];
@@ -377,16 +377,25 @@ mod tests {
     }
 
     #[test]
-    fn test_well_known_constants_are_stable() {
-        // The well-known constants should be stable across builds.
-        // (They're placeholder values for now, but the real ones will be
-        // computed from ActionId::from_name at runtime and cached.)
+    fn test_well_known_constants_are_nonzero() {
         assert_ne!(ActionId::READ.0, [0u8; 32]);
         assert_ne!(ActionId::WRITE.0, [0u8; 32]);
         assert_ne!(ActionId::DELETE.0, [0u8; 32]);
         assert_ne!(ActionId::EXECUTE.0, [0u8; 32]);
         assert_ne!(ActionId::DELEGATE.0, [0u8; 32]);
         assert_ne!(ActionId::ADMIN.0, [0u8; 32]);
+    }
+
+    #[test]
+    fn test_well_known_constants_match_from_name() {
+        // The well-known constants MUST equal the BLAKE3 hash computed by from_name.
+        // If these fail, someone set hand-picked placeholder values instead of real hashes.
+        assert_eq!(ActionId::READ, ActionId::from_name("read"));
+        assert_eq!(ActionId::WRITE, ActionId::from_name("write"));
+        assert_eq!(ActionId::DELETE, ActionId::from_name("delete"));
+        assert_eq!(ActionId::EXECUTE, ActionId::from_name("execute"));
+        assert_eq!(ActionId::DELEGATE, ActionId::from_name("delegate"));
+        assert_eq!(ActionId::ADMIN, ActionId::from_name("admin"));
     }
 
     #[test]
