@@ -114,7 +114,10 @@ mod tests {
             depends_on: vec![],
         };
 
-        assert_eq!(compute_execution_path(&turn, &ledger), ExecutionPath::FastPath);
+        assert_eq!(
+            compute_execution_path(&turn, &ledger),
+            ExecutionPath::FastPath
+        );
     }
 
     #[test]
@@ -161,7 +164,10 @@ mod tests {
             depends_on: vec![],
         };
 
-        assert_eq!(compute_execution_path(&turn, &ledger), ExecutionPath::Consensus);
+        assert_eq!(
+            compute_execution_path(&turn, &ledger),
+            ExecutionPath::Consensus
+        );
     }
 
     #[test]
@@ -181,6 +187,9 @@ mod tests {
             depends_on: vec![[0xaa; 32]],
         };
 
-        assert_eq!(compute_execution_path(&turn, &ledger), ExecutionPath::Consensus);
+        assert_eq!(
+            compute_execution_path(&turn, &ledger),
+            ExecutionPath::Consensus
+        );
     }
 }

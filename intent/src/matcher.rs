@@ -345,7 +345,8 @@ impl CustomConstraintEvaluators {
         predicate: impl Into<String>,
         evaluator: impl Fn(&str) -> bool + Send + Sync + 'static,
     ) {
-        self.evaluators.insert(predicate.into(), Box::new(evaluator));
+        self.evaluators
+            .insert(predicate.into(), Box::new(evaluator));
     }
 
     /// Evaluate a custom constraint. Returns `false` if no evaluator is registered.

@@ -70,9 +70,6 @@ sp1-sdk = { version = "6.2", optional = true }
 [features]
 default = ["mock", "recursion", "mina"]
 mock = []
-# SOUNDNESS WARNING: The QC AIR does NOT algebraically verify signatures or Merkle proofs.
-# Enable this feature ONLY for testing or non-adversarial contexts.
-unsafe_qc_stark = []
 plonky3 = [
     "p3-field", "p3-baby-bear", "p3-air", "p3-matrix", "p3-uni-stark",
     "p3-challenger", "p3-commit", "p3-fri", "p3-symmetric", "p3-dft",

@@ -218,7 +218,10 @@ fn test_fast_path_executes_immediately() {
 
     // Verify the turn routes to fast path.
     let turn = make_self_write_turn(alice_id);
-    assert_eq!(compute_execution_path(&turn, &ledger), ExecutionPath::FastPath);
+    assert_eq!(
+        compute_execution_path(&turn, &ledger),
+        ExecutionPath::FastPath
+    );
 
     let turn_hash = turn.hash();
 
@@ -241,8 +244,8 @@ fn test_fast_path_executes_immediately() {
     }
 
     // Assemble certificate (threshold=2 for 2f+1 with f=0 simplified).
-    let cert =
-        assemble_certificate(turn, turn_hash, signs, 2).expect("certificate assembly should succeed");
+    let cert = assemble_certificate(turn, turn_hash, signs, 2)
+        .expect("certificate assembly should succeed");
 
     // Execute the certified turn — this is the "immediate" execution (no consensus round).
     let executor = TurnExecutor::new(ComputronCosts::zero());
@@ -259,7 +262,10 @@ fn test_fast_path_executes_immediately() {
 
     // Verify the ledger was updated (nonce bumped).
     let cell = ledger.get(&alice_id).expect("alice cell should exist");
-    assert_eq!(cell.state.nonce, 1, "nonce should be bumped after execution");
+    assert_eq!(
+        cell.state.nonce, 1,
+        "nonce should be bumped after execution"
+    );
     // Verify the field was set.
     assert_eq!(cell.state.fields[0], [42u8; 32], "field should be updated");
 }
@@ -341,9 +347,15 @@ fn test_both_paths_deterministic() {
     let turn_hash = turn_fast.hash();
     let mut table = CellLockTable::with_defaults();
     let validator_key = [0xAA; 32];
-    let sign =
-        process_fast_path_lock(&mut table, &turn_fast, turn_hash, 100, &ledger_fast, &validator_key)
-            .unwrap();
+    let sign = process_fast_path_lock(
+        &mut table,
+        &turn_fast,
+        turn_hash,
+        100,
+        &ledger_fast,
+        &validator_key,
+    )
+    .unwrap();
     let cert = assemble_certificate(turn_fast, turn_hash, vec![sign], 1).unwrap();
     let executor = TurnExecutor::new(ComputronCosts::zero());
     let result_fast = execute_certified_turn(&cert, &executor, &mut ledger_fast, &mut table);

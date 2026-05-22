@@ -568,10 +568,10 @@ fn main() {
     let demo_delegation = DelegatedRef::new(
         controller_id,
         CellId::from_bytes([0u8; 32]), // placeholder child
-        vec![], // snapshot content doesn't matter for staleness check
+        vec![],                        // snapshot content doesn't matter for staleness check
         0,
-        2000, // refreshed_at = 2000 (from step 4)
-        60,   // max_staleness = 60s
+        2000,      // refreshed_at = 2000 (from step 4)
+        60,        // max_staleness = 60s
         [0u8; 32], // clist_commitment
         [0u8; 64], // parent_signature
     );

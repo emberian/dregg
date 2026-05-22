@@ -111,12 +111,10 @@ pub fn check_fill_amount(
 
     // SECURITY: min must not exceed max
     if constraints.min_fill_amount > constraints.max_fill_amount {
-        return Err(PartialFillError::InvalidConstraints(
-            format!(
-                "min_fill_amount ({}) must be <= max_fill_amount ({})",
-                constraints.min_fill_amount, constraints.max_fill_amount
-            ),
-        ));
+        return Err(PartialFillError::InvalidConstraints(format!(
+            "min_fill_amount ({}) must be <= max_fill_amount ({})",
+            constraints.min_fill_amount, constraints.max_fill_amount
+        )));
     }
 
     // Fill-or-kill: must satisfy the full max amount

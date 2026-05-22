@@ -257,9 +257,7 @@ fn evaluate_constraint(
                     // The only legitimate case for None is cell initialization (nonce == 0),
                     // where immutable fields are being set for the first time.
                     if new_state.nonce != 0 {
-                        return Err(ProgramError::ImmutableCheckRequiresOldState {
-                            index: *index,
-                        });
+                        return Err(ProgramError::ImmutableCheckRequiresOldState { index: *index });
                     }
                 }
             }
@@ -487,10 +485,16 @@ mod tests {
         state.fields[3] = field_from_u64(77);
         state.nonce = 5; // Not a fresh cell — has been mutated before
         let result = program.evaluate(&state, None);
-        assert!(result.is_err(), "immutable constraint must fail-closed when old_state is None and nonce > 0");
+        assert!(
+            result.is_err(),
+            "immutable constraint must fail-closed when old_state is None and nonce > 0"
+        );
         let err = result.unwrap_err();
         assert!(
-            matches!(err, ProgramError::ImmutableCheckRequiresOldState { index: 3 }),
+            matches!(
+                err,
+                ProgramError::ImmutableCheckRequiresOldState { index: 3 }
+            ),
             "expected ImmutableCheckRequiresOldState, got: {:?}",
             err
         );

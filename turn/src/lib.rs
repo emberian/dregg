@@ -71,7 +71,6 @@ pub use conditional::{
     refund_conditional_deposit, resolve_condition, validate_conditional_submission,
 };
 pub use conflict::{ConflictSet, build_conflict_set, extract_access_sets};
-pub use execution_path::{ExecutionPath, compute_execution_path};
 pub use encrypted::{
     ConflictBucket, EncryptedTurn, EncryptedTurnError, TurnOrdering, TurnValidityProof,
     TurnValidityPublicInputs, order_encrypted_turns,
@@ -82,6 +81,7 @@ pub use eventual::{
     CycleError, EventualRef, OutputRef, Pipeline, PipelineBuilder, PipelineError, PipelineResult,
     Target, TurnBatch, TurnOutput,
 };
+pub use execution_path::{ExecutionPath, compute_execution_path};
 pub use executor::{
     ComputronCosts, ObligationRecord, ProofVerifier, ResolutionTable, TurnExecutor,
     execute_pipeline, execute_pipeline_result, resolve_eventual_ref,

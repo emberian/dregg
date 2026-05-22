@@ -10,9 +10,7 @@ use std::sync::Mutex;
 
 use pyana_cell::{
     CapabilityRef, CellId, DelegatedRef, Ledger, NoteCommitment, Nullifier, Permissions,
-    VerificationKey,
-    note_bridge::BridgedNullifierSet,
-    state::FieldElement,
+    VerificationKey, note_bridge::BridgedNullifierSet, state::FieldElement,
 };
 
 use crate::action::Symbol;

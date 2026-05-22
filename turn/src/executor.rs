@@ -510,7 +510,12 @@ impl TurnExecutor {
                 // Rollback: replay journal in reverse to restore ledger.
                 // Also removes any obligation/escrow/nullifier insertions from
                 // the executor's in-memory maps (prevents phantom record attacks).
-                journal.rollback(ledger, &self.obligations, &self.escrows, &self.bridged_nullifiers);
+                journal.rollback(
+                    ledger,
+                    &self.obligations,
+                    &self.escrows,
+                    &self.bridged_nullifiers,
+                );
                 // Fast unlock: refund the budget debit on turn failure.
                 if let (Some(gate_cell), Some((digest, fee))) =
                     (&self.budget_gate, &budget_debit_digest)
@@ -526,7 +531,12 @@ impl TurnExecutor {
 
         // Check total cost against fee.
         if computrons_used > turn.fee {
-            journal.rollback(ledger, &self.obligations, &self.escrows, &self.bridged_nullifiers);
+            journal.rollback(
+                ledger,
+                &self.obligations,
+                &self.escrows,
+                &self.bridged_nullifiers,
+            );
             if let (Some(gate_cell), Some((digest, fee))) =
                 (&self.budget_gate, &budget_debit_digest)
             {
@@ -545,7 +555,12 @@ impl TurnExecutor {
         // equal sum of created values. This is checked independently of the cell
         // balance excess (notes are a separate value domain).
         if let Err(error) = self.check_note_conservation(turn) {
-            journal.rollback(ledger, &self.obligations, &self.escrows, &self.bridged_nullifiers);
+            journal.rollback(
+                ledger,
+                &self.obligations,
+                &self.escrows,
+                &self.bridged_nullifiers,
+            );
             if let (Some(gate_cell), Some((digest, fee))) =
                 (&self.budget_gate, &budget_debit_digest)
             {
@@ -563,7 +578,12 @@ impl TurnExecutor {
 
         // Check excess conservation law: must be zero at turn end.
         if excess != 0 {
-            journal.rollback(ledger, &self.obligations, &self.escrows, &self.bridged_nullifiers);
+            journal.rollback(
+                ledger,
+                &self.obligations,
+                &self.escrows,
+                &self.bridged_nullifiers,
+            );
             if let (Some(gate_cell), Some((digest, fee))) =
                 (&self.budget_gate, &budget_debit_digest)
             {
@@ -810,8 +830,12 @@ impl TurnExecutor {
                             let child_cell = ledger.get_mut(parent_cell).unwrap();
                             if child_cell.delegation.is_none() {
                                 journal.record_set_delegation(*parent_cell, None);
-                                let clist_bytes = postcard::to_allocvec(&snapshot).unwrap_or_default();
-                                let clist_commitment = pyana_cell::DelegatedRef::compute_clist_commitment(&clist_bytes);
+                                let clist_bytes =
+                                    postcard::to_allocvec(&snapshot).unwrap_or_default();
+                                let clist_commitment =
+                                    pyana_cell::DelegatedRef::compute_clist_commitment(
+                                        &clist_bytes,
+                                    );
                                 child_cell.delegation = Some(pyana_cell::DelegatedRef::new(
                                     ancestor_id,
                                     *parent_cell,
@@ -3195,7 +3219,8 @@ impl TurnExecutor {
                 child_cell.id = child_id;
                 child_cell.delegate = Some(*action_target);
                 let clist_bytes = postcard::to_allocvec(&snapshot).unwrap_or_default();
-                let clist_commitment = pyana_cell::DelegatedRef::compute_clist_commitment(&clist_bytes);
+                let clist_commitment =
+                    pyana_cell::DelegatedRef::compute_clist_commitment(&clist_bytes);
                 child_cell.delegation = Some(pyana_cell::DelegatedRef::new(
                     *action_target,
                     child_id,
@@ -3247,7 +3272,8 @@ impl TurnExecutor {
                 let child_mut = ledger.get_mut(action_target).unwrap();
                 journal.record_set_delegation(*action_target, old_delegation);
                 let clist_bytes = postcard::to_allocvec(&new_snapshot).unwrap_or_default();
-                let clist_commitment = pyana_cell::DelegatedRef::compute_clist_commitment(&clist_bytes);
+                let clist_commitment =
+                    pyana_cell::DelegatedRef::compute_clist_commitment(&clist_bytes);
                 child_mut.delegation = Some(pyana_cell::DelegatedRef::new(
                     parent_id,
                     *action_target,

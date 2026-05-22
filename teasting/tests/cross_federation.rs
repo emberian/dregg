@@ -14,13 +14,13 @@ use pyana_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
 use pyana_teasting::agent::SimAgent;
 use pyana_teasting::federation::{drive_to_finalization, dual_federation};
 use pyana_teasting::harness::SimulationHarness;
+use pyana_token::RevocationRegistry;
 use pyana_turn::{
     CallForest, CallTree, ComputronCosts, ConditionProof, ConditionalResult, ConditionalTurn,
     DEFAULT_MAX_ROOT_AGE, Effect, ProofCondition, Turn, TurnExecutor, TurnResult,
     action::{Action, Authorization, DelegationMode},
     compute_conditional_deposit, resolve_condition, validate_conditional_submission,
 };
-use pyana_token::RevocationRegistry;
 use pyana_types::AttestedRoot;
 
 fn open_permissions() -> Permissions {
@@ -505,9 +505,7 @@ fn test_cross_federation_revocation_propagation() {
     );
 
     // Run consensus to finalize the new revocation.
-    harness
-        .federation_mut(0)
-        .submit_revocation(0, target_token);
+    harness.federation_mut(0).submit_revocation(0, target_token);
     let rounds = drive_to_finalization(&mut harness, 0, 5);
     assert!(rounds.is_some(), "Fed A should finalize the new revocation");
 

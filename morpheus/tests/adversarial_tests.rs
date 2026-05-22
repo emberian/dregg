@@ -659,6 +659,9 @@ fn test_qc_for_future_view_no_crash() {
 fn test_leader_failure_full_view_change_recovery() {
     let mut harness = SimulationHarness::create_test_setup(3);
 
+    // Use larger time steps so we cross the 12*delta timeout faster (fewer BLS ops).
+    harness.time_step = 500;
+
     // Leader of view 0 is Identity(1) (since leader = view % n + 1 = 0%3+1 = 1).
     // Node 1 is Byzantine: present but never produces any blocks (no transactions).
     harness
@@ -668,15 +671,14 @@ fn test_leader_failure_full_view_change_recovery() {
     // Nodes 2 and 3 produce transactions
     harness
         .tx_gen_policy
-        .insert(Identity(2), TxGenPolicy::EveryNSteps { n: 2 });
+        .insert(Identity(2), TxGenPolicy::EveryNSteps { n: 1 });
     harness
         .tx_gen_policy
-        .insert(Identity(3), TxGenPolicy::EveryNSteps { n: 2 });
+        .insert(Identity(3), TxGenPolicy::EveryNSteps { n: 1 });
 
-    // Run enough steps to trigger the 12*delta timeout and view change.
-    // delta=100 (time_step=100), 12*delta=1200. We need ~13 steps to cross the
-    // timeout, plus a few more for message exchange and view advancement.
-    harness.run(20);
+    // 12*delta = 1200, time_step = 500, so 3 steps crosses timeout.
+    // Run 6 steps for timeout + message exchange + view advancement.
+    harness.run(6);
 
     // All nodes should have advanced past view 0 via EndViewCert
     let max_view = harness.processes.values().map(|p| p.view_i).max().unwrap();

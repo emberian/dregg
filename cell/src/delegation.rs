@@ -144,11 +144,8 @@ impl DelegatedRef {
     pub fn verify_parent_signature(&self, parent_pubkey: &[u8; 32]) -> bool {
         use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
-        let message = Self::signing_message(
-            &self.clist_commitment,
-            self.delegation_epoch,
-            &self.child,
-        );
+        let message =
+            Self::signing_message(&self.clist_commitment, self.delegation_epoch, &self.child);
         let signature = Signature::from_bytes(&self.parent_signature);
 
         if let Ok(vk) = VerifyingKey::from_bytes(parent_pubkey) {

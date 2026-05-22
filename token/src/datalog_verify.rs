@@ -2712,7 +2712,10 @@ mod tests {
         };
 
         let result = verify_token_datalog_full(&set, &request);
-        assert!(result.is_err(), "token should deny after expiry in full window");
+        assert!(
+            result.is_err(),
+            "token should deny after expiry in full window"
+        );
     }
 
     #[test]

@@ -76,7 +76,10 @@ impl std::fmt::Display for ValidationError {
                 write!(f, "too many compound sub-specs: {count} exceeds max {max}")
             }
             Self::ZeroBudget => {
-                write!(f, "min_budget must be > 0 (use None to omit budget constraint)")
+                write!(
+                    f,
+                    "min_budget must be > 0 (use None to omit budget constraint)"
+                )
             }
             Self::InvalidFillConstraints(msg) => {
                 write!(f, "invalid fill constraints: {msg}")
@@ -170,12 +173,10 @@ pub fn validate_intent(intent: &Intent) -> Result<(), ValidationError> {
             ));
         }
         if fc.min_fill_amount > fc.max_fill_amount {
-            return Err(ValidationError::InvalidFillConstraints(
-                format!(
-                    "min_fill_amount ({}) must be <= max_fill_amount ({})",
-                    fc.min_fill_amount, fc.max_fill_amount
-                ),
-            ));
+            return Err(ValidationError::InvalidFillConstraints(format!(
+                "min_fill_amount ({}) must be <= max_fill_amount ({})",
+                fc.min_fill_amount, fc.max_fill_amount
+            )));
         }
     }
 

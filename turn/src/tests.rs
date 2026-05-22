@@ -5350,8 +5350,8 @@ fn test_is_stale_various_timestamps() {
         child,
         vec![],
         0,
-        1000, // refreshed_at
-        300,  // max_staleness = 300s
+        1000,      // refreshed_at
+        300,       // max_staleness = 300s
         [0u8; 32], // clist_commitment (empty c-list)
         [0u8; 64], // parent_signature (not verified in this test)
     );
@@ -5366,16 +5366,7 @@ fn test_is_stale_various_timestamps() {
     assert!(delegation.is_stale(2000));
 
     // max_staleness = 0 means always stale.
-    let always_stale = DelegatedRef::new(
-        source,
-        child,
-        vec![],
-        0,
-        1000,
-        0,
-        [0u8; 32],
-        [0u8; 64],
-    );
+    let always_stale = DelegatedRef::new(source, child, vec![], 0, 1000, 0, [0u8; 32], [0u8; 64]);
     assert!(always_stale.is_stale(1000));
     assert!(always_stale.is_stale(0));
 }
@@ -6187,7 +6178,10 @@ fn test_adversarial_obligation_rollback_on_turn_failure() {
     let turn = builder.fee(100).build();
 
     let result = executor.execute(&turn, &mut ledger);
-    assert!(result.is_rejected(), "Turn should be rejected due to invalid field index");
+    assert!(
+        result.is_rejected(),
+        "Turn should be rejected due to invalid field index"
+    );
 
     // Verify the obligation was NOT left behind in the executor's map.
     let obligations = executor.obligations.lock().unwrap();
@@ -6240,7 +6234,10 @@ fn test_adversarial_escrow_rollback_on_turn_failure() {
     let turn = builder.fee(100).build();
 
     let result = executor.execute(&turn, &mut ledger);
-    assert!(result.is_rejected(), "Turn should be rejected due to invalid field index");
+    assert!(
+        result.is_rejected(),
+        "Turn should be rejected due to invalid field index"
+    );
 
     // Verify the escrow was NOT left behind.
     let escrows = executor.escrows.lock().unwrap();
@@ -6429,7 +6426,10 @@ fn test_create_escrow_correct_cell_matches_target() {
     }
     let turn = builder.fee(100).build();
     let result = executor.execute(&turn, &mut ledger);
-    assert!(result.is_committed(), "CreateEscrow with correct cell should succeed");
+    assert!(
+        result.is_committed(),
+        "CreateEscrow with correct cell should succeed"
+    );
 
     // Verify balance was deducted.
     let sender = ledger.get(&sender_id).unwrap();

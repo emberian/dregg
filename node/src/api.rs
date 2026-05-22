@@ -1941,9 +1941,7 @@ async fn post_atomic_vote(
             return Ok(Json(AtomicVoteResponse {
                 accepted: false,
                 decision: None,
-                error: Some(
-                    "vote signature does not match claimed voter identity".to_string(),
-                ),
+                error: Some("vote signature does not match claimed voter identity".to_string()),
             }));
         }
     }

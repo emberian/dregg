@@ -82,7 +82,11 @@ impl std::fmt::Display for FillConstraintsError {
         match self {
             Self::ZeroMinFillAmount => write!(f, "min_fill_amount must be > 0"),
             Self::MinExceedsMax { min, max } => {
-                write!(f, "min_fill_amount ({}) must be <= max_fill_amount ({})", min, max)
+                write!(
+                    f,
+                    "min_fill_amount ({}) must be <= max_fill_amount ({})",
+                    min, max
+                )
             }
         }
     }

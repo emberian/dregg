@@ -821,7 +821,10 @@ mod tests {
         let root_before = registry.current_root();
         registry.revoke("some-token");
         let root_after = registry.current_root();
-        assert_ne!(root_before, root_after, "root should change after revocation");
+        assert_ne!(
+            root_before, root_after,
+            "root should change after revocation"
+        );
     }
 
     // =========================================================================

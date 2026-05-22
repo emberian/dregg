@@ -404,7 +404,7 @@ mod tests {
                 resource_pattern: None,
                 compound: None,
                 predicate_requirements: vec![],
-            strict_resource_matching: false,
+                strict_resource_matching: false,
             };
             let mut creator_bytes = [0u8; 32];
             creator_bytes[0] = tag_idx as u8;

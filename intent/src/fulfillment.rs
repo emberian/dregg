@@ -261,12 +261,13 @@ pub fn verify_fulfillment_with_key(
             }
 
             // Deserialize the raw macaroon bytes
-            let mac = pyana_token::pyana_macaroon::Macaroon::deserialize(token_data).map_err(|e| {
-                FulfillmentError::ProofVerificationFailed(format!(
-                    "failed to deserialize macaroon token: {}",
-                    e
-                ))
-            })?;
+            let mac =
+                pyana_token::pyana_macaroon::Macaroon::deserialize(token_data).map_err(|e| {
+                    FulfillmentError::ProofVerificationFailed(format!(
+                        "failed to deserialize macaroon token: {}",
+                        e
+                    ))
+                })?;
 
             // Verify the HMAC chain with the root key
             let key = root_key.ok_or_else(|| {
@@ -725,11 +726,7 @@ pub fn compute_intent_request_hash(intent: &Intent) -> BabyBear {
         .unwrap_or("*");
 
     // Extract the resource pattern. If not specified, use "*".
-    let resource = intent
-        .matcher
-        .resource_pattern
-        .as_deref()
-        .unwrap_or("*");
+    let resource = intent.matcher.resource_pattern.as_deref().unwrap_or("*");
 
     compute_action_binding_narrow(action, resource)
 }
@@ -891,7 +888,13 @@ pub fn execute_fulfillment_flow_with_key(
 ) -> Result<TurnReceipt, FulfillmentError> {
     // Step 1: Verify the fulfillment.
     let state_root = fulfillment.state_root;
-    verify_fulfillment_with_predicates_and_key(fulfillment, intent, state_root, current_block, root_key)?;
+    verify_fulfillment_with_predicates_and_key(
+        fulfillment,
+        intent,
+        state_root,
+        current_block,
+        root_key,
+    )?;
 
     // Step 2: Determine payment amount from the intent's min_budget.
     let payment_amount = intent.matcher.min_budget.unwrap_or(0);
@@ -948,9 +951,9 @@ pub fn execute_fulfillment_flow_with_key(
 mod tests {
     use super::*;
     use crate::{ActionPattern, CommitmentId, Intent, IntentKind, MatchSpec, VerificationMode};
-    use pyana_circuit::derivation_air::{BodyAtomPattern, CircuitRule, DerivationWitness};
     use pyana_circuit::compute_action_binding_narrow;
-use pyana_circuit::multi_step_air::{ALLOW_PREDICATE, build_multi_step_witness};
+    use pyana_circuit::derivation_air::{BodyAtomPattern, CircuitRule, DerivationWitness};
+    use pyana_circuit::multi_step_air::{ALLOW_PREDICATE, build_multi_step_witness};
     use pyana_circuit::poseidon2::hash_fact;
 
     fn source_token() -> HeldCapability {
@@ -1418,7 +1421,10 @@ use pyana_circuit::multi_step_air::{ALLOW_PREDICATE, build_multi_step_witness};
 
         let key = test_root_key();
         let result = verify_fulfillment_with_key(&fulfillment, &intent, BabyBear::ZERO, Some(&key));
-        assert!(result.is_err(), "arbitrary bytes must not verify as valid macaroon");
+        assert!(
+            result.is_err(),
+            "arbitrary bytes must not verify as valid macaroon"
+        );
         match result.unwrap_err() {
             FulfillmentError::ProofVerificationFailed(msg) => {
                 assert!(msg.contains("deserialize") || msg.contains("HMAC"));
@@ -1476,7 +1482,14 @@ use pyana_circuit::multi_step_air::{ALLOW_PREDICATE, build_multi_step_witness};
             root_key: Some(key),
             ..Default::default()
         };
-        let fulfillment = fulfill(&intent, &matched, &token, CommitmentId([0xBB; 32]), &options).unwrap();
+        let fulfillment = fulfill(
+            &intent,
+            &matched,
+            &token,
+            CommitmentId([0xBB; 32]),
+            &options,
+        )
+        .unwrap();
 
         let result = verify_fulfillment_with_key(&fulfillment, &intent, BabyBear::ZERO, Some(&key));
         assert!(result.is_err());
@@ -2113,8 +2126,8 @@ use pyana_circuit::multi_step_air::{ALLOW_PREDICATE, build_multi_step_witness};
 
     #[test]
     fn test_execute_fulfillment_flow_success() {
-        use pyana_cell::{AuthRequired, Cell, Ledger, Permissions};
         use crate::matcher::{HeldCapability, Sensitivity};
+        use pyana_cell::{AuthRequired, Cell, Ledger, Permissions};
 
         let spec = MatchSpec {
             actions: vec![ActionPattern {
@@ -2144,7 +2157,14 @@ use pyana_circuit::multi_step_air::{ALLOW_PREDICATE, build_multi_step_witness};
             root_key: Some(key),
             ..Default::default()
         };
-        let base = fulfill(&intent, &matched, &token, CommitmentId([0xBB; 32]), &options).unwrap();
+        let base = fulfill(
+            &intent,
+            &matched,
+            &token,
+            CommitmentId([0xBB; 32]),
+            &options,
+        )
+        .unwrap();
 
         let fulfillment = FulfillmentWithPredicates {
             base,
@@ -2244,7 +2264,14 @@ use pyana_circuit::multi_step_air::{ALLOW_PREDICATE, build_multi_step_witness};
             root_key: Some(key),
             ..Default::default()
         };
-        let base = fulfill(&intent, &matched, &token, CommitmentId([0xBB; 32]), &options).unwrap();
+        let base = fulfill(
+            &intent,
+            &matched,
+            &token,
+            CommitmentId([0xBB; 32]),
+            &options,
+        )
+        .unwrap();
 
         let fulfillment = FulfillmentWithPredicates {
             base,
@@ -2319,7 +2346,14 @@ use pyana_circuit::multi_step_air::{ALLOW_PREDICATE, build_multi_step_witness};
             root_key: Some(key),
             ..Default::default()
         };
-        let base = fulfill(&intent, &matched, &token, CommitmentId([0xBB; 32]), &options).unwrap();
+        let base = fulfill(
+            &intent,
+            &matched,
+            &token,
+            CommitmentId([0xBB; 32]),
+            &options,
+        )
+        .unwrap();
 
         // Missing predicate proof: this should cause verification to fail.
         let fulfillment = FulfillmentWithPredicates {
