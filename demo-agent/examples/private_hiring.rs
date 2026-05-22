@@ -185,6 +185,7 @@ fn main() {
         resource_pattern: Some("hiring/senior-rust-dev".into()),
         compound: None,
         predicate_requirements: requirements.clone(),
+        strict_resource_matching: false,
     };
 
     let intent = Intent::new(

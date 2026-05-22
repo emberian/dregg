@@ -62,6 +62,8 @@ fn mock_stark_verify(
     _nullifier: &[u8; 32],
     _merkle_root: &[u8; 32],
     _dest_federation: &[u8; 32],
+    _value: u64,
+    _asset_type: u64,
     proof_bytes: &[u8],
 ) -> Result<(), String> {
     // In a real system, this would call verify_note_spend from pyana-circuit.

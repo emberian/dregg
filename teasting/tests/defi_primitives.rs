@@ -113,7 +113,7 @@ fn make_test_intent_for_commit_reveal() -> Intent {
         resource_pattern: None,
         compound: None,
         predicate_requirements: vec![],
-        strict_resource_machine: false,
+        strict_resource_matching: false,
     };
     Intent::new(IntentKind::Need, spec, CommitmentId([0xAA; 32]), 9999, None)
 }
