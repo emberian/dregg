@@ -111,6 +111,8 @@ pub mod temporal_absence_air;
 
 #[cfg(feature = "mina")]
 pub mod poseidon_stark;
+#[cfg(feature = "mina")]
+pub mod poseidon_stark_verifier_circuit;
 pub mod temporal_predicate_air;
 pub mod turn_validity_air;
 

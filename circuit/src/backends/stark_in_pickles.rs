@@ -1,5 +1,16 @@
 //! STARK-in-Pickles wrapper: verify a BabyBear STARK proof inside a Pickles recursive SNARK.
 //!
+//! # Status: SCAFFOLD
+//!
+//! This module defines the architecture for wrapping BabyBear STARKs inside
+//! Pickles proofs but the constraint implementation is incomplete:
+//! - Range checks are placeholders (line ~362)
+//! - Poseidon2 emulation uses filler gates (line ~462)
+//! - The wrapper delegates to Pickles step binding, not actual STARK verification
+//!
+//! For the production STARK-in-Kimchi path, see `poseidon_stark.rs` which uses
+//! native Poseidon commitments for efficient (~29K gate) Kimchi wrapping.
+//!
 //! # Architecture
 //!
 //! ```text
@@ -637,6 +648,7 @@ fn build_stark_verifier_circuit(
 ///
 /// # Returns
 /// A `PicklesWrappedStark` containing the constant-size Pickles proof.
+#[deprecated(note = "scaffold only — uses Pickles step binding, not actual in-circuit STARK verification. Use poseidon_stark for production.")]
 pub fn wrap_stark_in_pickles(
     stark_proof: &StarkProof,
     air: &dyn StarkAir,
@@ -738,6 +750,7 @@ pub fn wrap_stark_in_pickles(
 ///
 /// # Returns
 /// `true` if the proof is valid.
+#[deprecated(note = "scaffold only — verifies Pickles binding, not actual STARK verification in-circuit. Use poseidon_stark for production.")]
 pub fn verify_pickles_wrapped_stark(
     wrapped: &PicklesWrappedStark,
     expected_public_inputs: Option<&[BabyBear]>,
@@ -792,6 +805,7 @@ pub fn verify_pickles_wrapped_stark(
 ///
 /// # Returns
 /// A new `PicklesWrappedStark` proving both are valid.
+#[deprecated(note = "scaffold only — composes Pickles bindings, not actual STARK verifications. Use poseidon_stark for production.")]
 pub fn compose_pickles_proofs(
     proof_a: &PicklesWrappedStark,
     proof_b: &PicklesWrappedStark,
@@ -879,6 +893,7 @@ pub fn compose_pickles_proofs(
 ///
 /// For checkpoint proofs where the STARK is also verified natively by validators,
 /// reduced query count in the wrapping circuit is acceptable.
+#[deprecated(note = "scaffold only — uses Pickles step binding, not actual in-circuit STARK verification. Use poseidon_stark for production.")]
 pub fn wrap_stark_fast(
     stark_proof: &StarkProof,
     air: &dyn StarkAir,
