@@ -1168,6 +1168,7 @@ impl BridgePresentationBuilder {
             presentation_randomness,
             composition_commitment: BabyBear::ZERO,
             verifier_nonce: BabyBear::ZERO,
+            verifier_block_height: BabyBear::ZERO,
         };
 
         Ok(witness)
@@ -1228,16 +1229,20 @@ impl BridgePresentationBuilder {
         let blinding_factor = generate_blinding_factor();
 
         // Generate fresh presentation randomness for the presentation tag.
-        // This ensures the tag `Poseidon2(final_root, randomness)` is different each show.
+        // This ensures the tag `Poseidon2(final_root, randomness, nonce)` is different each show.
         let presentation_randomness = generate_presentation_randomness();
 
         // Compute the presentation tag (same formula as the circuit uses).
+        // The verifier_nonce is included to cryptographically bind the proof to a
+        // specific verifier challenge, preventing replay attacks.
+        let verifier_nonce = BabyBear::ZERO; // TODO: accept from verifier challenge
         let final_root = if let Some(last_fold) = fold_chain.last() {
             last_fold.new_root
         } else {
             derivation_state_root
         };
-        let presentation_tag = poseidon2::hash_2_to_1(final_root, presentation_randomness);
+        let presentation_tag =
+            poseidon2::hash_many(&[final_root, presentation_randomness, verifier_nonce]);
 
         // Compute the fold chain commitment: Poseidon2 over all fold step roots.
         // This summarizes the entire fold chain into a single field element.
@@ -1275,7 +1280,8 @@ impl BridgePresentationBuilder {
             blinding_factor,
             presentation_randomness,
             composition_commitment,
-            verifier_nonce: BabyBear::ZERO,
+            verifier_nonce,
+            verifier_block_height: BabyBear::ZERO,
         };
 
         Ok(witness)
@@ -1362,11 +1368,35 @@ impl BridgePresentationBuilder {
                 })
                 .collect();
 
+            // Compute the cryptographic commitment to added checks.
+            // This binds the actual check content to the fold proof, preventing
+            // a prover from claiming checks they didn't actually add.
+            let added_checks_commitment = if delta.added_checks.is_empty() {
+                BabyBear::ZERO
+            } else {
+                use pyana_circuit::poseidon2::hash_many;
+                let check_hashes: Vec<BabyBear> = delta
+                    .added_checks
+                    .iter()
+                    .map(|check| {
+                        let pred_bb = bytes_to_babybear(&check.predicate.0);
+                        let terms = [
+                            bytes_to_babybear(&check.terms[0].0),
+                            bytes_to_babybear(&check.terms[1].0),
+                            bytes_to_babybear(&check.terms[2].0),
+                        ];
+                        hash_fact(pred_bb, &terms)
+                    })
+                    .collect();
+                hash_many(&check_hashes)
+            };
+
             witnesses.push(FoldWitness {
                 old_root,
                 new_root,
                 removed_facts,
                 num_added_checks: delta.added_checks.len(),
+                added_checks_commitment,
             });
         }
 
@@ -2052,10 +2082,10 @@ pub fn verify_presentation_full(
 
     // 3. Request predicate authorization: verify the proof actually authorizes
     //    the action being requested, not just any action.
+    //    The action binding is a 4-element commitment with 124-bit security.
     if let Some(action) = expected_action {
-        let action_sym = pyana_trace::symbol_from_str(action);
-        let expected_pred = bytes_to_babybear(&action_sym);
-        if proof.circuit_proof.public_inputs.request_predicate != expected_pred {
+        let expected_binding = pyana_circuit::compute_action_binding(action, "");
+        if proof.circuit_proof.public_inputs.request_predicate != expected_binding {
             return false;
         }
     }

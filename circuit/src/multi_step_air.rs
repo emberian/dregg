@@ -21,7 +21,7 @@
 //! Column 141: `is_final_step` — 1 if this is the last meaningful step, 0 otherwise
 //! Column 142: `is_active` — 1 if this row is an active derivation step, 0 if padding
 //!
-//! Total width: 143 columns (DERIVATION_AIR_WIDTH + 5).
+//! Total width: 376 columns (DERIVATION_AIR_WIDTH + 5).
 //!
 //! # Public inputs
 //!
@@ -51,21 +51,24 @@
 //!   - `is_final_step * (derived_predicate - ALLOW_PREDICATE) = 0`
 //!   - On the final step, `accumulated_facts_hash = final_accumulated_hash` (public input)
 //!   - Step index increments by 1 for active rows
-//!   - Policy root: the verifier checks that the rule_id values in the trace correspond to
-//!     rules whose hashes are leaves in the Merkle tree at `policy_root`. This is enforced
-//!     externally by the verifier comparing the public input against their known policy.
+//!   - Policy root: a Poseidon2 commitment to the FULL rule structure definitions
+//!     (not just rule IDs). This binds rule_id, head_predicate, num_body_atoms,
+//!     num_variables, head term patterns, equal/memberof/gte/lt checks. The verifier
+//!     compares the proof's policy_root against their known policy hash. A prover
+//!     CANNOT substitute a rule with stripped checks (same ID, no GTE) because the
+//!     structure hash would differ.
 
 use crate::constraint_prover::{Air, Constraint};
 use crate::derivation_air::{
     DERIVATION_AIR_WIDTH, DerivationWitness, GTE_DIFF_BITS, MAX_BODY_ATOMS, MAX_EQUAL_CHECKS,
-    MAX_HEAD_TERMS, MAX_MEMBEROF_CHECKS, MAX_SUB_VARS, col as dcol,
+    MAX_HEAD_TERMS, MAX_MEMBEROF_CHECKS, MAX_SUB_VARS, col as dcol, compute_policy_root,
 };
 use crate::field::BabyBear;
 use crate::poseidon2::{hash_2_to_1, hash_fact};
 use crate::stark::{self, BoundaryConstraint, StarkAir, StarkProof};
 
 /// Trace width for the multi-step derivation AIR.
-pub const MULTI_STEP_AIR_WIDTH: usize = DERIVATION_AIR_WIDTH + 5; // 171 + 5 = 176
+pub const MULTI_STEP_AIR_WIDTH: usize = DERIVATION_AIR_WIDTH + 5; // 371 + 5 = 376
 
 /// Maximum derivation steps supported.
 pub const MAX_STEPS: usize = 32;
@@ -80,15 +83,15 @@ pub mod col {
     use super::DERIVATION_AIR_WIDTH;
 
     /// Step index (0-based).
-    pub const STEP_INDEX: usize = DERIVATION_AIR_WIDTH; // 138
+    pub const STEP_INDEX: usize = DERIVATION_AIR_WIDTH; // 371
     /// Running accumulated hash of derived facts (including this step).
-    pub const ACCUMULATED_HASH: usize = DERIVATION_AIR_WIDTH + 1; // 139
+    pub const ACCUMULATED_HASH: usize = DERIVATION_AIR_WIDTH + 1; // 372
     /// Previous accumulated hash (from previous row, or initial_state_root for row 0).
-    pub const PREV_ACCUMULATED: usize = DERIVATION_AIR_WIDTH + 2; // 140
+    pub const PREV_ACCUMULATED: usize = DERIVATION_AIR_WIDTH + 2; // 373
     /// Is this the final derivation step? (binary flag)
-    pub const IS_FINAL_STEP: usize = DERIVATION_AIR_WIDTH + 3; // 141
+    pub const IS_FINAL_STEP: usize = DERIVATION_AIR_WIDTH + 3; // 374
     /// Is this row an active step? (binary flag, 0 = padding)
-    pub const IS_ACTIVE: usize = DERIVATION_AIR_WIDTH + 4; // 142
+    pub const IS_ACTIVE: usize = DERIVATION_AIR_WIDTH + 4; // 375
 }
 
 /// Public input indices.
@@ -98,9 +101,16 @@ pub mod pi {
     pub const CONCLUSION: usize = 2;
     pub const NUM_STEPS: usize = 3;
     pub const FINAL_ACCUMULATED_HASH: usize = 4;
-    /// Policy root: Poseidon2 hash of the rule set. The verifier checks that the
-    /// proof was generated under this specific policy by comparing to their known
-    /// policy root. This makes the rule set a public input to the proof.
+    /// Policy root: Poseidon2 hash of the FULL rule structure definitions.
+    ///
+    /// This commits to the complete rule structure including: rule_id, head_predicate,
+    /// num_body_atoms, num_variables, head term patterns, equal checks, memberof checks,
+    /// GTE check, and LT check. The verifier checks that the proof was generated under
+    /// this specific policy by comparing to their known policy root.
+    ///
+    /// SOUNDNESS: A prover cannot substitute a rule with the same ID but stripped
+    /// checks (e.g., removing a budget GTE constraint) because the structure hash
+    /// would differ, producing a different policy_root that the verifier rejects.
     pub const POLICY_ROOT: usize = 5;
 }
 
@@ -532,6 +542,121 @@ impl Air for MultiStepDerivationAir {
                     active * lt_active * high_bit
                 }),
             },
+            // ================================================================
+            // SOUNDNESS FIX: Check term binding constraints
+            // ================================================================
+            // Constraint 18g: Check term is_var flags are binary (when row active).
+            Constraint {
+                name: "check_term_is_var_binary".to_string(),
+                eval: Box::new(|row, _, _| {
+                    let active = row[col::IS_ACTIVE];
+                    let mut result = BabyBear::ZERO;
+                    for slot in 0..dcol::NUM_CHECK_TERMS {
+                        let is_var = row[dcol::check_term_is_var(slot)];
+                        result = result + is_var * (is_var - BabyBear::ONE);
+                    }
+                    active * result
+                }),
+            },
+            // Constraint 18h: Check term selectors are binary (when row active).
+            Constraint {
+                name: "check_term_sel_binary".to_string(),
+                eval: Box::new(|row, _, _| {
+                    let active = row[col::IS_ACTIVE];
+                    let mut result = BabyBear::ZERO;
+                    for slot in 0..dcol::NUM_CHECK_TERMS {
+                        for var_j in 0..MAX_SUB_VARS {
+                            let sel = row[dcol::check_term_sel(slot, var_j)];
+                            result = result + sel * (sel - BabyBear::ONE);
+                        }
+                    }
+                    active * result
+                }),
+            },
+            // Constraint 18i: Check term selector sum = is_var (when row active).
+            Constraint {
+                name: "check_term_sel_sum_equals_is_var".to_string(),
+                eval: Box::new(|row, _, _| {
+                    let active = row[col::IS_ACTIVE];
+                    let mut result = BabyBear::ZERO;
+                    for slot in 0..dcol::NUM_CHECK_TERMS {
+                        let is_var = row[dcol::check_term_is_var(slot)];
+                        let mut sel_sum = BabyBear::ZERO;
+                        for var_j in 0..MAX_SUB_VARS {
+                            sel_sum = sel_sum + row[dcol::check_term_sel(slot, var_j)];
+                        }
+                        let diff = sel_sum - is_var;
+                        result = result + diff * diff;
+                    }
+                    active * result
+                }),
+            },
+            // Constraint 18j: Check term binding correctness (when row active).
+            Constraint {
+                name: "check_term_binding_correct".to_string(),
+                eval: Box::new(|row, _, _| {
+                    let active = row[col::IS_ACTIVE];
+                    let mut result = BabyBear::ZERO;
+
+                    let resolve_slot = |slot: usize| -> BabyBear {
+                        let is_var = row[dcol::check_term_is_var(slot)];
+                        let raw_value = row[dcol::check_term_raw_value(slot)];
+                        let mut var_resolved = BabyBear::ZERO;
+                        for var_j in 0..MAX_SUB_VARS {
+                            let sel = row[dcol::check_term_sel(slot, var_j)];
+                            let sub_val = row[dcol::SUB_VALUE_START + var_j];
+                            var_resolved = var_resolved + sel * sub_val;
+                        }
+                        is_var * var_resolved + (BabyBear::ONE - is_var) * raw_value
+                    };
+
+                    for i in 0..MAX_EQUAL_CHECKS {
+                        let eq_active = row[dcol::eq_check_active(i)];
+                        let trace_a = row[dcol::eq_check_term_a(i)];
+                        let trace_b = row[dcol::eq_check_term_b(i)];
+                        let resolved_a = resolve_slot(dcol::eq_check_term_a_slot(i));
+                        let resolved_b = resolve_slot(dcol::eq_check_term_b_slot(i));
+                        let diff_a = trace_a - resolved_a;
+                        let diff_b = trace_b - resolved_b;
+                        result = result + eq_active * (diff_a * diff_a + diff_b * diff_b);
+                    }
+
+                    for i in 0..MAX_MEMBEROF_CHECKS {
+                        let mo_active = row[dcol::memberof_check_active(i)];
+                        let trace_a = row[dcol::memberof_check_term_a(i)];
+                        let trace_b = row[dcol::memberof_check_term_b(i)];
+                        let resolved_a = resolve_slot(dcol::memberof_check_term_a_slot(i));
+                        let resolved_b = resolve_slot(dcol::memberof_check_term_b_slot(i));
+                        let diff_a = trace_a - resolved_a;
+                        let diff_b = trace_b - resolved_b;
+                        result = result + mo_active * (diff_a * diff_a + diff_b * diff_b);
+                    }
+
+                    {
+                        let gte_active = row[dcol::GTE_CHECK_ACTIVE];
+                        let trace_a = row[dcol::GTE_CHECK_TERM_A];
+                        let trace_b = row[dcol::GTE_CHECK_TERM_B];
+                        let resolved_a = resolve_slot(dcol::GTE_TERM_A_SLOT);
+                        let resolved_b = resolve_slot(dcol::GTE_TERM_B_SLOT);
+                        let diff_a = trace_a - resolved_a;
+                        let diff_b = trace_b - resolved_b;
+                        result = result + gte_active * (diff_a * diff_a + diff_b * diff_b);
+                    }
+
+                    {
+                        let lt_active = row[dcol::LT_CHECK_ACTIVE];
+                        let trace_a = row[dcol::LT_CHECK_TERM_A];
+                        let trace_b = row[dcol::LT_CHECK_TERM_B];
+                        let resolved_a = resolve_slot(dcol::LT_TERM_A_SLOT);
+                        let resolved_b = resolve_slot(dcol::LT_TERM_B_SLOT);
+                        let diff_a = trace_a - resolved_a;
+                        let diff_b = trace_b - resolved_b;
+                        result = result + lt_active * (diff_a * diff_a + diff_b * diff_b);
+                    }
+
+                    active * result
+                }),
+            },
             // === Multi-step chaining constraints ===
 
             // Constraint 19: is_active is binary.
@@ -871,6 +996,97 @@ impl Air for MultiStepDerivationAir {
                     }
                 }
 
+                // --- Check term binding columns (SOUNDNESS FIX) ---
+                {
+                    let fill_binding =
+                        |row: &mut Vec<BabyBear>, slot: usize, is_var: bool, value: BabyBear| {
+                            row[dcol::check_term_is_var(slot)] = if is_var {
+                                BabyBear::ONE
+                            } else {
+                                BabyBear::ZERO
+                            };
+                            row[dcol::check_term_raw_value(slot)] = value;
+                            if is_var {
+                                let var_idx = value.as_u32() as usize;
+                                if var_idx < MAX_SUB_VARS {
+                                    row[dcol::check_term_sel(slot, var_idx)] = BabyBear::ONE;
+                                }
+                            }
+                        };
+
+                    for (check_i, eq_check) in step
+                        .rule
+                        .equal_checks
+                        .iter()
+                        .enumerate()
+                        .take(MAX_EQUAL_CHECKS)
+                    {
+                        fill_binding(
+                            &mut row,
+                            dcol::eq_check_term_a_slot(check_i),
+                            eq_check.lhs_is_var,
+                            eq_check.lhs_value,
+                        );
+                        fill_binding(
+                            &mut row,
+                            dcol::eq_check_term_b_slot(check_i),
+                            eq_check.rhs_is_var,
+                            eq_check.rhs_value,
+                        );
+                    }
+
+                    for (check_i, mo_check) in step
+                        .rule
+                        .memberof_checks
+                        .iter()
+                        .enumerate()
+                        .take(MAX_MEMBEROF_CHECKS)
+                    {
+                        fill_binding(
+                            &mut row,
+                            dcol::memberof_check_term_a_slot(check_i),
+                            mo_check.lhs_is_var,
+                            mo_check.lhs_value,
+                        );
+                        fill_binding(
+                            &mut row,
+                            dcol::memberof_check_term_b_slot(check_i),
+                            mo_check.rhs_is_var,
+                            mo_check.rhs_value,
+                        );
+                    }
+
+                    if let Some(gte_check) = &step.rule.gte_check {
+                        fill_binding(
+                            &mut row,
+                            dcol::GTE_TERM_A_SLOT,
+                            gte_check.lhs_is_var,
+                            gte_check.lhs_value,
+                        );
+                        fill_binding(
+                            &mut row,
+                            dcol::GTE_TERM_B_SLOT,
+                            gte_check.rhs_is_var,
+                            gte_check.rhs_value,
+                        );
+                    }
+
+                    if let Some(lt_check) = &step.rule.lt_check {
+                        fill_binding(
+                            &mut row,
+                            dcol::LT_TERM_A_SLOT,
+                            lt_check.lhs_is_var,
+                            lt_check.lhs_value,
+                        );
+                        fill_binding(
+                            &mut row,
+                            dcol::LT_TERM_B_SLOT,
+                            lt_check.rhs_is_var,
+                            lt_check.rhs_value,
+                        );
+                    }
+                }
+
                 // --- Multi-step columns ---
                 row[col::STEP_INDEX] = BabyBear::new(row_idx as u32);
                 row[col::ACCUMULATED_HASH] = accumulated_hashes[row_idx];
@@ -913,27 +1129,25 @@ impl Air for MultiStepDerivationAir {
 /// fact set). The last step must derive the "allow" predicate for the proof
 /// to conclude ALLOW.
 ///
-/// The `policy_root` is a Poseidon2 hash of the rule set. The verifier can
-/// check "this proof was made under policy P" by comparing the policy_root
-/// public input against their known/expected policy hash.
+/// The `policy_root` is a Poseidon2 hash of the FULL rule structure definitions.
+/// This cryptographically binds not just rule IDs, but the complete rule structure
+/// including all checks (equal, memberof, gte, lt), body atom count, head pattern,
+/// and variable count. A malicious prover cannot substitute a rule with the same ID
+/// but stripped checks (e.g., removing a budget GTE constraint).
+///
+/// The verifier can check "this proof was made under policy P" by comparing the
+/// policy_root public input against their known/expected policy hash.
 pub fn build_multi_step_witness(
     initial_state_root: BabyBear,
     request_hash: BabyBear,
     steps: Vec<DerivationWitness>,
 ) -> MultiStepWitness {
-    // Compute policy_root as hash of all rule IDs used in the derivation.
-    // In a real system this would be the Merkle root of the full policy;
-    // here we use a deterministic hash of the rule IDs for simplicity.
-    let rule_ids: Vec<BabyBear> = steps.iter().map(|s| BabyBear::new(s.rule.id)).collect();
-    let policy_root = if rule_ids.is_empty() {
-        BabyBear::ZERO
-    } else {
-        let mut acc = rule_ids[0];
-        for &id in &rule_ids[1..] {
-            acc = hash_2_to_1(acc, id);
-        }
-        acc
-    };
+    // Compute policy_root as hash of ALL rule structure definitions used.
+    // SOUNDNESS FIX: Previously only hashed rule IDs, allowing a prover to
+    // substitute a rule with the same ID but stripped checks. Now we hash
+    // the full rule structure (checks, body count, head pattern, etc.).
+    let rules: Vec<&crate::derivation_air::CircuitRule> = steps.iter().map(|s| &s.rule).collect();
+    let policy_root = compute_policy_root(&rules);
 
     MultiStepWitness {
         initial_state_root,
@@ -1239,6 +1453,112 @@ impl StarkAir for MultiStepStarkAir {
         result = result + alpha_power * c17f;
         alpha_power = alpha_power * alpha;
 
+        // --- SOUNDNESS FIX: Check term binding constraints ---
+
+        // Constraint 17g: check_term_is_var binary
+        {
+            let mut c = BabyBear::ZERO;
+            for slot in 0..dcol::NUM_CHECK_TERMS {
+                let iv = local[dcol::check_term_is_var(slot)];
+                c = c + iv * (iv - BabyBear::ONE);
+            }
+            result = result + alpha_power * (is_active * c);
+        }
+        alpha_power = alpha_power * alpha;
+
+        // Constraint 17h: check_term_sel binary
+        {
+            let mut c = BabyBear::ZERO;
+            for slot in 0..dcol::NUM_CHECK_TERMS {
+                for var_j in 0..MAX_SUB_VARS {
+                    let sel = local[dcol::check_term_sel(slot, var_j)];
+                    c = c + sel * (sel - BabyBear::ONE);
+                }
+            }
+            result = result + alpha_power * (is_active * c);
+        }
+        alpha_power = alpha_power * alpha;
+
+        // Constraint 17i: check_term_sel_sum = is_var
+        {
+            let mut c = BabyBear::ZERO;
+            for slot in 0..dcol::NUM_CHECK_TERMS {
+                let iv = local[dcol::check_term_is_var(slot)];
+                let mut sel_sum = BabyBear::ZERO;
+                for var_j in 0..MAX_SUB_VARS {
+                    sel_sum = sel_sum + local[dcol::check_term_sel(slot, var_j)];
+                }
+                let d = sel_sum - iv;
+                c = c + d * d;
+            }
+            result = result + alpha_power * (is_active * c);
+        }
+        alpha_power = alpha_power * alpha;
+
+        // Constraint 17j: check_term_binding_correct
+        {
+            let resolve_slot = |slot: usize| -> BabyBear {
+                let iv = local[dcol::check_term_is_var(slot)];
+                let raw = local[dcol::check_term_raw_value(slot)];
+                let mut vr = BabyBear::ZERO;
+                for var_j in 0..MAX_SUB_VARS {
+                    let sel = local[dcol::check_term_sel(slot, var_j)];
+                    let sv = local[dcol::SUB_VALUE_START + var_j];
+                    vr = vr + sel * sv;
+                }
+                iv * vr + (BabyBear::ONE - iv) * raw
+            };
+
+            let mut c = BabyBear::ZERO;
+
+            for i in 0..MAX_EQUAL_CHECKS {
+                let ea = local[dcol::eq_check_active(i)];
+                let ta = local[dcol::eq_check_term_a(i)];
+                let tb = local[dcol::eq_check_term_b(i)];
+                let ra = resolve_slot(dcol::eq_check_term_a_slot(i));
+                let rb = resolve_slot(dcol::eq_check_term_b_slot(i));
+                let da = ta - ra;
+                let db = tb - rb;
+                c = c + ea * (da * da + db * db);
+            }
+
+            for i in 0..MAX_MEMBEROF_CHECKS {
+                let ma = local[dcol::memberof_check_active(i)];
+                let ta = local[dcol::memberof_check_term_a(i)];
+                let tb = local[dcol::memberof_check_term_b(i)];
+                let ra = resolve_slot(dcol::memberof_check_term_a_slot(i));
+                let rb = resolve_slot(dcol::memberof_check_term_b_slot(i));
+                let da = ta - ra;
+                let db = tb - rb;
+                c = c + ma * (da * da + db * db);
+            }
+
+            {
+                let ga = local[dcol::GTE_CHECK_ACTIVE];
+                let ta = local[dcol::GTE_CHECK_TERM_A];
+                let tb = local[dcol::GTE_CHECK_TERM_B];
+                let ra = resolve_slot(dcol::GTE_TERM_A_SLOT);
+                let rb = resolve_slot(dcol::GTE_TERM_B_SLOT);
+                let da = ta - ra;
+                let db = tb - rb;
+                c = c + ga * (da * da + db * db);
+            }
+
+            {
+                let la = local[dcol::LT_CHECK_ACTIVE];
+                let ta = local[dcol::LT_CHECK_TERM_A];
+                let tb = local[dcol::LT_CHECK_TERM_B];
+                let ra = resolve_slot(dcol::LT_TERM_A_SLOT);
+                let rb = resolve_slot(dcol::LT_TERM_B_SLOT);
+                let da = ta - ra;
+                let db = tb - rb;
+                c = c + la * (da * da + db * db);
+            }
+
+            result = result + alpha_power * (is_active * c);
+        }
+        alpha_power = alpha_power * alpha;
+
         // --- Constraint 18: Final step derives ALLOW predicate ---
         // conclusion * is_final * (head_pred - ALLOW_PREDICATE) = 0
         let conclusion = public_inputs[pi::CONCLUSION];
@@ -1259,15 +1579,38 @@ impl StarkAir for MultiStepStarkAir {
         }
         result = result + alpha_power * (is_active * c19);
 
-        // Note: The "active monotone decreasing" transition constraint is NOT
-        // included in the STARK eval_constraints. In cyclic STARKs, the last row's
-        // "next" wraps to the first row, which would create a false violation
-        // (last padding row's next = first active row). This property is instead
-        // enforced by the trace construction, and any tampering is caught by:
-        // (a) the accumulated hash chain commitment,
-        // (b) body roots matching state_root when is_active=1, and
-        // (c) the final_accumulated_hash public input check.
-        let _ = next; // Acknowledge the next row parameter (unused in this AIR)
+        // --- Transition constraints (enforced on all rows except the last) ---
+        //
+        // These are critical for soundness: without them a malicious prover could
+        // commit to arbitrary intermediate accumulated_hash values. The STARK
+        // transition vanishing polynomial ensures these are NOT enforced on the
+        // last row (where "next" wraps around in the evaluation domain).
+        //
+        // NOTE: Full Poseidon2 hash correctness is NOT proved in-circuit here
+        // (the S-box would require degree-7 constraints or auxiliary columns).
+        // Hash correctness relies on composition: a separate hash-chain STARK
+        // proves that every accumulated_hash value is a correct Poseidon2 output.
+        // What we DO enforce here is chain CONTINUITY: no gaps, no skipped rows.
+        alpha_power = alpha_power * alpha;
+
+        // --- Constraint 20: is_active monotone decreasing (transition) ---
+        // Once is_active goes to 0, it must stay 0.
+        // (1 - is_active_current) * is_active_next = 0
+        let next_is_active = next[col::IS_ACTIVE];
+        let c20 = (BabyBear::ONE - is_active) * next_is_active;
+        result = result + alpha_power * c20;
+        alpha_power = alpha_power * alpha;
+
+        // --- Constraint 21: Chain continuity (transition) ---
+        // The prev_accumulated of the next active row must equal the accumulated_hash
+        // of the current row. This prevents a malicious prover from inserting arbitrary
+        // values that break the chain between consecutive rows.
+        // is_active_next * (prev_accumulated_next - accumulated_hash_current) = 0
+        let current_acc = local[col::ACCUMULATED_HASH];
+        let next_prev = next[col::PREV_ACCUMULATED];
+        let c21 = next_is_active * (next_prev - current_acc);
+        result = result + alpha_power * c21;
+        let _ = alpha_power; // final power consumed
 
         result
     }
@@ -2459,5 +2802,444 @@ mod tests {
             stark::proof_to_bytes(&proof).len() as f64 / 1024.0,
             proof.public_inputs[pi::POLICY_ROOT],
         );
+    }
+
+    // ========================================================================
+    // Transition constraint soundness tests (STARK variant)
+    // ========================================================================
+
+    #[test]
+    fn test_stark_non_monotone_is_active_rejected() {
+        // A malicious prover sets is_active to [0, 1] on consecutive rows — a
+        // non-monotone transition. The constraint `(1 - is_active) * next_is_active == 0`
+        // must catch this.
+        //
+        // We directly construct two row vectors: "local" has is_active=0, "next"
+        // has is_active=1. This simulates the exact pair the STARK prover evaluates
+        // when checking the transition between a padding row and a re-activated row.
+
+        let mut local_row = vec![BabyBear::ZERO; MULTI_STEP_AIR_WIDTH];
+        let mut next_row = vec![BabyBear::ZERO; MULTI_STEP_AIR_WIDTH];
+
+        // local is inactive
+        local_row[col::IS_ACTIVE] = BabyBear::ZERO;
+        // next is active (non-monotone violation)
+        next_row[col::IS_ACTIVE] = BabyBear::ONE;
+
+        // Public inputs (minimal valid set)
+        let public_inputs = vec![
+            BabyBear::new(99999), // initial_state_root
+            BabyBear::new(42),    // request_hash
+            BabyBear::ONE,        // conclusion
+            BabyBear::new(2),     // num_steps
+            BabyBear::new(12345), // final_accumulated_hash
+            BabyBear::new(67890), // policy_root
+        ];
+
+        let air = MultiStepStarkAir::new(2);
+        let alpha = BabyBear::new(7); // arbitrary non-zero alpha
+        let constraint_val = air.eval_constraints(&local_row, &next_row, &public_inputs, alpha);
+
+        // The constraint evaluation must be non-zero (violation detected)
+        assert_ne!(
+            constraint_val,
+            BabyBear::ZERO,
+            "Non-monotone is_active (0 -> 1) must produce a non-zero constraint evaluation"
+        );
+    }
+
+    #[test]
+    fn test_stark_chain_gap_rejected() {
+        // A malicious prover sets prev_accumulated[row 1] to an arbitrary value
+        // instead of accumulated_hash[row 0]. The transition constraint
+        // `is_active_next * (prev_accumulated_next - accumulated_current) == 0`
+        // must catch this.
+        let state_root = BabyBear::new(99999);
+        let alice = BabyBear::new(1000);
+        let app = BabyBear::new(2000);
+        let allow_pred = BabyBear::new(ALLOW_PREDICATE);
+        let has_role_pred = BabyBear::new(600);
+        let app_auth_pred = BabyBear::new(500);
+
+        let step1 = make_step(
+            1,
+            state_root,
+            app_auth_pred,
+            [alice, app, BabyBear::ZERO, BabyBear::ZERO],
+            has_role_pred,
+            [alice, app, BabyBear::ZERO, BabyBear::ZERO],
+            vec![alice, app],
+        );
+        let step2 = make_step(
+            2,
+            state_root,
+            allow_pred,
+            [alice, app, BabyBear::ZERO, BabyBear::ZERO],
+            app_auth_pred,
+            [alice, app, BabyBear::ZERO, BabyBear::ZERO],
+            vec![alice, app],
+        );
+
+        let witness = build_multi_step_witness(state_root, BabyBear::new(42), vec![step1, step2]);
+        let (mut trace, public_inputs) = generate_multi_step_trace(&witness);
+
+        // Verify that the honest trace passes first
+        let air = MultiStepStarkAir::new(2);
+        let alpha = BabyBear::new(7);
+        let honest_val = air.eval_constraints(&trace[0], &trace[1], &public_inputs, alpha);
+        assert_eq!(
+            honest_val,
+            BabyBear::ZERO,
+            "Honest trace should have zero constraint evaluation on transition 0->1"
+        );
+
+        // Tamper: break the chain by changing prev_accumulated in row 1
+        let original_prev = trace[1][col::PREV_ACCUMULATED];
+        trace[1][col::PREV_ACCUMULATED] = BabyBear::new(777777);
+        assert_ne!(
+            trace[1][col::PREV_ACCUMULATED],
+            original_prev,
+            "Tampered value should differ from original"
+        );
+
+        // Evaluate transition constraints on rows 0->1 using the STARK AIR.
+        let constraint_val = air.eval_constraints(&trace[0], &trace[1], &public_inputs, alpha);
+
+        // The constraint evaluation must be non-zero (chain gap detected)
+        assert_ne!(
+            constraint_val,
+            BabyBear::ZERO,
+            "Chain gap (prev_accumulated != previous accumulated_hash) must produce \
+             a non-zero constraint evaluation"
+        );
+    }
+
+    // ========================================================================
+    // Policy root soundness tests: full rule structure commitment
+    // ========================================================================
+
+    #[test]
+    fn test_policy_root_binds_full_rule_structure() {
+        // A correct rule with a GTE check produces a valid policy_root.
+        // The verifier accepts the proof because the policy_root matches.
+        use crate::derivation_air::{BodyAtomPattern, CircuitGteCheck, CircuitRule};
+
+        let state_root = BabyBear::new(99999);
+        let alice = BabyBear::new(1000);
+        let budget = BabyBear::new(50);
+        let cost = BabyBear::new(10);
+        let allow_pred = BabyBear::new(ALLOW_PREDICATE);
+        let budget_pred = BabyBear::new(700);
+
+        // Rule WITH a GTE check: allow(User, Budget) :- budget_info(User, Budget, Cost), Budget >= Cost.
+        let rule_with_gte = CircuitRule {
+            id: 10,
+            num_body_atoms: 1,
+            num_variables: 3,
+            head_predicate: allow_pred,
+            head_terms: [
+                (true, BabyBear::new(0)), // User
+                (true, BabyBear::new(1)), // Budget
+                (false, BabyBear::ZERO),
+                (false, BabyBear::ZERO),
+            ],
+            body_atoms: vec![BodyAtomPattern {
+                predicate: budget_pred,
+                terms: [
+                    (true, BabyBear::new(0)), // User
+                    (true, BabyBear::new(1)), // Budget
+                    (true, BabyBear::new(2)), // Cost
+                ],
+            }],
+            equal_checks: vec![],
+            memberof_checks: vec![],
+            gte_check: Some(CircuitGteCheck {
+                lhs_is_var: true,
+                lhs_value: BabyBear::new(1), // Budget
+                rhs_is_var: true,
+                rhs_value: BabyBear::new(2), // Cost
+            }),
+            lt_check: None,
+        };
+
+        let body_hash = hash_fact(budget_pred, &[alice, budget, cost]);
+
+        let step = DerivationWitness {
+            rule: rule_with_gte,
+            state_root,
+            body_fact_hashes: vec![body_hash],
+            substitution: vec![alice, budget, cost],
+            derived_predicate: allow_pred,
+            derived_terms: [alice, budget, BabyBear::ZERO, BabyBear::ZERO],
+            not_after_height: BabyBear::ZERO,
+            org_id_hash: BabyBear::ZERO,
+            budget_remaining: BabyBear::ZERO,
+        };
+
+        let witness = build_multi_step_witness(state_root, BabyBear::new(42), vec![step]);
+        assert_eq!(witness.conclusion(), BabyBear::ONE, "Should conclude ALLOW");
+
+        // The witness should produce a valid proof
+        let air = MultiStepDerivationAir::new(witness.clone());
+        let result = ConstraintProver::verify(&air);
+        assert!(
+            result.is_valid(),
+            "Correct policy with GTE check should verify: {:?}",
+            result.violations()
+        );
+
+        // Also verify via STARK
+        let conclusion = witness.conclusion();
+        let acc_hash = witness.final_accumulated_hash();
+        let proof = prove_authorization_stark(&witness);
+        let result = verify_authorization_stark(conclusion, acc_hash, &proof);
+        assert!(
+            result.is_ok(),
+            "STARK proof with correct GTE policy should verify: {:?}",
+            result.err()
+        );
+
+        // The policy_root in the proof is non-zero and deterministic
+        let policy_root_value = proof.public_inputs[pi::POLICY_ROOT];
+        assert_ne!(policy_root_value, 0, "policy_root should be non-zero");
+    }
+
+    #[test]
+    fn test_stripped_gte_check_produces_wrong_policy_root() {
+        // SOUNDNESS TEST: A prover strips the GTE check from a rule but keeps
+        // the same rule_id. The resulting policy_root MUST differ from the
+        // legitimate policy_root, causing verifier rejection.
+        use crate::derivation_air::{
+            BodyAtomPattern, CircuitGteCheck, CircuitRule, compute_policy_root,
+        };
+
+        let state_root = BabyBear::new(99999);
+        let alice = BabyBear::new(1000);
+        let budget = BabyBear::new(5); // budget LESS than cost!
+        let cost = BabyBear::new(10);
+        let allow_pred = BabyBear::new(ALLOW_PREDICATE);
+        let budget_pred = BabyBear::new(700);
+
+        // The LEGITIMATE rule (with GTE check: Budget >= Cost)
+        let legitimate_rule = CircuitRule {
+            id: 10,
+            num_body_atoms: 1,
+            num_variables: 3,
+            head_predicate: allow_pred,
+            head_terms: [
+                (true, BabyBear::new(0)),
+                (true, BabyBear::new(1)),
+                (false, BabyBear::ZERO),
+                (false, BabyBear::ZERO),
+            ],
+            body_atoms: vec![BodyAtomPattern {
+                predicate: budget_pred,
+                terms: [
+                    (true, BabyBear::new(0)),
+                    (true, BabyBear::new(1)),
+                    (true, BabyBear::new(2)),
+                ],
+            }],
+            equal_checks: vec![],
+            memberof_checks: vec![],
+            gte_check: Some(CircuitGteCheck {
+                lhs_is_var: true,
+                lhs_value: BabyBear::new(1), // Budget
+                rhs_is_var: true,
+                rhs_value: BabyBear::new(2), // Cost
+            }),
+            lt_check: None,
+        };
+
+        // The STRIPPED rule (same ID but NO GTE check -- malicious)
+        let stripped_rule = CircuitRule {
+            id: 10, // Same ID!
+            num_body_atoms: 1,
+            num_variables: 3,
+            head_predicate: allow_pred,
+            head_terms: [
+                (true, BabyBear::new(0)),
+                (true, BabyBear::new(1)),
+                (false, BabyBear::ZERO),
+                (false, BabyBear::ZERO),
+            ],
+            body_atoms: vec![BodyAtomPattern {
+                predicate: budget_pred,
+                terms: [
+                    (true, BabyBear::new(0)),
+                    (true, BabyBear::new(1)),
+                    (true, BabyBear::new(2)),
+                ],
+            }],
+            equal_checks: vec![],
+            memberof_checks: vec![],
+            gte_check: None, // STRIPPED! No budget check!
+            lt_check: None,
+        };
+
+        // Compute the LEGITIMATE policy_root (what the verifier expects)
+        let legitimate_policy_root = compute_policy_root(&[&legitimate_rule]);
+
+        // Compute the STRIPPED policy_root (what a malicious prover would produce)
+        let stripped_policy_root = compute_policy_root(&[&stripped_rule]);
+
+        // The two policy roots MUST differ -- this is the core soundness property
+        assert_ne!(
+            legitimate_policy_root, stripped_policy_root,
+            "SOUNDNESS FAILURE: Stripped rule produces same policy_root as legitimate rule! \
+             A prover could bypass the GTE budget check."
+        );
+
+        // Now demonstrate the attack scenario: prover uses stripped rule with
+        // budget=5, cost=10 (would fail GTE check). Without GTE, derivation succeeds.
+        let body_hash = hash_fact(budget_pred, &[alice, budget, cost]);
+
+        let malicious_step = DerivationWitness {
+            rule: stripped_rule,
+            state_root,
+            body_fact_hashes: vec![body_hash],
+            substitution: vec![alice, budget, cost],
+            derived_predicate: allow_pred,
+            derived_terms: [alice, budget, BabyBear::ZERO, BabyBear::ZERO],
+            not_after_height: BabyBear::ZERO,
+            org_id_hash: BabyBear::ZERO,
+            budget_remaining: BabyBear::ZERO,
+        };
+
+        let malicious_witness =
+            build_multi_step_witness(state_root, BabyBear::new(42), vec![malicious_step]);
+
+        // The malicious witness produces a proof (the circuit itself is satisfied
+        // because there's no GTE check in the stripped rule)
+        let air = MultiStepDerivationAir::new(malicious_witness.clone());
+        let result = ConstraintProver::verify(&air);
+        assert!(
+            result.is_valid(),
+            "Stripped rule passes AIR constraints (no GTE to fail)"
+        );
+
+        // BUT: the policy_root in the malicious proof differs from the legitimate one.
+        // The verifier compares proof.policy_root against their known legitimate policy:
+        let malicious_proof_policy_root = malicious_witness.policy_root;
+        assert_ne!(
+            malicious_proof_policy_root, legitimate_policy_root,
+            "Verifier REJECTS: malicious proof's policy_root ({:?}) does not match \
+             legitimate policy_root ({:?})",
+            malicious_proof_policy_root, legitimate_policy_root
+        );
+
+        // Also verify via STARK: the proof is valid BUT has wrong policy_root
+        let conclusion = malicious_witness.conclusion();
+        let acc_hash = malicious_witness.final_accumulated_hash();
+        let proof = prove_authorization_stark(&malicious_witness);
+
+        // The STARK proof itself verifies (constraints are satisfied for the stripped rule)
+        let result = verify_authorization_stark(conclusion, acc_hash, &proof);
+        assert!(
+            result.is_ok(),
+            "STARK proof is technically valid for stripped rule"
+        );
+
+        // BUT the policy_root public input does NOT match the legitimate policy
+        let proof_policy_root = BabyBear::new_canonical(proof.public_inputs[pi::POLICY_ROOT]);
+        assert_ne!(
+            proof_policy_root, legitimate_policy_root,
+            "Verifier REJECTS: proof policy_root does not match expected legitimate policy. \
+             The prover cannot bypass the GTE budget check by stripping it from the rule."
+        );
+
+        println!(
+            "SOUNDNESS VERIFIED: legitimate_policy_root={:?}, stripped_policy_root={:?}",
+            legitimate_policy_root, stripped_policy_root
+        );
+    }
+
+    #[test]
+    fn test_policy_root_different_for_different_rule_structures() {
+        // Additional soundness checks: various rule modifications produce different hashes
+        use crate::derivation_air::{
+            BodyAtomPattern, CircuitEqualCheck, CircuitGteCheck, CircuitLtCheck,
+            CircuitMemberOfCheck, CircuitRule, compute_policy_root,
+        };
+
+        let allow_pred = BabyBear::new(ALLOW_PREDICATE);
+        let body_pred = BabyBear::new(100);
+
+        let base_rule = CircuitRule {
+            id: 1,
+            num_body_atoms: 1,
+            num_variables: 2,
+            head_predicate: allow_pred,
+            head_terms: [
+                (true, BabyBear::new(0)),
+                (true, BabyBear::new(1)),
+                (false, BabyBear::ZERO),
+                (false, BabyBear::ZERO),
+            ],
+            body_atoms: vec![BodyAtomPattern {
+                predicate: body_pred,
+                terms: [
+                    (true, BabyBear::new(0)),
+                    (true, BabyBear::new(1)),
+                    (false, BabyBear::ZERO),
+                ],
+            }],
+            equal_checks: vec![],
+            memberof_checks: vec![],
+            gte_check: None,
+            lt_check: None,
+        };
+
+        // Rule with an added equal check
+        let mut rule_with_eq = base_rule.clone();
+        rule_with_eq.equal_checks.push(CircuitEqualCheck {
+            lhs_is_var: true,
+            lhs_value: BabyBear::new(0),
+            rhs_is_var: false,
+            rhs_value: BabyBear::new(1000),
+        });
+
+        // Rule with an added memberof check
+        let mut rule_with_memberof = base_rule.clone();
+        rule_with_memberof
+            .memberof_checks
+            .push(CircuitMemberOfCheck {
+                lhs_is_var: true,
+                lhs_value: BabyBear::new(0),
+                rhs_is_var: true,
+                rhs_value: BabyBear::new(1),
+            });
+
+        // Rule with an LT check
+        let mut rule_with_lt = base_rule.clone();
+        rule_with_lt.lt_check = Some(CircuitLtCheck {
+            lhs_is_var: true,
+            lhs_value: BabyBear::new(0),
+            rhs_is_var: true,
+            rhs_value: BabyBear::new(1),
+        });
+
+        // Rule with different head predicate
+        let mut rule_different_head = base_rule.clone();
+        rule_different_head.head_predicate = BabyBear::new(999);
+
+        let base_root = compute_policy_root(&[&base_rule]);
+        let eq_root = compute_policy_root(&[&rule_with_eq]);
+        let memberof_root = compute_policy_root(&[&rule_with_memberof]);
+        let lt_root = compute_policy_root(&[&rule_with_lt]);
+        let diff_head_root = compute_policy_root(&[&rule_different_head]);
+
+        // All must be different from each other
+        let roots = [base_root, eq_root, memberof_root, lt_root, diff_head_root];
+        for i in 0..roots.len() {
+            for j in (i + 1)..roots.len() {
+                assert_ne!(
+                    roots[i], roots[j],
+                    "Policy roots for structurally different rules must differ: \
+                     root[{}]={:?} == root[{}]={:?}",
+                    i, roots[i], j, roots[j]
+                );
+            }
+        }
     }
 }

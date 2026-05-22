@@ -53,17 +53,23 @@
 //! 16. GTE bit decomposition: sum(bit_i * 2^i) = diff (when active)
 //! 17. GTE bits are binary
 //! 18. GTE high bit is 0 (diff < 2^30 < p/2, meaning a >= b)
+//! 25. Check term binding: is_var flags are binary
+//! 26. Check term binding: selectors are binary
+//! 27. Check term binding: selector sum = is_var (exactly-one when var)
+//! 28. Check term binding: resolved term = is_var*(sum sel_j*sub[j]) + (1-is_var)*raw_value
+//!     (This binds eq/memberof/gte/lt check terms to the substitution, preventing soundness bypass)
 
 use crate::constraint_prover::{Air, Constraint};
 use crate::field::BabyBear;
-use crate::poseidon2::hash_fact;
+use crate::poseidon2::{hash_2_to_1, hash_fact, hash_many};
 use crate::stark::{self, BoundaryConstraint, StarkAir, StarkProof};
 
 /// Trace width for the derivation AIR.
 /// rule_id(1) + body_hashes(8) + body_membership(8) + head_pred(1) + head_terms(4) +
 /// derived_hash(1) + sub_values(8) + body_roots(8) + head_is_var(4) + head_raw_value(4) +
-/// head_sel_var(4*8=32) + eq_checks(3*4=12) + memberof_checks(3*4=12) + gte(4+30=34) + lt(4+30=34) = 171
-pub const DERIVATION_AIR_WIDTH: usize = 171;
+/// head_sel_var(4*8=32) + eq_checks(3*4=12) + memberof_checks(3*4=12) + gte(4+30=34) + lt(4+30=34)
+/// + check_term_binding(20 terms * (1 is_var + 1 raw_value + 8 selectors) = 200) = 371
+pub const DERIVATION_AIR_WIDTH: usize = 371;
 
 /// Maximum body atoms per rule.
 pub const MAX_BODY_ATOMS: usize = 8;
@@ -200,8 +206,96 @@ pub mod col {
         LT_CHECK_DIFF_BITS_START + bit_idx
     }
 
-    /// Total columns: LT_CHECK_DIFF_BITS_START + GTE_DIFF_BITS = 141 + 30 = 171
-    pub const _TOTAL: usize = LT_CHECK_DIFF_BITS_START + GTE_DIFF_BITS;
+    // ==========================================================================
+    // Check term binding columns (SOUNDNESS FIX)
+    //
+    // These columns bind each check's resolved term_a/term_b to the substitution,
+    // preventing a malicious prover from placing arbitrary values in the check
+    // columns that don't correspond to the actual substitution.
+    //
+    // Layout: For each check term, we store:
+    //   - is_var (1 col): 1 if this term references a substitution variable
+    //   - raw_value (1 col): the constant value (when is_var=0) or var index (when is_var=1)
+    //   - sel_var[0..MAX_SUB_VARS] (8 cols): one-hot selector for which sub variable
+    //
+    // Total per term: 10 columns.
+    // Total check terms: (MAX_EQUAL_CHECKS * 2) + (MAX_MEMBEROF_CHECKS * 2) + 2 (GTE) + 2 (LT) = 20
+    // Total new columns: 20 * 10 = 200
+    // ==========================================================================
+
+    /// Number of columns per check term binding (is_var + raw_value + MAX_SUB_VARS selectors).
+    pub const CHECK_TERM_COLS: usize = 1 + 1 + MAX_SUB_VARS; // 10
+
+    /// Start of check term binding columns.
+    pub const CHECK_TERM_BINDING_START: usize = LT_CHECK_DIFF_BITS_START + GTE_DIFF_BITS; // 171
+
+    /// Number of check terms: eq(4*2) + memberof(4*2) + gte(2) + lt(2) = 20
+    pub const NUM_CHECK_TERMS: usize = MAX_EQUAL_CHECKS * 2 + MAX_MEMBEROF_CHECKS * 2 + 2 + 2; // 20
+
+    /// Get the base column for a check term binding slot.
+    /// Slot ordering:
+    ///   0..7:  eq_check[0..3].term_a, eq_check[0..3].term_b
+    ///   8..15: memberof_check[0..3].term_a, memberof_check[0..3].term_b
+    ///   16: gte_check.term_a
+    ///   17: gte_check.term_b
+    ///   18: lt_check.term_a
+    ///   19: lt_check.term_b
+    #[inline]
+    pub const fn check_term_base(slot: usize) -> usize {
+        CHECK_TERM_BINDING_START + slot * CHECK_TERM_COLS
+    }
+
+    /// Check term is_var column for a given slot.
+    #[inline]
+    pub const fn check_term_is_var(slot: usize) -> usize {
+        check_term_base(slot)
+    }
+
+    /// Check term raw_value column for a given slot.
+    #[inline]
+    pub const fn check_term_raw_value(slot: usize) -> usize {
+        check_term_base(slot) + 1
+    }
+
+    /// Check term selector column for a given slot and variable index.
+    #[inline]
+    pub const fn check_term_sel(slot: usize, var_idx: usize) -> usize {
+        check_term_base(slot) + 2 + var_idx
+    }
+
+    // --- Helper functions for named slot indices ---
+
+    /// Slot index for eq_check[check_idx].term_a.
+    #[inline]
+    pub const fn eq_check_term_a_slot(check_idx: usize) -> usize {
+        check_idx * 2
+    }
+    /// Slot index for eq_check[check_idx].term_b.
+    #[inline]
+    pub const fn eq_check_term_b_slot(check_idx: usize) -> usize {
+        check_idx * 2 + 1
+    }
+    /// Slot index for memberof_check[check_idx].term_a.
+    #[inline]
+    pub const fn memberof_check_term_a_slot(check_idx: usize) -> usize {
+        MAX_EQUAL_CHECKS * 2 + check_idx * 2
+    }
+    /// Slot index for memberof_check[check_idx].term_b.
+    #[inline]
+    pub const fn memberof_check_term_b_slot(check_idx: usize) -> usize {
+        MAX_EQUAL_CHECKS * 2 + check_idx * 2 + 1
+    }
+    /// Slot index for gte_check.term_a.
+    pub const GTE_TERM_A_SLOT: usize = MAX_EQUAL_CHECKS * 2 + MAX_MEMBEROF_CHECKS * 2; // 16
+    /// Slot index for gte_check.term_b.
+    pub const GTE_TERM_B_SLOT: usize = GTE_TERM_A_SLOT + 1; // 17
+    /// Slot index for lt_check.term_a.
+    pub const LT_TERM_A_SLOT: usize = GTE_TERM_B_SLOT + 1; // 18
+    /// Slot index for lt_check.term_b.
+    pub const LT_TERM_B_SLOT: usize = LT_TERM_A_SLOT + 1; // 19
+
+    /// Total columns: CHECK_TERM_BINDING_START + NUM_CHECK_TERMS * CHECK_TERM_COLS = 171 + 200 = 371
+    pub const _TOTAL: usize = CHECK_TERM_BINDING_START + NUM_CHECK_TERMS * CHECK_TERM_COLS;
 }
 
 /// A rule definition for the circuit (simplified representation).
@@ -232,6 +326,141 @@ pub struct CircuitRule {
     /// Semantics: `term_a < term_b` (e.g., request_time < expiry).
     /// Proven via bit decomposition of `(term_b - term_a - 1)` with high bit = 0.
     pub lt_check: Option<CircuitLtCheck>,
+}
+
+impl CircuitRule {
+    /// Compute a cryptographic commitment to the full rule structure.
+    ///
+    /// This hashes ALL structural properties of the rule:
+    /// - rule_id, head_predicate, num_body_atoms, num_variables
+    /// - head term patterns (is_var flags + values)
+    /// - equal checks (each check's lhs/rhs structure)
+    /// - memberof checks (each check's lhs/rhs structure)
+    /// - gte check (presence + lhs/rhs structure)
+    /// - lt check (presence + lhs/rhs structure)
+    ///
+    /// SOUNDNESS: This commitment binds the full rule definition. A prover cannot
+    /// swap a rule with stripped checks (e.g., removing a GTE budget constraint)
+    /// because the resulting hash would differ from the policy commitment.
+    pub fn compute_structure_hash(&self) -> BabyBear {
+        let mut elements = Vec::with_capacity(32);
+
+        // Core rule identity
+        elements.push(BabyBear::new(self.id));
+        elements.push(self.head_predicate);
+        elements.push(BabyBear::new(self.num_body_atoms as u32));
+        elements.push(BabyBear::new(self.num_variables as u32));
+
+        // Head term patterns (encode is_var as 1/0, then the value)
+        for &(is_var, value) in &self.head_terms {
+            elements.push(if is_var {
+                BabyBear::ONE
+            } else {
+                BabyBear::ZERO
+            });
+            elements.push(value);
+        }
+
+        // Equal checks: encode count + each check's structure
+        elements.push(BabyBear::new(self.equal_checks.len() as u32));
+        for eq in &self.equal_checks {
+            elements.push(if eq.lhs_is_var {
+                BabyBear::ONE
+            } else {
+                BabyBear::ZERO
+            });
+            elements.push(eq.lhs_value);
+            elements.push(if eq.rhs_is_var {
+                BabyBear::ONE
+            } else {
+                BabyBear::ZERO
+            });
+            elements.push(eq.rhs_value);
+        }
+
+        // MemberOf checks: encode count + each check's structure
+        elements.push(BabyBear::new(self.memberof_checks.len() as u32));
+        for mo in &self.memberof_checks {
+            elements.push(if mo.lhs_is_var {
+                BabyBear::ONE
+            } else {
+                BabyBear::ZERO
+            });
+            elements.push(mo.lhs_value);
+            elements.push(if mo.rhs_is_var {
+                BabyBear::ONE
+            } else {
+                BabyBear::ZERO
+            });
+            elements.push(mo.rhs_value);
+        }
+
+        // GTE check: encode presence + structure
+        match &self.gte_check {
+            Some(gte) => {
+                elements.push(BabyBear::ONE); // has gte
+                elements.push(if gte.lhs_is_var {
+                    BabyBear::ONE
+                } else {
+                    BabyBear::ZERO
+                });
+                elements.push(gte.lhs_value);
+                elements.push(if gte.rhs_is_var {
+                    BabyBear::ONE
+                } else {
+                    BabyBear::ZERO
+                });
+                elements.push(gte.rhs_value);
+            }
+            None => {
+                elements.push(BabyBear::ZERO); // no gte
+            }
+        }
+
+        // LT check: encode presence + structure
+        match &self.lt_check {
+            Some(lt) => {
+                elements.push(BabyBear::ONE); // has lt
+                elements.push(if lt.lhs_is_var {
+                    BabyBear::ONE
+                } else {
+                    BabyBear::ZERO
+                });
+                elements.push(lt.lhs_value);
+                elements.push(if lt.rhs_is_var {
+                    BabyBear::ONE
+                } else {
+                    BabyBear::ZERO
+                });
+                elements.push(lt.rhs_value);
+            }
+            None => {
+                elements.push(BabyBear::ZERO); // no lt
+            }
+        }
+
+        hash_many(&elements)
+    }
+}
+
+/// Compute the policy root from a set of rules by hashing their full structure.
+///
+/// SOUNDNESS: Unlike the previous implementation that only hashed rule IDs,
+/// this commits to the complete rule definitions. A malicious prover cannot
+/// substitute a rule with the same ID but stripped checks (e.g., removing a
+/// GTE budget constraint) because the structure hash would differ.
+///
+/// policy_root = hash(rule_1_structure_hash || rule_2_structure_hash || ...)
+pub fn compute_policy_root(rules: &[&CircuitRule]) -> BabyBear {
+    if rules.is_empty() {
+        return BabyBear::ZERO;
+    }
+
+    let mut acc = rules[0].compute_structure_hash();
+    for rule in &rules[1..] {
+        acc = hash_2_to_1(acc, rule.compute_structure_hash());
+    }
+    acc
 }
 
 /// An Equal check in circuit form.
@@ -736,6 +965,134 @@ impl Air for DerivationAir {
                     active * high_bit
                 }),
             },
+            // ================================================================
+            // SOUNDNESS FIX: Check term binding constraints (C25-C28)
+            //
+            // These constraints bind the resolved check terms (eq, memberof, gte, lt)
+            // to the substitution columns, preventing a malicious prover from placing
+            // arbitrary values in the check term columns.
+            // ================================================================
+            // Constraint 25: Check term binding is_var flags are binary.
+            Constraint {
+                name: "check_term_is_var_binary".to_string(),
+                eval: Box::new(|row, _, _| {
+                    let mut result = BabyBear::ZERO;
+                    for slot in 0..col::NUM_CHECK_TERMS {
+                        let is_var = row[col::check_term_is_var(slot)];
+                        result = result + is_var * (is_var - BabyBear::ONE);
+                    }
+                    result
+                }),
+            },
+            // Constraint 26: Check term binding selectors are binary.
+            Constraint {
+                name: "check_term_sel_binary".to_string(),
+                eval: Box::new(|row, _, _| {
+                    let mut result = BabyBear::ZERO;
+                    for slot in 0..col::NUM_CHECK_TERMS {
+                        for var_j in 0..MAX_SUB_VARS {
+                            let sel = row[col::check_term_sel(slot, var_j)];
+                            result = result + sel * (sel - BabyBear::ONE);
+                        }
+                    }
+                    result
+                }),
+            },
+            // Constraint 27: Check term binding selector sum equals is_var.
+            // When is_var=1, exactly one selector must be 1; when is_var=0, all zero.
+            Constraint {
+                name: "check_term_sel_sum_equals_is_var".to_string(),
+                eval: Box::new(|row, _, _| {
+                    let mut result = BabyBear::ZERO;
+                    for slot in 0..col::NUM_CHECK_TERMS {
+                        let is_var = row[col::check_term_is_var(slot)];
+                        let mut sel_sum = BabyBear::ZERO;
+                        for var_j in 0..MAX_SUB_VARS {
+                            sel_sum = sel_sum + row[col::check_term_sel(slot, var_j)];
+                        }
+                        let diff = sel_sum - is_var;
+                        result = result + diff * diff;
+                    }
+                    result
+                }),
+            },
+            // Constraint 28: Check term binding correctness.
+            // For each active check, the resolved term in the trace must equal the
+            // value computed from the binding columns:
+            //   resolved = is_var * sum(sel_j * sub[j]) + (1-is_var) * raw_value
+            //
+            // Equal checks: active * (trace_term - resolved) = 0
+            // MemberOf checks: active * (trace_term - resolved) = 0
+            // GTE/LT: active * (trace_term - resolved) = 0
+            Constraint {
+                name: "check_term_binding_correct".to_string(),
+                eval: Box::new(|row, _, _| {
+                    let mut result = BabyBear::ZERO;
+
+                    // Helper: compute resolved value for a slot
+                    let resolve_slot = |slot: usize| -> BabyBear {
+                        let is_var = row[col::check_term_is_var(slot)];
+                        let raw_value = row[col::check_term_raw_value(slot)];
+                        let mut var_resolved = BabyBear::ZERO;
+                        for var_j in 0..MAX_SUB_VARS {
+                            let sel = row[col::check_term_sel(slot, var_j)];
+                            let sub_val = row[col::SUB_VALUE_START + var_j];
+                            var_resolved = var_resolved + sel * sub_val;
+                        }
+                        is_var * var_resolved + (BabyBear::ONE - is_var) * raw_value
+                    };
+
+                    // Equal check term bindings
+                    for i in 0..MAX_EQUAL_CHECKS {
+                        let active = row[col::eq_check_active(i)];
+                        let trace_a = row[col::eq_check_term_a(i)];
+                        let trace_b = row[col::eq_check_term_b(i)];
+                        let resolved_a = resolve_slot(col::eq_check_term_a_slot(i));
+                        let resolved_b = resolve_slot(col::eq_check_term_b_slot(i));
+                        let diff_a = trace_a - resolved_a;
+                        let diff_b = trace_b - resolved_b;
+                        result = result + active * (diff_a * diff_a + diff_b * diff_b);
+                    }
+
+                    // MemberOf check term bindings
+                    for i in 0..MAX_MEMBEROF_CHECKS {
+                        let active = row[col::memberof_check_active(i)];
+                        let trace_a = row[col::memberof_check_term_a(i)];
+                        let trace_b = row[col::memberof_check_term_b(i)];
+                        let resolved_a = resolve_slot(col::memberof_check_term_a_slot(i));
+                        let resolved_b = resolve_slot(col::memberof_check_term_b_slot(i));
+                        let diff_a = trace_a - resolved_a;
+                        let diff_b = trace_b - resolved_b;
+                        result = result + active * (diff_a * diff_a + diff_b * diff_b);
+                    }
+
+                    // GTE check term bindings
+                    {
+                        let active = row[col::GTE_CHECK_ACTIVE];
+                        let trace_a = row[col::GTE_CHECK_TERM_A];
+                        let trace_b = row[col::GTE_CHECK_TERM_B];
+                        let resolved_a = resolve_slot(col::GTE_TERM_A_SLOT);
+                        let resolved_b = resolve_slot(col::GTE_TERM_B_SLOT);
+                        let diff_a = trace_a - resolved_a;
+                        let diff_b = trace_b - resolved_b;
+                        result = result + active * (diff_a * diff_a + diff_b * diff_b);
+                    }
+
+                    // LT check term bindings
+                    {
+                        let active = row[col::LT_CHECK_ACTIVE];
+                        let trace_a = row[col::LT_CHECK_TERM_A];
+                        let trace_b = row[col::LT_CHECK_TERM_B];
+                        let resolved_a = resolve_slot(col::LT_TERM_A_SLOT);
+                        let resolved_b = resolve_slot(col::LT_TERM_B_SLOT);
+                        let diff_a = trace_a - resolved_a;
+                        let diff_b = trace_b - resolved_b;
+                        result = result + active * (diff_a * diff_a + diff_b * diff_b);
+                    }
+
+                    result
+                }),
+            },
         ]
     }
 
@@ -948,6 +1305,103 @@ impl Air for DerivationAir {
                 let bit = (diff_val >> i) & 1;
                 row[col::lt_diff_bit(i)] = BabyBear::new(bit);
             }
+        }
+
+        // --- Check term binding columns (SOUNDNESS FIX) ---
+        // Fill in the is_var, raw_value, and selector columns for each check term,
+        // binding them to the substitution so the verifier can confirm term resolution.
+
+        // Helper closure to populate binding columns for a single check term
+        let fill_check_term_binding =
+            |row: &mut Vec<BabyBear>, slot: usize, is_var: bool, value: BabyBear| {
+                row[col::check_term_is_var(slot)] = if is_var {
+                    BabyBear::ONE
+                } else {
+                    BabyBear::ZERO
+                };
+                row[col::check_term_raw_value(slot)] = value;
+                if is_var {
+                    let var_idx = value.as_u32() as usize;
+                    if var_idx < MAX_SUB_VARS {
+                        row[col::check_term_sel(slot, var_idx)] = BabyBear::ONE;
+                    }
+                }
+            };
+
+        // Equal checks
+        for (check_i, eq_check) in w
+            .rule
+            .equal_checks
+            .iter()
+            .enumerate()
+            .take(MAX_EQUAL_CHECKS)
+        {
+            fill_check_term_binding(
+                &mut row,
+                col::eq_check_term_a_slot(check_i),
+                eq_check.lhs_is_var,
+                eq_check.lhs_value,
+            );
+            fill_check_term_binding(
+                &mut row,
+                col::eq_check_term_b_slot(check_i),
+                eq_check.rhs_is_var,
+                eq_check.rhs_value,
+            );
+        }
+
+        // MemberOf checks
+        for (check_i, mo_check) in w
+            .rule
+            .memberof_checks
+            .iter()
+            .enumerate()
+            .take(MAX_MEMBEROF_CHECKS)
+        {
+            fill_check_term_binding(
+                &mut row,
+                col::memberof_check_term_a_slot(check_i),
+                mo_check.lhs_is_var,
+                mo_check.lhs_value,
+            );
+            fill_check_term_binding(
+                &mut row,
+                col::memberof_check_term_b_slot(check_i),
+                mo_check.rhs_is_var,
+                mo_check.rhs_value,
+            );
+        }
+
+        // GTE check
+        if let Some(gte_check) = &w.rule.gte_check {
+            fill_check_term_binding(
+                &mut row,
+                col::GTE_TERM_A_SLOT,
+                gte_check.lhs_is_var,
+                gte_check.lhs_value,
+            );
+            fill_check_term_binding(
+                &mut row,
+                col::GTE_TERM_B_SLOT,
+                gte_check.rhs_is_var,
+                gte_check.rhs_value,
+            );
+        }
+
+        // LT check
+        if let Some(lt_check) = &w.rule.lt_check {
+            fill_check_term_binding(
+                &mut row,
+                col::LT_TERM_A_SLOT,
+                lt_check.lhs_is_var,
+                lt_check.lhs_value,
+            );
+            fill_check_term_binding(
+                &mut row,
+                col::LT_TERM_B_SLOT,
+                lt_check.rhs_is_var,
+                lt_check.rhs_value,
+            );
         }
 
         let public_inputs = vec![
@@ -1225,6 +1679,97 @@ impl StarkAir for DerivationStarkAir {
         // C24: lt_check_high_bit_zero
         let lt_high_bit = local[col::lt_diff_bit(GTE_DIFF_BITS - 1)];
         result = result + alpha_power * (lt_active * lt_high_bit);
+        alpha_power = alpha_power * alpha;
+
+        // C25: check_term_is_var_binary
+        for slot in 0..col::NUM_CHECK_TERMS {
+            let is_var = local[col::check_term_is_var(slot)];
+            result = result + alpha_power * (is_var * (is_var - BabyBear::ONE));
+        }
+        alpha_power = alpha_power * alpha;
+
+        // C26: check_term_sel_binary
+        for slot in 0..col::NUM_CHECK_TERMS {
+            for var_j in 0..MAX_SUB_VARS {
+                let sel = local[col::check_term_sel(slot, var_j)];
+                result = result + alpha_power * (sel * (sel - BabyBear::ONE));
+            }
+        }
+        alpha_power = alpha_power * alpha;
+
+        // C27: check_term_sel_sum_equals_is_var
+        for slot in 0..col::NUM_CHECK_TERMS {
+            let is_var = local[col::check_term_is_var(slot)];
+            let mut sel_sum = BabyBear::ZERO;
+            for var_j in 0..MAX_SUB_VARS {
+                sel_sum = sel_sum + local[col::check_term_sel(slot, var_j)];
+            }
+            let diff = sel_sum - is_var;
+            result = result + alpha_power * (diff * diff);
+        }
+        alpha_power = alpha_power * alpha;
+
+        // C28: check_term_binding_correct
+        // Helper: compute resolved value for a slot from binding columns
+        let resolve_slot = |slot: usize| -> BabyBear {
+            let is_var = local[col::check_term_is_var(slot)];
+            let raw_value = local[col::check_term_raw_value(slot)];
+            let mut var_resolved = BabyBear::ZERO;
+            for var_j in 0..MAX_SUB_VARS {
+                let sel = local[col::check_term_sel(slot, var_j)];
+                let sub_val = local[col::SUB_VALUE_START + var_j];
+                var_resolved = var_resolved + sel * sub_val;
+            }
+            is_var * var_resolved + (BabyBear::ONE - is_var) * raw_value
+        };
+
+        // Equal check term bindings
+        for i in 0..MAX_EQUAL_CHECKS {
+            let active = local[col::eq_check_active(i)];
+            let trace_a = local[col::eq_check_term_a(i)];
+            let trace_b = local[col::eq_check_term_b(i)];
+            let resolved_a = resolve_slot(col::eq_check_term_a_slot(i));
+            let resolved_b = resolve_slot(col::eq_check_term_b_slot(i));
+            let diff_a = trace_a - resolved_a;
+            let diff_b = trace_b - resolved_b;
+            result = result + alpha_power * (active * (diff_a * diff_a + diff_b * diff_b));
+        }
+
+        // MemberOf check term bindings
+        for i in 0..MAX_MEMBEROF_CHECKS {
+            let active = local[col::memberof_check_active(i)];
+            let trace_a = local[col::memberof_check_term_a(i)];
+            let trace_b = local[col::memberof_check_term_b(i)];
+            let resolved_a = resolve_slot(col::memberof_check_term_a_slot(i));
+            let resolved_b = resolve_slot(col::memberof_check_term_b_slot(i));
+            let diff_a = trace_a - resolved_a;
+            let diff_b = trace_b - resolved_b;
+            result = result + alpha_power * (active * (diff_a * diff_a + diff_b * diff_b));
+        }
+
+        // GTE check term bindings
+        {
+            let active = local[col::GTE_CHECK_ACTIVE];
+            let trace_a = local[col::GTE_CHECK_TERM_A];
+            let trace_b = local[col::GTE_CHECK_TERM_B];
+            let resolved_a = resolve_slot(col::GTE_TERM_A_SLOT);
+            let resolved_b = resolve_slot(col::GTE_TERM_B_SLOT);
+            let diff_a = trace_a - resolved_a;
+            let diff_b = trace_b - resolved_b;
+            result = result + alpha_power * (active * (diff_a * diff_a + diff_b * diff_b));
+        }
+
+        // LT check term bindings
+        {
+            let active = local[col::LT_CHECK_ACTIVE];
+            let trace_a = local[col::LT_CHECK_TERM_A];
+            let trace_b = local[col::LT_CHECK_TERM_B];
+            let resolved_a = resolve_slot(col::LT_TERM_A_SLOT);
+            let resolved_b = resolve_slot(col::LT_TERM_B_SLOT);
+            let diff_a = trace_a - resolved_a;
+            let diff_b = trace_b - resolved_b;
+            result = result + alpha_power * (active * (diff_a * diff_a + diff_b * diff_b));
+        }
 
         result
     }
@@ -2337,6 +2882,306 @@ mod tests {
         assert!(
             verify_derivation_stark(&proof, &public_inputs).is_ok(),
             "derivation STARK proof with GTE check should verify"
+        );
+    }
+
+    // ========================================================================
+    // Soundness fix tests: check term binding constraints
+    // ========================================================================
+
+    #[test]
+    fn test_prover_lies_about_equal_check_term_rejected() {
+        // SOUNDNESS TEST: A malicious prover sets eq_check term_a=5, term_b=5
+        // in the trace (so the equality constraint passes), but the actual
+        // substitution has X=1000, Y=2000. The binding constraint should catch this.
+        let access_pred = BabyBear::new(300);
+        let owns_pred = BabyBear::new(100);
+        let alice = BabyBear::new(1000);
+        let file = BabyBear::new(2000);
+
+        let rule = CircuitRule {
+            id: 10,
+            num_body_atoms: 1,
+            num_variables: 2,
+            head_predicate: access_pred,
+            head_terms: [
+                (true, BabyBear::new(0)), // X
+                (true, BabyBear::new(1)), // Y
+                (false, BabyBear::ZERO),
+                (false, BabyBear::ZERO),
+            ],
+            body_atoms: vec![BodyAtomPattern {
+                predicate: owns_pred,
+                terms: [
+                    (true, BabyBear::new(0)),
+                    (true, BabyBear::new(1)),
+                    (false, BabyBear::ZERO),
+                ],
+            }],
+            // Equal check: X == Y (var 0 == var 1)
+            // With X=1000, Y=2000 this should NOT pass honestly.
+            equal_checks: vec![CircuitEqualCheck {
+                lhs_is_var: true,
+                lhs_value: BabyBear::new(0), // X
+                rhs_is_var: true,
+                rhs_value: BabyBear::new(1), // Y
+            }],
+            memberof_checks: vec![],
+            gte_check: None,
+            lt_check: None,
+        };
+
+        let body_fact = hash_fact(owns_pred, &[alice, file, BabyBear::ZERO]);
+
+        let witness = DerivationWitness {
+            rule,
+            state_root: BabyBear::new(99999),
+            body_fact_hashes: vec![body_fact],
+            substitution: vec![alice, file], // X=1000, Y=2000
+            derived_predicate: access_pred,
+            derived_terms: [alice, file, BabyBear::ZERO, BabyBear::ZERO],
+            not_after_height: BabyBear::ZERO,
+            org_id_hash: BabyBear::ZERO,
+            budget_remaining: BabyBear::ZERO,
+        };
+
+        // Generate trace honestly, then tamper with the eq check terms
+        let air = DerivationAir::new(witness.clone());
+        let (mut trace, public_inputs) = air.generate_trace();
+
+        // Malicious prover: overwrite term_a and term_b to both be 5
+        // so that active*(term_a - term_b) = 1*(5-5) = 0 passes
+        trace[0][col::eq_check_term_a(0)] = BabyBear::new(5);
+        trace[0][col::eq_check_term_b(0)] = BabyBear::new(5);
+
+        // Verify using the tampered trace directly
+        struct TamperedAir {
+            trace: Vec<Vec<BabyBear>>,
+            public_inputs: Vec<BabyBear>,
+        }
+        impl Air for TamperedAir {
+            fn trace_width(&self) -> usize {
+                DERIVATION_AIR_WIDTH
+            }
+            fn num_public_inputs(&self) -> usize {
+                5
+            }
+            fn constraints(&self) -> Vec<Constraint> {
+                let w = create_test_derivation(); // just for constraints
+                DerivationAir::new(w).constraints()
+            }
+            fn generate_trace(&self) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
+                (self.trace.clone(), self.public_inputs.clone())
+            }
+        }
+
+        let tampered = TamperedAir {
+            trace,
+            public_inputs,
+        };
+        let result = ConstraintProver::verify(&tampered);
+        assert!(
+            !result.is_valid(),
+            "Prover lying about eq check terms should be REJECTED by binding constraint"
+        );
+        let has_binding_violation = result
+            .violations()
+            .iter()
+            .any(|v| v.constraint_name == "check_term_binding_correct");
+        assert!(
+            has_binding_violation,
+            "Should have check_term_binding_correct violation, got: {:?}",
+            result.violations()
+        );
+    }
+
+    #[test]
+    fn test_prover_lies_about_gte_check_term_rejected() {
+        // SOUNDNESS TEST: A malicious prover has budget=5 (sub[0]=5) and cost=10 (sub[1]=10).
+        // GTE check requires sub[0] >= sub[1], which fails honestly (5 < 10).
+        // Prover lies by setting GTE term_a=100, term_b=10 in the trace.
+        // The binding constraint should catch that term_a != resolved(sub[0]).
+        let access_pred = BabyBear::new(300);
+        let owns_pred = BabyBear::new(100);
+        let budget = BabyBear::new(5);
+        let cost = BabyBear::new(10);
+
+        let rule = CircuitRule {
+            id: 11,
+            num_body_atoms: 1,
+            num_variables: 2,
+            head_predicate: access_pred,
+            head_terms: [
+                (true, BabyBear::new(0)),
+                (true, BabyBear::new(1)),
+                (false, BabyBear::ZERO),
+                (false, BabyBear::ZERO),
+            ],
+            body_atoms: vec![BodyAtomPattern {
+                predicate: owns_pred,
+                terms: [
+                    (true, BabyBear::new(0)),
+                    (true, BabyBear::new(1)),
+                    (false, BabyBear::ZERO),
+                ],
+            }],
+            equal_checks: vec![],
+            memberof_checks: vec![],
+            gte_check: Some(CircuitGteCheck {
+                lhs_is_var: true,
+                lhs_value: BabyBear::new(0), // budget (sub[0] = 5)
+                rhs_is_var: true,
+                rhs_value: BabyBear::new(1), // cost (sub[1] = 10)
+            }),
+            lt_check: None,
+        };
+
+        let body_fact = hash_fact(owns_pred, &[budget, cost, BabyBear::ZERO]);
+
+        let witness = DerivationWitness {
+            rule,
+            state_root: BabyBear::new(99999),
+            body_fact_hashes: vec![body_fact],
+            substitution: vec![budget, cost], // sub[0]=5, sub[1]=10
+            derived_predicate: access_pred,
+            derived_terms: [budget, cost, BabyBear::ZERO, BabyBear::ZERO],
+            not_after_height: BabyBear::ZERO,
+            org_id_hash: BabyBear::ZERO,
+            budget_remaining: BabyBear::ZERO,
+        };
+
+        // Generate trace honestly, then tamper
+        let air = DerivationAir::new(witness.clone());
+        let (mut trace, public_inputs) = air.generate_trace();
+
+        // Malicious prover: overwrite GTE terms to fake passing
+        // Set term_a = 100, term_b = 10, diff = 90 (which passes bit decomp + high bit)
+        let fake_a = BabyBear::new(100);
+        let fake_b = BabyBear::new(10);
+        let fake_diff = fake_a - fake_b; // 90
+        trace[0][col::GTE_CHECK_TERM_A] = fake_a;
+        trace[0][col::GTE_CHECK_TERM_B] = fake_b;
+        trace[0][col::GTE_CHECK_DIFF] = fake_diff;
+        // Fix bit decomposition for the fake diff (90)
+        let diff_val = fake_diff.as_u32();
+        for i in 0..GTE_DIFF_BITS {
+            let bit = (diff_val >> i) & 1;
+            trace[0][col::gte_diff_bit(i)] = BabyBear::new(bit);
+        }
+
+        struct TamperedAir {
+            trace: Vec<Vec<BabyBear>>,
+            public_inputs: Vec<BabyBear>,
+        }
+        impl Air for TamperedAir {
+            fn trace_width(&self) -> usize {
+                DERIVATION_AIR_WIDTH
+            }
+            fn num_public_inputs(&self) -> usize {
+                5
+            }
+            fn constraints(&self) -> Vec<Constraint> {
+                let w = create_test_derivation();
+                DerivationAir::new(w).constraints()
+            }
+            fn generate_trace(&self) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
+                (self.trace.clone(), self.public_inputs.clone())
+            }
+        }
+
+        let tampered = TamperedAir {
+            trace,
+            public_inputs,
+        };
+        let result = ConstraintProver::verify(&tampered);
+        assert!(
+            !result.is_valid(),
+            "Prover lying about GTE check terms should be REJECTED by binding constraint"
+        );
+        let has_binding_violation = result
+            .violations()
+            .iter()
+            .any(|v| v.constraint_name == "check_term_binding_correct");
+        assert!(
+            has_binding_violation,
+            "Should have check_term_binding_correct violation, got: {:?}",
+            result.violations()
+        );
+    }
+
+    #[test]
+    fn test_honest_prover_with_variable_references_passes() {
+        // Verify that an honest prover with variable references in all check types passes.
+        // Rule with Equal (X==Y where X=Y=42), MemberOf (X==Y), and GTE (X>=Y where X=100, Y=50).
+        let access_pred = BabyBear::new(300);
+        let owns_pred = BabyBear::new(100);
+        let val = BabyBear::new(42);
+        let budget = BabyBear::new(100);
+        let cost = BabyBear::new(50);
+
+        let rule = CircuitRule {
+            id: 12,
+            num_body_atoms: 1,
+            num_variables: 4,
+            head_predicate: access_pred,
+            head_terms: [
+                (true, BabyBear::new(0)), // X
+                (true, BabyBear::new(1)), // Y
+                (true, BabyBear::new(2)), // budget
+                (true, BabyBear::new(3)), // cost
+            ],
+            body_atoms: vec![BodyAtomPattern {
+                predicate: owns_pred,
+                terms: [
+                    (true, BabyBear::new(0)),
+                    (true, BabyBear::new(1)),
+                    (true, BabyBear::new(2)),
+                ],
+            }],
+            // Equal: X == Y (both are 42)
+            equal_checks: vec![CircuitEqualCheck {
+                lhs_is_var: true,
+                lhs_value: BabyBear::new(0), // X
+                rhs_is_var: true,
+                rhs_value: BabyBear::new(1), // Y
+            }],
+            // MemberOf: X == Y (same vars, passes)
+            memberof_checks: vec![CircuitMemberOfCheck {
+                lhs_is_var: true,
+                lhs_value: BabyBear::new(0), // X
+                rhs_is_var: true,
+                rhs_value: BabyBear::new(1), // Y
+            }],
+            // GTE: budget >= cost (100 >= 50)
+            gte_check: Some(CircuitGteCheck {
+                lhs_is_var: true,
+                lhs_value: BabyBear::new(2), // budget
+                rhs_is_var: true,
+                rhs_value: BabyBear::new(3), // cost
+            }),
+            lt_check: None,
+        };
+
+        let body_fact = hash_fact(owns_pred, &[val, val, budget]);
+
+        let witness = DerivationWitness {
+            rule,
+            state_root: BabyBear::new(99999),
+            body_fact_hashes: vec![body_fact],
+            substitution: vec![val, val, budget, cost], // X=42, Y=42, budget=100, cost=50
+            derived_predicate: access_pred,
+            derived_terms: [val, val, budget, cost],
+            not_after_height: BabyBear::ZERO,
+            org_id_hash: BabyBear::ZERO,
+            budget_remaining: BabyBear::ZERO,
+        };
+
+        let air = DerivationAir::new(witness);
+        let result = ConstraintProver::verify(&air);
+        assert!(
+            result.is_valid(),
+            "Honest prover with variable references in all check types should pass: {:?}",
+            result.violations()
         );
     }
 }

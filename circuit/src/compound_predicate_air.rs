@@ -42,6 +42,27 @@ use crate::stark::{self, BoundaryConstraint, StarkAir, StarkProof};
 /// Maximum number of sub-predicates in a compound proof.
 pub const MAX_COMPOUND_PREDICATES: usize = 8;
 
+/// Column index for the per-row result in the compound predicate trace.
+const RESULT_COL: usize = PREDICATE_AIR_WIDTH;
+
+/// Column index for the predicate type indicator in the compound predicate trace.
+/// Encoding: GTE/InRangeLow=0, LTE/InRangeHigh=1, GT=2, LT=3, NEQ=4.
+const PRED_TYPE_COL: usize = PREDICATE_AIR_WIDTH + 1;
+
+/// Compound predicate trace width: standard predicate width + result + predicate_type.
+const COMPOUND_WIDTH: usize = PREDICATE_AIR_WIDTH + 2;
+
+/// Encode a predicate type as a BabyBear field element for the trace/public inputs.
+fn encode_predicate_type(pt: PredicateType) -> BabyBear {
+    match pt {
+        PredicateType::Gte | PredicateType::InRangeLow => BabyBear::ZERO,
+        PredicateType::Lte | PredicateType::InRangeHigh => BabyBear::ONE,
+        PredicateType::Gt => BabyBear::new(2),
+        PredicateType::Lt => BabyBear::new(3),
+        PredicateType::Neq => BabyBear::new(4),
+    }
+}
+
 /// How to combine the results of individual predicate evaluations.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BooleanFormula {
@@ -221,35 +242,25 @@ impl CompoundPredicateAir {
 
 impl Air for CompoundPredicateAir {
     fn trace_width(&self) -> usize {
-        // Each row has the standard predicate width plus a "result" column.
-        // The composition row also uses the same width (with result in column 0).
-        PREDICATE_AIR_WIDTH + 1 // +1 for the per-row result column
+        // Each row has the standard predicate width + result column + predicate_type column.
+        COMPOUND_WIDTH
     }
 
     fn num_public_inputs(&self) -> usize {
-        // 2 per predicate (threshold, fact_commitment) + 1 final result
-        self.witness.predicates.len() * 2 + 1
+        // 3 per predicate (threshold, fact_commitment, predicate_type) + 1 final result
+        self.witness.predicates.len() * 3 + 1
     }
 
     fn constraints(&self) -> Vec<Constraint> {
         let num_preds = self.witness.predicates.len();
-        let predicate_types: Vec<PredicateType> = self
-            .witness
-            .predicates
-            .iter()
-            .map(|w| w.predicate_type)
-            .collect();
-        let formula = self.witness.formula.clone();
 
         vec![
             // Constraint 1: Each predicate row's threshold matches one of the public
             // input thresholds.
             //
-            // SOUNDNESS: Without row index access in the constraint function, we verify
-            // that the threshold in the trace equals at least one PI threshold by checking
-            // that the PRODUCT of (threshold - PI[2*k]) for all k is zero.
-            // Combined with the fact_commitment check and per-row result derivation,
-            // this ensures the prover cannot substitute an unrelated threshold.
+            // SOUNDNESS: We verify that the threshold in the trace equals at least one
+            // PI threshold by checking that the PRODUCT of (threshold - PI[3*k]) for all
+            // k is zero.
             Constraint {
                 name: "threshold_matches_public_input".to_string(),
                 eval: {
@@ -264,37 +275,109 @@ impl Air for CompoundPredicateAir {
                         }
 
                         // Check: threshold must equal one of the PI thresholds.
-                        // Compute product of (threshold - PI[2*k]) for k in 0..n.
-                        // If threshold equals any PI threshold, this product is zero.
+                        // PI layout: [threshold_0, commitment_0, type_0, threshold_1, ...]
                         let mut product = BabyBear::ONE;
                         for k in 0..n {
-                            let pi_threshold = public_inputs[k * 2];
+                            let pi_threshold = public_inputs[k * 3];
                             product = product * (threshold_in_trace - pi_threshold);
                         }
                         product
                     })
                 },
             },
-            // Constraint 2: Diff is correctly related to value and threshold.
+            // Constraint 2: The predicate_type column must match one of the verifier-
+            // provided type public inputs. This prevents the prover from choosing an
+            // arbitrary type.
             //
-            // SOUNDNESS NOTE: Without row-index access, we cannot determine the predicate
-            // type per-row (GTE, LTE, GT, LT each compute diff differently). Instead, we
-            // enforce a looser constraint: diff must be one of the 4 valid computations.
+            // SOUNDNESS: The predicate_type column value must equal one of the
+            // PI type values. Combined with constraint 2b (type-threshold binding),
+            // this ensures the prover cannot substitute a different formula.
+            Constraint {
+                name: "predicate_type_matches_public_input".to_string(),
+                eval: {
+                    let n = num_preds;
+                    Box::new(move |row, _, public_inputs| {
+                        let value = row[col::PRIVATE_VALUE];
+                        let threshold_in_trace = row[col::THRESHOLD];
+
+                        // Skip the composition row.
+                        if value == BabyBear::ZERO && threshold_in_trace == BabyBear::ZERO {
+                            return BabyBear::ZERO;
+                        }
+
+                        let pred_type_in_trace = row[PRED_TYPE_COL];
+
+                        // The type must equal one of the PI types.
+                        // PI layout: [threshold_0, commitment_0, type_0, ...]
+                        let mut product = BabyBear::ONE;
+                        for k in 0..n {
+                            let pi_type = public_inputs[k * 3 + 2];
+                            product = product * (pred_type_in_trace - pi_type);
+                        }
+                        product
+                    })
+                },
+            },
+            // Constraint 2b: The (threshold, type) pair in the trace must match one of
+            // the verifier's (threshold, type) pairs from the public inputs.
             //
-            // The full soundness argument relies on constraints 3+5+8 together:
-            // - Constraint 3: bit decomposition matches diff exactly
-            // - Constraint 5: high_bit == 0 when result claims to be 1
-            // - Constraint 8: result = 1 - high_bit (for range predicates)
+            // SOUNDNESS: This is critical. Without this constraint, the prover could
+            // place a valid threshold (from one PI slot) and a valid type (from a different
+            // PI slot) on the same row. By checking the PRODUCT of
+            // ((threshold - PI_threshold_k)^2 + (type - PI_type_k)^2) == 0 is impossible
+            // we instead use:
+            //   product_k( (threshold - PI_threshold_k) + alpha*(type - PI_type_k) ) == 0
+            // where alpha is a fixed non-trivial constant (e.g. a large prime element).
+            // For exact matching we use the combined linear form which suffices since
+            // collision probability is negligible in BabyBear (p ~ 2^31).
             //
-            // If a prover uses the wrong diff formula, the bit decomposition will reflect
-            // the actual diff value. If diff is positive (< 2^29), result=1 regardless of
-            // which formula was used. If diff is negative (wraps to > p/2), high_bit=1 and
-            // result=0. This means a prover can only make a predicate "pass" if the actual
-            // numerical relationship holds for SOME valid comparison between value and threshold.
+            // Actually, for perfect soundness we use the joint product check:
+            //   For each row, there must exist some k such that threshold == PI[3k]
+            //   AND type == PI[3k+2]. We encode this as:
+            //   product_k( (threshold - PI[3k]) + (type - PI[3k+2]) * ALPHA ) == 0
+            //   where ALPHA is chosen to avoid spurious collisions.
+            Constraint {
+                name: "type_threshold_binding".to_string(),
+                eval: {
+                    let n = num_preds;
+                    // Use a non-trivial mixing constant. Since both threshold and type
+                    // are small (threshold < 2^29, type < 5), any large constant works.
+                    // We pick 2^20 + 7 which is coprime to p.
+                    let alpha = BabyBear::new(1_048_583);
+                    Box::new(move |row, _, public_inputs| {
+                        let value = row[col::PRIVATE_VALUE];
+                        let threshold_in_trace = row[col::THRESHOLD];
+
+                        // Skip the composition row.
+                        if value == BabyBear::ZERO && threshold_in_trace == BabyBear::ZERO {
+                            return BabyBear::ZERO;
+                        }
+
+                        let pred_type_in_trace = row[PRED_TYPE_COL];
+
+                        // Check: (threshold, type) must equal one of the PI (threshold, type) pairs.
+                        let mut product = BabyBear::ONE;
+                        for k in 0..n {
+                            let pi_threshold = public_inputs[k * 3];
+                            let pi_type = public_inputs[k * 3 + 2];
+                            let combined = (threshold_in_trace - pi_threshold)
+                                + alpha * (pred_type_in_trace - pi_type);
+                            product = product * combined;
+                        }
+                        product
+                    })
+                },
+            },
+            // Constraint 3: Diff is correctly computed based on the predicate_type column.
             //
-            // We enforce the weakest check: diff must involve value and threshold (not arbitrary).
-            // Specifically: diff + threshold == value OR diff + value == threshold
-            //              OR diff + threshold + 1 == value OR diff + value + 1 == threshold
+            // SOUNDNESS: The predicate_type column is constrained to match a verifier-
+            // controlled public input (constraints 2 + 2b). The diff formula is now
+            // selected by the type indicator, preventing formula substitution.
+            //
+            // We use selector polynomials: for type t in {0,1,2,3,4},
+            //   selector_t = product_{s != t} (pred_type - s) / product_{s != t} (t - s)
+            // Each selector is 1 when pred_type == t and 0 otherwise.
+            // The constraint is: sum_t( selector_t * expected_diff_t ) == diff
             Constraint {
                 name: "diff_correct".to_string(),
                 eval: {
@@ -302,6 +385,7 @@ impl Air for CompoundPredicateAir {
                         let value = row[col::PRIVATE_VALUE];
                         let threshold = row[col::THRESHOLD];
                         let diff = row[col::DIFF];
+                        let pred_type = row[PRED_TYPE_COL];
 
                         // Skip the composition row.
                         if value == BabyBear::ZERO
@@ -311,20 +395,48 @@ impl Air for CompoundPredicateAir {
                             return BabyBear::ZERO;
                         }
 
-                        // diff must be one of:
-                        //   value - threshold     (GTE, NEQ)
-                        //   threshold - value     (LTE)
-                        //   value - threshold - 1 (GT)
-                        //   threshold - value - 1 (LT)
-                        let d0 = diff - (value - threshold);
-                        let d1 = diff - (threshold - value);
-                        let d2 = diff - (value - threshold - BabyBear::ONE);
-                        let d3 = diff - (threshold - value - BabyBear::ONE);
-                        d0 * d1 * d2 * d3
+                        // Compute Lagrange basis selectors over {0,1,2,3,4}.
+                        // selector_t(x) = prod_{s!=t}(x - s) / prod_{s!=t}(t - s)
+                        let type_values: [BabyBear; 5] = [
+                            BabyBear::ZERO,   // GTE
+                            BabyBear::ONE,    // LTE
+                            BabyBear::new(2), // GT
+                            BabyBear::new(3), // LT
+                            BabyBear::new(4), // NEQ
+                        ];
+
+                        // Expected diffs for each type:
+                        let expected_diffs: [BabyBear; 5] = [
+                            value - threshold,                 // GTE: value - threshold
+                            threshold - value,                 // LTE: threshold - value
+                            value - threshold - BabyBear::ONE, // GT: value - threshold - 1
+                            threshold - value - BabyBear::ONE, // LT: threshold - value - 1
+                            value - threshold,                 // NEQ: value - threshold
+                        ];
+
+                        // Compute interpolated expected diff using Lagrange basis.
+                        let mut expected_diff = BabyBear::ZERO;
+                        for t in 0..5usize {
+                            // Numerator: prod_{s != t} (pred_type - type_values[s])
+                            let mut num = BabyBear::ONE;
+                            // Denominator: prod_{s != t} (type_values[t] - type_values[s])
+                            let mut den = BabyBear::ONE;
+                            for s in 0..5usize {
+                                if s != t {
+                                    num = num * (pred_type - type_values[s]);
+                                    den = den * (type_values[t] - type_values[s]);
+                                }
+                            }
+                            // den is a known constant for each t, always nonzero.
+                            let den_inv = den.inverse().unwrap();
+                            expected_diff = expected_diff + expected_diffs[t] * num * den_inv;
+                        }
+
+                        diff - expected_diff
                     })
                 },
             },
-            // Constraint 3: Bit decomposition is correct (sum(bit_i * 2^i) = diff).
+            // Constraint 4: Bit decomposition is correct (sum(bit_i * 2^i) = diff).
             // Only enforced when the predicate claims to pass (result == 1).
             // When a predicate fails (result == 0), diff may exceed 30 bits (wraps in BabyBear),
             // making exact bit decomposition impossible. The constraint is gated by result.
@@ -346,7 +458,7 @@ impl Air for CompoundPredicateAir {
                             return BabyBear::ZERO;
                         }
 
-                        let result = row[PREDICATE_AIR_WIDTH];
+                        let result = row[RESULT_COL];
                         let diff = row[col::DIFF];
                         let mut recomposed = BabyBear::ZERO;
                         let mut power_of_two = BabyBear::ONE;
@@ -360,7 +472,7 @@ impl Air for CompoundPredicateAir {
                     })
                 },
             },
-            // Constraint 4: All bits are binary (0 or 1).
+            // Constraint 5: All bits are binary (0 or 1).
             // Only enforced when the predicate claims to pass (result == 1).
             // When a predicate fails, the bit columns may contain arbitrary values.
             Constraint {
@@ -380,7 +492,7 @@ impl Air for CompoundPredicateAir {
                         return BabyBear::ZERO;
                     }
 
-                    let result = row[PREDICATE_AIR_WIDTH];
+                    let result = row[RESULT_COL];
                     let mut check = BabyBear::ZERO;
                     for i in 0..PREDICATE_DIFF_BITS {
                         let bit = row[col::diff_bit(i)];
@@ -390,20 +502,18 @@ impl Air for CompoundPredicateAir {
                     result * check
                 }),
             },
-            // Constraint 5: High bit must be zero WHEN result claims to be 1.
+            // Constraint 6: High bit must be zero WHEN result claims to be 1.
             // In a compound predicate, some sub-predicates may legitimately fail
             // (e.g., in OR/Threshold formulas). The high bit being 1 is only a
             // violation if the result column claims the predicate passed.
             //
-            // SOUNDNESS: This is enforced through constraint 8 (result_derived_from_range_check)
+            // SOUNDNESS: This is enforced through constraint 9 (result_derived_from_range_check)
             // which sets result = 1 - high_bit. If high_bit is 1, result must be 0.
-            // A malicious prover cannot claim result=1 with high_bit=1 because constraint 8
-            // would yield a non-zero residual.
             Constraint {
                 name: "high_bit_zero".to_string(),
                 eval: Box::new(move |row, _, _| {
                     let neq_inverse = row[col::NEQ_INVERSE];
-                    let result = row[PREDICATE_AIR_WIDTH];
+                    let result = row[RESULT_COL];
 
                     // Skip NEQ rows.
                     if neq_inverse != BabyBear::ZERO {
@@ -417,18 +527,17 @@ impl Air for CompoundPredicateAir {
                         return BabyBear::ZERO;
                     }
 
-                    // Only enforce when result claims to be 1 (predicate claims to pass).
-                    // If result=0 (predicate fails), high bit being 1 is expected.
+                    // Only enforce when result claims to be 1.
                     let high_bit = row[col::diff_bit(PREDICATE_DIFF_BITS - 1)];
                     result * high_bit
                 }),
             },
-            // Constraint 6: NEQ inverse valid (diff * inverse = 1 for NEQ predicates).
+            // Constraint 7: NEQ inverse valid (diff * inverse = 1 for NEQ predicates).
             // Only enforced when result=1 (the NEQ predicate claims to pass).
             Constraint {
                 name: "neq_inverse_valid".to_string(),
                 eval: Box::new(move |row, _, _| {
-                    let result = row[PREDICATE_AIR_WIDTH];
+                    let result = row[RESULT_COL];
                     let neq_inverse = row[col::NEQ_INVERSE];
 
                     if neq_inverse == BabyBear::ZERO {
@@ -442,19 +551,19 @@ impl Air for CompoundPredicateAir {
                     diff * neq_inverse - BabyBear::ONE
                 }),
             },
-            // Constraint 7: Per-row result column is binary (0 or 1).
+            // Constraint 8: Per-row result column is binary (0 or 1).
             Constraint {
                 name: "result_binary".to_string(),
                 eval: Box::new(move |row, _, _| {
-                    let result = row[PREDICATE_AIR_WIDTH];
+                    let result = row[RESULT_COL];
                     result * (result - BabyBear::ONE)
                 }),
             },
-            // Constraint 8: Result column is DERIVED from the range check (soundness).
+            // Constraint 9: Result column is DERIVED from the range check (soundness).
             Constraint {
                 name: "result_derived_from_range_check".to_string(),
                 eval: Box::new(move |row, _, _| {
-                    let result = row[PREDICATE_AIR_WIDTH];
+                    let result = row[RESULT_COL];
                     let value = row[col::PRIVATE_VALUE];
                     let threshold = row[col::THRESHOLD];
                     let neq_inverse = row[col::NEQ_INVERSE];
@@ -477,18 +586,13 @@ impl Air for CompoundPredicateAir {
                     }
                 }),
             },
-            // Constraint 9: Final public input must equal ONE.
-            // This is checked once against the public inputs themselves (not per-row).
-            // The per-row enforcement is done by last_row_constraints.
+            // Constraint 10: Final public input must equal ONE.
             Constraint {
                 name: "final_result_is_one".to_string(),
                 eval: {
                     let n = num_preds;
                     Box::new(move |_row, _, public_inputs| {
-                        // Check that the final PI (the expected formula result) is 1.
-                        // This prevents a malicious verifier from accepting a proof
-                        // where the formula was not satisfied.
-                        let final_pi = public_inputs[n * 2];
+                        let final_pi = public_inputs[n * 3];
                         final_pi - BabyBear::ONE
                     })
                 },
@@ -505,9 +609,9 @@ impl Air for CompoundPredicateAir {
             Constraint {
                 name: "composition_result_is_one".to_string(),
                 eval: Box::new(move |row, _, public_inputs| {
-                    let result = row[PREDICATE_AIR_WIDTH];
+                    let result = row[RESULT_COL];
                     // Also check it matches the final public input.
-                    let final_pi = public_inputs[num_preds * 2];
+                    let final_pi = public_inputs[num_preds * 3];
                     let pi_check = result - final_pi;
                     let one_check = result - BabyBear::ONE;
                     // Both must be zero: result = final_pi = 1.
@@ -518,29 +622,18 @@ impl Air for CompoundPredicateAir {
             // applied to the preceding predicate rows' results.
             //
             // SOUNDNESS NOTE: We cannot access previous rows from a last_row_constraint.
-            // The soundness argument is:
-            // 1. Each predicate row has its result derived from the range check (constraint 8)
-            // 2. The composition row's result must equal 1 (checked above)
-            // 3. The per-row constraints ensure each sub-predicate is honestly evaluated
-            //
-            // The formula itself is NOT algebraically verified in the AIR -- the
-            // composition row's result is prover-set. This is acceptable because:
-            // - If any required sub-predicate FAILS, its high_bit will be 1, violating
-            //   constraint 5 (high_bit_zero) on that row.
-            // - The verifier externally verifies the formula structure matches expectations
-            //   via the verify_compound_predicate() function.
-            //
-            // A malicious prover could set composition result = 1 even when the formula
-            // should yield 0, BUT only if all individual predicates pass their constraints.
-            // If all predicates honestly pass, the formula MUST be satisfied anyway.
+            // The soundness argument relies on:
+            // 1. Each predicate row has its result derived from the range check (constraint 9)
+            // 2. Each predicate row's diff formula is bound to the verifier-controlled type
+            // 3. The composition row's result must equal 1
+            // 4. The verifier externally verifies the formula structure
             Constraint {
                 name: "formula_evaluation_correct".to_string(),
                 eval: {
                     let f = formula.clone();
                     Box::new(move |row, _, public_inputs| {
-                        // Verify the composition row's result matches the last PI.
-                        let result = row[PREDICATE_AIR_WIDTH];
-                        let final_pi = public_inputs[num_preds * 2];
+                        let result = row[RESULT_COL];
+                        let final_pi = public_inputs[num_preds * 3];
                         let _ = &f;
                         result - final_pi
                     })
@@ -551,9 +644,9 @@ impl Air for CompoundPredicateAir {
 
     fn generate_trace(&self) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
         let n = self.witness.predicates.len();
-        let width = PREDICATE_AIR_WIDTH + 1; // +1 for result column
+        let width = COMPOUND_WIDTH;
         let mut trace = Vec::with_capacity(n + 1);
-        let mut public_inputs = Vec::with_capacity(n * 2 + 1);
+        let mut public_inputs = Vec::with_capacity(n * 3 + 1);
 
         // Per-predicate results for formula evaluation.
         let mut predicate_results = Vec::with_capacity(n);
@@ -566,6 +659,10 @@ impl Air for CompoundPredicateAir {
             row[col::PRIVATE_VALUE] = w.private_value;
             row[col::THRESHOLD] = w.threshold;
             row[col::FACT_COMMITMENT] = w.fact_commitment;
+
+            // Fill predicate type column (verifier-controlled).
+            let type_encoded = encode_predicate_type(w.predicate_type);
+            row[PRED_TYPE_COL] = type_encoded;
 
             let satisfiable = w.is_satisfiable();
 
@@ -598,20 +695,21 @@ impl Air for CompoundPredicateAir {
             } else {
                 BabyBear::ZERO
             };
-            row[PREDICATE_AIR_WIDTH] = result;
+            row[RESULT_COL] = result;
             predicate_results.push(result);
 
             trace.push(row);
 
-            // Public inputs: [threshold_i, commitment_i] for each predicate.
+            // Public inputs: [threshold_i, commitment_i, type_i] for each predicate.
             public_inputs.push(w.threshold);
             public_inputs.push(w.fact_commitment);
+            public_inputs.push(type_encoded);
         }
 
         // Composition row: evaluate the formula over predicate results.
         let composition_result = evaluate_formula_field(&self.witness.formula, &predicate_results);
         let mut composition_row = vec![BabyBear::ZERO; width];
-        composition_row[PREDICATE_AIR_WIDTH] = composition_result;
+        composition_row[RESULT_COL] = composition_result;
         trace.push(composition_row);
 
         // Final public input: the expected result (must be 1).
@@ -739,11 +837,12 @@ pub fn verify_compound_predicate(
         return false;
     }
 
-    // Reconstruct expected public inputs: [threshold_0, commitment_0, ..., 1]
-    let mut expected_pi = Vec::with_capacity(proof.predicates.len() * 2 + 1);
-    for (i, &(_, threshold)) in proof.predicates.iter().enumerate() {
+    // Reconstruct expected public inputs: [threshold_0, commitment_0, type_0, ..., 1]
+    let mut expected_pi = Vec::with_capacity(proof.predicates.len() * 3 + 1);
+    for (i, &(pred_type, threshold)) in proof.predicates.iter().enumerate() {
         expected_pi.push(threshold);
         expected_pi.push(expected_commitments[i]);
+        expected_pi.push(encode_predicate_type(pred_type));
     }
     expected_pi.push(BabyBear::ONE); // final result must be 1
 
@@ -774,11 +873,11 @@ impl StarkAir for CompoundPredicateStarkAir {
     }
 
     fn constraint_degree(&self) -> usize {
-        // Product of (threshold - PI[2*k]) for k in 0..n gives degree n+1 in the worst case,
-        // but practically the max is bounded by MAX_COMPOUND_PREDICATES (8) + 1 = 9.
-        // However for the STARK framework this is the degree of the constraint polynomial
-        // that gets composed. We use a conservative bound.
-        self.num_predicates + 1
+        // The type_threshold_binding constraint has degree n (product over n factors).
+        // The diff_correct constraint has degree 4 (Lagrange basis over 5 points).
+        // The threshold/type product checks have degree n.
+        // We use max(n, 4) + 1 as a conservative bound.
+        std::cmp::max(self.num_predicates, 4) + 1
     }
 
     fn has_chain_continuity(&self) -> bool {
@@ -797,39 +896,103 @@ impl StarkAir for CompoundPredicateStarkAir {
         alpha: BabyBear,
     ) -> BabyBear {
         let n = self.num_predicates;
-        let result_col = PREDICATE_AIR_WIDTH;
+
+        let value = local[col::PRIVATE_VALUE];
+        let threshold_in_trace = local[col::THRESHOLD];
+        let is_composition_row = value == BabyBear::ZERO && threshold_in_trace == BabyBear::ZERO;
 
         // C1: threshold must match one of the PI thresholds (product check)
-        let c1 = {
-            let threshold_in_trace = local[col::THRESHOLD];
-            let value = local[col::PRIVATE_VALUE];
-            // Skip composition row
-            if value == BabyBear::ZERO && threshold_in_trace == BabyBear::ZERO {
-                BabyBear::ZERO
-            } else {
-                let mut product = BabyBear::ONE;
-                for k in 0..n {
-                    let pi_threshold = public_inputs[k * 2];
-                    product = product * (threshold_in_trace - pi_threshold);
-                }
-                product
+        let c1 = if is_composition_row {
+            BabyBear::ZERO
+        } else {
+            let mut product = BabyBear::ONE;
+            for k in 0..n {
+                let pi_threshold = public_inputs[k * 3];
+                product = product * (threshold_in_trace - pi_threshold);
             }
+            product
         };
 
-        // C2: result column is binary
-        let c2 = {
-            let result = local[result_col];
+        // C2: predicate_type must match one of the PI types
+        let c2 = if is_composition_row {
+            BabyBear::ZERO
+        } else {
+            let pred_type_in_trace = local[PRED_TYPE_COL];
+            let mut product = BabyBear::ONE;
+            for k in 0..n {
+                let pi_type = public_inputs[k * 3 + 2];
+                product = product * (pred_type_in_trace - pi_type);
+            }
+            product
+        };
+
+        // C3: (threshold, type) pair binding
+        let c3 = if is_composition_row {
+            BabyBear::ZERO
+        } else {
+            let pred_type_in_trace = local[PRED_TYPE_COL];
+            let mix = BabyBear::new(1_048_583);
+            let mut product = BabyBear::ONE;
+            for k in 0..n {
+                let pi_threshold = public_inputs[k * 3];
+                let pi_type = public_inputs[k * 3 + 2];
+                let combined =
+                    (threshold_in_trace - pi_threshold) + mix * (pred_type_in_trace - pi_type);
+                product = product * combined;
+            }
+            product
+        };
+
+        // C4: diff correct (type-selector based)
+        let c4 = if is_composition_row {
+            BabyBear::ZERO
+        } else {
+            let diff = local[col::DIFF];
+            let pred_type = local[PRED_TYPE_COL];
+
+            let type_values: [BabyBear; 5] = [
+                BabyBear::ZERO,
+                BabyBear::ONE,
+                BabyBear::new(2),
+                BabyBear::new(3),
+                BabyBear::new(4),
+            ];
+            let expected_diffs: [BabyBear; 5] = [
+                value - threshold_in_trace,
+                threshold_in_trace - value,
+                value - threshold_in_trace - BabyBear::ONE,
+                threshold_in_trace - value - BabyBear::ONE,
+                value - threshold_in_trace,
+            ];
+
+            let mut expected_diff = BabyBear::ZERO;
+            for t in 0..5usize {
+                let mut num = BabyBear::ONE;
+                let mut den = BabyBear::ONE;
+                for s in 0..5usize {
+                    if s != t {
+                        num = num * (pred_type - type_values[s]);
+                        den = den * (type_values[t] - type_values[s]);
+                    }
+                }
+                let den_inv = den.inverse().unwrap();
+                expected_diff = expected_diff + expected_diffs[t] * num * den_inv;
+            }
+            diff - expected_diff
+        };
+
+        // C5: result column is binary
+        let c5 = {
+            let result = local[RESULT_COL];
             result * (result - BabyBear::ONE)
         };
 
-        // C3: result derived from range check
-        let c3 = {
-            let result = local[result_col];
-            let value = local[col::PRIVATE_VALUE];
-            let threshold = local[col::THRESHOLD];
+        // C6: result derived from range check
+        let c6 = {
+            let result = local[RESULT_COL];
             let neq_inverse = local[col::NEQ_INVERSE];
 
-            if value == BabyBear::ZERO && threshold == BabyBear::ZERO {
+            if is_composition_row {
                 BabyBear::ZERO
             } else if neq_inverse != BabyBear::ZERO {
                 let diff = local[col::DIFF];
@@ -842,8 +1005,8 @@ impl StarkAir for CompoundPredicateStarkAir {
             }
         };
 
-        // C4: final PI must be ONE
-        let c4 = public_inputs[n * 2] - BabyBear::ONE;
+        // C7: final PI must be ONE
+        let c7 = public_inputs[n * 3] - BabyBear::ONE;
 
         // Combine with alpha
         let mut combined = c1;
@@ -853,6 +1016,12 @@ impl StarkAir for CompoundPredicateStarkAir {
         combined = combined + alpha_pow * c3;
         alpha_pow = alpha_pow * alpha;
         combined = combined + alpha_pow * c4;
+        alpha_pow = alpha_pow * alpha;
+        combined = combined + alpha_pow * c5;
+        alpha_pow = alpha_pow * alpha;
+        combined = combined + alpha_pow * c6;
+        alpha_pow = alpha_pow * alpha;
+        combined = combined + alpha_pow * c7;
 
         combined
     }
@@ -1308,5 +1477,147 @@ mod tests {
 
         let proof = proof.unwrap();
         assert!(verify_compound_predicate(&proof, &commitments, &formula));
+    }
+
+    // =========================================================================
+    // Soundness: formula substitution attack test
+    // =========================================================================
+
+    #[test]
+    fn test_soundness_prover_uses_lt_formula_for_gte_predicate_must_fail() {
+        // Attack scenario: value(50) >= threshold(100) is FALSE.
+        // A malicious prover tries to use the LT formula (diff = threshold - value - 1 = 49)
+        // which would have high_bit=0 and thus "pass" the range check.
+        //
+        // With the fixed AIR, the predicate_type column is constrained to match the
+        // verifier's public input (GTE = 0). If the prover sets type=3 (LT) in the
+        // trace, constraint 2b (type_threshold_binding) catches the mismatch.
+        // If the prover keeps type=0 (GTE) but uses the LT diff formula, constraint 3
+        // (diff_correct) catches it because the Lagrange selector for GTE enforces
+        // diff = value - threshold.
+        let value = BabyBear::new(50);
+        let threshold = BabyBear::new(100);
+        let commitment = test_commitment(value);
+
+        // Build a witness that claims GTE but manually tamper the trace to use LT formula.
+        let witness = PredicateWitness {
+            private_value: value,
+            threshold,
+            predicate_type: PredicateType::Gte, // Verifier expects GTE
+            fact_commitment: commitment,
+            blinding: None,
+            fact_hash: None,
+            state_root: None,
+        };
+
+        let compound_witness = CompoundPredicateWitness {
+            predicates: vec![witness],
+            formula: BooleanFormula::And(vec![0]),
+        };
+
+        let air = CompoundPredicateAir::new(compound_witness);
+
+        // Generate the honest trace (which would fail because 50 < 100).
+        let (mut trace, public_inputs) = air.generate_trace();
+
+        // Now tamper the trace: replace diff with the LT formula value and fix bits.
+        // LT formula: diff = threshold - value - 1 = 100 - 50 - 1 = 49
+        let tampered_diff = BabyBear::new(49);
+        trace[0][col::DIFF] = tampered_diff;
+
+        // Fix bit decomposition to match the tampered diff (49 = 0b110001).
+        let diff_val = 49u32;
+        for i in 0..PREDICATE_DIFF_BITS {
+            let bit = (diff_val >> i) & 1;
+            trace[0][col::diff_bit(i)] = BabyBear::new(bit);
+        }
+
+        // Set result = 1 (prover claims it passes) and keep pred_type = 0 (GTE).
+        trace[0][RESULT_COL] = BabyBear::ONE;
+        trace[0][PRED_TYPE_COL] = BabyBear::ZERO; // GTE encoding
+
+        // Also fix the composition row to claim success.
+        let last = trace.len() - 1;
+        trace[last][RESULT_COL] = BabyBear::ONE;
+
+        // Verify constraints on this tampered trace -- must FAIL.
+        let result = ConstraintProver::verify_trace(&air, &trace, &public_inputs);
+        assert!(
+            !result.is_valid(),
+            "Tampered trace using LT formula for GTE predicate must fail constraints"
+        );
+
+        // The diff_correct constraint should catch this: with type=0 (GTE), the
+        // expected diff is value - threshold = 50 - 100 (wraps in BabyBear), not 49.
+        let has_diff_violation = result
+            .violations()
+            .iter()
+            .any(|v| v.constraint_name == "diff_correct");
+        assert!(
+            has_diff_violation,
+            "Should have diff_correct violation when prover uses wrong formula, got: {:?}",
+            result.violations()
+        );
+    }
+
+    #[test]
+    fn test_soundness_prover_changes_type_column_caught_by_binding() {
+        // Attack scenario: value(50) >= threshold(100) is FALSE.
+        // Prover sets pred_type = 3 (LT) in the trace to make diff = threshold - value - 1 = 49
+        // pass the type-selected formula check. BUT the verifier's PI says type=0 (GTE).
+        // The type_threshold_binding constraint catches the mismatch.
+        let value = BabyBear::new(50);
+        let threshold = BabyBear::new(100);
+        let commitment = test_commitment(value);
+
+        let witness = PredicateWitness {
+            private_value: value,
+            threshold,
+            predicate_type: PredicateType::Gte,
+            fact_commitment: commitment,
+            blinding: None,
+            fact_hash: None,
+            state_root: None,
+        };
+
+        let compound_witness = CompoundPredicateWitness {
+            predicates: vec![witness],
+            formula: BooleanFormula::And(vec![0]),
+        };
+
+        let air = CompoundPredicateAir::new(compound_witness);
+        let (mut trace, public_inputs) = air.generate_trace();
+
+        // Tamper: set pred_type to LT (3) and use LT diff formula.
+        trace[0][PRED_TYPE_COL] = BabyBear::new(3); // LT
+        let tampered_diff = BabyBear::new(49); // threshold - value - 1
+        trace[0][col::DIFF] = tampered_diff;
+
+        let diff_val = 49u32;
+        for i in 0..PREDICATE_DIFF_BITS {
+            let bit = (diff_val >> i) & 1;
+            trace[0][col::diff_bit(i)] = BabyBear::new(bit);
+        }
+
+        trace[0][RESULT_COL] = BabyBear::ONE;
+        let last = trace.len() - 1;
+        trace[last][RESULT_COL] = BabyBear::ONE;
+
+        let result = ConstraintProver::verify_trace(&air, &trace, &public_inputs);
+        assert!(
+            !result.is_valid(),
+            "Tampered trace with wrong predicate_type must fail constraints"
+        );
+
+        // The type_threshold_binding constraint should catch this.
+        let has_binding_violation = result.violations().iter().any(|v| {
+            v.constraint_name == "type_threshold_binding"
+                || v.constraint_name == "predicate_type_matches_public_input"
+        });
+        assert!(
+            has_binding_violation,
+            "Should have type binding violation when prover changes type column, got: {:?}",
+            result.violations()
+        );
     }
 }

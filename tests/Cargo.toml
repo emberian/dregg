@@ -12,7 +12,7 @@ path = "src/main.rs"
 pyana-circuit = { path = "../circuit" }
 pyana-turn = { path = "../turn" }
 pyana-cell = { path = "../cell" }
-token = { path = "../token", default-features = false, features = ["macaroon", "datalog"] }
+token = { path = "../token", default-features = false, features = ["macaroon", "datalog", "rand-deps"] }
 blake3 = "1"
 getrandom = { workspace = true }
 proptest = { workspace = true }

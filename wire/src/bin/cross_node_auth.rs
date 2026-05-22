@@ -62,12 +62,16 @@ impl ProofVerifier for Poseidon2StarkVerifier {
             .map(|&v| pyana_circuit::BabyBear::new(v))
             .collect();
 
-        // Verify action binding: the proof's last public input must be the canonical
-        // commitment to (action, resource), computed via `compute_action_binding`.
+        // Verify action binding: the proof must contain the canonical 4-element
+        // commitment to (action, resource) at pi[2..6], computed via `compute_action_binding`.
         let expected_binding = pyana_circuit::compute_action_binding(action, resource);
-        match public_inputs.last() {
-            Some(&last_pi) if last_pi == expected_binding => {}
-            _ => return Ok(false), // Proof not bound to this (action, resource)
+        if public_inputs.len() < 2 + pyana_circuit::ACTION_BINDING_WIDTH {
+            return Ok(false);
+        }
+        for i in 0..pyana_circuit::ACTION_BINDING_WIDTH {
+            if public_inputs[2 + i] != expected_binding[i] {
+                return Ok(false); // Proof not bound to this (action, resource)
+            }
         }
 
         // Production verification only accepts the Poseidon2 AIR.

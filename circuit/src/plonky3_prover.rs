@@ -818,6 +818,118 @@ mod tests {
     }
 
     #[test]
+    fn plonky3_check_symbolic_degree() {
+        use p3_air::BaseAir;
+        use p3_air::symbolic::{AirLayout, get_max_constraint_degree, get_symbolic_constraints};
+
+        let air = P3MerklePoseidon2Air;
+        let layout = AirLayout {
+            preprocessed_width: 0,
+            main_width: <P3MerklePoseidon2Air as BaseAir<P3BabyBear>>::width(&air),
+            num_public_values: <P3MerklePoseidon2Air as BaseAir<P3BabyBear>>::num_public_values(
+                &air,
+            ),
+            num_periodic_columns: 0,
+            ..Default::default()
+        };
+
+        let degree = get_max_constraint_degree::<P3BabyBear, _>(&air, layout);
+        let constraints = get_symbolic_constraints::<P3BabyBear, _>(&air, layout);
+        eprintln!("Symbolic max constraint degree: {}", degree);
+        eprintln!("Number of constraints: {}", constraints.len());
+        eprintln!(
+            "log_num_quotient_chunks: {}",
+            p3_util::log2_ceil_usize(degree.max(2) - 1)
+        );
+        assert_eq!(degree, 7, "Expected degree 7, got {}", degree);
+        assert_eq!(
+            constraints.len(),
+            357,
+            "Expected 357 constraints, got {}",
+            constraints.len()
+        );
+    }
+
+    /// Minimal AIR with degree-7 constraint to test that our config supports high-degree AIRs.
+    /// If this passes but P3MerklePoseidon2Air fails, the bug is in our specific AIR logic.
+    struct MinimalDegree7Air;
+
+    impl<F: PrimeCharacteristicRing + Sync> BaseAir<F> for MinimalDegree7Air {
+        fn width(&self) -> usize {
+            2 // [x, x^7]
+        }
+        fn num_public_values(&self) -> usize {
+            0
+        }
+    }
+
+    impl<AB: AirBuilder> Air<AB> for MinimalDegree7Air
+    where
+        AB::F: PrimeField32,
+    {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let local = main.current_slice();
+            let x: AB::Expr = local[0].into();
+            let x7_witness: AB::Expr = local[1].into();
+            // Constraint: x^7 == x7_witness
+            let x7_computed = x.exp_const_u64::<7>();
+            builder.assert_eq(x7_computed, x7_witness);
+        }
+    }
+
+    #[test]
+    fn plonky3_minimal_degree7_prove_verify() {
+        // Create a 4-row trace where col0 = some values, col1 = col0^7
+        let config = create_config();
+        let air = MinimalDegree7Air;
+
+        let values: Vec<P3BabyBear> = [5u32, 17, 42, 100]
+            .iter()
+            .flat_map(|&v| {
+                let x = P3BabyBear::new(v);
+                let x7 = x.exp_const_u64::<7>();
+                [x, x7]
+            })
+            .collect();
+        let matrix = RowMajorMatrix::new(values, 2);
+        let public: Vec<P3BabyBear> = vec![];
+
+        let proof = prove(&config, &air, matrix, &public);
+        let result = verify(&config, &air, &proof, &public);
+        assert!(
+            result.is_ok(),
+            "Minimal degree-7 AIR (4 rows) failed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn plonky3_minimal_degree7_more_rows() {
+        // Try with 16 rows to see if trace size matters
+        let config = create_config();
+        let air = MinimalDegree7Air;
+
+        let values: Vec<P3BabyBear> = (1u32..=16)
+            .flat_map(|v| {
+                let x = P3BabyBear::new(v * 7 + 3);
+                let x7 = x.exp_const_u64::<7>();
+                [x, x7]
+            })
+            .collect();
+        let matrix = RowMajorMatrix::new(values, 2);
+        let public: Vec<P3BabyBear> = vec![];
+
+        let proof = prove(&config, &air, matrix, &public);
+        let result = verify(&config, &air, &proof, &public);
+        assert!(
+            result.is_ok(),
+            "Minimal degree-7 AIR (16 rows) failed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
     fn plonky3_non_power_of_2_depth() {
         // Depth 3 gets padded to 4
         let leaf = BabyBear::new(12345);

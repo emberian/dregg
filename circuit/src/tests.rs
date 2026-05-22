@@ -29,6 +29,7 @@ fn end_to_end_authorization_proof() {
     let can_read = BabyBear::new(200);
     let can_write = BabyBear::new(300);
     let access = BabyBear::new(400);
+    let access_binding = crate::binding::compute_action_binding("access", "test");
     let alice = BabyBear::new(1001);
     let file1 = BabyBear::new(2001);
     let file2 = BabyBear::new(2002);
@@ -67,6 +68,7 @@ fn end_to_end_authorization_proof() {
             membership_proof: Some(fold1_proofs.into_iter().next().unwrap()),
         }],
         num_added_checks: 0,
+        added_checks_commitment: BabyBear::ZERO,
     };
 
     println!("\nFold step 1: Remove can_write(alice, file2)");
@@ -92,6 +94,7 @@ fn end_to_end_authorization_proof() {
             membership_proof: Some(fold2_proofs.into_iter().next().unwrap()),
         }],
         num_added_checks: 1,
+        added_checks_commitment: crate::fold_air::compute_test_checks_commitment(1),
     };
 
     println!("\nFold step 2: Remove owns(alice, file2), add check read_only(file2)");
@@ -184,7 +187,7 @@ fn end_to_end_authorization_proof() {
     // -- Step 6: Complete presentation proof --
     let presentation = PresentationWitness {
         federation_root,
-        request_predicate: access,
+        request_predicate: access_binding,
         timestamp: BabyBear::new(1716000000),
         fold_chain: vec![fold1, fold2],
         derivation,
@@ -195,6 +198,7 @@ fn end_to_end_authorization_proof() {
         presentation_randomness: BabyBear::ZERO,
         composition_commitment: BabyBear::ZERO,
         verifier_nonce: BabyBear::ZERO,
+        verifier_block_height: BabyBear::ZERO,
     };
 
     let presentation_air = PresentationAir::new(presentation);
@@ -226,6 +230,7 @@ fn end_to_end_authorization_proof() {
 #[test]
 fn single_step_no_attenuation() {
     let pred_access = BabyBear::new(400);
+    let action_binding = crate::binding::compute_action_binding("access", "resource");
     let alice = BabyBear::new(1001);
     let resource = BabyBear::new(3001);
 
@@ -277,7 +282,7 @@ fn single_step_no_attenuation() {
 
     let presentation = PresentationWitness {
         federation_root,
-        request_predicate: pred_access,
+        request_predicate: action_binding,
         timestamp: BabyBear::new(1000),
         fold_chain: vec![], // No attenuation
         derivation,
@@ -288,6 +293,7 @@ fn single_step_no_attenuation() {
         presentation_randomness: BabyBear::ZERO,
         composition_commitment: BabyBear::ZERO,
         verifier_nonce: BabyBear::ZERO,
+        verifier_block_height: BabyBear::ZERO,
     };
 
     let air = PresentationAir::new(presentation);
@@ -325,6 +331,7 @@ fn long_attenuation_chain() {
                 .last_mut()
                 .map(|f: &mut FoldWitness| f.new_root = tree_root);
         }
+        let num_checks = if i % 2 == 0 { 1 } else { 0 };
         folds.push(FoldWitness {
             old_root: tree_root,
             new_root: roots[i + 1],
@@ -333,7 +340,8 @@ fn long_attenuation_chain() {
                 terms,
                 membership_proof: Some(proofs.into_iter().next().unwrap()),
             }],
-            num_added_checks: if i % 2 == 0 { 1 } else { 0 },
+            num_added_checks: num_checks,
+            added_checks_commitment: crate::fold_air::compute_test_checks_commitment(num_checks),
         });
     }
 
@@ -393,7 +401,7 @@ fn long_attenuation_chain() {
 
     let presentation = PresentationWitness {
         federation_root,
-        request_predicate: BabyBear::new(999),
+        request_predicate: crate::binding::compute_action_binding("test", "resource-999"),
         timestamp: BabyBear::new(2000),
         fold_chain: folds,
         derivation,
@@ -404,6 +412,7 @@ fn long_attenuation_chain() {
         presentation_randomness: BabyBear::ZERO,
         composition_commitment: BabyBear::ZERO,
         verifier_nonce: BabyBear::ZERO,
+        verifier_block_height: BabyBear::ZERO,
     };
 
     let air = PresentationAir::new(presentation);
@@ -474,7 +483,7 @@ fn fold_rejects_inconsistent_fact_hash() {
             crate::fold_air::FOLD_AIR_WIDTH
         }
         fn num_public_inputs(&self) -> usize {
-            5
+            6
         }
         fn constraints(&self) -> Vec<Constraint> {
             FoldAir::new(crate::fold_air::create_test_fold(1, 1)).constraints()
@@ -519,10 +528,12 @@ fn fold_rejects_inconsistent_fact_hash() {
             summary[col::CHECK_COUNT] = BabyBear::ONE;
             summary[col::HASH_VALID] = BabyBear::ONE;
 
+            let checks_commitment = crate::fold_air::compute_test_checks_commitment(1);
             let root_transition = crate::fold_air::compute_root_transition_hash(
                 old_root,
                 new_root,
                 &[BabyBear::new(99999)],
+                checks_commitment,
             );
             let pi = vec![
                 old_root,
@@ -530,6 +541,7 @@ fn fold_rejects_inconsistent_fact_hash() {
                 BabyBear::ONE,
                 BabyBear::ONE,
                 root_transition,
+                checks_commitment,
             ];
             (vec![row, summary], pi)
         }
@@ -730,6 +742,7 @@ fn proof_size_scaling() {
                         membership_proof: Some(proofs.into_iter().next().unwrap()),
                     }],
                     num_added_checks: 1,
+                    added_checks_commitment: crate::fold_air::compute_test_checks_commitment(1),
                 }
             })
             .collect();
@@ -782,7 +795,7 @@ fn proof_size_scaling() {
 
         let presentation = PresentationWitness {
             federation_root,
-            request_predicate: BabyBear::new(999),
+            request_predicate: crate::binding::compute_action_binding("test", "resource-999"),
             timestamp: BabyBear::new(2000),
             fold_chain: folds,
             derivation,
@@ -793,6 +806,7 @@ fn proof_size_scaling() {
             presentation_randomness: BabyBear::ZERO,
             composition_commitment: BabyBear::ZERO,
             verifier_nonce: BabyBear::ZERO,
+            verifier_block_height: BabyBear::ZERO,
         };
 
         let air = PresentationAir::new(presentation);

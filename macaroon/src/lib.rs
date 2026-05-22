@@ -33,11 +33,16 @@
 pub mod access;
 pub mod action;
 pub mod caveat;
+#[cfg(feature = "crypto")]
 pub mod caveat_3p;
+#[cfg(feature = "crypto")]
 pub mod crypto;
+#[cfg(feature = "crypto")]
 pub mod discharge_gateway;
 pub mod error;
+#[cfg(feature = "crypto")]
 pub mod format;
+#[cfg(feature = "crypto")]
 pub mod macaroon;
 pub mod resource;
 
@@ -45,7 +50,9 @@ pub mod resource;
 pub use access::Access;
 pub use action::Action;
 pub use caveat::{Caveat, CaveatSet, CaveatType, WireCaveat};
+#[cfg(feature = "crypto")]
 pub use caveat_3p::ThirdPartyCaveat;
+#[cfg(feature = "crypto")]
 pub use discharge_gateway::{
     AllOfEvaluator, AllowlistEvaluator, AlwaysAllow, AnyOfEvaluator, ConditionEvaluator,
     DischargeError, DischargeGateway, DischargeRequest, DischargeResponse, PaymentEvaluator,
@@ -53,6 +60,8 @@ pub use discharge_gateway::{
     VerifyingProofEvaluator,
 };
 pub use error::{CaveatError, MacaroonError, MacaroonResult};
+#[cfg(feature = "crypto")]
 pub use format::{decode_token, encode_token};
+#[cfg(feature = "crypto")]
 pub use macaroon::{Macaroon, Nonce, create_discharge};
 pub use resource::ResourceSet;

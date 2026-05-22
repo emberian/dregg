@@ -1198,8 +1198,8 @@ pub struct IvcPresentationProof {
     pub issuer_membership_proof: ConstraintProof,
     /// The federation root of trust.
     pub federation_root: BabyBear,
-    /// The request predicate being authorized.
-    pub request_predicate: BabyBear,
+    /// The action binding commitment (4 elements for 124-bit security).
+    pub request_predicate: crate::binding::ActionBinding,
     /// Timestamp for freshness.
     pub timestamp: BabyBear,
     /// Commitment to selectively revealed facts (zero if fully private).
@@ -1965,6 +1965,7 @@ pub fn create_test_chain(num_steps: usize) -> (BabyBear, Vec<FoldDelta>) {
                     membership_proof: Some(step.membership_proof.clone()),
                 }],
                 num_added_checks: 1,
+                added_checks_commitment: crate::fold_air::compute_test_checks_commitment(1),
             };
             FoldDelta::new(fold)
         })
@@ -2143,6 +2144,7 @@ mod tests {
                 membership_proof: None,
             }],
             num_added_checks: 1,
+            added_checks_commitment: crate::fold_air::compute_test_checks_commitment(1),
         });
         let result = builder.add_fold(bad_delta);
         assert!(result.is_err());
@@ -2334,7 +2336,12 @@ mod tests {
             derivation_proof,
             issuer_membership_proof: issuer_proof,
             federation_root,
-            request_predicate: BabyBear::new(999),
+            request_predicate: [
+                BabyBear::new(999),
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+            ],
             timestamp: BabyBear::new(1716000000),
             revealed_facts_commitment: BabyBear::ZERO,
         };
@@ -2948,6 +2955,7 @@ mod tests {
                         membership_proof: None,
                     }],
                     num_added_checks: 1, // use checks-only path to pass fold AIR
+                    added_checks_commitment: crate::fold_air::compute_test_checks_commitment(1),
                 };
                 FoldDelta::new(fold)
             })
@@ -2964,6 +2972,7 @@ mod tests {
                     new_root: w.new_root,
                     removed_facts: vec![],
                     num_added_checks: 1,
+                    added_checks_commitment: crate::fold_air::compute_test_checks_commitment(1),
                 })
             })
             .collect();
@@ -3000,6 +3009,7 @@ mod tests {
                     new_root: w.new_root,
                     removed_facts: vec![],
                     num_added_checks: 1,
+                    added_checks_commitment: crate::fold_air::compute_test_checks_commitment(1),
                 })
             })
             .collect();

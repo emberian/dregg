@@ -1,0 +1,4 @@
+# SP1 guest programs require a specific nightly toolchain with the RISC-V target.
+# This is installed automatically by `sp1up` and used by `cargo prove build`.
+[toolchain]
+channel = "succinct"

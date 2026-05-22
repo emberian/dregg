@@ -25,6 +25,7 @@ pub mod action_set;
 pub mod error;
 pub mod format;
 pub mod pyana;
+#[cfg(feature = "rand-deps")]
 pub mod revocation;
 pub mod traits;
 
@@ -34,7 +35,7 @@ pub mod biscuit_backend;
 #[cfg(feature = "macaroon")]
 pub mod pyana_caveats;
 
-#[cfg(feature = "macaroon")]
+#[cfg(all(feature = "macaroon", feature = "rand-deps"))]
 pub mod macaroon_backend;
 
 #[cfg(all(feature = "macaroon", feature = "datalog"))]
@@ -47,6 +48,7 @@ pub mod datalog_verify;
 pub use action_set::{ActionId, ActionSet};
 pub use error::TokenError;
 pub use format::TokenFormat;
+#[cfg(feature = "rand-deps")]
 pub use revocation::RevocationFilter;
 pub use traits::{
     Attenuation, AuthRequest, AuthToken, BudgetSpec, Capability, FeatureGlobSpec, TokenClearance,
@@ -56,7 +58,7 @@ pub use traits::{
 #[cfg(feature = "biscuit")]
 pub use biscuit_backend::BiscuitToken;
 
-#[cfg(feature = "macaroon")]
+#[cfg(all(feature = "macaroon", feature = "rand-deps"))]
 pub use macaroon_backend::MacaroonToken;
 
 // Re-export underlying crate types for advanced usage.
@@ -74,6 +76,7 @@ pub use pyana_macaroon;
 /// For **Macaroon** tokens, you must provide the root secret key.
 ///
 /// Use the format-specific constructors for type-safe key handling.
+#[cfg(feature = "rand-deps")]
 pub fn decode_token(
     encoded: &str,
     #[cfg(feature = "biscuit")] biscuit_public_key: Option<biscuit_auth::PublicKey>,

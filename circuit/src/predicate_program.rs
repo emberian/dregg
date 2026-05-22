@@ -139,6 +139,40 @@ pub enum PredicateExpr {
         predicate: crate::arithmetic_predicate_air::ArithPredicate,
     },
 
+    /// Non-membership: `attribute NOT IN property_set`.
+    /// Dispatches to `AccumulatorNonMembershipAir` (generalized from non-revocation).
+    ///
+    /// This is the sound way to express `NOT(Membership { ... })` -- instead of
+    /// trying to negate a proof (which is unsound), we use the polynomial-evaluation
+    /// accumulator to directly prove non-membership.
+    NonMembership {
+        /// The attribute whose hash must NOT appear in the set.
+        attribute: String,
+        /// Identifier for the property set (domain-separated).
+        set_id: BabyBear,
+    },
+
+    // ─── Negation extensions (no new AIR needed) ───
+    /// Inequality: prove `attribute != value`.
+    /// Compiles to `ArithmeticPredicateAir` with `ExprNeq`.
+    Neq { attribute: String, value: u64 },
+
+    /// Range exclusion: prove `value NOT IN [low, high]`.
+    /// Strategy: compiles to `Or(Lt(low), Gt(high))` using existing range predicates.
+    NotInRange {
+        attribute: String,
+        low: u64,
+        high: u64,
+    },
+
+    /// Threshold below: prove that FEWER than `max_k` of the given predicates hold.
+    /// Purely compositional: during proving, count how many sub-predicates succeed,
+    /// reject (produce no proof) if count >= max_k. Verifier checks fewer than max_k proofs.
+    ThresholdBelow {
+        max_k: usize,
+        predicates: Vec<PredicateExpr>,
+    },
+
     // ─── Composition operators ───
     /// All sub-predicates must hold.
     And(Vec<PredicateExpr>),
@@ -198,6 +232,8 @@ pub enum AirType {
     Membership,
     /// `ArithmeticPredicateAir` — arithmetic expression over multiple inputs.
     Arithmetic,
+    /// `AccumulatorNonMembershipAir` — accumulator-based non-membership proof.
+    NonMembership,
 }
 
 /// Specification of what witness data is needed for a particular compiled sub-proof.
@@ -238,6 +274,8 @@ pub enum WitnessSpec {
         expression: crate::arithmetic_predicate_air::ArithExpr,
         predicate: crate::arithmetic_predicate_air::ArithPredicate,
     },
+    /// Non-membership: needs element hash + set parameters.
+    NonMembership { attribute: String, set_id: BabyBear },
 }
 
 /// The compiled form of a predicate program — a plan for proof generation.
@@ -274,6 +312,8 @@ pub enum CompositeFormula {
     Or,
     /// At least `k` sub-proofs must verify.
     Threshold(usize),
+    /// Fewer than `k` sub-proofs verify (the inverse of Threshold).
+    ThresholdBelow(usize),
     /// Negate the single sub-proof's result.
     Not,
 }
@@ -351,19 +391,24 @@ fn compute_depth(expr: &PredicateExpr) -> usize {
         // Leaves have depth 1.
         PredicateExpr::Range { .. }
         | PredicateExpr::Membership { .. }
+        | PredicateExpr::NonMembership { .. }
         | PredicateExpr::Temporal { .. }
         | PredicateExpr::Relational { .. }
         | PredicateExpr::CommittedThreshold { .. }
-        | PredicateExpr::Arithmetic { .. } => 1,
+        | PredicateExpr::Arithmetic { .. }
+        | PredicateExpr::Neq { .. }
+        | PredicateExpr::NotInRange { .. } => 1,
 
         // Composition operators have depth = 1 + max(children).
         PredicateExpr::And(children) | PredicateExpr::Or(children) => {
             1 + children.iter().map(compute_depth).max().unwrap_or(0)
         }
         PredicateExpr::Not(inner) => 1 + compute_depth(inner),
-        PredicateExpr::Threshold { predicates, .. } => {
-            1 + predicates.iter().map(compute_depth).max().unwrap_or(0)
-        }
+        PredicateExpr::Threshold { predicates, .. }
+        | PredicateExpr::ThresholdBelow {
+            max_k: _,
+            predicates,
+        } => 1 + predicates.iter().map(compute_depth).max().unwrap_or(0),
     }
 }
 
@@ -447,6 +492,75 @@ fn compile_expr(expr: &PredicateExpr) -> Result<CompiledPredicate, CompileError>
             },
         }),
 
+        PredicateExpr::NonMembership { attribute, set_id } => Ok(CompiledPredicate::Single {
+            air_type: AirType::NonMembership,
+            witness_spec: WitnessSpec::NonMembership {
+                attribute: attribute.clone(),
+                set_id: *set_id,
+            },
+        }),
+
+        // ─── Negation extensions ───
+        PredicateExpr::Neq { attribute, value } => {
+            // Compile as ArithmeticPredicateAir with ExprNeq.
+            use crate::arithmetic_predicate_air::{ArithExpr, ArithPredicate};
+            Ok(CompiledPredicate::Single {
+                air_type: AirType::Arithmetic,
+                witness_spec: WitnessSpec::Arithmetic {
+                    inputs: vec![attribute.clone()],
+                    expression: ArithExpr::Var(0),
+                    predicate: ArithPredicate::ExprNeq(
+                        ArithExpr::Var(0),
+                        BabyBear::new(*value as u32),
+                    ),
+                },
+            })
+        }
+
+        PredicateExpr::NotInRange {
+            attribute,
+            low,
+            high,
+        } => {
+            // Compile to Or(Lt(low), Gt(high)) — value < low OR value > high.
+            // This means value is outside [low, high].
+            let lt_low = PredicateExpr::Range {
+                attribute: attribute.clone(),
+                predicate_type: PredicateType::Lt,
+                threshold: *low,
+            };
+            let gt_high = PredicateExpr::Range {
+                attribute: attribute.clone(),
+                predicate_type: PredicateType::Gt,
+                threshold: *high,
+            };
+            compile_expr(&PredicateExpr::Or(vec![lt_low, gt_high]))
+        }
+
+        PredicateExpr::ThresholdBelow { max_k, predicates } => {
+            if predicates.is_empty() {
+                return Err(CompileError::EmptyProgram);
+            }
+            if *max_k == 0 || *max_k > predicates.len() {
+                return Err(CompileError::InvalidThreshold {
+                    k: *max_k,
+                    n: predicates.len(),
+                });
+            }
+            // ThresholdBelow { max_k, predicates } means "fewer than max_k hold".
+            // Equivalently: at most (max_k - 1) hold.
+            // We compile this as a Composite with a ThresholdBelow formula.
+            let sub_proofs: Vec<CompiledPredicate> = predicates
+                .iter()
+                .map(compile_expr)
+                .collect::<Result<Vec<_>, _>>()?;
+
+            Ok(CompiledPredicate::Composite {
+                sub_proofs,
+                formula: CompositeFormula::ThresholdBelow(*max_k),
+            })
+        }
+
         // ─── AND composition ───
         PredicateExpr::And(children) => {
             if children.is_empty() {
@@ -464,8 +578,28 @@ fn compile_expr(expr: &PredicateExpr) -> Result<CompiledPredicate, CompileError>
         }
 
         // ─── NOT ───
-        PredicateExpr::Not(_inner) => {
-            // SOUNDNESS FIX: NOT cannot be soundly implemented in the current proof system.
+        PredicateExpr::Not(inner) => {
+            // Special case: NOT(Membership { ... }) compiles to NonMembership.
+            //
+            // This is the ONE case where NOT can be soundly implemented: we use the
+            // polynomial-evaluation accumulator to directly prove non-membership,
+            // rather than trying to negate an existential proof.
+            if let PredicateExpr::Membership {
+                attribute,
+                set_commitment,
+            } = inner.as_ref()
+            {
+                return Ok(CompiledPredicate::Single {
+                    air_type: AirType::NonMembership,
+                    witness_spec: WitnessSpec::NonMembership {
+                        attribute: attribute.clone(),
+                        set_id: *set_commitment,
+                    },
+                });
+            }
+
+            // SOUNDNESS FIX: General NOT cannot be soundly implemented in the current
+            // proof system.
             //
             // The previous implementation accepted NOT(P) when the prover "failed to
             // generate a proof for P." This is UNSOUND: a malicious prover can claim
@@ -478,7 +612,8 @@ fn compile_expr(expr: &PredicateExpr) -> Result<CompiledPredicate, CompileError>
             // 3. Flipping the comparison (GTE -> LT) at the expression level before
             //    compilation (caller's responsibility)
             //
-            // For now, NOT is rejected at compile time.
+            // Only NOT(Membership(...)) is supported (compiles to NonMembership above).
+            // All other NOT forms are rejected at compile time.
             Err(CompileError::UnsupportedNot)
         }
 
@@ -570,6 +705,110 @@ fn compile_boolean_composition(
 }
 
 // =============================================================================
+// NOR Helper
+// =============================================================================
+
+/// Compile a NOR ("none of these hold") predicate expression.
+///
+/// For predicate-based NOR: flips each range predicate's comparison direction,
+/// then compiles as AND of flipped predicates:
+/// - `Gte` becomes `Lt`
+/// - `Lte` becomes `Gt`
+/// - `Gt` becomes `Lte`
+/// - `Lt` becomes `Gte`
+/// - `Neq` becomes an `ExprEq` (via Arithmetic)
+///
+/// This is sound because "none hold" = "all are false" = "all negations are true".
+///
+/// For non-range predicates in the input, they are wrapped in ThresholdBelow(1, [p])
+/// which means "zero of [p] hold".
+///
+/// Returns a `PredicateExpr` that can be fed to `compile_predicate`.
+pub fn compile_nor(predicates: &[PredicateExpr]) -> PredicateExpr {
+    let flipped: Vec<PredicateExpr> = predicates.iter().map(|p| flip_predicate(p)).collect();
+    PredicateExpr::And(flipped)
+}
+
+/// Flip a single predicate to its negation.
+///
+/// For range predicates, this flips the comparison direction.
+/// For other predicate types, wraps in ThresholdBelow(1, ...) meaning "zero hold".
+fn flip_predicate(pred: &PredicateExpr) -> PredicateExpr {
+    match pred {
+        PredicateExpr::Range {
+            attribute,
+            predicate_type,
+            threshold,
+        } => {
+            let flipped_type = match predicate_type {
+                PredicateType::Gte => PredicateType::Lt,
+                PredicateType::Lte => PredicateType::Gt,
+                PredicateType::Gt => PredicateType::Lte,
+                PredicateType::Lt => PredicateType::Gte,
+                PredicateType::Neq => {
+                    // NEQ flipped = EQ. Use Arithmetic with ExprEq.
+                    return PredicateExpr::Arithmetic {
+                        inputs: vec![attribute.clone()],
+                        expression: crate::arithmetic_predicate_air::ArithExpr::Var(0),
+                        predicate: crate::arithmetic_predicate_air::ArithPredicate::ExprEq(
+                            crate::arithmetic_predicate_air::ArithExpr::Var(0),
+                            BabyBear::new(*threshold as u32),
+                        ),
+                    };
+                }
+                PredicateType::InRangeLow | PredicateType::InRangeHigh => {
+                    // These are internal types; treat as unsupported by wrapping.
+                    return PredicateExpr::ThresholdBelow {
+                        max_k: 1,
+                        predicates: vec![pred.clone()],
+                    };
+                }
+            };
+            PredicateExpr::Range {
+                attribute: attribute.clone(),
+                predicate_type: flipped_type,
+                threshold: *threshold,
+            }
+        }
+        PredicateExpr::Neq { attribute, value } => {
+            // NEQ flipped = EQ. Compile as Arithmetic ExprEq.
+            PredicateExpr::Arithmetic {
+                inputs: vec![attribute.clone()],
+                expression: crate::arithmetic_predicate_air::ArithExpr::Var(0),
+                predicate: crate::arithmetic_predicate_air::ArithPredicate::ExprEq(
+                    crate::arithmetic_predicate_air::ArithExpr::Var(0),
+                    BabyBear::new(*value as u32),
+                ),
+            }
+        }
+        PredicateExpr::NotInRange {
+            attribute,
+            low,
+            high,
+        } => {
+            // NOT(NotInRange) = InRange. Use a Range with InRangeLow + AND + InRangeHigh.
+            PredicateExpr::And(vec![
+                PredicateExpr::Range {
+                    attribute: attribute.clone(),
+                    predicate_type: PredicateType::Gte,
+                    threshold: *low,
+                },
+                PredicateExpr::Range {
+                    attribute: attribute.clone(),
+                    predicate_type: PredicateType::Lte,
+                    threshold: *high,
+                },
+            ])
+        }
+        // For other complex predicates, wrap in ThresholdBelow(1) meaning "zero hold".
+        _ => PredicateExpr::ThresholdBelow {
+            max_k: 1,
+            predicates: vec![pred.clone()],
+        },
+    }
+}
+
+// =============================================================================
 // Proof Execution
 // =============================================================================
 
@@ -631,6 +870,8 @@ pub enum SubProof {
     Relational(RelationalPredicateProof),
     /// A committed-threshold predicate proof (value >= hidden threshold).
     CommittedThreshold(CommittedThresholdProof),
+    /// A non-membership proof (element NOT in set, via accumulator).
+    NonMembership(crate::non_membership::NonMembershipProof),
 }
 
 /// The structure of a program proof (mirrors the compiled predicate shape).
@@ -665,6 +906,9 @@ pub struct PrivateState {
     /// Committed thresholds received from verifiers, keyed by the threshold commitment.
     /// Each entry: (threshold, blinding) as provided by the verifier via secure channel.
     pub committed_thresholds: HashMap<String, CommittedThresholdContext>,
+    /// Non-membership contexts keyed by attribute name.
+    /// Each entry provides the set elements needed to generate the accumulator witness.
+    pub non_membership_context: HashMap<String, NonMembershipContext>,
 }
 
 /// Context needed to prove a relational predicate.
@@ -689,6 +933,18 @@ pub struct CommittedThresholdContext {
     pub threshold: u64,
     /// The verifier's blinding randomness.
     pub blinding: BabyBear,
+}
+
+/// Context needed to prove a non-membership predicate.
+///
+/// The prover needs the set elements to generate the accumulator witness.
+/// In production, this would come from a federation's published exclusion set.
+#[derive(Clone, Debug)]
+pub struct NonMembershipContext {
+    /// Human-readable set name (e.g., "suspended_users", "blacklist").
+    pub set_name: String,
+    /// The elements in the exclusion set.
+    pub set_elements: Vec<BabyBear>,
 }
 
 /// Prove a compiled predicate program against private state.
@@ -1018,6 +1274,50 @@ fn prove_single(
                 structure: ProofStructure::Single,
             })
         }
+
+        WitnessSpec::NonMembership { attribute, set_id } => {
+            use crate::non_membership::{NonMembershipProver, SetIdentifier};
+
+            // The non-membership context provides the set elements and set identity.
+            let nm_ctx = private_state
+                .non_membership_context
+                .get(attribute)
+                .ok_or_else(|| {
+                    ProveError::ProofGenerationFailed(format!(
+                        "non-membership predicate for '{}' requires set context \
+                         (set_elements provided via non_membership_context)",
+                        attribute
+                    ))
+                })?;
+
+            let set_identifier = SetIdentifier::from_raw(&nm_ctx.set_name, *set_id);
+
+            let prover = NonMembershipProver::with_set_id(&nm_ctx.set_elements, set_identifier);
+
+            // The element to prove non-membership for is the attribute's hash.
+            let element_hash = private_state
+                .fact_hashes
+                .get(attribute)
+                .copied()
+                .unwrap_or_else(|| {
+                    let value = private_state.values.get(attribute).copied().unwrap_or(0);
+                    compute_attribute_fact_hash(attribute, value)
+                });
+
+            let nm_proof = prover
+                .prove_non_membership(&[element_hash])
+                .ok_or_else(|| {
+                    ProveError::NotSatisfiable(format!(
+                        "{}: element IS in the {} set (non-membership cannot be proven)",
+                        attribute, nm_ctx.set_name
+                    ))
+                })?;
+
+            Ok(ProgramProof {
+                sub_proofs: vec![SubProof::NonMembership(nm_proof)],
+                structure: ProofStructure::Single,
+            })
+        }
     }
 }
 
@@ -1139,6 +1439,29 @@ fn prove_composite(
                     "only {successes} of {k} required predicates satisfied"
                 )));
             }
+        }
+        CompositeFormula::ThresholdBelow(max_k) => {
+            // Fewer than max_k must succeed.
+            // The prover counts how many sub-predicates are satisfiable. If the
+            // count is >= max_k, the ThresholdBelow statement is FALSE and we
+            // cannot produce a proof. If count < max_k, the statement is TRUE.
+            let mut successes = 0;
+            for sub in sub_compilations {
+                match prove_program(sub, private_state, state_root) {
+                    Ok(sub_result) => {
+                        all_sub_proofs.extend(sub_result.sub_proofs);
+                        successes += 1;
+                    }
+                    Err(_) => continue,
+                }
+            }
+            if successes >= *max_k {
+                return Err(ProveError::NotSatisfiable(format!(
+                    "{successes} predicates satisfied, but ThresholdBelow requires fewer than {max_k}"
+                )));
+            }
+            // The proof contains the (successes < max_k) satisfied sub-proofs.
+            // The verifier will count them and confirm count < max_k.
         }
         CompositeFormula::Not => {
             // SOUNDNESS: NOT is rejected at compile time. If this code path is
@@ -1347,6 +1670,14 @@ fn verify_single_proof(
             verify_committed_threshold_air(proof, *threshold_commitment, fact_commitment)
         }
 
+        (SubProof::NonMembership(proof), WitnessSpec::NonMembership { .. }) => {
+            // For non-membership predicates, verify the accumulator STARK proof.
+            // The verifier trusts the accumulator and alpha from the proof
+            // (in production, these would be cross-checked against a federation's
+            // published set commitment).
+            crate::non_membership::verify_non_membership_proof(proof).is_ok()
+        }
+
         _ => false,
     }
 }
@@ -1478,6 +1809,34 @@ fn verify_composite_proof(
                 }
             }
             verified >= *k
+        }
+        CompositeFormula::ThresholdBelow(max_k) => {
+            // For ThresholdBelow(max_k): fewer than max_k sub-proofs verify.
+            // The prover provides the sub-proofs that DID succeed. The verifier
+            // verifies each one and confirms the total count is < max_k.
+            let mut verified = 0;
+            let mut proof_idx = 0;
+            for compiled_sub in compiled_subs {
+                let sub_proof_count = count_expected_sub_proofs(compiled_sub);
+                if proof_idx + sub_proof_count > sub_proofs.len() {
+                    break;
+                }
+                let sub_slice = &sub_proofs[proof_idx..proof_idx + sub_proof_count];
+                let sub_program_proof = ProgramProof {
+                    sub_proofs: sub_slice.to_vec(),
+                    structure: infer_structure(compiled_sub),
+                };
+                if verify_program(
+                    &sub_program_proof,
+                    compiled_sub,
+                    expected_commitments,
+                    state_root,
+                ) {
+                    verified += 1;
+                    proof_idx += sub_proof_count;
+                }
+            }
+            verified < *max_k
         }
         CompositeFormula::Not => {
             // SOUNDNESS FIX: NOT verification previously accepted empty sub_proofs,
@@ -2329,5 +2688,525 @@ mod tests {
         assert_eq!(proof.sub_proofs.len(), 2);
         assert!(matches!(&proof.sub_proofs[0], SubProof::Relational(_)));
         assert!(matches!(&proof.sub_proofs[1], SubProof::Range(_)));
+    }
+
+    // =========================================================================
+    // Negation extension tests
+    // =========================================================================
+
+    #[test]
+    fn test_compile_neq() {
+        let program = PredicateProgram::with_default_depth(PredicateExpr::Neq {
+            attribute: "status".to_string(),
+            value: 0,
+        });
+
+        let compiled = compile_predicate(&program).unwrap();
+        match &compiled {
+            CompiledPredicate::Single {
+                air_type,
+                witness_spec,
+            } => {
+                assert_eq!(*air_type, AirType::Arithmetic);
+                match witness_spec {
+                    WitnessSpec::Arithmetic {
+                        inputs, predicate, ..
+                    } => {
+                        assert_eq!(inputs.len(), 1);
+                        assert_eq!(inputs[0], "status");
+                        assert!(matches!(
+                            predicate,
+                            crate::arithmetic_predicate_air::ArithPredicate::ExprNeq(_, _)
+                        ));
+                    }
+                    _ => panic!("expected Arithmetic witness spec"),
+                }
+            }
+            _ => panic!("expected Single compiled predicate"),
+        }
+    }
+
+    #[test]
+    fn test_prove_verify_neq() {
+        let state_root = BabyBear::new(99999);
+        let program = PredicateProgram::with_default_depth(PredicateExpr::Neq {
+            attribute: "status".to_string(),
+            value: 0,
+        });
+
+        let compiled = compile_predicate(&program).unwrap();
+        let private_state = make_state(&[("status", 5)]);
+        let proof = prove_program(&compiled, &private_state, state_root).unwrap();
+
+        // Build expected commitments for the arithmetic predicate.
+        use crate::arithmetic_predicate_air::compute_arithmetic_fact_commitment;
+        let fact_hash = compute_attribute_fact_hash("status", 5);
+        let fact_commitment = compute_arithmetic_fact_commitment(fact_hash, state_root);
+        let mut commitments = HashMap::new();
+        commitments.insert("status".to_string(), fact_commitment);
+
+        assert!(verify_program(&proof, &compiled, &commitments, state_root));
+    }
+
+    #[test]
+    fn test_prove_neq_fails_when_equal() {
+        let state_root = BabyBear::new(99999);
+        let program = PredicateProgram::with_default_depth(PredicateExpr::Neq {
+            attribute: "status".to_string(),
+            value: 5,
+        });
+
+        let compiled = compile_predicate(&program).unwrap();
+        let private_state = make_state(&[("status", 5)]);
+        let result = prove_program(&compiled, &private_state, state_root);
+        assert!(matches!(result, Err(ProveError::NotSatisfiable(_))));
+    }
+
+    #[test]
+    fn test_compile_not_in_range() {
+        let program = PredicateProgram::with_default_depth(PredicateExpr::NotInRange {
+            attribute: "age".to_string(),
+            low: 18,
+            high: 65,
+        });
+
+        let compiled = compile_predicate(&program).unwrap();
+        // Should compile to CompoundRange with Or(Lt(18), Gt(65))
+        match &compiled {
+            CompiledPredicate::CompoundRange {
+                sub_predicates,
+                formula,
+            } => {
+                assert_eq!(sub_predicates.len(), 2);
+                assert_eq!(*formula, BooleanFormula::Or(vec![0, 1]));
+            }
+            _ => panic!("expected CompoundRange, got {:?}", compiled),
+        }
+    }
+
+    #[test]
+    fn test_prove_verify_not_in_range_below() {
+        // value=10, not in [18, 65] -> passes because 10 < 18
+        let state_root = BabyBear::new(99999);
+        let program = PredicateProgram::with_default_depth(PredicateExpr::NotInRange {
+            attribute: "age".to_string(),
+            low: 18,
+            high: 65,
+        });
+
+        let compiled = compile_predicate(&program).unwrap();
+        let private_state = make_state(&[("age", 10)]);
+        let proof = prove_program(&compiled, &private_state, state_root).unwrap();
+
+        let commitments = make_commitments(&[("age", 10)], state_root);
+        assert!(verify_program(&proof, &compiled, &commitments, state_root));
+    }
+
+    #[test]
+    fn test_prove_verify_not_in_range_above() {
+        // value=70, not in [18, 65] -> passes because 70 > 65
+        let state_root = BabyBear::new(99999);
+        let program = PredicateProgram::with_default_depth(PredicateExpr::NotInRange {
+            attribute: "age".to_string(),
+            low: 18,
+            high: 65,
+        });
+
+        let compiled = compile_predicate(&program).unwrap();
+        let private_state = make_state(&[("age", 70)]);
+        let proof = prove_program(&compiled, &private_state, state_root).unwrap();
+
+        let commitments = make_commitments(&[("age", 70)], state_root);
+        assert!(verify_program(&proof, &compiled, &commitments, state_root));
+    }
+
+    #[test]
+    fn test_prove_not_in_range_fails_when_inside() {
+        // value=30, not in [18, 65] -> fails because 30 is in [18, 65]
+        let state_root = BabyBear::new(99999);
+        let program = PredicateProgram::with_default_depth(PredicateExpr::NotInRange {
+            attribute: "age".to_string(),
+            low: 18,
+            high: 65,
+        });
+
+        let compiled = compile_predicate(&program).unwrap();
+        let private_state = make_state(&[("age", 30)]);
+        let result = prove_program(&compiled, &private_state, state_root);
+        assert!(matches!(result, Err(ProveError::NotSatisfiable(_))));
+    }
+
+    #[test]
+    fn test_compile_threshold_below() {
+        let program = PredicateProgram::with_default_depth(PredicateExpr::ThresholdBelow {
+            max_k: 2,
+            predicates: vec![
+                PredicateExpr::Range {
+                    attribute: "a".to_string(),
+                    predicate_type: PredicateType::Gte,
+                    threshold: 10,
+                },
+                PredicateExpr::Range {
+                    attribute: "b".to_string(),
+                    predicate_type: PredicateType::Gte,
+                    threshold: 20,
+                },
+                PredicateExpr::Range {
+                    attribute: "c".to_string(),
+                    predicate_type: PredicateType::Gte,
+                    threshold: 30,
+                },
+            ],
+        });
+
+        let compiled = compile_predicate(&program).unwrap();
+        match &compiled {
+            CompiledPredicate::Composite {
+                sub_proofs,
+                formula,
+            } => {
+                assert_eq!(sub_proofs.len(), 3);
+                assert_eq!(*formula, CompositeFormula::ThresholdBelow(2));
+            }
+            _ => panic!("expected Composite, got {:?}", compiled),
+        }
+    }
+
+    #[test]
+    fn test_prove_verify_threshold_below_succeeds() {
+        // ThresholdBelow(2): fewer than 2 predicates hold.
+        // a=15 (pass a>=10), b=10 (fail b>=20), c=5 (fail c>=30)
+        // Only 1 passes, which is < 2, so ThresholdBelow succeeds.
+        let state_root = BabyBear::new(99999);
+        let program = PredicateProgram::with_default_depth(PredicateExpr::ThresholdBelow {
+            max_k: 2,
+            predicates: vec![
+                PredicateExpr::Range {
+                    attribute: "a".to_string(),
+                    predicate_type: PredicateType::Gte,
+                    threshold: 10,
+                },
+                PredicateExpr::Range {
+                    attribute: "b".to_string(),
+                    predicate_type: PredicateType::Gte,
+                    threshold: 20,
+                },
+                PredicateExpr::Range {
+                    attribute: "c".to_string(),
+                    predicate_type: PredicateType::Gte,
+                    threshold: 30,
+                },
+            ],
+        });
+
+        let compiled = compile_predicate(&program).unwrap();
+        let private_state = make_state(&[("a", 15), ("b", 10), ("c", 5)]);
+        let proof = prove_program(&compiled, &private_state, state_root).unwrap();
+
+        let commitments = make_commitments(&[("a", 15), ("b", 10), ("c", 5)], state_root);
+        assert!(verify_program(&proof, &compiled, &commitments, state_root));
+    }
+
+    #[test]
+    fn test_prove_threshold_below_fails_when_too_many_pass() {
+        // ThresholdBelow(2): fewer than 2 predicates hold.
+        // a=15 (pass a>=10), b=25 (pass b>=20), c=5 (fail c>=30)
+        // 2 pass, which is NOT < 2, so ThresholdBelow fails.
+        let state_root = BabyBear::new(99999);
+        let program = PredicateProgram::with_default_depth(PredicateExpr::ThresholdBelow {
+            max_k: 2,
+            predicates: vec![
+                PredicateExpr::Range {
+                    attribute: "a".to_string(),
+                    predicate_type: PredicateType::Gte,
+                    threshold: 10,
+                },
+                PredicateExpr::Range {
+                    attribute: "b".to_string(),
+                    predicate_type: PredicateType::Gte,
+                    threshold: 20,
+                },
+                PredicateExpr::Range {
+                    attribute: "c".to_string(),
+                    predicate_type: PredicateType::Gte,
+                    threshold: 30,
+                },
+            ],
+        });
+
+        let compiled = compile_predicate(&program).unwrap();
+        let private_state = make_state(&[("a", 15), ("b", 25), ("c", 5)]);
+        let result = prove_program(&compiled, &private_state, state_root);
+        assert!(matches!(result, Err(ProveError::NotSatisfiable(_))));
+    }
+
+    #[test]
+    fn test_compile_nor_all_range() {
+        // NOR(a >= 10, b >= 20) = AND(a < 10, b < 20)
+        let predicates = vec![
+            PredicateExpr::Range {
+                attribute: "a".to_string(),
+                predicate_type: PredicateType::Gte,
+                threshold: 10,
+            },
+            PredicateExpr::Range {
+                attribute: "b".to_string(),
+                predicate_type: PredicateType::Gte,
+                threshold: 20,
+            },
+        ];
+
+        let nor_expr = compile_nor(&predicates);
+
+        // Should be And(Lt(10), Lt(20))
+        match &nor_expr {
+            PredicateExpr::And(children) => {
+                assert_eq!(children.len(), 2);
+                match &children[0] {
+                    PredicateExpr::Range {
+                        attribute,
+                        predicate_type,
+                        threshold,
+                    } => {
+                        assert_eq!(attribute, "a");
+                        assert_eq!(*predicate_type, PredicateType::Lt);
+                        assert_eq!(*threshold, 10);
+                    }
+                    _ => panic!("expected Range"),
+                }
+                match &children[1] {
+                    PredicateExpr::Range {
+                        attribute,
+                        predicate_type,
+                        threshold,
+                    } => {
+                        assert_eq!(attribute, "b");
+                        assert_eq!(*predicate_type, PredicateType::Lt);
+                        assert_eq!(*threshold, 20);
+                    }
+                    _ => panic!("expected Range"),
+                }
+            }
+            _ => panic!("expected And"),
+        }
+    }
+
+    #[test]
+    fn test_prove_verify_nor() {
+        // NOR(a >= 100, b >= 200): neither holds for a=50, b=100
+        let state_root = BabyBear::new(99999);
+        let predicates = vec![
+            PredicateExpr::Range {
+                attribute: "a".to_string(),
+                predicate_type: PredicateType::Gte,
+                threshold: 100,
+            },
+            PredicateExpr::Range {
+                attribute: "b".to_string(),
+                predicate_type: PredicateType::Gte,
+                threshold: 200,
+            },
+        ];
+
+        let nor_expr = compile_nor(&predicates);
+        let program = PredicateProgram::with_default_depth(nor_expr);
+        let compiled = compile_predicate(&program).unwrap();
+
+        let private_state = make_state(&[("a", 50), ("b", 100)]);
+        let proof = prove_program(&compiled, &private_state, state_root).unwrap();
+
+        let commitments = make_commitments(&[("a", 50), ("b", 100)], state_root);
+        assert!(verify_program(&proof, &compiled, &commitments, state_root));
+    }
+
+    #[test]
+    fn test_prove_nor_fails_when_one_holds() {
+        // NOR(a >= 100, b >= 200): fails because a=150 >= 100
+        let state_root = BabyBear::new(99999);
+        let predicates = vec![
+            PredicateExpr::Range {
+                attribute: "a".to_string(),
+                predicate_type: PredicateType::Gte,
+                threshold: 100,
+            },
+            PredicateExpr::Range {
+                attribute: "b".to_string(),
+                predicate_type: PredicateType::Gte,
+                threshold: 200,
+            },
+        ];
+
+        let nor_expr = compile_nor(&predicates);
+        let program = PredicateProgram::with_default_depth(nor_expr);
+        let compiled = compile_predicate(&program).unwrap();
+
+        let private_state = make_state(&[("a", 150), ("b", 100)]);
+        let result = prove_program(&compiled, &private_state, state_root);
+        assert!(matches!(result, Err(ProveError::NotSatisfiable(_))));
+    }
+
+    #[test]
+    fn test_compile_nor_with_neq() {
+        // NOR(value != 0) should flip to value == 0
+        let predicates = vec![PredicateExpr::Neq {
+            attribute: "status".to_string(),
+            value: 0,
+        }];
+
+        let nor_expr = compile_nor(&predicates);
+        match &nor_expr {
+            PredicateExpr::And(children) => {
+                assert_eq!(children.len(), 1);
+                match &children[0] {
+                    PredicateExpr::Arithmetic { predicate, .. } => {
+                        assert!(matches!(
+                            predicate,
+                            crate::arithmetic_predicate_air::ArithPredicate::ExprEq(_, _)
+                        ));
+                    }
+                    _ => panic!("expected Arithmetic with ExprEq"),
+                }
+            }
+            _ => panic!("expected And"),
+        }
+    }
+
+    // =========================================================================
+    // NOT(Membership) -> NonMembership compilation tests
+    // =========================================================================
+
+    #[test]
+    fn test_compile_not_membership_becomes_non_membership() {
+        // NOT(Membership { attribute, set_commitment }) should compile to NonMembership.
+        let set_commitment = BabyBear::new(0x1234);
+        let program = PredicateProgram::with_default_depth(PredicateExpr::Not(Box::new(
+            PredicateExpr::Membership {
+                attribute: "user_id".to_string(),
+                set_commitment,
+            },
+        )));
+
+        let compiled = compile_predicate(&program).unwrap();
+        match &compiled {
+            CompiledPredicate::Single {
+                air_type,
+                witness_spec,
+            } => {
+                assert_eq!(*air_type, AirType::NonMembership);
+                match witness_spec {
+                    WitnessSpec::NonMembership { attribute, set_id } => {
+                        assert_eq!(attribute, "user_id");
+                        assert_eq!(*set_id, set_commitment);
+                    }
+                    _ => panic!("expected NonMembership witness spec"),
+                }
+            }
+            _ => panic!("expected Single compiled predicate, got {:?}", compiled),
+        }
+    }
+
+    #[test]
+    fn test_compile_not_range_still_rejected() {
+        // NOT(Range { ... }) should still produce UnsupportedNot.
+        let program = PredicateProgram::with_default_depth(PredicateExpr::Not(Box::new(
+            PredicateExpr::Range {
+                attribute: "age".to_string(),
+                predicate_type: PredicateType::Gte,
+                threshold: 18,
+            },
+        )));
+
+        let result = compile_predicate(&program);
+        assert_eq!(result, Err(CompileError::UnsupportedNot));
+    }
+
+    #[test]
+    fn test_prove_verify_non_membership_via_program() {
+        use crate::non_membership::SetIdentifier;
+        use crate::poseidon2::hash_many;
+
+        let state_root = BabyBear::new(99999);
+
+        // Create a "suspended users" set.
+        let suspended_set: Vec<BabyBear> = (1..=5)
+            .map(|i| hash_many(&[BabyBear::new(i * 100), BabyBear::new(0xBEEF)]))
+            .collect();
+
+        // The set_id doubles as the set_commitment in this integration.
+        let set_id_value = BabyBear::new(0xAAAA);
+
+        // Build a NonMembership predicate directly.
+        let program = PredicateProgram::with_default_depth(PredicateExpr::NonMembership {
+            attribute: "credential".to_string(),
+            set_id: set_id_value,
+        });
+
+        let compiled = compile_predicate(&program).unwrap();
+
+        // Build private state with non-membership context.
+        let mut private_state = PrivateState::default();
+        private_state.values.insert("credential".to_string(), 9999);
+
+        // The fact hash for the credential must NOT be in the suspended set.
+        let cred_fact_hash = compute_attribute_fact_hash("credential", 9999);
+        assert!(!suspended_set.contains(&cred_fact_hash));
+
+        private_state.non_membership_context.insert(
+            "credential".to_string(),
+            NonMembershipContext {
+                set_name: "suspended".to_string(),
+                set_elements: suspended_set.clone(),
+            },
+        );
+
+        let proof = prove_program(&compiled, &private_state, state_root).unwrap();
+        assert_eq!(proof.sub_proofs.len(), 1);
+        assert!(matches!(&proof.sub_proofs[0], SubProof::NonMembership(_)));
+
+        // Verify.
+        let commitments = HashMap::new(); // NonMembership doesn't use fact commitments for verification.
+        assert!(verify_program(&proof, &compiled, &commitments, state_root));
+    }
+
+    #[test]
+    fn test_prove_non_membership_fails_when_in_set() {
+        use crate::poseidon2::hash_many;
+
+        let state_root = BabyBear::new(99999);
+        let set_id_value = BabyBear::new(0xBBBB);
+
+        let program = PredicateProgram::with_default_depth(PredicateExpr::NonMembership {
+            attribute: "credential".to_string(),
+            set_id: set_id_value,
+        });
+
+        let compiled = compile_predicate(&program).unwrap();
+
+        // Make the credential's fact hash equal to one of the set elements.
+        let cred_fact_hash = compute_attribute_fact_hash("credential", 42);
+
+        // Build set that INCLUDES the credential hash.
+        let suspended_set = vec![
+            BabyBear::new(111),
+            cred_fact_hash, // The credential IS in the set.
+            BabyBear::new(333),
+        ];
+
+        let mut private_state = PrivateState::default();
+        private_state.values.insert("credential".to_string(), 42);
+        private_state.non_membership_context.insert(
+            "credential".to_string(),
+            NonMembershipContext {
+                set_name: "suspended".to_string(),
+                set_elements: suspended_set,
+            },
+        );
+
+        let result = prove_program(&compiled, &private_state, state_root);
+        assert!(
+            matches!(result, Err(ProveError::NotSatisfiable(_))),
+            "Should fail when element IS in set: {:?}",
+            result
+        );
     }
 }

@@ -47,6 +47,19 @@ pub const MAX_ANCESTORS: usize = 8;
 /// In production this would be larger, but 4 is sufficient for correctness.
 pub const REVOCATION_TREE_DEPTH: usize = 4;
 
+/// Number of bits for ordering range checks.
+///
+/// BabyBear p = 2013265921, (p-1)/2 = 1006632960 < 2^30 = 1073741824.
+/// To prove diff < (p-1)/2 (which implies canonical ordering), we prove that
+/// `(p-1)/2 - 1 - diff` fits in 30 bits. If diff >= (p-1)/2, the subtraction
+/// wraps to a value > 2^30 that cannot be decomposed into 30 bits.
+pub const ORDERING_DIFF_BITS: usize = 30;
+
+/// (p-1)/2 - 1 as a field element, used for the ordering range check.
+/// If diff = a - b - 1 is in [0, (p-1)/2 - 1], then HALF_P_MINUS_1 - diff
+/// is in [0, (p-1)/2 - 1] < 2^30, and can be decomposed into 30 bits.
+pub const HALF_P_MINUS_1: u32 = 1006632959; // (2013265921 - 1) / 2 - 1 + 1 ... = (p-1)/2 - 1
+
 /// Trace width for the non-revocation AIR.
 ///
 /// Layout per row:
@@ -62,10 +75,18 @@ pub const REVOCATION_TREE_DEPTH: usize = 4;
 /// - col 9: right_neighbor (the right boundary value)
 /// - col 10: ancestor_index (which ancestor in the path, 0..MAX_ANCESTORS-1)
 /// - col 11: is_active (1 if this row is part of an active ancestor proof, 0 for padding)
-pub const NON_REVOCATION_WIDTH: usize = 12;
+/// - col 12: left_position (tree position of left neighbor leaf)
+/// - col 13: right_position (tree position of right neighbor leaf)
+/// - col 14: diff_left (ancestor_hash - left_neighbor - 1; must be < (p-1)/2)
+/// - col 15..44: diff_left_bits[0..30] (bit decomposition of HALF_P_MINUS_1 - diff_left)
+/// - col 45: diff_right (right_neighbor - ancestor_hash - 1; must be < (p-1)/2)
+/// - col 46..75: diff_right_bits[0..30] (bit decomposition of HALF_P_MINUS_1 - diff_right)
+pub const NON_REVOCATION_WIDTH: usize = 76;
 
 /// Column indices.
 pub mod col {
+    use super::ORDERING_DIFF_BITS;
+
     /// Current hash value being walked up the Merkle path.
     pub const CURRENT: usize = 0;
     /// First sibling in the 4-ary Merkle level.
@@ -90,6 +111,30 @@ pub mod col {
     pub const ANCESTOR_INDEX: usize = 10;
     /// Whether this row is active (1) or padding (0).
     pub const IS_ACTIVE: usize = 11;
+    /// Tree position of the left neighbor leaf (used for adjacency check).
+    pub const LEFT_POSITION: usize = 12;
+    /// Tree position of the right neighbor leaf (used for adjacency check).
+    pub const RIGHT_POSITION: usize = 13;
+    /// diff_left = ancestor_hash - left_neighbor - 1 (ordering: left < ancestor).
+    pub const DIFF_LEFT: usize = 14;
+    /// Bit decomposition of diff_left (30 bits), starting at col 15.
+    pub const DIFF_LEFT_BITS_START: usize = 15;
+    /// diff_right = right_neighbor - ancestor_hash - 1 (ordering: ancestor < right).
+    pub const DIFF_RIGHT: usize = DIFF_LEFT_BITS_START + ORDERING_DIFF_BITS; // 45
+    /// Bit decomposition of diff_right (30 bits), starting at col 46.
+    pub const DIFF_RIGHT_BITS_START: usize = DIFF_RIGHT + 1; // 46
+
+    /// Get column index for diff_left_bits[bit_idx].
+    #[inline]
+    pub const fn diff_left_bit(bit_idx: usize) -> usize {
+        DIFF_LEFT_BITS_START + bit_idx
+    }
+
+    /// Get column index for diff_right_bits[bit_idx].
+    #[inline]
+    pub const fn diff_right_bit(bit_idx: usize) -> usize {
+        DIFF_RIGHT_BITS_START + bit_idx
+    }
 }
 
 /// Public input indices.
@@ -118,6 +163,10 @@ pub struct NonMembershipWitness {
     pub right_siblings: Vec<[BabyBear; 3]>,
     /// Merkle positions for the right neighbor's membership proof.
     pub right_positions: Vec<u8>,
+    /// Tree position (leaf index) of the left neighbor.
+    pub left_tree_position: usize,
+    /// Tree position (leaf index) of the right neighbor.
+    pub right_tree_position: usize,
 }
 
 /// Complete witness for a non-revocation proof.
@@ -192,7 +241,8 @@ impl NonRevocationAir {
             let right_neighbor = nmw.right_neighbor;
 
             // Control row: records the ancestor hash and its neighbors.
-            // The ordering constraint (left < ancestor < right) is checked here.
+            // The ordering constraint (left < ancestor < right) and adjacency
+            // constraint (right_pos == left_pos + 1) are enforced on this row.
             let mut control = vec![BabyBear::ZERO; NON_REVOCATION_WIDTH];
             control[col::CURRENT] = left_neighbor; // left neighbor is the "starting point"
             control[col::POSITION] = BabyBear::ZERO;
@@ -203,6 +253,39 @@ impl NonRevocationAir {
             control[col::RIGHT_NEIGHBOR] = right_neighbor;
             control[col::ANCESTOR_INDEX] = BabyBear::new(ancestor_idx as u32);
             control[col::IS_ACTIVE] = BabyBear::ONE;
+
+            // Ordering and adjacency witness columns.
+            control[col::LEFT_POSITION] = BabyBear::new(nmw.left_tree_position as u32);
+            control[col::RIGHT_POSITION] = BabyBear::new(nmw.right_tree_position as u32);
+
+            // diff_left = ancestor_hash - left_neighbor - 1
+            // If ancestor > left canonically, diff_left < (p-1)/2.
+            // The bits decompose HALF_P_MINUS_1 - diff_left (the "check" value).
+            // For valid witnesses, check_left fits in 30 bits.
+            // For malicious witnesses, the bits will be wrong and constraints reject.
+            let diff_left = ancestor_hash - left_neighbor - BabyBear::ONE;
+            control[col::DIFF_LEFT] = diff_left;
+            let diff_left_u32 = diff_left.as_u32();
+            if diff_left_u32 <= HALF_P_MINUS_1 {
+                let check_left_val = HALF_P_MINUS_1 - diff_left_u32;
+                for i in 0..ORDERING_DIFF_BITS {
+                    control[col::diff_left_bit(i)] = BabyBear::new((check_left_val >> i) & 1);
+                }
+            }
+            // else: bits stay zero, constraints will reject (decomposition won't match)
+
+            // diff_right = right_neighbor - ancestor_hash - 1
+            let diff_right = right_neighbor - ancestor_hash - BabyBear::ONE;
+            control[col::DIFF_RIGHT] = diff_right;
+            let diff_right_u32 = diff_right.as_u32();
+            if diff_right_u32 <= HALF_P_MINUS_1 {
+                let check_right_val = HALF_P_MINUS_1 - diff_right_u32;
+                for i in 0..ORDERING_DIFF_BITS {
+                    control[col::diff_right_bit(i)] = BabyBear::new((check_right_val >> i) & 1);
+                }
+            }
+            // else: bits stay zero, constraints will reject
+
             trace.push(control);
 
             // Left neighbor Merkle membership proof rows.
@@ -386,49 +469,111 @@ impl StarkAir for NonRevocationAir {
         combined = combined + alpha_pow * c_hash;
         alpha_pow = alpha_pow * alpha;
 
-        // Constraint 5: Ordering constraint on control rows.
-        // On control rows (row_type == 0), enforce:
-        //   left_neighbor < ancestor_hash < right_neighbor
-        //
-        // In BabyBear, "less than" is defined on canonical representations (u32 < u32).
-        // We enforce: ancestor_hash - left_neighbor != 0 AND right_neighbor - ancestor_hash != 0
-        // AND both differences are "small" (positive in the canonical sense).
-        //
-        // For a sound ZK non-membership proof in a sorted tree, we need:
-        //   left_neighbor.0 < ancestor_hash.0 < right_neighbor.0
-        //
-        // We use the fact that if a - b is in range [1, (p-1)/2], then a > b canonically.
-        // This is enforced by checking that the "difference" has its high bit clear.
-        //
-        // For simplicity in this implementation, we verify ordering outside the AIR
-        // (in the witness generation) and the AIR verifies Merkle membership + hash
-        // correctness. The ordering is enforced by the proof structure: if the prover
-        // provides incorrect neighbors, the Merkle proofs won't verify against the
-        // committed root (since the neighbors must actually exist in the tree and be
-        // adjacent in the sorted order).
-        //
-        // A production circuit would add explicit range-check gadgets here. For now,
-        // the security comes from: the committed sorted tree has a deterministic order,
-        // and the prover must show actual adjacent elements from that tree.
+        // Constraint 5: Control row consistency — left_neighbor == CURRENT column.
+        // On control rows, left_neighbor starts the left Merkle path.
         let ancestor_hash = local[col::ANCESTOR_HASH];
         let left_neighbor = local[col::LEFT_NEIGHBOR];
         let right_neighbor = local[col::RIGHT_NEIGHBOR];
 
-        // Sanity constraint: on control rows, left != ancestor and right != ancestor.
-        // (If left == ancestor or right == ancestor, the hash IS in the set.)
-        // We check: (ancestor - left) != 0 and (right - ancestor) != 0.
-        // Express as: is_control * (ancestor - left) * (right - ancestor) must be nonzero
-        // when is_active. But we can't enforce "nonzero" directly in AIR polynomial
-        // constraints. Instead, we use an inverse witness trick:
-        //
-        // Actually, the simplest sound approach: the prover cannot construct a valid
-        // witness if the hash IS in the set (they can't find adjacent neighbors that
-        // bracket it). So the constraint system is sound by construction.
-        //
-        // We do add a basic consistency check: on control rows, left_neighbor must
-        // equal the CURRENT column (which starts the left Merkle path).
         let c_control_left = is_active * is_control * (current - left_neighbor);
         combined = combined + alpha_pow * c_control_left;
+        alpha_pow = alpha_pow * alpha;
+
+        // ====================================================================
+        // Constraint 6: Ordering — left_neighbor < ancestor_hash.
+        // Proven via bit decomposition: diff_left = ancestor_hash - left_neighbor - 1
+        // must decompose into ORDERING_DIFF_BITS bits with the high bit = 0.
+        // This ensures diff_left is in [0, 2^29 - 1], i.e., ancestor_hash - left_neighbor
+        // is in [1, 2^29], proving strict ordering on canonical u32 representations.
+        // ====================================================================
+
+        let diff_left = local[col::DIFF_LEFT];
+
+        // 6a: diff_left consistency: diff_left == ancestor_hash - left_neighbor - 1
+        let c_diff_left_correct =
+            is_active * is_control * (diff_left - (ancestor_hash - left_neighbor - BabyBear::ONE));
+        combined = combined + alpha_pow * c_diff_left_correct;
+        alpha_pow = alpha_pow * alpha;
+
+        // 6b: diff_left range check via bit decomposition.
+        // The bits decompose (HALF_P_MINUS_1 - diff_left). If this fits in 30 bits,
+        // then diff_left < (p-1)/2, proving left_neighbor < ancestor_hash canonically.
+        let half_p = BabyBear::new(HALF_P_MINUS_1);
+        {
+            let mut recomposed = BabyBear::ZERO;
+            let mut power_of_two = BabyBear::ONE;
+            for i in 0..ORDERING_DIFF_BITS {
+                let bit = local[col::diff_left_bit(i)];
+                recomposed = recomposed + bit * power_of_two;
+                power_of_two = power_of_two + power_of_two;
+            }
+            let c_decomp = is_active * is_control * (recomposed - (half_p - diff_left));
+            combined = combined + alpha_pow * c_decomp;
+        }
+        alpha_pow = alpha_pow * alpha;
+
+        // 6c: diff_left bits are binary
+        {
+            let mut bits_check = BabyBear::ZERO;
+            for i in 0..ORDERING_DIFF_BITS {
+                let bit = local[col::diff_left_bit(i)];
+                bits_check = bits_check + bit * (bit - BabyBear::ONE);
+            }
+            combined = combined + alpha_pow * (is_active * is_control * bits_check);
+        }
+        alpha_pow = alpha_pow * alpha;
+
+        // ====================================================================
+        // Constraint 7: Ordering — ancestor_hash < right_neighbor.
+        // Same technique: diff_right = right_neighbor - ancestor_hash - 1.
+        // ====================================================================
+
+        let diff_right = local[col::DIFF_RIGHT];
+
+        // 7a: diff_right consistency
+        let c_diff_right_correct = is_active
+            * is_control
+            * (diff_right - (right_neighbor - ancestor_hash - BabyBear::ONE));
+        combined = combined + alpha_pow * c_diff_right_correct;
+        alpha_pow = alpha_pow * alpha;
+
+        // 7b: diff_right range check via bit decomposition.
+        // The bits decompose (HALF_P_MINUS_1 - diff_right).
+        {
+            let mut recomposed = BabyBear::ZERO;
+            let mut power_of_two = BabyBear::ONE;
+            for i in 0..ORDERING_DIFF_BITS {
+                let bit = local[col::diff_right_bit(i)];
+                recomposed = recomposed + bit * power_of_two;
+                power_of_two = power_of_two + power_of_two;
+            }
+            let c_decomp = is_active * is_control * (recomposed - (half_p - diff_right));
+            combined = combined + alpha_pow * c_decomp;
+        }
+        alpha_pow = alpha_pow * alpha;
+
+        // 7c: diff_right bits are binary
+        {
+            let mut bits_check = BabyBear::ZERO;
+            for i in 0..ORDERING_DIFF_BITS {
+                let bit = local[col::diff_right_bit(i)];
+                bits_check = bits_check + bit * (bit - BabyBear::ONE);
+            }
+            combined = combined + alpha_pow * (is_active * is_control * bits_check);
+        }
+        alpha_pow = alpha_pow * alpha;
+
+        // ====================================================================
+        // Constraint 8: Adjacency — right_position == left_position + 1.
+        // This ensures the prover cannot pick two non-adjacent leaves that
+        // happen to bracket the element (which would allow a revoked element
+        // to appear to be absent).
+        // ====================================================================
+
+        let left_pos = local[col::LEFT_POSITION];
+        let right_pos = local[col::RIGHT_POSITION];
+        let c_adjacency = is_active * is_control * (right_pos - left_pos - BabyBear::ONE);
+        combined = combined + alpha_pow * c_adjacency;
 
         combined
     }
@@ -493,14 +638,31 @@ pub struct SortedRevocationTree {
     depth: usize,
 }
 
+/// Sentinel value at the lower boundary of the sorted revocation tree.
+/// This is 0, which is the smallest possible canonical BabyBear value.
+/// Its presence ensures that any non-zero hash has a valid left neighbor.
+pub const SENTINEL_MIN: BabyBear = BabyBear::ZERO;
+
+/// Sentinel value at the upper boundary of the sorted revocation tree.
+/// This is p - 1 = 2013265920, the largest canonical BabyBear value.
+/// Its presence ensures that any hash < p-1 has a valid right neighbor.
+pub const SENTINEL_MAX: BabyBear = BabyBear(2013265920);
+
 impl SortedRevocationTree {
     /// Create a new sorted revocation tree from a set of revocation hashes.
     ///
     /// The hashes are sorted by their canonical u32 representation to enable
     /// binary search and adjacent-neighbor non-membership proofs.
+    ///
+    /// Automatically inserts boundary sentinel values (0 and p-1) to ensure
+    /// that every non-member hash falls between two adjacent tree entries.
+    /// This is required for the in-circuit ordering constraints to be satisfiable.
     pub fn new(mut revocation_hashes: Vec<BabyBear>, depth: usize) -> Self {
+        // Insert boundary sentinels for sound non-membership proofs.
+        revocation_hashes.push(SENTINEL_MIN);
+        revocation_hashes.push(SENTINEL_MAX);
         revocation_hashes.sort_by_key(|h| h.0);
-        // Deduplicate
+        // Deduplicate (in case 0 or p-1 was already present)
         revocation_hashes.dedup();
         Self {
             leaves: revocation_hashes,
@@ -508,18 +670,34 @@ impl SortedRevocationTree {
         }
     }
 
-    /// Number of revoked entries.
+    /// Number of entries (including sentinels).
     pub fn len(&self) -> usize {
         self.leaves.len()
     }
 
-    /// Whether the tree is empty.
-    pub fn is_empty(&self) -> bool {
-        self.leaves.is_empty()
+    /// Number of actual revoked entries (excluding sentinels).
+    pub fn num_revoked(&self) -> usize {
+        self.leaves
+            .iter()
+            .filter(|h| **h != SENTINEL_MIN && **h != SENTINEL_MAX)
+            .count()
     }
 
-    /// Check if a hash is in the revocation set.
+    /// Whether the tree has no revoked entries (sentinels don't count).
+    pub fn is_empty(&self) -> bool {
+        self.num_revoked() == 0
+    }
+
+    /// Check if a hash is in the revocation set (sentinels are not considered revoked).
     pub fn contains(&self, hash: &BabyBear) -> bool {
+        if *hash == SENTINEL_MIN || *hash == SENTINEL_MAX {
+            return false;
+        }
+        self.leaves.binary_search_by_key(&hash.0, |h| h.0).is_ok()
+    }
+
+    /// Check if a hash exists as a leaf in the tree (including sentinels).
+    pub fn contains_leaf(&self, hash: &BabyBear) -> bool {
         self.leaves.binary_search_by_key(&hash.0, |h| h.0).is_ok()
     }
 
@@ -597,43 +775,37 @@ impl SortedRevocationTree {
 
     /// Generate a non-membership witness for a hash that is NOT in the tree.
     ///
-    /// Returns None if the hash IS in the tree (can't prove non-membership).
+    /// Returns None if the hash IS in the tree (can't prove non-membership),
+    /// or if the hash equals a sentinel value.
+    ///
+    /// Because the tree always contains sentinels (0 and p-1), any hash in the
+    /// range (0, p-1) exclusive is guaranteed to fall between two adjacent leaves.
     pub fn prove_non_membership(&self, hash: &BabyBear) -> Option<NonMembershipWitness> {
+        // Sentinels themselves cannot be proven absent (they ARE in the tree).
+        if *hash == SENTINEL_MIN || *hash == SENTINEL_MAX {
+            return None;
+        }
+
         // Binary search for the insertion point.
         match self.leaves.binary_search_by_key(&hash.0, |h| h.0) {
             Ok(_) => None, // Hash IS in the set.
             Err(idx) => {
-                // The hash falls between leaves[idx-1] and leaves[idx].
-                // We need both neighbors to exist for a proper bracketing proof.
-                if self.leaves.is_empty() {
-                    // Empty tree: use sentinel values (0 and max).
-                    // In an empty tree, we use a special witness with zero neighbors.
-                    return Some(NonMembershipWitness {
-                        ancestor_hash: *hash,
-                        left_neighbor: BabyBear::ZERO,
-                        right_neighbor: BabyBear::ZERO,
-                        left_siblings: vec![[BabyBear::ZERO; 3]; self.depth],
-                        left_positions: vec![0; self.depth],
-                        right_siblings: vec![[BabyBear::ZERO; 3]; self.depth],
-                        right_positions: vec![0; self.depth],
-                    });
-                }
+                // Thanks to sentinels, idx is always in range (0, leaves.len()).
+                // leaves[0] = SENTINEL_MIN = 0, so hash > 0 means idx > 0.
+                // leaves[last] = SENTINEL_MAX = p-1, so hash < p-1 means idx < leaves.len().
+                assert!(
+                    idx > 0 && idx < self.leaves.len(),
+                    "Sentinel invariant violated: idx={}, len={}",
+                    idx,
+                    self.leaves.len()
+                );
 
-                // Get left and right neighbors with their tree positions.
-                let (left_val, left_pos) = if idx > 0 {
-                    (self.leaves[idx - 1], idx - 1)
-                } else {
-                    // No left neighbor: use position 0 (which is the smallest leaf or zero-padding).
-                    // For a sorted tree, if hash < all leaves, left is the zero padding.
-                    (BabyBear::ZERO, self.leaves.len()) // first empty slot
-                };
-
-                let (right_val, right_pos) = if idx < self.leaves.len() {
-                    (self.leaves[idx], idx)
-                } else {
-                    // No right neighbor: use the first zero-padded position after leaves.
-                    (BabyBear::ZERO, self.leaves.len())
-                };
+                // Left neighbor is leaves[idx-1], right neighbor is leaves[idx].
+                // They are adjacent in the sorted order (positions idx-1 and idx).
+                let left_pos = idx - 1;
+                let right_pos = idx;
+                let left_val = self.leaves[left_pos];
+                let right_val = self.leaves[right_pos];
 
                 // Generate Merkle proofs for both neighbors.
                 let (left_siblings, left_positions) = self.prove_membership(left_pos)?;
@@ -647,6 +819,8 @@ impl SortedRevocationTree {
                     left_positions,
                     right_siblings,
                     right_positions,
+                    left_tree_position: left_pos,
+                    right_tree_position: right_pos,
                 })
             }
         }
@@ -735,7 +909,9 @@ mod tests {
     #[test]
     fn sorted_tree_construction() {
         let tree = build_test_tree(5);
-        assert_eq!(tree.len(), 5);
+        // 5 revoked entries + 2 sentinels = 7 leaves
+        assert_eq!(tree.len(), 7);
+        assert_eq!(tree.num_revoked(), 5);
 
         // Verify leaves are sorted.
         for i in 1..tree.leaves.len() {
@@ -744,6 +920,10 @@ mod tests {
                 "Leaves must be sorted"
             );
         }
+
+        // Verify sentinels are present.
+        assert_eq!(tree.leaves[0], SENTINEL_MIN);
+        assert_eq!(*tree.leaves.last().unwrap(), SENTINEL_MAX);
     }
 
     #[test]
@@ -793,20 +973,22 @@ mod tests {
         let witness = tree.prove_non_membership(&absent).unwrap();
         assert_eq!(witness.ancestor_hash, absent);
 
-        // The left neighbor should be < absent and the right should be > absent
-        // (when both exist and are nonzero).
-        if witness.left_neighbor != BabyBear::ZERO {
-            assert!(
-                witness.left_neighbor.0 < absent.0,
-                "Left neighbor must be less than absent hash"
-            );
-        }
-        if witness.right_neighbor != BabyBear::ZERO {
-            assert!(
-                witness.right_neighbor.0 > absent.0 || witness.right_neighbor == BabyBear::ZERO,
-                "Right neighbor must be greater than absent hash"
-            );
-        }
+        // Left neighbor must be strictly less than absent hash.
+        assert!(
+            witness.left_neighbor.0 < absent.0,
+            "Left neighbor must be less than absent hash"
+        );
+        // Right neighbor must be strictly greater than absent hash.
+        assert!(
+            witness.right_neighbor.0 > absent.0,
+            "Right neighbor must be greater than absent hash"
+        );
+        // Adjacency: right position == left position + 1.
+        assert_eq!(
+            witness.right_tree_position,
+            witness.left_tree_position + 1,
+            "Neighbors must be adjacent in the tree"
+        );
     }
 
     #[test]
@@ -1073,6 +1255,354 @@ mod tests {
             bytes.len() < 256 * 1024,
             "Proof too large: {} bytes",
             bytes.len()
+        );
+    }
+
+    // ========================================================================
+    // Soundness tests for in-circuit ordering and adjacency constraints
+    // ========================================================================
+
+    /// Helper: generate a trace with a manually-crafted (potentially malicious) witness,
+    /// and check whether the constraints accept or reject it.
+    fn constraints_accept(
+        air: &NonRevocationAir,
+        trace: &[Vec<BabyBear>],
+        public_inputs: &[BabyBear],
+    ) -> bool {
+        let alpha = BabyBear::new(7);
+        for i in 0..trace.len() {
+            let next_idx = if i + 1 < trace.len() { i + 1 } else { 0 };
+            let c = air.eval_constraints(&trace[i], &trace[next_idx], public_inputs, alpha);
+            if c != BabyBear::ZERO {
+                return false;
+            }
+        }
+        true
+    }
+
+    #[test]
+    fn non_adjacent_neighbors_rejected() {
+        // SOUNDNESS TEST: A malicious prover picks two non-adjacent leaves that
+        // bracket the element. The adjacency constraint should catch this.
+        let tree = build_test_tree(10); // 10 revoked + 2 sentinels = 12 leaves
+
+        // Pick a hash that falls between two leaves.
+        let target = make_revocation_hash(12345);
+        assert!(!tree.contains(&target));
+
+        // Get the legitimate witness first.
+        let legit_witness = tree.prove_non_membership(&target).unwrap();
+
+        // Now craft a malicious witness: use two non-adjacent leaves that
+        // still bracket the target. Find two leaves that bracket the target
+        // but are NOT adjacent (skip one leaf in between).
+        let target_val = target.0;
+        let mut left_idx = None;
+        let mut right_idx = None;
+        for i in 0..tree.leaves.len() - 2 {
+            if tree.leaves[i].0 < target_val && tree.leaves[i + 2].0 > target_val {
+                // Skip leaves[i+1] -- use non-adjacent pair (i, i+2)
+                left_idx = Some(i);
+                right_idx = Some(i + 2);
+                break;
+            }
+        }
+
+        let left_idx = left_idx.expect("Should find non-adjacent bracket");
+        let right_idx = right_idx.expect("Should find non-adjacent bracket");
+
+        // Verify the bracket is non-adjacent (positions differ by 2, not 1).
+        assert_eq!(right_idx - left_idx, 2);
+
+        let left_val = tree.leaves[left_idx];
+        let right_val = tree.leaves[right_idx];
+        assert!(left_val.0 < target_val && target_val < right_val.0);
+
+        // Build malicious witness with non-adjacent neighbors.
+        let (left_siblings, left_positions) = tree.prove_membership(left_idx).unwrap();
+        let (right_siblings, right_positions) = tree.prove_membership(right_idx).unwrap();
+
+        let malicious = NonMembershipWitness {
+            ancestor_hash: target,
+            left_neighbor: left_val,
+            right_neighbor: right_val,
+            left_siblings,
+            left_positions,
+            right_siblings,
+            right_positions,
+            left_tree_position: left_idx,
+            right_tree_position: right_idx,
+        };
+
+        let witness = NonRevocationWitness {
+            ancestors: vec![malicious],
+        };
+
+        let air = NonRevocationAir::new(REVOCATION_TREE_DEPTH);
+        let (trace, public_inputs) = air.generate_trace(&witness, tree.root());
+
+        // The adjacency constraint should REJECT this trace.
+        assert!(
+            !constraints_accept(&air, &trace, &public_inputs),
+            "Non-adjacent neighbors must be rejected by adjacency constraint"
+        );
+
+        // Verify the legitimate witness DOES pass.
+        let legit_full = NonRevocationWitness {
+            ancestors: vec![legit_witness],
+        };
+        let (legit_trace, legit_pi) = air.generate_trace(&legit_full, tree.root());
+        assert!(
+            constraints_accept(&air, &legit_trace, &legit_pi),
+            "Legitimate witness with adjacent neighbors should pass"
+        );
+    }
+
+    #[test]
+    fn element_outside_bracket_rejected() {
+        // SOUNDNESS TEST: Prover claims neighbors that DON'T bracket the element.
+        // The ordering constraints should catch this.
+        let tree = build_test_tree(5);
+
+        // Pick a hash not in the tree.
+        let target = make_revocation_hash(777);
+        assert!(!tree.contains(&target));
+
+        let legit_witness = tree.prove_non_membership(&target).unwrap();
+        let left_pos = legit_witness.left_tree_position;
+        let right_pos = legit_witness.right_tree_position;
+
+        // Craft a malicious witness where the element is ABOVE the right neighbor.
+        // Use a pair of adjacent leaves that are both below the target.
+        // Find the first pair that are both < target.
+        let target_val = target.0;
+        let mut found_pair = None;
+        for i in 0..tree.leaves.len() - 1 {
+            if tree.leaves[i].0 < target_val
+                && tree.leaves[i + 1].0 < target_val
+                && tree.leaves[i + 1].0 > tree.leaves[i].0
+            {
+                found_pair = Some((i, i + 1));
+                break;
+            }
+        }
+
+        if let Some((li, ri)) = found_pair {
+            let left_val = tree.leaves[li];
+            let right_val = tree.leaves[ri];
+            assert!(
+                target_val > right_val.0,
+                "Element should be above both neighbors"
+            );
+
+            let (left_siblings, left_positions_merkle) = tree.prove_membership(li).unwrap();
+            let (right_siblings, right_positions_merkle) = tree.prove_membership(ri).unwrap();
+
+            let malicious = NonMembershipWitness {
+                ancestor_hash: target,
+                left_neighbor: left_val,
+                right_neighbor: right_val,
+                left_siblings,
+                left_positions: left_positions_merkle,
+                right_siblings,
+                right_positions: right_positions_merkle,
+                left_tree_position: li,
+                right_tree_position: ri,
+            };
+
+            let witness = NonRevocationWitness {
+                ancestors: vec![malicious],
+            };
+
+            let air = NonRevocationAir::new(REVOCATION_TREE_DEPTH);
+            let (trace, public_inputs) = air.generate_trace(&witness, tree.root());
+
+            // The ordering constraint (ancestor < right_neighbor) should REJECT this.
+            assert!(
+                !constraints_accept(&air, &trace, &public_inputs),
+                "Element outside bracket (above right) must be rejected"
+            );
+        }
+
+        // Also test: element BELOW the left neighbor.
+        // Use a pair where both are above the target.
+        let mut found_pair_above = None;
+        for i in 0..tree.leaves.len() - 1 {
+            if tree.leaves[i].0 > target_val
+                && tree.leaves[i + 1].0 > target_val
+                && tree.leaves[i + 1].0 > tree.leaves[i].0
+            {
+                found_pair_above = Some((i, i + 1));
+                break;
+            }
+        }
+
+        if let Some((li, ri)) = found_pair_above {
+            let left_val = tree.leaves[li];
+            let right_val = tree.leaves[ri];
+            assert!(target_val < left_val.0, "Element should be below both");
+
+            let (left_siblings, left_positions_merkle) = tree.prove_membership(li).unwrap();
+            let (right_siblings, right_positions_merkle) = tree.prove_membership(ri).unwrap();
+
+            let malicious = NonMembershipWitness {
+                ancestor_hash: target,
+                left_neighbor: left_val,
+                right_neighbor: right_val,
+                left_siblings,
+                left_positions: left_positions_merkle,
+                right_siblings,
+                right_positions: right_positions_merkle,
+                left_tree_position: li,
+                right_tree_position: ri,
+            };
+
+            let witness = NonRevocationWitness {
+                ancestors: vec![malicious],
+            };
+
+            let air = NonRevocationAir::new(REVOCATION_TREE_DEPTH);
+            let (trace, public_inputs) = air.generate_trace(&witness, tree.root());
+
+            // The ordering constraint (left_neighbor < ancestor) should REJECT this.
+            assert!(
+                !constraints_accept(&air, &trace, &public_inputs),
+                "Element outside bracket (below left) must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn element_equal_to_neighbor_rejected() {
+        // SOUNDNESS TEST: Element equals one of the neighbors.
+        // diff_left = ancestor - left - 1 would wrap around (be large),
+        // failing the high-bit-zero check.
+        let tree = build_test_tree(5);
+
+        // Use a leaf that IS in the tree as the "ancestor_hash",
+        // but craft a witness where it equals the left neighbor.
+        let leaf_val = tree.leaves[3]; // a real leaf (not sentinel)
+        assert!(leaf_val != SENTINEL_MIN && leaf_val != SENTINEL_MAX);
+
+        // Craft witness: ancestor_hash == left_neighbor == leaf_val.
+        // Use adjacent positions (3, 4).
+        let li = 3;
+        let ri = 4;
+        let right_val = tree.leaves[ri];
+
+        let (left_siblings, left_positions_merkle) = tree.prove_membership(li).unwrap();
+        let (right_siblings, right_positions_merkle) = tree.prove_membership(ri).unwrap();
+
+        let malicious = NonMembershipWitness {
+            ancestor_hash: leaf_val, // EQUALS left neighbor!
+            left_neighbor: leaf_val,
+            right_neighbor: right_val,
+            left_siblings,
+            left_positions: left_positions_merkle,
+            right_siblings,
+            right_positions: right_positions_merkle,
+            left_tree_position: li,
+            right_tree_position: ri,
+        };
+
+        let witness = NonRevocationWitness {
+            ancestors: vec![malicious],
+        };
+
+        let air = NonRevocationAir::new(REVOCATION_TREE_DEPTH);
+        let (trace, public_inputs) = air.generate_trace(&witness, tree.root());
+
+        // diff_left = ancestor - left - 1 = leaf_val - leaf_val - 1 = p - 1 (wraps!)
+        // This is a huge number, so bit decomposition with 30 bits won't match,
+        // or the high bit will be set. Either way, constraints reject.
+        assert!(
+            !constraints_accept(&air, &trace, &public_inputs),
+            "Element equal to left neighbor must be rejected"
+        );
+
+        // Also test: ancestor_hash == right_neighbor.
+        let right_leaf = tree.leaves[4];
+        let malicious2 = NonMembershipWitness {
+            ancestor_hash: right_leaf, // EQUALS right neighbor!
+            left_neighbor: tree.leaves[3],
+            right_neighbor: right_leaf,
+            left_siblings: tree.prove_membership(3).unwrap().0,
+            left_positions: tree.prove_membership(3).unwrap().1,
+            right_siblings: tree.prove_membership(4).unwrap().0,
+            right_positions: tree.prove_membership(4).unwrap().1,
+            left_tree_position: 3,
+            right_tree_position: 4,
+        };
+
+        let witness2 = NonRevocationWitness {
+            ancestors: vec![malicious2],
+        };
+        let (trace2, pi2) = air.generate_trace(&witness2, tree.root());
+
+        // diff_right = right - ancestor - 1 = right_leaf - right_leaf - 1 = p - 1 (wraps!)
+        assert!(
+            !constraints_accept(&air, &trace2, &pi2),
+            "Element equal to right neighbor must be rejected"
+        );
+    }
+
+    #[test]
+    fn valid_non_membership_passes() {
+        // Positive test: a correctly-generated non-membership proof passes
+        // all constraints including the new ordering and adjacency checks.
+        let tree = build_test_tree(8);
+
+        // Test with several different absent hashes.
+        let absent_hashes: Vec<BabyBear> = (0..5u32)
+            .map(|i| make_revocation_hash(40000 + i * 1000))
+            .collect();
+
+        for hash in &absent_hashes {
+            assert!(!tree.contains(hash));
+        }
+
+        let witnesses: Vec<NonMembershipWitness> = absent_hashes
+            .iter()
+            .map(|h| tree.prove_non_membership(h).unwrap())
+            .collect();
+
+        // Verify each witness satisfies the constraints individually.
+        let air = NonRevocationAir::new(REVOCATION_TREE_DEPTH);
+        for (i, w) in witnesses.iter().enumerate() {
+            let single = NonRevocationWitness {
+                ancestors: vec![w.clone()],
+            };
+            let (trace, pi) = air.generate_trace(&single, tree.root());
+            assert!(
+                constraints_accept(&air, &trace, &pi),
+                "Valid non-membership witness {} should pass all constraints",
+                i
+            );
+
+            // Verify ordering invariants in the witness.
+            assert!(
+                w.left_neighbor.0 < w.ancestor_hash.0,
+                "Left must be < ancestor"
+            );
+            assert!(
+                w.ancestor_hash.0 < w.right_neighbor.0,
+                "Ancestor must be < right"
+            );
+            assert_eq!(
+                w.right_tree_position,
+                w.left_tree_position + 1,
+                "Must be adjacent"
+            );
+        }
+
+        // Also verify the full proof (STARK) works end-to-end.
+        let proof =
+            prove_non_revocation(&absent_hashes, &tree).expect("Should generate valid proof");
+        let result = verify_non_revocation(tree.root(), &proof);
+        assert!(
+            result.is_ok(),
+            "Full STARK proof should verify: {:?}",
+            result.err()
         );
     }
 }

@@ -525,6 +525,8 @@ pub fn prove_with_context(
     }
 
     transcript.absorb_hash(&trace_tree.root());
+    // Bind the public input count to prevent length-extension transcript collisions
+    transcript.absorb_bytes(&(public_inputs.len() as u32).to_le_bytes());
     for pi in public_inputs {
         transcript.absorb_field(*pi);
     }
@@ -547,10 +549,23 @@ pub fn prove_with_context(
     // polynomial Z_T(x) = (x^n - 1) / (x - omega^(n-1)).
     // This polynomial vanishes on all trace rows EXCEPT the last, which is correct
     // because transition constraints (referencing "next row") don't apply at the last row.
-    // For per-row constraints that hold everywhere, the numerator also vanishes at the
-    // last row, making the quotient well-defined everywhere.
+    //
+    // At the last trace point omega^(n-1):
+    //   Z_T(omega^(n-1)) = lim_{x->omega^(n-1)} (x^n-1)/(x-omega^(n-1))
+    //                     = n * omega^((n-1)*(n-1))  [by L'Hopital]
+    //   quotient = constraint / Z_T  (may be non-zero since transition doesn't hold there)
+    //
+    // At other trace points omega^k (k < n-1):
+    //   Z_T(omega^k) = 0 and constraint(omega^k) = 0 (constraint holds on these rows)
+    //   quotient = 0/0 resolved to 0 by convention (the polynomial Q is well-defined
+    //   by continuity and the committed evaluations at non-trace points determine it)
     let omega_trace = get_root_of_unity(num_rows.trailing_zeros());
     let last_trace_point = omega_trace.pow((num_rows - 1) as u32); // omega^(n-1)
+    // Precompute Z_T at the last trace point via derivative: n * omega^((n-1)^2)
+    // For power-of-two n: (n-1)^2 mod n = (n^2-2n+1) mod n = 1, so omega^((n-1)^2) = omega.
+    // We compute (n-1)^2 mod n explicitly to avoid u32 overflow for large trace sizes.
+    let exp_mod_n = ((num_rows - 1) as u64 * (num_rows - 1) as u64 % num_rows as u64) as u32;
+    let z_t_at_last = BabyBear::new(num_rows as u32) * omega_trace.pow(exp_mod_n);
     let mut quotient_evals = Vec::with_capacity(domain_size);
     for i in 0..domain_size {
         let x = eval_points[i];
@@ -560,12 +575,16 @@ pub fn prove_with_context(
         // Z_T(x) = Z(x) / (x - omega^(n-1))
         let denom_factor = x - last_trace_point;
         if z_full == BabyBear::ZERO {
-            // x is on the trace domain. For the last trace point, Z_T(x) = 0 but
-            // the quotient is 0/0; we set it to 0 since transition constraints are
-            // not enforced there. For other trace points, Z_T has a simple zero and
-            // the constraint should also vanish (constraint/Z_T is evaluated via
-            // L'Hopital or set to 0 for the committed polynomial approach).
-            quotient_evals.push(BabyBear::ZERO);
+            if denom_factor == BabyBear::ZERO {
+                // x IS the last trace point omega^(n-1). Z_T != 0 here.
+                // Compute quotient = constraint / Z_T(omega^(n-1))
+                quotient_evals.push(constraint_evals[i] * z_t_at_last.inverse().unwrap());
+            } else {
+                // x is on the trace domain but NOT the last point.
+                // Z_T(x) = 0 here, and constraint(x) must also be 0 (constraints
+                // hold on rows 0..n-2). The quotient is 0 by L'Hopital/continuity.
+                quotient_evals.push(BabyBear::ZERO);
+            }
         } else {
             // z_full != 0 means x is NOT on the trace domain, so denom_factor != 0
             let z_transition = z_full * denom_factor.inverse().unwrap();
@@ -741,7 +760,42 @@ pub fn verify_with_context(
 
     let num_cols = proof.num_cols;
     let trace_len = proof.trace_len;
-    let domain_size = trace_len * BLOWUP;
+
+    // Structural validation: reject malformed proof parameters that could cause
+    // panics or undefined behavior during verification.
+    if trace_len < 2 {
+        return Err(format!("Invalid trace_len: {} (must be >= 2)", trace_len));
+    }
+    if !trace_len.is_power_of_two() {
+        return Err(format!(
+            "Invalid trace_len: {} (must be a power of two)",
+            trace_len
+        ));
+    }
+    if num_cols == 0 || num_cols != air.width() {
+        return Err(format!(
+            "Column count mismatch: proof has {}, AIR expects {}",
+            num_cols,
+            air.width()
+        ));
+    }
+    if proof.query_proofs.len() != NUM_QUERIES {
+        return Err(format!(
+            "Invalid query count: expected {}, got {}",
+            NUM_QUERIES,
+            proof.query_proofs.len()
+        ));
+    }
+    // Ensure trace_len * BLOWUP doesn't overflow and log fits in root-of-unity range
+    let domain_size = trace_len
+        .checked_mul(BLOWUP)
+        .ok_or_else(|| format!("trace_len * BLOWUP overflow: {} * {}", trace_len, BLOWUP))?;
+    if domain_size.trailing_zeros() > 27 {
+        return Err(format!(
+            "Domain size 2^{} exceeds BabyBear root-of-unity limit (2^27)",
+            domain_size.trailing_zeros()
+        ));
+    }
 
     let proof_pis: Vec<BabyBear> = proof
         .public_inputs
@@ -773,6 +827,8 @@ pub fn verify_with_context(
     }
 
     transcript.absorb_hash(&proof.trace_commitment);
+    // Bind the public input count to prevent length-extension transcript collisions
+    transcript.absorb_bytes(&(public_inputs.len() as u32).to_le_bytes());
     for pi in public_inputs {
         transcript.absorb_field(*pi);
     }
@@ -935,17 +991,32 @@ pub fn verify_with_context(
         let constraint_at_x =
             air.eval_constraints(&trace_vals, &next_trace_vals, public_inputs, alpha);
         if z_full == BabyBear::ZERO {
-            // x is on the trace domain. The prover sets quotient = 0 at these points.
-            // The constraint must also evaluate to zero (constraints hold on the trace).
-            if constraint_val != BabyBear::ZERO {
-                return Err(format!(
-                    "Constraint quotient non-zero on trace domain at query index {idx}"
-                ));
-            }
-            if constraint_at_x != BabyBear::ZERO {
-                return Err(format!(
-                    "Constraint non-zero on trace domain at query index {idx}"
-                ));
+            if denom_factor == BabyBear::ZERO {
+                // x IS the last trace point omega^(n-1). Z_T != 0 here.
+                // Z_T(omega^(n-1)) = n * omega^((n-1)^2) [by L'Hopital]
+                // (n-1)^2 mod n = 1 for power-of-two n; compute mod to avoid overflow.
+                let exp_mod_n =
+                    ((trace_len - 1) as u64 * (trace_len - 1) as u64 % trace_len as u64) as u32;
+                let z_t_at_last = BabyBear::new(trace_len as u32) * omega_trace.pow(exp_mod_n);
+                // Verify: quotient * Z_T == constraint
+                if constraint_val * z_t_at_last != constraint_at_x {
+                    return Err(format!(
+                        "Constraint consistency check failed at last trace point (query index {idx})"
+                    ));
+                }
+            } else {
+                // x is on trace domain but NOT the last point. Prover sets quotient=0.
+                // The constraint must also be zero (constraints hold on rows 0..n-2).
+                if constraint_val != BabyBear::ZERO {
+                    return Err(format!(
+                        "Constraint quotient non-zero on trace domain at query index {idx}"
+                    ));
+                }
+                if constraint_at_x != BabyBear::ZERO {
+                    return Err(format!(
+                        "Constraint non-zero on trace domain at query index {idx}"
+                    ));
+                }
             }
         } else {
             // x is NOT on the trace domain; denom_factor is also non-zero since the
@@ -960,6 +1031,20 @@ pub fn verify_with_context(
 
         // FRI folding relation verification
         let first_half = domain_size / 2;
+
+        // Validate constraint sibling position: must be the paired half-domain partner
+        let expected_sibling_pos = if idx < first_half {
+            idx + first_half
+        } else {
+            idx - first_half
+        };
+        if query.constraint_sibling_pos != expected_sibling_pos {
+            return Err(format!(
+                "FRI: constraint sibling position mismatch: expected {}, got {}",
+                expected_sibling_pos, query.constraint_sibling_pos
+            ));
+        }
+
         let constraint_sib_val = BabyBear::new_canonical(query.constraint_sibling_value);
         if !MerkleTree::verify_proof(
             &proof.constraint_commitment,
@@ -1077,14 +1162,27 @@ pub fn verify_with_context(
         }
 
         if let Some(last) = query.fri_layers.last() {
-            if last.query_pos < proof.fri_final_poly.len()
-                && last.query_value != proof.fri_final_poly[last.query_pos]
-            {
+            // The last FRI layer's values must match the final polynomial.
+            // Reject if positions are out of range (malformed proof attempting
+            // to bypass the final-poly consistency check).
+            if last.query_pos >= proof.fri_final_poly.len() {
+                return Err(format!(
+                    "FRI final poly: query_pos {} out of range (final poly len {})",
+                    last.query_pos,
+                    proof.fri_final_poly.len()
+                ));
+            }
+            if last.query_value != proof.fri_final_poly[last.query_pos] {
                 return Err(format!("FRI final poly mismatch at pos {}", last.query_pos));
             }
-            if last.sibling_pos < proof.fri_final_poly.len()
-                && last.sibling_value != proof.fri_final_poly[last.sibling_pos]
-            {
+            if last.sibling_pos >= proof.fri_final_poly.len() {
+                return Err(format!(
+                    "FRI final poly: sibling_pos {} out of range (final poly len {})",
+                    last.sibling_pos,
+                    proof.fri_final_poly.len()
+                ));
+            }
+            if last.sibling_value != proof.fri_final_poly[last.sibling_pos] {
                 return Err(format!(
                     "FRI final poly sibling mismatch at pos {}",
                     last.sibling_pos
@@ -1240,6 +1338,11 @@ pub fn proof_to_bytes(proof: &StarkProof) -> Vec<u8> {
 }
 
 pub fn proof_from_bytes(bytes: &[u8]) -> Result<StarkProof, String> {
+    // Maximum plausible sizes to prevent allocation bombs from malicious inputs.
+    // A legitimate proof's total byte length provides a natural upper bound on
+    // internal array counts (each element occupies >= 4 bytes).
+    let max_items = bytes.len() / 4 + 1;
+
     let mut pos: usize;
     let ru32 = |p: &mut usize, b: &[u8]| -> Result<u32, String> {
         if *p + 4 > b.len() {
@@ -1265,16 +1368,25 @@ pub fn proof_from_bytes(bytes: &[u8]) -> Result<StarkProof, String> {
     let trace_commitment = rh(&mut pos, bytes)?;
     let constraint_commitment = rh(&mut pos, bytes)?;
     let fc = ru32(&mut pos, bytes)? as usize;
+    if fc > max_items {
+        return Err(format!("fri_commitments count {fc} exceeds input bounds"));
+    }
     let mut fri_commitments = Vec::new();
     for _ in 0..fc {
         fri_commitments.push(rh(&mut pos, bytes)?);
     }
     let fpl = ru32(&mut pos, bytes)? as usize;
+    if fpl > max_items {
+        return Err(format!("fri_final_poly count {fpl} exceeds input bounds"));
+    }
     let mut fri_final_poly = Vec::new();
     for _ in 0..fpl {
         fri_final_poly.push(ru32(&mut pos, bytes)?);
     }
     let pic = ru32(&mut pos, bytes)? as usize;
+    if pic > max_items {
+        return Err(format!("public_inputs count {pic} exceeds input bounds"));
+    }
     let mut public_inputs = Vec::new();
     for _ in 0..pic {
         public_inputs.push(ru32(&mut pos, bytes)?);
@@ -1282,6 +1394,9 @@ pub fn proof_from_bytes(bytes: &[u8]) -> Result<StarkProof, String> {
     let trace_len = ru32(&mut pos, bytes)? as usize;
     let num_cols = ru32(&mut pos, bytes)? as usize;
     let qc = ru32(&mut pos, bytes)? as usize;
+    if qc > max_items {
+        return Err(format!("query_proofs count {qc} exceeds input bounds"));
+    }
     let mut query_proofs = Vec::new();
     for _ in 0..qc {
         let index = ru32(&mut pos, bytes)? as usize;
@@ -2226,5 +2341,383 @@ mod tests {
 
         // Deserialized proof verifies
         assert!(verify(&air, &proof2, &pi).is_ok());
+    }
+
+    // ========================================================================
+    // HARDENING TESTS: malformed proof rejection without panics
+    // ========================================================================
+
+    #[test]
+    fn verifier_rejects_zero_trace_len() {
+        let (trace, pi) = generate_merkle_trace(
+            12345,
+            &[
+                [100u32, 200, 300],
+                [400, 500, 600],
+                [700, 800, 900],
+                [1000, 1100, 1200],
+            ],
+            &[0u32, 1, 2, 3],
+        );
+        let air = MerkleStarkAir;
+        let mut proof = prove(&air, &trace, &pi);
+        proof.trace_len = 0;
+        let result = verify(&air, &proof, &pi);
+        assert!(result.is_err(), "Zero trace_len must be rejected");
+        assert!(result.unwrap_err().contains("trace_len"));
+    }
+
+    #[test]
+    fn verifier_rejects_trace_len_one() {
+        let (trace, pi) = generate_merkle_trace(
+            12345,
+            &[
+                [100u32, 200, 300],
+                [400, 500, 600],
+                [700, 800, 900],
+                [1000, 1100, 1200],
+            ],
+            &[0u32, 1, 2, 3],
+        );
+        let air = MerkleStarkAir;
+        let mut proof = prove(&air, &trace, &pi);
+        proof.trace_len = 1;
+        let result = verify(&air, &proof, &pi);
+        assert!(result.is_err(), "trace_len=1 must be rejected");
+        assert!(result.unwrap_err().contains("trace_len"));
+    }
+
+    #[test]
+    fn verifier_rejects_non_power_of_two_trace_len() {
+        let (trace, pi) = generate_merkle_trace(
+            12345,
+            &[
+                [100u32, 200, 300],
+                [400, 500, 600],
+                [700, 800, 900],
+                [1000, 1100, 1200],
+            ],
+            &[0u32, 1, 2, 3],
+        );
+        let air = MerkleStarkAir;
+        let mut proof = prove(&air, &trace, &pi);
+        proof.trace_len = 5; // not power of two
+        let result = verify(&air, &proof, &pi);
+        assert!(
+            result.is_err(),
+            "Non-power-of-two trace_len must be rejected"
+        );
+        assert!(result.unwrap_err().contains("power of two"));
+    }
+
+    #[test]
+    fn verifier_rejects_wrong_num_cols() {
+        let (trace, pi) = generate_merkle_trace(
+            12345,
+            &[
+                [100u32, 200, 300],
+                [400, 500, 600],
+                [700, 800, 900],
+                [1000, 1100, 1200],
+            ],
+            &[0u32, 1, 2, 3],
+        );
+        let air = MerkleStarkAir;
+        let mut proof = prove(&air, &trace, &pi);
+        proof.num_cols = 3; // AIR expects 6
+        let result = verify(&air, &proof, &pi);
+        assert!(result.is_err(), "Wrong num_cols must be rejected");
+        assert!(result.unwrap_err().contains("Column count mismatch"));
+    }
+
+    #[test]
+    fn verifier_rejects_wrong_query_count() {
+        let (trace, pi) = generate_merkle_trace(
+            12345,
+            &[
+                [100u32, 200, 300],
+                [400, 500, 600],
+                [700, 800, 900],
+                [1000, 1100, 1200],
+            ],
+            &[0u32, 1, 2, 3],
+        );
+        let air = MerkleStarkAir;
+        let mut proof = prove(&air, &trace, &pi);
+        // Remove one query to create an incorrect count
+        proof.query_proofs.pop();
+        let result = verify(&air, &proof, &pi);
+        assert!(result.is_err(), "Wrong query count must be rejected");
+        assert!(result.unwrap_err().contains("query count"));
+    }
+
+    #[test]
+    fn verifier_rejects_tampered_constraint_sibling_pos() {
+        let (trace, pi) = generate_merkle_trace(
+            12345,
+            &[
+                [100u32, 200, 300],
+                [400, 500, 600],
+                [700, 800, 900],
+                [1000, 1100, 1200],
+            ],
+            &[0u32, 1, 2, 3],
+        );
+        let air = MerkleStarkAir;
+        let mut proof = prove(&air, &trace, &pi);
+        // Tamper with the first query's sibling position
+        proof.query_proofs[0].constraint_sibling_pos ^= 1;
+        let result = verify(&air, &proof, &pi);
+        assert!(result.is_err(), "Wrong sibling pos must be rejected");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("sibling position mismatch") || err.contains("Query index mismatch"),
+            "Unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn verifier_rejects_fri_final_poly_out_of_range() {
+        let (trace, pi) = generate_merkle_trace(
+            12345,
+            &[
+                [100u32, 200, 300],
+                [400, 500, 600],
+                [700, 800, 900],
+                [1000, 1100, 1200],
+            ],
+            &[0u32, 1, 2, 3],
+        );
+        let air = MerkleStarkAir;
+        let mut proof = prove(&air, &trace, &pi);
+        // Shrink fri_final_poly to make last-layer positions out of range
+        proof.fri_final_poly = vec![0]; // only 1 element, positions will be >= 1
+        let result = verify(&air, &proof, &pi);
+        assert!(
+            result.is_err(),
+            "FRI final poly out-of-range must be rejected"
+        );
+    }
+
+    #[test]
+    fn verifier_rejects_oversized_fri_final_poly() {
+        let (trace, pi) = generate_merkle_trace(
+            12345,
+            &[
+                [100u32, 200, 300],
+                [400, 500, 600],
+                [700, 800, 900],
+                [1000, 1100, 1200],
+            ],
+            &[0u32, 1, 2, 3],
+        );
+        let air = MerkleStarkAir;
+        let mut proof = prove(&air, &trace, &pi);
+        // Make fri_final_poly too large (> 4 elements)
+        proof.fri_final_poly = vec![0, 1, 2, 3, 4];
+        let result = verify(&air, &proof, &pi);
+        assert!(result.is_err(), "Oversized fri_final_poly must be rejected");
+        // The proof may fail on FRI final poly size check or on an earlier
+        // consistency check depending on whether the tampered values break
+        // the FRI layer verification first.
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("FRI final polynomial too large") || err.contains("FRI"),
+            "Expected FRI-related rejection, got: {err}"
+        );
+    }
+
+    #[test]
+    fn smallest_valid_trace_two_rows() {
+        // Minimum trace: 2 rows. This exercises the edge case where FRI
+        // operates on the smallest possible domain (8 elements).
+        struct MinimalAir;
+        impl StarkAir for MinimalAir {
+            fn width(&self) -> usize {
+                2
+            }
+            fn constraint_degree(&self) -> usize {
+                2
+            }
+            fn air_name(&self) -> &'static str {
+                "pyana-minimal-test-v1"
+            }
+            fn has_chain_continuity(&self) -> bool {
+                false
+            }
+            fn eval_constraints(
+                &self,
+                local: &[BabyBear],
+                next: &[BabyBear],
+                _public_inputs: &[BabyBear],
+                alpha: BabyBear,
+            ) -> BabyBear {
+                // Constraint: col1 = col0 + 1 (for transitions)
+                let c1 = next[0] - local[0] - BabyBear::ONE;
+                let c2 = local[1] - local[0] * local[0];
+                c1 + alpha * c2
+            }
+        }
+
+        let air = MinimalAir;
+        // 2-row trace: row0 = [1, 1], row1 = [2, 4]
+        let trace = vec![
+            vec![BabyBear::ONE, BabyBear::ONE],
+            vec![BabyBear::new(2), BabyBear::new(4)],
+        ];
+        let pi = vec![BabyBear::ONE]; // just a marker public input
+
+        let proof = prove(&air, &trace, &pi);
+        let result = verify(&air, &proof, &pi);
+        assert!(
+            result.is_ok(),
+            "2-row trace must verify: {:?}",
+            result.err()
+        );
+
+        // Verify serialization roundtrip
+        let bytes = proof_to_bytes(&proof);
+        let proof2 = proof_from_bytes(&bytes).unwrap();
+        assert!(verify(&air, &proof2, &pi).is_ok());
+    }
+
+    #[test]
+    fn deserialization_rejects_truncated_bytes() {
+        let (trace, pi) = generate_merkle_trace(
+            42,
+            &[[10u32, 20, 30], [40, 50, 60], [70, 80, 90], [100, 110, 120]],
+            &[0u32, 1, 2, 3],
+        );
+        let air = MerkleStarkAir;
+        let proof = prove(&air, &trace, &pi);
+        let bytes = proof_to_bytes(&proof);
+
+        // Truncate at various points
+        for cut in [5, 50, 100, bytes.len() / 2] {
+            let result = proof_from_bytes(&bytes[..cut]);
+            assert!(
+                result.is_err(),
+                "Truncated proof at {cut} bytes must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn deserialization_rejects_invalid_header() {
+        assert!(proof_from_bytes(b"").is_err());
+        assert!(proof_from_bytes(b"PYNX\x01").is_err()); // wrong magic
+        assert!(proof_from_bytes(b"PYNA\x02").is_err()); // wrong version
+        assert!(proof_from_bytes(b"PYN").is_err()); // too short
+    }
+
+    #[test]
+    fn transcript_pi_count_binding_prevents_confusion() {
+        // Two transcripts with the same field values but different PI counts
+        // must produce different challenges. This tests the PI count binding.
+        let mut t1 = Transcript::new(b"merkle-stark");
+        t1.absorb_bytes(b"pyana-merkle-v1");
+        t1.absorb_hash(&[0u8; 32]);
+        t1.absorb_bytes(&2u32.to_le_bytes()); // count = 2
+        t1.absorb_field(BabyBear::new(100));
+        t1.absorb_field(BabyBear::new(200));
+        let c1 = t1.squeeze_field();
+
+        let mut t2 = Transcript::new(b"merkle-stark");
+        t2.absorb_bytes(b"pyana-merkle-v1");
+        t2.absorb_hash(&[0u8; 32]);
+        t2.absorb_bytes(&3u32.to_le_bytes()); // count = 3
+        t2.absorb_field(BabyBear::new(100));
+        t2.absorb_field(BabyBear::new(200));
+        t2.absorb_field(BabyBear::ZERO);
+        let c2 = t2.squeeze_field();
+
+        assert_ne!(
+            c1, c2,
+            "Different PI counts must produce different challenges (length binding)"
+        );
+    }
+
+    #[test]
+    fn smallest_trace_tampered_still_rejected() {
+        // Verify that tampered proofs are detected even with the minimum 2-row trace.
+        struct MinimalAir;
+        impl StarkAir for MinimalAir {
+            fn width(&self) -> usize {
+                2
+            }
+            fn constraint_degree(&self) -> usize {
+                2
+            }
+            fn air_name(&self) -> &'static str {
+                "pyana-minimal-test-v1"
+            }
+            fn has_chain_continuity(&self) -> bool {
+                false
+            }
+            fn eval_constraints(
+                &self,
+                local: &[BabyBear],
+                next: &[BabyBear],
+                _public_inputs: &[BabyBear],
+                alpha: BabyBear,
+            ) -> BabyBear {
+                let c1 = next[0] - local[0] - BabyBear::ONE;
+                let c2 = local[1] - local[0] * local[0];
+                c1 + alpha * c2
+            }
+        }
+
+        let air = MinimalAir;
+        let trace = vec![
+            vec![BabyBear::ONE, BabyBear::ONE],
+            vec![BabyBear::new(2), BabyBear::new(4)],
+        ];
+        let pi = vec![BabyBear::ONE];
+
+        let mut proof = prove(&air, &trace, &pi);
+        // Tamper with trace commitment
+        proof.trace_commitment[0] ^= 0xFF;
+        let result = verify(&air, &proof, &pi);
+        assert!(result.is_err(), "Tampered 2-row proof must be rejected");
+
+        // Also tamper with a query value
+        let mut proof2 = prove(&air, &trace, &pi);
+        proof2.query_proofs[0].trace_values[0] ^= 1;
+        assert!(
+            verify(&air, &proof2, &pi).is_err(),
+            "Tampered query in 2-row proof must be rejected"
+        );
+    }
+
+    #[test]
+    fn last_trace_point_quotient_correctness() {
+        // Verify the Z_T derivative formula is correct by checking:
+        // Z_T(omega^(n-1)) = n * omega^((n-1)^2 mod n) for various sizes.
+        for log_n in 1..=10u32 {
+            let n = 1usize << log_n;
+            let omega = get_root_of_unity(log_n);
+            let last_point = omega.pow((n - 1) as u32);
+
+            // Z_T(x) = (x^n - 1) / (x - omega^(n-1))
+            // = product_{k=0}^{n-2} (x - omega^k)
+            // Z_T(omega^(n-1)) = product_{k=0}^{n-2} (omega^(n-1) - omega^k)
+            let mut product = BabyBear::ONE;
+            for k in 0..(n - 1) {
+                product = product * (last_point - omega.pow(k as u32));
+            }
+
+            // Formula: n * omega^((n-1)^2 mod n)
+            // For power-of-two n: (n-1)^2 mod n = 1, so this equals n * omega.
+            let exp_mod_n = ((n - 1) as u64 * (n - 1) as u64 % n as u64) as u32;
+            let formula = BabyBear::new(n as u32) * omega.pow(exp_mod_n);
+
+            assert_eq!(
+                product, formula,
+                "Z_T derivative formula incorrect for n=2^{log_n}"
+            );
+
+            // Also verify the identity: (n-1)^2 mod n == 1 for power-of-two n
+            assert_eq!(exp_mod_n, 1, "Expected (n-1)^2 mod n = 1 for n=2^{log_n}");
+        }
     }
 }

@@ -18,8 +18,8 @@ pyana-circuit = { path = "../circuit" }
 pyana-commit = { path = "../commit" }
 pyana-intent = { path = "../intent" }
 pyana-wire = { path = "../wire" }
-macaroon = { workspace = true }
-token = { path = "../token", default-features = false, features = ["macaroon", "datalog"] }
+macaroon = { workspace = true, features = ["crypto"] }
+token = { path = "../token", default-features = false, features = ["macaroon", "datalog", "rand-deps"] }
 pyana-trace = { path = "../trace" }
 
 async-trait = "0.1"

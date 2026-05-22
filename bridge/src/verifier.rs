@@ -111,17 +111,18 @@ impl ProofVerifier for StarkProofVerifier {
             .map(|&v| BabyBear::new_canonical(v))
             .collect();
 
-        // Expect at least [leaf_hash, merkle_root, action_binding]
-        if pi.len() < 3 {
+        // Expect at least [leaf_hash, merkle_root, action_binding[0..4]]
+        if pi.len() < 2 + pyana_circuit::ACTION_BINDING_WIDTH {
             return false;
         }
 
-        // 3. Verify the action binding commitment.
-        // The action binding is always at pi[2] (after leaf_hash and merkle_root).
+        // 3. Verify the action binding commitment (4 elements, 124-bit security).
+        // The action binding occupies pi[2..6] (after leaf_hash and merkle_root).
         let expected_binding = compute_action_binding(action, resource);
-        let proof_binding = pi[2];
-        if proof_binding != expected_binding {
-            return false;
+        for i in 0..pyana_circuit::ACTION_BINDING_WIDTH {
+            if pi[2 + i] != expected_binding[i] {
+                return false;
+            }
         }
 
         // 4. Check that the merkle_root (pi[1]) corresponds to the federation root
@@ -154,16 +155,17 @@ impl ProofVerifier for StarkProofVerifier {
         }
 
         // 5. Timestamp freshness check (if configured).
-        // The timestamp is the 4th public input (index 3) when present.
+        // The timestamp is after the 4-element action binding: pi[6] (index 2+4=6).
         // SECURITY: When freshness is required (max_proof_age_secs > 0), the proof
         // MUST include a timestamp. Rejecting proofs without timestamps prevents a
         // prover from stripping the timestamp to bypass freshness enforcement.
+        let timestamp_idx = 2 + pyana_circuit::ACTION_BINDING_WIDTH; // = 6
         if self.max_proof_age_secs > 0 {
-            if pi.len() < 4 {
+            if pi.len() <= timestamp_idx {
                 // Timestamp required but proof does not include one — reject.
                 return false;
             }
-            let proof_timestamp = pi[3].0 as i64;
+            let proof_timestamp = pi[timestamp_idx].0 as i64;
             if proof_timestamp == 0 {
                 // No timestamp in proof — reject when freshness is required.
                 return false;

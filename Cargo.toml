@@ -18,7 +18,7 @@ ark-serialize-derive = { git = "https://github.com/emberian/algebra", branch = "
 
 [workspace.dependencies]
 ## Local
-macaroon = { path = "macaroon" }
+macaroon = { path = "macaroon", default-features = false }
 pyana-net = { path = "net" }
 pyana-types = { path = "types" }
 secrets = { path = "secrets" }

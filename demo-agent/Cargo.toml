@@ -15,7 +15,7 @@ pyana-sdk = { path = "../sdk" }
 pyana-trace = { path = "../trace" }
 pyana-federation = { path = "../federation" }
 pyana-intent = { path = "../intent" }
-token = { path = "../token", default-features = false, features = ["macaroon", "datalog"] }
+token = { path = "../token", default-features = false, features = ["macaroon", "datalog", "rand-deps"] }
 blake3 = "1"
 serde_json = { workspace = true }
 ed25519-dalek = { version = "2", features = ["hazmat"] }

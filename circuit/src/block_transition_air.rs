@@ -176,13 +176,13 @@ impl StarkAir for BlockTransitionAir {
     }
 
     fn has_chain_continuity(&self) -> bool {
-        false
+        true
     }
 
     fn eval_constraints(
         &self,
         local: &[BabyBear],
-        _next: &[BabyBear],
+        next: &[BabyBear],
         _public_inputs: &[BabyBear],
         alpha: BabyBear,
     ) -> BabyBear {
@@ -198,26 +198,21 @@ impl StarkAir for BlockTransitionAir {
         let expected_root = compute_update_root(old_root, new_leaf, position, sibling_hash);
         let c_hash = new_root - expected_root;
 
-        // Constraint 2: Position validity — position must be a valid u32 field element.
-        // This is a weak constraint; mainly ensures the hash input is well-formed.
-        // We check position*(position - 1)...(position - max) = 0 would be expensive,
-        // so we just rely on the hash binding for soundness.
-        let _ = alpha; // used below
-
-        // Chain continuity and event ordering are NOT enforced here because the STARK
-        // evaluates constraints cyclically (last row wraps to first). Instead, chain
-        // integrity is guaranteed by:
-        // 1. Boundary constraints pinning row[0].old_root and row[N-1].new_root
-        // 2. The hash binding on each row ensuring computational integrity
-        // 3. The polynomial commitment (FRI) ensuring the trace is a single
-        //    low-degree polynomial (prover cannot have different values at
-        //    different points than what's committed)
+        // Constraint 2: Chain continuity — next row's old_root must equal this row's new_root.
+        // This creates an unbroken chain of state transitions preventing a malicious prover
+        // from fabricating disconnected intermediate states.
         //
-        // For full chain continuity in the cyclic domain, we would need the trace
-        // to form a cycle (last row connects back to first). We achieve this by
-        // constructing the padding to cycle back to pre_state_root.
+        // The STARK transition vanishing polynomial Z_T(x) = (x^n - 1) / (x - omega^(n-1))
+        // excludes the last row from transition constraint enforcement, so the cyclic
+        // wrap-around (last row -> first row) is NOT checked. This is correct because:
+        // - Boundary constraints pin row[0].old_root and row[last_real].new_root
+        // - Padding rows use identity-like transitions maintaining the chain
+        // - The last row's "next" wraps to the first row which has a different old_root
+        //   (the pre_state_root), but this transition is excluded by Z_T.
+        let c_chain = next[col::OLD_ROOT] - local[col::NEW_ROOT];
 
-        c_hash
+        // Combine constraints with random linear combination for soundness.
+        c_hash + alpha * c_chain
     }
 
     fn boundary_constraints(
@@ -665,5 +660,129 @@ mod tests {
         let post_root = pi[1];
 
         assert!(verify_block_transition(&proof, pre_root, post_root).is_ok());
+    }
+
+    #[test]
+    fn disconnected_intermediate_row_rejected() {
+        // A malicious prover tries to insert an intermediate row with a disconnected
+        // old_root (not equal to the previous row's new_root). The chain continuity
+        // constraint must catch this.
+        let pre_root = BabyBear::new(42);
+        let events: Vec<BlockEvent> = (0..4)
+            .map(|i| BlockEvent {
+                leaf: BabyBear::new(1000 + i),
+                position: i,
+            })
+            .collect();
+        let witnesses: Vec<MerkleUpdateWitness> = (0..4).map(|i| make_test_witness(4, i)).collect();
+
+        let (mut trace, public_inputs) =
+            generate_block_transition_trace(pre_root, &events, &witnesses);
+        let air = BlockTransitionAir::new(events.len());
+        let alpha = BabyBear::new(7);
+
+        // Tamper with row 2's old_root to create a disconnected intermediate state.
+        // This breaks the chain: trace[1].new_root != trace[2].old_root
+        let original_old_root_2 = trace[2][col::OLD_ROOT];
+        trace[2][col::OLD_ROOT] = BabyBear::new(0xBAD);
+        assert_ne!(trace[2][col::OLD_ROOT], original_old_root_2);
+
+        // The chain continuity constraint on row 1 (checking next=row2) must be non-zero.
+        let c = air.eval_constraints(&trace[1], &trace[2], &public_inputs, alpha);
+        assert_ne!(
+            c,
+            BabyBear::ZERO,
+            "Disconnected intermediate row must produce non-zero constraint (chain continuity violated)"
+        );
+    }
+
+    #[test]
+    fn valid_chain_passes() {
+        // A correctly generated trace with proper chain continuity must have all
+        // transition constraints evaluate to zero on every consecutive pair.
+        let pre_root = BabyBear::new(12345);
+        let events: Vec<BlockEvent> = (0..8)
+            .map(|i| BlockEvent {
+                leaf: BabyBear::new(5000 + i),
+                position: i % 4,
+            })
+            .collect();
+        let witnesses: Vec<MerkleUpdateWitness> =
+            (0..8).map(|i| make_test_witness(4, i % 4)).collect();
+
+        let (trace, public_inputs) = generate_block_transition_trace(pre_root, &events, &witnesses);
+        let air = BlockTransitionAir::new(events.len());
+        let alpha = BabyBear::new(13);
+
+        // Verify all transition constraints are zero on consecutive row pairs
+        // (excluding the last row, which is not subject to transition constraints).
+        for i in 0..trace.len() - 1 {
+            let c = air.eval_constraints(&trace[i], &trace[i + 1], &public_inputs, alpha);
+            assert_eq!(
+                c,
+                BabyBear::ZERO,
+                "Valid chain must have zero constraint at row {}: got {}",
+                i,
+                c.0
+            );
+        }
+
+        // Also verify end-to-end proof generation and verification works.
+        let proof = prove_block_transition(pre_root, &events, &witnesses);
+        let post_root = public_inputs[1];
+        assert!(
+            verify_block_transition(&proof, pre_root, post_root).is_ok(),
+            "Valid chain proof must verify"
+        );
+    }
+
+    #[test]
+    fn swapped_row_order_rejected() {
+        // If a malicious prover swaps two adjacent rows in the trace, the chain
+        // continuity constraint must detect this: swapped rows will have
+        // next.old_root != local.new_root at the swap boundaries.
+        let pre_root = BabyBear::new(999);
+        let events: Vec<BlockEvent> = (0..4)
+            .map(|i| BlockEvent {
+                leaf: BabyBear::new(2000 + i),
+                position: i,
+            })
+            .collect();
+        let witnesses: Vec<MerkleUpdateWitness> = (0..4).map(|i| make_test_witness(4, i)).collect();
+
+        let (mut trace, public_inputs) =
+            generate_block_transition_trace(pre_root, &events, &witnesses);
+        let air = BlockTransitionAir::new(events.len());
+        let alpha = BabyBear::new(7);
+
+        // Verify the original trace is valid.
+        for i in 0..trace.len() - 1 {
+            let c = air.eval_constraints(&trace[i], &trace[i + 1], &public_inputs, alpha);
+            assert_eq!(
+                c,
+                BabyBear::ZERO,
+                "Original trace must be valid at row {}",
+                i
+            );
+        }
+
+        // Swap rows 1 and 2 — this breaks chain continuity at two boundaries:
+        // row 0 -> row 2 (was row 1): row0.new_root != row2.old_root
+        // row 2 (was row 1) -> row 1 (was row 2): row1.new_root != row2.old_root... etc.
+        trace.swap(1, 2);
+
+        // At least one constraint must be non-zero after swapping.
+        let mut found_violation = false;
+        for i in 0..trace.len() - 1 {
+            let c = air.eval_constraints(&trace[i], &trace[i + 1], &public_inputs, alpha);
+            if c != BabyBear::ZERO {
+                found_violation = true;
+                break;
+            }
+        }
+        assert!(
+            found_violation,
+            "Swapped row order must produce at least one non-zero constraint (chain continuity violated)"
+        );
     }
 }

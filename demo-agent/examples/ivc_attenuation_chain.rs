@@ -220,6 +220,7 @@ fn main() {
             new_root,
             removed_facts,
             num_added_checks: 1, // Each step adds a restriction check
+            added_checks_commitment: pyana_circuit::fold_air::compute_test_checks_commitment(1),
         };
 
         let delta = FoldDelta::new(fold_witness);

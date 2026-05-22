@@ -1,0 +1,27 @@
+[workspace]
+# Standalone — guest programs cannot share workspace with the host due to
+# target incompatibility (riscv32im-succinct-zkvm-elf vs native).
+
+[package]
+name = "pyana-datalog-evaluation-guest"
+version = "0.2.0"
+edition = "2021"
+# SP1 guest programs require edition 2021 for zkVM ABI compatibility.
+# They are compiled by `cargo prove build` targeting riscv32im-succinct-zkvm-elf.
+description = """
+SP1 zkVM guest program that proves full Datalog evaluation with private rules
+and private data: forward-chaining fixed-point computation, predicate evaluation
+over private attributes, multi-step attenuation + derivation pipeline, and
+Merkle state binding — all in a single RISC-V execution proven by SP1's STARK.
+"""
+
+[dependencies]
+sp1-zkvm = "6"
+serde = { version = "1", features = ["derive"] }
+# blake3 without std — we use it for Merkle tree hashing and commitments.
+blake3 = { version = "1", default-features = false }
+# Real evaluation logic from the workspace crates, compiled without crypto/randomness deps.
+token = { path = "../../token", default-features = false, features = ["zkvm"] }
+pyana-cell = { path = "../../cell", default-features = false, features = ["zkvm"] }
+rmp-serde = "1.3"
+globset = "0.4"

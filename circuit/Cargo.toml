@@ -39,17 +39,8 @@ serde = { version = "1", features = ["derive"] }
 tracing = { version = "0.1", optional = true }
 itertools = { version = "0.14", optional = true }
 rand = { version = "0.10", optional = true }
-bincode = { version = "1", optional = true }
 rmp-serde = { version = "1.2", optional = true }
-
-# Halo2 (PSE fork) - Plonkish arithmetization with IPA/KZG
-halo2_proofs = { git = "https://github.com/privacy-scaling-explorations/halo2", tag = "v0.3.0", optional = true }
 rand_core = { version = "0.6", optional = true, features = ["getrandom"] }
-
-# Nova - folding-based IVC
-nova-snark = { git = "https://github.com/microsoft/Nova", branch = "main", optional = true }
-bellpepper-core = { git = "https://github.com/lurk-lab/bellpepper", branch = "main", optional = true }
-ff = { version = "0.13", optional = true }
 
 # Mina/Kimchi - Plonk variant over Pasta curves with IPA commitments
 kimchi = { git = "https://github.com/o1-labs/proof-systems", rev = "36a8b510", optional = true, default-features = false, features = ["prover"] }
@@ -58,6 +49,8 @@ mina-curves = { git = "https://github.com/o1-labs/proof-systems", rev = "36a8b51
 mina-poseidon = { git = "https://github.com/o1-labs/proof-systems", rev = "36a8b510", optional = true }
 groupmap = { git = "https://github.com/o1-labs/proof-systems", rev = "36a8b510", optional = true }
 ark-ff = { version = "0.5", optional = true, default-features = false, features = ["asm"] }
+ark-poly = { version = "0.5", optional = true, default-features = false }
+ark-ec = { version = "0.5", optional = true, default-features = false }
 
 # Binius - binary field tower proof system (Irreducible/Ulvetanna)
 binius_core = { git = "https://github.com/IrreducibleOSS/binius", rev = "46eef325", optional = true }
@@ -71,6 +64,9 @@ binius_utils = { git = "https://github.com/IrreducibleOSS/binius", rev = "46eef3
 bumpalo = { version = "3.16", optional = true }
 groestl_crypto = { package = "groestl", version = "0.10", optional = true }
 
+# SP1 - Succinct's RISC-V zkVM (proves Datalog evaluation as normal Rust execution)
+sp1-sdk = { version = "6.2", optional = true }
+
 [features]
 default = ["mock", "recursion"]
 mock = []
@@ -83,11 +79,9 @@ plonky3 = [
     "p3-poseidon2", "p3-mds", "p3-monty-31", "p3-merkle-tree", "p3-util",
     "rand", "tracing", "itertools",
 ]
-halo2 = ["halo2_proofs", "rand_core"]
-nova = ["nova-snark", "bellpepper-core", "ff", "bincode", "rand"]
 mina = [
     "kimchi", "poly-commitment", "mina-curves", "mina-poseidon", "groupmap",
-    "ark-ff", "rmp-serde", "rand_core",
+    "ark-ff", "ark-poly", "ark-ec", "rmp-serde", "rand_core",
 ]
 binius = [
     "dep:binius_core", "dep:binius_field", "dep:binius_hash",
@@ -95,6 +89,7 @@ binius = [
     "dep:binius_macros", "dep:binius_utils", "dep:bumpalo",
     "dep:groestl_crypto",
 ]
+sp1 = ["dep:sp1-sdk"]
 recursion = [
     "plonky3",
     "dep:p3-recursion", "dep:p3-circuit", "dep:p3-circuit-prover",

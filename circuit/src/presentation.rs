@@ -27,14 +27,15 @@ use crate::merkle_air::{MerkleAir, MerkleLevelWitness, MerkleWitness};
 use crate::multi_step_air;
 use crate::poseidon2::hash_fact;
 use crate::stark::{self, MerkleStarkAir, StarkAir, StarkProof};
+use crate::temporal_predicate_air::{TemporalPredicateProof, verify_temporal_predicate};
 
 /// The complete presentation witness (all private data).
 #[derive(Clone, Debug)]
 pub struct PresentationWitness {
     /// The federation root (root of trust, public).
     pub federation_root: BabyBear,
-    /// The request predicate hash (public).
-    pub request_predicate: BabyBear,
+    /// The action binding commitment (public, 4 elements for 124-bit security).
+    pub request_predicate: crate::binding::ActionBinding,
     /// Timestamp for freshness (public).
     pub timestamp: BabyBear,
     /// Chain of fold steps (private).
@@ -65,7 +66,7 @@ pub struct PresentationWitness {
     pub blinding_factor: BabyBear,
     /// Fresh randomness for the presentation tag (private).
     ///
-    /// Used to compute `presentation_tag = Poseidon2(final_root, presentation_randomness)`.
+    /// Used to compute `presentation_tag = Poseidon2(final_root, presentation_randomness, verifier_nonce)`.
     /// Must be freshly generated per presentation to ensure unlinkability.
     /// The final_root remains private; only the blinded tag is public.
     pub presentation_randomness: BabyBear,
@@ -99,6 +100,17 @@ pub struct PresentationWitness {
     /// with older provers). Verifiers SHOULD reject proofs with a zero nonce in
     /// challenge-response protocols.
     pub verifier_nonce: BabyBear,
+    /// Verifier-declared current block height for freshness binding (public).
+    ///
+    /// The verifier provides this value (the current chain height) as a public input.
+    /// The circuit enforces that if the token has a `not_after_height` expiry caveat
+    /// (non-zero), then `not_after_height >= verifier_block_height`. This ensures
+    /// the token has not expired relative to the verifier's view of the chain.
+    ///
+    /// When `BabyBear::ZERO`, no freshness check is performed (backward compatibility).
+    /// Verifiers operating in height-aware protocols SHOULD provide a non-zero value
+    /// to enforce token expiry.
+    pub verifier_block_height: BabyBear,
 }
 
 /// Public inputs for the presentation proof.
@@ -110,7 +122,7 @@ pub struct PresentationWitness {
 /// making presentations linkable across shows.
 ///
 /// Instead, a `presentation_tag` is included:
-///   `presentation_tag = Poseidon2(final_root, presentation_randomness)`
+///   `presentation_tag = Poseidon2(final_root, presentation_randomness, verifier_nonce)`
 /// where `presentation_randomness` is fresh per presentation. The fold chain still
 /// proves `initial_root -> final_root` internally (as private witness), and the STARK
 /// proves the tag is well-formed. This makes presentations unlinkable.
@@ -118,15 +130,15 @@ pub struct PresentationWitness {
 pub struct PresentationPublicInputs {
     /// Federation root of trust.
     pub federation_root: BabyBear,
-    /// The request predicate being authorized.
-    pub request_predicate: BabyBear,
+    /// The action binding commitment (4 elements for 124-bit security).
+    pub request_predicate: crate::binding::ActionBinding,
     /// Timestamp for freshness.
     pub timestamp: BabyBear,
     /// Blinded presentation tag for unlinkable multi-show.
     ///
-    /// Computed as `Poseidon2(final_root, presentation_randomness)` where the randomness
-    /// is fresh per presentation. The verifier cannot recover `final_root` from this tag,
-    /// so the same credential produces a different tag every time it is shown.
+    /// Computed as `Poseidon2(final_root, presentation_randomness, verifier_nonce)` where
+    /// the randomness is fresh per presentation. The verifier cannot recover `final_root`
+    /// from this tag, so the same credential produces a different tag every time it is shown.
     pub presentation_tag: BabyBear,
     /// Commitment to selectively revealed facts (zero if fully private).
     ///
@@ -154,6 +166,15 @@ pub struct PresentationPublicInputs {
     /// Verifiers operating in challenge-response mode SHOULD reject proofs with zero nonce.
     #[serde(default)]
     pub verifier_nonce: BabyBear,
+    /// Verifier-declared current block height for freshness binding.
+    ///
+    /// When non-zero, the verifier asserts "I am at block height H". The circuit
+    /// enforces that the token's `not_after_height` (if present) satisfies
+    /// `not_after_height >= verifier_block_height`, proving the token has not expired.
+    ///
+    /// `BabyBear::ZERO` means no freshness binding (legacy proofs).
+    #[serde(default)]
+    pub verifier_block_height: BabyBear,
 }
 
 /// A complete presentation proof.
@@ -167,6 +188,14 @@ pub struct PresentationProof {
     pub derivation_proof: ConstraintProof,
     /// Proof of issuer membership in federation.
     pub issuer_membership_proof: ConstraintProof,
+    /// Optional temporal predicate proofs (e.g., "balance >= X for N blocks").
+    ///
+    /// Each temporal proof attests that an attribute satisfied a predicate over
+    /// a contiguous range of steps in the IVC chain. The proof's `final_state_root`
+    /// must match the presentation's final state root (end of fold chain) to bind
+    /// the temporal claim to the same token state being presented.
+    #[serde(default)]
+    pub temporal_proofs: Vec<TemporalPredicateProof>,
     /// Total proof size in bytes.
     pub total_proof_size_bytes: usize,
 }
@@ -238,6 +267,16 @@ impl PresentationProof {
             return PresentationVerification::IssuerNotInFederation;
         }
 
+        // 5. Verify temporal predicate proofs (if any).
+        if let Err(e) = self.verify_temporal_proofs(current_root) {
+            return e;
+        }
+
+        // 6. Freshness binding: check token expiry against verifier's block height.
+        if let Err(e) = self.verify_freshness_binding() {
+            return e;
+        }
+
         PresentationVerification::Valid
     }
 
@@ -251,7 +290,91 @@ impl PresentationProof {
         if issuer_federation_root != self.public_inputs.federation_root {
             return PresentationVerification::IssuerNotInFederation;
         }
+
+        // Verify temporal proofs bind to derivation state root.
+        let state_root = self.derivation_proof.public_inputs[0];
+        if let Err(e) = self.verify_temporal_proofs(state_root) {
+            return e;
+        }
+
+        // Freshness binding.
+        if let Err(e) = self.verify_freshness_binding() {
+            return e;
+        }
+
         PresentationVerification::Valid
+    }
+
+    /// Verify freshness binding: token expiry vs verifier block height.
+    ///
+    /// If both `verifier_block_height` (public input) and `not_after_height`
+    /// (derivation proof public input index 2) are non-zero, enforce:
+    ///   `not_after_height >= verifier_block_height`
+    ///
+    /// If `not_after_height == 0`, the token has no expiry (always valid).
+    /// If `verifier_block_height == 0`, no freshness check is requested.
+    fn verify_freshness_binding(&self) -> Result<(), PresentationVerification> {
+        let verifier_height = self.public_inputs.verifier_block_height;
+        if verifier_height == BabyBear::ZERO {
+            return Ok(());
+        }
+
+        // Extract not_after_height from derivation proof public inputs (index 2).
+        let not_after_height = if self.derivation_proof.public_inputs.len() >= 3 {
+            self.derivation_proof.public_inputs[2]
+        } else {
+            BabyBear::ZERO
+        };
+
+        // Zero means no expiry caveat — always valid.
+        if not_after_height == BabyBear::ZERO {
+            return Ok(());
+        }
+
+        // Enforce: not_after_height >= verifier_block_height
+        // In the field, this means (not_after_height - verifier_block_height) is
+        // a "small" non-negative value (fits in 30 bits, i.e., < p/2).
+        let diff = not_after_height - verifier_height;
+        let diff_val = diff.as_u32();
+        // If the subtraction wrapped (result > p/2), the token is expired.
+        if diff_val > 1_006_632_960 {
+            // p/2 = 2013265921 / 2 = 1006632960
+            return Err(PresentationVerification::TokenExpired);
+        }
+
+        Ok(())
+    }
+
+    /// Verify all attached temporal predicate proofs.
+    ///
+    /// Each temporal proof must satisfy:
+    /// 1. Its `final_state_root` matches the presentation's state root (binding).
+    /// 2. The STARK proof itself is valid (cryptographic verification).
+    ///
+    /// This ensures temporal claims ("attribute X >= Y for N blocks") are bound to
+    /// the same token state being presented, preventing a prover from attaching
+    /// a temporal proof from a different token/chain.
+    fn verify_temporal_proofs(&self, state_root: BabyBear) -> Result<(), PresentationVerification> {
+        for (i, temporal_proof) in self.temporal_proofs.iter().enumerate() {
+            // The temporal proof's final_state_root must match the presentation's
+            // state root to bind the temporal claim to this presentation.
+            if temporal_proof.final_state_root != state_root {
+                return Err(PresentationVerification::InvalidTemporalProof { index: i });
+            }
+
+            // Verify the STARK proof cryptographically.
+            let valid = verify_temporal_predicate(
+                temporal_proof,
+                temporal_proof.threshold,
+                temporal_proof.num_steps,
+                temporal_proof.initial_state_root,
+                temporal_proof.final_state_root,
+            );
+            if !valid {
+                return Err(PresentationVerification::InvalidTemporalProof { index: i });
+            }
+        }
+        Ok(())
     }
 }
 
@@ -280,6 +403,23 @@ pub enum PresentationVerification {
     InvalidIssuerProof,
     /// The issuer is not in the federation.
     IssuerNotInFederation,
+    /// A temporal predicate proof failed verification.
+    ///
+    /// Either the temporal proof's `final_state_root` does not match the
+    /// presentation's state root (binding failure), or the STARK proof itself
+    /// is invalid.
+    InvalidTemporalProof { index: usize },
+    /// The composition commitment is zero (missing sub-proof binding).
+    ///
+    /// A zero composition commitment means the sub-proofs are not cryptographically
+    /// bound together, allowing an attacker to mix-and-match sub-proofs from
+    /// different presentations. Verifiers MUST reject proofs with zero commitment.
+    MissingCompositionCommitment,
+    /// The token has expired: `not_after_height < verifier_block_height`.
+    ///
+    /// The verifier declared a current block height that exceeds the token's
+    /// expiry height. The token is no longer valid at the verifier's current position.
+    TokenExpired,
 }
 
 /// The presentation AIR: combines all sub-AIRs into one constraint system.
@@ -336,7 +476,8 @@ impl PresentationAir {
             w.derivation.state_root
         };
 
-        let presentation_tag = crate::poseidon2::hash_2_to_1(final_root, w.presentation_randomness);
+        let presentation_tag =
+            crate::poseidon2::hash_many(&[final_root, w.presentation_randomness, w.verifier_nonce]);
 
         let public_inputs = PresentationPublicInputs {
             federation_root: w.federation_root,
@@ -346,6 +487,7 @@ impl PresentationAir {
             revealed_facts_commitment: w.revealed_facts_commitment,
             composition_commitment: w.composition_commitment,
             verifier_nonce: w.verifier_nonce,
+            verifier_block_height: w.verifier_block_height,
         };
 
         // Compute total proof size
@@ -361,6 +503,7 @@ impl PresentationAir {
             fold_proofs,
             derivation_proof,
             issuer_membership_proof,
+            temporal_proofs: Vec::new(),
             total_proof_size_bytes: total_size,
         })
     }
@@ -430,6 +573,7 @@ impl PresentationAir {
             new_root: state_root,
             removed_facts: vec![],
             num_added_checks: 1, // at least one check to satisfy delta_nonempty
+            added_checks_commitment: fold_air::compute_test_checks_commitment(1),
         };
         let deltas = vec![FoldDelta::new(identity_fold)];
         let ivc_proof = prove_ivc(state_root, deltas)?;
@@ -505,7 +649,8 @@ impl PresentationAir {
             w.derivation.state_root
         };
 
-        let presentation_tag = crate::poseidon2::hash_2_to_1(final_root, w.presentation_randomness);
+        let presentation_tag =
+            crate::poseidon2::hash_many(&[final_root, w.presentation_randomness, w.verifier_nonce]);
 
         let public_inputs = PresentationPublicInputs {
             federation_root: w.federation_root,
@@ -515,6 +660,7 @@ impl PresentationAir {
             revealed_facts_commitment: w.revealed_facts_commitment,
             composition_commitment: w.composition_commitment,
             verifier_nonce: w.verifier_nonce,
+            verifier_block_height: w.verifier_block_height,
         };
 
         Some(RealPresentationProof {
@@ -524,6 +670,7 @@ impl PresentationAir {
             issuer_membership_stark_proof: merkle_stark_proof,
             fold_stark_proofs: vec![],
             derivation_stark_proof: None,
+            temporal_proofs: Vec::new(),
         })
     }
 
@@ -586,13 +733,13 @@ impl PresentationAir {
             generate_blinded_merkle_poseidon2_stark_proof(
                 &w.issuer_membership,
                 w.blinding_factor,
-                w.request_predicate,
+                &w.request_predicate,
                 composition_opt,
             )?
         } else {
             generate_merkle_poseidon2_stark_proof_bound(
                 &w.issuer_membership,
-                w.request_predicate,
+                &w.request_predicate,
                 composition_opt,
             )?
         };
@@ -604,7 +751,8 @@ impl PresentationAir {
             w.derivation.state_root
         };
 
-        let presentation_tag = crate::poseidon2::hash_2_to_1(final_root, w.presentation_randomness);
+        let presentation_tag =
+            crate::poseidon2::hash_many(&[final_root, w.presentation_randomness, w.verifier_nonce]);
 
         let public_inputs = PresentationPublicInputs {
             federation_root: w.federation_root,
@@ -614,6 +762,7 @@ impl PresentationAir {
             revealed_facts_commitment: w.revealed_facts_commitment,
             composition_commitment: w.composition_commitment,
             verifier_nonce: w.verifier_nonce,
+            verifier_block_height: w.verifier_block_height,
         };
 
         Some(RealPresentationProof {
@@ -623,6 +772,7 @@ impl PresentationAir {
             issuer_membership_stark_proof: merkle_stark_proof,
             fold_stark_proofs,
             derivation_stark_proof,
+            temporal_proofs: Vec::new(),
         })
     }
 
@@ -673,6 +823,20 @@ impl PresentationAir {
             return PresentationVerification::IssuerNotInFederation;
         }
 
+        // Freshness binding: check token expiry against verifier's block height.
+        let verifier_height = w.verifier_block_height;
+        if verifier_height != BabyBear::ZERO {
+            let not_after_height = w.derivation.not_after_height;
+            if not_after_height != BabyBear::ZERO {
+                // Enforce: not_after_height >= verifier_block_height
+                let diff = not_after_height - verifier_height;
+                let diff_val = diff.as_u32();
+                if diff_val > 1_006_632_960 {
+                    return PresentationVerification::TokenExpired;
+                }
+            }
+        }
+
         PresentationVerification::Valid
     }
 }
@@ -683,12 +847,12 @@ impl PresentationAir {
 impl Air for PresentationAir {
     fn trace_width(&self) -> usize {
         // Width of the "summary" trace (just public inputs as columns)
-        // federation_root, request_predicate, timestamp, presentation_tag, revealed_facts_commitment
-        5
+        // federation_root, request_predicate[0..4], timestamp, presentation_tag, revealed_facts_commitment
+        8
     }
 
     fn num_public_inputs(&self) -> usize {
-        5 // federation_root, request_predicate, timestamp, presentation_tag, revealed_facts_commitment
+        8 // federation_root, request_predicate[0..4], timestamp, presentation_tag, revealed_facts_commitment
     }
 
     fn constraints(&self) -> Vec<Constraint> {
@@ -700,20 +864,32 @@ impl Air for PresentationAir {
                 eval: Box::new(|row, _, public_inputs| row[0] - public_inputs[0]),
             },
             Constraint {
-                name: "request_predicate_match".to_string(),
+                name: "request_predicate_0_match".to_string(),
                 eval: Box::new(|row, _, public_inputs| row[1] - public_inputs[1]),
             },
             Constraint {
-                name: "timestamp_match".to_string(),
+                name: "request_predicate_1_match".to_string(),
                 eval: Box::new(|row, _, public_inputs| row[2] - public_inputs[2]),
             },
             Constraint {
-                name: "presentation_tag_match".to_string(),
+                name: "request_predicate_2_match".to_string(),
                 eval: Box::new(|row, _, public_inputs| row[3] - public_inputs[3]),
             },
             Constraint {
-                name: "revealed_facts_commitment_match".to_string(),
+                name: "request_predicate_3_match".to_string(),
                 eval: Box::new(|row, _, public_inputs| row[4] - public_inputs[4]),
+            },
+            Constraint {
+                name: "timestamp_match".to_string(),
+                eval: Box::new(|row, _, public_inputs| row[5] - public_inputs[5]),
+            },
+            Constraint {
+                name: "presentation_tag_match".to_string(),
+                eval: Box::new(|row, _, public_inputs| row[6] - public_inputs[6]),
+            },
+            Constraint {
+                name: "revealed_facts_commitment_match".to_string(),
+                eval: Box::new(|row, _, public_inputs| row[7] - public_inputs[7]),
             },
         ]
     }
@@ -727,11 +903,15 @@ impl Air for PresentationAir {
             w.derivation.state_root
         };
 
-        let presentation_tag = crate::poseidon2::hash_2_to_1(final_root, w.presentation_randomness);
+        let presentation_tag =
+            crate::poseidon2::hash_many(&[final_root, w.presentation_randomness, w.verifier_nonce]);
 
         let row = vec![
             w.federation_root,
-            w.request_predicate,
+            w.request_predicate[0],
+            w.request_predicate[1],
+            w.request_predicate[2],
+            w.request_predicate[3],
             w.timestamp,
             presentation_tag,
             w.revealed_facts_commitment,
@@ -739,7 +919,10 @@ impl Air for PresentationAir {
 
         let public_inputs = vec![
             w.federation_root,
-            w.request_predicate,
+            w.request_predicate[0],
+            w.request_predicate[1],
+            w.request_predicate[2],
+            w.request_predicate[3],
             w.timestamp,
             presentation_tag,
             w.revealed_facts_commitment,
@@ -816,7 +999,7 @@ pub fn prove_authorization(
 /// Builder for constructing a presentation witness step by step.
 pub struct PresentationBuilder {
     federation_root: BabyBear,
-    request_predicate: BabyBear,
+    request_predicate: crate::binding::ActionBinding,
     timestamp: BabyBear,
     fold_chain: Vec<FoldWitness>,
     derivation: Option<DerivationWitness>,
@@ -829,7 +1012,7 @@ impl PresentationBuilder {
     /// Create a new presentation builder.
     pub fn new(
         federation_root: BabyBear,
-        request_predicate: BabyBear,
+        request_predicate: crate::binding::ActionBinding,
         timestamp: BabyBear,
     ) -> Self {
         Self {
@@ -887,6 +1070,7 @@ impl PresentationBuilder {
             blinding_factor: BabyBear::ZERO,
             presentation_randomness: BabyBear::ZERO,
             verifier_nonce: BabyBear::ZERO,
+            verifier_block_height: BabyBear::ZERO,
         })
     }
 }
@@ -922,6 +1106,12 @@ pub struct RealPresentationProof {
     /// When present, this supersedes `derivation_proof` for verification.
     #[serde(default)]
     pub derivation_stark_proof: Option<StarkProof>,
+    /// Optional temporal predicate proofs bound to this presentation.
+    ///
+    /// Each proof attests that an attribute satisfied a predicate over N consecutive
+    /// steps. The proof's `final_state_root` must match the presentation's state root.
+    #[serde(default)]
+    pub temporal_proofs: Vec<TemporalPredicateProof>,
 }
 
 impl RealPresentationProof {
@@ -933,6 +1123,13 @@ impl RealPresentationProof {
     /// Supports both Poseidon2-based proofs (production, collision-resistant) and
     /// legacy linear proofs. Tries Poseidon2 first; falls back to linear.
     pub fn verify(&self) -> PresentationVerification {
+        // 0. Reject proofs with zero composition commitment.
+        // A zero value means the sub-proofs are not bound together, allowing
+        // an attacker to mix-and-match membership proofs from different tokens.
+        if self.public_inputs.composition_commitment == BabyBear::ZERO {
+            return PresentationVerification::MissingCompositionCommitment;
+        }
+
         // 1. Check fold chain continuity (roots are private, verified internally).
         let mut current_root = if let Some(first) = self.fold_proofs.first() {
             if first.public_inputs.len() < 4 {
@@ -1031,9 +1228,74 @@ impl RealPresentationProof {
             )
         };
         match verify_result {
-            Ok(()) => PresentationVerification::Valid,
-            Err(_) => PresentationVerification::InvalidIssuerProof,
+            Ok(()) => {}
+            Err(_) => return PresentationVerification::InvalidIssuerProof,
         }
+
+        // 6. Verify temporal predicate proofs (if any).
+        for (i, temporal_proof) in self.temporal_proofs.iter().enumerate() {
+            // Temporal proof's final_state_root must bind to the presentation state root.
+            if temporal_proof.final_state_root != current_root {
+                return PresentationVerification::InvalidTemporalProof { index: i };
+            }
+            let valid = verify_temporal_predicate(
+                temporal_proof,
+                temporal_proof.threshold,
+                temporal_proof.num_steps,
+                temporal_proof.initial_state_root,
+                temporal_proof.final_state_root,
+            );
+            if !valid {
+                return PresentationVerification::InvalidTemporalProof { index: i };
+            }
+        }
+
+        // 7. Freshness binding: check token expiry against verifier's block height.
+        if let Err(e) = self.verify_freshness_binding() {
+            return e;
+        }
+
+        PresentationVerification::Valid
+    }
+
+    /// Verify freshness binding: token expiry vs verifier block height.
+    ///
+    /// If both `verifier_block_height` (public input) and `not_after_height`
+    /// (derivation proof public input index 2) are non-zero, enforce:
+    ///   `not_after_height >= verifier_block_height`
+    ///
+    /// If `not_after_height == 0`, the token has no expiry (always valid).
+    /// If `verifier_block_height == 0`, no freshness check is requested.
+    fn verify_freshness_binding(&self) -> Result<(), PresentationVerification> {
+        let verifier_height = self.public_inputs.verifier_block_height;
+        if verifier_height == BabyBear::ZERO {
+            return Ok(());
+        }
+
+        // Extract not_after_height from derivation proof public inputs (index 2).
+        let not_after_height = if self.derivation_proof.public_inputs.len() >= 3 {
+            self.derivation_proof.public_inputs[2]
+        } else {
+            BabyBear::ZERO
+        };
+
+        // Zero means no expiry caveat — always valid.
+        if not_after_height == BabyBear::ZERO {
+            return Ok(());
+        }
+
+        // Enforce: not_after_height >= verifier_block_height
+        // In the field, this means (not_after_height - verifier_block_height) is
+        // a "small" non-negative value (fits in 30 bits, i.e., < p/2).
+        let diff = not_after_height - verifier_height;
+        let diff_val = diff.as_u32();
+        // If the subtraction wrapped (result > p/2), the token is expired.
+        if diff_val > 1_006_632_960 {
+            // p/2 = 2013265921 / 2 = 1006632960
+            return Err(PresentationVerification::TokenExpired);
+        }
+
+        Ok(())
     }
 
     /// Get the total proof size in bytes.
@@ -1193,7 +1455,7 @@ pub fn generate_merkle_poseidon2_stark_proof(witness: &MerkleWitness) -> Option<
 /// `poseidon2::hash_many(&BabyBear::encode_hash(&blake3_hash_of_action))`
 pub fn generate_merkle_poseidon2_stark_proof_bound(
     witness: &MerkleWitness,
-    action_commitment: BabyBear,
+    action_commitment: &crate::binding::ActionBinding,
     composition_commitment: Option<BabyBear>,
 ) -> Option<StarkProof> {
     use crate::poseidon2_air::{self, MerklePoseidon2StarkAir};
@@ -1218,9 +1480,12 @@ pub fn generate_merkle_poseidon2_stark_proof_bound(
         return None;
     }
 
-    // Append the action commitment as an additional public input.
-    // This binds the proof to a specific action, preventing replay.
-    public_inputs.push(action_commitment);
+    // Append the action binding commitment as 4 additional public inputs.
+    // This binds the proof to a specific (action, resource) pair with 124-bit
+    // collision resistance (birthday bound ~2^62), preventing replay.
+    for &elem in action_commitment.iter() {
+        public_inputs.push(elem);
+    }
 
     // Append the composition commitment if provided (sub-proof binding).
     if let Some(cc) = composition_commitment {
@@ -1254,7 +1519,7 @@ pub fn generate_merkle_poseidon2_stark_proof_bound(
 pub fn generate_blinded_merkle_poseidon2_stark_proof(
     witness: &MerkleWitness,
     blinding_factor: BabyBear,
-    action_commitment: BabyBear,
+    action_commitment: &crate::binding::ActionBinding,
     composition_commitment: Option<BabyBear>,
 ) -> Option<StarkProof> {
     use crate::poseidon2_air::{self, BlindedMerklePoseidon2StarkAir};
@@ -1283,8 +1548,12 @@ pub fn generate_blinded_merkle_poseidon2_stark_proof(
         return None;
     }
 
-    // Append the action commitment as an additional public input (replay prevention).
-    public_inputs.push(action_commitment);
+    // Append the action binding commitment as 4 additional public inputs.
+    // This binds the proof to a specific (action, resource) pair with 124-bit
+    // collision resistance (birthday bound ~2^62), preventing replay.
+    for &elem in action_commitment.iter() {
+        public_inputs.push(elem);
+    }
 
     // Append the composition commitment if provided (sub-proof binding).
     if let Some(cc) = composition_commitment {
@@ -1353,7 +1622,7 @@ pub fn create_test_presentation() -> PresentationWitness {
     use crate::fold_air::build_shared_tree;
 
     let federation_root = BabyBear::new(1000000);
-    let request_pred = BabyBear::new(500);
+    let request_pred = crate::binding::compute_action_binding("test-action", "test-resource");
     let timestamp = BabyBear::new(1716000000); // some timestamp
 
     // Create a 2-step fold chain with valid membership proofs
@@ -1386,6 +1655,7 @@ pub fn create_test_presentation() -> PresentationWitness {
             membership_proof: Some(f1_proofs.into_iter().next().unwrap()),
         }],
         num_added_checks: 1,
+        added_checks_commitment: fold_air::compute_test_checks_commitment(1),
     };
 
     let mut f2_iter = f2_proofs.into_iter();
@@ -1405,6 +1675,7 @@ pub fn create_test_presentation() -> PresentationWitness {
             },
         ],
         num_added_checks: 0,
+        added_checks_commitment: BabyBear::ZERO,
     };
 
     // Derivation: proves authorization from the final state
@@ -1459,6 +1730,7 @@ pub fn create_test_presentation() -> PresentationWitness {
         blinding_factor: BabyBear::ZERO,
         presentation_randomness: BabyBear::new(123456789),
         verifier_nonce: BabyBear::ZERO,
+        verifier_block_height: BabyBear::ZERO,
     }
 }
 
@@ -1615,6 +1887,8 @@ mod tests {
         let poseidon2_issuer = create_poseidon2_compatible_witness(BabyBear::new(42424242), 8);
         witness.issuer_membership = poseidon2_issuer;
         witness.federation_root = witness.issuer_membership.expected_root;
+        // Non-zero composition commitment required for verification
+        witness.composition_commitment = BabyBear::new(777777);
 
         let air = PresentationAir::new(witness);
 
@@ -1648,6 +1922,8 @@ mod tests {
         let stark_issuer = create_stark_compatible_witness(BabyBear::new(42424242), 8);
         witness.issuer_membership = stark_issuer;
         witness.federation_root = witness.issuer_membership.expected_root;
+        // Non-zero composition commitment required for verification
+        witness.composition_commitment = BabyBear::new(777777);
 
         let air = PresentationAir::new(witness);
         let mut proof = air.prove_stark().unwrap();
@@ -1695,7 +1971,12 @@ mod tests {
     #[test]
     fn presentation_builder() {
         let federation_root = BabyBear::new(1000);
-        let request = BabyBear::new(42);
+        let request = [
+            BabyBear::new(42),
+            BabyBear::ZERO,
+            BabyBear::ZERO,
+            BabyBear::ZERO,
+        ];
         let timestamp = BabyBear::new(12345);
 
         let fold = FoldWitness {
@@ -1707,6 +1988,7 @@ mod tests {
                 membership_proof: None,
             }],
             num_added_checks: 1,
+            added_checks_commitment: fold_air::compute_test_checks_commitment(1),
         };
 
         let derivation = DerivationWitness {
@@ -1822,5 +2104,260 @@ mod tests {
         pi[1] = BabyBear::new(999999);
         let result = crate::stark::verify(&MerklePoseidon2StarkAir, &proof, &pi);
         assert!(result.is_err(), "Should reject wrong federation root");
+    }
+
+    #[test]
+    fn presentation_zero_composition_commitment_rejected() {
+        // A proof with composition_commitment == ZERO must be rejected by verifiers.
+        // This prevents sub-proof mix-and-match attacks.
+        let mut witness = create_test_presentation();
+        let stark_issuer = create_stark_compatible_witness(BabyBear::new(42424242), 8);
+        witness.issuer_membership = stark_issuer;
+        witness.federation_root = witness.issuer_membership.expected_root;
+        // Explicitly leave composition_commitment at ZERO (the default)
+        witness.composition_commitment = BabyBear::ZERO;
+
+        let air = PresentationAir::new(witness);
+        let proof = air.prove_stark().unwrap();
+
+        // Verification must reject: zero composition commitment is not allowed
+        let verification = proof.verify();
+        assert_eq!(
+            verification,
+            PresentationVerification::MissingCompositionCommitment,
+            "Zero composition_commitment must be rejected"
+        );
+    }
+
+    #[test]
+    fn presentation_nonce_bound_to_tag() {
+        // Verify that verifier_nonce is cryptographically bound to the presentation_tag.
+        // Two proofs with different nonces must produce different tags.
+        let mut witness1 = create_test_presentation();
+        witness1.federation_root = witness1.issuer_membership.expected_root;
+        witness1.verifier_nonce = BabyBear::new(111);
+
+        let mut witness2 = create_test_presentation();
+        witness2.federation_root = witness2.issuer_membership.expected_root;
+        witness2.verifier_nonce = BabyBear::new(222);
+
+        let air1 = PresentationAir::new(witness1);
+        let air2 = PresentationAir::new(witness2);
+
+        let proof1 = air1.prove().unwrap();
+        let proof2 = air2.prove().unwrap();
+
+        // The tags must differ because the nonces differ
+        assert_ne!(
+            proof1.public_inputs.presentation_tag, proof2.public_inputs.presentation_tag,
+            "Different verifier_nonce must produce different presentation_tag"
+        );
+    }
+
+    #[test]
+    fn presentation_with_temporal_predicate_proof() {
+        use crate::predicate_air::PredicateType;
+        use crate::temporal_predicate_air::prove_temporal_predicate;
+
+        // Create a presentation with matching federation root.
+        let mut witness = create_test_presentation();
+        witness.federation_root = witness.issuer_membership.expected_root;
+
+        let air = PresentationAir::new(witness.clone());
+        let mut proof = air.prove().expect("base proof should succeed");
+
+        // The final state root of the presentation (end of fold chain).
+        let final_state_root = witness.fold_chain.last().unwrap().new_root;
+
+        // Generate a temporal predicate proof:
+        // "balance >= 100 for 8 consecutive blocks, ending at final_state_root"
+        let threshold = BabyBear::new(100);
+        let num_steps = 8usize;
+        let values: Vec<BabyBear> = vec![200, 150, 300, 100, 500, 120, 999, 101]
+            .into_iter()
+            .map(BabyBear::new)
+            .collect();
+        // State roots: arbitrary chain ending at final_state_root.
+        let mut state_roots: Vec<BabyBear> = (0..num_steps - 1)
+            .map(|i| BabyBear::new(5000 + i as u32))
+            .collect();
+        state_roots.push(final_state_root);
+
+        let temporal_proof =
+            prove_temporal_predicate(&values, &state_roots, PredicateType::Gte, threshold)
+                .expect("temporal proof should succeed (all values >= 100)");
+
+        // Attach the temporal proof to the presentation.
+        proof.temporal_proofs.push(temporal_proof);
+
+        // Verify the complete presentation with temporal proof.
+        let verification = proof.verify();
+        assert_eq!(
+            verification,
+            PresentationVerification::Valid,
+            "Presentation with valid temporal proof should verify"
+        );
+    }
+
+    #[test]
+    fn presentation_temporal_proof_wrong_state_root_rejected() {
+        use crate::predicate_air::PredicateType;
+        use crate::temporal_predicate_air::prove_temporal_predicate;
+
+        let mut witness = create_test_presentation();
+        witness.federation_root = witness.issuer_membership.expected_root;
+
+        let air = PresentationAir::new(witness.clone());
+        let mut proof = air.prove().expect("base proof should succeed");
+
+        // Generate a temporal proof with a WRONG final_state_root.
+        let threshold = BabyBear::new(100);
+        let values: Vec<BabyBear> = vec![200, 150, 300, 100]
+            .into_iter()
+            .map(BabyBear::new)
+            .collect();
+        // Use a different final state root (not matching the presentation).
+        let state_roots: Vec<BabyBear> = (0..4).map(|i| BabyBear::new(9000 + i)).collect();
+
+        let temporal_proof =
+            prove_temporal_predicate(&values, &state_roots, PredicateType::Gte, threshold)
+                .expect("temporal proof generation should succeed");
+
+        proof.temporal_proofs.push(temporal_proof);
+
+        // Verification should fail: temporal proof not bound to presentation state root.
+        let verification = proof.verify();
+        assert_eq!(
+            verification,
+            PresentationVerification::InvalidTemporalProof { index: 0 },
+            "Temporal proof with wrong state root should be rejected"
+        );
+    }
+
+    // =========================================================================
+    // Freshness binding tests
+    // =========================================================================
+
+    #[test]
+    fn presentation_freshness_valid_token_not_expired() {
+        // Token with not_after_height=100, verifier at height 50 -> valid.
+        let mut witness = create_test_presentation();
+        witness.federation_root = witness.issuer_membership.expected_root;
+        witness.derivation.not_after_height = BabyBear::new(100);
+        witness.verifier_block_height = BabyBear::new(50);
+
+        let air = PresentationAir::new(witness);
+        let verification = air.verify_all();
+        assert_eq!(
+            verification,
+            PresentationVerification::Valid,
+            "Token with not_after_height=100 at verifier height 50 should be valid"
+        );
+    }
+
+    #[test]
+    fn presentation_freshness_expired_token_rejected() {
+        // Token with not_after_height=100, verifier at height 150 -> rejected.
+        let mut witness = create_test_presentation();
+        witness.federation_root = witness.issuer_membership.expected_root;
+        witness.derivation.not_after_height = BabyBear::new(100);
+        witness.verifier_block_height = BabyBear::new(150);
+
+        let air = PresentationAir::new(witness);
+        let verification = air.verify_all();
+        assert_eq!(
+            verification,
+            PresentationVerification::TokenExpired,
+            "Token with not_after_height=100 at verifier height 150 should be expired"
+        );
+    }
+
+    #[test]
+    fn presentation_freshness_no_expiry_always_valid() {
+        // Token with not_after_height=0 -> always valid (no expiry caveat).
+        let mut witness = create_test_presentation();
+        witness.federation_root = witness.issuer_membership.expected_root;
+        witness.derivation.not_after_height = BabyBear::ZERO;
+        witness.verifier_block_height = BabyBear::new(999999);
+
+        let air = PresentationAir::new(witness);
+        let verification = air.verify_all();
+        assert_eq!(
+            verification,
+            PresentationVerification::Valid,
+            "Token with not_after_height=0 should always be valid (no expiry)"
+        );
+    }
+
+    #[test]
+    fn presentation_freshness_no_verifier_height_skips_check() {
+        // If verifier_block_height=0, no freshness check is performed.
+        let mut witness = create_test_presentation();
+        witness.federation_root = witness.issuer_membership.expected_root;
+        witness.derivation.not_after_height = BabyBear::new(100);
+        witness.verifier_block_height = BabyBear::ZERO;
+
+        let air = PresentationAir::new(witness);
+        let verification = air.verify_all();
+        assert_eq!(
+            verification,
+            PresentationVerification::Valid,
+            "No verifier_block_height should skip freshness check"
+        );
+    }
+
+    #[test]
+    fn presentation_freshness_exact_boundary_valid() {
+        // Token with not_after_height=100, verifier at height 100 -> valid (>=, not >).
+        let mut witness = create_test_presentation();
+        witness.federation_root = witness.issuer_membership.expected_root;
+        witness.derivation.not_after_height = BabyBear::new(100);
+        witness.verifier_block_height = BabyBear::new(100);
+
+        let air = PresentationAir::new(witness);
+        let verification = air.verify_all();
+        assert_eq!(
+            verification,
+            PresentationVerification::Valid,
+            "Token at exact expiry boundary (not_after_height == verifier_height) should be valid"
+        );
+    }
+
+    #[test]
+    fn presentation_freshness_proof_verify_expired() {
+        // Test freshness binding through the proof verification path (not just verify_all).
+        let mut witness = create_test_presentation();
+        witness.federation_root = witness.issuer_membership.expected_root;
+        witness.derivation.not_after_height = BabyBear::new(100);
+        witness.verifier_block_height = BabyBear::new(150);
+
+        let air = PresentationAir::new(witness);
+        let proof = air.prove().expect("proof generation should succeed");
+
+        let verification = proof.verify();
+        assert_eq!(
+            verification,
+            PresentationVerification::TokenExpired,
+            "Proof verification should detect expired token"
+        );
+    }
+
+    #[test]
+    fn presentation_freshness_proof_verify_valid() {
+        // Test freshness binding through the proof verification path (valid case).
+        let mut witness = create_test_presentation();
+        witness.federation_root = witness.issuer_membership.expected_root;
+        witness.derivation.not_after_height = BabyBear::new(1000);
+        witness.verifier_block_height = BabyBear::new(500);
+
+        let air = PresentationAir::new(witness);
+        let proof = air.prove().expect("proof generation should succeed");
+
+        let verification = proof.verify();
+        assert_eq!(
+            verification,
+            PresentationVerification::Valid,
+            "Proof verification should pass for non-expired token"
+        );
     }
 }

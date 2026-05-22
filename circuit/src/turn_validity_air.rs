@@ -53,7 +53,8 @@ use crate::field::BabyBear;
 use crate::stark::{self, BoundaryConstraint, StarkAir, StarkProof};
 
 /// Trace width for the turn validity AIR.
-pub const TURN_VALIDITY_WIDTH: usize = 12;
+/// 12 base columns + 32 bit columns (8 bits per limb * 4 fee_minus_min limbs).
+pub const TURN_VALIDITY_WIDTH: usize = 44;
 
 /// Column indices.
 pub mod col {
@@ -69,6 +70,18 @@ pub mod col {
     pub const IS_VALID: usize = 9;
     pub const NONCE_CHECK: usize = 10;
     pub const IS_RANGE_ROW: usize = 11;
+
+    /// Bit decomposition columns for fee_minus_min limbs on the range check row.
+    /// 4 limbs * 8 bits = 32 columns, starting at column 12.
+    /// LIMB_BITS_BASE + limb_index * 8 + bit_index gives the column for bit `bit_index`
+    /// of `limb_index`.
+    pub const LIMB_BITS_BASE: usize = 12;
+
+    /// Get the column index for bit `bit` (0..8) of limb `limb` (0..4).
+    #[inline]
+    pub const fn limb_bit(limb: usize, bit: usize) -> usize {
+        LIMB_BITS_BASE + limb * 8 + bit
+    }
 }
 
 /// Public input indices.
@@ -202,6 +215,20 @@ impl TurnValidityAir {
         row1[7] = BabyBear::new((fee_val >> 24) & 0xFF);
         row1[col::IS_RANGE_ROW] = BabyBear::ONE; // marks this as a range check row
 
+        // Bit decomposition of the 4 fee_minus_min limbs.
+        let limbs = [
+            fee_diff & 0xFF,
+            (fee_diff >> 8) & 0xFF,
+            (fee_diff >> 16) & 0xFF,
+            (fee_diff >> 24) & 0xFF,
+        ];
+        for (limb_idx, &limb_val) in limbs.iter().enumerate() {
+            for bit in 0..8 {
+                let b = (limb_val >> bit) & 1;
+                row1[col::limb_bit(limb_idx, bit)] = BabyBear::new(b);
+            }
+        }
+
         // Pad to power of 2 (minimum 4 rows).
         let mut trace = vec![row0, row1];
         while trace.len() < 4 {
@@ -325,27 +352,45 @@ impl StarkAir for TurnValidityAir {
 
         // === Constraints on range check row (gated by is_range_row) ===
 
-        // Constraint 9: fee_minus_min decomposition is correct.
-        // limb0 + limb1*256 + limb2*65536 + limb3*16777216 == fee_minus_min (from row 0).
-        // We use a boundary constraint to bind row 0's fee_minus_min to the public inputs,
-        // and a range check here to prove the decomposition limbs are bytes.
+        // Constraint 9: Each bit column must be binary (b * (b - 1) == 0).
+        // 4 limbs * 8 bits = 32 binary constraints.
+        for limb_idx in 0..4 {
+            for bit in 0..8 {
+                let b = local[col::limb_bit(limb_idx, bit)];
+                let c_bit = is_range_row * b * (b - BabyBear::ONE);
+                combined = combined + alpha_pow * c_bit;
+                alpha_pow = alpha_pow * alpha;
+            }
+        }
 
-        // Each limb must be in [0, 255]. We use the degree-2 constraint: limb * (limb - 255) <= 0.
-        // In a finite field, we can't directly check "<=". Instead we prove each limb IS a byte
-        // by checking limb * (256 - 1 - limb) ... no, standard approach:
-        // Check: limb * (limb - 1) * (limb - 2) * ... * (limb - 255) = 0
-        // This is degree 256 — too high.
-        //
-        // Practical approach for our prototype: we accept that the range check is
-        // enforced by the honest prover placing correct byte values. A production
-        // implementation would use a lookup argument or a full 8-bit decomposition
-        // sub-AIR. For this Phase 1 prototype, we verify the decomposition sum matches.
-        //
-        // Constraint: is_range_row * (limb0 + 256*limb1 + 65536*limb2 + 16777216*limb3 - fee_minus_min_from_meta) = 0
-        // But we don't have cross-row access in this simple AIR model.
-        // Instead we use a boundary constraint to bind row 0 col FEE_MINUS_MIN.
+        // Constraint 10: Reconstruction — each limb equals the sum of its bits * powers of 2.
+        // limb_i == sum(bit_{i,j} * 2^j for j in 0..8)
+        for limb_idx in 0..4 {
+            let mut reconstructed = BabyBear::ZERO;
+            let mut power = BabyBear::ONE;
+            for bit in 0..8 {
+                reconstructed = reconstructed + local[col::limb_bit(limb_idx, bit)] * power;
+                power = power * BabyBear::TWO;
+            }
+            let c_recon = is_range_row * (local[limb_idx] - reconstructed);
+            combined = combined + alpha_pow * c_recon;
+            alpha_pow = alpha_pow * alpha;
+        }
 
-        // For now, just enforce that is_range_row's nonce_check column is zero (padding).
+        // Constraint 11: Cross-row binding — on the metadata row, fee_minus_min must equal
+        // the reconstruction from the next row's limbs (the range check row).
+        // fee_minus_min == next[0] + 256*next[1] + 65536*next[2] + 16777216*next[3]
+        {
+            let reconstructed_from_next = _next[0]
+                + BabyBear::new(256) * _next[1]
+                + BabyBear::new(65536) * _next[2]
+                + BabyBear::new(16777216) * _next[3];
+            let c_cross_row = is_meta_row * (local[col::FEE_MINUS_MIN] - reconstructed_from_next);
+            combined = combined + alpha_pow * c_cross_row;
+            alpha_pow = alpha_pow * alpha;
+        }
+
+        // Constraint 12: is_range_row's nonce_check column is zero (padding).
         let c_range_padding = is_range_row * local[col::NONCE_CHECK];
         combined = combined + alpha_pow * c_range_padding;
 
@@ -392,6 +437,18 @@ impl StarkAir for TurnValidityAir {
                 row: 0,
                 col: col::NONCE_CHECK,
                 value: BabyBear::ZERO,
+            });
+            // is_range_row must be 0 on row 0 (metadata row).
+            constraints.push(BoundaryConstraint {
+                row: 0,
+                col: col::IS_RANGE_ROW,
+                value: BabyBear::ZERO,
+            });
+            // is_range_row must be 1 on row 1 (range check row).
+            constraints.push(BoundaryConstraint {
+                row: 1,
+                col: col::IS_RANGE_ROW,
+                value: BabyBear::ONE,
             });
         }
 
@@ -578,5 +635,110 @@ mod tests {
 
         let result = verify_turn_validity(&public_inputs, &proof2);
         assert!(result.is_ok(), "Deserialized proof should verify");
+    }
+
+    #[test]
+    fn fee_below_min_fee_rejected() {
+        // A malicious prover tries to submit a turn with fee=100 but claims min_fee=500.
+        // The honest trace generator panics, so we manually construct a forged trace.
+        let witness = test_witness(); // fee=1000, min_fee=500
+        let (mut trace, public_inputs) = TurnValidityAir::generate_trace(&witness);
+        let air = TurnValidityAir;
+        let alpha = BabyBear::new(7);
+
+        // Forge: set fee=100 on row 0 (below min_fee=500).
+        // fee_minus_min should be 100 - 500 = -400, which can't be a valid non-negative
+        // decomposition. A malicious prover might try fee_minus_min=0 with zero limbs.
+        trace[0][col::FEE] = BabyBear::new(100);
+        trace[0][col::FEE_MINUS_MIN] = BabyBear::ZERO; // forged: claims difference is 0
+
+        // Zero out the range check row limbs and bits (consistent with fee_minus_min=0).
+        for i in 0..4 {
+            trace[1][i] = BabyBear::ZERO;
+            for bit in 0..8 {
+                trace[1][col::limb_bit(i, bit)] = BabyBear::ZERO;
+            }
+        }
+
+        // The constraint on the metadata row checks:
+        //   fee_minus_min == fee - min_fee (from public inputs)
+        //   i.e., 0 == 100 - 500 = BabyBear(p - 400) != 0
+        // This MUST fail.
+        let c = air.eval_constraints(&trace[0], &trace[1], &public_inputs, alpha);
+        assert_ne!(
+            c,
+            BabyBear::ZERO,
+            "Fee below min_fee must be detected by constraints"
+        );
+    }
+
+    #[test]
+    fn fee_exactly_at_min_fee_passes() {
+        // fee == min_fee means fee_minus_min = 0, all limbs and bits are zero.
+        let mut witness = test_witness();
+        witness.fee = 500;
+        witness.min_fee = 500;
+        let (trace, public_inputs) = TurnValidityAir::generate_trace(&witness);
+        let air = TurnValidityAir;
+        let alpha = BabyBear::new(7);
+
+        // All constraint evaluations should be zero on a valid trace.
+        for i in 0..trace.len() {
+            let next_idx = if i + 1 < trace.len() { i + 1 } else { 0 };
+            let c = air.eval_constraints(&trace[i], &trace[next_idx], &public_inputs, alpha);
+            assert_eq!(
+                c,
+                BabyBear::ZERO,
+                "Fee exactly at min_fee should pass, failed at row {}: c = {}",
+                i,
+                c.0
+            );
+        }
+
+        // Also verify via full prove/verify cycle.
+        let proof = prove_turn_validity(&witness);
+        let result = verify_turn_validity(&public_inputs, &proof);
+        assert!(
+            result.is_ok(),
+            "Fee exactly at min_fee should produce valid proof: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn forged_limb_values_with_wrong_reconstruction_rejected() {
+        // A malicious prover puts non-byte values in the limbs that don't match
+        // the bit decomposition, trying to forge a valid range check.
+        let witness = test_witness(); // fee=1000, min_fee=500, diff=500
+        let (mut trace, public_inputs) = TurnValidityAir::generate_trace(&witness);
+        let air = TurnValidityAir;
+        let alpha = BabyBear::new(7);
+
+        // Forge: set limb0 to 300 (not a byte!) on the range check row,
+        // but leave the bit decomposition as the original (for 244 = 500 & 0xFF).
+        // The reconstruction constraint (limb != sum(bits*2^i)) will catch this.
+        trace[1][0] = BabyBear::new(300);
+
+        let c = air.eval_constraints(&trace[1], &trace[2], &public_inputs, alpha);
+        assert_ne!(
+            c,
+            BabyBear::ZERO,
+            "Forged limb value with mismatched bit decomposition must be rejected"
+        );
+
+        // Also test: set bits to represent 300 (which requires bit 8 = 1, i.e., 256+44).
+        // If a prover sets a "bit" column to a value > 1, the binary constraint catches it.
+        let mut trace2 = trace.clone();
+        // Revert limb to 300, and set bits to "encode" 300 = 256 + 32 + 8 + 4 = 0b100101100
+        // That's 9 bits, but we only have 8 bit columns. So set bit columns for
+        // an invalid decomposition: e.g., make bit 0 = 2 (not binary!).
+        trace2[1][0] = BabyBear::new(300);
+        trace2[1][col::limb_bit(0, 0)] = BabyBear::new(2); // not binary!
+        let c2 = air.eval_constraints(&trace2[1], &trace2[2], &public_inputs, alpha);
+        assert_ne!(
+            c2,
+            BabyBear::ZERO,
+            "Non-binary bit value must be rejected by binary constraint"
+        );
     }
 }

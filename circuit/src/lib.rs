@@ -72,6 +72,7 @@ pub mod binding;
 pub mod body_membership;
 pub mod chunked_derivation;
 pub mod constraint_prover;
+pub mod cross_state_derivation;
 pub mod derivation_air;
 pub mod field;
 pub mod fold_air;
@@ -95,15 +96,18 @@ pub mod committed_threshold;
 pub mod compound_predicate_air;
 pub mod garbled;
 pub mod garbled_air;
+pub mod non_membership;
 pub mod non_revocation_air;
 pub mod note_spending_air;
 pub mod predicate_air;
 pub mod predicate_program;
+pub mod quantified_absence;
 pub mod relational_predicate_air;
 pub mod schnorr_air;
 pub mod schnorr_curve;
 pub mod schnorr_sig;
 pub mod stark;
+pub mod temporal_absence_air;
 pub mod temporal_predicate_air;
 pub mod turn_validity_air;
 
@@ -136,8 +140,8 @@ pub use field::BabyBear;
 pub use ivc::{
     FoldDelta, FoldMembershipEntry, FoldStepWitness, IvcBackend, IvcBackendProof, IvcBuilder,
     IvcPresentationProof, IvcProof, IvcVerification, MAX_FOLD_DEPTH, StateTransitionAir,
-    ValidatedIvcProof, ValidatedIvcVerification, prove_ivc, prove_ivc_stark,
-    prove_validated_ivc, verify_ivc, verify_ivc_stark, verify_validated_ivc,
+    ValidatedIvcProof, ValidatedIvcVerification, prove_ivc, prove_ivc_stark, prove_validated_ivc,
+    verify_ivc, verify_ivc_stark, verify_validated_ivc,
 };
 
 // Backward-compatible aliases (hidden from docs).
@@ -152,7 +156,9 @@ pub use arithmetic_predicate_air::{
     compute_arithmetic_fact_commitment, evaluate_expression, prove_arithmetic_predicate,
     verify_arithmetic_predicate,
 };
-pub use binding::compute_action_binding;
+pub use binding::{
+    ACTION_BINDING_WIDTH, ActionBinding, compute_action_binding, compute_action_binding_narrow,
+};
 pub use block_transition_air::{
     BlockEvent, BlockTransitionAir, BlockTransitionProof, MerkleUpdateWitness,
     prove_block_transition, verify_block_transition,
@@ -172,13 +178,22 @@ pub use constraint_prover::MockProof;
 pub use constraint_prover::MockProofResult;
 #[doc(hidden)]
 pub use constraint_prover::MockProver;
+pub use cross_state_derivation::{
+    CombiningRule, CrossStateDerivationProof, SourceDerivation, SourceInput,
+    prove_cross_state_derivation, verify_cross_state_derivation,
+};
 pub use multi_step_air::{
     ALLOW_PREDICATE, MultiStepDerivationAir, MultiStepStarkAir, MultiStepWitness,
     prove_authorization_stark, verify_authorization_stark,
 };
+pub use non_membership::{
+    AugmentedDerivation, DerivationNonMembershipCheck, NonMembershipCheck, NonMembershipProof,
+    NonMembershipProver, SetIdentifier, compute_set_accumulator, derive_alpha_for_set,
+    verify_augmented_derivation, verify_non_membership_proof,
+};
 pub use non_revocation_air::{
-    NonMembershipWitness, NonRevocationAir, NonRevocationWitness, SortedRevocationTree,
-    prove_non_revocation, revocation_hash_to_field, verify_non_revocation,
+    NonMembershipWitness, NonRevocationAir, NonRevocationWitness, SENTINEL_MAX, SENTINEL_MIN,
+    SortedRevocationTree, prove_non_revocation, revocation_hash_to_field, verify_non_revocation,
 };
 pub use note_spending_air::{
     NoteSpendingAir, NoteSpendingWitness, prove_note_spend, verify_note_spend,

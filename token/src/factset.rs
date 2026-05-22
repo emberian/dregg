@@ -30,6 +30,7 @@
 
 use pyana_commit::{Fact, FactSet, FieldElement, SymbolTable};
 
+#[cfg(feature = "rand-deps")]
 use crate::MacaroonToken;
 use crate::pyana_caveats::{self, PyanaGrant};
 use crate::traits::Attenuation;
@@ -42,6 +43,7 @@ use crate::traits::Attenuation;
 ///
 /// Returns the fact set (ready for Merkle commitment) and a symbol table
 /// mapping field elements back to their human-readable names.
+#[cfg(feature = "rand-deps")]
 pub fn macaroon_to_factset(token: &MacaroonToken) -> (FactSet, SymbolTable) {
     let mut factset = FactSet::new();
     let mut symbols = SymbolTable::new();

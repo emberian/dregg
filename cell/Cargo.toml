@@ -9,18 +9,23 @@ homepage.workspace = true
 repository.workspace = true
 description = "Agent cell model — capability-secure isolated execution contexts"
 
+[features]
+default = ["crypto"]
+crypto = ["dep:chacha20poly1305", "dep:curve25519-dalek", "dep:ed25519-dalek", "dep:getrandom", "dep:x25519-dalek", "dep:zeroize"]
+zkvm = []
+
 [dependencies]
 blake3 = "1"
-chacha20poly1305 = { workspace = true }
-curve25519-dalek = { version = "4", features = ["alloc"] }
-ed25519-dalek = { version = "2", features = ["hazmat"] }
-getrandom = { workspace = true }
+chacha20poly1305 = { workspace = true, optional = true }
+curve25519-dalek = { version = "4", features = ["alloc"], optional = true }
+ed25519-dalek = { version = "2", features = ["hazmat"], optional = true }
+getrandom = { workspace = true, optional = true }
 postcard = { version = "1", features = ["alloc"] }
 pyana-types = { path = "../types" }
 serde = { version = "1", features = ["derive", "std"] }
 serde_json = { workspace = true }
-x25519-dalek = { workspace = true }
-zeroize = { workspace = true }
+x25519-dalek = { workspace = true, optional = true }
+zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

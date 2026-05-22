@@ -104,6 +104,7 @@ impl Note {
     /// the blinding factor is cryptographically unpredictable. The creation_nonce is
     /// derived from the randomness for domain separation. Two calls at the same
     /// nanosecond will produce distinct notes.
+    #[cfg(feature = "crypto")]
     pub fn new(owner: [u8; 32], fields: [u64; 8]) -> Self {
         // Use OS randomness for the blinding factor — MUST be cryptographically random.
         let mut randomness = [0u8; 32];

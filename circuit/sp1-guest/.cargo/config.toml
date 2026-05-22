@@ -1,0 +1,4 @@
+# SP1 guest programs are compiled for the RISC-V zkVM target.
+# This config is used by `cargo prove build` (from the SP1 toolchain).
+[build]
+target = "riscv32im-succinct-zkvm-elf"

@@ -237,11 +237,14 @@ impl StarkAir for TemporalPredicateAir {
             local[col::diff_bit(PREDICATE_DIFF_BITS - 1)]
         };
 
-        // Note: transition constraints (c5=accumulator increment, c6=step increment) omitted
-        // from StarkAir because padding rows violate them. Per-row predicate constraints
-        // + boundary constraints provide sufficient soundness.
+        // C5: accumulator increments by exactly 1 at each transition.
+        // Padding rows also satisfy this because they continue incrementing.
+        let c5 = next[col::ACCUMULATOR] - local[col::ACCUMULATOR] - BabyBear::ONE;
 
-        // Combine per-row constraints only
+        // C6: step_index increments by exactly 1 at each transition.
+        let c6 = next[col::STEP_INDEX] - local[col::STEP_INDEX] - BabyBear::ONE;
+
+        // Combine all constraints (per-row + transition)
         let mut combined = c1;
         let mut alpha_pow = alpha;
         combined = combined + alpha_pow * c2;
@@ -250,6 +253,10 @@ impl StarkAir for TemporalPredicateAir {
         alpha_pow = alpha_pow * alpha;
         combined = combined + alpha_pow * c4;
         alpha_pow = alpha_pow * alpha;
+        combined = combined + alpha_pow * c5;
+        alpha_pow = alpha_pow * alpha;
+        combined = combined + alpha_pow * c6;
+        let _ = alpha_pow;
         combined
     }
 
@@ -484,14 +491,16 @@ impl Air for TemporalPredicateAir {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// A complete temporal predicate proof.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TemporalPredicateProof {
     /// The predicate type that was proven.
     pub predicate_type: PredicateType,
     /// The threshold (public).
     pub threshold: BabyBear,
-    /// Number of steps over which the predicate held.
+    /// Number of REAL steps over which the predicate held (not including padding).
     pub num_steps: u32,
+    /// Padded trace length (power of 2, used in STARK boundary constraints).
+    pub padded_len: u32,
     /// The initial state root (binding to the start of the range).
     pub initial_state_root: BabyBear,
     /// The final state root (binding to the end of the range).
@@ -541,14 +550,34 @@ pub fn prove_temporal_predicate(
     let final_state_root = *witness.state_roots.last().unwrap();
 
     let air = TemporalPredicateAir::new(witness);
-    let (mut trace, public_inputs) = air.generate_trace();
+    let (mut trace, _generated_public_inputs) = air.generate_trace();
 
     // STARK prover requires trace length >= 2 and power-of-two.
-    // Pad with copies of the last row. The StarkAir omits transition constraints
-    // so duplicated rows are acceptable.
-    while trace.len() < 2 || !trace.len().is_power_of_two() {
-        trace.push(trace.last().unwrap().clone());
+    // Padding rows MUST satisfy transition constraints (accumulator and step_index
+    // increment by 1). We duplicate the last row's predicate data (which still passes
+    // the per-row predicate constraints) while continuing to increment counters.
+    let target_len = trace.len().next_power_of_two().max(2);
+    while trace.len() < target_len {
+        let pad_idx = trace.len();
+        let mut pad_row = trace.last().unwrap().clone();
+        // Continue incrementing step_index and accumulator so transition constraints hold.
+        pad_row[col::STEP_INDEX] = BabyBear::new(pad_idx as u32);
+        pad_row[col::ACCUMULATOR] = BabyBear::new((pad_idx + 1) as u32);
+        // predicate_value, diff, diff_bits, state_root are copied from the last real row.
+        // The per-row predicate constraints still hold because the predicate value and
+        // diff/bits are consistent (same data as a real passing row).
+        trace.push(pad_row);
     }
+    let padded_len = trace.len() as u32;
+
+    // Public inputs for the STARK: boundary constraint on last row checks
+    // accumulator == padded_len (since padding rows also increment).
+    let public_inputs = vec![
+        threshold,
+        BabyBear::new(padded_len),
+        initial_state_root,
+        final_state_root,
+    ];
 
     let stark_proof = stark::prove(&air, &trace, &public_inputs);
 
@@ -556,6 +585,7 @@ pub fn prove_temporal_predicate(
         predicate_type,
         threshold,
         num_steps,
+        padded_len,
         initial_state_root,
         final_state_root,
         stark_proof,
@@ -597,9 +627,18 @@ pub fn verify_temporal_predicate(
         return false;
     }
 
+    // The STARK boundary constraint checks accumulator == padded_len at the last row,
+    // so public_inputs[1] must be the padded trace length (not num_steps).
+    let padded_len = proof.padded_len;
+
+    // Sanity: padded_len must be >= num_steps and a power of two.
+    if padded_len < num_steps || !padded_len.is_power_of_two() {
+        return false;
+    }
+
     let public_inputs = vec![
         threshold,
-        BabyBear::new(num_steps),
+        BabyBear::new(padded_len),
         initial_state_root,
         final_state_root,
     ];
@@ -1551,6 +1590,81 @@ mod tests {
             proof.is_none(),
             "Mismatched lengths should not produce a proof"
         );
+    }
+
+    // =========================================================================
+    // Soundness: prover cannot skip steps or fabricate duration claims
+    // =========================================================================
+
+    #[test]
+    fn test_temporal_soundness_cannot_fabricate_duration() {
+        // A malicious prover tries to claim "balance >= 100 for 10 steps" but
+        // only provides 3 valid steps. With transition constraints enforced,
+        // this must fail verification.
+        //
+        // Attack vector: provide only 3 real steps, then try to pass a proof
+        // claiming 10 steps. The STARK now enforces that accumulator increments
+        // by exactly 1 at every row transition, so the trace must have at least
+        // 10 rows with valid incrementing accumulators.
+        let threshold = BabyBear::new(100);
+        let state_roots_3 = test_state_roots(3);
+
+        // Honest proof for 3 steps.
+        let values_3: Vec<BabyBear> = vec![200, 150, 300].into_iter().map(BabyBear::new).collect();
+        let proof_3 =
+            prove_temporal_predicate(&values_3, &state_roots_3, PredicateType::Gte, threshold)
+                .expect("3 valid steps should produce a proof");
+        assert_eq!(proof_3.num_steps, 3);
+
+        // The honest 3-step proof must NOT verify when the verifier expects 10 steps.
+        let state_roots_10 = test_state_roots(10);
+        let bogus_verify = verify_temporal_predicate(
+            &proof_3,
+            threshold,
+            10, // verifier expects 10 steps
+            state_roots_10[0],
+            state_roots_10[9],
+        );
+        assert!(
+            !bogus_verify,
+            "A 3-step proof must NOT verify as a 10-step proof"
+        );
+
+        // Additionally verify that even with matching state roots, the num_steps
+        // mismatch is caught.
+        let bogus_verify_same_roots = verify_temporal_predicate(
+            &proof_3,
+            threshold,
+            10, // verifier expects 10 steps
+            state_roots_3[0],
+            state_roots_3[2],
+        );
+        assert!(
+            !bogus_verify_same_roots,
+            "A 3-step proof must NOT verify when verifier expects 10 steps \
+             (even with matching state roots)"
+        );
+
+        // The honest proof for 3 steps DOES verify with correct parameters.
+        let valid =
+            verify_temporal_predicate(&proof_3, threshold, 3, state_roots_3[0], state_roots_3[2]);
+        assert!(valid, "3-step proof should verify with correct parameters");
+
+        // Now prove 10 steps honestly and verify it works.
+        let values_10: Vec<BabyBear> = vec![200; 10].into_iter().map(BabyBear::new).collect();
+        let proof_10 =
+            prove_temporal_predicate(&values_10, &state_roots_10, PredicateType::Gte, threshold)
+                .expect("10 valid steps should produce a proof");
+        assert_eq!(proof_10.num_steps, 10);
+
+        let valid_10 = verify_temporal_predicate(
+            &proof_10,
+            threshold,
+            10,
+            state_roots_10[0],
+            state_roots_10[9],
+        );
+        assert!(valid_10, "10-step proof should verify correctly");
     }
 
     // =========================================================================

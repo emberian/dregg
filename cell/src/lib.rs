@@ -17,13 +17,16 @@ pub mod derivation;
 pub mod id;
 pub mod ledger;
 pub mod note;
+#[cfg(feature = "crypto")]
 pub mod note_bridge;
 pub mod nullifier_set;
+#[cfg(feature = "crypto")]
 pub mod oblivious_transfer;
 pub mod permissions;
 pub mod preconditions;
 pub mod program;
 pub mod revocation_channel;
+#[cfg(feature = "crypto")]
 pub mod seal;
 pub mod state;
 
@@ -40,12 +43,14 @@ pub use derivation::{
 pub use id::CellId;
 pub use ledger::{CellStateDelta, Ledger, LedgerDelta, LedgerError, MembershipProof, Side};
 pub use note::{Note, NoteCommitment, NoteError, Nullifier, PositionedNote};
+#[cfg(feature = "crypto")]
 pub use note_bridge::{
     BridgeError, BridgeReceipt, BridgeState, BridgedNullifierSet, PendingBridge, PendingBridgeSet,
     PortableNoteProof, cancel_bridge, create_portable_note, finalize_bridge, initiate_bridge,
     verify_bridge_receipt, verify_portable_note,
 };
 pub use nullifier_set::{MerkleMembershipProof, NonMembershipProof, NullifierSet};
+#[cfg(feature = "crypto")]
 pub use oblivious_transfer::{
     OtError, OtReceiver, OtReceiverResponse, OtSender, OtSenderPayload, OtSenderSetup, ot_1_of_n,
 };
@@ -57,6 +62,7 @@ pub use program::{CellProgram, ProgramError, StateConstraint};
 pub use revocation_channel::{
     ChannelId, RevocationChannel, RevocationChannelError, RevocationChannelSet,
 };
+#[cfg(feature = "crypto")]
 pub use seal::{SealError, SealPair, SealedBox, SealerPublic, test_seal_pair};
 pub use state::{
     CellState, FIELD_ZERO, FieldElement, FieldVisibility, PublicFieldView, STATE_SLOTS,

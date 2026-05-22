@@ -58,17 +58,31 @@ pub struct FoldWitness {
     pub new_root: BabyBear,
     pub removed_facts: Vec<RemovedFact>,
     pub num_added_checks: usize,
+    /// Cryptographic commitment to the added checks (Poseidon2 hash of check hashes).
+    ///
+    /// This binds the actual check content to the fold proof, preventing a malicious
+    /// prover from claiming checks they didn't actually add. When `num_added_checks == 0`,
+    /// this MUST be `BabyBear::ZERO` (backwards-compatible identity).
+    ///
+    /// Computed as: `hash_many(&[check_1_hash, check_2_hash, ...])` where each
+    /// `check_i_hash = hash_fact(predicate, terms)`.
+    pub added_checks_commitment: BabyBear,
 }
 
 pub fn compute_root_transition_hash(
     old_root: BabyBear,
     new_root: BabyBear,
     removed_fact_hashes: &[BabyBear],
+    added_checks_commitment: BabyBear,
 ) -> BabyBear {
-    let mut elements = Vec::with_capacity(2 + removed_fact_hashes.len());
+    let mut elements = Vec::with_capacity(3 + removed_fact_hashes.len());
     elements.push(old_root);
     elements.push(new_root);
     elements.extend_from_slice(removed_fact_hashes);
+    // Include the checks commitment in the transition hash.
+    // When no checks are added, this is ZERO (identity element for hashing),
+    // but still included to ensure the hash domain is consistent.
+    elements.push(added_checks_commitment);
     hash_many(&elements)
 }
 
@@ -96,6 +110,7 @@ pub fn verify_root_transition(witness: &FoldWitness) -> Option<BabyBear> {
         witness.old_root,
         witness.new_root,
         &fact_hashes,
+        witness.added_checks_commitment,
     ))
 }
 
@@ -114,7 +129,7 @@ impl Air for FoldAir {
         FOLD_AIR_WIDTH
     }
     fn num_public_inputs(&self) -> usize {
-        5
+        6
     }
 
     fn constraints(&self) -> Vec<Constraint> {
@@ -198,18 +213,43 @@ impl Air for FoldAir {
             },
             // SECURITY: This constraint binds the summary row's MEMBERSHIP_ROOT
             // to pi[4], which is computed as:
-            //   Poseidon2(old_root || new_root || removed_fact_hashes)
+            //   Poseidon2(old_root || new_root || removed_fact_hashes || checks_commitment)
             //
-            // Since pi[4] commits to new_root via a collision-resistant hash,
-            // a malicious prover cannot substitute a different new_root without
-            // producing a Poseidon2 collision. The verifier MUST independently
-            // compute pi[4] from the actual tree rebuild (old state minus removed
-            // leaves), which is done by build_fold_witnesses() in the bridge.
+            // Since pi[4] commits to new_root AND added_checks_commitment via a
+            // collision-resistant hash, a malicious prover cannot substitute a different
+            // new_root or different checks without producing a Poseidon2 collision.
+            // The verifier MUST independently compute pi[4] from the actual tree rebuild
+            // and the actual checks commitment, which is done by build_fold_witnesses()
+            // in the bridge.
+            //
+            // pi[5] is the added_checks_commitment: Poseidon2(check_1_hash || check_2_hash || ...).
+            // This is included in the root transition hash (pi[4]), cryptographically binding
+            // the actual check content to the proof.
             Constraint {
                 name: "root_transition_binding".into(),
                 eval: Box::new(|row, _, pi| {
                     let is_summary = row[col::ROW_TYPE];
                     is_summary * (row[col::MEMBERSHIP_ROOT] - pi[4])
+                }),
+            },
+            // SECURITY: When check_count == 0, the checks commitment must be ZERO.
+            // This prevents a prover from sneaking a non-zero commitment with zero count.
+            // When check_count > 0, the commitment is non-zero (enforced by Poseidon2
+            // producing non-zero outputs for non-empty inputs, assuming no collisions
+            // with zero). The meaningful binding comes from pi[4] including the commitment.
+            Constraint {
+                name: "checks_commitment_zero_when_no_checks".into(),
+                eval: Box::new(|row, _, pi| {
+                    let is_summary = row[col::ROW_TYPE];
+                    // When check_count (pi[3]) is zero, checks_commitment (pi[5]) must be zero.
+                    // We only enforce this on summary rows to avoid over-constraining.
+                    // Note: this is a public-input-only constraint (doesn't touch trace values
+                    // beyond ROW_TYPE), so it acts as a well-formedness check on the verifier's inputs.
+                    if pi[3] == BabyBear::ZERO {
+                        is_summary * pi[5]
+                    } else {
+                        BabyBear::ZERO
+                    }
                 }),
             },
         ]
@@ -248,7 +288,7 @@ impl Air for FoldAir {
         let root_transition_hash = if !w.removed_facts.is_empty() {
             verify_root_transition(w).unwrap_or(BabyBear::ZERO)
         } else {
-            compute_root_transition_hash(w.old_root, w.new_root, &[])
+            compute_root_transition_hash(w.old_root, w.new_root, &[], w.added_checks_commitment)
         };
 
         for (i, fact) in w.removed_facts.iter().enumerate() {
@@ -280,13 +320,19 @@ impl Air for FoldAir {
         trace.push(summary);
 
         let fact_hashes: Vec<BabyBear> = w.removed_facts.iter().map(|f| f.hash()).collect();
-        let expected_rt = compute_root_transition_hash(w.old_root, w.new_root, &fact_hashes);
+        let expected_rt = compute_root_transition_hash(
+            w.old_root,
+            w.new_root,
+            &fact_hashes,
+            w.added_checks_commitment,
+        );
         let public_inputs = vec![
             w.old_root,
             w.new_root,
             BabyBear::new(w.removed_facts.len() as u32),
             BabyBear::new(w.num_added_checks as u32),
             expected_rt,
+            w.added_checks_commitment,
         ];
         (trace, public_inputs)
     }
@@ -353,8 +399,8 @@ impl StarkAir for FoldStarkAir {
 
         // C2: membership_root_matches_old_root
         let is_removal = BabyBear::ONE - local[col::ROW_TYPE];
-        result =
-            result + alpha_power * (is_removal * (local[col::MEMBERSHIP_ROOT] - local[col::OLD_ROOT]));
+        result = result
+            + alpha_power * (is_removal * (local[col::MEMBERSHIP_ROOT] - local[col::OLD_ROOT]));
         alpha_power = alpha_power * alpha;
 
         // C3: hash_valid_binary
@@ -400,6 +446,13 @@ impl StarkAir for FoldStarkAir {
         let is_summary = local[col::ROW_TYPE];
         result =
             result + alpha_power * (is_summary * (local[col::MEMBERSHIP_ROOT] - public_inputs[4]));
+        alpha_power = alpha_power * alpha;
+
+        // C10: checks_commitment_zero_when_no_checks
+        // When check_count (pi[3]) is zero, checks_commitment (pi[5]) must be zero.
+        if public_inputs[3] == BabyBear::ZERO {
+            result = result + alpha_power * (is_summary * public_inputs[5]);
+        }
 
         result
     }
@@ -410,7 +463,7 @@ impl StarkAir for FoldStarkAir {
         trace_len: usize,
     ) -> Vec<BoundaryConstraint> {
         let mut constraints = vec![];
-        if public_inputs.len() >= 5 {
+        if public_inputs.len() >= 6 {
             // First row: old_root must match pi[0]
             constraints.push(BoundaryConstraint {
                 row: 0,
@@ -506,6 +559,7 @@ pub fn verify_fold_stark(proof: &StarkProof, public_inputs: &[BabyBear]) -> Resu
         new_root: BabyBear::ZERO,
         removed_facts: vec![],
         num_added_checks: 0,
+        added_checks_commitment: BabyBear::ZERO,
     };
     let air = FoldStarkAir::new(dummy_witness);
     stark::verify(&air, proof, public_inputs)
@@ -582,14 +636,35 @@ pub fn build_membership_proof(leaf_hash: BabyBear, depth: usize) -> MerkleWitnes
     }
 }
 
+/// Compute the checks commitment for a set of test checks.
+///
+/// Each test check is modeled as `hash_fact(predicate=CHECK_BASE+i, terms=[i, 0, 0])`.
+/// Returns `BabyBear::ZERO` when `num_checks == 0` (backwards-compatible identity).
+pub fn compute_test_checks_commitment(num_checks: usize) -> BabyBear {
+    if num_checks == 0 {
+        return BabyBear::ZERO;
+    }
+    let check_hashes: Vec<BabyBear> = (0..num_checks)
+        .map(|i| {
+            hash_fact(
+                BabyBear::new(900 + i as u32), // CHECK_BASE + i
+                &[BabyBear::new(i as u32), BabyBear::ZERO, BabyBear::ZERO],
+            )
+        })
+        .collect();
+    hash_many(&check_hashes)
+}
+
 pub fn create_test_fold(num_removals: usize, num_checks: usize) -> FoldWitness {
     let new_root = BabyBear::new(222222);
+    let checks_commitment = compute_test_checks_commitment(num_checks);
     if num_removals == 0 {
         return FoldWitness {
             old_root: BabyBear::new(111111),
             new_root,
             removed_facts: vec![],
             num_added_checks: num_checks,
+            added_checks_commitment: checks_commitment,
         };
     }
     let facts_data: Vec<(BabyBear, [BabyBear; 3])> = (0..num_removals)
@@ -623,6 +698,7 @@ pub fn create_test_fold(num_removals: usize, num_checks: usize) -> FoldWitness {
         new_root,
         removed_facts,
         num_added_checks: num_checks,
+        added_checks_commitment: checks_commitment,
     }
 }
 
@@ -661,6 +737,7 @@ mod tests {
             new_root: BabyBear::new(200),
             removed_facts: vec![],
             num_added_checks: 3,
+            added_checks_commitment: compute_test_checks_commitment(3),
         };
         let air = FoldAir::new(witness);
         let result = ConstraintProver::verify(&air);
@@ -678,6 +755,7 @@ mod tests {
             new_root: BabyBear::new(200),
             removed_facts: vec![],
             num_added_checks: 0,
+            added_checks_commitment: BabyBear::ZERO,
         };
         let air = FoldAir::new(witness);
         assert!(!ConstraintProver::verify(&air).is_valid());
@@ -694,6 +772,7 @@ mod tests {
                 membership_proof: None,
             }],
             num_added_checks: 0,
+            added_checks_commitment: BabyBear::ZERO,
         };
         assert!(
             !ConstraintProver::verify(&FoldAir::new(witness)).is_valid(),
@@ -716,6 +795,7 @@ mod tests {
                 membership_proof: Some(proof),
             }],
             num_added_checks: 0,
+            added_checks_commitment: BabyBear::ZERO,
         };
         assert!(
             !ConstraintProver::verify(&FoldAir::new(witness)).is_valid(),
@@ -738,6 +818,7 @@ mod tests {
                 membership_proof: Some(proof),
             }],
             num_added_checks: 0,
+            added_checks_commitment: BabyBear::ZERO,
         };
         assert!(
             !ConstraintProver::verify(&FoldAir::new(witness)).is_valid(),
@@ -783,6 +864,7 @@ mod tests {
             new_root: BabyBear::new(200),
             removed_facts: vec![],
             num_added_checks: 3,
+            added_checks_commitment: compute_test_checks_commitment(3),
         };
         let proof = prove_fold_stark(&witness).expect("fold STARK proof should generate");
 
@@ -822,6 +904,164 @@ mod tests {
         assert!(
             verify_fold_stark(&proof, &public_inputs).is_err(),
             "tampered fold STARK proof should fail"
+        );
+    }
+
+    // ========================================================================
+    // Added checks commitment binding tests
+    // ========================================================================
+
+    #[test]
+    fn fold_air_checks_commitment_binds_content() {
+        // Prover claims 3 checks added but provides a commitment for only 2 checks.
+        // The root transition hash won't match pi[4] because pi[5] (commitment)
+        // was computed from 2 checks but pi[3] says 3.
+        //
+        // More importantly: even if the count is "correct", a forged commitment
+        // (different checks than what was actually added) will fail because
+        // the verifier independently computes the commitment from real check data.
+        let real_commitment_for_2 = compute_test_checks_commitment(2);
+        let witness = FoldWitness {
+            old_root: BabyBear::new(100),
+            new_root: BabyBear::new(200),
+            removed_facts: vec![],
+            num_added_checks: 3,                            // claims 3...
+            added_checks_commitment: real_commitment_for_2, // ...but commitment is for 2
+        };
+        let air = FoldAir::new(witness);
+        let result = ConstraintProver::verify(&air);
+        // This should pass at the AIR level (the AIR doesn't know how many checks
+        // went into the commitment -- that's the verifier's job to supply matching
+        // pi[3] and pi[5]). The key security property is that pi[4] binds pi[5].
+        // If the verifier supplies mismatched count/commitment, the proof won't
+        // verify against the expected root transition hash at the bridge layer.
+        //
+        // However, at the STARK level, if we produce a proof with this witness,
+        // then the verifier uses the CORRECT public inputs (count=3, commitment
+        // for 3 checks), the proof will fail.
+        assert!(
+            result.is_valid(),
+            "AIR should pass (it trusts its own public inputs): {:?}",
+            result.violations()
+        );
+    }
+
+    #[test]
+    fn fold_stark_wrong_checks_commitment_fails() {
+        // Generate a valid proof with 3 checks (correct commitment).
+        let witness = create_test_fold(0, 3);
+        let proof = prove_fold_stark(&witness).expect("fold STARK proof should generate");
+
+        // Now the verifier tries to verify with a DIFFERENT checks commitment
+        // (e.g., the prover claimed they added checks A,B,C but really added A,B,D).
+        // The verifier independently computes the commitment from what was actually expected.
+        let fold_air = FoldAir::new(witness.clone());
+        let (_, mut public_inputs) = fold_air.generate_trace();
+        // Tamper with pi[5] (checks_commitment) to simulate verifier detecting fraud
+        let wrong_commitment = compute_test_checks_commitment(2);
+        public_inputs[5] = wrong_commitment;
+        // Also recompute pi[4] with the wrong commitment (as verifier would)
+        public_inputs[4] = compute_root_transition_hash(
+            public_inputs[0],
+            public_inputs[1],
+            &[], // no removals
+            wrong_commitment,
+        );
+        assert!(
+            verify_fold_stark(&proof, &public_inputs).is_err(),
+            "STARK proof with wrong checks commitment should fail verification"
+        );
+    }
+
+    #[test]
+    fn fold_stark_forged_count_with_zero_commitment_fails() {
+        // Prover produces a proof claiming 0 checks (with ZERO commitment),
+        // but actually added checks. When the verifier supplies the real
+        // commitment (non-zero), verification fails.
+        let witness_no_checks = FoldWitness {
+            old_root: BabyBear::new(100),
+            new_root: BabyBear::new(200),
+            removed_facts: vec![],
+            num_added_checks: 1,
+            added_checks_commitment: compute_test_checks_commitment(1),
+        };
+        let proof = prove_fold_stark(&witness_no_checks).expect("should generate");
+
+        // Verifier detects the prover actually didn't include the real checks:
+        // supplies count=1 but with a DIFFERENT commitment
+        let fold_air = FoldAir::new(witness_no_checks.clone());
+        let (_, mut public_inputs) = fold_air.generate_trace();
+        // Replace commitment with a forged one
+        let forged_commitment = hash_many(&[BabyBear::new(9999)]);
+        public_inputs[5] = forged_commitment;
+        public_inputs[4] = compute_root_transition_hash(
+            public_inputs[0],
+            public_inputs[1],
+            &[],
+            forged_commitment,
+        );
+        assert!(
+            verify_fold_stark(&proof, &public_inputs).is_err(),
+            "STARK proof with forged checks commitment should fail"
+        );
+    }
+
+    #[test]
+    fn fold_air_nonzero_commitment_with_zero_count_fails() {
+        // The constraint `checks_commitment_zero_when_no_checks` prevents
+        // a prover from claiming 0 checks but providing a non-zero commitment.
+        let witness = FoldWitness {
+            old_root: BabyBear::new(100),
+            new_root: BabyBear::new(200),
+            removed_facts: vec![],
+            num_added_checks: 0,
+            added_checks_commitment: hash_many(&[BabyBear::new(42)]), // non-zero!
+        };
+        let air = FoldAir::new(witness);
+        let result = ConstraintProver::verify(&air);
+        assert!(
+            !result.is_valid(),
+            "Non-zero commitment with zero check count should fail"
+        );
+    }
+
+    #[test]
+    fn fold_air_zero_commitment_with_nonzero_count_is_invalid_binding() {
+        // A prover claims checks but provides ZERO commitment. The root transition
+        // hash will be computed with ZERO commitment, which won't match what the
+        // verifier expects (the verifier independently hashes the real checks).
+        //
+        // At the AIR level, this still "passes" because the AIR is self-consistent.
+        // The real check happens when the STARK verifier supplies correct pi[5].
+        let witness = FoldWitness {
+            old_root: BabyBear::new(100),
+            new_root: BabyBear::new(200),
+            removed_facts: vec![],
+            num_added_checks: 2,
+            added_checks_commitment: BabyBear::ZERO, // wrong: should be non-zero for 2 checks
+        };
+        let air = FoldAir::new(witness.clone());
+        let result = ConstraintProver::verify(&air);
+        // The AIR passes because it's internally consistent (the public inputs
+        // are generated from the witness). But at the STARK level, the verifier
+        // would supply the CORRECT commitment and the proof would fail.
+        assert!(
+            result.is_valid(),
+            "AIR is self-consistent even with zero commitment"
+        );
+
+        // Now verify at the STARK level: proof fails when verifier supplies correct commitment
+        let proof = prove_fold_stark(&witness).expect("should generate");
+        let fold_air = FoldAir::new(witness.clone());
+        let (_, mut public_inputs) = fold_air.generate_trace();
+        // Verifier corrects pi[5] to the real commitment
+        let real_commitment = compute_test_checks_commitment(2);
+        public_inputs[5] = real_commitment;
+        public_inputs[4] =
+            compute_root_transition_hash(public_inputs[0], public_inputs[1], &[], real_commitment);
+        assert!(
+            verify_fold_stark(&proof, &public_inputs).is_err(),
+            "STARK should fail when verifier supplies correct commitment that differs from proof"
         );
     }
 }

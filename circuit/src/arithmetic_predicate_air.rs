@@ -82,6 +82,9 @@ pub enum ArithPredicate {
     ExprLte(ArithExpr, BabyBear),
     /// Expression result == value.
     ExprEq(ArithExpr, BabyBear),
+    /// Expression result != value (inequality).
+    /// Proved by witnessing the multiplicative inverse of (result - value).
+    ExprNeq(ArithExpr, BabyBear),
     /// low <= expression result <= high.
     ExprInRange(ArithExpr, BabyBear, BabyBear),
     /// Two expressions compared: expr1 `relation` expr2.
@@ -96,6 +99,7 @@ pub enum CompareOp {
     Gt,
     Lt,
     Eq,
+    Neq,
 }
 
 /// A single flattened operation in the compiled expression.
@@ -483,6 +487,12 @@ impl ArithmeticPredicateWitness {
                 };
                 result == *value
             }
+            ArithPredicate::ExprNeq(expr, value) => {
+                let Some(result) = evaluate_expression(expr, &self.inputs) else {
+                    return false;
+                };
+                result != *value
+            }
             ArithPredicate::ExprInRange(expr, low, high) => {
                 let Some(result) = evaluate_expression(expr, &self.inputs) else {
                     return false;
@@ -502,6 +512,7 @@ impl ArithmeticPredicateWitness {
                     CompareOp::Gt => result_a.as_u32() > result_b.as_u32(),
                     CompareOp::Lt => result_a.as_u32() < result_b.as_u32(),
                     CompareOp::Eq => result_a == result_b,
+                    CompareOp::Neq => result_a != result_b,
                 }
             }
         }
@@ -513,6 +524,7 @@ impl ArithmeticPredicateWitness {
             ArithPredicate::ExprGte(expr, _)
             | ArithPredicate::ExprLte(expr, _)
             | ArithPredicate::ExprEq(expr, _)
+            | ArithPredicate::ExprNeq(expr, _)
             | ArithPredicate::ExprInRange(expr, _, _) => expr,
             ArithPredicate::ExprCompare(expr, _, _) => expr,
         }
@@ -590,6 +602,8 @@ struct ArithLayout {
     diff_bits_start: usize,
     /// Column for fact commitment.
     fact_commitment_col: usize,
+    /// Column for NEQ inverse witness (only used for Inequality/CompareNeq).
+    neq_inverse_col: usize,
     /// Total trace width.
     width: usize,
 }
@@ -637,7 +651,8 @@ impl ArithLayout {
         let diff_col = threshold_col + 1;
         let diff_bits_start = diff_col + 1;
         let fact_commitment_col = diff_bits_start + PREDICATE_DIFF_BITS;
-        let width = fact_commitment_col + 1;
+        let neq_inverse_col = fact_commitment_col + 1;
+        let width = neq_inverse_col + 1;
 
         Self {
             num_inputs,
@@ -652,6 +667,7 @@ impl ArithLayout {
             diff_col,
             diff_bits_start,
             fact_commitment_col,
+            neq_inverse_col,
             width,
         }
     }
@@ -677,6 +693,7 @@ impl ArithmeticPredicateAir {
             ArithPredicate::ExprGte(expr, _)
             | ArithPredicate::ExprLte(expr, _)
             | ArithPredicate::ExprEq(expr, _)
+            | ArithPredicate::ExprNeq(expr, _)
             | ArithPredicate::ExprInRange(expr, _, _) => compile_expression(expr, num_inputs)?,
             ArithPredicate::ExprCompare(expr_a, _, _) => compile_expression(expr_a, num_inputs)?,
         };
@@ -1367,8 +1384,8 @@ impl Air for ArithmeticPredicateAir {
                                 let threshold = row[threshold_col];
                                 diff - (threshold - result_a)
                             }
-                            ArithPredicate::ExprEq(_, _) => {
-                                // diff = result - threshold (must be zero)
+                            ArithPredicate::ExprEq(_, _) | ArithPredicate::ExprNeq(_, _) => {
+                                // diff = result - threshold (must be zero for Eq, non-zero for Neq)
                                 let threshold = row[threshold_col];
                                 diff - (result_a - threshold)
                             }
@@ -1386,28 +1403,37 @@ impl Air for ArithmeticPredicateAir {
                                     CompareOp::Lte => diff - (result_b - result_a),
                                     CompareOp::Gt => diff - (result_a - result_b - BabyBear::ONE),
                                     CompareOp::Lt => diff - (result_b - result_a - BabyBear::ONE),
-                                    CompareOp::Eq => diff - (result_a - result_b),
+                                    CompareOp::Eq | CompareOp::Neq => diff - (result_a - result_b),
                                 }
                             }
                         }
                     })
                 },
             },
-            // Constraint 6: Bit decomposition is correct (sum(bit_i * 2^i) = diff).
+            // Constraint 6: Bit decomposition or inverse check.
             Constraint {
                 name: "bit_decomposition_correct".to_string(),
                 eval: {
                     let pred = predicate.clone();
                     let dc = diff_col;
                     let dbs = diff_bits_start;
+                    let neq_inv_col = layout.neq_inverse_col;
                     Box::new(move |row, _, _| {
                         // For ExprEq, diff must be zero (no bit decomp needed).
                         if matches!(&pred, ArithPredicate::ExprEq(_, _)) {
-                            // Just enforce diff == 0 directly.
                             return row[dc];
                         }
                         if matches!(&pred, ArithPredicate::ExprCompare(_, _, CompareOp::Eq)) {
                             return row[dc];
+                        }
+                        // For ExprNeq / CompareNeq: diff * inverse == 1.
+                        if matches!(&pred, ArithPredicate::ExprNeq(_, _)) {
+                            let neq_inverse = row[neq_inv_col];
+                            return row[dc] * neq_inverse - BabyBear::ONE;
+                        }
+                        if matches!(&pred, ArithPredicate::ExprCompare(_, _, CompareOp::Neq)) {
+                            let neq_inverse = row[neq_inv_col];
+                            return row[dc] * neq_inverse - BabyBear::ONE;
                         }
 
                         let diff = row[dc];
@@ -1423,16 +1449,23 @@ impl Air for ArithmeticPredicateAir {
                 },
             },
             // Constraint 7: All bits are binary (0 or 1).
+            // Skipped for EQ (diff must be zero) and NEQ (uses inverse).
             Constraint {
                 name: "bits_binary".to_string(),
                 eval: {
                     let pred = predicate.clone();
                     let dbs = diff_bits_start;
                     Box::new(move |row, _, _| {
-                        if matches!(&pred, ArithPredicate::ExprEq(_, _)) {
+                        if matches!(
+                            &pred,
+                            ArithPredicate::ExprEq(_, _) | ArithPredicate::ExprNeq(_, _)
+                        ) {
                             return BabyBear::ZERO;
                         }
-                        if matches!(&pred, ArithPredicate::ExprCompare(_, _, CompareOp::Eq)) {
+                        if matches!(
+                            &pred,
+                            ArithPredicate::ExprCompare(_, _, CompareOp::Eq | CompareOp::Neq)
+                        ) {
                             return BabyBear::ZERO;
                         }
                         let mut result = BabyBear::ZERO;
@@ -1445,16 +1478,23 @@ impl Air for ArithmeticPredicateAir {
                 },
             },
             // Constraint 8: High bit is 0 (diff < 2^30 < p/2, proving non-negative).
+            // Skipped for EQ and NEQ.
             Constraint {
                 name: "high_bit_zero".to_string(),
                 eval: {
                     let pred = predicate.clone();
                     let dbs = diff_bits_start;
                     Box::new(move |row, _, _| {
-                        if matches!(&pred, ArithPredicate::ExprEq(_, _)) {
+                        if matches!(
+                            &pred,
+                            ArithPredicate::ExprEq(_, _) | ArithPredicate::ExprNeq(_, _)
+                        ) {
                             return BabyBear::ZERO;
                         }
-                        if matches!(&pred, ArithPredicate::ExprCompare(_, _, CompareOp::Eq)) {
+                        if matches!(
+                            &pred,
+                            ArithPredicate::ExprCompare(_, _, CompareOp::Eq | CompareOp::Neq)
+                        ) {
                             return BabyBear::ZERO;
                         }
                         row[dbs + PREDICATE_DIFF_BITS - 1]
@@ -1519,6 +1559,9 @@ impl Air for ArithmeticPredicateAir {
             ArithPredicate::ExprEq(_, v) => {
                 (*v, result_a - *v) // Should be zero.
             }
+            ArithPredicate::ExprNeq(_, v) => {
+                (*v, result_a - *v) // Must be non-zero.
+            }
             ArithPredicate::ExprInRange(_, low, _high) => {
                 // Prove lower bound (GTE low).
                 (*low, result_a - *low)
@@ -1533,6 +1576,7 @@ impl Air for ArithmeticPredicateAir {
                     CompareOp::Gt => result_a - result_b - BabyBear::ONE,
                     CompareOp::Lt => result_b - result_a - BabyBear::ONE,
                     CompareOp::Eq => result_a - result_b,
+                    CompareOp::Neq => result_a - result_b,
                 };
                 // For ExprCompare, threshold public input is zero (not used for comparison).
                 (BabyBear::ZERO, diff)
@@ -1543,14 +1587,25 @@ impl Air for ArithmeticPredicateAir {
         row[layout.diff_col] = diff;
         row[layout.fact_commitment_col] = self.witness.fact_commitment;
 
-        // Bit decomposition of diff (unless equality check).
+        // Determine if this is an equality or inequality check.
         let is_eq = matches!(&self.witness.predicate, ArithPredicate::ExprEq(_, _))
             || matches!(
                 &self.witness.predicate,
                 ArithPredicate::ExprCompare(_, _, CompareOp::Eq)
             );
+        let is_neq = matches!(&self.witness.predicate, ArithPredicate::ExprNeq(_, _))
+            || matches!(
+                &self.witness.predicate,
+                ArithPredicate::ExprCompare(_, _, CompareOp::Neq)
+            );
 
-        if !is_eq {
+        if is_neq {
+            // For NEQ: witness the inverse of diff. diff * inv == 1 proves diff != 0.
+            if let Some(inv) = diff.inverse() {
+                row[layout.neq_inverse_col] = inv;
+            }
+            // No bit decomposition needed for NEQ.
+        } else if !is_eq {
             let diff_val = diff.as_u32();
             for i in 0..PREDICATE_DIFF_BITS {
                 let bit = (diff_val >> i) & 1;
@@ -1595,6 +1650,9 @@ pub enum DiffKind {
     ThresholdMinusResult,
     /// diff = result - threshold, must be zero (ExprEq)
     Equality,
+    /// diff = result - threshold, must be non-zero (ExprNeq)
+    /// Proved via inverse witness: diff * inv == 1.
+    Inequality,
     /// diff = result_a - result_b (ExprCompare GTE)
     CompareGte,
     /// diff = result_b - result_a (ExprCompare LTE)
@@ -1605,6 +1663,9 @@ pub enum DiffKind {
     CompareLt,
     /// diff = result_a - result_b, must be zero (ExprCompare EQ)
     CompareEq,
+    /// diff = result_a - result_b, must be non-zero (ExprCompare NEQ)
+    /// Proved via inverse witness: diff * inv == 1.
+    CompareNeq,
 }
 
 /// StarkAir wrapper for arithmetic predicates.
@@ -1898,7 +1959,9 @@ impl StarkAir for ArithmeticPredicateStarkAir {
         let c5 = match &self.diff_kind {
             DiffKind::ResultMinusThreshold => local[diff_col] - (result_a - local[threshold_col]),
             DiffKind::ThresholdMinusResult => local[diff_col] - (local[threshold_col] - result_a),
-            DiffKind::Equality => local[diff_col] - (result_a - local[threshold_col]),
+            DiffKind::Equality | DiffKind::Inequality => {
+                local[diff_col] - (result_a - local[threshold_col])
+            }
             DiffKind::CompareGte => {
                 let result_b = local[layout.slots_b_start + self.result_slot_b.unwrap_or(0)];
                 local[diff_col] - (result_a - result_b)
@@ -1915,7 +1978,7 @@ impl StarkAir for ArithmeticPredicateStarkAir {
                 let result_b = local[layout.slots_b_start + self.result_slot_b.unwrap_or(0)];
                 local[diff_col] - (result_b - result_a - BabyBear::ONE)
             }
-            DiffKind::CompareEq => {
+            DiffKind::CompareEq | DiffKind::CompareNeq => {
                 let result_b = local[layout.slots_b_start + self.result_slot_b.unwrap_or(0)];
                 local[diff_col] - (result_a - result_b)
             }
@@ -1923,11 +1986,16 @@ impl StarkAir for ArithmeticPredicateStarkAir {
         result = result + alpha_pow * c5;
         alpha_pow = alpha_pow * alpha;
 
-        // Constraint 6: Bit decomposition is correct (sum(bit_i * 2^i) = diff).
+        // Constraint 6: Bit decomposition or inverse check.
         let is_eq = matches!(self.diff_kind, DiffKind::Equality | DiffKind::CompareEq);
+        let is_neq = matches!(self.diff_kind, DiffKind::Inequality | DiffKind::CompareNeq);
         let c6 = if is_eq {
             // For equality predicates, diff must be zero directly.
             local[diff_col]
+        } else if is_neq {
+            // For inequality predicates, diff * inverse == 1 (proves diff != 0).
+            let neq_inverse = local[layout.neq_inverse_col];
+            local[diff_col] * neq_inverse - BabyBear::ONE
         } else {
             let mut recomposed = BabyBear::ZERO;
             let mut power_of_two = BabyBear::ONE;
@@ -1942,7 +2010,8 @@ impl StarkAir for ArithmeticPredicateStarkAir {
         alpha_pow = alpha_pow * alpha;
 
         // Constraint 7: All diff bits are binary (0 or 1).
-        let c7 = if is_eq {
+        // Skipped for EQ (diff must be zero) and NEQ (uses inverse instead of bit decomp).
+        let c7 = if is_eq || is_neq {
             BabyBear::ZERO
         } else {
             let mut bits_error = BabyBear::ZERO;
@@ -1956,7 +2025,8 @@ impl StarkAir for ArithmeticPredicateStarkAir {
         alpha_pow = alpha_pow * alpha;
 
         // Constraint 8: High bit is zero (proves diff is non-negative, i.e., diff < 2^(BITS-1)).
-        let c8 = if is_eq {
+        // Skipped for EQ and NEQ.
+        let c8 = if is_eq || is_neq {
             BabyBear::ZERO
         } else {
             local[diff_bits_start + PREDICATE_DIFF_BITS - 1]
@@ -1981,6 +2051,7 @@ fn diff_kind_from_predicate(predicate: &ArithPredicate) -> DiffKind {
         ArithPredicate::ExprGte(_, _) => DiffKind::ResultMinusThreshold,
         ArithPredicate::ExprLte(_, _) => DiffKind::ThresholdMinusResult,
         ArithPredicate::ExprEq(_, _) => DiffKind::Equality,
+        ArithPredicate::ExprNeq(_, _) => DiffKind::Inequality,
         ArithPredicate::ExprInRange(_, _, _) => DiffKind::ResultMinusThreshold,
         ArithPredicate::ExprCompare(_, _, op) => match op {
             CompareOp::Gte => DiffKind::CompareGte,
@@ -1988,6 +2059,7 @@ fn diff_kind_from_predicate(predicate: &ArithPredicate) -> DiffKind {
             CompareOp::Gt => DiffKind::CompareGt,
             CompareOp::Lt => DiffKind::CompareLt,
             CompareOp::Eq => DiffKind::CompareEq,
+            CompareOp::Neq => DiffKind::CompareNeq,
         },
     }
 }
@@ -2674,6 +2746,157 @@ mod tests {
             result.is_valid(),
             "500/8 >= 50 should pass: {:?}",
             result.violations()
+        );
+    }
+
+    // =========================================================================
+    // ExprNeq tests (inequality predicate)
+    // =========================================================================
+
+    #[test]
+    fn test_expr_neq_passes() {
+        // Prove: a != 42 where a = 100
+        let inputs = vec![BabyBear::new(100)];
+        let commitment = test_commitment(&inputs);
+        let expr = ArithExpr::Var(0);
+
+        let witness = ArithmeticPredicateWitness {
+            inputs,
+            predicate: ArithPredicate::ExprNeq(expr, BabyBear::new(42)),
+            fact_commitment: commitment,
+        };
+
+        assert!(witness.is_satisfiable());
+        let air = ArithmeticPredicateAir::new(witness).unwrap();
+        let result = ConstraintProver::verify(&air);
+        assert!(
+            result.is_valid(),
+            "100 != 42 should pass: {:?}",
+            result.violations()
+        );
+    }
+
+    #[test]
+    fn test_expr_neq_fails_when_equal() {
+        // Prove: a != 42 where a = 42 (should fail)
+        let inputs = vec![BabyBear::new(42)];
+        let commitment = test_commitment(&inputs);
+        let expr = ArithExpr::Var(0);
+
+        let witness = ArithmeticPredicateWitness {
+            inputs,
+            predicate: ArithPredicate::ExprNeq(expr, BabyBear::new(42)),
+            fact_commitment: commitment,
+        };
+
+        assert!(
+            !witness.is_satisfiable(),
+            "42 != 42 should not be satisfiable"
+        );
+    }
+
+    #[test]
+    fn test_expr_neq_expression_passes() {
+        // Prove: (a + b) != 100 where a=30, b=40 (sum=70 != 100)
+        let inputs = vec![BabyBear::new(30), BabyBear::new(40)];
+        let commitment = test_commitment(&inputs);
+        let expr = ArithExpr::Add(Box::new(ArithExpr::Var(0)), Box::new(ArithExpr::Var(1)));
+
+        let witness = ArithmeticPredicateWitness {
+            inputs,
+            predicate: ArithPredicate::ExprNeq(expr, BabyBear::new(100)),
+            fact_commitment: commitment,
+        };
+
+        assert!(witness.is_satisfiable());
+        let air = ArithmeticPredicateAir::new(witness).unwrap();
+        let result = ConstraintProver::verify(&air);
+        assert!(
+            result.is_valid(),
+            "(30 + 40) != 100 should pass: {:?}",
+            result.violations()
+        );
+    }
+
+    #[test]
+    fn test_prove_verify_expr_neq() {
+        // Full prove/verify: a != 0 where a = 7
+        let inputs = vec![BabyBear::new(7)];
+        let commitment = test_commitment(&inputs);
+        let expr = ArithExpr::Var(0);
+
+        let witness = ArithmeticPredicateWitness {
+            inputs,
+            predicate: ArithPredicate::ExprNeq(expr, BabyBear::new(0)),
+            fact_commitment: commitment,
+        };
+
+        let proof = prove_arithmetic_predicate(witness).expect("should produce proof");
+        assert!(verify_arithmetic_predicate(
+            &proof,
+            BabyBear::new(0),
+            commitment
+        ));
+    }
+
+    #[test]
+    fn test_prove_neq_returns_none_when_equal() {
+        // Prove: a != 7 where a = 7 (should fail)
+        let inputs = vec![BabyBear::new(7)];
+        let commitment = test_commitment(&inputs);
+        let expr = ArithExpr::Var(0);
+
+        let witness = ArithmeticPredicateWitness {
+            inputs,
+            predicate: ArithPredicate::ExprNeq(expr, BabyBear::new(7)),
+            fact_commitment: commitment,
+        };
+
+        let proof = prove_arithmetic_predicate(witness);
+        assert!(proof.is_none(), "Cannot prove 7 != 7");
+    }
+
+    #[test]
+    fn test_expr_compare_neq_passes() {
+        // Prove: a != b where a=10, b=20
+        let inputs = vec![BabyBear::new(10), BabyBear::new(20)];
+        let commitment = test_commitment(&inputs);
+        let expr_a = ArithExpr::Var(0);
+        let expr_b = ArithExpr::Var(1);
+
+        let witness = ArithmeticPredicateWitness {
+            inputs,
+            predicate: ArithPredicate::ExprCompare(expr_a, expr_b, CompareOp::Neq),
+            fact_commitment: commitment,
+        };
+
+        assert!(witness.is_satisfiable());
+        let air = ArithmeticPredicateAir::new(witness).unwrap();
+        let result = ConstraintProver::verify(&air);
+        assert!(
+            result.is_valid(),
+            "10 != 20 (ExprCompare) should pass: {:?}",
+            result.violations()
+        );
+    }
+
+    #[test]
+    fn test_expr_compare_neq_fails_when_equal() {
+        // Prove: a != b where a=42, b=42 (should fail)
+        let inputs = vec![BabyBear::new(42), BabyBear::new(42)];
+        let commitment = test_commitment(&inputs);
+        let expr_a = ArithExpr::Var(0);
+        let expr_b = ArithExpr::Var(1);
+
+        let witness = ArithmeticPredicateWitness {
+            inputs,
+            predicate: ArithPredicate::ExprCompare(expr_a, expr_b, CompareOp::Neq),
+            fact_commitment: commitment,
+        };
+
+        assert!(
+            !witness.is_satisfiable(),
+            "42 != 42 (ExprCompare) should not be satisfiable"
         );
     }
 }

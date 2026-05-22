@@ -377,6 +377,28 @@ fn assemble_public_inputs(witness: &SchnorrVerificationWitness) -> Vec<BabyBear>
 }
 
 // ============================================================================
+// Phase Layout Constants
+// ============================================================================
+
+/// Number of rows in phase 0 (computing s*G): one per scalar bit.
+pub const PHASE_0_ROWS: usize = SCALAR_BITS; // 248
+
+/// Number of rows in phase 1 (computing e*pk): one per scalar bit.
+pub const PHASE_1_ROWS: usize = SCALAR_BITS; // 248
+
+/// Number of rows in phase 2 (final combination check).
+pub const PHASE_2_ROWS: usize = 1;
+
+/// First row of phase 1.
+pub const PHASE_1_START: usize = PHASE_0_ROWS; // 248
+
+/// First row of phase 2.
+pub const PHASE_2_START: usize = PHASE_0_ROWS + PHASE_1_ROWS; // 496
+
+/// First row of phase 3 (padding/idle).
+pub const PHASE_3_START: usize = PHASE_2_START + PHASE_2_ROWS; // 497
+
+// ============================================================================
 // Constraint Evaluation
 // ============================================================================
 
@@ -384,6 +406,18 @@ fn assemble_public_inputs(witness: &SchnorrVerificationWitness) -> Vec<BabyBear>
 ///
 /// Returns a vector of constraint evaluations. All should be zero for a valid trace.
 /// This is used by the constraint checker to verify trace correctness.
+///
+/// # Soundness
+///
+/// The phase column is constrained by:
+/// 1. Phase must be in {0, 1, 2, 3} (range constraint).
+/// 2. Phase transitions are monotonically non-decreasing (phase_next >= phase_local).
+/// 3. Phase can only increase by at most 1 per row.
+/// 4. Boundary constraints enforce the exact phase at specific rows via
+///    `evaluate_schnorr_boundary_constraints`.
+///
+/// Together these prevent a malicious prover from skipping phases or setting
+/// all rows to phase=3 to bypass constraint evaluation.
 pub fn evaluate_schnorr_constraints(
     local: &[BabyBear],
     next: &[BabyBear],
@@ -391,21 +425,52 @@ pub fn evaluate_schnorr_constraints(
 ) -> Vec<BabyBear> {
     let mut constraints = Vec::new();
 
-    let phase = local[col::PHASE].as_u32();
-    let op_type = local[col::OP_TYPE].as_u32();
+    let phase = local[col::PHASE];
+    let phase_val = phase.as_u32();
 
-    // Only enforce constraints for active rows (phase 0, 1, or 2)
-    if phase >= 3 {
-        return constraints;
+    // ------------------------------------------------------------------
+    // Phase range constraint: phase * (phase - 1) * (phase - 2) * (phase - 3) == 0
+    // This ensures phase is in {0, 1, 2, 3}.
+    // ------------------------------------------------------------------
+    let p0 = phase;
+    let p1 = phase - BabyBear::ONE;
+    let p2 = phase - BabyBear::new(2);
+    let p3 = phase - BabyBear::new(3);
+    constraints.push(p0 * p1 * p2 * p3);
+
+    // ------------------------------------------------------------------
+    // Phase transition constraint: phase can only stay the same or increase by 1.
+    // Enforced as: (next_phase - phase) * (next_phase - phase - 1) == 0
+    // i.e., delta in {0, 1}.
+    // ------------------------------------------------------------------
+    if next.len() >= SCHNORR_AIR_WIDTH {
+        let next_phase = next[col::PHASE];
+        let delta = next_phase - phase;
+        let delta_minus_one = delta - BabyBear::ONE;
+        constraints.push(delta * delta_minus_one);
     }
 
-    let scalar_bit = local[col::SCALAR_BIT];
+    // ------------------------------------------------------------------
+    // Phase-specific constraints using selectors.
+    // A selector is zero when the row is NOT in that phase, so the constraint
+    // is automatically satisfied; it is nonzero only for rows IN that phase.
+    //
+    // is_phase_0 = (phase-1)*(phase-2)*(phase-3) / (0-1)*(0-2)*(0-3)  [Lagrange basis]
+    // But since we only need "if phase==X then enforce", we can use simpler
+    // indicator products and rely on the range constraint above.
+    //
+    // For efficiency, we use the direct check on phase_val (the range constraint
+    // already proves phase is in {0,1,2,3}).
+    // ------------------------------------------------------------------
 
-    // Constraint: scalar_bit is boolean (0 or 1)
+    let scalar_bit = local[col::SCALAR_BIT];
+    let op_type = local[col::OP_TYPE].as_u32();
+
+    // Constraint: scalar_bit is boolean (0 or 1) — always enforced regardless of phase
     constraints.push(scalar_bit * (scalar_bit - BabyBear::ONE));
 
     // For phases 0 and 1 (scalar multiplication steps):
-    if phase < 2 && op_type == 1 {
+    if phase_val < 2 && op_type == 1 {
         // When scalar_bit = 1, verify the addition step using lambda
         let acc_x = read_bb8(local, col::ACC_X);
         let acc_y = read_bb8(local, col::ACC_Y);
@@ -452,6 +517,61 @@ pub fn evaluate_schnorr_constraints(
             }
         }
     }
+
+    // For phase 3 (padding rows): scalar_bit must be 0, op_type must be 0
+    if phase_val == 3 {
+        constraints.push(scalar_bit);
+        constraints.push(local[col::OP_TYPE]);
+    }
+
+    constraints
+}
+
+/// Evaluate boundary constraints for the Schnorr AIR.
+///
+/// These are "public-input-level" constraints that pin the phase column to
+/// specific values at specific rows, making phase a verifier-controlled quantity.
+///
+/// Returns a vector of constraint violations. All should be zero for a valid trace.
+///
+/// # Constraints enforced:
+///
+/// - Row 0 must have phase = 0 (start of s*G computation).
+/// - Row PHASE_1_START must have phase = 1 (start of e*pk computation).
+/// - Row PHASE_2_START must have phase = 2 (final verification row).
+/// - Row PHASE_3_START must have phase = 3 (padding begins).
+/// - Last row must have phase = 3 (trace ends in padding).
+pub fn evaluate_schnorr_boundary_constraints(
+    trace: &[Vec<BabyBear>],
+    _public_inputs: &[BabyBear],
+) -> Vec<BabyBear> {
+    let mut constraints = Vec::new();
+
+    if trace.is_empty() {
+        return constraints;
+    }
+
+    // Row 0 must have phase = 0
+    constraints.push(trace[0][col::PHASE] - BabyBear::new(0));
+
+    // Row PHASE_1_START must have phase = 1
+    if trace.len() > PHASE_1_START {
+        constraints.push(trace[PHASE_1_START][col::PHASE] - BabyBear::ONE);
+    }
+
+    // Row PHASE_2_START must have phase = 2
+    if trace.len() > PHASE_2_START {
+        constraints.push(trace[PHASE_2_START][col::PHASE] - BabyBear::new(2));
+    }
+
+    // Row PHASE_3_START must have phase = 3
+    if trace.len() > PHASE_3_START {
+        constraints.push(trace[PHASE_3_START][col::PHASE] - BabyBear::new(3));
+    }
+
+    // Last row must have phase = 3
+    let last = trace.len() - 1;
+    constraints.push(trace[last][col::PHASE] - BabyBear::new(3));
 
     constraints
 }
@@ -505,7 +625,15 @@ pub fn verify_schnorr_via_trace(
 
     let (trace, public_inputs) = generate_schnorr_trace(&witness);
 
-    // Verify all constraints are satisfied
+    // Verify boundary constraints (phase pinning)
+    let boundary_violations = evaluate_schnorr_boundary_constraints(&trace, &public_inputs);
+    for c in &boundary_violations {
+        if *c != BabyBear::ZERO {
+            return false;
+        }
+    }
+
+    // Verify all transition/row constraints are satisfied
     let mut all_satisfied = true;
     for i in 0..trace.len() - 1 {
         let constraints = evaluate_schnorr_constraints(&trace[i], &trace[i + 1], &public_inputs);
@@ -516,6 +644,15 @@ pub fn verify_schnorr_via_trace(
             }
         }
         if !all_satisfied {
+            break;
+        }
+    }
+    // Also check the last row (with empty next)
+    let last_constraints =
+        evaluate_schnorr_constraints(&trace[trace.len() - 1], &[], &public_inputs);
+    for c in &last_constraints {
+        if *c != BabyBear::ZERO {
+            all_satisfied = false;
             break;
         }
     }
@@ -558,6 +695,41 @@ fn recompute_challenge(r: &CurvePoint, pk: &CurvePoint, message_hash: &[BabyBear
     let mut result = [0u32; 8];
     result[0] = reduced as u32;
     result
+}
+
+/// Check whether an arbitrary trace satisfies all Schnorr AIR constraints.
+///
+/// This function checks both boundary constraints and per-row transition constraints.
+/// It does NOT require the trace to correspond to a valid signature — it only checks
+/// that the algebraic constraints are satisfied. This is what the STARK verifier would
+/// check.
+///
+/// Returns true if all constraints evaluate to zero, false otherwise.
+pub fn check_trace_constraints(trace: &[Vec<BabyBear>], public_inputs: &[BabyBear]) -> bool {
+    // Check boundary constraints
+    let boundary = evaluate_schnorr_boundary_constraints(trace, public_inputs);
+    for c in &boundary {
+        if *c != BabyBear::ZERO {
+            return false;
+        }
+    }
+
+    // Check per-row transition constraints
+    for i in 0..trace.len() {
+        let next = if i + 1 < trace.len() {
+            &trace[i + 1]
+        } else {
+            &[] as &[BabyBear]
+        };
+        let constraints = evaluate_schnorr_constraints(&trace[i], next, public_inputs);
+        for c in &constraints {
+            if *c != BabyBear::ZERO {
+                return false;
+            }
+        }
+    }
+
+    true
 }
 
 // ============================================================================
@@ -610,7 +782,11 @@ mod tests {
         let idle = row_to_columns(&idle_row());
         let constraints = evaluate_schnorr_constraints(&idle, &idle, &[]);
         // Idle rows (phase=3) should produce no constraint violations
-        assert!(constraints.is_empty());
+        // (phase range constraint, transition constraint, boolean constraint, and
+        // phase-3-specific constraints all evaluate to zero for a valid idle row)
+        for c in &constraints {
+            assert_eq!(*c, BabyBear::ZERO, "idle row produced non-zero constraint");
+        }
     }
 
     #[test]
@@ -662,5 +838,101 @@ mod tests {
             assert_eq!(public_inputs[pi::R_X + i], sig.r.x.0[i]);
             assert_eq!(public_inputs[pi::R_Y + i], sig.r.y.0[i]);
         }
+    }
+
+    // ======================================================================
+    // Soundness tests: verify that the phase constraints prevent forgery.
+    // ======================================================================
+
+    #[test]
+    fn schnorr_all_phase3_trace_rejected() {
+        // Attack scenario: a malicious prover fills the entire trace with phase=3
+        // rows (idle/padding). Before the fix, this would bypass ALL constraints
+        // and the verifier would accept any forged signature.
+        let fake_trace: Vec<Vec<BabyBear>> = (0..TRACE_HEIGHT)
+            .map(|_| row_to_columns(&idle_row()))
+            .collect();
+        let fake_pi = vec![BabyBear::ZERO; pi::TOTAL];
+
+        // The boundary constraints must reject this: row 0 should have phase=0
+        // but the all-phase-3 trace has phase=3 at row 0.
+        assert!(
+            !check_trace_constraints(&fake_trace, &fake_pi),
+            "all-phase-3 trace must be REJECTED by boundary constraints"
+        );
+    }
+
+    #[test]
+    fn schnorr_wrong_phase_sequence_rejected() {
+        // Generate a valid trace, then corrupt the phase sequence.
+        let seed = [0xDDu8; 32];
+        let (sk, pk) = schnorr_keygen(&seed);
+        let message = b"wrong phase test";
+        let sig = schnorr_sign(&sk, &pk, message);
+
+        let msg_blake = blake3::hash(message);
+        let message_hash = BabyBear::encode_hash(msg_blake.as_bytes());
+        let challenge = recompute_challenge(&sig.r, &pk.0, &message_hash);
+
+        let witness = SchnorrVerificationWitness {
+            pk: pk.clone(),
+            sig: sig.clone(),
+            message_hash,
+            challenge,
+        };
+
+        let (mut trace, public_inputs) = generate_schnorr_trace(&witness);
+
+        // Sanity: the unmodified trace should pass
+        assert!(
+            check_trace_constraints(&trace, &public_inputs),
+            "valid trace should pass constraint checks"
+        );
+
+        // Corrupt: set row 10 to phase=2 (skipping ahead from phase 0)
+        trace[10][col::PHASE] = BabyBear::new(2);
+
+        assert!(
+            !check_trace_constraints(&trace, &public_inputs),
+            "trace with phase jumping from 0 to 2 must be REJECTED"
+        );
+    }
+
+    #[test]
+    fn schnorr_valid_signature_verifies() {
+        // End-to-end: a legitimately signed message passes all constraints.
+        let seed = [0xEEu8; 32];
+        let (sk, pk) = schnorr_keygen(&seed);
+        let message = b"valid signature end-to-end test";
+        let sig = schnorr_sign(&sk, &pk, message);
+
+        assert!(
+            verify_schnorr_via_trace(&pk, &sig, message),
+            "a valid Schnorr signature must pass trace verification"
+        );
+    }
+
+    #[test]
+    fn schnorr_invalid_signature_rejected() {
+        // A signature that fails the Schnorr equation must be rejected.
+        let seed = [0xFFu8; 32];
+        let (sk, pk) = schnorr_keygen(&seed);
+        let message = b"signed this message";
+        let sig = schnorr_sign(&sk, &pk, message);
+
+        // Tamper with the signature's s scalar to make it invalid
+        let mut bad_sig = sig.clone();
+        bad_sig.s[0] = bad_sig.s[0].wrapping_add(1);
+
+        assert!(
+            !verify_schnorr_via_trace(&pk, &bad_sig, message),
+            "a tampered Schnorr signature must be REJECTED"
+        );
+
+        // Also test with wrong message
+        assert!(
+            !verify_schnorr_via_trace(&pk, &sig, b"different message"),
+            "signature verified against wrong message must be REJECTED"
+        );
     }
 }
