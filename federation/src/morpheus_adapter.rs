@@ -28,7 +28,7 @@ use std::collections::{BTreeSet, VecDeque};
 use pyana_morpheus::test_harness::TestTransaction;
 use pyana_morpheus::{BlockData, BlockKey, Identity, KeyBook, Message, MorpheusProcess, ViewNum};
 
-use crate::consensus::ConsensusConfig;
+use crate::node::ConsensusConfig;
 use crate::types::RevocationEvent;
 
 /// Configuration for the Morpheus adapter.

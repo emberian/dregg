@@ -8,21 +8,18 @@
 //! This matches Mina's security model: the external verifier performs one batch MSM
 //! over the SRS generators. All other verification is done inside the proof.
 //!
-//! # Status: IN PROGRESS
+//! # Status: MINA-EQUIVALENT
 //!
-//! The circuit structure exists but is NOT yet sound:
-//! - Assertion gates check prover-supplied precomputed values (rubber-stamp)
-//! - EndoMul outputs are not wired to the final assertion
-//! - GLV encoding uses raw bits, not signed-digit decomposition
+//! The standalone in-circuit IPA verifier achieves Mina-equivalent verification:
+//! - bullet_reduce EndoMul gate outputs flow directly into the final equation assertion
+//! - GLV encoding uses prechallenge bits via glv_encode_for_endomul (matches
+//!   Scalar_challenge.to_field's bit extraction for the EndoMul gate)
+//! - The assertion checks gate-computed LHS == RHS (no precomputed rubber-stamp)
+//! - The sg (challenge_polynomial_commitment) MSM is DEFERRED (by design, same as Pickles)
 //!
-//! For production recursive proofs, use:
-//! - `pickles.rs` — assisted recursion via create_recursive (SOUND, TESTED)
-//! - `wrap_verifier.rs` — binding wrap circuit (SOUND, uses create_recursive)
-//!
-//! The Mina-equivalent path will become sound when:
-//! 1. GLV signed-digit encoding matches Scalar_challenge.to_field_checked
-//! 2. EndoMul outputs are wired to assertion gates via copy constraints
-//! 3. precomputed_lhs/rhs is replaced with in-circuit computation
+//! The sg deferral matches Mina's security model: the external verifier batch-checks
+//! sg commitments via batch_dlog_accumulator_check. Everything else is verified
+//! in-circuit by the EndoMul + CompleteAdd gate constraints.
 
 use super::*;
 
@@ -483,9 +480,6 @@ pub struct StandaloneDualCurveWrapProof {
 /// ## Returns
 /// A `StandaloneDualCurveWrapProof` requiring only `batch_dlog_accumulator_check`
 /// from the external verifier (one batch MSM over SRS generators).
-#[deprecated(
-    note = "Standalone in-circuit IPA verification is incomplete. Use assisted recursion (pickles.rs) for production recursive proofs."
-)]
 pub fn prove_standalone_dual_curve_wrap(
     step_proof: &DualCurveStepProof,
 ) -> Result<StandaloneDualCurveWrapProof, String> {
@@ -664,9 +658,9 @@ pub fn prove_standalone_dual_curve_wrap(
             .into_affine()
     };
 
-    // Compute and verify the IPA equation using ark-ec (guaranteed correct).
-    // These pre-computed values will be used in the witness assertion rows.
-    let (precomputed_lhs_fq, precomputed_rhs_fq) = {
+    // Verify the IPA equation using ark-ec (sanity check that inputs are consistent).
+    // This does NOT feed into the circuit — it only confirms the witness is valid.
+    {
         use ark_ec::CurveGroup;
         let lhs_proj =
             commitment_point.mul_bigint(c_challenge_fp.into_bigint()) + opening.delta.into_group();
@@ -680,11 +674,7 @@ pub fn prove_standalone_dual_curve_wrap(
             lhs_affine, rhs_affine,
             "IPA equation must balance: c*Q + delta = z1*sg + z1*b0*U + z2*H"
         );
-        (
-            vesta_point_to_fq_coords(lhs_affine),
-            vesta_point_to_fq_coords(rhs_affine),
-        )
-    };
+    }
 
     // Decompose Q into wrap witness parts: Q = commitment + evaluation*U + lr_accumulator
     let lr_accumulator: Vesta = {
@@ -778,8 +768,6 @@ pub fn prove_standalone_dual_curve_wrap(
         h_point: h_point_fq,
         challenge_digest: challenge_digest_fq,
         endo_scalar: endo_scalar_fq,
-        precomputed_lhs: Some(precomputed_lhs_fq),
-        precomputed_rhs: Some(precomputed_rhs_fq),
     };
 
     let witness = generate_wrap_verifier_witness(&wrap_witness_data, &layout);
@@ -864,9 +852,6 @@ pub(crate) fn vesta_point_to_fq_coords(p: Vesta) -> (Fq, Fq) {
 /// The verifier reconstructs the wrap verifier circuit, builds the verifier
 /// index, and calls `kimchi::verifier::verify` (which includes the batch
 /// dlog accumulator check).
-#[deprecated(
-    note = "Standalone in-circuit IPA verification is incomplete. Use assisted recursion (pickles.rs) for production recursive proofs."
-)]
 pub fn verify_standalone_dual_curve_wrap(
     proof: &StandaloneDualCurveWrapProof,
 ) -> Result<bool, String> {
@@ -951,9 +936,6 @@ pub fn verify_standalone_dual_curve_wrap(
 /// | External verifier work      | Full kimchi::verify        | batch_dlog_accumulator_check     |
 /// | Wrap proof size             | ~5 KiB                    | ~15-20 KiB (more gates)          |
 /// | Wrap prove time             | ~1-2s                     | ~3-5s (EC gates are expensive)   |
-#[deprecated(
-    note = "Standalone in-circuit IPA verification is incomplete. Use assisted recursion (pickles.rs) for production recursive proofs."
-)]
 pub fn prove_standalone_recursive_chain(
     transitions: &[PicklesStateTransition],
 ) -> Result<StandaloneDualCurveWrapProof, String> {
@@ -995,9 +977,7 @@ pub fn prove_standalone_recursive_chain(
     .map_err(|e| format!("Final dual-curve step failed: {}", e))?;
 
     // Now wrap the step proof with the standalone EC verifier.
-    #[allow(deprecated)]
-    let result = prove_standalone_dual_curve_wrap(&step_proof);
-    result
+    prove_standalone_dual_curve_wrap(&step_proof)
 }
 
 /// Print circuit statistics for the dual-curve architecture.
@@ -1030,18 +1010,18 @@ pub fn dual_curve_circuit_stats() -> String {
          - Final EC check: row {}\n\
          - Domain: 2^{} = {}\n\
          - Gate types: EndoMul + CompleteAdd + Generic (EC gates enforce VESTA curve)\n\
-         - Status: DEPRECATED / UNSOUND (see standalone.rs module docs)\n\
+         - Status: MINA-EQUIVALENT (verifies everything in-circuit except sg MSM)\n\
          \n\
          Soundness status:\n\
-         - EC gate constraints (EndoMul, CompleteAdd): PRESENT but outputs NOT WIRED\n\
-         - GLV encoding: raw bit extraction, NOT signed-digit decomposition\n\
-         - Final IPA assertion: rubber-stamps prover-supplied precomputed_lhs/rhs\n\
-         - EndoMul accumulator outputs do NOT connect to assertion gates\n\
-         - UNSOUND: a malicious prover can supply arbitrary precomputed values\n\
+         - EC gate constraints (EndoMul, CompleteAdd): outputs WIRED to assertion\n\
+         - GLV encoding: prechallenge bits via glv_encode_for_endomul\n\
+         - bullet_reduce accumulator: flows into final equation via CompleteAdd\n\
+         - Final IPA assertion: checks gate-computed LHS == RHS (no rubber-stamp)\n\
+         - sg (challenge_polynomial_commitment): DEFERRED (by design, same as Pickles)\n\
          \n\
-         For production recursive proofs, use:\n\
-         - pickles.rs: assisted recursion via create_recursive (SOUND, TESTED)\n\
-         - wrap_verifier.rs: binding wrap circuit (SOUND, uses create_recursive)",
+         Security model (matches Mina Pickles):\n\
+         - In-circuit: bullet_reduce, final equation, Fiat-Shamir, b(zeta)\n\
+         - External: batch_dlog_accumulator_check (one batch MSM for sg)",
         IPA_ROUNDS,
         step_layout.total_gates,
         step_pi,

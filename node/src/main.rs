@@ -37,6 +37,11 @@ enum Command {
         #[arg(long, default_value = "8420")]
         port: u16,
 
+        /// Bind address for the HTTP API. Defaults to 127.0.0.1 (localhost only).
+        /// Use --bind 0.0.0.0 to expose to the network.
+        #[arg(long, default_value = "127.0.0.1")]
+        bind: String,
+
         /// Federation peer addresses (host:port), comma-separated.
         #[arg(long, value_delimiter = ',')]
         federation_peers: Vec<String>,
@@ -188,6 +193,7 @@ async fn main() {
     match cli.command {
         Command::Run {
             port,
+            bind,
             federation_peers,
             data_dir,
             morpheus,
@@ -199,6 +205,7 @@ async fn main() {
         } => {
             run_node(
                 port,
+                &bind,
                 federation_peers,
                 &data_dir,
                 morpheus,
@@ -253,6 +260,7 @@ async fn main() {
 /// Run the node: start HTTP API server and federation sync.
 async fn run_node(
     port: u16,
+    bind: &str,
     peers: Vec<String>,
     data_dir: &str,
     morpheus: bool,
@@ -314,7 +322,20 @@ async fn run_node(
     // Build and serve the HTTP API.
     let app = api::router(node_state.clone(), enable_faucet)
         .into_make_service_with_connect_info::<SocketAddr>();
-    let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), port);
+    let bind_addr: std::net::IpAddr = bind.parse().unwrap_or_else(|_| {
+        error!("invalid --bind address: {bind}, falling back to 127.0.0.1");
+        Ipv4Addr::LOCALHOST.into()
+    });
+    let addr = SocketAddr::new(bind_addr, port);
+
+    if bind_addr == std::net::IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+        || bind_addr == std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED)
+    {
+        tracing::warn!(
+            %addr,
+            "binding to all interfaces — faucet, wallet, bridge endpoints are exposed to the network"
+        );
+    }
 
     info!(%addr, "HTTP API listening");
 
@@ -353,6 +374,14 @@ fn init_node(data_dir: &str) {
     // Write the secret key to the data dir (in production, use a keyring).
     let key_path = data_path.join("node.key");
     std::fs::write(&key_path, key_bytes).expect("failed to write node key");
+
+    // Restrict file permissions to owner read/write only (0600).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))
+            .expect("failed to set node.key permissions");
+    }
 
     // Derive public key for display.
     let signing_key = ed25519_dalek::SigningKey::from_bytes(&key_bytes);

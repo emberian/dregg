@@ -54,14 +54,10 @@
 //!
 //! - [`types`]: Core data types (AttestedRoot, RevocationProof, messages, crypto)
 //! - [`revocation`]: Revocation Merkle tree + non-membership proofs
-//! - [`consensus`]: Simplified Morpheus-shaped consensus protocol (**deprecated** — use `morpheus_adapter` instead)
 //! - [`network`]: Channel-based networking between nodes
-//! - [`node`]: Federation node implementation
+//! - [`node`]: Federation node implementation (includes BFT consensus simulation)
 
 pub mod checkpoint;
-/// Deprecated simplified consensus. Prefer `morpheus_adapter` (feature = "morpheus").
-/// See `consensus.rs` module docs for the full migration plan.
-pub mod consensus;
 pub mod epoch;
 #[cfg(feature = "morpheus")]
 pub mod morpheus_adapter;
@@ -78,11 +74,10 @@ pub use checkpoint::{
     Checkpoint, CheckpointError, DEFAULT_CHECKPOINT_INTERVAL, create_checkpoint,
     finalize_checkpoint, is_checkpoint_height, verify_checkpoint,
 };
-pub use consensus::{
-    ConsensusConfig, ConsensusError, ConsensusOrchestrator, ConsensusState, PendingStateRoots,
-    ReconfigurationProposal, ReconfigurationVotes,
+pub use node::{
+    ConsensusConfig, ConsensusError, ConsensusOrchestrator, ConsensusState, Federation,
+    FederationNode, PendingStateRoots, ReconfigurationProposal, ReconfigurationVotes,
 };
-pub use node::{Federation, FederationNode};
 pub use revocation::{RevocationTree, RevocationVerification, RevocationVerifier};
 pub use threshold::{
     FederationCommittee, MemberSecret, ThresholdError, ThresholdQC, generate_test_committee,

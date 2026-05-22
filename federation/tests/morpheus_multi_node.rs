@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 
-use pyana_federation::consensus::ConsensusConfig;
+use pyana_federation::ConsensusConfig;
 use pyana_federation::morpheus_adapter::{MorpheusAdapter, MorpheusAdapterConfig};
 use pyana_federation::types::RevocationEvent;
 use pyana_federation::types::Signature;

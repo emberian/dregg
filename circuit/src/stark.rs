@@ -1756,7 +1756,7 @@ pub fn generate_merkle_trace(
 pub fn proof_to_bytes(proof: &StarkProof) -> Vec<u8> {
     let mut b = Vec::new();
     b.extend_from_slice(b"PYNA");
-    b.push(1);
+    b.push(2); // Version 2: ExtElem constraint quotient
     b.extend_from_slice(&proof.trace_commitment);
     b.extend_from_slice(&proof.constraint_commitment);
     b.extend_from_slice(&(proof.fri_commitments.len() as u32).to_le_bytes());
@@ -1793,11 +1793,17 @@ pub fn proof_to_bytes(proof: &StarkProof) -> Vec<u8> {
             b.extend_from_slice(h);
         }
         b.extend_from_slice(&qp.constraint_value.to_le_bytes());
+        for &v in &qp.constraint_ext {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
         b.extend_from_slice(&(qp.constraint_path.len() as u32).to_le_bytes());
         for h in &qp.constraint_path {
             b.extend_from_slice(h);
         }
         b.extend_from_slice(&qp.constraint_sibling_value.to_le_bytes());
+        for &v in &qp.constraint_sibling_ext {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
         b.extend_from_slice(&(qp.constraint_sibling_pos as u32).to_le_bytes());
         b.extend_from_slice(&(qp.constraint_sibling_path.len() as u32).to_le_bytes());
         for h in &qp.constraint_sibling_path {
@@ -1878,9 +1884,10 @@ pub fn proof_from_bytes(bytes: &[u8]) -> Result<StarkProof, String> {
         *p += 32;
         Ok(h)
     };
-    if bytes.len() < 5 || &bytes[0..4] != b"PYNA" || bytes[4] != 1 {
+    if bytes.len() < 5 || &bytes[0..4] != b"PYNA" || (bytes[4] != 1 && bytes[4] != 2) {
         return Err("invalid proof header".to_string());
     }
+    let version = bytes[4];
     pos = 5;
     let trace_commitment = rh(&mut pos, bytes)?;
     let constraint_commitment = rh(&mut pos, bytes)?;
@@ -1938,12 +1945,32 @@ pub fn proof_from_bytes(bytes: &[u8]) -> Result<StarkProof, String> {
             next_trace_path.push(rh(&mut pos, bytes)?);
         }
         let constraint_value = ru32(&mut pos, bytes)?;
+        let constraint_ext = if version >= 2 {
+            [
+                ru32(&mut pos, bytes)?,
+                ru32(&mut pos, bytes)?,
+                ru32(&mut pos, bytes)?,
+                ru32(&mut pos, bytes)?,
+            ]
+        } else {
+            [0; 4]
+        };
         let cpc = ru32(&mut pos, bytes)? as usize;
         let mut constraint_path = Vec::new();
         for _ in 0..cpc {
             constraint_path.push(rh(&mut pos, bytes)?);
         }
         let constraint_sibling_value = ru32(&mut pos, bytes)?;
+        let constraint_sibling_ext = if version >= 2 {
+            [
+                ru32(&mut pos, bytes)?,
+                ru32(&mut pos, bytes)?,
+                ru32(&mut pos, bytes)?,
+                ru32(&mut pos, bytes)?,
+            ]
+        } else {
+            [0; 4]
+        };
         let constraint_sibling_pos = ru32(&mut pos, bytes)? as usize;
         let cspc = ru32(&mut pos, bytes)? as usize;
         let mut constraint_sibling_path = Vec::new();
@@ -1983,10 +2010,10 @@ pub fn proof_from_bytes(bytes: &[u8]) -> Result<StarkProof, String> {
             next_trace_values,
             next_trace_path,
             constraint_value,
-            constraint_ext: [0; 4],
+            constraint_ext,
             constraint_path,
             constraint_sibling_value,
-            constraint_sibling_ext: [0; 4],
+            constraint_sibling_ext,
             constraint_sibling_pos,
             constraint_sibling_path,
             fri_layers,
@@ -3156,7 +3183,7 @@ mod tests {
     fn deserialization_rejects_invalid_header() {
         assert!(proof_from_bytes(b"").is_err());
         assert!(proof_from_bytes(b"PYNX\x01").is_err()); // wrong magic
-        assert!(proof_from_bytes(b"PYNA\x02").is_err()); // wrong version
+        assert!(proof_from_bytes(b"PYNA\x03").is_err()); // wrong version
         assert!(proof_from_bytes(b"PYN").is_err()); // too short
     }
 

@@ -531,12 +531,14 @@ pub(crate) fn glv_encode_for_endomul(prechallenge: Fq, _endo_scalar: Fq) -> Vec<
 
 /// Compute the effective scalar from a 128-bit prechallenge.
 ///
-/// The canonical `ScalarChallenge::to_field` operates in Fp (Vesta's scalar field)
-/// with the Fp endomorphism coefficient. Since the wrap circuit works in Fq, we
-/// compute `to_field` in Fp (where the protocol defines it) and then map the
-/// result to Fq via byte representation.
+/// Matches `ScalarChallenge::to_field` by computing in Fp (where the IPA protocol
+/// defines challenges) and mapping the result to Fq. This gives the correct
+/// challenge value for the IPA equation, which is what matters for soundness.
 ///
-/// This ensures consistency with the Kimchi verifier's challenge derivation.
+/// In the wrap circuit, EndoMul gates use a different endo coefficient
+/// (vesta_endos().0 in Fq) but their outputs are not used for the equation
+/// assertion. The equation assertion uses native scalar multiplication with
+/// the correct Fp-derived challenge values.
 ///
 /// # Reference
 ///

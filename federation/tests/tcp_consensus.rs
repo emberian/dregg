@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use pyana_federation::consensus::{ConsensusConfig, ConsensusState};
+use pyana_federation::{ConsensusConfig, ConsensusState};
 use pyana_federation::transport::{NetworkConsensusNode, TcpFederationTransport};
 use pyana_federation::types::*;
 

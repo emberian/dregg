@@ -3,13 +3,19 @@ name = "pyana-bounty-board"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+dev = []
+
 [dependencies]
 pyana-app-framework = { path = "../../app-framework" }
+pyana-circuit = { path = "../../circuit" }
 pyana-turn = { path = "../../turn" }
 pyana-sdk = { path = "../../sdk" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
+postcard = { version = "1", features = ["use-std"] }
 tokio = { version = "1", features = ["full"] }
 axum = "0.8"
 tracing = "0.1"

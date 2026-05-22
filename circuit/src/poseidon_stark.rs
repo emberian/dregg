@@ -110,6 +110,12 @@ const NODE_DOMAIN_SEP: u64 = 0x7374_6172_6b5f_6e64; // "stark_nd" as u64
 /// then hashes via Mina's native Poseidon sponge with a domain separator.
 #[cfg(feature = "mina")]
 fn poseidon_hash_leaf(values: &[BabyBear]) -> Fp {
+    poseidon_hash_leaf_standalone(values)
+}
+
+/// Public version of poseidon_hash_leaf for testing.
+#[cfg(feature = "mina")]
+pub fn poseidon_hash_leaf_standalone(values: &[BabyBear]) -> Fp {
     let params = Vesta::sponge_params();
     let mut sponge = ArithmeticSponge::<Fp, PlonkSpongeConstantsKimchi, FULL_ROUNDS>::new(params);
 
@@ -540,7 +546,7 @@ pub fn prove_poseidon_with_nonce(
         let local: Vec<BabyBear> = trace_evals.iter().map(|col| col[i]).collect();
         let next_idx = (i + blowup) % domain_size;
         let next: Vec<BabyBear> = trace_evals.iter().map(|col| col[next_idx]).collect();
-        constraint_evals.push(air.eval_constraints(&local, &next, public_inputs, crate::stark::ExtElem::from_base(alpha)).base_elem());
+        constraint_evals.push(air.eval_constraints(&local, &next, public_inputs, alpha));
     }
 
     // Compute transition quotient (same logic as stark.rs)
@@ -991,7 +997,7 @@ pub fn verify_poseidon_with_nonce(
         let last_trace_point = omega_trace.pow((trace_len - 1) as u32);
         let denom_factor = x - last_trace_point;
         let constraint_at_x =
-            air.eval_constraints(&trace_vals, &next_trace_vals, public_inputs, crate::stark::ExtElem::from_base(alpha)).base_elem();
+            air.eval_constraints(&trace_vals, &next_trace_vals, public_inputs, alpha);
 
         if z_full == BabyBear::ZERO {
             if denom_factor == BabyBear::ZERO {

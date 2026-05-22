@@ -129,9 +129,13 @@ pub mod plonky3_verifier_air;
 pub mod plonky3_recursion_impl;
 
 pub mod backends;
+pub mod proof_tier;
 
 #[cfg(test)]
 mod tests;
+
+// Proof tier types — prevents scaffold/test proofs from satisfying production verifiers.
+pub use proof_tier::{CryptographicProof, ProofTier, VerifiedProof};
 
 // Re-export primary types.
 pub use body_membership::{
@@ -220,6 +224,7 @@ pub use relational_predicate_air::{
 pub use turn_validity_air::{
     TurnValidityAir, TurnValidityWitness, prove_turn_validity, verify_turn_validity,
 };
+
 
 // Schnorr signature scheme over BabyBear^8 elliptic curve.
 pub use babybear8::BabyBear8;

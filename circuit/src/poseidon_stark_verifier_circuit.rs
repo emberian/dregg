@@ -330,6 +330,21 @@ impl PoseidonStarkVerifierCircuit {
 
             // (B) Trace Merkle path
             let trace_path: Vec<Fp> = query.trace_path.iter().map(|s| s.fp()).collect();
+
+            // Verify leaf hash matches what the STARK prover would compute
+            #[cfg(debug_assertions)]
+            {
+                use crate::poseidon_stark::poseidon_hash_leaf_standalone;
+                let trace_vals_bb: Vec<BabyBear> = query.trace_values.iter()
+                    .map(|&v| BabyBear::new(v)).collect();
+                let expected_leaf = poseidon_hash_leaf_standalone(&trace_vals_bb);
+                debug_assert_eq!(
+                    trace_leaf_hash, expected_leaf,
+                    "Leaf hash mismatch at query {}",
+                    qi
+                );
+            }
+
             let computed_trace_root = self.merkle_path_witness(
                 trace_leaf_hash,
                 query.index,
@@ -573,6 +588,23 @@ impl PoseidonStarkVerifierCircuit {
     pub fn prove(&self) -> Result<PoseidonStarkKimchiProof, String> {
         let (gates, public_count, layout) = self.build_circuit();
         let witness = self.generate_witness(&layout);
+
+        // Debug: check the equality gate at the expected row
+        #[cfg(debug_assertions)]
+        {
+            let eq_row = layout.public_input_count + POSEIDON_GADGET_ROWS
+                + layout.tree_depth * POSEIDON_GADGET_ROWS;
+            if eq_row < layout.total_rows {
+                let w0 = witness[0][eq_row];
+                let w1 = witness[1][eq_row];
+                if w0 != w1 {
+                    return Err(format!(
+                        "Witness mismatch at equality gate row {}: w0={:?}, w1={:?}, gate_type={:?}",
+                        eq_row, w0, w1, gates[eq_row].typ
+                    ));
+                }
+            }
+        }
 
         // Create prover index
         let index = kimchi::prover_index::testing::new_index_for_test::<FULL_ROUNDS, Vesta>(

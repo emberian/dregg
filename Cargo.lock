@@ -1718,7 +1718,9 @@ version = "0.1.0"
 dependencies = [
  "axum 0.8.9",
  "blake3",
+ "postcard",
  "pyana-app-framework",
+ "pyana-circuit",
  "pyana-intent",
  "pyana-turn",
  "serde",
@@ -5835,7 +5837,9 @@ version = "0.1.0"
 dependencies = [
  "axum 0.8.9",
  "blake3",
+ "postcard",
  "pyana-app-framework",
+ "pyana-circuit",
  "pyana-sdk",
  "pyana-turn",
  "serde",

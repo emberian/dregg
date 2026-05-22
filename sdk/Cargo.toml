@@ -38,6 +38,10 @@ tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 zeroize = { workspace = true }
 
+[features]
+default = []
+dev = ["pyana-circuit/dev"]
+
 [[example]]
 name = "agent_demo"
 path = "examples/agent_demo.rs"

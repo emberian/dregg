@@ -461,8 +461,9 @@ impl NodeState {
 
     /// Persist critical state before shutdown.
     ///
-    /// Currently persists:
-    /// - Discharge gateway replay set (prevents replay after restart)
+    /// Note: Replay-prevention state (discharge issued set, proof nullifiers)
+    /// is now persisted at USE time for crash safety. This shutdown hook serves
+    /// as a final consistency checkpoint only.
     pub async fn persist_on_shutdown(&self) {
         let s = self.inner.read().await;
         if let Some(gateway) = &s.discharge_gateway {

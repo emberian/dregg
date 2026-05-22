@@ -327,6 +327,84 @@ pub fn verify_validated_ivc_proof(proof_bytes: &[u8]) -> Result<bool, SdkError> 
         == pyana_circuit::ValidatedIvcVerification::Valid)
 }
 
+// ============================================================================
+// Tier-gated verification
+// ============================================================================
+
+/// Verify a serialized authorization proof and require Production tier.
+///
+/// This is the production-safe entry point. It performs full STARK verification
+/// and then checks that the proof was produced by a production-grade backend
+/// (custom STARK with ext-field composition, Kimchi native, or Pickles).
+///
+/// Structural stubs (constraint prover, SP1 without feature, Binius without feature)
+/// are rejected even if they pass structural validation.
+///
+/// # Errors
+///
+/// Returns `Err` if:
+/// - The proof cannot be deserialized
+/// - The proof tier is not `Production`
+pub fn verify_production(
+    proof_bytes: &[u8],
+    federation_root: &[u8; 32],
+) -> Result<pyana_circuit::VerifiedProof, SdkError> {
+    use pyana_circuit::proof_tier;
+
+    // Perform the standard verification.
+    let valid = verify_authorization_proof(proof_bytes, federation_root)?;
+    if !valid {
+        return Err(SdkError::Wire("proof verification failed".into()));
+    }
+
+    // The custom STARK with Poseidon2 AIR is production-grade.
+    let result = pyana_circuit::VerifiedProof::with_federation_root(
+        proof_tier::stark_tier(),
+        proof_tier::STARK_BACKEND,
+        *federation_root,
+    );
+
+    if result.tier() != pyana_circuit::ProofTier::Production {
+        return Err(SdkError::Wire(format!(
+            "non-production proof tier: {} (backend: {})",
+            result.tier(),
+            result.backend()
+        )));
+    }
+
+    Ok(result)
+}
+
+/// Verify a serialized authorization proof accepting any tier.
+///
+/// This function is only available in tests or when the `dev` feature is enabled.
+/// It performs standard verification but does not enforce a minimum proof tier,
+/// allowing structural stubs and experimental backends to pass.
+///
+/// # Safety
+///
+/// This MUST NOT be used in production code paths. It exists solely for testing
+/// and development workflows where real cryptographic proofs are unavailable.
+#[cfg(any(test, feature = "dev"))]
+pub fn verify_any_tier(
+    proof_bytes: &[u8],
+    federation_root: &[u8; 32],
+) -> Result<pyana_circuit::VerifiedProof, SdkError> {
+    use pyana_circuit::proof_tier;
+
+    let valid = verify_authorization_proof(proof_bytes, federation_root)?;
+    if !valid {
+        return Err(SdkError::Wire("proof verification failed".into()));
+    }
+
+    // In dev mode, accept any tier.
+    Ok(pyana_circuit::VerifiedProof::with_federation_root(
+        proof_tier::stark_tier(),
+        proof_tier::STARK_BACKEND,
+        *federation_root,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

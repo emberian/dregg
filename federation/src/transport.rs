@@ -18,7 +18,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{Mutex, mpsc};
 
-use crate::consensus::{ConsensusConfig, ConsensusState};
+use crate::node::{ConsensusConfig, ConsensusState};
 use crate::types::*;
 
 // =============================================================================
@@ -1012,7 +1012,7 @@ impl NetworkConsensusNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::consensus::ConsensusConfig;
+    use crate::node::ConsensusConfig;
     use crate::types::generate_keypair;
 
     #[tokio::test]

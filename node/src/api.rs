@@ -1474,9 +1474,16 @@ async fn post_fast_path_certificate(
         });
     }
 
-    // Assemble certificate (verify quorum). Use f=0 threshold=1 for single-node dev.
-    // In production, threshold would be 2f+1 from the federation config.
-    let threshold = 1; // TODO: derive from federation size
+    // Assemble certificate (verify quorum).
+    // Threshold is derived from federation size: n - f where f = (n-1)/3.
+    // For single-node (n=1): threshold = 1. For 4 nodes: threshold = 3.
+    let n = {
+        let s = state.read().await;
+        let key_count = s.known_federation_keys.len();
+        if key_count == 0 { 1usize } else { key_count }
+    };
+    let f = (n.saturating_sub(1)) / 3;
+    let threshold = n - f;
     let cert = match pyana_turn::assemble_certificate(turn, turn_hash_bytes, signatures, threshold)
     {
         Ok(c) => c,
@@ -1669,6 +1676,14 @@ async fn post_resolve_conditional(
 
     match result {
         pyana_turn::ConditionalResult::Resolved => {
+            // SECURITY: Persist the proof nullifier to the store immediately so
+            // a crash cannot allow proof replay. The in-memory set was already
+            // updated by resolve_condition; this makes it durable.
+            let proof_hash = pyana_turn::compute_proof_hash(&proof);
+            if let Err(e) = s.store.insert_proof_hash(&proof_hash) {
+                tracing::warn!(error = %e, "failed to persist proof nullifier to store");
+            }
+
             let conditional = s.pending_conditionals.remove(idx);
 
             let executor = pyana_turn::TurnExecutor::new(pyana_turn::ComputronCosts::default());
@@ -2467,13 +2482,22 @@ async fn post_discharge(
     };
 
     match gateway.process_request(&discharge_req) {
-        Ok(resp) => Ok(Json(NodeDischargeResponse {
-            success: true,
-            discharge: Some(resp.discharge),
-            expires_at: Some(resp.expires_at),
-            condition_met: Some(resp.condition_met),
-            error: None,
-        })),
+        Ok(resp) => {
+            // SECURITY: Persist replay-prevention state immediately after each
+            // successful discharge. A crash between discharge issuance and shutdown
+            // would otherwise lose the replay set, enabling ticket reuse.
+            let data = gateway.serialize_issued_set();
+            if let Err(e) = s.store.set_config("discharge_issued_set", &data) {
+                tracing::warn!(error = %e, "failed to persist discharge replay set");
+            }
+            Ok(Json(NodeDischargeResponse {
+                success: true,
+                discharge: Some(resp.discharge),
+                expires_at: Some(resp.expires_at),
+                condition_met: Some(resp.condition_met),
+                error: None,
+            }))
+        }
         Err(e) => Ok(Json(NodeDischargeResponse {
             success: false,
             discharge: None,

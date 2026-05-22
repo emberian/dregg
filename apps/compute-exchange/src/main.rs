@@ -200,7 +200,8 @@ async fn create_offering(
             min_count: req.gpu_count as u64,
         };
 
-        match verify_compute_qualification(&requirement, &proof_bytes, federation_root) {
+        let engine = state.engine_read().await;
+        match verify_compute_qualification(&engine, &requirement, &proof_bytes, federation_root) {
             Ok(true) => {}
             Ok(false) => {
                 return (

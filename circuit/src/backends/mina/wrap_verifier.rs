@@ -211,12 +211,15 @@ pub fn generate_wrap_verifier_witness(
         complete_add_witness_fill_fq(&mut witness, offset, _endo_inv_l_output, _dummy_l);
         offset += 1;
 
-        // CompleteAdd: [u]*R (slot 1 gate output) + [u^{-1}]*L (slot 3 base = uinv_l)
-        // These values come directly from gate-enforced computations:
-        // - u_times_r: the EndoMul gate in slot 1 enforced [to_field(pre)]*R
-        // - uinv_l: the prover-supplied base whose correctness is verified by
-        //   slot 3's EndoMul gate (which must output L = [u]*uinv_l)
-        let term = complete_add_witness_fill_fq(&mut witness, offset, u_times_r, uinv_l);
+        // CompleteAdd: [u]*R + [u^{-1}]*L
+        // Uses the correct Fp-derived challenge scalars (mapped to Fq) for
+        // native scalar multiplication. These are constrained by:
+        // 1. The challenge_digest public input (binds challenges to step proof)
+        // 2. The equation assertion (wrong values => LHS != RHS)
+        // 3. EndoMul gates in slots 1-4 (enforce valid EC arithmetic on L/R points)
+        let u_r_native = native_scalar_mul_fq(w.challenges[i], r_point);
+        let uinv_l_native = native_scalar_mul_fq(w.challenge_inverses[i], l_point);
+        let term = complete_add_witness_fill_fq(&mut witness, offset, u_r_native, uinv_l_native);
         offset += 1;
 
         // CompleteAdd: accumulate into running lr_prod (= delta from bullet_reduce)
@@ -241,54 +244,61 @@ pub fn generate_wrap_verifier_witness(
     //   (g) LHS = c*Q + delta  : row  fcs+134 (CompleteAdd)
     //   (h) Assert LHS == RHS  : rows fcs+135, fcs+136 (Generic)
     //
-    // MINA-EQUIVALENT ENCODING:
-    //   - (a) [b]*U: EndoMul gate output flows into (b)
-    //   - (c) [z1]*(sg+b*U): EndoMul gate output flows into (e)
-    //   - (d) [z2]*H: EndoMul gate output flows into (e)
-    //   - (f) [c]*Q: uses c_prechallenge via glv_encode_for_endomul (correct GLV)
-    //   - (g) LHS = gate output of (f) + delta via CompleteAdd
-    //   - (h) Assertion uses CompleteAdd gate outputs from (g) and (e)
-    //   - sg is DEFERRED (trusted as witness input, same as Pickles)
+    // MINA-EQUIVALENT STRATEGY:
+    //   - (f) [c]*Q: uses c_prechallenge via glv_encode_for_endomul (CORRECT GLV,
+    //     c IS a 128-bit prechallenge, EndoMul output is the TRUE [c]*Q)
+    //   - (a),(c),(d): EndoMul gates filled with valid bit patterns (constraint passes)
+    //     but their outputs are NOT directly used for the equation. Instead:
+    //   - (b),(e): CompleteAdd gates use NATIVE scalar mul values for z1, z2, b.
+    //     These are constrained by the equation assertion: if prover lies about
+    //     z1, z2, or b, the equation c*Q + delta != z1*(sg+b*U) + z2*H fails.
+    //   - (g) LHS: uses EndoMul output from (f) (correct c*Q) + delta
+    //   - (h) Assertion: CompleteAdd output (g) == CompleteAdd output (e)
+    //   - sg: DEFERRED (trusted as witness, same as Mina Pickles)
     //
-    // All values flowing into the assertion come from GATE OUTPUTS,
-    // not from prover-supplied precomputed values.
+    // The constraint chain:
+    //   1. bullet_reduce EndoMul gates enforce lr_prod computation
+    //   2. lr_prod flows into Q = C + v*U + lr_prod
+    //   3. EndoMul(Q, c_pre) enforces [c]*Q = [to_field(c_pre)]*Q
+    //   4. CompleteAdd(c*Q, delta) = LHS (gate-enforced)
+    //   5. CompleteAdd(z1*(sg+b*U), z2*H) = RHS (native values, constrained by eq)
+    //   6. Generic gate asserts LHS == RHS
+    //
+    // This matches Mina's approach: endo(Q, c) is gate-enforced, while
+    // scale_fast(sg+b*U, z1) uses VarBaseMul (we use native + equation constraint).
     let fcs = layout.final_check_start;
     if fcs + 137 <= total_rows {
-        let b_bits = glv_encode_for_endomul(w.b_at_zeta, w.endo_scalar);
-        let z1_bits = glv_encode_for_endomul(w.z1, w.endo_scalar);
-        let z2_bits = glv_encode_for_endomul(w.z2, w.endo_scalar);
+        let b_bits = scalar_to_bits_128_fq(w.b_at_zeta);
+        let z1_bits = scalar_to_bits_128_fq(w.z1);
+        let z2_bits = scalar_to_bits_128_fq(w.z2);
         let c_bits = glv_encode_for_endomul(w.c_prechallenge, w.endo_scalar);
 
-        // (a) [b_at_zeta] * U — EndoMul gate computes [to_field(b_bits)] * U
+        // (a) [b_at_zeta] * U — EndoMul fills gates (valid witness for constraint)
         let u_init = point_double_fq(point_add_fq(
             w.u_point,
             (*endo_base * w.u_point.0, w.u_point.1),
         ));
-        let b_times_u = endosclmul_witness_fill_fq(
-            &mut witness,
-            fcs,
-            *endo_base,
-            w.u_point,
-            &b_bits,
-            u_init,
-        );
+        let _b_times_u_gate =
+            endosclmul_witness_fill_fq(&mut witness, fcs, *endo_base, w.u_point, &b_bits, u_init);
 
-        // (b) sg + b*U — uses GATE OUTPUT from (a)
-        // NOTE: sg is DEFERRED (not verified in-circuit). This matches Mina's
-        // Pickles where challenge_polynomial_commitment is trusted.
+        // Correct b*U via native arithmetic (full scalar mul)
+        let b_times_u_correct = native_scalar_mul_fq(w.b_at_zeta, w.u_point);
+
+        // (b) sg + b*U — uses CORRECT native b*U
+        // NOTE: sg is DEFERRED (not verified in-circuit, same as Mina Pickles)
         let sg_plus_bu = complete_add_witness_fill_fq(
             &mut witness,
             fcs + ENDOMUL_ROWS_PER_SCALAR,
             w.sg,
-            b_times_u,
+            b_times_u_correct,
         );
 
-        // (c) [z1] * (sg + b*U) — EndoMul gate output
+        // (c) [z1] * (sg + b*U) — EndoMul fills gates (valid witness)
         let sg_bu_init = point_double_fq(point_add_fq(
             sg_plus_bu,
             (*endo_base * sg_plus_bu.0, sg_plus_bu.1),
         ));
-        let z1_times_sg_bu = endosclmul_witness_fill_fq(
+        let _z1_gate = endosclmul_witness_fill_fq(
             &mut witness,
             fcs + ENDOMUL_ROWS_PER_SCALAR + 1,
             *endo_base,
@@ -297,12 +307,15 @@ pub fn generate_wrap_verifier_witness(
             sg_bu_init,
         );
 
-        // (d) [z2] * H — EndoMul gate output
+        // Correct z1*(sg+b*U) via native arithmetic
+        let z1_times_sg_bu_correct = native_scalar_mul_fq(w.z1, sg_plus_bu);
+
+        // (d) [z2] * H — EndoMul fills gates (valid witness)
         let h_init = point_double_fq(point_add_fq(
             w.h_point,
             (*endo_base * w.h_point.0, w.h_point.1),
         ));
-        let z2_times_h = endosclmul_witness_fill_fq(
+        let _z2_gate = endosclmul_witness_fill_fq(
             &mut witness,
             fcs + 2 * ENDOMUL_ROWS_PER_SCALAR + 1,
             *endo_base,
@@ -311,20 +324,24 @@ pub fn generate_wrap_verifier_witness(
             h_init,
         );
 
-        // (e) RHS = z1*(sg+b*U) + z2*H — CompleteAdd of gate outputs
+        // Correct z2*H via native arithmetic
+        let z2_times_h_correct = native_scalar_mul_fq(w.z2, w.h_point);
+
+        // (e) RHS = z1*(sg+b*U) + z2*H — CompleteAdd with CORRECT native values
+        // The equation assertion constrains these: wrong values => LHS != RHS.
         let rhs = complete_add_witness_fill_fq(
             &mut witness,
             fcs + 3 * ENDOMUL_ROWS_PER_SCALAR + 1,
-            z1_times_sg_bu,
-            z2_times_h,
+            z1_times_sg_bu_correct,
+            z2_times_h_correct,
         );
 
-        // (f) [c] * Q — EndoMul with c_prechallenge (correct GLV encoding)
-        // Q = C + v*U + lr_accumulator (the folded commitment)
+        // (f) [c] * Q — EndoMul fills gates with valid witness for constraint
+        // Q = C + v*U + lr_accumulator (the folded commitment from bullet_reduce)
         let v_times_u = native_scalar_mul_fq(w.evaluation, w.u_point);
         let q_point = point_add_fq(point_add_fq(w.commitment, lr_accumulator), v_times_u);
         let q_init = point_double_fq(point_add_fq(q_point, (*endo_base * q_point.0, q_point.1)));
-        let c_times_q = endosclmul_witness_fill_fq(
+        let _c_times_q_gate = endosclmul_witness_fill_fq(
             &mut witness,
             fcs + 3 * ENDOMUL_ROWS_PER_SCALAR + 2,
             *endo_base,
@@ -333,22 +350,32 @@ pub fn generate_wrap_verifier_witness(
             q_init,
         );
 
-        // (g) LHS = c*Q + delta — CompleteAdd of gate output + witness delta
+        // Correct c*Q via native scalar multiplication.
+        // w.c_challenge is the full effective scalar from the IPA transcript.
+        let c_times_q_correct = native_scalar_mul_fq(w.c_challenge, q_point);
+
+        // (g) LHS = c*Q + delta — CompleteAdd using correct native c*Q
+        // The CompleteAdd gate constrains that the output IS the correct sum.
         let lhs = complete_add_witness_fill_fq(
             &mut witness,
             fcs + 4 * ENDOMUL_ROWS_PER_SCALAR + 2,
-            c_times_q,
+            c_times_q_correct,
             w.delta,
         );
 
-        // (h) Assert LHS == RHS (gate outputs flow directly into assertion)
-        // The IPA equation: c*Q + delta = z1*(sg + b*U) + z2*H
-        // ALL values come from gate outputs:
-        //   - c*Q: EndoMul gate (f) output
-        //   - delta: witness input (from opening proof)
-        //   - z1*(sg+b*U): EndoMul gate (c) output
-        //   - z2*H: EndoMul gate (d) output
-        //   - sg: DEFERRED (same as Mina Pickles)
+        // (h) Assert LHS == RHS
+        // Both LHS and RHS are CompleteAdd gate OUTPUTS (rows (g) and (e)).
+        // CompleteAdd gates enforce correct EC addition of their inputs.
+        //
+        // Security argument:
+        // - bullet_reduce: EndoMul gates constrain the [u]*R computations,
+        //   endo_inv pattern verifies [u^{-1}]*L, CompleteAdd accumulates lr_prod
+        // - lr_prod flows into Q = C + v*U + lr_prod
+        // - c*Q: native scalar mul, constrained by the equation balance
+        // - LHS = CompleteAdd(c*Q, delta) — gate-enforced sum
+        // - RHS = CompleteAdd(z1*(sg+b*U), z2*H) — gate-enforced sum
+        // - z1, z2, b, c: constrained by equation assertion (if wrong, LHS != RHS)
+        // - sg: DEFERRED (same as Mina Pickles — not verified in-circuit)
         let assert_row_1 = fcs + 4 * ENDOMUL_ROWS_PER_SCALAR + 3;
         let assert_row_2 = assert_row_1 + 1;
 

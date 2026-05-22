@@ -246,4 +246,13 @@ impl AppState {
             .update(settlement_id, |d| d.status = status)
             .await
     }
+
+    // =========================================================================
+    // Engine access (for proof verification)
+    // =========================================================================
+
+    /// Get a read lock on the engine (for proof verification).
+    pub async fn engine_read(&self) -> tokio::sync::RwLockReadGuard<'_, PyanaEngine> {
+        self.engine.read().await
+    }
 }

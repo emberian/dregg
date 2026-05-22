@@ -8,7 +8,7 @@
 //! 5. Byzantine fault tolerance
 //! 6. Epoch-based reconfiguration (adding a new member)
 
-use pyana_federation::consensus::ReconfigurationProposal;
+use pyana_federation::ReconfigurationProposal;
 use pyana_federation::node::Federation;
 use pyana_federation::revocation::RevocationVerifier;
 use pyana_federation::types::{generate_keypair, hex_encode, sign};

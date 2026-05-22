@@ -3,7 +3,7 @@
 //! A single federation node that:
 //! - Takes a config (own keypair, peer addresses, threshold)
 //! - Starts a TCP listener for incoming federation messages
-//! - Starts the ConsensusOrchestrator with TcpFederationTransport
+//! - Starts consensus with TcpFederationTransport
 //! - Runs periodic consensus rounds
 //! - Prints attested roots as they're produced
 //!
@@ -18,7 +18,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use pyana_federation::consensus::{ConsensusConfig, ConsensusState};
+use pyana_federation::{ConsensusConfig, ConsensusState};
 use pyana_federation::transport::{NetworkConsensusNode, TcpFederationTransport};
 use pyana_federation::types::*;
 

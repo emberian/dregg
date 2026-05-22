@@ -1302,10 +1302,6 @@ fn test_standalone_dual_curve_wrap_base_case_rejected() {
 }
 
 #[test]
-#[ignore = "UNSOUND: standalone wrap uses precomputed_lhs/rhs (prover rubber-stamps \
-            the assertion), EndoMul outputs are not wired to the final check, and \
-            GLV encoding uses raw bits instead of signed-digit decomposition. \
-            Use assisted recursion (pickles.rs) for production recursive proofs."]
 fn test_standalone_dual_curve_wrap_end_to_end() {
     // Create a recursive proof, then a step that defers its IPA, then
     // standalone-wrap it with in-circuit verification.
@@ -1320,7 +1316,6 @@ fn test_standalone_dual_curve_wrap_end_to_end() {
         pre_state_hash: [2u8; 32],
         post_state_hash: [3u8; 32],
     };
-    #[allow(deprecated)]
     let step_proof = prove_dual_curve_step(Some(&base_recursive), &transition2)
         .expect("Step with deferred IPA should succeed");
     assert!(
@@ -1329,7 +1324,7 @@ fn test_standalone_dual_curve_wrap_end_to_end() {
     );
 
     // This is the key test: standalone wrap with in-circuit EC verification.
-    #[allow(deprecated)]
+    // Gate outputs (EndoMul + CompleteAdd) flow directly into the assertion.
     let standalone_wrap = prove_standalone_dual_curve_wrap(&step_proof)
         .expect("Standalone wrap prover should succeed");
 
@@ -1342,20 +1337,18 @@ fn test_standalone_dual_curve_wrap_end_to_end() {
     );
 
     // Verify the standalone proof — this must succeed for the architecture to work.
-    #[allow(deprecated)]
     let valid =
         verify_standalone_dual_curve_wrap(&standalone_wrap).expect("Verification should not error");
     assert!(
         valid,
         "Standalone dual-curve wrap proof MUST verify. \
          The EC verifier circuit (EndoMul + CompleteAdd on Pallas) \
-         verifies the Vesta IPA equation in-circuit."
+         verifies the Vesta IPA equation in-circuit. \
+         Only sg MSM is deferred (same as Mina Pickles)."
     );
 }
 
 #[test]
-#[ignore = "UNSOUND: standalone wrap verification is not transitive-sound. \
-            See test_standalone_dual_curve_wrap_end_to_end ignore reason."]
 fn test_standalone_dual_curve_wrap_tampered_fails() {
     let transition1 = PicklesStateTransition {
         pre_state_hash: [1u8; 32],
@@ -1368,11 +1361,9 @@ fn test_standalone_dual_curve_wrap_tampered_fails() {
         pre_state_hash: [2u8; 32],
         post_state_hash: [3u8; 32],
     };
-    #[allow(deprecated)]
     let step_proof =
         prove_dual_curve_step(Some(&base_recursive), &transition2).expect("Step should succeed");
 
-    #[allow(deprecated)]
     let mut standalone_wrap =
         prove_standalone_dual_curve_wrap(&step_proof).expect("Standalone wrap should succeed");
 
@@ -1381,7 +1372,6 @@ fn test_standalone_dual_curve_wrap_tampered_fails() {
         *byte ^= 0x01;
     }
 
-    #[allow(deprecated)]
     let result = verify_standalone_dual_curve_wrap(&standalone_wrap);
     match result {
         Ok(false) => {} // Clean failure
@@ -1391,9 +1381,6 @@ fn test_standalone_dual_curve_wrap_tampered_fails() {
 }
 
 #[test]
-#[ignore = "UNSOUND: standalone recursive chain relies on prove_standalone_dual_curve_wrap \
-            which uses precomputed_lhs/rhs and unwired EndoMul outputs. \
-            Use assisted recursion (pickles.rs) for production recursive proofs."]
 fn test_standalone_recursive_chain() {
     // Full standalone-transitive chain: prove multiple transitions,
     // final proof is self-contained.
@@ -1408,7 +1395,6 @@ fn test_standalone_recursive_chain() {
         },
     ];
 
-    #[allow(deprecated)]
     let standalone_wrap = prove_standalone_recursive_chain(&transitions)
         .expect("Standalone recursive chain should succeed");
 
@@ -1419,7 +1405,6 @@ fn test_standalone_recursive_chain() {
     );
 
     // Verify
-    #[allow(deprecated)]
     let valid = verify_standalone_dual_curve_wrap(&standalone_wrap)
         .expect("Standalone chain verification should not error");
     assert!(valid, "Standalone recursive chain proof must verify");

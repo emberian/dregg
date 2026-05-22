@@ -26,5 +26,9 @@ thiserror = { workspace = true }
 base64 = { workspace = true }
 blake3 = "1"
 
+[features]
+default = []
+dev = ["pyana-sdk/dev"]
+
 [lints]
 workspace = true

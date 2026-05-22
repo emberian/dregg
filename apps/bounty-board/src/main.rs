@@ -6,6 +6,7 @@
 //! - Payment is released atomically via conditional turns on completion.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use axum::{
     Json, Router,
@@ -15,9 +16,10 @@ use axum::{
     routing::{get, post},
 };
 use serde_json::json;
+use tokio::sync::RwLock;
 use tracing::{info, warn};
 
-use pyana_app_framework::CellId;
+use pyana_app_framework::{CellId, EngineConfig, PyanaEngine};
 use pyana_bounty_board::qualification::verify_qualification;
 use pyana_bounty_board::state::BoardState;
 use pyana_bounty_board::{
@@ -38,6 +40,8 @@ struct AppState {
     /// The federation root used for membership/qualification checks.
     /// In production this would be fetched from the federation periodically.
     federation_root: [u8; 32],
+    /// The pyana engine for cryptographic proof verification.
+    engine: Arc<RwLock<PyanaEngine>>,
 }
 
 // =============================================================================
@@ -55,6 +59,7 @@ async fn main() {
     let state = AppState {
         board: BoardState::new(),
         federation_root: [0u8; 32], // placeholder; would come from federation attestation
+        engine: Arc::new(RwLock::new(PyanaEngine::new(EngineConfig::default()))),
     };
 
     let app = Router::new()
@@ -199,9 +204,10 @@ async fn claim_bounty(
         );
     }
 
-    // Verify qualification proof.
+    // Verify qualification proof (real cryptographic verification).
     let proof_bytes = req.qualification_proof.as_deref().unwrap_or(&[]);
-    match verify_qualification(&bounty.qualification, proof_bytes, state.federation_root) {
+    let engine = state.engine.read().await;
+    match verify_qualification(&engine, &bounty.qualification, proof_bytes, state.federation_root) {
         Ok(true) => {}
         Ok(false) => {
             return (

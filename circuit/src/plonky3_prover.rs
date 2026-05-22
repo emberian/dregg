@@ -110,17 +110,17 @@ pub fn create_config() -> PyanaStarkConfig {
 
     let hash = PaddingFreeSponge::new(perm24.clone());
     let compress = TruncatedPermutation::new(perm16);
-    let val_mmcs = MerkleTreeMmcs::new(hash, compress, 3);
+    let val_mmcs = MerkleTreeMmcs::new(hash, compress, 0);
 
     let challenge_mmcs = ExtensionMmcs::<P3BabyBear, EF, _>::new(val_mmcs.clone());
 
     let fri_params = FriParameters {
-        log_blowup: 2,
-        log_final_poly_len: 0,
-        max_log_arity: 3,
-        num_queries: 50,
+        log_blowup: 1,
+        log_final_poly_len: 3,
+        max_log_arity: 2,
+        num_queries: 40,
         commit_proof_of_work_bits: 0,
-        query_proof_of_work_bits: 16,
+        query_proof_of_work_bits: 8,
         mmcs: challenge_mmcs,
     };
 
@@ -865,6 +865,9 @@ mod tests {
         fn num_public_values(&self) -> usize {
             0
         }
+        fn max_constraint_degree(&self) -> Option<usize> {
+            Some(7)
+        }
     }
 
     impl<AB: AirBuilder> Air<AB> for MinimalDegree7Air
@@ -931,6 +934,56 @@ mod tests {
         assert!(
             result.is_ok(),
             "Minimal degree-7 AIR (16 rows) failed: {:?}",
+            result.err()
+        );
+    }
+
+    /// Degree-2 AIR: x^2 == witness
+    struct MinimalDegree2Air;
+
+    impl<F: PrimeCharacteristicRing + Sync> BaseAir<F> for MinimalDegree2Air {
+        fn width(&self) -> usize {
+            2
+        }
+        fn num_public_values(&self) -> usize {
+            0
+        }
+    }
+
+    impl<AB: AirBuilder> Air<AB> for MinimalDegree2Air
+    where
+        AB::F: PrimeField32,
+    {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let local = main.current_slice();
+            let x: AB::Expr = local[0].into();
+            let x2_witness: AB::Expr = local[1].into();
+            builder.assert_zero(x.clone() * x - x2_witness);
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn plonky3_minimal_degree2() {
+        let config = create_config();
+        let air = MinimalDegree2Air;
+
+        let values: Vec<P3BabyBear> = (1u32..=16)
+            .flat_map(|v| {
+                let x = P3BabyBear::new(v);
+                let x2 = x * x;
+                [x, x2]
+            })
+            .collect();
+        let matrix = RowMajorMatrix::new(values, 2);
+        let public: Vec<P3BabyBear> = vec![];
+
+        let proof = prove(&config, &air, matrix, &public);
+        let result = verify(&config, &air, &proof, &public);
+        assert!(
+            result.is_ok(),
+            "Minimal degree-2 AIR failed: {:?}",
             result.err()
         );
     }
