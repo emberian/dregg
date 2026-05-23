@@ -5,6 +5,9 @@ edition = "2024"
 
 [dependencies]
 pyana-circuit = { path = "../circuit" }
+serde = { workspace = true, features = ["derive"] }
+postcard = { version = "1", features = ["alloc"] }
+blake3 = "1"
 
 [dev-dependencies]
 pyana-circuit = { path = "../circuit" }

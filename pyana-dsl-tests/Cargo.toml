@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 pyana-dsl = { path = "../pyana-dsl" }
 pyana-dsl-runtime = { path = "../pyana-dsl-runtime" }
+pyana-circuit = { path = "../circuit" }
 
 [lints]
 workspace = true

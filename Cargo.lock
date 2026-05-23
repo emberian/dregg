@@ -6230,13 +6230,17 @@ dependencies = [
 name = "pyana-dsl-runtime"
 version = "0.1.0"
 dependencies = [
+ "blake3",
+ "postcard",
  "pyana-circuit",
+ "serde",
 ]
 
 [[package]]
 name = "pyana-dsl-tests"
 version = "0.1.0"
 dependencies = [
+ "pyana-circuit",
  "pyana-dsl",
  "pyana-dsl-runtime",
 ]

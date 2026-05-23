@@ -7,8 +7,21 @@
 //! The [`circuit`] module provides a runtime-interpreted `StarkAir` implementation
 //! driven by a [`circuit::CircuitDescriptor`], enabling DSL macros to emit data
 //! rather than 2000 lines of codegen.
+//!
+//! # Smart Contract Runtime
+//!
+//! The [`circuit::CellProgram`] and [`circuit::ProgramRegistry`] types form the
+//! smart contract runtime: user-defined cell programs (submitted as serialized
+//! `CircuitDescriptor`s at deploy time) are validated, stored, and verified at
+//! runtime via proof-carrying turns.
 
 pub mod circuit;
+
+// Re-export primary smart contract runtime types.
+pub use circuit::{
+    CellProgram, CircuitDescriptor, DslCircuit, ProgramError, ProgramRegistry,
+    ProgramValidationError,
+};
 
 /// Error returned when a caveat constraint is violated at runtime.
 #[derive(Debug, Clone, PartialEq, Eq)]

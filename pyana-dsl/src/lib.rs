@@ -11,6 +11,7 @@
 
 extern crate proc_macro;
 
+mod emit_stark_impl;
 mod gen_air;
 mod gen_datalog;
 mod gen_kimchi;
@@ -54,12 +55,14 @@ pub fn pyana_caveat(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let air_desc = gen_air::generate_air_descriptor(&ir);
     let datalog = gen_datalog::generate_datalog(&ir);
     let kimchi = gen_kimchi::generate_kimchi(&ir);
+    let stark_impl = emit_stark_impl::emit_stark_impl(&ir);
 
     let output = quote! {
         #rust_eval
         #air_desc
         #datalog
         #kimchi
+        #stark_impl
     };
 
     output.into()
@@ -109,6 +112,7 @@ pub fn pyana_effect(attr: TokenStream, item: TokenStream) -> TokenStream {
     let datalog = gen_datalog::generate_datalog(&ir);
     let kimchi = gen_kimchi::generate_kimchi(&ir);
     let effect_desc = gen_rust::generate_effect_descriptor(&ir);
+    let stark_impl = emit_stark_impl::emit_stark_impl(&ir);
 
     let output = quote! {
         #rust_eval
@@ -116,6 +120,7 @@ pub fn pyana_effect(attr: TokenStream, item: TokenStream) -> TokenStream {
         #datalog
         #kimchi
         #effect_desc
+        #stark_impl
     };
 
     output.into()
