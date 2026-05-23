@@ -120,10 +120,7 @@ impl FromRequestParts<EngineState> for StrictPresentation {
         );
 
         if verified_proof.tier() != pyana_circuit::ProofTier::Production {
-            return Err((
-                StatusCode::FORBIDDEN,
-                "non-production proof tier rejected",
-            ));
+            return Err((StatusCode::FORBIDDEN, "non-production proof tier rejected"));
         }
 
         Ok(StrictPresentation {
@@ -233,8 +230,7 @@ impl FromRequestParts<EngineState> for OptionalPresentation {
         // Verify against the engine with full action binding + freshness checks.
         let engine = state.0.read().await;
         let federation_root = engine.federation_root();
-        let result =
-            engine.verify_presentation_bytes(&proof_bytes, action_str, resource_str);
+        let result = engine.verify_presentation_bytes(&proof_bytes, action_str, resource_str);
 
         match result {
             Ok(true) => Ok(OptionalPresentation {
@@ -310,5 +306,10 @@ pub fn verify_any_tier_presentation(
     expected_action: &str,
     expected_resource: &str,
 ) -> Result<pyana_circuit::VerifiedProof, pyana_sdk::SdkError> {
-    pyana_sdk::verify_any_tier(proof_bytes, federation_root, expected_action, expected_resource)
+    pyana_sdk::verify_any_tier(
+        proof_bytes,
+        federation_root,
+        expected_action,
+        expected_resource,
+    )
 }

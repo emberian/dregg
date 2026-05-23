@@ -380,9 +380,11 @@ impl AgentRuntime {
             issuer_key,
         );
 
-        // Derive proof key from issuer key for the sub-agent's ZK proof capability.
+        // Derive a proof key from the issuer key via BLAKE3 key derivation.
+        // This gives the sub-agent proof capability without leaking the raw issuer key.
+        // Must match the derivation in AgentWallet::delegate().
         let proof_key = if issuer_key != [0u8; 32] {
-            Some(blake3::derive_key("pyana-proof-key-v1", &issuer_key))
+            Some(AgentWallet::derive_proof_key(&issuer_key))
         } else {
             None
         };
@@ -395,6 +397,7 @@ impl AgentRuntime {
             delegatee: sub_pk,
             restrictions: restrictions.clone(),
             proof_key,
+            membership_proof: None,
         })?;
 
         // Create the sub-agent's cell in the ledger.

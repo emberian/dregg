@@ -61,4 +61,8 @@ pub enum SdkError {
     /// A non-membership proof failed cryptographic verification.
     #[error("non-membership proof verification failed: {0}")]
     NonMembershipVerificationFailed(String),
+
+    /// A witness construction failed (e.g., unground variable in predicate proof).
+    #[error("invalid witness: {0}")]
+    InvalidWitness(String),
 }

@@ -49,9 +49,7 @@
 //! std::fs::write("proof.bin", &proof).unwrap();
 //! ```
 
-use pyana_bridge::present::{
-    self, BridgePresentationBuilder, WirePresentationProof,
-};
+use pyana_bridge::present::{self, BridgePresentationBuilder, WirePresentationProof};
 use pyana_cell::Ledger;
 use pyana_token::{Attenuation, AuthRequest, AuthToken, MacaroonToken};
 use pyana_turn::turn::TurnResult;
@@ -429,11 +427,7 @@ impl PyanaEngine {
     /// action binding is not applicable (e.g., qualifying a node as a federation
     /// member). For action-authorized requests, use [`verify_presentation_bytes`]
     /// which enforces full security checks via [`present::verify_proof_complete`].
-    pub fn verify_membership_proof(
-        &self,
-        proof_bytes: &[u8],
-        federation_root: &[u8; 32],
-    ) -> bool {
+    pub fn verify_membership_proof(&self, proof_bytes: &[u8], federation_root: &[u8; 32]) -> bool {
         let wire_proof: WirePresentationProof = match postcard::from_bytes(proof_bytes) {
             Ok(p) => p,
             Err(_) => return false,

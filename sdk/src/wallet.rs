@@ -263,18 +263,23 @@ pub struct HeldToken {
     /// Never serialized — stays in memory only.
     #[serde(skip)]
     root_key: [u8; 32],
-    /// The issuer's root key, used ONLY for federation membership proofs.
+    /// A derived proof-only key for federation membership proofs.
     ///
-    /// For root tokens this equals `root_key`. For attenuated tokens created
-    /// locally (from a parent that held the root key) this is a copy of the
-    /// parent's root key — it allows generating ZK proofs (federation membership)
-    /// without granting the ability to mint or forge new tokens. For tokens
-    /// received via delegation (where the issuer key is unknown) this is zeroed.
+    /// This is a BLAKE3 key derivation of the issuer's root HMAC key:
+    /// `blake3::derive_key("pyana-proof-key-v1", &root_key)`.
+    /// It is NEVER the raw root key itself.
     ///
-    /// **SECURITY**: Possession of this key does NOT allow minting new root tokens
-    /// or modifying the HMAC chain — those operations require `root_key` (which
-    /// is zeroed for attenuated tokens). It only allows computing the federation
-    /// Merkle root, which is a one-way derivation.
+    /// For root tokens, this is derived at construction time from `root_key`.
+    /// For attenuated tokens, this is copied from the parent's `issuer_key`
+    /// (which is already derived). For tokens received via delegation (where
+    /// the issuer key is unknown), this is zeroed.
+    ///
+    /// **SECURITY**: Possession of this key does NOT allow:
+    /// - Minting new root tokens (requires the raw `root_key` for HMAC chain init)
+    /// - Forging or extending HMAC chains (HMAC verification requires `root_key`)
+    /// - Recovering the raw root key (BLAKE3 key derivation is one-way)
+    ///
+    /// It DOES allow computing the federation Merkle leaf hash for ZK proofs.
     #[serde(skip)]
     issuer_key: [u8; 32],
     /// Unique identifier for lookup.
@@ -290,15 +295,27 @@ pub struct HeldToken {
     /// decisions MUST check this field. An unverified token may have been forged or
     /// tampered with. Verification happens at presentation time when the token is
     /// submitted to a service that holds the root key.
-    #[serde(default = "default_verified_true")]
+    #[serde(default = "default_verified_false")]
     pub verified: bool,
+    /// Pre-generated federation membership proof (for delegated tokens).
+    ///
+    /// When a token is received via delegation, the delegator pre-generates a
+    /// Merkle membership proof for the REAL issuer key (which IS in the federation
+    /// tree). The delegatee stores this proof and uses it directly during proof
+    /// generation, bypassing the need to look up the proof_key in the federation tree
+    /// (which would fail since the tree contains real keys, not their BLAKE3 derivations).
+    ///
+    /// `None` for tokens minted locally (they can generate fresh proofs on the fly).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub membership_proof: Option<pyana_commit::merkle::MerkleProof>,
 }
 
 /// Default for deserialization of older snapshots that lack the `verified` field.
-/// Conservatively defaults to `true` to avoid breaking existing persisted wallets
-/// that only contain locally-minted tokens.
-fn default_verified_true() -> bool {
-    true
+/// Conservatively defaults to `false` — unverified until proven otherwise.
+/// Tokens that were minted locally or verified via HMAC chain will have this
+/// field explicitly set to `true` at creation time.
+fn default_verified_false() -> bool {
+    false
 }
 
 impl Drop for HeldToken {
@@ -324,8 +341,9 @@ impl HeldToken {
         // For root tokens, derive a proof-only key from the root key.
         // This ensures the issuer_key NEVER equals the root_key, preventing
         // key leakage through attenuation or delegation paths.
+        // Uses the same context string as AgentWallet::derive_proof_key().
         let issuer_key = if root_key != [0u8; 32] {
-            blake3::derive_key("pyana-issuer-proof-key-v1", &root_key)
+            blake3::derive_key("pyana-proof-key-v1", &root_key)
         } else {
             [0u8; 32]
         };
@@ -337,6 +355,7 @@ impl HeldToken {
             issuer_key,
             id,
             verified,
+            membership_proof: None,
         }
     }
 
@@ -362,6 +381,7 @@ impl HeldToken {
             issuer_key,
             id,
             verified: true, // Locally-attenuated from a verified parent
+            membership_proof: None,
         }
     }
 
@@ -388,11 +408,11 @@ impl HeldToken {
 
     /// Returns `true` if this token can generate ZK proofs.
     ///
-    /// A token can prove if it has the issuer key (for federation membership).
-    /// This is true for root tokens (issuer_key == root_key) and for attenuated
-    /// tokens created locally from a parent that held the root key.
+    /// A token can prove if it has the derived proof key (for federation membership).
+    /// This is true for root tokens (issuer_key = derive(root_key)) and for attenuated
+    /// tokens created locally from a parent that held the proof key.
     ///
-    /// Tokens received via delegation without an issuer key cannot prove;
+    /// Tokens received via delegation without a proof key cannot prove;
     /// use `prove_authorization_with_issuer_key()` for those.
     pub fn can_prove(&self) -> bool {
         self.issuer_key != [0u8; 32]
@@ -434,8 +454,9 @@ pub struct DelegatedToken {
     pub restrictions: Attenuation,
     /// Derived proof key for ZK proof generation by the delegatee.
     ///
-    /// This is derived from the issuer's root key via BLAKE3 key derivation:
-    /// `blake3::derive_key("pyana-proof-key-v1", issuer_key)`. It grants the
+    /// This is the token's `issuer_key`, which is already a one-way BLAKE3
+    /// derivation of the issuer's root HMAC key via
+    /// `blake3::derive_key("pyana-proof-key-v1", &root_key)`. It grants the
     /// delegatee the ability to generate federation membership proofs (ZK) but
     /// NOT the ability to mint or forge tokens (one-way derivation).
     ///
@@ -444,6 +465,20 @@ pub struct DelegatedToken {
     /// the delegator holds a token with proof capability.
     #[serde(default)]
     pub proof_key: Option<[u8; 32]>,
+    /// Pre-generated federation membership proof for the delegatee.
+    ///
+    /// The delegator (who holds the REAL issuer key and CAN generate membership
+    /// proofs from the federation tree) pre-generates this proof and includes it
+    /// in the delegation payload. The delegatee uses this proof directly instead
+    /// of trying to look up membership by `proof_key` (which is a BLAKE3 derivation
+    /// not present in the federation tree).
+    ///
+    /// **Security property**: The membership proof is bound to the specific federation
+    /// root at delegation time. If the federation root changes (e.g., issuer is removed),
+    /// this pre-generated proof becomes invalid and the delegatee can no longer prove
+    /// membership.
+    #[serde(default)]
+    pub membership_proof: Option<pyana_commit::merkle::MerkleProof>,
 }
 
 /// A turn signed by this wallet's identity, ready for submission.
@@ -817,21 +852,12 @@ impl AgentWallet {
     ) -> Result<DelegatedToken, SdkError> {
         let attenuated = self.attenuate(token, restrictions)?;
 
-        // Derive a proof key from the issuer key via BLAKE3 key derivation.
-        // This gives the delegatee proof capability (federation membership ZK proofs)
-        // without granting mint capability (the derivation is one-way).
+        // Pass through the derived proof key to the delegatee.
+        // The issuer_key is already a one-way derivation of the root key (never the
+        // raw root key itself), so it's safe to transmit to a less-trusted party.
         let proof_key = if token.can_prove() {
-            let issuer_key = if token.can_mint() {
-                token.root_key()
-            } else {
-                token.issuer_key()
-            };
-            // Only derive if the issuer key is non-zero (has proof capability).
-            if *issuer_key != [0u8; 32] {
-                Some(blake3::derive_key("pyana-proof-key-v1", issuer_key))
-            } else {
-                None
-            }
+            let key = token.issuer_key();
+            if *key != [0u8; 32] { Some(*key) } else { None }
         } else {
             None
         };
@@ -844,6 +870,67 @@ impl AgentWallet {
             delegatee: *to,
             restrictions: restrictions.clone(),
             proof_key,
+            membership_proof: None,
+        })
+    }
+
+    /// Delegate a token to another agent with a pre-generated federation membership proof.
+    ///
+    /// When a `federation_tree` is provided, the delegator pre-generates a federation
+    /// membership proof using the REAL issuer key (which IS in the tree). The delegatee
+    /// receives this proof and can use it directly during presentation — they do not need
+    /// to look up their `proof_key` (a BLAKE3 derivation) in the federation tree.
+    ///
+    /// Without a federation tree, the delegatee falls back to synthetic/test proofs or
+    /// must supply the tree at proof-generation time.
+    ///
+    /// # Arguments
+    ///
+    /// * `token` - The token to delegate from.
+    /// * `to` - The public key of the agent receiving the delegation.
+    /// * `restrictions` - Additional restrictions beyond those already on the token.
+    /// * `federation_tree` - Federation Merkle tree for pre-generating membership proofs.
+    pub fn delegate_with_tree(
+        &mut self,
+        token: &HeldToken,
+        to: &PublicKey,
+        restrictions: &Attenuation,
+        federation_tree: &pyana_commit::merkle::MerkleTree,
+    ) -> Result<DelegatedToken, SdkError> {
+        let attenuated = self.attenuate(token, restrictions)?;
+
+        // Pass through the derived proof key to the delegatee.
+        let proof_key = if token.can_prove() {
+            let key = token.issuer_key();
+            if *key != [0u8; 32] { Some(*key) } else { None }
+        } else {
+            None
+        };
+
+        // Pre-generate federation membership proof. The delegator looks up the REAL
+        // root key in the federation tree (the tree contains real keys, not their
+        // BLAKE3 derivations). The delegatee will use this proof directly at
+        // presentation time.
+        let membership_proof = if token.can_mint() {
+            // Root token holder: look up the real root_key in the federation tree.
+            federation_tree.membership_proof(token.root_key())
+        } else if let Some(ref pre_existing) = token.membership_proof {
+            // Delegating a delegated token: pass through the pre-generated proof.
+            // The proof is still bound to the same real issuer key and federation root.
+            Some(pre_existing.clone())
+        } else {
+            None
+        };
+
+        Ok(DelegatedToken {
+            token_bytes: attenuated.encoded.clone(),
+            service: attenuated.service.clone(),
+            label: attenuated.label.clone(),
+            id: attenuated.id.clone(),
+            delegatee: *to,
+            restrictions: restrictions.clone(),
+            proof_key,
+            membership_proof,
         })
     }
 
@@ -946,6 +1033,12 @@ impl AgentWallet {
             }
         }
 
+        // Store the pre-generated federation membership proof if provided.
+        // The delegator generated this from the REAL issuer key (in the federation tree).
+        // The delegatee uses it directly during proof generation, bypassing the lookup
+        // that would fail for the BLAKE3-derived proof_key.
+        held.membership_proof = delegated.membership_proof;
+
         self.tokens.push(held);
         Ok(())
     }
@@ -995,11 +1088,10 @@ impl AgentWallet {
             };
             // Best-effort: if the fold fails (e.g., root mismatch on first step),
             // we still append the receipt but skip IVC extension.
+            // Don't append to IVC state — it would be inconsistent.
+            let receipt_hash = receipt.receipt_hash();
             if let Err(e) = builder.add_fold(FoldDelta::new(fold)) {
-                tracing::warn!(
-                    "IVC fold failed (chain may be incomplete): {e}; \
-                     receipt will be appended but IVC state is stale"
-                );
+                tracing::warn!("IVC fold failed for receipt {:?}: {}", receipt_hash, e);
             }
         }
 
@@ -1282,13 +1374,9 @@ impl AgentWallet {
         let mut predicate_proofs: Vec<(usize, BridgePredicateProof)> = Vec::new();
 
         // Compute a state root for predicate fact commitments.
-        // Use issuer_key for attenuated tokens (root_key is zeroed).
-        let issuer_key = if token.can_mint() {
-            token.root_key()
-        } else {
-            token.issuer_key()
-        };
-        let state_root = Self::bytes_to_babybear(issuer_key);
+        // The issuer_key is always the derived proof key (never the raw root key),
+        // whether this is a root token or an attenuated token.
+        let state_root = Self::bytes_to_babybear(token.issuer_key());
 
         for (fact_index, disclosure_mode) in &disclosure.facts {
             let fact = match all_facts.get(*fact_index) {
@@ -1304,7 +1392,7 @@ impl AgentWallet {
                     predicate_type,
                     threshold,
                 } => {
-                    let value = Self::extract_fact_value(fact);
+                    let value = Self::extract_fact_value(fact)?;
                     let pred_bb = Self::trace_fact_predicate_bb(fact);
                     let term_bbs = Self::trace_fact_terms_bb(fact);
                     let fact_hash = poseidon2::hash_fact(pred_bb, &term_bbs);
@@ -1332,7 +1420,7 @@ impl AgentWallet {
                 } => {
                     // Generate a committed-threshold proof: value >= threshold
                     // where neither value nor threshold is revealed to third parties.
-                    let value = Self::extract_fact_value(fact);
+                    let value = Self::extract_fact_value(fact)?;
                     let pred_bb = Self::trace_fact_predicate_bb(fact);
                     let term_bbs = Self::trace_fact_terms_bb(fact);
                     let fact_hash = poseidon2::hash_fact(pred_bb, &term_bbs);
@@ -1399,18 +1487,26 @@ impl AgentWallet {
     }
 
     /// Extract a numeric value from a trace fact's first term.
-    fn extract_fact_value(fact: &TraceFact) -> u32 {
+    ///
+    /// Returns an error if the term is a variable — predicate proofs cannot
+    /// operate on unground variables because there is no concrete value to prove
+    /// a predicate over.
+    fn extract_fact_value(fact: &TraceFact) -> Result<u32, SdkError> {
         if let Some(term) = fact.terms.first() {
             match term {
-                pyana_trace::Term::Int(v) => (*v).max(0).min(u32::MAX as i64) as u32,
+                pyana_trace::Term::Int(v) => Ok((*v).max(0).min(u32::MAX as i64) as u32),
                 pyana_trace::Term::Const(sym) => {
-                    u32::from_le_bytes([sym[0], sym[1], sym[2], sym[3]])
-                        % pyana_circuit::field::BABYBEAR_P
+                    Ok(u32::from_le_bytes([sym[0], sym[1], sym[2], sym[3]])
+                        % pyana_circuit::field::BABYBEAR_P)
                 }
-                pyana_trace::Term::Var(_) => 0,
+                pyana_trace::Term::Var(_) => {
+                    return Err(SdkError::InvalidWitness(
+                        "cannot prove predicates on unground variables".into(),
+                    ));
+                }
             }
         } else {
-            0
+            Ok(0)
         }
     }
 
@@ -1481,8 +1577,8 @@ impl AgentWallet {
         // Decode the macaroon structure (this doesn't require the root key — it just
         // parses the MsgPack encoding). We use a zeroed key since from_encoded only
         // stores the key, it doesn't verify during decode.
-        let decoded = MacaroonToken::from_encoded(&token.encoded, [0u8; 32])
-            .map_err(SdkError::Token)?;
+        let decoded =
+            MacaroonToken::from_encoded(&token.encoded, [0u8; 32]).map_err(SdkError::Token)?;
 
         // Extract first-party caveats directly from the macaroon structure.
         // The caveats field is public on Macaroon and populated during deserialization.
@@ -1580,25 +1676,27 @@ impl AgentWallet {
         token: &HeldToken,
         request: &AuthRequest,
     ) -> Result<BridgePresentationProof, SdkError> {
-        // SECURITY: Use the token's actual root_key for the federation membership proof.
+        // SECURITY: Use the derived proof key for federation membership proofs.
+        // The raw root_key is NEVER passed to the builder — only the one-way derived
+        // proof key is used as the leaf in the federation Merkle tree.
         // Attenuated tokens (root_key == zeroed) cannot generate federation membership
         // proofs — they must use `prove_authorization_with_issuer_key()` instead,
-        // providing the issuer's root key out-of-band.
+        // providing the issuer's proof key out-of-band.
         if !token.can_mint() {
             return Err(SdkError::MissingKey(
                 "attenuated tokens cannot generate federation membership proofs; \
-                 use prove_authorization_with_issuer_key() with the issuer's root key, \
+                 use prove_authorization_with_issuer_key() with the issuer's proof key, \
                  or use the root token holder to prove directly"
                     .into(),
             ));
         }
 
-        let issuer_key = *token.root_key();
-        let federation_root_bb = Self::compute_federation_root_bb(&issuer_key);
+        let proof_key = Self::derive_proof_key(token.root_key());
+        let federation_root_bb = Self::compute_federation_root_bb(&proof_key);
         let federation_root = Self::bb_to_bytes(federation_root_bb);
 
         let mut builder = pyana_bridge::BridgePresentationBuilder::new_with_root_bb(
-            issuer_key,
+            proof_key,
             federation_root,
             federation_root_bb,
         );
@@ -1652,7 +1750,7 @@ impl AgentWallet {
         // Verify the issuer key is not zeroed (caller must provide a real key).
         if *issuer_key == [0u8; 32] {
             return Err(SdkError::MissingKey(
-                "issuer_key must not be zeroed; provide the real issuer root key".into(),
+                "issuer_key must not be zeroed; provide the issuer's derived proof key".into(),
             ));
         }
 
@@ -1664,6 +1762,14 @@ impl AgentWallet {
             federation_root,
             federation_root_bb,
         );
+
+        // If the token has a pre-generated membership proof (from delegation), attach
+        // it to the builder. This allows the delegatee to prove federation membership
+        // without needing to look up their proof_key in the federation tree (which would
+        // fail since the tree contains real keys, not BLAKE3 derivations).
+        if let Some(ref membership_proof) = token.membership_proof {
+            builder.with_pre_generated_membership_proof(membership_proof.clone());
+        }
 
         // Decode the attenuated token. For attenuated tokens the internal root_key is
         // zeroed, but we can still decode the macaroon structure (caveats, identifiers).
@@ -1693,18 +1799,18 @@ impl AgentWallet {
         if !token.can_mint() {
             return Err(SdkError::MissingKey(
                 "attenuated tokens cannot generate selective disclosure proofs; \
-                 use prove_authorization_with_issuer_key() with the issuer's root key, \
+                 use prove_authorization_with_issuer_key() with the issuer's proof key, \
                  or use the root token holder to prove directly"
                     .into(),
             ));
         }
 
-        let issuer_key = *token.root_key();
-        let federation_root_bb = Self::compute_federation_root_bb(&issuer_key);
+        let proof_key = Self::derive_proof_key(token.root_key());
+        let federation_root_bb = Self::compute_federation_root_bb(&proof_key);
         let federation_root = Self::bb_to_bytes(federation_root_bb);
 
         let mut builder = pyana_bridge::BridgePresentationBuilder::new_with_root_bb(
-            issuer_key,
+            proof_key,
             federation_root,
             federation_root_bb,
         );
@@ -1734,7 +1840,7 @@ impl AgentWallet {
     ) -> Result<BridgePresentationProof, SdkError> {
         if *issuer_key == [0u8; 32] {
             return Err(SdkError::MissingKey(
-                "issuer_key must not be zeroed; provide the real issuer root key".into(),
+                "issuer_key must not be zeroed; provide the issuer's derived proof key".into(),
             ));
         }
 
@@ -1746,6 +1852,11 @@ impl AgentWallet {
             federation_root,
             federation_root_bb,
         );
+
+        // Attach pre-generated membership proof if available (delegation path).
+        if let Some(ref membership_proof) = token.membership_proof {
+            builder.with_pre_generated_membership_proof(membership_proof.clone());
+        }
 
         // Set the revealed facts commitment before proving.
         builder.set_revealed_facts_commitment(commitment);
@@ -1799,12 +1910,12 @@ impl AgentWallet {
             ));
         }
 
-        let issuer_key = *root_token.root_key();
-        let federation_root_bb = Self::compute_federation_root_bb(&issuer_key);
+        let proof_key = Self::derive_proof_key(root_token.root_key());
+        let federation_root_bb = Self::compute_federation_root_bb(&proof_key);
         let federation_root = Self::bb_to_bytes(federation_root_bb);
 
         let mut builder = pyana_bridge::BridgePresentationBuilder::new_with_root_bb(
-            issuer_key,
+            proof_key,
             federation_root,
             federation_root_bb,
         );
@@ -1896,10 +2007,10 @@ impl AgentWallet {
         let value_bb = BabyBear::new(attribute_value);
         let fact_hash = poseidon2::hash_fact(attr_bb, &[value_bb, BabyBear::ZERO, BabyBear::ZERO]);
 
-        // Compute a state root from the token's issuer key (deterministic for testing).
+        // Compute a state root from the token's derived proof key (deterministic for testing).
         // In production, this would come from the committed Merkle tree of the token state.
-        let issuer_key = token.root_key();
-        let state_root = Self::bytes_to_babybear(issuer_key);
+        let proof_key = Self::derive_proof_key(token.root_key());
+        let state_root = Self::bytes_to_babybear(&proof_key);
 
         // Generate the predicate proof via the bridge.
         let proof = pyana_bridge::prove_predicate_for_fact(
@@ -1954,9 +2065,9 @@ impl AgentWallet {
         // Decode the token to verify it's valid.
         let _decoded = token.decode()?;
 
-        // Derive the state root from the token's root key (consistent with other proofs).
-        let issuer_key = token.root_key();
-        let state_root = Self::bytes_to_babybear(issuer_key);
+        // Derive the state root from the token's proof key (consistent with other proofs).
+        let proof_key = Self::derive_proof_key(token.root_key());
+        let state_root = Self::bytes_to_babybear(&proof_key);
 
         // Convert inputs to BabyBear values and compute per-attribute fact hashes.
         let input_values: Vec<BabyBear> = inputs
@@ -2112,8 +2223,8 @@ impl AgentWallet {
         let value_bb = BabyBear::new(attribute_value as u32);
         let fact_hash = poseidon2::hash_fact(attr_bb, &[value_bb, BabyBear::ZERO, BabyBear::ZERO]);
 
-        let issuer_key = token.root_key();
-        let state_root = Self::bytes_to_babybear(issuer_key);
+        let proof_key = Self::derive_proof_key(token.root_key());
+        let state_root = Self::bytes_to_babybear(&proof_key);
         let fact_commitment = pyana_circuit::compute_fact_commitment(fact_hash, state_root);
 
         let witness = pyana_circuit::CommittedThresholdWitness {
@@ -2165,9 +2276,9 @@ impl AgentWallet {
         // Decode the token to verify it's valid.
         let _decoded = token.decode()?;
 
-        // Compute a state root from the token's issuer key.
-        let issuer_key = token.root_key();
-        let state_root = Self::bytes_to_babybear(issuer_key);
+        // Compute a state root from the token's derived proof key.
+        let proof_key = Self::derive_proof_key(token.root_key());
+        let state_root = Self::bytes_to_babybear(&proof_key);
 
         // Prove via the bridge layer.
         let proof = pyana_bridge::prove_predicate_program(program, attribute_values, state_root)
@@ -2208,9 +2319,9 @@ impl AgentWallet {
         // Decode the token to verify it's valid.
         let _decoded = token.decode()?;
 
-        // Compute a state root from the token's issuer key.
-        let issuer_key = token.root_key();
-        let state_root = Self::bytes_to_babybear(issuer_key);
+        // Compute a state root from the token's derived proof key.
+        let proof_key = Self::derive_proof_key(token.root_key());
+        let state_root = Self::bytes_to_babybear(&proof_key);
 
         // Prove via the bridge layer (full private state path).
         let proof = pyana_bridge::prove_predicate_program_full(program, private_state, state_root)
@@ -2549,8 +2660,12 @@ impl AgentWallet {
     /// It DOES allow:
     /// - Computing the federation Merkle leaf hash (proving issuer membership)
     /// - Generating ZK proofs bound to this issuer's identity
-    fn derive_proof_key(root_key: &[u8; 32]) -> [u8; 32] {
-        blake3::derive_key("pyana-issuer-proof-key-v1", root_key)
+    ///
+    /// The context string "pyana-proof-key-v1" is used for domain separation.
+    /// This MUST match the derivation in [`HeldToken::new()`], [`delegate()`], and
+    /// any external delegation protocol implementations.
+    pub(crate) fn derive_proof_key(root_key: &[u8; 32]) -> [u8; 32] {
+        blake3::derive_key("pyana-proof-key-v1", root_key)
     }
 
     /// Derive a deterministic sibling hash for Merkle path construction.
@@ -2838,9 +2953,16 @@ mod tests {
         assert!(!attenuated.can_mint());
         assert_eq!(attenuated.root_key(), &[0u8; 32]);
 
-        // But it CAN prove (has issuer_key for federation membership).
+        // But it CAN prove (has derived issuer_key for federation membership).
         assert!(attenuated.can_prove());
-        assert_eq!(attenuated.issuer_key(), &root_key);
+        // The issuer_key is a one-way derivation of the root key, never the raw key.
+        let expected_proof_key = blake3::derive_key("pyana-proof-key-v1", &root_key);
+        assert_eq!(attenuated.issuer_key(), &expected_proof_key);
+        assert_ne!(
+            attenuated.issuer_key(),
+            &root_key,
+            "issuer_key must NOT be the raw root key"
+        );
 
         // The attenuated token cannot be used to mint new tokens (prove_authorization
         // with the direct method still fails — it requires can_mint()).
@@ -3028,7 +3150,13 @@ mod tests {
         // The doubly-attenuated token should still be able to prove.
         assert!(!att2.can_mint());
         assert!(att2.can_prove());
-        assert_eq!(att2.issuer_key(), &root_key);
+        let expected_proof_key = blake3::derive_key("pyana-proof-key-v1", &root_key);
+        assert_eq!(att2.issuer_key(), &expected_proof_key);
+        assert_ne!(
+            att2.issuer_key(),
+            &root_key,
+            "issuer_key must NOT be the raw root key"
+        );
 
         // Authorize in Private mode.
         let request = pyana_token::AuthRequest {
@@ -3117,6 +3245,7 @@ mod tests {
             delegatee: holder_wallet.public_key(),
             restrictions: Attenuation::default(),
             proof_key: None, // No proof_key (legacy delegation)
+            membership_proof: None,
         };
 
         // This will fail because "em2_test" is not a valid token, but let's test
@@ -3142,5 +3271,69 @@ mod tests {
         };
         let result = holder_wallet.authorize(&held, &request, VerificationMode::FullyPrivate);
         assert!(result.is_err());
+    }
+
+    /// Roundtrip test: wallet.authorize() produces bytes that engine.verify_presentation_against()
+    /// can decode and verify.
+    ///
+    /// This is the P0 regression test for the format mismatch where the wallet serialized
+    /// raw STARK bytes via `stark::proof_to_bytes` but the verifier expected a postcard-encoded
+    /// `WirePresentationProof`. Both sides now use the same format.
+    #[test]
+    fn test_wallet_authorize_engine_verify_roundtrip() {
+        use crate::embed::{EngineConfig, PyanaEngine};
+
+        let mut wallet = AgentWallet::new();
+        let root_key = [0xEE; 32];
+        let root_token = wallet.mint_token(&root_key, "data");
+
+        // Attenuate the token (restrict to read on "data" service).
+        let restrictions = Attenuation {
+            services: vec![("data".to_string(), "r".to_string())],
+            ..Default::default()
+        };
+        let attenuated = wallet.attenuate(&root_token, &restrictions).unwrap();
+        assert!(attenuated.can_prove());
+
+        // Generate the proof via wallet.authorize(FullyPrivate).
+        let request = pyana_token::AuthRequest {
+            service: Some("data".into()),
+            action: Some("r".into()),
+            ..Default::default()
+        };
+        let presentation = wallet
+            .authorize(&attenuated, &request, VerificationMode::FullyPrivate)
+            .expect("authorize should succeed");
+
+        let proof_bytes = match &presentation {
+            AuthorizationPresentation::Private { proof, conclusion } => {
+                assert!(*conclusion, "authorization should allow");
+                proof.clone()
+            }
+            other => panic!("expected Private presentation, got: {:?}", other),
+        };
+
+        // Compute the federation root (same derivation the wallet uses internally).
+        let federation_root_bb = AgentWallet::compute_federation_root_bb(&root_key);
+        let federation_root = AgentWallet::bb_to_bytes(federation_root_bb);
+
+        // Create an engine and set the federation root to match.
+        let mut engine = PyanaEngine::new(EngineConfig::for_testing());
+        engine.set_federation_root(federation_root);
+
+        // The key assertion: verify_presentation_against must successfully decode the proof.
+        // (Before the fix, this would fail with "proof decode failed" because the wallet
+        // serialized raw STARK bytes instead of a postcard WirePresentationProof.)
+        let result =
+            engine.verify_presentation_against(&proof_bytes, &federation_root, "r", "data");
+
+        // The proof should decode without error. Whether full cryptographic verification
+        // passes depends on STARK verification and freshness checks, but the decode must
+        // succeed -- that's the P0 fix we're testing.
+        assert!(
+            result.is_ok(),
+            "verify_presentation_against should not return a decode error, got: {:?}",
+            result.err()
+        );
     }
 }

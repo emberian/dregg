@@ -95,7 +95,8 @@ pub fn verify_authorization_proof(
     if pi.len() < 2 + pyana_circuit::ACTION_BINDING_WIDTH {
         return Ok(false);
     }
-    let expected_binding = pyana_circuit::compute_action_binding(expected_action, expected_resource);
+    let expected_binding =
+        pyana_circuit::compute_action_binding(expected_action, expected_resource);
     for i in 0..pyana_circuit::ACTION_BINDING_WIDTH {
         if pi[2 + i] != expected_binding[i] {
             return Ok(false); // Proof not bound to this (action, resource)
@@ -205,7 +206,8 @@ pub fn verify_selective_disclosure(
     if pi.len() < 2 + pyana_circuit::ACTION_BINDING_WIDTH {
         return Ok(false);
     }
-    let expected_binding = pyana_circuit::compute_action_binding(expected_action, expected_resource);
+    let expected_binding =
+        pyana_circuit::compute_action_binding(expected_action, expected_resource);
     for i in 0..pyana_circuit::ACTION_BINDING_WIDTH {
         if pi[2 + i] != expected_binding[i] {
             return Ok(false); // Proof not bound to this (action, resource)
@@ -386,7 +388,12 @@ pub fn verify_production(
     use pyana_circuit::proof_tier;
 
     // Perform the standard verification (including action/resource binding).
-    let valid = verify_authorization_proof(proof_bytes, federation_root, expected_action, expected_resource)?;
+    let valid = verify_authorization_proof(
+        proof_bytes,
+        federation_root,
+        expected_action,
+        expected_resource,
+    )?;
     if !valid {
         return Err(SdkError::Wire("proof verification failed".into()));
     }
@@ -428,7 +435,12 @@ pub fn verify_any_tier(
 ) -> Result<pyana_circuit::VerifiedProof, SdkError> {
     use pyana_circuit::proof_tier;
 
-    let valid = verify_authorization_proof(proof_bytes, federation_root, expected_action, expected_resource)?;
+    let valid = verify_authorization_proof(
+        proof_bytes,
+        federation_root,
+        expected_action,
+        expected_resource,
+    )?;
     if !valid {
         return Err(SdkError::Wire("proof verification failed".into()));
     }
@@ -691,7 +703,8 @@ mod tests {
         let mut federation_root_bytes = [0u8; 32];
         federation_root_bytes[0..4].copy_from_slice(&federation_root.as_u32().to_le_bytes());
 
-        let result = verify_selective_disclosure(&proof_bytes, &federation_root_bytes, "", "", &facts);
+        let result =
+            verify_selective_disclosure(&proof_bytes, &federation_root_bytes, "", "", &facts);
 
         // Must NOT return Ok(true): the proof has no commitment bound.
         match result {

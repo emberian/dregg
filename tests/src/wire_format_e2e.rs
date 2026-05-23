@@ -8,13 +8,13 @@
 //! If this test passes, the headline product demo works.
 //! If it fails, we have a wire protocol mismatch.
 
-use pyana_bridge::present::{WirePresentationProof, bytes_to_babybear};
+use pyana_bridge::present::WirePresentationProof;
 use pyana_circuit::BabyBear;
 use pyana_circuit::merkle_air::MerkleAir;
 use pyana_circuit::poseidon2;
 use pyana_sdk::wallet::{AgentWallet, VerificationMode};
 use pyana_sdk::{EngineConfig, PyanaEngine};
-use pyana_token::{Attenuation, AuthRequest};
+use pyana_token::AuthRequest;
 
 // =============================================================================
 // Helpers (mirror the wallet's internal derivation logic)
@@ -53,8 +53,7 @@ fn hash_index(level: usize, sibling_idx: usize, key: &[u8; 32]) -> u32 {
     hasher.update(key);
     let hash = hasher.finalize();
     let bytes = hash.as_bytes();
-    u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
-        % pyana_circuit::field::BABYBEAR_P
+    u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) % pyana_circuit::field::BABYBEAR_P
 }
 
 fn bb_to_bytes(bb: BabyBear) -> [u8; 32] {
@@ -144,11 +143,24 @@ fn wire_format_e2e_happy_path_and_adversarial() {
             // SUCCESS: The wire format round-trip works end-to-end.
         }
         Ok(false) => {
+            // Decode and call verify_proof_complete directly for detailed diagnostics.
+            let wire_proof: WirePresentationProof =
+                postcard::from_bytes(&proof_bytes).expect("already decoded above");
+            let detail = pyana_bridge::verify_proof_complete(
+                &wire_proof,
+                "read",
+                "storage",
+                &federation_root_bytes,
+                now_ts,
+                300,
+            );
             panic!(
-                "WIRE FORMAT MISMATCH (P0): engine.verify_presentation_bytes() returned Ok(false).\n\
+                "WIRE FORMAT / BINDING MISMATCH (P0): engine.verify_presentation_bytes() returned Ok(false).\n\
+                 Detailed verify_proof_complete error: {:?}\n\
+                 \n\
                  This means the proof bytes produced by wallet.authorize() do not satisfy\n\
-                 the engine's verification checks (root, action binding, STARK, freshness,\n\
-                 or composition commitment). The wire format P0 bug is present."
+                 the engine's verification checks. The wire format or binding P0 bug is present.",
+                detail.err()
             );
         }
         Err(e) => {
@@ -204,12 +216,8 @@ fn wire_format_e2e_happy_path_and_adversarial() {
     let wrong_root_bb = compute_federation_root_bb(&wrong_root);
     let wrong_root_bytes = bb_to_bytes(wrong_root_bb);
 
-    let wrong_root_result = engine.verify_presentation_against(
-        &proof_bytes,
-        &wrong_root_bytes,
-        "read",
-        "storage",
-    );
+    let wrong_root_result =
+        engine.verify_presentation_against(&proof_bytes, &wrong_root_bytes, "read", "storage");
     match wrong_root_result {
         Ok(true) => {
             panic!(

@@ -89,6 +89,13 @@ pub struct BridgePresentationBuilder {
     /// When set, `build_issuer_membership` uses a real Merkle path from this tree
     /// instead of the synthetic/deterministic fallback.
     federation_tree: Option<MerkleTree>,
+    /// Pre-generated federation membership proof (for delegated tokens).
+    ///
+    /// When set, `build_issuer_membership` and `build_issuer_membership_poseidon2` use
+    /// this proof directly instead of looking up the issuer_key in the federation tree.
+    /// This is the delegation architecture fix: the delegator (who has the real issuer key
+    /// in the tree) pre-generates the proof and passes it to the delegatee.
+    pre_generated_membership_proof: Option<MerkleProof>,
     /// Commitment to the set of facts being selectively disclosed.
     ///
     /// For selective disclosure mode, this is computed by the SDK before calling
@@ -351,6 +358,7 @@ impl BridgePresentationBuilder {
             root_token: None,
             auth_state: TokenState::new(),
             federation_tree: None,
+            pre_generated_membership_proof: None,
             revealed_facts_commitment: WideHash::ZERO,
         }
     }
@@ -374,6 +382,7 @@ impl BridgePresentationBuilder {
             root_token: None,
             auth_state: TokenState::new(),
             federation_tree: None,
+            pre_generated_membership_proof: None,
             revealed_facts_commitment: WideHash::ZERO,
         }
     }
@@ -406,6 +415,23 @@ impl BridgePresentationBuilder {
         self.federation_root = root_bytes;
         self.federation_root_bb = bytes_to_babybear(&root_bytes);
         self.federation_tree = Some(tree);
+        self
+    }
+
+    /// Attach a pre-generated federation membership proof for delegation scenarios.
+    ///
+    /// When a delegatee holds a `proof_key` (BLAKE3 derivation of the real issuer key),
+    /// they cannot look up their key in the federation tree (which stores real keys).
+    /// Instead, the delegator pre-generates the membership proof at delegation time
+    /// and the delegatee passes it here.
+    ///
+    /// When this is set, `build_issuer_membership` and `build_issuer_membership_poseidon2`
+    /// use this proof directly instead of querying the federation tree.
+    ///
+    /// The `federation_root` on this builder must still be set correctly (matching the
+    /// root the proof was generated against) for the proof to verify.
+    pub fn with_pre_generated_membership_proof(&mut self, proof: MerkleProof) -> &mut Self {
+        self.pre_generated_membership_proof = Some(proof);
         self
     }
 
@@ -1665,6 +1691,14 @@ impl BridgePresentationBuilder {
         &self,
         issuer_key_hash: BabyBear,
     ) -> Result<MerkleWitness, AuthError> {
+        // Delegation path: use pre-generated membership proof if available.
+        // The delegator pre-generated this proof using the REAL issuer key (which IS
+        // in the federation tree). The delegatee's proof_key is a BLAKE3 derivation that
+        // would NOT be found in the tree directly.
+        if let Some(proof) = &self.pre_generated_membership_proof {
+            return self.build_issuer_membership_from_proof(proof, issuer_key_hash);
+        }
+
         // Production path: use real federation tree if available.
         if let Some(tree) = &self.federation_tree {
             return self.build_issuer_membership_from_tree(tree, issuer_key_hash);
@@ -1728,6 +1762,53 @@ impl BridgePresentationBuilder {
         })
     }
 
+    /// Build issuer membership from a pre-generated MerkleProof (linear binding).
+    ///
+    /// This is used in the delegation path: the delegator pre-generated the proof
+    /// using the REAL issuer key. The delegatee converts it to a circuit witness
+    /// using the `issuer_key_hash` (which is derived from their proof_key) for the
+    /// leaf computation, but uses the pre-generated path (siblings/positions) directly.
+    ///
+    /// Note: the `issuer_key_hash` here is computed from the proof_key (the BLAKE3
+    /// derivation). The proof's path is valid for the REAL issuer key in the tree.
+    /// The circuit witness uses the path from the pre-generated proof but recomputes
+    /// parents from the leaf hash of the real issuer key's Poseidon2 encoding.
+    fn build_issuer_membership_from_proof(
+        &self,
+        proof: &MerkleProof,
+        issuer_key_hash: BabyBear,
+    ) -> Result<MerkleWitness, AuthError> {
+        // Convert the pre-generated proof's leaf_hash to a BabyBear field element.
+        // This is the hash of the REAL issuer key, not the proof_key.
+        let real_leaf_hash = bytes_to_babybear(&proof.leaf_hash);
+
+        let mut levels = Vec::with_capacity(proof.path_indices.len());
+        let mut current = real_leaf_hash;
+
+        for i in 0..proof.path_indices.len() {
+            let position = proof.path_indices[i];
+            let siblings = [
+                bytes_to_babybear(&proof.siblings[i][0]),
+                bytes_to_babybear(&proof.siblings[i][1]),
+                bytes_to_babybear(&proof.siblings[i][2]),
+            ];
+            let parent = MerkleAir::compute_parent(current, position, &siblings);
+            levels.push(MerkleLevelWitness { position, siblings });
+            current = parent;
+        }
+
+        // The computed root must match the federation root.
+        if current != self.federation_root_bb {
+            return Err(AuthError::IssuerNotInFederation);
+        }
+
+        Ok(MerkleWitness {
+            leaf_hash: real_leaf_hash,
+            levels,
+            expected_root: current,
+        })
+    }
+
     /// Synthetic/deterministic issuer membership proof (TESTING ONLY).
     ///
     /// Constructs a Merkle path from BLAKE3-derived sibling values. This is NOT
@@ -1785,6 +1866,12 @@ impl BridgePresentationBuilder {
         &self,
         issuer_key_hash: BabyBear,
     ) -> Result<MerkleWitness, AuthError> {
+        // Delegation path: use pre-generated membership proof if available.
+        // Uses Poseidon2 hashing to convert the byte-level proof to a field-level witness.
+        if let Some(proof) = &self.pre_generated_membership_proof {
+            return self.build_issuer_membership_poseidon2_from_proof(proof, issuer_key_hash);
+        }
+
         // Production path: use real federation tree if available.
         if let Some(tree) = &self.federation_tree {
             return self.build_issuer_membership_poseidon2_from_tree(tree, issuer_key_hash);
@@ -1846,6 +1933,61 @@ impl BridgePresentationBuilder {
 
         Ok(MerkleWitness {
             leaf_hash: issuer_key_hash,
+            levels,
+            expected_root: current,
+        })
+    }
+
+    /// Build Poseidon2 issuer membership from a pre-generated MerkleProof.
+    ///
+    /// This is the Poseidon2 variant of the delegation path. The delegator pre-generated
+    /// the proof using the REAL issuer key. We convert the byte-level siblings to BabyBear
+    /// field elements and use Poseidon2 hashing (hash_4_to_1) to compute parents.
+    ///
+    /// The leaf_hash in the proof corresponds to the REAL issuer key, so we use it
+    /// (converted to BabyBear) as the starting leaf for the witness computation.
+    fn build_issuer_membership_poseidon2_from_proof(
+        &self,
+        proof: &MerkleProof,
+        _issuer_key_hash: BabyBear,
+    ) -> Result<MerkleWitness, AuthError> {
+        // Use the pre-generated proof's leaf_hash (the REAL issuer key hash from the tree).
+        let real_leaf_hash = bytes_to_babybear(&proof.leaf_hash);
+
+        let mut levels = Vec::with_capacity(proof.path_indices.len());
+        let mut current = real_leaf_hash;
+
+        for i in 0..proof.path_indices.len() {
+            let position = proof.path_indices[i];
+            let siblings = [
+                bytes_to_babybear(&proof.siblings[i][0]),
+                bytes_to_babybear(&proof.siblings[i][1]),
+                bytes_to_babybear(&proof.siblings[i][2]),
+            ];
+
+            // Use Poseidon2 hashing: arrange children by position, hash with hash_4_to_1
+            let mut children = [BabyBear::ZERO; 4];
+            let mut sib_idx = 0;
+            for j in 0..4u8 {
+                if j == position {
+                    children[j as usize] = current;
+                } else {
+                    children[j as usize] = siblings[sib_idx];
+                    sib_idx += 1;
+                }
+            }
+            let parent = poseidon2::hash_4_to_1(&children);
+
+            levels.push(MerkleLevelWitness { position, siblings });
+            current = parent;
+        }
+
+        if current != self.federation_root_bb {
+            return Err(AuthError::IssuerNotInFederation);
+        }
+
+        Ok(MerkleWitness {
+            leaf_hash: real_leaf_hash,
             levels,
             expected_root: current,
         })
@@ -2128,12 +2270,15 @@ pub fn verify_presentation_full(
             real.derivation_proof.public_inputs[0]
         };
         let presentation_tag = proof.circuit_proof.public_inputs.presentation_tag;
-        // Hash the 4-element presentation tag into a single BabyBear for composition.
-        let tag_hash = poseidon2::hash_many(&[presentation_tag]);
-
+        // The circuit PI already stores the narrow (single-element) presentation tag,
+        // which is compute_presentation_tag_narrow(). Use it directly — no re-hashing.
         let recomputed = WideHash::from_poseidon2(
             "pyana-composition-v1",
-            &[fold_chain_commitment, derivation_state_root, tag_hash],
+            &[
+                fold_chain_commitment,
+                derivation_state_root,
+                presentation_tag,
+            ],
         );
 
         if recomputed != proof.composition_commitment {
@@ -2393,7 +2538,11 @@ pub fn verify_proof_complete(
 
         let recomputed = WideHash::from_poseidon2(
             "pyana-composition-v1",
-            &[fold_chain_commitment, derivation_state_root, presentation_tag],
+            &[
+                fold_chain_commitment,
+                derivation_state_root,
+                presentation_tag,
+            ],
         );
 
         if recomputed != wire_proof.composition_commitment {
@@ -2732,11 +2881,15 @@ pub fn verify_presentation_complete(
         real.derivation_proof.public_inputs[0]
     };
     let presentation_tag = proof.circuit_proof.public_inputs.presentation_tag;
-    let tag_hash = poseidon2::hash_many(&[presentation_tag]);
-
+    // The circuit PI already stores the narrow (single-element) presentation tag,
+    // which is compute_presentation_tag_narrow(). Use it directly — no re-hashing.
     let recomputed = WideHash::from_poseidon2(
         "pyana-composition-v1",
-        &[fold_chain_commitment, derivation_state_root, tag_hash],
+        &[
+            fold_chain_commitment,
+            derivation_state_root,
+            presentation_tag,
+        ],
     );
 
     if recomputed != proof.composition_commitment {
