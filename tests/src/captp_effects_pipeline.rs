@@ -8,11 +8,8 @@
 //! - Tampered traces fail verification
 //! - Multiple CapTP effects can be combined in a single turn/proof
 
-use pyana_circuit::effect_vm::{
-    self, CellState, Effect, EffectVmAir, compute_effects_hash, generate_effect_vm_trace,
-};
+use pyana_circuit::effect_vm::{CellState, Effect, EffectVmAir, generate_effect_vm_trace};
 use pyana_circuit::field::BabyBear;
-use pyana_circuit::poseidon2::hash_2_to_1;
 use pyana_circuit::stark::{self, StarkProof};
 
 // =============================================================================

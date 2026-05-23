@@ -33,6 +33,7 @@
         <a class="docs-sidebar__link" href="setup.html">Node Setup</a>
         <a class="docs-sidebar__link" href="federation.html">Joining a Federation</a>
         <a class="docs-sidebar__link" href="bridge.html">Bridge Nodes</a>
+        <a class="docs-sidebar__link" href="relay.html">Relay Operators</a>
         <a class="docs-sidebar__link" href="monitoring.html">Monitoring</a>
         <a class="docs-sidebar__link" href="security.html">Security Hardening</a>
       </div>
@@ -70,6 +71,7 @@
         <li><a href="setup.html">Node Setup</a> -- Initialize, configure, and run pyana-node</li>
         <li><a href="federation.html">Joining a Federation</a> -- Connect to peers, sync state</li>
         <li><a href="bridge.html">Bridge Nodes</a> -- Relay across federations</li>
+        <li><a href="relay.html">Relay Operators</a> -- Hosted inbox service (store-and-forward, earns fees)</li>
         <li><a href="monitoring.html">Monitoring</a> -- Status, tracing, logs</li>
         <li><a href="security.html">Security Hardening</a> -- TLS, file permissions, rate limits</li>
       </ul>
@@ -117,6 +119,8 @@
   +-- MCP Server (stdio)         -- AI agent tool interface
   |
   +-- Bridge (port 8421)         -- Cross-federation relay
+  |
+  +-- Relay (port 3100)          -- Hosted inbox operator (store-and-forward)
   |
   +-- Storage (redb)             -- Commitment tree + nullifiers
         ~/.pyana/                 -- Data directory</code></pre>

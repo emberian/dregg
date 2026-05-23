@@ -251,6 +251,7 @@ impl SimCapTpSession {
             WireMessage::DropRemoteRef {
                 from_federation,
                 cell_id,
+                session_epoch: _,
             } => {
                 let fed_id = FederationId(*from_federation);
                 let cell = CellId(*cell_id);
@@ -276,6 +277,7 @@ impl SimCapTpSession {
             WireMessage::DropRemoteRef {
                 from_federation,
                 cell_id,
+                session_epoch: _,
             } => {
                 let fed_id = FederationId(*from_federation);
                 let cell = CellId(*cell_id);
@@ -388,6 +390,7 @@ mod tests {
         session.send_b_to_a(WireMessage::DropRemoteRef {
             from_federation: fed_b_id().0,
             cell_id: cell.0,
+            session_epoch: 0,
         });
         session.deliver_pending();
 

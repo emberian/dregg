@@ -13,6 +13,7 @@ mod genesis;
 pub mod gossip;
 mod mcp;
 pub mod metrics;
+mod relay_service;
 mod routing_table;
 mod state;
 mod ws;
@@ -146,6 +147,61 @@ enum Command {
         output: PathBuf,
     },
 
+    /// Run as a hosted inbox relay operator.
+    ///
+    /// Starts an HTTP server that accepts CapTP store-and-forward messages,
+    /// hosts inboxes for subscribed users, charges deposits, bonds computrons,
+    /// runs periodic GC, and exposes status/monitoring endpoints.
+    Relay {
+        /// Port for the relay HTTP API.
+        #[arg(long, default_value = "3100")]
+        port: u16,
+
+        /// Bond amount in computrons (operator stake).
+        #[arg(long, default_value = "10000")]
+        bond: u64,
+
+        /// Maximum total inbox capacity to host.
+        #[arg(long, default_value = "100000")]
+        max_capacity: usize,
+
+        /// GC interval in seconds.
+        #[arg(long, default_value = "300")]
+        gc_interval: u64,
+
+        /// Message TTL in blocks (messages older than this are GC'd).
+        #[arg(long, default_value = "1000")]
+        message_ttl: u64,
+
+        /// Max delivery latency (SLA) in blocks.
+        #[arg(long, default_value = "50")]
+        max_delivery_latency: u64,
+
+        /// Path for persistent relay state file.
+        #[arg(long, default_value = "./relay-state.json")]
+        state_file: PathBuf,
+
+        /// Data directory (for reading operator key).
+        #[arg(long, default_value = "~/.pyana")]
+        data_dir: String,
+
+        /// Default inbox capacity for new subscriptions.
+        #[arg(long, default_value = "100")]
+        default_inbox_capacity: usize,
+
+        /// Default minimum deposit for new inboxes.
+        #[arg(long, default_value = "100")]
+        default_min_deposit: u64,
+
+        /// Minimum deposit per message (computrons).
+        #[arg(long, default_value = "100")]
+        min_message_deposit: u64,
+
+        /// One-time subscription fee for creating an inbox.
+        #[arg(long, default_value = "1000")]
+        subscription_fee: u64,
+    },
+
     /// Run as a cross-federation bridge node.
     ///
     /// Connects to multiple federations' gossip networks and relays messages
@@ -260,6 +316,36 @@ async fn main() {
             checkpoint_interval,
             output,
         } => genesis::run_genesis(validators, epoch_length, checkpoint_interval, &output),
+        Command::Relay {
+            port,
+            bond,
+            max_capacity,
+            gc_interval,
+            message_ttl,
+            max_delivery_latency,
+            state_file,
+            data_dir,
+            default_inbox_capacity,
+            default_min_deposit,
+            min_message_deposit,
+            subscription_fee,
+        } => {
+            run_relay(
+                port,
+                bond,
+                max_capacity,
+                gc_interval,
+                message_ttl,
+                max_delivery_latency,
+                state_file,
+                &data_dir,
+                default_inbox_capacity,
+                default_min_deposit,
+                min_message_deposit,
+                subscription_fee,
+            )
+            .await
+        }
         Command::Bridge {
             data_dir,
             federation_peers,
@@ -579,6 +665,61 @@ async fn run_mcp(data_dir: &str, peers: Vec<String>) {
     };
 
     mcp::run_stdio(node_state).await;
+}
+
+/// Run the relay operator service.
+#[allow(clippy::too_many_arguments)]
+async fn run_relay(
+    port: u16,
+    bond: u64,
+    max_capacity: usize,
+    gc_interval: u64,
+    message_ttl: u64,
+    max_delivery_latency: u64,
+    state_file: PathBuf,
+    data_dir: &str,
+    default_inbox_capacity: usize,
+    default_min_deposit: u64,
+    min_message_deposit: u64,
+    subscription_fee: u64,
+) {
+    let data_path = expand_path(data_dir);
+
+    // Read operator key from the data directory.
+    let operator_key = if data_path.join("node.key").exists() {
+        let key_bytes = std::fs::read(data_path.join("node.key"))
+            .expect("failed to read node.key for relay operator identity");
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&key_bytes[..32]);
+        key
+    } else {
+        error!(
+            "no node.key found in {}. Run `pyana-node init` first.",
+            data_path.display()
+        );
+        std::process::exit(1);
+    };
+
+    let config = relay_service::RelayConfig {
+        listen_port: port,
+        operator_key,
+        bond_amount: bond,
+        fee_policy: relay_service::FeePolicy {
+            min_deposit_computrons: min_message_deposit,
+            subscription_fee,
+            accept_external_assets: false,
+            external_rate_micros: 1_000_000,
+        },
+        max_total_capacity: max_capacity,
+        gc_interval_secs: gc_interval,
+        message_ttl_blocks: message_ttl,
+        max_delivery_latency_blocks: max_delivery_latency,
+        state_file,
+        default_inbox_capacity,
+        default_min_deposit,
+    };
+
+    relay_service::run_relay_service(config).await;
 }
 
 /// Run the cross-federation bridge node.

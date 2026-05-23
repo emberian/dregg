@@ -25,6 +25,10 @@
 //! - EnlivenRef (15): Enliven a sturdy ref (CapTP).
 //! - DropRef (16): Drop a remote reference / GC decrement (CapTP).
 //! - ValidateHandoff (17): Validate a handoff certificate (CapTP).
+//! - AllocateQueue (18): Create a new MerkleQueue (storage Phase 2).
+//! - EnqueueMessage (19): Append message to queue (storage Phase 2).
+//! - DequeueMessage (20): Advance queue head, reveal message (storage Phase 2).
+//! - ResizeQueue (21): Change queue capacity (storage Phase 2).
 //!
 //! # Trace Layout (one row per effect)
 //!
@@ -4466,5 +4470,320 @@ mod tests {
             result.is_err(),
             "verify_balance_limb_ranges MUST catch out-of-range limbs"
         );
+    }
+
+    // ========================================================================
+    // STORAGE QUEUE EFFECT TESTS
+    // ========================================================================
+
+    /// Test: AllocateQueue proves correct balance debit and empty queue root.
+    #[test]
+    fn test_storage_allocate_queue() {
+        let state = CellState::new(10_000, 0);
+
+        let effects = vec![Effect::AllocateQueue {
+            capacity: 100,
+            owner_quota_id: BabyBear::new(0x0A),
+            cost_per_slot: 10,
+        }];
+
+        let (trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
+        let air = EffectVmAir::new(trace.len());
+
+        // Verify constraints pass on all rows.
+        for alpha_val in [7u32, 13, 101] {
+            let alpha = BabyBear::new(alpha_val);
+            for row in 0..trace.len() - 1 {
+                let next_row = (row + 1) % trace.len();
+                let c = air.eval_constraints(&trace[row], &trace[next_row], &public_inputs, alpha);
+                assert_eq!(
+                    c,
+                    BabyBear::ZERO,
+                    "AllocateQueue: constraint non-zero at row {} alpha={}",
+                    row,
+                    alpha_val
+                );
+            }
+        }
+
+        // STARK roundtrip.
+        let proof = prove(&air, &trace, &public_inputs);
+        let result = verify(&air, &proof, &public_inputs);
+        assert!(
+            result.is_ok(),
+            "AllocateQueue should verify: {:?}",
+            result.err()
+        );
+
+        // Verify balance debit: 100 * 10 = 1000 deducted.
+        let delta = extract_net_delta(&public_inputs).unwrap();
+        assert_eq!(delta, -1000, "AllocateQueue should debit 100*10=1000");
+
+        // Verify field[4] is the empty queue hash.
+        let expected_empty = hash_2_to_1(BabyBear::ZERO, BabyBear::ZERO);
+        let actual_f4 = trace[0][STATE_AFTER_BASE + state::FIELD_BASE + 4];
+        assert_eq!(
+            actual_f4, expected_empty,
+            "field[4] should be empty_queue_hash"
+        );
+    }
+
+    /// Test: EnqueueMessage proves queue root change and deposit debit.
+    #[test]
+    fn test_storage_enqueue_message() {
+        let mut state = CellState::new(10_000, 0);
+        // Set field[4] to a known queue root (simulating an existing queue).
+        let initial_queue_root = hash_2_to_1(BabyBear::ZERO, BabyBear::ZERO);
+        state.fields[4] = initial_queue_root;
+        state.refresh_commitment();
+
+        let msg_hash = BabyBear::new(0xDEAD);
+        let effects = vec![Effect::EnqueueMessage {
+            message_hash: msg_hash,
+            deposit_amount: 50,
+            sender_id: BabyBear::new(0x5E),
+            queue_len: 0,
+        }];
+
+        let (trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
+        let air = EffectVmAir::new(trace.len());
+
+        // Verify constraints.
+        for alpha_val in [7u32, 13, 101] {
+            let alpha = BabyBear::new(alpha_val);
+            for row in 0..trace.len() - 1 {
+                let next_row = (row + 1) % trace.len();
+                let c = air.eval_constraints(&trace[row], &trace[next_row], &public_inputs, alpha);
+                assert_eq!(
+                    c,
+                    BabyBear::ZERO,
+                    "EnqueueMessage: constraint non-zero at row {} alpha={}",
+                    row,
+                    alpha_val
+                );
+            }
+        }
+
+        // STARK roundtrip.
+        let proof = prove(&air, &trace, &public_inputs);
+        let result = verify(&air, &proof, &public_inputs);
+        assert!(
+            result.is_ok(),
+            "EnqueueMessage should verify: {:?}",
+            result.err()
+        );
+
+        // Verify queue root changed: new_root = hash(initial_root, msg_hash).
+        let expected_new_root = hash_2_to_1(initial_queue_root, msg_hash);
+        let actual_f4 = trace[0][STATE_AFTER_BASE + state::FIELD_BASE + 4];
+        assert_eq!(actual_f4, expected_new_root, "queue root should advance");
+        assert_ne!(actual_f4, initial_queue_root, "queue root must change");
+
+        // Verify balance debit of deposit.
+        let delta = extract_net_delta(&public_inputs).unwrap();
+        assert_eq!(delta, -50, "EnqueueMessage should debit deposit of 50");
+    }
+
+    /// Test: DequeueMessage proves correct message dequeued and deposit refund.
+    #[test]
+    fn test_storage_dequeue_message() {
+        let mut state = CellState::new(5_000, 0);
+        // Set field[4] to a queue root that has messages.
+        let queue_root = hash_2_to_1(BabyBear::new(0xABC), BabyBear::new(0xDEF));
+        state.fields[4] = queue_root;
+        state.refresh_commitment();
+
+        let expected_msg = BabyBear::new(0xBEEF);
+        let effects = vec![Effect::DequeueMessage {
+            expected_message_hash: expected_msg,
+            deposit_refund: 75,
+        }];
+
+        let (trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
+        let air = EffectVmAir::new(trace.len());
+
+        // Verify constraints.
+        for alpha_val in [7u32, 13, 101] {
+            let alpha = BabyBear::new(alpha_val);
+            for row in 0..trace.len() - 1 {
+                let next_row = (row + 1) % trace.len();
+                let c = air.eval_constraints(&trace[row], &trace[next_row], &public_inputs, alpha);
+                assert_eq!(
+                    c,
+                    BabyBear::ZERO,
+                    "DequeueMessage: constraint non-zero at row {} alpha={}",
+                    row,
+                    alpha_val
+                );
+            }
+        }
+
+        // STARK roundtrip.
+        let proof = prove(&air, &trace, &public_inputs);
+        let result = verify(&air, &proof, &public_inputs);
+        assert!(
+            result.is_ok(),
+            "DequeueMessage should verify: {:?}",
+            result.err()
+        );
+
+        // Verify queue root advanced.
+        let expected_new_root = hash_2_to_1(queue_root, expected_msg);
+        let actual_f4 = trace[0][STATE_AFTER_BASE + state::FIELD_BASE + 4];
+        assert_eq!(
+            actual_f4, expected_new_root,
+            "queue root should advance on dequeue"
+        );
+
+        // Verify balance credit (deposit refund).
+        let delta = extract_net_delta(&public_inputs).unwrap();
+        assert_eq!(
+            delta, 75,
+            "DequeueMessage should credit deposit refund of 75"
+        );
+    }
+
+    /// Test: Multi-effect storage queue lifecycle (Allocate + Enqueue + Enqueue + Dequeue).
+    #[test]
+    fn test_storage_multi_effect_queue_lifecycle() {
+        let state = CellState::new(50_000, 0);
+
+        let msg1 = BabyBear::new(0xCAFE);
+        let msg2 = BabyBear::new(0xBEEF);
+
+        let effects = vec![
+            // Allocate a queue (costs 10 * 5 = 50).
+            Effect::AllocateQueue {
+                capacity: 10,
+                owner_quota_id: BabyBear::new(0x01),
+                cost_per_slot: 5,
+            },
+            // Enqueue first message (deposit 100).
+            Effect::EnqueueMessage {
+                message_hash: msg1,
+                deposit_amount: 100,
+                sender_id: BabyBear::new(0xAA),
+                queue_len: 0,
+            },
+            // Enqueue second message (deposit 100).
+            Effect::EnqueueMessage {
+                message_hash: msg2,
+                deposit_amount: 100,
+                sender_id: BabyBear::new(0xBB),
+                queue_len: 1,
+            },
+            // Dequeue first message (refund 80).
+            Effect::DequeueMessage {
+                expected_message_hash: msg1,
+                deposit_refund: 80,
+            },
+        ];
+
+        let (trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
+        assert_eq!(trace.len(), 4); // 4 effects = power of 2
+
+        let air = EffectVmAir::new(trace.len());
+
+        // Verify constraints on all rows.
+        for alpha_val in [7u32, 13, 101] {
+            let alpha = BabyBear::new(alpha_val);
+            for row in 0..trace.len() - 1 {
+                let next_row = (row + 1) % trace.len();
+                let c = air.eval_constraints(&trace[row], &trace[next_row], &public_inputs, alpha);
+                assert_eq!(
+                    c,
+                    BabyBear::ZERO,
+                    "Queue lifecycle: constraint non-zero at row {} alpha={}",
+                    row,
+                    alpha_val
+                );
+            }
+        }
+
+        // STARK roundtrip.
+        let proof = prove(&air, &trace, &public_inputs);
+        let result = verify(&air, &proof, &public_inputs);
+        assert!(
+            result.is_ok(),
+            "Queue lifecycle should verify: {:?}",
+            result.err()
+        );
+
+        // Verify net delta: -50 (alloc) - 100 (enqueue1) - 100 (enqueue2) + 80 (dequeue) = -170.
+        let delta = extract_net_delta(&public_inputs).unwrap();
+        assert_eq!(delta, -170, "Net delta should be -170");
+
+        // Verify the queue root evolves correctly through the lifecycle.
+        // After AllocateQueue: field[4] = empty_hash.
+        let empty_hash = hash_2_to_1(BabyBear::ZERO, BabyBear::ZERO);
+        let f4_after_alloc = trace[0][STATE_AFTER_BASE + state::FIELD_BASE + 4];
+        assert_eq!(f4_after_alloc, empty_hash);
+
+        // After EnqueueMessage(msg1): field[4] = hash(empty_hash, msg1).
+        let root_after_msg1 = hash_2_to_1(empty_hash, msg1);
+        let f4_after_enq1 = trace[1][STATE_AFTER_BASE + state::FIELD_BASE + 4];
+        assert_eq!(f4_after_enq1, root_after_msg1);
+
+        // After EnqueueMessage(msg2): field[4] = hash(root_after_msg1, msg2).
+        let root_after_msg2 = hash_2_to_1(root_after_msg1, msg2);
+        let f4_after_enq2 = trace[2][STATE_AFTER_BASE + state::FIELD_BASE + 4];
+        assert_eq!(f4_after_enq2, root_after_msg2);
+
+        // After DequeueMessage(msg1): field[4] = hash(root_after_msg2, msg1).
+        let root_after_deq = hash_2_to_1(root_after_msg2, msg1);
+        let f4_after_deq = trace[3][STATE_AFTER_BASE + state::FIELD_BASE + 4];
+        assert_eq!(f4_after_deq, root_after_deq);
+    }
+
+    /// Test: ResizeQueue proves correct balance debit and capacity update.
+    #[test]
+    fn test_storage_resize_queue() {
+        let mut state = CellState::new(10_000, 0);
+        // Set field[5] to current capacity (old_capacity = 10).
+        state.fields[5] = BabyBear::new(10);
+        state.refresh_commitment();
+
+        let effects = vec![Effect::ResizeQueue {
+            new_capacity: 20,
+            queue_id: BabyBear::new(0x01),
+            cost_per_slot: 5,
+            old_capacity: 10,
+        }];
+
+        let (trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
+        let air = EffectVmAir::new(trace.len());
+
+        // Verify constraints.
+        for alpha_val in [7u32, 13, 101] {
+            let alpha = BabyBear::new(alpha_val);
+            for row in 0..trace.len() - 1 {
+                let next_row = (row + 1) % trace.len();
+                let c = air.eval_constraints(&trace[row], &trace[next_row], &public_inputs, alpha);
+                assert_eq!(
+                    c,
+                    BabyBear::ZERO,
+                    "ResizeQueue: constraint non-zero at row {} alpha={}",
+                    row,
+                    alpha_val
+                );
+            }
+        }
+
+        // STARK roundtrip.
+        let proof = prove(&air, &trace, &public_inputs);
+        let result = verify(&air, &proof, &public_inputs);
+        assert!(
+            result.is_ok(),
+            "ResizeQueue should verify: {:?}",
+            result.err()
+        );
+
+        // Verify balance debit: (20 - 10) * 5 = 50.
+        let delta = extract_net_delta(&public_inputs).unwrap();
+        assert_eq!(delta, -50, "ResizeQueue should debit (20-10)*5=50");
+
+        // Verify field[5] is updated to new capacity.
+        let new_f5 = trace[0][STATE_AFTER_BASE + state::FIELD_BASE + 5];
+        assert_eq!(new_f5, BabyBear::new(20), "field[5] should be new capacity");
     }
 }

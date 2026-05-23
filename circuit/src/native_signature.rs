@@ -25,7 +25,7 @@
 //! (also Poseidon2 Merkle, keeping the entire scheme STARK-native).
 
 use crate::field::BabyBear;
-use crate::poseidon2::{self, Poseidon2State, WIDTH};
+use crate::poseidon2::{self, Poseidon2State};
 
 /// Winternitz parameter: base-16 (4-bit digits).
 pub const WOTS_W: usize = 16;

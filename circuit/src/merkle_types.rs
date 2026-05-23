@@ -4,7 +4,7 @@
 
 use crate::constraint_prover::{Air, Constraint};
 use crate::field::BabyBear;
-use crate::poseidon2::hash_4_to_1;
+use crate::poseidon2::hash_fact;
 
 /// The tree depth (number of levels from leaf to root).
 pub const TREE_DEPTH: usize = 16;
@@ -55,23 +55,18 @@ impl MerkleAir {
     }
 
     /// Compute what the parent hash should be given the current hash, position, and siblings.
-    /// Uses hash_4_to_1 with children arranged by position for multi-member Merkle trees.
+    /// Uses hash_fact(current, [sib0, sib1, sib2, position]) to match the DSL circuit's
+    /// ConstraintExpr::Hash constraint.
     /// If position is out of range (>3), returns ZERO (constraint will catch this).
     pub fn compute_parent(current: BabyBear, position: u8, siblings: &[BabyBear; 3]) -> BabyBear {
         if position > 3 {
             return BabyBear::ZERO;
         }
-        let mut children = [BabyBear::ZERO; 4];
-        let mut sib_idx = 0;
-        for i in 0..4u8 {
-            if i == position {
-                children[i as usize] = current;
-            } else {
-                children[i as usize] = siblings[sib_idx];
-                sib_idx += 1;
-            }
-        }
-        hash_4_to_1(&children)
+        let position_bb = BabyBear::new(position as u32);
+        hash_fact(
+            current,
+            &[siblings[0], siblings[1], siblings[2], position_bb],
+        )
     }
 }
 

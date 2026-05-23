@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Relay Operators - Pyana Operator Guide</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0f0d'/%3E%3Ctext x='16' y='22' font-size='16' text-anchor='middle' fill='%235b8a5a' font-family='monospace'%3E%CF%80%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../../assets/style.css">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<nav class="nav">
+  <span class="nav__mark">&pi;</span>
+  <span class="nav__name">Pyana</span>
+  <span class="nav__tag">operator guide</span>
+  <div class="nav__links">
+    <a class="nav__link" href="../../index.html">Home</a>
+    <a class="nav__link nav__link--active" href="../index.html">Docs</a>
+    <a class="nav__link" href="../../paper.html">Paper</a>
+    <a class="nav__link" href="../../explorer/">Explorer</a>
+    <a class="nav__link" href="https://github.com/emberian/pyana">GitHub</a>
+  </div>
+</nav>
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <div class="docs-sidebar__section">
+      <p class="docs-sidebar__heading">Operator Guide</p>
+      <div class="docs-sidebar__list">
+        <a class="docs-sidebar__link" href="index.html">Overview</a>
+        <a class="docs-sidebar__link" href="setup.html">Node Setup</a>
+        <a class="docs-sidebar__link" href="federation.html">Joining a Federation</a>
+        <a class="docs-sidebar__link" href="bridge.html">Bridge Nodes</a>
+        <a class="docs-sidebar__link docs-sidebar__link--active" href="relay.html">Relay Operators</a>
+        <a class="docs-sidebar__link" href="monitoring.html">Monitoring</a>
+        <a class="docs-sidebar__link" href="security.html">Security Hardening</a>
+      </div>
+    </div>
+  </aside>
+
+  <div class="docs-content">
+    <div class="docs-breadcrumb">
+      <a href="../index.html">Docs</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <a href="index.html">Operators</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <span>Relay Operators</span>
+    </div>
+
+    <h1>Relay Operators</h1>
+
+    <p>
+      A relay operator runs a <strong>hosted inbox service</strong>. Users who are
+      frequently offline (mobile wallets, IoT agents, intermittent peers) subscribe
+      to a relay operator. The relay buffers store-and-forward messages in
+      MerkleQueue-backed inboxes, provides cryptographic delivery proofs, and earns
+      fees for the service.
+    </p>
+
+    <h2 id="what">What is a Relay Operator?</h2>
+
+    <ul>
+      <li>Hosts inboxes for subscribed users (bounded capacity, metered storage)</li>
+      <li>Accepts incoming CapTP store-and-forward messages on behalf of offline users</li>
+      <li>Delivers messages with cryptographic DequeueProofs when users come online</li>
+      <li>Charges sender deposits (anti-spam) and subscription fees (capacity reservation)</li>
+      <li>Earns 10% of expired message deposits as revenue on GC</li>
+      <li>Subject to SLA: must deliver within <code>max_delivery_latency</code> blocks or be slashed</li>
+    </ul>
+
+    <h2 id="requirements">Requirements</h2>
+
+    <ul>
+      <li><strong>Bond:</strong> Computrons staked proportional to hosted capacity (100 computrons per unit of capacity)</li>
+      <li><strong>Uptime:</strong> Reliable availability -- missed deliveries within the SLA window trigger slashing</li>
+      <li><strong>Storage:</strong> Sufficient disk for hosted inboxes (each message is typically 1-64 KiB)</li>
+      <li><strong>Network:</strong> Public IP or domain with ports accessible to senders and subscribers</li>
+    </ul>
+
+    <h2 id="quickstart">Quick Start</h2>
+
+    <pre><code># Initialize the node data directory (generates operator keypair)
+pyana-node init --data-dir ~/.pyana
+
+# Start the relay operator service
+pyana-node relay \
+  --bond 10000 \
+  --port 3100 \
+  --state-file ./relay-state.json \
+  --data-dir ~/.pyana</code></pre>
+
+    <p>
+      The relay service starts an HTTP API on the specified port. It reads the
+      operator identity from <code>~/.pyana/node.key</code>.
+    </p>
+
+    <h2 id="config">Configuration Options</h2>
+
+    <table class="comparison">
+      <thead>
+        <tr><th>Flag</th><th>Default</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>--port</code></td><td>3100</td><td>HTTP API listen port</td></tr>
+        <tr><td><code>--bond</code></td><td>10000</td><td>Bond amount in computrons (operator stake)</td></tr>
+        <tr><td><code>--max-capacity</code></td><td>100000</td><td>Maximum total inbox capacity to host</td></tr>
+        <tr><td><code>--gc-interval</code></td><td>300</td><td>GC interval in seconds</td></tr>
+        <tr><td><code>--message-ttl</code></td><td>1000</td><td>Message TTL in blocks (expired messages are GC'd)</td></tr>
+        <tr><td><code>--max-delivery-latency</code></td><td>50</td><td>SLA: max blocks before delivery is required</td></tr>
+        <tr><td><code>--state-file</code></td><td>./relay-state.json</td><td>Path for persistent relay state</td></tr>
+        <tr><td><code>--data-dir</code></td><td>~/.pyana</td><td>Data directory (operator key location)</td></tr>
+        <tr><td><code>--default-inbox-capacity</code></td><td>100</td><td>Default capacity for new inbox subscriptions</td></tr>
+        <tr><td><code>--default-min-deposit</code></td><td>100</td><td>Default minimum deposit per message</td></tr>
+        <tr><td><code>--min-message-deposit</code></td><td>100</td><td>Global minimum deposit per message (computrons)</td></tr>
+        <tr><td><code>--subscription-fee</code></td><td>1000</td><td>One-time fee for creating an inbox</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="endpoints">HTTP API Endpoints</h2>
+
+    <table class="comparison">
+      <thead>
+        <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>GET</td><td><code>/relay/status</code></td><td>Operator info: bond, hosted inboxes, earnings, health</td></tr>
+        <tr><td>POST</td><td><code>/relay/subscribe</code></td><td>Create a hosted inbox (user pays subscription fee)</td></tr>
+        <tr><td>DELETE</td><td><code>/relay/unsubscribe</code></td><td>Remove an inbox (remaining messages refunded)</td></tr>
+        <tr><td>POST</td><td><code>/relay/send/:dest</code></td><td>Enqueue a message (sender pays deposit)</td></tr>
+        <tr><td>GET</td><td><code>/relay/drain</code></td><td>Drain your inbox (authenticated, returns messages + proofs)</td></tr>
+        <tr><td>GET</td><td><code>/relay/inbox/:id/status</code></td><td>Check inbox status (capacity, pending, root)</td></tr>
+        <tr><td>GET</td><td><code>/relay/proof/:msg_id</code></td><td>Get the DequeueProof for a delivered message</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="economics">Economics</h2>
+
+    <h3>Revenue Sources</h3>
+    <ul>
+      <li><strong>Subscription fees:</strong> One-time fee when a user creates an inbox</li>
+      <li><strong>GC fees:</strong> 10% of expired message deposits are kept by the operator</li>
+      <li><strong>Delivery compensation:</strong> On successful delivery, deposits flow to the inbox owner (who may share with the operator via separate agreement)</li>
+    </ul>
+
+    <h3>Fee Flow</h3>
+    <pre><code>Sender deposits 1000 computrons with a message
+  |
+  +-- Message delivered within TTL:
+  |     Deposit goes to inbox owner (compensation for reading)
+  |
+  +-- Message expires (GC):
+        90% refunded to sender
+        10% kept by relay operator as fee</code></pre>
+
+    <h3>Bond Economics</h3>
+    <p>
+      The bond requirement scales linearly with committed capacity:
+      <code>required_bond = total_committed_capacity * 100 computrons</code>.
+      If an operator becomes underbonded (e.g., bond is slashed), they cannot accept
+      new inboxes until the bond is topped up.
+    </p>
+
+    <h2 id="disputes">Disputes and Slashing</h2>
+
+    <p>
+      If a relay operator fails to deliver a message within the SLA window
+      (<code>max_delivery_latency</code> blocks), a sender can file a
+      <strong>DeliveryDispute</strong>:
+    </p>
+
+    <ol>
+      <li>Sender proves they enqueued (provides old queue root + enqueue receipt)</li>
+      <li>Operator must respond with a valid DequeueProof within the SLA window</li>
+      <li>If operator cannot produce proof: <strong>slashed</strong> (bond / active_inboxes)</li>
+      <li>If operator produces valid proof: dispute dismissed</li>
+    </ol>
+
+    <p>
+      Slashing is proportional: <code>slash_amount = bond / active_inbox_count</code>.
+      An operator hosting 10 inboxes with a 100,000 computron bond risks losing
+      10,000 computrons per failed delivery dispute.
+    </p>
+
+    <h2 id="monitoring">Monitoring</h2>
+
+    <p>Use <code>GET /relay/status</code> to monitor operator health:</p>
+
+    <pre><code>curl http://localhost:3100/relay/status | jq .
+
+{
+  "operator_id": "aa0011...",
+  "bond": 100000,
+  "required_bond": 50000,
+  "is_underbonded": false,
+  "active_inboxes": 5,
+  "total_pending_messages": 142,
+  "earned_fees": 4200,
+  "max_delivery_latency_blocks": 50,
+  "current_height": 12450,
+  "messages_delivered": 8923,
+  "messages_received": 9065,
+  "gc_interval_secs": 300
+}</code></pre>
+
+    <h3>What to Watch</h3>
+    <ul>
+      <li><strong>is_underbonded:</strong> If true, you cannot accept new inboxes. Top up your bond.</li>
+      <li><strong>total_pending_messages:</strong> High and growing = users not draining. Consider reducing capacity or contacting subscribers.</li>
+      <li><strong>earned_fees:</strong> Your cumulative revenue from GC passes.</li>
+      <li><strong>messages_delivered vs messages_received:</strong> Delivery ratio. Low ratio may indicate inactive subscribers.</li>
+    </ul>
+
+    <h2 id="scaling">Scaling</h2>
+
+    <ul>
+      <li><strong>Capacity planning:</strong> Each inbox unit reserves space for one message. A capacity of 100 means 100 messages can be buffered simultaneously.</li>
+      <li><strong>Bond scaling:</strong> 100 computrons per capacity unit. Hosting 1000 total capacity requires 100,000 computron bond.</li>
+      <li><strong>Multiple instances:</strong> Run multiple relay processes on different ports with different operator keys for horizontal scaling.</li>
+      <li><strong>Storage growth:</strong> Messages are GC'd after TTL expires. Disk usage is bounded by <code>max_total_capacity * max_message_size</code>.</li>
+    </ul>
+
+    <h2 id="discovery">Discovery (Governed Namespace)</h2>
+
+    <p>
+      Relay operators register in the governed namespace so that clients can discover
+      available relays. The namespace entry includes the operator's public key, endpoint
+      URL, fee policy, and current capacity availability. Clients query the namespace
+      to find a relay that meets their needs (price, capacity, SLA).
+    </p>
+
+  </div>
+</div>
+
+<footer class="site-foot">
+  <div class="site-foot__inner">
+    <span class="site-foot__left">Pyana -- sovereign capability runtime.</span>
+    <div class="site-foot__links">
+      <a href="../../index.html">Home</a>
+      <a href="../index.html">Docs</a>
+      <a href="https://github.com/emberian/pyana">GitHub</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

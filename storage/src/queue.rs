@@ -139,6 +139,17 @@ impl MerkleQueue {
         self.head
     }
 
+    /// Peek at an entry by relative position from head.
+    /// Returns None if the index is out of bounds.
+    pub fn peek_relative(&self, relative_index: usize) -> Option<&QueueEntry> {
+        let absolute = self.head + relative_index;
+        if absolute < self.entries.len() {
+            Some(&self.entries[absolute])
+        } else {
+            None
+        }
+    }
+
     /// Recompute the Merkle root from all pending entries (head..tail).
     ///
     /// Uses a binary Merkle tree over blake3 hashes of entry content hashes.

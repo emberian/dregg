@@ -571,6 +571,7 @@ impl TurnExecutor {
             escrows: Mutex::new(HashMap::new()),
             committed_escrows: Mutex::new(HashMap::new()),
             committed_escrow_amounts: Mutex::new(HashMap::new()),
+            cell_migrations: Mutex::new(CellMigrationManager::new()),
             factory_registry: std::cell::RefCell::new(pyana_cell::FactoryRegistry::new()),
             epoch_minter: None,
         }
@@ -602,6 +603,7 @@ impl TurnExecutor {
             escrows: Mutex::new(HashMap::new()),
             committed_escrows: Mutex::new(HashMap::new()),
             committed_escrow_amounts: Mutex::new(HashMap::new()),
+            cell_migrations: Mutex::new(CellMigrationManager::new()),
             factory_registry: std::cell::RefCell::new(pyana_cell::FactoryRegistry::new()),
             epoch_minter: None,
         }
@@ -629,6 +631,7 @@ impl TurnExecutor {
             escrows: Mutex::new(HashMap::new()),
             committed_escrows: Mutex::new(HashMap::new()),
             committed_escrow_amounts: Mutex::new(HashMap::new()),
+            cell_migrations: Mutex::new(CellMigrationManager::new()),
             factory_registry: std::cell::RefCell::new(pyana_cell::FactoryRegistry::new()),
             epoch_minter: None,
         }
@@ -1165,9 +1168,6 @@ impl TurnExecutor {
         cell_id: &CellId,
         turn: &Turn,
     ) -> Vec<pyana_circuit::effect_vm::Effect> {
-        use pyana_circuit::effect_vm::Effect as VmEffect;
-        use pyana_circuit::field::BabyBear;
-
         fn collect_effects(
             tree: &CallTree,
             cell_id: &CellId,
@@ -7686,5 +7686,198 @@ impl TurnExecutor {
             sovereign_deltas,
             hosted_deltas,
         })
+    }
+}
+
+// =============================================================================
+// Cell Migration Tests
+// =============================================================================
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+
+    fn test_cell() -> CellId {
+        CellId([0xCC; 32])
+    }
+
+    fn target_federation() -> [u8; 32] {
+        [0xDD; 32]
+    }
+
+    #[test]
+    fn migration_happy_path() {
+        let mut mgr = CellMigrationManager::new();
+        let cell = test_cell();
+        let target = target_federation();
+
+        // Begin migration: freeze the cell
+        mgr.begin_migration(cell, target, 100, 50).unwrap();
+        assert!(mgr.is_frozen(&cell));
+        assert!(!mgr.is_cancelled(&cell));
+
+        // Bundle sent
+        mgr.bundle_sent(cell, 105, 30).unwrap();
+        assert!(mgr.is_frozen(&cell)); // Still frozen while awaiting receipt
+
+        // Receipt confirmed
+        mgr.confirm_receipt(cell, 110).unwrap();
+        assert!(!mgr.is_frozen(&cell)); // No longer frozen after completion
+
+        // Verify final state
+        match mgr.get(&cell) {
+            Some(MigrationState::Completed {
+                confirmed_at,
+                target: t,
+                ..
+            }) => {
+                assert_eq!(*confirmed_at, 110);
+                assert_eq!(*t, target);
+            }
+            other => panic!("expected Completed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn migration_timeout_during_freeze_cancels() {
+        let mut mgr = CellMigrationManager::new();
+        let cell = test_cell();
+
+        // Freeze with timeout of 50 blocks
+        mgr.begin_migration(cell, target_federation(), 100, 50)
+            .unwrap();
+        assert!(mgr.is_frozen(&cell));
+
+        // At height 140 (40 blocks elapsed): not yet timed out
+        let cancelled = mgr.check_timeouts(140);
+        assert!(cancelled.is_empty());
+        assert!(mgr.is_frozen(&cell));
+
+        // At height 160 (60 blocks elapsed > 50 timeout): should cancel
+        let cancelled = mgr.check_timeouts(160);
+        assert_eq!(cancelled, vec![cell]);
+        assert!(!mgr.is_frozen(&cell));
+        assert!(mgr.is_cancelled(&cell));
+
+        match mgr.get(&cell) {
+            Some(MigrationState::Cancelled { reason, .. }) => {
+                assert_eq!(*reason, MigrationCancelReason::Timeout);
+            }
+            other => panic!("expected Cancelled, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn migration_timeout_during_awaiting_receipt_cancels() {
+        let mut mgr = CellMigrationManager::new();
+        let cell = test_cell();
+
+        mgr.begin_migration(cell, target_federation(), 100, 50)
+            .unwrap();
+        mgr.bundle_sent(cell, 110, 20).unwrap(); // receipt timeout = 20 blocks
+
+        // At height 125 (15 blocks since send): not timed out
+        let cancelled = mgr.check_timeouts(125);
+        assert!(cancelled.is_empty());
+
+        // At height 135 (25 blocks since send > 20 timeout): cancel
+        let cancelled = mgr.check_timeouts(135);
+        assert_eq!(cancelled, vec![cell]);
+        assert!(!mgr.is_frozen(&cell));
+        assert!(mgr.is_cancelled(&cell));
+    }
+
+    #[test]
+    fn migration_cannot_start_while_already_migrating() {
+        let mut mgr = CellMigrationManager::new();
+        let cell = test_cell();
+
+        mgr.begin_migration(cell, target_federation(), 100, 50)
+            .unwrap();
+
+        // Second migration attempt fails
+        let err = mgr.begin_migration(cell, [0xEE; 32], 105, 50).unwrap_err();
+        assert_eq!(err, MigrationError::AlreadyMigrating);
+    }
+
+    #[test]
+    fn migration_can_restart_after_cancellation() {
+        let mut mgr = CellMigrationManager::new();
+        let cell = test_cell();
+
+        // First attempt: times out
+        mgr.begin_migration(cell, target_federation(), 100, 10)
+            .unwrap();
+        mgr.check_timeouts(120);
+        assert!(mgr.is_cancelled(&cell));
+
+        // Can start a new migration after cancellation
+        mgr.begin_migration(cell, [0xEE; 32], 130, 50).unwrap();
+        assert!(mgr.is_frozen(&cell));
+        assert!(!mgr.is_cancelled(&cell));
+    }
+
+    #[test]
+    fn migration_explicit_cancel() {
+        let mut mgr = CellMigrationManager::new();
+        let cell = test_cell();
+
+        mgr.begin_migration(cell, target_federation(), 100, 50)
+            .unwrap();
+        mgr.cancel(cell, MigrationCancelReason::Explicit).unwrap();
+
+        assert!(!mgr.is_frozen(&cell));
+        assert!(mgr.is_cancelled(&cell));
+    }
+
+    #[test]
+    fn migration_invalid_transitions_rejected() {
+        let mut mgr = CellMigrationManager::new();
+        let cell = test_cell();
+
+        // Can't send bundle before freezing
+        assert_eq!(
+            mgr.bundle_sent(cell, 100, 20),
+            Err(MigrationError::NotMigrating)
+        );
+
+        // Can't confirm receipt before sending bundle
+        mgr.begin_migration(cell, target_federation(), 100, 50)
+            .unwrap();
+        assert_eq!(
+            mgr.confirm_receipt(cell, 105),
+            Err(MigrationError::InvalidTransition)
+        );
+    }
+
+    #[test]
+    fn migration_gc_removes_terminal_states() {
+        let mut mgr = CellMigrationManager::new();
+        let cell1 = CellId([0x11; 32]);
+        let cell2 = CellId([0x22; 32]);
+        let cell3 = CellId([0x33; 32]);
+
+        // cell1: completed
+        mgr.begin_migration(cell1, target_federation(), 100, 50)
+            .unwrap();
+        mgr.bundle_sent(cell1, 105, 30).unwrap();
+        mgr.confirm_receipt(cell1, 110).unwrap();
+
+        // cell2: cancelled
+        mgr.begin_migration(cell2, target_federation(), 100, 10)
+            .unwrap();
+        mgr.check_timeouts(120);
+
+        // cell3: still frozen (active)
+        mgr.begin_migration(cell3, target_federation(), 100, 50)
+            .unwrap();
+
+        // GC should remove completed and cancelled, keep active
+        let removed = mgr.gc_completed();
+        assert_eq!(removed.len(), 2);
+        assert!(removed.contains(&cell1));
+        assert!(removed.contains(&cell2));
+        assert!(mgr.is_frozen(&cell3)); // still tracked
+        assert!(mgr.get(&cell1).is_none()); // cleaned up
     }
 }

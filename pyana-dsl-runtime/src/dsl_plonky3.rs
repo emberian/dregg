@@ -65,7 +65,8 @@ impl DslP3Air {
         match expr {
             ConstraintExpr::Hash { .. }
             | ConstraintExpr::Hash2to1 { .. }
-            | ConstraintExpr::Hash4to1 { .. } => true,
+            | ConstraintExpr::Hash4to1 { .. }
+            | ConstraintExpr::MerkleHash { .. } => true,
             ConstraintExpr::Gated { inner, .. } => Self::constraint_uses_hash(inner),
             ConstraintExpr::InvertedGated { inner, .. } => Self::constraint_uses_hash(inner),
             ConstraintExpr::Squared { inner } => Self::constraint_uses_hash(inner),
@@ -267,7 +268,8 @@ where
         }
         ConstraintExpr::Hash { .. }
         | ConstraintExpr::Hash2to1 { .. }
-        | ConstraintExpr::Hash4to1 { .. } => (AB::Expr::ZERO, false),
+        | ConstraintExpr::Hash4to1 { .. }
+        | ConstraintExpr::MerkleHash { .. } => (AB::Expr::ZERO, false),
         // Lookup constraints are verified via membership check (non-algebraic).
         // In a full Plonky3 deployment, this would compile to a LogUp argument.
         // For now, return ZERO (the constraint checker handles verification).

@@ -120,7 +120,7 @@ impl ErasureEncoder {
         chunks: &[ErasureChunk],
         original_size: usize,
     ) -> Result<Vec<u8>, ReconstructError> {
-        let n_data_chunks = (original_size + self.chunk_size - 1) / self.chunk_size;
+        let n_data_chunks = original_size.div_ceil(self.chunk_size);
 
         // For prototype: we need all data chunks present.
         // A real RS implementation could reconstruct from any n_data of 2*n_data.
@@ -168,11 +168,9 @@ impl ErasureEncoder {
             let parity_chunk = chunks.iter().find(|c| c.is_parity).unwrap();
             let mut recovered = parity_chunk.data.clone();
 
-            for opt_chunk in &data_chunks {
-                if let Some(chunk) = opt_chunk {
-                    for (k, byte) in chunk.data.iter().enumerate() {
-                        recovered[k] ^= byte;
-                    }
+            for chunk in data_chunks.iter().flatten() {
+                for (k, byte) in chunk.data.iter().enumerate() {
+                    recovered[k] ^= byte;
                 }
             }
 

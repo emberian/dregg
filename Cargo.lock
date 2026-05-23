@@ -6799,6 +6799,7 @@ dependencies = [
  "pyana-intent",
  "pyana-net",
  "pyana-sdk",
+ "pyana-storage",
  "pyana-store",
  "pyana-turn",
  "pyana-types",
@@ -6921,6 +6922,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pyana-storage"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "serde",
+]
+
+[[package]]
 name = "pyana-store"
 version = "0.1.0"
 dependencies = [
@@ -6964,6 +6973,7 @@ dependencies = [
  "pyana-intent",
  "pyana-net",
  "pyana-sdk",
+ "pyana-storage",
  "pyana-store",
  "pyana-turn",
  "pyana-types",

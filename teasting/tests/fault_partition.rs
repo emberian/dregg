@@ -329,6 +329,7 @@ fn test_split_brain_gc_convergence() {
     session.send_b_to_a(WireMessage::DropRemoteRef {
         from_federation: session.fed_b_id.0,
         cell_id: cell_1.0,
+        session_epoch: 0,
     });
     session.deliver_pending();
 

@@ -337,6 +337,41 @@ pub enum WireMessage {
     },
 
     // -------------------------------------------------------------------------
+    // Peer Authentication (Federation Boundary Enforcement)
+    // -------------------------------------------------------------------------
+    /// Challenge sent by the server to authenticate a connecting peer.
+    ///
+    /// After Hello/Welcome, the server sends this challenge. The peer must
+    /// respond with a `PeerAuthResponse` signing the nonce to prove they
+    /// hold a key listed in the federation's constitution.
+    PeerChallenge {
+        /// Random nonce (32 bytes). The peer must sign this.
+        nonce: [u8; 32],
+        /// The server's node identity (included in the signed message to
+        /// prevent cross-node replay).
+        server_node_id: [u8; 32],
+    },
+
+    /// Response to a `PeerChallenge`, proving the peer holds a constitution key.
+    PeerAuthResponse {
+        /// The participant's Ed25519 public key (must be in the constitution).
+        participant_key: [u8; 32],
+        /// Signature over blake3("pyana-wire peer-auth v1" || nonce || server_node_id).
+        signature: Signature,
+        /// The constitution version the peer believes is current.
+        claimed_constitution_version: u64,
+    },
+
+    /// Server's confirmation of the peer's authenticated role.
+    PeerAuthenticated {
+        /// The role assigned to this peer.
+        role_tag: u8,
+        /// For Member role: the participant key that was authenticated.
+        /// For other roles: zeroed.
+        authenticated_key: [u8; 32],
+    },
+
+    // -------------------------------------------------------------------------
     // Keepalive / Diagnostics
     // -------------------------------------------------------------------------
     /// Periodic heartbeat to keep connections alive.
@@ -386,6 +421,9 @@ impl WireMessage {
             Self::PipelinedMsg { .. } => "PipelinedMsg",
             Self::PresentHandoff { .. } => "PresentHandoff",
             Self::HandoffAccepted { .. } => "HandoffAccepted",
+            Self::PeerChallenge { .. } => "PeerChallenge",
+            Self::PeerAuthResponse { .. } => "PeerAuthResponse",
+            Self::PeerAuthenticated { .. } => "PeerAuthenticated",
             Self::Ping { .. } => "Ping",
             Self::Pong { .. } => "Pong",
             Self::Error { .. } => "Error",
@@ -464,6 +502,12 @@ pub mod error_codes {
     pub const INVALID_DROP: u32 = 13;
     /// The message carries a stale session epoch (from a terminated session).
     pub const STALE_EPOCH: u32 = 14;
+    /// The peer has not authenticated and the requested operation requires
+    /// a higher privilege level (Member or CapTpPeer).
+    pub const PEER_AUTH_REQUIRED: u32 = 15;
+    /// The peer's authentication challenge-response failed (bad signature,
+    /// key not in constitution, etc.).
+    pub const PEER_AUTH_FAILED: u32 = 16;
 }
 
 /// The current protocol version.
@@ -635,6 +679,20 @@ mod tests {
                 routing_token: [0x33; 32],
                 cell_id: [0x44; 32],
                 permissions_tag: 2,
+            },
+            // Peer authentication variants
+            WireMessage::PeerChallenge {
+                nonce: [0x55; 32],
+                server_node_id: [0x66; 32],
+            },
+            WireMessage::PeerAuthResponse {
+                participant_key: [0x77; 32],
+                signature: Signature([0x88; 64]),
+                claimed_constitution_version: 42,
+            },
+            WireMessage::PeerAuthenticated {
+                role_tag: 1,
+                authenticated_key: [0x99; 32],
             },
         ];
 

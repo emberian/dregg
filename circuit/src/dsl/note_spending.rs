@@ -21,8 +21,7 @@
 
 use crate::field::{BABYBEAR_P, BabyBear};
 use crate::note_spending_air::{
-    self, MIN_MERKLE_DEPTH, NOTE_SPENDING_WIDTH, NoteSpendingWitness, SPENDING_KEY_LIMBS, col,
-    merkle_col, pi,
+    MIN_MERKLE_DEPTH, NOTE_SPENDING_WIDTH, NoteSpendingWitness, col, merkle_col, pi,
 };
 use crate::poseidon2::hash_fact;
 use crate::stark::{self, StarkProof};

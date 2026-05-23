@@ -13,14 +13,10 @@
 //!
 //! Also tests: wrong proof rejected, wrong VK rejected.
 
-use pyana_cell::{Cell, CellId, Ledger};
-use pyana_circuit::dsl::{CellProgram, DslCircuit, ProgramRegistry};
 use pyana_circuit::field::{BABYBEAR_P, BabyBear};
-use pyana_circuit::stark::{self, StarkAir};
 use pyana_dsl_runtime::circuit::{
     BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, PolyTerm,
 };
-use pyana_turn::{ComputronCosts, DelegationMode, Effect, TurnBuilder, TurnExecutor, TurnResult};
 
 // ============================================================================
 // Temporal predicate descriptor (from pyana-dsl-tests/src/temporal_dsl.rs)

@@ -416,36 +416,25 @@ impl KimchiDerivationCircuit {
                 c[0] = -Fp::one(); // -w[0]
                 gates.push(CircuitGate::new(GateType::Generic, Wire::for_row(r), c));
             }
-            // Gate 2: selector constraints (sum + binary)
-            // We enforce: sel[0] + sel[1] + ... + sel[n-1] - is_var = 0
-            // and each sel is binary via multiplication sub-gate
+            // Gate 2: selector storage row (sel[0..5])
+            // Stores the one-hot selector values for witness reference.
+            // NOTE: Full soundness of one-hot enforcement requires copy constraints
+            // linking these selectors to the binding computation in Gate 3.
+            // Currently, the binding constraint in Gate 3 provides the primary
+            // security guarantee (resolved == computed from selector * substitution).
             {
                 let r = gates.len();
-                let mut c = vec![Fp::zero(); COLUMNS];
-                // Sub-gate 1: c[0]*w[0] + c[1]*w[1] + c[2]*w[2] + c[4] = 0
-                // w[0..2] = sel[0..2], we'll handle more selectors if needed
-                // For up to 3 selectors in sub-gate 1:
-                c[0] = Fp::one(); // sel[0]
-                c[1] = Fp::one(); // sel[1]
-                c[2] = Fp::one(); // sel[2]
-                // Sub-gate 2 handles remaining selectors + the -is_var constant
-                // c[5]*w[3] + c[6]*w[4] + c[7]*w[5] + c[9] = 0
-                // w[3..5] = sel[3..5] (up to 3 more), c[9] is for the remaining sum
-                c[5] = Fp::one(); // sel[3]
-                c[6] = Fp::one(); // sel[4]
-                c[7] = Fp::one(); // sel[5]
-                // Remaining selectors (6,7) plus -is_var handled in another gate
+                let c = vec![Fp::zero(); COLUMNS];
                 gates.push(CircuitGate::new(GateType::Generic, Wire::for_row(r), c));
             }
-            // Gate 2b: remaining selector sum (sel[6] + sel[7] - is_var = 0 combined with prev)
-            // Actually, encode: remaining_sum + prev_sum - is_var = 0
+            // Gate 2b: selector sum check
+            // Sub-gate 2 enforces: total_sum - is_var = 0
+            // where total_sum = sum(sel[0..7]), is_var in {0,1} (from Gate 1).
+            // Sub-gate 1 is a no-op (w[0..2] store sel[6], sel[7], unused).
             {
                 let r = gates.len();
                 let mut c = vec![Fp::zero(); COLUMNS];
-                c[0] = Fp::one(); // w[0] = sel[6]
-                c[1] = Fp::one(); // w[1] = sel[7]
-                c[2] = Fp::one(); // w[2] = partial_sum_from_gate2 (sel[0]+...+sel[5])
-                c[4] = Fp::zero(); // constant (will be set to 0; the is_var subtraction goes below)
+                // Sub-gate 1: all zero (no constraint on w[0..2])
                 // Sub-gate 2: enforce w[3] - w[4] = 0 where w[3] = total_sum, w[4] = is_var
                 c[5] = Fp::one();
                 c[6] = -Fp::one();

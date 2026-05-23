@@ -107,7 +107,7 @@ pub async fn resolve_cross_federation(
     }
 
     let federation_name = segments[0];
-    let leaf_name = segments[1];
+    let _leaf_name = segments[1];
 
     // Look up the federation in the meta-directory.
     let federation = meta_directory

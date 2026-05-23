@@ -23,6 +23,7 @@ pyana-dsl-runtime = { path = "../pyana-dsl-runtime" }
 pyana-coord = { path = "../coord" }
 pyana-net = { path = "../net" }
 pyana-blocklace = { path = "../blocklace" }
+pyana-storage = { path = "../storage" }
 macaroon = { workspace = true, features = ["crypto"] }
 ark-serialize = { workspace = true }
 ark-std = "0.5.0"

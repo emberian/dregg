@@ -9,7 +9,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
-use crate::registry::{NameEntry, NameRegistry, PyanaUri};
+use crate::registry::{NameEntry, NameRegistry};
 
 // =============================================================================
 // Types

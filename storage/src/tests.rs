@@ -318,10 +318,14 @@ fn relay_enqueue_and_drain() {
     assert_eq!(relay.total_buffered(), 2);
     assert_eq!(relay.buffered_for(&dest), 2);
 
-    let messages = relay.drain(&dest);
-    assert_eq!(messages.len(), 2);
-    assert_eq!(messages[0].payload, b"hello offline node");
-    assert_eq!(messages[1].payload, b"second message");
+    let entries = relay.drain(&dest);
+    assert_eq!(entries.len(), 2);
+    // Verify content hashes match expected payloads.
+    assert_eq!(entries[0].0.content_hash, *blake3::hash(b"hello offline node").as_bytes());
+    assert_eq!(entries[1].0.content_hash, *blake3::hash(b"second message").as_bytes());
+    // Verify dequeue proofs are valid.
+    assert!(crate::queue::verify_dequeue_proof(&entries[0].1));
+    assert!(crate::queue::verify_dequeue_proof(&entries[1].1));
     assert_eq!(relay.total_buffered(), 0);
 }
 

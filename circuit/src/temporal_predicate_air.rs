@@ -8,12 +8,7 @@
 #[cfg(feature = "plonky3")]
 pub mod p3_temporal {
     use crate::field::BabyBear;
-    use crate::plonky3_prover::{PyanaProof, create_config, to_p3, trace_to_matrix};
-    use crate::predicate_air::PREDICATE_DIFF_BITS;
-
-    use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
-    use p3_baby_bear::BabyBear as P3BabyBear;
-    use p3_field::{PrimeCharacteristicRing, PrimeField32};
+    use crate::plonky3_prover::PyanaProof;
 
     pub const P3_TEMPORAL_WIDTH: usize = 36;
 
@@ -58,17 +53,17 @@ pub mod p3_temporal {
     }
 
     pub fn prove_temporal_predicate_p3(
-        values: &[BabyBear],
-        state_roots: &[BabyBear],
-        predicate_type: crate::predicate_air::PredicateType,
-        threshold: u32,
+        _values: &[BabyBear],
+        _state_roots: &[BabyBear],
+        _predicate_type: crate::predicate_air::PredicateType,
+        _threshold: u32,
     ) -> Result<P3TemporalPredicateProof, String> {
         Err("p3_temporal proving not yet migrated to DSL".into())
     }
 
     pub fn verify_temporal_predicate_p3(
-        proof: &P3TemporalPredicateProof,
-        num_steps: usize,
+        _proof: &P3TemporalPredicateProof,
+        _num_steps: usize,
     ) -> Result<(), String> {
         Err("p3_temporal verification not yet migrated to DSL".into())
     }

@@ -29,7 +29,7 @@
 //! call site, with identical semantics (same descriptor, same witness, different
 //! proof system).
 
-use ark_ff::{One, PrimeField, Zero};
+use ark_ff::{One, Zero};
 use groupmap::GroupMap;
 use kimchi::circuits::{
     gate::{CircuitGate, GateType},
@@ -547,7 +547,7 @@ fn compile_constraint(
                 // Gate per quad: w[0]*w[1] - w[2] = 0 (w[2] = product)
                 // Final gate: sum of intermediates + linear terms + constant = 0
                 let mut intermediates: Vec<usize> = Vec::new(); // gate indices for products
-                for &(_, qa, qb) in &quad_terms {
+                for &(_, _qa, _qb) in &quad_terms {
                     let r = gates.len();
                     let mut c = vec![Fp::zero(); COLUMNS];
                     c[3] = Fp::one(); // w[0]*w[1]
@@ -559,7 +559,7 @@ fn compile_constraint(
                 // Final summation gate: sum all quad products (weighted) + linear + const = 0
                 // This is a linear constraint over the intermediates + original linear terms.
                 // Combine: quad_coeff[i] * intermediate[i] + linear terms + const = 0
-                let mut all_linear: Vec<(Fp, usize)> = Vec::new();
+                let _all_linear: Vec<(Fp, usize)> = Vec::new();
                 // The intermediates are conceptual — they're stored as w[2] of their respective
                 // gate rows. For the final gate, we need them as wire inputs. Since Kimchi's
                 // self-wiring doesn't allow cross-row references without copy constraints,

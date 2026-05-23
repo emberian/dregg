@@ -86,6 +86,79 @@ Inbound rules:
 - UDP 9420 from 0.0.0.0/0 (QUIC gossip)
 - TCP 22 from your IP (SSH)
 
+## Relay Operator Deployment
+
+To run a relay operator alongside (or instead of) the gateway node:
+
+```bash
+# Start the relay operator service on port 3100
+pyana-node relay \
+  --bond 10000 \
+  --port 3100 \
+  --data-dir /opt/pyana-data \
+  --state-file /opt/pyana-data/relay-state.json \
+  --gc-interval 300 \
+  --message-ttl 1000 \
+  --max-capacity 100000
+```
+
+### Systemd Unit (pyana-relay.service)
+
+Create `/etc/systemd/system/pyana-relay.service`:
+
+```ini
+[Unit]
+Description=Pyana Relay Operator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pyana
+ExecStart=/opt/pyana/target/release/pyana-node relay \
+  --bond 10000 \
+  --port 3100 \
+  --data-dir /opt/pyana-data \
+  --state-file /opt/pyana-data/relay-state.json
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now pyana-relay
+```
+
+### Caddy Configuration (add to Caddyfile)
+
+```
+handle /relay/* {
+    reverse_proxy localhost:3100
+}
+```
+
+### Relay Ports
+
+| Port | Protocol | Purpose |
+|------|----------|---------|
+| 3100 | TCP      | Relay operator HTTP API |
+
+Add to the security group:
+- TCP 3100 from 0.0.0.0/0 (relay API) -- or restrict to known senders
+
+### Monitoring
+
+```bash
+# Check relay status
+curl http://localhost:3100/relay/status
+
+# Service logs
+sudo journalctl -u pyana-relay -f
+```
+
 ## Troubleshooting
 
 **Node won't start:**

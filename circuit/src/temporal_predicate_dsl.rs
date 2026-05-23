@@ -19,7 +19,7 @@
 //! and `TemporalPredicateRequirement` are all re-exported with the same signatures.
 
 use crate::field::BabyBear;
-use crate::predicate_air::{PREDICATE_DIFF_BITS, PredicateType};
+use crate::predicate_air::PredicateType;
 use crate::stark::{self, BoundaryConstraint, StarkAir, StarkProof};
 
 // ─────────────────────────────────────────────────────────────────────────────

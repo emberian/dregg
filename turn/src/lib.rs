@@ -92,9 +92,10 @@ pub use eventual::{
 };
 pub use execution_path::{ExecutionPath, compute_execution_path};
 pub use executor::{
-    AtomicProofEntry, AtomicSovereignTurn, AtomicTurnError, ComputronCosts, MixedAtomicResult,
-    MixedAtomicTurn, ObligationRecord, ProofVerifier, ResolutionTable, TurnExecutor,
-    execute_pipeline, execute_pipeline_result, resolve_eventual_ref,
+    AtomicProofEntry, AtomicSovereignTurn, AtomicTurnError, CellMigrationManager, ComputronCosts,
+    MigrationCancelReason, MigrationError, MigrationState, MixedAtomicResult, MixedAtomicTurn,
+    ObligationRecord, ProofVerifier, ResolutionTable, TurnExecutor, execute_pipeline,
+    execute_pipeline_result, resolve_eventual_ref,
 };
 pub use fast_path::{
     CellLockEntry, CellLockTable, FastPathConfig, FastPathError, TurnCertificate, TurnSign,

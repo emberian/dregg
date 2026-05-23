@@ -215,6 +215,7 @@ fn test_byzantine_fabricated_captp_messages() {
     let fake_drop = WireMessage::DropRemoteRef {
         from_federation: fed_c_id().0, // C is not a party to this session
         cell_id: test_cell(0xFF).0,    // doesn't exist
+        session_epoch: 0,
     };
 
     // Process the fake drop at A — should be harmless because:
@@ -473,6 +474,7 @@ fn test_byzantine_cross_session_attack() {
     let spoofed_drop = WireMessage::DropRemoteRef {
         from_federation: fed_b_id().0, // C pretends to be B
         cell_id: cell_ab.0,
+        session_epoch: 0,
     };
     // C sends this through the A<->C session
     session_ac.send_b_to_a(spoofed_drop);

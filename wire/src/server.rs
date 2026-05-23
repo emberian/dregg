@@ -687,6 +687,160 @@ enum ConnectionState {
     Active,
 }
 
+// =============================================================================
+// Peer Authentication & Role Classification
+// =============================================================================
+
+/// The authenticated role of a connected peer.
+///
+/// Determines what messages they may receive and what state is replicated to
+/// them. Connections start as `Anonymous` and are upgraded via the
+/// challenge-response handshake.
+///
+/// # Security Invariant
+///
+/// A peer MUST NOT receive state-replication messages (gossip, swiss table
+/// updates, cell state) unless they are authenticated as `Member`. CapTP
+/// operations require at least `CapTpPeer` role.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PeerRole {
+    /// Full federation member. Gets all state, participates in consensus.
+    /// Authenticated via Ed25519 challenge-response against constitution.
+    Member { participant_key: [u8; 32] },
+    /// External CapTP peer. Gets only CapTP messages, no state replication.
+    /// Promoted from Anonymous when they complete CapHello with valid session.
+    CapTpPeer { federation_id: [u8; 32] },
+    /// Light client. Gets only proofs and public commitments.
+    LightClient,
+    /// Unauthenticated. Limited to health check, public info, token presentation.
+    /// This is the INITIAL state for all connections.
+    Anonymous,
+}
+
+impl PeerRole {
+    /// Numeric tag for wire encoding.
+    pub fn tag(&self) -> u8 {
+        match self {
+            PeerRole::Member { .. } => 1,
+            PeerRole::CapTpPeer { .. } => 2,
+            PeerRole::LightClient => 3,
+            PeerRole::Anonymous => 0,
+        }
+    }
+
+    /// Whether this role permits CapTP operations.
+    pub fn allows_captp(&self) -> bool {
+        matches!(self, PeerRole::Member { .. } | PeerRole::CapTpPeer { .. })
+    }
+
+    /// Whether this role permits state-replication (gossip, swiss, cell state).
+    pub fn allows_state_replication(&self) -> bool {
+        matches!(self, PeerRole::Member { .. })
+    }
+
+    /// Whether this role permits revocation submission.
+    pub fn allows_revocation(&self) -> bool {
+        matches!(self, PeerRole::Member { .. })
+    }
+
+    /// Whether this role permits public-info operations (present, attest, ping).
+    pub fn allows_public_ops(&self) -> bool {
+        true // All roles can do public operations
+    }
+}
+
+/// Tracks authenticated state for a single connection.
+///
+/// Created at connection acceptance time with `Anonymous` role. Upgraded
+/// if the peer completes the challenge-response handshake.
+#[derive(Clone, Debug)]
+pub struct ConnectionAuth {
+    /// The peer's authenticated role.
+    pub role: PeerRole,
+    /// Whether the challenge-response handshake has been completed.
+    /// A connection may remain Anonymous even after the handshake window
+    /// (the peer simply didn't authenticate).
+    pub handshake_complete: bool,
+}
+
+impl ConnectionAuth {
+    /// Create a new anonymous (unauthenticated) connection state.
+    pub fn anonymous() -> Self {
+        Self {
+            role: PeerRole::Anonymous,
+            handshake_complete: false,
+        }
+    }
+
+    /// Upgrade to Member role after successful challenge-response.
+    pub fn authenticate_as_member(&mut self, participant_key: [u8; 32]) {
+        self.role = PeerRole::Member { participant_key };
+        self.handshake_complete = true;
+    }
+
+    /// Upgrade to CapTpPeer role.
+    pub fn authenticate_as_captp_peer(&mut self, federation_id: [u8; 32]) {
+        // Only upgrade if currently Anonymous (don't downgrade Member).
+        if matches!(self.role, PeerRole::Anonymous) {
+            self.role = PeerRole::CapTpPeer { federation_id };
+        }
+    }
+}
+
+/// Participant list provider for peer authentication.
+///
+/// The server needs access to the current constitution's participant list
+/// to verify challenge-response signatures. This trait abstracts the
+/// source of truth.
+pub trait ParticipantSource: Send + Sync + std::fmt::Debug {
+    /// Check if a public key is a current constitutional participant.
+    fn is_participant(&self, key: &[u8; 32]) -> bool;
+    /// Get the current constitution version.
+    fn constitution_version(&self) -> u64;
+}
+
+/// A static participant list (for testing and simple deployments).
+#[derive(Clone, Debug)]
+pub struct StaticParticipants {
+    /// The participant keys (sorted).
+    pub participants: Vec<[u8; 32]>,
+    /// The constitution version.
+    pub version: u64,
+}
+
+impl StaticParticipants {
+    /// Create a new static participant source.
+    pub fn new(participants: Vec<[u8; 32]>) -> Self {
+        Self {
+            participants,
+            version: 0,
+        }
+    }
+}
+
+impl ParticipantSource for StaticParticipants {
+    fn is_participant(&self, key: &[u8; 32]) -> bool {
+        self.participants.contains(key)
+    }
+
+    fn constitution_version(&self) -> u64 {
+        self.version
+    }
+}
+
+/// Compute the peer authentication signing message.
+///
+/// Both the challenger (server) and the responder (peer) must use this
+/// function to compute what is signed, ensuring consistency.
+///
+/// Domain-separated via blake3 derive_key to prevent cross-protocol replay.
+pub fn peer_auth_signing_message(nonce: &[u8; 32], server_node_id: &[u8; 32]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key("pyana-wire peer-auth v1");
+    hasher.update(nonce);
+    hasher.update(server_node_id);
+    *hasher.finalize().as_bytes()
+}
+
 /// Guard that decrements the active connection counter on drop.
 struct ConnectionGuard {
     counter: Arc<AtomicUsize>,
@@ -821,6 +975,10 @@ pub struct SiloServer {
     tls_acceptor: Option<TlsAcceptor>,
     /// CapTP session state: swiss table, GC managers, active sessions.
     captp_state: Arc<RwLock<CapTpState>>,
+    /// Participant source for peer authentication (constitution participant list).
+    /// When set, enables challenge-response handshake. When None, all peers
+    /// remain Anonymous (backward-compatible with existing deployments).
+    participant_source: Option<Arc<dyn ParticipantSource>>,
 }
 
 /// Events logged by the server for diagnostics.
@@ -880,6 +1038,7 @@ impl SiloServer {
             active_connections: Arc::new(AtomicUsize::new(0)),
             tls_acceptor,
             captp_state: Arc::new(RwLock::new(CapTpState::new())),
+            participant_source: None,
         }
     }
 
@@ -906,6 +1065,7 @@ impl SiloServer {
             active_connections: Arc::new(AtomicUsize::new(0)),
             tls_acceptor,
             captp_state: Arc::new(RwLock::new(CapTpState::new())),
+            participant_source: None,
         }
     }
 
@@ -952,6 +1112,21 @@ impl SiloServer {
     /// known federation peers before starting.
     pub fn with_captp_state(mut self, captp_state: CapTpState) -> Self {
         self.captp_state = Arc::new(RwLock::new(captp_state));
+        self
+    }
+
+    /// Set the participant source for peer authentication.
+    ///
+    /// When configured, the server will issue a `PeerChallenge` after the
+    /// Hello/Welcome handshake. Peers that successfully respond are classified
+    /// as `Member`; those that don't remain `Anonymous` (limited access).
+    ///
+    /// When NOT configured (the default), all peers remain `Anonymous` but are
+    /// permitted all operations for backward compatibility. This allows
+    /// incremental adoption: existing deployments continue to work, new
+    /// deployments opt in to authentication.
+    pub fn with_participant_source(mut self, source: Arc<dyn ParticipantSource>) -> Self {
+        self.participant_source = Some(source);
         self
     }
 
@@ -1036,6 +1211,7 @@ impl SiloServer {
             let conn_counter = Arc::clone(&self.active_connections);
             let tls_acceptor = self.tls_acceptor.clone();
             let captp_state = Arc::clone(&self.captp_state);
+            let participant_source = self.participant_source.clone();
 
             tokio::spawn(async move {
                 // ConnectionGuard decrements the counter when this task exits.
@@ -1059,6 +1235,7 @@ impl SiloServer {
                                 presentation_nonces,
                                 revocation_nonces,
                                 captp_state,
+                                participant_source,
                             )
                             .await;
                         }
@@ -1080,6 +1257,7 @@ impl SiloServer {
                         presentation_nonces,
                         revocation_nonces,
                         captp_state,
+                        participant_source,
                     )
                     .await;
                 }
@@ -1099,6 +1277,7 @@ impl SiloServer {
         presentation_nonces: Arc<Mutex<NonceCache>>,
         revocation_nonces: Arc<Mutex<NonceCache>>,
         captp_state: Arc<RwLock<CapTpState>>,
+        participant_source: Option<Arc<dyn ParticipantSource>>,
     ) {
         let (reader, writer) = tokio::io::split(stream);
         Self::handle_connection_generic(
@@ -1112,6 +1291,7 @@ impl SiloServer {
             presentation_nonces,
             revocation_nonces,
             captp_state,
+            participant_source,
         )
         .await;
     }
@@ -1132,6 +1312,7 @@ impl SiloServer {
         presentation_nonces: Arc<Mutex<NonceCache>>,
         revocation_nonces: Arc<Mutex<NonceCache>>,
         captp_state: Arc<RwLock<CapTpState>>,
+        participant_source: Option<Arc<dyn ParticipantSource>>,
     ) where
         R: AsyncRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin + Send + 'static,
@@ -1195,7 +1376,7 @@ impl SiloServer {
             }
         }
 
-        // Process the Hello message
+        // Process the Hello message (sends Welcome)
         if let Some(response) = Self::process_message(
             first_msg,
             remote_addr,
@@ -1217,7 +1398,90 @@ impl SiloServer {
             }
         }
 
-        // Process subsequent messages (connection is now Active)
+        // --- Federation Boundary: Challenge-Response Authentication ---
+        //
+        // If a participant_source is configured, issue a challenge after
+        // Hello/Welcome. The peer has one chance to prove membership. If
+        // they respond correctly, they are upgraded to Member. If they
+        // don't respond or fail, they remain Anonymous.
+        let mut conn_auth = ConnectionAuth::anonymous();
+
+        if let Some(ref source) = participant_source {
+            // Generate challenge nonce
+            let mut nonce = [0u8; 32];
+            getrandom::fill(&mut nonce).expect("getrandom failed");
+
+            let challenge = WireMessage::PeerChallenge {
+                nonce,
+                server_node_id: config.node_id,
+            };
+            if crate::codec::write_message(&mut writer, &challenge)
+                .await
+                .is_err()
+            {
+                return;
+            }
+
+            // Wait for the response (within handshake timeout)
+            let auth_response = match tokio::time::timeout(
+                config.handshake_timeout,
+                crate::codec::read_message(&mut reader),
+            )
+            .await
+            {
+                Ok(Ok(msg)) => Some(msg),
+                Ok(Err(crate::codec::CodecError::ConnectionClosed)) => return,
+                Ok(Err(_)) => None,
+                Err(_) => None, // Timeout: peer didn't authenticate (stays Anonymous)
+            };
+
+            if let Some(WireMessage::PeerAuthResponse {
+                participant_key,
+                signature,
+                claimed_constitution_version: _,
+            }) = auth_response
+            {
+                // Verify the signature against the challenge
+                let signing_msg = peer_auth_signing_message(&nonce, &config.node_id);
+                let pk = PublicKey(participant_key);
+
+                if pk.verify(&signing_msg, &signature) && source.is_participant(&participant_key) {
+                    // Authentication successful
+                    conn_auth.authenticate_as_member(participant_key);
+
+                    let ack = WireMessage::PeerAuthenticated {
+                        role_tag: conn_auth.role.tag(),
+                        authenticated_key: participant_key,
+                    };
+                    if crate::codec::write_message(&mut writer, &ack)
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                } else {
+                    // Authentication failed: remain Anonymous, notify peer
+                    conn_auth.handshake_complete = true;
+
+                    let ack = WireMessage::PeerAuthenticated {
+                        role_tag: PeerRole::Anonymous.tag(),
+                        authenticated_key: [0u8; 32],
+                    };
+                    if crate::codec::write_message(&mut writer, &ack)
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            } else {
+                // Peer sent something other than PeerAuthResponse, or timed out.
+                // They stay Anonymous. Mark handshake as complete.
+                conn_auth.handshake_complete = true;
+            }
+        }
+
+        // Process subsequent messages (connection is now Active, with role filtering)
         loop {
             let msg = match tokio::time::timeout(
                 Duration::from_secs(60),
@@ -1250,6 +1514,30 @@ impl SiloServer {
                 }
             };
 
+            // --- Federation Boundary: Message filtering by role ---
+            //
+            // When participant_source is configured (authentication enabled),
+            // reject messages that require higher privilege than the peer has.
+            // When NOT configured (backward compat), allow everything.
+            if participant_source.is_some() {
+                if let Some(rejection) = Self::check_role_permission(&msg, &conn_auth) {
+                    if crate::codec::write_message(&mut writer, &rejection)
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                    continue;
+                }
+            }
+
+            // Handle CapHello promoting Anonymous -> CapTpPeer (only effective
+            // when auth is NOT enforced, since with auth the check_role_permission
+            // blocks CapTP for Anonymous).
+            if let WireMessage::CapHello { federation_id, .. } = &msg {
+                conn_auth.authenticate_as_captp_peer(*federation_id);
+            }
+
             let response = Self::process_message(
                 msg,
                 remote_addr,
@@ -1271,6 +1559,68 @@ impl SiloServer {
                     break;
                 }
             }
+        }
+    }
+
+    /// Check whether a message is permitted given the connection's authenticated role.
+    ///
+    /// Returns `Some(error_message)` if the message should be rejected, or `None`
+    /// if it is permitted.
+    fn check_role_permission(msg: &WireMessage, auth: &ConnectionAuth) -> Option<WireMessage> {
+        let role = &auth.role;
+
+        match msg {
+            // Public operations: always allowed
+            WireMessage::PresentToken { .. }
+            | WireMessage::RequestAttestedRoot
+            | WireMessage::RequestNonMembership { .. }
+            | WireMessage::Ping { .. }
+            | WireMessage::Pong { .. }
+            | WireMessage::Hello { .. }
+            | WireMessage::PeerAuthResponse { .. }
+            | WireMessage::PeerChallenge { .. }
+            | WireMessage::PeerAuthenticated { .. } => None,
+
+            // CapTP operations: require CapTpPeer or Member
+            WireMessage::CapHello { .. }
+            | WireMessage::CapGoodbye { .. }
+            | WireMessage::EnlivenSturdyRef { .. }
+            | WireMessage::PipelinedMsg { .. }
+            | WireMessage::PresentHandoff { .. }
+            | WireMessage::DropRemoteRef { .. } => {
+                if role.allows_captp() {
+                    None
+                } else {
+                    Some(WireMessage::Error {
+                        code: crate::message::error_codes::PEER_AUTH_REQUIRED,
+                        message:
+                            "CapTP operations require authenticated peer (Member or CapTpPeer)"
+                                .to_string(),
+                    })
+                }
+            }
+
+            // Revocation: require Member
+            WireMessage::SubmitRevocation { .. } => {
+                if role.allows_revocation() {
+                    None
+                } else {
+                    Some(WireMessage::Error {
+                        code: crate::message::error_codes::PEER_AUTH_REQUIRED,
+                        message: "revocation submission requires Member authentication".to_string(),
+                    })
+                }
+            }
+
+            // Response-type messages: allow (they're responses to requests we made)
+            WireMessage::Welcome { .. }
+            | WireMessage::PresentationResult { .. }
+            | WireMessage::AttestedRoot { .. }
+            | WireMessage::RevocationAck { .. }
+            | WireMessage::NonMembershipResponse { .. }
+            | WireMessage::EnlivenResponse { .. }
+            | WireMessage::HandoffAccepted { .. }
+            | WireMessage::Error { .. } => None,
         }
     }
 
@@ -1872,6 +2222,15 @@ impl SiloServer {
 
             WireMessage::HandoffAccepted { .. } => {
                 // This is a response, not a request; no action needed on the server side.
+                None
+            }
+
+            WireMessage::PeerChallenge { .. }
+            | WireMessage::PeerAuthResponse { .. }
+            | WireMessage::PeerAuthenticated { .. } => {
+                // Peer authentication protocol messages are handled at a lower layer
+                // (connection establishment). If they arrive during the main message
+                // loop, they are spurious and safely ignored.
                 None
             }
         }

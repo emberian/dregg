@@ -21,12 +21,11 @@
 //! use the same `hash_fact` function.
 
 use crate::field::BabyBear;
-use crate::poseidon2::{hash_4_to_1, hash_fact};
+use crate::poseidon2::hash_fact;
 use crate::stark::{self, StarkProof};
 
 use crate::dsl::descriptors::{
-    self, BLINDED_MERKLE_P2_WIDTH, MERKLE_P2_WIDTH, blinded_merkle_poseidon2_circuit, merkle_col,
-    merkle_poseidon2_circuit,
+    self, blinded_merkle_poseidon2_circuit, merkle_col, merkle_poseidon2_circuit,
 };
 
 // ============================================================================
@@ -60,18 +59,8 @@ pub fn generate_merkle_poseidon2_trace(
         let sib1 = siblings[i][1];
         let sib2 = siblings[i][2];
 
-        // Parent = hash_4_to_1(children arranged by position)
-        let mut children = [BabyBear::ZERO; 4];
-        let mut sib_i = 0;
-        for j in 0..4u8 {
-            if j == pos {
-                children[j as usize] = current;
-            } else {
-                children[j as usize] = [sib0, sib1, sib2][sib_i];
-                sib_i += 1;
-            }
-        }
-        let parent = hash_4_to_1(&children);
+        // Parent = hash_fact(current, [sib0, sib1, sib2, position])
+        let parent = hash_fact(current, &[sib0, sib1, sib2, position]);
 
         trace.push(vec![current, sib0, sib1, sib2, position, parent]);
         current = parent;
@@ -79,7 +68,7 @@ pub fn generate_merkle_poseidon2_trace(
 
     // Pad to power of two (minimum 2 rows). Padding rows must satisfy all constraints:
     // - Position validity: position=0 satisfies pos*(pos-1)*(pos-2)*(pos-3)=0
-    // - Hash binding: parent = hash_4_to_1([current, 0, 0, 0]) (position=0)
+    // - Hash binding: parent = hash_fact(current, [0, 0, 0, 0])
     // - Chain continuity: next[current] = local[parent]
     let target_len = depth.next_power_of_two().max(2);
     while trace.len() < target_len {
@@ -88,7 +77,7 @@ pub fn generate_merkle_poseidon2_trace(
         let pad_sib0 = BabyBear::ZERO;
         let pad_sib1 = BabyBear::ZERO;
         let pad_sib2 = BabyBear::ZERO;
-        let pad_parent = hash_4_to_1(&[prev_parent, pad_sib0, pad_sib1, pad_sib2]);
+        let pad_parent = hash_fact(prev_parent, &[pad_sib0, pad_sib1, pad_sib2, pad_pos]);
 
         trace.push(vec![
             prev_parent,
@@ -123,18 +112,8 @@ pub fn create_test_witness(
             BabyBear::new((i * 3 + 2) as u32),
             BabyBear::new((i * 3 + 3) as u32),
         ];
-        // Reconstruct children in canonical order and hash with hash_4_to_1
-        let mut children = [BabyBear::ZERO; 4];
-        let mut sib_idx = 0;
-        for j in 0..4u8 {
-            if j == pos {
-                children[j as usize] = current;
-            } else {
-                children[j as usize] = sibs[sib_idx];
-                sib_idx += 1;
-            }
-        }
-        current = hash_4_to_1(&children);
+        let position = BabyBear::new(pos as u32);
+        current = hash_fact(current, &[sibs[0], sibs[1], sibs[2], position]);
         siblings.push(sibs);
         positions.push(pos);
     }
@@ -174,18 +153,7 @@ pub fn generate_blinded_merkle_poseidon2_trace(
         let sib1 = siblings[i][1];
         let sib2 = siblings[i][2];
 
-        // Parent = hash_4_to_1(children arranged by position)
-        let mut children = [BabyBear::ZERO; 4];
-        let mut sib_i = 0;
-        for j in 0..4u8 {
-            if j == pos {
-                children[j as usize] = current;
-            } else {
-                children[j as usize] = [sib0, sib1, sib2][sib_i];
-                sib_i += 1;
-            }
-        }
-        let parent = hash_4_to_1(&children);
+        let parent = hash_fact(current, &[sib0, sib1, sib2, position]);
 
         // Blinding column: real value at row 0, zero elsewhere
         let row_blinding = if i == 0 {
@@ -217,8 +185,7 @@ pub fn generate_blinded_merkle_poseidon2_trace(
         let pad_sib0 = BabyBear::ZERO;
         let pad_sib1 = BabyBear::ZERO;
         let pad_sib2 = BabyBear::ZERO;
-        // Position=0, so children = [prev_parent, 0, 0, 0]
-        let pad_parent = hash_4_to_1(&[prev_parent, pad_sib0, pad_sib1, pad_sib2]);
+        let pad_parent = hash_fact(prev_parent, &[pad_sib0, pad_sib1, pad_sib2, pad_pos]);
         // Blinding=0 on padding rows; blinded = hash_fact(prev_parent, [0])
         let pad_blinded = hash_fact(prev_parent, &[BabyBear::ZERO]);
 

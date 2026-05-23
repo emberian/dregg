@@ -15,7 +15,7 @@
 
 use pyana_circuit::field::BabyBear;
 use pyana_circuit::poseidon2::{hash_2_to_1, hash_4_to_1};
-use pyana_circuit::stark::{self, BoundaryConstraint, StarkAir};
+use pyana_circuit::stark::{BoundaryConstraint, StarkAir};
 
 // =============================================================================
 // DFA Definition

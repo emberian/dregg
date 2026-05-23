@@ -170,6 +170,7 @@ fn test_stale_messages_after_teardown() {
         WireMessage::DropRemoteRef {
             from_federation: fed_b_id().0,
             cell_id: cell.0,
+            session_epoch: 0,
         },
     ];
 
@@ -233,6 +234,7 @@ fn test_drop_before_enliven_graceful() {
     let premature_drop = WireMessage::DropRemoteRef {
         from_federation: fed_b_id().0,
         cell_id: cell.0,
+        session_epoch: 0,
     };
     session.send_b_to_a(premature_drop);
     session.deliver_pending();

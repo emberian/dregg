@@ -62,7 +62,7 @@ pub const FOLD_DSL_PI_COUNT: usize = 6;
 // Witness types (previously in fold_types.rs, now inlined here)
 // ============================================================================
 
-use crate::constraint_prover::{Air, Constraint, ConstraintProver};
+use crate::constraint_prover::{Air, Constraint};
 use crate::merkle_types::{MerkleAir, MerkleLevelWitness, MerkleWitness};
 use crate::poseidon2::{hash_4_to_1, hash_fact, hash_many};
 
@@ -85,15 +85,33 @@ impl RemovedFact {
         if proof.leaf_hash != self.hash() {
             return None;
         }
-        let air = MerkleAir::new(proof.clone());
-        let result = ConstraintProver::verify(&air);
-        if !result.is_valid() {
-            return None;
+        // Try hash_fact path first (synthetic/single-member proofs from build_membership_proof).
+        let mut current = proof.leaf_hash;
+        for level in &proof.levels {
+            current = MerkleAir::compute_parent(current, level.position, &level.siblings);
         }
-        if proof.expected_root != old_root {
-            return None;
+        if current == old_root {
+            return Some(current);
         }
-        Some(proof.expected_root)
+        // Fallback: try hash_4_to_1 path (multi-member proofs from build_shared_tree).
+        current = proof.leaf_hash;
+        for level in &proof.levels {
+            let mut children = [BabyBear::ZERO; 4];
+            let mut sib_idx = 0;
+            for i in 0..4u8 {
+                if i == level.position {
+                    children[i as usize] = current;
+                } else {
+                    children[i as usize] = level.siblings[sib_idx];
+                    sib_idx += 1;
+                }
+            }
+            current = hash_4_to_1(&children);
+        }
+        if current == old_root {
+            return Some(current);
+        }
+        None
     }
 }
 

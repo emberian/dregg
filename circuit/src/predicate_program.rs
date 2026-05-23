@@ -75,9 +75,7 @@ use crate::relational_predicate_air::{
 use crate::temporal_predicate_dsl::p3_temporal::{
     P3TemporalPredicateProof, prove_temporal_predicate_p3, verify_temporal_predicate_p3,
 };
-use crate::temporal_predicate_dsl::{
-    TemporalPredicateProof, prove_temporal_predicate, verify_temporal_predicate,
-};
+use crate::temporal_predicate_dsl::{TemporalPredicateProof, verify_temporal_predicate};
 
 // =============================================================================
 // Program Representation
@@ -1047,7 +1045,7 @@ fn prove_single(
 
             let values_bb: Vec<BabyBear> =
                 values.iter().map(|v| BabyBear::new(*v as u32)).collect();
-            let threshold_bb = BabyBear::new(*threshold as u32);
+            let _threshold_bb = BabyBear::new(*threshold as u32);
 
             // Use Plonky3-based prover when available (correct transition constraints).
             #[cfg(feature = "plonky3")]
@@ -1603,7 +1601,7 @@ fn verify_single_proof(
         (
             SubProof::TemporalP3(proof),
             WitnessSpec::Temporal {
-                threshold,
+                threshold: _,
                 min_blocks,
                 ..
             },
@@ -1684,7 +1682,7 @@ fn verify_single_proof(
 fn verify_compound_range_proof(
     sub_proofs: &[SubProof],
     sub_predicates: &[WitnessSpec],
-    formula: &BooleanFormula,
+    _formula: &BooleanFormula,
     expected_commitments: &HashMap<String, BabyBear>,
     _state_root: BabyBear,
 ) -> bool {
