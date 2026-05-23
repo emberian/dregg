@@ -12,12 +12,17 @@ use zeroize::{Zeroize, Zeroizing};
 
 use pyana_bridge::{BridgePredicateProof, BridgePresentationProof, Predicate};
 use pyana_cell::CellId;
+use pyana_cell::stealth::{StealthAnnouncement, StealthKeys, StealthMetaAddress, StealthAddress};
+use pyana_cell::note::NoteCommitment;
+use pyana_cell::value_commitment::ValueCommitment;
 use pyana_circuit::BabyBear;
 use pyana_circuit::IvcProof;
 use pyana_circuit::PredicateType;
 use pyana_circuit::ivc::IvcBuilder;
 use pyana_circuit::merkle_air::MerkleAir;
 use pyana_circuit::poseidon2;
+use pyana_intent::sse::EncryptedIntent;
+use pyana_intent::{CommitmentId, IntentKind, MatchSpec};
 use pyana_token::{Attenuation, AuthRequest, AuthToken, MacaroonToken, TokenClearance};
 use pyana_trace::{AuthorizationTrace, Fact as TraceFact};
 use pyana_turn::Turn;
@@ -561,6 +566,9 @@ pub struct AgentWallet {
     mnemonic_phrase: Option<String>,
     /// The derivation path used for this wallet's key (e.g., "pyana/0").
     derivation_path: Option<String>,
+    /// Stealth keypair for receiving private notes via one-time addresses.
+    /// Derived deterministically from the wallet's signing key.
+    stealth_keys: StealthKeys,
 }
 
 impl AgentWallet {

@@ -590,6 +590,7 @@ impl Coordinator {
             valid_until: None,
             depends_on: Vec::new(),
             previous_receipt_hash: None,
+            conservation_proof: None,
         };
 
         // Execute the turn with proper metering.
@@ -985,6 +986,7 @@ impl Participant {
             valid_until: None,
             depends_on: Vec::new(),
             previous_receipt_hash: None,
+            conservation_proof: None,
         };
 
         let executor = TurnExecutor::new(self.costs.clone());

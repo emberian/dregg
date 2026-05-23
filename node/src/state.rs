@@ -187,6 +187,17 @@ pub struct NodeStateInner {
     ///
     /// Depth 16 supports up to 4^16 = ~4 billion notes.
     pub note_tree: Poseidon2NoteTree,
+
+    // ─── Privacy Primitives ─────────────────────────────────────────────────────
+    /// Encrypted intent pool: content-addressed ID -> EncryptedIntent.
+    /// These are intents propagated via gossip with SSE search tokens for
+    /// privacy-preserving matching (body hidden until a fulfiller matches tokens).
+    pub encrypted_intent_pool: HashMap<[u8; 32], pyana_intent::sse::EncryptedIntent>,
+
+    /// Delay pool for timing decorrelation of fulfillment reveals.
+    /// Items are accumulated and released in batches at fixed intervals to prevent
+    /// timing correlation between intent matching and fulfillment publication.
+    pub delay_pool: pyana_intent::delay_pool::DelayPool,
 }
 
 /// An active atomic proposal tracked by the node.
@@ -371,6 +382,10 @@ impl NodeState {
                 cross_federation_revocations: HashMap::new(),
                 revocation_accumulator: None,
                 note_tree: Poseidon2NoteTree::with_depth(16),
+                encrypted_intent_pool: HashMap::new(),
+                delay_pool: pyana_intent::delay_pool::DelayPool::new(
+                    pyana_intent::delay_pool::DelayPoolConfig::default(),
+                ),
             })),
             events_tx,
             gossip: Arc::new(RwLock::new(None)),
@@ -432,6 +447,10 @@ impl NodeState {
                 cross_federation_revocations: HashMap::new(),
                 revocation_accumulator: None,
                 note_tree: Poseidon2NoteTree::with_depth(16),
+                encrypted_intent_pool: HashMap::new(),
+                delay_pool: pyana_intent::delay_pool::DelayPool::new(
+                    pyana_intent::delay_pool::DelayPoolConfig::default(),
+                ),
             })),
             events_tx,
             gossip: Arc::new(RwLock::new(None)),
