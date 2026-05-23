@@ -1084,7 +1084,7 @@ impl EncryptedDatabase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ActionPattern, CommitmentId, IntentKind, MatchSpec};
+    use crate::{ActionPattern, IntentKind};
 
     /// Build a test index with known tags and intent IDs.
     fn build_test_index(num_tags: usize) -> IntentIndex {

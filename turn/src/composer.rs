@@ -335,6 +335,7 @@ impl TurnComposer {
             valid_until: self.valid_until,
             depends_on: Vec::new(),
             previous_receipt_hash: None,
+            conservation_proof: None,
         };
 
         Ok(ComposedTurn {

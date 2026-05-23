@@ -21,7 +21,20 @@
 
 use pyana_cell::CellId;
 use pyana_cell::ValueCommitmentBytes;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+/// Serde helper for `[u8; 64]` (Ed25519 signatures — serde doesn't support arrays > 32).
+mod serde_sig64 {
+    use super::*;
+    pub fn serialize<S: Serializer>(bytes: &[u8; 64], ser: S) -> Result<S::Ok, S::Error> {
+        bytes.as_ref().serialize(ser)
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(de: D) -> Result<[u8; 64], D::Error> {
+        let v: Vec<u8> = Deserialize::deserialize(de)?;
+        v.try_into()
+            .map_err(|_| serde::de::Error::custom("expected 64 bytes"))
+    }
+}
 
 /// The condition that must be satisfied to release an escrow.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -118,13 +131,15 @@ pub struct CommittedEscrow {
 ///
 /// # Initial implementation (signed statement)
 ///
-/// The claimer reveals their public key and blinding factor, then provides an
-/// Ed25519 signature over the escrow_id. The executor:
-/// 1. Recomputes the commitment from (public_key, blinding) and checks it matches.
-/// 2. Verifies the signature against the revealed public key.
+/// The claimer reveals their CellId and blinding factor (opening the identity
+/// commitment), then provides an Ed25519 signature over the escrow_id from the
+/// cell's public key. The executor:
+/// 1. Recomputes the commitment from (cell_id, blinding) and checks it matches.
+/// 2. Looks up the cell in the ledger to obtain the public key.
+/// 3. Verifies the signature against that public key.
 ///
-/// This proves identity without requiring the escrow to store the cleartext key,
-/// but does reveal the key to the executor at claim time.
+/// This proves identity without requiring the escrow to store the cleartext
+/// CellId, but does reveal the CellId to the executor at claim time.
 ///
 /// # Future: ZK claim
 ///
@@ -132,11 +147,12 @@ pub struct CommittedEscrow {
 /// without revealing it. The executor only sees the proof + escrow_id.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EscrowClaimAuth {
-    /// The claimer's Ed25519 public key (opening of the identity commitment).
-    pub public_key: [u8; 32],
+    /// The claimer's CellId (opening of the identity commitment).
+    pub cell_id: CellId,
     /// The blinding factor used when creating the identity commitment.
     pub blinding: [u8; 32],
-    /// Ed25519 signature over the escrow_id, proving control of `public_key`.
+    /// Ed25519 signature over the escrow_id, proving control of the cell's key.
+    #[serde(with = "serde_sig64")]
     pub signature: [u8; 64],
 }
 

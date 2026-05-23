@@ -104,6 +104,16 @@ pub(crate) enum JournalEntry {
     /// A bridged nullifier was inserted into the executor's nullifier set.
     /// On rollback, this nullifier must be REMOVED from the set.
     BridgedNullifierInserted { nullifier: [u8; 32] },
+    /// A committed escrow was created. Recorded for event tracking.
+    CommittedEscrowCreated { escrow_id: [u8; 32], amount: u64 },
+    /// A committed escrow was released (recipient claimed).
+    CommittedEscrowReleased { escrow_id: [u8; 32] },
+    /// A committed escrow was refunded (creator reclaimed after timeout).
+    CommittedEscrowRefunded { escrow_id: [u8; 32] },
+    /// A committed escrow was inserted into the executor's committed escrow map.
+    /// On rollback, this escrow_id must be REMOVED from both committed_escrows
+    /// and committed_escrow_amounts maps.
+    CommittedEscrowInserted { escrow_id: [u8; 32] },
 }
 
 /// The undo journal for a turn's execution.
@@ -298,6 +308,32 @@ impl LedgerJournal {
             .push(JournalEntry::BridgedNullifierInserted { nullifier });
     }
 
+    /// Record a committed escrow creation.
+    pub fn record_committed_escrow_created(&mut self, escrow_id: [u8; 32], amount: u64) {
+        self.entries
+            .push(JournalEntry::CommittedEscrowCreated { escrow_id, amount });
+    }
+
+    /// Record a committed escrow release.
+    pub fn record_committed_escrow_released(&mut self, escrow_id: [u8; 32]) {
+        self.entries
+            .push(JournalEntry::CommittedEscrowReleased { escrow_id });
+    }
+
+    /// Record a committed escrow refund.
+    pub fn record_committed_escrow_refunded(&mut self, escrow_id: [u8; 32]) {
+        self.entries
+            .push(JournalEntry::CommittedEscrowRefunded { escrow_id });
+    }
+
+    /// Record that a committed escrow was inserted into the executor's maps.
+    /// On rollback, this escrow_id will be removed from both committed_escrows
+    /// and committed_escrow_amounts.
+    pub fn record_committed_escrow_inserted(&mut self, escrow_id: [u8; 32]) {
+        self.entries
+            .push(JournalEntry::CommittedEscrowInserted { escrow_id });
+    }
+
     /// Roll back all recorded changes in reverse order.
     ///
     /// After this call, the ledger is restored to the state it was in before
@@ -310,6 +346,8 @@ impl LedgerJournal {
         obligations: &Mutex<HashMap<[u8; 32], ObligationRecord>>,
         escrows: &Mutex<HashMap<[u8; 32], EscrowRecord>>,
         bridged_nullifiers: &Mutex<BridgedNullifierSet>,
+        committed_escrows: &Mutex<HashMap<[u8; 32], crate::escrow::CommittedEscrow>>,
+        committed_escrow_amounts: &Mutex<HashMap<[u8; 32], u64>>,
     ) {
         for entry in self.entries.into_iter().rev() {
             match entry {
@@ -391,6 +429,10 @@ impl LedgerJournal {
                 JournalEntry::BridgedNullifierInserted { nullifier } => {
                     bridged_nullifiers.lock().unwrap().remove(&nullifier);
                 }
+                JournalEntry::CommittedEscrowInserted { escrow_id } => {
+                    committed_escrows.lock().unwrap().remove(&escrow_id);
+                    committed_escrow_amounts.lock().unwrap().remove(&escrow_id);
+                }
                 // Note/obligation/escrow/event entries don't modify ledger state directly.
                 // On rollback these are simply discarded — the note layer,
                 // obligation registry, and escrow registry only process them after
@@ -403,6 +445,9 @@ impl LedgerJournal {
                 | JournalEntry::EscrowCreated { .. }
                 | JournalEntry::EscrowReleased { .. }
                 | JournalEntry::EscrowRefunded { .. }
+                | JournalEntry::CommittedEscrowCreated { .. }
+                | JournalEntry::CommittedEscrowReleased { .. }
+                | JournalEntry::CommittedEscrowRefunded { .. }
                 | JournalEntry::EventEmitted { .. } => {}
             }
         }

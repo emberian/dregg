@@ -23,7 +23,7 @@ ed25519-dalek = { version = "2", features = ["hazmat"], optional = true }
 getrandom = { workspace = true, optional = true }
 merlin = { version = "3", optional = true }
 postcard = { version = "1", features = ["alloc"] }
-pyana-circuit = { path = "../circuit", default-features = false, optional = true }
+pyana-circuit = { path = "../circuit", optional = true }
 pyana-types = { path = "../types" }
 serde = { version = "1", features = ["derive", "std"] }
 serde_json = { workspace = true }

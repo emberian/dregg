@@ -76,7 +76,10 @@ pub use encrypted::{
     TurnValidityPublicInputs, order_encrypted_turns,
 };
 pub use error::TurnError;
-pub use escrow::{EscrowCondition, EscrowRecord};
+pub use escrow::{
+    CommittedEscrow, EscrowClaimAuth, EscrowCondition, EscrowRecord, compute_condition_commitment,
+    compute_identity_commitment, verify_escrow_claim,
+};
 pub use eventual::{
     CycleError, EventualRef, OutputRef, Pipeline, PipelineBuilder, PipelineError, PipelineResult,
     Target, TurnBatch, TurnOutput,

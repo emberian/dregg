@@ -182,6 +182,11 @@ pub struct TurnExecutor {
     /// Active committed (privacy-preserving) escrow records, keyed by escrow ID.
     /// Tracks committed escrows where parties and amounts are hidden behind commitments.
     pub committed_escrows: Mutex<HashMap<[u8; 32], CommittedEscrow>>,
+    /// Executor-internal side-table mapping committed escrow IDs to their locked amounts.
+    /// This is needed for balance settlement (release/refund) since the committed escrow
+    /// record intentionally does not store the cleartext amount. Only the executor knows
+    /// this mapping; it is NOT exposed to observers.
+    pub committed_escrow_amounts: Mutex<HashMap<[u8; 32], u64>>,
 }
 
 impl TurnExecutor {
@@ -205,6 +210,7 @@ impl TurnExecutor {
             obligations: Mutex::new(HashMap::new()),
             escrows: Mutex::new(HashMap::new()),
             committed_escrows: Mutex::new(HashMap::new()),
+            committed_escrow_amounts: Mutex::new(HashMap::new()),
         }
     }
 
@@ -232,6 +238,7 @@ impl TurnExecutor {
             obligations: Mutex::new(HashMap::new()),
             escrows: Mutex::new(HashMap::new()),
             committed_escrows: Mutex::new(HashMap::new()),
+            committed_escrow_amounts: Mutex::new(HashMap::new()),
         }
     }
 
@@ -255,6 +262,7 @@ impl TurnExecutor {
             obligations: Mutex::new(HashMap::new()),
             escrows: Mutex::new(HashMap::new()),
             committed_escrows: Mutex::new(HashMap::new()),
+            committed_escrow_amounts: Mutex::new(HashMap::new()),
         }
     }
 
@@ -534,6 +542,8 @@ impl TurnExecutor {
                     &self.obligations,
                     &self.escrows,
                     &self.bridged_nullifiers,
+                    &self.committed_escrows,
+                    &self.committed_escrow_amounts,
                 );
                 // Fast unlock: refund the budget debit on turn failure.
                 if let (Some(gate_cell), Some((digest, fee))) =
@@ -555,6 +565,8 @@ impl TurnExecutor {
                 &self.obligations,
                 &self.escrows,
                 &self.bridged_nullifiers,
+                &self.committed_escrows,
+                &self.committed_escrow_amounts,
             );
             if let (Some(gate_cell), Some((digest, fee))) =
                 (&self.budget_gate, &budget_debit_digest)
@@ -579,6 +591,8 @@ impl TurnExecutor {
                 &self.obligations,
                 &self.escrows,
                 &self.bridged_nullifiers,
+                &self.committed_escrows,
+                &self.committed_escrow_amounts,
             );
             if let (Some(gate_cell), Some((digest, fee))) =
                 (&self.budget_gate, &budget_debit_digest)
@@ -602,6 +616,8 @@ impl TurnExecutor {
                 &self.obligations,
                 &self.escrows,
                 &self.bridged_nullifiers,
+                &self.committed_escrows,
+                &self.committed_escrow_amounts,
             );
             if let (Some(gate_cell), Some((digest, fee))) =
                 (&self.budget_gate, &budget_debit_digest)
@@ -2806,6 +2822,370 @@ impl TurnExecutor {
                 Ok(())
             }
 
+            // Committed escrow effects: privacy-preserving conditional settlement.
+            Effect::CreateCommittedEscrow {
+                creator_commitment,
+                recipient_commitment,
+                value_commitment,
+                condition_commitment,
+                timeout_height,
+                escrow_id,
+                range_proof,
+                amount,
+            } => {
+                // Validate escrow_id is non-zero.
+                if escrow_id.iter().all(|&b| b == 0) {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "committed escrow_id is null".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                // Validate timeout is in the future.
+                if *timeout_height <= self.block_height {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "committed escrow timeout_height must be in the future".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                // Validate amount is non-zero.
+                if *amount == 0 {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "committed escrow amount must be non-zero".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                // Validate commitments are non-zero (prevent trivial commitments).
+                if creator_commitment.iter().all(|&b| b == 0) {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "committed escrow creator_commitment is null".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                if recipient_commitment.iter().all(|&b| b == 0) {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "committed escrow recipient_commitment is null".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                if condition_commitment.iter().all(|&b| b == 0) {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "committed escrow condition_commitment is null".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                // Validate range proof is present (non-empty).
+                if range_proof.is_empty() {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "committed escrow range_proof is empty".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                // Verify the range proof if a proof verifier is configured.
+                if let Some(verifier) = &self.proof_verifier {
+                    if !verifier.verify(
+                        range_proof,
+                        "committed-escrow-range",
+                        "value-commitment",
+                        &value_commitment.0,
+                    ) {
+                        return Err((
+                            TurnError::InvalidEffect {
+                                reason: "committed escrow range proof verification failed".into(),
+                            },
+                            path.to_vec(),
+                        ));
+                    }
+                }
+                // Verify escrow_id is correctly derived from commitments.
+                let expected_id = CommittedEscrow::compute_escrow_id(
+                    creator_commitment,
+                    recipient_commitment,
+                    value_commitment,
+                    condition_commitment,
+                    *timeout_height,
+                );
+                if *escrow_id != expected_id {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "committed escrow_id does not match derived value".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                // Check escrow_id is not already in use (in either escrow map).
+                {
+                    let escrows = self.escrows.lock().unwrap();
+                    if escrows.contains_key(escrow_id) {
+                        return Err((
+                            TurnError::InvalidEffect {
+                                reason: "escrow_id already exists (cleartext)".into(),
+                            },
+                            path.to_vec(),
+                        ));
+                    }
+                }
+                {
+                    let committed = self.committed_escrows.lock().unwrap();
+                    if committed.contains_key(escrow_id) {
+                        return Err((
+                            TurnError::InvalidEffect {
+                                reason: "committed escrow_id already exists".into(),
+                            },
+                            path.to_vec(),
+                        ));
+                    }
+                }
+                // Lock the funds from the creator (action_target).
+                let creator_cell = ledger.get(action_target).ok_or_else(|| {
+                    (
+                        TurnError::CellNotFound { id: *action_target },
+                        path.to_vec(),
+                    )
+                })?;
+                if creator_cell.state.balance < *amount {
+                    return Err((
+                        TurnError::InsufficientBalance {
+                            cell: *action_target,
+                            required: *amount,
+                            available: creator_cell.state.balance,
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                let old_balance = creator_cell.state.balance;
+                journal.record_set_balance(*action_target, old_balance);
+                ledger.get_mut(action_target).unwrap().state.balance -= *amount;
+
+                // Store committed escrow record.
+                let record = CommittedEscrow {
+                    creator_commitment: *creator_commitment,
+                    recipient_commitment: *recipient_commitment,
+                    value_commitment: value_commitment.clone(),
+                    condition_commitment: *condition_commitment,
+                    timeout_height: *timeout_height,
+                    escrow_id: *escrow_id,
+                    range_proof: range_proof.clone(),
+                    resolved: false,
+                };
+                {
+                    let mut committed = self.committed_escrows.lock().unwrap();
+                    committed.insert(*escrow_id, record);
+                }
+                // Store the amount in the side-table for settlement.
+                {
+                    let mut amounts = self.committed_escrow_amounts.lock().unwrap();
+                    amounts.insert(*escrow_id, *amount);
+                }
+                // Record insertion for rollback.
+                journal.record_committed_escrow_inserted(*escrow_id);
+                journal.record_committed_escrow_created(*escrow_id, *amount);
+                Ok(())
+            }
+
+            Effect::ReleaseCommittedEscrow {
+                escrow_id,
+                claim_auth,
+                recipient,
+            } => {
+                // Validate escrow_id is non-zero.
+                if escrow_id.iter().all(|&b| b == 0) {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "null escrow_id in ReleaseCommittedEscrow".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                // Look up the committed escrow.
+                let record = {
+                    let committed = self.committed_escrows.lock().unwrap();
+                    committed.get(escrow_id).cloned()
+                };
+                let record = record.ok_or_else(|| {
+                    (
+                        TurnError::InvalidEffect {
+                            reason: "committed escrow not found".into(),
+                        },
+                        path.to_vec(),
+                    )
+                })?;
+                if record.resolved {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "committed escrow already resolved".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                // Verify the claim_auth against the recipient_commitment.
+                if !verify_escrow_claim(claim_auth, &record.recipient_commitment, escrow_id) {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "committed escrow release: claim authorization failed".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                // Verify the recipient cell exists and matches the claim.
+                if ledger.get(recipient).is_none() {
+                    return Err((
+                        TurnError::CellNotFound { id: *recipient },
+                        path.to_vec(),
+                    ));
+                }
+                // Verify that the claimed recipient CellId matches the public_key in claim_auth.
+                let expected_recipient = CellId::from_bytes(claim_auth.public_key);
+                if *recipient != expected_recipient {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "committed escrow release: recipient does not match claim key"
+                                .into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                // Retrieve the escrowed amount from the side-table.
+                let amount = {
+                    let amounts = self.committed_escrow_amounts.lock().unwrap();
+                    amounts.get(escrow_id).copied()
+                };
+                let amount = amount.ok_or_else(|| {
+                    (
+                        TurnError::InvalidEffect {
+                            reason: "committed escrow amount not found (internal error)".into(),
+                        },
+                        path.to_vec(),
+                    )
+                })?;
+                // Credit the escrowed amount to the recipient.
+                let recipient_cell = ledger.get(recipient).unwrap();
+                let old_balance = recipient_cell.state.balance;
+                journal.record_set_balance(*recipient, old_balance);
+                ledger.get_mut(recipient).unwrap().state.balance += amount;
+                // Mark as resolved.
+                {
+                    let mut committed = self.committed_escrows.lock().unwrap();
+                    if let Some(esc) = committed.get_mut(escrow_id) {
+                        esc.resolved = true;
+                    }
+                }
+                journal.record_committed_escrow_released(*escrow_id);
+                Ok(())
+            }
+
+            Effect::RefundCommittedEscrow {
+                escrow_id,
+                claim_auth,
+                creator,
+            } => {
+                // Validate escrow_id is non-zero.
+                if escrow_id.iter().all(|&b| b == 0) {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "null escrow_id in RefundCommittedEscrow".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                // Look up the committed escrow.
+                let record = {
+                    let committed = self.committed_escrows.lock().unwrap();
+                    committed.get(escrow_id).cloned()
+                };
+                let record = record.ok_or_else(|| {
+                    (
+                        TurnError::InvalidEffect {
+                            reason: "committed escrow not found".into(),
+                        },
+                        path.to_vec(),
+                    )
+                })?;
+                if record.resolved {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "committed escrow already resolved".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                // Check timeout has passed.
+                if self.block_height <= record.timeout_height {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "committed escrow timeout has not passed, cannot refund"
+                                .into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                // Verify the claim_auth against the creator_commitment.
+                if !verify_escrow_claim(claim_auth, &record.creator_commitment, escrow_id) {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "committed escrow refund: claim authorization failed".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                // Verify the creator cell exists and matches the claim.
+                if ledger.get(creator).is_none() {
+                    return Err((
+                        TurnError::CellNotFound { id: *creator },
+                        path.to_vec(),
+                    ));
+                }
+                let expected_creator = CellId::from_bytes(claim_auth.public_key);
+                if *creator != expected_creator {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "committed escrow refund: creator does not match claim key"
+                                .into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                // Return the escrowed amount to the creator.
+                let amount = {
+                    let amounts = self.committed_escrow_amounts.lock().unwrap();
+                    amounts.get(escrow_id).copied()
+                };
+                let amount = amount.ok_or_else(|| {
+                    (
+                        TurnError::InvalidEffect {
+                            reason: "committed escrow amount not found (internal error)".into(),
+                        },
+                        path.to_vec(),
+                    )
+                })?;
+                let creator_cell = ledger.get(creator).unwrap();
+                let old_balance = creator_cell.state.balance;
+                journal.record_set_balance(*creator, old_balance);
+                ledger.get_mut(creator).unwrap().state.balance += amount;
+                // Mark as resolved.
+                {
+                    let mut committed = self.committed_escrows.lock().unwrap();
+                    if let Some(esc) = committed.get_mut(escrow_id) {
+                        esc.resolved = true;
+                    }
+                }
+                journal.record_committed_escrow_refunded(*escrow_id);
+                Ok(())
+            }
+
             // ExerciseViaCapability: one-step evaluation map.
             // Look up cap_slot in actor's c-list, verify permissions, execute
             // inner_effects against the capability's target cell.
@@ -3520,7 +3900,10 @@ impl TurnExecutor {
             | Effect::BridgeCancel { .. } => self.costs.effect_base,
             Effect::CreateEscrow { .. }
             | Effect::ReleaseEscrow { .. }
-            | Effect::RefundEscrow { .. } => self.costs.effect_base,
+            | Effect::RefundEscrow { .. }
+            | Effect::CreateCommittedEscrow { .. }
+            | Effect::ReleaseCommittedEscrow { .. }
+            | Effect::RefundCommittedEscrow { .. } => self.costs.effect_base,
         };
         base.saturating_add(extra)
             .saturating_add((effect.data_bytes() as u64).saturating_mul(self.costs.per_byte))
@@ -4526,7 +4909,10 @@ fn rewrite_effect_targets(effects: &mut [Effect], placeholder: &CellId, resolved
             | Effect::BridgeCancel { .. }
             | Effect::CreateEscrow { .. }
             | Effect::ReleaseEscrow { .. }
-            | Effect::RefundEscrow { .. } => {}
+            | Effect::RefundEscrow { .. }
+            | Effect::CreateCommittedEscrow { .. }
+            | Effect::ReleaseCommittedEscrow { .. }
+            | Effect::RefundCommittedEscrow { .. } => {}
         }
     }
 }
