@@ -19,6 +19,7 @@ postcard = { version = "1", features = ["alloc"] }
 serde = { workspace = true }
 
 [dev-dependencies]
+curve25519-dalek = { version = "4", features = ["alloc"] }
 proptest = { workspace = true }
 
 [lints]

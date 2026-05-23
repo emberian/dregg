@@ -27,6 +27,19 @@ use crate::journal::{JournalEntry, LedgerJournal};
 use crate::routing::RoutingDirective;
 use crate::turn::{EmittedEvent, Turn, TurnReceipt, TurnResult};
 
+/// Whether note effects in a turn use Pedersen value commitments or cleartext values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NoteCommitmentMode {
+    /// No note effects present in the turn.
+    Empty,
+    /// All note effects use cleartext values (legacy path).
+    Cleartext,
+    /// All note effects carry Pedersen value commitments (committed path).
+    Committed,
+    /// Some notes have commitments, some don't -- invalid (rejected).
+    Mixed,
+}
+
 /// A record of an active obligation tracked by the executor for balance enforcement.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ObligationRecord {
@@ -241,6 +254,7 @@ impl TurnExecutor {
             revocation_channels: None,
             obligations: Mutex::new(HashMap::new()),
             escrows: Mutex::new(HashMap::new()),
+            committed_escrows: Mutex::new(HashMap::new()),
         }
     }
 
@@ -3555,28 +3569,255 @@ impl TurnExecutor {
 
     /// Check note conservation across all effects in the turn.
     ///
-    /// For each asset type that appears in NoteSpend/NoteCreate effects,
-    /// the total value spent must equal the total value created.
+    /// Dispatches between two paths:
+    /// - **Cleartext path**: all notes lack `value_commitment` -- uses sum comparison.
+    /// - **Committed path**: all notes have `value_commitment` -- uses Pedersen/Schnorr
+    ///   algebraic verification via the turn's `conservation_proof`.
+    /// - **Mixed**: some notes have commitments and some don't -- rejected.
+    ///
     /// Returns Ok(()) if conservation holds, or Err((asset_type, inputs, outputs)).
     fn check_note_conservation(&self, turn: &Turn) -> Result<(), (u64, u64, u64)> {
-        let mut inputs: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
-        let mut outputs: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
+        let mode = Self::detect_commitment_mode(&turn.call_forest);
 
-        self.collect_note_effects(&turn.call_forest, &mut inputs, &mut outputs)?;
+        match mode {
+            NoteCommitmentMode::Cleartext => {
+                let mut inputs: std::collections::HashMap<u64, u64> =
+                    std::collections::HashMap::new();
+                let mut outputs: std::collections::HashMap<u64, u64> =
+                    std::collections::HashMap::new();
 
-        // Check conservation for each asset type.
-        let all_asset_types: std::collections::HashSet<u64> =
-            inputs.keys().chain(outputs.keys()).copied().collect();
+                self.collect_note_effects(&turn.call_forest, &mut inputs, &mut outputs)?;
 
-        for asset_type in all_asset_types {
-            let input_total = inputs.get(&asset_type).copied().unwrap_or(0);
-            let output_total = outputs.get(&asset_type).copied().unwrap_or(0);
-            if input_total != output_total {
-                return Err((asset_type, input_total, output_total));
+                let all_asset_types: std::collections::HashSet<u64> =
+                    inputs.keys().chain(outputs.keys()).copied().collect();
+
+                for asset_type in all_asset_types {
+                    let input_total = inputs.get(&asset_type).copied().unwrap_or(0);
+                    let output_total = outputs.get(&asset_type).copied().unwrap_or(0);
+                    if input_total != output_total {
+                        return Err((asset_type, input_total, output_total));
+                    }
+                }
+                Ok(())
             }
+            NoteCommitmentMode::Committed => {
+                Self::check_committed_conservation(turn).map_err(|_| (0u64, 0u64, 0u64))
+            }
+            NoteCommitmentMode::Mixed => Err((0u64, 0u64, 0u64)),
+            NoteCommitmentMode::Empty => Ok(()),
+        }
+    }
+
+    /// Check conservation using the committed (Pedersen) path.
+    fn check_committed_conservation(turn: &Turn) -> Result<(), TurnError> {
+        let proof_bytes = turn.conservation_proof.as_ref().ok_or_else(|| {
+            TurnError::CommittedConservationFailed {
+                reason: "turn uses committed values but has no conservation_proof".into(),
+            }
+        })?;
+
+        let proof: pyana_cell::ConservationProof =
+            postcard::from_bytes(proof_bytes).map_err(|e| {
+                TurnError::CommittedConservationFailed {
+                    reason: format!("failed to deserialize conservation_proof: {e}"),
+                }
+            })?;
+
+        let mut input_commitments: Vec<ValueCommitment> = Vec::new();
+        let mut output_commitments: Vec<ValueCommitment> = Vec::new();
+        Self::collect_committed_notes(
+            &turn.call_forest,
+            &mut input_commitments,
+            &mut output_commitments,
+        )?;
+
+        let turn_hash = turn.hash();
+        pyana_cell::verify_conservation(
+            &input_commitments,
+            &output_commitments,
+            &proof,
+            &turn_hash,
+        )
+        .map_err(|e| TurnError::CommittedConservationFailed {
+            reason: format!("conservation proof invalid: {e}"),
+        })?;
+
+        Self::verify_output_range_proofs(&turn.call_forest)?;
+        Ok(())
+    }
+
+    /// Collect ValueCommitment points from committed NoteSpend/NoteCreate effects.
+    fn collect_committed_notes(
+        forest: &crate::forest::CallForest,
+        inputs: &mut Vec<ValueCommitment>,
+        outputs: &mut Vec<ValueCommitment>,
+    ) -> Result<(), TurnError> {
+        for tree in &forest.roots {
+            Self::collect_committed_notes_tree(tree, inputs, outputs)?;
+        }
+        Ok(())
+    }
+
+    fn collect_committed_notes_tree(
+        tree: &CallTree,
+        inputs: &mut Vec<ValueCommitment>,
+        outputs: &mut Vec<ValueCommitment>,
+    ) -> Result<(), TurnError> {
+        for effect in &tree.action.effects {
+            Self::collect_committed_notes_from_effect(effect, inputs, outputs)?;
+        }
+        for child in &tree.children {
+            Self::collect_committed_notes_tree(child, inputs, outputs)?;
+        }
+        Ok(())
+    }
+
+    fn collect_committed_notes_from_effect(
+        effect: &Effect,
+        inputs: &mut Vec<ValueCommitment>,
+        outputs: &mut Vec<ValueCommitment>,
+    ) -> Result<(), TurnError> {
+        match effect {
+            Effect::NoteSpend {
+                value_commitment: Some(vc_bytes),
+                ..
+            } => {
+                let vc = ValueCommitment::from_bytes(&ValueCommitmentBytes(*vc_bytes))
+                    .ok_or_else(|| TurnError::CommittedConservationFailed {
+                        reason: "NoteSpend value_commitment is not a valid Ristretto point".into(),
+                    })?;
+                inputs.push(vc);
+            }
+            Effect::NoteCreate {
+                value_commitment: Some(vc_bytes),
+                ..
+            } => {
+                let vc = ValueCommitment::from_bytes(&ValueCommitmentBytes(*vc_bytes))
+                    .ok_or_else(|| TurnError::CommittedConservationFailed {
+                        reason: "NoteCreate value_commitment is not a valid Ristretto point".into(),
+                    })?;
+                outputs.push(vc);
+            }
+            Effect::ExerciseViaCapability { inner_effects, .. } => {
+                for inner in inner_effects {
+                    Self::collect_committed_notes_from_effect(inner, inputs, outputs)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Verify range proofs on NoteCreate outputs with value commitments.
+    fn verify_output_range_proofs(
+        forest: &crate::forest::CallForest,
+    ) -> Result<(), TurnError> {
+        for tree in &forest.roots {
+            Self::verify_output_range_proofs_tree(tree)?;
+        }
+        Ok(())
+    }
+
+    fn verify_output_range_proofs_tree(tree: &CallTree) -> Result<(), TurnError> {
+        for effect in &tree.action.effects {
+            Self::verify_output_range_proof_effect(effect)?;
+        }
+        for child in &tree.children {
+            Self::verify_output_range_proofs_tree(child)?;
+        }
+        Ok(())
+    }
+
+    fn verify_output_range_proof_effect(effect: &Effect) -> Result<(), TurnError> {
+        match effect {
+            Effect::NoteCreate {
+                value_commitment: Some(_),
+                range_proof,
+                ..
+            } => {
+                let rp = range_proof.as_ref().ok_or_else(|| {
+                    TurnError::CommittedConservationFailed {
+                        reason: "NoteCreate has value_commitment but no range_proof".into(),
+                    }
+                })?;
+                if rp.is_empty() {
+                    return Err(TurnError::CommittedConservationFailed {
+                        reason: "NoteCreate range_proof is empty".into(),
+                    });
+                }
+                Ok(())
+            }
+            Effect::ExerciseViaCapability { inner_effects, .. } => {
+                for inner in inner_effects {
+                    Self::verify_output_range_proof_effect(inner)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Detect whether the turn's notes use commitments, cleartext, or a mix.
+    fn detect_commitment_mode(forest: &crate::forest::CallForest) -> NoteCommitmentMode {
+        let mut has_committed = false;
+        let mut has_cleartext = false;
+
+        for tree in &forest.roots {
+            Self::detect_commitment_mode_tree(tree, &mut has_committed, &mut has_cleartext);
         }
 
-        Ok(())
+        match (has_committed, has_cleartext) {
+            (false, false) => NoteCommitmentMode::Empty,
+            (true, false) => NoteCommitmentMode::Committed,
+            (false, true) => NoteCommitmentMode::Cleartext,
+            (true, true) => NoteCommitmentMode::Mixed,
+        }
+    }
+
+    fn detect_commitment_mode_tree(
+        tree: &CallTree,
+        has_committed: &mut bool,
+        has_cleartext: &mut bool,
+    ) {
+        for effect in &tree.action.effects {
+            Self::detect_commitment_mode_effect(effect, has_committed, has_cleartext);
+        }
+        for child in &tree.children {
+            Self::detect_commitment_mode_tree(child, has_committed, has_cleartext);
+        }
+    }
+
+    fn detect_commitment_mode_effect(
+        effect: &Effect,
+        has_committed: &mut bool,
+        has_cleartext: &mut bool,
+    ) {
+        match effect {
+            Effect::NoteSpend {
+                value_commitment, ..
+            } => {
+                if value_commitment.is_some() {
+                    *has_committed = true;
+                } else {
+                    *has_cleartext = true;
+                }
+            }
+            Effect::NoteCreate {
+                value_commitment, ..
+            } => {
+                if value_commitment.is_some() {
+                    *has_committed = true;
+                } else {
+                    *has_cleartext = true;
+                }
+            }
+            Effect::ExerciseViaCapability { inner_effects, .. } => {
+                for inner in inner_effects {
+                    Self::detect_commitment_mode_effect(inner, has_committed, has_cleartext);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Recursively collect NoteSpend/NoteCreate effects from the call forest.

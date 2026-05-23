@@ -1371,4 +1371,413 @@ mod tests {
         assert!(tags.contains(&"feature:premium".to_string()));
         assert!(tags.contains(&"pattern:api/v1/*".to_string()));
     }
+
+    // =========================================================================
+    // New tests for PIR improvements
+    // =========================================================================
+
+    #[test]
+    fn test_padded_database_is_power_of_two() {
+        // 10 real tags should pad to 16 rows.
+        let index = build_test_index(10);
+        let padded = PaddedDatabase::from_index(&index, PirMode::TwoServer);
+        assert_eq!(padded.padded_rows, 16);
+        assert_eq!(padded.entries.len(), 16);
+        assert_eq!(padded.tag_commitments.len(), 16);
+    }
+
+    #[test]
+    fn test_padded_database_preserves_real_data() {
+        let index = build_test_index(10);
+        let padded = PaddedDatabase::from_index(&index, PirMode::TwoServer);
+
+        // Real rows should be preserved exactly.
+        for i in 0..index.num_rows() {
+            assert_eq!(padded.entries[i], index.entries[i]);
+        }
+
+        // Padding rows should be all zeros.
+        for i in index.num_rows()..padded.padded_rows {
+            assert!(
+                padded.entries[i].iter().all(|&e| e == BabyBear::ZERO),
+                "padding row {i} should be all zeros"
+            );
+        }
+    }
+
+    #[test]
+    fn test_padded_database_hides_size() {
+        // 5 tags and 7 tags both pad to 8, making them indistinguishable.
+        let index_5 = build_test_index(5);
+        let index_7 = build_test_index(7);
+        let padded_5 = PaddedDatabase::from_index(&index_5, PirMode::TwoServer);
+        let padded_7 = PaddedDatabase::from_index(&index_7, PirMode::TwoServer);
+
+        assert_eq!(padded_5.padded_rows, 8);
+        assert_eq!(padded_7.padded_rows, 8);
+        assert_eq!(padded_5.info().num_rows, padded_7.info().num_rows);
+    }
+
+    #[test]
+    fn test_padded_database_pir_correctness() {
+        // PIR should still work correctly over padded database.
+        let index = build_test_index(10);
+        let padded = PaddedDatabase::from_index(&index, PirMode::TwoServer);
+
+        for target_idx in 0..index.num_rows() {
+            let (q_a, q_b) = generate_pir_queries(target_idx, padded.padded_rows);
+            let resp_a = compute_pir_response(&q_a, &padded.entries);
+            let resp_b = compute_pir_response(&q_b, &padded.entries);
+            let result = combine_pir_responses(&resp_a, &resp_b);
+
+            assert_eq!(
+                result, index.entries[target_idx],
+                "PIR over padded DB failed for row {target_idx}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_padded_database_dummy_rows_decode_empty() {
+        // Querying a padding row should decode to no intent IDs.
+        let index = build_test_index(5);
+        let padded = PaddedDatabase::from_index(&index, PirMode::TwoServer);
+
+        // Query a padding row (index >= 5, < 8).
+        let padding_idx = 6;
+        let (q_a, q_b) = generate_pir_queries(padding_idx, padded.padded_rows);
+        let resp_a = compute_pir_response(&q_a, &padded.entries);
+        let resp_b = compute_pir_response(&q_b, &padded.entries);
+        let result = combine_pir_responses(&resp_a, &resp_b);
+        let ids = decode_intent_ids(&result);
+        assert!(ids.is_empty(), "padding row should decode to no intents");
+    }
+
+    #[test]
+    fn test_batch_pir_queries() {
+        let index = build_test_index(20);
+        let targets = vec![3, 7, 15];
+
+        let (batch_a, batch_b) = generate_batch_pir_queries(&targets, index.num_rows());
+        let resp_a = compute_batch_pir_response(&batch_a, &index.entries);
+        let resp_b = compute_batch_pir_response(&batch_b, &index.entries);
+        let results = combine_batch_pir_responses(&resp_a, &resp_b);
+
+        assert_eq!(results.len(), 3);
+        for (i, &target) in targets.iter().enumerate() {
+            assert_eq!(
+                results[i], index.entries[target],
+                "batch PIR failed for target {target}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_batch_pir_all_rows() {
+        let index = build_test_index(8);
+        let targets: Vec<usize> = (0..index.num_rows()).collect();
+
+        let (batch_a, batch_b) = generate_batch_pir_queries(&targets, index.num_rows());
+        let resp_a = compute_batch_pir_response(&batch_a, &index.entries);
+        let resp_b = compute_batch_pir_response(&batch_b, &index.entries);
+        let results = combine_batch_pir_responses(&resp_a, &resp_b);
+
+        for (i, row) in results.iter().enumerate() {
+            assert_eq!(*row, index.entries[i], "batch failed at row {i}");
+        }
+    }
+
+    #[test]
+    fn test_single_server_pir_correctness() {
+        let index = build_test_index(10);
+        let padded = PaddedDatabase::from_index(&index, PirMode::SingleServerPadded);
+        let target_idx = 4;
+
+        // Generate query with blinding.
+        let (query, blinding) =
+            generate_single_server_query(target_idx, padded.padded_rows);
+
+        // Server computes response.
+        let response = compute_single_server_response(&query, &padded.entries);
+
+        // Client computes blinding contribution (using local copy of DB).
+        let blinding_contrib = compute_blinding_contribution(&blinding, &padded.entries);
+
+        // Reconstruct.
+        let result = reconstruct_single_server(&response, &blinding_contrib);
+
+        assert_eq!(
+            result, padded.entries[target_idx],
+            "single-server PIR failed for row {target_idx}"
+        );
+    }
+
+    #[test]
+    fn test_single_server_pir_all_rows() {
+        let index = build_test_index(15);
+        let padded = PaddedDatabase::from_index(&index, PirMode::SingleServerPadded);
+
+        for target_idx in 0..index.num_rows() {
+            let (query, blinding) =
+                generate_single_server_query(target_idx, padded.padded_rows);
+            let response = compute_single_server_response(&query, &padded.entries);
+            let blinding_contrib =
+                compute_blinding_contribution(&blinding, &padded.entries);
+            let result = reconstruct_single_server(&response, &blinding_contrib);
+
+            assert_eq!(
+                result, padded.entries[target_idx],
+                "single-server PIR failed for row {target_idx}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_single_server_query_looks_random() {
+        let padded_rows = 64;
+        let target_idx = 30;
+        let (query, _blinding) = generate_single_server_query(target_idx, padded_rows);
+
+        // The query vector should look random (many non-zero entries).
+        let nonzero = query
+            .query_vector
+            .iter()
+            .filter(|&&v| v != BabyBear::ZERO)
+            .count();
+        assert!(
+            nonzero > padded_rows / 2,
+            "single-server query should look random (has {nonzero}/{padded_rows} non-zero)"
+        );
+
+        // Should NOT be the unit vector.
+        let is_unit = query.query_vector.iter().enumerate().all(|(i, &v)| {
+            if i == target_idx {
+                v == BabyBear::ONE
+            } else {
+                v == BabyBear::ZERO
+            }
+        });
+        assert!(!is_unit, "query should NOT be the plain unit vector");
+    }
+
+    #[test]
+    fn test_download_all_encrypt_decrypt_roundtrip() {
+        let index = build_test_index(10);
+        let padded = PaddedDatabase::from_index(&index, PirMode::DownloadAll { max_db_size: 1000 });
+
+        let session_secret = [0x42u8; 32];
+        let encrypted = EncryptedDatabase::encrypt(&padded, &session_secret);
+
+        // Decrypt each row and verify it matches the original.
+        for i in 0..padded.padded_rows {
+            let decrypted = encrypted.decrypt_row(i, &session_secret).unwrap();
+            assert_eq!(
+                decrypted, padded.entries[i],
+                "decrypt failed for row {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_download_all_wrong_secret_fails() {
+        let index = build_test_index(5);
+        let padded = PaddedDatabase::from_index(&index, PirMode::DownloadAll { max_db_size: 1000 });
+
+        let session_secret = [0x42u8; 32];
+        let wrong_secret = [0x99u8; 32];
+        let encrypted = EncryptedDatabase::encrypt(&padded, &session_secret);
+
+        // Decrypting with wrong secret should produce garbage (not match original).
+        let decrypted = encrypted.decrypt_row(0, &wrong_secret).unwrap();
+        assert_ne!(
+            decrypted, padded.entries[0],
+            "wrong secret should NOT decrypt correctly"
+        );
+    }
+
+    #[test]
+    fn test_download_all_out_of_bounds_returns_none() {
+        let index = build_test_index(5);
+        let padded = PaddedDatabase::from_index(&index, PirMode::DownloadAll { max_db_size: 1000 });
+
+        let session_secret = [0x42u8; 32];
+        let encrypted = EncryptedDatabase::encrypt(&padded, &session_secret);
+
+        assert!(encrypted.decrypt_row(999, &session_secret).is_none());
+    }
+
+    #[test]
+    fn test_unlinkable_commitments_are_unique() {
+        let secret = b"my-wallet-secret";
+        let c0 = derive_unlinkable_commitment(secret, 0);
+        let c1 = derive_unlinkable_commitment(secret, 1);
+        let c2 = derive_unlinkable_commitment(secret, 2);
+
+        assert_ne!(c0, c1);
+        assert_ne!(c1, c2);
+        assert_ne!(c0, c2);
+    }
+
+    #[test]
+    fn test_unlinkable_commitments_are_deterministic() {
+        let secret = b"my-wallet-secret";
+        let c1a = derive_unlinkable_commitment(secret, 42);
+        let c1b = derive_unlinkable_commitment(secret, 42);
+        assert_eq!(c1a, c1b);
+    }
+
+    #[test]
+    fn test_unlinkable_commitments_different_secrets_differ() {
+        let c1 = derive_unlinkable_commitment(b"secret-a", 0);
+        let c2 = derive_unlinkable_commitment(b"secret-b", 0);
+        assert_ne!(c1, c2);
+    }
+
+    #[test]
+    fn test_private_browse_client_next_commitment_increments() {
+        let mut client =
+            PrivateBrowseClient::with_secret(PirMode::TwoServer, [0xAA; 32]);
+        let c0 = client.next_commitment();
+        let c1 = client.next_commitment();
+        let c2 = client.next_commitment();
+
+        // All should be different (unlinkable).
+        assert_ne!(c0, c1);
+        assert_ne!(c1, c2);
+        assert_ne!(c0, c2);
+    }
+
+    #[test]
+    fn test_private_browse_client_download_all_local() {
+        let index = build_test_index(10);
+        let padded = PaddedDatabase::from_index(&index, PirMode::DownloadAll { max_db_size: 1000 });
+        let info = padded.info();
+
+        let session_secret = [0x42u8; 32];
+        let encrypted = EncryptedDatabase::encrypt(&padded, &session_secret);
+
+        let mut client =
+            PrivateBrowseClient::with_secret(PirMode::DownloadAll { max_db_size: 1000 }, [0xBB; 32]);
+        client.set_db_info(info);
+        client.set_cached_db(encrypted, session_secret);
+
+        // Browse the first tag's category.
+        let tag = &index.tags[0];
+        let listings = client.browse_category_local(tag).unwrap();
+        assert!(!listings.is_empty(), "should find listings for tag: {tag}");
+
+        // Verify the listing IDs match what PIR would return.
+        let ids = decode_intent_ids(&index.entries[0]);
+        assert_eq!(listings.len(), ids.len());
+        for (listing, expected_id) in listings.iter().zip(ids.iter()) {
+            assert_eq!(listing.id, *expected_id);
+        }
+    }
+
+    #[test]
+    fn test_private_browse_client_nonexistent_category() {
+        let index = build_test_index(5);
+        let padded = PaddedDatabase::from_index(&index, PirMode::DownloadAll { max_db_size: 1000 });
+        let info = padded.info();
+
+        let session_secret = [0x42u8; 32];
+        let encrypted = EncryptedDatabase::encrypt(&padded, &session_secret);
+
+        let mut client =
+            PrivateBrowseClient::with_secret(PirMode::DownloadAll { max_db_size: 1000 }, [0xBB; 32]);
+        client.set_db_info(info);
+        client.set_cached_db(encrypted, session_secret);
+
+        // Nonexistent category should return None.
+        let result = client.browse_category_local("action:nonexistent_xyz");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_pir_mode_default_is_two_server() {
+        assert_eq!(PirMode::default(), PirMode::TwoServer);
+    }
+
+    #[test]
+    fn test_padded_database_power_of_two_already() {
+        // 8 tags should still pad to 8 (already power of 2).
+        let index = build_test_index(8);
+        let padded = PaddedDatabase::from_index(&index, PirMode::TwoServer);
+        assert_eq!(padded.padded_rows, 8);
+        assert_eq!(padded.entries.len(), 8);
+    }
+
+    #[test]
+    fn test_padded_database_single_row() {
+        // 1 tag should pad to 1 (2^0 = 1).
+        let index = build_test_index(1);
+        let padded = PaddedDatabase::from_index(&index, PirMode::TwoServer);
+        assert_eq!(padded.padded_rows, 1);
+    }
+
+    #[test]
+    fn test_padded_database_info_tag_lookup() {
+        let index = build_test_index(10);
+        let padded = PaddedDatabase::from_index(&index, PirMode::TwoServer);
+        let info = padded.info();
+
+        // Should be able to find real tags.
+        for tag in &index.tags {
+            assert!(
+                info.find_tag_index(tag).is_some(),
+                "should find tag: {tag}"
+            );
+        }
+
+        // Should NOT find fake tags.
+        assert!(info.find_tag_index("action:definitely_not_here").is_none());
+    }
+
+    #[test]
+    fn test_batch_pir_over_padded_database() {
+        let index = build_test_index(10);
+        let padded = PaddedDatabase::from_index(&index, PirMode::TwoServer);
+        let targets = vec![0, 5, 9];
+
+        let (batch_a, batch_b) =
+            generate_batch_pir_queries(&targets, padded.padded_rows);
+        let resp_a = compute_batch_pir_response(&batch_a, &padded.entries);
+        let resp_b = compute_batch_pir_response(&batch_b, &padded.entries);
+        let results = combine_batch_pir_responses(&resp_a, &resp_b);
+
+        for (i, &target) in targets.iter().enumerate() {
+            assert_eq!(results[i], index.entries[target]);
+            let ids = decode_intent_ids(&results[i]);
+            assert!(!ids.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_is_download_all_practical() {
+        let info_small = PirDatabaseInfo {
+            num_rows: 64,
+            row_width: ROW_WIDTH,
+            tag_commitments: vec![[0u8; 32]; 64],
+            mode: PirMode::DownloadAll { max_db_size: 1000 },
+        };
+        assert!(PrivateBrowseClient::is_download_all_practical(&info_small));
+
+        let info_large = PirDatabaseInfo {
+            num_rows: 2000,
+            row_width: ROW_WIDTH,
+            tag_commitments: vec![[0u8; 32]; 2000],
+            mode: PirMode::DownloadAll { max_db_size: 1000 },
+        };
+        assert!(!PrivateBrowseClient::is_download_all_practical(&info_large));
+
+        let info_two_server = PirDatabaseInfo {
+            num_rows: 64,
+            row_width: ROW_WIDTH,
+            tag_commitments: vec![[0u8; 32]; 64],
+            mode: PirMode::TwoServer,
+        };
+        assert!(!PrivateBrowseClient::is_download_all_practical(
+            &info_two_server
+        ));
+    }
 }
