@@ -252,6 +252,7 @@ impl CommittedTurnBuilder {
             previous_receipt_hash: None,
             depends_on: Vec::new(),
             conservation_proof: None,
+            sovereign_witnesses: std::collections::HashMap::new(),
         };
 
         let turn_hash = partial_turn.hash();

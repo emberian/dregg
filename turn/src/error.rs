@@ -153,6 +153,16 @@ pub enum TurnError {
     /// Committed (Pedersen) conservation check failed: the Schnorr proof over the
     /// excess commitment is invalid, indicating value is not conserved.
     CommittedConservationFailed { reason: String },
+
+    /// A turn targets a sovereign cell but no witness was provided.
+    SovereignWitnessRequired { cell: CellId },
+
+    /// The sovereign cell witness commitment does not match the stored commitment.
+    SovereignCommitmentMismatch {
+        cell: CellId,
+        expected: [u8; 32],
+        got: [u8; 32],
+    },
 }
 
 impl core::fmt::Display for TurnError {
@@ -336,6 +346,19 @@ impl core::fmt::Display for TurnError {
             }
             TurnError::CommittedConservationFailed { reason } => {
                 write!(f, "committed conservation failed: {reason}")
+            }
+            TurnError::SovereignWitnessRequired { cell } => {
+                write!(
+                    f,
+                    "sovereign cell {cell} targeted but no witness provided in turn"
+                )
+            }
+            TurnError::SovereignCommitmentMismatch { cell, expected, got } => {
+                write!(
+                    f,
+                    "sovereign commitment mismatch for cell {cell}: expected {:02x}{:02x}..., got {:02x}{:02x}...",
+                    expected[0], expected[1], got[0], got[1]
+                )
             }
         }
     }

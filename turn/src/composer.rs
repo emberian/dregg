@@ -336,6 +336,7 @@ impl TurnComposer {
             depends_on: Vec::new(),
             previous_receipt_hash: None,
             conservation_proof: None,
+            sovereign_witnesses: std::collections::HashMap::new(),
         };
 
         Ok(ComposedTurn {

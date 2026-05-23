@@ -507,6 +507,82 @@ impl TurnExecutor {
         }
 
         // =====================================================================
+        // SOVEREIGN CELL WITNESS INJECTION
+        // Validate witnesses for sovereign cells referenced in this turn and
+        // temporarily inject them into the ledger so the executor can operate
+        // on them as if they were hosted. After execution, new commitments are
+        // computed and the cells are removed from the hosted store.
+        // =====================================================================
+        let mut sovereign_cell_ids: Vec<CellId> = Vec::new();
+        for (cell_id, witness) in &turn.sovereign_witnesses {
+            // Verify the cell is actually sovereign in the ledger.
+            let stored_commitment = match ledger.get_sovereign_commitment(cell_id) {
+                Some(c) => *c,
+                None => {
+                    return TurnResult::Rejected {
+                        reason: TurnError::InvalidEffect {
+                            reason: format!(
+                                "sovereign witness provided for non-sovereign cell {}",
+                                cell_id
+                            ),
+                        },
+                        at_action: vec![],
+                    };
+                }
+            };
+            // Verify the witness state_proof matches the cell's state_commitment.
+            let computed_commitment = witness.cell_state.state_commitment();
+            if witness.state_proof != computed_commitment {
+                return TurnResult::Rejected {
+                    reason: TurnError::SovereignCommitmentMismatch {
+                        cell: *cell_id,
+                        expected: computed_commitment,
+                        got: witness.state_proof,
+                    },
+                    at_action: vec![],
+                };
+            }
+            // Verify the computed commitment matches the stored one.
+            if computed_commitment != stored_commitment {
+                return TurnResult::Rejected {
+                    reason: TurnError::SovereignCommitmentMismatch {
+                        cell: *cell_id,
+                        expected: stored_commitment,
+                        got: computed_commitment,
+                    },
+                    at_action: vec![],
+                };
+            }
+            // Verify the witness cell ID matches.
+            if witness.cell_state.id != *cell_id {
+                return TurnResult::Rejected {
+                    reason: TurnError::InvalidEffect {
+                        reason: format!(
+                            "sovereign witness cell ID mismatch: expected {}, got {}",
+                            cell_id, witness.cell_state.id
+                        ),
+                    },
+                    at_action: vec![],
+                };
+            }
+            // Temporarily inject the witnessed cell into the ledger for execution.
+            // This uses the internal cells map directly via insert_cell.
+            // Since the cell is sovereign (not in `cells`), insert_cell won't conflict.
+            if let Err(_) = ledger.insert_cell(witness.cell_state.clone()) {
+                return TurnResult::Rejected {
+                    reason: TurnError::InvalidEffect {
+                        reason: format!(
+                            "failed to inject sovereign witness for cell {}",
+                            cell_id
+                        ),
+                    },
+                    at_action: vec![],
+                };
+            }
+            sovereign_cell_ids.push(*cell_id);
+        }
+
+        // =====================================================================
         // PHASE 2: Execute call forest (rolled back on failure).
         // The journal only records forest effects — fee/nonce are already final.
         // =====================================================================
@@ -545,6 +621,10 @@ impl TurnExecutor {
                     &self.committed_escrows,
                     &self.committed_escrow_amounts,
                 );
+                // Remove temporarily-injected sovereign cells on rollback.
+                for cell_id in &sovereign_cell_ids {
+                    ledger.remove(cell_id);
+                }
                 // Fast unlock: refund the budget debit on turn failure.
                 if let (Some(gate_cell), Some((digest, fee))) =
                     (&self.budget_gate, &budget_debit_digest)
@@ -568,6 +648,9 @@ impl TurnExecutor {
                 &self.committed_escrows,
                 &self.committed_escrow_amounts,
             );
+            for cell_id in &sovereign_cell_ids {
+                ledger.remove(cell_id);
+            }
             if let (Some(gate_cell), Some((digest, fee))) =
                 (&self.budget_gate, &budget_debit_digest)
             {
@@ -594,6 +677,9 @@ impl TurnExecutor {
                 &self.committed_escrows,
                 &self.committed_escrow_amounts,
             );
+            for cell_id in &sovereign_cell_ids {
+                ledger.remove(cell_id);
+            }
             if let (Some(gate_cell), Some((digest, fee))) =
                 (&self.budget_gate, &budget_debit_digest)
             {
@@ -619,6 +705,9 @@ impl TurnExecutor {
                 &self.committed_escrows,
                 &self.committed_escrow_amounts,
             );
+            for cell_id in &sovereign_cell_ids {
+                ledger.remove(cell_id);
+            }
             if let (Some(gate_cell), Some((digest, fee))) =
                 (&self.budget_gate, &budget_debit_digest)
             {
@@ -628,6 +717,19 @@ impl TurnExecutor {
                 reason: TurnError::ExcessNotZero { excess },
                 at_action: vec![],
             };
+        }
+
+        // =====================================================================
+        // SOVEREIGN CELL POST-EXECUTION: Compute new commitments and remove
+        // the temporarily-injected cells from the hosted store.
+        // The federation stores only the updated 32-byte commitment.
+        // =====================================================================
+        for cell_id in &sovereign_cell_ids {
+            if let Some(cell) = ledger.remove(cell_id) {
+                let new_commitment = cell.state_commitment();
+                // Update the sovereign commitment in the ledger.
+                let _ = ledger.update_sovereign_commitment(cell_id, new_commitment);
+            }
         }
 
         // =====================================================================
@@ -3731,6 +3833,28 @@ impl TurnExecutor {
                 child_mut.delegation = None;
                 Ok(())
             }
+
+            Effect::MakeSovereign { cell } => {
+                // Only the cell itself (as action target) can make itself sovereign.
+                if cell != action_target {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "MakeSovereign cell must match action target".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                // Transition the cell from hosted to sovereign.
+                ledger.make_sovereign(cell).map_err(|e| {
+                    (
+                        TurnError::InvalidEffect {
+                            reason: format!("MakeSovereign failed: {e}"),
+                        },
+                        path.to_vec(),
+                    )
+                })?;
+                Ok(())
+            }
         }
     }
 
@@ -3906,6 +4030,7 @@ impl TurnExecutor {
             | Effect::CreateCommittedEscrow { .. }
             | Effect::ReleaseCommittedEscrow { .. }
             | Effect::RefundCommittedEscrow { .. } => self.costs.effect_base,
+            Effect::MakeSovereign { .. } => self.costs.effect_base,
         };
         base.saturating_add(extra)
             .saturating_add((effect.data_bytes() as u64).saturating_mul(self.costs.per_byte))
@@ -4917,7 +5042,8 @@ fn rewrite_effect_targets(effects: &mut [Effect], placeholder: &CellId, resolved
             | Effect::RefundEscrow { .. }
             | Effect::CreateCommittedEscrow { .. }
             | Effect::ReleaseCommittedEscrow { .. }
-            | Effect::RefundCommittedEscrow { .. } => {}
+            | Effect::RefundCommittedEscrow { .. }
+            | Effect::MakeSovereign { .. } => {}
         }
     }
 }

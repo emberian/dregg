@@ -104,7 +104,7 @@ pub use pending::{
     ResolutionCondition, ResolutionEvent, ResolutionOutcome,
 };
 pub use routing::RoutingDirective;
-pub use turn::{EmittedEvent, Turn, TurnReceipt, TurnResult};
+pub use turn::{EmittedEvent, SovereignCellWitness, Turn, TurnReceipt, TurnResult};
 pub use verify::{
     VerifyError, sign_receipt, verify_receipt_chain, verify_receipt_chain_head,
     verify_receipt_chain_with_keys, verify_receipt_extends,

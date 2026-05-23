@@ -523,6 +523,7 @@ fn test_real_signature_verification() {
         previous_receipt_hash: None,
         depends_on: vec![],
         conservation_proof: None,
+        sovereign_witnesses: std::collections::HashMap::new(),
     };
 
     let result = executor.execute(&turn, &mut ledger);
@@ -650,6 +651,7 @@ fn test_wrong_key_signature_rejected() {
         previous_receipt_hash: None,
         depends_on: vec![],
         conservation_proof: None,
+        sovereign_witnesses: std::collections::HashMap::new(),
     };
 
     let result = executor.execute(&turn, &mut ledger);
@@ -1221,6 +1223,7 @@ fn test_empty_forest_rejected() {
         previous_receipt_hash: None,
         depends_on: vec![],
         conservation_proof: None,
+        sovereign_witnesses: std::collections::HashMap::new(),
     };
 
     let result = executor.execute(&turn, &mut ledger);
@@ -4830,6 +4833,7 @@ fn test_spawn_with_delegation_child_gets_parent_caps() {
         previous_receipt_hash: None,
         depends_on: vec![],
         conservation_proof: None,
+        sovereign_witnesses: std::collections::HashMap::new(),
     };
 
     let result = executor.execute(&turn, &mut ledger);
@@ -4905,6 +4909,7 @@ fn test_child_acts_via_delegated_caps() {
         previous_receipt_hash: None,
         depends_on: vec![],
         conservation_proof: None,
+        sovereign_witnesses: std::collections::HashMap::new(),
     };
     let result = executor.execute(&turn1, &mut ledger);
     assert!(result.is_committed());
@@ -4943,6 +4948,7 @@ fn test_child_acts_via_delegated_caps() {
         previous_receipt_hash: None,
         depends_on: vec![],
         conservation_proof: None,
+        sovereign_witnesses: std::collections::HashMap::new(),
     };
     let result = executor.execute(&turn2, &mut ledger);
     assert!(
@@ -5007,6 +5013,7 @@ fn test_refresh_delegation_updates_snapshot() {
         previous_receipt_hash: None,
         depends_on: vec![],
         conservation_proof: None,
+        sovereign_witnesses: std::collections::HashMap::new(),
     };
     executor.execute(&turn1, &mut ledger);
 
@@ -5060,6 +5067,7 @@ fn test_refresh_delegation_updates_snapshot() {
         previous_receipt_hash: None,
         depends_on: vec![],
         conservation_proof: None,
+        sovereign_witnesses: std::collections::HashMap::new(),
     };
     let result = executor.execute(&turn2, &mut ledger);
     assert!(result.is_committed(), "refresh should work: {:?}", result);
@@ -5124,6 +5132,7 @@ fn test_revoke_delegation_bumps_epoch_and_clears_child() {
         previous_receipt_hash: None,
         depends_on: vec![],
         conservation_proof: None,
+        sovereign_witnesses: std::collections::HashMap::new(),
     };
     executor.execute(&turn1, &mut ledger);
 
@@ -5165,6 +5174,7 @@ fn test_revoke_delegation_bumps_epoch_and_clears_child() {
         previous_receipt_hash: None,
         depends_on: vec![],
         conservation_proof: None,
+        sovereign_witnesses: std::collections::HashMap::new(),
     };
     let result = executor.execute(&turn2, &mut ledger);
     assert!(result.is_committed(), "revoke should work: {:?}", result);
@@ -5226,6 +5236,7 @@ fn test_parent_new_cap_invisible_until_refresh() {
         previous_receipt_hash: None,
         depends_on: vec![],
         conservation_proof: None,
+        sovereign_witnesses: std::collections::HashMap::new(),
     };
     executor.execute(&turn1, &mut ledger);
 
@@ -5268,6 +5279,7 @@ fn test_parent_new_cap_invisible_until_refresh() {
         previous_receipt_hash: None,
         depends_on: vec![],
         conservation_proof: None,
+        sovereign_witnesses: std::collections::HashMap::new(),
     };
     let result = executor.execute(&turn2, &mut ledger);
     assert!(
@@ -5330,6 +5342,7 @@ fn test_parent_loses_cap_child_still_has_until_refresh() {
         previous_receipt_hash: None,
         depends_on: vec![],
         conservation_proof: None,
+        sovereign_witnesses: std::collections::HashMap::new(),
     };
     executor.execute(&turn1, &mut ledger);
 
@@ -5374,6 +5387,7 @@ fn test_parent_loses_cap_child_still_has_until_refresh() {
         previous_receipt_hash: None,
         depends_on: vec![],
         conservation_proof: None,
+        sovereign_witnesses: std::collections::HashMap::new(),
     };
     let result = executor.execute(&turn2, &mut ledger);
     assert!(
@@ -6653,4 +6667,326 @@ fn test_committed_conservation_inflated_output_fails() {
         result.is_rejected(),
         "committed conservation with inflated output should be rejected"
     );
+}
+
+// =============================================================================
+// Sovereign Cell Tests (Phase 1a)
+// =============================================================================
+
+#[test]
+fn sovereign_cell_execute_turn_with_valid_witness() {
+    // Setup: create a sovereign cell and register its commitment.
+    let mut ledger = Ledger::new();
+    let (agent, _) = make_open_cell(1, 10_000);
+    let agent_id = agent.id;
+    ledger.insert_cell(agent).unwrap();
+
+    // Create a cell that will become sovereign.
+    let (mut sovereign_cell, _) = make_open_cell(2, 500);
+    let sovereign_id = sovereign_cell.id;
+    sovereign_cell.mode = pyana_cell::CellMode::Sovereign;
+
+    // Compute the initial commitment and register as sovereign.
+    let initial_commitment = sovereign_cell.state_commitment();
+    ledger.register_sovereign_cell(sovereign_id, initial_commitment).unwrap();
+
+    // Grant agent a capability to the sovereign cell.
+    ledger.get_mut(&agent_id).unwrap().capabilities.grant(sovereign_id, AuthRequired::None);
+
+    // Build a turn that targets the sovereign cell (set a field).
+    let new_value = [42u8; 32];
+    let turn = Turn {
+        agent: agent_id,
+        nonce: 0,
+        call_forest: CallForest {
+            roots: vec![CallTree {
+                action: Action {
+                    target: sovereign_id,
+                    method: symbol("set_field"),
+                    args: vec![],
+                    authorization: Authorization::Unchecked,
+                    preconditions: CellPreconditions::default(),
+                    effects: vec![Effect::SetField {
+                        cell: sovereign_id,
+                        index: 0,
+                        value: new_value,
+                    }],
+                    may_delegate: DelegationMode::None,
+                    commitment_mode: CommitmentMode::Full,
+                    balance_change: None,
+                },
+                children: vec![],
+                hash: [0u8; 32],
+            }],
+            forest_hash: [0u8; 32],
+        },
+        fee: 0,
+        memo: None,
+        valid_until: None,
+        previous_receipt_hash: None,
+        depends_on: vec![],
+        conservation_proof: None,
+        sovereign_witnesses: {
+            let mut m = std::collections::HashMap::new();
+            m.insert(
+                sovereign_id,
+                crate::turn::SovereignCellWitness {
+                    cell_state: sovereign_cell.clone(),
+                    state_proof: initial_commitment,
+                },
+            );
+            m
+        },
+    };
+
+    let executor = zero_cost_executor();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed(), "turn should commit successfully");
+
+    // After execution, the sovereign commitment should be updated.
+    let new_commitment = ledger.get_sovereign_commitment(&sovereign_id).unwrap();
+    assert_ne!(
+        *new_commitment, initial_commitment,
+        "commitment should change after state modification"
+    );
+
+    // Verify the new commitment matches what we'd expect.
+    let mut expected_cell = sovereign_cell.clone();
+    expected_cell.state.fields[0] = new_value;
+    assert_eq!(
+        *new_commitment,
+        expected_cell.state_commitment(),
+        "new commitment should match the expected post-transition state"
+    );
+
+    // The cell should NOT be in the hosted store.
+    assert!(ledger.get(&sovereign_id).is_none(), "sovereign cell should not be in hosted store");
+    assert!(ledger.is_sovereign(&sovereign_id), "cell should still be sovereign");
+}
+
+#[test]
+fn sovereign_cell_rejected_without_witness() {
+    // Setup: create a sovereign cell.
+    let mut ledger = Ledger::new();
+    let (agent, _) = make_open_cell(1, 10_000);
+    let agent_id = agent.id;
+    ledger.insert_cell(agent).unwrap();
+
+    let (sovereign_cell, _) = make_open_cell(2, 500);
+    let sovereign_id = sovereign_cell.id;
+    let commitment = sovereign_cell.state_commitment();
+    ledger.register_sovereign_cell(sovereign_id, commitment).unwrap();
+
+    // Grant agent a capability to the sovereign cell.
+    ledger.get_mut(&agent_id).unwrap().capabilities.grant(sovereign_id, AuthRequired::None);
+
+    // Build a turn targeting the sovereign cell WITHOUT providing a witness.
+    let turn = Turn {
+        agent: agent_id,
+        nonce: 0,
+        call_forest: CallForest {
+            roots: vec![CallTree {
+                action: Action {
+                    target: sovereign_id,
+                    method: symbol("set_field"),
+                    args: vec![],
+                    authorization: Authorization::Unchecked,
+                    preconditions: CellPreconditions::default(),
+                    effects: vec![Effect::SetField {
+                        cell: sovereign_id,
+                        index: 0,
+                        value: [1u8; 32],
+                    }],
+                    may_delegate: DelegationMode::None,
+                    commitment_mode: CommitmentMode::Full,
+                    balance_change: None,
+                },
+                children: vec![],
+                hash: [0u8; 32],
+            }],
+            forest_hash: [0u8; 32],
+        },
+        fee: 0,
+        memo: None,
+        valid_until: None,
+        previous_receipt_hash: None,
+        depends_on: vec![],
+        conservation_proof: None,
+        sovereign_witnesses: std::collections::HashMap::new(), // NO witness!
+    };
+
+    let executor = zero_cost_executor();
+    let result = executor.execute(&turn, &mut ledger);
+
+    // The turn should be rejected because the sovereign cell is not in the
+    // hosted store and no witness was provided.
+    assert!(result.is_rejected(), "turn should be rejected without witness");
+    let (error, _) = result.unwrap_rejected();
+    // Should fail with CellNotFound since the cell isn't in the hosted store.
+    assert!(
+        matches!(error, TurnError::CellNotFound { .. }),
+        "expected CellNotFound, got: {error}"
+    );
+}
+
+#[test]
+fn sovereign_cell_rejected_with_wrong_commitment() {
+    // Setup: create a sovereign cell.
+    let mut ledger = Ledger::new();
+    let (agent, _) = make_open_cell(1, 10_000);
+    let agent_id = agent.id;
+    ledger.insert_cell(agent).unwrap();
+
+    let (sovereign_cell, _) = make_open_cell(2, 500);
+    let sovereign_id = sovereign_cell.id;
+    let commitment = sovereign_cell.state_commitment();
+    ledger.register_sovereign_cell(sovereign_id, commitment).unwrap();
+
+    // Grant agent a capability to the sovereign cell.
+    ledger.get_mut(&agent_id).unwrap().capabilities.grant(sovereign_id, AuthRequired::None);
+
+    // Create a tampered witness: claim a different state than what's committed.
+    let mut tampered_cell = sovereign_cell.clone();
+    tampered_cell.state.balance = 999_999; // Lie about balance.
+    let tampered_commitment = tampered_cell.state_commitment();
+
+    let turn = Turn {
+        agent: agent_id,
+        nonce: 0,
+        call_forest: CallForest {
+            roots: vec![CallTree {
+                action: Action {
+                    target: sovereign_id,
+                    method: symbol("set_field"),
+                    args: vec![],
+                    authorization: Authorization::Unchecked,
+                    preconditions: CellPreconditions::default(),
+                    effects: vec![Effect::SetField {
+                        cell: sovereign_id,
+                        index: 0,
+                        value: [1u8; 32],
+                    }],
+                    may_delegate: DelegationMode::None,
+                    commitment_mode: CommitmentMode::Full,
+                    balance_change: None,
+                },
+                children: vec![],
+                hash: [0u8; 32],
+            }],
+            forest_hash: [0u8; 32],
+        },
+        fee: 0,
+        memo: None,
+        valid_until: None,
+        previous_receipt_hash: None,
+        depends_on: vec![],
+        conservation_proof: None,
+        sovereign_witnesses: {
+            let mut m = std::collections::HashMap::new();
+            m.insert(
+                sovereign_id,
+                crate::turn::SovereignCellWitness {
+                    cell_state: tampered_cell,
+                    state_proof: tampered_commitment, // This won't match stored commitment
+                },
+            );
+            m
+        },
+    };
+
+    let executor = zero_cost_executor();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_rejected(), "turn should be rejected with wrong commitment");
+    let (error, _) = result.unwrap_rejected();
+    assert!(
+        matches!(error, TurnError::SovereignCommitmentMismatch { .. }),
+        "expected SovereignCommitmentMismatch, got: {error}"
+    );
+}
+
+#[test]
+fn sovereign_cell_make_sovereign_effect() {
+    // Setup: create a hosted cell, then use MakeSovereign to transition it.
+    let mut ledger = Ledger::new();
+    let (agent, _) = make_open_cell(1, 10_000);
+    let agent_id = agent.id;
+
+    let (target, _) = make_open_cell(2, 500);
+    let target_id = target.id;
+
+    let mut agent_with_cap = agent;
+    agent_with_cap.capabilities.grant(target_id, AuthRequired::None);
+    ledger.insert_cell(agent_with_cap).unwrap();
+    ledger.insert_cell(target.clone()).unwrap();
+
+    // Verify the cell starts as hosted.
+    assert!(!ledger.is_sovereign(&target_id));
+    assert!(ledger.get(&target_id).is_some());
+
+    // Build a turn that makes the target sovereign.
+    let turn = Turn {
+        agent: agent_id,
+        nonce: 0,
+        call_forest: CallForest {
+            roots: vec![CallTree {
+                action: Action {
+                    target: target_id,
+                    method: symbol("make_sovereign"),
+                    args: vec![],
+                    authorization: Authorization::Unchecked,
+                    preconditions: CellPreconditions::default(),
+                    effects: vec![Effect::MakeSovereign { cell: target_id }],
+                    may_delegate: DelegationMode::None,
+                    commitment_mode: CommitmentMode::Full,
+                    balance_change: None,
+                },
+                children: vec![],
+                hash: [0u8; 32],
+            }],
+            forest_hash: [0u8; 32],
+        },
+        fee: 0,
+        memo: None,
+        valid_until: None,
+        previous_receipt_hash: None,
+        depends_on: vec![],
+        conservation_proof: None,
+        sovereign_witnesses: std::collections::HashMap::new(),
+    };
+
+    let executor = zero_cost_executor();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed(), "MakeSovereign turn should commit: {:?}", result);
+
+    // After execution, the cell should be sovereign.
+    assert!(ledger.is_sovereign(&target_id), "cell should be sovereign after MakeSovereign");
+    assert!(ledger.get(&target_id).is_none(), "cell should not be in hosted store");
+
+    // The commitment should match the original cell's state commitment.
+    let expected_commitment = target.state_commitment();
+    let stored = ledger.get_sovereign_commitment(&target_id).unwrap();
+    assert_eq!(*stored, expected_commitment, "stored commitment should match original state");
+}
+
+#[test]
+fn sovereign_cell_state_commitment_deterministic() {
+    // Verify state_commitment is deterministic.
+    let (cell1, _) = make_open_cell(5, 1000);
+    let (cell2, _) = make_open_cell(5, 1000);
+    assert_eq!(cell1.state_commitment(), cell2.state_commitment());
+
+    // Different state => different commitment.
+    let (mut cell3, _) = make_open_cell(5, 1000);
+    cell3.state.balance = 999;
+    assert_ne!(cell1.state_commitment(), cell3.state_commitment());
+
+    // Different nonce => different commitment.
+    let (mut cell4, _) = make_open_cell(5, 1000);
+    cell4.state.nonce = 42;
+    assert_ne!(cell1.state_commitment(), cell4.state_commitment());
+
+    // Different field => different commitment.
+    let (mut cell5, _) = make_open_cell(5, 1000);
+    cell5.state.fields[0] = [1u8; 32];
+    assert_ne!(cell1.state_commitment(), cell5.state_commitment());
 }

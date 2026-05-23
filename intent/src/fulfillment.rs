@@ -814,6 +814,7 @@ pub fn create_fulfillment_turn(
         previous_receipt_hash: None,
         depends_on: vec![],
         conservation_proof: None,
+        sovereign_witnesses: std::collections::HashMap::new(),
     };
 
     ConditionalTurn {
@@ -1144,6 +1145,7 @@ pub fn execute_committed_fulfillment_flow(
         previous_receipt_hash: None,
         depends_on: vec![],
         conservation_proof: None,
+        sovereign_witnesses: std::collections::HashMap::new(),
     };
 
     let turn_hash = partial_turn.hash();
