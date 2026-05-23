@@ -25,6 +25,7 @@ pyana-trace = { path = "../trace" }
 async-trait = "0.1"
 base64 = { workspace = true }
 blake3 = "1"
+curve25519-dalek = { version = "4", features = ["alloc"] }
 ed25519-dalek = { version = "2", features = ["std"] }
 getrandom = { workspace = true }
 hmac = { workspace = true }

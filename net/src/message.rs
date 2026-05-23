@@ -6,8 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 // Used by pad_message for random fill.
-#[allow(unused_imports)]
-use rand::Fill;
+use rand::Rng;
 
 /// Messages exchanged between pyana peers over direct QUIC connections
 /// or disseminated via gossip.

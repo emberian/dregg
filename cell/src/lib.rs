@@ -75,6 +75,8 @@ pub use state::{
 pub use stealth::{StealthAddress, StealthAnnouncement, StealthKeys, StealthMetaAddress};
 #[cfg(feature = "crypto")]
 pub use value_commitment::{
-    CommittedNote, CommittedNoteOpening, ConservationError, ConservationProof, ValueCommitment,
-    ValueCommitmentBytes, prove_conservation, verify_conservation,
+    BulletproofRangeProof, CommittedNote, CommittedNoteOpening, ConservationError,
+    ConservationProof, FullConservationError, FullConservationProof, ValueCommitment,
+    ValueCommitmentBytes, prove_conservation, prove_conservation_with_range,
+    verify_conservation, verify_conservation_with_range,
 };

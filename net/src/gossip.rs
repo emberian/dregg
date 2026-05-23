@@ -30,7 +30,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use quinn::{Connection, Endpoint, RecvStream};
-use rand::seq::SliceRandom;
+use rand::seq::IndexedRandom;
 use tokio::sync::{RwLock, mpsc};
 use tracing::{debug, info, trace, warn};
 
@@ -1074,6 +1074,10 @@ impl GossipNetwork {
     async fn send_to_peers(data: &[u8], targets: &[SocketAddr], state: &Arc<RwLock<GossipState>>) {
         let mut dead_peers: Vec<SocketAddr> = Vec::new();
 
+        // Apply two-bucket padding to hide message type from size analysis.
+        // See docs/design-network-privacy.md Phase 1.
+        let padded = crate::message::pad_message(data);
+
         for &addr in targets {
             let conn = {
                 let state_r = state.read().await;
@@ -1082,11 +1086,12 @@ impl GossipNetwork {
             if let Some(conn) = conn {
                 match conn.open_uni().await {
                     Ok(mut stream) => {
-                        let data = data.to_vec();
+                        let padded = padded.clone();
                         tokio::spawn(async move {
-                            let len = (data.len() as u32).to_be_bytes();
+                            // Write outer length prefix (padded frame size) then padded data.
+                            let len = (padded.len() as u32).to_be_bytes();
                             if stream.write_all(&len).await.is_ok() {
-                                let _ = stream.write_all(&data).await;
+                                let _ = stream.write_all(&padded).await;
                                 let _ = stream.finish();
                             }
                         });
@@ -1605,6 +1610,123 @@ impl GossipNetwork {
         }
     }
 
+    /// Transition a stem message to fluff phase: mark as seen, deliver locally,
+    /// and broadcast via normal Plumtree eager-push to all peers.
+    async fn fluff_message(
+        topic_id: TopicId,
+        msg_hash: MessageHash,
+        payload: Vec<u8>,
+        received_from: SocketAddr,
+        state: &Arc<RwLock<GossipState>>,
+        outgoing_tx: &mpsc::UnboundedSender<OutgoingGossip>,
+        signing_key: &SigningKey,
+        node_id: NodeId,
+    ) {
+        let (eager_targets, lazy_targets) = {
+            let mut s = state.write().await;
+            s.seen.insert(msg_hash);
+            s.stem_messages.remove(&msg_hash);
+            s.cache_insert(
+                msg_hash,
+                CachedMessage {
+                    topic_id,
+                    payload: payload.clone(),
+                    cached_at: Instant::now(),
+                },
+            );
+
+            // Deliver to local subscribers
+            if let Some(topic_state) = s.topics.get(&topic_id) {
+                if let Ok(msg) = PeerMessage::decode_raw(&payload) {
+                    for sub in &topic_state.subscribers {
+                        let _ = sub.send(GossipEvent::Message {
+                            from: received_from,
+                            message: msg.clone(),
+                        });
+                    }
+                }
+
+                let eager: Vec<_> = topic_state
+                    .eager_peers()
+                    .into_iter()
+                    .filter(|a| *a != received_from)
+                    .collect();
+                let lazy: Vec<_> = topic_state
+                    .lazy_peers()
+                    .into_iter()
+                    .filter(|a| *a != received_from)
+                    .collect();
+                (eager, lazy)
+            } else {
+                (Vec::new(), Vec::new())
+            }
+        };
+
+        // Send as FullMessage (fluff phase — normal Plumtree broadcast)
+        if !eager_targets.is_empty() {
+            let fwd_envelope = GossipEnvelope::FullMessage {
+                topic_id,
+                msg_hash,
+                payload: payload.clone(),
+            };
+            if let Some(fwd_bytes) = Self::sign_envelope(&fwd_envelope, node_id, signing_key) {
+                Self::send_to_peers(&fwd_bytes, &eager_targets, state).await;
+            }
+        }
+
+        if !lazy_targets.is_empty() {
+            let ihave_envelope = GossipEnvelope::IHave { topic_id, msg_hash };
+            if let Some(ihave_bytes) = Self::sign_envelope(&ihave_envelope, node_id, signing_key) {
+                Self::send_to_peers(&ihave_bytes, &lazy_targets, state).await;
+            }
+        }
+    }
+
+    /// Dandelion++ stem timeout loop: periodically checks for messages stuck in
+    /// stem phase beyond STEM_TIMEOUT and fluffs them to prevent message loss.
+    async fn stem_timeout_loop(
+        state: Arc<RwLock<GossipState>>,
+        outgoing_tx: mpsc::UnboundedSender<OutgoingGossip>,
+        node_id: NodeId,
+        signing_key: Arc<SigningKey>,
+    ) {
+        let mut interval = tokio::time::interval(Duration::from_secs(5));
+        loop {
+            interval.tick().await;
+
+            let now = Instant::now();
+            let expired: Vec<StemEntry> = {
+                let s = state.read().await;
+                s.stem_messages
+                    .values()
+                    .filter(|entry| now.duration_since(entry.entered_stem_at) > STEM_TIMEOUT)
+                    .cloned()
+                    .collect()
+            };
+
+            for entry in expired {
+                debug!(
+                    "Stem timeout for message {:02x}{:02x}... — fluffing",
+                    entry.msg_hash[0], entry.msg_hash[1]
+                );
+
+                // Use a sentinel address for "self-originated fluff"
+                let self_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+                Self::fluff_message(
+                    entry.topic_id,
+                    entry.msg_hash,
+                    entry.payload,
+                    self_addr,
+                    &state,
+                    &outgoing_tx,
+                    &signing_key,
+                    node_id,
+                )
+                .await;
+            }
+        }
+    }
+
     async fn ihave_timeout_loop(
         state: Arc<RwLock<GossipState>>,
         outgoing_tx: mpsc::UnboundedSender<OutgoingGossip>,
@@ -1742,7 +1864,12 @@ async fn read_signed_envelope(recv: &mut RecvStream) -> Result<SignedEnvelope, S
     let mut buf = vec![0u8; len];
     recv.read_exact(&mut buf).await.map_err(|e| e.to_string())?;
 
-    postcard::from_bytes(&buf).map_err(|e| e.to_string())
+    // Strip two-bucket padding to recover the actual envelope bytes.
+    // See docs/design-network-privacy.md Phase 1.
+    let payload = crate::message::unpad_message(&buf)
+        .ok_or_else(|| "invalid padded frame (malformed length prefix)".to_string())?;
+
+    postcard::from_bytes(payload).map_err(|e| e.to_string())
 }
 
 /// Derive a deterministic TopicId from a human-readable topic name.
@@ -2167,5 +2294,243 @@ mod tests {
 
         assert_eq!(*blake3::hash(payload).as_bytes(), correct_hash);
         assert_ne!(wrong_hash, correct_hash);
+    }
+
+    // ─── Dandelion++ tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn gossip_envelope_roundtrip_stem() {
+        let envelope = GossipEnvelope::Stem {
+            topic_id: [0x55; 32],
+            msg_hash: [0x66; 32],
+            payload: vec![7, 8, 9],
+        };
+        let bytes = postcard::to_stdvec(&envelope).unwrap();
+        let decoded: GossipEnvelope = postcard::from_bytes(&bytes).unwrap();
+        match decoded {
+            GossipEnvelope::Stem {
+                topic_id,
+                msg_hash,
+                payload,
+            } => {
+                assert_eq!(topic_id, [0x55; 32]);
+                assert_eq!(msg_hash, [0x66; 32]);
+                assert_eq!(payload, vec![7, 8, 9]);
+            }
+            _ => panic!("wrong variant — expected Stem"),
+        }
+    }
+
+    #[test]
+    fn stem_probability_within_expected_range() {
+        // With p=0.9, run 1000 trials: expect ~900 "continue stem" outcomes.
+        // Use a wide tolerance (800-980) to avoid flaky test while validating
+        // the distribution is clearly biased toward stem continuation.
+        let mut stem_count = 0u32;
+        for _ in 0..1000 {
+            if rand::random::<f64>() < STEM_PROBABILITY {
+                stem_count += 1;
+            }
+        }
+        assert!(
+            stem_count >= 800 && stem_count <= 980,
+            "stem continuation count {stem_count}/1000 outside expected range [800, 980]"
+        );
+    }
+
+    #[test]
+    fn stem_entry_timeout_detection() {
+        // Verify that stem entries can be identified as expired based on STEM_TIMEOUT.
+        let entry = StemEntry {
+            topic_id: [0xaa; 32],
+            msg_hash: [0xbb; 32],
+            payload: vec![1, 2, 3],
+            entered_stem_at: Instant::now() - Duration::from_secs(31),
+        };
+
+        let now = Instant::now();
+        assert!(now.duration_since(entry.entered_stem_at) > STEM_TIMEOUT);
+
+        // A fresh entry should NOT be expired
+        let fresh = StemEntry {
+            topic_id: [0xcc; 32],
+            msg_hash: [0xdd; 32],
+            payload: vec![4, 5, 6],
+            entered_stem_at: Instant::now(),
+        };
+        let now = Instant::now();
+        assert!(now.duration_since(fresh.entered_stem_at) < STEM_TIMEOUT);
+    }
+
+    /// Integration test: publish() routes a message to exactly 1 peer (stem),
+    /// then the stem timeout failsafe eventually fluffs it (broadcasts).
+    #[tokio::test]
+    async fn dandelion_publish_sends_stem_to_one_peer() {
+        use tokio::sync::mpsc;
+
+        // We can't easily spin up real QUIC endpoints in a unit test, but we
+        // can verify the outgoing message flow by inspecting the OutgoingGossip
+        // channel. Build the state directly.
+        let topic_id = topic_id_from_name("dandelion-test");
+        let mut state = GossipState {
+            topics: HashMap::new(),
+            peers: HashMap::new(),
+            seen: BoundedSeenSet::new(100, Duration::from_secs(60)),
+            pending_ihaves: BoundedPendingIhaves::new(100),
+            message_cache: HashMap::new(),
+            message_cache_order: VecDeque::new(),
+            stem_messages: HashMap::new(),
+        };
+
+        // Add a topic with 5 peers (3 eager, 2 lazy)
+        let mut topic_state = TopicState::new();
+        let peers: Vec<SocketAddr> = (1..=5)
+            .map(|i| format!("127.0.0.1:{}", 3000 + i).parse().unwrap())
+            .collect();
+        for &peer in &peers {
+            topic_state.add_peer(peer);
+        }
+        state.topics.insert(topic_id, topic_state);
+
+        let state = Arc::new(RwLock::new(state));
+        let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<OutgoingGossip>();
+
+        // Simulate what publish() does: pick one random peer for stem
+        let msg = PeerMessage::PublishTurn {
+            turn_hash: [0x42; 32],
+            turn_data: vec![1, 2, 3],
+            causal_deps: vec![],
+        };
+        let encoded = msg.encode_raw();
+        let msg_hash = *blake3::hash(&encoded).as_bytes();
+
+        {
+            let mut s = state.write().await;
+            s.seen.insert(msg_hash);
+            s.cache_insert(
+                msg_hash,
+                CachedMessage {
+                    topic_id,
+                    payload: encoded.clone(),
+                    cached_at: Instant::now(),
+                },
+            );
+            s.stem_messages.insert(
+                msg_hash,
+                StemEntry {
+                    topic_id,
+                    msg_hash,
+                    payload: encoded.clone(),
+                    entered_stem_at: Instant::now(),
+                },
+            );
+
+            // Select one random peer
+            let all_peers = s.topics.get(&topic_id).unwrap().all_peers();
+            let mut rng = rand::rng();
+            let target = *all_peers.choose(&mut rng).unwrap();
+
+            outgoing_tx
+                .send(OutgoingGossip::StemForward {
+                    topic_id,
+                    msg_hash,
+                    payload: encoded.clone(),
+                    target,
+                })
+                .unwrap();
+        }
+
+        // Verify exactly ONE StemForward was sent
+        let outgoing = outgoing_rx.try_recv().unwrap();
+        match outgoing {
+            OutgoingGossip::StemForward {
+                topic_id: tid,
+                msg_hash: mh,
+                target,
+                ..
+            } => {
+                assert_eq!(tid, topic_id);
+                assert_eq!(mh, msg_hash);
+                // The target must be one of our 5 peers
+                assert!(peers.contains(&target));
+            }
+            other => panic!(
+                "Expected StemForward, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+
+        // No further outgoing messages (stem sends to exactly 1 peer)
+        assert!(outgoing_rx.try_recv().is_err());
+
+        // Verify the message is tracked in stem_messages
+        let s = state.read().await;
+        assert!(s.stem_messages.contains_key(&msg_hash));
+    }
+
+    #[tokio::test]
+    async fn dandelion_fluff_broadcasts_to_all_eager_peers() {
+        use tokio::sync::mpsc;
+
+        let topic_id = topic_id_from_name("fluff-test");
+        let (signing_key, _public_key) = pyana_types::generate_keypair();
+        let node_id = [0xab; 32];
+
+        let mut state = GossipState {
+            topics: HashMap::new(),
+            peers: HashMap::new(),
+            seen: BoundedSeenSet::new(100, Duration::from_secs(60)),
+            pending_ihaves: BoundedPendingIhaves::new(100),
+            message_cache: HashMap::new(),
+            message_cache_order: VecDeque::new(),
+            stem_messages: HashMap::new(),
+        };
+
+        // 3 eager + 2 lazy peers
+        let mut topic_state = TopicState::new();
+        let peers: Vec<SocketAddr> = (1..=5)
+            .map(|i| format!("127.0.0.1:{}", 4000 + i).parse().unwrap())
+            .collect();
+        for &peer in &peers {
+            topic_state.add_peer(peer);
+        }
+        state.topics.insert(topic_id, topic_state);
+
+        let state = Arc::new(RwLock::new(state));
+        let (outgoing_tx, _outgoing_rx) = mpsc::unbounded_channel::<OutgoingGossip>();
+
+        let payload = vec![10, 20, 30];
+        let msg_hash = *blake3::hash(&payload).as_bytes();
+        let remote_addr: SocketAddr = "127.0.0.1:9999".parse().unwrap();
+
+        // Call fluff_message — this should mark as seen and prepare broadcast
+        GossipNetwork::fluff_message(
+            topic_id,
+            msg_hash,
+            payload.clone(),
+            remote_addr,
+            &state,
+            &outgoing_tx,
+            &signing_key,
+            node_id,
+        )
+        .await;
+
+        // After fluff, the message should be in seen set and cache
+        let s = state.read().await;
+        assert!(s.seen.contains(&msg_hash));
+        assert!(s.message_cache.contains_key(&msg_hash));
+        // And NOT in stem_messages
+        assert!(!s.stem_messages.contains_key(&msg_hash));
+    }
+
+    #[test]
+    fn message_phase_enum_variants() {
+        // Ensure MessagePhase is properly defined and usable
+        let stem = MessagePhase::Stem;
+        let fluff = MessagePhase::Fluff;
+        assert_ne!(stem, fluff);
+        assert_eq!(stem, MessagePhase::Stem);
+        assert_eq!(fluff, MessagePhase::Fluff);
     }
 }

@@ -22,6 +22,7 @@ token = { path = "../token", default-features = false, features = ["macaroon", "
 serde = { workspace = true, features = ["std"] }
 serde_json = { workspace = true }
 globset = { workspace = true }
+x25519-dalek = { workspace = true }
 
 [dev-dependencies]
 

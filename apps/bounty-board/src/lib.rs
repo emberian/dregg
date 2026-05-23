@@ -18,6 +18,7 @@
 
 pub mod payment;
 pub mod qualification;
+pub mod server;
 pub mod state;
 
 use pyana_app_framework::CellId;
