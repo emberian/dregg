@@ -30,7 +30,6 @@ use kimchi::{
 };
 use mina_curves::pasta::{Fp, Vesta};
 use mina_poseidon::{
-    constants::PlonkSpongeConstantsKimchi,
     pasta::FULL_ROUNDS,
     poseidon::{ArithmeticSponge, Sponge},
 };
@@ -321,7 +320,7 @@ impl KimchiFoldCircuit {
         //
         // For the circuit, each block is one Poseidon gadget.
         let num_transition_elements = 3 + nr; // old_root, new_root, fact_hashes..., checks_commitment
-        let num_transition_blocks = (num_transition_elements + 1) / 2; // ceil div by rate=2
+        let num_transition_blocks = num_transition_elements.div_ceil(2); // ceil div by rate=2
         for _ in 0..num_transition_blocks {
             let s = gates.len();
             let (pg, _) = CircuitGate::<Fp>::create_poseidon_gadget(
@@ -455,7 +454,7 @@ impl KimchiFoldCircuit {
         }
         elements.push(w.checks_commitment);
 
-        let num_blocks = (elements.len() + 1) / 2;
+        let num_blocks = elements.len().div_ceil(2);
         let mut state = [Fp::zero(); 3];
 
         for block in 0..num_blocks {

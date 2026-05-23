@@ -23,7 +23,6 @@ pub mod state;
 use pyana_app_framework::CellId;
 use pyana_app_framework::PredicateType;
 use pyana_app_framework::hex::{bytes32_to_hex, hex_to_bytes32};
-use pyana_sdk::HeldToken;
 use pyana_turn::TurnReceipt;
 use serde::{Deserialize, Serialize};
 

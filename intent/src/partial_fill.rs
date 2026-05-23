@@ -19,9 +19,9 @@
 //! visible to the creator (via `remaining_after_fill`).
 
 use crate::fulfillment::{FulfillOptions, Fulfillment, FulfillmentError, fulfill};
-use crate::matcher::{HeldCapability, MatchResult, match_intent};
+use crate::matcher::HeldCapability;
 use crate::{
-    CommitmentId, FillConstraints, Intent, IntentKind, Match, MatchSpec, VerificationMode,
+    CommitmentId, FillConstraints, Intent, Match,
 };
 
 // ---------------------------------------------------------------------------

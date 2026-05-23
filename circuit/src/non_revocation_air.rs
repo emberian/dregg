@@ -36,7 +36,7 @@
 
 use crate::field::BabyBear;
 use crate::poseidon2::{hash_4_to_1, hash_many};
-use crate::stark::{self, BoundaryConstraint, ExtElem, StarkAir, StarkProof};
+use crate::stark::{self, BoundaryConstraint, StarkAir, StarkProof};
 
 /// Maximum number of ancestors supported in a single non-revocation proof.
 /// This bounds the derivation chain depth we can prove in one shot.

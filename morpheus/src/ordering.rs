@@ -16,7 +16,6 @@
 //! and yielded, it is never yielded again even as new blocks are finalized.
 
 use std::collections::{BTreeSet, HashSet};
-use std::hash::Hash;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};

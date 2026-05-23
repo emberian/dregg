@@ -193,7 +193,7 @@ pub fn build_ipa_verifier_circuit(
     let poseidon_gadget_total = poseidon_rows + 1; // 11 Poseidon + 1 Zero = 12 rows per gadget
 
     // Absorption: ceil(4*num_rounds / 3) calls
-    let absorption_calls = (4 * num_rounds + 2) / 3;
+    let absorption_calls = (4 * num_rounds).div_ceil(3);
     for _ in 0..absorption_calls {
         let first_wire = Wire::for_row(row);
         let last_wire = Wire::for_row(row + poseidon_rows);
@@ -611,7 +611,7 @@ pub fn generate_ipa_verifier_witness(
         transcript_elements.extend_from_slice(&[*lx, *ly, *rx, *ry]);
     }
     let poseidon_gadget_rows = (FULL_ROUNDS / 5) + 1;
-    let absorption_calls = (4 * num_rounds + 2) / 3;
+    let absorption_calls = (4 * num_rounds).div_ceil(3);
     let mut poseidon_row = layout.transcript_section_start;
     for call_idx in 0..absorption_calls {
         let base_elem = call_idx * 3;
@@ -956,7 +956,7 @@ pub fn add_ipa_verifier_copy_constraints(
 ) {
     let num_rounds = layout.num_rounds;
     let poseidon_gadget_rows = (FULL_ROUNDS / 5) + 1;
-    let absorption_calls = (4 * num_rounds + 2) / 3;
+    let absorption_calls = (4 * num_rounds).div_ceil(3);
 
     // The squeeze section starts after absorption in Section 2.
     let squeeze_section_start =

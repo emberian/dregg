@@ -21,7 +21,7 @@ use crate::field::BabyBear;
 use crate::poseidon2::{
     Poseidon2State, TOTAL_ROUNDS, WIDTH, compute_round, hash_4_to_1, poseidon2_trace,
 };
-use crate::stark::{BoundaryConstraint, ExtElem, StarkAir};
+use crate::stark::{BoundaryConstraint, StarkAir};
 
 /// State width for the Merkle Poseidon2 AIR.
 const MERKLE_P2_STATE_WIDTH: usize = WIDTH;

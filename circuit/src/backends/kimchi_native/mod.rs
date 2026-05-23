@@ -16,7 +16,7 @@ pub mod presentation;
 #[cfg(test)]
 pub mod tests;
 
-use ark_ff::{Field, One, PrimeField, Zero};
+use ark_ff::{One, PrimeField, Zero};
 use groupmap::GroupMap;
 use kimchi::{
     circuits::{
@@ -35,7 +35,7 @@ use mina_poseidon::{
 };
 use poly_commitment::{
     commitment::CommitmentCurve,
-    ipa::{OpeningProof, SRS},
+    ipa::OpeningProof,
 };
 
 pub(crate) type SpongeParams = PlonkSpongeConstantsKimchi;
@@ -64,7 +64,7 @@ pub(crate) fn u64_to_fp(v: u64) -> Fp {
 }
 
 pub(crate) fn fp_to_bytes32(fp: &Fp) -> [u8; 32] {
-    use ark_ff::BigInteger;
+    
     let bigint = fp.into_bigint();
     let limbs = bigint.as_ref();
     let mut out = [0u8; 32];
@@ -244,7 +244,7 @@ impl KimchiNativeBackend {
             .try_into()
             .map_err(|_| "bad num bytes")?;
         let num_ancestors = {
-            use ark_ff::BigInteger;
+            
             bytes32_to_fp(&nb).into_bigint().as_ref()[0] as usize
         };
         if num_ancestors != expected_elements.len() {
@@ -720,7 +720,7 @@ impl KimchiNativeBackend {
 
         // Token expiry check (verifier-side)
         if vbh != Fp::zero() && vnah != Fp::zero() {
-            use ark_ff::BigInteger;
+            
             let diff = vnah - vbh;
             let diff_u64 = diff.into_bigint().as_ref()[0];
             let top_bit = (diff_u64 >> (GTE_DIFF_BITS - 1)) & 1;
@@ -749,7 +749,7 @@ impl KimchiNativeBackend {
 // ============================================================================
 
 use super::{
-    AccumulatorBackend, AccumulatorInput, CompoundPredicateInput, CrossStateBackend,
+    AccumulatorBackend, AccumulatorInput, CrossStateBackend,
     CrossStateCombiningRule, CrossStateOutput, CrossStateSource, DerivationBackend,
     DerivationInput, DerivationOutput, FullProofBackend, IvcBackend, IvcFoldStep, IvcOutput,
     PredicateBackend, PredicateInput, PredicateKind, PresentationBackend, PresentationInput,
@@ -970,7 +970,7 @@ impl DerivationBackend for KimchiNativeBackend {
 
         // Convert Fp values back to FieldElement (u64).
         // For Pasta field elements > u64::MAX, we take the low 64 bits.
-        use ark_ff::BigInteger;
+        
         let state_root_u64 = state_root_fp.into_bigint().as_ref()[0];
         let derived_hash_u64 = derived_hash_fp.into_bigint().as_ref()[0];
 
@@ -1078,7 +1078,7 @@ impl PredicateBackend for KimchiNativeBackend {
             .try_into()
             .map_err(|_| "e")?;
 
-        use ark_ff::BigInteger;
+        
         let num_steps_fp = bytes32_to_fp(&nb_bytes);
         let final_state_root_fp = bytes32_to_fp(&fsr_bytes);
         let initial_block_height_fp = bytes32_to_fp(&ibh_bytes);
@@ -1114,7 +1114,7 @@ impl PredicateBackend for KimchiNativeBackend {
             .iter()
             .map(|p| {
                 // Evaluate the predicate: value vs threshold with the given kind
-                use ark_ff::BigInteger;
+                
                 let v = p.value;
                 let t = p.threshold;
                 let result = match p.kind {
@@ -1171,7 +1171,7 @@ impl PredicateBackend for KimchiNativeBackend {
         let kb: [u8; 32] = proof.public_input_bytes[96..128]
             .try_into()
             .map_err(|_| "e")?;
-        use ark_ff::BigInteger;
+        
         let efh = bytes32_to_fp(&fb);
         let enp = bytes32_to_fp(&nb).into_bigint().as_ref()[0];
         let erc = bytes32_to_fp(&cb);
@@ -1303,7 +1303,7 @@ impl AccumulatorBackend for KimchiNativeBackend {
             .try_into()
             .map_err(|_| "bad num bytes")?;
         let proof_num = {
-            use ark_ff::BigInteger;
+            
             bytes32_to_fp(&nb).into_bigint().as_ref()[0] as usize
         };
         if proof_num != num_ancestors {
@@ -1368,7 +1368,7 @@ impl IvcBackend for KimchiNativeBackend {
 
         KimchiNativeBackend::verify_ivc(proof, &ir, &fr)?;
 
-        use ark_ff::BigInteger;
+        
         Ok(IvcOutput {
             initial_root: ir.into_bigint().as_ref()[0],
             final_root: fr.into_bigint().as_ref()[0],
@@ -1510,7 +1510,7 @@ impl PresentationBackend for KimchiNativeBackend {
             }
         }
 
-        use ark_ff::BigInteger;
+        
 
         // Extract presentation tag as 4 u64 elements
         let tag_bytes = fp_to_bytes32(&proof.presentation_tag);
@@ -1569,7 +1569,7 @@ impl CrossStateBackend for KimchiNativeBackend {
         let mut intermediate_hashes: Vec<Fp> = Vec::with_capacity(sources.len());
         for source in sources {
             let input = &source.derivation;
-            let state_root = Fp::from(input.state_root);
+            let _state_root = Fp::from(input.state_root);
             let derived_predicate = Fp::from(input.derived_predicate);
             let derived_terms = [
                 Fp::from(input.derived_terms[0]),
@@ -1659,7 +1659,7 @@ impl CrossStateBackend for KimchiNativeBackend {
             .try_into()
             .map_err(|_| "bad bytes")?;
 
-        use ark_ff::BigInteger;
+        
         let composition_root_fp = bytes32_to_fp(&sr_bytes);
         let final_derived_hash_fp = bytes32_to_fp(&dh_bytes);
 

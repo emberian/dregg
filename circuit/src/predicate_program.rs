@@ -58,7 +58,7 @@ use crate::committed_threshold::{
     verify_committed_threshold as verify_committed_threshold_air,
 };
 use crate::compound_predicate_air::{
-    BooleanFormula, CompoundPredicateProof, Gate, MAX_COMPOUND_PREDICATES,
+    BooleanFormula, CompoundPredicateProof, MAX_COMPOUND_PREDICATES,
     prove_compound_predicate, verify_compound_predicate,
 };
 use crate::field::BabyBear;
@@ -76,7 +76,7 @@ use crate::temporal_predicate_air::p3_temporal::{
     P3TemporalPredicateProof, prove_temporal_predicate_p3, verify_temporal_predicate_p3,
 };
 use crate::temporal_predicate_air::{
-    TemporalPredicateProof, prove_temporal_predicate, verify_temporal_predicate,
+    TemporalPredicateProof, verify_temporal_predicate,
 };
 
 // =============================================================================
@@ -1063,10 +1063,10 @@ fn prove_single(
                         ))
                     })?;
 
-                return Ok(ProgramProof {
+                Ok(ProgramProof {
                     sub_proofs: vec![SubProof::TemporalP3(proof)],
                     structure: ProofStructure::Single,
-                });
+                })
             }
 
             // Fallback: legacy custom STARK prover (omits transition constraints).
@@ -1217,7 +1217,7 @@ fn prove_single(
         }
         WitnessSpec::Arithmetic {
             inputs,
-            expression,
+            expression: _,
             predicate,
         } => {
             use crate::arithmetic_predicate_air::{
@@ -1543,7 +1543,7 @@ fn verify_single_proof(
     sub_proofs: &[SubProof],
     witness_spec: &WitnessSpec,
     expected_commitments: &HashMap<String, BabyBear>,
-    state_root: BabyBear,
+    _state_root: BabyBear,
 ) -> bool {
     if sub_proofs.len() != 1 {
         return false;
@@ -1562,7 +1562,7 @@ fn verify_single_proof(
                 expected_commitments
                     .get(attribute)
                     .copied()
-                    .unwrap_or_else(|| {
+                    .unwrap_or({
                         // If no explicit commitment provided, we cannot verify.
                         BabyBear::ZERO
                     });
@@ -1688,7 +1688,7 @@ fn verify_compound_range_proof(
     sub_predicates: &[WitnessSpec],
     formula: &BooleanFormula,
     expected_commitments: &HashMap<String, BabyBear>,
-    state_root: BabyBear,
+    _state_root: BabyBear,
 ) -> bool {
     if sub_proofs.len() != 1 {
         return false;
@@ -1705,7 +1705,7 @@ fn verify_compound_range_proof(
         match spec {
             WitnessSpec::Range {
                 attribute,
-                threshold,
+                threshold: _,
                 ..
             } => {
                 let commitment = expected_commitments

@@ -72,7 +72,7 @@
 
 use crate::babybear8::BabyBear8;
 use crate::field::BabyBear;
-use crate::schnorr_curve::{CurvePoint, GENERATOR, ORDER, Scalar};
+use crate::schnorr_curve::{CurvePoint, GENERATOR, Scalar};
 use crate::schnorr_sig::{SchnorrPublicKey, SchnorrSignature};
 
 // ============================================================================

@@ -573,7 +573,7 @@ pub fn cancel_bridge(
 ///
 /// Returns true if the receipt's signature is valid for any of the trusted keys.
 pub fn verify_bridge_receipt(receipt: &BridgeReceipt, trusted_keys: &[[u8; 32]]) -> bool {
-    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+    use ed25519_dalek::{Signature, VerifyingKey};
 
     let message = BridgeReceipt::signing_message(
         &receipt.nullifier,

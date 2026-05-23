@@ -459,7 +459,7 @@ fn resolve_inner(
 
             let verified = trusted_executor_keys.iter().any(|key_bytes| {
                 if let Ok(vk) = ed25519_dalek::VerifyingKey::from_bytes(key_bytes) {
-                    use ed25519_dalek::Verifier;
+                    
                     vk.verify_strict(&receipt_hash, &signature).is_ok()
                 } else {
                     false

@@ -62,12 +62,10 @@
 
 use p3_air::WindowAccess;
 use p3_air::{Air, AirBuilder, BaseAir};
-use p3_baby_bear::BabyBear as P3BabyBear;
 use p3_field::PrimeCharacteristicRing;
-use p3_matrix::dense::RowMajorMatrix;
 
 use crate::field::BabyBear;
-use crate::plonky3_prover::{PyanaProof, create_config, to_p3, verify_plonky3};
+use crate::plonky3_prover::PyanaProof;
 use crate::poseidon2::{hash_4_to_1, hash_many};
 
 // ============================================================================

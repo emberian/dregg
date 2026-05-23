@@ -1978,7 +1978,7 @@ impl DerivationBackend for Sp1Backend {
         let state_root_bytes = field_to_bytes(input.state_root);
 
         // Build the head terms.
-        let head_terms: Vec<u64> = input.derived_terms.iter().copied().collect();
+        let head_terms: Vec<u64> = input.derived_terms.to_vec();
 
         let sp1_input = Sp1DerivationInput {
             rule_id: input.rule_id,

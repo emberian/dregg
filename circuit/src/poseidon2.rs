@@ -401,7 +401,7 @@ pub fn hash_bytes(data: &[u8]) -> BabyBear {
 pub fn hash_fact(predicate: BabyBear, terms: &[BabyBear]) -> BabyBear {
     let mut state = Poseidon2State::new();
     state.state[0] = predicate;
-    if terms.len() > 0 {
+    if !terms.is_empty() {
         state.state[1] = terms[0];
     }
     if terms.len() > 1 {

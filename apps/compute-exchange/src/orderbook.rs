@@ -5,7 +5,7 @@
 //! The matcher finds compatible offerings and executes partial fills when applicable.
 
 use pyana_app_framework::{CellId, FillConstraints};
-use pyana_intent::partial_fill::{CumulativeFillTracker, PartialFillError, check_fill_amount};
+use pyana_intent::partial_fill::{PartialFillError, check_fill_amount};
 use serde::{Deserialize, Serialize};
 
 // =============================================================================

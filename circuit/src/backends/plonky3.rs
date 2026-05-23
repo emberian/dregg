@@ -850,7 +850,7 @@ impl AccumulatorBackend for Plonky3Backend {
 
     fn prove_non_membership(input: &AccumulatorInput) -> Result<Self::AccumulatorProof, String> {
         use crate::accumulator_air::{
-            ExtElem, compute_accumulator, prove_accumulator_non_revocation,
+            ExtElem, prove_accumulator_non_revocation,
         };
 
         let ancestor_hashes: Vec<BabyBear> = input
@@ -1065,7 +1065,7 @@ impl PresentationBackend for Plonky3Backend {
         use crate::binding::compute_presentation_tag;
 
         // 1. Prove IVC for the fold chain.
-        let ivc_steps: Vec<IvcFoldStep> = input.fold_steps.iter().cloned().collect();
+        let ivc_steps: Vec<IvcFoldStep> = input.fold_steps.to_vec();
 
         let initial_root = ivc_steps
             .first()

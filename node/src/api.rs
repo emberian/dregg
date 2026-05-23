@@ -31,7 +31,7 @@ use tokio::sync::Mutex;
 use pyana_sdk::{Attenuation, AuthRequest, CellId};
 use pyana_turn::{CallForest, Turn};
 
-use crate::state::{NodeEvent, NodeState, NodeStateInner};
+use crate::state::{NodeEvent, NodeState};
 use crate::ws::handle_ws;
 
 // =============================================================================
@@ -929,6 +929,7 @@ async fn get_receipts(State(state): State<NodeState>) -> Json<Vec<ReceiptInfo>> 
     Json(receipts)
 }
 
+#[tracing::instrument(skip_all, fields(agent = %req.agent))]
 async fn post_submit_turn(
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     State(state): State<NodeState>,
@@ -939,6 +940,9 @@ async fn post_submit_turn(
     if !limiter.check(addr.ip()).await {
         return Err(StatusCode::TOO_MANY_REQUESTS);
     }
+
+    crate::metrics::inc_turns_submitted();
+    let start = Instant::now();
 
     let mut s = state.write().await;
 
@@ -970,6 +974,10 @@ async fn post_submit_turn(
 
     match exec_result {
         pyana_turn::TurnResult::Committed { receipt, .. } => {
+            crate::metrics::inc_turns_executed("committed");
+            crate::metrics::record_turn_execution_duration(start.elapsed().as_secs_f64());
+            crate::metrics::set_ledger_cell_count(s.ledger.len() as f64);
+
             s.wallet.append_receipt(receipt);
 
             // Serialize the full SignedTurn for gossip (postcard format).
@@ -996,6 +1004,8 @@ async fn post_submit_turn(
             }))
         }
         pyana_turn::TurnResult::Rejected { reason, .. } => {
+            crate::metrics::inc_turns_executed("rejected");
+            crate::metrics::record_turn_execution_duration(start.elapsed().as_secs_f64());
             drop(s);
             Ok(Json(SubmitTurnResponse {
                 accepted: false,
@@ -1003,6 +1013,7 @@ async fn post_submit_turn(
             }))
         }
         _ => {
+            crate::metrics::inc_turns_executed("rejected");
             drop(s);
             Ok(Json(SubmitTurnResponse {
                 accepted: false,
@@ -1423,6 +1434,7 @@ async fn get_federation_roots(State(state): State<NodeState>) -> Json<Vec<Attest
 ///
 /// The node checks eligibility, acquires cell locks, and returns a TurnSign
 /// (the validator's lock acknowledgement) if the turn qualifies.
+#[tracing::instrument(skip_all)]
 async fn post_fast_path_lock(
     State(state): State<NodeState>,
     Json(req): Json<FastPathLockRequest>,
@@ -1480,6 +1492,7 @@ async fn post_fast_path_lock(
 /// The client presents a TurnCertificate (turn + 2f+1 validator signatures).
 /// The node verifies the certificate, executes the turn, releases locks, and
 /// gossips the result.
+#[tracing::instrument(skip_all)]
 async fn post_fast_path_certificate(
     State(state): State<NodeState>,
     Json(req): Json<FastPathCertificateRequest>,
@@ -1652,6 +1665,7 @@ async fn post_submit_conditional(
     }))
 }
 
+#[tracing::instrument(skip_all)]
 async fn post_resolve_conditional(
     State(state): State<NodeState>,
     Json(req): Json<ResolveConditionalRequest>,
@@ -1668,6 +1682,7 @@ async fn post_resolve_conditional(
 
     let proof: pyana_turn::ConditionProof =
         serde_json::from_value(req.proof).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let verify_start = Instant::now();
 
     let mut s = state.write().await;
     let current_height = s
@@ -1717,8 +1732,11 @@ async fn post_resolve_conditional(
         &trusted_executor_keys,
     );
 
+    crate::metrics::record_proof_verification_duration(verify_start.elapsed().as_secs_f64());
+
     match result {
         pyana_turn::ConditionalResult::Resolved => {
+            crate::metrics::inc_proofs_verified("valid");
             // SECURITY: Persist the proof nullifier to the store immediately so
             // a crash cannot allow proof replay. The in-memory set was already
             // updated by resolve_condition; this makes it durable.
@@ -1765,6 +1783,7 @@ async fn post_resolve_conditional(
             }
         }
         pyana_turn::ConditionalResult::Expired => {
+            crate::metrics::inc_proofs_verified("error");
             s.pending_conditionals.remove(idx);
             Ok(Json(ResolveConditionalResponse {
                 resolved: false,
@@ -1777,11 +1796,14 @@ async fn post_resolve_conditional(
             turn_hash: None,
             reason: Some("condition not yet satisfied".to_string()),
         })),
-        pyana_turn::ConditionalResult::InvalidProof(e) => Ok(Json(ResolveConditionalResponse {
-            resolved: false,
-            turn_hash: None,
-            reason: Some(format!("invalid proof: {e}")),
-        })),
+        pyana_turn::ConditionalResult::InvalidProof(e) => {
+            crate::metrics::inc_proofs_verified("invalid");
+            Ok(Json(ResolveConditionalResponse {
+                resolved: false,
+                turn_hash: None,
+                reason: Some(format!("invalid proof: {e}")),
+            }))
+        }
     }
 }
 
@@ -1831,6 +1853,7 @@ async fn get_pending_conditionals(
 /// The coordinator node creates a Coordinator instance, validates the proposal
 /// (budget gate, participant count, threshold), persists it in the proposals map,
 /// and returns a proposal_id that participants can vote on.
+#[tracing::instrument(skip_all)]
 async fn post_atomic_proposal(
     State(state): State<NodeState>,
     Json(req): Json<AtomicProposalRequest>,

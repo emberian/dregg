@@ -42,7 +42,7 @@ use crate::constraint_prover::{Air, Constraint, ConstraintProof, ConstraintProve
 use crate::field::BabyBear;
 use crate::fold_air::{FoldAir, FoldWitness, RemovedFact};
 use crate::poseidon2::hash_many;
-use crate::stark::{self, BoundaryConstraint, ExtElem, StarkAir, StarkProof};
+use crate::stark::{self, BoundaryConstraint, StarkAir, StarkProof};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types

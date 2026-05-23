@@ -262,7 +262,7 @@ pub fn verify_receipt_chain_with_keys(
             let mut verified = false;
             for pubkey_bytes in executor_pubkeys {
                 if let Ok(vk) = ed25519_dalek::VerifyingKey::from_bytes(pubkey_bytes) {
-                    use ed25519_dalek::Verifier;
+                    
                     if vk.verify_strict(&receipt_hash, &signature).is_ok() {
                         verified = true;
                         break;

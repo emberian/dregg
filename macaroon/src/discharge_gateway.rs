@@ -22,11 +22,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
-use crate::caveat::CaveatSet;
 use crate::caveat_3p::ThirdPartyCaveat;
 use crate::crypto;
-use crate::error::MacaroonError;
-use crate::macaroon::{Macaroon, create_discharge};
+use crate::macaroon::create_discharge;
 
 // =============================================================================
 // Core types

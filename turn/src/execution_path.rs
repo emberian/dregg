@@ -8,7 +8,7 @@
 //! If both conditions hold, the turn qualifies for the fast path. Otherwise,
 //! it must be ordered via consensus to prevent double-spend and resolve conflicts.
 
-use pyana_cell::{CellId, Ledger};
+use pyana_cell::Ledger;
 use serde::{Deserialize, Serialize};
 
 use crate::conflict::extract_access_sets;

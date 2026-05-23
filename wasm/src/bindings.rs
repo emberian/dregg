@@ -6,22 +6,21 @@
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
-use pyana_cell::{AuthRequired, CellId, Permissions};
+use pyana_cell::{AuthRequired, CellId};
 use pyana_intent::{ActionPattern, Constraint, IntentKind};
 use pyana_turn::conditional::ProofCondition;
 use pyana_turn::{Effect, TurnResult};
 
-use crate::runtime::{PyanaRuntime, SimAgent, TraceStep};
+use crate::runtime::{PyanaRuntime, TraceStep};
 
 // ============================================================================
 // Global runtime store (WASM is single-threaded, so this is safe)
 // ============================================================================
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 
 thread_local! {
-    static RUNTIMES: RefCell<Vec<Option<PyanaRuntime>>> = RefCell::new(Vec::new());
+    static RUNTIMES: RefCell<Vec<Option<PyanaRuntime>>> = const { RefCell::new(Vec::new()) };
 }
 
 fn with_runtime<F, R>(handle: usize, f: F) -> Result<R, JsError>

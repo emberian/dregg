@@ -5,12 +5,11 @@
 //! exercise consensus, turn execution, and proof verification without any I/O.
 
 use pyana_cell::Ledger;
-use pyana_federation::node::{Federation, FederationNode};
+use pyana_federation::node::Federation;
 use pyana_federation::types::AttestedRoot;
 use pyana_turn::executor::{ComputronCosts, TurnExecutor};
 use pyana_turn::{Turn, TurnResult};
 
-use crate::agent::SimAgent;
 
 /// Simulated clock for deterministic time progression.
 #[derive(Clone, Debug)]

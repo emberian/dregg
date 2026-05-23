@@ -1422,7 +1422,7 @@ pub fn schnorr_verify(
 #[wasm_bindgen]
 pub fn garbled_compare(prover_value: u32, verifier_threshold: u32) -> Result<JsValue, JsError> {
     use pyana_circuit::garbled::{
-        COMPARISON_BITS, evaluate_garbled_circuit, garble_comparison_circuit, hash_label,
+        COMPARISON_BITS, evaluate_garbled_circuit, garble_comparison_circuit,
         prove_private_threshold, verify_private_threshold,
     };
 
@@ -1447,7 +1447,7 @@ pub fn garbled_compare(prover_value: u32, verifier_threshold: u32) -> Result<JsV
 
     // Prover evaluates.
     let eval_result = evaluate_garbled_circuit(&circuit, &prover_labels);
-    let eval_time = perf_now() - start;
+    let _eval_time = perf_now() - start;
 
     // Prover generates STARK proof (if passed).
     let proof = prove_private_threshold(&circuit, &prover_labels);
@@ -1536,7 +1536,7 @@ pub fn prove_anonymous_membership(
         .map_err(|e| JsError::new(&format!("invalid ring member hex: {}", e)))?;
 
     // Verify the agent is actually in the ring.
-    if !ring_members.iter().any(|m| *m == agent_id_bytes) {
+    if !ring_members.contains(&agent_id_bytes) {
         return Err(JsError::new(
             "agent_id is not a member of the provided ring",
         ));

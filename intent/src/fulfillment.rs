@@ -915,7 +915,7 @@ pub fn execute_fulfillment_flow_with_key(
     );
 
     // Step 4: Resolve immediately -- we know the preimage since we derived it.
-    let preimage = {
+    let _preimage = {
         let mut hasher = blake3::Hasher::new_derive_key("pyana-fulfillment-payment-v1");
         hasher.update(&intent.id);
         hasher.update(&fulfillment.base.fulfiller.0);

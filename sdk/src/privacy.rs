@@ -16,7 +16,6 @@
 //! - What **the verifier learns** (the public inputs / revealed information).
 //! - What **stays hidden** (the private witness / secret data).
 
-use pyana_bridge::{BridgePresentationBuilder, BridgePresentationProof};
 use pyana_cell::note::{Note, NoteCommitment, Nullifier};
 use pyana_circuit::BabyBear;
 use pyana_circuit::field::BABYBEAR_P;

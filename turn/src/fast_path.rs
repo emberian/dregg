@@ -34,7 +34,7 @@ use std::collections::HashMap;
 
 use pyana_cell::{CellId, Ledger};
 
-use crate::budget_gate::{BudgetGate, DebitDigest};
+use crate::budget_gate::DebitDigest;
 use crate::conflict::extract_access_sets;
 use crate::turn::{Turn, TurnResult};
 

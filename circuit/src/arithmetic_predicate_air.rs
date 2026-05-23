@@ -38,7 +38,7 @@ use crate::constraint_prover::{Air, Constraint};
 use crate::field::BabyBear;
 use crate::poseidon2;
 use crate::predicate_air::PREDICATE_DIFF_BITS;
-use crate::stark::{self, BoundaryConstraint, ExtElem, StarkAir, StarkProof};
+use crate::stark::{self, BoundaryConstraint, StarkAir, StarkProof};
 
 /// Maximum number of operations in a compiled expression.
 pub const MAX_ARITHMETIC_OPS: usize = 32;
@@ -917,7 +917,7 @@ impl Air for ArithmeticPredicateAir {
         let layout = self.layout();
         let compiled_ops = self.compiled.ops.clone();
         let compiled_b_ops = self.compiled_b.as_ref().map(|c| c.ops.clone());
-        let num_inputs = layout.num_inputs;
+        let _num_inputs = layout.num_inputs;
         let slots_start = layout.slots_start;
         let slots_b_start = layout.slots_b_start;
         let threshold_col = layout.threshold_col;

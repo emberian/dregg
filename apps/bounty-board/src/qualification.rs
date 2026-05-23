@@ -143,7 +143,7 @@ fn verify_federation_membership(
 fn verify_predicate_proof(
     proof: &[u8],
     predicate_type: PredicateType,
-    attribute: &str,
+    _attribute: &str,
     threshold: u64,
 ) -> Result<bool, QualificationError> {
     if proof.is_empty() {

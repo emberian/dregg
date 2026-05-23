@@ -26,8 +26,7 @@
 use std::collections::HashMap;
 
 use crate::fulfillment::{
-    FulfillOptions, Fulfillment, FulfillmentError, FulfillmentWithPredicates, fulfill,
-    verify_fulfillment,
+    FulfillOptions, Fulfillment, FulfillmentError, fulfill,
 };
 use crate::gossip::COMMIT_REVEAL_WINDOW_SECS;
 use crate::matcher::HeldCapability;

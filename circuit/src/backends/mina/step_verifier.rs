@@ -132,7 +132,7 @@ pub fn build_step_verifier_circuit(
     let poseidon_gadget_total = poseidon_rows + 1; // 12 rows per gadget
 
     // Absorption: ceil(4*num_rounds / 3) Poseidon calls
-    let absorption_calls = (4 * num_rounds + 2) / 3;
+    let absorption_calls = (4 * num_rounds).div_ceil(3);
     for _ in 0..absorption_calls {
         let first_wire = Wire::for_row(row);
         let last_wire = Wire::for_row(row + poseidon_rows);
@@ -315,7 +315,7 @@ pub fn generate_step_verifier_witness(
         transcript_elements.extend_from_slice(&[*lx, *ly, *rx, *ry]);
     }
     let poseidon_gadget_rows = (FULL_ROUNDS / 5) + 1;
-    let absorption_calls = (4 * num_rounds + 2) / 3;
+    let absorption_calls = (4 * num_rounds).div_ceil(3);
     let mut poseidon_row = layout.transcript_section_start;
     for call_idx in 0..absorption_calls {
         let base_elem = call_idx * 3;
@@ -638,7 +638,7 @@ pub fn prove_dual_curve_step(
     Ok(DualCurveStepProof {
         proof_bytes,
         public_inputs: public_input_bytes,
-        deferred_ipa_data: deferred_ipa_data,
+        deferred_ipa_data,
         num_steps: step_count,
     })
 }

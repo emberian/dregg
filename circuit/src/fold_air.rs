@@ -6,7 +6,7 @@ use crate::constraint_prover::{Air, Constraint, ConstraintProver};
 use crate::field::BabyBear;
 use crate::merkle_air::{MerkleAir, MerkleLevelWitness, MerkleWitness};
 use crate::poseidon2::{hash_fact, hash_many};
-use crate::stark::{self, BoundaryConstraint, ExtElem, StarkAir, StarkProof};
+use crate::stark::{self, BoundaryConstraint, StarkAir, StarkProof};
 
 pub const FOLD_AIR_WIDTH: usize = 12;
 

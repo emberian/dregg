@@ -61,6 +61,7 @@ pub struct GossipHandle {
 impl GossipHandle {
     /// Publish a turn to the gossip network.
     pub async fn gossip_turn(&self, turn_hash: [u8; 32], turn_data: Vec<u8>) {
+        crate::metrics::inc_gossip("sent");
         let msg = PeerMessage::PublishTurn {
             turn_hash,
             turn_data,
@@ -369,6 +370,9 @@ pub async fn run_federation_sync(
         topic_budget: topic_budget.clone(),
     };
     state.set_gossip(handle).await;
+
+    // Record initial peer count.
+    crate::metrics::set_federation_peers_connected(peer_addrs.len() as f64);
 
     info!("gossip layer initialized, processing messages");
 
@@ -809,6 +813,7 @@ async fn handle_turn_message(state: &NodeState, from: SocketAddr, message: PeerM
             turn_data,
             ..
         } => {
+            crate::metrics::inc_gossip("received");
             let hash_hex: String = turn_hash.iter().map(|b| format!("{b:02x}")).collect();
             info!(from = %from, turn_hash = %hash_hex, "received turn via gossip");
 
@@ -1162,6 +1167,8 @@ async fn handle_revocation_message(state: &NodeState, from: SocketAddr, message:
             token_id,
             signature,
         } => {
+            crate::metrics::inc_gossip("received");
+            crate::metrics::inc_revocations();
             info!(from = %from, token_id = %token_id, "received revocation via gossip");
 
             // Verify the revocation signature: the signature must be a valid Ed25519
@@ -1246,7 +1253,7 @@ async fn handle_intent_message(state: &NodeState, from: SocketAddr, message: Pee
             // Intents arriving via gossip MUST carry a valid stake proof to prevent
             // spam. The stake proves the sender controls a note in the Poseidon2
             // note tree, binding real economic cost to intent propagation.
-            if let Some(stake_proof) = &intent.stake_proof {
+            if let Some(_stake_proof) = &intent.stake_proof {
                 // Build the Poseidon2 note tree root from stored commitments for
                 // verification. This ensures the stake is against the current
                 // federation state, not an outdated or fabricated root.
@@ -1366,7 +1373,7 @@ pub async fn produce_decryption_shares_for_block(
 ///
 /// Returns the number of turns successfully decrypted and executed.
 pub async fn try_decrypt_and_execute(
-    state: &NodeState,
+    _state: &NodeState,
     ciphertext: &pyana_federation::ThresholdCiphertext,
     shares: &[pyana_federation::DecryptionShare],
     threshold: usize,
@@ -2139,6 +2146,10 @@ async fn handle_root_message(state: &NodeState, from: SocketAddr, message: PeerM
                     warn!(error = %e, "failed to persist attested root from gossip");
                 }
             }
+
+            // Update metrics gauges for the new root.
+            crate::metrics::set_block_height(height as f64);
+            crate::metrics::set_federation_root_age(0.0);
 
             // Emit to WS subscribers.
             state.emit(NodeEvent::Root {

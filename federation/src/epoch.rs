@@ -13,7 +13,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::types::{PublicKey, QuorumCertificate, Signature, SigningKey, sign};
+use crate::types::{PublicKey, QuorumCertificate};
 
 // =============================================================================
 // Constants

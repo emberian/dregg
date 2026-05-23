@@ -32,7 +32,7 @@
 
 use crate::field::BabyBear;
 use crate::poseidon2::{hash_2_to_1, hash_4_to_1};
-use crate::stark::{self, BoundaryConstraint, ExtElem, StarkAir, StarkProof};
+use crate::stark::{self, BoundaryConstraint, StarkAir, StarkProof};
 use serde::{Deserialize, Serialize};
 
 // ============================================================================

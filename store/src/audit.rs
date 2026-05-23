@@ -251,7 +251,7 @@ impl PersistentStore {
     ) -> Result<u64> {
         let mut batch = Vec::new();
         for idx in from_index..to_index {
-            let event = log.get_event(idx).ok_or_else(|| StoreError::NotFound)?;
+            let event = log.get_event(idx).ok_or(StoreError::NotFound)?;
             batch.push(StoredAuditEvent {
                 token_id: event.token_id,
                 event_type: AuditEventType::TokenPresented,

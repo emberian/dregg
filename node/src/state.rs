@@ -13,7 +13,7 @@ use tokio::sync::{RwLock, broadcast};
 
 use pyana_cell::{CellId, Ledger};
 use pyana_circuit::field::BabyBear;
-use pyana_commit::accumulator::{BabyBear4, PolynomialAccumulator};
+use pyana_commit::accumulator::PolynomialAccumulator;
 use pyana_coord::Coordinator;
 use pyana_coord::budget::{
     BudgetCoordinator, BudgetError, FastUnlockManager, SiloId, SpendingCertificate,

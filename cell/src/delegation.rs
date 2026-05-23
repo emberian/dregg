@@ -142,7 +142,7 @@ impl DelegatedRef {
     /// Returns `true` if the signature is valid for the given parent public key.
     #[cfg(feature = "crypto")]
     pub fn verify_parent_signature(&self, parent_pubkey: &[u8; 32]) -> bool {
-        use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+        use ed25519_dalek::{Signature, VerifyingKey};
 
         let message =
             Self::signing_message(&self.clist_commitment, self.delegation_epoch, &self.child);

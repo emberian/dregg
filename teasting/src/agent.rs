@@ -5,8 +5,6 @@
 //! proving, and presenting tokens.
 
 use pyana_bridge::{BridgePredicateProof, BridgePresentationProof, Predicate};
-use pyana_circuit::predicate_air::{PredicateProof, PredicateWitness, prove_predicate};
-use pyana_circuit::{BabyBear, PredicateType};
 use pyana_sdk::{AgentWallet, Attenuation, AuthRequest, DelegatedToken, HeldToken};
 use pyana_types::PublicKey;
 

@@ -96,7 +96,7 @@ recursion = [
 
 [dev-dependencies]
 criterion = { workspace = true }
-pyana-bridge = { path = "../bridge" }
+pyana-bridge = { path = "../bridge", features = ["test-utils"] }
 pyana-cell = { path = "../cell" }
 pyana-trace = { path = "../trace" }
 token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }

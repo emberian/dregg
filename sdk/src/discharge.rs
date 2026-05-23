@@ -3,7 +3,6 @@
 //! This module provides convenience functions for obtaining discharge macaroons
 //! from a remote gateway and binding them to held tokens.
 
-use std::collections::HashMap;
 
 use crate::error::SdkError;
 use crate::wallet::HeldToken;

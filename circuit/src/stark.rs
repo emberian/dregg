@@ -1380,7 +1380,7 @@ pub fn verify_full(
     }
 
     // Use roots of unity (must match prover's domain construction)
-    let trace_points: Vec<BabyBear> = build_evaluation_domain(trace_len);
+    let _trace_points: Vec<BabyBear> = build_evaluation_domain(trace_len);
     let eval_points: Vec<BabyBear> = build_evaluation_domain(domain_size);
 
     for query in &proof.query_proofs {

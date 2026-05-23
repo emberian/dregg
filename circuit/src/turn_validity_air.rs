@@ -50,7 +50,7 @@
 //! - Nonce is public (needed for replay detection — this is fine, it's just a counter)
 
 use crate::field::BabyBear;
-use crate::stark::{self, BoundaryConstraint, ExtElem, StarkAir, StarkProof};
+use crate::stark::{self, BoundaryConstraint, StarkAir, StarkProof};
 
 /// Trace width for the turn validity AIR.
 /// 12 base columns + 32 bit columns (8 bits per limb * 4 fee_minus_min limbs).

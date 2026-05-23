@@ -199,7 +199,7 @@ impl KimchiNonMembershipCircuit {
         // Poseidon gadget: hash the coefficients to verify accumulator_root
         let rc = &Vesta::sponge_params().round_constants;
         let pr = FULL_ROUNDS / 5;
-        let num_poseidon_calls = (n + 2) / 3;
+        let num_poseidon_calls = n.div_ceil(3);
         for _ in 0..num_poseidon_calls {
             let s = gates.len();
             let (pg, _) = CircuitGate::<Fp>::create_poseidon_gadget(
@@ -280,7 +280,7 @@ impl KimchiNonMembershipCircuit {
 
         // Poseidon: hash the coefficients
         let pgr = FULL_ROUNDS / 5 + 1;
-        let num_poseidon_calls = (n + 2) / 3;
+        let num_poseidon_calls = n.div_ceil(3);
         for call_idx in 0..num_poseidon_calls {
             let base = call_idx * 3;
             let inp = [
@@ -383,7 +383,7 @@ impl KimchiNonMembershipCircuit {
 
         let root = super::bytes32_to_fp(&root_bytes);
         let num_ancestors_fp = super::bytes32_to_fp(&num_bytes);
-        use ark_ff::{BigInteger, PrimeField};
+        use ark_ff::PrimeField;
         let num_ancestors = num_ancestors_fp.into_bigint().as_ref()[0] as usize;
 
         if num_ancestors == 0 || num_ancestors > MAX_ANCESTORS {

@@ -12,12 +12,12 @@
 //! 6. Token expiry: not_after_height >= verifier_block_height (bit-decomp GTE)
 //! 7. Revealed facts commitment: Poseidon(revealed_facts...) == public revealed_facts_commitment
 //! 8. Issuer membership: blinded Poseidon Merkle path proving issuer key in federation tree
-use super::fold::{FpMerkleLevelWitness, FpMerkleWitness, build_fp_merkle_tree, fp_hash4};
+use super::fold::FpMerkleWitness;
 use super::{
     BaseSponge, GTE_DIFF_BITS, KimchiNativeCircuitType, KimchiNativeProof, ScalarSponge,
-    SpongeParams, VestaOpeningProof, bytes32_to_fp, fp_to_bytes32, verify_kimchi_proof,
+    SpongeParams, VestaOpeningProof, fp_to_bytes32, verify_kimchi_proof,
 };
-use ark_ff::{BigInteger, Field, One, PrimeField, Zero};
+use ark_ff::{Field, One, PrimeField, Zero};
 use groupmap::GroupMap;
 use kimchi::{
     circuits::{
@@ -30,7 +30,6 @@ use kimchi::{
 };
 use mina_curves::pasta::{Fp, Vesta};
 use mina_poseidon::{
-    constants::PlonkSpongeConstantsKimchi,
     pasta::FULL_ROUNDS,
     poseidon::{ArithmeticSponge, Sponge},
 };
@@ -269,7 +268,7 @@ impl KimchiPresentationCircuit {
         let expiry_diff_u64 = expiry_diff.into_bigint().as_ref()[0];
 
         let bits_per_row = 6;
-        let num_bit_rows = (GTE_DIFF_BITS + bits_per_row - 1) / bits_per_row;
+        let num_bit_rows = GTE_DIFF_BITS.div_ceil(bits_per_row);
 
         for chunk_idx in 0..num_bit_rows {
             let r = gates.len();
@@ -306,7 +305,7 @@ impl KimchiPresentationCircuit {
         }
 
         // Binary enforcement rows for expiry bits
-        let num_binary_rows = (GTE_DIFF_BITS + 1) / 2;
+        let num_binary_rows = GTE_DIFF_BITS.div_ceil(2);
         for _ in 0..num_binary_rows {
             let r = gates.len();
             let mut c = vec![Fp::zero(); COLUMNS];
@@ -333,7 +332,7 @@ impl KimchiPresentationCircuit {
         // Then equality gate: computed_commitment == public[11]
         let num_revealed = self.witness.revealed_facts.len();
         if num_revealed > 0 {
-            let num_rfc_blocks = (num_revealed + 1) / 2;
+            let num_rfc_blocks = num_revealed.div_ceil(2);
             for _ in 0..num_rfc_blocks {
                 let s = gates.len();
                 let pr = POS_ROWS_PER_HASH;
@@ -545,7 +544,7 @@ impl KimchiPresentationCircuit {
 
         // Bit chunk rows (6 bits per row)
         let bits_per_row = 6;
-        let num_bit_rows = (GTE_DIFF_BITS + bits_per_row - 1) / bits_per_row;
+        let num_bit_rows = GTE_DIFF_BITS.div_ceil(bits_per_row);
         for chunk_idx in 0..num_bit_rows {
             let base_bit = chunk_idx * bits_per_row;
             for i in 0..3 {
@@ -564,7 +563,7 @@ impl KimchiPresentationCircuit {
         }
 
         // Binary enforcement rows
-        let num_binary_rows = (GTE_DIFF_BITS + 1) / 2;
+        let num_binary_rows = GTE_DIFF_BITS.div_ceil(2);
         for br_idx in 0..num_binary_rows {
             let bit_idx_a = 2 * br_idx;
             if bit_idx_a < GTE_DIFF_BITS {
@@ -589,7 +588,7 @@ impl KimchiPresentationCircuit {
         let num_revealed = w.revealed_facts.len();
         if num_revealed > 0 {
             // Sponge-based hashing: absorb rate=2 elements per permutation
-            let num_rfc_blocks = (num_revealed + 1) / 2;
+            let num_rfc_blocks = num_revealed.div_ceil(2);
             let mut state = [Fp::zero(); 3];
 
             for block in 0..num_rfc_blocks {

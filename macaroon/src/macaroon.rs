@@ -267,7 +267,7 @@ impl Macaroon {
             .expect("system clock before UNIX epoch")
             .as_secs() as i64;
         let age = now - self.nonce.created_at;
-        if age < 0 || age > MAX_DISCHARGE_AGE {
+        if !(0..=MAX_DISCHARGE_AGE).contains(&age) {
             return Err(MacaroonError::Malformed(format!(
                 "discharge expired (age={age}s, max={MAX_DISCHARGE_AGE}s)"
             )));

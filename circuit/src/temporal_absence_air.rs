@@ -53,10 +53,10 @@
 //! proofs binding both entries to the same timeline root, this constitutes a
 //! complete absence proof.
 
-use crate::constraint_prover::{Air, Constraint, ConstraintProof, ConstraintProver};
+use crate::constraint_prover::{Air, Constraint};
 use crate::field::BabyBear;
 use crate::poseidon2::hash_many;
-use crate::stark::{self, BoundaryConstraint, ExtElem, StarkAir, StarkProof};
+use crate::stark::{self, BoundaryConstraint, StarkAir, StarkProof};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -332,7 +332,7 @@ impl Air for TemporalAbsenceAir {
             // Constraint 6: entry_after.block_height >= t2.
             Constraint {
                 name: "entry_after_timing".to_string(),
-                eval: Box::new(|_row, next_row, public_inputs| {
+                eval: Box::new(|_row, next_row, _public_inputs| {
                     // Only applies to row 1 (entry_after) -- checked when we ARE row 1
                     // Since this is the last row, next_row is None.
                     if next_row.is_none() {

@@ -39,7 +39,7 @@
 use crate::constraint_prover::{Air, Constraint};
 use crate::field::BabyBear;
 use crate::garbled::GateEvalRecord;
-use crate::stark::{BoundaryConstraint, ExtElem, StarkAir};
+use crate::stark::{BoundaryConstraint, StarkAir};
 
 // ============================================================================
 // Column layout

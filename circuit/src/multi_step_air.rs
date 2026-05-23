@@ -65,7 +65,7 @@ use crate::derivation_air::{
 };
 use crate::field::BabyBear;
 use crate::poseidon2::{hash_2_to_1, hash_fact};
-use crate::stark::{self, BoundaryConstraint, ExtElem, StarkAir, StarkProof};
+use crate::stark::{self, BoundaryConstraint, StarkAir, StarkProof};
 
 /// Trace width for the multi-step derivation AIR.
 pub const MULTI_STEP_AIR_WIDTH: usize = DERIVATION_AIR_WIDTH + 5; // 371 + 5 = 376

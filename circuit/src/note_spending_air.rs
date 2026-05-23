@@ -50,7 +50,7 @@
 
 use crate::field::BabyBear;
 use crate::poseidon2::{hash_4_to_1, hash_many};
-use crate::stark::{self, BoundaryConstraint, ExtElem, StarkAir, StarkProof};
+use crate::stark::{self, BoundaryConstraint, StarkAir, StarkProof};
 
 /// Trace width for the note spending AIR.
 /// 19 columns: 5 note preimage + commitment + 8 key limbs + nullifier + randomness + is_merkle + 2 unused.

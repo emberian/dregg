@@ -1392,7 +1392,7 @@ impl TurnExecutor {
             )
         })?;
 
-        use ed25519_dalek::Verifier;
+        
         verifying_key
             .verify_strict(&message, &signature)
             .map_err(|_| {
@@ -4049,7 +4049,7 @@ impl TurnExecutor {
 // ─── Pipeline Execution ──────────────────────────────────────────────────────
 
 use crate::eventual::{
-    EventualRef, Pipeline, PipelineError, PipelineResult, TurnBatch, TurnOutput,
+    EventualRef, Pipeline, PipelineError, PipelineResult, TurnOutput,
 };
 
 /// A resolution table mapping (turn_hash, output_slot) to concrete outputs.

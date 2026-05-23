@@ -1002,8 +1002,8 @@ impl BridgePresentationBuilder {
         &mut self,
         request: &AuthRequest,
     ) -> Result<BridgePresentationProof, AuthError> {
-        use pyana_circuit::ivc::{FoldStepWitness, prove_validated_ivc};
-        use pyana_circuit::poseidon2::hash_fact;
+        use pyana_circuit::ivc::prove_validated_ivc;
+        
 
         // 1. Get the final state.
         let final_step = self.chain.last().ok_or(AuthError::EmptyState)?;
@@ -1745,7 +1745,7 @@ impl BridgePresentationBuilder {
         // Only available in test builds or with the `test-utils` feature.
         #[cfg(any(test, feature = "test-utils"))]
         {
-            return self.build_issuer_membership_synthetic(issuer_key_hash);
+            self.build_issuer_membership_synthetic(issuer_key_hash)
         }
 
         #[cfg(not(any(test, feature = "test-utils")))]
@@ -1813,7 +1813,7 @@ impl BridgePresentationBuilder {
     fn build_issuer_membership_from_proof(
         &self,
         proof: &MerkleProof,
-        issuer_key_hash: BabyBear,
+        _issuer_key_hash: BabyBear,
     ) -> Result<MerkleWitness, AuthError> {
         // Convert the pre-generated proof's leaf_hash to a BabyBear field element.
         // This is the hash of the REAL issuer key, not the proof_key.
@@ -1917,7 +1917,7 @@ impl BridgePresentationBuilder {
         // TESTING FALLBACK: synthetic Poseidon2 Merkle path.
         #[cfg(any(test, feature = "test-utils"))]
         {
-            return self.build_issuer_membership_poseidon2_synthetic(issuer_key_hash);
+            self.build_issuer_membership_poseidon2_synthetic(issuer_key_hash)
         }
 
         #[cfg(not(any(test, feature = "test-utils")))]

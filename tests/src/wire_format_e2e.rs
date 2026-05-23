@@ -8,13 +8,9 @@
 //! If this test passes, the headline product demo works.
 //! If it fails, we have a wire protocol mismatch.
 
-use pyana_bridge::present::WirePresentationProof;
 use pyana_circuit::BabyBear;
 use pyana_circuit::merkle_air::MerkleAir;
 use pyana_circuit::poseidon2;
-use pyana_sdk::wallet::{AgentWallet, VerificationMode};
-use pyana_sdk::{EngineConfig, PyanaEngine};
-use pyana_token::AuthRequest;
 
 // =============================================================================
 // Helpers (mirror the wallet's internal derivation logic)

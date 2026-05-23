@@ -23,7 +23,7 @@ use pyana_cell::{CellId, NoteCommitment};
 use serde::{Deserialize, Serialize};
 
 use crate::conditional::{
-    ConditionProof, ConditionalResult, DEFAULT_MAX_ROOT_AGE, ProofCondition, TrustedRoot,
+    ConditionProof, ConditionalResult, ProofCondition, TrustedRoot,
     resolve_condition,
 };
 

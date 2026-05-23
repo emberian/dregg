@@ -18,7 +18,7 @@
 //! Matcher:     composes both + adds deposit actions → single atomic turn
 //! ```
 
-use ed25519_dalek::{Signature, Signer, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, VerifyingKey};
 use pyana_cell::CellId;
 
 use crate::action::{Action, CommitmentMode};
@@ -380,7 +380,7 @@ impl ComposedTurn {
         };
         let signature = Signature::from_bytes(sig_bytes);
         let turn_hash = self.turn.hash();
-        use ed25519_dalek::Verifier;
+        
         verifying_key.verify_strict(&turn_hash, &signature).is_ok()
     }
 }

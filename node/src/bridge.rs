@@ -34,7 +34,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use pyana_net::gossip::{GossipEvent, GossipNetwork, MessageStream, TopicHandle};
+use pyana_net::gossip::{GossipEvent, GossipNetwork, MessageStream};
 use pyana_net::message::PeerMessage;
 use pyana_net::node::{NodeId, PeerNode, PeerNodeConfig};
 use tokio::sync::RwLock;

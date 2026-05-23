@@ -52,7 +52,7 @@ use crate::field::{BABYBEAR_P, BabyBear};
 use crate::poseidon_stark::{FpSer, PoseidonStarkProof};
 
 #[cfg(feature = "mina")]
-use ark_ff::{BigInteger, Field, One, PrimeField, Zero};
+use ark_ff::{Field, One, PrimeField, Zero};
 
 #[cfg(feature = "mina")]
 use kimchi::circuits::{
@@ -415,7 +415,7 @@ impl PoseidonStarkVerifierCircuit {
 
             // Extract trace columns (MerkleStarkAir layout):
             // col0=current, col1=sib0, col2=sib1, col3=sib2, col4=position, col5=parent
-            let current_val = if tv.len() > 0 { tv[0] } else { 0 };
+            let current_val = if !tv.is_empty() { tv[0] } else { 0 };
             let sib0_val = if tv.len() > 1 { tv[1] } else { 0 };
             let sib1_val = if tv.len() > 2 { tv[2] } else { 0 };
             let sib2_val = if tv.len() > 3 { tv[3] } else { 0 };
@@ -496,7 +496,7 @@ impl PoseidonStarkVerifierCircuit {
             // path won't match. We compute z_t from domain parameters.
             let trace_len = self.proof.trace_len;
             let blowup = self.constraint_degree.next_power_of_two().max(4) as u64;
-            let domain_size = (trace_len as u64) * blowup;
+            let _domain_size = (trace_len as u64) * blowup;
             // omega_eval = primitive (domain_size)-th root of unity
             // z_t(omega_eval^i) = omega_eval^(i * trace_len) - 1
             // = (omega_eval^trace_len)^i - 1
@@ -1069,8 +1069,8 @@ pub fn estimate_verifier_rows(
         + bb_muls_constraint * 3
         + fri_layers * (fri_cost_per_layer * POSEIDON_GADGET_ROWS + 3 + 1);
 
-    let total = public_inputs + num_queries * rows_per_query + 1; // +1 final gate
-    total
+     // +1 final gate
+    public_inputs + num_queries * rows_per_query + 1
 }
 
 // ============================================================================

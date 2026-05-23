@@ -44,7 +44,7 @@
 use crate::constraint_prover::{Air, Constraint};
 use crate::field::BabyBear;
 use crate::poseidon2;
-use crate::stark::{self, BoundaryConstraint, ExtElem, StarkAir, StarkProof};
+use crate::stark::{self, BoundaryConstraint, StarkAir, StarkProof};
 
 /// Number of bits for the range check (same as PredicateAir).
 ///

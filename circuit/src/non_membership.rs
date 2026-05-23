@@ -30,7 +30,7 @@
 
 use crate::accumulator_air::{
     AccumulatorNonMembershipWitness, AccumulatorNonRevocationAir, AccumulatorNonRevocationWitness,
-    ExtElem, compute_accumulator, derive_alpha,
+    ExtElem, compute_accumulator,
 };
 use crate::field::BabyBear;
 use crate::poseidon2::hash_many;

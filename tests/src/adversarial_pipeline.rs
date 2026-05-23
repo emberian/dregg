@@ -15,16 +15,9 @@
 //! 8. Proof for wrong statement (wrong action binding in proof authorization)
 
 use pyana_cell::{
-    AuthRequired, Cell, CellId, Ledger, Note, Nullifier, NullifierSet, Permissions, VerificationKey,
+    AuthRequired, Permissions,
 };
-use pyana_circuit::field::BabyBear;
-use pyana_circuit::stark::{
-    MerkleStarkAir, generate_merkle_trace, proof_from_bytes, proof_to_bytes, prove, verify,
-};
-use pyana_token::{Attenuation, AuthRequest, AuthToken, MacaroonToken};
-use pyana_turn::{
-    ComputronCosts, DelegationMode, Effect, ProofVerifier, TurnBuilder, TurnExecutor, TurnResult,
-};
+use pyana_turn::ProofVerifier;
 
 // =============================================================================
 // Helpers

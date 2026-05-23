@@ -60,12 +60,12 @@ use crate::field::{BABYBEAR_P, BabyBear};
 
 #[cfg(feature = "mina")]
 use crate::stark::{
-    BoundaryConstraint, StarkAir, build_evaluation_domain, get_root_of_unity, interpolate,
+    StarkAir, build_evaluation_domain, get_root_of_unity, interpolate,
     poly_eval,
 };
 
 #[cfg(feature = "mina")]
-use ark_ff::{BigInteger, Field, One, PrimeField, Zero};
+use ark_ff::{Field, PrimeField};
 
 #[cfg(feature = "mina")]
 use mina_curves::pasta::{Fp, Vesta};

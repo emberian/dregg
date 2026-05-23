@@ -62,7 +62,7 @@
 use crate::constraint_prover::{Air, Constraint};
 use crate::field::BabyBear;
 use crate::poseidon2::{hash_2_to_1, hash_fact, hash_many};
-use crate::stark::{self, BoundaryConstraint, ExtElem, StarkAir, StarkProof};
+use crate::stark::{self, BoundaryConstraint, StarkAir, StarkProof};
 
 /// Trace width for the derivation AIR.
 /// rule_id(1) + body_hashes(8) + body_membership(8) + head_pred(1) + head_terms(4) +

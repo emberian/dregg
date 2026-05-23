@@ -16,7 +16,6 @@ use kimchi::{
 };
 use mina_curves::pasta::{Fp, Vesta};
 use mina_poseidon::{
-    constants::PlonkSpongeConstantsKimchi,
     pasta::FULL_ROUNDS,
     poseidon::{ArithmeticSponge, Sponge},
 };
@@ -79,7 +78,7 @@ impl KimchiIvcCircuit {
 
         let rc = &Vesta::sponge_params().round_constants;
         let pr = FULL_ROUNDS / 5; // round gate rows per Poseidon gadget (excl Zero row)
-        let pgr = pr + 1; // total rows per Poseidon gadget (incl Zero/output row)
+        let _pgr = pr + 1; // total rows per Poseidon gadget (incl Zero/output row)
 
         // Poseidon gadgets - one per fold step
         for _ in &self.fold_steps {

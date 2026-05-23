@@ -26,7 +26,7 @@
 //! - Total garbled circuit size: ~1 KB (31 gates * 4 entries * 8 field elements)
 
 use crate::field::BabyBear;
-use crate::poseidon2::{self, Poseidon2State, WIDTH};
+use crate::poseidon2::Poseidon2State;
 
 /// Number of bits in a BabyBear comparison circuit.
 pub const COMPARISON_BITS: usize = 31;

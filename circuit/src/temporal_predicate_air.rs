@@ -49,10 +49,10 @@
 //! - First row: `step_index = 0`, `accumulator = 1`, `state_root = initial_state_root`
 //! - Last row: `accumulator = num_steps`, `state_root = final_state_root`
 
-use crate::constraint_prover::{Air, Constraint, ConstraintProof, ConstraintProver};
+use crate::constraint_prover::{Air, Constraint};
 use crate::field::BabyBear;
 use crate::predicate_air::{PREDICATE_DIFF_BITS, PredicateType};
-use crate::stark::{self, BoundaryConstraint, ExtElem, StarkAir, StarkProof};
+use crate::stark::{self, BoundaryConstraint, StarkAir, StarkProof};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants and column layout
@@ -800,7 +800,7 @@ pub mod p3_temporal {
             let state_root: AB::Expr = local[col::STATE_ROOT].into();
 
             let next_accumulator: AB::Expr = next[col::ACCUMULATOR].into();
-            let next_state_root: AB::Expr = next[col::STATE_ROOT].into();
+            let _next_state_root: AB::Expr = next[col::STATE_ROOT].into();
 
             let one = AB::Expr::ONE;
 

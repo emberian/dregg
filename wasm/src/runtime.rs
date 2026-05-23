@@ -11,23 +11,21 @@
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
-use wasm_bindgen::prelude::*;
+use serde::Serialize;
 
-use pyana_cell::revocation_channel::ChannelState;
 use pyana_cell::{
-    AuthRequired, CapabilityRef, Cell, CellId, Ledger, Note, NoteCommitment, Nullifier,
-    NullifierSet, Permissions, RevocationChannel, RevocationChannelSet,
+    AuthRequired, Cell, CellId, Ledger, Note, NoteCommitment, Nullifier,
+    NullifierSet, RevocationChannel, RevocationChannelSet,
 };
 use pyana_intent::matcher::{
-    HeldCapability, MatchResult, Sensitivity, match_intent, satisfies_spec,
+    HeldCapability, MatchResult, Sensitivity, match_intent,
 };
 use pyana_intent::{
     ActionPattern, CommitmentId, Constraint, Intent, IntentKind, MatchSpec, VerificationMode,
 };
 use pyana_turn::conditional::{ConditionalTurn, ProofCondition};
 use pyana_turn::{
-    Action, Authorization, BudgetGate, CallForest, CallTree, ComputronCosts, DelegationMode,
+    ComputronCosts,
     Effect, TurnBuilder, TurnExecutor, TurnReceipt, TurnResult,
 };
 

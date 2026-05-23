@@ -21,7 +21,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use pyana_sdk::{Attenuation, CellId};
 use pyana_turn::{CallForest, Turn};
@@ -30,8 +30,6 @@ use pyana_types::PublicKey;
 use crate::state::NodeState;
 
 // Re-import x25519 and chacha for seal/unseal operations.
-use chacha20poly1305;
-use x25519_dalek;
 
 /// Build a CallForest with a single root action containing the given effects.
 fn build_forest_with_effects(target: CellId, effects: Vec<pyana_turn::Effect>) -> CallForest {

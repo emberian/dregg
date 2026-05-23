@@ -16,7 +16,7 @@
 //! Gate constraint for Generic: c[0]*w[0] + c[1]*w[1] + c[2]*w[2] + c[3]*(w[0]*w[1]) + c[4] = 0
 //!                    (sub-gate 2): c[5]*w[3] + c[6]*w[4] + c[7]*w[5] + c[8]*(w[3]*w[4]) + c[9] = 0
 
-use ark_ff::{BigInteger, Field, One, PrimeField, Zero};
+use ark_ff::{One, PrimeField, Zero};
 use groupmap::GroupMap;
 use kimchi::{
     circuits::{
@@ -32,7 +32,7 @@ use mina_poseidon::pasta::FULL_ROUNDS;
 use poly_commitment::commitment::CommitmentCurve;
 use rand_core::OsRng;
 
-use super::fold::{FpMerkleLevelWitness, FpMerkleWitness, fp_hash4};
+use super::fold::FpMerkleWitness;
 use super::{
     BaseSponge, GTE_DIFF_BITS, KimchiNativeCircuitType, KimchiNativeProof, MAX_BODY_ATOMS,
     MAX_HEAD_TERMS, MAX_SUB_VARS, ScalarSponge, VestaOpeningProof, fp_to_bytes32, hash_fact_fp,
@@ -507,7 +507,7 @@ impl KimchiDerivationCircuit {
         // Rule structure commitment: Poseidon hash of rule parameters
         // We compute hash_many_fp of the rule elements. Number of Poseidon gadgets = ceil(n/2).
         let rule_elements = self.rule_hash_elements();
-        let num_rule_hash_blocks = (rule_elements.len() + 1) / 2;
+        let num_rule_hash_blocks = rule_elements.len().div_ceil(2);
         for _ in 0..num_rule_hash_blocks {
             let s = gates.len();
             let (pg, _) = CircuitGate::<Fp>::create_poseidon_gadget(
@@ -579,7 +579,7 @@ impl KimchiDerivationCircuit {
 
         // Bit decomposition rows
         let bits_per_row = 6;
-        let num_bit_rows = (GTE_DIFF_BITS + bits_per_row - 1) / bits_per_row;
+        let num_bit_rows = GTE_DIFF_BITS.div_ceil(bits_per_row);
 
         for chunk_idx in 0..num_bit_rows {
             let r = gates.len();
@@ -616,7 +616,7 @@ impl KimchiDerivationCircuit {
         }
 
         // Binary enforcement rows
-        let num_binary_rows = (GTE_DIFF_BITS + 1) / 2;
+        let num_binary_rows = GTE_DIFF_BITS.div_ceil(2);
         for _ in 0..num_binary_rows {
             let r = gates.len();
             let mut c = vec![Fp::zero(); COLUMNS];
@@ -957,7 +957,7 @@ impl KimchiDerivationCircuit {
 
         // Rule structure commitment witness (Poseidon sponge)
         let rule_elements = self.rule_hash_elements();
-        let num_blocks = (rule_elements.len() + 1) / 2;
+        let num_blocks = rule_elements.len().div_ceil(2);
         let mut state = [Fp::zero(); 3];
 
         for block in 0..num_blocks {
@@ -1016,7 +1016,7 @@ impl KimchiDerivationCircuit {
 
         // Bit chunk rows
         let bits_per_row = 6;
-        let num_bit_rows = (GTE_DIFF_BITS + bits_per_row - 1) / bits_per_row;
+        let num_bit_rows = GTE_DIFF_BITS.div_ceil(bits_per_row);
         for chunk_idx in 0..num_bit_rows {
             let base_bit = chunk_idx * bits_per_row;
             for i in 0..3 {
@@ -1035,7 +1035,7 @@ impl KimchiDerivationCircuit {
         }
 
         // Binary enforcement rows
-        let num_binary_rows = (GTE_DIFF_BITS + 1) / 2;
+        let num_binary_rows = GTE_DIFF_BITS.div_ceil(2);
         for br_idx in 0..num_binary_rows {
             let bit_idx_a = 2 * br_idx;
             if bit_idx_a < GTE_DIFF_BITS {

@@ -35,9 +35,9 @@
 use crate::constraint_prover::{Air, Constraint};
 use crate::field::BabyBear;
 use crate::predicate_air::{
-    self, PREDICATE_AIR_WIDTH, PREDICATE_DIFF_BITS, PredicateType, PredicateWitness, col,
+    PREDICATE_AIR_WIDTH, PREDICATE_DIFF_BITS, PredicateType, PredicateWitness, col,
 };
-use crate::stark::{self, BoundaryConstraint, ExtElem, StarkAir, StarkProof};
+use crate::stark::{self, BoundaryConstraint, StarkAir, StarkProof};
 
 /// Maximum number of sub-predicates in a compound proof.
 pub const MAX_COMPOUND_PREDICATES: usize = 8;
@@ -1028,7 +1028,7 @@ impl StarkAir for CompoundPredicateStarkAir {
 
     fn boundary_constraints(
         &self,
-        public_inputs: &[BabyBear],
+        _public_inputs: &[BabyBear],
         _trace_len: usize,
     ) -> Vec<BoundaryConstraint> {
         // No boundary constraints needed -- public input binding is done
