@@ -140,6 +140,22 @@ impl GossipHandle {
         }
     }
 
+    /// Publish an encrypted intent to the gossip network.
+    ///
+    /// Encrypted intents carry SSE search tokens for privacy-preserving matching.
+    /// The body is hidden until a fulfiller's capability keywords match the tokens.
+    pub async fn gossip_encrypted_intent(&self, encrypted: &pyana_intent::sse::EncryptedIntent) {
+        let intent_bytes = postcard::to_stdvec(encrypted).unwrap_or_default();
+        let intent_hash = encrypted.id;
+        let msg = PeerMessage::PublishIntent {
+            intent_hash,
+            intent_data: intent_bytes,
+        };
+        if let Err(e) = self.network.publish(&self.topic_intents, &msg).await {
+            warn!(error = %e, "failed to gossip encrypted intent");
+        }
+    }
+
     /// Publish a budget message (spending certificates, unlock requests/votes).
     ///
     /// Budget messages are serialized as postcard-encoded `BudgetGossipMessage`
@@ -767,6 +783,55 @@ pub async fn run_federation_sync(
         }
     });
 
+    // Spawn a periodic delay pool tick task.
+    // The delay pool accumulates fulfillment reveals and releases them in batches
+    // for timing decorrelation. Released batches are broadcast via gossip.
+    let state_delay_pool = state.clone();
+    tokio::spawn(async move {
+        // Tick every 10 seconds (batches release based on the pool's own interval config).
+        let mut interval = tokio::time::interval(Duration::from_secs(10));
+        loop {
+            interval.tick().await;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+
+            let batch = {
+                let mut s = state_delay_pool.write().await;
+                s.delay_pool.tick(now)
+            };
+
+            if let Some(items) = batch {
+                // Broadcast released batch items via gossip as intent fulfillments.
+                // Real items are published; dummies are also published (indistinguishable
+                // at the gossip layer, fail verification silently on the receiver side).
+                if let Some(gossip_handle) = state_delay_pool.gossip().await {
+                    for item in &items {
+                        match item {
+                            pyana_intent::delay_pool::PoolItem::Real(result) => {
+                                let data = postcard::to_stdvec(&result.fulfillment)
+                                    .unwrap_or_default();
+                                let hash = *blake3::hash(&data).as_bytes();
+                                gossip_handle.gossip_turn(hash, data).await;
+                            }
+                            pyana_intent::delay_pool::PoolItem::Dummy(dummy) => {
+                                // Publish dummy as a turn with the dummy's commitment_hash.
+                                // Receivers will fail to decode/verify and silently discard.
+                                let data = dummy.commitment_hash.to_vec();
+                                gossip_handle.gossip_turn(dummy.intent_id, data).await;
+                            }
+                        }
+                    }
+                }
+                info!(
+                    batch_size = items.len(),
+                    "delay pool released batch for timing decorrelation"
+                );
+            }
+        }
+    });
+
     // If Morpheus consensus is enabled, spawn the consensus driver.
     if let Some(mcfg) = morpheus_config {
         // Join the consensus gossip topic.
@@ -1262,10 +1327,59 @@ async fn handle_revocation_message(state: &NodeState, from: SocketAddr, message:
 ///
 /// P1 Fix (issue 10): Uses the dedicated PublishIntent variant instead of abusing PublishTurn.
 /// CRITICAL 2 Fix: Verifies stake proof for gossip-propagated intents.
+///
+/// Also handles SSE-encrypted intents (postcard-encoded `EncryptedIntent`). These
+/// are tried first since they use postcard encoding, falling through to JSON for
+/// cleartext intents.
 async fn handle_intent_message(state: &NodeState, from: SocketAddr, message: PeerMessage) {
     match message {
         PeerMessage::PublishIntent { intent_data, .. } => {
-            // Decode and validate the intent from intent_data.
+            // Try to decode as an EncryptedIntent first (postcard-encoded).
+            if let Ok(encrypted) =
+                postcard::from_bytes::<pyana_intent::sse::EncryptedIntent>(&intent_data)
+            {
+                let intent_id_hex: String =
+                    encrypted.id.iter().map(|b| format!("{b:02x}")).collect();
+
+                // Basic validation: non-empty tokens and body.
+                if encrypted.search_tokens.is_empty() || encrypted.encrypted_body.is_empty() {
+                    warn!(
+                        from = %from,
+                        intent_id = %intent_id_hex,
+                        "rejecting encrypted intent: empty search tokens or body"
+                    );
+                    return;
+                }
+
+                // Check expiry.
+                if let Some(expiry) = encrypted.expiry {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    if now >= expiry {
+                        return;
+                    }
+                }
+
+                // Store in the encrypted intent pool.
+                let mut s = state.write().await;
+                if s.encrypted_intent_pool.len() < crate::api::MAX_NODE_INTENT_POOL {
+                    s.encrypted_intent_pool
+                        .insert(encrypted.id, encrypted.clone());
+                }
+                drop(s);
+
+                info!(
+                    from = %from,
+                    intent_id = %intent_id_hex,
+                    tokens = encrypted.search_tokens.len(),
+                    "received encrypted intent via gossip"
+                );
+                return;
+            }
+
+            // Decode and validate the intent from intent_data (cleartext JSON path).
             let intent = match serde_json::from_slice::<pyana_intent::Intent>(&intent_data) {
                 Ok(i) => i,
                 Err(_) => return,

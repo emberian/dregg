@@ -206,6 +206,12 @@ pub struct IntentSubmitResponse {
     pub stored: bool,
 }
 
+#[derive(Serialize)]
+pub struct EncryptedIntentSubmitResponse {
+    pub intent_id: String,
+    pub stored: bool,
+}
+
 // =============================================================================
 // PIR (Private Information Retrieval) types
 // =============================================================================
@@ -735,6 +741,7 @@ pub fn router(
         .route("/wallet/tokens", get(get_tokens))
         .route("/wallet/receipts", get(get_receipts))
         .route("/intents", get(get_intents).post(post_intent))
+        .route("/intents/encrypted", post(post_encrypted_intent))
         .route("/intents/fulfill", post(post_fulfill_intent))
         .route(
             "/turn/submit",
@@ -1272,6 +1279,56 @@ async fn post_intent(
     }
 
     Ok(Json(IntentSubmitResponse {
+        intent_id: intent_id_hex,
+        stored: true,
+    }))
+}
+
+/// POST /intents/encrypted — submit an SSE-encrypted intent for gossip propagation.
+///
+/// Encrypted intents carry search tokens for privacy-preserving matching. The body
+/// is hidden until a fulfiller's capability keywords produce a matching token, at
+/// which point the poster reveals the decryption key over a direct channel.
+async fn post_encrypted_intent(
+    State(state): State<NodeState>,
+    Json(encrypted): Json<pyana_intent::sse::EncryptedIntent>,
+) -> Result<Json<EncryptedIntentSubmitResponse>, StatusCode> {
+    let intent_id_hex = hex_encode(&encrypted.id);
+
+    // Basic validation: check non-empty search tokens and non-empty body.
+    if encrypted.search_tokens.is_empty() || encrypted.encrypted_body.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    // Check expiry if set.
+    if let Some(expiry) = encrypted.expiry {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        if now >= expiry {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+
+    // Store in the encrypted intent pool.
+    {
+        let mut s = state.write().await;
+        if s.encrypted_intent_pool.len() >= MAX_NODE_INTENT_POOL {
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
+        s.encrypted_intent_pool.insert(encrypted.id, encrypted.clone());
+    }
+
+    // Gossip the encrypted intent to federation peers.
+    if let Some(gossip) = state.gossip().await {
+        let enc = encrypted.clone();
+        tokio::spawn(async move {
+            gossip.gossip_encrypted_intent(&enc).await;
+        });
+    }
+
+    Ok(Json(EncryptedIntentSubmitResponse {
         intent_id: intent_id_hex,
         stored: true,
     }))

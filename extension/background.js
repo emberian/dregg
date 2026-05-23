@@ -334,6 +334,569 @@ async function deriveKeypairFromMnemonic(mnemonic, passphrase) {
 }
 
 // ---------------------------------------------------------------------------
+// Stealth address support
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive stealth keys from the wallet seed (mnemonic).
+ *
+ * Produces a StealthMetaAddress consisting of:
+ *   - spend_pubkey: Ed25519 public key for spending (derived via BLAKE3(seed, "pyana-stealth-spend"))
+ *   - view_pubkey: X25519 public key for scanning (derived via BLAKE3(seed, "pyana-stealth-view"))
+ *
+ * The private keys are stored encrypted alongside the wallet state.
+ *
+ * TODO: WASM exports needed:
+ *   - wasm.derive_stealth_keys(mnemonic, passphrase) -> { spend_pubkey, spend_privkey, view_pubkey, view_privkey }
+ *     Must use BLAKE3(seed, "pyana-stealth-spend") for Ed25519 spend key
+ *     and BLAKE3(seed, "pyana-stealth-view") for X25519 view key.
+ *   - wasm.stealth_pubkey_from_privkey(privkey_bytes, key_type) -> pubkey_bytes
+ *     (key_type: "ed25519" | "x25519")
+ */
+async function deriveStealthKeys(mnemonic, passphrase) {
+  requireWasm('deriveStealthKeys');
+
+  // TODO: wasm.derive_stealth_keys should implement:
+  //   1. seed = BIP39_to_seed(mnemonic, passphrase)
+  //   2. spend_seed = BLAKE3(seed, context="pyana-stealth-spend") -> 32 bytes
+  //   3. view_seed = BLAKE3(seed, context="pyana-stealth-view") -> 32 bytes
+  //   4. spend_keypair = Ed25519::from_seed(spend_seed)
+  //   5. view_keypair = X25519::from_seed(view_seed)
+  if (!wasm.derive_stealth_keys) {
+    throw new Error(
+      'WASM export "derive_stealth_keys" not available. ' +
+      'Stealth address support requires the updated WASM module.'
+    );
+  }
+
+  const result = wasm.derive_stealth_keys(mnemonic, passphrase || '');
+  return {
+    spendPubkey: Array.from(result.spend_pubkey),   // Ed25519 public key (32 bytes)
+    spendPrivkey: Array.from(result.spend_privkey),  // Ed25519 private key (32 bytes)
+    viewPubkey: Array.from(result.view_pubkey),      // X25519 public key (32 bytes)
+    viewPrivkey: Array.from(result.view_privkey),    // X25519 private key (32 bytes)
+  };
+}
+
+/**
+ * Get or derive the stealth meta-address for the current wallet.
+ * The meta-address (spend_pubkey + view_pubkey) is the public-facing identifier
+ * that senders use to derive one-time stealth addresses for us.
+ *
+ * Returns { spendPubkey: number[], viewPubkey: number[] } or null if unavailable.
+ */
+async function getStealthMetaAddress() {
+  const wallet = await loadState();
+  if (wallet.locked) return null;
+
+  // Check if stealth keys are already derived and stored.
+  if (wallet.stealthMeta) {
+    return {
+      spendPubkey: wallet.stealthMeta.spendPubkey,
+      viewPubkey: wallet.stealthMeta.viewPubkey,
+    };
+  }
+
+  // Derive from mnemonic. Requires wallet to be unlocked and mnemonic available.
+  const mnemonic = await getMnemonic();
+  if (!mnemonic) return null;
+
+  try {
+    const keys = await deriveStealthKeys(mnemonic, walletPassphrase === await getInternalEncryptionKey() ? '' : walletPassphrase || '');
+
+    // Store the full stealth key material in wallet state (encrypted at rest).
+    state.stealthMeta = {
+      spendPubkey: keys.spendPubkey,
+      viewPubkey: keys.viewPubkey,
+    };
+    state.stealthPrivate = {
+      spendPrivkey: keys.spendPrivkey,
+      viewPrivkey: keys.viewPrivkey,
+    };
+    await saveState();
+
+    return {
+      spendPubkey: keys.spendPubkey,
+      viewPubkey: keys.viewPubkey,
+    };
+  } catch (e) {
+    console.warn('[pyana] Failed to derive stealth keys:', e.message);
+    return null;
+  }
+}
+
+/**
+ * Check if a note announcement is addressed to us (stealth ownership check).
+ *
+ * A stealth note announcement contains:
+ *   - ephemeralPubkey: X25519 public key used by the sender
+ *   - oneTimePubkey: the derived one-time address the funds were sent to
+ *   - encryptedMemo: optional encrypted memo (decryptable with shared secret)
+ *
+ * We check ownership by:
+ *   1. Performing X25519 DH: sharedSecret = X25519(viewPrivkey, ephemeralPubkey)
+ *   2. Deriving the expected one-time pubkey: hash(sharedSecret) * G + spendPubkey
+ *   3. Comparing with the announced oneTimePubkey
+ *
+ * TODO: WASM exports needed:
+ *   - wasm.check_stealth_ownership(view_privkey, spend_pubkey, ephemeral_pubkey, one_time_pubkey)
+ *     -> { is_ours: bool, one_time_privkey: Uint8Array | null }
+ *   - wasm.decrypt_stealth_memo(shared_secret, encrypted_memo) -> plaintext
+ */
+function checkStealthOwnership(announcement, viewPrivkey, spendPubkey) {
+  requireWasm('checkStealthOwnership');
+
+  // TODO: wasm.check_stealth_ownership should implement:
+  //   1. shared_secret = x25519(view_privkey, ephemeral_pubkey)
+  //   2. scalar = BLAKE3(shared_secret, context="pyana-stealth-derive")
+  //   3. expected_one_time = scalar * G_ed25519 + spend_pubkey
+  //   4. return expected_one_time == one_time_pubkey
+  //   5. If match: one_time_privkey = scalar + spend_privkey (mod L)
+  if (!wasm.check_stealth_ownership) {
+    throw new Error(
+      'WASM export "check_stealth_ownership" not available. ' +
+      'Stealth scanning requires the updated WASM module.'
+    );
+  }
+
+  const result = wasm.check_stealth_ownership(
+    new Uint8Array(viewPrivkey),
+    new Uint8Array(spendPubkey),
+    new Uint8Array(announcement.ephemeralPubkey),
+    new Uint8Array(announcement.oneTimePubkey)
+  );
+
+  return {
+    isOurs: result.is_ours,
+    oneTimePrivkey: result.one_time_privkey ? Array.from(result.one_time_privkey) : null,
+  };
+}
+
+/**
+ * Scan a batch of note announcements for notes addressed to us.
+ * Returns an array of matched notes with their derived spending keys.
+ */
+async function scanStealthNotes(announcements) {
+  const wallet = await loadState();
+  if (wallet.locked || !wallet.stealthPrivate) return [];
+
+  const viewPrivkey = wallet.stealthPrivate.viewPrivkey;
+  const spendPubkey = wallet.stealthMeta.spendPubkey;
+  const matched = [];
+
+  for (const announcement of announcements) {
+    try {
+      const result = checkStealthOwnership(announcement, viewPrivkey, spendPubkey);
+      if (result.isOurs) {
+        matched.push({
+          noteId: announcement.noteId,
+          amount: announcement.amount, // Will be null for committed (private) transfers
+          assetType: announcement.assetType,
+          oneTimePrivkey: result.oneTimePrivkey,
+          ephemeralPubkey: announcement.ephemeralPubkey,
+          memo: announcement.encryptedMemo || null,
+          receivedAt: Date.now(),
+        });
+      }
+    } catch (e) {
+      // Skip announcements that fail to check (malformed, etc.)
+      console.warn('[pyana] Stealth check failed for announcement:', e.message);
+    }
+  }
+
+  // Store matched notes in wallet state.
+  if (matched.length > 0) {
+    if (!state.stealthNotes) state.stealthNotes = [];
+    state.stealthNotes.push(...matched);
+    await saveState();
+
+    notifySubscribers('stealthNoteReceived', {
+      count: matched.length,
+      noteIds: matched.map(n => n.noteId),
+    });
+  }
+
+  return matched;
+}
+
+// ---------------------------------------------------------------------------
+// Encrypted intent posting (SSE tokens + sealed body)
+// ---------------------------------------------------------------------------
+
+/**
+ * Post an encrypted intent with searchable encryption (SSE) tokens.
+ *
+ * The intent body is sealed (encrypted) so only the fulfiller can read the
+ * full match specification. SSE tokens derived from keywords allow the intent
+ * service to route without seeing plaintext.
+ *
+ * TODO: WASM exports needed:
+ *   - wasm.generate_sse_tokens(keywords: string[]) -> Uint8Array[]
+ *     Derives deterministic searchable encryption tokens from keywords using
+ *     BLAKE3 keyed hash with a per-intent random key.
+ *   - wasm.seal_intent_body(plaintext_json: string, recipient_pubkey: Uint8Array | null)
+ *     -> { ciphertext: Uint8Array, ephemeral_pubkey: Uint8Array, nonce: Uint8Array }
+ *     If recipient_pubkey is null, uses a broadcast encryption scheme where any
+ *     matching node can decrypt with the SSE key.
+ *   - wasm.unseal_intent_body(ciphertext, ephemeral_pubkey, nonce, privkey)
+ *     -> plaintext_json
+ *
+ * @param {object} matchSpec - The intent match specification (same as postIntent)
+ * @param {object} options - { expiry, keywords, recipientPubkey }
+ *   keywords: array of strings for SSE token generation (e.g. ["swap", "USDC", "ETH"])
+ *   recipientPubkey: optional targeted encryption to a specific fulfiller
+ */
+async function postEncryptedIntent(matchSpec, options = {}) {
+  requireWasm('postEncryptedIntent');
+
+  const wallet = await loadState();
+  if (wallet.locked) {
+    return { error: 'Wallet is locked' };
+  }
+
+  // Show confirmation popup before broadcasting (same security model as postIntent).
+  const confirmed = await showIntentConfirmation('postEncryptedIntent', matchSpec, options);
+  if (!confirmed) {
+    return { error: 'User denied encrypted intent broadcast' };
+  }
+
+  const expiry = options.expiry || (Date.now() + DEFAULT_INTENT_EXPIRY_MS);
+  const keywords = options.keywords || extractKeywordsFromSpec(matchSpec);
+
+  // Generate SSE tokens from keywords.
+  // TODO: wasm.generate_sse_tokens should use BLAKE3 keyed hash for each keyword.
+  if (!wasm.generate_sse_tokens) {
+    throw new Error(
+      'WASM export "generate_sse_tokens" not available. ' +
+      'Encrypted intent posting requires the updated WASM module.'
+    );
+  }
+  const sseTokens = wasm.generate_sse_tokens(keywords);
+
+  // Seal the match specification body.
+  if (!wasm.seal_intent_body) {
+    throw new Error(
+      'WASM export "seal_intent_body" not available. ' +
+      'Encrypted intent posting requires the updated WASM module.'
+    );
+  }
+  const recipientPubkey = options.recipientPubkey
+    ? new Uint8Array(options.recipientPubkey)
+    : null;
+  const sealed = wasm.seal_intent_body(
+    JSON.stringify(matchSpec),
+    recipientPubkey
+  );
+
+  // Compute an intent ID for the encrypted intent.
+  const intentId = await computeIntentId('need', matchSpec, expiry);
+
+  const encryptedIntent = {
+    id: intentId,
+    kind: 'need',
+    expiry,
+    createdAt: Date.now(),
+    encrypted: true,
+    sseTokens: Array.from(sseTokens),
+    sealedBody: {
+      ciphertext: Array.from(sealed.ciphertext),
+      ephemeralPubkey: Array.from(sealed.ephemeral_pubkey),
+      nonce: Array.from(sealed.nonce),
+    },
+    creatorPubkey: wallet.publicKey,
+  };
+
+  // Store locally.
+  intentPool.set(intentId, { intent: encryptedIntent, receivedAt: Date.now() });
+
+  // Broadcast via WebSocket.
+  if (nodeWs && nodeWs.readyState === WebSocket.OPEN) {
+    nodeWs.send(JSON.stringify({
+      type: 'broadcast_encrypted_intent',
+      intent: encryptedIntent,
+    }));
+  }
+
+  return { intentId, expiry, encrypted: true, sseTokenCount: keywords.length };
+}
+
+/**
+ * Extract searchable keywords from a match specification for SSE token generation.
+ * Heuristic: pull action names, resource patterns, constraint values.
+ */
+function extractKeywordsFromSpec(matchSpec) {
+  const keywords = [];
+
+  if (matchSpec.actions) {
+    for (const a of matchSpec.actions) {
+      if (a.action) keywords.push(a.action.toLowerCase());
+      if (a.resource) keywords.push(a.resource.toLowerCase());
+    }
+  }
+  if (matchSpec.resourcePattern) {
+    // Split resource pattern into segments.
+    const segments = matchSpec.resourcePattern.split('/').filter(Boolean);
+    keywords.push(...segments.map(s => s.toLowerCase()));
+  }
+  if (matchSpec.constraints) {
+    for (const c of matchSpec.constraints) {
+      if (c.value && typeof c.value === 'string') {
+        keywords.push(c.value.toLowerCase());
+      }
+    }
+  }
+
+  // Deduplicate.
+  return [...new Set(keywords)];
+}
+
+// ---------------------------------------------------------------------------
+// Private transfer support (committed/hidden amounts)
+// ---------------------------------------------------------------------------
+
+/**
+ * Send a private transfer to a recipient's stealth meta-address.
+ *
+ * This creates:
+ *   1. A one-time stealth address for the recipient (from their meta-address)
+ *   2. A Pedersen value commitment hiding the amount
+ *   3. A range proof (Bulletproof-style) proving the amount is valid
+ *   4. A committed turn submitted to the network
+ *
+ * TODO: WASM exports needed:
+ *   - wasm.derive_stealth_one_time_address(recipient_spend_pubkey, recipient_view_pubkey)
+ *     -> { one_time_pubkey: Uint8Array, ephemeral_pubkey: Uint8Array, ephemeral_privkey: Uint8Array }
+ *   - wasm.create_value_commitment(amount: u64, blinding: Uint8Array)
+ *     -> { commitment: Uint8Array, blinding: Uint8Array }
+ *     Uses Ristretto Pedersen commitment: C = amount * H + blinding * G
+ *   - wasm.generate_range_proof(amount: u64, blinding: Uint8Array, commitment: Uint8Array)
+ *     -> { proof: Uint8Array, proof_size_bytes: number }
+ *   - wasm.build_committed_turn(params: JSON) -> { turn_bytes: Uint8Array, turn_id: string }
+ *     Builds a Turn with committed value fields.
+ *
+ * @param {number} amount - The amount to transfer (hidden from network)
+ * @param {string} assetType - Asset type identifier (e.g. "PYANA", "USDC")
+ * @param {object} recipientStealthMeta - { spendPubkey: number[], viewPubkey: number[] }
+ * @returns {object} { turnId, commitment, ephemeralPubkey, success }
+ */
+async function privateTransfer(amount, assetType, recipientStealthMeta) {
+  requireWasm('privateTransfer');
+
+  const wallet = await loadState();
+  if (wallet.locked) {
+    return { error: 'Wallet is locked' };
+  }
+  if (!wallet.secretKey) {
+    return { error: 'Wallet secret key not available (locked or not derived)' };
+  }
+  if (!amount || amount <= 0) {
+    return { error: 'Amount must be positive' };
+  }
+  if (!recipientStealthMeta || !recipientStealthMeta.spendPubkey || !recipientStealthMeta.viewPubkey) {
+    return { error: 'Recipient stealth meta-address is required (spendPubkey + viewPubkey)' };
+  }
+
+  // Step 1: Derive a one-time stealth address for the recipient.
+  // TODO: wasm.derive_stealth_one_time_address should implement:
+  //   1. Generate ephemeral X25519 keypair
+  //   2. shared_secret = X25519(ephemeral_privkey, recipient_view_pubkey)
+  //   3. scalar = BLAKE3(shared_secret, context="pyana-stealth-derive")
+  //   4. one_time_pubkey = scalar * G_ed25519 + recipient_spend_pubkey
+  if (!wasm.derive_stealth_one_time_address) {
+    throw new Error(
+      'WASM export "derive_stealth_one_time_address" not available. ' +
+      'Private transfers require the updated WASM module.'
+    );
+  }
+  const stealthAddr = wasm.derive_stealth_one_time_address(
+    new Uint8Array(recipientStealthMeta.spendPubkey),
+    new Uint8Array(recipientStealthMeta.viewPubkey)
+  );
+
+  // Step 2: Create a Pedersen value commitment hiding the amount.
+  // TODO: wasm.create_value_commitment should use Ristretto points:
+  //   C = amount * H + blinding * G, where H is a nothing-up-my-sleeve generator.
+  if (!wasm.create_value_commitment) {
+    throw new Error(
+      'WASM export "create_value_commitment" not available. ' +
+      'Private transfers require the updated WASM module.'
+    );
+  }
+  // Generate random blinding factor.
+  const blindingBytes = new Uint8Array(32);
+  crypto.getRandomValues(blindingBytes);
+  const commitment = wasm.create_value_commitment(amount, blindingBytes);
+
+  // Step 3: Generate a range proof proving amount is in valid range [0, 2^64).
+  // TODO: wasm.generate_range_proof should produce a Bulletproof or similar
+  //   compact range proof over the Pedersen commitment.
+  if (!wasm.generate_range_proof) {
+    throw new Error(
+      'WASM export "generate_range_proof" not available. ' +
+      'Private transfers require the updated WASM module.'
+    );
+  }
+  const rangeProof = wasm.generate_range_proof(
+    amount,
+    blindingBytes,
+    new Uint8Array(commitment.commitment)
+  );
+
+  // Step 4: Build the committed turn.
+  // TODO: wasm.build_committed_turn constructs a Turn with:
+  //   - sender: wallet.publicKey
+  //   - recipient: one_time_pubkey (stealth)
+  //   - value_commitment: the Pedersen commitment
+  //   - range_proof: the range proof bytes
+  //   - asset_type: assetType
+  //   - ephemeral_pubkey: for stealth scanning by recipient
+  if (!wasm.build_committed_turn) {
+    throw new Error(
+      'WASM export "build_committed_turn" not available. ' +
+      'Private transfers require the updated WASM module.'
+    );
+  }
+  const turnParams = {
+    sender_pubkey: wallet.publicKey,
+    sender_privkey: wallet.secretKey,
+    recipient_one_time_pubkey: Array.from(stealthAddr.one_time_pubkey),
+    value_commitment: Array.from(commitment.commitment),
+    blinding_factor: Array.from(commitment.blinding),
+    range_proof: Array.from(rangeProof.proof),
+    asset_type: assetType,
+    amount: amount, // Included in the turn for the sender's records, NOT transmitted
+    ephemeral_pubkey: Array.from(stealthAddr.ephemeral_pubkey),
+  };
+  const turn = wasm.build_committed_turn(JSON.stringify(turnParams));
+
+  // Step 5: Submit the committed turn via WebSocket or HTTP.
+  let submitted = false;
+  if (nodeWs && nodeWs.readyState === WebSocket.OPEN) {
+    nodeWs.send(JSON.stringify({
+      type: 'submit_committed_turn',
+      turn_id: turn.turn_id,
+      turn_bytes: Array.from(turn.turn_bytes),
+    }));
+    submitted = true;
+  } else {
+    // Fallback: HTTP submission.
+    try {
+      const resp = await fetch('http://localhost:8420/turns/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          turn_id: turn.turn_id,
+          turn_bytes: Array.from(turn.turn_bytes),
+          committed: true,
+        }),
+      });
+      if (resp.ok) {
+        submitted = true;
+      } else {
+        const errText = await resp.text().catch(() => '');
+        return { error: `Node rejected committed turn: HTTP ${resp.status} ${errText}` };
+      }
+    } catch (e) {
+      return { error: `Failed to submit committed turn: ${e.message}` };
+    }
+  }
+
+  // Log the transfer locally (we keep the plaintext amount for our own records).
+  wallet.log.push({
+    action: 'privateTransfer',
+    resource: assetType,
+    allowed: true,
+    timestamp: Date.now(),
+    mode: 'private',
+    turnId: turn.turn_id,
+    amount: amount,
+    recipientStealthMeta: {
+      spendPubkey: recipientStealthMeta.spendPubkey,
+      viewPubkey: recipientStealthMeta.viewPubkey,
+    },
+  });
+  await saveState();
+
+  // Update privacy state.
+  await updatePrivacyState({ lastPrivateTransfer: Date.now() });
+
+  notifySubscribers('privateTransfer', {
+    turnId: turn.turn_id,
+    assetType,
+    submitted,
+  });
+
+  return {
+    success: true,
+    turnId: turn.turn_id,
+    commitment: Array.from(commitment.commitment),
+    ephemeralPubkey: Array.from(stealthAddr.ephemeral_pubkey),
+    rangeProofSize: rangeProof.proof_size_bytes || rangeProof.proof.length,
+    submitted,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Privacy mode state tracking
+// ---------------------------------------------------------------------------
+
+/**
+ * Get the current privacy features state.
+ * Returns which privacy features are active for the session.
+ */
+async function getPrivacyState() {
+  const wallet = await loadState();
+  if (wallet.locked) {
+    return { active: false, locked: true };
+  }
+
+  const stored = await chrome.storage.session.get(PRIVACY_STATE_KEY);
+  const privacyState = stored[PRIVACY_STATE_KEY] || {};
+
+  const stealthMeta = wallet.stealthMeta || null;
+  const hasStealthKeys = stealthMeta !== null;
+  const stealthNotesCount = (wallet.stealthNotes || []).length;
+
+  return {
+    active: true,
+    features: {
+      stealthAddresses: hasStealthKeys,
+      committedTransfers: privacyState.committedTransfersActive || false,
+      encryptedIntents: privacyState.encryptedIntentsActive || false,
+    },
+    stealthMeta: stealthMeta ? {
+      spendPubkey: stealthMeta.spendPubkey,
+      viewPubkey: stealthMeta.viewPubkey,
+    } : null,
+    stealthNotesReceived: stealthNotesCount,
+    lastPrivateTransfer: privacyState.lastPrivateTransfer || null,
+    sessionStarted: privacyState.sessionStarted || null,
+  };
+}
+
+/**
+ * Update the session privacy state.
+ */
+async function updatePrivacyState(updates) {
+  const stored = await chrome.storage.session.get(PRIVACY_STATE_KEY);
+  const privacyState = stored[PRIVACY_STATE_KEY] || { sessionStarted: Date.now() };
+  Object.assign(privacyState, updates);
+  await chrome.storage.session.set({ [PRIVACY_STATE_KEY]: privacyState });
+}
+
+/**
+ * Enable or disable committed (amount-hidden) transfer mode.
+ */
+async function setCommittedTransferMode(enabled) {
+  await updatePrivacyState({ committedTransfersActive: !!enabled });
+  notifySubscribers('privacyModeChanged', {
+    feature: 'committedTransfers',
+    enabled: !!enabled,
+  });
+  return { success: true, committedTransfersActive: !!enabled };
+}
+
+// ---------------------------------------------------------------------------
 // Event bus (authorization, revoked notifications)
 // ---------------------------------------------------------------------------
 
@@ -453,6 +1016,9 @@ async function saveState() {
       hasMnemonic: state.hasMnemonic,
       mnemonicShown: state.mnemonicShown,
       needsPassphraseSetup: state.needsPassphraseSetup || false,
+      stealthMeta: state.stealthMeta || null,
+      stealthPrivate: state.stealthPrivate || null,
+      stealthNotes: state.stealthNotes || [],
     });
     const encrypted = await encryptWithPassphrase(plaintext, walletPassphrase);
     encrypted.publicKey = state.publicKey; // Keep public key readable for UI.
@@ -524,6 +1090,9 @@ async function unlockWallet(passphrase) {
         hasMnemonic: decrypted.hasMnemonic || false,
         mnemonicShown: decrypted.mnemonicShown || false,
         needsPassphraseSetup: decrypted.needsPassphraseSetup || false,
+        stealthMeta: decrypted.stealthMeta || null,
+        stealthPrivate: decrypted.stealthPrivate || null,
+        stealthNotes: decrypted.stealthNotes || [],
       };
       walletPassphrase = attempt;
       resetLockTimer();
@@ -1688,6 +2257,8 @@ async function getWalletState() {
     mnemonicShown: wallet.mnemonicShown || false,
     hasPassphrase: walletPassphrase !== null && walletPassphrase !== internalKey,
     needsPassphraseSetup: wallet.needsPassphraseSetup || false,
+    hasStealthKeys: wallet.stealthMeta !== null && wallet.stealthMeta !== undefined,
+    stealthNotesCount: (wallet.stealthNotes || []).length,
   };
 }
 
@@ -1792,6 +2363,9 @@ const PAGE_ALLOWED_METHODS = new Set([
   'pyana:subscribe',
   'pyana:provision',
   'pyana:postIntent',
+  'pyana:getStealthAddress',
+  'pyana:postEncryptedIntent',
+  'pyana:privateTransfer',
   // Note: pyana:offerCapability, pyana:getCapabilities, pyana:listIntents are
   // NOT accessible from page context — popup-only.
 ]);
@@ -1816,6 +2390,9 @@ const POPUP_ONLY_METHODS = new Set([
   'pyana:clearDisclosurePref',
   'pyana:getOriginPermissions',
   'pyana:revokeOriginPermission',
+  'pyana:getPrivacyState',
+  'pyana:setCommittedTransferMode',
+  'pyana:getStealthNotes',
 ]);
 
 async function handleMessage(message, sender) {
@@ -2005,6 +2582,57 @@ async function handleMessage(message, sender) {
     case 'pyana:originPermissionDecision':
       return { id: message.id, result: true };
 
+    // --- Privacy features ---
+
+    case 'pyana:getStealthAddress': {
+      const meta = await getStealthMetaAddress();
+      if (!meta) {
+        return { id: message.id, error: 'Stealth keys not available (wallet locked or WASM missing)' };
+      }
+      return { id: message.id, result: meta };
+    }
+
+    case 'pyana:postEncryptedIntent': {
+      const result = await postEncryptedIntent(message.matchSpec, message.options || {});
+      return { id: message.id, result };
+    }
+
+    case 'pyana:privateTransfer': {
+      const result = await privateTransfer(
+        message.amount,
+        message.assetType,
+        message.recipientStealthMeta
+      );
+      resetLockTimer();
+      return { id: message.id, result };
+    }
+
+    case 'pyana:getPrivacyState': {
+      if (!isExtensionPopup(sender)) {
+        return { id: message.id, error: 'Only available from extension popup.' };
+      }
+      return { id: message.id, result: await getPrivacyState() };
+    }
+
+    case 'pyana:setCommittedTransferMode': {
+      if (!isExtensionPopup(sender)) {
+        return { id: message.id, error: 'Only available from extension popup.' };
+      }
+      const result = await setCommittedTransferMode(message.enabled);
+      return { id: message.id, result };
+    }
+
+    case 'pyana:getStealthNotes': {
+      if (!isExtensionPopup(sender)) {
+        return { id: message.id, error: 'Only available from extension popup.' };
+      }
+      const wallet = await loadState();
+      if (wallet.locked) {
+        return { id: message.id, error: 'Wallet is locked' };
+      }
+      return { id: message.id, result: wallet.stealthNotes || [] };
+    }
+
     default:
       return { id: message.id, error: 'Unknown message type' };
   }
@@ -2098,7 +2726,7 @@ function validateNodeSignature(payload, signature, pubKey) {
  */
 function validateNodeMessage(msg) {
   // Messages that mutate wallet state require a valid signature.
-  const SIGNED_TYPES = new Set(['revocation', 'receipt', 'root', 'intent']);
+  const SIGNED_TYPES = new Set(['revocation', 'receipt', 'root', 'intent', 'note_announcement']);
   if (!SIGNED_TYPES.has(msg.type)) return true; // informational, no signature needed
   if (!nodePublicKey) {
     console.warn('[pyana] No node public key available; rejecting signed message');
@@ -2190,7 +2818,7 @@ function tryConnect(url, onFail) {
           // Now subscribe after authentication.
           nodeWs.send(JSON.stringify({
             type: 'subscribe',
-            topics: ['roots', 'revocations', 'receipts', 'intents'],
+            topics: ['roots', 'revocations', 'receipts', 'intents', 'note_announcements'],
           }));
         } else {
           console.error('[pyana] WS auth failed — invalid signature from node');
@@ -2203,7 +2831,7 @@ function tryConnect(url, onFail) {
         console.warn('[pyana] WS auth skipped — no node public key available');
         nodeWs.send(JSON.stringify({
           type: 'subscribe',
-          topics: ['roots', 'revocations', 'receipts', 'intents'],
+          topics: ['roots', 'revocations', 'receipts', 'intents', 'note_announcements'],
         }));
       } else {
         console.error('[pyana] WS auth_response missing signature');
@@ -2250,6 +2878,17 @@ function tryConnect(url, onFail) {
       }
       case 'intent': {
         await receiveGossipIntent(msg.intent);
+        break;
+      }
+      case 'note_announcement': {
+        // Stealth note scanning: check if any announced notes are addressed to us.
+        const announcements = msg.notes || (msg.note ? [msg.note] : []);
+        if (announcements.length > 0) {
+          const matched = await scanStealthNotes(announcements);
+          if (matched.length > 0) {
+            console.log('[pyana] Found', matched.length, 'stealth note(s) addressed to us');
+          }
+        }
         break;
       }
       case 'subscribed':

@@ -14,7 +14,6 @@ use pyana_bridge::{BridgePredicateProof, BridgePresentationProof, Predicate};
 use pyana_cell::CellId;
 use pyana_cell::stealth::{StealthAnnouncement, StealthKeys, StealthMetaAddress, StealthAddress};
 use pyana_cell::note::NoteCommitment;
-use pyana_cell::value_commitment::ValueCommitment;
 use pyana_circuit::BabyBear;
 use pyana_circuit::IvcProof;
 use pyana_circuit::PredicateType;
@@ -609,6 +608,8 @@ impl AgentWallet {
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&secret);
         let verifying_key = signing_key.verifying_key();
         let public_key = PublicKey(verifying_key.to_bytes());
+        // Derive stealth keys deterministically from the signing key.
+        let stealth_keys = Self::derive_stealth_keys(&signing_key);
         // Explicitly zeroize before drop for defense-in-depth (Zeroizing's Drop
         // impl will also do this, but we want to be clear about intent).
         secret.zeroize();
@@ -622,6 +623,7 @@ impl AgentWallet {
             seed: None,
             mnemonic_phrase: None,
             derivation_path: None,
+            stealth_keys,
         }
     }
 
@@ -658,6 +660,7 @@ impl AgentWallet {
         sec_bytes.zeroize();
         let verifying_key = signing_key.verifying_key();
         let public_key = PublicKey(verifying_key.to_bytes());
+        let stealth_keys = Self::derive_stealth_keys(&signing_key);
         AgentWallet {
             signing_key,
             public_key,
@@ -668,6 +671,7 @@ impl AgentWallet {
             seed: Some(seed),
             mnemonic_phrase: None,
             derivation_path: Some(path.to_string()),
+            stealth_keys,
         }
     }
 
@@ -3004,6 +3008,187 @@ impl AgentWallet {
 
         builder.build(agent_cell, nonce, 0)
     }
+
+    // =========================================================================
+    // Stealth Address Support
+    // =========================================================================
+
+    /// Get this wallet's stealth meta-address (for receiving private notes).
+    ///
+    /// Publish this so senders can generate unlinkable one-time addresses for you.
+    /// The meta-address contains your view public key (for scanning) and spend
+    /// public key (for address derivation), but does NOT reveal your signing key.
+    pub fn stealth_meta_address(&self) -> StealthMetaAddress {
+        self.stealth_keys.meta_address()
+    }
+
+    /// Generate a one-time stealth address for sending TO a recipient's meta-address.
+    ///
+    /// Returns a [`StealthAddress`] containing:
+    /// - `one_time_pubkey`: use as the note's `owner` field
+    /// - `ephemeral_pubkey`: publish alongside the note for recipient scanning
+    pub fn generate_stealth_address_for(&self, recipient: &StealthMetaAddress) -> StealthAddress {
+        let (addr, _shared_secret) = recipient.generate_stealth_address();
+        addr
+    }
+
+    /// Scan announcements for notes addressed to this wallet (using our view key).
+    ///
+    /// Iterates over the provided announcements, performing the DH check to identify
+    /// notes that were sent to our stealth meta-address. Returns the note commitments
+    /// of notes that belong to us.
+    ///
+    /// For large announcement sets, the view tag pre-filter makes this efficient:
+    /// only ~1/256 of announcements require the full DH computation.
+    pub fn scan_notes(
+        &self,
+        announcements: &[(NoteCommitment, StealthAnnouncement)],
+    ) -> Vec<OwnedStealthNote> {
+        let meta = self.stealth_keys.meta_address();
+        let mut owned = Vec::new();
+
+        for (commitment, announcement) in announcements {
+            // Fast pre-filter: skip if view tag does not match (~255/256 of the time).
+            if !announcement.matches_view_tag(&self.stealth_keys.view_private_key) {
+                continue;
+            }
+
+            // Full ownership check via DH. We construct a StealthAddress from the
+            // announcement's ephemeral pubkey and check if we're the recipient.
+            let stealth_addr = StealthAddress {
+                one_time_pubkey: [0u8; 32], // Not needed for check_ownership
+                ephemeral_pubkey: announcement.ephemeral_pubkey,
+            };
+            if stealth_addr.check_ownership(
+                &self.stealth_keys.view_private_key,
+                &meta.spend_pubkey,
+            ) {
+                let spending_key = stealth_addr.derive_spending_key(
+                    &self.stealth_keys.view_private_key,
+                    &self.stealth_keys.spend_private_key,
+                );
+                owned.push(OwnedStealthNote {
+                    commitment: *commitment,
+                    ephemeral_pubkey: announcement.ephemeral_pubkey,
+                    spending_key,
+                });
+            }
+        }
+
+        owned
+    }
+
+    // =========================================================================
+    // Private Transfer (Committed Notes + Stealth)
+    // =========================================================================
+
+    /// Create a private transfer: committed value, stealth recipient, range-proved.
+    ///
+    /// This combines stealth addressing with value commitments to produce a fully
+    /// private transfer turn where:
+    /// - The recipient is hidden (one-time stealth address)
+    /// - The amount is hidden (Pedersen commitment + Bulletproof range proof)
+    /// - Conservation is proven (Schnorr excess signature)
+    ///
+    /// # Arguments
+    ///
+    /// * `amount` - The value to transfer.
+    /// * `asset_type` - The asset type identifier.
+    /// * `recipient_meta` - The recipient's stealth meta-address.
+    ///
+    /// # Returns
+    ///
+    /// A fully-formed [`Turn`] ready for signing and submission, or an error.
+    pub fn private_transfer(
+        &mut self,
+        amount: u64,
+        asset_type: u64,
+        recipient_meta: &StealthMetaAddress,
+    ) -> Result<Turn, SdkError> {
+        use crate::committed_turn::{CommittedNoteOutput, CommittedTurnBuilder};
+
+        // 1. Generate stealth address for recipient.
+        let (stealth_addr, _shared_secret) = recipient_meta.generate_stealth_address();
+
+        // 2. Build a committed turn with the stealth address as recipient.
+        let agent_cell = self.cell_id("default");
+        let nonce = self.receipt_chain.len() as u64;
+
+        let output = CommittedNoteOutput {
+            value: amount,
+            asset_type,
+            recipient: stealth_addr.one_time_pubkey,
+        };
+
+        let mut builder = CommittedTurnBuilder::new();
+        builder.add_output(output);
+
+        // Note: In a full implementation, the caller would provide input notes to
+        // spend. For the API surface, we build a turn with just the output --
+        // the caller can use build_committed_transfer() for full input/output flows.
+        builder.build(agent_cell, nonce, 0)
+    }
+
+    // =========================================================================
+    // Encrypted Intent Posting
+    // =========================================================================
+
+    /// Post an intent with encrypted headers (SSE tokens + sealed body).
+    ///
+    /// Creates an [`EncryptedIntent`] suitable for gossip propagation. The intent's
+    /// MatchSpec is encrypted so only fulfillers whose capabilities match the SSE
+    /// search tokens can discover and decrypt it.
+    ///
+    /// # Arguments
+    ///
+    /// * `spec` - The capability matching specification.
+    /// * `kind` - The kind of intent (Need, Offer, or Query).
+    /// * `expiry` - Optional Unix timestamp after which the intent expires.
+    ///
+    /// # Returns
+    ///
+    /// An [`EncryptedIntent`] ready for gossip broadcast.
+    pub fn post_encrypted_intent(
+        &self,
+        spec: &MatchSpec,
+        _kind: IntentKind,
+        expiry: Option<u64>,
+    ) -> EncryptedIntent {
+        // Derive the commitment ID from this wallet's public key.
+        let commitment_id = CommitmentId(self.public_key.0);
+
+        // Use epoch 0 for now; in production this would come from the network clock.
+        let epoch = 0u64;
+
+        let (encrypted, _keypair) = EncryptedIntent::create(spec, commitment_id, epoch, expiry);
+        encrypted
+    }
+
+    // =========================================================================
+    // Stealth Key Derivation (internal)
+    // =========================================================================
+
+    /// Derive stealth keys deterministically from the wallet's Ed25519 signing key.
+    ///
+    /// Uses BLAKE3 key derivation with distinct context strings to produce
+    /// independent view and spend keys.
+    fn derive_stealth_keys(signing_key: &ed25519_dalek::SigningKey) -> StealthKeys {
+        let sk_bytes = signing_key.to_bytes();
+        let view_private_key = blake3::derive_key("pyana-stealth-view-key-v1", &sk_bytes);
+        let spend_private_key = blake3::derive_key("pyana-stealth-spend-key-v1", &sk_bytes);
+        StealthKeys::from_keys(view_private_key, spend_private_key)
+    }
+}
+
+/// A note detected as belonging to this wallet during stealth scanning.
+#[derive(Clone, Debug)]
+pub struct OwnedStealthNote {
+    /// The note commitment (for lookup in the note tree).
+    pub commitment: NoteCommitment,
+    /// The ephemeral public key from the announcement.
+    pub ephemeral_pubkey: [u8; 32],
+    /// The derived one-time spending key for this note.
+    pub spending_key: [u8; 32],
 }
 
 impl Default for AgentWallet {

@@ -63,7 +63,7 @@ pub use error::SdkError;
 pub use runtime::{AgentRuntime, SubAgent};
 pub use wallet::{
     AgentWallet, AuthorizationPresentation, DelegatedToken, DisclosureSpec, FactDisclosure,
-    FactIndex, HeldToken, SignedTurn, VerificationMode,
+    FactIndex, HeldToken, OwnedStealthNote, SignedTurn, VerificationMode,
 };
 
 // Re-export commonly needed types from dependencies so users don't need
@@ -85,6 +85,16 @@ pub use pyana_circuit::PresentationVerification;
 
 // Re-export mnemonic generation at crate root for convenience.
 pub use mnemonic::generate_mnemonic;
+
+// Re-export privacy primitives for stealth addresses, value commitments, and encrypted intents.
+pub use pyana_cell::stealth::{
+    StealthAddress, StealthAnnouncement, StealthKeys, StealthMetaAddress,
+};
+pub use pyana_cell::value_commitment::{
+    BulletproofRangeProof, ConservationProof, FullConservationProof, ValueCommitment,
+    ValueCommitmentBytes,
+};
+pub use pyana_intent::sse::EncryptedIntent;
 
 // Re-export the no-IO embed layer for service integration.
 pub use embed::{EmbedError, EngineConfig, PyanaEngine, WireCodec};
