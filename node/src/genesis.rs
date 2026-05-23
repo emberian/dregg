@@ -178,10 +178,7 @@ pub fn run_genesis(validators: usize, epoch_length: u64, checkpoint_interval: u6
     println!("  {}", genesis_path.display());
     println!("  {}", devnet_marker_path.display());
     for i in 0..validators {
-        println!(
-            "  {}",
-            output.join(format!("node-{i}.key")).display()
-        );
+        println!("  {}", output.join(format!("node-{i}.key")).display());
         println!("  {}", output.join(format!("node-{i}.env")).display());
     }
     println!();

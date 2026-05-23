@@ -367,20 +367,24 @@ pub fn verify_validated_ivc_proof(proof_bytes: &[u8]) -> Result<bool, SdkError> 
 // Tier-gated verification
 // ============================================================================
 
-/// Verify a serialized authorization proof and require Production tier.
+/// Verify a serialized authorization proof (production entry point).
 ///
 /// This is the production-safe entry point. It performs full STARK verification
-/// and then checks that the proof was produced by a production-grade backend
-/// (custom STARK with ext-field composition, Kimchi native, or Pickles).
+/// including action/resource binding and composition commitment checks.
 ///
-/// Structural stubs (constraint prover, SP1 without feature, Binius without feature)
-/// are rejected even if they pass structural validation.
+/// Tier gating has been removed per the verification policy simplification:
+/// if a proof cryptographically verifies (passes `verify_authorization_proof`),
+/// it is valid regardless of which backend produced it. Structural stubs cannot
+/// produce valid STARK proofs and are rejected by the cryptographic check itself.
+/// The tier is retained as informational metadata only.
 ///
 /// # Errors
 ///
 /// Returns `Err` if:
 /// - The proof cannot be deserialized
-/// - The proof tier is not `Production`
+/// - STARK verification fails
+/// - Action/resource binding fails
+/// - Composition commitment is missing or invalid
 pub fn verify_production(
     proof_bytes: &[u8],
     federation_root: &[u8; 32],
@@ -400,22 +404,13 @@ pub fn verify_production(
         return Err(SdkError::Wire("proof verification failed".into()));
     }
 
-    // The custom STARK with Poseidon2 AIR is production-grade.
-    let result = pyana_circuit::VerifiedProof::with_federation_root(
+    // Return a VerifiedProof with informational tier metadata.
+    // No tier gating: if the STARK verified, the proof is accepted.
+    Ok(pyana_circuit::VerifiedProof::with_federation_root(
         proof_tier::stark_tier(),
         proof_tier::STARK_BACKEND,
         *federation_root,
-    );
-
-    if result.tier() != pyana_circuit::ProofTier::Production {
-        return Err(SdkError::Wire(format!(
-            "non-production proof tier: {} (backend: {})",
-            result.tier(),
-            result.backend()
-        )));
-    }
-
-    Ok(result)
+    ))
 }
 
 /// Verify a serialized authorization proof accepting any tier.

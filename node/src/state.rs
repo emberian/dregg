@@ -241,7 +241,11 @@ impl NodeState {
     ///
     /// Issue 3 fix: Loads persisted passphrase hash from the store.
     /// Issue 5 fix: Loads persisted proof hashes (nullifiers) from the store.
-    pub fn new_with_key_file(data_dir: &Path, peers: Vec<String>, key_file: &str) -> Result<Self, String> {
+    pub fn new_with_key_file(
+        data_dir: &Path,
+        peers: Vec<String>,
+        key_file: &str,
+    ) -> Result<Self, String> {
         let db_path = data_dir.join("pyana.redb");
         let store =
             PersistentStore::open(&db_path).map_err(|e| format!("failed to open store: {e}"))?;
@@ -255,8 +259,8 @@ impl NodeState {
         };
 
         let wallet = if key_path.exists() {
-            let key_bytes_vec =
-                std::fs::read(&key_path).map_err(|e| format!("failed to read {}: {e}", key_path.display()))?;
+            let key_bytes_vec = std::fs::read(&key_path)
+                .map_err(|e| format!("failed to read {}: {e}", key_path.display()))?;
             if key_bytes_vec.len() != 32 {
                 return Err(format!(
                     "{} has invalid length: expected 32, got {}",
@@ -279,8 +283,9 @@ impl NodeState {
             {
                 use std::os::unix::fs::PermissionsExt;
                 let perms = std::fs::Permissions::from_mode(0o600);
-                std::fs::set_permissions(&key_path, perms)
-                    .map_err(|e| format!("failed to set {} permissions: {e}", key_path.display()))?;
+                std::fs::set_permissions(&key_path, perms).map_err(|e| {
+                    format!("failed to set {} permissions: {e}", key_path.display())
+                })?;
             }
             AgentWallet::from_key_bytes(zeroize::Zeroizing::new(key_bytes))
         };

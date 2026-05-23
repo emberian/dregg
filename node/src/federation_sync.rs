@@ -168,7 +168,11 @@ impl GossipHandle {
 /// loop drives the adapter.
 ///
 /// `gossip_port` specifies the UDP/QUIC port to bind for gossip (default 9420).
-pub async fn run_federation_sync(state: NodeState, morpheus_config: Option<MorpheusConfig>, gossip_port: u16) {
+pub async fn run_federation_sync(
+    state: NodeState,
+    morpheus_config: Option<MorpheusConfig>,
+    gossip_port: u16,
+) {
     let peers = {
         let s = state.read().await;
         s.peers.clone()

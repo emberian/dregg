@@ -96,6 +96,10 @@ recursion = [
 
 [dev-dependencies]
 criterion = { workspace = true }
+pyana-bridge = { path = "../bridge" }
+token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
+pyana-turn = { path = "../turn" }
+getrandom = { workspace = true }
 
 [[bench]]
 name = "stark_bench"
@@ -103,6 +107,10 @@ harness = false
 
 [[bench]]
 name = "proof_benchmarks"
+harness = false
+
+[[bench]]
+name = "practical_benchmarks"
 harness = false
 
 [lints]

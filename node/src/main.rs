@@ -189,6 +189,11 @@ enum Command {
 
 #[tokio::main]
 async fn main() {
+    // Install the ring CryptoProvider for rustls (required by quinn/QUIC).
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("failed to install rustls CryptoProvider");
+
     // Initialize tracing.
     tracing_subscriber::fmt()
         .with_env_filter(

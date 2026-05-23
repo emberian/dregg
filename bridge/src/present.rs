@@ -2464,7 +2464,9 @@ impl std::error::Error for VerifyError {}
 /// Result of successful verification from [`verify_proof_complete`].
 #[derive(Clone, Debug)]
 pub struct VerifiedPresentation {
-    /// The proof tier (always Production for a passing proof).
+    /// The proof tier (informational only — not used for acceptance decisions).
+    /// A proof that passes `verify_proof_complete` is always accepted regardless of tier.
+    /// The tier is retained for logging, metrics, and diagnostics.
     pub tier: pyana_circuit::ProofTier,
     /// The action the proof was verified against.
     pub action: String,
@@ -2472,6 +2474,71 @@ pub struct VerifiedPresentation {
     pub resource: String,
     /// The federation root the proof was verified against.
     pub federation_root: [u8; 32],
+}
+
+/// Configuration for the verification policy.
+///
+/// This replaces tier-based gating with explicit policy configuration.
+/// Devnet accepts all AIRs. Production might restrict to Poseidon2-backed AIRs only.
+///
+/// # Example
+///
+/// ```
+/// use pyana_bridge::present::VerifierConfig;
+///
+/// // Production: only accept Poseidon2-backed AIRs.
+/// let production = VerifierConfig::production();
+///
+/// // Devnet: accept any cryptographically valid AIR.
+/// let devnet = VerifierConfig::devnet();
+/// ```
+#[derive(Clone, Debug)]
+pub struct VerifierConfig {
+    /// Which AIR names are acceptable. Empty means "accept all known AIRs".
+    pub accepted_air_names: Vec<String>,
+    /// Maximum proof age in seconds. 0 disables freshness check.
+    pub max_proof_age_secs: i64,
+    /// Whether composition commitment is required (binds sub-proofs together).
+    /// Set to `false` for single-step proofs that have no fold chain.
+    pub require_composition: bool,
+}
+
+impl Default for VerifierConfig {
+    fn default() -> Self {
+        Self::production()
+    }
+}
+
+impl VerifierConfig {
+    /// Production config: accepts only Poseidon2-backed AIRs, requires composition,
+    /// and enforces a 5-minute freshness window.
+    pub fn production() -> Self {
+        Self {
+            accepted_air_names: vec![
+                "BlindedMerklePoseidon2StarkAir".to_string(),
+                "MerklePoseidon2StarkAir".to_string(),
+            ],
+            max_proof_age_secs: 300,
+            require_composition: true,
+        }
+    }
+
+    /// Devnet config: accepts any cryptographically valid AIR (including the legacy
+    /// MerkleStarkAir), with a generous freshness window and relaxed composition.
+    pub fn devnet() -> Self {
+        Self {
+            accepted_air_names: Vec::new(), // empty = accept all known AIRs
+            max_proof_age_secs: 3600,
+            require_composition: false,
+        }
+    }
+
+    /// Returns true if the given AIR name is accepted by this config.
+    /// An empty `accepted_air_names` list means all known AIRs are accepted.
+    pub fn accepts_air(&self, air_name: &str) -> bool {
+        self.accepted_air_names.is_empty()
+            || self.accepted_air_names.iter().any(|a| a == air_name)
+    }
 }
 
 /// The ONLY verification function that should be called in production.
@@ -2484,7 +2551,15 @@ pub struct VerifiedPresentation {
 /// 5. Action binding (proof's request_predicate == compute_action_binding(action, resource))
 /// 6. Timestamp freshness (proof not older than max_age_secs)
 /// 7. Composition commitment (non-zero AND correctly recomputed from sub-proofs)
-/// 8. Proof tier (only Production tier passes)
+///
+/// Tier is NOT checked for acceptance. If a proof passes cryptographic STARK
+/// verification for a known AIR, it is valid. The tier is retained in the
+/// returned `VerifiedPresentation` as informational metadata for logging/metrics.
+/// Structural stubs cannot produce valid STARK proofs, so they are naturally
+/// rejected by step 3 without needing a separate tier gate.
+///
+/// For deployment-specific policy (restricting which AIRs are accepted), use
+/// [`VerifierConfig`] to filter at the caller level.
 ///
 /// # Arguments
 ///
@@ -2621,8 +2696,9 @@ pub fn verify_proof_complete(
     }
 
     // 8. STARK cryptographic verification.
-    // Accepts both Production (Poseidon2) and Experimental (custom STARK) proofs.
-    // Only rejects Structural proofs (no cryptographic guarantees at all).
+    // Dispatches on air_name to select the correct AIR for verification.
+    // Any AIR that passes cryptographic verification is accepted — the tier is
+    // informational only (per verification-policy-design.md).
     use pyana_circuit::poseidon2_air::{BlindedMerklePoseidon2StarkAir, MerklePoseidon2StarkAir};
     use pyana_circuit::stark::{MerkleStarkAir, StarkAir};
     let air_name = &real.issuer_membership_stark_proof.air_name;
@@ -2645,20 +2721,14 @@ pub fn verify_proof_complete(
             pyana_circuit::ProofTier::Production,
         )
     } else if air_name == MerkleStarkAir.air_name() {
-        // Custom STARK (Experimental tier) — cryptographically sound but with
-        // weaker parameters. Accepted for devnet and development use.
         (
-            stark::verify(
-                &MerkleStarkAir,
-                &real.issuer_membership_stark_proof,
-                &pi,
-            ),
+            stark::verify(&MerkleStarkAir, &real.issuer_membership_stark_proof, &pi),
             pyana_circuit::ProofTier::Experimental,
         )
     } else {
-        // Unknown AIR — reject as structural (no crypto guarantees).
+        // Unknown AIR — cannot verify, reject.
         return Err(VerifyError::StarkInvalid(format!(
-            "unknown AIR: {air_name} (only Production and Experimental tiers accepted)"
+            "unknown AIR: {air_name} (no verifier available)"
         )));
     };
 
@@ -2666,13 +2736,9 @@ pub fn verify_proof_complete(
         return Err(VerifyError::StarkInvalid(e));
     }
 
-    // Only reject Structural tier (no cryptographic guarantees).
-    // Both Production (Plonky3/Poseidon2) and Experimental (custom STARK) are accepted.
-    if proof_tier == pyana_circuit::ProofTier::Structural {
-        return Err(VerifyError::StarkInvalid(
-            "structural proofs have no cryptographic guarantees".to_string(),
-        ));
-    }
+    // Tier is informational only. If the STARK verified cryptographically, the
+    // proof is valid. Structural stubs cannot reach this point because they cannot
+    // produce valid STARK proofs for any known AIR.
 
     Ok(VerifiedPresentation {
         tier: proof_tier,

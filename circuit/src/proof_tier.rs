@@ -1,4 +1,4 @@
-//! Proof tier markers — prevents scaffold/test proofs from satisfying production verifiers.
+//! Proof tier markers — informational classification of proof backends.
 //!
 //! The codebase has multiple proof backends (custom STARK, Kimchi native, Mina/Pickles,
 //! SP1, Binius, constraint prover, structural stubs). All produce bytes that look like
@@ -6,26 +6,35 @@
 //!
 //! This module introduces:
 //! - [`ProofTier`]: an enum marking whether a proof is production-grade, experimental,
-//!   or structural-only.
+//!   or structural-only. Used for logging, metrics, and diagnostics.
 //! - [`CryptographicProof`]: a marker trait that proof types implement to declare their tier.
 //! - [`VerifiedProof`]: a wrapper returned by verification functions that carries the tier.
 //!
-//! Production code paths check the tier at the verification boundary to reject structural
-//! stubs that would otherwise pass type-checking.
+//! **Tier is informational only and NOT used for verification acceptance decisions.**
+//! A proof is accepted if it passes cryptographic STARK verification for a known AIR.
+//! Structural stubs cannot produce valid STARK proofs, so they are naturally rejected
+//! by the cryptographic check without needing a separate tier gate. The tier enum is
+//! retained for diagnostics, logging, and metrics (e.g., tracking which backends are
+//! producing proofs in the wild).
 
 use std::fmt;
 
-/// Proof tiers — prevents scaffold proofs from satisfying production verifiers.
+/// Proof tiers — informational classification for logging and metrics.
+///
+/// This enum is NOT used for verification acceptance decisions. A proof is accepted
+/// if it passes cryptographic STARK verification. The tier is metadata indicating
+/// the backend's maturity level.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ProofTier {
     /// Real cryptographic proof with full soundness guarantees.
-    /// Only produced by: custom STARK (with ext-field composition), Kimchi native, Pickles.
+    /// Produced by: Plonky3, Poseidon2 STARK, Kimchi native, Pickles.
     Production,
     /// Proof from a backend that is in development. May have known weaknesses.
-    /// Produced by: custom STARK (base-field only), Poseidon STARK.
+    /// Produced by: custom STARK (base-field only).
     Experimental,
     /// Structural validation only — no cryptographic guarantees.
     /// Produced by: SP1 stub (no feature), Binius stub (no feature), constraint prover.
+    /// These proofs cannot pass STARK verification and are rejected naturally.
     Structural,
 }
 
@@ -51,8 +60,8 @@ pub trait CryptographicProof {
 
 /// A verified proof that carries its tier information.
 ///
-/// Returned by verification functions. Production code paths inspect the tier
-/// to reject structural or experimental proofs.
+/// Returned by verification functions. The tier is informational metadata for
+/// logging and metrics — it is NOT used for acceptance decisions.
 #[derive(Clone, Debug)]
 pub struct VerifiedProof {
     /// The tier of the backend that produced this proof.

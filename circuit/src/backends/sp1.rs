@@ -73,6 +73,11 @@ use sp1_sdk::{ProverClient, SP1ProofWithPublicValues, SP1Stdin};
 /// - A valid Datalog rule application was executed
 /// - Given the committed body facts, the derived fact is correct
 /// - The execution followed the exact derivation logic (same code as our AIR)
+///
+/// **Note on structural stubs:** When the `sp1` feature is disabled, this type holds
+/// simulated proof bytes that cannot pass cryptographic STARK verification. Stub proofs
+/// are naturally rejected by any verifier that performs real STARK verification (e.g.,
+/// `verify_proof_complete`). No separate tier check is needed to reject them.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Sp1Proof {
     /// The serialized SP1 proof bytes (STARK or Groth16-wrapped).

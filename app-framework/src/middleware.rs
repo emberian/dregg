@@ -110,18 +110,16 @@ impl FromRequestParts<EngineState> for StrictPresentation {
             ));
         }
 
-        // Production tier enforcement: only accept production-grade backends.
-        // The STARK verification above already checks cryptographic validity;
-        // here we additionally bind the tier to reject structural stubs.
+        // Tier enforcement removed per verification-policy-design.md:
+        // If verify_presentation_bytes() passes (which delegates to verify_proof_complete),
+        // the proof is cryptographically valid. The tier is a prover-side concern, not
+        // a verifier-side concern. Structural stubs cannot produce valid STARK proofs,
+        // so they are rejected by the cryptographic check above.
         let verified_proof = pyana_circuit::VerifiedProof::with_federation_root(
             pyana_circuit::proof_tier::stark_tier(),
             pyana_circuit::proof_tier::STARK_BACKEND,
             federation_root,
         );
-
-        if verified_proof.tier() != pyana_circuit::ProofTier::Production {
-            return Err((StatusCode::FORBIDDEN, "non-production proof tier rejected"));
-        }
 
         Ok(StrictPresentation {
             action,

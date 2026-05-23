@@ -309,13 +309,10 @@ fn auth_request_to_trace(request: &AuthRequest) -> Result<TraceRequest, AuthErro
     // canonical full action name for secure policy matching. Short forms like "r"
     // map to "read", "w" to "write", etc. This ensures the trace action symbol
     // matches the interned action names in action_allowed/svc_action_allowed facts.
-    let action = request
-        .action
-        .as_deref()
-        .map(|s| {
-            let canonical = action_short_to_canonical(s);
-            symbol_from_bytes(canonical.as_bytes())
-        });
+    let action = request.action.as_deref().map(|s| {
+        let canonical = action_short_to_canonical(s);
+        symbol_from_bytes(canonical.as_bytes())
+    });
     let features: Vec<[u8; 32]> = request
         .features
         .iter()

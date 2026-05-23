@@ -7,6 +7,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::{
     Json, Router,
@@ -25,10 +26,8 @@ use pyana_app_framework::{CellId, EngineConfig, PyanaEngine};
 use pyana_bounty_board::qualification::verify_qualification;
 use pyana_bounty_board::state::BoardState;
 use pyana_bounty_board::{
-    ApproveRequest, Bounty, BountyFilter, BountyStatus, BountyStatusResponse, BountySummary,
-    ClaimRequest, CompletionEvidence, CreateBountyRequest, QualificationRequirement,
-    SerializedToken, SubmitRequest, bounty_id_from_hex, bounty_id_hex, compute_bounty_id,
-    qualification_label, status_label,
+    ApproveRequest, Bounty, BountyFilter, BountyStatus, BountyStatusResponse, ClaimRequest,
+    CreateBountyRequest, SubmitRequest, bounty_id_from_hex, bounty_id_hex, compute_bounty_id,
 };
 
 // =============================================================================
@@ -39,15 +38,18 @@ use pyana_bounty_board::{
 #[derive(Parser, Debug)]
 #[command(name = "bounty-board")]
 struct Args {
-    /// Federation root hash (64 hex chars). If not provided, fetches from a federation node.
+    /// Federation root hash (64 hex chars). If not provided, fetches from the node.
     #[arg(long, env = "PYANA_FEDERATION_ROOT")]
     federation_root: Option<String>,
 
-    /// Federation node URL to sync root from (not yet implemented).
-    #[arg(long, env = "PYANA_FEDERATION_NODE")]
-    federation_node: Option<String>,
+    /// URL of a running pyana-node to fetch the federation root from.
+    /// The app will query /status and /federation/roots on startup and
+    /// periodically sync the latest attested root.
+    #[arg(long, default_value = "http://127.0.0.1:8420", env = "PYANA_NODE_URL")]
+    node_url: String,
 
-    /// Run in dev mode: allows starting with an all-zeroes federation root.
+    /// Run in dev mode: allows starting with an all-zeroes federation root
+    /// if the node is unreachable.
     /// WARNING: proof verification will reject all federation membership proofs.
     #[arg(long, env = "PYANA_DEV")]
     dev: bool,
@@ -55,6 +57,10 @@ struct Args {
     /// Listen address.
     #[arg(long, default_value = "127.0.0.1:3030", env = "PYANA_LISTEN")]
     listen: SocketAddr,
+
+    /// Root sync interval in seconds (how often to poll the node for new roots).
+    #[arg(long, default_value = "30", env = "PYANA_SYNC_INTERVAL")]
+    sync_interval: u64,
 }
 
 // =============================================================================
@@ -67,8 +73,125 @@ struct AppState {
     board: BoardState,
     /// The federation root used for membership/qualification checks.
     federation_root: Arc<RwLock<[u8; 32]>>,
+    /// When the federation root was last updated.
+    root_last_updated: Arc<RwLock<Option<Instant>>>,
     /// The pyana engine for cryptographic proof verification.
     engine: Arc<RwLock<PyanaEngine>>,
+    /// The node URL used for root syncing.
+    node_url: Arc<String>,
+    /// Whether the node is currently reachable.
+    node_connected: Arc<RwLock<bool>>,
+}
+
+// =============================================================================
+// Node Client
+// =============================================================================
+
+/// Response shape from the node's GET /status endpoint.
+#[derive(serde::Deserialize)]
+struct NodeStatusResponse {
+    healthy: bool,
+    latest_height: u64,
+    #[allow(dead_code)]
+    peer_count: usize,
+}
+
+/// Response shape from the node's GET /federation/roots endpoint.
+#[derive(serde::Deserialize)]
+struct AttestedRootInfo {
+    #[allow(dead_code)]
+    height: u64,
+    merkle_root: String,
+    #[allow(dead_code)]
+    timestamp: i64,
+    #[allow(dead_code)]
+    signatures: usize,
+}
+
+/// Fetch the latest federation root from a running node.
+///
+/// Queries `/federation/roots` and returns the merkle_root of the highest-height
+/// attested root. Falls back to `/status` to verify the node is reachable.
+async fn fetch_federation_root(node_url: &str) -> Result<[u8; 32], String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| format!("failed to build HTTP client: {e}"))?;
+
+    // First verify the node is healthy.
+    let status_url = format!("{node_url}/status");
+    let status: NodeStatusResponse = client
+        .get(&status_url)
+        .send()
+        .await
+        .map_err(|e| format!("node unreachable at {status_url}: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("invalid status response: {e}"))?;
+
+    if !status.healthy {
+        return Err("node reports unhealthy status".to_string());
+    }
+
+    // Fetch attested roots.
+    let roots_url = format!("{node_url}/federation/roots");
+    let roots: Vec<AttestedRootInfo> = client
+        .get(&roots_url)
+        .send()
+        .await
+        .map_err(|e| format!("failed to fetch federation roots: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("invalid federation roots response: {e}"))?;
+
+    if roots.is_empty() {
+        return Err(format!(
+            "node at height {} has no attested roots yet",
+            status.latest_height
+        ));
+    }
+
+    // Use the last root (highest height, the list is ordered).
+    let latest = roots.last().unwrap();
+    let root = hex_to_bytes32(&latest.merkle_root)
+        .map_err(|e| format!("invalid merkle_root hex from node: {e}"))?;
+
+    if root == [0u8; 32] {
+        return Err("node returned zeroed federation root".to_string());
+    }
+
+    Ok(root)
+}
+
+/// Background task that periodically syncs the federation root from the node.
+async fn root_sync_task(state: AppState, interval_secs: u64) {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+    // Skip the first immediate tick (we already fetched on startup).
+    interval.tick().await;
+
+    loop {
+        interval.tick().await;
+
+        match fetch_federation_root(&state.node_url).await {
+            Ok(new_root) => {
+                let old_root = *state.federation_root.read().await;
+                *state.federation_root.write().await = new_root;
+                *state.root_last_updated.write().await = Some(Instant::now());
+                *state.node_connected.write().await = true;
+
+                if new_root != old_root {
+                    info!(
+                        root = %bytes32_to_hex(&new_root),
+                        "federation root updated from node"
+                    );
+                }
+            }
+            Err(e) => {
+                *state.node_connected.write().await = false;
+                warn!(error = %e, "failed to sync federation root from node");
+            }
+        }
+    }
 }
 
 // =============================================================================
@@ -91,15 +214,15 @@ async fn main() {
 
     let args = Args::parse();
 
-    // Resolve federation root.
-    let federation_root = match &args.federation_root {
+    // Resolve federation root: explicit > node fetch > dev fallback.
+    let (federation_root, root_updated) = match &args.federation_root {
         Some(hex) => match parse_federation_root(hex) {
             Ok(root) => {
                 info!(
                     root = %bytes32_to_hex(&root),
-                    "federation root configured (from PYANA_FEDERATION_ROOT)"
+                    "federation root configured (explicit)"
                 );
-                root
+                (root, Some(Instant::now()))
             }
             Err(e) => {
                 error!("{e}");
@@ -107,30 +230,55 @@ async fn main() {
             }
         },
         None => {
-            if args.dev {
-                warn!(
-                    "running in --dev mode with zeroed federation root; federation membership proofs will be rejected"
-                );
-                [0u8; 32]
-            } else {
-                error!(
-                    "no federation root configured. Set PYANA_FEDERATION_ROOT or --federation-root, or use --dev for testing without verification."
-                );
-                std::process::exit(1);
+            // Try fetching from the node.
+            info!(node_url = %args.node_url, "fetching federation root from node...");
+            match fetch_federation_root(&args.node_url).await {
+                Ok(root) => {
+                    info!(
+                        root = %bytes32_to_hex(&root),
+                        node_url = %args.node_url,
+                        "federation root fetched from node"
+                    );
+                    (root, Some(Instant::now()))
+                }
+                Err(e) => {
+                    if args.dev {
+                        warn!(
+                            error = %e,
+                            "could not reach node; running in --dev mode with zeroed federation root"
+                        );
+                        ([0u8; 32], None)
+                    } else {
+                        error!(
+                            "failed to fetch federation root from node: {e}\n\
+                             Hint: start the devnet first, or pass --federation-root explicitly, \
+                             or use --dev for testing without verification."
+                        );
+                        std::process::exit(1);
+                    }
+                }
             }
         }
     };
 
+    let node_connected = federation_root != [0u8; 32];
+
     let state = AppState {
         board: BoardState::new(),
         federation_root: Arc::new(RwLock::new(federation_root)),
+        root_last_updated: Arc::new(RwLock::new(root_updated)),
         engine: Arc::new(RwLock::new(PyanaEngine::new(EngineConfig::new(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0),
         )))),
+        node_url: Arc::new(args.node_url.clone()),
+        node_connected: Arc::new(RwLock::new(node_connected)),
     };
+
+    // Spawn background root sync task.
+    tokio::spawn(root_sync_task(state.clone(), args.sync_interval));
 
     let app = Router::new()
         // Bounty lifecycle
@@ -597,6 +745,7 @@ async fn set_federation_root(
                 );
             }
             *state.federation_root.write().await = root;
+            *state.root_last_updated.write().await = Some(Instant::now());
             info!(root = %bytes32_to_hex(&root), "federation root updated via admin endpoint");
             (StatusCode::OK, Json(json!({"root": bytes32_to_hex(&root)})))
         }
@@ -607,7 +756,54 @@ async fn set_federation_root(
     }
 }
 
-/// GET /health — health check.
-async fn health_check() -> impl IntoResponse {
-    Json(json!({"status": "ok", "service": "pyana-bounty-board"}))
+/// GET /health — comprehensive health check.
+///
+/// Returns app status, federation root info, bounty counts, and node connection status.
+async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
+    let federation_root = *state.federation_root.read().await;
+    let root_last_updated = *state.root_last_updated.read().await;
+    let node_connected = *state.node_connected.read().await;
+
+    let root_age_secs = root_last_updated.map(|t| t.elapsed().as_secs());
+
+    // Count bounties by status.
+    let all_bounties = state
+        .board
+        .list_bounties(&BountyFilter::default())
+        .await;
+    let open = all_bounties.iter().filter(|b| b.status == "open").count();
+    let claimed = all_bounties.iter().filter(|b| b.status == "claimed").count();
+    let submitted = all_bounties
+        .iter()
+        .filter(|b| b.status == "submitted")
+        .count();
+    let paid = all_bounties.iter().filter(|b| b.status == "paid").count();
+    let expired = all_bounties
+        .iter()
+        .filter(|b| b.status == "expired")
+        .count();
+
+    let root_is_live = federation_root != [0u8; 32];
+
+    Json(json!({
+        "status": "running",
+        "service": "pyana-bounty-board",
+        "federation_root": {
+            "value": bytes32_to_hex(&federation_root),
+            "live": root_is_live,
+            "last_updated_secs_ago": root_age_secs,
+        },
+        "bounties": {
+            "total": all_bounties.len(),
+            "open": open,
+            "claimed": claimed,
+            "submitted": submitted,
+            "paid": paid,
+            "expired": expired,
+        },
+        "node": {
+            "url": state.node_url.as_str(),
+            "connected": node_connected,
+        }
+    }))
 }

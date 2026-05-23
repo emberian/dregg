@@ -84,6 +84,11 @@ use groestl_crypto::Groestl256;
 ///
 /// Binius proofs are significantly smaller than BabyBear STARK proofs
 /// for hash-intensive computations (like Merkle membership).
+///
+/// **Note on structural stubs:** When the `binius` feature is disabled, this type holds
+/// simulated proof bytes that cannot pass cryptographic verification. Stub proofs are
+/// naturally rejected by any verifier that performs real proof verification. No separate
+/// tier check is needed to reject them.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BiniusProof {
     /// The raw proof transcript bytes.

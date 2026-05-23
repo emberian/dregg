@@ -39,6 +39,7 @@ getrandom = { workspace = true }
 uuid = { version = "1", features = ["v4"] }
 ed25519-dalek = { version = "2", features = ["std"] }
 quinn = { version = "0.11", features = ["runtime-tokio", "rustls-ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 blake3 = "1"
 argon2 = "0.5"
 subtle = { workspace = true }

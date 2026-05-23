@@ -49,7 +49,7 @@ pub use present::{
     BridgeCommittedThresholdProof, BridgePredicateProof, BridgePredicateProofInner,
     BridgePresentationBuilder, BridgePresentationProof, DEFAULT_MAX_PROOF_AGE_SECS,
     FederationRegistry, Predicate, ProgramProveError, UnsafeLocalOnlyMarker, VerifiedPresentation,
-    VerifyError, WirePresentationProof, bb_from_bytes, bb_to_bytes,
+    VerifierConfig, VerifyError, WirePresentationProof, bb_from_bytes, bb_to_bytes,
     compute_revealed_facts_commitment, prove_committed_threshold, prove_predicate_for_fact,
     prove_predicate_program, prove_predicate_program_full, verify_committed_threshold_proof,
     verify_fold_chain, verify_predicate_program, verify_predicate_proof,
