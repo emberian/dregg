@@ -572,6 +572,7 @@ async fn tool_submit_turn(params: &Value, state: &NodeState) -> McpToolResult {
         call_forest: forest,
         depends_on: vec![],
         previous_receipt_hash: None,
+        conservation_proof: None,
     };
 
     let signed = s.wallet.sign_turn(&turn);
@@ -702,6 +703,7 @@ async fn tool_grant_capability(params: &Value, state: &NodeState) -> McpToolResu
         call_forest: build_forest_with_effects(agent_cell_id, vec![effect]),
         depends_on: vec![],
         previous_receipt_hash: None,
+        conservation_proof: None,
     };
 
     let signed = s.wallet.sign_turn(&turn);
@@ -780,6 +782,7 @@ async fn tool_revoke_capability(params: &Value, state: &NodeState) -> McpToolRes
         call_forest: build_forest_with_effects(agent_cell_id, vec![effect]),
         depends_on: vec![],
         previous_receipt_hash: None,
+        conservation_proof: None,
     };
 
     let signed = s.wallet.sign_turn(&turn);
@@ -1109,6 +1112,7 @@ async fn tool_delegate(params: &Value, state: &NodeState) -> McpToolResult {
         call_forest: build_forest_with_effects(agent_cell_id, vec![effect]),
         depends_on: vec![],
         previous_receipt_hash: None,
+        conservation_proof: None,
     };
 
     let signed = s.wallet.sign_turn(&turn);
@@ -1457,6 +1461,7 @@ async fn tool_bridge_note(params: &Value, state: &NodeState) -> McpToolResult {
         call_forest: build_forest_with_effects(agent_cell_id, vec![effect]),
         depends_on: vec![],
         previous_receipt_hash: None,
+        conservation_proof: None,
     };
 
     let signed = s.wallet.sign_turn(&turn);

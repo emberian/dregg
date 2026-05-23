@@ -476,6 +476,15 @@ pub enum Effect {
         /// The effects to perform on the target cell (resolved from the capability).
         inner_effects: Vec<Effect>,
     },
+    /// Transition a hosted cell to sovereign mode.
+    ///
+    /// When executed: moves the cell from `cells` to `sovereign_commitments`
+    /// (stores only the 32-byte state commitment, deletes the full state).
+    /// The agent becomes responsible for maintaining and providing cell state.
+    MakeSovereign {
+        /// The cell to make sovereign.
+        cell: CellId,
+    },
 }
 
 /// An event emitted by an action.
@@ -984,6 +993,10 @@ impl Effect {
                     hasher.update(&inner.hash());
                 }
             }
+            Effect::MakeSovereign { cell } => {
+                hasher.update(&[35u8]);
+                hasher.update(cell.as_bytes());
+            }
         }
         *hasher.finalize().as_bytes()
     }
@@ -1078,6 +1091,7 @@ impl Effect {
             Effect::ExerciseViaCapability { inner_effects, .. } => {
                 4 + inner_effects.iter().map(|e| e.data_bytes()).sum::<usize>()
             }
+            Effect::MakeSovereign { .. } => 32, // cell id
         }
     }
 

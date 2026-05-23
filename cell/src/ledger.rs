@@ -130,6 +130,18 @@ pub enum LedgerError {
     TransferSourceNotFound(CellId),
     /// Transfer destination cell not found.
     TransferDestNotFound(CellId),
+    /// Attempted to operate on a sovereign cell without providing a witness.
+    SovereignWitnessRequired(CellId),
+    /// The provided sovereign witness commitment does not match the stored commitment.
+    SovereignCommitmentMismatch {
+        cell_id: CellId,
+        expected: [u8; 32],
+        got: [u8; 32],
+    },
+    /// Attempted to register a sovereign cell that already exists (hosted or sovereign).
+    SovereignAlreadyExists(CellId),
+    /// The cell is not sovereign.
+    NotSovereign(CellId),
 }
 
 impl core::fmt::Display for LedgerError {
@@ -159,6 +171,26 @@ impl core::fmt::Display for LedgerError {
             LedgerError::TransferDestNotFound(id) => {
                 write!(f, "transfer destination not found: {id}")
             }
+            LedgerError::SovereignWitnessRequired(id) => {
+                write!(f, "sovereign cell requires witness: {id}")
+            }
+            LedgerError::SovereignCommitmentMismatch {
+                cell_id,
+                expected,
+                got,
+            } => {
+                write!(
+                    f,
+                    "sovereign commitment mismatch for cell {cell_id}: expected {:02x}{:02x}..., got {:02x}{:02x}...",
+                    expected[0], expected[1], got[0], got[1]
+                )
+            }
+            LedgerError::SovereignAlreadyExists(id) => {
+                write!(f, "sovereign cell already exists: {id}")
+            }
+            LedgerError::NotSovereign(id) => {
+                write!(f, "cell is not sovereign: {id}")
+            }
         }
     }
 }
@@ -178,6 +210,9 @@ impl std::error::Error for LedgerError {}
 #[derive(Clone, Debug)]
 pub struct Ledger {
     cells: HashMap<CellId, Cell>,
+    /// Sovereign cells: federation stores only a 32-byte state commitment.
+    /// The agent must provide the full cell state in each turn as a witness.
+    sovereign_commitments: HashMap<CellId, [u8; 32]>,
     /// Sorted leaf positions: CellId -> index in the leaf layer.
     leaf_positions: BTreeMap<[u8; 32], usize>,
     /// The Merkle tree nodes, indexed by level then position.
@@ -195,6 +230,7 @@ impl Ledger {
     pub fn new() -> Self {
         Ledger {
             cells: HashMap::new(),
+            sovereign_commitments: HashMap::new(),
             leaf_positions: BTreeMap::new(),
             tree_levels: Vec::new(),
             root: Self::compute_empty_root(),
@@ -938,6 +974,61 @@ impl Ledger {
             self.dirty = true;
         }
         cell
+    }
+
+    // =========================================================================
+    // Sovereign cell support (Phase 1a)
+    // =========================================================================
+
+    /// Register a cell as sovereign, storing only its initial state commitment.
+    ///
+    /// The cell must not already exist in either the hosted cells or the sovereign
+    /// commitments map.
+    pub fn register_sovereign_cell(
+        &mut self,
+        id: CellId,
+        initial_commitment: [u8; 32],
+    ) -> Result<(), LedgerError> {
+        if self.cells.contains_key(&id) || self.sovereign_commitments.contains_key(&id) {
+            return Err(LedgerError::SovereignAlreadyExists(id));
+        }
+        self.sovereign_commitments.insert(id, initial_commitment);
+        Ok(())
+    }
+
+    /// Get the stored commitment for a sovereign cell.
+    pub fn get_sovereign_commitment(&self, id: &CellId) -> Option<&[u8; 32]> {
+        self.sovereign_commitments.get(id)
+    }
+
+    /// Update the stored commitment for a sovereign cell after a verified transition.
+    pub fn update_sovereign_commitment(
+        &mut self,
+        id: &CellId,
+        new_commitment: [u8; 32],
+    ) -> Result<(), LedgerError> {
+        if !self.sovereign_commitments.contains_key(id) {
+            return Err(LedgerError::NotSovereign(*id));
+        }
+        self.sovereign_commitments.insert(*id, new_commitment);
+        Ok(())
+    }
+
+    /// Check whether a cell ID refers to a sovereign cell.
+    pub fn is_sovereign(&self, id: &CellId) -> bool {
+        self.sovereign_commitments.contains_key(id)
+    }
+
+    /// Move a hosted cell to sovereign mode. Stores only the state commitment
+    /// and removes the full cell state from the hosted store.
+    ///
+    /// Returns the removed cell on success.
+    pub fn make_sovereign(&mut self, id: &CellId) -> Result<Cell, LedgerError> {
+        let cell = self.cells.remove(id).ok_or(LedgerError::CellNotFound(*id))?;
+        let commitment = cell.state_commitment();
+        self.sovereign_commitments.insert(*id, commitment);
+        self.dirty = true;
+        Ok(cell)
     }
 }
 

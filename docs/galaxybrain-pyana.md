@@ -105,12 +105,124 @@ This does not require a rewrite. It can be a gradual transition:
 
 Pyana's sovereign model is closest to a "rollup per agent" where each agent is their own sequencer, the federation is their DA + verification layer, and multi-party interactions use atomic cross-rollup proofs (which we already have as TurnComposer).
 
+## The Radical Endpoint: Zero Federation Storage
+
+Phase 1-5 above still assumes the federation stores ONE commitment per cell. But even that isn't necessary.
+
+**A sovereign cell that only interacts with parties it already knows doesn't need the federation AT ALL.**
+
+The federation's role reduces to exactly four functions:
+1. **Ordering** — when two sovereign cells interact with the SAME third party and order matters
+2. **Double-spend prevention** — when a sovereign cell spends a note from the shared nullifier set
+3. **Discovery** — when you need to find someone you don't already know
+4. **Root anchoring** — periodic checkpoints so you can prove to strangers "my state was valid as of height H"
+
+Between two parties who already know each other? They exchange signed state transitions directly. No federation contact. No registration. No storage footprint.
+
+### Fully offline cells
+
+```
+Sovereign cell exists NOWHERE in the federation by default.
+
+Peer-to-peer interaction (Alice ↔ Bob, no federation):
+  Alice sends: (old_commitment_A, new_commitment_A, transition_proof, signed)
+  Bob verifies: proof is valid, Alice's signature matches
+  Bob updates his local view of Alice's state
+  Federation is never contacted. Storage cost: 0 bytes.
+
+On-demand federation interaction (Alice needs ordering/anchoring):
+  1. Alice registers her current commitment (32 bytes) — ephemeral
+  2. She submits her proof-carrying turn
+  3. Federation verifies, orders if needed, updates commitment
+  4. Alice deregisters (or commitment expires after N blocks of inactivity)
+  Storage cost: 32 bytes, temporary.
+```
+
+### Peer-to-peer state exchange protocol
+
+For two parties who know each other:
+
+```rust
+struct PeerStateTransition {
+    cell_id: CellId,
+    old_commitment: [u8; 32],
+    new_commitment: [u8; 32],
+    transition_proof: StarkProof,  // proves validity of the transition
+    signature: [u8; 64],          // signs the whole thing
+}
+```
+
+Alice sends this to Bob. Bob verifies:
+- Signature matches Alice's known public key
+- `old_commitment` matches what Bob last saw from Alice
+- `transition_proof` verifies (STARK: the state transition is valid)
+- Bob stores `new_commitment` as Alice's current state
+
+No blockchain. No consensus. No federation. Just two agents exchanging proofs.
+
+### When do you need the federation?
+
+| Situation | Need federation? | Why |
+|-----------|-----------------|-----|
+| Alice transfers private note to Bob (they know each other) | NO | Direct exchange, both verify locally |
+| Alice exercises capability on Bob's cell (they know each other) | NO | Proof-carrying capability exercise |
+| Alice wants to prove to a STRANGER that her state is valid | YES | Needs an attested root anchor |
+| Alice spends a note from the shared note tree | YES | Nullifier ordering (double-spend) |
+| Alice and Bob disagree on state (dispute) | YES | Need arbiter with ordering authority |
+| Alice wants to be discoverable (intent posting) | YES | Gossip network for discovery |
+| Alice trades on a public DEX (hosted cell) | YES | DEX state is federation-maintained |
+
+Most routine agent-to-agent interactions DON'T need the federation. The federation is more like a notary or DNS server — you use it when you need to prove something to strangers or resolve disputes, not for every operation.
+
+### Proof-carrying capability exercise (no federation)
+
+Alice holds a capability to Bob's cell. She wants to exercise it:
+
+```
+Alice → Bob:
+  "Here's my current state (commitment + proof that I hold cap to your cell).
+   Here's the transition I want (effect on your cell).
+   Here's my proof that my state allows this."
+
+Bob verifies locally:
+  - Alice's state commitment is what he last knew
+  - Alice's proof shows she holds a valid cap (in her own c-list)
+  - The requested effect is within the cap's permissions
+  - Bob executes the effect on HIS cell
+  - Bob sends Alice an ack with his new commitment
+```
+
+The federation never participates. Bob is the "verifier" for effects on his own cell. This is literally the E capability model: objects verify their own incoming messages.
+
+### Eventual federation sync (insurance, not requirement)
+
+Agents CAN periodically anchor their state:
+- Every N minutes (or after K transitions): register current commitment with federation
+- This creates an "attested checkpoint" provable to strangers
+- Between checkpoints: peer-to-peer only
+
+Think of it like git: you work locally, push when you want others to have a reference point. You don't push every keystroke.
+
+### What this means for the codebase
+
+The `Ledger` type becomes optional infrastructure, not a requirement. The core protocol is:
+- `Cell` (local state)
+- `StarkProof` (transition validity)
+- `Signature` (authentication)
+- `PeerStateTransition` (the wire format between agents)
+
+The federation crates (federation, morpheus, coord) become a LAYER on top — used when needed, not for everything.
+
 ## Open Questions
 
-1. **Witness freshness.** When Alice's Merkle witness is stale (someone else's cell updated, changing the root), how does she learn the new path? The federation must serve witness-update diffs, or Alice subscribes to commitment-tree changes.
+1. **Witness freshness.** When Alice's Merkle witness is stale (someone else's cell updated, changing the root), how does she learn the new path? The federation must serve witness-update diffs, or Alice subscribes to commitment-tree changes. (NOTE: this only matters when Alice registers — which is optional/infrequent.)
 
-2. **Revocation without revelation.** Can we build a revocation scheme where the federation enforces "this cap is revoked" without seeing the cap? Possibly via nullifier-style revocation: revoking a cap publishes a revocation-nullifier, and proofs must demonstrate non-membership in the revocation set.
+2. **Revocation without revelation.** Can we build a revocation scheme where the federation enforces "this cap is revoked" without seeing the cap? Possibly via nullifier-style revocation: revoking a cap publishes a revocation-nullifier, and proofs must demonstrate non-membership in the revocation set. For peer-to-peer interactions, revocation can be communicated directly.
 
 3. **Hybrid cell coordination.** When a sovereign cell interacts with a hosted cell (e.g., a private agent trades on a public DEX), what does the proof interface look like? The hosted cell's state is visible; the sovereign cell's is not. Asymmetric proof requirements.
 
-4. **Recovery.** If an agent loses their local state, they lose everything. The federation stores only a hash. Recovery requires backups, social recovery, or encrypted state escrow -- none of which currently exist.
+4. **Recovery.** If an agent loses their local state, they lose everything. The federation stores only a hash (if registered at all). Recovery requires backups, social recovery, or encrypted state escrow.
+
+5. **Offline conflict resolution.** If Alice sends conflicting state transitions to Bob and Carol (equivocation), they can't detect it without communicating. The federation resolves this via ordering — but only if both register. Peer-to-peer-only agents are vulnerable to equivocation until they anchor.
+
+6. **Bootstrap.** A brand-new agent has no peers, no state, no reputation. How do they enter the system? Probably: register with the federation initially (like creating an account), then go sovereign once they have peers who know them.

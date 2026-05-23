@@ -7,6 +7,22 @@ use crate::permissions::Permissions;
 use crate::program::CellProgram;
 use crate::state::CellState;
 
+/// Whether a cell's full state is stored by the federation or only a commitment.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CellMode {
+    /// Federation stores full cell state (current behavior).
+    Hosted,
+    /// Federation stores only a 32-byte state commitment.
+    /// The agent must provide cell state in each turn.
+    Sovereign,
+}
+
+impl Default for CellMode {
+    fn default() -> Self {
+        CellMode::Hosted
+    }
+}
+
 /// A verification key associated with a cell's proof circuit.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VerificationKey {
@@ -57,6 +73,11 @@ pub struct Cell {
     /// The cell's program: defines valid state transitions.
     /// If `CellProgram::None`, any authorized state change is valid (backward compat).
     pub program: CellProgram,
+    /// Whether this cell is hosted (federation stores full state) or sovereign
+    /// (federation stores only a 32-byte commitment). Defaults to Hosted for
+    /// backward compatibility with existing serialized cells.
+    #[serde(default)]
+    pub mode: CellMode,
 }
 
 impl Cell {
@@ -74,6 +95,7 @@ impl Cell {
             token_id,
             capabilities: CapabilitySet::new(),
             program: CellProgram::None,
+            mode: CellMode::Hosted,
         }
     }
 
@@ -91,7 +113,64 @@ impl Cell {
             token_id,
             capabilities: CapabilitySet::new(),
             program: CellProgram::None,
+            mode: CellMode::Hosted,
         }
+    }
+
+    /// Compute the BLAKE3 commitment to this cell's current state.
+    ///
+    /// This is the 32-byte value stored by the federation for sovereign cells.
+    /// It commits to the cell's identity, nonce, balance, fields, capabilities,
+    /// and permissions — everything needed to verify a state transition.
+    pub fn state_commitment(&self) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new_derive_key("pyana-cell-state-v1");
+        hasher.update(&self.id.0);
+        hasher.update(&self.public_key);
+        hasher.update(&self.token_id);
+        hasher.update(&self.state.nonce.to_le_bytes());
+        hasher.update(&self.state.balance.to_le_bytes());
+        for field in &self.state.fields {
+            hasher.update(field);
+        }
+        // Include capabilities count and content.
+        let cap_count = self.capabilities.len() as u64;
+        hasher.update(&cap_count.to_le_bytes());
+        for cap in self.capabilities.iter() {
+            hasher.update(cap.target.as_bytes());
+            hasher.update(&cap.slot.to_le_bytes());
+        }
+        // Include permissions.
+        let perm_fields = [
+            &self.permissions.send,
+            &self.permissions.receive,
+            &self.permissions.set_state,
+            &self.permissions.set_permissions,
+            &self.permissions.set_verification_key,
+            &self.permissions.increment_nonce,
+            &self.permissions.delegate,
+            &self.permissions.access,
+        ];
+        for perm in perm_fields {
+            let perm_byte = match perm {
+                crate::permissions::AuthRequired::None => 0u8,
+                crate::permissions::AuthRequired::Signature => 1u8,
+                crate::permissions::AuthRequired::Proof => 2u8,
+                crate::permissions::AuthRequired::Either => 3u8,
+                crate::permissions::AuthRequired::Impossible => 4u8,
+            };
+            hasher.update(&[perm_byte]);
+        }
+        // Include verification key hash if present.
+        match &self.verification_key {
+            Some(vk) => {
+                hasher.update(&[1u8]);
+                hasher.update(&vk.hash);
+            }
+            None => {
+                hasher.update(&[0u8]);
+            }
+        }
+        *hasher.finalize().as_bytes()
     }
 
     /// Create a child cell delegated to this cell.
@@ -108,6 +187,7 @@ impl Cell {
             token_id: child_token_id,
             capabilities: CapabilitySet::new(),
             program: CellProgram::None,
+            mode: CellMode::Hosted,
         }
     }
 
@@ -150,6 +230,7 @@ impl Cell {
             token_id: child_token_id,
             capabilities: CapabilitySet::new(),
             program: CellProgram::None,
+            mode: CellMode::Hosted,
         }
     }
 }

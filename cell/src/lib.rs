@@ -39,7 +39,7 @@ mod tests;
 
 // Re-exports for convenience.
 pub use capability::{AttenuatedCap, CapabilityRef, CapabilitySet, is_attenuation};
-pub use cell::{Cell, VerificationKey};
+pub use cell::{Cell, CellMode, VerificationKey};
 pub use delegation::DelegatedRef;
 pub use derivation::{
     DerivationEdge, DerivationNode, DerivationRecord, DerivationTree, DerivationType,
