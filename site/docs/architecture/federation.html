@@ -99,8 +99,9 @@
 
     <h3>Single Federation</h3>
     <p>
-      The simplest deployment: N nodes (typically 4-7) run Morpheus consensus together,
-      producing attested roots at regular intervals.
+      The simplest deployment: N nodes (typically 4-7) run Blocklace consensus with
+      Cordial Miners, producing attested roots at regular intervals. A single-node
+      federation (n=1) is the same code path -- no special "solo mode."
     </p>
 
     <h3>Cross-Federation</h3>
@@ -111,7 +112,14 @@
       <li><strong>Attested roots</strong> -- So agents in federation A can verify proofs from federation B</li>
       <li><strong>Revocations</strong> -- Token revocations propagate across boundaries</li>
       <li><strong>Receipts</strong> -- State proofs can reference cross-federation transitions</li>
-      <li><strong>Conditional proofs</strong> -- Atomic cross-federation operations</li>
+      <li><strong>Conditional proofs</strong> -- Atomic cross-federation operations via ConditionalTurn + ProofObligation</li>
+    </ul>
+
+    <h3>External Chains</h3>
+    <ul>
+      <li><strong>EVM (Base Sepolia):</strong> SP1 wraps STARK proofs in Groth16 for ~200k gas on-chain verification</li>
+      <li><strong>Midnight:</strong> Level 1 attestation bridge (implemented) + Level 2 ZKIR proof-carrying (designed)</li>
+      <li><strong>Mina:</strong> Native Pickles recursion via STARK-in-Pickles pipeline</li>
     </ul>
 
     <h2 id="exit">Federation Exit and Sovereignty</h2>
@@ -125,6 +133,24 @@
       For hosted cells, export the receipt chain (or IVC-compressed constant-size proof).
       Any verifier can check the chain's integrity without contacting the original
       federation.
+    </p>
+
+    <h2 id="persistence">Persistence</h2>
+
+    <p>
+      Nodes survive restarts via redb (ACID, WAL, crash-safe embedded database):
+    </p>
+
+    <ul>
+      <li><strong>Blocklace blocks:</strong> Persisted incrementally. On restart, the node
+          reconstructs its DAG view.</li>
+      <li><strong>Ledger checkpoints:</strong> Full state snapshot every 100 committed blocks.</li>
+      <li><strong>App state:</strong> JSON atomic snapshots for application services.</li>
+    </ul>
+
+    <p>
+      New nodes fast-sync by fetching the latest checkpoint instead of replaying
+      the full Blocklace history.
     </p>
 
     <div class="stub-notice">

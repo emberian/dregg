@@ -1680,3 +1680,17 @@ pub fn verify_arithmetic_dsl(
     let pi = vec![threshold, fact_commitment];
     stark::verify(&circuit, &proof.stark_proof, &pi)
 }
+
+/// Backward-compatible alias for `verify_arithmetic_dsl`.
+pub fn verify_arithmetic_predicate(
+    proof: &ArithmeticPredicateProof,
+    threshold: BabyBear,
+    fact_commitment: BabyBear,
+) -> Result<(), String> {
+    verify_arithmetic_dsl(proof, threshold, fact_commitment)
+}
+
+/// Backward-compatible: compute fact commitment for arithmetic predicates.
+pub fn compute_arithmetic_fact_commitment(fact_hash: BabyBear, state_root: BabyBear) -> BabyBear {
+    crate::poseidon2::hash_2_to_1(fact_hash, state_root)
+}

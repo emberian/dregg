@@ -59,14 +59,415 @@ pub const FOLD_DSL_WIDTH: usize = 13;
 pub const FOLD_DSL_PI_COUNT: usize = 6;
 
 // ============================================================================
-// Witness types (shared, moved from fold_types)
+// Witness types (previously in fold_types.rs, now inlined here)
 // ============================================================================
 
-pub use crate::fold_types::{
-    FoldAir, FoldWitness, RemovedFact, build_membership_proof, build_shared_tree,
-    compute_root_transition_hash, compute_test_checks_commitment, create_test_fold,
-    verify_root_transition,
-};
+use crate::constraint_prover::{Air, Constraint, ConstraintProver};
+use crate::merkle_types::{MerkleAir, MerkleLevelWitness, MerkleWitness};
+use crate::poseidon2::{hash_4_to_1, hash_fact, hash_many};
+
+pub const FOLD_AIR_WIDTH: usize = 12;
+
+#[derive(Clone, Debug)]
+pub struct RemovedFact {
+    pub predicate: BabyBear,
+    pub terms: [BabyBear; 3],
+    pub membership_proof: Option<MerkleWitness>,
+}
+
+impl RemovedFact {
+    pub fn hash(&self) -> BabyBear {
+        hash_fact(self.predicate, &self.terms)
+    }
+
+    pub fn verify_membership(&self, old_root: BabyBear) -> Option<BabyBear> {
+        let proof = self.membership_proof.as_ref()?;
+        if proof.leaf_hash != self.hash() {
+            return None;
+        }
+        let air = MerkleAir::new(proof.clone());
+        let result = ConstraintProver::verify(&air);
+        if !result.is_valid() {
+            return None;
+        }
+        if proof.expected_root != old_root {
+            return None;
+        }
+        Some(proof.expected_root)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct FoldWitness {
+    pub old_root: BabyBear,
+    pub new_root: BabyBear,
+    pub removed_facts: Vec<RemovedFact>,
+    pub num_added_checks: usize,
+    pub added_checks_commitment: crate::binding::WideHash,
+}
+
+pub fn compute_root_transition_hash(
+    old_root: BabyBear,
+    new_root: BabyBear,
+    removed_fact_hashes: &[BabyBear],
+    added_checks_commitment: &crate::binding::WideHash,
+) -> BabyBear {
+    let mut elements = Vec::with_capacity(3 + removed_fact_hashes.len() + 4);
+    elements.push(old_root);
+    elements.push(new_root);
+    elements.extend_from_slice(removed_fact_hashes);
+    elements.extend_from_slice(added_checks_commitment.as_slice());
+    hash_many(&elements)
+}
+
+pub fn verify_root_transition(witness: &FoldWitness) -> Option<BabyBear> {
+    for fact in &witness.removed_facts {
+        if fact.verify_membership(witness.old_root).is_none() {
+            return None;
+        }
+    }
+    let fact_hashes: Vec<BabyBear> = witness.removed_facts.iter().map(|f| f.hash()).collect();
+    Some(compute_root_transition_hash(
+        witness.old_root,
+        witness.new_root,
+        &fact_hashes,
+        &witness.added_checks_commitment,
+    ))
+}
+
+pub struct FoldAir {
+    pub witness: FoldWitness,
+}
+
+impl FoldAir {
+    pub fn new(witness: FoldWitness) -> Self {
+        Self { witness }
+    }
+}
+
+impl Air for FoldAir {
+    fn trace_width(&self) -> usize {
+        FOLD_AIR_WIDTH
+    }
+    fn num_public_inputs(&self) -> usize {
+        6
+    }
+
+    fn constraints(&self) -> Vec<Constraint> {
+        vec![
+            Constraint {
+                name: "row_type_binary".into(),
+                eval: Box::new(|row, _, _| {
+                    let rt = row[col::ROW_TYPE];
+                    rt * (rt - BabyBear::ONE)
+                }),
+            },
+            Constraint {
+                name: "membership_root_matches_old_root".into(),
+                eval: Box::new(|row, _, _| {
+                    let is_removal = BabyBear::ONE - row[col::ROW_TYPE];
+                    is_removal * (row[col::MEMBERSHIP_ROOT] - row[col::OLD_ROOT])
+                }),
+            },
+            Constraint {
+                name: "hash_valid_binary".into(),
+                eval: Box::new(|row, _, _| {
+                    let hv = row[col::HASH_VALID];
+                    hv * (hv - BabyBear::ONE)
+                }),
+            },
+            Constraint {
+                name: "removal_hash_required".into(),
+                eval: Box::new(|row, _, _| {
+                    let is_removal = BabyBear::ONE - row[col::ROW_TYPE];
+                    is_removal * (BabyBear::ONE - row[col::HASH_VALID])
+                }),
+            },
+            Constraint {
+                name: "fact_hash_correct".into(),
+                eval: Box::new(|row, _, _| {
+                    let is_removal = BabyBear::ONE - row[col::ROW_TYPE];
+                    let expected = hash_fact(
+                        row[col::FACT_PRED],
+                        &[
+                            row[col::FACT_TERM_START],
+                            row[col::FACT_TERM_START + 1],
+                            row[col::FACT_TERM_START + 2],
+                        ],
+                    );
+                    is_removal * (row[col::FACT_HASH] - expected)
+                }),
+            },
+            Constraint {
+                name: "old_root_consistent".into(),
+                eval: Box::new(|row, _, pi| row[col::OLD_ROOT] - pi[0]),
+            },
+            Constraint {
+                name: "new_root_consistent".into(),
+                eval: Box::new(|row, _, pi| row[col::NEW_ROOT] - pi[1]),
+            },
+            Constraint {
+                name: "removal_count_increment".into(),
+                eval: Box::new(|row, next_row, _| {
+                    if let Some(next) = next_row {
+                        let is_removal = BabyBear::ONE - row[col::ROW_TYPE];
+                        let is_next_removal = BabyBear::ONE - next[col::ROW_TYPE];
+                        is_removal
+                            * is_next_removal
+                            * (next[col::REMOVAL_COUNT] - row[col::REMOVAL_COUNT] - BabyBear::ONE)
+                    } else {
+                        BabyBear::ZERO
+                    }
+                }),
+            },
+            Constraint {
+                name: "delta_nonempty".into(),
+                eval: Box::new(|row, _, _| {
+                    let is_summary = row[col::ROW_TYPE];
+                    let total = row[col::REMOVAL_COUNT] + row[col::CHECK_COUNT];
+                    if is_summary == BabyBear::ONE && total == BabyBear::ZERO {
+                        BabyBear::ONE
+                    } else {
+                        BabyBear::ZERO
+                    }
+                }),
+            },
+            Constraint {
+                name: "root_transition_binding".into(),
+                eval: Box::new(|row, _, pi| {
+                    let is_summary = row[col::ROW_TYPE];
+                    is_summary * (row[col::MEMBERSHIP_ROOT] - pi[4])
+                }),
+            },
+            Constraint {
+                name: "checks_commitment_zero_when_no_checks".into(),
+                eval: Box::new(|row, _, pi| {
+                    let is_summary = row[col::ROW_TYPE];
+                    if pi[3] == BabyBear::ZERO {
+                        is_summary * pi[5]
+                    } else {
+                        BabyBear::ZERO
+                    }
+                }),
+            },
+        ]
+    }
+
+    fn first_row_constraints(&self) -> Vec<Constraint> {
+        vec![Constraint {
+            name: "first_removal_count".into(),
+            eval: Box::new(|row, _, _| {
+                let is_removal = BabyBear::ONE - row[col::ROW_TYPE];
+                is_removal * (row[col::REMOVAL_COUNT] - BabyBear::ONE)
+            }),
+        }]
+    }
+
+    fn last_row_constraints(&self) -> Vec<Constraint> {
+        vec![
+            Constraint {
+                name: "last_row_is_summary".into(),
+                eval: Box::new(|row, _, _| row[col::ROW_TYPE] - BabyBear::ONE),
+            },
+            Constraint {
+                name: "total_removals_match".into(),
+                eval: Box::new(|row, _, pi| row[col::REMOVAL_COUNT] - pi[2]),
+            },
+            Constraint {
+                name: "total_checks_match".into(),
+                eval: Box::new(|row, _, pi| row[col::CHECK_COUNT] - pi[3]),
+            },
+        ]
+    }
+
+    fn generate_trace(&self) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
+        let w = &self.witness;
+        let mut trace = Vec::new();
+        let root_transition_hash = if !w.removed_facts.is_empty() {
+            verify_root_transition(w).unwrap_or(BabyBear::ZERO)
+        } else {
+            compute_root_transition_hash(w.old_root, w.new_root, &[], &w.added_checks_commitment)
+        };
+
+        for (i, fact) in w.removed_facts.iter().enumerate() {
+            let mut row = vec![BabyBear::ZERO; FOLD_AIR_WIDTH];
+            row[col::ROW_TYPE] = BabyBear::ZERO;
+            row[col::FACT_HASH] = fact.hash();
+            row[col::MEMBERSHIP_ROOT] =
+                fact.verify_membership(w.old_root).unwrap_or(BabyBear::ZERO);
+            row[col::OLD_ROOT] = w.old_root;
+            row[col::NEW_ROOT] = w.new_root;
+            row[col::REMOVAL_COUNT] = BabyBear::new((i + 1) as u32);
+            row[col::CHECK_COUNT] = BabyBear::new(w.num_added_checks as u32);
+            row[col::FACT_PRED] = fact.predicate;
+            row[col::FACT_TERM_START] = fact.terms[0];
+            row[col::FACT_TERM_START + 1] = fact.terms[1];
+            row[col::FACT_TERM_START + 2] = fact.terms[2];
+            row[col::HASH_VALID] = BabyBear::ONE;
+            trace.push(row);
+        }
+
+        let mut summary = vec![BabyBear::ZERO; FOLD_AIR_WIDTH];
+        summary[col::ROW_TYPE] = BabyBear::ONE;
+        summary[col::MEMBERSHIP_ROOT] = root_transition_hash;
+        summary[col::OLD_ROOT] = w.old_root;
+        summary[col::NEW_ROOT] = w.new_root;
+        summary[col::REMOVAL_COUNT] = BabyBear::new(w.removed_facts.len() as u32);
+        summary[col::CHECK_COUNT] = BabyBear::new(w.num_added_checks as u32);
+        summary[col::HASH_VALID] = BabyBear::ONE;
+        trace.push(summary);
+
+        let fact_hashes: Vec<BabyBear> = w.removed_facts.iter().map(|f| f.hash()).collect();
+        let expected_rt = compute_root_transition_hash(
+            w.old_root,
+            w.new_root,
+            &fact_hashes,
+            &w.added_checks_commitment,
+        );
+        let narrow_checks = w.added_checks_commitment.to_narrow();
+        let public_inputs = vec![
+            w.old_root,
+            w.new_root,
+            BabyBear::new(w.removed_facts.len() as u32),
+            BabyBear::new(w.num_added_checks as u32),
+            expected_rt,
+            narrow_checks,
+        ];
+        (trace, public_inputs)
+    }
+}
+
+pub fn build_shared_tree(leaves: &[BabyBear], depth: usize) -> (BabyBear, Vec<MerkleWitness>) {
+    let fan_out = 4usize;
+    let max_leaves = fan_out.pow(depth as u32);
+    let mut levels: Vec<Vec<BabyBear>> = Vec::with_capacity(depth + 1);
+    let mut bottom = Vec::with_capacity(max_leaves);
+    for &leaf in leaves.iter().take(max_leaves) {
+        bottom.push(leaf);
+    }
+    while bottom.len() < max_leaves {
+        bottom.push(BabyBear::ZERO);
+    }
+    levels.push(bottom);
+    for _ in 0..depth {
+        let prev = levels.last().unwrap();
+        let mut next = Vec::with_capacity(prev.len() / fan_out);
+        for chunk in prev.chunks(fan_out) {
+            next.push(hash_4_to_1(&[chunk[0], chunk[1], chunk[2], chunk[3]]));
+        }
+        levels.push(next);
+    }
+    let root = levels[depth][0];
+    let mut proofs = Vec::with_capacity(leaves.len());
+    for (leaf_idx, &leaf_hash) in leaves.iter().enumerate() {
+        let mut proof_levels = Vec::with_capacity(depth);
+        let mut idx = leaf_idx;
+        for level in 0..depth {
+            let position = (idx % fan_out) as u8;
+            let group_start = idx - (idx % fan_out);
+            let mut siblings = Vec::with_capacity(3);
+            for j in 0..fan_out {
+                if j as u8 != position {
+                    siblings.push(levels[level][group_start + j]);
+                }
+            }
+            proof_levels.push(MerkleLevelWitness {
+                position,
+                siblings: [siblings[0], siblings[1], siblings[2]],
+            });
+            idx /= fan_out;
+        }
+        proofs.push(MerkleWitness {
+            leaf_hash,
+            levels: proof_levels,
+            expected_root: root,
+        });
+    }
+    (root, proofs)
+}
+
+pub fn build_membership_proof(leaf_hash: BabyBear, depth: usize) -> MerkleWitness {
+    let mut current = leaf_hash;
+    let mut levels = Vec::with_capacity(depth);
+    for i in 0..depth {
+        let position = (i % 4) as u8;
+        let siblings = [
+            BabyBear::new((leaf_hash.0.wrapping_add(i as u32 * 7 + 1)) % crate::field::BABYBEAR_P),
+            BabyBear::new((leaf_hash.0.wrapping_add(i as u32 * 7 + 2)) % crate::field::BABYBEAR_P),
+            BabyBear::new((leaf_hash.0.wrapping_add(i as u32 * 7 + 3)) % crate::field::BABYBEAR_P),
+        ];
+        let parent = MerkleAir::compute_parent(current, position, &siblings);
+        levels.push(MerkleLevelWitness { position, siblings });
+        current = parent;
+    }
+    MerkleWitness {
+        leaf_hash,
+        levels,
+        expected_root: current,
+    }
+}
+
+pub fn compute_test_checks_commitment(num_checks: usize) -> crate::binding::WideHash {
+    if num_checks == 0 {
+        return crate::binding::WideHash::ZERO;
+    }
+    let check_hashes: Vec<BabyBear> = (0..num_checks)
+        .map(|i| {
+            hash_fact(
+                BabyBear::new(900 + i as u32),
+                &[BabyBear::new(i as u32), BabyBear::ZERO, BabyBear::ZERO],
+            )
+        })
+        .collect();
+    crate::binding::WideHash::from_poseidon2("pyana-checks-v1", &check_hashes)
+}
+
+pub fn create_test_fold(num_removals: usize, num_checks: usize) -> FoldWitness {
+    let new_root = BabyBear::new(222222);
+    let checks_commitment = compute_test_checks_commitment(num_checks);
+    if num_removals == 0 {
+        return FoldWitness {
+            old_root: BabyBear::new(111111),
+            new_root,
+            removed_facts: vec![],
+            num_added_checks: num_checks,
+            added_checks_commitment: checks_commitment,
+        };
+    }
+    let facts_data: Vec<(BabyBear, [BabyBear; 3])> = (0..num_removals)
+        .map(|i| {
+            (
+                BabyBear::new((i * 100 + 10) as u32),
+                [
+                    BabyBear::new((i * 100 + 20) as u32),
+                    BabyBear::new((i * 100 + 30) as u32),
+                    BabyBear::ZERO,
+                ],
+            )
+        })
+        .collect();
+    let fact_hashes: Vec<BabyBear> = facts_data
+        .iter()
+        .map(|(pred, terms)| hash_fact(*pred, terms))
+        .collect();
+    let (old_root, proofs) = build_shared_tree(&fact_hashes, 4);
+    let removed_facts: Vec<RemovedFact> = facts_data
+        .into_iter()
+        .zip(proofs.into_iter())
+        .map(|((predicate, terms), proof)| RemovedFact {
+            predicate,
+            terms,
+            membership_proof: Some(proof),
+        })
+        .collect();
+    FoldWitness {
+        old_root,
+        new_root,
+        removed_facts,
+        num_added_checks: num_checks,
+        added_checks_commitment: checks_commitment,
+    }
+}
 
 // ============================================================================
 // Circuit descriptor
@@ -103,26 +504,80 @@ pub use crate::fold_types::{
 /// - Last row: MEMBERSHIP_ROOT == pi[4] (transition hash binding)
 pub fn fold_circuit_descriptor() -> CircuitDescriptor {
     let columns = vec![
-        ColumnDef { name: "row_type".into(), index: col::ROW_TYPE, kind: ColumnKind::Selector },
-        ColumnDef { name: "fact_hash".into(), index: col::FACT_HASH, kind: ColumnKind::Hash },
-        ColumnDef { name: "membership_root".into(), index: col::MEMBERSHIP_ROOT, kind: ColumnKind::Hash },
-        ColumnDef { name: "old_root".into(), index: col::OLD_ROOT, kind: ColumnKind::Value },
-        ColumnDef { name: "new_root".into(), index: col::NEW_ROOT, kind: ColumnKind::Value },
-        ColumnDef { name: "removal_count".into(), index: col::REMOVAL_COUNT, kind: ColumnKind::Value },
-        ColumnDef { name: "check_count".into(), index: col::CHECK_COUNT, kind: ColumnKind::Value },
-        ColumnDef { name: "fact_pred".into(), index: col::FACT_PRED, kind: ColumnKind::Value },
-        ColumnDef { name: "fact_term_0".into(), index: col::FACT_TERM_START, kind: ColumnKind::Value },
-        ColumnDef { name: "fact_term_1".into(), index: col::FACT_TERM_START + 1, kind: ColumnKind::Value },
-        ColumnDef { name: "fact_term_2".into(), index: col::FACT_TERM_START + 2, kind: ColumnKind::Value },
-        ColumnDef { name: "hash_valid".into(), index: col::HASH_VALID, kind: ColumnKind::Binary },
-        ColumnDef { name: "removal_count_plus_one".into(), index: col::REMOVAL_COUNT_PLUS_ONE, kind: ColumnKind::Value },
+        ColumnDef {
+            name: "row_type".into(),
+            index: col::ROW_TYPE,
+            kind: ColumnKind::Selector,
+        },
+        ColumnDef {
+            name: "fact_hash".into(),
+            index: col::FACT_HASH,
+            kind: ColumnKind::Hash,
+        },
+        ColumnDef {
+            name: "membership_root".into(),
+            index: col::MEMBERSHIP_ROOT,
+            kind: ColumnKind::Hash,
+        },
+        ColumnDef {
+            name: "old_root".into(),
+            index: col::OLD_ROOT,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "new_root".into(),
+            index: col::NEW_ROOT,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "removal_count".into(),
+            index: col::REMOVAL_COUNT,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "check_count".into(),
+            index: col::CHECK_COUNT,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "fact_pred".into(),
+            index: col::FACT_PRED,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "fact_term_0".into(),
+            index: col::FACT_TERM_START,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "fact_term_1".into(),
+            index: col::FACT_TERM_START + 1,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "fact_term_2".into(),
+            index: col::FACT_TERM_START + 2,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "hash_valid".into(),
+            index: col::HASH_VALID,
+            kind: ColumnKind::Binary,
+        },
+        ColumnDef {
+            name: "removal_count_plus_one".into(),
+            index: col::REMOVAL_COUNT_PLUS_ONE,
+            kind: ColumnKind::Value,
+        },
     ];
 
     // Constraint 1: row_type is binary
     let c_row_type_binary = ConstraintExpr::Binary { col: col::ROW_TYPE };
 
     // Constraint 2: hash_valid is binary
-    let c_hash_valid_binary = ConstraintExpr::Binary { col: col::HASH_VALID };
+    let c_hash_valid_binary = ConstraintExpr::Binary {
+        col: col::HASH_VALID,
+    };
 
     // Constraint 3: membership_root == old_root WHEN is_removal (row_type == 0)
     let c_membership_root = ConstraintExpr::InvertedGated {
@@ -142,9 +597,10 @@ pub fn fold_circuit_descriptor() -> CircuitDescriptor {
             // Inner evaluates to 1 when hash_valid == 0; we need the product to be zero.
             // (1-ROW_TYPE)*(1-HASH_VALID) == 0 is best expressed as a Polynomial:
             inner: Box::new(ConstraintExpr::Polynomial {
-                terms: vec![
-                    crate::dsl::circuit::PolyTerm { coeff: BabyBear::ONE, col_indices: vec![] },
-                ],
+                terms: vec![crate::dsl::circuit::PolyTerm {
+                    coeff: BabyBear::ONE,
+                    col_indices: vec![],
+                }],
             }),
         }),
     };
@@ -210,17 +666,41 @@ pub fn fold_circuit_descriptor() -> CircuitDescriptor {
 
     let boundaries = vec![
         // First row: old_root == pi[0]
-        BoundaryDef::PiBinding { row: BoundaryRow::First, col: col::OLD_ROOT, pi_index: 0 },
+        BoundaryDef::PiBinding {
+            row: BoundaryRow::First,
+            col: col::OLD_ROOT,
+            pi_index: 0,
+        },
         // First row: new_root == pi[1]
-        BoundaryDef::PiBinding { row: BoundaryRow::First, col: col::NEW_ROOT, pi_index: 1 },
+        BoundaryDef::PiBinding {
+            row: BoundaryRow::First,
+            col: col::NEW_ROOT,
+            pi_index: 1,
+        },
         // Last row: row_type == 1 (summary)
-        BoundaryDef::Fixed { row: BoundaryRow::Last, col: col::ROW_TYPE, value: BabyBear::ONE },
+        BoundaryDef::Fixed {
+            row: BoundaryRow::Last,
+            col: col::ROW_TYPE,
+            value: BabyBear::ONE,
+        },
         // Last row: removal_count == pi[2]
-        BoundaryDef::PiBinding { row: BoundaryRow::Last, col: col::REMOVAL_COUNT, pi_index: 2 },
+        BoundaryDef::PiBinding {
+            row: BoundaryRow::Last,
+            col: col::REMOVAL_COUNT,
+            pi_index: 2,
+        },
         // Last row: check_count == pi[3]
-        BoundaryDef::PiBinding { row: BoundaryRow::Last, col: col::CHECK_COUNT, pi_index: 3 },
+        BoundaryDef::PiBinding {
+            row: BoundaryRow::Last,
+            col: col::CHECK_COUNT,
+            pi_index: 3,
+        },
         // Last row: membership_root == pi[4] (transition hash)
-        BoundaryDef::PiBinding { row: BoundaryRow::Last, col: col::MEMBERSHIP_ROOT, pi_index: 4 },
+        BoundaryDef::PiBinding {
+            row: BoundaryRow::Last,
+            col: col::MEMBERSHIP_ROOT,
+            pi_index: 4,
+        },
     ];
 
     CircuitDescriptor {

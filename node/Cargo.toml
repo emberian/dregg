@@ -22,9 +22,7 @@ pyana-commit = { path = "../commit" }
 pyana-dsl-runtime = { path = "../pyana-dsl-runtime" }
 pyana-coord = { path = "../coord" }
 pyana-net = { path = "../net" }
-pyana-morpheus = { path = "../morpheus" }
 pyana-blocklace = { path = "../blocklace" }
-hints = { path = "../hints" }
 macaroon = { workspace = true, features = ["crypto"] }
 ark-serialize = { workspace = true }
 ark-std = "0.5.0"

@@ -111,11 +111,9 @@ cargo build -p pyana-node --release</code></pre>
         <tr><td><code>--port</code></td><td>8420</td><td>HTTP API listen port</td></tr>
         <tr><td><code>--data-dir</code></td><td>~/.pyana</td><td>Persistent state directory</td></tr>
         <tr><td><code>--federation-peers</code></td><td>(none)</td><td>Comma-separated peer addresses (host:port)</td></tr>
-        <tr><td><code>--morpheus</code></td><td>false</td><td>Enable full Morpheus DAG-BFT consensus</td></tr>
         <tr><td><code>--node-index</code></td><td>0</td><td>This node's index in federation (0-based)</td></tr>
-        <tr><td><code>--federation-size</code></td><td>4</td><td>Total number of federation nodes</td></tr>
-        <tr><td><code>--enable-pruning</code></td><td>false</td><td>Prune old blocks below latest checkpoint</td></tr>
-        <tr><td><code>--checkpoint-interval</code></td><td>1000</td><td>Blocks between checkpoints</td></tr>
+        <tr><td><code>--enable-pruning</code></td><td>false</td><td>Prune old Blocklace blocks below latest checkpoint</td></tr>
+        <tr><td><code>--checkpoint-interval</code></td><td>100</td><td>Committed blocks between ledger checkpoints</td></tr>
         <tr><td><code>--enable-faucet</code></td><td>false</td><td>Enable POST /api/faucet (devnet only)</td></tr>
       </tbody>
     </table>

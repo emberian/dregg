@@ -427,7 +427,10 @@ pub fn derivation_circuit_descriptor() -> CircuitDescriptor {
             for var_j in 0..MAX_SUB_VARS {
                 terms_vec.push(term(
                     neg_one(),
-                    &[col::check_term_sel(slot, var_j), col::SUB_VALUE_START + var_j],
+                    &[
+                        col::check_term_sel(slot, var_j),
+                        col::SUB_VALUE_START + var_j,
+                    ],
                 ));
             }
             constraints.push(ConstraintExpr::Gated {
@@ -450,7 +453,10 @@ pub fn derivation_circuit_descriptor() -> CircuitDescriptor {
             for var_j in 0..MAX_SUB_VARS {
                 terms_vec.push(term(
                     neg_one(),
-                    &[col::check_term_sel(slot, var_j), col::SUB_VALUE_START + var_j],
+                    &[
+                        col::check_term_sel(slot, var_j),
+                        col::SUB_VALUE_START + var_j,
+                    ],
                 ));
             }
             constraints.push(ConstraintExpr::Gated {
@@ -478,7 +484,10 @@ pub fn derivation_circuit_descriptor() -> CircuitDescriptor {
             for var_j in 0..MAX_SUB_VARS {
                 terms_vec.push(term(
                     neg_one(),
-                    &[col::check_term_sel(slot, var_j), col::SUB_VALUE_START + var_j],
+                    &[
+                        col::check_term_sel(slot, var_j),
+                        col::SUB_VALUE_START + var_j,
+                    ],
                 ));
             }
             constraints.push(ConstraintExpr::Gated {
@@ -501,7 +510,10 @@ pub fn derivation_circuit_descriptor() -> CircuitDescriptor {
             for var_j in 0..MAX_SUB_VARS {
                 terms_vec.push(term(
                     neg_one(),
-                    &[col::check_term_sel(slot, var_j), col::SUB_VALUE_START + var_j],
+                    &[
+                        col::check_term_sel(slot, var_j),
+                        col::SUB_VALUE_START + var_j,
+                    ],
                 ));
             }
             constraints.push(ConstraintExpr::Gated {
@@ -529,7 +541,10 @@ pub fn derivation_circuit_descriptor() -> CircuitDescriptor {
             for var_j in 0..MAX_SUB_VARS {
                 terms_vec.push(term(
                     neg_one(),
-                    &[col::check_term_sel(slot, var_j), col::SUB_VALUE_START + var_j],
+                    &[
+                        col::check_term_sel(slot, var_j),
+                        col::SUB_VALUE_START + var_j,
+                    ],
                 ));
             }
             constraints.push(ConstraintExpr::Gated {
@@ -552,7 +567,10 @@ pub fn derivation_circuit_descriptor() -> CircuitDescriptor {
             for var_j in 0..MAX_SUB_VARS {
                 terms_vec.push(term(
                     neg_one(),
-                    &[col::check_term_sel(slot, var_j), col::SUB_VALUE_START + var_j],
+                    &[
+                        col::check_term_sel(slot, var_j),
+                        col::SUB_VALUE_START + var_j,
+                    ],
                 ));
             }
             constraints.push(ConstraintExpr::Gated {
@@ -580,7 +598,10 @@ pub fn derivation_circuit_descriptor() -> CircuitDescriptor {
             for var_j in 0..MAX_SUB_VARS {
                 terms_vec.push(term(
                     neg_one(),
-                    &[col::check_term_sel(slot, var_j), col::SUB_VALUE_START + var_j],
+                    &[
+                        col::check_term_sel(slot, var_j),
+                        col::SUB_VALUE_START + var_j,
+                    ],
                 ));
             }
             constraints.push(ConstraintExpr::Gated {
@@ -603,7 +624,10 @@ pub fn derivation_circuit_descriptor() -> CircuitDescriptor {
             for var_j in 0..MAX_SUB_VARS {
                 terms_vec.push(term(
                     neg_one(),
-                    &[col::check_term_sel(slot, var_j), col::SUB_VALUE_START + var_j],
+                    &[
+                        col::check_term_sel(slot, var_j),
+                        col::SUB_VALUE_START + var_j,
+                    ],
                 ));
             }
             constraints.push(ConstraintExpr::Gated {
@@ -889,10 +913,7 @@ pub fn prove_derivation_dsl(witness: &DerivationWitness) -> Option<StarkProof> {
 ///
 /// The verifier instantiates the same DSL circuit descriptor and checks the
 /// proof against the provided public inputs.
-pub fn verify_derivation_dsl(
-    proof: &StarkProof,
-    public_inputs: &[BabyBear],
-) -> Result<(), String> {
+pub fn verify_derivation_dsl(proof: &StarkProof, public_inputs: &[BabyBear]) -> Result<(), String> {
     let circuit = derivation_dsl_circuit();
     stark::verify(&circuit, proof, public_inputs)
 }
@@ -974,12 +995,12 @@ pub fn generate_multi_step_trace_dsl(
     let conclusion = witness.conclusion();
     let final_acc = witness.final_accumulated_hash();
     let public_inputs = vec![
-        witness.initial_state_root,             // 0: initial_state_root
-        witness.request_hash,                   // 1: request_hash
-        conclusion,                             // 2: conclusion
-        BabyBear::new(num_active as u32),       // 3: num_steps
-        final_acc,                              // 4: final_accumulated_hash
-        witness.policy_root,                    // 5: policy_root
+        witness.initial_state_root,       // 0: initial_state_root
+        witness.request_hash,             // 1: request_hash
+        conclusion,                       // 2: conclusion
+        BabyBear::new(num_active as u32), // 3: num_steps
+        final_acc,                        // 4: final_accumulated_hash
+        witness.policy_root,              // 5: policy_root
     ];
 
     (trace, public_inputs)
@@ -994,9 +1015,7 @@ pub fn generate_multi_step_trace_dsl(
 ///
 /// This function wraps the existing `prove_authorization_stark` after ensuring
 /// the trace is generated with DSL-compatible column layout.
-pub fn prove_authorization_dsl(
-    witness: &crate::multi_step_air::MultiStepWitness,
-) -> StarkProof {
+pub fn prove_authorization_dsl(witness: &crate::multi_step_air::MultiStepWitness) -> StarkProof {
     // The existing prove_authorization_stark already uses the 376-column layout
     // from multi_step_air. The DSL derivation constraints are semantically
     // equivalent within the first 371 columns.

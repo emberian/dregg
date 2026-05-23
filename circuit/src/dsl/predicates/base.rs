@@ -52,6 +52,29 @@ pub enum PredicateOp {
     InRangeHigh,
 }
 
+/// Backward-compatible alias for `PredicateOp` (previously `PredicateType` in `predicate_air`).
+pub type PredicateType = PredicateOp;
+
+/// Number of bits used for range proofs (backward-compatible constant).
+pub const PREDICATE_DIFF_BITS: usize = NUM_DIFF_BITS;
+
+/// Backward-compatible alias: prove a predicate using the DSL circuit.
+pub fn prove_predicate(witness: PredicateWitness) -> Option<PredicateProof> {
+    prove_predicate_dsl(&witness).ok()
+}
+
+/// Backward-compatible alias: verify a predicate proof.
+pub fn verify_predicate(
+    proof: &PredicateProof,
+    threshold: BabyBear,
+    fact_commitment: BabyBear,
+) -> Result<(), String> {
+    verify_predicate_dsl(proof, threshold, fact_commitment)
+}
+
+/// Legacy AIR struct (constraint-prover interface).
+pub struct PredicateAir;
+
 // ============================================================================
 // Descriptor construction
 // ============================================================================
@@ -292,9 +315,9 @@ pub fn predicate_descriptor() -> CircuitDescriptor {
 /// Witness for trace generation.
 #[derive(Clone, Debug)]
 pub struct PredicateWitness {
-    pub private_value: u32,
-    pub threshold: u32,
-    pub op: PredicateOp,
+    pub private_value: BabyBear,
+    pub threshold: BabyBear,
+    pub predicate_type: PredicateOp,
     pub fact_commitment: BabyBear,
     /// When Some, enables in-circuit commitment derivation verification.
     pub fact_hash: Option<BabyBear>,
@@ -335,7 +358,7 @@ pub fn generate_predicate_trace_full(
     row[FACT_COMMITMENT] = witness.fact_commitment;
 
     // Compute diff based on operation.
-    let diff = match witness.op {
+    let diff = match witness.predicate_type {
         PredicateOp::Gte | PredicateOp::InRangeLow => {
             witness.private_value.wrapping_sub(witness.threshold)
         }
@@ -354,7 +377,7 @@ pub fn generate_predicate_trace_full(
     };
     row[DIFF] = BabyBear::new(diff);
 
-    match witness.op {
+    match witness.predicate_type {
         PredicateOp::Neq => {
             row[NEQ_FLAG] = BabyBear::ONE;
             let diff_field = BabyBear::new(diff);
@@ -469,7 +492,7 @@ pub struct PredicateProof {
 /// Returns `Err` if the predicate is not satisfiable or proof generation fails.
 pub fn prove_predicate_dsl(witness: &PredicateWitness) -> Result<PredicateProof, String> {
     // Check satisfiability.
-    let satisfiable = match witness.op {
+    let satisfiable = match witness.predicate_type {
         PredicateOp::Gte | PredicateOp::InRangeLow => witness.private_value >= witness.threshold,
         PredicateOp::Lte | PredicateOp::InRangeHigh => witness.private_value <= witness.threshold,
         PredicateOp::Gt => witness.private_value > witness.threshold,
@@ -486,7 +509,7 @@ pub fn prove_predicate_dsl(witness: &PredicateWitness) -> Result<PredicateProof,
     let stark_proof = stark::prove(&circuit, &trace, &pi);
 
     Ok(PredicateProof {
-        op: witness.op,
+        op: witness.predicate_type,
         threshold: BabyBear::new(witness.threshold),
         fact_commitment: witness.fact_commitment,
         stark_proof,

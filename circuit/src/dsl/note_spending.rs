@@ -79,7 +79,9 @@ pub fn note_spending_circuit_descriptor() -> CircuitDescriptor {
     let mut constraints = Vec::new();
 
     // C1: is_merkle is binary
-    constraints.push(ConstraintExpr::Binary { col: col::IS_MERKLE });
+    constraints.push(ConstraintExpr::Binary {
+        col: col::IS_MERKLE,
+    });
 
     // C2: Commitment hash binding (gated by 1-is_merkle)
     // On commitment rows: commitment == hash_fact(owner, [value, asset_type, creation_nonce, randomness])
@@ -234,15 +236,51 @@ pub fn note_spending_circuit_descriptor() -> CircuitDescriptor {
 
     // Column definitions
     let columns = vec![
-        ColumnDef { name: "owner".into(), index: col::OWNER, kind: ColumnKind::Value },
-        ColumnDef { name: "value".into(), index: col::VALUE, kind: ColumnKind::Value },
-        ColumnDef { name: "asset_type".into(), index: col::ASSET_TYPE, kind: ColumnKind::Value },
-        ColumnDef { name: "creation_nonce".into(), index: col::CREATION_NONCE, kind: ColumnKind::Value },
-        ColumnDef { name: "commitment".into(), index: col::COMMITMENT, kind: ColumnKind::Hash },
-        ColumnDef { name: "nullifier".into(), index: col::NULLIFIER, kind: ColumnKind::Hash },
-        ColumnDef { name: "randomness".into(), index: col::RANDOMNESS, kind: ColumnKind::Value },
-        ColumnDef { name: "is_merkle".into(), index: col::IS_MERKLE, kind: ColumnKind::Binary },
-        ColumnDef { name: "nullifier_intermediate".into(), index: NULLIFIER_INTERMEDIATE, kind: ColumnKind::Hash },
+        ColumnDef {
+            name: "owner".into(),
+            index: col::OWNER,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "value".into(),
+            index: col::VALUE,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "asset_type".into(),
+            index: col::ASSET_TYPE,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "creation_nonce".into(),
+            index: col::CREATION_NONCE,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "commitment".into(),
+            index: col::COMMITMENT,
+            kind: ColumnKind::Hash,
+        },
+        ColumnDef {
+            name: "nullifier".into(),
+            index: col::NULLIFIER,
+            kind: ColumnKind::Hash,
+        },
+        ColumnDef {
+            name: "randomness".into(),
+            index: col::RANDOMNESS,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "is_merkle".into(),
+            index: col::IS_MERKLE,
+            kind: ColumnKind::Binary,
+        },
+        ColumnDef {
+            name: "nullifier_intermediate".into(),
+            index: NULLIFIER_INTERMEDIATE,
+            kind: ColumnKind::Hash,
+        },
     ];
 
     CircuitDescriptor {
@@ -298,7 +336,10 @@ pub fn generate_note_spending_trace(
 ) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
     let depth = witness.merkle_siblings.len();
     assert_eq!(witness.merkle_positions.len(), depth);
-    assert!(depth >= MIN_MERKLE_DEPTH, "Need at least depth {MIN_MERKLE_DEPTH}");
+    assert!(
+        depth >= MIN_MERKLE_DEPTH,
+        "Need at least depth {MIN_MERKLE_DEPTH}"
+    );
 
     let commitment = witness.commitment();
     let nullifier = witness.nullifier();
@@ -368,7 +409,12 @@ pub fn generate_note_spending_trace(
     // Pad to power of 2
     let padding_parent = hash_fact(
         merkle_root,
-        &[BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO],
+        &[
+            BabyBear::ZERO,
+            BabyBear::ZERO,
+            BabyBear::ZERO,
+            BabyBear::ZERO,
+        ],
     );
     for _ in total_rows..padded_rows {
         let mut row = vec![BabyBear::ZERO; NOTE_SPENDING_WIDTH];

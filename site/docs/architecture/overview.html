@@ -56,53 +56,67 @@
       Pyana is structured as a Rust workspace of 44 crates. The core architecture
       follows the sovereign cell model: agents maintain their own state and execute
       transitions locally. The federation verifies proofs and provides ordering --
-      it does not store or execute on behalf of agents (in sovereign mode). A
-      constraint DSL compiles to 8 proof backends; 21 AIR circuits cover the full
-      authorization and state-transition space.
+      it does not store or execute on behalf of agents (in sovereign mode). The Effect VM
+      proves arbitrary turns in a single STARK (14 effects, Custom dispatch for CellPrograms).
+      A constraint DSL compiles to 8 proof backends from a single source definition.
     </p>
 
     <h2 id="layers">Layer Architecture</h2>
 
     <pre><code>Applications           Stablecoin | AMM | Orderbook | Lending | Identity
                        Gallery (provenance) | Compute Exchange | Bounty Board
+                       Discord bot (19 commands + explorer + presence attestation)
   ---------------------------------------------------------------
 Browser Extension (wallet UI)
   window.pyana: authorize | postIntent | offerCapability | provision
   ---------------------------------------------------------------
-SDK Layer              AgentWallet | AgentRuntime | SiloClient
+SDK Layer              Rust SDK (86 fns) | TypeScript SDK | WASM (20 exports)
+                       Extension (14 methods) | MCP (37 tools for AI assistants)
   ---------------------------------------------------------------
 DSL                    #[pyana_caveat] | #[pyana_effect] | write once, 8 backends
   Backends:            Rust | AIR | Datalog | Kimchi | Midnight | Plonky3 | SP1 | STARK
+  Composition:         compose_and | compose_or | compose_chain | compose_aggregate
   ---------------------------------------------------------------
 Intent Engine          Gossip broadcast | local Datalog matching | STARK fulfillment
   ---------------------------------------------------------------
 Network                QUIC P2P | Plumtree gossip | Dandelion++ (unlinkable relay)
+                       Cordial dissemination (reactive push, frontier exchange)
+                       Chunked sync (100 blocks/push) | Checkpoint serving (fast-sync)
   ---------------------------------------------------------------
-Federation             Morpheus adaptive BFT | BLS12-381 threshold sigs
-                       Ed25519 consensus | epoch reconfig | revocation trees
+Consensus              Blocklace (CRDT DAG, equivocation detection, quiescent)
+                       Cordial Miners tau (total ordering, 3-round finality)
+                       Constitutional Consensus (democratic membership, h-rule)
   ---------------------------------------------------------------
-Coordination           Causal DAG | 2PC atomic | bounded counters (Stingray)
+Three-Tier Execution   Sovereign (PCO) --> Optimistic (Stingray COD) --> Ordered
+                       2PC atomic coordination | bounded counters
   ---------------------------------------------------------------
 Execution              Sovereign Cells (hosted OR sovereign) | Turns (atomic txns)
-                       EROS-style factories | Faceted capabilities (E-language)
+                       Effect VM (14 effects, Custom CellProgram dispatch)
+                       EROS-style factories | Faceted capabilities | Bearer caps
                        Eventual sends | Pipeline composition | Routing directives
   ---------------------------------------------------------------
 Privacy                Stealth addresses | Pedersen commitments | Dandelion++
-                       Encrypted turns | Sealer/Unsealer | Oblivious transfer
+                       Private Vickrey (garbled + OT + threshold + ring + stealth)
+                       Encrypted turns | Sealer/Unsealer | Private predicates (3 tiers)
   ---------------------------------------------------------------
-Proof                  BabyBear STARK + FRI | 21 AIR circuits | Recursive composition
-                       Kimchi (Mina) | SP1 zkVM | Plonky3 native | IVC fold chains
+Proof                  Effect VM (one STARK per turn, 14 effects)
+                       DSL circuits: CircuitDescriptor --> 8 backends
+                       STARK-in-Pickles (recursive, constant-size)
+                       Kimchi (Mina) | SP1 zkVM | Plonky3 native | IVC compression
   ---------------------------------------------------------------
-EVM Bridge             SP1 Groth16 (~200k gas) | Base/Ethereum verification
-                       VK governance | Incremental Merkle | Deposit/Withdraw
+Bridge                 EVM: SP1 Groth16 (~200k gas) | Base Sepolia
+                       Midnight: Attestation bridge + ZKIR compilation path
+                       Mina: Native Pickles recursion
   ---------------------------------------------------------------
 Commitment             4-ary Merkle trees (BLAKE3 fast / Poseidon2 ZK)
   ---------------------------------------------------------------
 Policy                 Datalog evaluator | Macaroon HMAC + Biscuit Ed25519
                        Facet masks (E-style restricted views)
   ---------------------------------------------------------------
-Storage                redb ACID | OS keychain | note commitment tree
-                       nullifier set | audit log</code></pre>
+Persistence            redb (ACID, WAL, crash-safe)
+                       Blocklace blocks (incremental) | Ledger checkpoints (every 100)
+                       App state (JSON atomic snapshots) | OS keychain
+                       Note commitment tree | Nullifier set | Audit log</code></pre>
 
     <h2 id="crates">Crate Map</h2>
 
@@ -131,19 +145,20 @@ Storage                redb ACID | OS keychain | note commitment tree
     <table class="comparison">
       <thead><tr><th>Crate</th><th>Role</th></tr></thead>
       <tbody>
-        <tr><td><code>pyana-circuit</code></td><td>21 AIR circuits, STARK prover/verifier, IVC, Kimchi/Mina/SP1/Plonky3 backends</td></tr>
+        <tr><td><code>pyana-circuit</code></td><td>DSL-only circuits, Effect VM (14 effects), 3 proof backends (STARK/Plonky3/Kimchi), IVC</td></tr>
         <tr><td><code>pyana-bridge</code></td><td>Bridge between SDK types and circuit types, presentation proof builder</td></tr>
-        <tr><td><code>pyana-chain</code></td><td>EVM bridge: SP1 Groth16 wrapping, Base/Ethereum verification, deposit/withdraw</td></tr>
+        <tr><td><code>pyana-chain</code></td><td>EVM bridge: SP1 Groth16 wrapping, Base Sepolia verification, deposit/withdraw</td></tr>
         <tr><td><code>pyana-trace</code></td><td>Authorization trace representation (facts, steps, conclusions)</td></tr>
       </tbody>
     </table>
 
-    <h3>Federation and Network</h3>
+    <h3>Consensus, Federation, and Network</h3>
     <table class="comparison">
       <thead><tr><th>Crate</th><th>Role</th></tr></thead>
       <tbody>
-        <tr><td><code>pyana-federation</code></td><td>Morpheus DAG-BFT consensus, epoch management, attested roots</td></tr>
-        <tr><td><code>pyana-net</code></td><td>QUIC P2P, Plumtree gossip, Dandelion++ routing, causal DAG</td></tr>
+        <tr><td><code>pyana-blocklace</code></td><td>Blocklace DAG + Cordial Miners (total ordering) + Constitutional Consensus</td></tr>
+        <tr><td><code>pyana-federation</code></td><td>Consensus orchestration, attested roots, revocation trees</td></tr>
+        <tr><td><code>pyana-net</code></td><td>QUIC P2P, Plumtree gossip, Dandelion++ routing, cordial dissemination</td></tr>
         <tr><td><code>pyana-wire</code></td><td>Wire protocol framing (postcard + length-prefixed)</td></tr>
       </tbody>
     </table>

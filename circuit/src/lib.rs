@@ -73,62 +73,52 @@ pub mod body_membership;
 pub mod chunked_derivation;
 pub mod constraint_prover;
 pub mod cross_state_derivation;
-pub mod derivation_air;
-pub mod derivation_types;
 pub mod dsl;
 pub mod field;
+pub mod ivc;
+
+// Backward-compatible shim modules (type definitions + re-exports from DSL).
+pub mod accumulator_air;
+pub mod arithmetic_predicate_air;
+pub mod compound_predicate_air;
+pub mod derivation_air;
 pub mod fold_air;
 pub mod fold_types;
-pub mod ivc;
+pub mod garbled_air;
 pub mod merkle_air;
 pub mod merkle_types;
+pub mod multi_step_air;
+pub mod note_spending_air;
+pub mod poseidon2_air;
+pub mod predicate_air;
+pub mod relational_predicate_air;
+#[cfg(feature = "plonky3")]
+pub mod temporal_predicate_air;
 
 /// Backward-compatible re-export. Prefer [`constraint_prover`] for new code.
 #[doc(hidden)]
 pub mod mock_prover {
     pub use crate::constraint_prover::*;
 }
-pub mod multi_step_air;
 pub mod poseidon2;
-pub mod poseidon2_air;
 pub mod presentation;
 
-pub mod accumulator_air;
-pub mod arithmetic_predicate_air;
-pub mod block_transition_air;
 pub mod committed_threshold;
-pub mod compound_predicate_air;
 pub mod effect_vm;
 pub mod garbled;
-pub mod garbled_air;
-pub mod garbled_types;
-pub mod multi_step_types;
 pub mod native_signature;
-pub mod native_signature_air;
 pub mod non_membership;
-pub mod non_revocation_air;
-pub mod note_spending_air;
-pub mod note_types;
-pub mod predicate_air;
 pub mod predicate_program;
 pub mod quantified_absence;
-pub mod relational_predicate_air;
-pub mod revocation_types;
-pub mod schnorr_air;
 pub mod schnorr_curve;
 pub mod schnorr_sig;
-pub mod sovereign_transition_air;
-pub mod sovereign_types;
 pub mod stark;
-pub mod temporal_absence_air;
 
 #[cfg(feature = "mina")]
 pub mod poseidon_stark;
 #[cfg(feature = "mina")]
 pub mod poseidon_stark_verifier_circuit;
-pub mod temporal_predicate_air;
 pub mod temporal_predicate_dsl;
-pub mod turn_validity_air;
 
 #[cfg(feature = "plonky3")]
 pub mod plonky3_prover;
@@ -152,41 +142,14 @@ mod tests;
 pub use proof_tier::{CryptographicProof, ProofTier, VerifiedProof};
 
 // Re-export primary types.
-pub use body_membership::{
-    BodyFactMerkleProof, BodyMembershipProof, MembershipEntry, collect_body_fact_hashes,
-    prove_authorization_with_membership, verify_authorization_with_membership,
-};
-pub use constraint_prover::{
-    Air, ConstraintCheckResult, ConstraintProof, ConstraintProver, ConstraintViolation,
-};
-pub use field::BabyBear;
-pub use ivc::{
-    FoldDelta, FoldMembershipEntry, FoldStepWitness, IvcBackend, IvcBackendProof, IvcBuilder,
-    IvcPresentationProof, IvcProof, IvcVerification, MAX_FOLD_DEPTH, StateTransitionAir,
-    ValidatedIvcProof, ValidatedIvcVerification, prove_ivc, prove_ivc_stark, prove_validated_ivc,
-    verify_ivc, verify_ivc_stark, verify_validated_ivc,
-};
-
-// Backward-compatible aliases (hidden from docs).
-pub use accumulator_air::{
-    AccumulatorNonMembershipWitness, AccumulatorNonRevocationAir, AccumulatorNonRevocationWitness,
-    ExtElem, compute_accumulator, derive_alpha, prove_accumulator_non_revocation,
-    verify_accumulator_non_revocation,
-};
-pub use arithmetic_predicate_air::{
-    ArithExpr, ArithPredicate, ArithmeticPredicateAir, ArithmeticPredicateProof,
-    ArithmeticPredicateWitness, CompareOp, CompiledArith, compile_expression,
-    compute_arithmetic_fact_commitment, evaluate_expression, prove_arithmetic_predicate,
-    verify_arithmetic_predicate,
-};
 pub use binding::{
     ACTION_BINDING_WIDTH, ActionBinding, PRESENTATION_TAG_WIDTH, PresentationTag, WideHash,
     compute_action_binding, compute_action_binding_narrow, compute_presentation_tag,
     compute_presentation_tag_narrow,
 };
-pub use block_transition_air::{
-    BlockEvent, BlockTransitionAir, BlockTransitionProof, MerkleUpdateWitness,
-    prove_block_transition, verify_block_transition,
+pub use body_membership::{
+    BodyFactMerkleProof, BodyMembershipProof, MembershipEntry, collect_body_fact_hashes,
+    prove_authorization_with_membership, verify_authorization_with_membership,
 };
 pub use chunked_derivation::{
     ChunkedAuthorizationProof, DEFAULT_CHUNK_SIZE, prove_chunked_authorization,
@@ -203,6 +166,9 @@ pub use constraint_prover::MockProof;
 pub use constraint_prover::MockProofResult;
 #[doc(hidden)]
 pub use constraint_prover::MockProver;
+pub use constraint_prover::{
+    Air, ConstraintCheckResult, ConstraintProof, ConstraintProver, ConstraintViolation,
+};
 pub use cross_state_derivation::{
     CombiningRule, CrossStateDerivationProof, SourceDerivation, SourceInput,
     prove_cross_state_derivation, verify_cross_state_derivation,
@@ -212,42 +178,22 @@ pub use effect_vm::{
     encode_net_delta, extract_custom_proof_commitments, extract_net_delta,
     generate_effect_vm_trace,
 };
-pub use multi_step_types::{
-    ALLOW_PREDICATE, MultiStepDerivationAir, MultiStepStarkAir, MultiStepWitness,
-    prove_authorization_stark, verify_authorization_stark,
+pub use field::BabyBear;
+pub use ivc::{
+    FoldDelta, FoldMembershipEntry, FoldStepWitness, IvcBackend, IvcBackendProof, IvcBuilder,
+    IvcPresentationProof, IvcProof, IvcVerification, MAX_FOLD_DEPTH, StateTransitionAir,
+    ValidatedIvcProof, ValidatedIvcVerification, prove_ivc, prove_ivc_stark, prove_validated_ivc,
+    verify_ivc, verify_ivc_stark, verify_validated_ivc,
 };
 pub use non_membership::{
     AugmentedDerivation, DerivationNonMembershipCheck, NonMembershipCheck, NonMembershipProof,
     NonMembershipProver, SetIdentifier, compute_set_accumulator, derive_alpha_for_set,
     verify_augmented_derivation, verify_non_membership_proof,
 };
-pub use note_types::{NoteSpendingAir, NoteSpendingWitness, prove_note_spend, verify_note_spend};
-pub use predicate_air::{
-    PredicateAir, PredicateProof, PredicateType, PredicateWitness, compute_blinded_fact_commitment,
-    compute_fact_commitment, prove_in_range, prove_predicate, verify_in_range, verify_predicate,
-};
 pub use presentation::{
     AuthorizationProof, PresentationAir, PresentationProof, PresentationVerification,
     PresentationWitness, RealPresentationProof, prove_authorization,
 };
-pub use relational_predicate_air::{
-    RelationType, RelationalPredicateAir, RelationalPredicateProof, RelationalPredicateWitness,
-    compute_value_commitment, prove_relational, prove_value_comparison, verify_relational,
-};
-pub use revocation_types::{
-    NonMembershipWitness, NonRevocationAir, NonRevocationWitness, SENTINEL_MAX, SENTINEL_MIN,
-    SortedRevocationTree, prove_non_revocation, revocation_hash_to_field, verify_non_revocation,
-};
-pub use sovereign_types::{
-    DELTA_PI_LEN, DELTA_PI_OFFSET, SOVEREIGN_PUBLIC_INPUTS, SOVEREIGN_TRANSITION_WIDTH,
-    SovereignTransitionAir, bytes32_to_babybear, compute_cell_id_hash,
-    compute_transfer_effects_hash, encode_balance_delta, extract_balance_delta,
-    generate_sovereign_transition_trace,
-};
-pub use turn_validity_air::{
-    TurnValidityAir, TurnValidityWitness, prove_turn_validity, verify_turn_validity,
-};
-
 // Schnorr signature scheme over BabyBear^8 elliptic curve.
 pub use babybear8::BabyBear8;
 pub use schnorr_curve::{CurvePoint, GENERATOR as SCHNORR_GENERATOR};

@@ -1674,7 +1674,15 @@ pub fn create_poseidon2_compatible_witness(leaf_hash: BabyBear, depth: usize) ->
         ];
 
         // Use DSL-compatible hash: hash_fact(current, [sib0, sib1, sib2, position])
-        let parent = hash_fact(current, &[siblings[0], siblings[1], siblings[2], BabyBear::new(position as u32)]);
+        let parent = hash_fact(
+            current,
+            &[
+                siblings[0],
+                siblings[1],
+                siblings[2],
+                BabyBear::new(position as u32),
+            ],
+        );
         levels.push(MerkleLevelWitness { position, siblings });
         current = parent;
     }

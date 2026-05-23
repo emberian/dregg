@@ -18,15 +18,15 @@ The system is implemented in approximately 355k lines of Rust across 41 workspac
     [`token`], [Capability token lifecycle, validation], [macaroon, secrets],
     [`tokenizer`], [Token serialization, BIP39 HD derivation], [token],
     [`hints`], [BLS12-381 threshold signatures], [ark-bls12-381],
-    [`morpheus`], [DAG-based BFT consensus (Lewis-Pye/Shapiro)], [hints],
+    [`blocklace`], [Blocklace DAG + Cordial Miners $tau$ + Constitutional Consensus], [hints],
     [`commit`], [Poseidon2 Merkle trees, commitments], [p3-poseidon2],
     [`trace`], [STARK trace generation, AIR evaluation], [commit, p3-fri],
-    [`circuit`], [21+ AIR circuits, 3 proof backends, Effect VM], [trace, commit, p3-uni-stark],
-    [`federation`], [Consensus orchestration, revocation trees], [morpheus, hints],
+    [`circuit`], [DSL-only circuits, 3 proof backends, Effect VM (14 effects)], [trace, commit, p3-uni-stark],
+    [`federation`], [Consensus orchestration, revocation trees], [blocklace, hints],
     [`audit`], [Security audit trail, policy evaluation], [token],
     [`bridge`], [High-level API bridging proof + token layers], [circuit, token],
     [`wire`], [Network protocol, QUIC transport], [quinn, postcard],
-    [`store`], [Persistent state, Merkle stores], [sled],
+    [`store`], [Persistent state: redb ACID, Blocklace blocks, ledger checkpoints], [redb],
     [`cell`], [Cell state, c-lists, factories, sovereignty], [types],
     [`turn`], [Turn execution, journal, atomicity], [cell, circuit],
     [`coord`], [2PC atomic coordination, causal DAG], [turn, federation],
@@ -102,7 +102,7 @@ The test suite includes 4,046 test functions covering:
 - End-to-end demo scenarios (20+) covering delegation, revocation, multi-party turns, intent fulfillment, pipeline execution, cross-federation swaps, wallet interactions, factory spawning, and sovereign cell transitions
 - DSL code generation tests (all 8 backends produce correct output for a common test suite)
 - Effect VM soundness tests (conservation violation detection, authority bypass attempts, state continuity breaks)
-- Consensus correctness tests (3--7 node federations under simulated network conditions)
+- Consensus correctness tests (Blocklace + Cordial Miners under 3--7 node simulated network conditions)
 - Security regression tests for all audit findings
 - Application integration tests (each app has its own test harness)
 

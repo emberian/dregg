@@ -12,7 +12,6 @@ pyana-turn = { path = "../turn" }
 pyana-circuit = { path = "../circuit" }
 pyana-dsl-runtime = { path = "../pyana-dsl-runtime" }
 pyana-federation = { path = "../federation" }
-pyana-morpheus = { path = "../morpheus" }
 pyana-sdk = { path = "../sdk" }
 pyana-bridge = { path = "../bridge", features = ["test-utils"] }
 pyana-wire = { path = "../wire" }

@@ -56,6 +56,35 @@ pub enum RelationalOp {
     SumGreaterThan(u32),
 }
 
+/// Backward-compatible alias (previously `RelationType` in `relational_predicate_air`).
+pub type RelationType = RelationalOp;
+
+/// Backward-compatible type alias.
+pub type RelationalPredicateProof = RelationalProof;
+
+/// Backward-compatible type alias.
+pub type RelationalPredicateWitness = RelationalWitness;
+
+/// Backward-compatible alias for `compute_commitment`.
+pub fn compute_value_commitment(value: BabyBear, blinding: BabyBear) -> BabyBear {
+    compute_commitment(value, blinding)
+}
+
+/// Backward-compatible alias for `prove_relational_dsl`.
+pub fn prove_relational(witness: &RelationalWitness) -> Result<RelationalProof, String> {
+    prove_relational_dsl(witness)
+}
+
+/// Backward-compatible alias for `verify_relational_dsl`.
+pub fn verify_relational(
+    proof: &RelationalProof,
+    commitment_a: BabyBear,
+    commitment_b: BabyBear,
+    result_bit: BabyBear,
+) -> Result<(), String> {
+    verify_relational_dsl(proof, commitment_a, commitment_b, result_bit)
+}
+
 // ============================================================================
 // Descriptor construction
 // ============================================================================

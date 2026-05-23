@@ -256,11 +256,7 @@ impl ProofBackend for Plonky3Backend {
             use crate::dsl::descriptors::merkle_poseidon2_circuit;
             use crate::dsl::membership::generate_merkle_poseidon2_trace;
 
-            let (trace, pi) = generate_merkle_poseidon2_trace(
-                leaf_hash,
-                &bb_siblings,
-                &positions,
-            );
+            let (trace, pi) = generate_merkle_poseidon2_trace(leaf_hash, &bb_siblings, &positions);
 
             // SECURITY: Verify the witness produces a root matching the expected root.
             if pi.len() < 2 || pi[1] != expected_root {

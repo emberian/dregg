@@ -22,8 +22,8 @@
 //! - [8]: num_ancestors (number of active rows)
 
 use crate::accumulator_air::{
-    AccumulatorNonMembershipWitness, AccumulatorNonRevocationAir,
-    AccumulatorNonRevocationWitness, ExtElem, ACCUMULATOR_WIDTH, MAX_ANCESTORS, col, pi,
+    ACCUMULATOR_WIDTH, AccumulatorNonMembershipWitness, AccumulatorNonRevocationAir,
+    AccumulatorNonRevocationWitness, ExtElem, MAX_ANCESTORS, col, pi,
 };
 use crate::field::{BABYBEAR_P, BabyBear};
 use crate::stark::{self, StarkProof};
@@ -235,25 +235,89 @@ pub fn accumulator_circuit_descriptor() -> CircuitDescriptor {
 
     let mut boundaries = vec![
         // First row: alpha_aux[0..3] = pi[4..7]
-        BoundaryDef::PiBinding { row: BoundaryRow::First, col: alpha_aux_start, pi_index: pi::ALPHA_START },
-        BoundaryDef::PiBinding { row: BoundaryRow::First, col: alpha_aux_start + 1, pi_index: pi::ALPHA_START + 1 },
-        BoundaryDef::PiBinding { row: BoundaryRow::First, col: alpha_aux_start + 2, pi_index: pi::ALPHA_START + 2 },
-        BoundaryDef::PiBinding { row: BoundaryRow::First, col: alpha_aux_start + 3, pi_index: pi::ALPHA_START + 3 },
+        BoundaryDef::PiBinding {
+            row: BoundaryRow::First,
+            col: alpha_aux_start,
+            pi_index: pi::ALPHA_START,
+        },
+        BoundaryDef::PiBinding {
+            row: BoundaryRow::First,
+            col: alpha_aux_start + 1,
+            pi_index: pi::ALPHA_START + 1,
+        },
+        BoundaryDef::PiBinding {
+            row: BoundaryRow::First,
+            col: alpha_aux_start + 2,
+            pi_index: pi::ALPHA_START + 2,
+        },
+        BoundaryDef::PiBinding {
+            row: BoundaryRow::First,
+            col: alpha_aux_start + 3,
+            pi_index: pi::ALPHA_START + 3,
+        },
         // First row: acc_aux[0..3] = pi[0..3]
-        BoundaryDef::PiBinding { row: BoundaryRow::First, col: acc_aux_start, pi_index: pi::ACC_START },
-        BoundaryDef::PiBinding { row: BoundaryRow::First, col: acc_aux_start + 1, pi_index: pi::ACC_START + 1 },
-        BoundaryDef::PiBinding { row: BoundaryRow::First, col: acc_aux_start + 2, pi_index: pi::ACC_START + 2 },
-        BoundaryDef::PiBinding { row: BoundaryRow::First, col: acc_aux_start + 3, pi_index: pi::ACC_START + 3 },
+        BoundaryDef::PiBinding {
+            row: BoundaryRow::First,
+            col: acc_aux_start,
+            pi_index: pi::ACC_START,
+        },
+        BoundaryDef::PiBinding {
+            row: BoundaryRow::First,
+            col: acc_aux_start + 1,
+            pi_index: pi::ACC_START + 1,
+        },
+        BoundaryDef::PiBinding {
+            row: BoundaryRow::First,
+            col: acc_aux_start + 2,
+            pi_index: pi::ACC_START + 2,
+        },
+        BoundaryDef::PiBinding {
+            row: BoundaryRow::First,
+            col: acc_aux_start + 3,
+            pi_index: pi::ACC_START + 3,
+        },
         // First row: sum == Acc
-        BoundaryDef::PiBinding { row: BoundaryRow::First, col: col::SUM, pi_index: pi::ACC_START },
-        BoundaryDef::PiBinding { row: BoundaryRow::First, col: col::SUM + 1, pi_index: pi::ACC_START + 1 },
-        BoundaryDef::PiBinding { row: BoundaryRow::First, col: col::SUM + 2, pi_index: pi::ACC_START + 2 },
-        BoundaryDef::PiBinding { row: BoundaryRow::First, col: col::SUM + 3, pi_index: pi::ACC_START + 3 },
+        BoundaryDef::PiBinding {
+            row: BoundaryRow::First,
+            col: col::SUM,
+            pi_index: pi::ACC_START,
+        },
+        BoundaryDef::PiBinding {
+            row: BoundaryRow::First,
+            col: col::SUM + 1,
+            pi_index: pi::ACC_START + 1,
+        },
+        BoundaryDef::PiBinding {
+            row: BoundaryRow::First,
+            col: col::SUM + 2,
+            pi_index: pi::ACC_START + 2,
+        },
+        BoundaryDef::PiBinding {
+            row: BoundaryRow::First,
+            col: col::SUM + 3,
+            pi_index: pi::ACC_START + 3,
+        },
         // First row: check == (1, 0, 0, 0)
-        BoundaryDef::Fixed { row: BoundaryRow::First, col: col::CHECK, value: BabyBear::ONE },
-        BoundaryDef::Fixed { row: BoundaryRow::First, col: col::CHECK + 1, value: BabyBear::ZERO },
-        BoundaryDef::Fixed { row: BoundaryRow::First, col: col::CHECK + 2, value: BabyBear::ZERO },
-        BoundaryDef::Fixed { row: BoundaryRow::First, col: col::CHECK + 3, value: BabyBear::ZERO },
+        BoundaryDef::Fixed {
+            row: BoundaryRow::First,
+            col: col::CHECK,
+            value: BabyBear::ONE,
+        },
+        BoundaryDef::Fixed {
+            row: BoundaryRow::First,
+            col: col::CHECK + 1,
+            value: BabyBear::ZERO,
+        },
+        BoundaryDef::Fixed {
+            row: BoundaryRow::First,
+            col: col::CHECK + 2,
+            value: BabyBear::ZERO,
+        },
+        BoundaryDef::Fixed {
+            row: BoundaryRow::First,
+            col: col::CHECK + 3,
+            value: BabyBear::ZERO,
+        },
     ];
 
     // Add Index boundaries for rows 1..MAX_ANCESTORS-1 for sum and check.
@@ -265,26 +329,90 @@ pub fn accumulator_circuit_descriptor() -> CircuitDescriptor {
                 pi_index: pi::ACC_START + i,
             });
         }
-        boundaries.push(BoundaryDef::Fixed { row: BoundaryRow::Index(row_idx), col: col::CHECK, value: BabyBear::ONE });
-        boundaries.push(BoundaryDef::Fixed { row: BoundaryRow::Index(row_idx), col: col::CHECK + 1, value: BabyBear::ZERO });
-        boundaries.push(BoundaryDef::Fixed { row: BoundaryRow::Index(row_idx), col: col::CHECK + 2, value: BabyBear::ZERO });
-        boundaries.push(BoundaryDef::Fixed { row: BoundaryRow::Index(row_idx), col: col::CHECK + 3, value: BabyBear::ZERO });
+        boundaries.push(BoundaryDef::Fixed {
+            row: BoundaryRow::Index(row_idx),
+            col: col::CHECK,
+            value: BabyBear::ONE,
+        });
+        boundaries.push(BoundaryDef::Fixed {
+            row: BoundaryRow::Index(row_idx),
+            col: col::CHECK + 1,
+            value: BabyBear::ZERO,
+        });
+        boundaries.push(BoundaryDef::Fixed {
+            row: BoundaryRow::Index(row_idx),
+            col: col::CHECK + 2,
+            value: BabyBear::ZERO,
+        });
+        boundaries.push(BoundaryDef::Fixed {
+            row: BoundaryRow::Index(row_idx),
+            col: col::CHECK + 3,
+            value: BabyBear::ZERO,
+        });
     }
 
     // Column definitions (representative subset; all 40 columns are used)
     let columns = vec![
-        ColumnDef { name: "h[0]".into(), index: col::HASH, kind: ColumnKind::Value },
-        ColumnDef { name: "h[1]".into(), index: col::HASH + 1, kind: ColumnKind::Value },
-        ColumnDef { name: "h[2]".into(), index: col::HASH + 2, kind: ColumnKind::Value },
-        ColumnDef { name: "h[3]".into(), index: col::HASH + 3, kind: ColumnKind::Value },
-        ColumnDef { name: "w[0]".into(), index: col::QUOTIENT, kind: ColumnKind::Value },
-        ColumnDef { name: "diff[0]".into(), index: col::DIFF, kind: ColumnKind::Value },
-        ColumnDef { name: "prod[0]".into(), index: col::PRODUCT, kind: ColumnKind::Value },
-        ColumnDef { name: "sum[0]".into(), index: col::SUM, kind: ColumnKind::Value },
-        ColumnDef { name: "v_inv[0]".into(), index: col::V_INV, kind: ColumnKind::Value },
-        ColumnDef { name: "check[0]".into(), index: col::CHECK, kind: ColumnKind::Value },
-        ColumnDef { name: "alpha_aux[0]".into(), index: alpha_aux_start, kind: ColumnKind::Value },
-        ColumnDef { name: "acc_aux[0]".into(), index: acc_aux_start, kind: ColumnKind::Value },
+        ColumnDef {
+            name: "h[0]".into(),
+            index: col::HASH,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "h[1]".into(),
+            index: col::HASH + 1,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "h[2]".into(),
+            index: col::HASH + 2,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "h[3]".into(),
+            index: col::HASH + 3,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "w[0]".into(),
+            index: col::QUOTIENT,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "diff[0]".into(),
+            index: col::DIFF,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "prod[0]".into(),
+            index: col::PRODUCT,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "sum[0]".into(),
+            index: col::SUM,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "v_inv[0]".into(),
+            index: col::V_INV,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "check[0]".into(),
+            index: col::CHECK,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "alpha_aux[0]".into(),
+            index: alpha_aux_start,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "acc_aux[0]".into(),
+            index: acc_aux_start,
+            kind: ColumnKind::Value,
+        },
     ];
 
     CircuitDescriptor {

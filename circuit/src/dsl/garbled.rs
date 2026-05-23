@@ -25,12 +25,12 @@
 use crate::binding::WideHash;
 use crate::field::BabyBear;
 use crate::garbled::{self, GateEvalRecord};
-use crate::garbled_air::{col, GARBLED_EVAL_AIR_WIDTH};
+use crate::garbled_air::{GARBLED_EVAL_AIR_WIDTH, col};
 use crate::stark::{self, StarkProof};
 
 use crate::dsl::circuit::{
-    BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr,
-    DslCircuit, PolyTerm,
+    BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, DslCircuit,
+    PolyTerm,
 };
 
 // ============================================================================
@@ -468,9 +468,7 @@ pub fn generate_extended_garbled_trace(
 /// The comparison circuit uses a borrow-chain topology where each gate's output feeds
 /// the next gate's left input. All gates are labeled as AND (the gate type is
 /// informational; the truth table is in the garbled table entries).
-pub fn comparison_records_to_extended(
-    gate_trace: &[GateEvalRecord],
-) -> Vec<ExtendedGateRecord> {
+pub fn comparison_records_to_extended(gate_trace: &[GateEvalRecord]) -> Vec<ExtendedGateRecord> {
     let num_gates = gate_trace.len();
     gate_trace
         .iter()

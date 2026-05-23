@@ -1139,9 +1139,7 @@ mod tests {
 
     #[test]
     fn dsl_circuit_prove_and_verify() {
-        use crate::sovereign_transition_air::{
-            SOVEREIGN_PUBLIC_INPUTS, bytes32_to_babybear,
-        };
+        use crate::sovereign_transition_air::{SOVEREIGN_PUBLIC_INPUTS, bytes32_to_babybear};
 
         let old_balance = 1000u64;
         let transfer_amount = 100u64;
@@ -1180,9 +1178,7 @@ mod tests {
 
     #[test]
     fn dsl_circuit_incoming_transfer() {
-        use crate::sovereign_transition_air::{
-            SOVEREIGN_PUBLIC_INPUTS, bytes32_to_babybear,
-        };
+        use crate::sovereign_transition_air::{SOVEREIGN_PUBLIC_INPUTS, bytes32_to_babybear};
 
         let old_balance = 500u64;
         let transfer_amount = 200u64;
@@ -1244,9 +1240,7 @@ mod tests {
 
     #[test]
     fn prove_and_verify_via_registry() {
-        use crate::sovereign_transition_air::{
-            SOVEREIGN_PUBLIC_INPUTS, bytes32_to_babybear,
-        };
+        use crate::sovereign_transition_air::{SOVEREIGN_PUBLIC_INPUTS, bytes32_to_babybear};
 
         let descriptor = sovereign_transfer_descriptor();
         let program = CellProgram::new(descriptor, 1);
@@ -1379,9 +1373,7 @@ mod tests {
 
     #[test]
     fn wrong_vk_hash_verification_fails() {
-        use crate::sovereign_transition_air::{
-            SOVEREIGN_PUBLIC_INPUTS, bytes32_to_babybear,
-        };
+        use crate::sovereign_transition_air::{SOVEREIGN_PUBLIC_INPUTS, bytes32_to_babybear};
 
         let descriptor = sovereign_transfer_descriptor();
         let program = CellProgram::new(descriptor, 1);
@@ -1403,9 +1395,7 @@ mod tests {
 
     #[test]
     fn valid_proof_under_correct_program_passes() {
-        use crate::sovereign_transition_air::{
-            SOVEREIGN_PUBLIC_INPUTS, bytes32_to_babybear,
-        };
+        use crate::sovereign_transition_air::{SOVEREIGN_PUBLIC_INPUTS, bytes32_to_babybear};
 
         let descriptor = sovereign_transfer_descriptor();
         let program = CellProgram::new(descriptor, 1);

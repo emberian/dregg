@@ -592,25 +592,25 @@ pub async fn run_blocklace_sync(state: NodeState, gossip_port: u16) -> Option<Bl
     // but existing topics handle non-consensus gossip).
     if !peer_addrs.is_empty() {
         let topic_turns = gossip
-            .join_topic(crate::federation_sync::TOPIC_TURNS, &peer_addrs)
+            .join_topic(crate::gossip::TOPIC_TURNS, &peer_addrs)
             .await;
         let topic_revocations = gossip
-            .join_topic(crate::federation_sync::TOPIC_REVOCATIONS, &peer_addrs)
+            .join_topic(crate::gossip::TOPIC_REVOCATIONS, &peer_addrs)
             .await;
         let topic_intents = gossip
-            .join_topic(crate::federation_sync::TOPIC_INTENTS, &peer_addrs)
+            .join_topic(crate::gossip::TOPIC_INTENTS, &peer_addrs)
             .await;
         let topic_roots = gossip
-            .join_topic(crate::federation_sync::TOPIC_ROOTS, &peer_addrs)
+            .join_topic(crate::gossip::TOPIC_ROOTS, &peer_addrs)
             .await;
         let topic_checkpoints = gossip
-            .join_topic(crate::federation_sync::TOPIC_CHECKPOINTS, &peer_addrs)
+            .join_topic(crate::gossip::TOPIC_CHECKPOINTS, &peer_addrs)
             .await;
         let topic_decryption_shares = gossip
-            .join_topic(crate::federation_sync::TOPIC_DECRYPTION_SHARES, &peer_addrs)
+            .join_topic(crate::gossip::TOPIC_DECRYPTION_SHARES, &peer_addrs)
             .await;
         let topic_budget = gossip
-            .join_topic(crate::federation_sync::TOPIC_BUDGET, &peer_addrs)
+            .join_topic(crate::gossip::TOPIC_BUDGET, &peer_addrs)
             .await;
 
         // If all topics joined successfully, build and store the GossipHandle.
@@ -623,7 +623,7 @@ pub async fn run_blocklace_sync(state: NodeState, gossip_port: u16) -> Option<Bl
             topic_decryption_shares,
             topic_budget,
         ) {
-            let gossip_handle = crate::federation_sync::GossipHandle {
+            let gossip_handle = crate::gossip::GossipHandle {
                 network: gossip.clone(),
                 topic_turns: tt,
                 topic_revocations: tr,

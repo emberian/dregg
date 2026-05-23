@@ -144,6 +144,45 @@ Intent fulfillments pass through a _delay pool_: a 30-second batching window tha
 
 Proofs may reference any recent Merkle root (not only the latest). The federation maintains a sliding window of recent roots with TTL-based expiry. This accommodates proof generation latency: a prover can generate a STARK proof against root $R_n$ even if the current root has advanced to $R_(n+k)$, provided $R_n$ is still within the acceptance window.
 
+== Private Vickrey Auction (4-Phase Protocol)
+
+Pyana implements a fully private Vickrey (sealed-bid second-price) auction where no party learns any bid value, the payment amount, or the winner's identity. The protocol uses a combination of garbled circuits, oblivious transfer, federation threshold cryptography, Pedersen commitments, ring proofs, and stealth addresses:
+
+=== Phase 1: Bid Commitment
+
+Each bidder $i$ commits their bid $b_i$ using a Pedersen commitment $C_i = b_i dot G + r_i dot H$ and submits it to the auction contract. A STARK range proof proves $b_i in [0, 2^(64))$ without revealing $b_i$. The commitment is binding (bidder cannot change their bid) and hiding (no one learns the bid value).
+
+=== Phase 2: Threshold-Encrypted Bid Revelation
+
+After the commitment deadline, bidders encrypt their bid openings $(b_i, r_i)$ under the federation's threshold public key. No single federation member can decrypt---$t$-of-$n$ threshold decryption is required. The encrypted bids are submitted on-chain.
+
+=== Phase 3: Garbled Circuit Evaluation
+
+The federation collectively evaluates a garbled circuit that computes the Vickrey outcome:
+- Inputs: All bid values (threshold-decrypted within the secure computation)
+- Computation: Find the highest bid (winner) and second-highest bid (payment)
+- Outputs: Only the winner index and payment amount---individual bid values are NOT output
+
+Oblivious transfer (OT) is used between federation members during garbled circuit evaluation to prevent any subset from learning intermediate values. The garbled circuit construction ensures that the federation learns only the final output, not the individual inputs.
+
+=== Phase 4: Anonymous Settlement
+
+Settlement hides the winner's identity from all observers:
+- The payment amount $p$ (second-highest bid) is committed via Pedersen: $C_p = p dot G + r_p dot H$.
+- The winner proves in zero knowledge (ring proof over the bidder set) that they are the winning bidder without revealing which commitment $C_i$ is theirs.
+- Payment is sent to a stealth address derived for the auctioneer---network observers cannot link the payment to the auction.
+- The winner receives the item via a fresh stealth address---the auctioneer cannot link the winner's payment identity to their receiving address.
+
+=== Security Properties
+
+- *Bid privacy*: No party (including the federation) learns any bid value except the second-highest price.
+- *Winner privacy*: The winner's identity is hidden behind a ring proof. Even the auctioneer cannot identify which bidder won.
+- *Payment privacy*: The payment amount and flow are hidden behind Pedersen commitments and stealth addresses.
+- *Fairness*: The threshold requirement prevents a coalition smaller than $t$ federation members from learning bids early.
+- *Correctness*: The garbled circuit evaluation is verifiable---a STARK proof attests that the circuit was evaluated correctly on the threshold-decrypted inputs.
+
+*Status:* The 4-phase protocol is implemented. Garbled circuit evaluation uses Poseidon2-based garbling (STARK-friendly). OT uses the Simplest OT protocol over Ristretto. The ring proof uses a Schnorr-based linkable ring signature adapted for the bidder commitment set. End-to-end auction execution is tested with up to 64 bidders.
+
 == Post-Quantum Safety
 
 All privacy additions maintain PQ safety:

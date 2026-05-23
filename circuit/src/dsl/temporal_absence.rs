@@ -29,13 +29,13 @@
 //!
 //! [t1, t2, excluded_attribute_hash, timeline_root]
 
-use crate::field::{BabyBear, BABYBEAR_P};
+use crate::field::{BABYBEAR_P, BabyBear};
 use crate::poseidon2::hash_fact;
 use crate::stark::{self, StarkProof};
 
 use crate::dsl::circuit::{
-    BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr,
-    DslCircuit, PolyTerm,
+    BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, DslCircuit,
+    PolyTerm,
 };
 
 // ============================================================================
@@ -75,16 +75,56 @@ pub fn temporal_absence_descriptor() -> CircuitDescriptor {
     let neg_one = BabyBear::new(BABYBEAR_P - 1);
 
     let columns = vec![
-        ColumnDef { name: "block_height".into(), index: BLOCK_HEIGHT, kind: ColumnKind::Value },
-        ColumnDef { name: "event_type".into(), index: EVENT_TYPE, kind: ColumnKind::Value },
-        ColumnDef { name: "attribute_hash".into(), index: ATTRIBUTE_HASH, kind: ColumnKind::Value },
-        ColumnDef { name: "timeline_index".into(), index: TIMELINE_INDEX, kind: ColumnKind::Value },
-        ColumnDef { name: "leaf_hash".into(), index: LEAF_HASH, kind: ColumnKind::Hash },
-        ColumnDef { name: "merkle_root".into(), index: MERKLE_ROOT, kind: ColumnKind::Hash },
-        ColumnDef { name: "adj_index_plus1".into(), index: ADJ_INDEX_PLUS1, kind: ColumnKind::Value },
-        ColumnDef { name: "is_before".into(), index: IS_BEFORE, kind: ColumnKind::Binary },
-        ColumnDef { name: "timing_ok".into(), index: TIMING_OK, kind: ColumnKind::Value },
-        ColumnDef { name: "attr_diff_inv".into(), index: ATTR_DIFF_INV, kind: ColumnKind::Value },
+        ColumnDef {
+            name: "block_height".into(),
+            index: BLOCK_HEIGHT,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "event_type".into(),
+            index: EVENT_TYPE,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "attribute_hash".into(),
+            index: ATTRIBUTE_HASH,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "timeline_index".into(),
+            index: TIMELINE_INDEX,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "leaf_hash".into(),
+            index: LEAF_HASH,
+            kind: ColumnKind::Hash,
+        },
+        ColumnDef {
+            name: "merkle_root".into(),
+            index: MERKLE_ROOT,
+            kind: ColumnKind::Hash,
+        },
+        ColumnDef {
+            name: "adj_index_plus1".into(),
+            index: ADJ_INDEX_PLUS1,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "is_before".into(),
+            index: IS_BEFORE,
+            kind: ColumnKind::Binary,
+        },
+        ColumnDef {
+            name: "timing_ok".into(),
+            index: TIMING_OK,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "attr_diff_inv".into(),
+            index: ATTR_DIFF_INV,
+            kind: ColumnKind::Value,
+        },
     ];
 
     let mut constraints = Vec::new();
@@ -102,9 +142,18 @@ pub fn temporal_absence_descriptor() -> CircuitDescriptor {
     // adj_index_plus1 - timeline_index - 1 == 0
     constraints.push(ConstraintExpr::Polynomial {
         terms: vec![
-            PolyTerm { coeff: BabyBear::ONE, col_indices: vec![ADJ_INDEX_PLUS1] },
-            PolyTerm { coeff: neg_one, col_indices: vec![TIMELINE_INDEX] },
-            PolyTerm { coeff: neg_one, col_indices: vec![] }, // constant -1
+            PolyTerm {
+                coeff: BabyBear::ONE,
+                col_indices: vec![ADJ_INDEX_PLUS1],
+            },
+            PolyTerm {
+                coeff: neg_one,
+                col_indices: vec![TIMELINE_INDEX],
+            },
+            PolyTerm {
+                coeff: neg_one,
+                col_indices: vec![],
+            }, // constant -1
         ],
     });
 

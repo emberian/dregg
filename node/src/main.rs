@@ -9,8 +9,8 @@
 mod api;
 mod blocklace_sync;
 mod bridge;
-pub mod federation_sync;
 mod genesis;
+pub mod gossip;
 mod mcp;
 pub mod metrics;
 mod routing_table;

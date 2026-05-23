@@ -22,7 +22,7 @@ The system is operational: 355k lines of Rust across 41 crates, 4,046 tests, rea
 
 - All STARK proofs use real Poseidon2 constraints over BabyBear4 (124-bit security)---no vacuous proofs
 - Full token-to-proof-to-turn-execution pipeline with pipeline execution and topological ordering
-- Working multi-node TCP consensus with Morpheus BFT and BLS12-381 threshold signatures
+- Working multi-node Blocklace consensus with Cordial Miners (3-round BFT) and Constitutional Consensus (democratic membership)
 - Browser extension wallet with intent matching, local Datalog evaluation, and STARK fulfillment proofs
 - Sealer/unsealer with X25519-ChaCha20Poly1305 for offline capability transfer
 - Promise pipelining with `EventualRef` resolution and three-party introduction
@@ -32,12 +32,15 @@ The system is operational: 355k lines of Rust across 41 crates, 4,046 tests, rea
 - Constraint DSL compiling to 8 backends (Rust, AIR, Datalog, Kimchi, STARK, Midnight/ZKIR, Plonky3, SP1)
 - Three production provers (custom STARK, Plonky3, Kimchi/Pickles) with STARK-in-Pickles wrapping
 - Composition operators (`compose_and`, `compose_or`, `compose_chain`, `compose_aggregate`) with cryptographic binding
-- Effect VM proving arbitrary turns in a single STARK (conservation + state continuity operational)
-- 21+ AIR circuits ported to DSL with full parity
+- Effect VM (14 effects) proving arbitrary turns in a single STARK (conservation + state continuity + authority operational)
+- DSL-only circuit architecture (old _air.rs files deleted; DSL is single source of truth)
 - Stealth addresses (X25519 DH + Ed25519 derivation + view tag scanning)
 - Pedersen commitments (Ristretto, per-asset-type generators) with Bulletproof range proofs
 - Dandelion++ stem routing ($p = 0.9$, ~10 hops) and delay pool (30s batch + dummy traffic)
-- EVM bridge architecture (SP1 wraps STARK in Groth16, ~200K gas on Base)
+- EVM bridge with Foundry scripts for Base Sepolia (SP1 wraps STARK in Groth16, ~200K gas)
+- Midnight attestation bridge (Level 1 implemented, Level 2 ZKIR designed)
+- Private Vickrey auction (4-phase: garbled circuits + OT + threshold + ring + stealth)
+- Node persistence via redb (Blocklace incremental, ledger checkpoints every 100 blocks, fast-sync)
 - 8 production applications (gallery, stablecoin, AMM, orderbook, lending, identity, compute-exchange, bounty-board)
 - Discord bot with custodial wallet and DeFi commands
 - Devnet deployment (3 federation nodes + app services + Caddy TLS + multi-arch Docker)
@@ -45,12 +48,11 @@ The system is operational: 355k lines of Rust across 41 crates, 4,046 tests, rea
 
 What remains:
 
-- EVM bridge guest program requires regeneration against Plonky3 backend (architecture complete, SP1 toolchain integration pending)
+- EVM bridge guest program requires regeneration against Plonky3 backend (Foundry scripts deployed, SP1 toolchain integration pending)
 - Full heterogeneous recursive composition (derivation + fold + membership + Effect VM in one recursive proof)---individual pairs work, arbitrary-N aggregation uses sequential chaining
-- Effect VM authority witness integration (conservation and state-continuity constraints operational; EffectMask verification in-circuit is in progress)
 - Cross-silo multi-hop gossip for block propagation (Dandelion++ works for transactions; cross-federation block gossip is one-hop)
 - Privacy Phases 2--6 (unlinkable presentations, predicates, unified recursive proof, revocable unlinkability, federation privacy) are designed but not yet implemented
 - Fee distribution, validator staking, and fee market are designed but the executor currently burns all fees
-- Morpheus adapter exists but is not yet driving production consensus (simplified consensus is the active path)
+- Midnight Level 2 bridge (FRI verifier in ZKIR)---designed but not yet end-to-end operational
 
 The remaining work is well-understood. The execution, proof, authorization, sovereignty, and interop layers are production-grade. The privacy credential pipeline (unlinkable multi-show), economic model activation, and federation privacy layers are designed and await implementation.

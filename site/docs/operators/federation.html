@@ -65,42 +65,73 @@
     <pre><code>pyana-node run \
   --federation-peers "node1.fed.example:8420,node2.fed.example:8420,node3.fed.example:8420"</code></pre>
 
-    <h2 id="keys">Key Exchange</h2>
+    <h2 id="keys">Key Exchange (Constitutional Consensus)</h2>
 
     <p>
       Share your node's public key (printed during <code>pyana-node init</code>) with
-      the federation operator. They will add it to the validator set for the next epoch
-      reconfiguration.
+      existing federation members. Under Constitutional Consensus, your node is admitted
+      when <code>h</code> existing members reference your join-request block in the
+      Blocklace (typically h = 2f+1). No separate "epoch reconfiguration" step is needed --
+      membership changes take effect as soon as the Blocklace records sufficient support.
     </p>
 
-    <h2 id="sync">Initial Sync</h2>
+    <h2 id="sync">Initial Sync (Fast-Sync)</h2>
 
     <p>
-      On first connection, the node downloads the chain state from peers. The sync
-      process fetches attested roots and any committed blocks since genesis.
-      Progress is logged at <code>INFO</code> level.
+      On first connection, the node does <strong>not</strong> replay the full Blocklace
+      history. Instead, it fetches the latest ledger checkpoint from a peer (checkpoint
+      serving API), verifies it against a known trust anchor, and resumes participation
+      from the checkpoint height. This takes seconds, not hours.
     </p>
 
-    <h2 id="morpheus">Morpheus Consensus</h2>
+    <p>
+      After checkpoint sync, the node receives new Blocklace blocks via cordial
+      dissemination (reactive push with frontier exchange).
+    </p>
+
+    <h2 id="consensus">Blocklace + Cordial Miners</h2>
 
     <p>
-      For production federations, enable the full Morpheus DAG-BFT consensus engine:
+      Production federations run Blocklace consensus with Cordial Miners for total ordering:
     </p>
 
     <pre><code>pyana-node run \
-  --morpheus \
   --node-index 2 \
-  --federation-size 4 \
-  --federation-peers "..."</code></pre>
+  --federation-peers "node1:8420,node2:8420,node3:8420"</code></pre>
 
     <p>
-      Morpheus provides adaptive modes: fast path (all-correct) and slow path
-      (tolerates up to f = (n-1)/3 Byzantine faults). See
+      Cordial Miners provides 3-round BFT finality, tolerating up to f = (n-1)/3
+      Byzantine faults. The protocol is quiescent -- no messages when idle. A single-node
+      federation (n=1) uses the same code path with a trivial committee. See
       <a href="../architecture/consensus.html">Consensus Architecture</a> for details.
     </p>
 
+    <h2 id="persistence">Persistence</h2>
+
+    <p>
+      Nodes persist all state to redb (ACID, WAL, crash-safe). On restart:
+    </p>
+
+    <ul>
+      <li>Blocklace blocks are restored from the incremental store</li>
+      <li>Ledger state is restored from the latest checkpoint (every 100 blocks)</li>
+      <li>The node resumes Cordial Miners participation at its last known round</li>
+    </ul>
+
+    <h2 id="membership">Membership Changes</h2>
+
+    <p>
+      Constitutional Consensus handles membership continuously:
+    </p>
+
+    <ul>
+      <li><strong>Joining:</strong> Produce a join-request block. Admitted when h members reference it.</li>
+      <li><strong>Leaving:</strong> Stop producing blocks. Timeout-leave removes inactive nodes automatically.</li>
+      <li><strong>Eviction:</strong> Equivocating nodes are detected structurally in the Blocklace and removed.</li>
+    </ul>
+
     <div class="stub-notice">
-      <p>Detailed peer discovery, epoch reconfiguration, and state sync protocol documentation is being written.</p>
+      <p>Detailed peer discovery and multi-federation networking documentation is being written.</p>
     </div>
 
   </div>

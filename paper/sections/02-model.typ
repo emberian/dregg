@@ -52,9 +52,9 @@ If any action in the call forest fails, all effects are rolled back via journal 
 
 == Silos and Federations
 
-A _silo_ is a node that participates in federation consensus, verifies proofs, and anchors state roots. For hosted cells, a silo stores full state; for sovereign cells (the default), it stores only the 32-byte commitment. A _federation_ is a committee of 3--64 silos sharing a trust root. Federation members run Morpheus @morpheus adaptive BFT consensus to agree on attested Merkle roots, revocation tree updates, and budget rebalancing epochs. The honest-majority assumption is standard: tolerate $< n\/3$ Byzantine members.
+A _silo_ is a node that participates in federation consensus, verifies proofs, and anchors state roots. For hosted cells, a silo stores full state; for sovereign cells (the default), it stores only the 32-byte commitment. A _federation_ is a committee of 1--64 silos sharing a trust root. Federation members run the Blocklace @blocklace protocol with Cordial Miners $tau$ for total ordering, achieving 3-round BFT finality under the standard $< n\/3$ Byzantine assumption. Constitutional Consensus governs membership changes (democratic admission via h-rule, timeout-leave for inactive nodes).
 
-The federation's role is deliberately minimal: ordering, nullifier deduplication, root anchoring, and discovery. It is NOT an execution layer for sovereign cells---verification only. Sovereign cells prove their own state transitions; the federation merely attests that proofs were valid at a given height.
+The federation's role is deliberately minimal: ordering, nullifier deduplication, root anchoring, and discovery. It is NOT an execution layer for sovereign cells---verification only. Sovereign cells prove their own state transitions; the federation merely attests that proofs were valid at a given height. The system operates in three tiers: sovereign execution (no federation), optimistic coordination (Stingray bounded counters), and ordered consensus (Cordial Miners)---agents escalate only when needed.
 
 == EROS-Style Factories
 

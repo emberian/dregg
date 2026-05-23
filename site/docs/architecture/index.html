@@ -61,9 +61,9 @@
       Pyana is a sovereign capability runtime. Agents own their state as cells on their
       own machines. The federation is a notary -- used for ordering, double-spend prevention,
       discovery, and proving to strangers. Between known parties, it is just signed proofs
-      exchanged directly. The system spans ~340k lines of Rust across 44 crates, with a
-      constraint DSL that compiles to 8 proof backends, 21 AIR circuits, and 8 complete
-      applications (DeFi suite, identity, gallery, compute exchange).
+      exchanged directly. The system spans ~355k lines of Rust across 44 crates, with a
+      constraint DSL that compiles to 8 proof backends, an Effect VM (14 effects, one STARK
+      per turn), and 8 complete applications (DeFi suite, identity, gallery, compute exchange).
     </p>
 
     <h2>Three Interaction Modes</h2>
@@ -88,10 +88,10 @@
       <p class="toc__title">In this section</p>
       <ul class="toc__list">
         <li><a href="overview.html">System Design</a> -- The 44-crate workspace and how layers interact</li>
-        <li><a href="consensus.html">Consensus</a> -- Morpheus DAG-BFT, adaptive modes, epoch reconfiguration</li>
-        <li><a href="cryptography.html">Cryptography</a> -- BabyBear, Poseidon2, STARKs, Kimchi, SP1, Plonky3, FRI, 21 AIRs</li>
+        <li><a href="consensus.html">Consensus</a> -- Blocklace, Cordial Miners (3-round BFT), Constitutional Consensus, three-tier execution</li>
+        <li><a href="cryptography.html">Cryptography</a> -- Effect VM, DSL-only circuits, BabyBear STARKs, Kimchi, SP1, Plonky3, FRI</li>
         <li><a href="capabilities.html">Capabilities</a> -- Cells, turns, c-lists, delegation, factories, facets, E-language semantics</li>
-        <li><a href="privacy.html">Privacy</a> -- Stealth addresses, Pedersen commitments, Dandelion++, encrypted turns, sealers</li>
+        <li><a href="privacy.html">Privacy</a> -- Private Vickrey auction, stealth addresses, Pedersen commitments, Dandelion++, garbled circuits</li>
         <li><a href="federation.html">Federation Model</a> -- Single-fed, cross-fed, bridge nodes, EVM bridge (SP1 Groth16)</li>
         <li><a href="economics.html">Economics</a> -- Fees, deposits, budget channels, computrons</li>
       </ul>

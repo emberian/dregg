@@ -703,12 +703,12 @@ pub fn circuit_for_air_name(air_name: &str) -> Option<DslCircuit> {
         BLINDED_MERKLE_AIR_NAME => Some(blinded_merkle_poseidon2_circuit()),
         NON_REVOCATION_AIR_NAME => Some(non_revocation_circuit()),
         DERIVATION_AIR_NAME => Some(derivation_circuit()),
-        PREDICATE_DSL_AIR_NAME => {
-            Some(DslCircuit::new(crate::dsl::predicates::predicate_descriptor()))
-        }
-        RELATIONAL_PREDICATE_DSL_AIR_NAME => {
-            Some(DslCircuit::new(crate::dsl::predicates::relational_predicate_descriptor()))
-        }
+        PREDICATE_DSL_AIR_NAME => Some(DslCircuit::new(
+            crate::dsl::predicates::predicate_descriptor(),
+        )),
+        RELATIONAL_PREDICATE_DSL_AIR_NAME => Some(DslCircuit::new(
+            crate::dsl::predicates::relational_predicate_descriptor(),
+        )),
         COMPOUND_PREDICATE_DSL_AIR_NAME => {
             Some(crate::dsl::predicates::compound_predicate_dsl_circuit())
         }

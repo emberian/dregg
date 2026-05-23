@@ -378,9 +378,32 @@ For Ethereum/Base settlement, the SP1 backend wraps Pyana STARKs in Groth16:
 
 The EVM bridge includes a VK registry with governance, an incremental Merkle tree for deposits ($O(log n)$ insertions), and frontrunning protection. *Status:* The chain crate is implemented but the guest program requires regeneration against the current Plonky3 backend (in development).
 
-== Effect VM <sec-effect-vm>
+== Effect VM: The Sovereign Proof Mechanism <sec-effect-vm>
 
-The Effect VM is a multi-row AIR circuit that proves arbitrary turns---one STARK per turn regardless of effect count. Rather than a general-purpose CPU emulator, it is a domain-specific VM whose instruction set matches Pyana's effect types (SetField, Transfer, GrantCapability, CreateCell, NoteSpend, etc.).
+The Effect VM is the primary proof mechanism for sovereign cells. It is a multi-row AIR circuit that proves arbitrary turns---one STARK per turn regardless of effect count. Rather than a general-purpose CPU emulator, it is a domain-specific VM whose 14-effect instruction set matches Pyana's state transition primitives:
+
+#figure(
+  table(
+    columns: (auto, auto),
+    align: (left, left),
+    table.header([*Effect*], [*Semantics*]),
+    [SetField], [Mutate a cell state slot],
+    [Transfer], [Move value between cells (conservation-checked)],
+    [GrantCapability], [Delegate capability with monotonic narrowing],
+    [RevokeCapability], [Remove a capability from a c-list],
+    [CreateCell], [Factory-spawned cell creation],
+    [DestroyCell], [Provably remove a cell],
+    [NoteSpend], [Private note consumption (nullifier production)],
+    [NoteCreate], [Private note minting (commitment production)],
+    [EmitEvent], [Observable side-effect (logged, not state-altering)],
+    [Seal], [Encrypt data under a sealer capability],
+    [Introduce], [Three-party capability introduction],
+    [Bridge], [Cross-chain attestation emission],
+    [Invoke], [CellProgram invocation (calls DSL-generated circuits)],
+    [Custom], [Dispatch to arbitrary CellProgram-defined logic],
+  ),
+  caption: [Effect VM instruction set. Each effect maps to a constrained state transition row in the STARK trace.],
+)
 
 Each row of the Effect VM trace encodes one effect's execution:
 
@@ -396,38 +419,42 @@ The VM enforces:
 - *Authority*: Each effect's EffectMask is a subset of the actor's mask.
 - *Atomicity*: All effects in a turn succeed or all roll back (proven via a completion flag).
 
-The Effect VM handles turns of arbitrary length in a single proof, eliminating the per-effect proof overhead that would otherwise make complex turns (e.g., flash-loan factory spawning, multi-party swaps) prohibitively expensive. *Status:* Implemented and tested (1,411 lines); conservation and state-continuity constraints are operational; authority witness integration is in progress.
+The `Custom` effect enables dispatch to DSL-generated CellProgram circuits---any application-specific logic compiled through the constraint DSL can be invoked as a single Effect VM step. IVC compression then chains multiple turn proofs into a constant-size attestation covering the cell's entire history.
 
-== 21+ AIR Circuits
+The Effect VM handles turns of arbitrary length in a single proof, eliminating the per-effect proof overhead that would otherwise make complex turns (e.g., flash-loan factory spawning, multi-party swaps) prohibitively expensive. *Status:* Implemented and tested; conservation, state-continuity, and authority constraints are operational. The Effect VM is the default proof path for all sovereign cell transitions.
 
-The circuit crate implements the following AIR circuits, all ported to the DSL with full parity:
+== DSL-Only Circuit Architecture
+
+All proof logic is now defined exclusively through the constraint DSL (`circuit/src/dsl/`). The former standalone `_air.rs` files have been deleted---the DSL is the single source of truth, generating circuit implementations for all backends from `CircuitDescriptor` definitions. The production circuit library:
 
 #figure(
   table(
-    columns: (auto, auto),
-    align: (left, left),
-    table.header([*Circuit*], [*Purpose*]),
-    [Poseidon2Air], [Hash permutation verification],
-    [MerkleAir], [4-ary Merkle membership proof],
-    [FoldAir], [Monotonic capability attenuation],
-    [MultiStepAir], [N-step Datalog derivation],
-    [IvcAir], [Fold chain accumulation (constant-size)],
-    [NoteSpendingAir], [Private note spending + nullifier],
-    [NonRevocationAir], [Credential non-revocation proof],
-    [NonMembershipAir], [Set non-membership (nullifier freshness)],
-    [RecursiveVerifierAir], [STARK-in-STARK recursive verification],
-    [PresentationAir], [Full private credential presentation],
-    [BlockTransitionAir], [Block state transition validity],
-    [TurnValidityAir], [Single turn state transition],
-    [SovereignTransitionAir], [Sovereign cell state transition],
-    [EffectVmAir], [Multi-effect turn proving],
-    [PredicateAir], [Arbitrary predicate evaluation],
-    [TemporalPredicateAir], [Time-bounded predicate proofs],
-    [ArithmeticPredicateAir], [Arithmetic range/comparison proofs],
-    [RelationalPredicateAir], [Cross-field relational constraints],
-    [CompoundPredicateAir], [Boolean composition of predicates],
-    [SchnorrAir], [Schnorr signature verification in-circuit],
-    [NativeSignatureAir], [Ed25519 signature verification],
+    columns: (auto, auto, auto),
+    align: (left, left, left),
+    table.header([*Descriptor*], [*Purpose*], [*Backends*]),
+    [Poseidon2], [Hash permutation verification], [All 8],
+    [MerkleMembership], [4-ary Merkle path proof], [All 8],
+    [FoldChain], [Monotonic capability attenuation], [All 8],
+    [MultiStepDerivation], [N-step Datalog derivation], [All 8],
+    [IvcAccumulation], [Fold chain compression (constant-size)], [STARK, Plonky3, Kimchi],
+    [NoteSpending], [Private note spending + nullifier], [All 8],
+    [NonRevocation], [Credential non-revocation proof], [All 8],
+    [NonMembership], [Set non-membership (nullifier freshness)], [All 8],
+    [RecursiveVerifier], [STARK-in-STARK recursive verification], [STARK, Plonky3],
+    [Presentation], [Full private credential presentation], [All 8],
+    [EffectVm], [Multi-effect turn proving (14 effects)], [STARK, Plonky3, Kimchi],
+    [Predicate], [Arbitrary predicate evaluation], [All 8],
+    [TemporalPredicate], [Time-bounded predicate proofs], [All 8],
+    [ArithmeticPredicate], [Arithmetic range/comparison proofs], [All 8],
+    [RelationalPredicate], [Cross-field relational constraints], [All 8],
+    [CompoundPredicate], [Boolean composition of predicates], [All 8],
+    [Schnorr], [Schnorr signature verification in-circuit], [STARK, Plonky3],
+    [NativeSignature], [Ed25519 signature verification], [STARK, Plonky3],
+    [SovereignTransition], [Sovereign cell state transition], [STARK, Plonky3, Kimchi],
+    [BlockTransition], [Block state transition validity], [STARK, Plonky3],
+    [TurnValidity], [Single turn state transition], [STARK, Plonky3],
   ),
-  caption: [Implemented AIR circuits. All support the custom STARK prover; most additionally support Plonky3 and DSL compilation.],
+  caption: [DSL circuit descriptors. Each compiles to trace generators and constraint evaluators for the indicated backends via code generation. "All 8" = Rust, AIR, Datalog, Kimchi, Midnight/ZKIR, Plonky3, SP1, STARK.],
 )
+
+The Effect VM is the primary sovereign proof mechanism: a single STARK proves an entire turn regardless of effect count. The DSL descriptors above provide the component circuits that the Effect VM dispatches to via `Custom` CellProgram effects.

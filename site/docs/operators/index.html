@@ -108,7 +108,8 @@
   +-- WebSocket (port 8420/ws)   -- Real-time state updates
   |
   +-- Federation Sync            -- Gossip with peers
-  |     Morpheus DAG-BFT         -- Consensus (ordering)
+  |     Blocklace + Cordial Miners -- Consensus (3-round BFT ordering)
+  |     Constitutional Consensus -- Democratic membership (h-rule, timeout-leave)
   |     Ed25519 signatures       -- Message authentication
   |     Attested roots           -- Periodic commitment checkpoints
   |     Nullifier set            -- Double-spend prevention

@@ -6,13 +6,13 @@ stingray:
   serial-number: "arXiv:2501.06531"
   url: "https://arxiv.org/abs/2501.06531"
 
-morpheus:
+blocklace:
   type: article
-  title: "Morpheus: Optimal-Latency BFT Under Partial Synchrony"
-  author: ["Lewis-Pye, Andrew", "Shapiro, Ehud"]
-  date: 2025
-  url: "https://arxiv.org/abs/2502.08465"
-  serial-number: "arXiv:2502.08465"
+  title: "Cordial Miners: Fast and Efficient Consensus for Every Eventuality"
+  author: ["Shapiro, Ehud", "Sela, Nimrod"]
+  date: 2024
+  url: "https://arxiv.org/abs/2205.09174"
+  serial-number: "arXiv:2205.09174"
 
 macaroons:
   type: article

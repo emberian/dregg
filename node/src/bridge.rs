@@ -40,7 +40,7 @@ use pyana_net::node::{NodeId, PeerNode, PeerNodeConfig};
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
-use crate::federation_sync::{GossipHandle, TOPIC_REVOCATIONS, TOPIC_ROOTS, TOPIC_TURNS};
+use crate::gossip::{GossipHandle, TOPIC_REVOCATIONS, TOPIC_ROOTS, TOPIC_TURNS};
 use crate::state::NodeState;
 
 // ─── Configuration ─────────────────────────────────────────────────────────

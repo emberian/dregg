@@ -286,24 +286,26 @@ Intent Engine            Gossip broadcast | local Datalog matching | STARK fulfi
   ────────────────────────────────────────────────────────────────────
 Network                  QUIC P2P | Plumtree gossip | Dandelion++ (unlinkable relay)
   ────────────────────────────────────────────────────────────────────
-Federation               Morpheus adaptive BFT | BLS12-381 threshold sigs
-                         Ed25519 consensus | epoch reconfig | revocation trees
+Consensus                Blocklace (CRDT DAG) | Cordial Miners (3-round BFT)
+                         Constitutional Consensus (democratic membership, h-rule)
   ────────────────────────────────────────────────────────────────────
-Coordination             Causal DAG | 2PC atomic | bounded counters (Stingray)
+Three-Tier Execution     Sovereign (PCO) | Optimistic (Stingray COD) | Ordered
+                         2PC atomic | bounded counters
   ────────────────────────────────────────────────────────────────────
 Execution                Sovereign Cells (hosted OR sovereign mode) | Turns (atomic txns)
                          EROS-style factories | Faceted capabilities (E-language)
                          Eventual sends | Pipeline composition | Routing directives
   ────────────────────────────────────────────────────────────────────
-Privacy                  Stealth addresses (Monero/EIP-5564 style) | Pedersen commitments
-                         Dandelion++ stem/fluff | Encrypted turns | Oblivious transfer
-                         Sealer/Unsealer (X25519-ChaCha20Poly1305 rights amplification)
+Privacy                  Private Vickrey (garbled + OT + threshold + ring + stealth)
+                         Stealth addresses | Pedersen commitments | Dandelion++
+                         Encrypted turns | Private predicates (3 tiers) | Sealers
   ────────────────────────────────────────────────────────────────────
-Proof                    BabyBear STARK + FRI | 21 AIR circuits | Recursive composition
-                         Kimchi (Mina) backend | SP1 zkVM | Plonky3 native
-                         IVC fold chains | Proof-tier selection | ~24 KiB proofs
+Proof                    Effect VM (14 effects, one STARK per turn) | DSL-only circuits
+                         STARK-in-Pickles (recursive, constant-size)
+                         Kimchi (Mina) | SP1 zkVM | Plonky3 native | ~24 KiB proofs
   ────────────────────────────────────────────────────────────────────
-EVM Bridge               SP1 Groth16 wrapping (~200k gas) | Base/Ethereum verification
+Bridge                   EVM: SP1 Groth16 (~200k gas) | Base Sepolia
+                         Midnight: Attestation bridge + ZKIR path | Mina: Pickles
                          VK governance | Incremental Merkle | Deposit/Withdraw cycle
   ────────────────────────────────────────────────────────────────────
 Commitment               4-ary Merkle trees (BLAKE3 fast / Poseidon2 ZK)

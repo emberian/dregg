@@ -319,6 +319,15 @@ pub fn verify_blinded_membership_dsl_full(
 }
 
 // ============================================================================
+// Legacy compatibility types (re-exported from merkle_types.rs)
+// ============================================================================
+
+pub use crate::merkle_types::{
+    MERKLE_AIR_WIDTH, MerkleAir, MerkleLevelWitness, MerkleWitness, TREE_DEPTH,
+    create_test_witness as create_test_witness_legacy,
+};
+
+// ============================================================================
 // AIR Name Constants (for dispatch)
 // ============================================================================
 

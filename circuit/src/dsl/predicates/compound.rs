@@ -78,6 +78,9 @@ use crate::dsl::circuit::{
 /// Maximum sub-predicates supported.
 pub const MAX_SUB_PREDICATES: usize = 8;
 
+/// Backward-compatible alias (previously `MAX_COMPOUND_PREDICATES` in `compound_predicate_air`).
+pub const MAX_COMPOUND_PREDICATES: usize = MAX_SUB_PREDICATES;
+
 /// Sub-result columns: 0..7
 pub const SUB_RESULT_START: usize = 0;
 
@@ -919,4 +922,21 @@ pub fn verify_compound_dsl(
 ) -> Result<(), String> {
     let circuit = compound_predicate_dsl_circuit();
     stark::verify(&circuit, &proof.stark_proof, expected_pi)
+}
+
+/// Backward-compatible alias for `prove_compound_dsl`.
+pub fn prove_compound_predicate(
+    sub_results: &[bool],
+    formula: &BooleanFormula,
+    commitments: Option<&[BabyBear]>,
+) -> Result<CompoundPredicateProof, String> {
+    prove_compound_dsl(sub_results, formula, commitments)
+}
+
+/// Backward-compatible alias for `verify_compound_dsl`.
+pub fn verify_compound_predicate(
+    proof: &CompoundPredicateProof,
+    expected_pi: &[BabyBear],
+) -> Result<(), String> {
+    verify_compound_dsl(proof, expected_pi)
 }

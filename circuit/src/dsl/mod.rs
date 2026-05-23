@@ -56,8 +56,17 @@ pub use revocation::{
 
 // Re-export DSL-native fold proving API.
 pub use fold::{
-    FOLD_DSL_PI_COUNT, FOLD_DSL_WIDTH, fold_circuit_descriptor, fold_dsl_circuit,
+    FOLD_AIR_WIDTH, FOLD_DSL_PI_COUNT, FOLD_DSL_WIDTH, FoldAir, FoldWitness, RemovedFact,
+    build_membership_proof, build_shared_tree, compute_root_transition_hash,
+    compute_test_checks_commitment, create_test_fold, fold_circuit_descriptor, fold_dsl_circuit,
     generate_fold_trace, prove_fold_dsl, prove_fold_stark, verify_fold_dsl, verify_fold_stark,
+    verify_root_transition,
+};
+
+// Re-export legacy Merkle types for backward compatibility.
+pub use crate::merkle_types::{
+    MERKLE_AIR_WIDTH, MerkleAir, MerkleLevelWitness, MerkleWitness, TREE_DEPTH,
+    create_test_witness as create_test_witness_legacy,
 };
 
 // Re-export DSL-native note spending proving API.
@@ -76,8 +85,7 @@ pub use accumulator::{
 
 // Re-export DSL-native derivation proving API.
 pub use derivation::{
-    BODY_HASH_INV_START, EXTENDED_TRACE_WIDTH, MULTI_STEP_DSL_WIDTH,
-    derivation_circuit_descriptor, derivation_dsl_circuit, generate_derivation_trace_dsl,
-    generate_multi_step_trace_dsl, prove_authorization_dsl, prove_derivation_dsl,
-    verify_authorization_dsl, verify_derivation_dsl,
+    BODY_HASH_INV_START, EXTENDED_TRACE_WIDTH, MULTI_STEP_DSL_WIDTH, derivation_circuit_descriptor,
+    derivation_dsl_circuit, generate_derivation_trace_dsl, generate_multi_step_trace_dsl,
+    prove_authorization_dsl, prove_derivation_dsl, verify_authorization_dsl, verify_derivation_dsl,
 };

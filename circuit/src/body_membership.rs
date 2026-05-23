@@ -21,13 +21,13 @@
 //! This is IVC/composition: two proof types sharing the public `state_root`.
 //! No trace widening needed -- just additional proof obligations.
 
+use crate::dsl::descriptors::merkle_poseidon2_circuit;
+use crate::dsl::membership::generate_merkle_poseidon2_trace;
 use crate::field::BabyBear;
 use crate::multi_step_air::{
     MultiStepWitness, prove_authorization_stark, verify_authorization_stark,
 };
 use crate::stark::{self, StarkProof};
-use crate::dsl::descriptors::merkle_poseidon2_circuit;
-use crate::dsl::membership::generate_merkle_poseidon2_trace;
 use serde::{Deserialize, Serialize};
 
 /// A Merkle proof for a single body fact: siblings + positions (leaf-to-root).
