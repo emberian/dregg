@@ -29,6 +29,7 @@
 //! This IS the progressive disclosure story applied to discovery.
 
 pub mod commit_reveal_fulfillment;
+pub mod delay_pool;
 pub mod fulfillment;
 pub mod gossip;
 pub mod matcher;
@@ -523,7 +524,7 @@ pub fn compute_stake_nullifier(commitment: &[u8; 32], epoch: u64, counter: u32) 
 // ---------------------------------------------------------------------------
 
 /// Fill a buffer with random bytes (no-std compatible via getrandom).
-fn getrandom(buf: &mut [u8]) {
+pub(crate) fn getrandom(buf: &mut [u8]) {
     ::getrandom::fill(buf).expect("getrandom failed");
 }
 

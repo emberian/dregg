@@ -5,6 +5,10 @@
 
 use serde::{Deserialize, Serialize};
 
+// Used by pad_message for random fill.
+#[allow(unused_imports)]
+use rand::Fill;
+
 /// Messages exchanged between pyana peers over direct QUIC connections
 /// or disseminated via gossip.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,6 +128,77 @@ impl PeerMessage {
     }
 }
 
+// ─── Two-Bucket Message Padding ─────────────────────────────────────────────
+//
+// Hides message type from traffic-analysis by padding all wire messages to one
+// of two fixed sizes. See docs/design-network-privacy.md Phase 1.
+
+/// Small bucket size: 4 KiB. Covers turns, intents, revocations.
+pub const SMALL_BUCKET: usize = 4096;
+
+/// Large bucket size: 512 KiB. Covers STARK proofs, recursive proofs, checkpoints.
+pub const LARGE_BUCKET: usize = 524_288;
+
+/// Pad a serialized payload to a fixed bucket size.
+///
+/// Wire format of the padded output:
+/// ```text
+/// [4 bytes: actual payload length, little-endian u32]
+/// [payload bytes]
+/// [random padding to fill bucket]
+/// ```
+///
+/// Messages larger than `LARGE_BUCKET - 4` bytes are returned as-is with a
+/// 4-byte length prefix but no additional padding (they are already identifiable
+/// by their exceptional size and padding would be wasteful).
+pub fn pad_message(payload: &[u8]) -> Vec<u8> {
+    // The padded frame needs 4 bytes for the length prefix plus the payload.
+    let framed_len = 4 + payload.len();
+
+    let target_size = if framed_len <= SMALL_BUCKET {
+        SMALL_BUCKET
+    } else if framed_len <= LARGE_BUCKET {
+        LARGE_BUCKET
+    } else {
+        // Too large to pad economically — just frame it.
+        tracing::warn!(
+            "Message too large for padding buckets ({} bytes); sending unpadded",
+            payload.len()
+        );
+        framed_len
+    };
+
+    let mut padded = Vec::with_capacity(target_size);
+    // 4-byte length prefix (actual payload length).
+    padded.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    // Actual payload.
+    padded.extend_from_slice(payload);
+    // Random padding to fill bucket.
+    let pad_len = target_size - 4 - payload.len();
+    if pad_len > 0 {
+        let mut pad = vec![0u8; pad_len];
+        rand::rng().fill(&mut pad[..]);
+        padded.extend_from_slice(&pad);
+    }
+
+    padded
+}
+
+/// Strip padding from a received padded frame, returning the original payload.
+///
+/// Returns `None` if the frame is malformed (too short or inner length exceeds
+/// frame bounds).
+pub fn unpad_message(padded: &[u8]) -> Option<&[u8]> {
+    if padded.len() < 4 {
+        return None;
+    }
+    let len = u32::from_le_bytes(padded[0..4].try_into().ok()?) as usize;
+    if 4 + len > padded.len() {
+        return None;
+    }
+    Some(&padded[4..4 + len])
+}
+
 /// Errors from message decoding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecodeError {
@@ -226,5 +301,153 @@ mod tests {
             PeerMessage::decode(&[0, 0, 0, 100]),
             Err(DecodeError::Incomplete)
         );
+    }
+
+    // ─── Two-bucket padding tests ──────────────────────────────────────────
+
+    #[test]
+    fn pad_small_message_to_small_bucket() {
+        let payload = vec![0xAB; 100]; // 100 bytes, well under 4 KiB
+        let padded = super::pad_message(&payload);
+        assert_eq!(padded.len(), super::SMALL_BUCKET);
+
+        let recovered = super::unpad_message(&padded).unwrap();
+        assert_eq!(recovered, &payload[..]);
+    }
+
+    #[test]
+    fn pad_empty_message_to_small_bucket() {
+        let payload: Vec<u8> = vec![];
+        let padded = super::pad_message(&payload);
+        assert_eq!(padded.len(), super::SMALL_BUCKET);
+
+        let recovered = super::unpad_message(&padded).unwrap();
+        assert_eq!(recovered, &payload[..]);
+    }
+
+    #[test]
+    fn pad_max_small_message() {
+        // Maximum payload that fits in small bucket: SMALL_BUCKET - 4 bytes for length
+        let payload = vec![0x42; super::SMALL_BUCKET - 4];
+        let padded = super::pad_message(&payload);
+        assert_eq!(padded.len(), super::SMALL_BUCKET);
+
+        let recovered = super::unpad_message(&padded).unwrap();
+        assert_eq!(recovered, &payload[..]);
+    }
+
+    #[test]
+    fn pad_just_over_small_goes_to_large_bucket() {
+        // One byte too large for small bucket
+        let payload = vec![0x42; super::SMALL_BUCKET - 3];
+        let padded = super::pad_message(&payload);
+        assert_eq!(padded.len(), super::LARGE_BUCKET);
+
+        let recovered = super::unpad_message(&padded).unwrap();
+        assert_eq!(recovered, &payload[..]);
+    }
+
+    #[test]
+    fn pad_medium_message_to_large_bucket() {
+        let payload = vec![0xCD; 50_000]; // 50 KiB, goes to large bucket
+        let padded = super::pad_message(&payload);
+        assert_eq!(padded.len(), super::LARGE_BUCKET);
+
+        let recovered = super::unpad_message(&padded).unwrap();
+        assert_eq!(recovered, &payload[..]);
+    }
+
+    #[test]
+    fn pad_max_large_message() {
+        // Maximum payload that fits in large bucket: LARGE_BUCKET - 4
+        let payload = vec![0xEF; super::LARGE_BUCKET - 4];
+        let padded = super::pad_message(&payload);
+        assert_eq!(padded.len(), super::LARGE_BUCKET);
+
+        let recovered = super::unpad_message(&padded).unwrap();
+        assert_eq!(recovered, &payload[..]);
+    }
+
+    #[test]
+    fn pad_oversized_message_not_padded() {
+        // Larger than large bucket — sent as-is with just the length prefix
+        let payload = vec![0xFF; super::LARGE_BUCKET]; // exactly LARGE_BUCKET payload => framed is LARGE_BUCKET + 4
+        let padded = super::pad_message(&payload);
+        // Should be exactly 4 + payload.len() (no extra padding)
+        assert_eq!(padded.len(), 4 + payload.len());
+
+        let recovered = super::unpad_message(&padded).unwrap();
+        assert_eq!(recovered, &payload[..]);
+    }
+
+    #[test]
+    fn pad_random_fill_not_all_zeros() {
+        // Padding should be random, not zeros (statistical check)
+        let payload = vec![0x00; 10];
+        let padded = super::pad_message(&payload);
+        // The padding region starts at offset 4 + 10 = 14
+        let padding_region = &padded[14..];
+        // With 4082 random bytes, probability of all zeros is negligible
+        let nonzero_count = padding_region.iter().filter(|&&b| b != 0).count();
+        assert!(
+            nonzero_count > 100,
+            "Padding should contain random bytes, found only {} non-zero in {} bytes",
+            nonzero_count,
+            padding_region.len()
+        );
+    }
+
+    #[test]
+    fn unpad_rejects_short_frame() {
+        assert!(super::unpad_message(&[]).is_none());
+        assert!(super::unpad_message(&[1, 2, 3]).is_none());
+    }
+
+    #[test]
+    fn unpad_rejects_invalid_length() {
+        // Length prefix says 100 bytes but frame is only 10 bytes total
+        let mut frame = vec![0u8; 10];
+        frame[0..4].copy_from_slice(&100u32.to_le_bytes());
+        assert!(super::unpad_message(&frame).is_none());
+    }
+
+    #[test]
+    fn all_message_types_pad_to_bucket_sizes() {
+        // Verify that typical message types all produce exactly bucket-sized outputs
+        let messages = vec![
+            PeerMessage::PublishTurn {
+                turn_hash: [1; 32],
+                turn_data: vec![10; 800],
+                causal_deps: vec![[2; 32]],
+            },
+            PeerMessage::PublishIntent {
+                intent_hash: [3; 32],
+                intent_data: vec![4; 400],
+            },
+            PeerMessage::RevocationGossip {
+                token_id: "tok-123".to_string(),
+                signature: vec![0xaa; 64],
+            },
+            PeerMessage::PublishCheckpoint {
+                height: 42,
+                checkpoint_data: vec![0xbb; 100_000], // large, goes to LARGE_BUCKET
+            },
+        ];
+
+        for msg in &messages {
+            let raw = msg.encode_raw();
+            let padded = super::pad_message(&raw);
+            assert!(
+                padded.len() == super::SMALL_BUCKET || padded.len() == super::LARGE_BUCKET,
+                "Message padded to unexpected size: {} (expected {} or {})",
+                padded.len(),
+                super::SMALL_BUCKET,
+                super::LARGE_BUCKET,
+            );
+            // Verify roundtrip
+            let recovered = super::unpad_message(&padded).unwrap();
+            let decoded = PeerMessage::decode_raw(recovered).unwrap();
+            assert_eq!(&decoded, msg);
+        }
     }
 }

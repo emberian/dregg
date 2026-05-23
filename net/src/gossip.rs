@@ -30,6 +30,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use quinn::{Connection, Endpoint, RecvStream};
+use rand::seq::SliceRandom;
 use tokio::sync::{RwLock, mpsc};
 use tracing::{debug, info, trace, warn};
 
@@ -84,6 +85,16 @@ const MAX_MESSAGE_CACHE_SIZE: usize = 10_000;
 /// Prevents a single peer from exhausting resources via stream flooding.
 const MAX_STREAMS_PER_PEER: usize = 64;
 
+// ─── Dandelion++ constants ─────────────────────────────────────────────────
+
+/// Probability of continuing stem phase at each hop.
+/// Expected stem length: 1/(1-p) = 10 hops.
+const STEM_PROBABILITY: f64 = 0.9;
+
+/// Maximum time a message may remain in stem phase before being fluffed.
+/// Prevents message loss if the stem path hits a dead or unresponsive node.
+const STEM_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// A handle to a joined gossip topic.
 #[derive(Clone, Debug)]
 pub struct TopicHandle {
@@ -101,6 +112,24 @@ impl TopicHandle {
     pub fn name(&self) -> &str {
         &self.name
     }
+}
+
+/// Dandelion++ message phase. Determines routing behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessagePhase {
+    /// Stem phase: forward to exactly one random peer (hides origin).
+    Stem,
+    /// Fluff phase: broadcast to all peers via normal Plumtree gossip.
+    Fluff,
+}
+
+/// Tracking entry for a message in stem phase (for timeout-based failsafe).
+#[derive(Clone)]
+struct StemEntry {
+    topic_id: TopicId,
+    msg_hash: MessageHash,
+    payload: Vec<u8>,
+    entered_stem_at: Instant,
 }
 
 /// The gossip network manages topic subscriptions and message forwarding.
@@ -295,6 +324,9 @@ struct GossipState {
     message_cache: HashMap<MessageHash, CachedMessage>,
     /// Insertion order for message cache entries (FIFO eviction).
     message_cache_order: VecDeque<MessageHash>,
+    /// Dandelion++ stem tracking: messages currently in the stem phase.
+    /// If a message stays here beyond STEM_TIMEOUT, it is fluffed automatically.
+    stem_messages: HashMap<MessageHash, StemEntry>,
 }
 
 impl GossipState {
@@ -422,6 +454,13 @@ enum OutgoingGossip {
         hashes: Vec<MessageHash>,
         target: SocketAddr,
     },
+    /// Dandelion++ stem forward: send to exactly one peer in stem phase.
+    StemForward {
+        topic_id: TopicId,
+        msg_hash: MessageHash,
+        payload: Vec<u8>,
+        target: SocketAddr,
+    },
 }
 
 /// A subscription to a gossip topic.
@@ -491,6 +530,14 @@ enum GossipEnvelope {
     AntiEntropyResponse {
         topic_id: TopicId,
         messages: Vec<(MessageHash, Vec<u8>)>,
+    },
+    /// Dandelion++ stem message: forwarded to exactly one peer per hop.
+    /// The receiver should continue stem (probability STEM_PROBABILITY) or
+    /// transition to fluff (broadcast via normal Plumtree eager-push).
+    Stem {
+        topic_id: TopicId,
+        msg_hash: MessageHash,
+        payload: Vec<u8>,
     },
 }
 
@@ -606,6 +653,7 @@ impl GossipNetwork {
             pending_ihaves: BoundedPendingIhaves::new(MAX_PENDING_IHAVES),
             message_cache: HashMap::new(),
             message_cache_order: VecDeque::new(),
+            stem_messages: HashMap::new(),
         }));
 
         let signing_key = Arc::new(signing_key);
@@ -655,6 +703,15 @@ impl GossipNetwork {
         let ihave_tx = outgoing_tx.clone();
         tokio::spawn(async move {
             Self::ihave_timeout_loop(ihave_state, ihave_tx).await;
+        });
+
+        // Spawn the Dandelion++ stem timeout checker
+        let stem_state = state.clone();
+        let stem_tx = outgoing_tx.clone();
+        let stem_node_id = node_id;
+        let stem_key = signing_key.clone();
+        tokio::spawn(async move {
+            Self::stem_timeout_loop(stem_state, stem_tx, stem_node_id, stem_key).await;
         });
 
         // Spawn the anti-entropy reconciliation task
@@ -730,6 +787,10 @@ impl GossipNetwork {
     }
 
     /// Publish a message to a gossip topic.
+    ///
+    /// Messages always enter the Dandelion++ stem phase first: they are forwarded
+    /// to exactly one random peer (hiding the origin). The stem relay chain
+    /// probabilistically transitions to fluff (normal Plumtree broadcast).
     pub async fn publish(
         &self,
         topic: &TopicHandle,
@@ -738,37 +799,82 @@ impl GossipNetwork {
         let encoded = message.encode_raw();
         let msg_hash = *blake3::hash(&encoded).as_bytes();
 
-        {
+        // Pick a random peer for the stem relay
+        let stem_target = {
             let mut state = self.state.write().await;
             state.seen.insert(msg_hash);
             state.cache_insert(
                 msg_hash,
                 CachedMessage {
                     topic_id: topic.topic_id,
-                    payload: encoded,
+                    payload: encoded.clone(),
                     cached_at: Instant::now(),
                 },
             );
-        }
 
-        let (eager_targets, lazy_targets) = {
-            let state = self.state.read().await;
+            // Track this message in the stem set for timeout failsafe
+            state.stem_messages.insert(
+                msg_hash,
+                StemEntry {
+                    topic_id: topic.topic_id,
+                    msg_hash,
+                    payload: encoded.clone(),
+                    entered_stem_at: Instant::now(),
+                },
+            );
+
+            // Select one random peer from all peers in this topic
             if let Some(topic_state) = state.topics.get(&topic.topic_id) {
-                (topic_state.eager_peers(), topic_state.lazy_peers())
+                let all_peers = topic_state.all_peers();
+                if all_peers.is_empty() {
+                    None
+                } else {
+                    let mut rng = rand::rng();
+                    Some(*all_peers.choose(&mut rng).unwrap())
+                }
             } else {
-                (Vec::new(), Vec::new())
+                None
             }
         };
 
-        self.outgoing_tx
-            .send(OutgoingGossip::EagerPush {
-                topic_id: topic.topic_id,
-                message: message.clone(),
-                msg_hash,
-                targets: eager_targets,
-                lazy_targets,
-            })
-            .map_err(|_| GossipError::Shutdown)?;
+        match stem_target {
+            Some(target) => {
+                // Stem phase: forward to exactly one peer
+                self.outgoing_tx
+                    .send(OutgoingGossip::StemForward {
+                        topic_id: topic.topic_id,
+                        msg_hash,
+                        payload: encoded,
+                        target,
+                    })
+                    .map_err(|_| GossipError::Shutdown)?;
+            }
+            None => {
+                // No peers available — fall back to immediate fluff
+                let mut state = self.state.write().await;
+                state.stem_messages.remove(&msg_hash);
+                drop(state);
+
+                let (eager_targets, lazy_targets) = {
+                    let state = self.state.read().await;
+                    if let Some(topic_state) = state.topics.get(&topic.topic_id) {
+                        (topic_state.eager_peers(), topic_state.lazy_peers())
+                    } else {
+                        (Vec::new(), Vec::new())
+                    }
+                };
+
+                self.outgoing_tx
+                    .send(OutgoingGossip::EagerPush {
+                        topic_id: topic.topic_id,
+                        message: message.clone(),
+                        msg_hash,
+                        targets: eager_targets,
+                        lazy_targets,
+                    })
+                    .map_err(|_| GossipError::Shutdown)?;
+            }
+        }
 
         self.deliver_locally(topic.topic_id, "127.0.0.1:0".parse().unwrap(), message)
             .await;
@@ -937,6 +1043,26 @@ impl GossipNetwork {
                         Self::sign_envelope(&envelope, node_id, &signing_key)
                     else {
                         warn!("gossip envelope serialization failed");
+                        continue;
+                    };
+                    Self::send_to_peers(&envelope_bytes, &[target], &state).await;
+                }
+
+                OutgoingGossip::StemForward {
+                    topic_id,
+                    msg_hash,
+                    payload,
+                    target,
+                } => {
+                    let envelope = GossipEnvelope::Stem {
+                        topic_id,
+                        msg_hash,
+                        payload,
+                    };
+                    let Some(envelope_bytes) =
+                        Self::sign_envelope(&envelope, node_id, &signing_key)
+                    else {
+                        warn!("gossip stem envelope serialization failed");
                         continue;
                     };
                     Self::send_to_peers(&envelope_bytes, &[target], &state).await;
@@ -1371,6 +1497,109 @@ impl GossipNetwork {
                             }
                         }
                     }
+                }
+            }
+
+            // ─── Dandelion++ stem message handling ─────────────────────────
+            GossipEnvelope::Stem {
+                topic_id,
+                msg_hash,
+                payload,
+            } => {
+                // Verify hash integrity
+                let computed_hash = *blake3::hash(&payload).as_bytes();
+                if computed_hash != msg_hash {
+                    warn!(
+                        "Rejecting stem message from {} — hash mismatch",
+                        remote_addr
+                    );
+                    return;
+                }
+
+                // Dedup: if we've already seen this message, ignore
+                {
+                    let s = state.read().await;
+                    if s.seen.contains(&msg_hash) {
+                        trace!("Stem message already seen, ignoring");
+                        return;
+                    }
+                }
+
+                // Decide: continue stem or transition to fluff?
+                let continue_stem = rand::random::<f64>() < STEM_PROBABILITY;
+
+                if continue_stem {
+                    // Pick one random peer (excluding sender) and forward in stem phase
+                    let stem_target = {
+                        let s = state.read().await;
+                        if let Some(topic_state) = s.topics.get(&topic_id) {
+                            let candidates: Vec<_> = topic_state
+                                .all_peers()
+                                .into_iter()
+                                .filter(|a| *a != remote_addr)
+                                .collect();
+                            if candidates.is_empty() {
+                                None
+                            } else {
+                                let mut rng = rand::rng();
+                                Some(*candidates.choose(&mut rng).unwrap())
+                            }
+                        } else {
+                            None
+                        }
+                    };
+
+                    match stem_target {
+                        Some(target) => {
+                            // Track for stem timeout failsafe
+                            {
+                                let mut s = state.write().await;
+                                s.stem_messages.insert(
+                                    msg_hash,
+                                    StemEntry {
+                                        topic_id,
+                                        msg_hash,
+                                        payload: payload.clone(),
+                                        entered_stem_at: Instant::now(),
+                                    },
+                                );
+                            }
+
+                            let _ = outgoing_tx.send(OutgoingGossip::StemForward {
+                                topic_id,
+                                msg_hash,
+                                payload,
+                                target,
+                            });
+                        }
+                        None => {
+                            // No valid stem target — fluff immediately
+                            Self::fluff_message(
+                                topic_id,
+                                msg_hash,
+                                payload,
+                                remote_addr,
+                                state,
+                                outgoing_tx,
+                                signing_key,
+                                node_id,
+                            )
+                            .await;
+                        }
+                    }
+                } else {
+                    // Transition to fluff: broadcast via normal Plumtree
+                    Self::fluff_message(
+                        topic_id,
+                        msg_hash,
+                        payload,
+                        remote_addr,
+                        state,
+                        outgoing_tx,
+                        signing_key,
+                        node_id,
+                    )
+                    .await;
                 }
             }
         }
