@@ -16,10 +16,10 @@
 //!   scalar_state.json    — block height, federation root
 //! ```
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-use tracing::{error, warn};
+use tracing::error;
 
 use pyana_app_framework::EscrowRecord;
 
@@ -64,21 +64,24 @@ pub struct StateSnapshot {
 ///
 /// Returns an `AppState` initialized from the snapshot, or an error if
 /// no valid snapshot exists.
+///
+/// The state is loaded without persistence enabled initially (to avoid a
+/// write-back loop during restoration), then the state_dir is set afterwards.
 pub fn load_state(dir: &Path, federation_root: [u8; 32]) -> Result<AppState, String> {
     let snapshot_path = dir.join("state.json");
     if !snapshot_path.exists() {
         return Err("no state.json found".to_string());
     }
 
-    let data =
-        std::fs::read_to_string(&snapshot_path).map_err(|e| format!("read error: {e}"))?;
+    let data = std::fs::read_to_string(&snapshot_path).map_err(|e| format!("read error: {e}"))?;
     let snapshot: StateSnapshot =
         serde_json::from_str(&data).map_err(|e| format!("parse error: {e}"))?;
 
-    // Use the federation root from CLI/node (authoritative) rather than persisted.
-    let state = AppState::new(federation_root, Some(dir.to_path_buf()));
+    // Build state WITHOUT persistence first (avoids write-back during restore).
+    let state = AppState::new(federation_root, None);
 
-    // Restore scalar state (height from disk, federation root from arg).
+    // Restore state from snapshot. This uses block_on since load_state is called
+    // at startup before the async context is fully set up for handlers.
     tokio::runtime::Handle::current().block_on(async {
         // Set height from persisted state.
         let delta = snapshot.scalar.current_height;
@@ -110,6 +113,9 @@ pub fn load_state(dir: &Path, federation_root: [u8; 32]) -> Result<AppState, Str
         for entry in snapshot.escrows {
             state.insert_escrow(entry.id, entry.value).await;
         }
+
+        // NOW enable persistence for future mutations.
+        state.set_state_dir(dir.to_path_buf()).await;
     });
 
     Ok(state)

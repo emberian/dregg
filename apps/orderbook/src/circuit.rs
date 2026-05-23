@@ -12,6 +12,8 @@
 
 use crate::matching::Fill;
 use crate::order::Side;
+use pyana_circuit::field::BabyBear;
+use pyana_circuit::stark::{self, ExtElem, StarkAir, StarkProof};
 use serde::{Deserialize, Serialize};
 
 /// Public inputs for the match proof circuit.
@@ -203,6 +205,179 @@ impl std::fmt::Display for MatchProofError {
             Self::ConservationViolation => write!(f, "payment != price * amount"),
             Self::PriorityViolation => write!(f, "price-time priority violated"),
         }
+    }
+}
+
+// =============================================================================
+// STARK AIR for Match Proofs
+// =============================================================================
+
+/// Trace layout for MatchProof STARK (2-row trace, 8 columns):
+///
+/// | 0 | fill_price                        |
+/// | 1 | fill_amount                       |
+/// | 2 | maker_limit_price (witness)       |
+/// | 3 | maker_remaining_before (witness)  |
+/// | 4 | maker_side (0=Buy, 1=Sell)        |
+/// | 5 | total_payment                     |
+/// | 6 | price_diff (non-negative)         |
+/// | 7 | amount_diff (non-negative)        |
+const MATCH_PROOF_WIDTH: usize = 8;
+
+/// StarkAir implementation for match proof verification.
+pub struct MatchProofStarkAir;
+
+impl StarkAir for MatchProofStarkAir {
+    fn width(&self) -> usize {
+        MATCH_PROOF_WIDTH
+    }
+
+    fn eval_constraints(
+        &self,
+        local: &[BabyBear],
+        _next: &[BabyBear],
+        public_inputs: &[BabyBear],
+        alpha: BabyBear,
+    ) -> BabyBear {
+        let fill_price = local[0];
+        let fill_amount = local[1];
+        let maker_limit = local[2];
+        let maker_remaining = local[3];
+        let maker_side = local[4];
+        let total_payment = local[5];
+        let price_diff = local[6];
+        let amount_diff = local[7];
+
+        let pi_fill_price = public_inputs[0];
+        let pi_fill_amount = public_inputs[1];
+        let pi_total_payment = public_inputs[2];
+
+        // Constraint 1: fill_price matches public input
+        let c1 = fill_price - pi_fill_price;
+        // Constraint 2: fill_amount matches public input
+        let c2 = fill_amount - pi_fill_amount;
+        // Constraint 3: conservation: total_payment == fill_price * fill_amount
+        let c3 = total_payment - fill_price * fill_amount;
+        // Constraint 4: total_payment matches public input
+        let c4 = total_payment - pi_total_payment;
+        // Constraint 5: price_diff computation based on side
+        let two = BabyBear::new(2);
+        let expected_diff =
+            fill_price - maker_limit + two * maker_side * (maker_limit - fill_price);
+        let c5 = price_diff - expected_diff;
+        // Constraint 6: amount_diff = maker_remaining - fill_amount
+        let c6 = amount_diff - (maker_remaining - fill_amount);
+
+        // Random linear combination
+        let mut result = c1;
+        let mut power = alpha;
+        result = result + c2 * power;
+        power = power * alpha;
+        result = result + c3 * power;
+        power = power * alpha;
+        result = result + c4 * power;
+        power = power * alpha;
+        result = result + c5 * power;
+        power = power * alpha;
+        result = result + c6 * power;
+        let _ = power;
+
+        result
+    }
+
+    fn constraint_degree(&self) -> usize {
+        3
+    }
+
+    fn has_chain_continuity(&self) -> bool {
+        false
+    }
+
+    fn air_name(&self) -> &'static str {
+        "orderbook-match-proof-v1"
+    }
+}
+
+impl MatchProofDescriptor {
+    /// Generate a real STARK proof for this match.
+    ///
+    /// Returns the serialized proof bytes that can be independently verified.
+    pub fn generate_stark_proof(&self) -> Result<Vec<u8>, MatchProofError> {
+        let witness = self
+            .witness
+            .as_ref()
+            .ok_or(MatchProofError::PriceNotSatisfied)?;
+
+        // Build 2-row trace (minimum for STARK)
+        let fill_price = BabyBear::from_u64(self.public_inputs.fill_price);
+        let fill_amount = BabyBear::from_u64(self.public_inputs.fill_amount);
+        let maker_limit = BabyBear::from_u64(witness.maker_limit_price);
+        let maker_remaining = BabyBear::from_u64(witness.maker_remaining_before);
+        let maker_side = BabyBear::new(self.public_inputs.maker_side as u32);
+        let total_payment = BabyBear::from_u64(self.public_inputs.total_payment);
+
+        let price_diff = if self.public_inputs.maker_side == 1 {
+            BabyBear::from_u64(
+                self.public_inputs
+                    .fill_price
+                    .saturating_sub(witness.maker_limit_price),
+            )
+        } else {
+            BabyBear::from_u64(
+                witness
+                    .maker_limit_price
+                    .saturating_sub(self.public_inputs.fill_price),
+            )
+        };
+        let amount_diff = BabyBear::from_u64(
+            witness
+                .maker_remaining_before
+                .saturating_sub(self.public_inputs.fill_amount),
+        );
+
+        let row = vec![
+            fill_price,
+            fill_amount,
+            maker_limit,
+            maker_remaining,
+            maker_side,
+            total_payment,
+            price_diff,
+            amount_diff,
+        ];
+
+        let trace = vec![row.clone(), row];
+        let public_inputs = vec![fill_price, fill_amount, total_payment, maker_side];
+
+        let air = MatchProofStarkAir;
+        let proof = stark::prove(&air, &trace, &public_inputs);
+
+        postcard::to_stdvec(&proof).map_err(|_| MatchProofError::ConservationViolation)
+    }
+
+    /// Verify a STARK proof for this match descriptor.
+    ///
+    /// This can be called by ANYONE with just the public inputs and the proof bytes.
+    pub fn verify_stark_proof(
+        public_inputs: &MatchProofPublicInputs,
+        proof_bytes: &[u8],
+    ) -> Result<(), MatchProofError> {
+        let proof: StarkProof = postcard::from_bytes(proof_bytes)
+            .map_err(|_| MatchProofError::ConservationViolation)?;
+
+        if proof.air_name != "orderbook-match-proof-v1" {
+            return Err(MatchProofError::ConservationViolation);
+        }
+
+        let pi = vec![
+            BabyBear::from_u64(public_inputs.fill_price),
+            BabyBear::from_u64(public_inputs.fill_amount),
+            BabyBear::from_u64(public_inputs.total_payment),
+            BabyBear::new(public_inputs.maker_side as u32),
+        ];
+
+        let air = MatchProofStarkAir;
+        stark::verify(&air, &proof, &pi).map_err(|_| MatchProofError::ConservationViolation)
     }
 }
 

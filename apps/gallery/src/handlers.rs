@@ -14,7 +14,8 @@ use tracing::{info, warn};
 use pyana_app_framework::hex::hex_to_bytes32;
 use pyana_app_framework::{CellId, EscrowCondition};
 
-use crate::server::AppState;
+use crate::persistence::StateSnapshot;
+use crate::server::{AppState, verify_admin_token};
 use crate::{
     CreateAuctionRequest, RegisterArtworkRequest, RevealBidRequest, SubmitBidRequest, WsEvent,
     id_from_hex, id_to_hex,
@@ -116,7 +117,7 @@ pub async fn register_artwork(
 
     let current_height = state.auction_engine.current_height().await;
 
-    let mut engine = state.engine.write().await;
+    let mut engine = state.engine.lock().await;
     match state
         .artwork_registry
         .register(
@@ -146,6 +147,9 @@ pub async fn register_artwork(
             });
 
             info!(artwork_id = %id_to_hex(&artwork_id), "artwork registered");
+
+            drop(engine);
+            persist_state_background(&state).await;
 
             (
                 StatusCode::CREATED,
@@ -302,6 +306,8 @@ pub async fn create_auction(
 
             info!(auction_id = %id_to_hex(&auction_id), "auction created");
 
+            persist_state_background(&state).await;
+
             (
                 StatusCode::CREATED,
                 Json(json!({
@@ -373,7 +379,7 @@ pub async fn submit_bid(
         verification_key: auction_id,
     };
 
-    let mut engine = state.engine.write().await;
+    let mut engine = state.engine.lock().await;
     let mut mgr = pyana_app_framework::escrow::EscrowManager::new(&mut engine);
     let escrow_id = match mgr.create_payment_escrow(
         bidder,
@@ -411,6 +417,8 @@ pub async fn submit_bid(
                 bidder = %id_to_hex(bidder.as_bytes()),
                 "bid committed"
             );
+
+            persist_state_background(&state).await;
 
             (
                 StatusCode::OK,
@@ -497,6 +505,8 @@ pub async fn reveal_bid(
                 "bid revealed"
             );
 
+            persist_state_background(&state).await;
+
             (
                 StatusCode::OK,
                 Json(json!({
@@ -563,43 +573,24 @@ pub async fn get_auction_result(
 }
 
 // =============================================================================
-// Admin Handlers
+// Admin Handlers (bearer-token-protected)
 // =============================================================================
 
-/// Verify admin bearer token from the `Authorization` header.
-/// Returns `Err(Response)` with 401 if the token is missing or invalid.
-fn check_admin_auth(headers: &HeaderMap) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    let expected_token = std::env::var("PYANA_ADMIN_TOKEN").unwrap_or_default();
-    if expected_token.is_empty() {
-        // No token configured — admin endpoints are unprotected (dev mode).
-        return Ok(());
-    }
-
-    let auth_header = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    let provided_token = auth_header.strip_prefix("Bearer ").unwrap_or("");
-    if provided_token.is_empty() || provided_token != expected_token {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "unauthorized: invalid or missing admin token"})),
-        ));
-    }
-
-    Ok(())
-}
-
 /// POST /admin/height — Advance block height (devnet utility).
+/// Protected by PYANA_ADMIN_TOKEN bearer auth.
 pub async fn advance_height(
     headers: HeaderMap,
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    if let Err(e) = check_admin_auth(&headers) {
-        return e.into_response();
+    if !verify_admin_token(&headers, &state.admin_token) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "invalid or missing admin token"})),
+        )
+            .into_response();
     }
+
     let delta = body["delta"].as_u64().unwrap_or(1);
     state.auction_engine.advance_height(delta).await;
     let new_height = state.auction_engine.current_height().await;
@@ -607,14 +598,20 @@ pub async fn advance_height(
 }
 
 /// POST /admin/settle/:id — Trigger settlement for an auction.
+/// Protected by PYANA_ADMIN_TOKEN bearer auth.
 pub async fn trigger_settle(
     headers: HeaderMap,
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(e) = check_admin_auth(&headers) {
-        return e.into_response();
+    if !verify_admin_token(&headers, &state.admin_token) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "invalid or missing admin token"})),
+        )
+            .into_response();
     }
+
     let auction_id = match id_from_hex(&id) {
         Some(bytes) => bytes,
         None => {
@@ -629,7 +626,7 @@ pub async fn trigger_settle(
     // First try to advance the phase.
     state.auction_engine.advance_phase(&auction_id).await;
 
-    let mut engine = state.engine.write().await;
+    let mut engine = state.engine.lock().await;
     match state.auction_engine.settle(&auction_id, &mut engine).await {
         Ok(phase) => {
             if let crate::AuctionPhase::Settled {
@@ -674,6 +671,9 @@ pub async fn trigger_settle(
                 );
             }
 
+            drop(engine);
+            persist_state_background(&state).await;
+
             Json(json!({
                 "status": crate::phase_label(&phase),
             }))
@@ -683,6 +683,27 @@ pub async fn trigger_settle(
             warn!(error = %e, "settlement failed");
             (StatusCode::CONFLICT, Json(json!({"error": e.to_string()}))).into_response()
         }
+    }
+}
+
+/// POST /admin/persist — Force persist state to disk.
+/// Protected by PYANA_ADMIN_TOKEN bearer auth.
+pub async fn persist_state(headers: HeaderMap, State(state): State<AppState>) -> impl IntoResponse {
+    if !verify_admin_token(&headers, &state.admin_token) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "invalid or missing admin token"})),
+        )
+            .into_response();
+    }
+
+    match do_persist(&state).await {
+        Ok(path) => Json(json!({"status": "persisted", "path": path})).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("persistence failed: {e}")})),
+        )
+            .into_response(),
     }
 }
 
@@ -711,4 +732,33 @@ pub async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
             "settled": settled_auctions,
         }
     }))
+}
+
+// =============================================================================
+// Persistence Helpers
+// =============================================================================
+
+/// Persist state in the background (non-blocking, best-effort).
+async fn persist_state_background(state: &AppState) {
+    if let Err(e) = do_persist(state).await {
+        tracing::warn!(error = %e, "background state persistence failed");
+    }
+}
+
+/// Actually persist state to disk.
+async fn do_persist(state: &AppState) -> Result<String, String> {
+    let path = match &state.state_file {
+        Some(p) => p.clone(),
+        None => return Err("no state_file configured".to_string()),
+    };
+
+    let snapshot = StateSnapshot::capture(
+        &state.artwork_registry,
+        &state.auction_engine,
+        &state.provenance_registry,
+    )
+    .await;
+
+    snapshot.save(&path).map_err(|e| e.to_string())?;
+    Ok(path)
 }

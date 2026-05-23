@@ -1470,7 +1470,7 @@ mod tests {
             name: "equality-test".to_string(),
             trace_width: 3,
             constraints: vec![DslConstraint::Equality { col_a: 0, col_b: 1 }],
-            public_input_count: 0,
+            public_input_count: 1,
         };
 
         let trace = vec![vec![42u32, 42, 0]];
@@ -1546,20 +1546,22 @@ mod tests {
 
         // Use from_dsl's prove function which takes raw gates + witness
         let from_dsl_desc = super::super::from_dsl::DslCircuitDescriptor {
-            gates: vec![
-                super::super::from_dsl::DslGate {
-                    typ: super::super::from_dsl::DslGateType::Generic,
-                    coeffs: vec![1, -1, 0, 0, 0],
-                    wires: 2,
-                },
-            ],
+            gates: vec![super::super::from_dsl::DslGate {
+                typ: super::super::from_dsl::DslGateType::Generic,
+                coeffs: vec![1, -1, 0, 0, 0],
+                wires: 2,
+            }],
             public_input_count: 1,
             trace_width: 3,
         };
 
         // Prove using from_dsl infrastructure but with my gates
         let proof = prove_dsl_circuit(&from_dsl_desc, witness);
-        assert!(proof.is_ok(), "Manual witness prove failed: {:?}", proof.err());
+        assert!(
+            proof.is_ok(),
+            "Manual witness prove failed: {:?}",
+            proof.err()
+        );
     }
 
     /// Build a simple DslKimchiDescriptor equivalent to SovereignTransitionAir:
@@ -1598,7 +1600,7 @@ mod tests {
                     ],
                 },
             ],
-            public_input_count: 0,
+            public_input_count: 1,
         }
     }
 
@@ -1608,8 +1610,8 @@ mod tests {
         let result = descriptor_to_kimchi_gates(&desc);
         assert!(result.is_ok(), "Gate generation failed: {:?}", result.err());
         let (gates, pc) = result.unwrap();
-        assert_eq!(pc, 0);
-        // At least 2 gates (one per constraint) + padding
+        assert_eq!(pc, 1); // min 1 PI for Kimchi
+        // At least 2 gates (PI + constraints)
         assert!(
             gates.len() >= 2,
             "Expected at least 2 gates, got {}",
@@ -1680,21 +1682,16 @@ mod tests {
         let desc = sovereign_transition_descriptor();
 
         // Invalid trace: old=1000, transfer=100, new=1000 (WRONG — should be 900)
+        // Kimchi's prover panics in debug mode for invalid witnesses
         let trace = vec![vec![1000u32, 100, 1000, 1, 0, 0]];
-        let public_inputs: &[u32] = &[];
-
-        // Proving may succeed (prover doesn't pre-check constraints at this level)
-        // but verification should fail because the constraint doesn't hold.
-        let proof = prove_dsl_kimchi(&desc, &trace, public_inputs);
-        if let Ok(proof) = proof {
-            let verified = verify_dsl_kimchi(&desc, &proof, public_inputs);
-            // Either verify returns false or returns an error
-            match verified {
-                Ok(true) => panic!("Invalid witness should not verify"),
-                Ok(false) | Err(_) => {} // expected
-            }
-        }
-        // If proving itself fails, that's also acceptable for invalid witnesses
+        let desc2 = desc.clone();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_dsl_kimchi(&desc2, &trace, &[0])
+        }));
+        assert!(
+            result.is_err() || result.unwrap().is_err(),
+            "Invalid witness should be rejected by prover"
+        );
     }
 
     #[test]
@@ -1704,39 +1701,40 @@ mod tests {
             name: "binary-only".to_string(),
             trace_width: 2,
             constraints: vec![DslConstraint::Binary { col: 0 }],
-            public_input_count: 0,
+            public_input_count: 1,
         };
 
         // Valid: col=0 → 0*(0-1) = 0
         let trace_valid = vec![vec![0u32, 0]];
-        let proof = prove_dsl_kimchi(&desc, &trace_valid, &[]);
+        let proof = prove_dsl_kimchi(&desc, &trace_valid, &[0]);
         assert!(
             proof.is_ok(),
             "Valid binary proof failed: {:?}",
             proof.err()
         );
         let proof = proof.unwrap();
-        let v = verify_dsl_kimchi(&desc, &proof, &[]);
+        let v = verify_dsl_kimchi(&desc, &proof, &[0]);
         assert!(v.is_ok() && v.unwrap(), "Valid binary proof didn't verify");
 
         // Valid: col=1 → 1*(1-1) = 0
         let trace_one = vec![vec![1u32, 0]];
-        let proof = prove_dsl_kimchi(&desc, &trace_one, &[]);
+        let proof = prove_dsl_kimchi(&desc, &trace_one, &[0]);
         assert!(proof.is_ok());
         let proof = proof.unwrap();
-        let v = verify_dsl_kimchi(&desc, &proof, &[]);
+        let v = verify_dsl_kimchi(&desc, &proof, &[0]);
         assert!(v.is_ok() && v.unwrap(), "Binary(1) proof didn't verify");
 
         // Invalid: col=2 → 2*(2-1) = 2 ≠ 0
+        // Kimchi panics in debug mode for invalid witnesses — catch it
         let trace_bad = vec![vec![2u32, 0]];
-        let proof = prove_dsl_kimchi(&desc, &trace_bad, &[]);
-        if let Ok(proof) = proof {
-            let v = verify_dsl_kimchi(&desc, &proof, &[]);
-            match v {
-                Ok(true) => panic!("Non-boolean value should not verify"),
-                Ok(false) | Err(_) => {}
-            }
-        }
+        let desc2 = desc.clone();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_dsl_kimchi(&desc2, &trace_bad, &[0])
+        }));
+        assert!(
+            result.is_err() || result.unwrap().is_err(),
+            "Non-boolean should be rejected"
+        );
     }
 
     #[test]
@@ -1756,16 +1754,16 @@ mod tests {
         let v = verify_dsl_kimchi(&desc, &proof, &[0]);
         assert!(v.is_ok() && v.unwrap());
 
-        // Invalid: col_a != col_b
+        // Invalid: col_a != col_b — prover panics in debug mode
         let trace_bad = vec![vec![42u32, 43, 0]];
-        let proof = prove_dsl_kimchi(&desc, &trace_bad, &[]);
-        if let Ok(proof) = proof {
-            let v = verify_dsl_kimchi(&desc, &proof, &[]);
-            match v {
-                Ok(true) => panic!("Unequal values should not verify"),
-                Ok(false) | Err(_) => {}
-            }
-        }
+        let desc2 = desc.clone();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_dsl_kimchi(&desc2, &trace_bad, &[0])
+        }));
+        assert!(
+            result.is_err() || result.unwrap().is_err(),
+            "Unequal should be rejected"
+        );
     }
 
     #[test]
@@ -1778,27 +1776,27 @@ mod tests {
                 b: 1,
                 output: 2,
             }],
-            public_input_count: 0,
+            public_input_count: 1,
         };
 
         // Valid: 3 * 7 = 21
         let trace = vec![vec![3u32, 7, 21, 0]];
-        let proof = prove_dsl_kimchi(&desc, &trace, &[]);
-        assert!(proof.is_ok());
+        let proof = prove_dsl_kimchi(&desc, &trace, &[0]);
+        assert!(proof.is_ok(), "Mult prove failed: {:?}", proof.err());
         let proof = proof.unwrap();
-        let v = verify_dsl_kimchi(&desc, &proof, &[]);
+        let v = verify_dsl_kimchi(&desc, &proof, &[0]);
         assert!(v.is_ok() && v.unwrap());
 
-        // Invalid: 3 * 7 != 20
+        // Invalid: 3 * 7 != 20 — prover panics in debug mode
         let trace_bad = vec![vec![3u32, 7, 20, 0]];
-        let proof = prove_dsl_kimchi(&desc, &trace_bad, &[]);
-        if let Ok(proof) = proof {
-            let v = verify_dsl_kimchi(&desc, &proof, &[]);
-            match v {
-                Ok(true) => panic!("Wrong product should not verify"),
-                Ok(false) | Err(_) => {}
-            }
-        }
+        let desc2 = desc.clone();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_dsl_kimchi(&desc2, &trace_bad, &[0])
+        }));
+        assert!(
+            result.is_err() || result.unwrap().is_err(),
+            "Wrong product should be rejected"
+        );
     }
 
     #[test]
@@ -1843,7 +1841,7 @@ mod tests {
         // Outgoing transfer
         let trace = vec![vec![1000u32, 100, 900, 1, 0, 0]];
 
-        let kimchi_proof = prove_dsl_kimchi(&desc, &trace, &[]);
+        let kimchi_proof = prove_dsl_kimchi(&desc, &trace, &[0]);
         assert!(
             kimchi_proof.is_ok(),
             "Kimchi proof failed: {:?}",
@@ -1851,7 +1849,7 @@ mod tests {
         );
         let kimchi_proof = kimchi_proof.unwrap();
 
-        let verified = verify_dsl_kimchi(&desc, &kimchi_proof, &[]);
+        let verified = verify_dsl_kimchi(&desc, &kimchi_proof, &[0]);
         assert!(verified.is_ok() && verified.unwrap());
 
         // Proof should be reasonably small (Kimchi IPA proofs are ~1-2 KiB)

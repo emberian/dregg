@@ -228,7 +228,7 @@ async fn claim_bounty(
     let proof_bytes = req.qualification_proof.as_deref().unwrap_or(&[]);
     let engine = state.engine.read().await;
     let root_history = state.root_history.read().await;
-    match verify_qualification(&engine, &bounty.qualification, proof_bytes, &root_history) {
+    match verify_qualification(&engine, &bounty.qualification, proof_bytes, &*root_history) {
         Ok(true) => {}
         Ok(false) => {
             return (

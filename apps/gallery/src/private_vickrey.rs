@@ -21,12 +21,9 @@
 //! - For N bidders: N-1 comparisons to find winner, then check runner-up candidates
 //! - Each comparison: 31-bit subtraction-borrow chain (same as garbled.rs)
 
-use pyana_circuit::field::BabyBear;
-use pyana_circuit::garbled::{
-    self, EvalResult, GarbledCircuit, GarbledGate, GarblingSecrets, GateEvalRecord, WireLabel,
-    garbling_hash,
-};
 use pyana_circuit::binding::WideHash;
+use pyana_circuit::field::BabyBear;
+use pyana_circuit::garbled::{GarbledGate, GateEvalRecord, WireLabel, garbling_hash};
 
 /// Number of bits per bid value (BabyBear field: 31 bits).
 pub const BID_BITS: usize = 31;
@@ -103,30 +100,6 @@ pub struct VickreyResult {
 // Comparison sub-circuit: a > b (strictly greater)
 // ============================================================================
 
-/// Internal: A single 31-bit comparison sub-circuit within the Vickrey tournament.
-///
-/// Computes `a > b` using LSB-first subtraction-borrow:
-/// - borrow_0 = 0
-/// - borrow_{i+1} = gate_i(borrow_i, a_i, b_i)
-/// - Result: a > b iff there is NO borrow AND a != b
-///
-/// Actually we compute a >= b (borrow_final == 0 means a >= b) and then
-/// also track equality. For the tournament we just need "a > b" with
-/// "a == b => lower index wins" tiebreaking.
-///
-/// For the Vickrey circuit, we use: `a >= b` (with tiebreak to lower index).
-/// This means: if a >= b, then a is the "winner" of the comparison.
-struct ComparisonGadget {
-    /// Wire indices for the 31 a-input bits.
-    a_wires: Vec<usize>,
-    /// Wire indices for the 31 b-input bits.
-    b_wires: Vec<usize>,
-    /// Wire index for the output: 0-label means a >= b, 1-label means a < b.
-    output_wire: usize,
-    /// The borrow chain wire indices (internal).
-    borrow_wires: Vec<usize>,
-}
-
 // ============================================================================
 // Garbling the Vickrey circuit
 // ============================================================================
@@ -183,121 +156,6 @@ fn decrypt_label(ciphertext: &WireLabel, key: &WireLabel) -> WireLabel {
     result
 }
 
-/// Garble a 3-input gate (borrow, a_bit, b_bit) -> borrow_out.
-///
-/// Truth table for subtraction borrow propagation (computing a - b):
-/// borrow_{i+1} = (NOT a_i AND b_i) OR (borrow_i AND (a_i == b_i))
-///
-/// Inputs: left = borrow_wire, right = a_wire (prover A's bit)
-/// The b_bit is "wired in" by the garbler who knows both label pairs.
-///
-/// Since we have 3 inputs but our gate model is 2-input, we handle this by
-/// creating a gate for each (borrow, a_bit) pair with b_bit hardcoded per gate.
-fn garble_borrow_gate_3input(
-    borrow_pair: &(WireLabel, WireLabel),
-    a_pair: &(WireLabel, WireLabel),
-    b_pair: &(WireLabel, WireLabel),
-    output_pair: &(WireLabel, WireLabel),
-    gate_index: u32,
-) -> GarbledGate {
-    // We have 3 input bits: borrow, a, b. That's 8 combinations.
-    // But our garbled gate model has a 4-entry table (2 inputs).
-    // Solution: use TWO gates per comparison bit (one gate selects on b=0, one on b=1).
-    //
-    // Actually, let's use a different approach: pack (borrow, a) as the two inputs
-    // and make TWO garbled gates per b-bit value. During evaluation, the evaluator
-    // uses the b-label's color bit to select which gate to use.
-    //
-    // Simpler approach for this implementation: we expand to 8-entry tables.
-    // Since our GarbledGate has a 4-entry table, we'll encode as TWO gates.
-    //
-    // Even simpler: since this is an inner circuit and the evaluator (auctioneer)
-    // has ALL labels for evaluation, we can use a scheme where each comparison
-    // bit results in one 8-entry garbled gate.
-    //
-    // For the MVP, let's use a pair of 2-input gates that chain:
-    // Gate A (borrow, a): produces intermediate wire
-    // Gate B (intermediate, b): produces borrow_out
-    //
-    // Actually the cleanest approach: use the same 2-input gate structure as garbled.rs
-    // but with a SELECT gate. The evaluator sees all three labels and picks the
-    // correct table entry.
-
-    // REVISED: Use an 8-row garbled table packed into 2 GarbledGates.
-    // First gate: rows for b=0, second gate: rows for b=1.
-    // The evaluator uses b's color bit to pick which gate, then uses
-    // (borrow, a) color bits within that gate.
-
-    // For this implementation we'll use a slightly different encoding:
-    // One GarbledGate with a 4-entry table where we hash all 3 inputs.
-    // We pick the row using: color_bit(borrow)*4 + color_bit(a)*2 + color_bit(b)
-    // But that needs an 8-entry table...
-    //
-    // DECISION: Use the simplest correct approach. Make the evaluation function
-    // aware that Vickrey gates use a different addressing scheme.
-    // We'll store 8 entries by using 2 consecutive GarbledGate structs.
-
-    // Gate for b_color=0: indexed by (borrow_color, a_color)
-    // Gate for b_color=1: indexed by (borrow_color, a_color)
-    let mut table_b0 = [[BabyBear::ZERO; 8]; 4];
-    let mut table_b1 = [[BabyBear::ZERO; 8]; 4];
-
-    for borrow_bit in 0..2u8 {
-        for a_bit in 0..2u8 {
-            for b_bit in 0..2u8 {
-                // Truth table: borrow_out = (!a & b) | (borrow & (a == b))
-                let borrow_out = (a_bit == 0 && b_bit == 1)
-                    || (borrow_bit == 1 && a_bit == b_bit);
-
-                let borrow_label = if borrow_bit == 0 {
-                    &borrow_pair.0
-                } else {
-                    &borrow_pair.1
-                };
-                let a_label = if a_bit == 0 { &a_pair.0 } else { &a_pair.1 };
-                let b_label = if b_bit == 0 { &b_pair.0 } else { &b_pair.1 };
-                let out_label = if borrow_out {
-                    &output_pair.1
-                } else {
-                    &output_pair.0
-                };
-
-                // Hash all 3 inputs together for the garbling key.
-                // We use: key = Poseidon2(borrow || a || gate_index) XOR b contribution
-                // Actually, for proper security we need all 3 in the hash.
-                // Use a two-level hash: h1 = hash(borrow, a, gate_idx), h2 = hash(h1, b, gate_idx+1)
-                let key_inner = garbling_hash(borrow_label, a_label, gate_index);
-                let key = garbling_hash(&key_inner, b_label, gate_index + 1);
-
-                let ciphertext = xor_labels(out_label, &key);
-
-                let row_idx = color_bit(borrow_label) * 2 + color_bit(a_label);
-                if b_bit == 0 {
-                    table_b0[row_idx] = ciphertext;
-                } else {
-                    table_b1[row_idx] = ciphertext;
-                }
-            }
-        }
-    }
-
-    // We return just the b=0 gate here; caller will also get b=1 gate.
-    // Actually, let's return a single combined structure. For storage efficiency,
-    // we'll just always use pairs of gates.
-    // The caller should call this once and get both gates.
-    unreachable!("use garble_comparison_subcirc instead")
-}
-
-/// Result of garbling a single 31-bit comparison: a >= b.
-struct ComparisonGarbling {
-    /// The garbled gates for this comparison (2 gates per bit = 62 gates total for 31 bits).
-    gates: Vec<GarbledGate>,
-    /// Topology entries for these gates.
-    topology: Vec<(usize, usize, usize)>,
-    /// The output wire index (0-label = a >= b, 1-label = a < b).
-    output_wire: usize,
-}
-
 /// Garble a 31-bit comparison sub-circuit for `a >= b`.
 ///
 /// Uses the same LSB-first borrow-chain design as `garbled.rs`, but with both
@@ -352,8 +210,8 @@ fn garble_comparison_subcirc(
             for a_bit in 0..2u8 {
                 for b_bit in 0..2u8 {
                     // borrow_out = (!a & b) | (borrow & (a == b))
-                    let borrow_out_val = (a_bit == 0 && b_bit == 1)
-                        || (borrow_bit == 1 && a_bit == b_bit);
+                    let borrow_out_val =
+                        (a_bit == 0 && b_bit == 1) || (borrow_bit == 1 && a_bit == b_bit);
 
                     let borrow_label = if borrow_bit == 0 {
                         &borrow_pair.0
@@ -660,14 +518,12 @@ pub fn garble_vickrey_circuit(num_bidders: usize) -> (VickreyCircuit, VickreyGar
     // Output: for each (i,j) where i < j, one bit: bidder[i] >= bidder[j].
     // =========================================================================
 
-    let num_comparisons = num_bidders * (num_bidders - 1) / 2;
+    let _num_comparisons = num_bidders * (num_bidders - 1) / 2;
 
     for i in 0..num_bidders {
         for j in (i + 1)..num_bidders {
-            let a_wires: Vec<usize> =
-                (0..bit_width).map(|b| bidder_wire_starts[i] + b).collect();
-            let b_wires: Vec<usize> =
-                (0..bit_width).map(|b| bidder_wire_starts[j] + b).collect();
+            let a_wires: Vec<usize> = (0..bit_width).map(|b| bidder_wire_starts[i] + b).collect();
+            let b_wires: Vec<usize> = (0..bit_width).map(|b| bidder_wire_starts[j] + b).collect();
 
             let output_wire = garble_comparison_subcirc(
                 &a_wires,
@@ -773,7 +629,7 @@ pub fn bidder_obtain_labels_ot(
     bidder_index: usize,
     bid_value: u32,
 ) -> Result<Vec<WireLabel>, String> {
-    use pyana_cell::oblivious_transfer::{OtSender, OtReceiver};
+    use pyana_cell::oblivious_transfer::{OtReceiver, OtSender};
 
     let pairs = &secrets.bidder_labels[bidder_index];
     let mut labels = Vec::with_capacity(BID_BITS);
@@ -786,8 +642,8 @@ pub fn bidder_obtain_labels_ot(
         let label1_bytes = label_to_bytes(&pairs[bit_idx].1);
 
         let (sender, setup) = OtSender::new();
-        let (receiver, response) = OtReceiver::new(bit, &setup)
-            .map_err(|e| format!("OT receiver setup failed: {e}"))?;
+        let (receiver, response) =
+            OtReceiver::new(bit, &setup).map_err(|e| format!("OT receiver setup failed: {e}"))?;
         let payload = sender
             .encrypt(&response, &label0_bytes, &label1_bytes)
             .map_err(|e| format!("OT encrypt failed: {e}"))?;
@@ -802,6 +658,7 @@ pub fn bidder_obtain_labels_ot(
 }
 
 /// Convert a WireLabel to bytes for OT transfer.
+#[allow(dead_code)]
 fn label_to_bytes(label: &WireLabel) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(32);
     for elem in label {
@@ -811,6 +668,7 @@ fn label_to_bytes(label: &WireLabel) -> Vec<u8> {
 }
 
 /// Convert bytes back to a WireLabel.
+#[allow(dead_code)]
 fn bytes_to_label(bytes: &[u8]) -> WireLabel {
     assert!(bytes.len() >= 32);
     let mut label = [BabyBear::ZERO; 8];
@@ -829,78 +687,6 @@ fn bytes_to_label(bytes: &[u8]) -> WireLabel {
 // ============================================================================
 // Circuit Evaluation
 // ============================================================================
-
-/// Evaluate the garbled Vickrey circuit given all bidders' input labels.
-///
-/// Returns the comparison results (one bool per pair (i,j) where i < j):
-/// true means bidder[i] >= bidder[j].
-pub fn evaluate_vickrey_circuit(
-    circuit: &VickreyCircuit,
-    all_bidder_labels: &[Vec<WireLabel>],
-) -> VickreyEvaluation {
-    assert_eq!(all_bidder_labels.len(), circuit.num_bidders);
-    for labels in all_bidder_labels {
-        assert_eq!(labels.len(), circuit.bit_width);
-    }
-
-    let num_bidders = circuit.num_bidders;
-    let bit_width = circuit.bit_width;
-
-    // Initialize wire labels.
-    let num_input_wires = num_bidders * bit_width;
-    let mut wire_labels: Vec<Option<WireLabel>> = vec![None; circuit.num_wires];
-
-    // Set bidder input labels.
-    for (bidder_idx, labels) in all_bidder_labels.iter().enumerate() {
-        for (bit_idx, label) in labels.iter().enumerate() {
-            let wire = bidder_idx * bit_width + bit_idx;
-            wire_labels[wire] = Some(*label);
-        }
-    }
-
-    let mut gate_trace: Vec<GateEvalRecord> = Vec::new();
-    let mut comparison_results: Vec<bool> = Vec::new();
-
-    // Process gates in pairs (each comparison bit uses 2 gates).
-    let gates = &circuit.garbled_gates;
-    let mut gate_idx = 0;
-    let mut comparison_count = 0;
-    let num_comparisons = num_bidders * (num_bidders - 1) / 2;
-
-    for _cmp in 0..num_comparisons {
-        // Each comparison has `bit_width` pairs of gates.
-        // Plus one borrow-init wire per comparison.
-        let borrow_init_wire = num_input_wires + comparison_count * (bit_width + 1);
-
-        // The borrow init wire gets the 0-label (from the garbling).
-        // In evaluation, we need to know this label. It's stored in the topology.
-        // Actually, we need to derive it from the circuit structure.
-        //
-        // ISSUE: The evaluator needs the initial borrow label (always the 0-label).
-        // In the original garbled.rs, this is part of `input_labels_verifier`.
-        // For the Vickrey circuit, we need to embed these in the circuit.
-        //
-        // SOLUTION: Store the initial borrow labels as part of the circuit.
-        // For now, in the evaluation function, we'll look them up from the topology.
-
-        // The topology for each comparison bit is:
-        //   topology[gate_idx]: (borrow_wire, a_wire, borrow_out_wire)
-        //   topology[gate_idx+1]: (borrow_out_wire, b_wire, borrow_out_wire) -- sentinel
-
-        // We need the initial borrow wire label. For evaluation, the garbler
-        // provides these as "verifier inputs" (they're always 0-labels).
-        // Let's track them via a dedicated field or pass them in.
-
-        // For this implementation, we'll pass them separately.
-        // See evaluate_vickrey_circuit_full below.
-        comparison_count += 1;
-        gate_idx += bit_width * 2;
-    }
-
-    // The simple evaluation can't proceed without the borrow init labels.
-    // Delegate to the full evaluation function.
-    panic!("use evaluate_vickrey_circuit_full instead");
-}
 
 /// Full evaluation of the Vickrey circuit, with borrow-init labels provided.
 ///
@@ -949,12 +735,9 @@ pub fn evaluate_vickrey_circuit_full(
             let (borrow_wire, a_wire, borrow_out_wire) = topo[topo_idx];
             let (_sentinel, b_wire, _) = topo[topo_idx + 1];
 
-            let borrow_label = wire_labels[borrow_wire]
-                .expect("borrow wire label not set");
-            let a_label = wire_labels[a_wire]
-                .expect("a wire label not set");
-            let b_label = wire_labels[b_wire]
-                .expect("b wire label not set");
+            let borrow_label = wire_labels[borrow_wire].expect("borrow wire label not set");
+            let a_label = wire_labels[a_wire].expect("a wire label not set");
+            let b_label = wire_labels[b_wire].expect("b wire label not set");
 
             let gate_base = (gate_pair_idx + bit_idx) * 2;
             let gate_b0 = &gates[gate_base];
@@ -1016,10 +799,7 @@ pub struct VickreyEvaluation {
 /// Second-place: the bidder who beats all others except the winner.
 ///
 /// Returns (winner_index, second_place_index).
-pub fn decode_comparison_matrix(
-    num_bidders: usize,
-    comparison_results: &[bool],
-) -> (usize, usize) {
+pub fn decode_comparison_matrix(num_bidders: usize, comparison_results: &[bool]) -> (usize, usize) {
     assert_eq!(
         comparison_results.len(),
         num_bidders * (num_bidders - 1) / 2
@@ -1075,7 +855,7 @@ pub fn determine_vickrey_result(
     VickreyResult {
         winner_index,
         second_price: bids[second_index] as u64,
-        evaluation_proof: Vec::new(), // Filled in by STARK prover
+        evaluation_proof: Vec::new(),  // Filled in by STARK prover
         circuit_commitment: [0u8; 32], // Filled in from circuit
     }
 }
@@ -1091,13 +871,15 @@ pub fn prove_vickrey_evaluation(
     circuit: &VickreyCircuit,
     evaluation: &VickreyEvaluation,
 ) -> Vec<u8> {
-    use pyana_circuit::garbled_air::GarbledEvaluationAir;
     use pyana_circuit::constraint_prover::Air;
+    use pyana_circuit::garbled_air::GarbledEvaluationAir;
 
     // Convert circuit commitment to WideHash for the AIR.
     let commitment_wide = WideHash::from_poseidon2(
         "pyana-vickrey-circuit-v1",
-        &circuit.circuit_commitment.iter()
+        &circuit
+            .circuit_commitment
+            .iter()
             .flat_map(|b| [BabyBear::new(*b as u32)])
             .collect::<Vec<_>>(),
     );
@@ -1112,11 +894,8 @@ pub fn prove_vickrey_evaluation(
     }
     let output_hash = WideHash::from_poseidon2("pyana-vickrey-output-v1", &output_elements);
 
-    let air = GarbledEvaluationAir::new(
-        evaluation.gate_trace.clone(),
-        commitment_wide,
-        output_hash,
-    );
+    let air =
+        GarbledEvaluationAir::new(evaluation.gate_trace.clone(), commitment_wide, output_hash);
 
     let (mut trace, public_inputs) = air.generate_trace();
 
@@ -1239,11 +1018,8 @@ impl PrivateVickreyAuction {
             wire_offset += bit_width + 1; // skip borrow_init + bit_width borrow_out wires
         }
 
-        let evaluation = evaluate_vickrey_circuit_full(
-            &self.circuit,
-            &all_labels,
-            &borrow_init_labels,
-        );
+        let evaluation =
+            evaluate_vickrey_circuit_full(&self.circuit, &all_labels, &borrow_init_labels);
 
         // Determine result from comparison matrix.
         let (winner_index, second_index) =
@@ -1315,10 +1091,7 @@ mod tests {
 
         // Bidder 3 has highest bid (1500), second highest is 1200 (bidder 1).
         assert_eq!(result.winner_index, 3, "bidder 3 (1500) should win");
-        assert_eq!(
-            result.second_price, 1200,
-            "winner pays second price (1200)"
-        );
+        assert_eq!(result.second_price, 1200, "winner pays second price (1200)");
     }
 
     #[test]
@@ -1494,14 +1267,18 @@ mod tests {
 
         // Allocate input wires for two 4-bit values (small for fast test).
         let bit_width = 4;
-        let a_wires: Vec<usize> = (0..bit_width).map(|i| {
-            all_labels.push(random_label_pair());
-            i
-        }).collect();
-        let b_wires: Vec<usize> = (0..bit_width).map(|i| {
-            all_labels.push(random_label_pair());
-            bit_width + i
-        }).collect();
+        let a_wires: Vec<usize> = (0..bit_width)
+            .map(|i| {
+                all_labels.push(random_label_pair());
+                i
+            })
+            .collect();
+        let b_wires: Vec<usize> = (0..bit_width)
+            .map(|i| {
+                all_labels.push(random_label_pair());
+                bit_width + i
+            })
+            .collect();
 
         let output_wire = garble_comparison_subcirc(
             &a_wires,

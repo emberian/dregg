@@ -13,12 +13,17 @@ struct Cli {
     listen: SocketAddr,
 
     /// Path to frontend static files directory.
-    #[arg(long, default_value = "/srv/gallery/frontend")]
+    #[arg(long, default_value = "frontend")]
     frontend: String,
 
     /// Node API URL for the backing pyana node.
     #[arg(long, env = "PYANA_NODE_URL", default_value = "http://node-0:8420")]
     node_url: String,
+
+    /// Path to state persistence file (JSON). State is saved on mutations and
+    /// restored on startup.
+    #[arg(long, env = "PYANA_STATE_FILE", default_value = "gallery_state.json")]
+    state_file: String,
 }
 
 #[tokio::main]
@@ -30,6 +35,7 @@ async fn main() {
     let config = ServerConfig {
         listen: cli.listen,
         frontend_path: Some(cli.frontend),
+        state_file: Some(cli.state_file),
     };
 
     let addr = start_server(config).await;

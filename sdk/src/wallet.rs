@@ -3598,7 +3598,10 @@ impl AgentWallet {
             children: vec![],
             hash: [0u8; 32],
         };
-        let forest = CallForest { roots: vec![tree], forest_hash: [0u8; 32] };
+        let forest = CallForest {
+            roots: vec![tree],
+            forest_hash: [0u8; 32],
+        };
 
         Turn {
             agent: agent_cell,

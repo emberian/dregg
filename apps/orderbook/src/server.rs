@@ -11,9 +11,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
+use crate::OrderbookEngine;
 use crate::book::TradingPair;
 use crate::order::{Order, OrderId, OrderStatus, OrderType, Side, TimeInForce};
-use crate::OrderbookEngine;
 
 // =============================================================================
 // Application State
@@ -240,8 +240,8 @@ async fn submit_order(
         let mut trades = state.trades.write().await;
         for fill in &match_result.fills {
             trades.push(TradeRecord {
-                buyer_order_id: hex_id(&fill.buyer_order_id),
-                seller_order_id: hex_id(&fill.seller_order_id),
+                buyer_order_id: hex_id(&fill.taker_order_id),
+                seller_order_id: hex_id(&fill.maker_order_id),
                 price: fill.price,
                 amount: fill.amount,
                 timestamp: height,
@@ -306,16 +306,12 @@ async fn cancel_order(
     Ok(Json(order_to_response(&cancelled)))
 }
 
-async fn get_book(
-    State(state): State<AppState>,
-    Path(_pair): Path<String>,
-) -> Json<BookSnapshot> {
+async fn get_book(State(state): State<AppState>, Path(_pair): Path<String>) -> Json<BookSnapshot> {
     let engine = state.engine.read().await;
 
     let bids: Vec<LevelResponse> = engine
         .book
         .bid_levels()
-        .iter()
         .map(|level| LevelResponse {
             price: level.price,
             quantity: level.total_quantity(),
@@ -326,7 +322,6 @@ async fn get_book(
     let asks: Vec<LevelResponse> = engine
         .book
         .ask_levels()
-        .iter()
         .map(|level| LevelResponse {
             price: level.price,
             quantity: level.total_quantity(),
@@ -342,9 +337,7 @@ async fn get_book(
     })
 }
 
-async fn trigger_match(
-    State(state): State<AppState>,
-) -> Json<MatchResponse> {
+async fn trigger_match(State(state): State<AppState>) -> Json<MatchResponse> {
     let mut engine = state.engine.write().await;
     let results = engine.process_reveal_batch();
     let fills: usize = results
@@ -359,9 +352,7 @@ async fn trigger_match(
     })
 }
 
-async fn get_trades(
-    State(state): State<AppState>,
-) -> Json<Vec<TradeRecord>> {
+async fn get_trades(State(state): State<AppState>) -> Json<Vec<TradeRecord>> {
     let trades = state.trades.read().await;
     Json(trades.clone())
 }

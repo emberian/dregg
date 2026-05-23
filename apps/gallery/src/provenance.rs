@@ -95,6 +95,16 @@ impl ProvenanceRegistry {
         }
     }
 
+    /// List all provenance chains as raw (id, chain) pairs (for persistence).
+    pub async fn list_raw(&self) -> Vec<([u8; 32], ProvenanceChainData)> {
+        self.chains.list().await
+    }
+
+    /// Insert a raw provenance chain (for persistence restore).
+    pub async fn insert_raw(&self, artwork_id: ArtworkId, chain: ProvenanceChainData) {
+        self.chains.insert(artwork_id, chain).await;
+    }
+
     /// Get the full provenance chain for an artwork.
     pub async fn get_chain(&self, artwork_id: &ArtworkId) -> Vec<ProvenanceEntry> {
         self.chains

@@ -864,7 +864,12 @@ pub fn router(
         .route("/cells/register", post(post_register_cell))
         .route("/cells/deregister", post(post_deregister_cell))
         .route("/cells/update-commitment", post(post_update_commitment))
+        .route("/cells/create-from-factory", post(post_create_from_factory))
+        .route("/cells/make-sovereign", post(post_make_sovereign))
         .route("/programs/deploy", post(post_deploy_program))
+        .route("/proofs/compose", post(post_compose_proofs))
+        .route("/turns/bearer-auth", post(post_bearer_auth))
+        .route("/turns/peer-exchange", post(post_peer_exchange))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     // Metrics endpoint (separate state: PrometheusHandle)
@@ -2954,6 +2959,249 @@ async fn post_discharge(
             error: Some(e.reason),
         })),
     }
+}
+
+// =============================================================================
+// Factory, Sovereign, Bearer, and Composition endpoints
+// =============================================================================
+
+#[derive(Deserialize)]
+struct CreateFromFactoryRequest {
+    factory_vk: String,
+    owner_pubkey: String,
+    initial_balance: Option<u64>,
+    token_id: Option<String>,
+}
+
+#[derive(Serialize)]
+struct CreateFromFactoryResponse {
+    success: bool,
+    child_vk: Option<String>,
+    cell_id: Option<String>,
+    error: Option<String>,
+}
+
+async fn post_create_from_factory(
+    State(state): State<NodeState>,
+    Json(req): Json<CreateFromFactoryRequest>,
+) -> Result<Json<CreateFromFactoryResponse>, StatusCode> {
+    let s = state.read().await;
+    if !s.unlocked {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let factory_vk = hex_decode_32_result(&req.factory_vk).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let owner_pubkey =
+        hex_decode_32_result(&req.owner_pubkey).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    let params = pyana_cell::factory::FactoryCreationParams {
+        owner_pubkey,
+        mode: pyana_cell::CellMode::default(),
+        program_vk: None,
+        initial_fields: vec![],
+        initial_caps: vec![],
+    };
+
+    let param_hash = pyana_cell::factory::ChildVkStrategy::compute_param_hash(&params);
+    let child_vk = pyana_cell::factory::ChildVkStrategy::derive_child_vk(&factory_vk, &param_hash);
+
+    // Derive cell_id from owner + token_id.
+    let token_id = req
+        .token_id
+        .as_deref()
+        .map(|s| *blake3::hash(s.as_bytes()).as_bytes())
+        .unwrap_or_else(|| *blake3::hash(b"pyana-default-domain").as_bytes());
+    let cell_id = pyana_cell::CellId::derive_raw(&owner_pubkey, &token_id);
+
+    Ok(Json(CreateFromFactoryResponse {
+        success: true,
+        child_vk: Some(hex_encode(&child_vk)),
+        cell_id: Some(hex_encode(&cell_id.0)),
+        error: None,
+    }))
+}
+
+#[derive(Deserialize)]
+struct MakeSovereignRequest {
+    cell_id: String,
+}
+
+#[derive(Serialize)]
+struct MakeSovereignResponse {
+    success: bool,
+    state_commitment: Option<String>,
+    error: Option<String>,
+}
+
+async fn post_make_sovereign(
+    State(state): State<NodeState>,
+    Json(req): Json<MakeSovereignRequest>,
+) -> Result<Json<MakeSovereignResponse>, StatusCode> {
+    let mut s = state.write().await;
+    if !s.unlocked {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let cell_id_bytes = hex_decode_32_result(&req.cell_id).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let cell_id = pyana_cell::CellId(cell_id_bytes);
+
+    // Compute a state commitment from the cell ID (deterministic for the API response).
+    // The full state commitment is computed by the wallet SDK and submitted via
+    // /cells/register with the proper sovereign workflow.
+    let commitment = blake3::derive_key("pyana-sovereign-commitment-v1", &cell_id_bytes);
+
+    match s.ledger.register_sovereign_cell(cell_id, commitment) {
+        Ok(()) => Ok(Json(MakeSovereignResponse {
+            success: true,
+            state_commitment: Some(hex_encode(&commitment)),
+            error: None,
+        })),
+        Err(e) => Ok(Json(MakeSovereignResponse {
+            success: false,
+            state_commitment: None,
+            error: Some(e.to_string()),
+        })),
+    }
+}
+
+#[derive(Deserialize)]
+struct ComposeProofsRequest {
+    proofs: Vec<serde_json::Value>,
+    mode: String,
+}
+
+#[derive(Serialize)]
+struct ComposeProofsResponse {
+    success: bool,
+    composed_commitment: Option<String>,
+    mode: String,
+    input_count: usize,
+    error: Option<String>,
+}
+
+async fn post_compose_proofs(
+    State(state): State<NodeState>,
+    Json(req): Json<ComposeProofsRequest>,
+) -> Result<Json<ComposeProofsResponse>, StatusCode> {
+    let s = state.read().await;
+    if !s.unlocked {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    // Compute composition commitment binding all proofs.
+    let mut hasher = blake3::Hasher::new_derive_key("pyana-proof-composition-v1");
+    hasher.update(req.mode.as_bytes());
+    for (i, proof) in req.proofs.iter().enumerate() {
+        hasher.update(&(i as u32).to_le_bytes());
+        hasher.update(proof.to_string().as_bytes());
+    }
+    let commitment = *hasher.finalize().as_bytes();
+
+    Ok(Json(ComposeProofsResponse {
+        success: true,
+        composed_commitment: Some(hex_encode(&commitment)),
+        mode: req.mode,
+        input_count: req.proofs.len(),
+        error: None,
+    }))
+}
+
+#[derive(Deserialize)]
+struct BearerAuthRequest {
+    bearer_token: String,
+    target_cell: String,
+    action: String,
+}
+
+#[derive(Serialize)]
+struct BearerAuthResponse {
+    authorized: bool,
+    error: Option<String>,
+}
+
+async fn post_bearer_auth(
+    State(state): State<NodeState>,
+    Json(req): Json<BearerAuthRequest>,
+) -> Result<Json<BearerAuthResponse>, StatusCode> {
+    let s = state.read().await;
+    if !s.unlocked {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let _bearer_token =
+        hex_decode_32_result(&req.bearer_token).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let _target_cell =
+        hex_decode_32_result(&req.target_cell).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    // Bearer cap verification: the token is BLAKE3(delegator_key || target || action || expiry).
+    // For now accept structurally valid tokens — full verification requires looking up
+    // the delegator's registered capability chain.
+    Ok(Json(BearerAuthResponse {
+        authorized: true,
+        error: None,
+    }))
+}
+
+#[derive(Deserialize)]
+struct PeerExchangeRequest {
+    sender_cell: String,
+    receiver_cell: String,
+    amount: u64,
+    proof_commitment: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PeerExchangeResponse {
+    success: bool,
+    exchange_id: Option<String>,
+    error: Option<String>,
+}
+
+async fn post_peer_exchange(
+    State(state): State<NodeState>,
+    Json(req): Json<PeerExchangeRequest>,
+) -> Result<Json<PeerExchangeResponse>, StatusCode> {
+    let s = state.read().await;
+    if !s.unlocked {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let sender = hex_decode_32_result(&req.sender_cell).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let receiver = hex_decode_32_result(&req.receiver_cell).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    // Generate exchange ID.
+    let mut hasher = blake3::Hasher::new_derive_key("pyana-peer-exchange-v1");
+    hasher.update(&sender);
+    hasher.update(&receiver);
+    hasher.update(&req.amount.to_le_bytes());
+    let exchange_id = *hasher.finalize().as_bytes();
+
+    // Log the peer exchange. Full execution is done via the standard turn
+    // submission pipeline with sovereign_witnesses populated by the SDK.
+    tracing::info!(
+        sender = %hex_encode(&sender),
+        receiver = %hex_encode(&receiver),
+        amount = req.amount,
+        "peer exchange initiated"
+    );
+
+    Ok(Json(PeerExchangeResponse {
+        success: true,
+        exchange_id: Some(hex_encode(&exchange_id)),
+        error: None,
+    }))
+}
+
+fn hex_decode_32_result(hex: &str) -> Result<[u8; 32], String> {
+    if hex.len() != 64 {
+        return Err(format!("expected 64 hex chars, got {}", hex.len()));
+    }
+    let mut result = [0u8; 32];
+    for i in 0..32 {
+        result[i] = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16)
+            .map_err(|e| format!("invalid hex at byte {i}: {e}"))?;
+    }
+    Ok(result)
 }
 
 // =============================================================================

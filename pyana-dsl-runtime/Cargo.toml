@@ -8,13 +8,35 @@ pyana-circuit = { path = "../circuit" }
 serde = { workspace = true, features = ["derive"] }
 postcard = { version = "1", features = ["alloc"] }
 blake3 = "1"
+rmp-serde = { workspace = true, optional = true }
+
+# Plonky3 core (optional, for dsl_plonky3 module)
+p3-field = { workspace = true, optional = true }
+p3-baby-bear = { workspace = true, optional = true }
+p3-air = { workspace = true, optional = true }
+p3-matrix = { workspace = true, optional = true }
+p3-uni-stark = { workspace = true, optional = true }
+p3-challenger = { workspace = true, optional = true }
+p3-commit = { workspace = true, optional = true }
+p3-fri = { workspace = true, optional = true }
+p3-symmetric = { workspace = true, optional = true }
+p3-dft = { workspace = true, optional = true }
+p3-merkle-tree = { workspace = true, optional = true }
+p3-util = { workspace = true, optional = true }
 
 [dev-dependencies]
 pyana-circuit = { path = "../circuit", features = ["mina"] }
 
 [features]
-default = []
+default = ["plonky3"]
 kimchi-bridge = ["pyana-circuit/mina"]
+plonky3 = [
+    "pyana-circuit/plonky3",
+    "dep:rmp-serde",
+    "dep:p3-field", "dep:p3-baby-bear", "dep:p3-air", "dep:p3-matrix",
+    "dep:p3-uni-stark", "dep:p3-challenger", "dep:p3-commit", "dep:p3-fri",
+    "dep:p3-symmetric", "dep:p3-dft", "dep:p3-merkle-tree", "dep:p3-util",
+]
 
 [lints]
 workspace = true

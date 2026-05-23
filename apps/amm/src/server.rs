@@ -268,14 +268,16 @@ async fn add_liquidity(
         )
     })?;
 
-    let output = pool.add_liquidity(req.amount_a, req.amount_b).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    let output = pool
+        .add_liquidity(req.amount_a, req.amount_b)
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
 
     Ok(Json(AddLiquidityResponse {
         lp_minted: output.lp_minted,

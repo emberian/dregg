@@ -73,7 +73,7 @@ groestl_crypto = { package = "groestl", version = "0.10", optional = true }
 sp1-sdk = { version = "6.2", optional = true }
 
 [features]
-default = ["mock", "recursion", "mina"]
+default = ["plonky3", "recursion", "mina"]
 mock = []
 dev = []
 plonky3 = [

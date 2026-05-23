@@ -1,6 +1,5 @@
 //! Minimal HTTP API server for the stablecoin CDP system.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::{
@@ -12,10 +11,10 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
-use crate::cdp::{CollateralPosition, PositionStatus, StablecoinRegistry, ETH_ASSET_TYPE};
+use crate::cdp::{CollateralPosition, ETH_ASSET_TYPE, PositionStatus, StablecoinRegistry};
 use crate::circuit::MIN_RATIO_BPS;
 use crate::liquidation::LiquidationEngine;
-use crate::oracle::{PriceAttestation, PriceOracle, test_attestation};
+use crate::oracle::{PriceOracle, test_attestation, test_oracle_pubkey};
 
 // =============================================================================
 // Application State
@@ -31,11 +30,14 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> Self {
-        let oracle_key = [0x01u8; 32];
+        // The signing key used by test_attestation to produce valid signatures.
+        let signing_key = [0x01u8; 32];
+        // Derive the Ed25519 public key for the trusted_keys list.
+        let oracle_pubkey = test_oracle_pubkey(&signing_key);
         Self {
             registry: Arc::new(RwLock::new(StablecoinRegistry::new())),
-            oracle: Arc::new(RwLock::new(PriceOracle::new(vec![oracle_key], 1000))),
-            liquidation_engine: Arc::new(LiquidationEngine::default()),
+            oracle: Arc::new(RwLock::new(PriceOracle::new(vec![oracle_pubkey], 1000))),
+            liquidation_engine: Arc::new(LiquidationEngine::default_config()),
             current_height: Arc::new(RwLock::new(1)),
         }
     }
@@ -158,16 +160,21 @@ async fn open_cdp(
     let owner = pyana_cell::CellId([0xAA; 32]); // placeholder owner
     let height = *state.current_height.read().await;
 
-    let mut position =
-        CollateralPosition::open(owner, req.collateral_amount, ETH_ASSET_TYPE, MIN_RATIO_BPS, height)
-            .map_err(|e| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    Json(ErrorResponse {
-                        error: e.to_string(),
-                    }),
-                )
-            })?;
+    let mut position = CollateralPosition::open(
+        owner,
+        req.collateral_amount,
+        ETH_ASSET_TYPE,
+        MIN_RATIO_BPS,
+        height,
+    )
+    .map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
 
     // If the caller wants to mint immediately on open:
     if let Some(debt) = req.debt_amount {
@@ -249,14 +256,16 @@ async fn mint_cdp(
         )
     })?;
 
-    position.mint(req.amount, &attestation, height, 1000).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    position
+        .mint(req.amount, &attestation, height, 1000)
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
 
     Ok(Json(position_to_response(position, Some(req.oracle_price))))
 }
@@ -288,14 +297,16 @@ async fn repay_cdp(
         )
     })?;
 
-    position.repay(req.amount, &attestation, 1000).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    position
+        .repay(req.amount, &attestation, 1000)
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
 
     Ok(Json(position_to_response(position, Some(req.oracle_price))))
 }

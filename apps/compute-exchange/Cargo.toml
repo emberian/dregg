@@ -14,7 +14,6 @@ serde_json = { workspace = true }
 postcard = { version = "1", features = ["use-std"] }
 tokio = { version = "1", features = ["full"] }
 axum = "0.8"
-axum-extra = { version = "0.10", features = ["typed-header"] }
 clap = { version = "4", features = ["derive", "env"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"

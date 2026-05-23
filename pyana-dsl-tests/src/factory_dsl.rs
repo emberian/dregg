@@ -134,12 +134,36 @@ impl StarkAir for FactoryCreationAir {
         _trace_len: usize,
     ) -> Vec<BoundaryConstraint> {
         vec![
-            BoundaryConstraint { row: 0, col: 0, value: public_inputs[0] },
-            BoundaryConstraint { row: 0, col: 1, value: public_inputs[1] },
-            BoundaryConstraint { row: 0, col: 2, value: public_inputs[2] },
-            BoundaryConstraint { row: 0, col: 3, value: public_inputs[3] },
-            BoundaryConstraint { row: 0, col: 4, value: public_inputs[4] },
-            BoundaryConstraint { row: 0, col: 5, value: public_inputs[5] },
+            BoundaryConstraint {
+                row: 0,
+                col: 0,
+                value: public_inputs[0],
+            },
+            BoundaryConstraint {
+                row: 0,
+                col: 1,
+                value: public_inputs[1],
+            },
+            BoundaryConstraint {
+                row: 0,
+                col: 2,
+                value: public_inputs[2],
+            },
+            BoundaryConstraint {
+                row: 0,
+                col: 3,
+                value: public_inputs[3],
+            },
+            BoundaryConstraint {
+                row: 0,
+                col: 4,
+                value: public_inputs[4],
+            },
+            BoundaryConstraint {
+                row: 0,
+                col: 5,
+                value: public_inputs[5],
+            },
         ]
     }
 }
@@ -365,11 +389,31 @@ impl StarkAir for FactoryVkDerivationAir {
         _trace_len: usize,
     ) -> Vec<BoundaryConstraint> {
         vec![
-            BoundaryConstraint { row: 0, col: 0, value: public_inputs[0] },
-            BoundaryConstraint { row: 0, col: 1, value: public_inputs[1] },
-            BoundaryConstraint { row: 0, col: 7, value: public_inputs[2] },
-            BoundaryConstraint { row: 0, col: 8, value: public_inputs[3] },
-            BoundaryConstraint { row: 0, col: 6, value: public_inputs[4] },
+            BoundaryConstraint {
+                row: 0,
+                col: 0,
+                value: public_inputs[0],
+            },
+            BoundaryConstraint {
+                row: 0,
+                col: 1,
+                value: public_inputs[1],
+            },
+            BoundaryConstraint {
+                row: 0,
+                col: 7,
+                value: public_inputs[2],
+            },
+            BoundaryConstraint {
+                row: 0,
+                col: 8,
+                value: public_inputs[3],
+            },
+            BoundaryConstraint {
+                row: 0,
+                col: 6,
+                value: public_inputs[4],
+            },
         ]
     }
 }
@@ -434,7 +478,13 @@ pub fn vk_derivation_public_inputs(witness: &VkDerivationWitness) -> Vec<BabyBea
     let derived_vk_lo = derivation_hash;
     let derived_vk_hi = hash_fact(derivation_hash, &[BabyBear::new(1)]);
 
-    vec![factory_vk_lo, factory_vk_hi, derived_vk_lo, derived_vk_hi, param_hash]
+    vec![
+        factory_vk_lo,
+        factory_vk_hi,
+        derived_vk_lo,
+        derived_vk_hi,
+        param_hash,
+    ]
 }
 
 /// Prove a factory VK derivation.
@@ -557,8 +607,16 @@ impl StarkAir for FactoryVkFromSetAir {
         _trace_len: usize,
     ) -> Vec<BoundaryConstraint> {
         vec![
-            BoundaryConstraint { row: 0, col: 0, value: public_inputs[0] },
-            BoundaryConstraint { row: 0, col: 1, value: public_inputs[1] },
+            BoundaryConstraint {
+                row: 0,
+                col: 0,
+                value: public_inputs[0],
+            },
+            BoundaryConstraint {
+                row: 0,
+                col: 1,
+                value: public_inputs[1],
+            },
         ]
     }
 }
@@ -904,11 +962,7 @@ mod tests {
         let proof = prove_from_set(&witness);
         let pi = from_set_public_inputs(&witness);
         let result = verify_from_set(&proof, &pi);
-        assert!(
-            result.is_ok(),
-            "from-set proof failed: {:?}",
-            result.err()
-        );
+        assert!(result.is_ok(), "from-set proof failed: {:?}", result.err());
     }
 
     #[test]

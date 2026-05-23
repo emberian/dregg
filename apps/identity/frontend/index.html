@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Identity Credentials</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <div class="header-content">
+            <h1 class="logo">Identity</h1>
+            <nav>
+                <a href="#" class="nav-link active" data-view="wallet">Wallet</a>
+                <a href="#" class="nav-link" data-view="issue">Issue</a>
+                <a href="#" class="nav-link" data-view="present">Present</a>
+                <a href="#" class="nav-link" data-view="verify">Verify</a>
+                <a href="#" class="nav-link" data-view="revocation">Revocation</a>
+            </nav>
+            <div class="wallet-status" id="wallet-status">
+                <span class="dot disconnected" id="wallet-dot"></span>
+                <span id="wallet-label">Connect Wallet</span>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <!-- Wallet View -->
+        <section id="view-wallet" class="view active">
+            <div class="section-header">
+                <h2>Credentials</h2>
+                <button class="btn btn-secondary" onclick="App.refreshCredentials()">Refresh</button>
+            </div>
+            <div class="credential-grid" id="credential-grid">
+                <div class="empty-state">Loading credentials...</div>
+            </div>
+        </section>
+
+        <!-- Issue View -->
+        <section id="view-issue" class="view">
+            <div class="section-header">
+                <h2>Issue Credential</h2>
+            </div>
+            <form id="issue-form" class="form-panel">
+                <div class="form-group">
+                    <label for="issue-subject">Subject (DID or Cell ID)</label>
+                    <input type="text" id="issue-subject" required placeholder="did:pyana:abc123...">
+                </div>
+                <div class="form-group">
+                    <label for="issue-schema">Schema</label>
+                    <select id="issue-schema">
+                        <option value="identity.basic">Basic Identity</option>
+                        <option value="identity.age">Age Verification</option>
+                        <option value="membership.org">Organization Membership</option>
+                        <option value="finance.kyc">KYC Attestation</option>
+                        <option value="custom">Custom Schema</option>
+                    </select>
+                </div>
+                <div class="form-group" id="custom-schema-group" style="display:none;">
+                    <label for="issue-custom-schema">Custom Schema Name</label>
+                    <input type="text" id="issue-custom-schema" placeholder="namespace.schema_name">
+                </div>
+                <div id="attribute-fields">
+                    <!-- Dynamically populated based on schema -->
+                </div>
+                <div class="form-group">
+                    <button type="button" class="btn btn-secondary" onclick="App.addAttribute()">+ Add Attribute</button>
+                </div>
+                <div class="form-group">
+                    <label for="issue-expiry">Expiry (optional)</label>
+                    <input type="datetime-local" id="issue-expiry">
+                </div>
+                <button type="submit" class="btn btn-primary btn-large">Issue Credential</button>
+            </form>
+        </section>
+
+        <!-- Present View -->
+        <section id="view-present" class="view">
+            <div class="section-header">
+                <h2>Create Presentation</h2>
+            </div>
+            <div class="present-layout">
+                <div class="form-panel">
+                    <div class="form-group">
+                        <label for="present-cred">Select Credential</label>
+                        <select id="present-cred">
+                            <option value="">Choose a credential...</option>
+                        </select>
+                    </div>
+                    <div id="present-attributes">
+                        <!-- Populated when credential selected -->
+                    </div>
+                    <div id="predicate-section" class="hidden">
+                        <h3>Predicates</h3>
+                        <div id="predicate-fields"></div>
+                        <button type="button" class="btn btn-secondary" onclick="App.addPredicate()">+ Add Predicate</button>
+                    </div>
+                    <button class="btn btn-primary btn-large" onclick="App.createPresentation()" style="margin-top: 1.5rem;">
+                        Create Presentation
+                    </button>
+                </div>
+                <div class="presentation-output" id="presentation-output">
+                    <h3>Generated Presentation</h3>
+                    <div class="output-box" id="presentation-json">
+                        <div class="empty-state">Select a credential and attributes to create a presentation</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Verify View -->
+        <section id="view-verify" class="view">
+            <div class="section-header">
+                <h2>Verify Presentation</h2>
+            </div>
+            <div class="form-panel" style="max-width: 800px;">
+                <div class="form-group">
+                    <label for="verify-input">Paste Presentation JSON</label>
+                    <textarea id="verify-input" rows="10" placeholder="Paste the presentation JSON here..."></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Or upload a file</label>
+                    <input type="file" id="verify-file" accept=".json,.jwt">
+                </div>
+                <button class="btn btn-primary btn-large" onclick="App.verifyPresentation()">Verify</button>
+                <div id="verify-result" class="verify-result hidden"></div>
+            </div>
+        </section>
+
+        <!-- Revocation View -->
+        <section id="view-revocation" class="view">
+            <div class="section-header">
+                <h2>Revocation</h2>
+            </div>
+            <div class="revocation-layout">
+                <!-- Revoke (issuer) -->
+                <div class="form-panel">
+                    <h3>Revoke Credential (Issuer)</h3>
+                    <div class="form-group">
+                        <label for="revoke-id">Credential ID</label>
+                        <input type="text" id="revoke-id" placeholder="Credential ID to revoke">
+                    </div>
+                    <div class="form-group">
+                        <label for="revoke-reason">Reason</label>
+                        <select id="revoke-reason">
+                            <option value="key_compromise">Key Compromise</option>
+                            <option value="superseded">Superseded</option>
+                            <option value="cessation">Cessation of Operation</option>
+                            <option value="privilege_withdrawn">Privilege Withdrawn</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-danger btn-large" onclick="App.revokeCredential()">Revoke</button>
+                </div>
+
+                <!-- Check revocation status -->
+                <div class="form-panel">
+                    <h3>Check Revocation Status</h3>
+                    <div class="form-group">
+                        <label for="check-revoke-id">Credential ID</label>
+                        <input type="text" id="check-revoke-id" placeholder="Credential ID to check">
+                    </div>
+                    <button class="btn btn-primary btn-large" onclick="App.checkRevocation()">Check Status</button>
+                    <div id="revocation-result" class="revocation-result hidden"></div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <div class="footer-content">
+            <span>Powered by <strong>pyana</strong> federation protocol</span>
+            <span class="connection-status" id="connection-status">API: checking...</span>
+        </div>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>

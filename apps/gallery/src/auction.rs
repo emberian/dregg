@@ -446,6 +446,27 @@ impl AuctionEngine {
         self.auctions.get(id).await
     }
 
+    /// List all auctions as raw (id, Auction) pairs (for persistence).
+    pub async fn list_raw(&self) -> Vec<([u8; 32], Auction)> {
+        self.auctions.list().await
+    }
+
+    /// Insert a raw auction (for persistence restore).
+    pub async fn insert_raw(&self, auction: Auction) {
+        let id = auction.id;
+        let artwork_id = auction.artwork_id;
+        let is_active = matches!(
+            auction.phase,
+            crate::AuctionPhase::Bidding
+                | crate::AuctionPhase::Reveal
+                | crate::AuctionPhase::Settling
+        );
+        self.auctions.insert(id, auction).await;
+        if is_active {
+            self.active_by_artwork.write().await.insert(artwork_id, id);
+        }
+    }
+
     /// List all auctions as responses.
     pub async fn list_all(&self) -> Vec<AuctionResponse> {
         self.auctions

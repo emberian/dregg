@@ -187,7 +187,7 @@ impl std::fmt::Display for QualificationError {
 
 impl std::error::Error for QualificationError {}
 
-/// Verify a worker's anonymous qualification proof against a requirement.
+/// Verify a worker's anonymous qualification proof against the federation root history.
 ///
 /// # Privacy properties
 ///
@@ -201,12 +201,18 @@ impl std::error::Error for QualificationError {}
 /// ALL paths perform real cryptographic verification. If verification cannot be performed
 /// (e.g., no federation root configured), the function fails CLOSED (rejects).
 ///
+/// # Federation root coherence
+///
+/// For federation membership proofs, the verifier accepts proofs against ANY root in
+/// the `FederationRootHistory` window. This tolerates propagation lag in multi-validator
+/// devnets without weakening security (the window is bounded and old roots are evicted).
+///
 /// # Arguments
 ///
 /// * `engine` - The PyanaEngine instance for federation membership verification.
 /// * `requirement` - What the worker must prove.
 /// * `proof` - The cryptographic proof bytes (format depends on requirement type).
-/// * `federation_root` - The current federation Merkle root for membership checks.
+/// * `root_history` - The federation root history (recent roots window).
 ///
 /// # Returns
 ///
@@ -216,13 +222,13 @@ pub fn verify_qualification(
     engine: &PyanaEngine,
     requirement: &QualificationRequirement,
     proof: &[u8],
-    federation_root: [u8; 32],
+    root_history: &FederationRootHistory,
 ) -> Result<bool, QualificationError> {
     match requirement {
         QualificationRequirement::None => Ok(true),
 
         QualificationRequirement::FederationMember => {
-            verify_federation_membership(engine, proof, federation_root)
+            verify_federation_membership_multi(engine, proof, root_history)
         }
 
         QualificationRequirement::PredicateProof {
@@ -237,14 +243,33 @@ pub fn verify_qualification(
     }
 }
 
-/// Verify a ring membership STARK proving the worker is a federation member.
+/// Backward-compatible single-root verification entry point.
 ///
-/// Uses the PyanaEngine's `verify_presentation_bytes()` to perform real STARK verification
-/// of the federation membership proof.
-fn verify_federation_membership(
+/// Wraps the single root in a `FederationRootHistory` for use by code that
+/// only tracks a single root (tests, simple setups).
+pub fn verify_qualification_single_root(
     engine: &PyanaEngine,
+    requirement: &QualificationRequirement,
     proof: &[u8],
     federation_root: [u8; 32],
+) -> Result<bool, QualificationError> {
+    let history = FederationRootHistory::with_initial_root(federation_root);
+    verify_qualification(engine, requirement, proof, &history)
+}
+
+/// Verify a ring membership STARK proving the worker is a federation member.
+///
+/// Tries verification against each root in the history window (newest first).
+/// In a multi-validator devnet, the proof may have been generated against a root
+/// that this node hasn't yet adopted as "current" due to propagation lag. Accepting
+/// any root from the recent window resolves this coherence issue.
+///
+/// Uses the PyanaEngine's `verify_membership_proof()` to perform real STARK verification
+/// of the federation membership proof.
+fn verify_federation_membership_multi(
+    engine: &PyanaEngine,
+    proof: &[u8],
+    root_history: &FederationRootHistory,
 ) -> Result<bool, QualificationError> {
     if proof.is_empty() {
         return Err(QualificationError::InvalidProof(
@@ -252,24 +277,31 @@ fn verify_federation_membership(
         ));
     }
 
-    // If we can't verify, REJECT -- never accept unverified proofs.
-    if federation_root == [0u8; 32] {
+    // If we have no known roots at all, fail closed.
+    if root_history.is_empty() {
         return Err(QualificationError::VerificationUnavailable(
             "no federation root configured".to_string(),
         ));
     }
 
-    // Perform real cryptographic verification via the engine.
-    // Uses verify_membership_proof which checks the STARK proof for federation
-    // membership without requiring action/resource binding (this is a qualification
-    // check, not an action-authorized request).
-    if engine.verify_membership_proof(proof, &federation_root) {
-        Ok(true)
-    } else {
-        Err(QualificationError::ProofRejected(
-            "federation membership STARK verification failed".to_string(),
-        ))
+    // Try verification against each known root (newest first for fast-path).
+    // The proof embeds the root it was generated against as a public input,
+    // so only the matching root will pass verification.
+    let known_roots = root_history.known_roots();
+    for root in &known_roots {
+        if engine.verify_membership_proof(proof, root) {
+            return Ok(true);
+        }
     }
+
+    // None of the known roots matched. This means either:
+    // 1. The proof is invalid (most common), or
+    // 2. The proof was generated against a root that has already been evicted
+    //    from the window (extremely stale proof).
+    Err(QualificationError::ProofRejected(format!(
+        "federation membership STARK verification failed against {} known root(s)",
+        known_roots.len()
+    )))
 }
 
 /// Verify a predicate STARK proving an attribute satisfies a threshold.

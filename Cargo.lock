@@ -1782,7 +1782,6 @@ name = "compute-exchange"
 version = "0.1.0"
 dependencies = [
  "axum 0.8.9",
- "axum-extra",
  "blake3",
  "clap",
  "postcard",
@@ -6315,8 +6314,21 @@ name = "pyana-dsl-runtime"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "p3-air 0.5.1",
+ "p3-baby-bear 0.5.1",
+ "p3-challenger 0.5.1",
+ "p3-commit 0.5.1",
+ "p3-dft 0.5.1",
+ "p3-field 0.5.1",
+ "p3-fri 0.5.1",
+ "p3-matrix 0.5.1",
+ "p3-merkle-tree 0.5.1",
+ "p3-symmetric 0.5.1",
+ "p3-uni-stark 0.5.1",
+ "p3-util 0.5.1",
  "postcard",
  "pyana-circuit",
+ "rmp-serde",
  "serde",
 ]
 
@@ -6704,6 +6716,7 @@ dependencies = [
  "token",
  "wasm-bindgen",
  "web-sys",
+ "x25519-dalek",
 ]
 
 [[package]]

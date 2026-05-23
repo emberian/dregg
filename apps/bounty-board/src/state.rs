@@ -10,11 +10,11 @@ use tokio::sync::RwLock;
 use pyana_app_framework::CellId;
 use pyana_app_framework::store::ContentStore;
 
+use crate::persist::{BoardSnapshot, PersistManager, bytes32_hex, hex_bytes32};
 use crate::{
     Bounty, BountyFilter, BountyStatus, BountySummary, bounty_id_hex, qualification_label,
     status_label,
 };
-use crate::persist::{BoardSnapshot, PersistManager, bytes32_hex, hex_bytes32};
 
 /// Wrapper for worker history (needed for ContentStore's Serialize/Deserialize bounds).
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]

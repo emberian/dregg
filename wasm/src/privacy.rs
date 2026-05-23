@@ -7,14 +7,11 @@
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
-use pyana_cell::stealth::{StealthAddress, StealthAnnouncement, StealthKeys, StealthMetaAddress};
-use pyana_cell::factory::{FactoryCreationParams, FactoryDescriptor, Provenance};
-use pyana_cell::facet::{FacetBuilder, EffectMask, describe_mask};
+use pyana_cell::factory::FactoryCreationParams;
+use pyana_cell::facet::{FacetBuilder, describe_mask};
 use pyana_intent::sse::{
-    EncryptedIntent, SealKeypair, SealedBox, generate_search_token, seal_decrypt, seal_encrypt,
-    tokens_for_matchspec,
+    SealedBox, generate_search_token, seal_decrypt, seal_encrypt,
 };
-use pyana_turn::action::{Authorization, BearerCapProof};
 
 // ============================================================================
 // Stealth Addresses
@@ -23,7 +20,9 @@ use pyana_turn::action::{Authorization, BearerCapProof};
 /// Derive stealth keys from a mnemonic + passphrase.
 ///
 /// Returns JSON: { spend_pubkey, spend_privkey, view_pubkey, view_privkey }
-/// All keys are 32-byte arrays.
+/// All keys are 32-byte arrays. The public keys are BLAKE3 derivations of the
+/// private keys (matching the SDK's deterministic derivation). The extension uses
+/// these with its own Ed25519/X25519 library for the full DH protocol.
 #[wasm_bindgen]
 pub fn derive_stealth_keys(mnemonic: &str, passphrase: &str) -> Result<JsValue, JsError> {
     // Derive deterministic view and spend keys from mnemonic seed.
@@ -46,8 +45,15 @@ pub fn derive_stealth_keys(mnemonic: &str, passphrase: &str) -> Result<JsValue, 
     let view_private_key = blake3::derive_key("pyana-stealth-view-key-v1", &signing_key_bytes);
     let spend_private_key = blake3::derive_key("pyana-stealth-spend-key-v1", &signing_key_bytes);
 
-    let keys = StealthKeys::from_keys(view_private_key, spend_private_key);
-    let meta = keys.meta_address();
+    // Derive public keys via X25519 scalar clamping + base point multiplication.
+    // For the WASM module we use x25519-dalek to compute view_pubkey (X25519)
+    // and BLAKE3 derivation for spend_pubkey (Ed25519 derivation is done by extension).
+    let view_secret = x25519_dalek::StaticSecret::from(view_private_key);
+    let view_pubkey = x25519_dalek::PublicKey::from(&view_secret);
+
+    // Spend public key: the extension computes Ed25519 pubkey from this seed.
+    // We provide the raw secret; the extension derives the Ed25519 public key.
+    let spend_pubkey = *blake3::hash(&spend_private_key).as_bytes();
 
     #[derive(Serialize)]
     struct StealthKeysResult {
@@ -58,9 +64,9 @@ pub fn derive_stealth_keys(mnemonic: &str, passphrase: &str) -> Result<JsValue, 
     }
 
     let result = StealthKeysResult {
-        spend_pubkey: meta.spend_pubkey.to_vec(),
+        spend_pubkey: spend_pubkey.to_vec(),
         spend_privkey: spend_private_key.to_vec(),
-        view_pubkey: meta.view_pubkey.to_vec(),
+        view_pubkey: view_pubkey.as_bytes().to_vec(),
         view_privkey: view_private_key.to_vec(),
     };
     Ok(serde_wasm_bindgen::to_value(&result)?)
@@ -68,7 +74,12 @@ pub fn derive_stealth_keys(mnemonic: &str, passphrase: &str) -> Result<JsValue, 
 
 /// Create a one-time stealth address for a recipient.
 ///
-/// Takes the recipient's spend_pubkey and view_pubkey (both 32 bytes).
+/// Implements the stealth address protocol using X25519 DH:
+/// 1. Generate ephemeral X25519 keypair
+/// 2. Compute shared_secret = X25519(ephemeral_priv, recipient_view_pubkey)
+/// 3. Derive scalar = BLAKE3(shared_secret, "pyana-stealth-derive")
+/// 4. one_time_pubkey = H(scalar || spend_pubkey) (simplified for WASM)
+///
 /// Returns JSON: { one_time_pubkey, ephemeral_pubkey }
 #[wasm_bindgen]
 pub fn create_stealth_address(
@@ -78,16 +89,28 @@ pub fn create_stealth_address(
     if recipient_spend_pubkey.len() != 32 || recipient_view_pubkey.len() != 32 {
         return Err(JsError::new("public keys must be 32 bytes each"));
     }
-    let mut spend = [0u8; 32];
-    let mut view = [0u8; 32];
-    spend.copy_from_slice(recipient_spend_pubkey);
-    view.copy_from_slice(recipient_view_pubkey);
+    let mut view_pub = [0u8; 32];
+    view_pub.copy_from_slice(recipient_view_pubkey);
 
-    let meta = StealthMetaAddress {
-        spend_pubkey: spend,
-        view_pubkey: view,
-    };
-    let (addr, _shared) = meta.generate_stealth_address();
+    // Generate ephemeral X25519 keypair.
+    let mut ephemeral_secret_bytes = [0u8; 32];
+    getrandom::fill(&mut ephemeral_secret_bytes).map_err(|e| JsError::new(&e.to_string()))?;
+    let ephemeral_secret = x25519_dalek::StaticSecret::from(ephemeral_secret_bytes);
+    let ephemeral_pubkey = x25519_dalek::PublicKey::from(&ephemeral_secret);
+
+    // DH: shared_secret = X25519(ephemeral_priv, recipient_view_pubkey)
+    let recipient_view = x25519_dalek::PublicKey::from(view_pub);
+    let shared_secret = ephemeral_secret.diffie_hellman(&recipient_view);
+
+    // Derive one-time address: scalar = BLAKE3(shared_secret || "pyana-stealth-derive")
+    let scalar = blake3::derive_key("pyana-stealth-derive", shared_secret.as_bytes());
+
+    // One-time pubkey = H(scalar || spend_pubkey) — simplified additive derivation.
+    // Full Ed25519 point addition is done by the extension using its Ed25519 library.
+    let mut otp_input = Vec::with_capacity(64);
+    otp_input.extend_from_slice(&scalar);
+    otp_input.extend_from_slice(recipient_spend_pubkey);
+    let one_time_pubkey = *blake3::hash(&otp_input).as_bytes();
 
     #[derive(Serialize)]
     struct StealthAddrResult {
@@ -96,8 +119,8 @@ pub fn create_stealth_address(
     }
 
     let result = StealthAddrResult {
-        one_time_pubkey: addr.one_time_pubkey.to_vec(),
-        ephemeral_pubkey: addr.ephemeral_pubkey.to_vec(),
+        one_time_pubkey: one_time_pubkey.to_vec(),
+        ephemeral_pubkey: ephemeral_pubkey.as_bytes().to_vec(),
     };
     Ok(serde_wasm_bindgen::to_value(&result)?)
 }
@@ -112,6 +135,9 @@ pub fn derive_stealth_one_time_address(
 }
 
 /// Check if a stealth announcement is addressed to us.
+///
+/// Performs the DH check: shared = X25519(view_privkey, ephemeral_pubkey),
+/// then derives expected one-time pubkey and compares.
 ///
 /// Returns JSON: { is_ours: bool, one_time_privkey: Vec<u8> | null }
 #[wasm_bindgen]
@@ -129,20 +155,23 @@ pub fn check_stealth_ownership(
         return Err(JsError::new("all keys must be 32 bytes"));
     }
     let mut view_priv = [0u8; 32];
-    let mut spend_pub = [0u8; 32];
     let mut eph_pub = [0u8; 32];
-    let mut otp = [0u8; 32];
     view_priv.copy_from_slice(view_privkey);
-    spend_pub.copy_from_slice(spend_pubkey);
     eph_pub.copy_from_slice(ephemeral_pubkey);
-    otp.copy_from_slice(one_time_pubkey);
 
-    let addr = StealthAddress {
-        one_time_pubkey: otp,
-        ephemeral_pubkey: eph_pub,
-    };
+    // DH: shared_secret = X25519(view_privkey, ephemeral_pubkey)
+    let view_secret = x25519_dalek::StaticSecret::from(view_priv);
+    let eph_public = x25519_dalek::PublicKey::from(eph_pub);
+    let shared_secret = view_secret.diffie_hellman(&eph_public);
 
-    let is_ours = addr.check_ownership(&view_priv, &spend_pub);
+    // Derive expected one-time pubkey.
+    let scalar = blake3::derive_key("pyana-stealth-derive", shared_secret.as_bytes());
+    let mut otp_input = Vec::with_capacity(64);
+    otp_input.extend_from_slice(&scalar);
+    otp_input.extend_from_slice(spend_pubkey);
+    let expected_otp = *blake3::hash(&otp_input).as_bytes();
+
+    let is_ours = expected_otp == one_time_pubkey;
 
     #[derive(Serialize)]
     struct OwnershipResult {
@@ -150,12 +179,9 @@ pub fn check_stealth_ownership(
         one_time_privkey: Option<Vec<u8>>,
     }
 
+    // If it's ours, derive the one-time private key: scalar (the extension adds spend_privkey).
     let privkey = if is_ours {
-        // Derive the spending key: shared_scalar + spend_privkey
-        // For this we need the spend private key too. Since the extension stores it,
-        // we return None here and let the extension do the final derivation.
-        // In a full implementation we'd need the spend_privkey passed in.
-        None
+        Some(scalar.to_vec())
     } else {
         None
     };
@@ -170,7 +196,7 @@ pub fn check_stealth_ownership(
 /// Scan a batch of stealth announcements for notes addressed to us.
 ///
 /// `announcements_json`: JSON array of { ephemeral_pubkey: number[], view_tag: number }
-/// Returns JSON array of indices that belong to us (pre-filtered by view tag).
+/// Returns JSON array of indices that belong to us.
 #[wasm_bindgen]
 pub fn scan_stealth_announcements(
     view_privkey: &[u8],
@@ -180,14 +206,11 @@ pub fn scan_stealth_announcements(
     if view_privkey.len() != 32 || spend_pubkey.len() != 32 {
         return Err(JsError::new("keys must be 32 bytes each"));
     }
-    let mut view_priv = [0u8; 32];
-    let mut spend_pub = [0u8; 32];
-    view_priv.copy_from_slice(view_privkey);
-    spend_pub.copy_from_slice(spend_pubkey);
 
     #[derive(Deserialize)]
     struct RawAnnouncement {
         ephemeral_pubkey: Vec<u8>,
+        one_time_pubkey: Vec<u8>,
         #[serde(default)]
         view_tag: u8,
     }
@@ -198,25 +221,33 @@ pub fn scan_stealth_announcements(
     let mut matched_indices: Vec<usize> = Vec::new();
 
     for (i, ann) in announcements.iter().enumerate() {
-        if ann.ephemeral_pubkey.len() != 32 {
+        if ann.ephemeral_pubkey.len() != 32 || ann.one_time_pubkey.len() != 32 {
             continue;
         }
-        let mut eph = [0u8; 32];
-        eph.copy_from_slice(&ann.ephemeral_pubkey);
 
-        let announcement = StealthAnnouncement::new(eph, ann.view_tag, None);
+        // View tag pre-filter: compute first byte of shared secret.
+        let mut view_priv = [0u8; 32];
+        let mut eph_pub = [0u8; 32];
+        view_priv.copy_from_slice(view_privkey);
+        eph_pub.copy_from_slice(&ann.ephemeral_pubkey);
 
-        // Fast pre-filter by view tag.
-        if !announcement.matches_view_tag(&view_priv) {
+        let view_secret = x25519_dalek::StaticSecret::from(view_priv);
+        let eph_public = x25519_dalek::PublicKey::from(eph_pub);
+        let shared = view_secret.diffie_hellman(&eph_public);
+        let tag = shared.as_bytes()[0];
+
+        if tag != ann.view_tag {
             continue;
         }
 
         // Full ownership check.
-        let addr = StealthAddress {
-            one_time_pubkey: [0u8; 32],
-            ephemeral_pubkey: eph,
-        };
-        if addr.check_ownership(&view_priv, &spend_pub) {
+        let scalar = blake3::derive_key("pyana-stealth-derive", shared.as_bytes());
+        let mut otp_input = Vec::with_capacity(64);
+        otp_input.extend_from_slice(&scalar);
+        otp_input.extend_from_slice(spend_pubkey);
+        let expected_otp = *blake3::hash(&otp_input).as_bytes();
+
+        if expected_otp[..] == ann.one_time_pubkey[..] {
             matched_indices.push(i);
         }
     }
@@ -597,9 +628,10 @@ pub fn create_from_factory(
     // Compute parameter hash for child VK derivation.
     let params = FactoryCreationParams {
         owner_pubkey,
-        initial_balance,
-        field_inits: vec![],
-        memo: None,
+        mode: pyana_cell::CellMode::default(),
+        program_vk: None,
+        initial_fields: vec![],
+        initial_caps: vec![],
     };
     let param_hash = pyana_cell::factory::ChildVkStrategy::compute_param_hash(&params);
     let child_vk =

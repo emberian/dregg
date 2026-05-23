@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AMM DEX</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <div class="header-content">
+            <h1 class="logo">AMM DEX</h1>
+            <nav>
+                <a href="#" class="nav-link active" data-view="pools">Pools</a>
+                <a href="#" class="nav-link" data-view="swap">Swap</a>
+                <a href="#" class="nav-link" data-view="liquidity">Liquidity</a>
+            </nav>
+            <div class="wallet-status" id="wallet-status">
+                <span class="dot disconnected" id="wallet-dot"></span>
+                <span id="wallet-label">Connect Wallet</span>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <!-- Pools View -->
+        <section id="view-pools" class="view active">
+            <div class="section-header">
+                <h2>Liquidity Pools</h2>
+            </div>
+            <div class="pool-list" id="pool-list">
+                <div class="empty-state">Loading pools...</div>
+            </div>
+        </section>
+
+        <!-- Swap View -->
+        <section id="view-swap" class="view">
+            <div class="section-header">
+                <h2>Swap</h2>
+            </div>
+            <div class="swap-container">
+                <form id="swap-form" class="form-panel">
+                    <div class="form-group">
+                        <label for="swap-pool">Pool</label>
+                        <select id="swap-pool">
+                            <option value="">Select a pool...</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="swap-direction">Direction</label>
+                        <select id="swap-direction">
+                            <option value="a_to_b">Token A -> Token B</option>
+                            <option value="b_to_a">Token B -> Token A</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="swap-input">Input Amount</label>
+                        <input type="number" id="swap-input" step="0.0001" min="0" required placeholder="Amount to swap">
+                    </div>
+                    <div class="quote-display" id="quote-display">
+                        <div class="quote-row">
+                            <span class="quote-label">Output</span>
+                            <span class="quote-value" id="quote-output">--</span>
+                        </div>
+                        <div class="quote-row">
+                            <span class="quote-label">Price Impact</span>
+                            <span class="quote-value" id="quote-impact">--</span>
+                        </div>
+                        <div class="quote-row">
+                            <span class="quote-label">Fee</span>
+                            <span class="quote-value" id="quote-fee">--</span>
+                        </div>
+                        <div class="quote-row">
+                            <span class="quote-label">Exchange Rate</span>
+                            <span class="quote-value" id="quote-rate">--</span>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-large">Execute Swap</button>
+                </form>
+            </div>
+        </section>
+
+        <!-- Liquidity View -->
+        <section id="view-liquidity" class="view">
+            <div class="section-header">
+                <h2>Manage Liquidity</h2>
+            </div>
+            <div class="liquidity-panels">
+                <!-- Add Liquidity -->
+                <form id="add-liq-form" class="form-panel">
+                    <h3>Add Liquidity</h3>
+                    <div class="form-group">
+                        <label for="add-pool">Pool</label>
+                        <select id="add-pool">
+                            <option value="">Select a pool...</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="add-amount-a">Token A Amount</label>
+                        <input type="number" id="add-amount-a" step="0.0001" min="0" required placeholder="Amount of Token A">
+                    </div>
+                    <div class="form-group">
+                        <label for="add-amount-b">Token B Amount (proportional)</label>
+                        <input type="number" id="add-amount-b" step="0.0001" min="0" placeholder="Auto-calculated" readonly>
+                        <small>Proportional to current pool ratio</small>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-large">Add Liquidity</button>
+                </form>
+
+                <!-- Remove Liquidity -->
+                <form id="remove-liq-form" class="form-panel">
+                    <h3>Remove Liquidity</h3>
+                    <div class="form-group">
+                        <label for="remove-pool">Pool</label>
+                        <select id="remove-pool">
+                            <option value="">Select a pool...</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="remove-lp">LP Token Amount</label>
+                        <input type="number" id="remove-lp" step="0.0001" min="0" required placeholder="LP tokens to burn">
+                    </div>
+                    <div class="receive-display" id="receive-display">
+                        <div class="quote-row">
+                            <span class="quote-label">Receive Token A</span>
+                            <span class="quote-value" id="receive-a">--</span>
+                        </div>
+                        <div class="quote-row">
+                            <span class="quote-label">Receive Token B</span>
+                            <span class="quote-value" id="receive-b">--</span>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-large">Remove Liquidity</button>
+                </form>
+            </div>
+        </section>
+
+        <!-- Pool Detail Modal -->
+        <div id="pool-modal" class="modal hidden">
+            <div class="modal-backdrop"></div>
+            <div class="modal-content">
+                <button class="modal-close">&times;</button>
+                <div id="pool-detail"></div>
+            </div>
+        </div>
+    </main>
+
+    <footer>
+        <div class="footer-content">
+            <span>Powered by <strong>pyana</strong> federation protocol</span>
+            <span class="connection-status" id="connection-status">API: checking...</span>
+        </div>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>

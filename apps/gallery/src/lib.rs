@@ -24,6 +24,7 @@ pub mod artwork;
 pub mod auction;
 pub mod bidding;
 pub mod handlers;
+pub mod persistence;
 pub mod private_vickrey;
 pub mod provenance;
 pub mod server;

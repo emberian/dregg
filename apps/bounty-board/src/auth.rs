@@ -65,10 +65,7 @@ impl IntoResponse for AdminAuthRejection {
                 StatusCode::SERVICE_UNAVAILABLE,
                 "admin endpoints disabled: PYANA_ADMIN_TOKEN not configured",
             ),
-            Self::MissingHeader => (
-                StatusCode::UNAUTHORIZED,
-                "missing Authorization header",
-            ),
+            Self::MissingHeader => (StatusCode::UNAUTHORIZED, "missing Authorization header"),
             Self::InvalidToken => (StatusCode::UNAUTHORIZED, "invalid admin token"),
         };
         (status, axum::Json(json!({"error": msg}))).into_response()

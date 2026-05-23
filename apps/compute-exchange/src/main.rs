@@ -885,7 +885,9 @@ async fn complete_settlement(
     if stark_proof.query_proofs.is_empty() || stark_proof.trace_len < 2 {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({"error": "delivery proof is structurally invalid (no queries or insufficient trace length)"})),
+            Json(
+                json!({"error": "delivery proof is structurally invalid (no queries or insufficient trace length)"}),
+            ),
         );
     }
 

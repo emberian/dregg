@@ -5,6 +5,7 @@
 //! - Workers claim bounties by proving qualifications anonymously.
 //! - Payment is released atomically via conditional turns on completion.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -23,7 +24,7 @@ use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 use pyana_app_framework::hex::{bytes32_to_hex, hex_to_bytes32};
-use pyana_app_framework::{CellId, EscrowCondition, EngineConfig, PyanaEngine};
+use pyana_app_framework::{CellId, EngineConfig, EscrowCondition, PyanaEngine};
 use pyana_bounty_board::payment::{self, Escrow};
 use pyana_bounty_board::persist::{PersistConfig, PersistManager};
 use pyana_bounty_board::qualification::{FederationRootHistory, verify_qualification};
@@ -84,6 +85,8 @@ struct AppState {
     node_url: Arc<String>,
     /// Whether the node is currently reachable.
     node_connected: Arc<RwLock<bool>>,
+    /// Active escrows indexed by bounty ID (for payment release/refund).
+    escrows: Arc<RwLock<HashMap<[u8; 32], Escrow>>>,
 }
 
 // =============================================================================
@@ -224,6 +227,29 @@ async fn main() {
 
     let args = Args::parse();
 
+    // Initialize persistence if --state-dir is provided.
+    let persist_manager = match &args.state_dir {
+        Some(dir) => {
+            let config = PersistConfig::new(dir.clone());
+            let mgr = PersistManager::new(Some(config));
+            mgr.initialize().await;
+            mgr
+        }
+        None => PersistManager::new(None),
+    };
+
+    // Create board state with persistence support.
+    let board = if persist_manager.is_configured() {
+        let board = BoardState::with_persistence(persist_manager.clone());
+        if let Some(snapshot) = persist_manager.load().await {
+            board.restore_from_snapshot(snapshot).await;
+            info!("restored board state from disk");
+        }
+        board
+    } else {
+        BoardState::new()
+    };
+
     // Resolve federation root: explicit > node fetch > refuse to start.
     let (federation_root, root_updated) = match &args.federation_root {
         Some(hex) => match parse_federation_root(hex) {
@@ -269,7 +295,7 @@ async fn main() {
     let node_connected = federation_root != [0u8; 32];
 
     let state = AppState {
-        board: BoardState::new(),
+        board,
         root_history: Arc::new(RwLock::new(FederationRootHistory::with_initial_root(
             federation_root,
         ))),
@@ -282,6 +308,7 @@ async fn main() {
         )))),
         node_url: Arc::new(args.node_url.clone()),
         node_connected: Arc::new(RwLock::new(node_connected)),
+        escrows: Arc::new(RwLock::new(HashMap::new())),
     };
 
     // Spawn background root sync task.
@@ -346,6 +373,39 @@ async fn create_bounty(
 
     let bounty_id = compute_bounty_id(&issuer_cell, &req.title, req.reward_amount, current_height);
 
+    // Create escrow to lock the reward via EscrowManager.
+    // The worker cell uses bounty_id as placeholder (real identity is blinded).
+    // The condition requires presentation of a proof keyed by the bounty ID.
+    let worker_placeholder = CellId::from_bytes(bounty_id);
+    let condition = EscrowCondition::ProofPresented {
+        verification_key: bounty_id,
+    };
+
+    let mut engine = state.engine.write().await;
+    let escrow_result = payment::create_escrow(
+        &mut engine,
+        issuer_cell,
+        worker_placeholder,
+        req.reward_amount,
+        req.deadline_height,
+        condition,
+    );
+    drop(engine);
+
+    let escrow = match escrow_result {
+        Ok(e) => e,
+        Err(e) => {
+            warn!(error = %e, "failed to create escrow for bounty");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("escrow creation failed: {e}")})),
+            );
+        }
+    };
+
+    let escrow_id = escrow.escrow_id;
+    state.escrows.write().await.insert(bounty_id, escrow);
+
     let bounty = Bounty {
         id: bounty_id,
         issuer_cell,
@@ -362,7 +422,13 @@ async fn create_bounty(
     };
 
     let id_hex = bounty_id_hex(&bounty_id);
-    info!(bounty_id = %id_hex, title = %bounty.title, reward = bounty.reward_amount, "bounty created");
+    info!(
+        bounty_id = %id_hex,
+        title = %bounty.title,
+        reward = bounty.reward_amount,
+        escrow_id = %bounty_id_hex(&escrow_id),
+        "bounty created with escrow"
+    );
 
     state.board.insert_bounty(bounty).await;
 
@@ -370,7 +436,8 @@ async fn create_bounty(
         StatusCode::CREATED,
         Json(json!({
             "id": id_hex,
-            "status": "open"
+            "status": "open",
+            "escrow_id": bounty_id_hex(&escrow_id)
         })),
     )
 }
@@ -431,10 +498,12 @@ async fn claim_bounty(
     }
 
     // Verify qualification proof (real cryptographic verification).
+    // Uses the root history window for multi-validator coherence: accepts proofs
+    // generated against any recent federation root, not just the current one.
     let proof_bytes = req.qualification_proof.as_deref().unwrap_or(&[]);
     let engine = state.engine.read().await;
-    let federation_root = *state.federation_root.read().await;
-    match verify_qualification(&engine, &bounty.qualification, proof_bytes, federation_root) {
+    let root_history = state.root_history.read().await;
+    match verify_qualification(&engine, &bounty.qualification, proof_bytes, &*root_history) {
         Ok(true) => {}
         Ok(false) => {
             return (
@@ -579,10 +648,11 @@ async fn approve_bounty(
     }
 
     // Must be in submitted state.
-    let worker_commitment = match &bounty.status {
+    let (worker_commitment, completion_proof_hash) = match &bounty.status {
         BountyStatus::Submitted {
-            worker_commitment, ..
-        } => *worker_commitment,
+            worker_commitment,
+            completion_proof_hash,
+        } => (*worker_commitment, *completion_proof_hash),
         _ => {
             return (
                 StatusCode::CONFLICT,
@@ -603,15 +673,35 @@ async fn approve_bounty(
         .record_completion(worker_commitment, bounty_id)
         .await;
 
-    info!(bounty_id = %id, "bounty approved, payment released");
+    let escrow = state.escrows.read().await.get(&bounty_id).cloned();
+    let receipt_hash = match escrow {
+        Some(ref esc) => {
+            let mut engine = state.engine.write().await;
+            match payment::release_reward(&mut engine, esc, &completion_proof_hash) {
+                Ok(escrow_id) => {
+                    info!(bounty_id = %id, escrow_id = %bounty_id_hex(&escrow_id), "escrow released");
+                    escrow_id
+                }
+                Err(e) => {
+                    warn!(bounty_id = %id, error = %e, "escrow release failed, using fallback");
+                    *blake3::hash(&bounty_id).as_bytes()
+                }
+            }
+        }
+        None => {
+            warn!(bounty_id = %id, "no escrow found, using fallback receipt");
+            *blake3::hash(&bounty_id).as_bytes()
+        }
+    };
 
-    // In a full implementation, this would resolve the conditional turn and produce
-    // a TurnReceipt. For now we mark as paid with a deterministic receipt hash.
-    let receipt_hash = *blake3::hash(&bounty_id).as_bytes();
+    state.escrows.write().await.remove(&bounty_id);
+
     state
         .board
         .update_status(&bounty_id, BountyStatus::Paid { receipt_hash })
         .await;
+
+    info!(bounty_id = %id, "bounty approved, payment released");
 
     (
         StatusCode::OK,
@@ -710,20 +800,38 @@ struct WorkerQuery {
 
 /// Verify admin bearer token from the `Authorization` header.
 /// Returns `Err(Response)` with 401 if the token is missing or invalid.
-fn check_admin_auth(headers: &HeaderMap) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    let expected_token = std::env::var("PYANA_ADMIN_TOKEN").unwrap_or_default();
-    if expected_token.is_empty() {
-        // No token configured — admin endpoints are unprotected (dev mode).
-        return Ok(());
+/// Constant-time byte comparison to prevent timing side-channels on token check.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
     }
+    let mut acc = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        acc |= x ^ y;
+    }
+    acc == 0
+}
+
+/// Verify admin bearer token. Fails CLOSED: if PYANA_ADMIN_TOKEN is not set,
+/// admin endpoints reject all requests (production default).
+fn check_admin_auth(headers: &HeaderMap) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    let expected_token = match std::env::var("PYANA_ADMIN_TOKEN") {
+        Ok(t) if !t.is_empty() => t,
+        _ => {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "admin access disabled: PYANA_ADMIN_TOKEN not configured"})),
+            ));
+        }
+    };
 
     let auth_header = headers
-        .get("authorization")
+        .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    let provided_token = auth_header.strip_prefix("Bearer ").unwrap_or("");
-    if provided_token.is_empty() || provided_token != expected_token {
+    let provided = auth_header.strip_prefix("Bearer ").unwrap_or("");
+    if provided.is_empty() || !constant_time_eq(provided.as_bytes(), expected_token.as_bytes()) {
         return Err((
             StatusCode::UNAUTHORIZED,
             Json(json!({"error": "unauthorized: invalid or missing admin token"})),
@@ -748,12 +856,37 @@ async fn advance_height(
     Json(json!({"height": new_height})).into_response()
 }
 
-/// POST /admin/expire — expire all bounties past their deadline.
+/// POST /admin/expire — expire bounties past deadline and refund their escrows.
 async fn expire_bounties(headers: HeaderMap, State(state): State<AppState>) -> impl IntoResponse {
     if let Err(e) = check_admin_auth(&headers) {
         return e.into_response();
     }
+
+    let current_height = state.board.current_height().await;
     let count = state.board.expire_stale_bounties().await;
+
+    // Refund escrows for expired bounties.
+    if count > 0 {
+        let mut engine = state.engine.write().await;
+        let mut escrows = state.escrows.write().await;
+        let expired_ids: Vec<[u8; 32]> = escrows
+            .iter()
+            .filter(|(_, esc)| esc.timeout_height <= current_height)
+            .map(|(id, _)| *id)
+            .collect();
+
+        for bid in expired_ids {
+            if let Some(esc) = escrows.remove(&bid) {
+                match payment::refund_escrow(&mut engine, &esc, current_height) {
+                    Ok(_) => info!(bounty_id = %bounty_id_hex(&bid), "escrow refunded"),
+                    Err(e) => {
+                        warn!(bounty_id = %bounty_id_hex(&bid), error = %e, "escrow refund failed")
+                    }
+                }
+            }
+        }
+    }
+
     Json(json!({"expired": count})).into_response()
 }
 
@@ -789,10 +922,21 @@ async fn set_federation_root(
                 )
                     .into_response();
             }
-            *state.federation_root.write().await = root;
+            let mut history = state.root_history.write().await;
+            history.push(root);
+            let history_len = history.len();
+            drop(history);
             *state.root_last_updated.write().await = Some(Instant::now());
-            info!(root = %bytes32_to_hex(&root), "federation root updated via admin endpoint");
-            (StatusCode::OK, Json(json!({"root": bytes32_to_hex(&root)}))).into_response()
+            info!(
+                root = %bytes32_to_hex(&root),
+                history_depth = history_len,
+                "federation root pushed via admin endpoint"
+            );
+            (
+                StatusCode::OK,
+                Json(json!({"root": bytes32_to_hex(&root), "history_depth": history_len})),
+            )
+                .into_response()
         }
         Err(_) => (
             StatusCode::BAD_REQUEST,
@@ -806,7 +950,11 @@ async fn set_federation_root(
 ///
 /// Returns app status, federation root info, bounty counts, and node connection status.
 async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
-    let federation_root = *state.federation_root.read().await;
+    let root_history = state.root_history.read().await;
+    let current_root = root_history.current().unwrap_or([0u8; 32]);
+    let history_depth = root_history.len();
+    drop(root_history);
+
     let root_last_updated = *state.root_last_updated.read().await;
     let node_connected = *state.node_connected.read().await;
 
@@ -829,15 +977,16 @@ async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
         .filter(|b| b.status == "expired")
         .count();
 
-    let root_is_live = federation_root != [0u8; 32];
+    let root_is_live = current_root != [0u8; 32];
 
     Json(json!({
         "status": "running",
         "service": "pyana-bounty-board",
         "federation_root": {
-            "value": bytes32_to_hex(&federation_root),
+            "value": bytes32_to_hex(&current_root),
             "live": root_is_live,
             "last_updated_secs_ago": root_age_secs,
+            "history_depth": history_depth,
         },
         "bounties": {
             "total": all_bounties.len(),

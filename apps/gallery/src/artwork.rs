@@ -138,6 +138,16 @@ impl ArtworkRegistry {
             .collect()
     }
 
+    /// List all artworks as raw (id, Artwork) pairs (for persistence).
+    pub async fn list_raw(&self) -> Vec<([u8; 32], Artwork)> {
+        self.artworks.list().await
+    }
+
+    /// Insert a raw artwork (for persistence restore).
+    pub async fn insert_raw(&self, id: ArtworkId, artwork: Artwork) {
+        self.artworks.insert(id, artwork).await;
+    }
+
     /// List artworks filtered by tag.
     pub async fn list_by_tag(&self, tag: &str) -> Vec<ArtworkSummary> {
         let tag = tag.to_string();

@@ -83,8 +83,7 @@ impl PriceAttestation {
         let verifying_key = VerifyingKey::from_bytes(&self.oracle_pubkey)
             .map_err(|_| OracleError::InvalidSignature)?;
 
-        let signature =
-            Signature::from_bytes(&self.signature);
+        let signature = Signature::from_bytes(&self.signature);
 
         let msg = self.message_bytes();
 
@@ -301,15 +300,13 @@ mod tests {
     // A fixed test signing key (32 bytes) — the pubkey is derived from this.
     const TEST_SIGNING_KEY: [u8; 32] = [0x01; 32];
 
-    fn test_oracle_pubkey() -> [u8; 32] {
-        use ed25519_dalek::SigningKey;
-        let sk = SigningKey::from_bytes(&TEST_SIGNING_KEY);
-        sk.verifying_key().to_bytes()
+    fn derived_pubkey() -> [u8; 32] {
+        test_oracle_pubkey(&TEST_SIGNING_KEY)
     }
 
     #[test]
     fn submit_and_query_price() {
-        let pubkey = test_oracle_pubkey();
+        let pubkey = derived_pubkey();
         let mut oracle = PriceOracle::new(vec![pubkey], 100);
         let attestation = test_attestation_signed("ETH/USD", 2000_00, 50, &TEST_SIGNING_KEY);
         oracle.submit_attestation(attestation, 60).unwrap();
@@ -320,7 +317,7 @@ mod tests {
 
     #[test]
     fn invalid_signature_rejected() {
-        let pubkey = test_oracle_pubkey();
+        let pubkey = derived_pubkey();
         let mut oracle = PriceOracle::new(vec![pubkey], 100);
         // Use the unsigned helper — should be rejected
         let attestation = test_attestation_unsigned("ETH/USD", 2000_00, 50, pubkey);
@@ -330,7 +327,7 @@ mod tests {
 
     #[test]
     fn stale_price_rejected_on_submit() {
-        let pubkey = test_oracle_pubkey();
+        let pubkey = derived_pubkey();
         let mut oracle = PriceOracle::new(vec![pubkey], 100);
         let attestation = test_attestation_signed("ETH/USD", 2000_00, 10, &TEST_SIGNING_KEY);
         let result = oracle.submit_attestation(attestation, 200);
@@ -339,7 +336,7 @@ mod tests {
 
     #[test]
     fn stale_price_rejected_on_query() {
-        let pubkey = test_oracle_pubkey();
+        let pubkey = derived_pubkey();
         let mut oracle = PriceOracle::new(vec![pubkey], 100);
         let attestation = test_attestation_signed("ETH/USD", 2000_00, 50, &TEST_SIGNING_KEY);
         oracle.submit_attestation(attestation, 60).unwrap();
@@ -351,7 +348,7 @@ mod tests {
 
     #[test]
     fn untrusted_oracle_rejected() {
-        let pubkey = test_oracle_pubkey();
+        let pubkey = derived_pubkey();
         let mut oracle = PriceOracle::new(vec![pubkey], 100);
         // Use a different signing key (untrusted pubkey)
         let bad_signing_key = [0xFF; 32];
@@ -379,8 +376,7 @@ mod tests {
 
     #[test]
     fn tampered_price_fails_signature() {
-        let mut attestation =
-            test_attestation_signed("BTC/USD", 50000_00, 1000, &TEST_SIGNING_KEY);
+        let mut attestation = test_attestation_signed("BTC/USD", 50000_00, 1000, &TEST_SIGNING_KEY);
         // Tamper with the price after signing
         attestation.price = 99999_99;
         assert!(attestation.verify_signature().is_err());

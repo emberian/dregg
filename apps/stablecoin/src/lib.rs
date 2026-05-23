@@ -61,4 +61,7 @@ pub use circuit::{
 pub use liquidation::{
     DEFAULT_LIQUIDATION_BONUS_BPS, LiquidationEngine, LiquidationError, LiquidationResult,
 };
-pub use oracle::{OracleError, PriceAttestation, PriceOracle, test_attestation};
+pub use oracle::{
+    OracleError, PriceAttestation, PriceOracle, test_attestation, test_attestation_signed,
+    test_attestation_unsigned, test_oracle_pubkey,
+};

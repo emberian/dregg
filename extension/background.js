@@ -2366,6 +2366,13 @@ const PAGE_ALLOWED_METHODS = new Set([
   'pyana:getStealthAddress',
   'pyana:postEncryptedIntent',
   'pyana:privateTransfer',
+  'pyana:createBearerCap',
+  'pyana:verifyBearerCap',
+  'pyana:createFromFactory',
+  'pyana:verifyProvenance',
+  'pyana:makeCellSovereign',
+  'pyana:peerExchange',
+  'pyana:composeProofs',
   // Note: pyana:offerCapability, pyana:getCapabilities, pyana:listIntents are
   // NOT accessible from page context — popup-only.
 ]);
@@ -2631,6 +2638,107 @@ async function handleMessage(message, sender) {
         return { id: message.id, error: 'Wallet is locked' };
       }
       return { id: message.id, result: wallet.stealthNotes || [] };
+    }
+
+    // --- Bearer capabilities ---
+
+    case 'pyana:createBearerCap': {
+      requireWasm('createBearerCap');
+      const wallet = await loadState();
+      if (wallet.locked) {
+        return { id: message.id, error: 'Wallet is locked' };
+      }
+      // Use wallet public key as delegator key.
+      const delegatorKeyHex = Array.from(wallet.publicKey)
+        .map(b => b.toString(16).padStart(2, '0')).join('');
+      const result = wasm.create_bearer_cap(
+        delegatorKeyHex,
+        message.targetCellHex,
+        message.action,
+        message.expiry || 0
+      );
+      resetLockTimer();
+      return { id: message.id, result };
+    }
+
+    case 'pyana:verifyBearerCap': {
+      requireWasm('verifyBearerCap');
+      const currentTime = Math.floor(Date.now() / 1000);
+      const result = wasm.verify_bearer_cap(
+        message.bearerTokenHex,
+        message.delegatorKeyHex,
+        message.targetCellHex,
+        message.action,
+        message.expiry || 0,
+        currentTime
+      );
+      return { id: message.id, result };
+    }
+
+    // --- Factory operations ---
+
+    case 'pyana:createFromFactory': {
+      requireWasm('createFromFactory');
+      const result = wasm.create_from_factory(
+        message.factoryVkHex,
+        message.ownerPubkeyHex,
+        message.initialBalance || 0
+      );
+      return { id: message.id, result };
+    }
+
+    case 'pyana:verifyProvenance': {
+      requireWasm('verifyProvenance');
+      const result = wasm.verify_provenance(
+        message.cellVkHex,
+        JSON.stringify(message.knownFactoryVks || [])
+      );
+      return { id: message.id, result };
+    }
+
+    // --- Sovereign cell operations ---
+
+    case 'pyana:makeCellSovereign': {
+      requireWasm('makeCellSovereign');
+      const wallet = await loadState();
+      if (wallet.locked) {
+        return { id: message.id, error: 'Wallet is locked' };
+      }
+      // Get balance from node if possible, otherwise use 0.
+      const result = wasm.make_cell_sovereign(message.cellIdHex, 0);
+      resetLockTimer();
+      return { id: message.id, result };
+    }
+
+    case 'pyana:peerExchange': {
+      requireWasm('peerExchange');
+      const wallet = await loadState();
+      if (wallet.locked) {
+        return { id: message.id, error: 'Wallet is locked' };
+      }
+      // Use wallet's cell as sender.
+      const senderCellHex = wasm.blake3_hash(
+        Array.from(wallet.publicKey).map(b => String.fromCharCode(b)).join('')
+      );
+      const result = wasm.peer_exchange_with_proof(
+        senderCellHex,
+        message.receiverCellHex,
+        message.amount
+      );
+      resetLockTimer();
+      return { id: message.id, result };
+    }
+
+    // --- Proof composition ---
+
+    case 'pyana:composeProofs': {
+      requireWasm('composeProofs');
+      const proofsInput = (message.proofs || []).map(p => ({
+        proof_json: p.proofJson || p.proof_json || '',
+        public_inputs: p.publicInputs || p.public_inputs || [],
+      }));
+      const result = wasm.compose_proofs(JSON.stringify(proofsInput), message.mode || 'and');
+      return { id: message.id, result };
     }
 
     default:

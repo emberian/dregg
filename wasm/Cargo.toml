@@ -36,6 +36,7 @@ token = { path = "../token", default-features = false, features = ["macaroon", "
 blake3 = "1"
 postcard = { version = "1", features = ["alloc"] }
 js-sys = "0.3"
+x25519-dalek = { workspace = true }
 
 [dependencies.web-sys]
 version = "0.3"

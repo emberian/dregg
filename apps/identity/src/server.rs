@@ -167,9 +167,7 @@ fn parse_hex_id(s: &str) -> Option<[u8; 32]> {
 
 fn json_to_attribute_value(v: &serde_json::Value) -> AttributeValue {
     match v {
-        serde_json::Value::Number(n) => {
-            AttributeValue::Integer(n.as_u64().unwrap_or(0) as u32)
-        }
+        serde_json::Value::Number(n) => AttributeValue::Integer(n.as_u64().unwrap_or(0) as u32),
         serde_json::Value::String(s) => AttributeValue::Text(s.clone()),
         serde_json::Value::Bool(b) => AttributeValue::Bool(*b),
         _ => AttributeValue::Text(v.to_string()),
@@ -205,12 +203,11 @@ fn credential_to_response(cred: &Credential) -> CredentialResponse {
 
 fn parse_predicate_type(s: &str) -> Option<PredicateType> {
     match s {
-        "gte" | ">=" => Some(PredicateType::GreaterThanOrEqual),
-        "gt" | ">" => Some(PredicateType::GreaterThan),
-        "lte" | "<=" => Some(PredicateType::LessThanOrEqual),
-        "lt" | "<" => Some(PredicateType::LessThan),
-        "eq" | "==" => Some(PredicateType::Equal),
-        "neq" | "!=" => Some(PredicateType::NotEqual),
+        "gte" | ">=" => Some(PredicateType::Gte),
+        "gt" | ">" => Some(PredicateType::Gt),
+        "lte" | "<=" => Some(PredicateType::Lte),
+        "lt" | "<" => Some(PredicateType::Lt),
+        "neq" | "!=" => Some(PredicateType::Neq),
         _ => None,
     }
 }
@@ -388,9 +385,8 @@ async fn verify_presentation(
     })?;
 
     // Build verification policy.
-    let mut policy =
-        VerificationPolicy::new("api-verify", BabyBear::ZERO, BabyBear::ZERO)
-            .with_non_revocation(req.require_non_revocation);
+    let mut policy = VerificationPolicy::new("api-verify", BabyBear::ZERO, BabyBear::ZERO)
+        .with_non_revocation(req.require_non_revocation);
 
     for pred in &req.requirements {
         if let Some(pt) = parse_predicate_type(&pred.predicate) {
@@ -447,9 +443,7 @@ async fn revoke_credential(
     }
 }
 
-async fn list_issuers(
-    State(state): State<AppState>,
-) -> Json<Vec<IssuerResponse>> {
+async fn list_issuers(State(state): State<AppState>) -> Json<Vec<IssuerResponse>> {
     let issuers = state.issuers.read().await;
     let results = issuers
         .iter()

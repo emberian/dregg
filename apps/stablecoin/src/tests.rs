@@ -12,12 +12,13 @@ use crate::cdp::{
 };
 use crate::circuit::{self, CdpWitness, MIN_RATIO_BPS};
 use crate::liquidation::LiquidationEngine;
-use crate::oracle::{PriceOracle, test_attestation};
+use crate::oracle::{PriceOracle, test_attestation, test_oracle_pubkey};
 
 const ORACLE_KEY: [u8; 32] = [0x01; 32];
 
 fn setup_oracle() -> PriceOracle {
-    PriceOracle::new(vec![ORACLE_KEY], 100)
+    let pubkey = test_oracle_pubkey(&ORACLE_KEY);
+    PriceOracle::new(vec![pubkey], 100)
 }
 
 fn alice() -> CellId {

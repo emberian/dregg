@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Orderbook</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <div class="header-content">
+            <h1 class="logo">Orderbook</h1>
+            <nav>
+                <a href="#" class="nav-link active" data-view="book">Order Book</a>
+                <a href="#" class="nav-link" data-view="place">Place Order</a>
+                <a href="#" class="nav-link" data-view="orders">My Orders</a>
+                <a href="#" class="nav-link" data-view="trades">Trades</a>
+            </nav>
+            <div class="header-right">
+                <label class="dark-pool-toggle">
+                    <input type="checkbox" id="dark-pool-toggle">
+                    <span class="toggle-label">Dark Pool</span>
+                </label>
+                <div class="wallet-status" id="wallet-status">
+                    <span class="dot disconnected" id="wallet-dot"></span>
+                    <span id="wallet-label">Connect Wallet</span>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <!-- Order Book View -->
+        <section id="view-book" class="view active">
+            <div class="section-header">
+                <h2>Order Book</h2>
+                <div class="spread-display">
+                    <span class="spread-label">Spread:</span>
+                    <span class="spread-value" id="spread-value">--</span>
+                </div>
+            </div>
+            <div class="book-layout">
+                <div class="book-side asks">
+                    <h3>Asks (Sell)</h3>
+                    <div class="book-header-row">
+                        <span>Price</span>
+                        <span>Amount</span>
+                        <span>Total</span>
+                    </div>
+                    <div class="book-entries" id="asks-list">
+                        <div class="empty-state">Loading...</div>
+                    </div>
+                </div>
+                <div class="book-side bids">
+                    <h3>Bids (Buy)</h3>
+                    <div class="book-header-row">
+                        <span>Price</span>
+                        <span>Amount</span>
+                        <span>Total</span>
+                    </div>
+                    <div class="book-entries" id="bids-list">
+                        <div class="empty-state">Loading...</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Place Order View -->
+        <section id="view-place" class="view">
+            <div class="section-header">
+                <h2>Place Order</h2>
+            </div>
+            <div class="place-container">
+                <form id="order-form" class="form-panel">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="order-side">Side</label>
+                            <select id="order-side">
+                                <option value="buy">Buy</option>
+                                <option value="sell">Sell</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="order-type">Type</label>
+                            <select id="order-type">
+                                <option value="limit">Limit</option>
+                                <option value="market">Market</option>
+                                <option value="stop">Stop</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group" id="price-group">
+                        <label for="order-price">Price</label>
+                        <input type="number" id="order-price" step="0.0001" min="0" placeholder="Limit price">
+                    </div>
+                    <div class="form-group" id="stop-group" style="display:none;">
+                        <label for="order-stop-price">Stop Price</label>
+                        <input type="number" id="order-stop-price" step="0.0001" min="0" placeholder="Trigger price">
+                    </div>
+                    <div class="form-group">
+                        <label for="order-amount">Amount</label>
+                        <input type="number" id="order-amount" step="0.0001" min="0" required placeholder="Order size">
+                    </div>
+                    <div class="order-summary" id="order-summary">
+                        <div class="summary-row">
+                            <span>Total</span>
+                            <span id="order-total">--</span>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-large" id="place-btn">Place Order</button>
+                </form>
+            </div>
+        </section>
+
+        <!-- My Orders View -->
+        <section id="view-orders" class="view">
+            <div class="section-header">
+                <h2>My Orders</h2>
+                <button class="btn btn-secondary" onclick="App.cancelAll()">Cancel All</button>
+            </div>
+            <div class="orders-list" id="my-orders">
+                <div class="empty-state">Loading...</div>
+            </div>
+        </section>
+
+        <!-- Trade History View -->
+        <section id="view-trades" class="view">
+            <div class="section-header">
+                <h2>Recent Trades</h2>
+            </div>
+            <div class="trades-list" id="trades-list">
+                <div class="empty-state">Loading...</div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <div class="footer-content">
+            <span>Powered by <strong>pyana</strong> federation protocol</span>
+            <span class="ws-status" id="ws-status">WS: disconnected</span>
+        </div>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>
