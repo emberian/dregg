@@ -6689,10 +6689,16 @@ fn sovereign_cell_execute_turn_with_valid_witness() {
 
     // Compute the initial commitment and register as sovereign.
     let initial_commitment = sovereign_cell.state_commitment();
-    ledger.register_sovereign_cell(sovereign_id, initial_commitment).unwrap();
+    ledger
+        .register_sovereign_cell(sovereign_id, initial_commitment)
+        .unwrap();
 
     // Grant agent a capability to the sovereign cell.
-    ledger.get_mut(&agent_id).unwrap().capabilities.grant(sovereign_id, AuthRequired::None);
+    ledger
+        .get_mut(&agent_id)
+        .unwrap()
+        .capabilities
+        .grant(sovereign_id, AuthRequired::None);
 
     // Build a turn that targets the sovereign cell (set a field).
     let new_value = [42u8; 32];
@@ -6761,8 +6767,14 @@ fn sovereign_cell_execute_turn_with_valid_witness() {
     );
 
     // The cell should NOT be in the hosted store.
-    assert!(ledger.get(&sovereign_id).is_none(), "sovereign cell should not be in hosted store");
-    assert!(ledger.is_sovereign(&sovereign_id), "cell should still be sovereign");
+    assert!(
+        ledger.get(&sovereign_id).is_none(),
+        "sovereign cell should not be in hosted store"
+    );
+    assert!(
+        ledger.is_sovereign(&sovereign_id),
+        "cell should still be sovereign"
+    );
 }
 
 #[test]
@@ -6776,10 +6788,16 @@ fn sovereign_cell_rejected_without_witness() {
     let (sovereign_cell, _) = make_open_cell(2, 500);
     let sovereign_id = sovereign_cell.id;
     let commitment = sovereign_cell.state_commitment();
-    ledger.register_sovereign_cell(sovereign_id, commitment).unwrap();
+    ledger
+        .register_sovereign_cell(sovereign_id, commitment)
+        .unwrap();
 
     // Grant agent a capability to the sovereign cell.
-    ledger.get_mut(&agent_id).unwrap().capabilities.grant(sovereign_id, AuthRequired::None);
+    ledger
+        .get_mut(&agent_id)
+        .unwrap()
+        .capabilities
+        .grant(sovereign_id, AuthRequired::None);
 
     // Build a turn targeting the sovereign cell WITHOUT providing a witness.
     let turn = Turn {
@@ -6821,7 +6839,10 @@ fn sovereign_cell_rejected_without_witness() {
 
     // The turn should be rejected because the sovereign cell is not in the
     // hosted store and no witness was provided.
-    assert!(result.is_rejected(), "turn should be rejected without witness");
+    assert!(
+        result.is_rejected(),
+        "turn should be rejected without witness"
+    );
     let (error, _) = result.unwrap_rejected();
     // Should fail with CellNotFound since the cell isn't in the hosted store.
     assert!(
@@ -6841,10 +6862,16 @@ fn sovereign_cell_rejected_with_wrong_commitment() {
     let (sovereign_cell, _) = make_open_cell(2, 500);
     let sovereign_id = sovereign_cell.id;
     let commitment = sovereign_cell.state_commitment();
-    ledger.register_sovereign_cell(sovereign_id, commitment).unwrap();
+    ledger
+        .register_sovereign_cell(sovereign_id, commitment)
+        .unwrap();
 
     // Grant agent a capability to the sovereign cell.
-    ledger.get_mut(&agent_id).unwrap().capabilities.grant(sovereign_id, AuthRequired::None);
+    ledger
+        .get_mut(&agent_id)
+        .unwrap()
+        .capabilities
+        .grant(sovereign_id, AuthRequired::None);
 
     // Create a tampered witness: claim a different state than what's committed.
     let mut tampered_cell = sovereign_cell.clone();
@@ -6897,7 +6924,10 @@ fn sovereign_cell_rejected_with_wrong_commitment() {
 
     let executor = zero_cost_executor();
     let result = executor.execute(&turn, &mut ledger);
-    assert!(result.is_rejected(), "turn should be rejected with wrong commitment");
+    assert!(
+        result.is_rejected(),
+        "turn should be rejected with wrong commitment"
+    );
     let (error, _) = result.unwrap_rejected();
     assert!(
         matches!(error, TurnError::SovereignCommitmentMismatch { .. }),
@@ -6916,7 +6946,9 @@ fn sovereign_cell_make_sovereign_effect() {
     let target_id = target.id;
 
     let mut agent_with_cap = agent;
-    agent_with_cap.capabilities.grant(target_id, AuthRequired::None);
+    agent_with_cap
+        .capabilities
+        .grant(target_id, AuthRequired::None);
     ledger.insert_cell(agent_with_cap).unwrap();
     ledger.insert_cell(target.clone()).unwrap();
 
@@ -6957,16 +6989,29 @@ fn sovereign_cell_make_sovereign_effect() {
 
     let executor = zero_cost_executor();
     let result = executor.execute(&turn, &mut ledger);
-    assert!(result.is_committed(), "MakeSovereign turn should commit: {:?}", result);
+    assert!(
+        result.is_committed(),
+        "MakeSovereign turn should commit: {:?}",
+        result
+    );
 
     // After execution, the cell should be sovereign.
-    assert!(ledger.is_sovereign(&target_id), "cell should be sovereign after MakeSovereign");
-    assert!(ledger.get(&target_id).is_none(), "cell should not be in hosted store");
+    assert!(
+        ledger.is_sovereign(&target_id),
+        "cell should be sovereign after MakeSovereign"
+    );
+    assert!(
+        ledger.get(&target_id).is_none(),
+        "cell should not be in hosted store"
+    );
 
     // The commitment should match the original cell's state commitment.
     let expected_commitment = target.state_commitment();
     let stored = ledger.get_sovereign_commitment(&target_id).unwrap();
-    assert_eq!(*stored, expected_commitment, "stored commitment should match original state");
+    assert_eq!(
+        *stored, expected_commitment,
+        "stored commitment should match original state"
+    );
 }
 
 #[test]

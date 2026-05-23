@@ -53,8 +53,10 @@
     <h1>System Design</h1>
 
     <p>
-      Pyana is structured as a Rust workspace of 22+ crates. Each crate encapsulates
-      a single concern with well-defined interfaces between layers.
+      Pyana is structured as a Rust workspace of 22+ crates. The core architecture
+      follows the sovereign cell model: agents maintain their own state and execute
+      transitions locally. The federation verifies proofs and provides ordering --
+      it does not store or execute on behalf of agents (in sovereign mode).
     </p>
 
     <h2 id="layers">Layer Architecture</h2>
@@ -142,13 +144,33 @@ Storage                redb ACID | OS keychain | note commitment tree
       <li><strong>Verifier</strong>: Checks proof against attested federation root (~2ms).</li>
     </ol>
 
-    <h2 id="data-flow-turn">Data Flow: Turn Execution</h2>
+    <h2 id="data-flow-turn">Data Flow: Turn Execution (Sovereign Mode)</h2>
+
+    <ol>
+      <li><strong>SDK</strong>: Build a <code>Turn</code> with a call forest targeting cells.</li>
+      <li><strong>Agent</strong>: Execute the turn locally with the local <code>TurnExecutor</code>.</li>
+      <li><strong>Circuit</strong>: Generate a STARK proof that the state transition is valid.</li>
+      <li><strong>Submit</strong>: Send <code>(turn_hash, new_commitment, proof)</code> to the federation.</li>
+      <li><strong>Federation</strong>: Verify proof, update 32-byte commitment, order if needed.</li>
+      <li><strong>Wallet</strong>: <code>wallet.append_receipt(receipt)</code> extends the proof chain.</li>
+    </ol>
+
+    <h2 id="data-flow-p2p">Data Flow: Peer-to-Peer (No Federation)</h2>
+
+    <ol>
+      <li><strong>Alice</strong>: Executes transition locally, produces STARK proof of validity.</li>
+      <li><strong>Alice</strong>: Sends <code>(old_commitment, new_commitment, proof, signature)</code> to Bob.</li>
+      <li><strong>Bob</strong>: Verifies proof, checks signature, updates his local view of Alice's state.</li>
+      <li>Federation is never contacted. Storage cost on the network: 0 bytes.</li>
+    </ol>
+
+    <h2 id="data-flow-hosted">Data Flow: Hosted Mode (Legacy)</h2>
 
     <ol>
       <li><strong>SDK</strong>: Build a <code>Turn</code> with a call forest targeting cells.</li>
       <li><strong>Wallet</strong>: Sign the turn with <code>wallet.sign_turn(&turn)</code>.</li>
       <li><strong>Node API</strong>: Submit signed turn to <code>POST /api/turn</code>.</li>
-      <li><strong>Execution</strong>: Cell runtime evaluates effects atomically (commit or rollback).</li>
+      <li><strong>Execution</strong>: Federation executes effects atomically (commit or rollback).</li>
       <li><strong>Consensus</strong>: Federation commits the turn and produces a <code>TurnReceipt</code>.</li>
       <li><strong>Wallet</strong>: <code>wallet.append_receipt(receipt)</code> extends the proof chain.</li>
     </ol>

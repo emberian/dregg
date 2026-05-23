@@ -365,6 +365,77 @@ pub struct PendingConditionalInfo {
 }
 
 // =============================================================================
+// Sovereign Cell Ephemeral Registration types
+// =============================================================================
+
+/// Request body for ephemeral sovereign cell registration.
+///
+/// The cell exists locally on the agent; the federation stores only the commitment.
+/// Registration is temporary — expires after `ttl_blocks` of inactivity.
+#[derive(Deserialize)]
+pub struct RegisterCellRequest {
+    /// Hex-encoded 32-byte cell ID.
+    pub cell_id: String,
+    /// Hex-encoded 32-byte current state commitment.
+    pub commitment: String,
+    /// How many blocks to keep the registration alive (default: 1000).
+    pub ttl_blocks: Option<u64>,
+    /// Hex-encoded 64-byte Ed25519 signature proving ownership.
+    /// Signs `cell_id || commitment`.
+    pub signature: String,
+}
+
+/// Response to a sovereign cell registration.
+#[derive(Serialize)]
+pub struct RegisterCellResponse {
+    pub registered: bool,
+    pub ttl_blocks: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Request body for voluntary deregistration.
+#[derive(Deserialize)]
+pub struct DeregisterCellRequest {
+    /// Hex-encoded 32-byte cell ID.
+    pub cell_id: String,
+    /// Hex-encoded 64-byte Ed25519 signature proving ownership.
+    pub signature: String,
+}
+
+/// Response to a sovereign cell deregistration.
+#[derive(Serialize)]
+pub struct DeregisterCellResponse {
+    pub deregistered: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Request body for updating a sovereign cell's commitment after a transition.
+#[derive(Deserialize)]
+pub struct UpdateCommitmentRequest {
+    /// Hex-encoded 32-byte cell ID.
+    pub cell_id: String,
+    /// Hex-encoded 32-byte old commitment (must match stored).
+    pub old_commitment: String,
+    /// Hex-encoded 32-byte new commitment.
+    pub new_commitment: String,
+    /// Optional hex-encoded STARK proof of the transition (future use).
+    pub transition_proof: Option<String>,
+    /// Hex-encoded 64-byte Ed25519 signature proving ownership.
+    /// Signs `cell_id || old_commitment || new_commitment`.
+    pub signature: String,
+}
+
+/// Response to a commitment update.
+#[derive(Serialize)]
+pub struct UpdateCommitmentResponse {
+    pub updated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+// =============================================================================
 // Atomic Multi-Party Turn types
 // =============================================================================
 
@@ -762,6 +833,9 @@ pub fn router(
         .route("/turn/atomic/{id}", get(get_proposal_status))
         .route("/turn/atomic/evaluate", post(post_evaluate_proposal))
         .route("/cell/{id}", get(get_cell))
+        .route("/cells/register", post(post_register_cell))
+        .route("/cells/deregister", post(post_deregister_cell))
+        .route("/cells/update-commitment", post(post_update_commitment))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     // Metrics endpoint (separate state: PrometheusHandle)
@@ -1319,7 +1393,8 @@ async fn post_encrypted_intent(
         if s.encrypted_intent_pool.len() >= MAX_NODE_INTENT_POOL {
             return Err(StatusCode::SERVICE_UNAVAILABLE);
         }
-        s.encrypted_intent_pool.insert(encrypted.id, encrypted.clone());
+        s.encrypted_intent_pool
+            .insert(encrypted.id, encrypted.clone());
     }
 
     // Gossip the encrypted intent to federation peers.
@@ -2259,6 +2334,177 @@ async fn post_evaluate_proposal(
             signature: hex_encode_var(&signature),
         })),
     }
+}
+
+// =============================================================================
+// Sovereign Cell Ephemeral Registration Handlers
+// =============================================================================
+
+/// POST /cells/register — register a sovereign cell's commitment with the federation.
+///
+/// The cell exists locally on the agent; the federation stores only the commitment
+/// and TTL metadata. Registration expires after `ttl_blocks` of inactivity.
+#[tracing::instrument(skip_all)]
+async fn post_register_cell(
+    State(state): State<NodeState>,
+    Json(req): Json<RegisterCellRequest>,
+) -> Result<Json<RegisterCellResponse>, StatusCode> {
+    let cell_id_bytes: [u8; 32] = hex_decode(&req.cell_id).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let commitment: [u8; 32] = hex_decode(&req.commitment).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let sig_bytes = hex_decode_var(&req.signature).map_err(|_| StatusCode::BAD_REQUEST)?;
+    if sig_bytes.len() != 64 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    // Verify signature: signs cell_id || commitment.
+    let mut message = Vec::with_capacity(64);
+    message.extend_from_slice(&cell_id_bytes);
+    message.extend_from_slice(&commitment);
+    if !verify_ed25519_signature(&cell_id_bytes, &sig_bytes, &message) {
+        return Ok(Json(RegisterCellResponse {
+            registered: false,
+            ttl_blocks: 0,
+            error: Some("invalid signature".to_string()),
+        }));
+    }
+
+    let ttl = req.ttl_blocks.unwrap_or(pyana_cell::DEFAULT_SOVEREIGN_TTL);
+    let cell_id = pyana_cell::CellId(cell_id_bytes);
+
+    let mut s = state.write().await;
+    let current_height = s
+        .store
+        .latest_attested_root()
+        .ok()
+        .flatten()
+        .map(|r| r.height)
+        .unwrap_or(0);
+
+    match s
+        .ledger
+        .register_sovereign_cell_ephemeral(cell_id, commitment, current_height, ttl)
+    {
+        Ok(()) => Ok(Json(RegisterCellResponse {
+            registered: true,
+            ttl_blocks: ttl,
+            error: None,
+        })),
+        Err(e) => Ok(Json(RegisterCellResponse {
+            registered: false,
+            ttl_blocks: 0,
+            error: Some(e.to_string()),
+        })),
+    }
+}
+
+/// POST /cells/deregister — voluntarily remove a sovereign cell from the federation.
+#[tracing::instrument(skip_all)]
+async fn post_deregister_cell(
+    State(state): State<NodeState>,
+    Json(req): Json<DeregisterCellRequest>,
+) -> Result<Json<DeregisterCellResponse>, StatusCode> {
+    let cell_id_bytes: [u8; 32] = hex_decode(&req.cell_id).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let sig_bytes = hex_decode_var(&req.signature).map_err(|_| StatusCode::BAD_REQUEST)?;
+    if sig_bytes.len() != 64 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    // Verify signature: signs cell_id (proves ownership for deregistration).
+    if !verify_ed25519_signature(&cell_id_bytes, &sig_bytes, &cell_id_bytes) {
+        return Ok(Json(DeregisterCellResponse {
+            deregistered: false,
+            error: Some("invalid signature".to_string()),
+        }));
+    }
+
+    let cell_id = pyana_cell::CellId(cell_id_bytes);
+    let mut s = state.write().await;
+
+    match s.ledger.deregister_sovereign_cell(&cell_id) {
+        Ok(()) => Ok(Json(DeregisterCellResponse {
+            deregistered: true,
+            error: None,
+        })),
+        Err(e) => Ok(Json(DeregisterCellResponse {
+            deregistered: false,
+            error: Some(e.to_string()),
+        })),
+    }
+}
+
+/// POST /cells/update-commitment — update a sovereign cell's commitment after a transition.
+///
+/// Verifies the old commitment matches, updates to the new commitment, and resets
+/// the TTL activity counter.
+#[tracing::instrument(skip_all)]
+async fn post_update_commitment(
+    State(state): State<NodeState>,
+    Json(req): Json<UpdateCommitmentRequest>,
+) -> Result<Json<UpdateCommitmentResponse>, StatusCode> {
+    let cell_id_bytes: [u8; 32] = hex_decode(&req.cell_id).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let old_commitment: [u8; 32] =
+        hex_decode(&req.old_commitment).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let new_commitment: [u8; 32] =
+        hex_decode(&req.new_commitment).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let sig_bytes = hex_decode_var(&req.signature).map_err(|_| StatusCode::BAD_REQUEST)?;
+    if sig_bytes.len() != 64 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    // Verify signature: signs cell_id || old_commitment || new_commitment.
+    let mut message = Vec::with_capacity(96);
+    message.extend_from_slice(&cell_id_bytes);
+    message.extend_from_slice(&old_commitment);
+    message.extend_from_slice(&new_commitment);
+    if !verify_ed25519_signature(&cell_id_bytes, &sig_bytes, &message) {
+        return Ok(Json(UpdateCommitmentResponse {
+            updated: false,
+            error: Some("invalid signature".to_string()),
+        }));
+    }
+
+    let cell_id = pyana_cell::CellId(cell_id_bytes);
+    let mut s = state.write().await;
+    let current_height = s
+        .store
+        .latest_attested_root()
+        .ok()
+        .flatten()
+        .map(|r| r.height)
+        .unwrap_or(0);
+
+    match s.ledger.update_sovereign_registration_commitment(
+        &cell_id,
+        old_commitment,
+        new_commitment,
+        current_height,
+    ) {
+        Ok(()) => Ok(Json(UpdateCommitmentResponse {
+            updated: true,
+            error: None,
+        })),
+        Err(e) => Ok(Json(UpdateCommitmentResponse {
+            updated: false,
+            error: Some(e.to_string()),
+        })),
+    }
+}
+
+/// Verify an Ed25519 signature where the public key is the cell_id bytes.
+///
+/// The cell_id doubles as the public key for sovereign cells (the cell_id IS
+/// the Ed25519 public key or is derived from it). For this API, we treat
+/// the cell_id as the public key directly.
+fn verify_ed25519_signature(public_key_bytes: &[u8; 32], sig_bytes: &[u8], message: &[u8]) -> bool {
+    use ed25519_dalek::Verifier;
+
+    let Ok(verifying_key) = ed25519_dalek::VerifyingKey::from_bytes(public_key_bytes) else {
+        return false;
+    };
+    let mut sig_arr = [0u8; 64];
+    sig_arr.copy_from_slice(sig_bytes);
+    let signature = ed25519_dalek::Signature::from_bytes(&sig_arr);
+    verifying_key.verify(message, &signature).is_ok()
 }
 
 // =============================================================================

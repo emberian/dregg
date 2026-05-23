@@ -571,10 +571,7 @@ impl TurnExecutor {
             if let Err(_) = ledger.insert_cell(witness.cell_state.clone()) {
                 return TurnResult::Rejected {
                     reason: TurnError::InvalidEffect {
-                        reason: format!(
-                            "failed to inject sovereign witness for cell {}",
-                            cell_id
-                        ),
+                        reason: format!("failed to inject sovereign witness for cell {}", cell_id),
                     },
                     at_action: vec![],
                 };

@@ -122,7 +122,7 @@ impl<'a> EscrowManager<'a> {
             previous_receipt_hash: None,
             depends_on: vec![],
             conservation_proof: None,
-        sovereign_witnesses: std::collections::HashMap::new(),
+            sovereign_witnesses: std::collections::HashMap::new(),
         };
 
         self.engine
@@ -172,7 +172,7 @@ impl<'a> EscrowManager<'a> {
             previous_receipt_hash: None,
             depends_on: vec![],
             conservation_proof: None,
-        sovereign_witnesses: std::collections::HashMap::new(),
+            sovereign_witnesses: std::collections::HashMap::new(),
         };
 
         self.engine
@@ -217,7 +217,7 @@ impl<'a> EscrowManager<'a> {
             previous_receipt_hash: None,
             depends_on: vec![],
             conservation_proof: None,
-        sovereign_witnesses: std::collections::HashMap::new(),
+            sovereign_witnesses: std::collections::HashMap::new(),
         };
 
         self.engine

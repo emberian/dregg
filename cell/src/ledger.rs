@@ -197,6 +197,29 @@ impl core::fmt::Display for LedgerError {
 
 impl std::error::Error for LedgerError {}
 
+/// Metadata for a sovereign cell's ephemeral federation registration.
+///
+/// Sovereign cells exist locally on the agent and register with the federation
+/// only when they need federation services (ordering, nullifier check, proving
+/// to strangers). They can deregister at will or be automatically expired after
+/// `ttl_blocks` of inactivity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SovereignRegistration {
+    /// Current state commitment (32-byte hash of the cell's local state).
+    pub commitment: [u8; 32],
+    /// Block height at which this cell was registered.
+    pub registered_at: u64,
+    /// Time-to-live in blocks. After `last_activity + ttl_blocks` the registration
+    /// is eligible for automatic expiry.
+    pub ttl_blocks: u64,
+    /// Block height of the most recent activity (registration, commitment update,
+    /// or any federation interaction that resets the timer).
+    pub last_activity: u64,
+}
+
+/// Default TTL for sovereign cell registrations (in blocks).
+pub const DEFAULT_SOVEREIGN_TTL: u64 = 1000;
+
 /// The world state: a collection of cells with a Merkle commitment.
 ///
 /// Uses an incremental binary Merkle tree. On cell state updates, only the
@@ -213,6 +236,10 @@ pub struct Ledger {
     /// Sovereign cells: federation stores only a 32-byte state commitment.
     /// The agent must provide the full cell state in each turn as a witness.
     sovereign_commitments: HashMap<CellId, [u8; 32]>,
+    /// Ephemeral sovereign registrations with TTL metadata.
+    /// Supersedes bare `sovereign_commitments` for cells that register via the
+    /// on-demand federation registration API.
+    sovereign_registrations: HashMap<CellId, SovereignRegistration>,
     /// Sorted leaf positions: CellId -> index in the leaf layer.
     leaf_positions: BTreeMap<[u8; 32], usize>,
     /// The Merkle tree nodes, indexed by level then position.
@@ -231,6 +258,7 @@ impl Ledger {
         Ledger {
             cells: HashMap::new(),
             sovereign_commitments: HashMap::new(),
+            sovereign_registrations: HashMap::new(),
             leaf_positions: BTreeMap::new(),
             tree_levels: Vec::new(),
             root: Self::compute_empty_root(),
@@ -1024,11 +1052,110 @@ impl Ledger {
     ///
     /// Returns the removed cell on success.
     pub fn make_sovereign(&mut self, id: &CellId) -> Result<Cell, LedgerError> {
-        let cell = self.cells.remove(id).ok_or(LedgerError::CellNotFound(*id))?;
+        let cell = self
+            .cells
+            .remove(id)
+            .ok_or(LedgerError::CellNotFound(*id))?;
         let commitment = cell.state_commitment();
         self.sovereign_commitments.insert(*id, commitment);
         self.dirty = true;
         Ok(cell)
+    }
+
+    // =========================================================================
+    // Ephemeral Sovereign Registration (on-demand federation registration)
+    // =========================================================================
+
+    /// Register a sovereign cell ephemerally with TTL metadata.
+    ///
+    /// The cell must not already exist as a hosted cell or have an existing
+    /// sovereign registration. Returns an error if a conflict exists.
+    pub fn register_sovereign_cell_ephemeral(
+        &mut self,
+        id: CellId,
+        commitment: [u8; 32],
+        current_height: u64,
+        ttl_blocks: u64,
+    ) -> Result<(), LedgerError> {
+        if self.cells.contains_key(&id)
+            || self.sovereign_commitments.contains_key(&id)
+            || self.sovereign_registrations.contains_key(&id)
+        {
+            return Err(LedgerError::SovereignAlreadyExists(id));
+        }
+        self.sovereign_registrations.insert(
+            id,
+            SovereignRegistration {
+                commitment,
+                registered_at: current_height,
+                ttl_blocks,
+                last_activity: current_height,
+            },
+        );
+        Ok(())
+    }
+
+    /// Deregister a sovereign cell (voluntary removal).
+    ///
+    /// Removes the cell from `sovereign_registrations`. Returns an error if
+    /// the cell is not registered as a sovereign cell.
+    pub fn deregister_sovereign_cell(&mut self, id: &CellId) -> Result<(), LedgerError> {
+        if self.sovereign_registrations.remove(id).is_some() {
+            Ok(())
+        } else if self.sovereign_commitments.remove(id).is_some() {
+            // Also allow deregistering from the legacy bare-commitment map.
+            Ok(())
+        } else {
+            Err(LedgerError::NotSovereign(*id))
+        }
+    }
+
+    /// Update the commitment for an ephemerally registered sovereign cell.
+    ///
+    /// Verifies that `old_commitment` matches the stored value, then updates
+    /// to `new_commitment` and resets the TTL activity counter.
+    pub fn update_sovereign_registration_commitment(
+        &mut self,
+        id: &CellId,
+        old_commitment: [u8; 32],
+        new_commitment: [u8; 32],
+        current_height: u64,
+    ) -> Result<(), LedgerError> {
+        if let Some(reg) = self.sovereign_registrations.get_mut(id) {
+            if reg.commitment != old_commitment {
+                return Err(LedgerError::SovereignCommitmentMismatch {
+                    cell_id: *id,
+                    expected: reg.commitment,
+                    got: old_commitment,
+                });
+            }
+            reg.commitment = new_commitment;
+            reg.last_activity = current_height;
+            Ok(())
+        } else {
+            Err(LedgerError::NotSovereign(*id))
+        }
+    }
+
+    /// Get the sovereign registration metadata for a cell.
+    pub fn get_sovereign_registration(&self, id: &CellId) -> Option<&SovereignRegistration> {
+        self.sovereign_registrations.get(id)
+    }
+
+    /// Expire sovereign registrations that have exceeded their TTL.
+    ///
+    /// Removes all registrations where `current_height - last_activity > ttl_blocks`.
+    /// Returns the number of expired registrations removed.
+    pub fn expire_sovereign_registrations(&mut self, current_height: u64) -> usize {
+        let before = self.sovereign_registrations.len();
+        self.sovereign_registrations
+            .retain(|_, reg| current_height.saturating_sub(reg.last_activity) <= reg.ttl_blocks);
+        before - self.sovereign_registrations.len()
+    }
+
+    /// Check whether a cell has an active ephemeral sovereign registration.
+    pub fn is_sovereign_registered(&self, id: &CellId) -> bool {
+        self.sovereign_registrations.contains_key(id)
     }
 }
 

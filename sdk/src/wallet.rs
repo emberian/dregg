@@ -7,13 +7,15 @@
 //! - Turn signing for submission to the ledger
 //! - Zero-knowledge proof generation via the bridge layer
 
+use std::collections::HashMap;
+
 use ed25519_dalek::Signer;
 use zeroize::{Zeroize, Zeroizing};
 
 use pyana_bridge::{BridgePredicateProof, BridgePresentationProof, Predicate};
-use pyana_cell::CellId;
-use pyana_cell::stealth::{StealthAnnouncement, StealthKeys, StealthMetaAddress, StealthAddress};
 use pyana_cell::note::NoteCommitment;
+use pyana_cell::stealth::{StealthAddress, StealthAnnouncement, StealthKeys, StealthMetaAddress};
+use pyana_cell::{Cell, CellId};
 use pyana_circuit::BabyBear;
 use pyana_circuit::IvcProof;
 use pyana_circuit::PredicateType;
@@ -24,7 +26,7 @@ use pyana_intent::sse::EncryptedIntent;
 use pyana_intent::{CommitmentId, IntentKind, MatchSpec};
 use pyana_token::{Attenuation, AuthRequest, AuthToken, MacaroonToken, TokenClearance};
 use pyana_trace::{AuthorizationTrace, Fact as TraceFact};
-use pyana_turn::Turn;
+use pyana_turn::{Effect, SovereignCellWitness, Turn};
 use pyana_types::{PublicKey, Signature};
 
 use crate::error::SdkError;
@@ -568,6 +570,12 @@ pub struct AgentWallet {
     /// Stealth keypair for receiving private notes via one-time addresses.
     /// Derived deterministically from the wallet's signing key.
     stealth_keys: StealthKeys,
+    /// Local state for sovereign cells we own.
+    ///
+    /// When a cell is transitioned to sovereign mode, the federation stores only
+    /// a 32-byte commitment. The agent maintains the full cell state here and
+    /// provides it as a witness in each turn targeting the cell.
+    sovereign_cells: HashMap<CellId, Cell>,
 }
 
 impl AgentWallet {
@@ -624,6 +632,7 @@ impl AgentWallet {
             mnemonic_phrase: None,
             derivation_path: None,
             stealth_keys,
+            sovereign_cells: HashMap::new(),
         }
     }
 
@@ -672,6 +681,7 @@ impl AgentWallet {
             mnemonic_phrase: None,
             derivation_path: Some(path.to_string()),
             stealth_keys,
+            sovereign_cells: HashMap::new(),
         }
     }
 
@@ -3059,10 +3069,8 @@ impl AgentWallet {
                 one_time_pubkey: [0u8; 32], // Not needed for check_ownership
                 ephemeral_pubkey: announcement.ephemeral_pubkey,
             };
-            if stealth_addr.check_ownership(
-                &self.stealth_keys.view_private_key,
-                &meta.spend_pubkey,
-            ) {
+            if stealth_addr.check_ownership(&self.stealth_keys.view_private_key, &meta.spend_pubkey)
+            {
                 let spending_key = stealth_addr.derive_spending_key(
                     &self.stealth_keys.view_private_key,
                     &self.stealth_keys.spend_private_key,
@@ -3130,6 +3138,227 @@ impl AgentWallet {
     }
 
     // =========================================================================
+    // Sovereign Cell Operations
+    // =========================================================================
+
+    /// Transition one of our cells to sovereign mode.
+    ///
+    /// After this, the federation stores only a 32-byte commitment.
+    /// We maintain the full state locally. The returned turn must be signed
+    /// and submitted to the federation to take effect.
+    ///
+    /// # Arguments
+    ///
+    /// * `cell_id` - The cell to make sovereign. Must be a cell we own.
+    ///
+    /// # Returns
+    ///
+    /// A [`Turn`] containing an `Effect::MakeSovereign` action ready for signing.
+    pub fn make_sovereign(&mut self, cell_id: &CellId) -> Result<Turn, SdkError> {
+        let agent_cell = *cell_id;
+        let nonce = self.receipt_chain.len() as u64;
+
+        let mut forest = pyana_turn::forest::CallForest::new();
+        let action = pyana_turn::Action {
+            target: agent_cell,
+            method: pyana_turn::action::symbol("make_sovereign"),
+            args: Vec::new(),
+            authorization: pyana_turn::Authorization::Caller,
+            effects: vec![Effect::MakeSovereign { cell: agent_cell }],
+            preconditions: None,
+            commitment_mode: pyana_turn::CommitmentMode::Instant,
+            delegation_mode: pyana_turn::DelegationMode::Direct,
+        };
+        forest.add_root(action);
+
+        let turn = Turn {
+            agent: agent_cell,
+            nonce,
+            call_forest: forest,
+            fee: 0,
+            memo: Some("make_sovereign".to_string()),
+            valid_until: None,
+            previous_receipt_hash: self.receipt_chain.last().map(|r| r.receipt_hash()),
+            depends_on: Vec::new(),
+            conservation_proof: None,
+            sovereign_witnesses: HashMap::new(),
+        };
+
+        Ok(turn)
+    }
+
+    /// Execute a turn targeting a sovereign cell.
+    ///
+    /// We must include the current cell state as a witness so the federation can
+    /// verify the state commitment matches what it has stored.
+    ///
+    /// # Arguments
+    ///
+    /// * `cell_id` - The sovereign cell to target.
+    /// * `effects` - The effects to apply.
+    /// * `fee` - The computron fee for this turn.
+    ///
+    /// # Returns
+    ///
+    /// A [`Turn`] with `sovereign_witnesses` populated, ready for signing.
+    pub fn execute_sovereign_turn(
+        &mut self,
+        cell_id: &CellId,
+        effects: Vec<Effect>,
+        fee: u64,
+    ) -> Result<Turn, SdkError> {
+        // 1. Get our local cell state.
+        let cell_state = self.sovereign_cells.get(cell_id).ok_or_else(|| {
+            SdkError::MissingKey(format!(
+                "no local sovereign state for cell {}; call store_sovereign_state() first",
+                cell_id
+            ))
+        })?.clone();
+
+        // 2. Compute state_commitment.
+        let state_commitment = cell_state.state_commitment();
+
+        // 3. Build SovereignCellWitness.
+        let witness = SovereignCellWitness {
+            cell_state,
+            state_proof: state_commitment,
+        };
+
+        // 4. Build the turn with sovereign_witnesses populated.
+        let agent_cell = *cell_id;
+        let nonce = self.receipt_chain.len() as u64;
+
+        let mut forest = pyana_turn::forest::CallForest::new();
+        let action = pyana_turn::Action {
+            target: agent_cell,
+            method: pyana_turn::action::symbol("sovereign_execute"),
+            args: Vec::new(),
+            authorization: pyana_turn::Authorization::Caller,
+            effects,
+            preconditions: None,
+            commitment_mode: pyana_turn::CommitmentMode::Instant,
+            delegation_mode: pyana_turn::DelegationMode::Direct,
+        };
+        forest.add_root(action);
+
+        let mut sovereign_witnesses = HashMap::new();
+        sovereign_witnesses.insert(*cell_id, witness);
+
+        let turn = Turn {
+            agent: agent_cell,
+            nonce,
+            call_forest: forest,
+            fee,
+            memo: None,
+            valid_until: None,
+            previous_receipt_hash: self.receipt_chain.last().map(|r| r.receipt_hash()),
+            depends_on: Vec::new(),
+            conservation_proof: None,
+            sovereign_witnesses,
+        };
+
+        Ok(turn)
+    }
+
+    /// Store sovereign cell state in the wallet (agent maintains it).
+    ///
+    /// Call this after transitioning a cell to sovereign mode. The wallet keeps
+    /// the full cell state locally and provides it as a witness in future turns.
+    pub fn store_sovereign_state(&mut self, cell: Cell) {
+        self.sovereign_cells.insert(cell.id, cell);
+    }
+
+    /// Get our local copy of a sovereign cell's state.
+    pub fn sovereign_state(&self, cell_id: &CellId) -> Option<&Cell> {
+        self.sovereign_cells.get(cell_id)
+    }
+
+    /// Update sovereign state after a turn executes (applies effects locally).
+    ///
+    /// This applies the given effects to the locally-stored sovereign cell state.
+    /// Call this after a turn has been committed by the federation so the local
+    /// state stays consistent with the on-chain commitment.
+    pub fn apply_sovereign_effects(
+        &mut self,
+        cell_id: &CellId,
+        effects: &[Effect],
+    ) -> Result<(), SdkError> {
+        let cell = self.sovereign_cells.get_mut(cell_id).ok_or_else(|| {
+            SdkError::MissingKey(format!(
+                "no local sovereign state for cell {}",
+                cell_id
+            ))
+        })?;
+
+        for effect in effects {
+            match effect {
+                Effect::SetField { cell: target, index, value } if target == cell_id => {
+                    if *index < cell.state.fields.len() {
+                        cell.state.fields[*index] = *value;
+                    }
+                }
+                Effect::Transfer { to, amount, .. } if to == cell_id => {
+                    cell.state.balance = cell.state.balance.saturating_add(*amount);
+                }
+                Effect::Transfer { from, amount, .. } if from == cell_id => {
+                    cell.state.balance = cell.state.balance.saturating_sub(*amount);
+                }
+                Effect::IncrementNonce { cell: target } if target == cell_id => {
+                    cell.state.nonce += 1;
+                }
+                _ => {
+                    // Other effects (GrantCapability, RevokeCapability, EmitEvent, etc.)
+                    // are either not relevant to cell state or handled at a higher level.
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Export all sovereign cell state (for backup).
+    ///
+    /// Serializes the full sovereign cell state map to a byte vector using
+    /// postcard encoding. The result can be stored securely and later restored
+    /// via [`import_sovereign_state`](Self::import_sovereign_state).
+    pub fn export_sovereign_state(&self) -> Vec<u8> {
+        // Collect into a Vec of (CellId, Cell) for deterministic serialization.
+        let entries: Vec<(&CellId, &Cell)> = self.sovereign_cells.iter().collect();
+        postcard::to_stdvec(&entries).unwrap_or_default()
+    }
+
+    /// Import sovereign cell state (for recovery).
+    ///
+    /// Deserializes sovereign cell state previously exported via
+    /// [`export_sovereign_state`](Self::export_sovereign_state) and merges it
+    /// into this wallet's sovereign cell map.
+    pub fn import_sovereign_state(&mut self, data: &[u8]) -> Result<(), SdkError> {
+        let entries: Vec<(CellId, Cell)> = postcard::from_bytes(data).map_err(|e| {
+            SdkError::Wire(format!("failed to deserialize sovereign state: {e}"))
+        })?;
+        for (id, cell) in entries {
+            self.sovereign_cells.insert(id, cell);
+        }
+        Ok(())
+    }
+
+    /// Get the number of sovereign cells stored locally.
+    pub fn sovereign_cell_count(&self) -> usize {
+        self.sovereign_cells.len()
+    }
+
+    /// Get a peer exchange session for direct sovereign interactions.
+    ///
+    /// Returns a [`PeerExchange`](pyana_cell::PeerExchange) initialized with
+    /// this wallet's cell ID and signing key, suitable for direct peer-to-peer
+    /// state exchange between sovereign cell owners.
+    ///
+    /// This is a convenience alias for [`peer_exchange`](Self::peer_exchange).
+    pub fn peer_exchange_session(&self, domain: &str) -> pyana_cell::PeerExchange {
+        self.peer_exchange(domain)
+    }
+
+    // =========================================================================
     // Encrypted Intent Posting
     // =========================================================================
 
@@ -3177,6 +3406,42 @@ impl AgentWallet {
         let view_private_key = blake3::derive_key("pyana-stealth-view-key-v1", &sk_bytes);
         let spend_private_key = blake3::derive_key("pyana-stealth-spend-key-v1", &sk_bytes);
         StealthKeys::from_keys(view_private_key, spend_private_key)
+    }
+
+    // =========================================================================
+    // Peer-to-Peer State Exchange (Sovereign Cells)
+    // =========================================================================
+
+    /// Create a peer exchange session for sovereign cell interactions.
+    ///
+    /// The exchange session is keyed to a specific domain (cell identity) and uses
+    /// this wallet's Ed25519 signing key for transition signatures.
+    pub fn peer_exchange(&self, domain: &str) -> pyana_cell::PeerExchange {
+        let cell_id = self.cell_id(domain);
+        let signing_key_bytes = self.signing_key.to_bytes();
+        pyana_cell::PeerExchange::new(cell_id, signing_key_bytes)
+    }
+
+    /// Send a sovereign state transition to a peer (sign + package).
+    ///
+    /// Computes the effects hash (BLAKE3 over serialized effects), then delegates
+    /// to the `PeerExchange` to create a signed transition.
+    ///
+    /// # Arguments
+    /// * `exchange` - The peer exchange session (must be for this wallet's cell).
+    /// * `old_commitment` - The commitment before this transition.
+    /// * `new_commitment` - The commitment after applying effects.
+    /// * `effects` - The effects that produced the state change.
+    pub fn send_peer_transition(
+        &self,
+        exchange: &mut pyana_cell::PeerExchange,
+        old_commitment: [u8; 32],
+        new_commitment: [u8; 32],
+        effects: &[pyana_turn::Effect],
+    ) -> pyana_cell::PeerStateTransition {
+        let effects_bytes = postcard::to_stdvec(effects).unwrap_or_default();
+        let effects_hash = *blake3::hash(&effects_bytes).as_bytes();
+        exchange.create_transition(old_commitment, new_commitment, effects_hash)
     }
 }
 

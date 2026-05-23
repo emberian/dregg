@@ -58,11 +58,27 @@
     <h1>Architecture</h1>
 
     <p>
-      Pyana is built as a layered system where each layer has clean boundaries and
-      can be understood independently. The system spans ~125k lines of Rust across
-      22+ crates, with rigorous separation between cryptographic primitives, consensus,
-      execution semantics, and user-facing APIs.
+      Pyana is a sovereign capability runtime. Agents own their state as cells on their
+      own machines. The federation is a notary -- used for ordering, double-spend prevention,
+      discovery, and proving to strangers. Between known parties, it is just signed proofs
+      exchanged directly. The system spans ~125k lines of Rust across 22+ crates.
     </p>
+
+    <h2>Three Interaction Modes</h2>
+
+    <div class="toc">
+      <ul class="toc__list">
+        <li><strong>Peer-to-peer</strong> -- Sovereign cells interact directly. No federation contact.
+            Agents exchange signed state transitions with STARK proofs of validity. The recipient
+            verifies locally. Used for routine interactions between known parties.</li>
+        <li><strong>Federation-mediated</strong> -- When ordering, atomicity, or nullifier tracking
+            is needed. The federation verifies proofs and provides ordering guarantees, but never
+            sees cell contents -- only 32-byte commitments.</li>
+        <li><strong>Hosted (legacy/convenience)</strong> -- The federation maintains full state for
+            a cell. Used for shared mutable objects (orderbooks, registries) or agents that
+            prefer convenience over sovereignty.</li>
+      </ul>
+    </div>
 
     <h2>Contents</h2>
 
@@ -79,6 +95,24 @@
       </ul>
     </div>
 
+    <h2>What the Federation Does NOT Do</h2>
+
+    <ul>
+      <li>Federation does <strong>NOT</strong> see your cell state (sovereign mode -- only a 32-byte commitment).</li>
+      <li>Federation does <strong>NOT</strong> see transfer amounts (Pedersen committed conservation).</li>
+      <li>Federation does <strong>NOT</strong> know who you are sending to (stealth addresses).</li>
+      <li>Federation does <strong>NOT</strong> execute your transitions (you prove locally, it verifies).</li>
+    </ul>
+
+    <h2>What the Federation DOES Provide</h2>
+
+    <ul>
+      <li><strong>Ordering</strong> -- when two cells interact with the same third party and sequence matters.</li>
+      <li><strong>Nullifier tracking</strong> -- double-spend prevention for the shared note tree.</li>
+      <li><strong>Discovery</strong> -- gossip network for finding parties you do not already know.</li>
+      <li><strong>Root anchoring</strong> -- periodic attested checkpoints so you can prove state validity to strangers.</li>
+    </ul>
+
     <h2>Design Principles</h2>
 
     <ul>
@@ -86,8 +120,10 @@
           Each delegation is a fold over a committed fact set. The STARK proves a valid chain.</li>
       <li><strong>Offline-first verification.</strong> A STARK proof + attested root is complete.
           No federation liveness required.</li>
-      <li><strong>Agents own their state.</strong> Receipt chains are portable proof-carrying state.
-          Exit any federation at any time.</li>
+      <li><strong>Agents own their state.</strong> Cells exist on the agent's machine. The federation
+          tracks commitments (32 bytes per cell), not full state.</li>
+      <li><strong>Federation as notary.</strong> You use the federation when you need to prove something
+          to strangers or resolve disputes. Not for every operation.</li>
       <li><strong>Progressive privacy.</strong> Three modes (trusted, selective, private) let
           developers choose the right tradeoff per interaction.</li>
       <li><strong>Post-quantum security.</strong> STARK proofs are hash-based (Poseidon2/BLAKE3).

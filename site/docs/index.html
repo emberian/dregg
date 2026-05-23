@@ -31,9 +31,10 @@
 <div class="page-header">
   <h1>Pyana Documentation</h1>
   <p>
-    Pyana is a distributed object-capability runtime where agents hold unforgeable
-    capabilities, delegate with attenuation, prove authorization with ZK STARKs,
-    and carry their own state as proof chains.
+    Pyana is a sovereign capability runtime. Agents own their state, prove
+    authorization with ZK STARKs, and interact peer-to-peer when possible.
+    The federation acts as a notary -- providing ordering, double-spend prevention,
+    and discovery -- not as a state host.
   </p>
 </div>
 
@@ -58,8 +59,8 @@
       <span class="audience-card__label">for operators</span>
       <span class="audience-card__title">Running a Node</span>
       <span class="audience-card__desc">
-        Set up a pyana-node, join a federation, run a cross-federation bridge,
-        monitor health, and deploy devnet clusters.
+        Set up a pyana-node, join a federation as a notary/ordering service,
+        run a cross-federation bridge, and deploy devnet clusters.
       </span>
       <span class="audience-card__link">Node setup &#8594;</span>
     </a>
@@ -78,8 +79,8 @@
       <span class="audience-card__label">for architects</span>
       <span class="audience-card__title">System Architecture</span>
       <span class="audience-card__desc">
-        Understand the 22-crate Rust workspace, Morpheus DAG-BFT consensus,
-        BabyBear STARK cryptography, object-capability model, and privacy architecture.
+        The sovereign cell model, three interaction modes (peer-to-peer,
+        federation-mediated, hosted), privacy stack, and proof architecture.
       </span>
       <span class="audience-card__link">Deep dive &#8594;</span>
     </a>

@@ -353,7 +353,11 @@ impl core::fmt::Display for TurnError {
                     "sovereign cell {cell} targeted but no witness provided in turn"
                 )
             }
-            TurnError::SovereignCommitmentMismatch { cell, expected, got } => {
+            TurnError::SovereignCommitmentMismatch {
+                cell,
+                expected,
+                got,
+            } => {
                 write!(
                     f,
                     "sovereign commitment mismatch for cell {cell}: expected {:02x}{:02x}..., got {:02x}{:02x}...",

@@ -11,6 +11,8 @@
 //! - Token domain membership and delegation hierarchy
 
 pub mod capability;
+#[cfg(feature = "crypto")]
+pub mod capability_proof;
 pub mod cell;
 pub mod delegation;
 pub mod derivation;
@@ -22,6 +24,8 @@ pub mod note_bridge;
 pub mod nullifier_set;
 #[cfg(feature = "crypto")]
 pub mod oblivious_transfer;
+#[cfg(feature = "crypto")]
+pub mod peer_exchange;
 pub mod permissions;
 pub mod preconditions;
 pub mod program;
@@ -39,13 +43,21 @@ mod tests;
 
 // Re-exports for convenience.
 pub use capability::{AttenuatedCap, CapabilityRef, CapabilitySet, is_attenuation};
+#[cfg(feature = "crypto")]
+pub use capability_proof::{
+    CapabilityExerciseRequest, CapabilityExerciseResponse, CapabilityProof, CapabilityProofData,
+    CapabilityProofError, PeerEffect, VerificationContext, sign_capability_proof,
+};
 pub use cell::{Cell, CellMode, VerificationKey};
 pub use delegation::DelegatedRef;
 pub use derivation::{
     DerivationEdge, DerivationNode, DerivationRecord, DerivationTree, DerivationType,
 };
 pub use id::CellId;
-pub use ledger::{CellStateDelta, Ledger, LedgerDelta, LedgerError, MembershipProof, Side};
+pub use ledger::{
+    CellStateDelta, DEFAULT_SOVEREIGN_TTL, Ledger, LedgerDelta, LedgerError, MembershipProof, Side,
+    SovereignRegistration,
+};
 pub use note::{Note, NoteCommitment, NoteError, Nullifier, PositionedNote};
 #[cfg(feature = "crypto")]
 pub use note_bridge::{
@@ -58,6 +70,8 @@ pub use nullifier_set::{MerkleMembershipProof, NonMembershipProof, NullifierSet}
 pub use oblivious_transfer::{
     OtError, OtReceiver, OtReceiverResponse, OtSender, OtSenderPayload, OtSenderSetup, ot_1_of_n,
 };
+#[cfg(feature = "crypto")]
+pub use peer_exchange::{PeerCellView, PeerExchange, PeerExchangeError, PeerStateTransition};
 pub use permissions::{Action, AuthKind, AuthRequired, Permissions};
 pub use preconditions::{
     CellStatePrecondition, EvalContext, NetworkPrecondition, Preconditions, TimeRange,

@@ -52,10 +52,34 @@
     <h1>Privacy Architecture</h1>
 
     <p>
-      Pyana provides privacy at multiple levels: anonymous credential presentation,
-      predicate proofs about private values, private note transfers (hidden balances),
-      private discovery (PIR), and non-revocation proofs.
+      Pyana provides privacy at multiple levels. In sovereign mode, the federation
+      never sees cell contents -- only 32-byte commitments and proofs. The privacy
+      stack covers credentials, amounts, recipients, intents, and network metadata.
     </p>
+
+    <h2 id="privacy-stack">What Is Private (Implemented)</h2>
+
+    <table class="comparison">
+      <thead><tr><th>Layer</th><th>Mechanism</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>Credential privacy (ZK auth)</td><td>BlindedMerklePoseidon2StarkAir -- unlinkable per-presentation blinding</td><td>Working</td></tr>
+        <tr><td>Amount privacy</td><td>Pedersen commitments + Bulletproof range proofs</td><td>Working</td></tr>
+        <tr><td>Recipient privacy</td><td>Stealth addresses -- derived per-transaction receive keys</td><td>Working</td></tr>
+        <tr><td>Intent privacy</td><td>SSE encrypted headers + delay pool for timing decorrelation</td><td>Working</td></tr>
+        <tr><td>Network privacy</td><td>Dandelion++ origin hiding + fixed-size message padding</td><td>Working</td></tr>
+        <tr><td>Transaction privacy</td><td>Committed conservation in executor -- values are Pedersen commitments</td><td>Working</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="privacy-limits">What Is NOT Fully Private (Honest Limitations)</h2>
+
+    <ul>
+      <li><strong>Intent content:</strong> SSE keyword tokens are enumerable by knowledgeable observers.
+          An adversary who knows the keyword space can test encrypted headers against known tags.</li>
+      <li><strong>Mediated interactions:</strong> The executor sees sovereign state during federation-mediated
+          multi-party interactions. Peer-to-peer mode avoids this entirely.</li>
+      <li><strong>Hosted cells:</strong> If you use hosted mode, the federation sees full cell state (by definition).</li>
+    </ul>
 
     <h2 id="anonymous-creds">Anonymous Credentials</h2>
     <p>
@@ -100,6 +124,22 @@
       tree that bracket the ancestor's hash. Prove membership of both neighbors and
       that the ancestor falls between them (absent). All ancestors are proven
       simultaneously in a single STARK.
+    </p>
+
+    <h2 id="sovereign-privacy">Sovereign Mode Privacy</h2>
+
+    <p>
+      In sovereign mode, the federation stores only <code>HashMap&lt;CellId, [u8; 32]&gt;</code> --
+      one hash per cell. It never sees balances, capability sets, metadata fields, or
+      internal state. The privacy model becomes uniform: everything is private by default
+      because the federation literally cannot read your state.
+    </p>
+
+    <p>
+      Between two parties who know each other (peer-to-peer mode), there is no federation
+      contact at all. Privacy against network observers relies on Dandelion++ routing and
+      message padding. Privacy against the counterparty is bounded by what you choose to
+      reveal in your proof's public inputs.
     </p>
 
     <div class="stub-notice">
