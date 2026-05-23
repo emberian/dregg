@@ -1502,4 +1502,279 @@ mod tests {
         // Escrow is consumed (can't double-refund).
         assert_eq!(engine.escrows.active_count(), 0);
     }
+
+    // =========================================================================
+    // UPGRADE 1: Blinded queue for fair order batch processing
+    // =========================================================================
+
+    /// Helper: build a ConsumptionProof for a single-item blinded queue.
+    ///
+    /// With exactly one commitment in the queue the Merkle tree has one leaf,
+    /// the root equals that leaf, and the sibling path is empty.
+    fn make_single_item_proof(
+        commitment: [u8; 32],
+        secret: [u8; 32],
+    ) -> pyana_storage::blinded::ConsumptionProof {
+        // Nullifier derivation must match `crypto::derive_nullifier`.
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"blinded-queue-nullifier");
+        hasher.update(&commitment);
+        hasher.update(&secret);
+        hasher.update(&0u64.to_le_bytes()); // position = 0
+        let nullifier = *hasher.finalize().as_bytes();
+
+        pyana_storage::blinded::ConsumptionProof {
+            nullifier,
+            membership_proof: vec![], // empty path for single-leaf tree
+            commitment,
+            position: 0,
+        }
+    }
+
+    #[test]
+    fn test_blinded_queue_commit_and_consume_succeeds() {
+        use crate::blinded_queue::{OrderBlindedQueue, compute_blinded_order_commitment};
+
+        let alice = make_cell(1);
+        let order = Order::new(
+            alice,
+            OrderType::Limit {
+                price: 100,
+                amount: 50,
+                side: Side::Buy,
+                time_in_force: TimeInForce::GTC,
+            },
+            1,
+            1000,
+        );
+        let secret = [0xAB; 32];
+
+        let mut queue = OrderBlindedQueue::new(16);
+
+        // Commit phase: compute and submit the commitment.
+        let commitment = compute_blinded_order_commitment(&order, &secret);
+        let root = queue.commit(commitment).unwrap();
+        assert_ne!(root, [0u8; 32]);
+        assert_eq!(queue.pending_count(), 0); // not yet consumed
+
+        // Consume phase: provide the proof with the order opening.
+        let proof = make_single_item_proof(commitment, secret);
+        queue.consume(order.clone(), secret, proof).unwrap();
+
+        // The order should now be in the pending batch.
+        assert_eq!(queue.pending_count(), 1);
+        assert_eq!(queue.consumed_count(), 1);
+
+        // Drain the batch and confirm the order is there.
+        let batch = queue.drain_batch();
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].id, order.id);
+        assert_eq!(queue.pending_count(), 0);
+    }
+
+    #[test]
+    fn test_blinded_queue_double_consume_rejected() {
+        use crate::blinded_queue::{BlindedOrderError, OrderBlindedQueue, compute_blinded_order_commitment};
+
+        let alice = make_cell(1);
+        let order = Order::new(
+            alice,
+            OrderType::Limit {
+                price: 100,
+                amount: 50,
+                side: Side::Buy,
+                time_in_force: TimeInForce::GTC,
+            },
+            1,
+            1000,
+        );
+        let secret = [0xCD; 32];
+
+        let mut queue = OrderBlindedQueue::new(16);
+        let commitment = compute_blinded_order_commitment(&order, &secret);
+        queue.commit(commitment).unwrap();
+
+        let proof1 = make_single_item_proof(commitment, secret);
+        let proof2 = make_single_item_proof(commitment, secret);
+
+        // First consume: succeeds.
+        queue.consume(order.clone(), secret, proof1).unwrap();
+
+        // Second consume with the same nullifier: must be rejected.
+        let result = queue.consume(order.clone(), secret, proof2);
+        assert_eq!(result, Err(BlindedOrderError::AlreadyConsumed));
+
+        // Only one order should be pending.
+        assert_eq!(queue.pending_count(), 1);
+    }
+
+    #[test]
+    fn test_blinded_queue_wrong_commitment_rejected() {
+        use crate::blinded_queue::{BlindedOrderError, OrderBlindedQueue, compute_blinded_order_commitment};
+
+        let alice = make_cell(1);
+        let order = Order::new(
+            alice,
+            OrderType::Limit {
+                price: 100,
+                amount: 50,
+                side: Side::Buy,
+                time_in_force: TimeInForce::GTC,
+            },
+            1,
+            1000,
+        );
+        let secret = [0xEF; 32];
+        let wrong_secret = [0x00; 32];
+
+        let mut queue = OrderBlindedQueue::new(16);
+        let commitment = compute_blinded_order_commitment(&order, &secret);
+        queue.commit(commitment).unwrap();
+
+        // Build proof with wrong_secret — commitment hash will not match.
+        let wrong_commitment = compute_blinded_order_commitment(&order, &wrong_secret);
+        // The proof's commitment field won't match what's in the queue.
+        let proof = make_single_item_proof(wrong_commitment, wrong_secret);
+
+        let result = queue.consume(order.clone(), wrong_secret, proof);
+        // Either CommitmentMismatch or InvalidMembershipProof — both are acceptable rejections.
+        assert!(result.is_err());
+    }
+
+    // =========================================================================
+    // UPGRADE 2: Ring trade participation for cross-pair settlement
+    // =========================================================================
+
+    #[test]
+    fn test_ring_trade_exchange_offers_nonempty() {
+        use crate::ring_trade::OrderbookRingParticipant;
+        use pyana_app_framework::ring_trade::RingTradeParticipant;
+
+        let mut book = OrderBook::new(eth_usdc_pair());
+        let alice = make_cell(1);
+        let bob = make_cell(2);
+
+        // Alice sells 50 ETH at 3000 USDC.
+        book.insert_order(Order::new(
+            alice,
+            OrderType::Limit {
+                price: 3000,
+                amount: 50,
+                side: Side::Sell,
+                time_in_force: TimeInForce::GTC,
+            },
+            1,
+            1000,
+        ));
+
+        // Bob bids 30 ETH at 2900 USDC.
+        book.insert_order(Order::new(
+            bob,
+            OrderType::Limit {
+                price: 2900,
+                amount: 30,
+                side: Side::Buy,
+                time_in_force: TimeInForce::GTC,
+            },
+            1,
+            1001,
+        ));
+
+        let participant = OrderbookRingParticipant::new("ETH", "USDC", &mut book);
+        let offers = participant.exchange_offers();
+
+        // Both resting orders should be exposed as exchange specs.
+        assert_eq!(offers.len(), 2);
+    }
+
+    #[test]
+    fn test_ring_trade_settle_leg_fills_order() {
+        use crate::ring_trade::{OrderbookRingParticipant, base_asset_id};
+        use pyana_app_framework::ring_trade::RingTradeParticipant;
+        use pyana_intent::CommitmentId;
+        use pyana_app_framework::ring_trade::Settlement;
+
+        let mut book = OrderBook::new(eth_usdc_pair());
+        let alice = make_cell(1);
+
+        // Alice sells 50 ETH at 3000 USDC.
+        book.insert_order(Order::new(
+            alice,
+            OrderType::Limit {
+                price: 3000,
+                amount: 50,
+                side: Side::Sell,
+                time_in_force: TimeInForce::GTC,
+            },
+            1,
+            1000,
+        ));
+
+        assert_eq!(book.order_count(), 1);
+
+        let settlement = Settlement {
+            from: CommitmentId([0x01; 32]),
+            to: CommitmentId([0x02; 32]),
+            asset: base_asset_id("ETH"), // base asset
+            amount: 50,
+        };
+
+        // Scope participant so borrow is released before the final assertion.
+        {
+            let mut participant = OrderbookRingParticipant::new("ETH", "USDC", &mut book);
+            // Solver says: fill 50 ETH from this book leg.
+            participant.settle_leg(&settlement).unwrap();
+        }
+
+        // The order should now be consumed (removed from book, fully filled).
+        assert_eq!(book.order_count(), 0);
+    }
+
+    #[test]
+    fn test_ring_trade_rollback_leg_restores_order() {
+        use crate::ring_trade::{OrderbookRingParticipant, base_asset_id};
+        use pyana_app_framework::ring_trade::RingTradeParticipant;
+        use pyana_intent::CommitmentId;
+        use pyana_app_framework::ring_trade::Settlement;
+
+        let mut book = OrderBook::new(eth_usdc_pair());
+        let alice = make_cell(1);
+
+        // Alice sells 50 ETH at 3000 USDC.
+        let sell_order = Order::new(
+            alice,
+            OrderType::Limit {
+                price: 3000,
+                amount: 50,
+                side: Side::Sell,
+                time_in_force: TimeInForce::GTC,
+            },
+            1,
+            1000,
+        );
+        book.insert_order(sell_order.clone());
+
+        let settlement = Settlement {
+            from: CommitmentId([0x01; 32]),
+            to: CommitmentId([0x02; 32]),
+            asset: base_asset_id("ETH"),
+            amount: 30, // partial fill
+        };
+
+        // Scope the participant so the mutable borrow is released before we inspect.
+        {
+            let mut participant = OrderbookRingParticipant::new("ETH", "USDC", &mut book);
+
+            // Settle: consume 30 out of 50.
+            participant.settle_leg(&settlement).unwrap();
+
+            // A downstream leg fails — roll back.
+            participant.rollback_leg(&settlement).unwrap();
+        } // participant dropped here; mutable borrow released
+
+        // The order should be restored to 50.
+        let restored = book.get_order(&sell_order.id).unwrap();
+        assert_eq!(restored.remaining_amount, 50);
+        assert_eq!(book.order_count(), 1);
+    }
 }

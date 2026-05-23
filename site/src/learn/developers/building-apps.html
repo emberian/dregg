@@ -1,0 +1,213 @@
+<layout src="_layouts/default.html">
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <include src="_includes/sidebar-learn.html"></include>
+  </aside>
+  <main class="docs-content">
+    <nav class="docs-breadcrumb">
+      <a href="/learn.html">Learn</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <a href="/learn/developers/">Developers</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <span>Building Apps</span>
+    </nav>
+<h1>Building Apps on Pyana</h1>
+
+    <p>
+      A pyana app is an HTTP service that uses <code>pyana-app-framework</code>
+      for infrastructure and <code>pyana-sdk</code> for cell/turn/proof
+      operations. The framework gives you health checks, CORS, admin auth,
+      persistence, and proof verification out of the box.
+    </p>
+
+    <h2 id="app-server">Using AppServer</h2>
+
+    <p>
+      The <code>AppServer</code> builder from <code>pyana_app_framework::server</code>
+      sets up the standard middleware stack:
+    </p>
+
+    <pre><code class="language-rust">use pyana_app_framework::server::{AppConfig, AppServer};
+use pyana_app_framework::{AdminAuth, JsonPersistence, PyanaEngine};
+use axum::{Router, routing::post};
+
+#[tokio::main]
+async fn main() {
+    let config = AppConfig::from_env();
+
+    // Initialize the pyana engine (connects to node, manages wallet)
+    let engine = PyanaEngine::new(EngineConfig::from_env()).await;
+
+    // Build the app
+    AppServer::new(config)
+        .service_name("my-app")
+        .with_health()      // GET /health
+        .with_cors()        // permissive CORS for SPAs
+        .routes(app_routes(engine))
+        .serve()
+        .await
+        .unwrap();
+}
+
+fn app_routes(engine: PyanaEngine) -> Router {
+    Router::new()
+        .route("/api/action", post(handle_action))
+        .with_state(engine)
+}</code></pre>
+
+    <p>
+      Environment variables: <code>LISTEN</code> (bind address, default
+      <code>0.0.0.0:3000</code>), <code>PYANA_NODE_URL</code> (federation
+      node), <code>PYANA_ADMIN_TOKEN</code> (for <code>/admin/*</code> routes),
+      <code>PYANA_STATE_FILE</code> (JSON persistence path).
+    </p>
+
+    <h2 id="nameservice">Register in the Nameservice</h2>
+
+    <p>
+      Apps are discovered via the governed namespace. Register your service so
+      clients can find it by name:
+    </p>
+
+    <pre><code># From the CLI:
+pyana namespace mount "services/my-app" \
+  --endpoint "https://my-app.example.com" \
+  --cell-id &lt;your-service-cell-id&gt;</code></pre>
+
+    <p>
+      The DFA routing table classifies requests by namespace path. Governed
+      namespaces enforce naming policy via Datalog rules.
+    </p>
+
+    <h2 id="captp-connections">Accept CapTP Connections</h2>
+
+    <p>
+      Clients connect to your app by enlivening a sturdy ref. The framework's
+      proof verification middleware validates presentation proofs from HTTP
+      headers automatically:
+    </p>
+
+    <pre><code class="language-rust">use pyana_app_framework::middleware::VerifiedPresentation;
+
+async fn handle_action(
+    VerifiedPresentation(proof): VerifiedPresentation,
+    // ... other extractors
+) -> impl IntoResponse {
+    // `proof` is a validated AuthorizationPresentation
+    // The client proved they hold the required capability
+    // without revealing the capability itself
+}</code></pre>
+
+    <h2 id="queues">Programmable Queues for Validated Input</h2>
+
+    <p>
+      Rather than accepting raw HTTP bodies, apps can use programmable queues --
+      storage buffers with custom acceptance predicates. The queue validates
+      messages before your app ever sees them:
+    </p>
+
+    <ul>
+      <li>Define an acceptance predicate (a circuit that must verify against the message).</li>
+      <li>Messages that fail the predicate are rejected at the storage layer.</li>
+      <li>Your app polls the queue for pre-validated, STARK-proven inputs.</li>
+    </ul>
+
+    <p>
+      This moves validation out of your application code and into the
+      cryptographic layer -- you cannot process an invalid message.
+    </p>
+
+    <h2 id="ring-trades">Participate in Ring Trades</h2>
+
+    <p>
+      The generalized intent solver matches heterogeneous offers and wants
+      across participants. To participate:
+    </p>
+
+    <ol>
+      <li>Declare what your app offers and wants as <code>ExchangeItem</code> values (assets, capabilities, services, storage, namespace entries).</li>
+      <li>Post the intent to the solver via <code>POST /api/intent</code> on your node.</li>
+      <li>When matched, the solver proposes a ring settlement.</li>
+      <li>Your app commits (escrow + STARK proof of fulfillment) or rejects.</li>
+    </ol>
+
+    <p>
+      Settlement is atomic: either all participants commit or none do. The
+      commit-reveal protocol uses <code>CommitRevealFulfiller</code> from the
+      app framework.
+    </p>
+
+    <h2 id="example">Minimal App Skeleton</h2>
+
+    <pre><code class="language-rust">// Cargo.toml
+// [dependencies]
+// pyana-app-framework = { path = "../app-framework" }
+// pyana-sdk = { path = "../sdk" }
+// axum = "0.8"
+// tokio = { version = "1", features = ["full"] }
+// serde_json = "1"
+
+use pyana_app_framework::server::{AppConfig, AppServer};
+use pyana_app_framework::{PyanaEngine, JsonPersistence, CellId};
+use pyana_sdk::embed::EngineConfig;
+use axum::{Router, Json, routing::{get, post}};
+use serde_json::{json, Value};
+
+struct AppState {
+    engine: PyanaEngine,
+    persistence: JsonPersistence,
+}
+
+#[tokio::main]
+async fn main() {
+    tracing_subscriber::init();
+
+    let config = AppConfig::from_env();
+    let engine = PyanaEngine::new(EngineConfig::from_env()).await;
+    let persistence = JsonPersistence::new(
+        config.state_file.clone().unwrap_or("state.json".into())
+    );
+
+    let state = std::sync::Arc::new(AppState { engine, persistence });
+
+    AppServer::new(config)
+        .service_name("minimal-app")
+        .with_health()
+        .with_cors()
+        .routes(
+            Router::new()
+                .route("/api/status", get(status))
+                .route("/api/action", post(action))
+                .with_state(state)
+        )
+        .serve()
+        .await
+        .unwrap();
+}
+
+async fn status() -> Json&lt;Value&gt; {
+    Json(json!({ "status": "ok" }))
+}
+
+async fn action(
+    axum::extract::State(state): axum::extract::State&lt;std::sync::Arc&lt;AppState&gt;&gt;,
+    Json(body): Json&lt;Value&gt;,
+) -> Json&lt;Value&gt; {
+    // Your app logic here: validate, execute turns, respond
+    Json(json!({ "accepted": true }))
+}</code></pre>
+
+    <div class="callout callout--note">
+      <p>
+        See <code>apps/</code> in the repository for production examples:
+        stablecoin, AMM, orderbook, lending, identity, gallery, compute-exchange,
+        bounty-board, and governed-namespace.
+      </p>
+    </div>
+
+  </div>
+  </main>
+</div>
+
+</layout>

@@ -1,0 +1,172 @@
+<layout src="_layouts/default.html">
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <include src="_includes/sidebar-learn.html"></include>
+  </aside>
+  <main class="docs-content">
+    <nav class="docs-breadcrumb">
+      <a href="/learn.html">Learn</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <a href="/learn/users/">Users</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <span>Captp</span>
+    </nav>
+<h1>Sharing and Accepting Capabilities (CapTP)</h1>
+
+    <p>
+      The Capability Transport Protocol (CapTP) is how capabilities move between
+      agents. Whether you are delegating access to a sub-agent, accepting a
+      capability from a colleague, or sending a message to an offline recipient,
+      CapTP handles the transport, persistence, and verification.
+    </p>
+
+    <h2 id="concepts">Key Concepts</h2>
+
+    <h3>Live References vs. Sturdy References</h3>
+    <p>
+      A <strong>live reference</strong> exists only within an active session between
+      two agents. It is fast (no lookup required) but ephemeral -- if either party
+      disconnects, the reference is gone.
+    </p>
+    <p>
+      A <strong>sturdy reference</strong> survives disconnection, serialization, and
+      restart. It encodes the target cell, a Swiss number (unforgeable designator),
+      and a routing hint. You can save a sturdy ref to disk, email it, or seal it
+      in a box for later delivery.
+    </p>
+
+    <h3>Store-and-Forward</h3>
+    <p>
+      If your target is offline, CapTP queues the message in their MerkleQueue inbox.
+      You pay a small deposit (refunded when the recipient processes the message).
+      Messages persist until the recipient comes online or the TTL expires.
+    </p>
+
+    <h2 id="sharing">Sharing a Capability</h2>
+
+    <h3>Via the Wallet (Browser Extension)</h3>
+    <ol>
+      <li>Open the wallet and navigate to "Tokens".</li>
+      <li>Select the token you want to share.</li>
+      <li>Click "Delegate" and enter the recipient's public key (or scan a QR code).</li>
+      <li>Choose restrictions: which actions, what TTL, what budget limit.</li>
+      <li>Click "Send". The wallet attenuates the token and transmits via CapTP.</li>
+    </ol>
+
+    <h3>Via the CLI</h3>
+    <pre><code># Delegate a capability with restrictions
+pyana cap delegate \
+  --token $TOKEN_ID \
+  --to $RECIPIENT_PUBKEY \
+  --restrict service=storage,action=read,budget=1000 \
+  --ttl 24h
+
+# The recipient can accept with:
+pyana cap accept --from $YOUR_PUBKEY</code></pre>
+
+    <h3>Via the SDK (Programmatic)</h3>
+    <pre><code class="language-rust">use pyana_sdk::{AgentWallet, Attenuation};
+
+let mut alice = AgentWallet::new();
+let mut bob = AgentWallet::new();
+
+let root = alice.mint_token(b"secret-key-here-32-bytes!!!!!!!!", "compute");
+
+// Alice delegates to Bob with restrictions
+let delegated = alice.delegate(&root, &bob.public_key(), &Attenuation {
+    services: vec![("compute".into(), "inference".into())],
+    max_budget: Some(5000),
+    max_ttl: Some(std::time::Duration::from_secs(3600)),
+    ..Default::default()
+}).unwrap();
+
+// Bob receives
+bob.receive_delegation(delegated).unwrap();</code></pre>
+
+    <h2 id="accepting">Accepting a Capability</h2>
+
+    <p>
+      When someone delegates a capability to you, it arrives in your inbox.
+      The wallet (or CLI) validates:
+    </p>
+    <ul>
+      <li>The delegation chain is cryptographically valid (HMAC chain intact).</li>
+      <li>The capability was not revoked (non-membership in revocation set).</li>
+      <li>The restrictions are consistent (each step only narrows).</li>
+    </ul>
+    <p>
+      You can inspect the capability before accepting -- see what service it grants,
+      what restrictions apply, when it expires, and who delegated it.
+    </p>
+
+    <h2 id="offline">Offline Delivery (Sealed Boxes)</h2>
+
+    <p>
+      To send a capability to someone who is offline, CapTP uses sealed boxes
+      (X25519 + ChaCha20-Poly1305 encryption):
+    </p>
+    <ol>
+      <li>The sender seals the capability under the recipient's public key.</li>
+      <li>The sealed box is deposited in the recipient's MerkleQueue inbox (federation stores it).</li>
+      <li>When the recipient comes online, they unseal using their private key.</li>
+    </ol>
+    <p>
+      The sealed box reveals nothing to the federation or any observer -- only that
+      a message of a certain size was deposited at a certain time.
+    </p>
+
+    <h2 id="three-party">Three-Party Introduction</h2>
+
+    <p>
+      If Alice holds capabilities to both Bob and Carol, she can introduce them:
+    </p>
+    <ol>
+      <li>Alice invokes <code>Effect::Introduce</code> in a turn, granting Bob a (possibly attenuated) capability to Carol.</li>
+      <li>Bob receives a routing directive telling him how to reach Carol.</li>
+      <li>Bob can now communicate directly with Carol -- no further involvement from Alice.</li>
+    </ol>
+    <p>
+      This is how new communication paths form in Pyana. There is no global directory;
+      all paths are introduced.
+    </p>
+
+    <h2 id="pipelining">Promise Pipelining</h2>
+
+    <p>
+      You can send messages to the <em>result</em> of a pending operation without
+      waiting for it to complete. If you request a service and the result will be
+      a new capability, you can start using that capability immediately -- the
+      messages queue and deliver once the promise resolves. This eliminates round-trip
+      latency in multi-step workflows.
+    </p>
+
+    <h2 id="revocation">Revoking Shared Capabilities</h2>
+
+    <p>
+      After sharing a capability, you may need to revoke it:
+    </p>
+    <ul>
+      <li><strong>Epoch bump:</strong> Increment your delegation epoch. All children become stale within <code>max_staleness</code>.</li>
+      <li><strong>RevocationChannel:</strong> For instant revocation, enroll the capability in a channel. Trip the channel to revoke in real-time.</li>
+      <li><strong>CDT revocation:</strong> Revoke an entire subtree of delegations at once.</li>
+    </ul>
+
+    <pre><code># Revoke a specific delegation
+pyana cap revoke --token $TOKEN_ID --delegation $DELEGATION_HASH
+
+# Trip a revocation channel (instant, all subscribers affected)
+pyana cap trip-channel --channel $CHANNEL_ID</code></pre>
+
+    <h2 id="next">Next Steps</h2>
+    <ul>
+      <li><a href="cli.html">CLI Reference</a> -- Full command reference for <code>pyana cap</code></li>
+      <li><a href="/learn/developers/sdk.html">SDK Quickstart</a> -- Programmatic CapTP usage</li>
+      <li><a href="/learn/architecture/capabilities.html">Capability Architecture</a> -- How CapTP works internally</li>
+    </ul>
+
+  </div>
+  </main>
+</div>
+
+</layout>

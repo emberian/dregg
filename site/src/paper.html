@@ -1,0 +1,142 @@
+<layout src="_layouts/default.html">
+
+<main class="wrap wrap--narrow main--compact">
+  <div class="page-header">
+    <h1>Whitepaper</h1>
+    <p>
+      <em>Pyana: A Distributed Object-Capability Runtime with Zero-Knowledge Authorization
+      and Proof-Carrying State</em> — 39 pages covering the design rationale, formal
+      specification, and security analysis.
+    </p>
+  </div>
+
+  <section class="section section--compact">
+    <span class="section__label">Abstract</span>
+    <h2 class="section__title">What this paper is about</h2>
+    <p class="paper-abstract">
+      Pyana combines object-capability semantics with zero-knowledge proofs to let agents
+      prove authorization across organizational boundaries without revealing their delegation
+      chain. The key insight is that capability attenuation — monotonically narrowing
+      permissions through delegation — is structurally identical to incrementally verifiable
+      computation. Zero-knowledge presentation emerges naturally from the capability model,
+      not bolted on afterward.
+    </p>
+    <p class="paper-abstract">
+      The system achieves sub-second proof generation (~24 KiB STARK proofs in 300–560ms),
+      sub-millisecond verification, offline operation without blockchain liveness, and
+      post-quantum security for external interfaces through exclusively hash-based
+      verification. Agents carry their own state as receipt chains that compress to
+      constant size via IVC, enabling censorship-resistant exit from any federation.
+    </p>
+  </section>
+
+  <section class="section section--compact">
+    <span class="section__label">Download</span>
+    <h2 class="section__title">Read the paper</h2>
+    <p style="color: var(--fg-dim); margin-bottom: var(--s5);">
+      Authored in Typst and compiled to PDF. The source lives in
+      <code>paper/pyana.typ</code> in the repo.
+    </p>
+    <a class="paper-download" href="/assets/pyana.pdf">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="7 10 12 15 17 10"/>
+        <line x1="12" y1="15" x2="12" y2="3"/>
+      </svg>
+      pyana.pdf
+    </a>
+  </section>
+
+  <section class="section section--compact">
+    <span class="section__label">Contents</span>
+    <h2 class="section__title">What's inside</h2>
+    <div class="paper-sections">
+      <div class="paper-section">
+        <p class="paper-section__num">01</p>
+        <p class="paper-section__title">Introduction</p>
+        <p class="paper-section__desc">Motivation, related systems' limitations, and 26 specific contributions.</p>
+      </div>
+      <div class="paper-section">
+        <p class="paper-section__num">02</p>
+        <p class="paper-section__title">System Model</p>
+        <p class="paper-section__desc">Cells, turns, call forests, reference groups, sovereignty spectrum, and the 24-effect VM.</p>
+      </div>
+      <div class="paper-section">
+        <p class="paper-section__num">03</p>
+        <p class="paper-section__title">Authorization Semantics</p>
+        <p class="paper-section__desc">Five auth modes, Datalog fact encoding, distributed capability derivation trees, revocation.</p>
+      </div>
+      <div class="paper-section">
+        <p class="paper-section__num">04</p>
+        <p class="paper-section__title">Zero-Knowledge Proofs</p>
+        <p class="paper-section__desc">4-ary Merkle trees, Fold AIR, 8+ proof architectures over BabyBear + FRI + Poseidon2.</p>
+      </div>
+      <div class="paper-section">
+        <p class="paper-section__num">05</p>
+        <p class="paper-section__title">Privacy Architecture</p>
+        <p class="paper-section__desc">Stealth addresses, Pedersen commitments, Dandelion++ routing, private Vickrey auctions.</p>
+      </div>
+      <div class="paper-section">
+        <p class="paper-section__num">06</p>
+        <p class="paper-section__title">Federation & Consensus</p>
+        <p class="paper-section__desc">Blocklace DAG, Cordial Miners BFT, constitutional consensus, fast sync.</p>
+      </div>
+      <div class="paper-section">
+        <p class="paper-section__num">07</p>
+        <p class="paper-section__title">CapTP</p>
+        <p class="paper-section__desc">Sessions, sturdy refs, three-party handoff, distributed GC, store-and-forward.</p>
+      </div>
+      <div class="paper-section">
+        <p class="paper-section__num">08</p>
+        <p class="paper-section__title">Storage & Economics</p>
+        <p class="paper-section__desc">Space banks, MerkleQueue inboxes, erasure coding, EIP-1559 fee market, staking, slashing.</p>
+      </div>
+      <div class="paper-section">
+        <p class="paper-section__num">09</p>
+        <p class="paper-section__title">Bridges</p>
+        <p class="paper-section__desc">Mina (Pickles L2), EVM (SP1/Groth16), Midnight (ZKIR v3 + Cardano attestation).</p>
+      </div>
+      <div class="paper-section">
+        <p class="paper-section__num">10</p>
+        <p class="paper-section__title">Implementation & Verification</p>
+        <p class="paper-section__desc">~395k lines of Rust, 46 crates, typed composition checker, 11 guarantees, 7 assumptions.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--compact paper-refs">
+    <span class="section__label">References</span>
+    <h2 class="section__title">Key influences</h2>
+    <ul>
+      <li>
+        <strong>Shapiro &amp; Sela.</strong> Cordial Miners: Fast and Efficient Consensus for Every Eventuality.
+        The foundation for pyana's Blocklace federation layer — DAG-based BFT with
+        3-round finality.
+      </li>
+      <li>
+        <strong>Stingray (arXiv:2501.06531).</strong> Bounded counters for budget
+        enforcement without per-operation consensus. Adapted for multi-silo coordination.
+      </li>
+      <li>
+        <strong>Mina Protocol.</strong> zkApp execution model with call forests and
+        cells-as-accounts. Pyana adapts this architecture for authorization and
+        distributed object semantics.
+      </li>
+      <li>
+        <strong>Birgisson et al. (Macaroons).</strong> HMAC-chained bearer tokens with
+        cryptographic attenuation. Pyana supports both Macaroon and Biscuit formats.
+      </li>
+      <li>
+        <strong>Biscuit (Datalog authorization).</strong> Ed25519-signed tokens with
+        embedded Datalog policies. Extended with STARK proofs over derivation traces.
+      </li>
+      <li>
+        <strong>Mark Miller (object-capabilities).</strong> The E programming language and
+        the principle of least authority. Pyana's execution model descends directly
+        from this lineage.
+      </li>
+    </ul>
+  </section>
+</main>
+
+</layout>

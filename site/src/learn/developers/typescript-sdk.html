@@ -1,0 +1,265 @@
+<layout src="_layouts/default.html">
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <include src="_includes/sidebar-learn.html"></include>
+  </aside>
+  <main class="docs-content">
+    <nav class="docs-breadcrumb">
+      <a href="/learn.html">Learn</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <a href="/learn/developers/">Developers</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <span>Typescript Sdk</span>
+    </nav>
+<h1>TypeScript SDK</h1>
+
+    <p>
+      The <code>@pyana/sdk</code> package provides ergonomic, type-safe TypeScript APIs for
+      token management, zero-knowledge proofs, Merkle trees, Datalog authorization,
+      and full runtime simulation. It wraps the <code>pyana-wasm</code> module (compiled from
+      the Rust codebase) into idiomatic async APIs.
+    </p>
+
+    <div class="callout callout--warning">
+      <p>
+        The TypeScript SDK is not yet published to npm. The API described here reflects
+        the intended design. For now, use the <a href="/learn/developers/wasm.html">WASM bindings</a>
+        directly or the <a href="/learn/developers/sdk.html">Rust SDK</a>.
+      </p>
+    </div>
+
+    <div class="callout callout--note">
+      <p>
+        The TypeScript SDK is a thin wrapper around the WASM package. All cryptographic
+        operations (STARK proofs, HMAC chains, Merkle trees) execute in the compiled WASM
+        module at near-native speed. See <a href="wasm.html">WASM Playground</a> for details
+        on the underlying package.
+      </p>
+    </div>
+
+    <h2 id="installation">Installation</h2>
+
+    <pre><code class="language-bash"># Not yet available on npm — build from source for now
+npm install @pyana/sdk pyana-wasm</code></pre>
+
+    <p>
+      Both packages will be required: <code>@pyana/sdk</code> provides the TypeScript API layer,
+      while <code>pyana-wasm</code> provides the compiled cryptographic core.
+    </p>
+
+    <h2 id="quick-start">Quick Start</h2>
+
+    <p>
+      Initialize the WASM module, create a client, and perform the core token lifecycle
+      (mint, attenuate, verify) in a few lines:
+    </p>
+
+    <pre><code class="language-javascript">import init from "pyana-wasm";
+import { PyanaClient } from "@pyana/sdk";
+
+// Initialize WASM and create client
+const wasm = await init();
+const client = await PyanaClient.init(wasm);
+
+// Mint a token
+const token = await client.wallet.mint("api-gateway");
+console.log(token.token); // "em2_..."
+
+// Attenuate (restrict) the token
+const restricted = await client.wallet.attenuate(token.token, {
+  service: "api-gateway",
+  actions: "read",
+  expiresSecs: 3600,
+});
+
+// Verify
+const result = await client.wallet.verify(restricted.token, { action: "read" });
+console.log(result.allowed); // true</code></pre>
+
+    <h2 id="wallet">Wallet (Token Lifecycle)</h2>
+
+    <p>
+      The <code>AgentWallet</code> class manages token minting, attenuation, and verification.
+      It mirrors the Rust SDK's <code>AgentWallet</code> API.
+    </p>
+
+    <pre><code class="language-rust">const wallet = await AgentWallet.create(wasm);
+
+// Mint a root token for a service
+const token = await wallet.mint("my-service");
+
+// Attenuate: restrict to read-only
+const attenuated = await wallet.attenuate(token.token, { actions: "read" });
+
+// Verify against a request
+const verified = await wallet.verify(attenuated.token, { action: "read" });
+console.log(verified.allowed); // true</code></pre>
+
+    <h2 id="proofs">STARK Proofs</h2>
+
+    <p>
+      The <code>ProofEngine</code> class generates and verifies STARK proofs, predicate proofs
+      (ZK comparisons), and more.
+    </p>
+
+    <pre><code class="language-javascript">const engine = new ProofEngine(wasm);
+
+// Generate a STARK proof
+const proof = await engine.generateStarkProof(42, 4);
+const valid = await engine.verifyStarkProof(proof.proof_json);
+console.log(valid); // true</code></pre>
+
+    <h3>Predicate Proofs (ZK Comparisons)</h3>
+
+    <p>Prove a comparison without revealing the private value:</p>
+
+    <pre><code class="language-javascript">// Prove age >= 18 without revealing exact age
+const proof = await engine.generatePredicateProof({
+  predicateType: "gte",
+  privateValue: 25,
+  threshold: 18,
+  attributeKey: "age",
+  stateRoot: 12345,
+});</code></pre>
+
+    <h2 id="merkle">Merkle Trees</h2>
+
+    <p>
+      The <code>MerkleTree</code> class provides root computation and membership/non-membership proofs
+      over 4-ary BLAKE3 Merkle trees.
+    </p>
+
+    <pre><code class="language-javascript">const tree = new MerkleTree(wasm);
+
+// Compute the Merkle root of a set of leaves
+const root = await tree.computeRoot(["alice", "bob", "carol"]);
+
+// Generate a membership proof for "bob"
+const proof = await tree.proveMembership(["alice", "bob", "carol"], "bob");</code></pre>
+
+    <h2 id="datalog">Datalog Authorization</h2>
+
+    <p>
+      The <code>PredicateEvaluator</code> class evaluates Datalog rules against a request context.
+    </p>
+
+    <pre><code class="language-javascript">const evaluator = new PredicateEvaluator(wasm);
+
+const result = await evaluator.evaluate(
+  [
+    { predicate: "member", terms: ["alice", "admin"] },
+    { predicate: "permission", terms: ["admin", "read"] },
+  ],
+  { action: "read" }
+);
+console.log(result.allowed); // true</code></pre>
+
+    <h2 id="runtime">Runtime Simulation</h2>
+
+    <p>
+      The <code>PyanaRuntime</code> class provides a full distributed system simulation: agents, transfers,
+      federations, block proposals, and intents.
+    </p>
+
+    <pre><code class="language-javascript">const runtime = client.createRuntime();
+
+// Create agents with initial balances
+const alice = await runtime.createAgent("alice", 1000);
+const bob = await runtime.createAgent("bob", 500);
+
+// Transfer between agents
+const result = await runtime.executeTurn(alice.agent_index, [
+  { type: "transfer", to: bob.cell_id, amount: 100 },
+]);
+
+// Create and manage federations
+const fed = await runtime.createFederation("testnet", 4);
+await runtime.proposeBlock(fed.fed_index, ["event1", "event2"]);
+
+// Intent marketplace
+const intent = await runtime.createIntent(
+  alice.agent_index,
+  "Need",
+  [{ action: "read", resource: "docs/*" }],
+  [{ Service: "storage" }],
+  "",
+  1716000000
+);
+
+// Clean up
+runtime.destroy();</code></pre>
+
+    <h2 id="api-reference">API Reference</h2>
+
+    <table class="comparison">
+      <thead>
+        <tr>
+          <th>Class</th>
+          <th>Purpose</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>PyanaClient</code></td>
+          <td>Main entry point combining all subsystems</td>
+        </tr>
+        <tr>
+          <td><code>AgentWallet</code></td>
+          <td>Token mint / attenuate / verify</td>
+        </tr>
+        <tr>
+          <td><code>TokenOps</code></td>
+          <td>Fold chains, BLAKE3 hashing, intent IDs</td>
+        </tr>
+        <tr>
+          <td><code>ProofEngine</code></td>
+          <td>STARK proofs, predicates, Schnorr, garbled circuits</td>
+        </tr>
+        <tr>
+          <td><code>MerkleTree</code></td>
+          <td>Root computation, membership/non-membership proofs</td>
+        </tr>
+        <tr>
+          <td><code>PredicateEvaluator</code></td>
+          <td>Datalog authorization engine</td>
+        </tr>
+        <tr>
+          <td><code>PyanaRuntime</code></td>
+          <td>Full distributed system simulation</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2 id="wasm-relationship">Relationship to WASM</h2>
+
+    <p>
+      The TypeScript SDK is a convenience layer over the <code>pyana-wasm</code> package:
+    </p>
+
+    <ul>
+      <li><code>pyana-wasm</code> is compiled from the Rust workspace using <code>wasm-pack</code>. It exposes
+        low-level functions that operate on raw bytes and JSON-serialized structures.</li>
+      <li><code>@pyana/sdk</code> wraps those functions into typed async methods, handles WASM
+        initialization, manages memory lifecycle, and provides builder patterns for
+        complex operations.</li>
+      <li>All cryptographic operations (HMAC chains, STARK proving/verifying, Merkle hashing)
+        run inside the WASM module at near-native speed.</li>
+      <li>The same WASM module powers the <a href="wasm.html">browser playground</a> -- the TS SDK
+        just adds structure and type safety on top.</li>
+    </ul>
+
+    <h2 id="next">Next Steps</h2>
+
+    <ul>
+      <li><a href="tutorial-first-app.html">Tutorial: First App</a> -- Build a complete API key management service (Rust)</li>
+      <li><a href="sdk.html">Rust SDK Quickstart</a> -- The full Rust API reference</li>
+      <li><a href="wasm.html">WASM Playground</a> -- Experiment in the browser</li>
+      <li><a href="tokens.html">Token Lifecycle</a> -- Deep dive into mint/attenuate/verify</li>
+    </ul>
+
+  </div>
+  </main>
+</div>
+
+</layout>

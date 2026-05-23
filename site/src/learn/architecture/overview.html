@@ -1,0 +1,153 @@
+<layout src="_layouts/default.html">
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <include src="_includes/sidebar-learn.html"></include>
+  </aside>
+  <main class="docs-content">
+    <nav class="docs-breadcrumb">
+      <a href="/learn.html">Learn</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <a href="/learn/architecture/">Architecture</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <span>Overview</span>
+    </nav>
+<h1>Architecture Overview</h1>
+
+    <p>
+      Pyana is a sovereign capability runtime. Agents own cells, execute
+      transitions locally, and prove validity with STARKs. The federation is a
+      notary: it orders, detects double-spends, and anchors 32-byte
+      commitments. It never sees cell contents.
+    </p>
+
+    <h2 id="unified-fabric">The Unified Fabric</h2>
+
+    <p>
+      All state lives on a single DAG -- the <strong>blocklace</strong>. Nodes
+      participate in one or more <strong>reference groups</strong>. Within each
+      group, the Cordial Miners protocol computes a total ordering via the
+      <strong>tau function</strong> (3-round leaderless BFT finality).
+      Cross-group communication uses interest-based dissemination with
+      cryptographic cross-references, not bridges.
+    </p>
+
+    <p>
+      Constitutional Consensus governs group membership democratically. The
+      h-rule determines supermajority thresholds; equivocation is detected and
+      penalized on-DAG.
+    </p>
+
+    <h2 id="effect-vm">The Effect VM</h2>
+
+    <p>
+      Every turn is proven by the Effect VM -- a single STARK circuit with
+      <strong>371 AIR columns</strong> and <strong>24 effects</strong>:
+    </p>
+
+    <ul>
+      <li>State: SetField, CreateCell, IncrementNonce, SetPermissions, SetVerificationKey</li>
+      <li>Transfer: Transfer (computrons between cells)</li>
+      <li>Capabilities: GrantCapability, RevokeCapability, RevokeDelegation, SpawnWithDelegation</li>
+      <li>Events: EmitEvent</li>
+      <li>Privacy: NoteSpend, NoteCreate (shielded notes with Pedersen commitments)</li>
+      <li>Sealing: CreateSealPair, Seal, Unseal (E-rights pattern)</li>
+      <li>Messaging: Introduce (three-party), PipelinedSend, CreateObligation</li>
+      <li>Bridge: BridgeMint, BridgeLock, BridgeFinalize, BridgeCancel</li>
+    </ul>
+
+    <p>
+      The DSL (<code>#[pyana_caveat]</code> / <code>#[pyana_effect]</code>)
+      compiles constraints to 8 backends from a single source: Rust, AIR,
+      Datalog, Kimchi, Midnight ZKIR, Plonky3, SP1, and native STARK.
+    </p>
+
+    <h2 id="captp">CapTP (Capability Transfer Protocol)</h2>
+
+    <p>
+      Capabilities flow between cells via CapTP sessions:
+    </p>
+
+    <ul>
+      <li><strong>Sturdy refs</strong> -- durable <code>pyana://</code> URIs with swiss numbers. Survive disconnection.</li>
+      <li><strong>Live refs</strong> -- ephemeral handles within an active session.</li>
+      <li><strong>Strands</strong> -- logical communication channels within a session, identified by StrandId.</li>
+      <li><strong>Handoff</strong> -- offline three-party introduction with Ed25519-signed certificates.</li>
+      <li><strong>Distributed GC</strong> -- unreachable capabilities are reclaimed across sessions.</li>
+    </ul>
+
+    <p>
+      Sessions run over QUIC with Plumtree gossip and Dandelion++ for
+      unlinkable relay. Cordial dissemination provides reactive push with
+      frontier exchange.
+    </p>
+
+    <h2 id="storage">Storage</h2>
+
+    <ul>
+      <li><strong>Programmable queues</strong> -- validated input buffers with custom acceptance predicates.</li>
+      <li><strong>Inboxes</strong> -- store-and-forward message delivery (relay operators host these).</li>
+      <li><strong>Blinded storage</strong> -- content-addressed data where the node cannot read contents.</li>
+      <li><strong>KZG commitments</strong> -- polynomial commitments for efficient data availability proofs.</li>
+      <li><strong>Space banks</strong> -- quota accounting; rent economics bound storage growth.</li>
+    </ul>
+
+    <p>
+      Persistence uses redb (ACID, WAL, crash-safe). Checkpoints every N blocks
+      enable fast-sync for new nodes.
+    </p>
+
+    <h2 id="intent-solving">Intent Solving</h2>
+
+    <p>
+      The generalized intent solver finds multi-party settlements involving
+      heterogeneous items -- assets, capabilities, services, storage, and
+      namespace entries -- in a single ring trade:
+    </p>
+
+    <ol>
+      <li>Each participant declares offers and wants (typed <code>ExchangeItem</code> values).</li>
+      <li>Edge A-&gt;B exists if A's offers satisfy some or all of B's wants.</li>
+      <li>Cycle detection finds rings where every participant is satisfied.</li>
+      <li>Settlement is atomic: escrow-commit-reveal with STARK proofs of fulfillment.</li>
+    </ol>
+
+    <p>
+      No global pricing -- satisfaction is structural and boolean. DFA routing
+      shards intents by namespace zone. Cross-zone rings use bridge intents.
+    </p>
+
+    <h2 id="trust-model">Trust Model</h2>
+
+    <pre><code class="language-javascript">CRYPTOGRAPHIC (no trust required):
+  - State transition validity (STARK proof)
+  - Capability chain validity (IVC fold proof, O(1) verification)
+  - Double-spend prevention (nullifier set, Merkle inclusion)
+  - Handoff integrity (Ed25519 signature on certificate)
+  - Privacy (Pedersen commitments, stealth addresses, shielded notes)
+
+EXECUTOR-TRUSTED (trust the federation for):
+  - Ordering (tau function over the blocklace -- BFT, not cryptographic)
+  - Liveness (group must have 2f+1 honest nodes online)
+  - Discovery (intent gossip relay -- can censor, cannot forge)
+  - Checkpoint anchoring (periodic roots attested by quorum signature)
+
+SELF-SOVEREIGN (trust nobody):
+  - Peer-to-peer mode: Alice proves directly to Bob, federation never contacted
+  - Offline operation: turn execution is local, proof is local
+  - State custody: you hold your cells, only commitments are public</code></pre>
+
+    <div class="callout callout--note">
+      <p>
+        For cryptographic details see <a href="cryptography.html">Cryptographic Foundations</a>.
+        For the capability semantics (cells, turns, c-lists) see
+        <a href="capabilities.html">Object-Capability Model</a>.
+        For consensus specifics see <a href="consensus.html">Consensus</a>.
+      </p>
+    </div>
+
+  </div>
+  </main>
+</div>
+
+</layout>

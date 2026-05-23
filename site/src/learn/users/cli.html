@@ -1,0 +1,270 @@
+<layout src="_layouts/default.html">
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <include src="_includes/sidebar-learn.html"></include>
+  </aside>
+  <main class="docs-content">
+    <nav class="docs-breadcrumb">
+      <a href="/learn.html">Learn</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <a href="/learn/users/">Users</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <span>Cli</span>
+    </nav>
+<h1>CLI Reference (<code>pyana</code>)</h1>
+
+    <p>
+      The <code>pyana</code> command-line tool is a full-citizen interface to the
+      runtime. Every operation available through the SDK or browser extension is
+      also available via the CLI. It is the primary tool for operators, developers,
+      and power users.
+    </p>
+
+    <h2 id="install">Installation</h2>
+
+    <pre><code class="language-rust"># From source (requires Rust 1.79+)
+cargo install --path cli/
+
+# Or from a release binary
+curl -sSf https://pyana.io/install.sh | sh
+
+# Verify installation
+pyana --version</code></pre>
+
+    <h2 id="subcommands">Subcommands Overview</h2>
+
+    <table class="comparison">
+      <thead>
+        <tr><th>Subcommand</th><th>Purpose</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>pyana cell</code></td><td>Create, inspect, migrate, split, merge cells</td></tr>
+        <tr><td><code>pyana turn</code></td><td>Build, sign, submit turns; inspect and verify receipts</td></tr>
+        <tr><td><code>pyana cap</code></td><td>Mint, attenuate, delegate, revoke, present, verify capabilities</td></tr>
+        <tr><td><code>pyana wallet</code></td><td>Create/restore identity, manage keys, check balance</td></tr>
+        <tr><td><code>pyana federation</code></td><td>Join/leave federation, check status, list peers</td></tr>
+        <tr><td><code>pyana namespace</code></td><td>Mount services, resolve names, manage registrations</td></tr>
+        <tr><td><code>pyana storage</code></td><td>Check quotas, space bank status, manage erasure shards</td></tr>
+        <tr><td><code>pyana directory</code></td><td>Manage petnames, edge names, proposed names</td></tr>
+        <tr><td><code>pyana proof</code></td><td>Generate, verify, export, compose proofs</td></tr>
+        <tr><td><code>pyana route</code></td><td>Classify paths, inspect DFA, test ACLs</td></tr>
+        <tr><td><code>pyana doctor</code></td><td>Diagnose node health, verify integrity</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="wallet">Wallet Management</h2>
+
+    <pre><code class="language-rust"># Create a new identity (generates 24-word mnemonic)
+pyana wallet create --mnemonic
+# Output: writes mnemonic to stdout, saves encrypted key to ~/.pyana/keys/
+
+# Restore from mnemonic
+pyana wallet restore --mnemonic "word1 word2 ... word24"
+
+# Check balance
+pyana wallet balance
+# Output: 45000 computrons (available), 5000 (locked in deposits)
+
+# Export public key
+pyana wallet pubkey
+# Output: ed25519:a1b2c3d4...</code></pre>
+
+    <h2 id="cell">Cell Operations</h2>
+
+    <pre><code># Create a sovereign cell (federation stores only your 32-byte commitment)
+pyana cell create --sovereign --federation devnet.pyana.io:8420
+
+# Create a hosted cell (federation stores full state)
+pyana cell create --hosted --federation devnet.pyana.io:8420
+
+# Inspect a cell
+pyana cell inspect $CELL_ID
+# Output: state slots, c-list entries, sovereignty mode, last turn, balance
+
+# Migrate (teleport) to another federation
+pyana cell migrate --cell $CELL_ID --to other-fed.io:8420
+
+# Split a cell into children
+pyana cell split --cell $CELL_ID --partitions 3
+
+# Merge children back
+pyana cell merge --cells $CHILD1,$CHILD2,$CHILD3</code></pre>
+
+    <h2 id="cap">Capability Operations</h2>
+
+    <pre><code># Mint a root capability token
+pyana cap mint --service my-service --root-key ./keys/root.key
+
+# Attenuate (restrict) a token
+pyana cap attenuate --token $TOKEN_ID \
+  --restrict service=my-service,action=read \
+  --ttl 1h --budget 500
+
+# Delegate to another agent
+pyana cap delegate --token $TOKEN_ID --to $BOB_PUBKEY \
+  --restrict action=read --ttl 24h
+
+# Revoke a delegation
+pyana cap revoke --token $TOKEN_ID --delegation $DELEG_HASH
+
+# Generate a ZK presentation proof
+pyana cap present --token $TOKEN_ID --request '{"service":"dns","action":"read"}' \
+  --mode private
+
+# Verify a received proof
+pyana cap verify --proof ./proof.bin --federation-root $ROOT_HEX</code></pre>
+
+    <h2 id="turn">Turn Operations</h2>
+
+    <pre><code># Build and submit a turn
+pyana turn build --target $CELL_ID --effect set-field:counter=42
+pyana turn submit --signed
+
+# Verify receipt chain integrity
+pyana turn verify-chain --cell $CELL_ID
+
+# Inspect a specific receipt
+pyana turn receipt --hash $TURN_HASH
+# Output: pre_state, post_state, effects, computron_cost, timestamp
+
+# Export IVC-compressed state proof
+pyana turn export-ivc --cell $CELL_ID --output ./state-proof.bin</code></pre>
+
+    <h2 id="federation">Federation Operations</h2>
+
+    <pre><code># Check federation status
+pyana federation status
+# Output: connected peers, current epoch, attested root, block height
+
+# Join a federation
+pyana federation join --url devnet.pyana.io:8420 --stake 100000
+
+# Leave a federation (keeps your IVC proof)
+pyana federation leave
+
+# List peers
+pyana federation peers
+# Output: node_id, address, last_seen, blocks_produced</code></pre>
+
+    <h2 id="namespace">Namespace and Service Mesh</h2>
+
+    <pre><code># Mount a service at a namespace path
+pyana namespace mount --path /services/inference --descriptor ./service.json
+
+# Resolve a service path
+pyana namespace resolve /services/inference
+# Output: cell_id, descriptor, ACL policy
+
+# List services under a prefix
+pyana namespace list /services/
+
+# Register a petname (local alias)
+pyana directory petname set bob ed25519:a1b2c3d4...
+pyana directory petname get bob
+# Output: ed25519:a1b2c3d4...
+
+# Manage name rental
+pyana namespace rent --path /public/myname --epochs 12
+pyana namespace status --path /public/myname</code></pre>
+
+    <h2 id="storage">Storage Operations</h2>
+
+    <pre><code># Check storage quota and usage
+pyana storage status
+# Output: used 45 KiB / 10 MiB quota, rent: 45 computrons/epoch
+
+# Check space bank allocation
+pyana storage bank
+# Output: bank_id, total allocation, used, available
+
+# Enable erasure coding for a cell
+pyana storage erasure enable --cell $CELL_ID --shards 7 --threshold 4
+
+# Check erasure shard health
+pyana storage erasure status --cell $CELL_ID
+
+# Inspect inbox (MerkleQueue)
+pyana storage inbox
+# Output: 3 pending messages, total deposit held: 1500 computrons</code></pre>
+
+    <h2 id="proof">Proof Operations</h2>
+
+    <pre><code># Generate a proof using a specific backend
+pyana proof generate --backend plonky3 --turn $TURN_HASH
+pyana proof generate --backend kimchi --turn $TURN_HASH
+
+# Compose multiple proofs
+pyana proof compose --mode chain --inputs proof1.bin,proof2.bin,proof3.bin
+
+# Wrap for Mina (STARK-in-Pickles)
+pyana proof wrap-pickles --input $STARK_PROOF --output mina-proof.bin
+
+# Wrap for EVM (SP1 Groth16)
+pyana proof wrap-sp1 --input $STARK_PROOF --output evm-proof.bin
+
+# Benchmark a proof backend
+pyana proof bench --backend plonky3 --circuit effect-vm --turns 100</code></pre>
+
+    <h2 id="route">Route Classification</h2>
+
+    <pre><code># Test a path against the DFA classifier
+pyana route classify /services/inference/gpt4
+# Output: ACCEPT (policy: compute-tier-1, ACL: [cell_id_1, cell_id_2])
+
+# Inspect the DFA state machine
+pyana route inspect --states
+# Output: 47 states, 312 transitions, 23 accept states
+
+# Propose a constitutional amendment (new route)
+pyana route propose --add /services/new-category --acl open
+# Output: proposal_id (requires h-rule acceptance)</code></pre>
+
+    <h2 id="doctor">Diagnostics</h2>
+
+    <pre><code># Full health check
+pyana doctor --full
+# Checks: node connectivity, chain integrity, peer count,
+#          disk usage, proof generation, key accessibility
+
+# Quick connectivity test
+pyana doctor --connectivity
+
+# Verify your receipt chain from genesis
+pyana doctor --verify-chain</code></pre>
+
+    <h2 id="config">Configuration</h2>
+
+    <p>
+      The CLI reads configuration from <code>~/.pyana/config.toml</code>:
+    </p>
+
+    <pre><code>[federation]
+default = "devnet.pyana.io:8420"
+
+[wallet]
+keyfile = "~/.pyana/keys/default.key"
+
+[proof]
+default_backend = "plonky3"
+
+[storage]
+data_dir = "~/.pyana/data"</code></pre>
+
+    <p>
+      All settings can be overridden with environment variables
+      (<code>PYANA_FEDERATION_DEFAULT</code>, etc.) or command-line flags.
+    </p>
+
+    <h2 id="next">Next Steps</h2>
+    <ul>
+      <li><a href="quickstart.html">Quickstart</a> -- Set up your first identity</li>
+      <li><a href="/learn/operators/setup.html">Node Setup</a> -- Run your own federation node</li>
+      <li><a href="/learn/developers/sdk.html">SDK Quickstart</a> -- Integrate programmatically</li>
+    </ul>
+
+  </div>
+  </main>
+</div>
+
+</layout>

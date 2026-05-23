@@ -20,6 +20,8 @@ serde_json = { workspace = true }
 blake3 = "1"
 tokio = { version = "1", features = ["full"] }
 axum = "0.8"
+tower = "0.5"
+pyana-storage = { path = "../../storage" }
 
 [[bin]]
 name = "pyana-identity"

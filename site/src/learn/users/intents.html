@@ -1,0 +1,73 @@
+<layout src="_layouts/default.html">
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <include src="_includes/sidebar-learn.html"></include>
+  </aside>
+  <main class="docs-content">
+    <nav class="docs-breadcrumb">
+      <a href="/learn.html">Learn</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <a href="/learn/users/">Users</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <span>Intents</span>
+    </nav>
+<h1>Intent Marketplace</h1>
+
+    <p>
+      The intent marketplace is pyana's privacy-preserving capability exchange.
+      Agents broadcast what they need ("intents") without revealing their identity.
+      Other agents discover matching intents privately and fulfill them with STARK proofs.
+    </p>
+
+    <div class="stub-notice">
+      <p>This page covers the intent marketplace from a user perspective. Full content is being written.</p>
+    </div>
+
+    <h2 id="posting">Posting an Intent</h2>
+
+    <p>
+      An intent describes a capability need: "I need read access to service X" or
+      "I want to delegate compute tokens to an agent that can prove reputation >= 50."
+      Intents are broadcast via gossip to federation nodes.
+    </p>
+
+    <h2 id="discovery">Discovering Offers</h2>
+
+    <p>
+      Discovery uses 2-server information-theoretic PIR (Private Information Retrieval).
+      You query the intent index by capability tag without revealing which tag you searched
+      for. Neither PIR server learns your query (assuming non-collusion).
+    </p>
+
+    <h2 id="fulfillment">Fulfilling Intents</h2>
+
+    <p>
+      When you can satisfy an intent, fulfillment is a STARK proof that you hold the
+      required capability. The intent poster receives proof of fulfillment without
+      learning your identity or other capabilities.
+    </p>
+
+    <h2 id="predicate-requirements">Predicate Requirements</h2>
+
+    <p>
+      Intents can specify predicate requirements: "prove balance >= 1000" or
+      "prove reputation >= 50". Fulfillment generates unlinkable predicate proofs
+      (fresh blinding each time) so the same agent can fulfill multiple intents
+      without being correlated.
+    </p>
+
+    <div class="callout callout--note">
+      <p>
+        For the developer API behind intents, see
+        <a href="/learn/developers/sdk.html">SDK Quickstart</a>. For the
+        privacy architecture of PIR-based discovery, see
+        <a href="/learn/architecture/privacy.html">Privacy Architecture</a>.
+      </p>
+    </div>
+
+  </div>
+  </main>
+</div>
+
+</layout>

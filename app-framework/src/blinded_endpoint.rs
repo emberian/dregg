@@ -137,6 +137,11 @@ impl FairDistributionEndpoint {
         self
     }
 
+    /// Get a clone of the inner `Arc<Mutex<BlindedQueue>>` for sharing with handlers.
+    pub fn queue_arc(&self) -> Arc<Mutex<BlindedQueue>> {
+        Arc::clone(&self.queue)
+    }
+
     /// Build the axum router.
     pub fn router(self) -> Router {
         let state = EndpointState {

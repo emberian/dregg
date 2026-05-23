@@ -1,0 +1,96 @@
+<layout src="_layouts/default.html">
+
+<main class="wrap main--compact">
+  <div class="page-header">
+    <h1>Demonstrations</h1>
+    <p>
+      Interactive ways to explore Pyana. Generate real STARK proofs in your browser,
+      try the wallet extension, run examples locally, or write code against the WASM API.
+    </p>
+  </div>
+
+  <div class="demo-card" style="border-color: var(--accent); border-width: 2px; margin-bottom: var(--s6); padding: var(--s6);">
+    <h2 class="demo-card__title" style="font-size: 1.5rem;">Interactive Playground</h2>
+    <p class="demo-card__desc" style="font-size: 1rem;">
+      The unified playground is the best way to see everything Pyana can do in one place.
+      Mint tokens, generate STARK proofs, build Merkle trees, evaluate Datalog policies,
+      transfer private notes, delegate capabilities, and bridge across federations —
+      all running client-side in WebAssembly. No server required.
+    </p>
+    <a class="btn btn--primary" href="/playground/" style="display:inline-flex;align-items:center;gap:8px;font-size:0.95rem;padding:14px 28px;margin-top:var(--s4);">
+      Launch Playground &rarr;
+    </a>
+  </div>
+
+  <div class="demo-cards">
+    <div class="demo-card">
+      <h2 class="demo-card__title">WASM Explorer</h2>
+      <p class="demo-card__desc">
+        The classic explorer with state tree, action builder, and proof viewer.
+        A compact view of core token and proof operations.
+      </p>
+      <ul class="demo-card__features">
+        <li>Mint a root macaroon and attenuate it with caveats</li>
+        <li>Generate real STARK proofs (BabyBear field, FRI commitment)</li>
+        <li>Verify proofs, tamper with them to see verification fail</li>
+        <li>Build 4-ary BLAKE3 Merkle trees with membership proofs</li>
+        <li>Run the Datalog evaluator with standard policy rules</li>
+      </ul>
+      <a class="demo-card__link" href="/demo/">Launch Explorer &rarr;</a>
+    </div>
+
+    <div class="demo-card">
+      <h2 class="demo-card__title">Browser Extension Wallet</h2>
+      <p class="demo-card__desc">
+        With the Pyana wallet extension installed, web pages request capability-based
+        authorization via <code>window.pyana</code>. The wallet evaluates Datalog policies
+        and generates STARK proofs locally.
+      </p>
+      <ul class="demo-card__features">
+        <li>Provision a demo token into the wallet</li>
+        <li>Request authorization at each privacy level</li>
+        <li>See exactly what the verifier learns</li>
+        <li>All crypto runs locally in WASM</li>
+      </ul>
+      <a class="demo-card__link" href="/extension/">Install Extension &rarr;</a>
+      <a class="demo-card__link" href="/examples/auth-demo.html" style="margin-left: var(--s4);">Auth Demo &rarr;</a>
+    </div>
+
+    <div class="demo-card">
+      <h2 class="demo-card__title">Code Sandbox</h2>
+      <p class="demo-card__desc">
+        Write and execute JavaScript that calls the Pyana WASM API directly.
+        Pre-built scenarios, live console output, and federation status.
+      </p>
+      <ul class="demo-card__features">
+        <li>Full pyana API available as <code>pyana.*</code></li>
+        <li>Pre-built scenarios: mint, attenuate, proofs, Merkle trees</li>
+        <li>Live federation status panel</li>
+        <li>Real-time output console with timing</li>
+      </ul>
+      <a class="demo-card__link" href="/playground/#sandbox">Sandbox in Playground &rarr;</a>
+      <a class="demo-card__link" href="/sandbox/" style="margin-left: var(--s4);">Standalone &rarr;</a>
+    </div>
+
+    <div class="demo-card">
+      <h2 class="demo-card__title">CLI Quickstart</h2>
+      <p class="demo-card__desc">
+        Run the full authorization pipeline locally. The <code>demo</code> and
+        <code>demo-agent</code> crates demonstrate minting, attenuation, proving,
+        and multi-agent cross-silo authorization.
+      </p>
+      <pre><code class="language-bash">git clone https://github.com/emberian/pyana
+cd pyana
+cargo build --release -p demo -p demo-agent
+
+# Single-agent flow
+cargo run --release -p demo
+
+# Multi-agent cross-silo
+cargo run --release -p demo-agent</code></pre>
+      <a class="demo-card__link" href="https://github.com/emberian/pyana" style="margin-top: var(--s4);">View Source &rarr;</a>
+    </div>
+  </div>
+</main>
+
+</layout>

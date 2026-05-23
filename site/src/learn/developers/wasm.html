@@ -1,0 +1,58 @@
+<layout src="_layouts/default.html">
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <include src="_includes/sidebar-learn.html"></include>
+  </aside>
+  <main class="docs-content">
+    <nav class="docs-breadcrumb">
+      <a href="/learn.html">Learn</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <a href="/learn/developers/">Developers</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <span>Wasm</span>
+    </nav>
+<h1>WASM Playground</h1>
+
+    <p>
+      The pyana playground lets you experiment with tokens, proofs, and authorization
+      directly in your browser using the WebAssembly build of the core crates.
+    </p>
+
+    <p>
+      <a class="btn btn--primary" href="/learn/../playground/">Open the Playground</a>
+    </p>
+
+    <h2 id="capabilities">What You Can Do</h2>
+
+    <ul>
+      <li>Create wallets and generate identities</li>
+      <li>Mint and attenuate tokens interactively</li>
+      <li>Generate STARK proofs and inspect their structure</li>
+      <li>Verify proofs against different federation roots</li>
+      <li>Experiment with privacy modes and see what the verifier learns</li>
+    </ul>
+
+    <h2 id="building">Building the WASM Package</h2>
+
+    <pre><code class="language-rust"># Build the WASM package from the workspace root
+cargo build -p pyana-wasm --target wasm32-unknown-unknown --release
+wasm-bindgen target/wasm32-unknown-unknown/release/pyana_wasm.wasm \
+  --out-dir site/pkg --target web</code></pre>
+
+    <h2 id="extension">Extension Development</h2>
+
+    <p>
+      The browser extension uses the same WASM package for client-side cryptography.
+      See <code>site/extension/</code> for the extension source.
+    </p>
+
+    <div class="stub-notice">
+      <p>Detailed WASM API documentation and extension development guide are being written.</p>
+    </div>
+
+  </div>
+  </main>
+</div>
+
+</layout>

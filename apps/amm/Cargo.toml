@@ -10,6 +10,8 @@ pyana-dsl-runtime = { path = "../../pyana-dsl-runtime" }
 pyana-turn = { path = "../../turn" }
 pyana-cell = { path = "../../cell" }
 pyana-types = { path = "../../types" }
+pyana-intent = { path = "../../intent" }
+pyana-storage = { path = "../../storage" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }

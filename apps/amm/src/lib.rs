@@ -30,8 +30,10 @@
 pub mod circuit;
 pub mod lp_token;
 pub mod pool;
+pub mod ring;
 pub mod router;
 pub mod server;
+pub mod twap_queue;
 
 #[cfg(test)]
 mod tests;

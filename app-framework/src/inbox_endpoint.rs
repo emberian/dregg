@@ -131,6 +131,22 @@ impl InboxEndpoint {
         }
     }
 
+    /// Create an endpoint from an existing `Arc<Mutex<CapInbox>>`.
+    ///
+    /// Use this when the app needs to share the inbox with other handlers
+    /// (e.g., to push notifications from a submission handler).
+    pub fn from_inbox(inbox: Arc<Mutex<CapInbox>>) -> Self {
+        Self {
+            inbox,
+            ttl_blocks: None,
+        }
+    }
+
+    /// Get a clone of the inner `Arc<Mutex<CapInbox>>` for sharing with handlers.
+    pub fn inbox_arc(&self) -> Arc<Mutex<CapInbox>> {
+        Arc::clone(&self.inbox)
+    }
+
     /// Set a time-to-live (in blocks). Expired messages are evicted on GC.
     ///
     /// NOTE: Automatic GC is NOT called by the HTTP handlers — apps must call

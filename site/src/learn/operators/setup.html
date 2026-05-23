@@ -1,0 +1,145 @@
+<layout src="_layouts/default.html">
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <include src="_includes/sidebar-learn.html"></include>
+  </aside>
+  <main class="docs-content">
+    <nav class="docs-breadcrumb">
+      <a href="/learn.html">Learn</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <a href="/learn/operators/">Operators</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <span>Setup</span>
+    </nav>
+<h1>Node Setup</h1>
+
+    <p>
+      This guide covers building, initializing, and running a pyana-node from
+      source. A pyana-node is the backend daemon that hosts an AgentWallet,
+      participates in federation consensus, and serves the HTTP API.
+    </p>
+
+    <h2 id="build">Building from Source</h2>
+
+    <p>Requirements:</p>
+    <ul>
+      <li>Rust 1.94+ (edition 2024)</li>
+      <li>A C compiler (for ed25519-dalek, blake3)</li>
+    </ul>
+
+    <pre><code class="language-rust">git clone https://github.com/emberian/pyana
+cd pyana
+cargo build -p pyana-node --release</code></pre>
+
+    <p>
+      The binary is at <code>target/release/pyana-node</code>.
+    </p>
+
+    <h2 id="init">Initializing the Data Directory</h2>
+
+    <pre><code>pyana-node init --data-dir ~/.pyana</code></pre>
+
+    <p>This creates the data directory and generates an Ed25519 node keypair:</p>
+    <ul>
+      <li><code>~/.pyana/node.key</code> -- 32-byte secret key (protect this file)</li>
+    </ul>
+
+    <p>
+      The command prints your node's public key. Share this with federation
+      operators who need to add you as a peer.
+    </p>
+
+    <div class="callout callout--warning">
+      <p>
+        The <code>node.key</code> file is your node's identity. In production,
+        use an OS keychain or HSM rather than a plaintext file. Set restrictive
+        permissions: <code>chmod 600 ~/.pyana/node.key</code>.
+      </p>
+    </div>
+
+    <h2 id="run">Running the Node</h2>
+
+    <pre><code>pyana-node run \
+  --port 8420 \
+  --data-dir ~/.pyana \
+  --federation-peers "peer1.example.com:8420,peer2.example.com:8420"</code></pre>
+
+    <h3>CLI Reference</h3>
+
+    <table class="comparison">
+      <thead>
+        <tr><th>Flag</th><th>Default</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>--port</code></td><td>8420</td><td>HTTP API listen port</td></tr>
+        <tr><td><code>--data-dir</code></td><td>~/.pyana</td><td>Persistent state directory</td></tr>
+        <tr><td><code>--federation-peers</code></td><td>(none)</td><td>Comma-separated peer addresses (host:port)</td></tr>
+        <tr><td><code>--node-index</code></td><td>0</td><td>This node's index in federation (0-based)</td></tr>
+        <tr><td><code>--enable-pruning</code></td><td>false</td><td>Prune old Blocklace blocks below latest checkpoint</td></tr>
+        <tr><td><code>--checkpoint-interval</code></td><td>100</td><td>Committed blocks between ledger checkpoints</td></tr>
+        <tr><td><code>--enable-faucet</code></td><td>false</td><td>Enable POST /api/faucet (devnet only)</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="devnet">Devnet Deployment</h2>
+
+    <p>
+      For local testing, generate a complete devnet configuration (validator keys,
+      genesis state, environment files):
+    </p>
+
+    <pre><code># Generate 4-node devnet config
+pyana-node genesis \
+  --validators 4 \
+  --epoch-length 1000 \
+  --checkpoint-interval 100 \
+  --output ./devnet-config</code></pre>
+
+    <p>This produces:</p>
+    <ul>
+      <li><code>devnet-config/genesis.json</code> -- Genesis state with initial cells and faucet</li>
+      <li><code>devnet-config/node-0/</code> through <code>node-3/</code> -- Per-node key material</li>
+      <li><code>devnet-config/docker-compose.yml</code> -- Ready-to-run multi-node cluster</li>
+    </ul>
+
+    <pre><code># Launch the devnet cluster
+cd devnet-config
+docker-compose up</code></pre>
+
+    <h2 id="status">Checking Node Status</h2>
+
+    <pre><code># Check if the node is running
+pyana-node status --port 8420
+
+# Or hit the API directly
+curl http://127.0.0.1:8420/status</code></pre>
+
+    <h2 id="mcp">MCP Server Mode</h2>
+
+    <p>
+      The node can also run as an MCP (Model Context Protocol) server for AI agents.
+      This reads JSON-RPC from stdin and writes responses to stdout:
+    </p>
+
+    <pre><code>pyana-node mcp --data-dir ~/.pyana --federation-peers "peer1:8420"</code></pre>
+
+    <p>
+      AI assistants (Claude, GPT, etc.) can then use pyana tools: authorize, submit
+      turns, manage capabilities, and post intents.
+    </p>
+
+    <h2 id="next">Next Steps</h2>
+
+    <ul>
+      <li><a href="federation.html">Joining a Federation</a> -- Configure peer discovery and sync</li>
+      <li><a href="bridge.html">Bridge Nodes</a> -- Connect multiple federations</li>
+      <li><a href="monitoring.html">Monitoring</a> -- Tracing, logs, and observability</li>
+      <li><a href="security.html">Security Hardening</a> -- Production deployment best practices</li>
+    </ul>
+
+  </div>
+  </main>
+</div>
+
+</layout>

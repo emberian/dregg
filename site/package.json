@@ -1,14 +1,12 @@
 {
-  "name": "pyana-site-tests",
+  "name": "pyana-site",
   "private": true,
   "scripts": {
-    "test": "npx playwright test",
-    "test:headed": "npx playwright test --headed",
-    "test:explorer": "npx playwright test explorer/",
-    "test:playground": "npx playwright test playground/"
+    "build": "node build.js",
+    "serve": "npx serve dist"
   },
   "devDependencies": {
-    "@playwright/test": "^1.42.0",
-    "serve": "^14.2.0"
+    "shiki": "^4.0",
+    "lightningcss": "^1.27"
   }
 }

@@ -1,0 +1,226 @@
+<layout src="_layouts/default.html">
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <include src="_includes/sidebar-learn.html"></include>
+  </aside>
+  <main class="docs-content">
+    <nav class="docs-breadcrumb">
+      <a href="/learn.html">Learn</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <a href="/learn/developers/">Developers</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <span>Bridges</span>
+    </nav>
+<h1>Bridges: Mina, EVM, and Midnight</h1>
+
+    <p>
+      Pyana connects to external chains via proof translation -- not consensus
+      bridging. Each bridge converts a Pyana STARK proof into a format the target
+      chain can verify natively. No trusted relayers, no multisigs, no committee
+      attestations. The target chain verifies the math directly.
+    </p>
+
+    <h2 id="trust-levels">Trust Levels</h2>
+
+    <table class="comparison">
+      <thead>
+        <tr><th>Bridge</th><th>Level</th><th>Mechanism</th><th>Verification Cost</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>EVM (Base/Ethereum)</td><td>Level 2 (proof-verified)</td><td>SP1 Groth16 wrapping</td><td>~200K gas</td></tr>
+        <tr><td>Mina</td><td>Level 2 (proof-verified)</td><td>Native Pasta curves (STARK-in-Pickles)</td><td>Recursive (free in Pickles)</td></tr>
+        <tr><td>Midnight/Cardano</td><td>Level 1.5 (optimistic+dispute)</td><td>Attestation + fraud proofs</td><td>Bond + dispute window</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="evm">EVM Bridge (Ethereum, Base)</h2>
+
+    <h3>Architecture</h3>
+    <ol>
+      <li><strong>Generate STARK proof</strong> (off-chain): The Effect VM proves your state transition.</li>
+      <li><strong>SP1 wrapping</strong> (off-chain): Succinct's SP1 zkVM verifies the STARK inside a RISC-V guest program, producing a Groth16 proof.</li>
+      <li><strong>On-chain verification</strong> (EVM): The Groth16 proof is verified by the SP1 Verifier Gateway contract (~200K gas).</li>
+      <li><strong>State update</strong> (EVM): The Pyana bridge contract records the new state commitment on-chain.</li>
+    </ol>
+
+    <h3>Depositing (EVM to Pyana)</h3>
+    <pre><code class="language-rust"># Step 1: Deposit ETH/tokens to the Pyana bridge contract
+# (uses commit-reveal to prevent frontrunning)
+
+# Step 2: The deposit appears as a note commitment in Pyana's note tree
+# (federation includes it in the next epoch)
+
+# Step 3: Claim the deposit in Pyana
+pyana wallet claim-deposit --tx-hash 0xabc123...</code></pre>
+
+    <h3>Withdrawing (Pyana to EVM)</h3>
+    <pre><code># Step 1: Generate a STARK proof of your note ownership
+pyana proof generate --backend plonky3 --turn $SPEND_TURN
+
+# Step 2: Wrap in Groth16 via SP1
+pyana proof wrap-sp1 --input $STARK_PROOF --output evm-proof.bin
+
+# Step 3: Submit the Groth16 proof to the bridge contract
+# (calls verifyAndWithdraw on-chain)</code></pre>
+
+    <h3>Sovereign Cells On-Chain</h3>
+    <p>
+      A sovereign cell can exist as an on-chain entity with its 32-byte commitment
+      stored in the bridge contract. This enables:
+    </p>
+    <ul>
+      <li>Other smart contracts to verify Pyana state transitions on-chain.</li>
+      <li>EVM DeFi protocols to interact with Pyana cells (e.g., collateral proofs).</li>
+      <li>Cross-chain atomic swaps between EVM tokens and Pyana notes.</li>
+    </ul>
+
+    <h3>Contract Addresses (Base Sepolia)</h3>
+    <pre><code>PyanaBridge:       0x... (deployed via Foundry)
+SP1VerifierGateway: 0x... (Succinct's deployed verifier)
+VKRegistry:        0x... (governance-managed VK updates)</code></pre>
+
+    <div class="callout callout--note">
+      <p>
+        The SP1 guest program is being regenerated against the current Plonky3 backend.
+        Deposits work end-to-end on Base Sepolia; withdrawals with fresh proofs are
+        in progress.
+      </p>
+    </div>
+
+    <h2 id="mina">Mina Bridge</h2>
+
+    <h3>Architecture</h3>
+    <p>
+      Mina natively supports Pickles recursive proofs over the Pasta curve cycle
+      (Pallas/Vesta). Pyana's Kimchi backend produces proofs over these same curves,
+      enabling zero-cost verification on Mina.
+    </p>
+    <ol>
+      <li><strong>STARK generation</strong> (Pyana): BabyBear/FRI proof of the state transition (~24 KiB).</li>
+      <li><strong>Kimchi wrapping</strong> (Pyana): Verify the STARK inside a Kimchi circuit (~30K gates).</li>
+      <li><strong>Pickles recursion</strong> (Pyana): Accumulate into a constant-size Pickles proof (~10 KiB).</li>
+      <li><strong>Mina verification</strong> (Mina): Pickles proof is natively verifiable by Mina validators and zkApps.</li>
+    </ol>
+
+    <h3>Using the Mina Bridge</h3>
+    <pre><code># Generate a Kimchi proof of your state transition
+pyana proof generate --backend kimchi --turn $TURN_HASH
+
+# Wrap in Pickles for Mina
+pyana proof wrap-pickles --input $KIMCHI_PROOF --output mina-proof.bin
+
+# The mina-proof.bin can be submitted to any Mina zkApp that
+# includes a Pyana verifier contract
+
+# Verify a Mina proof locally (for testing)
+pyana proof verify --input mina-proof.bin --backend pickles</code></pre>
+
+    <h3>What You Can Do</h3>
+    <ul>
+      <li><strong>zkApp verification:</strong> Mina smart contracts can verify Pyana state transitions natively.</li>
+      <li><strong>Cross-chain credentials:</strong> Prove you hold a Pyana capability to a Mina zkApp (without revealing the capability).</li>
+      <li><strong>State anchoring:</strong> Anchor Pyana federation roots on Mina for trustless freshness verification.</li>
+      <li><strong>Recursive accumulation:</strong> Chain multiple Pyana proofs into a single Pickles proof for batch verification.</li>
+    </ul>
+
+    <h3>Timeline</h3>
+    <p>
+      Assisted recursion is operational (STARK-in-Pickles pipeline works). Full
+      production deployment requires approximately 8 weeks of Kimchi gate
+      optimization and Mina zkApp contract development.
+    </p>
+
+    <h2 id="midnight">Midnight/Cardano Bridge</h2>
+
+    <h3>Architecture (Level 1.5: Optimistic + Dispute)</h3>
+    <p>
+      The Midnight bridge operates optimistically: state transitions are accepted
+      with a bond and a dispute window. During the window, any party can challenge
+      by requesting a full STARK proof.
+    </p>
+
+    <h3>How It Works</h3>
+    <ol>
+      <li><strong>Submit transition</strong>: Post a Pyana state transition to Midnight with a bond.</li>
+      <li><strong>Dispute window</strong>: 24 hours (configurable). Anyone can challenge.</li>
+      <li><strong>If challenged</strong>: Submitter must produce a full STARK proof within the response window.</li>
+      <li><strong>If unchallenged</strong>: Transition is accepted; bond is returned.</li>
+    </ol>
+
+    <h3>Level 1 (Attestation -- Operational Now)</h3>
+    <p>
+      Pyana state roots are attested on Midnight as observation-based data, following
+      the same pattern as Midnight's Cardano bridge. This provides:
+    </p>
+    <ul>
+      <li>Proof that a Pyana state existed at a given height.</li>
+      <li>Freshness anchoring for offline verification.</li>
+      <li>No proof verification required (observation only).</li>
+    </ul>
+
+    <h3>Level 2 (Future: Native ZKIR Verification)</h3>
+    <p>
+      The DSL's ZKIR v3 backend compiles Pyana constraint programs directly into
+      Midnight-compatible contracts. This will enable Midnight validators to verify
+      Pyana proofs natively -- eliminating the dispute window entirely. Awaiting
+      ZKIR v3 stabilization.
+    </p>
+
+    <h3>Using the Midnight Bridge</h3>
+    <pre><code># Attest a state root on Midnight (Level 1)
+pyana bridge midnight attest --root $FEDERATION_ROOT
+
+# Submit with optimistic acceptance (Level 1.5)
+pyana bridge midnight submit --turn $TURN_HASH --bond 50000
+
+# Check dispute status
+pyana bridge midnight status --submission $SUBMISSION_ID
+
+# Respond to a challenge (produces full STARK proof)
+pyana bridge midnight respond --challenge $CHALLENGE_ID</code></pre>
+
+    <h2 id="choosing">Choosing a Bridge</h2>
+
+    <table class="comparison">
+      <thead>
+        <tr><th>Use Case</th><th>Recommended Bridge</th><th>Why</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>DeFi integration (ERC-20 collateral)</td><td>EVM</td><td>Direct on-chain verification; composable with existing DeFi</td></tr>
+        <tr><td>Privacy-preserving credentials</td><td>Mina</td><td>Native curve compatibility; recursive proof accumulation</td></tr>
+        <tr><td>Cardano ecosystem interop</td><td>Midnight</td><td>Observation bridge to Cardano via Midnight relay</td></tr>
+        <tr><td>Lowest latency (no dispute window)</td><td>EVM or Mina</td><td>Level 2 verification is immediate (no waiting period)</td></tr>
+        <tr><td>Lowest cost</td><td>Mina</td><td>Pickles verification is "free" (part of normal Mina consensus)</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="sdk">SDK Bridge Operations</h2>
+
+    <pre><code class="language-rust">use pyana_sdk::AgentWallet;
+use pyana_chain::{EvmBridge, MinaBridge};
+
+let wallet = AgentWallet::new();
+
+// EVM: wrap and submit
+let stark_proof = wallet.generate_proof(turn, Backend::Plonky3)?;
+let groth16 = EvmBridge::wrap_sp1(&stark_proof)?;
+let tx_hash = EvmBridge::submit_to_base_sepolia(&groth16).await?;
+
+// Mina: wrap in Pickles
+let kimchi_proof = wallet.generate_proof(turn, Backend::Kimchi)?;
+let pickles_proof = MinaBridge::wrap_pickles(&kimchi_proof)?;
+// Submit to Mina zkApp...</code></pre>
+
+    <h2 id="next">Next Steps</h2>
+    <ul>
+      <li><a href="/learn/operators/bridge.html">Operating a Bridge Node</a> -- Cross-federation relay setup</li>
+      <li><a href="storage.html">Storage</a> -- State availability for bridge operations</li>
+      <li><a href="/learn/architecture/cryptography.html">Cryptography</a> -- Proof system details</li>
+    </ul>
+
+  </div>
+  </main>
+</div>
+
+</layout>

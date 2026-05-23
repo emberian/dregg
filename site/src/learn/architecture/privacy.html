@@ -1,0 +1,202 @@
+<layout src="_layouts/default.html">
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <include src="_includes/sidebar-learn.html"></include>
+  </aside>
+  <main class="docs-content">
+    <nav class="docs-breadcrumb">
+      <a href="/learn.html">Learn</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <a href="/learn/architecture/">Architecture</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <span>Privacy</span>
+    </nav>
+<h1>Privacy Architecture</h1>
+
+    <p>
+      Pyana provides privacy at multiple levels. In sovereign mode, the federation
+      never sees cell contents -- only 32-byte commitments and proofs. The privacy
+      stack covers credentials, amounts, recipients, intents, and network metadata.
+    </p>
+
+    <h2 id="privacy-stack">What Is Private (Implemented)</h2>
+
+    <table class="comparison">
+      <thead><tr><th>Layer</th><th>Mechanism</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>Credential privacy (ZK auth)</td><td>BlindedMerklePoseidon2StarkAir -- unlinkable per-presentation blinding</td><td>Working</td></tr>
+        <tr><td>Amount privacy</td><td>Pedersen commitments + Bulletproof range proofs</td><td>Working</td></tr>
+        <tr><td>Recipient privacy</td><td>Stealth addresses -- derived per-transaction receive keys</td><td>Working</td></tr>
+        <tr><td>Intent privacy</td><td>SSE encrypted headers + delay pool for timing decorrelation</td><td>Working</td></tr>
+        <tr><td>Network privacy</td><td>Dandelion++ origin hiding + fixed-size message padding</td><td>Working</td></tr>
+        <tr><td>Transaction privacy</td><td>Committed conservation in executor -- values are Pedersen commitments</td><td>Working</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="privacy-limits">What Is NOT Fully Private (Honest Limitations)</h2>
+
+    <ul>
+      <li><strong>Intent content:</strong> SSE keyword tokens are enumerable by knowledgeable observers.
+          An adversary who knows the keyword space can test encrypted headers against known tags.</li>
+      <li><strong>Mediated interactions:</strong> The executor sees sovereign state during federation-mediated
+          multi-party interactions. Peer-to-peer mode avoids this entirely.</li>
+      <li><strong>Hosted cells:</strong> If you use hosted mode, the federation sees full cell state (by definition).</li>
+    </ul>
+
+    <h2 id="anonymous-creds">Anonymous Credentials</h2>
+    <p>
+      The BlindedMerklePoseidon2StarkAir generates fresh blinding per presentation.
+      The public input is <code>hash_2_to_1(leaf_hash, blinding)</code> instead of
+      the raw leaf hash. The verifier cannot determine which Merkle leaf corresponds
+      to this proof. Multiple proofs from the same holder are unlinkable.
+    </p>
+
+    <h2 id="predicates">Predicate Proofs</h2>
+    <p>
+      Prove properties about private values without revealing them:
+    </p>
+    <ul>
+      <li><strong>Simple predicates:</strong> value >= threshold, value <= threshold, value != x</li>
+      <li><strong>Committed thresholds:</strong> value >= T where T is hidden behind Poseidon2(T, blinding)</li>
+      <li><strong>Relational:</strong> my_value > their_value (two-party, sealed channel)</li>
+      <li><strong>Arithmetic:</strong> expressions over multiple values (balance_a + balance_b >= 2000)</li>
+      <li><strong>Programmable:</strong> arbitrary expression trees compiled to AIR</li>
+    </ul>
+
+    <h2 id="notes">Private Notes</h2>
+    <p>
+      Notes are commitments to (owner, value, asset_type, randomness). The commitment
+      is a Poseidon2 hash -- binding (cannot open to different value) but hiding
+      (reveals nothing about contents). Spending requires proving knowledge of the
+      spending key and Merkle membership, producing a nullifier for double-spend prevention.
+    </p>
+
+    <h2 id="pir">Private Discovery (PIR)</h2>
+    <p>
+      Intent discovery uses 2-server information-theoretic PIR. The client generates
+      a random vector and XORs a unit vector at the target position. Each server sees
+      a random-looking query. Responses are XORed client-side to recover the target row.
+      Security is information-theoretic (not computational) under non-collusion.
+    </p>
+
+    <h2 id="non-revocation">Non-Revocation</h2>
+    <p>
+      The NonRevocationAir proves sorted-Merkle non-membership: for each ancestor
+      in a token's derivation path, find two adjacent leaves in the sorted revocation
+      tree that bracket the ancestor's hash. Prove membership of both neighbors and
+      that the ancestor falls between them (absent). All ancestors are proven
+      simultaneously in a single STARK.
+    </p>
+
+    <h2 id="sovereign-privacy">Sovereign Mode Privacy</h2>
+
+    <p>
+      In sovereign mode, the federation stores only <code>HashMap&lt;CellId, [u8; 32]&gt;</code> --
+      one hash per cell. It never sees balances, capability sets, metadata fields, or
+      internal state. The privacy model becomes uniform: everything is private by default
+      because the federation literally cannot read your state.
+    </p>
+
+    <p>
+      Between two parties who know each other (peer-to-peer mode), there is no federation
+      contact at all. Privacy against network observers relies on Dandelion++ routing and
+      message padding. Privacy against the counterparty is bounded by what you choose to
+      reveal in your proof's public inputs.
+    </p>
+
+    <h2 id="sealers">Sealer/Unsealer Pairs</h2>
+    <p>
+      E-style rights amplification for partition-tolerant capability transfer.
+      Each pair is an X25519 keypair: sealing uses a fresh ephemeral key (forward secrecy),
+      DH-derived shared secret, and ChaCha20-Poly1305 AEAD. Only the unsealer holder
+      can decrypt. This enables encrypted capability exchange without online coordination.
+    </p>
+
+    <h2 id="facets">Faceted Capabilities</h2>
+    <p>
+      From the E programming language: a facet is a restricted view of an object.
+      In pyana, facets are bitmasks on capabilities that restrict which effect types
+      are permitted. Predefined facets include read-only (observation without mutation),
+      transfer-only, state-writer, and admin. Facets compose with attenuation -- a child's
+      mask must be a subset of the parent's mask. This is enforced in-circuit.
+    </p>
+
+    <h2 id="encrypted-turns">Encrypted Turns</h2>
+    <p>
+      Turn payloads can be encrypted to specific recipients. The federation orders
+      opaque blobs (it can verify the STARK proof of validity without seeing plaintext
+      content). Combined with Dandelion++ routing and stealth addresses, this provides
+      strong unlinkability for routine transactions.
+    </p>
+
+    <h2 id="vickrey">Private Vickrey Auction (4-Phase Protocol)</h2>
+
+    <p>
+      A fully private sealed-bid second-price auction where nobody learns any bid value,
+      the payment amount, or the winner's identity. Uses garbled circuits, oblivious transfer,
+      federation threshold cryptography, Pedersen commitments, ring proofs, and stealth addresses.
+    </p>
+
+    <h3>Phase 1: Bid Commitment</h3>
+    <p>
+      Each bidder commits their bid using a Pedersen commitment with a STARK range proof.
+      The commitment is binding (cannot change bid) and hiding (no one learns the value).
+    </p>
+
+    <h3>Phase 2: Threshold-Encrypted Revelation</h3>
+    <p>
+      After the deadline, bidders encrypt their bid openings under the federation's
+      threshold public key. No single federation member can decrypt -- t-of-n threshold
+      decryption is required.
+    </p>
+
+    <h3>Phase 3: Garbled Circuit Evaluation</h3>
+    <p>
+      The federation collectively evaluates a garbled circuit computing the Vickrey outcome
+      (winner index + second-highest price). Individual bid values are never output.
+      Oblivious transfer between federation members prevents any subset from learning
+      intermediate values. The garbled circuit uses Poseidon2-based garbling (STARK-friendly).
+    </p>
+
+    <h3>Phase 4: Anonymous Settlement</h3>
+    <p>
+      The winner proves membership in the bidder set via a ring proof without revealing
+      which bid is theirs. Payment goes to a stealth address. The winner receives the item
+      at a fresh stealth address. Even the auctioneer cannot link winner identity to payment.
+    </p>
+
+    <h3>Security Properties</h3>
+    <ul>
+      <li><strong>Bid privacy:</strong> No party learns any bid except the second-highest price.</li>
+      <li><strong>Winner privacy:</strong> Winner identity hidden behind ring proof.</li>
+      <li><strong>Payment privacy:</strong> Amount and flow hidden by Pedersen + stealth.</li>
+      <li><strong>Fairness:</strong> Threshold prevents early bid revelation by coalition &lt; t.</li>
+      <li><strong>Correctness:</strong> STARK proof attests garbled circuit was evaluated correctly.</li>
+    </ul>
+
+    <p>
+      <strong>Status:</strong> Implemented and tested with up to 64 bidders. Uses Simplest OT
+      over Ristretto. Ring proof uses Schnorr-based linkable ring signature.
+    </p>
+
+    <h2 id="private-predicates">Private Predicates (Three Tiers)</h2>
+
+    <table class="comparison">
+      <thead><tr><th>Tier</th><th>Visibility</th><th>Use Case</th></tr></thead>
+      <tbody>
+        <tr><td>Public</td><td>Predicate and value visible to all</td><td>Public orderbook prices, registry entries</td></tr>
+        <tr><td>Semi-private</td><td>Predicate visible, value hidden (ZK range proof)</td><td>"Age >= 18" without revealing exact age</td></tr>
+        <tr><td>Fully private</td><td>Neither predicate nor value revealed</td><td>Private auctions, sealed computations</td></tr>
+      </tbody>
+    </table>
+
+    <div class="stub-notice">
+      <p>Formal privacy model, composability analysis, and comparison with Zcash/Aleo privacy are being written.</p>
+    </div>
+
+  </div>
+  </main>
+</div>
+
+</layout>

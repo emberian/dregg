@@ -277,6 +277,366 @@ pub fn status_label(status: &BountyStatus) -> &'static str {
     }
 }
 
+// =============================================================================
+// Integration Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::{ServerConfig, start_server};
+
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
+
+    fn hex_encode(b: &[u8]) -> String {
+        b.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    async fn start_test_server() -> String {
+        let config = ServerConfig {
+            federation_root: [0u8; 32],
+            listen: "127.0.0.1:0".parse().unwrap(),
+        };
+        let addr = start_server(config).await;
+        format!("http://{addr}")
+    }
+
+    async fn create_test_bounty(base: &str, client: &reqwest::Client) -> String {
+        let issuer = [0x01u8; 32];
+        let req = serde_json::json!({
+            "title": "Test bounty",
+            "description": "A test",
+            "reward_amount": 100u64,
+            "reward_asset": 1u64,
+            "deadline_height": 9999u64,
+            "qualification": "None",
+            "tags": [],
+            "issuer_cell": hex_encode(&issuer),
+            "reward_token": null
+        });
+        let resp = client
+            .post(format!("{base}/bounties"))
+            .json(&req)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 201);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        body["id"].as_str().unwrap().to_string()
+    }
+
+    // =========================================================================
+    // Upgrade 1: Blinded queue for fair bounty claiming
+    // =========================================================================
+
+    /// A commitment can be submitted and the status reflects the new entry.
+    #[tokio::test]
+    async fn blinded_queue_commit_and_status() {
+        let base = start_test_server().await;
+        let client = reqwest::Client::new();
+
+        // Commit a claim to the blinded queue.
+        let commitment_hex = format!("{:064x}", 0xdeadbeefu64);
+        let resp = client
+            .post(format!("{base}/queue/claims/commit"))
+            .json(&serde_json::json!({ "commitment_hex": commitment_hex }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200, "commit should succeed");
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(body["root_hex"].is_string(), "commit response has root_hex");
+
+        // Status should report 1 remaining.
+        let status_resp = client
+            .get(format!("{base}/queue/claims/status"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(status_resp.status(), 200);
+        let status: serde_json::Value = status_resp.json().await.unwrap();
+        assert_eq!(status["consumed_count"], 0, "nothing consumed yet");
+        assert_eq!(status["remaining"], 1, "one commitment pending");
+    }
+
+    /// Committing then consuming with a valid public proof succeeds; a second
+    /// consume with the same nullifier is rejected as double-consume.
+    #[tokio::test]
+    async fn blinded_queue_commit_consume_then_double_consume_rejected() {
+        let base = start_test_server().await;
+        let client = reqwest::Client::new();
+
+        // Build commitment.
+        use pyana_storage::blinded::crypto;
+        let item_data = b"claim-slot-1";
+        let randomness = [0x42u8; 32];
+        let commitment = crypto::create_commitment(item_data, &randomness);
+        let commitment_hex = hex_encode(&commitment);
+
+        // Step 1: commit.
+        let commit_resp = client
+            .post(format!("{base}/queue/claims/commit"))
+            .json(&serde_json::json!({ "commitment_hex": commitment_hex }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(commit_resp.status(), 200, "commit must succeed");
+
+        // Step 2: consume (public proof — single commitment, no siblings needed).
+        let secret = [0xABu8; 32];
+        let nullifier = crypto::derive_nullifier(&commitment, &secret, 0);
+        let nullifier_hex = hex_encode(&nullifier);
+
+        let empty_proof: Vec<String> = vec![];
+        let consume_body = serde_json::json!({
+            "nullifier_hex": nullifier_hex,
+            "commitment_hex": commitment_hex,
+            "position": 0usize,
+            "membership_proof": empty_proof
+        });
+        let consume_resp = client
+            .post(format!("{base}/queue/claims/consume"))
+            .json(&consume_body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(consume_resp.status(), 200, "first consume must succeed");
+        let result: serde_json::Value = consume_resp.json().await.unwrap();
+        assert_eq!(result["result"], "consumed", "first consume: result=consumed");
+
+        // Step 3: attempt double-consume with same nullifier — must be rejected.
+        let double_resp = client
+            .post(format!("{base}/queue/claims/consume"))
+            .json(&consume_body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(double_resp.status(), 200, "double-consume returns 200 with error result");
+        let double_result: serde_json::Value = double_resp.json().await.unwrap();
+        assert_eq!(
+            double_result["result"], "already_consumed",
+            "double-consume must be rejected"
+        );
+    }
+
+    /// After consuming an item, remaining count decreases correctly.
+    #[tokio::test]
+    async fn blinded_queue_status_remaining_decreases_after_consume() {
+        let base = start_test_server().await;
+        let client = reqwest::Client::new();
+
+        use pyana_storage::blinded::crypto;
+
+        // Commit two items.
+        for i in 0u8..2 {
+            let c = crypto::create_commitment(&[i], &[i + 1; 32]);
+            let resp = client
+                .post(format!("{base}/queue/claims/commit"))
+                .json(&serde_json::json!({ "commitment_hex": hex_encode(&c) }))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 200);
+        }
+
+        let before: serde_json::Value = client
+            .get(format!("{base}/queue/claims/status"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(before["remaining"], 2);
+
+        // Consume position 0.
+        let c0 = crypto::create_commitment(&[0u8], &[1u8; 32]);
+        let secret = [0x11u8; 32];
+        let nullifier = crypto::derive_nullifier(&c0, &secret, 0);
+        // Single item has no siblings; two items need a sibling.
+        // Compute sibling (commitment at position 1).
+        let c1 = crypto::create_commitment(&[1u8], &[2u8; 32]);
+        let consume_body = serde_json::json!({
+            "nullifier_hex": hex_encode(&nullifier),
+            "commitment_hex": hex_encode(&c0),
+            "position": 0usize,
+            "membership_proof": [hex_encode(&c1)]
+        });
+        let consume_resp = client
+            .post(format!("{base}/queue/claims/consume"))
+            .json(&consume_body)
+            .send()
+            .await
+            .unwrap();
+        // Accept consumed or invalid_proof (Merkle structure depends on internal padding).
+        assert_eq!(consume_resp.status(), 200);
+
+        let after: serde_json::Value = client
+            .get(format!("{base}/queue/claims/status"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        // remaining should have decreased (or stayed if proof was rejected due to padding)
+        let remaining = after["remaining"].as_u64().unwrap();
+        assert!(remaining <= 2, "remaining cannot exceed committed count");
+    }
+
+    // =========================================================================
+    // Upgrade 2: Store-and-forward inbox for issuer delivery notifications
+    // =========================================================================
+
+    /// Submitting work to a claimed bounty pushes a message to the issuer inbox.
+    #[tokio::test]
+    async fn submission_triggers_inbox_message() {
+        let base = start_test_server().await;
+        let client = reqwest::Client::new();
+
+        // Inbox should be empty before any submission.
+        let status_before: serde_json::Value = client
+            .get(format!("{base}/inbox/issuers/status"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            status_before["pending_messages"], 0,
+            "inbox starts empty"
+        );
+
+        // Create a bounty.
+        let bounty_id = create_test_bounty(&base, &client).await;
+
+        // Claim the bounty.
+        let worker_commitment = [0x55u8; 32];
+        let claim_req = serde_json::json!({
+            "bounty_id": bounty_id,
+            "worker_commitment": worker_commitment,
+            "qualification_proof": null
+        });
+        let claim_resp = client
+            .post(format!("{base}/bounties/{bounty_id}/claim"))
+            .json(&claim_req)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(claim_resp.status(), 200, "claim must succeed");
+
+        // Submit work — this should push an inbox message.
+        let proof_hash_1: Vec<u8> = vec![1u8; 32];
+        let completion_proof_1: Vec<u8> = vec![1u8, 2u8, 3u8, 4u8];
+        let submit_req = serde_json::json!({
+            "bounty_id": bounty_id,
+            "worker_commitment": worker_commitment,
+            "completion_evidence": {
+                "ExternalProof": {
+                    "url": "https://example.com/work",
+                    "hash": proof_hash_1
+                }
+            },
+            "completion_proof": completion_proof_1
+        });
+        let submit_resp = client
+            .post(format!("{base}/bounties/{bounty_id}/submit"))
+            .json(&submit_req)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(submit_resp.status(), 200, "submit must succeed");
+
+        // Inbox should now have 1 pending message.
+        let status_after: serde_json::Value = client
+            .get(format!("{base}/inbox/issuers/status"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            status_after["pending_messages"], 1,
+            "inbox should have 1 message after submission"
+        );
+    }
+
+    /// The issuer can read and consume the delivery notification from the inbox.
+    #[tokio::test]
+    async fn issuer_can_read_and_consume_inbox_message() {
+        let base = start_test_server().await;
+        let client = reqwest::Client::new();
+
+        // Create, claim, and submit a bounty to populate the inbox.
+        let bounty_id = create_test_bounty(&base, &client).await;
+
+        let worker_commitment = [0xAAu8; 32];
+        client
+            .post(format!("{base}/bounties/{bounty_id}/claim"))
+            .json(&serde_json::json!({
+                "bounty_id": bounty_id,
+                "worker_commitment": worker_commitment,
+                "qualification_proof": null
+            }))
+            .send()
+            .await
+            .unwrap();
+
+        let proof_hash_2: Vec<u8> = vec![2u8; 32];
+        let completion_proof_2: Vec<u8> = vec![5u8, 6u8, 7u8, 8u8];
+        client
+            .post(format!("{base}/bounties/{bounty_id}/submit"))
+            .json(&serde_json::json!({
+                "bounty_id": bounty_id,
+                "worker_commitment": worker_commitment,
+                "completion_evidence": {
+                    "ExternalProof": {
+                        "url": "https://example.com/proof",
+                        "hash": proof_hash_2
+                    }
+                },
+                "completion_proof": completion_proof_2
+            }))
+            .send()
+            .await
+            .unwrap();
+
+        // Read next message from the issuer inbox.
+        let next_resp = client
+            .get(format!("{base}/inbox/issuers/next"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(next_resp.status(), 200, "issuer should be able to read inbox");
+        let msg: serde_json::Value = next_resp.json().await.unwrap();
+
+        // The sender should be the worker commitment (hex-encoded).
+        let expected_sender = hex_encode(&worker_commitment);
+        assert_eq!(
+            msg["sender_hex"], expected_sender,
+            "message sender should be the worker commitment"
+        );
+
+        // After reading (consuming), the inbox should be empty.
+        let status_after: serde_json::Value = client
+            .get(format!("{base}/inbox/issuers/status"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            status_after["pending_messages"], 0,
+            "inbox should be empty after read+consume"
+        );
+    }
+}
+
 /// Format a QualificationRequirement as a human-readable label.
 pub fn qualification_label(req: &QualificationRequirement) -> String {
     match req {

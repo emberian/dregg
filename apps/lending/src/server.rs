@@ -12,15 +12,18 @@ use axum::{
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use pyana_app_framework::auth::{AdminAuth, AdminToken, HasAdminToken};
 use pyana_app_framework::server::ErrorResponse;
+use pyana_storage::inbox::CapInbox;
 
 use crate::borrow::{BorrowPosition, CollateralEntry};
 use crate::circuit::{HealthFactorWitness, prove_health_factor, verify_health_factor_proof};
+use crate::executor::{BorrowerDelegation, LendingBatchExecutor};
 use crate::interest::BPS_SCALE;
 use crate::liquidation::LiquidationResult;
+use crate::warnings::{HealthWarning, new_warnings_cap_inbox, push_health_warning};
 use crate::{LendingPool, Market};
 
 // =============================================================================
@@ -31,6 +34,10 @@ use crate::{LendingPool, Market};
 pub struct AppState {
     pub pool: Arc<RwLock<LendingPool>>,
     pub admin_token: AdminToken,
+    /// Batch executor for delegated health monitoring + emergency repayment.
+    pub executor: Arc<Mutex<LendingBatchExecutor>>,
+    /// Shared warnings inbox — borrowers poll this when they reconnect.
+    pub warnings_inbox: Arc<Mutex<CapInbox>>,
 }
 
 impl HasAdminToken for AppState {
@@ -47,6 +54,8 @@ impl AppState {
         Self {
             pool: Arc::new(RwLock::new(pool)),
             admin_token: AdminToken::from_env(),
+            executor: Arc::new(Mutex::new(LendingBatchExecutor::new())),
+            warnings_inbox: Arc::new(Mutex::new(new_warnings_cap_inbox())),
         }
     }
 }
@@ -138,6 +147,46 @@ pub struct ProofResponse {
 }
 
 // =============================================================================
+// Executor request / response types
+// =============================================================================
+
+#[derive(Deserialize)]
+pub struct DelegateRequest {
+    /// Hex-encoded borrower cell ID (64 chars).
+    pub borrower_hex: String,
+    /// Hex-encoded borrow position ID (64 chars).
+    pub position_id_hex: String,
+    /// Maximum repayment from reserve (in base units).
+    pub reserve_amount: u64,
+}
+
+#[derive(Serialize)]
+pub struct DelegateResponse {
+    pub registered: bool,
+    pub position_id: String,
+}
+
+#[derive(Deserialize)]
+pub struct ExecutorRunRequest {
+    /// Maximum batch size for this run.
+    pub max_batch_size: Option<usize>,
+}
+
+#[derive(Serialize)]
+pub struct ExecutorRunResponse {
+    /// Number of turns collected from at-risk scan.
+    pub scanned: usize,
+    /// Number of turns in the collected batch.
+    pub batch_size: usize,
+    /// Position IDs that were repaid.
+    pub repaid_positions: Vec<String>,
+    /// Batch ID (hex).
+    pub batch_id: String,
+    /// Number of warnings pushed to inbox.
+    pub warnings_pushed: usize,
+}
+
+// =============================================================================
 // Router
 // =============================================================================
 
@@ -150,6 +199,8 @@ pub fn router() -> Router<AppState> {
         .route("/position/{id}/repay", post(repay))
         .route("/position/{id}/liquidate", post(liquidate))
         .route("/position/{id}/prove_health", post(prove_health))
+        .route("/executor/delegate", post(executor_delegate))
+        .route("/executor/run", post(executor_run))
         .route("/admin/advance", post(admin_advance_height))
 }
 
@@ -470,6 +521,120 @@ async fn prove_health(
         proof_size_bytes: proof_bytes.len(),
         verified,
     }))
+}
+
+// =============================================================================
+// Executor Handlers
+// =============================================================================
+
+fn parse_hex32(s: &str) -> Option<[u8; 32]> {
+    pyana_app_framework::hex::hex_to_bytes32(s).ok()
+}
+
+/// Register a borrower delegation so the executor can monitor their position.
+async fn executor_delegate(
+    State(state): State<AppState>,
+    Json(req): Json<DelegateRequest>,
+) -> Result<(StatusCode, Json<DelegateResponse>), (StatusCode, Json<ErrorResponse>)> {
+    let borrower_bytes = parse_hex32(&req.borrower_hex).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "invalid borrower_hex".to_string(),
+            }),
+        )
+    })?;
+    let position_id = parse_hex32(&req.position_id_hex).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "invalid position_id_hex".to_string(),
+            }),
+        )
+    })?;
+
+    let borrower = pyana_types::CellId(borrower_bytes);
+    let mut exec = state.executor.lock().await;
+    exec.register_delegation(BorrowerDelegation {
+        borrower,
+        position_id,
+        reserve_amount: req.reserve_amount,
+        active: true,
+    });
+
+    Ok((
+        StatusCode::CREATED,
+        Json(DelegateResponse {
+            registered: true,
+            position_id: req.position_id_hex,
+        }),
+    ))
+}
+
+/// Drive the executor: scan at-risk positions, collect batch, apply repayments,
+/// and push inbox warnings for any position that crossed the health threshold.
+async fn executor_run(
+    State(state): State<AppState>,
+    Json(req): Json<ExecutorRunRequest>,
+) -> Json<ExecutorRunResponse> {
+    use pyana_app_framework::batch_executor::BatchExecutor;
+
+    let max_batch_size = req.max_batch_size.unwrap_or(64);
+
+    // Step 1: collect pool snapshot info and scan for at-risk positions
+    let mut exec = state.executor.lock().await;
+    let pool_read = state.pool.read().await;
+    let scanned = exec.scan_at_risk(&pool_read);
+    drop(pool_read);
+
+    // Step 2: collect the batch
+    let batch = exec.collect_batch(max_batch_size);
+    let batch_size = batch.len();
+
+    // Step 3: compute batch_id
+    let execution = exec.execute_batch(batch.clone()).unwrap_or(pyana_app_framework::batch_executor::BatchExecution {
+        batch_id: [0u8; 32],
+        turn_count: 0,
+        proof: None,
+    });
+
+    // Step 4: apply repayments to the pool
+    let mut pool_write = state.pool.write().await;
+    let repaid = exec.apply_batch(&batch, &mut pool_write);
+    let repaid_positions: Vec<String> = repaid.iter().map(hex_id).collect();
+
+    // Step 5: push inbox warnings for positions that crossed the threshold
+    let mut warnings_count = 0;
+    {
+        let mut inbox = state.warnings_inbox.lock().await;
+        for pos in &pool_write.borrow_positions {
+            if pos.repaid || pos.liquidated {
+                continue;
+            }
+            let health = pos.health_factor_bps();
+            if health < crate::executor::EXECUTOR_HEALTH_THRESHOLD_BPS {
+                let warning = HealthWarning {
+                    position_id_hex: hex_id(&pos.id),
+                    health_factor_bps: health,
+                    threshold_bps: crate::executor::EXECUTOR_HEALTH_THRESHOLD_BPS,
+                    block: pool_write.current_block,
+                };
+                if push_health_warning(&mut inbox, pos.borrower, warning, 0).is_ok() {
+                    warnings_count += 1;
+                }
+            }
+        }
+    }
+
+    let batch_id_hex: String = execution.batch_id.iter().map(|b| format!("{b:02x}")).collect();
+
+    Json(ExecutorRunResponse {
+        scanned,
+        batch_size,
+        repaid_positions,
+        batch_id: batch_id_hex,
+        warnings_pushed: warnings_count,
+    })
 }
 
 // =============================================================================

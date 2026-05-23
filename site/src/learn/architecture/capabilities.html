@@ -1,0 +1,65 @@
+<layout src="_layouts/default.html">
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <include src="_includes/sidebar-learn.html"></include>
+  </aside>
+  <main class="docs-content">
+    <nav class="docs-breadcrumb">
+      <a href="/learn.html">Learn</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <a href="/learn/architecture/">Architecture</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <span>Capabilities</span>
+    </nav>
+<h1>Object-Capability Model</h1>
+
+    <p>
+      Pyana implements an object-capability discipline: authority flows only through
+      unforgeable references. There is no ambient authority -- if you do not hold a
+      capability reference, you cannot perform the action.
+    </p>
+
+    <h2 id="cells">Cells</h2>
+    <p>
+      Cells are the unit of identity and state. Each cell has:
+    </p>
+    <ul>
+      <li><strong>Owner</strong> -- Ed25519 public key</li>
+      <li><strong>C-list</strong> -- Capability list (unforgeable references to other cells)</li>
+      <li><strong>Balance</strong> -- Computron budget (resource metering)</li>
+      <li><strong>Nonce</strong> -- Monotonic counter for replay protection</li>
+      <li><strong>Notes</strong> -- Private value commitments (Poseidon2)</li>
+      <li><strong>Program predicates</strong> -- Custom Datalog rules governing the cell's behavior</li>
+    </ul>
+
+    <h2 id="turns">Turns</h2>
+    <p>
+      A turn is an atomic state transition. It either fully commits (all effects applied)
+      or fully rolls back (no state change). Turns contain a call forest: a tree of
+      actions targeting different cells.
+    </p>
+
+    <h2 id="delegation">Delegation (Attenuation)</h2>
+    <p>
+      Capabilities are delegated via cryptographic attenuation. Each attenuation step
+      appends a caveat (restriction) to the macaroon token chain. The resulting token
+      is strictly less powerful than the parent.
+    </p>
+
+    <h2 id="introduction">Three-Party Introduction</h2>
+    <p>
+      When cell A wants to introduce cell B to cell C, A sends a capability reference
+      for C to B. B can then invoke C directly. This is the standard ocap introduction
+      pattern, implemented via routing directives in the call forest.
+    </p>
+
+    <div class="stub-notice">
+      <p>Detailed capability discipline rules, confinement proofs, and comparison with E/Mark Miller's ocap work are being written.</p>
+    </div>
+
+  </div>
+  </main>
+</div>
+
+</layout>

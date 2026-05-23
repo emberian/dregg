@@ -1,0 +1,216 @@
+<layout src="_layouts/default.html">
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <include src="_includes/sidebar-learn.html"></include>
+  </aside>
+  <main class="docs-content">
+    <nav class="docs-breadcrumb">
+      <a href="/learn.html">Learn</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <a href="/learn/developers/">Developers</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <span>Service Mesh</span>
+    </nav>
+<h1>Service Mesh</h1>
+
+    <p>
+      The Pyana service mesh is a governed namespace that acts as a capability
+      registry. Services are mounted at URL-style paths, discoverable by authorized
+      parties, and resolved via DFA-classified routing. Access is controlled by
+      provable ACLs -- not string-matching rules, but STARK-proved DFA evaluation.
+    </p>
+
+    <h2 id="overview">How It Works</h2>
+
+    <p>
+      The service mesh has three core operations:
+    </p>
+    <ul>
+      <li><strong>Mount</strong> -- register a service at a namespace path</li>
+      <li><strong>Discover</strong> -- find services matching your needs</li>
+      <li><strong>Resolve</strong> -- obtain a live capability to a mounted service</li>
+    </ul>
+
+    <p>
+      All operations go through the DFA route classifier: a state machine that
+      enforces governance rules about which paths exist, who can mount there,
+      and who can invoke services. The classifier's transitions are committed
+      to the federation's attested root and provable via STARK lookup tables.
+    </p>
+
+    <h2 id="mounting">Mounting a Service</h2>
+
+    <p>
+      To mount a service, you need a capability that authorizes mounting at the
+      target path. This is checked by the DFA classifier.
+    </p>
+
+    <h3>Via the CLI</h3>
+
+    <pre><code># Create a service descriptor
+cat > my-service.json &lt;&lt;'EOF'
+{
+  "name": "inference-api",
+  "description": "GPT-4 inference service",
+  "effects": ["Invoke", "Transfer"],
+  "pricing": {
+    "per_call": 10,
+    "budget_required": true
+  },
+  "verification_key": "optional-vk-hex-for-response-verification"
+}
+EOF
+
+# Mount at a namespace path
+pyana namespace mount --path /services/ai/inference --descriptor my-service.json</code></pre>
+
+    <h3>Via the SDK</h3>
+
+    <pre><code class="language-rust">use pyana_sdk::{AgentWallet, ServiceDescriptor, Effect};
+
+let mut wallet = AgentWallet::new();
+
+let descriptor = ServiceDescriptor {
+    name: "inference-api".into(),
+    description: "GPT-4 inference service".into(),
+    accepted_effects: vec![Effect::Invoke, Effect::Transfer],
+    pricing: Pricing { per_call: 10, budget_required: true },
+    verification_key: None,
+};
+
+// Mount requires a capability proving authority at this path
+wallet.mount_service("/services/ai/inference", descriptor).await?;</code></pre>
+
+    <h2 id="discovery">Discovery</h2>
+
+    <p>
+      Three ways to discover services:
+    </p>
+
+    <h3>1. Direct Resolution (Known Path)</h3>
+    <pre><code># Resolve a known path to its service descriptor
+pyana namespace resolve /services/ai/inference
+# Output:
+#   cell: abc123...
+#   name: inference-api
+#   effects: [Invoke, Transfer]
+#   pricing: 10 computrons/call</code></pre>
+
+    <h3>2. Prefix Enumeration (Browse)</h3>
+    <pre><code># List all services under a prefix (requires read capability on the prefix)
+pyana namespace list /services/ai/
+# Output:
+#   /services/ai/inference    -- GPT-4 inference service
+#   /services/ai/embeddings   -- Text embedding service
+#   /services/ai/classify     -- Image classification</code></pre>
+
+    <h3>3. Intent-Based Discovery (Private)</h3>
+    <pre><code># Broadcast a need without revealing what you already hold
+pyana intent post --need '{"type":"compute","model":"gpt4","budget":5000}'
+
+# Services that can satisfy your need respond with STARK proofs
+# (they prove they CAN satisfy it without revealing their full capabilities)</code></pre>
+
+    <h2 id="resolving">Resolving and Invoking</h2>
+
+    <p>
+      Resolution is a two-phase process:
+    </p>
+    <ol>
+      <li><strong>Route classification:</strong> The DFA classifier verifies the path is valid and you satisfy the ACL.</li>
+      <li><strong>Service binding:</strong> You receive a live CapTP reference to the service cell.</li>
+    </ol>
+
+    <pre><code class="language-rust">use pyana_sdk::AgentWallet;
+
+let mut wallet = AgentWallet::new();
+
+// Resolve returns a live capability reference
+let service_ref = wallet.resolve_service("/services/ai/inference").await?;
+
+// Invoke the service via CapTP (promise pipelining supported)
+let result = service_ref.invoke("classify", &payload).await?;
+
+// The service's response includes a STARK proof (if VK was set)
+result.verify()?;</code></pre>
+
+    <h2 id="acl">DFA-Based Access Control</h2>
+
+    <p>
+      Access control is not a list of allowed public keys. It is a DFA state machine
+      whose transitions encode governance rules. Each path in the namespace maps to
+      a DFA accept state that carries an ACL policy.
+    </p>
+
+    <p>
+      ACL policies can be:
+    </p>
+    <ul>
+      <li><strong>Open:</strong> Any agent can resolve the service.</li>
+      <li><strong>Cell set:</strong> Only specific cell IDs can resolve.</li>
+      <li><strong>Capability predicate:</strong> Resolver must hold a capability matching a Datalog predicate.</li>
+      <li><strong>Stake threshold:</strong> Resolver must prove a minimum stake (ZK range proof).</li>
+    </ul>
+
+    <p>
+      The DFA classification is proved in a STARK -- the resolver cannot bypass the
+      ACL, and the service cannot lie about what the ACL requires.
+    </p>
+
+    <h2 id="governance">Governance and Amendment</h2>
+
+    <p>
+      Namespace governance follows the federation's Constitutional Consensus:
+    </p>
+    <ul>
+      <li>Adding new routes: propose a DFA transition table update, accepted via h-rule.</li>
+      <li>Removing routes: same process. Existing capabilities to removed routes expire at the next epoch.</li>
+      <li>Changing ACLs: amend the accept state's policy via governance vote.</li>
+    </ul>
+
+    <pre><code># Propose adding a new namespace route
+pyana route propose --add /services/new-category --acl 'capability("tier2")'
+
+# Check proposal status
+pyana route proposal-status $PROPOSAL_ID
+
+# After h-rule acceptance, the route becomes active
+pyana namespace list /services/new-category/</code></pre>
+
+    <h2 id="patterns">Common Patterns</h2>
+
+    <h3>Service Gateway</h3>
+    <p>
+      A gateway cell mounts at a prefix (e.g., <code>/services/acme/</code>) and
+      sub-delegates mount authority to service cells under that prefix. The gateway
+      acts as a registry owner, managing its namespace via the CLI or SDK.
+    </p>
+
+    <h3>Load Balancing</h3>
+    <p>
+      Multiple cells can provide the same service. Mount them at the same path with
+      different priorities. Resolution returns them in priority order; the client
+      tries each until one responds. (Alternatively, use a coordinator cell that
+      round-robins internally.)
+    </p>
+
+    <h3>Versioned Services</h3>
+    <p>
+      Mount versions at sub-paths: <code>/services/ai/inference/v1</code>,
+      <code>/services/ai/inference/v2</code>. Clients pin to a version; the
+      "latest" path can redirect via a routing directive.
+    </p>
+
+    <h2 id="next">Next Steps</h2>
+    <ul>
+      <li><a href="bridges.html">Bridges</a> -- Expose services cross-chain</li>
+      <li><a href="storage.html">Storage</a> -- Service state persistence and quotas</li>
+      <li><a href="/learn/architecture/capabilities.html">Capability Architecture</a> -- DFA routing internals</li>
+    </ul>
+
+  </div>
+  </main>
+</div>
+
+</layout>

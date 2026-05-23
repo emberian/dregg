@@ -23,7 +23,9 @@
 pub mod artwork;
 pub mod auction;
 pub mod bidding;
+pub mod blinded_bids;
 pub mod handlers;
+pub mod notification_inbox;
 pub mod persistence;
 pub mod private_vickrey;
 pub mod provenance;

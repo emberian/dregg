@@ -1,0 +1,106 @@
+<layout src="_layouts/default.html">
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <include src="_includes/sidebar-learn.html"></include>
+  </aside>
+  <main class="docs-content">
+    <nav class="docs-breadcrumb">
+      <a href="/learn.html">Learn</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <a href="/learn/operators/">Operators</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <span>Bridge</span>
+    </nav>
+<h1>Inter-Chain Bridges</h1>
+
+    <div class="callout callout--note">
+      <p>
+        Cross-group communication within pyana now uses multi-group participation
+        (<code>pyana-node run --groups</code>) with interest-based dissemination
+        and cryptographic cross-references. The old <code>pyana-node bridge</code>
+        command has been removed. This page documents inter-chain bridges to
+        external networks (EVM, Mina, Midnight).
+      </p>
+    </div>
+
+    <h2 id="evm-bridge">EVM Bridge (Base Sepolia)</h2>
+
+    <p>
+      The EVM bridge wraps Pyana STARK proofs in Groth16 via SP1 for on-chain
+      verification (~200K gas). Operators run the bridge relay to facilitate
+      deposits and withdrawals.
+    </p>
+
+    <pre><code># Run the EVM bridge relay
+pyana-node bridge-evm \
+  --data-dir ~/.pyana \
+  --rpc-url https://sepolia.base.org \
+  --bridge-contract 0x... \
+  --private-key-file ./keys/bridge-operator.key \
+  --port 8422
+
+# The relay watches for on-chain deposit events and submits
+# corresponding note commitments to the federation.</code></pre>
+
+    <table class="comparison">
+      <thead>
+        <tr><th>Component</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>SP1 Verifier Gateway</td><td>Succinct's deployed contract verifying Groth16 proofs</td></tr>
+        <tr><td>PyanaBridge contract</td><td>State commitment registry + deposit/withdraw logic</td></tr>
+        <tr><td>VK Registry</td><td>Governance-managed verification key updates (multisig)</td></tr>
+        <tr><td>Incremental Merkle tree</td><td>O(log n) deposit insertions on-chain</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="mina-bridge">Mina Bridge</h2>
+
+    <p>
+      The Mina bridge uses native Pickles recursion. Pyana STARK proofs are wrapped
+      in Kimchi circuits over Pasta curves, producing Pickles recursive proofs that
+      Mina validators verify natively. No relay operator is required for proof
+      verification -- the proofs are self-contained.
+    </p>
+
+    <pre><code># Generate a Mina-compatible proof
+pyana proof generate --backend kimchi --turn $TURN_HASH
+pyana proof wrap-pickles --input $KIMCHI_PROOF --output mina-proof.bin
+
+# Submit to a Mina zkApp (requires o1js tooling)
+# The proof is natively verifiable by Mina's consensus</code></pre>
+
+    <h2 id="midnight-bridge">Midnight/Cardano Bridge</h2>
+
+    <p>
+      The Midnight bridge operates at Level 1.5: optimistic acceptance with a dispute
+      window. Operators run an attestation relay.
+    </p>
+
+    <pre><code># Run the Midnight attestation relay
+pyana-node bridge-midnight \
+  --data-dir ~/.pyana \
+  --midnight-endpoint wss://midnight-node.example.com \
+  --attestation-interval 100  # attest every 100 blocks
+  --bond-amount 50000</code></pre>
+
+    <h2 id="security">Bridge Security Model</h2>
+
+    <ul>
+      <li><strong>EVM (Level 2):</strong> Trust assumption is SP1/Groth16 soundness. No trusted relay.</li>
+      <li><strong>Mina (Level 2):</strong> Trust assumption is Pickles/IPA soundness. No trusted relay.</li>
+      <li><strong>Midnight (Level 1.5):</strong> Trust assumption is that at least one honest party will challenge invalid submissions within the dispute window.</li>
+    </ul>
+
+    <p>
+      All bridges use proof translation, not consensus bridging. There is no
+      multisig, no threshold committee, no trusted set of bridge operators that
+      could collude. The math is the bridge.
+    </p>
+
+  </div>
+  </main>
+</div>
+
+</layout>

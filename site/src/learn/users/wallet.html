@@ -1,0 +1,118 @@
+<layout src="_layouts/default.html">
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <include src="_includes/sidebar-learn.html"></include>
+  </aside>
+  <main class="docs-content">
+    <nav class="docs-breadcrumb">
+      <a href="/learn.html">Learn</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <a href="/learn/users/">Users</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <span>Wallet</span>
+    </nav>
+<h1>Using the Wallet</h1>
+
+    <p>
+      The pyana wallet manages your agent identity, capability tokens, and proof
+      generation. It runs as a browser extension with all cryptographic operations
+      happening locally -- your keys never leave your device.
+    </p>
+
+    <h2 id="identity">Identity Management</h2>
+
+    <h3>Creating an Identity</h3>
+    <p>
+      A pyana identity is an Ed25519 keypair. The wallet generates this from a
+      24-word BIP39 mnemonic using BLAKE3-based hierarchical derivation at path
+      <code>pyana/0</code>. The mnemonic is your master backup -- store it securely
+      offline.
+    </p>
+
+    <h3>Sub-agent Derivation</h3>
+    <p>
+      From a single mnemonic you can derive multiple agent identities. Each lives at
+      a different path (<code>pyana/1</code>, <code>pyana/2</code>, etc.). This lets
+      you run multiple agents with independent identities backed by a single recovery phrase.
+    </p>
+
+    <h3>Restoring a Wallet</h3>
+    <p>
+      Enter your 24-word mnemonic and optional passphrase. The wallet deterministically
+      re-derives the same keypair at <code>pyana/0</code> and any sub-agents you had.
+    </p>
+
+    <h2 id="tokens">Token Management</h2>
+
+    <h3>Viewing Held Tokens</h3>
+    <p>
+      The "Tokens" tab shows all capability tokens in your wallet. Each displays:
+    </p>
+    <ul>
+      <li><strong>Label</strong> -- Human-readable name (e.g., "root:dns")</li>
+      <li><strong>Service</strong> -- Which service this token grants access to</li>
+      <li><strong>Type</strong> -- Root (can forge new tokens) or Attenuated (restricted copy)</li>
+      <li><strong>ID</strong> -- Unique identifier for lookup</li>
+    </ul>
+
+    <h3>Receiving Tokens</h3>
+    <p>
+      Other agents delegate tokens to you. When you receive a delegation, the wallet
+      validates it (structure, expiry, size limits) before adding it to your collection.
+      Delegated tokens do NOT carry the root key -- you can further attenuate and present
+      them, but cannot mint new root tokens.
+    </p>
+
+    <h3>Delegating Tokens</h3>
+    <p>
+      To delegate a token to another agent, select a token and choose "Delegate". You
+      specify the recipient's public key and any additional restrictions. The resulting
+      token is strictly weaker than what you hold.
+    </p>
+
+    <h2 id="proof-generation">Proof Generation</h2>
+
+    <p>
+      When a web page or application requests authorization, the wallet generates
+      a STARK proof locally. This is computationally intensive but fast (sub-second
+      on modern hardware). The proof size is approximately 24 KiB.
+    </p>
+
+    <div class="callout callout--note">
+      <p>
+        For details on what each proof mode reveals to the verifier, see
+        <a href="privacy.html">Privacy Modes</a>.
+      </p>
+    </div>
+
+    <h2 id="receipt-chain">Receipt Chain (State History)</h2>
+
+    <p>
+      Every action you take that modifies state produces a <em>TurnReceipt</em>.
+      These receipts form a linked chain -- your verifiable history. You can export
+      this chain and present it to any verifier without contacting a federation.
+      IVC (Incrementally Verifiable Computation) compresses the entire chain to a
+      constant-size proof.
+    </p>
+
+    <h2 id="backup">Backup and Recovery</h2>
+
+    <ul>
+      <li><strong>Mnemonic</strong> -- Recovers your identity and derived sub-agents.</li>
+      <li><strong>Token export</strong> -- Tokens can be exported as encoded strings (em2_ prefix) and re-imported on another device.</li>
+      <li><strong>Receipt chain</strong> -- Your state history is portable. Export it as a file to carry to another federation.</li>
+    </ul>
+
+    <div class="callout callout--warning">
+      <p>
+        Your mnemonic phrase provides complete control over your identity and all
+        derived sub-agents. Never share it. Never store it digitally unencrypted.
+      </p>
+    </div>
+
+  </div>
+  </main>
+</div>
+
+</layout>

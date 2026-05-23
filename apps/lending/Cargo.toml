@@ -7,6 +7,7 @@ edition = "2024"
 pyana-app-framework = { path = "../../app-framework" }
 pyana-circuit = { path = "../../circuit", default-features = false, features = ["mock"] }
 pyana-dsl-runtime = { path = "../../pyana-dsl-runtime" }
+pyana-storage = { path = "../../storage" }
 pyana-types = { path = "../../types" }
 
 serde = { workspace = true }

@@ -1,0 +1,205 @@
+<layout src="_layouts/default.html">
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <include src="_includes/sidebar-learn.html"></include>
+  </aside>
+  <main class="docs-content">
+    <nav class="docs-breadcrumb">
+      <a href="/learn.html">Learn</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <a href="/learn/developers/">Developers</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <span>Privacy Api</span>
+    </nav>
+<h1>Privacy API Reference</h1>
+
+    <p>
+      The <code>pyana_sdk::privacy</code> module provides ergonomic wrappers around
+      pyana's privacy primitives. Each method documents what the verifier learns and
+      what stays hidden.
+    </p>
+
+    <h2 id="privacy-summary">Privacy Stack Summary</h2>
+
+    <table class="comparison">
+      <thead><tr><th>What</th><th>How</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>Credential privacy</td><td>BlindedMerklePoseidon2StarkAir (ZK auth, unlinkable multi-show)</td><td>Working</td></tr>
+        <tr><td>Amount privacy</td><td>Pedersen commitments + Bulletproof range proofs</td><td>Working</td></tr>
+        <tr><td>Recipient privacy</td><td>Stealth addresses (per-transaction derived keys)</td><td>Working</td></tr>
+        <tr><td>Intent privacy</td><td>SSE encrypted headers + delay pool</td><td>Working</td></tr>
+        <tr><td>Network privacy</td><td>Dandelion++ origin hiding + message padding</td><td>Working</td></tr>
+        <tr><td>Transaction privacy</td><td>Committed conservation in executor</td><td>Working</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout callout--note">
+      <p>
+        <strong>Honest limitations:</strong> Intent CONTENT is partially visible -- SSE keyword
+        tokens are enumerable by knowledgeable observers who know the keyword space.
+        The executor sees sovereign state during mediated (non-peer-to-peer) interactions.
+        Use <code>peer_exchange_session()</code> for maximum privacy between known parties.
+      </p>
+    </div>
+
+    <h2 id="anonymous-auth">Anonymous Authorization</h2>
+
+    <p>Prove you are authorized without revealing which federation member you are.</p>
+
+    <div class="api-sig">
+      <span class="keyword">pub fn</span> <span class="fn-name">authorize_anonymously</span>(<span class="param">&amp;self, token: &amp;HeldToken, request: &amp;AuthRequest</span>) -> <span class="type">Result&lt;AnonymousPresentation, SdkError&gt;</span>
+    </div>
+
+    <ul>
+      <li><strong>Verifier learns:</strong> Some valid federation member authorized this request + a unique presentation tag.</li>
+      <li><strong>Hidden:</strong> Which member, token contents, delegation chain, all prior proofs (unlinkable).</li>
+      <li><strong>Mechanism:</strong> BlindedMerklePoseidon2StarkAir with fresh per-presentation blinding.</li>
+    </ul>
+
+    <pre><code class="language-rust">use pyana_sdk::{AgentWallet, AuthRequest};
+
+let mut wallet = AgentWallet::new();
+let token = wallet.mint_token(b"secret-key-32-bytes-here!!!!!!!!!", "service");
+
+let request = AuthRequest {
+    service: Some("service".into()),
+    action: Some("read".into()),
+    ..Default::default()
+};
+
+let presentation = wallet.authorize_anonymously(&token, &request).unwrap();
+// presentation.presentation_tag is unique and unlinkable per call</code></pre>
+
+    <h2 id="private-notes">Private Notes (Hidden Balances)</h2>
+
+    <p>Create and transfer value without revealing amounts.</p>
+
+    <div class="api-sig">
+      <span class="keyword">pub fn</span> <span class="fn-name">create_private_note</span>(<span class="param">&amp;self, value: u64, asset_type: u64</span>) -> <span class="type">Result&lt;(NoteCommitment, NoteSecret), SdkError&gt;</span>
+    </div>
+
+    <div class="api-sig">
+      <span class="keyword">pub fn</span> <span class="fn-name">transfer_note_privately</span>(<span class="param">&amp;self, note_secret: &amp;NoteSecret, recipient_key: &amp;[u8; 32], merkle_siblings: Vec&lt;[BabyBear; 3]&gt;, merkle_positions: Vec&lt;u8&gt;</span>) -> <span class="type">Result&lt;NoteTransferProof, SdkError&gt;</span>
+    </div>
+
+    <ul>
+      <li><strong>Verifier learns:</strong> A nullifier (double-spend prevention), a Merkle root (note exists), a new commitment (goes to recipient).</li>
+      <li><strong>Hidden:</strong> Value, asset type, spending key, sender identity, recipient identity, which note was spent.</li>
+    </ul>
+
+    <h2 id="unlinkable-predicates">Unlinkable Predicate Proofs</h2>
+
+    <p>Prove facts about yourself that cannot be correlated across sessions.</p>
+
+    <div class="api-sig">
+      <span class="keyword">pub fn</span> <span class="fn-name">prove_predicate_unlinkable</span>(<span class="param">&amp;self, token: &amp;HeldToken, attribute: &amp;str, attribute_value: u32, predicate_type: PredicateType, threshold: BabyBear</span>) -> <span class="type">Result&lt;UnlinkablePredicateProof, SdkError&gt;</span>
+    </div>
+
+    <ul>
+      <li><strong>Verifier learns:</strong> The predicate is satisfied (e.g., "balance >= 1000") + a blinded fact commitment (unique per proof).</li>
+      <li><strong>Hidden:</strong> The actual value, which token, which identity, any correlation with other proofs.</li>
+      <li><strong>Mechanism:</strong> Fresh random BabyBear blinding generates a new <code>Poseidon2(fact_hash, state_root, blinding, 0)</code> each time.</li>
+    </ul>
+
+    <h2 id="non-revocation">Non-Revocation Proofs</h2>
+
+    <p>Prove your token has not been revoked without revealing which token you hold.</p>
+
+    <div class="api-sig">
+      <span class="keyword">pub fn</span> <span class="fn-name">prove_not_revoked</span>(<span class="param">&amp;self, token: &amp;HeldToken, revocation_tree: &amp;SortedRevocationTree</span>) -> <span class="type">Result&lt;NonRevocationProof, SdkError&gt;</span>
+    </div>
+
+    <ul>
+      <li><strong>Verifier learns:</strong> The prover holds a non-revoked capability + the revocation set root.</li>
+      <li><strong>Hidden:</strong> Which capability, derivation chain, which ancestors were checked.</li>
+      <li><strong>Mechanism:</strong> NonRevocationAir -- sorted-Merkle non-membership proof for all ancestors simultaneously.</li>
+    </ul>
+
+    <h2 id="private-discovery">Private Intent Discovery</h2>
+
+    <div class="api-sig">
+      <span class="keyword">pub async fn</span> <span class="fn-name">discover_intents_privately</span>(<span class="param">&amp;self, tag: &amp;str, node_a_url: &amp;str, node_b_url: &amp;str, transport: T</span>) -> <span class="type">Result&lt;Vec&lt;[u8; 32]&gt;, SdkError&gt;</span>
+    </div>
+
+    <ul>
+      <li><strong>Each server learns:</strong> That someone is querying. Nothing else.</li>
+      <li><strong>Hidden:</strong> Which tag was searched for, which row was accessed.</li>
+      <li><strong>Security model:</strong> Information-theoretic (not computational) -- non-collusion assumption.</li>
+    </ul>
+
+    <h2 id="stealth-addresses">Stealth Addresses (Recipient Privacy)</h2>
+
+    <p>Generate one-time receive addresses so senders cannot be linked to recipients.</p>
+
+    <div class="api-sig">
+      <span class="keyword">pub fn</span> <span class="fn-name">stealth_meta_address</span>(<span class="param">&amp;self</span>) -> <span class="type">StealthAddress</span>
+    </div>
+
+    <div class="api-sig">
+      <span class="keyword">pub fn</span> <span class="fn-name">private_transfer</span>(<span class="param">&amp;mut self, amount: u64, recipient: &amp;StealthAddress</span>) -> <span class="type">Result&lt;PrivateTransferProof, SdkError&gt;</span>
+    </div>
+
+    <ul>
+      <li><strong>Verifier learns:</strong> A nullifier, a new note commitment, a conservation proof (amounts balance).</li>
+      <li><strong>Hidden:</strong> Transfer amount, sender identity, recipient identity, which note was spent.</li>
+      <li><strong>Mechanism:</strong> Pedersen commitment to amount + Bulletproof range proof + stealth address derivation.</li>
+    </ul>
+
+    <pre><code class="language-rust">use pyana_sdk::AgentWallet;
+
+let mut alice = AgentWallet::new();
+let mut bob = AgentWallet::new();
+
+// Bob publishes his stealth meta-address (share publicly or via discovery)
+let bob_stealth = bob.stealth_meta_address();
+
+// Alice sends privately -- federation never sees the amount or recipient
+let proof = alice.private_transfer(500, &bob_stealth).unwrap();
+
+// Bob scans for incoming notes using his viewing key
+let incoming = bob.scan_for_notes(&note_tree).unwrap();</code></pre>
+
+    <h2 id="peer-exchange">Peer-to-Peer Exchange (No Federation)</h2>
+
+    <p>For maximum privacy, interact directly with a known peer. The federation is never contacted.</p>
+
+    <div class="api-sig">
+      <span class="keyword">pub fn</span> <span class="fn-name">peer_exchange_session</span>(<span class="param">&amp;mut self, peer: &amp;PublicKey</span>) -> <span class="type">Result&lt;PeerSession, SdkError&gt;</span>
+    </div>
+
+    <ul>
+      <li><strong>Network learns:</strong> Nothing (direct connection between peers).</li>
+      <li><strong>Federation learns:</strong> Nothing (not contacted).</li>
+      <li><strong>Peer learns:</strong> Your new state commitment + proof of valid transition.</li>
+    </ul>
+
+    <h2 id="verification">Verification Helpers</h2>
+
+    <pre><code class="language-rust">use pyana_sdk::{
+    verify_anonymous_presentation,
+    verify_non_revocation_proof,
+    verify_note_spending,
+};
+
+// Verify an anonymous presentation
+let valid = verify_anonymous_presentation(&presentation, &expected_federation_root);
+
+// Verify non-revocation
+verify_non_revocation_proof(&non_rev_proof).unwrap();
+
+// Verify note spending (for note tree operators)
+verify_note_spending(nullifier_bb, merkle_root_bb, &spending_proof).unwrap();</code></pre>
+
+    <div class="callout callout--note">
+      <p>
+        For the architectural design behind these privacy primitives, see
+        <a href="/learn/architecture/privacy.html">Privacy Architecture</a>.
+      </p>
+    </div>
+
+  </div>
+  </main>
+</div>
+
+</layout>

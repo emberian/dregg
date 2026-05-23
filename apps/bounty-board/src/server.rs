@@ -23,9 +23,14 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{info, warn};
 
 use pyana_app_framework::auth::{AdminAuth, AdminToken, HasAdminToken};
+use pyana_app_framework::blinded_endpoint::FairDistributionEndpoint;
 use pyana_app_framework::hex::{bytes32_to_hex, hex_to_bytes32};
+use pyana_app_framework::inbox_endpoint::InboxEndpoint;
 use pyana_app_framework::server::{AppConfig, AppServer};
 use pyana_app_framework::{CellId, EngineConfig, PyanaEngine};
+use pyana_storage::inbox::{CapInbox, InboxMessage};
+use pyana_storage::blinded::BlindedQueue;
+use pyana_storage::QuotaId;
 
 use crate::qualification::{FederationRootHistory, verify_qualification};
 use crate::state::BoardState;
@@ -69,6 +74,10 @@ struct AppState {
     node_url: Arc<String>,
     node_connected: Arc<RwLock<bool>>,
     admin_token: AdminToken,
+    /// Blinded queue for fair bounty claiming (upgrade: blinded queue).
+    claim_queue: Arc<Mutex<BlindedQueue>>,
+    /// Inbox for issuer delivery notifications (upgrade: store-and-forward).
+    issuer_inbox: Arc<Mutex<CapInbox>>,
 }
 
 impl HasAdminToken for AppState {
@@ -94,6 +103,17 @@ pub async fn start_server(config: ServerConfig) -> SocketAddr {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
 
+    // --- Upgrade 1: Blinded queue for fair bounty claiming ---
+    // Capacity 256: supports up to 256 concurrent claim commitments per bounty.
+    let claims_endpoint = FairDistributionEndpoint::new(256);
+    let claim_queue = claims_endpoint.queue_arc();
+
+    // --- Upgrade 2: Store-and-forward inbox for issuer delivery notifications ---
+    // Capacity 128 messages, minimum deposit 0 (internal server-to-server delivery).
+    let inbox = Arc::new(Mutex::new(CapInbox::new(QuotaId(0), 128, 0)));
+    let issuers_endpoint = InboxEndpoint::from_inbox(Arc::clone(&inbox));
+    let issuer_inbox = Arc::clone(&inbox);
+
     let state = AppState {
         board: BoardState::new(),
         root_history: Arc::new(RwLock::new(FederationRootHistory::with_initial_root(
@@ -105,6 +125,8 @@ pub async fn start_server(config: ServerConfig) -> SocketAddr {
         node_connected: Arc::new(RwLock::new(false)),
         // In-process server uses open admin mode (no token needed for tests/examples).
         admin_token: AdminToken::open(),
+        claim_queue,
+        issuer_inbox,
     };
 
     let app_routes = app_router().with_state(state);
@@ -115,6 +137,10 @@ pub async fn start_server(config: ServerConfig) -> SocketAddr {
         .service_name("pyana-bounty-board")
         .with_health()
         .with_cors()
+        // Upgrade 1: blinded queue for fair bounty claiming
+        .with_blinded_endpoint("/queue/claims", claims_endpoint)
+        // Upgrade 2: store-and-forward inbox for issuer delivery notifications
+        .with_inbox("/inbox/issuers", issuers_endpoint)
         .routes(app_routes)
         .serve_background()
         .await
@@ -340,6 +366,26 @@ async fn submit_work(
         completion_proof_hash,
     };
     state.board.update_status(&bounty_id, new_status).await;
+
+    // --- Upgrade 2: notify issuer via store-and-forward inbox ---
+    // Build an encrypted notification ciphertext containing the bounty ID and
+    // proof hash. The sender is the worker's blinded commitment (privacy-preserving).
+    let notification_payload = {
+        let mut payload = Vec::with_capacity(64);
+        payload.extend_from_slice(&bounty_id);
+        payload.extend_from_slice(&completion_proof_hash);
+        payload
+    };
+    let msg = InboxMessage::Encrypted {
+        ciphertext: notification_payload,
+        sender: req.worker_commitment,
+    };
+    let mut inbox = state.issuer_inbox.lock().await;
+    // Deposit 0: internal server-generated message, no anti-spam deposit needed.
+    if let Err(e) = inbox.receive(msg, 0) {
+        warn!(bounty_id = %id, error = ?e, "failed to push delivery notification to issuer inbox");
+    }
+    drop(inbox);
 
     (
         StatusCode::OK,

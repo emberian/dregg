@@ -1,0 +1,80 @@
+<layout src="_layouts/default.html">
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <include src="_includes/sidebar-learn.html"></include>
+  </aside>
+  <main class="docs-content">
+    <nav class="docs-breadcrumb">
+      <a href="/learn.html">Learn</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <a href="/learn/developers/">Developers</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <span>Tokens</span>
+    </nav>
+<h1>Token Lifecycle</h1>
+
+    <p>
+      Tokens in pyana follow a one-way lifecycle: they are minted, attenuated (restricted),
+      delegated to other agents, presented for verification, and eventually expire or are
+      revoked. Tokens can never be amplified -- only narrowed.
+    </p>
+
+    <h2 id="mint">Mint</h2>
+    <p>
+      A root token is created with <code>wallet.mint_token(root_key, service)</code>.
+      The root key is the HMAC secret that anchors the entire token chain. Anyone with
+      the root key can forge tokens for that service.
+    </p>
+
+    <h2 id="attenuate">Attenuate</h2>
+    <p>
+      Attenuation adds cryptographic caveats (restrictions) to a token. The <code>Attenuation</code>
+      struct supports:
+    </p>
+    <ul>
+      <li><code>services</code> -- Restrict to specific service:action pairs</li>
+      <li><code>max_ttl</code> -- Set a time-to-live duration</li>
+      <li><code>not_after</code> -- Absolute expiry timestamp</li>
+      <li>Custom caveats via the macaroon caveat system</li>
+    </ul>
+
+    <h2 id="delegate">Delegate</h2>
+    <p>
+      Delegation = attenuation + packaging for transmission. The delegatee receives
+      an attenuated token without the root key (they cannot forge new roots).
+    </p>
+
+    <h2 id="present">Present</h2>
+    <p>
+      Presentation generates a proof (trusted clearance, selective disclosure, or
+      full STARK) and returns an <code>AuthorizationPresentation</code> that the
+      verifier can check.
+    </p>
+
+    <h2 id="verify">Verify</h2>
+    <p>
+      Verification checks the presentation against an expected federation root.
+      For trusted mode, this is local Datalog evaluation. For STARK modes, this
+      is proof verification (~2ms).
+    </p>
+
+    <h2 id="sovereign-context">Tokens in Sovereign Mode</h2>
+    <p>
+      In sovereign mode, capabilities are part of the agent's local cell state.
+      The federation never sees your capability set. Exercising a capability on
+      another agent's cell works peer-to-peer: you prove "I hold this cap" via
+      a Merkle witness into your own state, and the target verifies locally. The
+      federation is only needed if you want to prove capability possession to a
+      stranger who requires an attested root anchor.
+    </p>
+
+    <div class="stub-notice">
+      <p>Full token lifecycle diagrams, error handling, and edge cases are being written.</p>
+    </div>
+
+  </div>
+  </main>
+</div>
+
+</layout>

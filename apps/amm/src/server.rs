@@ -13,6 +13,8 @@ use tokio::sync::RwLock;
 
 use crate::AmmRegistry;
 use crate::pool::LiquidityPool;
+use crate::ring::ring_router;
+use crate::twap_queue::{SharedTwapState, TwapBatchState, twap_queue_router};
 
 // =============================================================================
 // Application State
@@ -21,12 +23,15 @@ use crate::pool::LiquidityPool;
 #[derive(Clone)]
 pub struct AppState {
     pub registry: Arc<RwLock<AmmRegistry>>,
+    /// Staged swap intents for TWAP batch execution.
+    pub twap_state: SharedTwapState,
 }
 
 impl AppState {
     pub fn new() -> Self {
         Self {
             registry: Arc::new(RwLock::new(AmmRegistry::new())),
+            twap_state: Arc::new(RwLock::new(TwapBatchState::default())),
         }
     }
 }
@@ -100,7 +105,7 @@ pub struct QuoteResponse {
     pub price_impact_bps: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct ErrorResponse {
     pub error: String,
 }
@@ -118,6 +123,21 @@ pub fn router() -> Router<AppState> {
         .route("/pools/{id}/remove-liquidity", post(remove_liquidity))
         .route("/pools/{id}/quote", get(get_quote))
         .route("/health", get(health_check))
+        // Upgrade 1: Ring trade solver participation
+        .merge(ring_router())
+}
+
+/// Build the full AMM router including the TWAP queue endpoint.
+///
+/// The queue is nested under `/queue/swaps` and uses the `AppServer::with_queue_endpoint`
+/// pattern. Call this from `main` to get the complete server.
+pub fn full_router(state: AppState) -> Router {
+    let twap_state = state.twap_state.clone();
+    // Upgrade 2: TWAP batch queue mounted at /queue/swaps
+    let queue_router = twap_queue_router(twap_state, state.clone());
+    Router::new()
+        .merge(router().with_state(state))
+        .nest("/queue/swaps", queue_router)
 }
 
 // =============================================================================

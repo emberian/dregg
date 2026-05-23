@@ -42,7 +42,9 @@
 
 pub mod cdp;
 pub mod circuit;
+pub mod fee_endpoints;
 pub mod liquidation;
+pub mod liquidation_queue;
 pub mod oracle;
 pub mod server;
 

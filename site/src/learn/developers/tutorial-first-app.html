@@ -1,0 +1,452 @@
+<layout src="_layouts/default.html">
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <include src="_includes/sidebar-learn.html"></include>
+  </aside>
+  <main class="docs-content">
+    <nav class="docs-breadcrumb">
+      <a href="/learn.html">Learn</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <a href="/learn/developers/">Developers</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <span>Tutorial First App</span>
+    </nav>
+<h1>Build Your First Pyana App: API Key Management Service</h1>
+
+    <p>
+      This tutorial walks you through building a working API key management service
+      that demonstrates pyana's core value proposition: <strong>token minting, attenuation,
+      offline verification, and revocation</strong> -- no ZK proofs required.
+    </p>
+
+    <p>You will build a service where:</p>
+    <ul>
+      <li>An admin mints a root API key (a capability token)</li>
+      <li>The admin attenuates it for a specific customer (read-only, rate-limited, 24h expiry)</li>
+      <li>The customer uses the attenuated key to access a protected endpoint</li>
+      <li>The service verifies the key without contacting the admin (offline verification)</li>
+      <li>The admin revokes the key and subsequent access is denied</li>
+    </ul>
+
+    <h2 id="prerequisites">Prerequisites</h2>
+
+    <ul>
+      <li>Rust 1.94+ (<code>rustup update stable</code>)</li>
+      <li>A clone of the pyana repository:
+        <pre><code class="language-bash">git clone https://github.com/emberian/pyana.git
+cd pyana</code></pre>
+      </li>
+    </ul>
+
+    <h2 id="create-project">Create the project</h2>
+
+    <p>From the repository root, create a new binary crate:</p>
+
+    <pre><code class="language-rust">cargo new --name api-keys apps/api-keys</code></pre>
+
+    <p>Replace <code>apps/api-keys/Cargo.toml</code> with:</p>
+
+    <pre><code>[package]
+name = "api-keys"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+pyana-sdk = { path = "../../sdk" }
+token = { path = "../../token", default-features = false, features = ["macaroon", "datalog", "rand-deps"] }
+blake3 = "1"</code></pre>
+
+    <p>Now open <code>apps/api-keys/src/main.rs</code> and follow along.</p>
+
+    <h2 id="step-1">Step 1: Mint a root API key</h2>
+
+    <p>
+      The admin creates a wallet and mints an unrestricted root token for the
+      <code>"api"</code> service. This root token has full permissions -- it is the master key.
+    </p>
+
+    <pre><code class="language-rust">use pyana_sdk::{AgentWallet, Attenuation, AuthRequest};
+use pyana_token::{BudgetSpec, RevocationFilter};
+
+fn main() {
+    // The admin's 32-byte root secret. In production, generate this once and
+    // store it in a secrets manager. Anyone with this key can forge tokens.
+    let root_key: [u8; 32] = *blake3::hash(b"my-api-service-root-secret").as_bytes();
+
+    // Create the admin's wallet and mint a root token.
+    let mut admin_wallet = AgentWallet::new();
+    let root_token = admin_wallet.mint_token(&amp;root_key, "api");
+
+    println!("Root token minted:");
+    println!("  ID:      {}", root_token.id);
+    println!("  Service: {}", root_token.service);
+    println!("  Can mint: {}", root_token.can_mint());</code></pre>
+
+    <p>
+      The root token is an HMAC-chained macaroon. It grants unrestricted access to
+      the <code>"api"</code> service and can be attenuated into narrower tokens.
+    </p>
+
+    <p><strong>Expected output:</strong></p>
+    <pre><code>Root token minted:
+  ID:      api:0
+  Service: api
+  Can mint: true</code></pre>
+
+    <h2 id="step-2">Step 2: Attenuate for a customer</h2>
+
+    <p>
+      The admin creates a restricted key for a customer: read-only access,
+      rate-limited to 1000 requests per day, expiring in 24 hours.
+    </p>
+
+    <pre><code class="language-rust">    // Current time (Unix seconds). In production, use SystemTime::now().
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+
+    // Attenuate: read-only, 24h expiry, 1000 req/day budget.
+    let customer_token = admin_wallet.attenuate(&amp;root_token, &amp;Attenuation {
+        services: vec![("api".into(), "r".into())],  // read-only
+        not_after: Some(now + 86_400),               // expires in 24h
+        budget: Some(BudgetSpec {
+            id: "customer-42:daily".into(),
+            parent_id: None,
+            class: "api_calls".into(),
+            limit: 1000,
+            window: Some("1d".into()),
+        }),
+        confine_user: Some("customer-42".into()),
+        ..Default::default()
+    }).expect("attenuation should succeed");
+
+    println!("\nCustomer token created:");
+    println!("  ID:       {}", customer_token.id);
+    println!("  Can mint: {}", customer_token.can_mint());
+    println!("  Service:  {}", customer_token.service);</code></pre>
+
+    <p>
+      Attenuation is one-way: the customer token is strictly weaker than the root.
+      The customer cannot remove the restrictions or widen permissions. No round-trip
+      to the admin is needed to create or verify this token.
+    </p>
+
+    <p><strong>Expected output:</strong></p>
+    <pre><code>Customer token created:
+  ID:       api:0:att:1
+  Can mint: false
+  Service:  api</code></pre>
+
+    <h2 id="step-3">Step 3: Verify at the edge (offline)</h2>
+
+    <p>
+      A downstream service verifies the customer's token against an <code>AuthRequest</code>.
+      This check runs entirely locally -- no network call, no token introspection
+      endpoint, no shared Redis.
+    </p>
+
+    <pre><code class="language-rust">    // Simulate the customer presenting their key to a protected endpoint.
+    let request = AuthRequest {
+        service: Some("api".into()),
+        action: Some("read".into()),
+        user_id: Some("customer-42".into()),
+        now: Some(now + 3600), // 1 hour after issuance (still valid)
+        ..Default::default()
+    };
+
+    // The edge service verifies locally. It needs only the token -- no
+    // contact with the admin, no database lookup.
+    let authorized = admin_wallet.verify_token(&amp;customer_token, &amp;request);
+    println!("\nVerification (read, 1h after mint): {}", authorized);
+    assert!(authorized, "read access should be granted");
+
+    // Attempt a write -- should be denied (token is read-only).
+    let write_request = AuthRequest {
+        service: Some("api".into()),
+        action: Some("write".into()),
+        user_id: Some("customer-42".into()),
+        now: Some(now + 3600),
+        ..Default::default()
+    };
+    let write_denied = !admin_wallet.verify_token(&amp;customer_token, &amp;write_request);
+    println!("Verification (write attempt):      denied={}", write_denied);
+    assert!(write_denied, "write access should be denied");
+
+    // Attempt access after expiry -- should be denied.
+    let expired_request = AuthRequest {
+        service: Some("api".into()),
+        action: Some("read".into()),
+        user_id: Some("customer-42".into()),
+        now: Some(now + 100_000), // well past the 24h window
+        ..Default::default()
+    };
+    let expired_denied = !admin_wallet.verify_token(&amp;customer_token, &amp;expired_request);
+    println!("Verification (expired, +100000s):  denied={}", expired_denied);
+    assert!(expired_denied, "expired access should be denied");</code></pre>
+
+    <p>
+      All three checks execute in microseconds with zero I/O. The verifier needs only
+      the token string and the root key to validate the HMAC chain and evaluate caveats.
+    </p>
+
+    <p><strong>Expected output:</strong></p>
+    <pre><code>Verification (read, 1h after mint): true
+Verification (write attempt):      denied=true
+Verification (expired, +100000s):  denied=true</code></pre>
+
+    <h2 id="step-4">Step 4: Revoke the key</h2>
+
+    <p>
+      The admin adds the customer token's ID to a revocation filter. Any subsequent
+      verification that checks revocation status will reject the token.
+    </p>
+
+    <pre><code class="language-rust">    // Create a revocation filter (in production, this lives on your edge servers
+    // and is synced periodically from a central revocation list).
+    let revocation_filter = RevocationFilter::new();
+
+    // Revoke the customer's token by its ID.
+    revocation_filter.revoke(&amp;customer_token.id);
+    println!("\nRevoked token: {}", customer_token.id);
+    println!("Revocation filter size: {}", revocation_filter.revoked_count());
+
+    // Check revocation status before authorizing.
+    let is_revoked = revocation_filter.is_revoked(&amp;customer_token.id);
+    println!("Is revoked: {}", is_revoked);
+    assert!(is_revoked);
+
+    // The full authorization check: verify caveats AND check revocation.
+    let caveat_ok = admin_wallet.verify_token(&amp;customer_token, &amp;request);
+    let final_decision = caveat_ok &amp;&amp; !revocation_filter.is_revoked(&amp;customer_token.id);
+    println!("Final authorization (post-revocation): {}", final_decision);
+    assert!(!final_decision, "revoked token must be denied");
+
+    // Other tokens remain unaffected.
+    let other_token = admin_wallet.attenuate(&amp;root_token, &amp;Attenuation {
+        services: vec![("api".into(), "r".into())],
+        confine_user: Some("customer-99".into()),
+        ..Default::default()
+    }).unwrap();
+
+    let other_ok = admin_wallet.verify_token(&amp;other_token, &amp;AuthRequest {
+        service: Some("api".into()),
+        action: Some("read".into()),
+        user_id: Some("customer-99".into()),
+        now: Some(now + 3600),
+        ..Default::default()
+    }) &amp;&amp; !revocation_filter.is_revoked(&amp;other_token.id);
+    println!("Other customer (not revoked):        {}", other_ok);
+    assert!(other_ok);
+
+    println!("\n--- All checks passed. ---");
+}</code></pre>
+
+    <p>
+      The <code>RevocationFilter</code> is a cuckoo filter: O(1) lookups, zero false negatives,
+      sub-0.1% false positive rate. It can be serialized to bytes and distributed to
+      edge servers. Revocation propagation is as fast as your sync mechanism (push via
+      websocket, pull every N seconds, etc.) -- no consensus required at this level.
+    </p>
+
+    <p><strong>Expected output:</strong></p>
+    <pre><code>Revoked token: api:0:att:1
+Revocation filter size: 1
+Is revoked: true
+Final authorization (post-revocation): false
+Other customer (not revoked):        true
+
+--- All checks passed. ---</code></pre>
+
+    <h2 id="complete-source">Complete source</h2>
+
+    <p>Here is the full <code>main.rs</code> in one copy-pasteable block:</p>
+
+    <pre><code class="language-rust">use pyana_sdk::{AgentWallet, Attenuation, AuthRequest};
+use pyana_token::{BudgetSpec, RevocationFilter};
+
+fn main() {
+    let root_key: [u8; 32] = *blake3::hash(b"my-api-service-root-secret").as_bytes();
+
+    let mut admin_wallet = AgentWallet::new();
+    let root_token = admin_wallet.mint_token(&amp;root_key, "api");
+
+    println!("Root token minted:");
+    println!("  ID:      {}", root_token.id);
+    println!("  Service: {}", root_token.service);
+    println!("  Can mint: {}", root_token.can_mint());
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+
+    let customer_token = admin_wallet.attenuate(&amp;root_token, &amp;Attenuation {
+        services: vec![("api".into(), "r".into())],
+        not_after: Some(now + 86_400),
+        budget: Some(BudgetSpec {
+            id: "customer-42:daily".into(),
+            parent_id: None,
+            class: "api_calls".into(),
+            limit: 1000,
+            window: Some("1d".into()),
+        }),
+        confine_user: Some("customer-42".into()),
+        ..Default::default()
+    }).expect("attenuation should succeed");
+
+    println!("\nCustomer token created:");
+    println!("  ID:       {}", customer_token.id);
+    println!("  Can mint: {}", customer_token.can_mint());
+    println!("  Service:  {}", customer_token.service);
+
+    let request = AuthRequest {
+        service: Some("api".into()),
+        action: Some("read".into()),
+        user_id: Some("customer-42".into()),
+        now: Some(now + 3600),
+        ..Default::default()
+    };
+
+    let authorized = admin_wallet.verify_token(&amp;customer_token, &amp;request);
+    println!("\nVerification (read, 1h after mint): {}", authorized);
+    assert!(authorized);
+
+    let write_request = AuthRequest {
+        service: Some("api".into()),
+        action: Some("write".into()),
+        user_id: Some("customer-42".into()),
+        now: Some(now + 3600),
+        ..Default::default()
+    };
+    let write_denied = !admin_wallet.verify_token(&amp;customer_token, &amp;write_request);
+    println!("Verification (write attempt):      denied={}", write_denied);
+    assert!(write_denied);
+
+    let expired_request = AuthRequest {
+        service: Some("api".into()),
+        action: Some("read".into()),
+        user_id: Some("customer-42".into()),
+        now: Some(now + 100_000),
+        ..Default::default()
+    };
+    let expired_denied = !admin_wallet.verify_token(&amp;customer_token, &amp;expired_request);
+    println!("Verification (expired, +100000s):  denied={}", expired_denied);
+    assert!(expired_denied);
+
+    let revocation_filter = RevocationFilter::new();
+    revocation_filter.revoke(&amp;customer_token.id);
+    println!("\nRevoked token: {}", customer_token.id);
+    println!("Revocation filter size: {}", revocation_filter.revoked_count());
+
+    let is_revoked = revocation_filter.is_revoked(&amp;customer_token.id);
+    println!("Is revoked: {}", is_revoked);
+    assert!(is_revoked);
+
+    let caveat_ok = admin_wallet.verify_token(&amp;customer_token, &amp;request);
+    let final_decision = caveat_ok &amp;&amp; !revocation_filter.is_revoked(&amp;customer_token.id);
+    println!("Final authorization (post-revocation): {}", final_decision);
+    assert!(!final_decision);
+
+    let other_token = admin_wallet.attenuate(&amp;root_token, &amp;Attenuation {
+        services: vec![("api".into(), "r".into())],
+        confine_user: Some("customer-99".into()),
+        ..Default::default()
+    }).unwrap();
+
+    let other_ok = admin_wallet.verify_token(&amp;other_token, &amp;AuthRequest {
+        service: Some("api".into()),
+        action: Some("read".into()),
+        user_id: Some("customer-99".into()),
+        now: Some(now + 3600),
+        ..Default::default()
+    }) &amp;&amp; !revocation_filter.is_revoked(&amp;other_token.id);
+    println!("Other customer (not revoked):        {}", other_ok);
+    assert!(other_ok);
+
+    println!("\n--- All checks passed. ---");
+}</code></pre>
+
+    <p>Run it:</p>
+    <pre><code class="language-rust">cargo run -p api-keys</code></pre>
+
+    <h2 id="what-you-built">What you just built</h2>
+
+    <table class="comparison">
+      <thead>
+        <tr>
+          <th>Concern</th>
+          <th>How pyana handles it</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Key issuance</strong></td>
+          <td><code>AgentWallet::mint_token()</code> -- one line, one HMAC key</td>
+        </tr>
+        <tr>
+          <td><strong>Scope restriction</strong></td>
+          <td><code>Attenuation</code> struct -- services, actions, expiry, budget, user binding</td>
+        </tr>
+        <tr>
+          <td><strong>Offline verification</strong></td>
+          <td><code>verify_token()</code> -- local HMAC chain check, sub-microsecond</td>
+        </tr>
+        <tr>
+          <td><strong>Revocation</strong></td>
+          <td><code>RevocationFilter</code> -- O(1) cuckoo filter, zero false negatives</td>
+        </tr>
+        <tr>
+          <td><strong>No central authority at verify time</strong></td>
+          <td>The verifier never contacts the issuer</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>
+      This is pyana at trust level 0-1 (see <code>docs/web2-trust-integration.md</code>). No
+      ZK circuits, no federation consensus, no blockchain. Just HMAC keys and
+      Ed25519 signatures on commodity hardware.
+    </p>
+
+    <h2 id="whats-next">What's next</h2>
+
+    <p>From this foundation you can progressively escalate trust guarantees:</p>
+
+    <ol>
+      <li><strong>Add ZK privacy</strong> -- Use <code>wallet.authorize(&amp;token, &amp;request, VerificationMode::FullyPrivate)</code>
+        to prove authorization without revealing the token contents or delegation
+        chain to the verifier. The verifier learns only "authorized: yes/no."</li>
+      <li><strong>Add federation</strong> -- Deploy a <code>SiloServer</code> for BFT-ordered revocations.
+        Edge servers sync the attested revocation root periodically. Revocation
+        becomes tamper-evident and consensus-backed.</li>
+      <li><strong>Add selective disclosure</strong> -- Use <code>VerificationMode::SelectiveDisclosure</code>
+        to reveal only specific facts (e.g., "service=api" but not "user=customer-42")
+        while proving the rest in zero knowledge.</li>
+      <li><strong>Delegate to sub-agents</strong> -- Use <code>wallet.delegate(&amp;token, &amp;recipient_pubkey, &amp;restrictions)</code>
+        to hand an attenuated token to another agent. They can present it, further
+        attenuate it, but never widen it.</li>
+      <li><strong>Add third-party caveats</strong> -- Require a discharge from an MFA gateway before
+        the token is valid. See <code>sdk/src/discharge.rs</code> for the pattern.</li>
+    </ol>
+
+    <p>
+      Each upgrade is additive. Your existing tokens, verification logic, and
+      revocation infrastructure continue to work unchanged.
+    </p>
+
+    <h2 id="next">Next Steps</h2>
+
+    <ul>
+      <li><a href="sdk.html">SDK Quickstart</a> -- Full Rust SDK API reference</li>
+      <li><a href="typescript-sdk.html">TypeScript SDK</a> -- Use pyana from Node.js or the browser</li>
+      <li><a href="tokens.html">Token Lifecycle</a> -- Deep dive into the full token lifecycle</li>
+      <li><a href="privacy-api.html">Privacy API</a> -- Anonymous auth, private notes, predicates</li>
+    </ul>
+
+  </div>
+  </main>
+</div>
+
+</layout>

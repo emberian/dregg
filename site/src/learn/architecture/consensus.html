@@ -1,0 +1,173 @@
+<layout src="_layouts/default.html">
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <include src="_includes/sidebar-learn.html"></include>
+  </aside>
+  <main class="docs-content">
+    <nav class="docs-breadcrumb">
+      <a href="/learn.html">Learn</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <a href="/learn/architecture/">Architecture</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <span>Consensus</span>
+    </nav>
+<h1>Consensus: Blocklace + Cordial Miners</h1>
+
+    <p>
+      Pyana federations use the Blocklace protocol with Cordial Miners for total
+      ordering. This replaces the previous Morpheus DAG-BFT. The Blocklace is a
+      CRDT DAG where equivocation is structurally detectable, and Cordial Miners
+      provides 3-round BFT finality.
+    </p>
+
+    <h2 id="three-tier">Three-Tier Execution Model</h2>
+
+    <p>
+      Not all operations require consensus. Pyana provides three execution tiers
+      with increasing coordination cost:
+    </p>
+
+    <table class="comparison">
+      <thead><tr><th>Tier</th><th>Mechanism</th><th>Latency</th><th>When Used</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>Sovereign (PCO)</strong></td>
+          <td>Local execution + STARK proof</td>
+          <td>Instant</td>
+          <td>Default. Agent proves own state transitions. No federation contact.</td>
+        </tr>
+        <tr>
+          <td><strong>Optimistic (Stingray COD)</strong></td>
+          <td>Bounded counters, commit-on-demand</td>
+          <td>Fast (local)</td>
+          <td>Concurrent resource spending. Each silo debits locally within its budget slice.</td>
+        </tr>
+        <tr>
+          <td><strong>Ordered (Cordial Miners)</strong></td>
+          <td>Blocklace DAG, 3-round BFT</td>
+          <td>3 rounds</td>
+          <td>When total ordering is required: nullifier tracking, shared state, disputes.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>
+      Most turns execute at the sovereign tier. Agents escalate to ordered consensus
+      only when they need it (double-spend prevention, public orderbooks, dispute resolution).
+    </p>
+
+    <h2 id="blocklace">The Blocklace</h2>
+
+    <p>
+      The Blocklace is a DAG data structure where each block references all known
+      tips (its causal predecessors). Key properties:
+    </p>
+
+    <ul>
+      <li><strong>CRDT semantics:</strong> The DAG grows monotonically. Blocks are never removed.
+          Merging two views of the Blocklace is a simple union.</li>
+      <li><strong>Equivocation detection:</strong> If a node produces two blocks at the same round
+          with incompatible parents, both are visible in the DAG. This is an irrefutable
+          proof of Byzantine behavior -- no voting or accusation protocol needed.</li>
+      <li><strong>Quiescent:</strong> No messages are sent when there are no transactions to process.
+          Unlike traditional BFT protocols, idle federations consume zero bandwidth.</li>
+      <li><strong>Causal ordering:</strong> Parent references encode happened-before relationships.
+          The DAG provides partial ordering without any consensus protocol.</li>
+    </ul>
+
+    <h2 id="cordial-miners">Cordial Miners (Total Ordering)</h2>
+
+    <p>
+      When total ordering is needed, Cordial Miners operates over the Blocklace:
+    </p>
+
+    <ol>
+      <li>A miner creates a block referencing all known tips (cordial dissemination).</li>
+      <li>When 2f+1 blocks at the same round are observed, the round is <em>closed</em>.</li>
+      <li>A deterministic rule (lowest hash among qualifying round-r blocks) selects the
+          <em>leader</em> for that round.</li>
+      <li>The leader's causal past, minus already-committed blocks, is appended to the
+          total order.</li>
+    </ol>
+
+    <p>
+      Finality requires 3 communication rounds. Safety relies on the Blocklace's
+      equivocation-detection property. Tolerates f &lt; n/3 Byzantine nodes.
+    </p>
+
+    <p>
+      A single-node federation (n=1) is simply Cordial Miners with a trivial committee.
+      The same code path handles solo agents and large federations -- no special "solo mode."
+    </p>
+
+    <h2 id="constitutional">Constitutional Consensus (Membership)</h2>
+
+    <p>
+      Federation membership is governed by Constitutional Consensus -- a democratic
+      protocol built on the Blocklace:
+    </p>
+
+    <ul>
+      <li><strong>h-rule admission:</strong> A node is admitted when h existing members reference
+          its join-request block in their own blocks (typically h = 2f+1).</li>
+      <li><strong>Timeout-leave:</strong> A node that has not produced a block within a configured
+          timeout is automatically removed from the active set. No eviction vote needed.</li>
+      <li><strong>Democratic:</strong> No distinguished authority controls membership. The constitution
+          is the rule set; enforcement is structural via the Blocklace.</li>
+    </ul>
+
+    <p>
+      This replaces epoch-based reconfiguration: membership changes are continuous and
+      take effect as soon as the Blocklace records sufficient support.
+    </p>
+
+    <h2 id="persistence">Persistence and Bootstrapping</h2>
+
+    <p>
+      Nodes persist state across restarts using redb (ACID, WAL, crash-safe):
+    </p>
+
+    <ul>
+      <li><strong>Blocklace blocks:</strong> Persisted incrementally as they arrive. On restart,
+          the node reconstructs its DAG view from stored blocks.</li>
+      <li><strong>Ledger checkpoints:</strong> Every 100 committed blocks, the full ledger state
+          (cell commitments, note tree, nullifier set) is checkpointed atomically.</li>
+      <li><strong>Application state:</strong> JSON atomic snapshots for hosted cells and app services.</li>
+    </ul>
+
+    <h3>Fast-Sync for New Nodes</h3>
+
+    <p>
+      A new node joining a federation does not replay the full Blocklace history:
+    </p>
+
+    <ol>
+      <li>Request the latest checkpoint from any federation peer (checkpoint serving API).</li>
+      <li>Verify the checkpoint's attested root against a known trust anchor.</li>
+      <li>Resume Blocklace participation from the checkpoint height.</li>
+    </ol>
+
+    <p>
+      Sync time is O(checkpoint_size), not O(history) -- typically seconds for a
+      mature federation.
+    </p>
+
+    <h2 id="dissemination">Network Dissemination</h2>
+
+    <ul>
+      <li><strong>Cordial dissemination:</strong> Reactive push with frontier exchange. Each node
+          pushes new blocks to peers and responds to frontier queries with missing
+          causal history.</li>
+      <li><strong>Chunked sync:</strong> Up to 100 blocks per push for catch-up scenarios.</li>
+      <li><strong>Plumtree gossip:</strong> Eager push (degree 3) for spanning-tree delivery,
+          lazy push (IHave) for redundancy.</li>
+      <li><strong>QUIC transport:</strong> All communication over QUIC with multiplexed streams
+          and 0-RTT resumption.</li>
+    </ul>
+
+  </div>
+  </main>
+</div>
+
+</layout>

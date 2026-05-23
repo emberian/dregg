@@ -16,8 +16,10 @@
 //! - **Non-Revocation**: Prove a credential has not been revoked without revealing which one
 
 pub mod anonymous;
+pub mod blinded_credentials;
 pub mod credential;
 pub mod holder;
+pub mod inbox_delivery;
 pub mod issuer;
 pub mod presentation;
 pub mod revocation;

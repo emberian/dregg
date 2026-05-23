@@ -1,0 +1,25 @@
+/* Shiki syntax highlighting overrides */
+pre.code-block {
+  background: var(--bg-inset) !important;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r3);
+  padding: var(--s5) !important;
+  margin-bottom: var(--s5);
+  overflow-x: auto;
+}
+pre.code-block code {
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  line-height: 1.6;
+  background: transparent !important;
+}
+/* Ensure shiki tokens don't get overridden by our base code styles */
+pre.code-block .shiki {
+  background: transparent !important;
+}
+pre.code-block .line {
+  display: block;
+}
+pre.code-block .line:empty::before {
+  content: " ";
+}

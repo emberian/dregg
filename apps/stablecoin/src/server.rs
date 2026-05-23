@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{Path, State},
     http::StatusCode,
     routing::{get, post},
@@ -15,11 +15,14 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use pyana_app_framework::auth::{AdminAuth, AdminToken, HasAdminToken};
+use pyana_app_framework::fee_policy::FeePolicy;
 use pyana_app_framework::server::ErrorResponse;
 
 use crate::cdp::{CollateralPosition, ETH_ASSET_TYPE, PositionStatus, StablecoinRegistry};
 use crate::circuit::MIN_RATIO_BPS;
+use crate::fee_endpoints::{compute_fee_or_reject, default_fee_policy, resolve_paying_asset};
 use crate::liquidation::LiquidationEngine;
+use crate::liquidation_queue::{LIQUIDATION_QUEUE_MIN_DEPOSIT, LiquidationQueue};
 use crate::oracle::{PriceOracle, test_attestation, test_oracle_pubkey};
 
 // =============================================================================
@@ -31,6 +34,8 @@ pub struct AppState {
     pub registry: Arc<RwLock<StablecoinRegistry>>,
     pub oracle: Arc<RwLock<PriceOracle>>,
     pub liquidation_engine: Arc<LiquidationEngine>,
+    /// Programmable liquidation queue (Upgrade 1).
+    pub liquidation_queue: Arc<LiquidationQueue>,
     pub current_height: Arc<RwLock<u64>>,
     pub admin_token: AdminToken,
 }
@@ -51,6 +56,7 @@ impl AppState {
             registry: Arc::new(RwLock::new(StablecoinRegistry::new())),
             oracle: Arc::new(RwLock::new(PriceOracle::new(vec![oracle_pubkey], 1000))),
             liquidation_engine: Arc::new(LiquidationEngine::default_config()),
+            liquidation_queue: Arc::new(LiquidationQueue::new()),
             current_height: Arc::new(RwLock::new(1)),
             admin_token: AdminToken::from_env(),
         }
@@ -81,12 +87,63 @@ pub struct CdpResponse {
 pub struct MintRequest {
     pub amount: u64,
     pub oracle_price: u64,
+    /// Optional hex-encoded 32-byte asset ID for fee payment.
+    /// Defaults to native computrons if omitted.
+    /// Returns 400 if the asset is not in the accepted fee policy.
+    pub paying_asset: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct MintResponse {
+    #[serde(flatten)]
+    pub cdp: CdpResponse,
+    /// The fee amount charged, denominated in `fee_asset`.
+    pub fee_charged: u64,
+    /// Hex-encoded asset ID used for fee payment.
+    pub fee_asset: String,
 }
 
 #[derive(Deserialize)]
 pub struct RepayRequest {
     pub amount: u64,
     pub oracle_price: u64,
+}
+
+/// Request to submit a liquidation candidate to the programmable queue.
+#[derive(Deserialize)]
+pub struct QueueLiquidationRequest {
+    /// CDP position ID (hex-encoded 32 bytes).
+    pub position_id: String,
+    /// Oracle price to use for health-factor assessment.
+    pub oracle_price: u64,
+    /// Sender identity (hex-encoded 32 bytes).
+    pub sender: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct QueueLiquidationResponse {
+    pub queued: bool,
+    pub position_id: String,
+    pub health_factor_bps: u64,
+    pub queue_length: usize,
+}
+
+/// Request to pay a stability fee in a chosen asset.
+#[derive(Deserialize)]
+pub struct StabilityFeeRequest {
+    /// Base stability fee amount in computrons.
+    pub base_amount: u64,
+    /// Optional hex-encoded 32-byte asset ID for fee payment.
+    /// Defaults to native computrons if omitted.
+    pub paying_asset: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct StabilityFeeResponse {
+    /// The fee amount charged in the chosen asset.
+    pub fee_charged: u64,
+    /// Hex-encoded asset ID used for fee payment.
+    pub fee_asset: String,
 }
 
 #[derive(Deserialize)]
@@ -125,6 +182,12 @@ pub fn router() -> Router<AppState> {
         .route("/oracle/update", post(oracle_update))
         .route("/oracle/price", get(oracle_price))
         .route("/admin/height", post(admin_advance_height))
+        // Upgrade 1: programmable liquidation queue
+        .route("/queue/liquidations/submit", post(queue_liquidation_submit))
+        .route("/queue/liquidations/drain", get(queue_liquidation_drain))
+        // Upgrade 2: multi-asset fees
+        .route("/fees", get(crate::fee_endpoints::get_fees))
+        .route("/stability-fee", post(stability_fee))
 }
 
 // =============================================================================
@@ -235,9 +298,10 @@ async fn get_cdp(
 
 async fn mint_cdp(
     State(state): State<AppState>,
+    Extension(policy): Extension<FeePolicy>,
     Path(id): Path<String>,
     Json(req): Json<MintRequest>,
-) -> Result<Json<CdpResponse>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<MintResponse>, (StatusCode, Json<ErrorResponse>)> {
     let id_bytes = parse_hex_id(&id).ok_or_else(|| {
         (
             StatusCode::BAD_REQUEST,
@@ -246,6 +310,14 @@ async fn mint_cdp(
             }),
         )
     })?;
+
+    // Upgrade 2: resolve paying asset and compute fee.
+    let paying_asset = resolve_paying_asset(req.paying_asset.as_deref(), &policy)
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })))?;
+
+    // Base fee = 1% of mint amount (100 bps).
+    let base_fee = req.amount / 100;
+    let fee_charged = compute_fee_or_reject(&policy, &paying_asset, base_fee)?;
 
     let height = *state.current_height.read().await;
     let attestation = test_attestation("ETH/USD", req.oracle_price, height, [0x01; 32]);
@@ -271,7 +343,11 @@ async fn mint_cdp(
             )
         })?;
 
-    Ok(Json(position_to_response(position, Some(req.oracle_price))))
+    Ok(Json(MintResponse {
+        cdp: position_to_response(position, Some(req.oracle_price)),
+        fee_charged,
+        fee_asset: hex_id(&paying_asset),
+    }))
 }
 
 async fn repay_cdp(
@@ -401,6 +477,123 @@ async fn oracle_price(
         price: attestation.price,
         timestamp: attestation.timestamp,
     }))
+}
+
+// =============================================================================
+// Upgrade 1: Liquidation Queue Handlers
+// =============================================================================
+
+/// `POST /queue/liquidations/submit` — submit a CDP position as a liquidation candidate.
+///
+/// The request must include the position_id, oracle_price, and optionally sender.
+/// Returns 400 if the position is not liquidatable or is already queued.
+async fn queue_liquidation_submit(
+    State(state): State<AppState>,
+    Json(req): Json<QueueLiquidationRequest>,
+) -> Result<Json<QueueLiquidationResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let id_bytes = parse_hex_id(&req.position_id).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "invalid position_id format".to_string(),
+            }),
+        )
+    })?;
+
+    let sender = if let Some(s) = &req.sender {
+        parse_hex_id(s).ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "invalid sender format".to_string(),
+                }),
+            )
+        })?
+    } else {
+        [0u8; 32]
+    };
+
+    let registry = state.registry.read().await;
+    let position = registry.get(&id_bytes).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "CDP not found".to_string(),
+            }),
+        )
+    })?;
+
+    let health_factor_bps = position
+        .collateral_ratio_bps(req.oracle_price)
+        .unwrap_or(u64::MAX);
+
+    state
+        .liquidation_queue
+        .submit(position, req.oracle_price, sender, LIQUIDATION_QUEUE_MIN_DEPOSIT)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
+
+    let queue_length = state.liquidation_queue.len().await;
+
+    Ok(Json(QueueLiquidationResponse {
+        queued: true,
+        position_id: req.position_id,
+        health_factor_bps,
+        queue_length,
+    }))
+}
+
+/// `GET /queue/liquidations/drain` — return all pending liquidation candidates in priority order.
+///
+/// Returns candidates sorted lowest-health-factor-first (most-at-risk first).
+async fn queue_liquidation_drain(
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    let candidates = state.liquidation_queue.drain_priority().await;
+    Json(serde_json::json!({
+        "candidates": candidates.iter().map(|c| serde_json::json!({
+            "position_id": hex::encode(c.position_id),
+            "oracle_price": c.oracle_price,
+            "health_factor_bps": c.health_factor_bps,
+        })).collect::<Vec<_>>(),
+        "count": candidates.len(),
+    }))
+}
+
+// =============================================================================
+// Upgrade 2: Stability Fee with Multi-Asset Payment
+// =============================================================================
+
+/// `POST /stability-fee` — compute and record a stability fee in the caller's chosen asset.
+///
+/// The request specifies a base amount and optionally a paying_asset (hex-encoded 32-byte
+/// asset ID). Returns 400 if the asset is not in the accepted fee policy.
+async fn stability_fee(
+    Extension(policy): Extension<FeePolicy>,
+    Json(req): Json<StabilityFeeRequest>,
+) -> Result<Json<StabilityFeeResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let paying_asset = resolve_paying_asset(req.paying_asset.as_deref(), &policy)
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })))?;
+
+    let fee_charged = compute_fee_or_reject(&policy, &paying_asset, req.base_amount)?;
+
+    Ok(Json(StabilityFeeResponse {
+        fee_charged,
+        fee_asset: hex_id(&paying_asset),
+    }))
+}
+
+mod hex {
+    pub fn encode(b: impl AsRef<[u8]>) -> String {
+        b.as_ref().iter().map(|byte| format!("{byte:02x}")).collect()
+    }
 }
 
 // =============================================================================

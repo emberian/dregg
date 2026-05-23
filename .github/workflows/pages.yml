@@ -75,10 +75,16 @@ jobs:
           mkdir -p site/paper
           typst compile paper/pyana.typ site/paper/pyana.pdf
 
+      - name: Build site
+        run: |
+          cd site
+          npm install
+          npm run build
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: site
+          path: site/dist
 
   deploy:
     needs: build

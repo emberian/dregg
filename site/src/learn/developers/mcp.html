@@ -1,0 +1,67 @@
+<layout src="_layouts/default.html">
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <include src="_includes/sidebar-learn.html"></include>
+  </aside>
+  <main class="docs-content">
+    <nav class="docs-breadcrumb">
+      <a href="/learn.html">Learn</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <a href="/learn/developers/">Developers</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <span>Mcp</span>
+    </nav>
+<h1>MCP Integration (AI Agent Tools)</h1>
+
+    <p>
+      Pyana exposes its capabilities as MCP (Model Context Protocol) tools over
+      JSON-RPC 2.0 stdio transport. AI assistants (Claude, GPT, etc.) can discover
+      and invoke tools to interact with the federation.
+    </p>
+
+    <h2 id="running">Running the MCP Server</h2>
+
+    <pre><code>pyana-node mcp --data-dir ~/.pyana --federation-peers "peer1:8420"</code></pre>
+
+    <p>
+      This reads JSON-RPC from stdin and writes responses to stdout. Configure your
+      AI assistant to launch this as a tool server.
+    </p>
+
+    <h2 id="tools">Available Tools</h2>
+
+    <p>The MCP server exposes these tools via <code>tools/list</code>:</p>
+
+    <ul>
+      <li><strong>authorize</strong> -- Authorize an action with a held token</li>
+      <li><strong>mint_token</strong> -- Create a new root capability token</li>
+      <li><strong>attenuate</strong> -- Restrict a token's permissions</li>
+      <li><strong>delegate</strong> -- Hand an attenuated token to another agent</li>
+      <li><strong>submit_turn</strong> -- Execute a state transition</li>
+      <li><strong>post_intent</strong> -- Broadcast a capability need</li>
+      <li><strong>list_tokens</strong> -- Show all held tokens</li>
+      <li><strong>node_status</strong> -- Federation status and sync state</li>
+      <li><strong>seal</strong> -- Encrypt data under a capability (X25519-ChaCha20Poly1305)</li>
+      <li><strong>unseal</strong> -- Decrypt sealed data</li>
+    </ul>
+
+    <h2 id="protocol">Protocol</h2>
+
+    <p>Implements the MCP subset for tool serving:</p>
+    <ul>
+      <li><code>initialize</code> -- Capability negotiation</li>
+      <li><code>notifications/initialized</code> -- Client readiness (no response)</li>
+      <li><code>tools/list</code> -- Enumerate available tools</li>
+      <li><code>tools/call</code> -- Invoke a tool</li>
+    </ul>
+
+    <div class="stub-notice">
+      <p>Detailed MCP tool schemas, example conversations, and integration guides are being written.</p>
+    </div>
+
+  </div>
+  </main>
+</div>
+
+</layout>

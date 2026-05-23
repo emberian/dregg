@@ -24,6 +24,7 @@
 //! proofs alongside every fill. Settlement is atomic via TurnComposer. The book
 //! state Merkle root is committed to the federation after each state change.
 
+pub mod blinded_queue;
 pub mod book;
 pub mod circuit;
 pub mod commit_reveal;
@@ -31,6 +32,7 @@ pub mod escrow;
 pub mod matching;
 pub mod order;
 pub mod private_order;
+pub mod ring_trade;
 pub mod server;
 pub mod settlement;
 pub mod state_commitment;

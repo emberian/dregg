@@ -1,0 +1,139 @@
+<layout src="_layouts/default.html">
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <include src="_includes/sidebar-learn.html"></include>
+  </aside>
+  <main class="docs-content">
+    <nav class="docs-breadcrumb">
+      <a href="/learn.html">Learn</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <a href="/learn/architecture/">Architecture</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <span>Economics</span>
+    </nav>
+<h1>Economic Model</h1>
+
+    <p>
+      Pyana's economic model is based on computrons (resource units), budget channels,
+      and bounded counters. This prevents DoS attacks and aligns incentives without
+      requiring a global token or cryptocurrency.
+    </p>
+
+    <h2 id="computrons">Computrons</h2>
+    <p>
+      Every turn consumes computrons proportional to its execution cost. Cells hold
+      computron balances. A turn with insufficient balance is rejected before execution.
+      The faucet (devnet only) dispenses initial computrons for testing.
+    </p>
+
+    <h2 id="budget-channels">Budget Channels</h2>
+    <p>
+      Based on the Stingray model (bounded counters), budget channels allow
+      decentralized rate limiting without global consensus per operation. Each
+      channel tracks a counter with a maximum value, enabling fine-grained resource
+      control across distributed cells.
+    </p>
+
+    <h2 id="fees">Fees and Deposits</h2>
+    <ul>
+      <li><strong>Turn execution fee:</strong> Proportional to computational cost (computrons consumed)</li>
+      <li><strong>Storage deposit:</strong> Refundable deposit for state that persists across epochs</li>
+      <li><strong>Intent posting fee:</strong> Small anti-spam fee for broadcasting intents</li>
+    </ul>
+
+    <h2 id="comparison">Comparison</h2>
+
+    <table class="comparison">
+      <thead>
+        <tr><th>System</th><th>Pyana Difference</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Ethereum gas</td><td>No global token. Computrons are per-federation, not tradeable.</td></tr>
+        <tr><td>Sui object model</td><td>Similar per-object gas, but pyana cells are capability-gated (no ambient access).</td></tr>
+        <tr><td>Mina</td><td>Mina has a fixed supply token. Pyana computrons are a resource accounting mechanism, not a store of value.</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="storage-economics">Storage Economics</h2>
+
+    <h3>Space Banks</h3>
+    <p>
+      Each federation maintains a total storage budget partitioned into space banks.
+      Cells draw from their assigned bank. Over-allocation triggers a queue until
+      space is freed via GC or governance increases the allocation.
+    </p>
+
+    <h3>Computron-Metered Storage</h3>
+    <table class="comparison">
+      <thead>
+        <tr><th>Operation</th><th>Cost (computrons)</th><th>Notes</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Write (per byte, per epoch)</td><td>1</td><td>Ongoing cost for persistent state</td></tr>
+        <tr><td>Read (per byte)</td><td>0.01</td><td>Cheap reads encourage verification</td></tr>
+        <tr><td>MerkleQueue enqueue</td><td>10 + message_size</td><td>Anti-spam deposit (refunded on receipt)</td></tr>
+        <tr><td>Erasure shard (per byte, per epoch)</td><td>0.5</td><td>Redundancy at half price</td></tr>
+        <tr><td>Sovereign commitment</td><td>Fixed 10/epoch</td><td>Regardless of actual state size</td></tr>
+      </tbody>
+    </table>
+
+    <h3>MerkleQueue Inboxes</h3>
+    <p>
+      Every cell has a MerkleQueue inbox for pending messages. Senders pay a deposit
+      (refunded when the message is processed, burned if it expires). This is the
+      primary anti-spam mechanism: flooding inboxes is expensive.
+    </p>
+    <pre><code>deposit = base_fee + (message_size * per_byte_rate) + (ttl_blocks * per_block_rate)</code></pre>
+
+    <h3>Erasure Coding</h3>
+    <p>
+      Sovereign cells can opt into erasure-coded availability: state is encoded as
+      k-of-n Reed-Solomon shards distributed across federation nodes. Any k shards
+      reconstruct the full state. Priced at 0.5x the full hosting rate.
+    </p>
+
+    <h2 id="state-lifecycle">State Lifecycle (Deep GC)</h2>
+
+    <table class="comparison">
+      <thead>
+        <tr><th>Phase</th><th>Condition</th><th>Behavior</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Birth</td><td>Factory creation or genesis</td><td>Active participant</td></tr>
+        <tr><td>Active</td><td>Recent turn within TTL</td><td>Normal operation</td></tr>
+        <tr><td>Decay</td><td>No turn for &gt; TTL, rent unpaid</td><td>Frozen; pay rent to reactivate</td></tr>
+        <tr><td>Forced Sovereignty</td><td>Decay exceeds grace period</td><td>Ejected; must self-host from IVC proof</td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      The GC cycle runs at epoch boundaries. Forced sovereignty is not state
+      deletion -- the cell's owner retains their IVC proof and can re-register
+      at any time.
+    </p>
+
+    <h2 id="fee-market">Fee Market (EIP-1559 Adaptation)</h2>
+    <p>
+      A base fee adjusts per-block to target 50% utilization:
+    </p>
+    <pre><code>base_fee[n+1] = base_fee[n] * (1 + (actual - target) / target * 0.125)</code></pre>
+    <p>
+      Target: 1M computrons/block, max 2M. Users specify max_fee and priority_fee.
+      The base fee is split 50/30/20 (proposer/treasury/burn); priority goes
+      entirely to the proposer.
+    </p>
+
+    <h2 id="staking">Validator Staking</h2>
+    <p>
+      Federation membership requires a deposit (initially 100,000 computrons),
+      proven via a STARK range proof (value hidden, threshold satisfaction proven).
+      Slash conditions: 100% for equivocation, 5%/epoch for inactivity, 50% for
+      invalid attestation.
+    </p>
+
+  </div>
+  </main>
+</div>
+
+</layout>

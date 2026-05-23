@@ -24,9 +24,14 @@ use pyana_app_framework::persistence::JsonPersistence;
 use pyana_app_framework::server::{AppConfig, AppServer};
 use pyana_app_framework::{EngineConfig, PyanaEngine};
 
+use pyana_app_framework::blinded_endpoint::FairDistributionEndpoint;
+use pyana_app_framework::inbox_endpoint::InboxEndpoint;
+
 use crate::artwork::ArtworkRegistry;
 use crate::auction::AuctionEngine;
+use crate::blinded_bids::BLINDED_BID_QUEUE_CAPACITY;
 use crate::handlers;
+use crate::notification_inbox::{INBOX_CAPACITY, INBOX_MIN_DEPOSIT};
 use crate::persistence::StateSnapshot;
 use crate::provenance::ProvenanceRegistry;
 use crate::ws::{WsBroadcaster, handle_ws_connection};
@@ -150,10 +155,21 @@ pub async fn start_server(
         app_routes = app_routes.fallback_service(ServeDir::new(fp));
     }
 
+    // Upgrade 1: TRUE Vickrey auctions via blinded queue.
+    // Bids committed here cannot be reordered by the operator — strictly stronger
+    // than the legacy commit-reveal flow (kept at /auctions/* for compatibility).
+    let blinded_bids = FairDistributionEndpoint::new(BLINDED_BID_QUEUE_CAPACITY);
+
+    // Upgrade 2: Store-and-forward inbox for offline bidder notifications.
+    // Outbid and winner messages are pushed here as encrypted payloads.
+    let bidder_inbox = InboxEndpoint::new(INBOX_CAPACITY, INBOX_MIN_DEPOSIT);
+
     AppServer::new(config)
         .service_name("pyana-gallery")
         .with_cors()
         .routes(app_routes)
+        .with_blinded_endpoint("/queue/bids", blinded_bids)
+        .with_inbox("/inbox/bidders", bidder_inbox)
         .serve_background()
         .await
         .expect("failed to start gallery server")

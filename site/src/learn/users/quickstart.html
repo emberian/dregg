@@ -1,0 +1,112 @@
+<layout src="_layouts/default.html">
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <include src="_includes/sidebar-learn.html"></include>
+  </aside>
+  <main class="docs-content">
+    <nav class="docs-breadcrumb">
+      <a href="/learn.html">Learn</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <a href="/learn/users/">Users</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <span>Quickstart</span>
+    </nav>
+<h1>Quickstart</h1>
+
+    <p>
+      Get the <code>pyana</code> CLI installed, connect to a running node, and
+      perform your first operations. This takes under five minutes.
+    </p>
+
+    <h2 id="install">Install</h2>
+
+    <p>Build and install from source (requires Rust 1.94+):</p>
+
+    <pre><code class="language-rust">cargo install --path cli</code></pre>
+
+    <p>
+      This gives you the <code>pyana</code> command. Verify it works:
+    </p>
+
+    <pre><code>pyana --version</code></pre>
+
+    <h2 id="connect">Connect to a Node</h2>
+
+    <p>
+      Initialize your local config and point it at a running node:
+    </p>
+
+    <pre><code># Create ~/.pyana/config.toml with defaults
+pyana config init
+
+# Check the node is reachable
+pyana node status</code></pre>
+
+    <p>
+      By default the CLI connects to <code>http://127.0.0.1:8420</code>. If
+      your node is elsewhere, edit <code>~/.pyana/config.toml</code> or pass
+      <code>--node-url</code>.
+    </p>
+
+    <h2 id="first-operations">First Operations</h2>
+
+    <p>Check your computron balance and export a capability:</p>
+
+    <pre><code class="language-rust"># Show balances for cells you own
+pyana wallet balance
+
+# Export a capability as a portable sturdy ref
+pyana cap export &lt;cell-id&gt;</code></pre>
+
+    <p>
+      The exported capability is a <code>pyana://</code> URI containing a swiss
+      number. Anyone who receives it can enliven the reference to get a live
+      handle to that cell.
+    </p>
+
+    <h2 id="concepts">Key Concepts</h2>
+
+    <h3>Cells</h3>
+    <p>
+      A cell is the unit of state. Each cell has a 32-byte identity, a set of
+      typed fields, a c-list (capability list) of references it holds, and a
+      commitment hash. Cells can be sovereign (you execute locally, prove with
+      a STARK) or hosted (the federation executes on your behalf). In sovereign
+      mode the federation only ever sees the 32-byte commitment -- never your
+      data.
+    </p>
+
+    <h3>Turns</h3>
+    <p>
+      A turn is an atomic state transition. You build a call forest targeting
+      one or more cells, execute it locally, then submit
+      <code>(turn_hash, new_commitment, proof)</code> to the federation. The
+      Effect VM supports 24 effects: transfers, capability grants/revocations,
+      cell creation, seal/unseal, pipelined sends, bridge operations, and more.
+      Each turn produces a STARK proof that the transition is valid.
+    </p>
+
+    <h3>Capabilities and Strands</h3>
+    <p>
+      Capabilities are unforgeable object references. They flow between cells
+      via CapTP sessions organized into strands (logical communication
+      channels). Sturdy references survive disconnection. The handoff protocol
+      enables offline three-party introduction. Distributed GC reclaims
+      unreachable capabilities automatically.
+    </p>
+
+    <h2 id="next">Next Steps</h2>
+
+    <ul>
+      <li><a href="cli.html">CLI Reference</a> -- full command tree (cell, turn, cap, wallet, namespace, storage, proof)</li>
+      <li><a href="captp.html">CapTP Sessions</a> -- delegate, handoff, revoke capabilities</li>
+      <li><a href="/learn/architecture/overview.html">Architecture Overview</a> -- how the system works end-to-end</li>
+      <li><a href="/learn/developers/building-apps.html">Building Apps</a> -- create services that others can connect to</li>
+    </ul>
+
+  </div>
+  </main>
+</div>
+
+</layout>

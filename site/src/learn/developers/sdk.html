@@ -1,0 +1,294 @@
+<layout src="_layouts/default.html">
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <include src="_includes/sidebar-learn.html"></include>
+  </aside>
+  <main class="docs-content">
+    <nav class="docs-breadcrumb">
+      <a href="/learn.html">Learn</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <a href="/learn/developers/">Developers</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <span>Sdk</span>
+    </nav>
+<h1>SDK Quickstart</h1>
+
+    <p>
+      This guide walks through the core <code>pyana-sdk</code> APIs: creating a wallet,
+      minting tokens, attenuating and delegating, generating STARK proofs, and signing
+      turns. All code examples use real API signatures from the codebase.
+    </p>
+
+    <h2 id="wallet">Creating a Wallet</h2>
+
+    <p>
+      The <code>AgentWallet</code> is the primary credential holder. It manages your
+      Ed25519 identity, token collection, and proof generation.
+    </p>
+
+    <pre><code class="language-rust">use pyana_sdk::AgentWallet;
+
+// Option 1: Fresh random identity
+let mut wallet = AgentWallet::new();
+
+// Option 2: From a 24-word mnemonic (deterministic, recoverable)
+let mut wallet = AgentWallet::from_mnemonic(
+    "abandon abandon abandon ... (24 words)",
+    ""  // optional passphrase
+).unwrap();
+
+// Option 3: From raw key bytes (restore from backup)
+use zeroize::Zeroizing;
+let secret = Zeroizing::new([0u8; 32]); // your saved key
+let mut wallet = AgentWallet::from_key_bytes(secret);
+
+// Get your public identity
+let my_identity = wallet.public_key();
+println!("Agent ID: {:?}", my_identity);</code></pre>
+
+    <h2 id="mint">Minting a Root Token</h2>
+
+    <p>
+      Root tokens are the origin of all authority. Mint one with a 32-byte secret key
+      and a service name:
+    </p>
+
+    <div class="api-sig">
+      <span class="keyword">pub fn</span> <span class="fn-name">mint_token</span>(<span class="param">&amp;mut self, root_key: &amp;[u8; 32], service: &amp;str</span>) -> <span class="type">HeldToken</span>
+    </div>
+
+    <pre><code class="language-rust">use pyana_sdk::AgentWallet;
+
+let mut wallet = AgentWallet::new();
+
+// The root_key is your HMAC secret. Guard it carefully.
+let root_key: [u8; 32] = *b"my-secret-root-key-32-bytes!!!!!";
+let root_token = wallet.mint_token(&root_key, "my-service");
+
+println!("Token: {} (service: {})", root_token.label, root_token.service);
+assert!(root_token.can_mint()); // Root tokens can forge new ones</code></pre>
+
+    <h2 id="attenuate">Attenuating (Restricting) a Token</h2>
+
+    <p>
+      Attenuation creates a strictly weaker token. The original remains unchanged.
+    </p>
+
+    <div class="api-sig">
+      <span class="keyword">pub fn</span> <span class="fn-name">attenuate</span>(<span class="param">&amp;mut self, token: &amp;HeldToken, restrictions: &amp;Attenuation</span>) -> <span class="type">Result&lt;HeldToken, SdkError&gt;</span>
+    </div>
+
+    <pre><code class="language-rust">use pyana_sdk::{AgentWallet, Attenuation};
+
+let mut wallet = AgentWallet::new();
+let root = wallet.mint_token(b"my-secret-root-key-32-bytes!!!!!", "api");
+
+// Restrict to read-only on the "dns" service
+let restricted = wallet.attenuate(&root, &Attenuation {
+    services: vec![("dns".into(), "r".into())],
+    ..Default::default()
+}).unwrap();
+
+assert!(!restricted.can_mint()); // Attenuated tokens cannot forge</code></pre>
+
+    <h2 id="delegate">Delegating to Another Agent</h2>
+
+    <p>
+      Delegation attenuates a token and packages it for transmission to another agent.
+    </p>
+
+    <div class="api-sig">
+      <span class="keyword">pub fn</span> <span class="fn-name">delegate</span>(<span class="param">&amp;mut self, token: &amp;HeldToken, to: &amp;PublicKey, restrictions: &amp;Attenuation</span>) -> <span class="type">Result&lt;DelegatedToken, SdkError&gt;</span>
+    </div>
+
+    <pre><code class="language-rust">use pyana_sdk::{AgentWallet, Attenuation, PublicKey};
+
+let mut alice = AgentWallet::new();
+let mut bob = AgentWallet::new();
+
+let root = alice.mint_token(b"alice-secret-key-32-bytes!!!!!!!", "storage");
+
+// Alice delegates read-only to Bob
+let delegated = alice.delegate(&root, &bob.public_key(), &Attenuation {
+    services: vec![("storage".into(), "read".into())],
+    max_ttl: Some(std::time::Duration::from_secs(3600)),
+    ..Default::default()
+}).unwrap();
+
+// Bob receives the delegation
+bob.receive_delegation(delegated).unwrap();</code></pre>
+
+    <h2 id="authorize">Generating Authorization Proofs</h2>
+
+    <p>
+      The unified <code>authorize()</code> method supports all three verification modes:
+    </p>
+
+    <div class="api-sig">
+      <span class="keyword">pub fn</span> <span class="fn-name">authorize</span>(<span class="param">&amp;self, token: &amp;HeldToken, request: &amp;AuthRequest, mode: VerificationMode</span>) -> <span class="type">Result&lt;AuthorizationPresentation, SdkError&gt;</span>
+    </div>
+
+    <pre><code class="language-rust">use pyana_sdk::{AgentWallet, VerificationMode, AuthorizationPresentation, AuthRequest};
+
+let mut wallet = AgentWallet::new();
+let token = wallet.mint_token(b"my-secret-root-key-32-bytes!!!!!", "dns");
+
+let request = AuthRequest {
+    service: Some("dns".into()),
+    action: Some("read".into()),
+    ..Default::default()
+};
+
+// Trusted mode: full visibility, ~8us
+let trusted = wallet.authorize(&token, &request, VerificationMode::Trusted).unwrap();
+
+// Fully private: verifier learns only allow/deny, ~500ms
+let private = wallet.authorize(&token, &request, VerificationMode::FullyPrivate).unwrap();
+
+match private {
+    AuthorizationPresentation::Private { proof, conclusion } => {
+        println!("Authorized: {}", conclusion);
+        println!("Proof size: {} bytes", proof.len());
+    }
+    _ => unreachable!(),
+}</code></pre>
+
+    <h2 id="sign-turn">Signing Turns</h2>
+
+    <p>
+      Turns are atomic state transitions. Sign one for submission to a federation node:
+    </p>
+
+    <div class="api-sig">
+      <span class="keyword">pub fn</span> <span class="fn-name">sign_turn</span>(<span class="param">&amp;self, turn: &amp;Turn</span>) -> <span class="type">SignedTurn</span>
+    </div>
+
+    <pre><code class="language-rust">use pyana_sdk::{AgentWallet, CellId, Turn, TurnBuilder, Effect};
+
+let wallet = AgentWallet::new();
+
+// Build a turn targeting a cell
+let turn = TurnBuilder::new()
+    .target(CellId::derive_raw(&wallet.public_key().0, b"my-domain-hash-here-32bytes!"))
+    .effect(Effect::SetField { key: "counter".into(), value: 42 })
+    .build();
+
+let signed = wallet.sign_turn(&turn);
+// Submit signed.turn + signed.signature + signed.signer to the node</code></pre>
+
+    <h2 id="receipt-chain">Receipt Chains (Proof-Carrying State)</h2>
+
+    <p>
+      After each successful turn, append the receipt to build a verifiable history:
+    </p>
+
+    <pre><code class="language-rust">use pyana_sdk::AgentWallet;
+use pyana_turn::TurnReceipt;
+
+let mut wallet = AgentWallet::new();
+
+// After a turn is committed by the federation:
+// wallet.append_receipt(receipt);
+
+// Verify your own chain integrity
+wallet.verify_own_chain().unwrap();
+
+// Export for anyone to verify offline
+let chain = wallet.receipt_chain();
+pyana_turn::verify_receipt_chain(chain).unwrap();</code></pre>
+
+    <h2 id="ivc">IVC (Constant-Size State Proof)</h2>
+
+    <p>
+      Enable IVC to compress your entire receipt chain into a constant-size proof:
+    </p>
+
+    <pre><code class="language-rust">use pyana_sdk::{AgentWallet, BabyBear, verify_ivc};
+
+let mut wallet = AgentWallet::new();
+
+// Enable IVC accumulation (provide initial state root)
+wallet.enable_ivc(BabyBear::new(0));
+
+// ... append receipts as turns commit ...
+
+// Export a constant-size proof of your entire history
+if let Some(proof) = wallet.export_state_proof() {
+    // Anyone can verify this without seeing the full chain
+    assert!(verify_ivc(&proof));
+}</code></pre>
+
+    <h2 id="sovereign">Sovereign Cell Operations</h2>
+
+    <p>
+      These APIs let you take ownership of your cell state and interact directly
+      with peers, bypassing the federation entirely for routine operations.
+    </p>
+
+    <h3>Taking Sovereignty</h3>
+
+    <div class="api-sig">
+      <span class="keyword">pub fn</span> <span class="fn-name">make_sovereign</span>(<span class="param">&amp;mut self</span>) -> <span class="type">Result&lt;SovereignCell, SdkError&gt;</span>
+    </div>
+
+    <pre><code class="language-rust">// Transition your cell from hosted to sovereign mode.
+// After this, the federation stores only your 32-byte commitment hash.
+// You maintain full state locally and submit proofs of valid transitions.
+let sovereign = wallet.make_sovereign().unwrap();
+println!("Commitment: {:?}", sovereign.commitment());</code></pre>
+
+    <h3>Private Transfers</h3>
+
+    <div class="api-sig">
+      <span class="keyword">pub fn</span> <span class="fn-name">private_transfer</span>(<span class="param">&amp;mut self, amount: u64, recipient: &amp;StealthAddress</span>) -> <span class="type">Result&lt;PrivateTransferProof, SdkError&gt;</span>
+    </div>
+
+    <pre><code class="language-rust">// Amount-private send using Pedersen commitments.
+// The federation sees: a nullifier (double-spend check), a new note commitment,
+// and a conservation proof. It does NOT see the amount or recipient.
+let stealth_addr = bob_wallet.stealth_meta_address();
+let proof = wallet.private_transfer(1000, &stealth_addr).unwrap();</code></pre>
+
+    <h3>Stealth Receiving</h3>
+
+    <div class="api-sig">
+      <span class="keyword">pub fn</span> <span class="fn-name">stealth_meta_address</span>(<span class="param">&amp;self</span>) -> <span class="type">StealthAddress</span>
+    </div>
+
+    <pre><code class="language-rust">// Generate your stealth meta-address for receiving privately.
+// Senders derive a one-time address from this; only you can detect and spend.
+let my_stealth = wallet.stealth_meta_address();
+// Share my_stealth with potential senders</code></pre>
+
+    <h3>Peer-to-Peer Sessions</h3>
+
+    <div class="api-sig">
+      <span class="keyword">pub fn</span> <span class="fn-name">peer_exchange_session</span>(<span class="param">&amp;mut self, peer: &amp;PublicKey</span>) -> <span class="type">Result&lt;PeerSession, SdkError&gt;</span>
+    </div>
+
+    <pre><code class="language-rust">// Open a direct agent-to-agent session. No federation contact.
+// Both parties exchange signed state transitions with STARK proofs.
+let session = wallet.peer_exchange_session(&bob_pubkey).unwrap();
+
+// Send a state transition directly to Bob
+session.send_transition(my_transition, my_proof).await?;
+
+// Receive and verify Bob's transition
+let bob_transition = session.receive_transition().await?;
+// Bob's proof is verified automatically -- you learn his new commitment</code></pre>
+
+    <h2 id="next">Next Steps</h2>
+
+    <ul>
+      <li><a href="tokens.html">Token Lifecycle</a> -- Deep dive into the full token lifecycle</li>
+      <li><a href="privacy-api.html">Privacy API</a> -- Anonymous auth, private notes, predicates</li>
+      <li><a href="mcp.html">MCP Integration</a> -- Connect AI agents to pyana via tools</li>
+      <li><a href="/learn/architecture/overview.html">Architecture Overview</a> -- Understand the system design</li>
+    </ul>
+
+  </div>
+  </main>
+</div>
+
+</layout>

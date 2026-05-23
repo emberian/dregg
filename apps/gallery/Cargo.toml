@@ -30,6 +30,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 tower-http = { version = "0.6", features = ["cors", "fs"] }
 futures = "0.3"
 uuid = { version = "1", features = ["v4"] }
+tower = { version = "0.5" }
 
 [[bin]]
 name = "pyana-gallery"

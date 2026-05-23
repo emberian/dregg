@@ -1,0 +1,50 @@
+<layout src="_layouts/default.html">
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <include src="_includes/sidebar-learn.html"></include>
+  </aside>
+  <main class="docs-content">
+    <nav class="docs-breadcrumb">
+      <a href="/learn.html">Learn</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <a href="/learn/operators/">Operators</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <span>Security</span>
+    </nav>
+<h1>Security Hardening</h1>
+
+    <p>
+      Production pyana-node deployments should follow these hardening guidelines.
+    </p>
+
+    <h2 id="key-management">Key Management</h2>
+    <ul>
+      <li>Set <code>chmod 600</code> on <code>node.key</code></li>
+      <li>Run pyana-node as a dedicated service user (not root)</li>
+      <li>In production, integrate with OS keychain or HSM for key storage</li>
+    </ul>
+
+    <h2 id="network">Network Security</h2>
+    <ul>
+      <li>Place a TLS-terminating reverse proxy (nginx, caddy) in front of the HTTP API</li>
+      <li>Restrict federation peer ports to known IPs with firewall rules</li>
+      <li>The faucet endpoint (<code>--enable-faucet</code>) must NEVER be enabled in production</li>
+    </ul>
+
+    <h2 id="rate-limits">Rate Limiting</h2>
+    <ul>
+      <li>Apply rate limits at the reverse proxy level for public-facing endpoints</li>
+      <li>Delegated token reception validates size (64 KiB max) and structure</li>
+      <li>STARK proof verification is computationally bounded (~2ms per proof)</li>
+    </ul>
+
+    <div class="stub-notice">
+      <p>Full security hardening checklist, systemd unit files, and container security profiles are being written.</p>
+    </div>
+
+  </div>
+  </main>
+</div>
+
+</layout>

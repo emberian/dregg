@@ -1,0 +1,170 @@
+<layout src="_layouts/default.html">
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <include src="_includes/sidebar-learn.html"></include>
+  </aside>
+  <main class="docs-content">
+    <nav class="docs-breadcrumb">
+      <a href="/learn.html">Learn</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <a href="/learn/users/">Users</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <span>Privacy</span>
+    </nav>
+<h1>Privacy Modes</h1>
+
+    <p>
+      Pyana supports three verification modes with progressive privacy guarantees.
+      You choose the mode when authorizing an action -- the tradeoff is between
+      what the verifier learns and proof generation time.
+    </p>
+
+    <h2 id="trusted">Trusted Mode</h2>
+
+    <p>
+      Full cleartext evaluation. The verifier receives the complete token, Datalog
+      derivation trace, and clearance result.
+    </p>
+
+    <ul>
+      <li><strong>Verifier learns:</strong> Everything -- the full token chain, all caveats, the derivation logic, and the conclusion.</li>
+      <li><strong>Use when:</strong> Both parties are in the same trust domain (same organization, same machine, internal microservices).</li>
+      <li><strong>Latency:</strong> ~8 microseconds (local Datalog evaluation only, no proof generation).</li>
+    </ul>
+
+    <h2 id="selective">Selective Disclosure</h2>
+
+    <p>
+      The prover chooses which facts from the derivation trace to reveal. Everything
+      else remains hidden behind a STARK proof. A Poseidon2 commitment binds the
+      revealed facts to the proof so the prover cannot lie about what was derived.
+    </p>
+
+    <ul>
+      <li><strong>Verifier learns:</strong> The selected facts (e.g., "authorized for service: dns") plus a STARK proof that the full derivation is valid.</li>
+      <li><strong>Hidden:</strong> Unrevealed facts, delegation chain structure, intermediate authorities, token contents.</li>
+      <li><strong>Use when:</strong> Cross-organization interactions where partial disclosure is acceptable.</li>
+      <li><strong>Latency:</strong> ~200ms proof generation, ~2ms verification.</li>
+    </ul>
+
+    <h3>Per-Fact Disclosure Control</h3>
+    <p>
+      Each fact in the derivation trace can independently be:
+    </p>
+    <ul>
+      <li><strong>Reveal</strong> -- Show in plaintext.</li>
+      <li><strong>Predicate</strong> -- Prove a property (e.g., "balance >= 1000") without revealing the value.</li>
+      <li><strong>Committed Threshold</strong> -- Prove against a hidden threshold (neither value nor threshold visible to third parties).</li>
+      <li><strong>Hidden</strong> -- Nothing revealed (STARK proves existence only).</li>
+    </ul>
+
+    <h2 id="private">Fully Private</h2>
+
+    <p>
+      The verifier learns exactly one bit: whether authorization was granted or denied.
+      The STARK proof covers the entire multi-step Datalog derivation without revealing
+      any intermediate facts, chain length, or rule selections.
+    </p>
+
+    <ul>
+      <li><strong>Verifier learns:</strong> Allow or Deny. Nothing else.</li>
+      <li><strong>Hidden:</strong> All token contents, all derivation facts, chain length, identities, rule structure.</li>
+      <li><strong>Use when:</strong> Anonymous credential presentation, maximum privacy.</li>
+      <li><strong>Latency:</strong> ~500ms proof generation, ~2ms verification.</li>
+    </ul>
+
+    <h2 id="anonymous">Anonymous Presentation</h2>
+
+    <p>
+      A variant of fully-private mode that additionally hides <em>which</em>
+      federation member produced the proof. Uses per-presentation blinding
+      (BlindedMerklePoseidon2StarkAir) so the same holder produces unlinkable
+      proofs across sessions.
+    </p>
+
+    <ul>
+      <li><strong>Verifier learns:</strong> Some valid federation member authorized this request. Cannot determine which one.</li>
+      <li><strong>Unlinkability:</strong> Two proofs from the same agent cannot be correlated (fresh blinding each time).</li>
+    </ul>
+
+    <h2 id="choosing">Choosing a Mode</h2>
+
+    <table class="comparison">
+      <thead>
+        <tr>
+          <th>Mode</th>
+          <th>Privacy Level</th>
+          <th>Speed</th>
+          <th>Proof Size</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Trusted</td>
+          <td>None (full visibility)</td>
+          <td>~8 us</td>
+          <td>0 (no proof)</td>
+        </tr>
+        <tr>
+          <td>Selective</td>
+          <td>Partial (chosen facts only)</td>
+          <td>~200 ms</td>
+          <td>~24 KiB</td>
+        </tr>
+        <tr>
+          <td>Fully Private</td>
+          <td>Maximum (one bit)</td>
+          <td>~500 ms</td>
+          <td>~24 KiB</td>
+        </tr>
+        <tr>
+          <td>Anonymous</td>
+          <td>Maximum + unlinkable</td>
+          <td>~500 ms</td>
+          <td>~24 KiB</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2 id="beyond-auth">Beyond Authorization Privacy</h2>
+
+    <p>
+      Authorization modes control what the verifier learns about your credentials.
+      Pyana's privacy stack extends further:
+    </p>
+
+    <ul>
+      <li><strong>Amount privacy:</strong> Transfer amounts are Pedersen commitments. The federation
+          verifies conservation (amounts balance) without seeing values.</li>
+      <li><strong>Recipient privacy:</strong> Stealth addresses derive one-time keys per transaction.
+          Only the recipient can detect and spend incoming notes.</li>
+      <li><strong>Sovereign cell privacy:</strong> In sovereign mode, the federation stores only a
+          32-byte hash of your state. It never sees balances, capabilities, or metadata.</li>
+      <li><strong>Peer-to-peer privacy:</strong> Between known parties, interactions happen directly
+          with no federation contact. Only your peer learns your new state commitment.</li>
+      <li><strong>Network privacy:</strong> Dandelion++ routing hides message origin. Fixed-size
+          message padding prevents traffic analysis.</li>
+    </ul>
+
+    <div class="callout callout--note">
+      <p>
+        <strong>Honest limitation:</strong> Intent content is partially visible. SSE keyword tokens
+        are enumerable by observers who know the keyword space. The executor sees sovereign
+        state during federation-mediated multi-party interactions.
+      </p>
+    </div>
+
+    <div class="callout callout--note">
+      <p>
+        For the developer API behind these modes, see
+        <a href="/learn/developers/privacy-api.html">Privacy API Reference</a> and
+        the <a href="/learn/architecture/privacy.html">Privacy Architecture</a> deep dive.
+      </p>
+    </div>
+
+  </div>
+  </main>
+</div>
+
+</layout>

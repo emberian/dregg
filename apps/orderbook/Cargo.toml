@@ -9,6 +9,7 @@ pyana-circuit = { path = "../../circuit", default-features = false, features = [
 pyana-dsl-runtime = { path = "../../pyana-dsl-runtime" }
 pyana-turn = { path = "../../turn" }
 pyana-intent = { path = "../../intent" }
+pyana-storage = { path = "../../storage" }
 pyana-types = { path = "../../types" }
 
 serde = { workspace = true }

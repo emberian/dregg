@@ -1,0 +1,216 @@
+<layout src="_layouts/default.html">
+
+<header class="hero">
+  <div class="hero__inner">
+    <p class="hero__eyebrow">A capability-secure distributed runtime</p>
+    <h1>Your phone is a node. <em>Your proofs are your passport.</em></h1>
+    <p class="hero__sub">
+      Pyana is a unified fabric where agents own their state, prove their actions,
+      and move freely between sovereign operation and shared consensus.
+      No fixed federations. No forced migration. Just cells, turns, and proofs.
+    </p>
+    <div class="hero__cta">
+      <a class="btn btn--primary" href="/demo.html">Try the Demos</a>
+      <a class="btn btn--secondary" href="/apps.html">See the Apps</a>
+      <a class="btn btn--secondary" href="/learn.html">Get Started</a>
+    </div>
+  </div>
+</header>
+
+<main class="main--compact">
+
+<!-- ==================== WHAT IS THIS ==================== -->
+<section class="section wrap section--compact">
+  <span class="section__label">What is Pyana?</span>
+  <h2 class="section__title">A few ideas, taken seriously</h2>
+  <div class="problems">
+    <div class="problem">
+      <p class="problem__label problem__label--solve">Sovereignty spectrum</p>
+      <p class="problem__text">
+        Run a full node on your laptop. Delegate offline-capable snapshots to your phone.
+        Join a reference group for ordering and discovery. Switch modes without ceremony.
+        Your state is yours — always verifiable, always portable.
+      </p>
+    </div>
+    <div class="problem">
+      <p class="problem__label problem__label--solve">Proof-carrying state</p>
+      <p class="problem__text">
+        Every turn is proven by a 24-effect VM in a single STARK. BabyBear field + FRI,
+        sub-second generation, post-quantum secure. You don't trust a validator — you
+        verify a proof. Offline, on-chain, or anywhere in between.
+      </p>
+    </div>
+    <div class="problem">
+      <p class="problem__label problem__label--solve">Capabilities everywhere</p>
+      <p class="problem__text">
+        CapTP carries unforgeable references across the fabric. Sturdy refs survive
+        reboots. Three-party handoff lets Alice introduce Bob to Carol without a directory.
+        Distributed GC cleans up when references drop. It's object-capability networking,
+        end to end.
+      </p>
+    </div>
+    <div class="problem">
+      <p class="problem__label problem__label--solve">Privacy by design</p>
+      <p class="problem__text">
+        Three verification modes from the same Datalog rules: trusted, selective disclosure,
+        or fully private. Stealth addresses, Pedersen commitments, ring membership proofs.
+        You choose what to reveal. The verifier learns only what you decide.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== HOW IT WORKS ==================== -->
+<section class="section wrap section--compact">
+  <span class="section__label">How it works</span>
+  <h2 class="section__title">Cells, turns, proofs</h2>
+  <div class="flow">
+    <div class="flow__step">
+      <span class="flow__n">01 / Cells</span>
+      <p class="flow__name">Isolated objects with capability lists</p>
+      <p class="flow__desc">Each cell holds a c-list, balance, nonce, and optional programs. Cells are confined: they can only reference what is in their c-list.</p>
+    </div>
+    <div class="flow__step">
+      <span class="flow__n">02 / Turns</span>
+      <p class="flow__name">Atomic state transitions</p>
+      <p class="flow__desc">A call forest executes depth-first. Multi-party turns compose across cells. If any action fails, everything rolls back.</p>
+    </div>
+    <div class="flow__step">
+      <span class="flow__n">03 / Effect VM</span>
+      <p class="flow__name">24 effects, one STARK per turn</p>
+      <p class="flow__desc">Transfer, seal, factory creation, CapTP handoff, queue operations — all proven in a single trace. Sub-second generation.</p>
+    </div>
+    <div class="flow__step">
+      <span class="flow__n">04 / Fabric</span>
+      <p class="flow__name">Emergent reference groups</p>
+      <p class="flow__desc">The blocklace is one DAG. Groups form from mutual acknowledgment. Finality emerges from supermajority within a group.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== APPS ==================== -->
+<section class="section wrap section--compact">
+  <span class="section__label">Built on Pyana</span>
+  <h2 class="section__title">Real applications, real proofs</h2>
+  <p class="section__intro">
+    Eleven production applications exercise the full stack — from private DeFi to
+    anonymous credentials to federated compute markets. Every app generates real STARKs.
+  </p>
+  <div class="usecases">
+    <div class="usecase">
+      <p class="usecase__icon">stablecoin</p>
+      <p class="usecase__title">CDP Stablecoin</p>
+      <p class="usecase__desc">Collateralized debt positions with ZK liquidation proofs. Oracle integration, minimum collateralization enforced in-circuit.</p>
+    </div>
+    <div class="usecase">
+      <p class="usecase__icon">amm</p>
+      <p class="usecase__title">AMM + LP Tokens</p>
+      <p class="usecase__desc">Constant-product market maker with router, LP token minting, and pool management. All swaps proved.</p>
+    </div>
+    <div class="usecase">
+      <p class="usecase__icon">orderbook</p>
+      <p class="usecase__title">Privacy Orderbook</p>
+      <p class="usecase__desc">Commit-reveal trading with private orders. Verified matching engine, escrow settlement.</p>
+    </div>
+    <div class="usecase">
+      <p class="usecase__icon">identity</p>
+      <p class="usecase__title">Anonymous Credentials</p>
+      <p class="usecase__desc">Issuer/holder/verifier. Selective disclosure, revocation, anonymous proof of attributes via ring membership.</p>
+    </div>
+    <div class="usecase">
+      <p class="usecase__icon">gallery</p>
+      <p class="usecase__title">Privacy-Preserving Gallery</p>
+      <p class="usecase__desc">Sealed-bid art auctions with garbled circuits and oblivious transfer. Provenance tracked as capability chains.</p>
+    </div>
+    <div class="usecase">
+      <p class="usecase__icon">compute</p>
+      <p class="usecase__title">Compute Exchange</p>
+      <p class="usecase__desc">Marketplace for compute resources. SLA bonds, qualification proofs, and optimistic settlement with dispute windows.</p>
+    </div>
+  </div>
+  <p style="margin-top: var(--s5);">
+    <a href="/apps.html" class="btn btn--secondary">See all 11 apps &rarr;</a>
+  </p>
+</section>
+
+<!-- ==================== STATS ==================== -->
+<section class="section wrap section--compact">
+  <span class="section__label">Scale</span>
+  <h2 class="section__title">Real system, real proofs</h2>
+  <div class="stats">
+    <div class="stat">
+      <p class="stat__number">~395k</p>
+      <p class="stat__label">Lines of Rust</p>
+    </div>
+    <div class="stat">
+      <p class="stat__number">46</p>
+      <p class="stat__label">Workspace Crates</p>
+    </div>
+    <div class="stat">
+      <p class="stat__number">9,700+</p>
+      <p class="stat__label">Tests</p>
+    </div>
+    <div class="stat">
+      <p class="stat__number">24</p>
+      <p class="stat__label">Effect VM Opcodes</p>
+    </div>
+    <div class="stat">
+      <p class="stat__number">~38 KiB</p>
+      <p class="stat__label">Proof Size</p>
+    </div>
+    <div class="stat">
+      <p class="stat__number">&lt;1s</p>
+      <p class="stat__label">Proof Generation</p>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== QUICKSTART ==================== -->
+<section class="section wrap section--compact" id="quickstart">
+  <span class="section__label">Get Started</span>
+  <h2 class="section__title">Five minutes to a running node</h2>
+  <div class="quickstart">
+    <div class="quickstart__steps">
+      <div class="quickstart__step">
+        <span class="quickstart__n">1</span>
+        <div>
+          <p>Clone and build:</p>
+          <pre><code class="language-bash">git clone https://github.com/emberian/pyana && cd pyana
+cargo build</code></pre>
+        </div>
+      </div>
+      <div class="quickstart__step">
+        <span class="quickstart__n">2</span>
+        <div>
+          <p>Run a node:</p>
+          <pre><code class="language-bash">cargo run -p pyana-node run</code></pre>
+        </div>
+      </div>
+      <div class="quickstart__step">
+        <span class="quickstart__n">3</span>
+        <div>
+          <p>Try the CLI:</p>
+          <pre><code class="language-bash">pyana cell list
+pyana cell create --name my-agent
+pyana cap grant &lt;cell-id&gt; --service storage --actions read
+pyana namespace register alice --target &lt;cell-id&gt;</code></pre>
+        </div>
+      </div>
+      <div class="quickstart__step">
+        <span class="quickstart__n">4</span>
+        <div>
+          <p>Run the full demo pipeline:</p>
+          <pre><code class="language-bash">cargo run -p pyana-demo-agent</code></pre>
+          <p style="margin-top: var(--s2);">
+            <a href="/learn/developers/tutorial-first-app.html">Full tutorial</a> |
+            <a href="/playground/">Browser playground</a>
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+</layout>

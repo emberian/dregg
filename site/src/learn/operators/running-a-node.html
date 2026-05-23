@@ -1,0 +1,170 @@
+<layout src="_layouts/default.html">
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <include src="_includes/sidebar-learn.html"></include>
+  </aside>
+  <main class="docs-content">
+    <nav class="docs-breadcrumb">
+      <a href="/learn.html">Learn</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <a href="/learn/operators/">Operators</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <span>Running A Node</span>
+    </nav>
+<h1>Running a Node</h1>
+
+    <p>
+      A pyana node participates in federation consensus, verifies STARK proofs,
+      tracks nullifiers, and serves the HTTP/WebSocket API. It stores 32-byte
+      commitments -- not cell contents.
+    </p>
+
+    <h2 id="basic-run">Starting the Node</h2>
+
+    <pre><code class="language-rust"># Build from source
+cargo build -p pyana-node --release
+
+# Initialize data directory and generate keypair
+pyana-node init --data-dir ~/.pyana
+
+# Run with defaults (solo mode, localhost only)
+pyana-node run</code></pre>
+
+    <p>Full options for <code>pyana-node run</code>:</p>
+
+    <pre><code>pyana-node run \
+  --port 8420 \
+  --bind 127.0.0.1 \
+  --gossip-port 9420 \
+  --data-dir ~/.pyana \
+  --federation-peers "peer1:9420,peer2:9420" \
+  --federation-mode full \
+  --consensus blocklace \
+  --checkpoint-interval 1000</code></pre>
+
+    <h2 id="multi-group">Multi-Group Participation</h2>
+
+    <p>
+      A node can participate in multiple reference groups simultaneously. Each
+      group has its own membership set and tau ordering. Cross-group
+      communication uses interest-based dissemination with cryptographic
+      cross-references on the shared DAG.
+    </p>
+
+    <pre><code>pyana-node run --groups &lt;group-id-hex-1&gt;,&lt;group-id-hex-2&gt;</code></pre>
+
+    <p>
+      Group IDs are 64-character hex strings. When specified, the node joins
+      each group's Constitutional Consensus process and contributes blocks to
+      each group's portion of the blocklace.
+    </p>
+
+    <h2 id="relay">Relay Operation</h2>
+
+    <p>
+      Relay operators host inboxes for offline message delivery (store-and-forward).
+      This is a separate service from the main node:
+    </p>
+
+    <pre><code>pyana-node relay \
+  --port 3100 \
+  --bond 10000 \
+  --max-capacity 100000 \
+  --gc-interval 300 \
+  --message-ttl 1000 \
+  --max-delivery-latency 50</code></pre>
+
+    <ul>
+      <li><strong>Bond</strong> -- computrons staked as operator collateral.</li>
+      <li><strong>GC interval</strong> -- seconds between garbage collection sweeps.</li>
+      <li><strong>Message TTL</strong> -- blocks before undelivered messages are pruned.</li>
+      <li><strong>Max delivery latency</strong> -- SLA in blocks; exceeding this slashes bond.</li>
+    </ul>
+
+    <p>
+      Relay operators earn fees for hosting inboxes. Subscribers pay deposits
+      proportional to inbox size.
+    </p>
+
+    <h2 id="monitoring">Monitoring and Health Checks</h2>
+
+    <p>The node exposes several monitoring endpoints:</p>
+
+    <pre><code># Health check (HTTP)
+curl http://127.0.0.1:8420/status
+
+# Node status via CLI
+pyana node status
+
+# System health (wallet, federation, storage)
+pyana doctor</code></pre>
+
+    <p>Key things to monitor:</p>
+
+    <ul>
+      <li><strong>Sync state</strong> -- is the node caught up to the frontier? Check block height vs peers.</li>
+      <li><strong>Peer count</strong> -- are gossip connections healthy? Federation mode needs 2f+1.</li>
+      <li><strong>Nullifier set size</strong> -- growing unboundedly indicates pruning is needed.</li>
+      <li><strong>Checkpoint lag</strong> -- are checkpoints being produced on schedule?</li>
+      <li><strong>Proof verification time</strong> -- if degrading, check CPU/memory.</li>
+    </ul>
+
+    <p>
+      The node emits structured tracing via <code>tracing</code>. Set
+      <code>RUST_LOG=pyana_node=info</code> for production,
+      <code>=debug</code> for troubleshooting.
+    </p>
+
+    <h2 id="genesis">Genesis State and Deployment</h2>
+
+    <p>
+      For new networks, generate genesis configuration:
+    </p>
+
+    <pre><code>pyana-node genesis \
+  --validators 4 \
+  --epoch-length 1000 \
+  --checkpoint-interval 100 \
+  --output ./devnet-config</code></pre>
+
+    <p>
+      This produces keypairs and a <code>genesis.json</code> for each
+      validator. Distribute keys securely and start all nodes with matching
+      genesis state.
+    </p>
+
+    <h3>Federation Modes</h3>
+
+    <ul>
+      <li><strong>solo</strong> -- single-node devnet. Processes turns immediately, no gossip, tentative receipts. Auto-upgrades to full when peers appear.</li>
+      <li><strong>full</strong> -- BFT quorum. Requires peer connections. Uses blocklace consensus with tau ordering (3-round finality).</li>
+    </ul>
+
+    <h2 id="pruning">Storage Management</h2>
+
+    <p>
+      By default the node runs in archival mode (keeps all history). Enable
+      pruning to bound storage growth:
+    </p>
+
+    <pre><code>pyana-node run --enable-pruning --checkpoint-interval 1000</code></pre>
+
+    <p>
+      With pruning enabled, blocks below the latest checkpoint are removed.
+      New nodes can fast-sync from the latest checkpoint instead of replaying
+      the full history.
+    </p>
+
+    <div class="callout callout--warning">
+      <p>
+        Enabling the faucet (<code>--enable-faucet</code>) allows anyone to
+        request computrons. Only use this on devnets.
+      </p>
+    </div>
+
+  </div>
+  </main>
+</div>
+
+</layout>

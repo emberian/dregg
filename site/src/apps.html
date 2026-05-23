@@ -1,0 +1,163 @@
+<layout src="_layouts/default.html">
+
+<main class="wrap main--compact">
+  <div class="page-header">
+    <h1>Applications</h1>
+    <p>
+      Eleven production applications built on the Pyana runtime. Each one exercises
+      a different slice of the stack — from private DeFi to federated compute markets.
+      All generate real STARK proofs. All are runnable from the repo.
+    </p>
+  </div>
+
+  <section class="section section--compact">
+    <span class="section__label">DeFi Suite</span>
+    <h2 class="section__title">Decentralized finance, privately</h2>
+    <div class="app-grid">
+      <div class="app-card">
+        <p class="app-card__port">:3050</p>
+        <p class="app-card__title">Stablecoin (CDP)</p>
+        <p class="app-card__desc">Collateralized debt positions with ZK liquidation proofs. Oracle price feeds attested via Ed25519. Minimum collateralization ratio enforced in-circuit by a 14-column STARK.</p>
+        <div class="app-card__tags">
+          <span class="app-card__tag">STARK</span>
+          <span class="app-card__tag">oracle</span>
+          <span class="app-card__tag">CellProgram</span>
+        </div>
+      </div>
+      <div class="app-card">
+        <p class="app-card__port">:3051</p>
+        <p class="app-card__title">AMM</p>
+        <p class="app-card__desc">Constant-product market maker with x*y=k invariant proven in a 29-column STARK. LP tokens via the note model. Multi-hop routing with slippage range checks.</p>
+        <div class="app-card__tags">
+          <span class="app-card__tag">STARK</span>
+          <span class="app-card__tag">notes</span>
+          <span class="app-card__tag">routing</span>
+        </div>
+      </div>
+      <div class="app-card">
+        <p class="app-card__port">:3053</p>
+        <p class="app-card__title">Orderbook</p>
+        <p class="app-card__desc">Price-time priority matching with proof of fairness. Dark pool mode with Pedersen-committed amounts. Commit-reveal prevents frontrunning. Pre-trade escrow via TurnComposer.</p>
+        <div class="app-card__tags">
+          <span class="app-card__tag">MatchProof</span>
+          <span class="app-card__tag">commit-reveal</span>
+          <span class="app-card__tag">dark pool</span>
+        </div>
+      </div>
+      <div class="app-card">
+        <p class="app-card__port">—</p>
+        <p class="app-card__title">Lending</p>
+        <p class="app-card__desc">Utilization-based interest rates with compound interest proven iteratively. Health factor constraints in-circuit. Liquidation with bonus, all atomically settled.</p>
+        <div class="app-card__tags">
+          <span class="app-card__tag">health factor</span>
+          <span class="app-card__tag">interest circuit</span>
+          <span class="app-card__tag">liquidation</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--compact">
+    <span class="section__label">Identity & Privacy</span>
+    <h2 class="section__title">Who you are is yours to prove</h2>
+    <div class="app-grid">
+      <div class="app-card">
+        <p class="app-card__port">:3052</p>
+        <p class="app-card__title">Identity</p>
+        <p class="app-card__desc">Issue, present, and revoke verifiable credentials. Selective disclosure proves "age >= 18" without revealing exact age. Anonymous presentations via BlindedMerkle ring membership.</p>
+        <div class="app-card__tags">
+          <span class="app-card__tag">predicate proofs</span>
+          <span class="app-card__tag">ring membership</span>
+          <span class="app-card__tag">revocation</span>
+        </div>
+      </div>
+      <div class="app-card">
+        <p class="app-card__port">:3000</p>
+        <p class="app-card__title">Gallery</p>
+        <p class="app-card__desc">Privacy-preserving art auctions: sealed-bid, Vickrey, Dutch, and fully private modes. Garbled circuits + oblivious transfer for bid comparison. Provenance as capability chains.</p>
+        <div class="app-card__tags">
+          <span class="app-card__tag">garbled circuits</span>
+          <span class="app-card__tag">OT</span>
+          <span class="app-card__tag">provenance</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--compact">
+    <span class="section__label">Infrastructure</span>
+    <h2 class="section__title">Markets, namespaces, and coordination</h2>
+    <div class="app-grid">
+      <div class="app-card">
+        <p class="app-card__port">:3002</p>
+        <p class="app-card__title">Compute Exchange</p>
+        <p class="app-card__desc">GPU marketplace with SLA bonds and qualification proofs. Optimistic settlement with dispute windows. Provider reputation via STARK delivery proofs.</p>
+        <div class="app-card__tags">
+          <span class="app-card__tag">delivery proofs</span>
+          <span class="app-card__tag">dual escrow</span>
+          <span class="app-card__tag">SLA</span>
+        </div>
+      </div>
+      <div class="app-card">
+        <p class="app-card__port">:3001</p>
+        <p class="app-card__title">Bounty Board</p>
+        <p class="app-card__desc">Federated anonymous bounties. Workers claim, deliver, and get paid without issuers learning their identity. Standing proofs via IVC chains. Poseidon2-blinded commitments.</p>
+        <div class="app-card__tags">
+          <span class="app-card__tag">IVC</span>
+          <span class="app-card__tag">Poseidon2</span>
+          <span class="app-card__tag">anonymous</span>
+        </div>
+      </div>
+      <div class="app-card">
+        <p class="app-card__port">:3003</p>
+        <p class="app-card__title">Governed Namespace</p>
+        <p class="app-card__desc">DAO-controlled capability registry and service mesh. DFA routing compiled to prefix-trie state machines. Constitutional amendments via threshold voting on route tables.</p>
+        <div class="app-card__tags">
+          <span class="app-card__tag">DFA routing</span>
+          <span class="app-card__tag">governance</span>
+          <span class="app-card__tag">service mesh</span>
+        </div>
+      </div>
+      <div class="app-card">
+        <p class="app-card__port">—</p>
+        <p class="app-card__title">Nameservice</p>
+        <p class="app-card__desc">Hierarchical names with rent-based anti-squatting. Sub-delegation (*.alice.*). Cross-federation resolution via CapTP. Reverse WHOIS capability.</p>
+        <div class="app-card__tags">
+          <span class="app-card__tag">petnames</span>
+          <span class="app-card__tag">cross-fed</span>
+          <span class="app-card__tag">delegation</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--compact">
+    <span class="section__label">Try them</span>
+    <h2 class="section__title">Run the examples</h2>
+    <p style="color: var(--fg-dim); margin-bottom: var(--s5);">
+      Every app has runnable examples. Here are a few to get started:
+    </p>
+    <pre><code class="language-bash"># Stablecoin CDP lifecycle
+cargo run -p pyana-stablecoin --example demo
+
+# AMM swap with STARK proof
+cargo run -p pyana-amm --example swap_demo
+
+# Identity selective disclosure
+cargo run -p pyana-identity --example kyc_demo
+
+# Orderbook trading
+cargo run -p pyana-orderbook --example trading_demo
+
+# Full gallery auction
+cargo run -p pyana-gallery --example devnet_gallery</code></pre>
+    <p style="margin-top: var(--s4);">
+      See <code>apps/*/examples/</code> and <code>demo-agent/examples/</code> for the full catalog.
+      The Discord bot (<code>apps/discord-bot</code>) also exposes 30+ slash commands for
+      interacting with the devnet.
+    </p>
+  </section>
+
+</main>
+
+</layout>

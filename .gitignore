@@ -1,8 +1,11 @@
+.claude
+.claire
 **/target/
 hints/benches/*.bincode
 hints/benches/committee_1024.json
 hints/benches/committee.json
 hints/benches/committee_128.json
+site/dist
 paper/*.pdf
 pdfs/
 

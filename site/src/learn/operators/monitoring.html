@@ -1,0 +1,49 @@
+<layout src="_layouts/default.html">
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <include src="_includes/sidebar-learn.html"></include>
+  </aside>
+  <main class="docs-content">
+    <nav class="docs-breadcrumb">
+      <a href="/learn.html">Learn</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <a href="/learn/operators/">Operators</a>
+      <span class="docs-breadcrumb__sep">/</span>
+      <span>Monitoring</span>
+    </nav>
+<h1>Monitoring</h1>
+
+    <p>
+      pyana-node uses the <code>tracing</code> crate for structured logging. Control
+      log levels via the <code>RUST_LOG</code> environment variable.
+    </p>
+
+    <h2 id="status">Status Endpoint</h2>
+
+    <pre><code>curl http://127.0.0.1:8420/status</code></pre>
+
+    <p>Returns node health, peer count, latest attested root, and sync state.</p>
+
+    <h2 id="logging">Log Configuration</h2>
+
+    <pre><code># Default: info-level pyana logs
+RUST_LOG=pyana_node=info pyana-node run ...
+
+# Debug everything
+RUST_LOG=debug pyana-node run ...
+
+# Specific crate tracing
+RUST_LOG=pyana_node=debug,pyana_federation=info pyana-node run ...</code></pre>
+
+    <h2 id="tracing">Distributed Tracing</h2>
+
+    <div class="stub-notice">
+      <p>OpenTelemetry integration and distributed tracing documentation is being written.</p>
+    </div>
+
+  </div>
+  </main>
+</div>
+
+</layout>
