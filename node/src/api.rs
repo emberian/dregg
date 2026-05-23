@@ -383,6 +383,10 @@ pub struct RegisterCellRequest {
     /// Hex-encoded 64-byte Ed25519 signature proving ownership.
     /// Signs `cell_id || commitment`.
     pub signature: String,
+    /// Optional hex-encoded 32-byte verification key hash to bind this cell
+    /// to a deployed program. When set, proof-carrying turns are verified
+    /// against the program identified by this VK hash.
+    pub verification_key_hash: Option<String>,
 }
 
 /// Response to a sovereign cell registration.
@@ -2399,6 +2403,12 @@ async fn post_register_cell(
     let ttl = req.ttl_blocks.unwrap_or(pyana_cell::DEFAULT_SOVEREIGN_TTL);
     let cell_id = pyana_cell::CellId(cell_id_bytes);
 
+    // Parse optional verification key hash.
+    let vk_hash: Option<[u8; 32]> = match &req.verification_key_hash {
+        Some(hex_str) => Some(hex_decode(hex_str).map_err(|_| StatusCode::BAD_REQUEST)?),
+        None => None,
+    };
+
     let mut s = state.write().await;
     let current_height = s
         .store
@@ -2410,7 +2420,7 @@ async fn post_register_cell(
 
     match s
         .ledger
-        .register_sovereign_cell_ephemeral(cell_id, commitment, current_height, ttl)
+        .register_sovereign_cell_with_vk(cell_id, commitment, current_height, ttl, vk_hash)
     {
         Ok(()) => Ok(Json(RegisterCellResponse {
             registered: true,
