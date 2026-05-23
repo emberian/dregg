@@ -238,16 +238,49 @@ impl QuorumCertificate {
         }
     }
 
-    /// Whether this QC has enough votes (count-only check, for backwards compat).
+    /// Check vote count only (does NOT verify signatures).
     ///
     /// If an aggregate QC is present, requires proper BLS verification via
     /// `verify_with_committee()`. This method only validates vote counts.
-    pub fn is_valid(&self) -> bool {
+    ///
+    /// For full verification (count AND signatures), use
+    /// [`is_valid_with_keys`](Self::is_valid_with_keys) or
+    /// [`verify_with_committee`](Self::verify_with_committee).
+    pub fn has_quorum_count(&self) -> bool {
         if self.aggregate_qc.is_some() {
             // An aggregate QC requires proper BLS verification.
             // Do NOT short-circuit — fall through to vote count check.
         }
         self.votes.len() >= self.threshold
+    }
+
+    /// Deprecated alias for [`has_quorum_count`](Self::has_quorum_count).
+    #[deprecated(note = "Use has_quorum_count() (count-only) or is_valid_with_keys()/verify_with_committee() for full verification")]
+    pub fn is_valid(&self) -> bool {
+        self.has_quorum_count()
+    }
+
+    /// Full verification: checks vote count AND verifies all signatures against the committee.
+    ///
+    /// This is the preferred method when you have access to the committee public keys
+    /// as a slice (as opposed to `NodeIdentity` structs). For the `NodeIdentity`-based
+    /// API, use [`is_valid_with_keys`](Self::is_valid_with_keys).
+    pub fn verify_with_keys(&self, committee: &[PublicKey]) -> bool {
+        if self.votes.len() < self.threshold {
+            return false;
+        }
+        let vote_message = Self::vote_message(&self.block_hash, self.height, self.view);
+        for (voter_id, sig) in &self.votes {
+            match committee.get(*voter_id) {
+                Some(pk) => {
+                    if !pk.verify(&vote_message, sig) {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
+        }
+        true
     }
 
     /// Build the canonical vote message for signature verification.

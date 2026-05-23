@@ -340,7 +340,7 @@ mod tests {
 
         let root = finalized.unwrap();
         assert_eq!(root.height, 1);
-        assert!(root.qc.is_valid());
+        assert!(root.qc.has_quorum_count());
 
         // Verify the cached root is accessible.
         let cached = bridges[leader_id].latest_attested_root();

@@ -1181,7 +1181,7 @@ mod tests {
         let (block, qc) = result.unwrap();
         assert_eq!(block.events.len(), 1);
         assert_eq!(block.events[0].token_id, t1.id);
-        assert!(qc.is_valid());
+        assert!(qc.has_quorum_count());
 
         // All nodes should agree on the root.
         assert!(fed.roots_agree());

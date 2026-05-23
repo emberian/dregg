@@ -1123,7 +1123,7 @@ mod tests {
         assert!(result.is_some(), "leader should have reached quorum");
 
         let (_block, qc) = result.unwrap();
-        assert!(qc.is_valid());
+        assert!(qc.has_quorum_count());
 
         // Other nodes receive the finalization.
         for i in 0..4 {

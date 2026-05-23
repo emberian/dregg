@@ -2238,7 +2238,7 @@ pub fn verify_presentation_full(
     }
 
     // 1. Verify that the proof's federation root matches what we expect (EXTERNAL trust anchor).
-    let expected_root = bytes_to_babybear(federation_root);
+    let expected_root = bb_from_bytes(federation_root);
     if pi[1] != expected_root {
         return false;
     }
@@ -2655,7 +2655,7 @@ pub fn verify_presentation(proof: &BridgePresentationProof, federation_root: &[u
         }
 
         // Verify that the proof's federation root matches what we expect.
-        let expected_root = bytes_to_babybear(federation_root);
+        let expected_root = bb_from_bytes(federation_root);
         if pi[1] != expected_root {
             return false;
         }

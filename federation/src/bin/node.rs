@@ -326,7 +326,7 @@ async fn run_local_demo() {
                     "  FINALIZED: height={} votes={} valid={}",
                     block.height,
                     qc.votes.len(),
-                    qc.is_valid()
+                    qc.has_quorum_count()
                 );
                 println!("  Block hash: {}", hex_encode(&block.block_hash[..8]));
 

@@ -331,24 +331,27 @@ async fn handle_socket(socket: WebSocket, state: NodeState) {
                                     }
                                 } else {
                                     let mut s = state.write().await;
-                                    // Issue 1 fix: use derive_key (domain-separated) matching api.rs
-                                    let hash = blake3::derive_key(
-                                        "pyana-wallet-passphrase-v1",
-                                        passphrase.as_bytes(),
-                                    );
-                                    match s.passphrase_hash {
+                                    match s.passphrase_hash.clone() {
                                         Some(stored_hash) => {
-                                            // Issue 7 (MEDIUM): Use constant-time comparison
-                                            // to prevent timing side-channel attacks.
-                                            if !bool::from(hash.ct_eq(&stored_hash)) {
+                                            // Verify against stored Argon2id hash.
+                                            let valid = PasswordHash::new(&stored_hash)
+                                                .ok()
+                                                .map(|parsed| {
+                                                    Argon2::default()
+                                                        .verify_password(
+                                                            passphrase.as_bytes(),
+                                                            &parsed,
+                                                        )
+                                                        .is_ok()
+                                                })
+                                                .unwrap_or(false);
+                                            if !valid {
                                                 ServerMessage::UnlockResult {
                                                     success: false,
                                                     error: Some("invalid passphrase".to_string()),
                                                 }
                                             } else {
                                                 s.unlocked = true;
-                                                // Persist unlock state is not needed; passphrase_hash
-                                                // is already persisted on first set.
                                                 ServerMessage::UnlockResult {
                                                     success: true,
                                                     error: None,
@@ -356,13 +359,26 @@ async fn handle_socket(socket: WebSocket, state: NodeState) {
                                             }
                                         }
                                         None => {
-                                            // First unlock sets the passphrase.
-                                            s.passphrase_hash = Some(hash);
-                                            // Persist to store (Issue 3)
+                                            // First unlock sets the passphrase with Argon2id.
+                                            let salt = SaltString::generate(&mut OsRng);
+                                            let argon2 = Argon2::default();
+                                            let phc_string = argon2
+                                                .hash_password(passphrase.as_bytes(), &salt)
+                                                .expect("argon2 hash")
+                                                .to_string();
+                                            let bearer_seed = blake3::derive_key(
+                                                "pyana-node-bearer-v1",
+                                                format!("{}{}", passphrase, salt.as_str())
+                                                    .as_bytes(),
+                                            );
+                                            s.passphrase_hash = Some(phc_string.clone());
+                                            s.bearer_seed = Some(bearer_seed);
                                             let _ = s.store.set_config(
                                                 "passphrase_hash",
-                                                &hash,
+                                                phc_string.as_bytes(),
                                             );
+                                            let _ =
+                                                s.store.set_config("bearer_seed", &bearer_seed);
                                             s.unlocked = true;
                                             ServerMessage::UnlockResult {
                                                 success: true,

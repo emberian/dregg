@@ -107,7 +107,7 @@ async fn three_node_tcp_consensus() {
     assert_eq!(block.height, 1);
     assert_eq!(block.events.len(), 1);
     assert_eq!(block.events[0].token_id, "tcp-test-token-1");
-    assert!(qc.is_valid());
+    assert!(qc.has_quorum_count());
     assert!(
         qc.votes.len() >= config.threshold,
         "QC should have at least {} votes, got {}",
@@ -130,7 +130,7 @@ async fn three_node_tcp_consensus() {
         );
         let (fin_block, fin_qc) = fin.unwrap();
         assert_eq!(fin_block.block_hash, block.block_hash);
-        assert!(fin_qc.is_valid());
+        assert!(fin_qc.has_quorum_count());
     }
 
     // All nodes should now be at height 2 (next block).
@@ -216,5 +216,5 @@ async fn four_node_tcp_with_one_offline() {
     );
 
     let (_block, qc) = result.unwrap();
-    assert!(qc.is_valid());
+    assert!(qc.has_quorum_count());
 }

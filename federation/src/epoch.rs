@@ -714,7 +714,7 @@ mod tests {
     #[test]
     fn test_epoch_transition_requires_attestation() {
         let (v0, sk0) = make_validator(0);
-        let (v1, _sk1) = make_validator(0);
+        let (v1, sk1) = make_validator(0);
         let (v2, _sk2) = make_validator(0);
         let (v3, _sk3) = make_validator(1);
 
@@ -725,16 +725,18 @@ mod tests {
         // Empty attestation should fail verification.
         assert!(!verify_epoch_transition(&transition, &config));
 
-        // Add a properly signed vote to the attestation.
+        // Add properly signed votes to the attestation.
         // The vote message must match what QuorumCertificate::vote_message produces.
+        // With threshold=2, we need at least 2 valid signatures.
         let vote_message = QuorumCertificate::vote_message(
             &transition.attestation.block_hash,
             transition.attestation.height,
             transition.attestation.view,
         );
         let sig0 = sign(&sk0, &vote_message);
+        let sig1 = sign(&sk1, &vote_message);
         transition.attestation.threshold = config.threshold;
-        transition.attestation.votes = vec![(0, sig0)];
+        transition.attestation.votes = vec![(0, sig0), (1, sig1)];
         assert!(verify_epoch_transition(&transition, &config));
     }
 
