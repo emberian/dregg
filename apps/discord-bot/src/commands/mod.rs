@@ -10,3 +10,10 @@ pub mod social;
 pub mod status;
 pub mod transfer;
 pub mod wallet;
+
+// ─── CapTP integration commands ─────────────────────────────────────────────
+pub mod captp;
+pub mod federation;
+pub mod governance;
+pub mod names;
+pub mod queue;

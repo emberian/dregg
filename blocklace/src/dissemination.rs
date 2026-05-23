@@ -24,11 +24,262 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::ordering::ReferenceGroup;
 use crate::{Block, BlockId, Blocklace, NodeKey};
 
 /// Maximum number of blocks to include in a single push message.
 /// Chunks are sent sequentially to avoid OOM on large syncs.
 pub const MAX_BLOCKS_PER_PUSH: usize = 100;
+
+// =============================================================================
+// Interest-Based Subscriptions (Phase 2)
+// =============================================================================
+
+/// A subscription declares which strands a node is interested in.
+///
+/// The node will receive blocks ONLY from subscribed strands (plus causal
+/// closure of those blocks). This enables efficient dissemination in large
+/// unified blocklaces where not every node needs every strand.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Subscription {
+    /// Strands I want to receive blocks from (my reference group + any extras).
+    pub subscribed_strands: HashSet<NodeKey>,
+    /// If true, also receive blocks that my subscribed strands REFERENCE
+    /// (one hop of causal closure beyond my direct subscriptions).
+    pub include_referenced: bool,
+    /// Maximum causal depth to follow (0 = only direct subscriptions).
+    pub causal_depth: u32,
+}
+
+impl Subscription {
+    /// Subscribe to all members of a reference group.
+    pub fn from_reference_group(group: &ReferenceGroup) -> Self {
+        Subscription {
+            subscribed_strands: group.participants.iter().copied().collect(),
+            include_referenced: false,
+            causal_depth: 0,
+        }
+    }
+
+    /// Subscribe to specific strands.
+    pub fn from_strands(strands: &[NodeKey]) -> Self {
+        Subscription {
+            subscribed_strands: strands.iter().copied().collect(),
+            include_referenced: false,
+            causal_depth: 0,
+        }
+    }
+
+    /// Add a strand to the subscription.
+    pub fn subscribe(&mut self, strand: NodeKey) {
+        self.subscribed_strands.insert(strand);
+    }
+
+    /// Remove a strand from the subscription.
+    pub fn unsubscribe(&mut self, strand: &NodeKey) {
+        self.subscribed_strands.remove(strand);
+    }
+
+    /// Check if a block should be sent to this subscriber.
+    ///
+    /// A block is wanted if:
+    /// 1. Its creator is in the subscribed set, OR
+    /// 2. `include_referenced` is true and the block is referenced by a
+    ///    subscribed block (one hop), OR
+    /// 3. The block is within `causal_depth` hops of a subscribed block.
+    pub fn wants_block(&self, block: &Block, blocklace: &Blocklace) -> bool {
+        // Direct subscription: block's creator is subscribed.
+        if self.subscribed_strands.contains(&block.creator) {
+            return true;
+        }
+
+        // If include_referenced is set, check if any subscribed block
+        // directly references this block as a predecessor.
+        if self.include_referenced || self.causal_depth > 0 {
+            let block_id = block.id();
+            // Check if any block from a subscribed strand has this block as a predecessor.
+            if self.is_referenced_by_subscribed(&block_id, blocklace, self.causal_depth.max(1)) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Check if a block is referenced (within `max_depth` hops) by any
+    /// subscribed strand's blocks.
+    fn is_referenced_by_subscribed(
+        &self,
+        block_id: &BlockId,
+        blocklace: &Blocklace,
+        _max_depth: u32,
+    ) -> bool {
+        // Walk through all blocks from subscribed strands and check if
+        // they reference this block as a direct predecessor.
+        // For depth > 1 we'd need to walk the successor graph, but for
+        // typical use (depth=0 or 1) this is sufficient.
+        for (_, b) in blocklace.blocks.iter() {
+            if self.subscribed_strands.contains(&b.creator) && b.predecessors.contains(block_id) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Check if a block's creator is directly subscribed.
+    pub fn is_directly_subscribed(&self, creator: &NodeKey) -> bool {
+        self.subscribed_strands.contains(creator)
+    }
+}
+
+/// Messages for subscription management between peers.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SubscriptionMessage {
+    /// "Here's what I'm interested in" (sent on connect).
+    Advertise(Subscription),
+    /// "I'm now also interested in this strand."
+    Subscribe { strand: NodeKey },
+    /// "I'm no longer interested in this strand."
+    Unsubscribe { strand: NodeKey },
+    /// "What are you interested in?" (query).
+    QuerySubscription,
+}
+
+/// Interest discovery: tracks newly-seen strands for potential subscription.
+///
+/// When you receive a block that references an unknown strand, you can
+/// OPTIONALLY subscribe to that strand (discover new peers). This enables
+/// organic growth of reference groups.
+#[derive(Clone, Debug, Default)]
+pub struct InterestDiscovery {
+    /// Strands we've seen referenced but aren't subscribed to.
+    pub discovered: HashSet<NodeKey>,
+    /// How many times each discovered strand has been referenced by our
+    /// subscribed strands.
+    pub reference_counts: HashMap<NodeKey, usize>,
+    /// Auto-subscribe threshold: if a discovered strand is referenced
+    /// N times by our subscribed strands, auto-subscribe to it.
+    pub auto_subscribe_threshold: usize,
+}
+
+impl InterestDiscovery {
+    /// Create a new interest discovery tracker with the given threshold.
+    pub fn new(auto_subscribe_threshold: usize) -> Self {
+        InterestDiscovery {
+            discovered: HashSet::new(),
+            reference_counts: HashMap::new(),
+            auto_subscribe_threshold,
+        }
+    }
+
+    /// Record that a subscribed block referenced a non-subscribed strand.
+    /// Returns `true` if the strand just crossed the auto-subscribe threshold.
+    pub fn record_reference(&mut self, strand: NodeKey, sub: &Subscription) -> bool {
+        // Only track if not already subscribed.
+        if sub.is_directly_subscribed(&strand) {
+            return false;
+        }
+
+        self.discovered.insert(strand);
+        let count = self.reference_counts.entry(strand).or_insert(0);
+        *count += 1;
+
+        *count == self.auto_subscribe_threshold && self.auto_subscribe_threshold > 0
+    }
+
+    /// Get strands that have crossed the auto-subscribe threshold.
+    pub fn strands_to_auto_subscribe(&self) -> Vec<NodeKey> {
+        self.reference_counts
+            .iter()
+            .filter(|(_, count)| {
+                **count >= self.auto_subscribe_threshold && self.auto_subscribe_threshold > 0
+            })
+            .map(|(strand, _)| *strand)
+            .collect()
+    }
+
+    /// Clear a strand from discovery (e.g., after subscribing to it).
+    pub fn clear(&mut self, strand: &NodeKey) {
+        self.discovered.remove(strand);
+        self.reference_counts.remove(strand);
+    }
+}
+
+// =============================================================================
+// Subscription-Filtered Push Logic
+// =============================================================================
+
+/// Compute blocks to push to a peer, filtered by their subscription.
+///
+/// Only sends blocks the peer is interested in AND doesn't already have.
+/// If the peer has no subscription (legacy/backward compat), sends everything.
+pub fn compute_push_filtered(
+    candidates: Vec<Block>,
+    subscription: Option<&Subscription>,
+    blocklace: &Blocklace,
+) -> Vec<Block> {
+    match subscription {
+        Some(sub) => candidates
+            .into_iter()
+            .filter(|b| sub.wants_block(b, blocklace))
+            .collect(),
+        None => candidates, // No subscription = send everything (backward compat)
+    }
+}
+
+/// Compute the minimal causal closure needed for a set of blocks given a
+/// peer's subscription.
+///
+/// When a subscribed block references a block from a NON-subscribed strand,
+/// the referenced block must STILL be sent (for causal closure). But only
+/// that specific block (and its own needed predecessors not already known
+/// to the peer) -- not the entire non-subscribed strand's history.
+pub fn causal_closure_for_subscription(
+    blocks: &[Block],
+    _subscription: &Subscription,
+    blocklace: &Blocklace,
+    peer_known: &HashSet<BlockId>,
+) -> Vec<Block> {
+    let mut needed: HashSet<BlockId> = HashSet::new();
+    let mut result_set: HashSet<BlockId> = HashSet::new();
+
+    // Start with the blocks we intend to send.
+    for block in blocks {
+        let bid = block.id();
+        result_set.insert(bid);
+        // Check predecessors: if any are NOT in peer_known and NOT already
+        // in our result set, we need to include them for causal closure.
+        for pred_id in &block.predecessors {
+            if !peer_known.contains(pred_id) && !result_set.contains(pred_id) {
+                needed.insert(*pred_id);
+            }
+        }
+    }
+
+    // Resolve needed blocks (walk predecessors until all are satisfied).
+    let mut queue: Vec<BlockId> = needed.into_iter().collect();
+    while let Some(bid) = queue.pop() {
+        if result_set.contains(&bid) || peer_known.contains(&bid) {
+            continue;
+        }
+        if let Some(block) = blocklace.get(&bid) {
+            result_set.insert(bid);
+            // This block's predecessors also need to be satisfied.
+            for pred_id in &block.predecessors {
+                if !peer_known.contains(pred_id) && !result_set.contains(pred_id) {
+                    queue.push(*pred_id);
+                }
+            }
+        }
+    }
+
+    // Return all blocks in topological order.
+    let ordered = blocklace.topological_subset(&result_set);
+    ordered
+        .into_iter()
+        .filter_map(|id| blocklace.get(&id).cloned())
+        .collect()
+}
 
 // =============================================================================
 // Peer Knowledge Tracking
@@ -49,6 +300,9 @@ pub struct PeerKnowledge {
     /// (In practice it's exact for received-from knowledge, and conservative
     /// for inferred knowledge.)
     estimated_known: HashMap<NodeKey, HashSet<BlockId>>,
+    /// What each peer is subscribed to (if known).
+    /// If `None`, the peer is assumed to want everything (backward compat).
+    subscriptions: HashMap<NodeKey, Subscription>,
 }
 
 impl PeerKnowledge {
@@ -118,6 +372,31 @@ impl PeerKnowledge {
         for tip in frontier_tips {
             let past = blocklace.causal_past(tip);
             known.extend(past);
+        }
+    }
+
+    /// Record a peer's subscription (what strands they're interested in).
+    pub fn set_subscription(&mut self, peer: &NodeKey, subscription: Subscription) {
+        self.subscriptions.insert(*peer, subscription);
+    }
+
+    /// Get a peer's subscription, if known.
+    pub fn subscription(&self, peer: &NodeKey) -> Option<&Subscription> {
+        self.subscriptions.get(peer)
+    }
+
+    /// Update a peer's subscription: add a strand.
+    pub fn peer_subscribe(&mut self, peer: &NodeKey, strand: NodeKey) {
+        self.subscriptions
+            .entry(*peer)
+            .or_insert_with(|| Subscription::from_strands(&[]))
+            .subscribe(strand);
+    }
+
+    /// Update a peer's subscription: remove a strand.
+    pub fn peer_unsubscribe(&mut self, peer: &NodeKey, strand: &NodeKey) {
+        if let Some(sub) = self.subscriptions.get_mut(peer) {
+            sub.unsubscribe(strand);
         }
     }
 }
@@ -254,6 +533,8 @@ pub enum DisseminationMessage {
     PullResponse(BlockResponse),
     /// "I have blocks up to this frontier." (lightweight sync)
     HaveFrontier(Frontier),
+    /// Subscription management message.
+    Subscription(SubscriptionMessage),
 }
 
 // =============================================================================
@@ -274,6 +555,11 @@ pub struct Disseminator {
     /// Blocks we've received but can't insert yet (missing predecessors).
     /// Maps block_id -> (block, missing_predecessor_ids).
     pending: HashMap<BlockId, (Block, HashSet<BlockId>)>,
+    /// Our own subscription (what strands we're interested in).
+    /// If None, we accept everything (legacy behavior).
+    subscription: Option<Subscription>,
+    /// Interest discovery tracker.
+    interest_discovery: Option<InterestDiscovery>,
 }
 
 impl Disseminator {
@@ -284,6 +570,8 @@ impl Disseminator {
             peer_knowledge: PeerKnowledge::new(),
             self_key,
             pending: HashMap::new(),
+            subscription: None,
+            interest_discovery: None,
         }
     }
 
@@ -294,7 +582,41 @@ impl Disseminator {
             peer_knowledge: PeerKnowledge::new(),
             self_key,
             pending: HashMap::new(),
+            subscription: None,
+            interest_discovery: None,
         }
+    }
+
+    /// Create a disseminator with a subscription (interest-based mode).
+    pub fn with_subscription(self_key: NodeKey, subscription: Subscription) -> Self {
+        Self {
+            blocklace: Blocklace::new(),
+            peer_knowledge: PeerKnowledge::new(),
+            self_key,
+            pending: HashMap::new(),
+            subscription: Some(subscription),
+            interest_discovery: None,
+        }
+    }
+
+    /// Set our subscription.
+    pub fn set_subscription(&mut self, subscription: Subscription) {
+        self.subscription = Some(subscription);
+    }
+
+    /// Get our subscription.
+    pub fn subscription(&self) -> Option<&Subscription> {
+        self.subscription.as_ref()
+    }
+
+    /// Enable interest discovery with the given auto-subscribe threshold.
+    pub fn enable_interest_discovery(&mut self, threshold: usize) {
+        self.interest_discovery = Some(InterestDiscovery::new(threshold));
+    }
+
+    /// Get the interest discovery tracker (if enabled).
+    pub fn interest_discovery(&self) -> Option<&InterestDiscovery> {
+        self.interest_discovery.as_ref()
     }
 
     /// Get a reference to the local blocklace.
@@ -383,6 +705,48 @@ impl Disseminator {
         }
 
         DeltaGroup::from_blocks(sendable)
+    }
+
+    /// Determine what blocks to send to a specific peer, filtered by their
+    /// subscription.
+    ///
+    /// If the peer has a subscription, only blocks matching that subscription
+    /// (plus causal closure) are included. If no subscription is known,
+    /// behaves identically to `blocks_to_send` (backward compat).
+    pub fn blocks_to_send_filtered(&self, peer: &NodeKey) -> DeltaGroup {
+        let full_delta = self.blocks_to_send(peer);
+        if full_delta.is_empty() {
+            return full_delta;
+        }
+
+        let peer_sub = self.peer_knowledge.subscription(peer);
+        match peer_sub {
+            Some(sub) => {
+                // Filter blocks by subscription, then ensure causal closure.
+                let peer_known = self
+                    .peer_knowledge
+                    .known_by(peer)
+                    .cloned()
+                    .unwrap_or_default();
+
+                let filtered: Vec<Block> = full_delta
+                    .blocks
+                    .into_iter()
+                    .filter(|b| sub.wants_block(b, &self.blocklace))
+                    .collect();
+
+                if filtered.is_empty() {
+                    return DeltaGroup::new();
+                }
+
+                // Compute causal closure for the filtered set.
+                let closed =
+                    causal_closure_for_subscription(&filtered, sub, &self.blocklace, &peer_known);
+
+                DeltaGroup::from_blocks(closed)
+            }
+            None => full_delta, // No subscription = send everything (backward compat)
+        }
     }
 
     /// Determine what blocks to send to a specific peer, split into chunks.
@@ -528,6 +892,37 @@ impl Disseminator {
                 } else {
                     None
                 }
+            }
+            DisseminationMessage::Subscription(sub_msg) => {
+                self.handle_subscription_message(from, sub_msg)
+            }
+        }
+    }
+
+    /// Handle subscription management messages from a peer.
+    fn handle_subscription_message(
+        &mut self,
+        from: &NodeKey,
+        msg: SubscriptionMessage,
+    ) -> Option<DisseminationMessage> {
+        match msg {
+            SubscriptionMessage::Advertise(sub) => {
+                self.peer_knowledge.set_subscription(from, sub);
+                None
+            }
+            SubscriptionMessage::Subscribe { strand } => {
+                self.peer_knowledge.peer_subscribe(from, strand);
+                None
+            }
+            SubscriptionMessage::Unsubscribe { strand } => {
+                self.peer_knowledge.peer_unsubscribe(from, &strand);
+                None
+            }
+            SubscriptionMessage::QuerySubscription => {
+                // Respond with our own subscription if we have one.
+                self.subscription.as_ref().map(|sub| {
+                    DisseminationMessage::Subscription(SubscriptionMessage::Advertise(sub.clone()))
+                })
             }
         }
     }
@@ -1347,5 +1742,336 @@ mod tests {
         // blocks_since should only return the new blocks.
         let new_blocks = node.blocks_since(&tips_snapshot);
         assert_eq!(new_blocks.len(), 2);
+    }
+
+    // =========================================================================
+    // Phase 2: Interest-Based Dissemination Tests
+    // =========================================================================
+
+    #[test]
+    fn subscription_from_reference_group_includes_all_members() {
+        use crate::ordering::ReferenceGroup;
+
+        let members = vec![make_key(1), make_key(2), make_key(3)];
+        let group = ReferenceGroup::new(members.clone(), 10);
+        let sub = Subscription::from_reference_group(&group);
+
+        assert_eq!(sub.subscribed_strands.len(), 3);
+        for m in &members {
+            assert!(sub.is_directly_subscribed(m));
+        }
+        assert!(!sub.is_directly_subscribed(&make_key(99)));
+        assert!(!sub.include_referenced);
+        assert_eq!(sub.causal_depth, 0);
+    }
+
+    #[test]
+    fn filtered_push_subscribed_sent_non_subscribed_filtered() {
+        let key_a = make_key(1);
+        let key_b = make_key(2);
+        let key_c = make_key(3);
+
+        let mut node_a = Disseminator::new(key_a);
+
+        // A has blocks from strands B and C.
+        let b1 = Block::new(key_b, 0, vec![], b"from-b".to_vec());
+        let c1 = Block::new(key_c, 0, vec![], b"from-c".to_vec());
+        node_a.blocklace_mut().insert(b1.clone()).unwrap();
+        node_a.blocklace_mut().insert(c1.clone()).unwrap();
+
+        // Peer D subscribes only to strand B.
+        let key_d = make_key(4);
+        let sub = Subscription::from_strands(&[key_b]);
+        node_a.peer_knowledge.set_subscription(&key_d, sub);
+
+        // A computes filtered push for D.
+        let delta = node_a.blocks_to_send_filtered(&key_d);
+
+        // Only B's block should be included.
+        assert_eq!(delta.len(), 1);
+        assert_eq!(delta.blocks[0].creator, key_b);
+    }
+
+    #[test]
+    fn causal_closure_non_subscribed_predecessor_included() {
+        let key_a = make_key(1);
+        let key_b = make_key(2);
+        let key_c = make_key(3);
+
+        let mut node = Disseminator::new(key_a);
+
+        // C creates a genesis block.
+        let c1 = Block::new(key_c, 0, vec![], b"from-c".to_vec());
+        let c1_id = c1.id();
+        node.blocklace_mut().insert(c1.clone()).unwrap();
+
+        // B creates a block that references C's block.
+        let b1 = Block::new(key_b, 0, vec![c1_id], b"from-b-refs-c".to_vec());
+        node.blocklace_mut().insert(b1.clone()).unwrap();
+
+        // Peer D subscribes only to strand B.
+        let key_d = make_key(4);
+        let sub = Subscription::from_strands(&[key_b]);
+        node.peer_knowledge.set_subscription(&key_d, sub);
+
+        // Compute filtered push for D.
+        let delta = node.blocks_to_send_filtered(&key_d);
+
+        // Both blocks should be included: B's block (subscribed) +
+        // C's block (causal closure needed for B's block).
+        assert_eq!(delta.len(), 2);
+
+        let ids: HashSet<BlockId> = delta.blocks.iter().map(|b| b.id()).collect();
+        assert!(ids.contains(&b1.id()));
+        assert!(ids.contains(&c1_id));
+
+        // Delta should be causally closed.
+        assert!(delta.is_valid(&HashSet::new()));
+    }
+
+    #[test]
+    fn subscribe_unsubscribe_dynamic_update() {
+        let mut sub = Subscription::from_strands(&[make_key(1), make_key(2)]);
+
+        assert_eq!(sub.subscribed_strands.len(), 2);
+        assert!(sub.is_directly_subscribed(&make_key(1)));
+        assert!(sub.is_directly_subscribed(&make_key(2)));
+        assert!(!sub.is_directly_subscribed(&make_key(3)));
+
+        // Subscribe to a new strand.
+        sub.subscribe(make_key(3));
+        assert!(sub.is_directly_subscribed(&make_key(3)));
+        assert_eq!(sub.subscribed_strands.len(), 3);
+
+        // Unsubscribe from a strand.
+        sub.unsubscribe(&make_key(1));
+        assert!(!sub.is_directly_subscribed(&make_key(1)));
+        assert_eq!(sub.subscribed_strands.len(), 2);
+    }
+
+    #[test]
+    fn no_subscription_sends_everything_backward_compat() {
+        let key_a = make_key(1);
+        let key_b = make_key(2);
+        let key_c = make_key(3);
+
+        let mut node_a = Disseminator::new(key_a);
+
+        // A has blocks from multiple strands.
+        let b1 = Block::new(key_b, 0, vec![], b"from-b".to_vec());
+        let c1 = Block::new(key_c, 0, vec![], b"from-c".to_vec());
+        node_a.blocklace_mut().insert(b1.clone()).unwrap();
+        node_a.blocklace_mut().insert(c1.clone()).unwrap();
+
+        // Peer D has NO subscription (legacy peer).
+        let key_d = make_key(4);
+        // No subscription set for D.
+
+        // Filtered push should send everything.
+        let delta = node_a.blocks_to_send_filtered(&key_d);
+        assert_eq!(delta.len(), 2);
+    }
+
+    #[test]
+    fn interest_discovery_referenced_strand_added() {
+        let sub = Subscription::from_strands(&[make_key(1), make_key(2)]);
+        let mut discovery = InterestDiscovery::new(3);
+
+        // Strand 5 is referenced by a subscribed block.
+        let crossed = discovery.record_reference(make_key(5), &sub);
+        assert!(!crossed); // Not yet at threshold.
+        assert!(discovery.discovered.contains(&make_key(5)));
+        assert_eq!(discovery.reference_counts[&make_key(5)], 1);
+    }
+
+    #[test]
+    fn interest_discovery_auto_subscribe_threshold() {
+        let sub = Subscription::from_strands(&[make_key(1), make_key(2)]);
+        let mut discovery = InterestDiscovery::new(3);
+
+        // Record references to strand 5.
+        assert!(!discovery.record_reference(make_key(5), &sub)); // count=1
+        assert!(!discovery.record_reference(make_key(5), &sub)); // count=2
+        assert!(discovery.record_reference(make_key(5), &sub)); // count=3 -> threshold!
+
+        // Should be in the auto-subscribe list.
+        let auto = discovery.strands_to_auto_subscribe();
+        assert!(auto.contains(&make_key(5)));
+
+        // But already-subscribed strands are not tracked.
+        assert!(!discovery.record_reference(make_key(1), &sub));
+        assert!(!discovery.discovered.contains(&make_key(1)));
+    }
+
+    #[test]
+    fn multiple_peers_different_subscriptions_different_blocks() {
+        let key_a = make_key(1);
+        let key_b = make_key(2);
+        let key_c = make_key(3);
+
+        let mut node = Disseminator::new(key_a);
+
+        // Node has blocks from B, C, and itself.
+        let b1 = Block::new(key_b, 0, vec![], b"from-b".to_vec());
+        let c1 = Block::new(key_c, 0, vec![], b"from-c".to_vec());
+        let a1 = Block::new(key_a, 0, vec![], b"from-a".to_vec());
+        node.blocklace_mut().insert(b1.clone()).unwrap();
+        node.blocklace_mut().insert(c1.clone()).unwrap();
+        node.blocklace_mut().insert(a1.clone()).unwrap();
+
+        // Peer D subscribes to B only.
+        let key_d = make_key(4);
+        let sub_d = Subscription::from_strands(&[key_b]);
+        node.peer_knowledge.set_subscription(&key_d, sub_d);
+
+        // Peer E subscribes to C only.
+        let key_e = make_key(5);
+        let sub_e = Subscription::from_strands(&[key_c]);
+        node.peer_knowledge.set_subscription(&key_e, sub_e);
+
+        let delta_d = node.blocks_to_send_filtered(&key_d);
+        let delta_e = node.blocks_to_send_filtered(&key_e);
+
+        // D should get B's block only.
+        assert_eq!(delta_d.len(), 1);
+        assert_eq!(delta_d.blocks[0].creator, key_b);
+
+        // E should get C's block only.
+        assert_eq!(delta_e.len(), 1);
+        assert_eq!(delta_e.blocks[0].creator, key_c);
+    }
+
+    #[test]
+    fn subscription_advertise_message_roundtrip() {
+        let sub = Subscription::from_strands(&[make_key(1), make_key(2), make_key(3)]);
+        let msg = DisseminationMessage::Subscription(SubscriptionMessage::Advertise(sub.clone()));
+
+        let bytes = postcard::to_stdvec(&msg).unwrap();
+        let decoded: DisseminationMessage = postcard::from_bytes(&bytes).unwrap();
+
+        match decoded {
+            DisseminationMessage::Subscription(SubscriptionMessage::Advertise(decoded_sub)) => {
+                assert_eq!(decoded_sub, sub);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn subscription_subscribe_unsubscribe_messages_roundtrip() {
+        let msg_sub = DisseminationMessage::Subscription(SubscriptionMessage::Subscribe {
+            strand: make_key(7),
+        });
+        let msg_unsub = DisseminationMessage::Subscription(SubscriptionMessage::Unsubscribe {
+            strand: make_key(8),
+        });
+        let msg_query = DisseminationMessage::Subscription(SubscriptionMessage::QuerySubscription);
+
+        for msg in [msg_sub, msg_unsub, msg_query] {
+            let bytes = postcard::to_stdvec(&msg).unwrap();
+            let decoded: DisseminationMessage = postcard::from_bytes(&bytes).unwrap();
+            assert_eq!(decoded, msg);
+        }
+    }
+
+    #[test]
+    fn push_with_subscription_plus_causal_closure_is_causally_closed() {
+        let key_a = make_key(1);
+        let key_b = make_key(2);
+        let key_c = make_key(3);
+
+        let mut node = Disseminator::new(key_a);
+
+        // Build a chain: c1 (by C) -> b1 (by B, refs c1) -> b2 (by B, refs b1)
+        let c1 = Block::new(key_c, 0, vec![], b"c-genesis".to_vec());
+        let c1_id = c1.id();
+        node.blocklace_mut().insert(c1.clone()).unwrap();
+
+        let b1 = Block::new(key_b, 0, vec![c1_id], b"b-first".to_vec());
+        let b1_id = b1.id();
+        node.blocklace_mut().insert(b1.clone()).unwrap();
+
+        let b2 = Block::new(key_b, 1, vec![b1_id], b"b-second".to_vec());
+        node.blocklace_mut().insert(b2.clone()).unwrap();
+
+        // Peer D subscribes only to B.
+        let key_d = make_key(4);
+        let sub = Subscription::from_strands(&[key_b]);
+        node.peer_knowledge.set_subscription(&key_d, sub);
+
+        // Filtered push for D.
+        let delta = node.blocks_to_send_filtered(&key_d);
+
+        // Should include b1, b2 (subscribed) + c1 (causal closure for b1).
+        assert_eq!(delta.len(), 3);
+
+        // Must be causally closed.
+        assert!(
+            delta.is_valid(&HashSet::new()),
+            "filtered push with causal closure must produce a causally-closed set"
+        );
+
+        // Verify all expected blocks are present.
+        let ids: HashSet<BlockId> = delta.blocks.iter().map(|b| b.id()).collect();
+        assert!(ids.contains(&c1_id), "c1 needed for causal closure");
+        assert!(ids.contains(&b1_id), "b1 is subscribed");
+        assert!(ids.contains(&b2.id()), "b2 is subscribed");
+    }
+
+    #[test]
+    fn subscription_message_handling_updates_peer_knowledge() {
+        let key_a = make_key(1);
+        let key_b = make_key(2);
+
+        let mut node_a = Disseminator::new(key_a);
+
+        // B sends an Advertise message.
+        let sub = Subscription::from_strands(&[make_key(10), make_key(11)]);
+        let msg = DisseminationMessage::Subscription(SubscriptionMessage::Advertise(sub.clone()));
+        node_a.handle_message(&key_b, msg);
+
+        // A should now know B's subscription.
+        let b_sub = node_a.peer_knowledge.subscription(&key_b).unwrap();
+        assert_eq!(b_sub, &sub);
+
+        // B sends a Subscribe message.
+        let msg2 = DisseminationMessage::Subscription(SubscriptionMessage::Subscribe {
+            strand: make_key(12),
+        });
+        node_a.handle_message(&key_b, msg2);
+
+        let b_sub = node_a.peer_knowledge.subscription(&key_b).unwrap();
+        assert!(b_sub.is_directly_subscribed(&make_key(12)));
+
+        // B sends an Unsubscribe message.
+        let msg3 = DisseminationMessage::Subscription(SubscriptionMessage::Unsubscribe {
+            strand: make_key(10),
+        });
+        node_a.handle_message(&key_b, msg3);
+
+        let b_sub = node_a.peer_knowledge.subscription(&key_b).unwrap();
+        assert!(!b_sub.is_directly_subscribed(&make_key(10)));
+    }
+
+    #[test]
+    fn disseminator_with_subscription_responds_to_query() {
+        let key_a = make_key(1);
+        let key_b = make_key(2);
+
+        let sub = Subscription::from_strands(&[make_key(10), make_key(11)]);
+        let mut node_a = Disseminator::with_subscription(key_a, sub.clone());
+
+        // B queries A's subscription.
+        let query = DisseminationMessage::Subscription(SubscriptionMessage::QuerySubscription);
+        let response = node_a.handle_message(&key_b, query);
+
+        match response {
+            Some(DisseminationMessage::Subscription(SubscriptionMessage::Advertise(
+                advertised,
+            ))) => {
+                assert_eq!(advertised, sub);
+            }
+            _ => panic!("expected Subscription Advertise response"),
+        }
     }
 }

@@ -38,6 +38,7 @@
 //! 7. Quotas compose with computrons (quota IS a computron allocation)
 
 pub mod content;
+pub mod dedup;
 pub mod erasure;
 pub mod inbox;
 pub mod metering;
@@ -49,6 +50,7 @@ pub mod pubsub;
 pub mod queue;
 pub mod quota;
 pub mod relay;
+pub mod wal;
 
 /// A content hash (blake3) identifying a blob.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]

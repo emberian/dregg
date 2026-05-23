@@ -65,6 +65,7 @@ pub mod commit_reveal_fulfillment;
 pub mod delay_pool;
 pub mod exchange;
 pub mod fulfillment;
+pub mod generalized;
 pub mod gossip;
 pub mod matcher;
 pub mod partial_fill;

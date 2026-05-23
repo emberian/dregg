@@ -11,17 +11,14 @@
 //!
 //! # Findings documented inline where behavior reveals design gaps.
 
-use pyana_storage::QuotaId;
-use pyana_storage::inbox::{CapInbox, InboxMessage};
+use pyana_storage::inbox::InboxMessage;
 use pyana_storage::multi_asset::{ExchangeRate, FeeError, FeePayment, FeePolicy};
 use pyana_storage::operator::{DeliveryDispute, DisputeOutcome, RelayOperator};
-use pyana_storage::programmable::{
-    ProgramError, ProgrammableQueue, QueueConstraint, QueueProgram, ValidationContext, programs,
-};
+use pyana_storage::programmable::{ProgramError, ProgrammableQueue, ValidationContext, programs};
 use pyana_storage::pubsub::PubSubTopic;
-use pyana_storage::queue::{MerkleQueue, QueueEntry, QueueError, verify_dequeue_proof};
+use pyana_storage::queue::{MerkleQueue, QueueEntry, verify_dequeue_proof};
 use pyana_storage::relay::RelayError;
-use pyana_teasting::fault::{CrashableNode, FaultConfig, FaultyNetwork, MessageBuffer};
+use pyana_teasting::fault::{FaultConfig, FaultyNetwork, MessageBuffer};
 use pyana_teasting::harness::SimulationHarness;
 use pyana_wire::message::WireMessage;
 
@@ -477,16 +474,16 @@ fn pubsub_publisher_crash_mid_publish_causes_duplicate() {
     assert_eq!(topic.total_published(), 3);
 
     // Fast subscriber sees the duplicate.
-    let dup = topic.read_next(&sub_fast).unwrap().unwrap();
-    assert_eq!(dup.content_hash, hash2, "duplicate detected");
+    let dup_hash = topic.read_next(&sub_fast).unwrap().unwrap().content_hash;
+    assert_eq!(dup_hash, hash2, "duplicate detected");
 
     // Slow subscriber will also see both copies.
-    let s1 = topic.read_next(&sub_slow).unwrap().unwrap();
-    let s2 = topic.read_next(&sub_slow).unwrap().unwrap();
-    let s3 = topic.read_next(&sub_slow).unwrap().unwrap();
-    assert_eq!(s1.content_hash, hash1);
-    assert_eq!(s2.content_hash, hash2);
-    assert_eq!(s3.content_hash, hash2); // duplicate
+    let s1_hash = topic.read_next(&sub_slow).unwrap().unwrap().content_hash;
+    let s2_hash = topic.read_next(&sub_slow).unwrap().unwrap().content_hash;
+    let s3_hash = topic.read_next(&sub_slow).unwrap().unwrap().content_hash;
+    assert_eq!(s1_hash, hash1);
+    assert_eq!(s2_hash, hash2);
+    assert_eq!(s3_hash, hash2); // duplicate
 }
 
 // =============================================================================
@@ -1074,10 +1071,10 @@ fn message_buffer_preserves_fifo_on_recovery() {
     assert!(!net.is_node_healthy(0, 0));
 
     // Buffer messages while node is crashed (in order).
-    let messages: Vec<WireMessage> = (0..5)
+    let messages: Vec<WireMessage> = (0u64..5)
         .map(|i| WireMessage::Ping {
             seq: i,
-            timestamp: i * 100,
+            timestamp: (i * 100) as i64,
         })
         .collect();
 

@@ -7,12 +7,9 @@
 //! - Serve the current attested root and non-membership proofs
 //! - Initiate outgoing connections for cross-silo token presentation
 
-use crate::auth::{AuthConfig, GossipFilter, RateLimiter as AuthRateLimiter, SharedBanList};
+use crate::auth::{AuthConfig, RateLimiter as AuthRateLimiter, SharedBanList};
 use crate::connection::{ConnectionError, PeerConnection};
-use crate::hardening::{
-    ConnectionMetrics, HardeningConfig, OutgoingMessage, RateLimiter, ShutdownCoordinator,
-    message_cost, outgoing_channel,
-};
+use crate::hardening::{ConnectionMetrics, HardeningConfig, ShutdownCoordinator, message_cost};
 use crate::message::{
     AuthorizationRequest, MAX_NONCE_CACHE_SIZE, MAX_REQUEST_AGE_SECS, PROTOCOL_VERSION, PublicKey,
     Signature, ThresholdQC, WireMessage,
@@ -25,7 +22,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
-use tokio::sync::{Mutex, RwLock, mpsc};
+use tokio::sync::{Mutex, RwLock};
 use tokio_rustls::TlsAcceptor;
 
 use pyana_captp::{
@@ -57,6 +54,7 @@ pub trait ProofVerifier: Send + Sync + std::fmt::Debug {
 #[derive(Clone, Debug)]
 pub struct StarkVerifier;
 
+#[cfg(feature = "stark-verifier")]
 impl ProofVerifier for StarkVerifier {
     fn verify(&self, proof_bytes: &[u8], action: &str, resource: &str) -> Result<bool, String> {
         let proof = pyana_circuit::stark::proof_from_bytes(proof_bytes)?;
@@ -105,6 +103,15 @@ impl ProofVerifier for StarkVerifier {
             Ok(()) => Ok(true),
             Err(_reason) => Ok(false),
         }
+    }
+}
+
+/// Fallback StarkVerifier when the stark-verifier feature is not enabled.
+/// Always rejects proofs (fail-closed).
+#[cfg(not(feature = "stark-verifier"))]
+impl ProofVerifier for StarkVerifier {
+    fn verify(&self, _proof_bytes: &[u8], _action: &str, _resource: &str) -> Result<bool, String> {
+        Err("STARK verification unavailable: stark-verifier feature not enabled".to_string())
     }
 }
 
@@ -1335,6 +1342,7 @@ impl SiloServer {
                                 participant_source,
                                 auth_config,
                                 ban_list,
+                                shutdown.clone(),
                             )
                             .await;
                         }
@@ -1359,6 +1367,7 @@ impl SiloServer {
                         participant_source,
                         auth_config,
                         ban_list,
+                        shutdown,
                     )
                     .await;
                 }
@@ -1381,6 +1390,7 @@ impl SiloServer {
         participant_source: Option<Arc<dyn ParticipantSource>>,
         auth_config: AuthConfig,
         ban_list: SharedBanList,
+        shutdown: Arc<ShutdownCoordinator>,
     ) {
         let (reader, writer) = tokio::io::split(stream);
         Self::handle_connection_generic(
@@ -1397,6 +1407,7 @@ impl SiloServer {
             participant_source,
             auth_config,
             ban_list,
+            shutdown,
         )
         .await;
     }
@@ -3198,5 +3209,285 @@ mod tests {
         let verifier = StarkVerifier;
         // Random bytes should not pass STARK verification
         assert!(!SiloServer::verify_proof_with(&garbage, &verifier));
+    }
+
+    // =========================================================================
+    // Federation Boundary Enforcement Tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn require_auth_drops_failed_connections() {
+        // Server with require_auth=true: unauthenticated peers get dropped.
+        let (_sk, pk) = pyana_types::generate_keypair();
+        let participant_key = pk.0;
+        let participants = StaticParticipants::new(vec![participant_key]);
+
+        let auth_config = crate::auth::AuthConfig::strict();
+
+        let config = SiloConfig::new("strict-silo").with_verifier(Arc::new(NoopVerifier));
+        let server = SiloServer::new("127.0.0.1:0".parse().unwrap(), config)
+            .with_participant_source(Arc::new(participants))
+            .with_auth_config(auth_config);
+
+        let (addr_tx, addr_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            server.run_with_addr(addr_tx).await.unwrap();
+        });
+
+        let addr = addr_rx.await.unwrap();
+        let mut client = PeerConnection::connect(&addr.to_string()).await.unwrap();
+
+        // Send Hello
+        client
+            .send(WireMessage::Hello {
+                node_id: [0x11; 32],
+                node_name: "bad-peer".to_string(),
+                protocol_version: PROTOCOL_VERSION,
+                capabilities: vec![],
+            })
+            .await
+            .unwrap();
+        let _welcome = client.recv().await.unwrap();
+
+        // Server sends PeerChallenge, we respond with WRONG signature
+        let challenge = client.recv().await.unwrap();
+        match challenge {
+            WireMessage::PeerChallenge { .. } => {}
+            other => panic!("expected PeerChallenge, got {other:?}"),
+        }
+
+        // Send bad auth response
+        client
+            .send(WireMessage::PeerAuthResponse {
+                participant_key,
+                signature: Signature([0xFF; 64]), // Invalid signature
+                claimed_constitution_version: 0,
+            })
+            .await
+            .unwrap();
+
+        // Should get PeerAuthenticated with Anonymous role
+        let auth_result = client.recv().await.unwrap();
+        match &auth_result {
+            WireMessage::PeerAuthenticated { role_tag, .. } => {
+                assert_eq!(*role_tag, PeerRole::Anonymous.tag());
+            }
+            other => panic!("expected PeerAuthenticated, got {other:?}"),
+        }
+
+        // Then should get Error (connection being dropped due to require_auth)
+        let error = client.recv().await.unwrap();
+        match error {
+            WireMessage::Error { code, message } => {
+                assert_eq!(code, crate::message::error_codes::PEER_AUTH_FAILED);
+                assert!(message.contains("authentication required"));
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+
+        // Connection should now be closed
+        let result = client.recv().await;
+        assert!(
+            result.is_err(),
+            "connection should be closed after require_auth failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn authenticated_member_can_proceed() {
+        // Server with require_auth=true: properly authenticated peers proceed.
+        let (sk, pk) = pyana_types::generate_keypair();
+        let participant_key = pk.0;
+        let participants = StaticParticipants::new(vec![participant_key]);
+
+        let auth_config = crate::auth::AuthConfig::strict();
+
+        let config = SiloConfig::new("auth-silo").with_verifier(Arc::new(NoopVerifier));
+        let server = SiloServer::new("127.0.0.1:0".parse().unwrap(), config.clone())
+            .with_participant_source(Arc::new(participants))
+            .with_auth_config(auth_config);
+
+        let (addr_tx, addr_rx) = tokio::sync::oneshot::channel();
+        let server_node_id = config.node_id;
+        tokio::spawn(async move {
+            server.run_with_addr(addr_tx).await.unwrap();
+        });
+
+        let addr = addr_rx.await.unwrap();
+        let mut client = PeerConnection::connect(&addr.to_string()).await.unwrap();
+
+        // Send Hello
+        client
+            .send(WireMessage::Hello {
+                node_id: [0x11; 32],
+                node_name: "good-peer".to_string(),
+                protocol_version: PROTOCOL_VERSION,
+                capabilities: vec![],
+            })
+            .await
+            .unwrap();
+        let _welcome = client.recv().await.unwrap();
+
+        // Server sends PeerChallenge
+        let challenge = client.recv().await.unwrap();
+        let nonce = match challenge {
+            WireMessage::PeerChallenge {
+                nonce,
+                server_node_id: sid,
+            } => {
+                assert_eq!(sid, server_node_id);
+                nonce
+            }
+            other => panic!("expected PeerChallenge, got {other:?}"),
+        };
+
+        // Sign the challenge correctly
+        let signing_msg = peer_auth_signing_message(&nonce, &server_node_id);
+        let sig = pyana_types::sign(&sk, &signing_msg);
+
+        client
+            .send(WireMessage::PeerAuthResponse {
+                participant_key,
+                signature: sig,
+                claimed_constitution_version: 0,
+            })
+            .await
+            .unwrap();
+
+        // Should get PeerAuthenticated with Member role
+        let auth_result = client.recv().await.unwrap();
+        match auth_result {
+            WireMessage::PeerAuthenticated {
+                role_tag,
+                authenticated_key,
+            } => {
+                assert_eq!(role_tag, PeerRole::Member { participant_key }.tag());
+                assert_eq!(authenticated_key, participant_key);
+            }
+            other => panic!("expected PeerAuthenticated(Member), got {other:?}"),
+        }
+
+        // Connection should still be alive - send a ping
+        client
+            .send(WireMessage::Ping {
+                seq: 42,
+                timestamp: 12345,
+            })
+            .await
+            .unwrap();
+        let pong = client.recv().await.unwrap();
+        match pong {
+            WireMessage::Pong { seq, .. } => assert_eq!(seq, 42),
+            other => panic!("expected Pong, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn gossip_filter_blocks_state_replication_for_anonymous() {
+        use crate::auth::GossipFilter;
+
+        // Unit test: Anonymous peers should not receive state-replication messages
+        let anon = PeerRole::Anonymous;
+        let member = PeerRole::Member {
+            participant_key: [0xAA; 32],
+        };
+        let captp = PeerRole::CapTpPeer {
+            federation_id: [0xBB; 32],
+        };
+
+        // SubmitRevocation = state replication
+        let revocation = WireMessage::SubmitRevocation {
+            token_id: "tok".to_string(),
+            authority: PublicKey([0; 32]),
+            authority_sig: Signature([0; 64]),
+            nonce: [0; 16],
+            timestamp: 0,
+        };
+
+        assert!(!GossipFilter::should_send_to_peer(&revocation, &anon));
+        assert!(!GossipFilter::should_send_to_peer(&revocation, &captp));
+        assert!(GossipFilter::should_send_to_peer(&revocation, &member));
+
+        // CapTP messages
+        let cap_hello = WireMessage::CapHello {
+            federation_id: [0; 32],
+            initial_exports: vec![],
+        };
+        assert!(!GossipFilter::should_send_to_peer(&cap_hello, &anon));
+        assert!(GossipFilter::should_send_to_peer(&cap_hello, &captp));
+        assert!(GossipFilter::should_send_to_peer(&cap_hello, &member));
+
+        // Public messages
+        let ping = WireMessage::Ping {
+            seq: 0,
+            timestamp: 0,
+        };
+        assert!(GossipFilter::should_send_to_peer(&ping, &anon));
+        assert!(GossipFilter::should_send_to_peer(&ping, &captp));
+        assert!(GossipFilter::should_send_to_peer(&ping, &member));
+    }
+
+    #[tokio::test]
+    async fn rate_limit_anonymous_is_stricter() {
+        use crate::auth::{RateLimitConfig, RateLimiter as AuthRateLimiter};
+        use std::time::Duration;
+
+        let config = RateLimitConfig {
+            anonymous_max: 5,
+            captp_max: 50,
+            member_max: 500,
+            window: Duration::from_secs(10),
+        };
+
+        // Anonymous limiter
+        let mut anon_limiter = AuthRateLimiter::for_role(&PeerRole::Anonymous, &config);
+        for _ in 0..5 {
+            assert!(anon_limiter.check());
+        }
+        assert!(
+            !anon_limiter.check(),
+            "Anonymous should be limited after 5 messages"
+        );
+
+        // Member limiter (much higher limit)
+        let mut member_limiter = AuthRateLimiter::for_role(
+            &PeerRole::Member {
+                participant_key: [0; 32],
+            },
+            &config,
+        );
+        for _ in 0..500 {
+            assert!(member_limiter.check());
+        }
+        assert!(
+            !member_limiter.check(),
+            "Member should be limited after 500 messages"
+        );
+    }
+
+    #[tokio::test]
+    async fn ban_list_after_repeated_auth_failures() {
+        use crate::auth::{BanConfig, BanList, BanReason};
+        use std::net::IpAddr;
+        use std::time::Duration;
+
+        let config = BanConfig {
+            max_auth_failures: 3,
+            auth_failure_ban_duration: Duration::from_secs(300),
+            ..Default::default()
+        };
+        let mut ban_list = BanList::new(config);
+        let ip: IpAddr = "192.168.1.1".parse().unwrap();
+
+        // Three failures -> ban
+        assert!(!ban_list.record_auth_failure(&ip));
+        assert!(!ban_list.record_auth_failure(&ip));
+        assert!(ban_list.record_auth_failure(&ip));
+        assert!(ban_list.is_banned(&ip));
+
+        match ban_list.get_ban(&ip).unwrap().reason {
+            BanReason::RepeatedAuthFailure { attempts } => assert_eq!(attempts, 3),
+            _ => panic!("expected RepeatedAuthFailure"),
+        }
     }
 }

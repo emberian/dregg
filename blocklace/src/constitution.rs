@@ -706,6 +706,15 @@ impl ConstitutionManager {
         self.current.timeout_waves
     }
 
+    /// Get the current reference group (for use with tau_unified).
+    ///
+    /// This bridges the Constitution model to the unified blocklace model:
+    /// the Constitution's participant set becomes a ReferenceGroup that can
+    /// be passed to `tau_unified` for ordering over a shared DAG.
+    pub fn as_reference_group(&self) -> crate::ordering::ReferenceGroup {
+        crate::ordering::ReferenceGroup::from_constitution(&self.current)
+    }
+
     /// Get the current routes commitment (None = no governance routing).
     pub fn routes_commitment(&self) -> Option<[u8; 32]> {
         self.current.routes_commitment

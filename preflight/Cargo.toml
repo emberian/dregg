@@ -24,7 +24,12 @@ pyana-federation = { path = "../federation" }
 pyana-bridge = { path = "../bridge" }
 pyana-types = { path = "../types" }
 pyana-blocklace = { path = "../blocklace" }
+pyana-captp = { path = "../captp" }
+pyana-wire = { path = "../wire" }
+pyana-storage = { path = "../storage" }
 token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
+serde_json = "1"
+toml = "0.8"
 
 # App crates — exercised by preflight app integration checks.
 # Gallery, stablecoin, AMM, orderbook depend on pyana-app-framework -> pyana-sdk

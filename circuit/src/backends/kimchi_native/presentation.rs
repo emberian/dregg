@@ -798,33 +798,47 @@ impl KimchiPresentationCircuit {
 
     /// Verify a presentation proof using the real Kimchi verifier.
     pub fn verify(proof_bytes: &[u8], public_inputs: &[Fp]) -> Result<bool, String> {
+        Self::verify_with_gates(proof_bytes, public_inputs, &[])
+    }
+
+    /// Verify with optional embedded circuit gates.
+    pub fn verify_with_gates(
+        proof_bytes: &[u8],
+        public_inputs: &[Fp],
+        circuit_gates_bytes: &[u8],
+    ) -> Result<bool, String> {
         let proof: ProverProof<Vesta, VestaOpeningProof, FULL_ROUNDS> =
             rmp_serde::from_slice(proof_bytes)
                 .map_err(|e| format!("Deserialization error: {}", e))?;
 
-        // Build a dummy witness to get the circuit structure (we only need gates)
-        let dummy = KimchiPresentationWitness {
-            federation_root: Fp::zero(),
-            request_predicate: [Fp::zero(); 4],
-            timestamp: Fp::zero(),
-            verifier_nonce: Fp::zero(),
-            composition_commitment: Fp::one(),
-            presentation_tag: Fp::zero(),
-            issuer_membership_hash: Fp::zero(),
-            fold_chain_hash: Fp::zero(),
-            derivation_hash: Fp::zero(),
-            non_revocation_eval: Fp::one(),
-            final_root: Fp::zero(),
-            randomness: Fp::zero(),
-            verifier_block_height: Fp::zero(),
-            not_after_height: Fp::zero(),
-            revealed_facts: Vec::new(),
-            issuer_key_hash: Fp::zero(),
-            blinding_factor: Fp::zero(),
-            issuer_membership_proof: None,
+        let (gates, pc) = if !circuit_gates_bytes.is_empty() {
+            super::deserialize_circuit_gates(circuit_gates_bytes)
+                .ok_or_else(|| "Failed to deserialize embedded circuit gates".to_string())?
+        } else {
+            // Fallback: build a dummy witness to get the circuit structure (only works for base case)
+            let dummy = KimchiPresentationWitness {
+                federation_root: Fp::zero(),
+                request_predicate: [Fp::zero(); 4],
+                timestamp: Fp::zero(),
+                verifier_nonce: Fp::zero(),
+                composition_commitment: Fp::one(),
+                presentation_tag: Fp::zero(),
+                issuer_membership_hash: Fp::zero(),
+                fold_chain_hash: Fp::zero(),
+                derivation_hash: Fp::zero(),
+                non_revocation_eval: Fp::one(),
+                final_root: Fp::zero(),
+                randomness: Fp::zero(),
+                verifier_block_height: Fp::zero(),
+                not_after_height: Fp::zero(),
+                revealed_facts: Vec::new(),
+                issuer_key_hash: Fp::zero(),
+                blinding_factor: Fp::zero(),
+                issuer_membership_proof: None,
+            };
+            let circuit = KimchiPresentationCircuit::new(dummy);
+            circuit.build_circuit()
         };
-        let circuit = KimchiPresentationCircuit::new(dummy);
-        let (gates, pc) = circuit.build_circuit();
 
         verify_kimchi_proof(&proof, gates, public_inputs, pc)
     }

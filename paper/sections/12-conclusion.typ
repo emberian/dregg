@@ -33,7 +33,7 @@ The system is operational: 355k lines of Rust across 41 crates, 4,046 tests, rea
 - Three production provers (custom STARK, Plonky3, Kimchi/Pickles) with STARK-in-Pickles wrapping
 - Composition operators (`compose_and`, `compose_or`, `compose_chain`, `compose_aggregate`) with cryptographic binding
 - Effect VM (14 effects) proving arbitrary turns in a single STARK (conservation + state continuity + authority operational)
-- DSL-only circuit architecture (old _air.rs files deleted; DSL is single source of truth)
+- DSL-only circuit architecture (old `\_air.rs` files deprecated; DSL is single source of truth)
 - Stealth addresses (X25519 DH + Ed25519 derivation + view tag scanning)
 - Pedersen commitments (Ristretto, per-asset-type generators) with Bulletproof range proofs
 - Dandelion++ stem routing ($p = 0.9$, ~10 hops) and delay pool (30s batch + dummy traffic)

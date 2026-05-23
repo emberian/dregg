@@ -4,11 +4,15 @@
 //! Enqueue = append leaf. Dequeue = advance head pointer.
 //! The queue root IS the content address of the queue state.
 
+use std::path::PathBuf;
+
+use crate::wal::{WalEntry, WriteAheadLog};
+
 /// A content-addressed append-only queue.
 /// Each state of the queue has a unique root hash (Merkle tree of entries).
 /// Enqueue = append leaf. Dequeue = advance head pointer.
 /// The queue root IS the content address of the queue state.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct MerkleQueue {
     /// Current entries (linear buffer with head pointer).
     entries: Vec<QueueEntry>,
@@ -18,6 +22,28 @@ pub struct MerkleQueue {
     capacity: usize,
     /// Current root hash (blake3 of all entries from head to tail).
     root: [u8; 32],
+    /// Optional WAL for durable mode.
+    wal: Option<Box<WalState>>,
+}
+
+/// Internal WAL state.
+#[derive(Debug)]
+struct WalState {
+    wal: WriteAheadLog,
+    queue_id: [u8; 32],
+}
+
+impl Clone for MerkleQueue {
+    fn clone(&self) -> Self {
+        // Cloning produces an in-memory-only copy (WAL is not cloned).
+        Self {
+            entries: self.entries.clone(),
+            head: self.head,
+            capacity: self.capacity,
+            root: self.root,
+            wal: None,
+        }
+    }
 }
 
 /// A single entry in the queue.
@@ -54,16 +80,185 @@ pub enum QueueError {
 }
 
 impl MerkleQueue {
-    /// Create a new empty queue with the given capacity.
+    /// Create a new empty queue with the given capacity (in-memory only).
     pub fn new(capacity: usize) -> Self {
         let mut q = Self {
             entries: Vec::new(),
             head: 0,
             capacity,
             root: [0u8; 32],
+            wal: None,
         };
         q.recompute_root();
         q
+    }
+
+    /// Create a queue with WAL-backed durability.
+    pub fn with_wal(capacity: usize, wal_path: PathBuf) -> std::io::Result<Self> {
+        let queue_id = *blake3::hash(wal_path.to_string_lossy().as_bytes()).as_bytes();
+        let mut wal = WriteAheadLog::open(wal_path)?;
+
+        // Log the queue creation.
+        let seq = wal.next_sequence();
+        let entry = WalEntry::CreateQueue {
+            queue_id,
+            capacity,
+            sequence: seq,
+        };
+        wal.append(&entry)?;
+        wal.sync()?;
+
+        let mut q = Self {
+            entries: Vec::new(),
+            head: 0,
+            capacity,
+            root: [0u8; 32],
+            wal: Some(Box::new(WalState { wal, queue_id })),
+        };
+        q.recompute_root();
+        Ok(q)
+    }
+
+    /// Enqueue with WAL (logged before applied, fsync'd).
+    pub fn enqueue_durable(&mut self, entry: QueueEntry) -> std::io::Result<[u8; 32]> {
+        if self.is_full() {
+            return Err(std::io::Error::other(format!("queue full (capacity {})", self.capacity)));
+        }
+
+        let wal_state = self
+            .wal
+            .as_mut()
+            .ok_or_else(|| std::io::Error::other("no WAL attached"))?;
+
+        // Serialize entry data for the WAL.
+        let entry_data = serialize_queue_entry(&entry);
+        let entry_hash = entry.content_hash;
+
+        let seq = wal_state.wal.next_sequence();
+        let wal_entry = WalEntry::Enqueue {
+            queue_id: wal_state.queue_id,
+            entry_hash,
+            data: entry_data,
+            sequence: seq,
+        };
+
+        // Log BEFORE applying.
+        wal_state.wal.append(&wal_entry)?;
+        wal_state.wal.sync()?;
+
+        // Now apply in memory.
+        self.entries.push(entry);
+        self.recompute_root();
+        Ok(self.root)
+    }
+
+    /// Dequeue with WAL.
+    pub fn dequeue_durable(&mut self) -> std::io::Result<Option<(QueueEntry, DequeueProof)>> {
+        if self.head >= self.entries.len() {
+            return Ok(None);
+        }
+
+        let wal_state = self
+            .wal
+            .as_mut()
+            .ok_or_else(|| std::io::Error::other("no WAL attached"))?;
+
+        let position = self.head;
+        let seq = wal_state.wal.next_sequence();
+        let wal_entry = WalEntry::Dequeue {
+            queue_id: wal_state.queue_id,
+            position,
+            sequence: seq,
+        };
+
+        // Log BEFORE applying.
+        wal_state.wal.append(&wal_entry)?;
+        wal_state.wal.sync()?;
+
+        // Apply in memory.
+        let old_root = self.root;
+        let entry = self.entries[self.head].clone();
+        self.head += 1;
+        self.recompute_root();
+
+        let proof = DequeueProof {
+            entry: entry.clone(),
+            old_root,
+            new_root: self.root,
+            position,
+        };
+
+        Ok(Some((entry, proof)))
+    }
+
+    /// Recover state from WAL after crash.
+    /// Replays all WAL entries to reconstruct the queue state.
+    pub fn recover_from_wal(wal_path: PathBuf) -> std::io::Result<Self> {
+        let queue_id = *blake3::hash(wal_path.to_string_lossy().as_bytes()).as_bytes();
+        let wal = WriteAheadLog::open(wal_path)?;
+        let entries = wal.replay()?;
+
+        let mut capacity = 0usize;
+        let mut queue_entries: Vec<QueueEntry> = Vec::new();
+        let mut head: usize = 0;
+
+        for entry in &entries {
+            match entry {
+                WalEntry::CreateQueue {
+                    capacity: cap,
+                    queue_id: qid,
+                    ..
+                } if *qid == queue_id => {
+                    capacity = *cap;
+                    queue_entries.clear();
+                    head = 0;
+                }
+                WalEntry::Enqueue {
+                    data,
+                    queue_id: qid,
+                    ..
+                } if *qid == queue_id => {
+                    if let Some(qe) = deserialize_queue_entry(data) {
+                        queue_entries.push(qe);
+                    }
+                }
+                WalEntry::Dequeue {
+                    queue_id: qid, ..
+                } if *qid == queue_id => {
+                    head += 1;
+                }
+                WalEntry::Checkpoint {
+                    queue_id: qid, ..
+                } if *qid == queue_id => {
+                    // After a checkpoint, earlier entries were truncated.
+                    // The queue state at this point is what we have.
+                }
+                _ => {}
+            }
+        }
+
+        let mut q = Self {
+            entries: queue_entries,
+            head,
+            capacity,
+            root: [0u8; 32],
+            wal: Some(Box::new(WalState { wal, queue_id })),
+        };
+        q.recompute_root();
+        Ok(q)
+    }
+
+    /// Checkpoint: truncate WAL up to current state (called periodically).
+    pub fn checkpoint(&mut self) -> std::io::Result<()> {
+        let wal_state = self
+            .wal
+            .as_mut()
+            .ok_or_else(|| std::io::Error::other("no WAL attached"))?;
+
+        let seq = wal_state.wal.checkpoint(&wal_state.queue_id, &self.root)?;
+        // Truncate all entries before the checkpoint.
+        wal_state.wal.truncate_before(seq)?;
+        Ok(())
     }
 
     /// Enqueue an entry. Returns the new root hash on success.
@@ -226,6 +421,39 @@ pub fn verify_dequeue_proof(proof: &DequeueProof) -> bool {
         // That's only valid if old_root was a single-element tree.
         proof.new_root == *blake3::hash(b"empty_queue").as_bytes()
     }
+}
+
+/// Serialize a QueueEntry to bytes for WAL storage.
+pub fn serialize_queue_entry(entry: &QueueEntry) -> Vec<u8> {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&entry.content_hash);
+    buf.extend_from_slice(&entry.sender);
+    buf.extend_from_slice(&entry.deposit.to_le_bytes());
+    buf.extend_from_slice(&entry.enqueued_at.to_le_bytes());
+    buf.extend_from_slice(&(entry.size as u64).to_le_bytes());
+    buf
+}
+
+/// Deserialize a QueueEntry from bytes (WAL replay).
+pub fn deserialize_queue_entry(data: &[u8]) -> Option<QueueEntry> {
+    // content_hash(32) + sender(32) + deposit(8) + enqueued_at(8) + size(8) = 88 bytes
+    if data.len() < 88 {
+        return None;
+    }
+    let mut content_hash = [0u8; 32];
+    content_hash.copy_from_slice(&data[0..32]);
+    let mut sender = [0u8; 32];
+    sender.copy_from_slice(&data[32..64]);
+    let deposit = u64::from_le_bytes(data[64..72].try_into().ok()?);
+    let enqueued_at = u64::from_le_bytes(data[72..80].try_into().ok()?);
+    let size = u64::from_le_bytes(data[80..88].try_into().ok()?) as usize;
+    Some(QueueEntry {
+        content_hash,
+        sender,
+        deposit,
+        enqueued_at,
+        size,
+    })
 }
 
 #[cfg(test)]

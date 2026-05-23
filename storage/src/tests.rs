@@ -1,12 +1,18 @@
 //! Tests for pyana-storage.
 
+use std::fs;
+use std::path::PathBuf;
+
 use crate::content::ContentStore;
+use crate::dedup::DeduplicationFilter;
 use crate::erasure::{self, ErasureEncoder};
 use crate::inbox::{CapInbox, InboxError, InboxMessage};
 use crate::metering::{self, MeteringPolicy, StorageOp};
+use crate::pubsub::{PubSubTopic, PublishResult};
 use crate::queue::{MerkleQueue, QueueEntry, QueueError};
 use crate::quota::SpaceBank;
 use crate::relay::MeteredRelay;
+use crate::wal::{WalEntry, WriteAheadLog};
 use crate::{QuotaId, StorageError};
 
 /// Helper: create a space bank with standard test parameters.
@@ -804,4 +810,310 @@ fn quota_depletion_prevents_enqueue() {
         }
         other => panic!("Expected QuotaExhausted, got {:?}", other),
     }
+}
+
+// ============================================================================
+// Production hardening tests: WAL, dedup, durable queue, idempotent publish,
+// backpressure
+// ============================================================================
+
+fn hardening_wal_path(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join("pyana_hardening_tests");
+    fs::create_dir_all(&dir).unwrap();
+    dir.join(format!("{}.wal", name))
+}
+
+fn cleanup_wal(path: &PathBuf) {
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn wal_crash_recovery_state_matches() {
+    let path = hardening_wal_path("crash_recovery");
+    cleanup_wal(&path);
+
+    // Enqueue two entries, then "crash" (drop the queue without checkpointing).
+    let entry1 = QueueEntry {
+        content_hash: *blake3::hash(b"msg1").as_bytes(),
+        sender: [0x01; 32],
+        deposit: 100,
+        enqueued_at: 1,
+        size: 4,
+    };
+    let entry2 = QueueEntry {
+        content_hash: *blake3::hash(b"msg2").as_bytes(),
+        sender: [0x02; 32],
+        deposit: 200,
+        enqueued_at: 2,
+        size: 4,
+    };
+
+    {
+        let mut q = MerkleQueue::with_wal(10, path.clone()).unwrap();
+        q.enqueue_durable(entry1.clone()).unwrap();
+        q.enqueue_durable(entry2.clone()).unwrap();
+        // Crash! (drop without explicit close)
+    }
+
+    // Recover from WAL.
+    let mut recovered = MerkleQueue::recover_from_wal(path.clone()).unwrap();
+    assert_eq!(recovered.len(), 2);
+
+    // Dequeue and verify order.
+    let (got1, _) = recovered.dequeue().unwrap();
+    assert_eq!(got1.content_hash, entry1.content_hash);
+    let (got2, _) = recovered.dequeue().unwrap();
+    assert_eq!(got2.content_hash, entry2.content_hash);
+
+    cleanup_wal(&path);
+}
+
+#[test]
+fn wal_checkpoint_truncates_old_entries_integration() {
+    let path = hardening_wal_path("checkpoint_truncate_int");
+    cleanup_wal(&path);
+
+    let mut q = MerkleQueue::with_wal(10, path.clone()).unwrap();
+
+    // Enqueue 5 entries.
+    for i in 0..5u8 {
+        let entry = QueueEntry {
+            content_hash: *blake3::hash(&[i]).as_bytes(),
+            sender: [i; 32],
+            deposit: 50,
+            enqueued_at: i as u64,
+            size: 1,
+        };
+        q.enqueue_durable(entry).unwrap();
+    }
+
+    // Checkpoint.
+    q.checkpoint().unwrap();
+
+    // The WAL should now only have the checkpoint entry.
+    let wal = WriteAheadLog::open(path.clone()).unwrap();
+    let entries = wal.replay().unwrap();
+    // After truncate_before(checkpoint_seq), only the checkpoint entry remains.
+    assert_eq!(entries.len(), 1);
+    match &entries[0] {
+        WalEntry::Checkpoint { .. } => {} // expected
+        other => panic!("Expected Checkpoint, got {:?}", other),
+    }
+
+    cleanup_wal(&path);
+}
+
+#[test]
+fn dedup_first_accepted_duplicate_rejected() {
+    let mut filter = DeduplicationFilter::new(100);
+    let hash = *blake3::hash(b"unique_message").as_bytes();
+
+    // First submission: accepted (not a duplicate).
+    assert!(!filter.is_duplicate(&hash));
+    // Retry (same hash): rejected as duplicate.
+    assert!(filter.is_duplicate(&hash));
+    // Different message: accepted.
+    let hash2 = *blake3::hash(b"different_message").as_bytes();
+    assert!(!filter.is_duplicate(&hash2));
+}
+
+#[test]
+fn dedup_capacity_eviction() {
+    let mut filter = DeduplicationFilter::new(5);
+
+    // Fill to capacity.
+    let hashes: Vec<[u8; 32]> = (0..5u8)
+        .map(|i| *blake3::hash(&[i]).as_bytes())
+        .collect();
+    for h in &hashes {
+        assert!(!filter.is_duplicate(h));
+    }
+    assert_eq!(filter.len(), 5);
+
+    // Insert a 6th — oldest (hash[0]) should be evicted.
+    let new_hash = *blake3::hash(&[99u8]).as_bytes();
+    assert!(!filter.is_duplicate(&new_hash));
+    assert_eq!(filter.len(), 5);
+
+    // hash[0] should now be "forgotten" — no longer duplicate.
+    assert!(!filter.is_duplicate(&hashes[0]));
+    // hash[1] was evicted by the re-insertion of hash[0].
+    assert!(!filter.is_duplicate(&hashes[1]));
+}
+
+#[test]
+fn durable_queue_enqueue_crash_recover_present() {
+    let path = hardening_wal_path("durable_enqueue_crash");
+    cleanup_wal(&path);
+
+    let entry = QueueEntry {
+        content_hash: *blake3::hash(b"durable_data").as_bytes(),
+        sender: [0xAA; 32],
+        deposit: 500,
+        enqueued_at: 42,
+        size: 12,
+    };
+
+    {
+        let mut q = MerkleQueue::with_wal(10, path.clone()).unwrap();
+        q.enqueue_durable(entry.clone()).unwrap();
+        // Crash!
+    }
+
+    // Recover.
+    let recovered = MerkleQueue::recover_from_wal(path.clone()).unwrap();
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered.peek().unwrap().content_hash, entry.content_hash);
+
+    cleanup_wal(&path);
+}
+
+#[test]
+fn durable_queue_dequeue_crash_recover_gone() {
+    let path = hardening_wal_path("durable_dequeue_crash");
+    cleanup_wal(&path);
+
+    let entry = QueueEntry {
+        content_hash: *blake3::hash(b"will_dequeue").as_bytes(),
+        sender: [0xBB; 32],
+        deposit: 300,
+        enqueued_at: 10,
+        size: 12,
+    };
+
+    {
+        let mut q = MerkleQueue::with_wal(10, path.clone()).unwrap();
+        q.enqueue_durable(entry.clone()).unwrap();
+        // Dequeue it.
+        let result = q.dequeue_durable().unwrap();
+        assert!(result.is_some());
+        // Crash!
+    }
+
+    // Recover — message should be gone (dequeued).
+    let recovered = MerkleQueue::recover_from_wal(path.clone()).unwrap();
+    assert_eq!(recovered.len(), 0);
+    assert!(recovered.is_empty());
+
+    cleanup_wal(&path);
+}
+
+#[test]
+fn idempotent_publish_dedup() {
+    let publisher = [0xAA; 32];
+    let mut topic = PubSubTopic::new(publisher, "idem-topic".to_string(), 100, 10);
+
+    let data_hash = *blake3::hash(b"publish_once").as_bytes();
+
+    // First publish: New.
+    let result = topic.publish_idempotent(&publisher, data_hash, 100).unwrap();
+    match result {
+        PublishResult::New { root } => {
+            assert_ne!(root, [0u8; 32]);
+        }
+        PublishResult::Duplicate { .. } => panic!("Expected New, got Duplicate"),
+    }
+
+    // Second publish with same hash: Duplicate.
+    let result2 = topic.publish_idempotent(&publisher, data_hash, 100).unwrap();
+    match result2 {
+        PublishResult::Duplicate { existing_position } => {
+            assert_eq!(existing_position, 0);
+        }
+        PublishResult::New { .. } => panic!("Expected Duplicate, got New"),
+    }
+
+    // Only one entry in the queue.
+    assert_eq!(topic.total_published(), 1);
+}
+
+#[test]
+fn backpressure_evicts_when_owner_doesnt_read() {
+    let mut inbox = CapInbox::new(QuotaId(1), 20, 50);
+    inbox.set_backpressure(3); // Must read at least 3 per epoch.
+
+    // Deliver 5 messages.
+    for i in 0u8..5 {
+        let msg = InboxMessage::Encrypted {
+            ciphertext: vec![i; 4],
+            sender: [i; 32],
+        };
+        inbox.receive_at(msg, 100, 1).unwrap();
+    }
+
+    assert_eq!(inbox.len(), 5);
+
+    // Owner reads only 1 message (below the minimum of 3).
+    inbox.read_next().unwrap();
+    assert_eq!(inbox.len(), 4);
+
+    // Enforce backpressure at epoch 1.
+    let refunds = inbox.enforce_backpressure(1);
+
+    // Deficit = 3 - 1 = 2 messages evicted.
+    assert_eq!(refunds.len(), 2);
+    assert_eq!(inbox.len(), 2); // 4 - 2 evicted = 2 remaining
+
+    // Each refund is 50% of the 100 deposit.
+    for r in &refunds {
+        assert_eq!(r.amount, 50);
+    }
+}
+
+#[test]
+fn backpressure_no_eviction_when_owner_reads_enough() {
+    let mut inbox = CapInbox::new(QuotaId(1), 20, 50);
+    inbox.set_backpressure(2); // Must read at least 2 per epoch.
+
+    // Deliver 4 messages.
+    for i in 0u8..4 {
+        let msg = InboxMessage::Encrypted {
+            ciphertext: vec![i; 4],
+            sender: [i; 32],
+        };
+        inbox.receive_at(msg, 200, 1).unwrap();
+    }
+
+    // Owner reads 3 (exceeds minimum of 2).
+    inbox.read_next().unwrap();
+    inbox.read_next().unwrap();
+    inbox.read_next().unwrap();
+
+    // Enforce backpressure.
+    let refunds = inbox.enforce_backpressure(1);
+    assert!(refunds.is_empty());
+    assert_eq!(inbox.len(), 1); // Only the one unread remains.
+}
+
+#[test]
+fn integration_wal_dedup_durable_queue_compose() {
+    let path = hardening_wal_path("integration_compose");
+    cleanup_wal(&path);
+
+    let mut dedup = DeduplicationFilter::new(100);
+
+    let entry = QueueEntry {
+        content_hash: *blake3::hash(b"composable").as_bytes(),
+        sender: [0xCC; 32],
+        deposit: 750,
+        enqueued_at: 5,
+        size: 10,
+    };
+
+    // First attempt: not a duplicate, enqueue durably.
+    assert!(!dedup.is_duplicate(&entry.content_hash));
+    {
+        let mut q = MerkleQueue::with_wal(10, path.clone()).unwrap();
+        q.enqueue_durable(entry.clone()).unwrap();
+    }
+
+    // Second attempt (retry): dedup rejects.
+    assert!(dedup.is_duplicate(&entry.content_hash));
+
+    // Recover from WAL: message is present exactly once.
+    let recovered = MerkleQueue::recover_from_wal(path.clone()).unwrap();
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered.peek().unwrap().content_hash, entry.content_hash);
+
+    cleanup_wal(&path);
 }

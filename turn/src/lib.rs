@@ -136,6 +136,11 @@ pub use presence_discharge::{
     PresenceCaveat as PresenceCapCaveat, PresenceClaimRequirement, PresenceDischarge,
     PresenceDischargeError, verify_presence_discharge,
 };
+pub use queue_programs::{
+    EnqueueValidationContext, QueueConstraint, QueueProgram, QueueProgramError,
+    QueueProgramRegistry, ValidationResult, compute_validation_hash, validate_enqueue,
+    vk_hash_to_field,
+};
 pub use routing::{IntroductionExport, RoutingDirective};
 pub use turn::{
     CustomProgramProof, EmittedEvent, Finality, SovereignCellWitness, Turn, TurnReceipt, TurnResult,

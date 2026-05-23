@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 
+use crate::dedup::DeduplicationFilter;
 use crate::queue::{MerkleQueue, QueueEntry, QueueError};
 
 /// Errors from pub-sub operations.
@@ -20,6 +21,15 @@ pub enum PubSubError {
     MaxSubscribers { max: usize },
     /// Publisher identity mismatch.
     NotPublisher,
+}
+
+/// Result of an idempotent publish operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PublishResult {
+    /// A new message was published.
+    New { root: [u8; 32] },
+    /// The message was a duplicate (already published).
+    Duplicate { existing_position: usize },
 }
 
 impl From<QueueError> for PubSubError {
@@ -49,6 +59,8 @@ pub struct PubSubTopic {
     tags: Vec<String>,
     /// Max subscribers (bounded by publisher's quota).
     max_subscribers: usize,
+    /// Deduplication filter for idempotent publish.
+    dedup: DeduplicationFilter,
 }
 
 impl PubSubTopic {
@@ -67,6 +79,7 @@ impl PubSubTopic {
             name,
             tags: Vec::new(),
             max_subscribers,
+            dedup: DeduplicationFilter::new(capacity * 2),
         }
     }
 
@@ -85,6 +98,7 @@ impl PubSubTopic {
             name,
             tags,
             max_subscribers,
+            dedup: DeduplicationFilter::new(capacity * 2),
         }
     }
 
@@ -135,6 +149,51 @@ impl PubSubTopic {
 
         let root = self.queue.enqueue(entry)?;
         Ok(root)
+    }
+
+    /// Publish with deduplication. If data_hash was already published, returns
+    /// the existing entry (idempotent). Callers retrying after timeout get
+    /// the same result without creating duplicates.
+    pub fn publish_idempotent(
+        &mut self,
+        publisher: &[u8; 32],
+        data_hash: [u8; 32],
+        deposit: u64,
+    ) -> Result<PublishResult, PubSubError> {
+        if publisher != &self.publisher {
+            return Err(PubSubError::NotPublisher);
+        }
+
+        // Check dedup filter.
+        if self.dedup.is_duplicate(&data_hash) {
+            // Find the position of the existing entry.
+            let head = self.queue.head_position();
+            let tail = self.queue.tail();
+            for idx in head..tail {
+                if let Some(entry) = self.peek_at(idx)
+                    && entry.content_hash == data_hash
+                {
+                    return Ok(PublishResult::Duplicate {
+                        existing_position: idx,
+                    });
+                }
+            }
+            // If we can't find it (was GC'd), treat it as already-published.
+            return Ok(PublishResult::Duplicate {
+                existing_position: 0,
+            });
+        }
+
+        let entry = QueueEntry {
+            content_hash: data_hash,
+            sender: self.publisher,
+            deposit,
+            enqueued_at: 0,
+            size: 32,
+        };
+
+        let root = self.queue.enqueue(entry)?;
+        Ok(PublishResult::New { root })
     }
 
     /// Subscribe to this topic. Returns error if already subscribed or max reached.

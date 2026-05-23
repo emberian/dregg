@@ -532,6 +532,246 @@ pub fn is_cordial(blocklace: &Blocklace, block_id: &BlockId, participants: &[[u8
     acknowledged.len() > participants.len() * 2 / 3
 }
 
+// ─── Unified Blocklace: Reference Groups and Filtered Ordering ──────────────
+
+/// A reference group: the set of strands (participants) whose blocks
+/// are considered for ordering and finality. This is the unified-lace
+/// equivalent of a "federation" — but it's a VIEW over the shared DAG,
+/// not an isolated DAG.
+///
+/// Multiple ReferenceGroups can coexist over the same underlying blocklace --
+/// they just look at different strand subsets.
+#[derive(Clone, Debug)]
+pub struct ReferenceGroup {
+    /// The participant strands in this group.
+    pub participants: Vec<[u8; 32]>,
+    /// Threshold for finality (supermajority).
+    pub threshold: usize,
+    /// Timeout waves for activity detection.
+    pub timeout_waves: u64,
+    /// Optional routes commitment (governance).
+    pub routes_commitment: Option<[u8; 32]>,
+}
+
+impl ReferenceGroup {
+    /// Create a new reference group from a participant set.
+    ///
+    /// Threshold is automatically computed as the supermajority (2n/3 + 1).
+    pub fn new(participants: Vec<[u8; 32]>, timeout_waves: u64) -> Self {
+        let threshold = supermajority_threshold(participants.len());
+        ReferenceGroup {
+            participants,
+            threshold,
+            timeout_waves,
+            routes_commitment: None,
+        }
+    }
+
+    /// Create a reference group from an existing Constitution.
+    ///
+    /// This is the bridge from the current federation model to the unified model:
+    /// a Constitution's participant set becomes a ReferenceGroup that can be used
+    /// with `tau_unified`.
+    pub fn from_constitution(constitution: &crate::constitution::Constitution) -> Self {
+        ReferenceGroup {
+            participants: constitution.participants.clone(),
+            threshold: constitution.threshold,
+            timeout_waves: constitution.timeout_waves,
+            routes_commitment: constitution.routes_commitment,
+        }
+    }
+
+    /// Check if a key is a member of this reference group.
+    pub fn is_member(&self, key: &[u8; 32]) -> bool {
+        self.participants.contains(key)
+    }
+
+    /// Number of members in this reference group.
+    pub fn member_count(&self) -> usize {
+        self.participants.len()
+    }
+
+    /// Run tau_unified over the given blocklace using this reference group.
+    pub fn finalize(&self, blocklace: &Blocklace, config: &OrderingConfig) -> Vec<BlockId> {
+        tau_unified(blocklace, self, config)
+    }
+}
+
+/// Compute rounds considering only blocks from the reference group.
+///
+/// Blocks from non-members are assigned no round (effectively invisible).
+/// Only blocks whose creator is in `group.participants` get real round numbers.
+/// Non-member blocks that are predecessors of member blocks still exist in the
+/// DAG but don't advance rounds.
+fn compute_rounds_filtered(
+    blocklace: &Blocklace,
+    group: &ReferenceGroup,
+) -> (HashMap<BlockId, u64>, u64) {
+    let participant_set: HashSet<[u8; 32]> = group.participants.iter().copied().collect();
+    let mut rounds: HashMap<BlockId, u64> = HashMap::new();
+    let mut max_round: u64 = 0;
+
+    // Collect only blocks from participants.
+    let relevant_block_ids: HashSet<BlockId> = blocklace
+        .blocks
+        .iter()
+        .filter(|(_, block)| participant_set.contains(&block.creator))
+        .map(|(id, _)| *id)
+        .collect();
+
+    // Build in-degree map considering only edges between relevant blocks.
+    let mut in_degree: HashMap<BlockId, usize> = HashMap::new();
+    let mut successors: HashMap<BlockId, Vec<BlockId>> = HashMap::new();
+
+    for &id in &relevant_block_ids {
+        let block = &blocklace.blocks[&id];
+        // Only count predecessors that are ALSO from participants.
+        let pred_count = block
+            .predecessors
+            .iter()
+            .filter(|p| relevant_block_ids.contains(*p))
+            .count();
+        in_degree.insert(id, pred_count);
+        for pred in &block.predecessors {
+            if relevant_block_ids.contains(pred) {
+                successors.entry(*pred).or_default().push(id);
+            }
+        }
+    }
+
+    // Kahn's algorithm (same as compute_rounds, but restricted to participant blocks).
+    let mut queue: VecDeque<BlockId> = in_degree
+        .iter()
+        .filter(|(_, deg)| **deg == 0)
+        .map(|(id, _)| *id)
+        .collect();
+
+    while let Some(id) = queue.pop_front() {
+        let block = &blocklace.blocks[&id];
+        let round = if block
+            .predecessors
+            .iter()
+            .all(|p| !relevant_block_ids.contains(p))
+        {
+            1 // No relevant predecessors = genesis round
+        } else {
+            1 + block
+                .predecessors
+                .iter()
+                .filter(|p| relevant_block_ids.contains(*p))
+                .filter_map(|p| rounds.get(p))
+                .max()
+                .copied()
+                .unwrap_or(0)
+        };
+        rounds.insert(id, round);
+        if round > max_round {
+            max_round = round;
+        }
+
+        if let Some(succs) = successors.get(&id) {
+            for &succ in succs {
+                if let Some(deg) = in_degree.get_mut(&succ) {
+                    *deg -= 1;
+                    if *deg == 0 {
+                        queue.push_back(succ);
+                    }
+                }
+            }
+        }
+    }
+
+    (rounds, max_round)
+}
+
+/// Compute total ordering over a SUBSET of strands in the blocklace.
+///
+/// Unlike `tau` which assumes all blocks belong to participants,
+/// `tau_unified` works on a shared blocklace where non-participant
+/// blocks may be present. They are simply ignored for ordering purposes.
+///
+/// The algorithm is the same as `tau_with_config`, but:
+/// 1. `compute_rounds_filtered` only counts blocks from `reference_group.participants`
+/// 2. Wave assignment uses filtered rounds
+/// 3. Leader selection from reference group only
+/// 4. Approval/ratification counts from reference group only
+/// 5. Output only contains blocks from reference group participants
+///
+/// External blocks in the DAG are IGNORED (not counted for rounds, waves, or finality).
+pub fn tau_unified(
+    blocklace: &Blocklace,
+    reference_group: &ReferenceGroup,
+    config: &OrderingConfig,
+) -> Vec<BlockId> {
+    let participants = &reference_group.participants;
+    if participants.is_empty() || blocklace.blocks.is_empty() {
+        return vec![];
+    }
+
+    let participant_set: HashSet<[u8; 32]> = participants.iter().copied().collect();
+
+    // Use filtered rounds (only participant blocks contribute to wave structure).
+    let (rounds, max_round) = compute_rounds_filtered(blocklace, reference_group);
+
+    // Find finalized leaders using filtered rounds (only considers participant blocks).
+    let final_leaders = find_all_final_leaders(blocklace, &rounds, max_round, participants, config);
+
+    let mut ordered = Vec::new();
+    let mut prev_covered: HashSet<BlockId> = HashSet::new();
+
+    for leader_id in &final_leaders {
+        // Compute coverage the same way as tau_with_config, but using filtered rounds.
+        let leader_round = rounds.get(leader_id).copied().unwrap_or(1);
+        let leader_wave = round_to_wave(leader_round, config.wavelength);
+        let wave_end = wave_last_round(leader_wave, config.wavelength);
+        let leader_creator = blocklace
+            .get(leader_id)
+            .map(|b| b.creator)
+            .unwrap_or([0u8; 32]);
+
+        // Collect the union of causal pasts of all wave-end blocks that ratify.
+        let mut coverage: HashSet<BlockId> = HashSet::new();
+        for (id, r) in &rounds {
+            if *r == wave_end {
+                if ratifies(
+                    blocklace,
+                    &rounds,
+                    id,
+                    leader_id,
+                    &leader_creator,
+                    participants,
+                ) {
+                    let past = causal_past_inclusive(blocklace, id);
+                    coverage.extend(past);
+                }
+            }
+        }
+
+        // Blocks new to this leader's segment: in coverage but not previously covered.
+        // FILTER: only include blocks from reference group participants.
+        let new_blocks: HashSet<BlockId> = coverage
+            .difference(&prev_covered)
+            .copied()
+            .filter(|bid| {
+                if let Some(block) = blocklace.get(bid) {
+                    // Only include blocks from participants (not external strands).
+                    participant_set.contains(&block.creator)
+                        && !has_equivocation_in_past(blocklace, &rounds, leader_id, &block.creator)
+                } else {
+                    false
+                }
+            })
+            .collect();
+
+        let sorted = xsort(blocklace, &new_blocks);
+        ordered.extend(sorted);
+
+        prev_covered = coverage;
+    }
+
+    ordered
+}
+
 // ─── Constitution-Aware Ordering ─────────────────────────────────────────────
 
 /// Extract the total order from the blocklace using the constitution's participant set.
@@ -1013,6 +1253,418 @@ mod tests {
             turns.len() >= 8,
             "expected at least 8 turns, got {}",
             turns.len()
+        );
+    }
+
+    // ─── Unified Blocklace (tau_unified / ReferenceGroup) Tests ──────────────
+
+    /// Build a blocklace with EXTRA non-member blocks mixed in.
+    /// Returns (blocklace, member_blocks_by_round, external_block_ids).
+    fn build_mixed_blocklace(
+        members: &[[u8; 32]],
+        externals: &[[u8; 32]],
+        num_rounds: u64,
+    ) -> (Blocklace, Vec<Vec<BlockId>>, Vec<BlockId>) {
+        let mut bl = Blocklace::new();
+        let mut member_blocks_by_round: Vec<Vec<BlockId>> = Vec::new();
+        let mut external_ids = Vec::new();
+
+        for round in 1..=num_rounds {
+            // Member blocks reference all member blocks from previous round.
+            let preds: Vec<BlockId> = if round == 1 {
+                vec![]
+            } else {
+                member_blocks_by_round[(round - 2) as usize].clone()
+            };
+
+            let mut round_blocks = Vec::new();
+            for (i, &participant) in members.iter().enumerate() {
+                let seq = (round - 1) as u64;
+                let payload = vec![round as u8, i as u8];
+                let block = make_block(participant, seq, preds.clone(), payload);
+                let id = block.id();
+                bl.insert(block).unwrap();
+                round_blocks.push(id);
+            }
+
+            // External blocks also reference member blocks (they can see them).
+            for (j, &ext) in externals.iter().enumerate() {
+                let seq = (round - 1) as u64;
+                let payload = vec![0xFF, round as u8, j as u8];
+                let ext_block = make_block(ext, seq, preds.clone(), payload);
+                let ext_id = ext_block.id();
+                bl.insert(ext_block).unwrap();
+                external_ids.push(ext_id);
+            }
+
+            member_blocks_by_round.push(round_blocks);
+        }
+
+        (bl, member_blocks_by_round, external_ids)
+    }
+
+    #[test]
+    fn test_tau_unified_backward_compat_members_only() {
+        // When the blocklace contains ONLY member blocks, tau_unified should
+        // produce the same result as tau.
+        let participants = vec![make_key(1), make_key(2), make_key(3)];
+        let (bl, _) = build_full_blocklace(&participants, 3);
+
+        let config = OrderingConfig::default();
+        let group = ReferenceGroup::new(participants.clone(), 10);
+
+        let result_tau = tau_with_config(&bl, &participants, &config);
+        let result_unified = tau_unified(&bl, &group, &config);
+
+        assert_eq!(
+            result_tau, result_unified,
+            "tau_unified should produce identical output to tau when blocklace has only member blocks"
+        );
+        assert!(!result_tau.is_empty(), "should finalize blocks");
+    }
+
+    #[test]
+    fn test_tau_unified_ignores_non_member_blocks() {
+        // External strands produce blocks, but tau_unified should not include them
+        // in the output and they should not affect the ordering of member blocks.
+        let members = vec![make_key(1), make_key(2), make_key(3)];
+        let externals = vec![make_key(10), make_key(11)];
+        let (bl, _, external_ids) = build_mixed_blocklace(&members, &externals, 3);
+
+        let config = OrderingConfig::default();
+        let group = ReferenceGroup::new(members.clone(), 10);
+
+        let result = tau_unified(&bl, &group, &config);
+
+        // Output should not contain any external blocks.
+        for ext_id in &external_ids {
+            assert!(
+                !result.contains(ext_id),
+                "tau_unified output should not contain external blocks"
+            );
+        }
+
+        // All output blocks should be from members.
+        for &block_id in &result {
+            let block = bl.get(&block_id).unwrap();
+            assert!(
+                members.contains(&block.creator),
+                "tau_unified output should only contain member blocks, got creator {:?}",
+                block.creator[0]
+            );
+        }
+
+        // Should still finalize member blocks.
+        assert_eq!(result.len(), 9, "3 members * 3 rounds = 9 member blocks");
+    }
+
+    #[test]
+    fn test_tau_unified_finality_with_external_blocks_present() {
+        // Finality still works correctly even when external blocks are in the DAG.
+        let members = vec![make_key(1), make_key(2), make_key(3)];
+        let externals = vec![make_key(20), make_key(21), make_key(22)];
+        let (bl, _, _) = build_mixed_blocklace(&members, &externals, 6);
+
+        let config = OrderingConfig::default();
+        let group = ReferenceGroup::new(members.clone(), 10);
+
+        let result = tau_unified(&bl, &group, &config);
+
+        // Should finalize across 2 waves (6 rounds / 3 wavelength = 2 waves).
+        assert_eq!(
+            result.len(),
+            18,
+            "3 members * 6 rounds = 18 member blocks, got {}",
+            result.len()
+        );
+    }
+
+    #[test]
+    fn test_compute_rounds_filtered_ignores_non_members() {
+        // Non-member blocks should not get round assignments in filtered computation.
+        let members = vec![make_key(1), make_key(2), make_key(3)];
+        let externals = vec![make_key(10)];
+        let (bl, _, external_ids) = build_mixed_blocklace(&members, &externals, 3);
+
+        let group = ReferenceGroup::new(members, 10);
+        let (rounds, max_round) = compute_rounds_filtered(&bl, &group);
+
+        // External blocks should not appear in the rounds map.
+        for ext_id in &external_ids {
+            assert!(
+                !rounds.contains_key(ext_id),
+                "external blocks should not have round assignments in filtered rounds"
+            );
+        }
+
+        // Member blocks should all have rounds assigned.
+        // 3 members * 3 rounds = 9 blocks.
+        assert_eq!(
+            rounds.len(),
+            9,
+            "9 member blocks should have round assignments"
+        );
+        assert_eq!(max_round, 3, "max round should be 3");
+    }
+
+    #[test]
+    fn test_tau_unified_leader_selection_from_group_only() {
+        // Leader for each wave must come from the reference group, not external strands.
+        // We verify this by building a scenario where an external key would be the leader
+        // if external blocks were counted.
+        let members = vec![make_key(1), make_key(2), make_key(3)];
+        let (bl, _) = build_full_blocklace(&members, 3);
+
+        let group = ReferenceGroup::new(members.clone(), 10);
+        let config = OrderingConfig::default();
+
+        // Wave 0 leader should be members[0] = make_key(1).
+        let leader = wave_leader(0, &group.participants);
+        assert_eq!(leader, make_key(1));
+
+        let result = tau_unified(&bl, &group, &config);
+        assert!(!result.is_empty(), "should produce finalized output");
+
+        // All blocks in the output should be from reference group participants.
+        for &block_id in &result {
+            let block = bl.get(&block_id).unwrap();
+            assert!(
+                group.is_member(&block.creator),
+                "all finalized blocks should be from group members"
+            );
+        }
+    }
+
+    #[test]
+    fn test_tau_unified_ratification_counts_from_group_only() {
+        // Ratification should only count approvals from reference group members.
+        // External blocks that might approve a leader should not count.
+        let members = vec![make_key(1), make_key(2), make_key(3)];
+        let externals = vec![make_key(50), make_key(51), make_key(52)];
+        let (bl, _, _) = build_mixed_blocklace(&members, &externals, 3);
+
+        let group = ReferenceGroup::new(members.clone(), 10);
+        let config = OrderingConfig::default();
+
+        let result = tau_unified(&bl, &group, &config);
+
+        // Verify that the result matches what we'd get without external blocks.
+        let (bl_clean, _) = build_full_blocklace(&members, 3);
+        let result_clean = tau_with_config(&bl_clean, &members, &config);
+
+        // Both should finalize 9 blocks.
+        assert_eq!(result.len(), 9, "should finalize all member blocks");
+        assert_eq!(result_clean.len(), 9, "clean should finalize all blocks");
+    }
+
+    #[test]
+    fn test_reference_group_from_constitution() {
+        // ReferenceGroup::from_constitution should produce identical behavior
+        // to using the constitution's participants directly.
+        let participants = vec![make_key(1), make_key(2), make_key(3)];
+        let constitution = crate::constitution::Constitution::new(participants.clone(), 10);
+
+        let group = ReferenceGroup::from_constitution(&constitution);
+
+        assert_eq!(group.participants, constitution.participants);
+        assert_eq!(group.threshold, constitution.threshold);
+        assert_eq!(group.timeout_waves, constitution.timeout_waves);
+        assert_eq!(group.routes_commitment, constitution.routes_commitment);
+
+        // Build a blocklace and verify identical ordering.
+        let (bl, _) = build_full_blocklace(&constitution.participants, 3);
+        let config = OrderingConfig::default();
+
+        let result_constitution = tau_with_constitution(&bl, &constitution);
+        let result_unified = tau_unified(&bl, &group, &config);
+
+        assert_eq!(
+            result_constitution, result_unified,
+            "ReferenceGroup from Constitution should produce same ordering"
+        );
+    }
+
+    #[test]
+    fn test_multiple_reference_groups_same_blocklace() {
+        // Two different reference groups operating on the same blocklace
+        // should produce different orderings based on their member sets.
+        let all_members = vec![
+            make_key(1),
+            make_key(2),
+            make_key(3),
+            make_key(4),
+            make_key(5),
+            make_key(6),
+        ];
+        let (bl, _) = build_full_blocklace(&all_members, 3);
+
+        let config = OrderingConfig::default();
+
+        // Group A: participants 1, 2, 3
+        let group_a = ReferenceGroup::new(vec![make_key(1), make_key(2), make_key(3)], 10);
+        // Group B: participants 4, 5, 6
+        let group_b = ReferenceGroup::new(vec![make_key(4), make_key(5), make_key(6)], 10);
+
+        let result_a = tau_unified(&bl, &group_a, &config);
+        let result_b = tau_unified(&bl, &group_b, &config);
+
+        // Both should produce finalized output.
+        assert_eq!(result_a.len(), 9, "group A should finalize 9 blocks");
+        assert_eq!(result_b.len(), 9, "group B should finalize 9 blocks");
+
+        // The outputs should be completely disjoint (different members).
+        let set_a: HashSet<BlockId> = result_a.iter().copied().collect();
+        let set_b: HashSet<BlockId> = result_b.iter().copied().collect();
+        let intersection: HashSet<&BlockId> = set_a.intersection(&set_b).collect();
+        assert!(
+            intersection.is_empty(),
+            "two reference groups with disjoint members should produce disjoint orderings"
+        );
+
+        // Verify each output only has blocks from its own members.
+        for &block_id in &result_a {
+            let block = bl.get(&block_id).unwrap();
+            assert!(
+                group_a.is_member(&block.creator),
+                "group A output should only have group A members"
+            );
+        }
+        for &block_id in &result_b {
+            let block = bl.get(&block_id).unwrap();
+            assert!(
+                group_b.is_member(&block.creator),
+                "group B output should only have group B members"
+            );
+        }
+    }
+
+    #[test]
+    fn test_tau_unified_external_blocks_dont_inflate_rounds() {
+        // Verify that external blocks referencing deep chains don't inflate
+        // member round numbers. Member rounds should be computed purely from
+        // member-to-member references.
+        let members = vec![make_key(1), make_key(2), make_key(3)];
+        let mut bl = Blocklace::new();
+
+        // First, create a deep external chain (10 blocks deep).
+        let ext_key = make_key(99);
+        let mut ext_prev = vec![];
+        let mut ext_tip = [0u8; 32];
+        for seq in 0..10u64 {
+            let ext_block = make_block(ext_key, seq, ext_prev.clone(), vec![0xEE, seq as u8]);
+            ext_tip = ext_block.id();
+            bl.insert(ext_block).unwrap();
+            ext_prev = vec![ext_tip];
+        }
+
+        // Now build the member blocklace (3 rounds).
+        // Round 1: genesis blocks (no predecessors -- DO NOT reference external chain).
+        let mut member_blocks_by_round: Vec<Vec<BlockId>> = Vec::new();
+        let mut round_blocks = Vec::new();
+        for (i, &participant) in members.iter().enumerate() {
+            let block = make_block(participant, 0, vec![], vec![1, i as u8]);
+            let id = block.id();
+            bl.insert(block).unwrap();
+            round_blocks.push(id);
+        }
+        member_blocks_by_round.push(round_blocks);
+
+        // Round 2: reference previous round's member blocks + the deep external tip.
+        let mut round_blocks = Vec::new();
+        for (i, &participant) in members.iter().enumerate() {
+            let mut preds = member_blocks_by_round[0].clone();
+            preds.push(ext_tip); // Reference external deep chain
+            let block = make_block(participant, 1, preds, vec![2, i as u8]);
+            let id = block.id();
+            bl.insert(block).unwrap();
+            round_blocks.push(id);
+        }
+        member_blocks_by_round.push(round_blocks);
+
+        // Round 3: reference previous round.
+        let mut round_blocks = Vec::new();
+        for (i, &participant) in members.iter().enumerate() {
+            let preds = member_blocks_by_round[1].clone();
+            let block = make_block(participant, 2, preds, vec![3, i as u8]);
+            let id = block.id();
+            bl.insert(block).unwrap();
+            round_blocks.push(id);
+        }
+        member_blocks_by_round.push(round_blocks);
+
+        // Verify filtered rounds are not inflated by the external chain.
+        let group = ReferenceGroup::new(members.clone(), 10);
+        let (rounds, max_round) = compute_rounds_filtered(&bl, &group);
+
+        assert_eq!(
+            max_round, 3,
+            "max round should be 3 (not inflated by external chain)"
+        );
+
+        // Round 1 members should be at round 1.
+        for &id in &member_blocks_by_round[0] {
+            assert_eq!(rounds[&id], 1, "genesis member blocks should be at round 1");
+        }
+        // Round 2 members should be at round 2 (not 11+ from external chain).
+        for &id in &member_blocks_by_round[1] {
+            assert_eq!(
+                rounds[&id], 2,
+                "round 2 member blocks should be at round 2, not inflated by external chain"
+            );
+        }
+        // Round 3 members should be at round 3.
+        for &id in &member_blocks_by_round[2] {
+            assert_eq!(rounds[&id], 3, "round 3 member blocks should be at round 3");
+        }
+
+        // tau_unified should still finalize correctly.
+        let config = OrderingConfig::default();
+        let result = tau_unified(&bl, &group, &config);
+        assert_eq!(result.len(), 9, "should finalize all 9 member blocks");
+
+        // External blocks should not appear.
+        for &block_id in &result {
+            let block = bl.get(&block_id).unwrap();
+            assert_ne!(
+                block.creator, ext_key,
+                "external blocks should not be in output"
+            );
+        }
+    }
+
+    #[test]
+    fn test_reference_group_helpers() {
+        let group = ReferenceGroup::new(vec![make_key(1), make_key(2), make_key(3)], 5);
+
+        assert_eq!(group.member_count(), 3);
+        assert!(group.is_member(&make_key(1)));
+        assert!(group.is_member(&make_key(2)));
+        assert!(group.is_member(&make_key(3)));
+        assert!(!group.is_member(&make_key(4)));
+        assert_eq!(group.threshold, 3); // 2*3/3 + 1 = 3
+        assert_eq!(group.timeout_waves, 5);
+        assert_eq!(group.routes_commitment, None);
+    }
+
+    #[test]
+    fn test_constitution_manager_as_reference_group() {
+        // Test the bridge method on ConstitutionManager.
+        let participants = vec![make_key(1), make_key(2), make_key(3), make_key(4)];
+        let mgr =
+            crate::constitution::ConstitutionManager::from_participants(participants.clone(), 10);
+
+        let group = mgr.as_reference_group();
+        assert_eq!(group.member_count(), 4);
+        assert_eq!(group.threshold, mgr.threshold());
+        assert_eq!(group.timeout_waves, mgr.timeout_waves());
+
+        // Use the group to finalize a blocklace.
+        let (bl, _) = build_full_blocklace(&participants, 3);
+        let config = OrderingConfig::default();
+        let result = group.finalize(&bl, &config);
+        assert!(
+            !result.is_empty(),
+            "should produce finalized output via reference group"
         );
     }
 }

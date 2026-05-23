@@ -2,13 +2,17 @@
 //!
 //! Connects to the pyana devnet federation and provides slash commands for
 //! wallet management, token transfers, an explorer for browsing devnet state,
-//! and a presence attestation system for proof-of-presence capability tokens.
+//! a presence attestation system for proof-of-presence capability tokens,
+//! CapTP integration (the bot as a capability peer), programmable queues,
+//! governance, name service, and bidirectional pyana<->Discord integration.
 
 mod activity_feed;
+pub mod captp_client;
 mod commands;
 mod config;
 mod db;
 mod devnet;
+pub mod discord_caps;
 mod embeds;
 pub mod presence;
 mod wallet;
@@ -16,14 +20,18 @@ mod wallet;
 use std::sync::Arc;
 
 use serenity::Client;
-use serenity::all::{Command, Context, EventHandler, GatewayIntents, Interaction, Presence, Ready};
+use serenity::all::{
+    Command, Context, EventHandler, GatewayIntents, Interaction, Message, Presence, Ready,
+};
 use serenity::async_trait;
 use tokio::sync::Mutex;
 use tracing::{error, info};
 
+use captp_client::CapTPClient;
 use config::Config;
 use db::Database;
 use devnet::DevnetClient;
+use discord_caps::{DiscordCapRegistry, EventBridge};
 use presence::{PresenceStatus, PresenceTracker};
 
 /// Shared bot state accessible from all command handlers.
@@ -32,6 +40,12 @@ pub struct BotState {
     pub db: Database,
     pub devnet: DevnetClient,
     pub presence: Mutex<PresenceTracker>,
+    /// The bot's CapTP client — its identity and capability management.
+    pub captp: CapTPClient,
+    /// Registry of Discord capabilities exercisable via CapTP.
+    pub discord_caps: DiscordCapRegistry,
+    /// Event bridge: Discord events → pyana turns.
+    pub event_bridge: EventBridge,
 }
 
 /// The main event handler for Discord gateway events.
@@ -46,6 +60,7 @@ impl EventHandler for Handler {
 
         // Register global slash commands.
         let commands = vec![
+            // ─── Original 19 commands ───────────────────────────────────────
             commands::explorer::register(),
             commands::presence::register(),
             commands::wallet::register(),
@@ -65,6 +80,31 @@ impl EventHandler for Handler {
             commands::social::register_faucet(),
             commands::social::register_leaderboard(),
             commands::social::register_history(),
+            // ─── CapTP commands ─────────────────────────────────────────────
+            commands::captp::register_share(),
+            commands::captp::register_accept(),
+            commands::captp::register_delegate(),
+            commands::captp::register_list(),
+            commands::captp::register_revoke(),
+            // ─── Programmable queue commands ─────────────────────────────────
+            commands::queue::register_create(),
+            commands::queue::register_publish(),
+            commands::queue::register_subscribe(),
+            commands::queue::register_status(),
+            commands::queue::register_mount(),
+            // ─── Governance commands ────────────────────────────────────────
+            commands::governance::register_propose(),
+            commands::governance::register_vote(),
+            commands::governance::register_status(),
+            commands::governance::register_routes(),
+            // ─── Name service commands ──────────────────────────────────────
+            commands::names::register_register(),
+            commands::names::register_resolve(),
+            commands::names::register_whois(),
+            // ─── Federation setup commands ──────────────────────────────────
+            commands::federation::register_setup(),
+            commands::federation::register_link(),
+            commands::federation::register_unlink(),
         ];
 
         match Command::set_global_commands(&ctx.http, commands).await {
@@ -81,6 +121,7 @@ impl EventHandler for Handler {
             let name = command.data.name.as_str();
 
             match name {
+                // ─── Original commands ──────────────────────────────────────
                 "explorer" => commands::explorer::handle(&ctx, &command, &self.state).await,
                 "presence" => commands::presence::handle(&ctx, &command, &self.state).await,
                 "wallet" => commands::wallet::handle(&ctx, &command, &self.state).await,
@@ -101,11 +142,63 @@ impl EventHandler for Handler {
                     commands::social::handle_leaderboard(&ctx, &command, &self.state).await
                 }
                 "history" => commands::social::handle_history(&ctx, &command, &self.state).await,
+                // ─── CapTP commands ─────────────────────────────────────────
+                "cap-share" => commands::captp::handle_share(&ctx, &command, &self.state).await,
+                "cap-accept" => commands::captp::handle_accept(&ctx, &command, &self.state).await,
+                "cap-delegate" => {
+                    commands::captp::handle_delegate(&ctx, &command, &self.state).await
+                }
+                "cap-list" => commands::captp::handle_list(&ctx, &command, &self.state).await,
+                "cap-revoke" => commands::captp::handle_revoke(&ctx, &command, &self.state).await,
+                // ─── Programmable queue commands ─────────────────────────────
+                "queue-create" => commands::queue::handle_create(&ctx, &command, &self.state).await,
+                "queue-publish" => {
+                    commands::queue::handle_publish(&ctx, &command, &self.state).await
+                }
+                "queue-subscribe" => {
+                    commands::queue::handle_subscribe(&ctx, &command, &self.state).await
+                }
+                "queue-status" => commands::queue::handle_status(&ctx, &command, &self.state).await,
+                "queue-mount" => commands::queue::handle_mount(&ctx, &command, &self.state).await,
+                // ─── Governance commands ────────────────────────────────────
+                "gov-propose" => {
+                    commands::governance::handle_propose(&ctx, &command, &self.state).await
+                }
+                "gov-vote" => commands::governance::handle_vote(&ctx, &command, &self.state).await,
+                "gov-status" => {
+                    commands::governance::handle_status(&ctx, &command, &self.state).await
+                }
+                "gov-routes" => {
+                    commands::governance::handle_routes(&ctx, &command, &self.state).await
+                }
+                // ─── Name service commands ──────────────────────────────────
+                "name-register" => {
+                    commands::names::handle_register(&ctx, &command, &self.state).await
+                }
+                "name-resolve" => {
+                    commands::names::handle_resolve(&ctx, &command, &self.state).await
+                }
+                "name-whois" => commands::names::handle_whois(&ctx, &command, &self.state).await,
+                // ─── Federation setup commands ──────────────────────────────
+                "setup-federation" => {
+                    commands::federation::handle_setup(&ctx, &command, &self.state).await
+                }
+                "link-wallet" => {
+                    commands::federation::handle_link(&ctx, &command, &self.state).await
+                }
+                "unlink-wallet" => {
+                    commands::federation::handle_unlink(&ctx, &command, &self.state).await
+                }
                 _ => {
                     tracing::warn!("Unknown command: {name}");
                 }
             }
         }
+    }
+
+    async fn message(&self, _ctx: Context, msg: Message) {
+        // Bridge messages to pyana queues if the channel is linked.
+        self.state.event_bridge.on_message(&msg).await;
     }
 
     async fn presence_update(&self, _ctx: Context, data: Presence) {
@@ -168,16 +261,42 @@ async fn main() {
     let presence = Mutex::new(PresenceTracker::new(config.bot_secret));
     info!("Presence tracker initialized");
 
+    // Build CapTP client (the bot's own pyana identity).
+    let bot_cell_id = {
+        let wallet = wallet::DerivedWallet::derive(&config.bot_secret, 0);
+        wallet.cell_id_hex()
+    };
+    let federation_id = pyana_captp::FederationId([0u8; 32]); // Will be configured per-deployment.
+    let captp = CapTPClient::new(
+        federation_id,
+        bot_cell_id.clone(),
+        config.devnet_url.clone(),
+    );
+    info!(
+        "CapTP client initialized, bot cell: {}...",
+        &bot_cell_id[..16]
+    );
+
+    // Build Discord capability registry and event bridge.
+    let discord_caps = DiscordCapRegistry::new();
+    let event_bridge = EventBridge::new(config.devnet_url.clone());
+
     // Build shared state.
     let state = Arc::new(BotState {
         config,
         db,
         devnet,
         presence,
+        captp,
+        discord_caps,
+        event_bridge,
     });
 
-    // Build Discord client (GUILD_PRESENCES required for presence tracking).
-    let intents = GatewayIntents::GUILD_PRESENCES;
+    // Build Discord client (GUILD_PRESENCES + GUILD_MESSAGES for message bridging).
+    let intents = GatewayIntents::GUILD_PRESENCES
+        | GatewayIntents::GUILD_MESSAGES
+        | GatewayIntents::MESSAGE_CONTENT
+        | GatewayIntents::GUILD_MESSAGE_REACTIONS;
     let mut client = Client::builder(&state.config.discord_token, intents)
         .event_handler(Handler {
             state: state.clone(),

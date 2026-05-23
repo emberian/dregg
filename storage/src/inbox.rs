@@ -18,6 +18,12 @@ pub struct CapInbox {
     min_deposit: u64,
     /// Maximum message size in bytes.
     max_message_size: usize,
+    /// Backpressure: minimum reads per epoch required to avoid eviction.
+    backpressure_min_reads: Option<usize>,
+    /// Reads performed in the current epoch.
+    reads_this_epoch: usize,
+    /// Last epoch that backpressure was enforced.
+    last_backpressure_epoch: u64,
 }
 
 /// Message types that can be delivered to an inbox.
@@ -129,6 +135,9 @@ impl CapInbox {
             owner_quota,
             min_deposit,
             max_message_size: 65536, // 64 KiB default
+            backpressure_min_reads: None,
+            reads_this_epoch: 0,
+            last_backpressure_epoch: 0,
         }
     }
 
@@ -144,6 +153,9 @@ impl CapInbox {
             owner_quota,
             min_deposit,
             max_message_size,
+            backpressure_min_reads: None,
+            reads_this_epoch: 0,
+            last_backpressure_epoch: 0,
         }
     }
 
@@ -225,6 +237,7 @@ impl CapInbox {
     /// Returns the inbox message metadata and a dequeue proof.
     pub fn read_next(&mut self) -> Result<(QueueEntry, DequeueProof), InboxError> {
         let (entry, proof) = self.queue.dequeue()?;
+        self.reads_this_epoch += 1;
         Ok((entry, proof))
     }
 
@@ -270,6 +283,57 @@ impl CapInbox {
                 _ => break,
             }
         }
+
+        refunds
+    }
+
+    /// Set a minimum read rate. If the owner doesn't drain at least
+    /// `min_reads_per_epoch` messages per epoch, the inbox shrinks
+    /// (oldest messages evicted with partial refund).
+    pub fn set_backpressure(&mut self, min_reads_per_epoch: usize) {
+        self.backpressure_min_reads = Some(min_reads_per_epoch);
+    }
+
+    /// Called each epoch: enforce backpressure policy.
+    /// If the owner hasn't read enough messages, evict the oldest ones.
+    /// Returns refunds for evicted messages.
+    pub fn enforce_backpressure(&mut self, current_epoch: u64) -> Vec<ComputronRefund> {
+        let mut refunds = Vec::new();
+
+        // If no backpressure configured, nothing to do.
+        let min_reads = match self.backpressure_min_reads {
+            Some(min) => min,
+            None => return refunds,
+        };
+
+        // Only enforce if this is a new epoch.
+        if current_epoch <= self.last_backpressure_epoch {
+            return refunds;
+        }
+
+        // Check if owner met the minimum read rate.
+        if self.reads_this_epoch < min_reads && !self.queue.is_empty() {
+            // Owner is not keeping up. Evict oldest messages.
+            let deficit = min_reads.saturating_sub(self.reads_this_epoch);
+            let to_evict = deficit.min(self.queue.len());
+
+            for _ in 0..to_evict {
+                if let Ok((entry, _proof)) = self.queue.dequeue() {
+                    // Partial refund: 50% back to sender (penalty for slow consumer).
+                    let sender_refund = entry.deposit / 2;
+                    if sender_refund > 0 {
+                        refunds.push(ComputronRefund {
+                            quota_id: QuotaId(0), // Sender tracked by entry.sender
+                            amount: sender_refund,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Reset for next epoch.
+        self.reads_this_epoch = 0;
+        self.last_backpressure_epoch = current_epoch;
 
         refunds
     }

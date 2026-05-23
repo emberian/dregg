@@ -1754,37 +1754,31 @@ impl StarkAir for EffectVmAir {
             // ================================================================
             // Queue program validation hash binding.
             //
-            // param[4] = ENQUEUE_PROGRAM_VK: the queue's program VK hash as a
-            //   BabyBear field element. ZERO if the queue has no program.
-            // aux[2] = program_validation_hash: the hash binding program
-            //   validation to the proof. Must be correctly computed when
-            //   param[4] is non-zero.
+            // NOTE: aux[2..5] on row 0 are reserved for public input values
+            // (delta_mag, delta_sign, effects_hash_lo, effects_hash_hi).
+            // We use aux[6] for the validation hash and aux[7] for program_vk_inv.
             //
-            // Constraint: when param[4] != 0 (queue has a program):
-            //   aux[2] must equal hash(param[4], hash(sender_id, msg_hash))
+            // param[4] = ENQUEUE_PROGRAM_VK: queue program VK as field element.
+            //   ZERO if queue has no program (backward compatible).
+            // aux[6] = program_validation_hash
+            // aux[7] = inverse(program_vk) when != 0, else 0
             //
-            // Implementation: s_enqueue * param[4] * (aux[2] - expected) == 0
-            //   - If param[4] == 0 (no program): trivially satisfied.
-            //   - If param[4] != 0 (has program): aux[2] must match.
-            //
-            // Additionally: when param[4] == 0, aux[2] must be zero.
-            //   s_enqueue * (1 - param[4] * aux[3]) * aux[2] == 0
-            //   where aux[3] = inverse(param[4]) when param[4] != 0, else 0.
-            //   - If param[4] != 0: (1 - param[4] * inv(param[4])) = 0, trivially satisfied.
-            //   - If param[4] == 0: (1 - 0) * aux[2] = aux[2] must be 0.
+            // Constraints:
+            //   1. program_vk != 0 => aux[6] == hash(program_vk, hash(sender, msg))
+            //   2. program_vk == 0 => aux[6] == 0
             // ================================================================
             let program_vk = local[PARAM_BASE + param::ENQUEUE_PROGRAM_VK];
-            let validation_hash = local[AUX_BASE + 2];
-            let program_vk_inv = local[AUX_BASE + 3];
+            let validation_hash = local[AUX_BASE + 6];
+            let program_vk_inv = local[AUX_BASE + 7];
 
-            // When program_vk != 0: validation_hash must equal expected.
+            // Constraint 1: When program_vk != 0, validation_hash must equal expected.
             let inner_hash = hash_2_to_1(sender_id, message_hash);
             let expected_validation = hash_2_to_1(program_vk, inner_hash);
             let c_prog_valid = s_enqueue * program_vk * (validation_hash - expected_validation);
             combined = combined + alpha_pow * c_prog_valid;
             alpha_pow = alpha_pow * alpha;
 
-            // When program_vk == 0: validation_hash must be zero.
+            // Constraint 2: When program_vk == 0, validation_hash must be zero.
             let c_prog_zero =
                 s_enqueue * (BabyBear::ONE - program_vk * program_vk_inv) * validation_hash;
             combined = combined + alpha_pow * c_prog_zero;
@@ -2644,17 +2638,18 @@ pub fn generate_effect_vm_trace(
                 // Store new queue root in aux[0] for constraint verification.
                 row[AUX_BASE + 0] = new_queue_root;
 
-                // Program validation hash binding (aux[2] and aux[3]).
+                // Program validation hash binding (aux[6] and aux[7]).
+                // NOTE: aux[2..5] are reserved for PI values on row 0.
                 // When program_vk != 0, compute and store the validation hash.
                 // When program_vk == 0, both are zero (backward compatible).
                 if *program_vk != BabyBear::ZERO {
                     let inner = hash_2_to_1(*sender_id, *message_hash);
                     let validation_hash = hash_2_to_1(*program_vk, inner);
-                    row[AUX_BASE + 2] = validation_hash;
-                    // aux[3] = inverse of program_vk (for the zero-check constraint).
-                    row[AUX_BASE + 3] = program_vk.inverse().expect("program_vk is non-zero");
+                    row[AUX_BASE + 6] = validation_hash;
+                    // aux[7] = inverse of program_vk (for the zero-check constraint).
+                    row[AUX_BASE + 7] = program_vk.inverse().expect("program_vk is non-zero");
                 }
-                // else: aux[2] and aux[3] remain ZERO (default).
+                // else: aux[6] and aux[7] remain ZERO (default).
 
                 new_state.nonce += 1;
             }
@@ -4855,5 +4850,164 @@ mod tests {
         // Verify field[5] is updated to new capacity.
         let new_f5 = trace[0][STATE_AFTER_BASE + state::FIELD_BASE + 5];
         assert_eq!(new_f5, BabyBear::new(20), "field[5] should be new capacity");
+    }
+
+    /// Test: EnqueueMessage with program_vk binds validation hash to STARK proof.
+    #[test]
+    fn test_enqueue_with_program_validation_stark_roundtrip() {
+        let mut state = CellState::new(10_000, 0);
+        let initial_queue_root = hash_2_to_1(BabyBear::ZERO, BabyBear::ZERO);
+        state.fields[4] = initial_queue_root;
+        state.refresh_commitment();
+
+        let msg_hash = BabyBear::new(0xCAFE);
+        let sender = BabyBear::new(0x5E);
+        let program_vk = BabyBear::new(0x1234); // non-zero = has program
+
+        let effects = vec![Effect::EnqueueMessage {
+            message_hash: msg_hash,
+            deposit_amount: 75,
+            sender_id: sender,
+            queue_len: 0,
+            program_vk,
+        }];
+
+        let (trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
+        let air = EffectVmAir::new(trace.len());
+
+        // Verify constraints pass for all alpha values.
+        for alpha_val in [7u32, 13, 101, 251] {
+            let alpha = BabyBear::new(alpha_val);
+            for row in 0..trace.len() - 1 {
+                let next_row = (row + 1) % trace.len();
+                let c = air.eval_constraints(&trace[row], &trace[next_row], &public_inputs, alpha);
+                assert_eq!(
+                    c,
+                    BabyBear::ZERO,
+                    "EnqueueMessage+program: constraint non-zero at row {} alpha={}",
+                    row,
+                    alpha_val
+                );
+            }
+        }
+
+        // STARK roundtrip: prove and verify.
+        let proof = prove(&air, &trace, &public_inputs);
+        let result = verify(&air, &proof, &public_inputs);
+        assert!(
+            result.is_ok(),
+            "EnqueueMessage with program_vk should verify: {:?}",
+            result.err()
+        );
+
+        // Verify the validation hash is correctly set in aux[6].
+        let expected_inner = hash_2_to_1(sender, msg_hash);
+        let expected_validation = hash_2_to_1(program_vk, expected_inner);
+        let actual_aux6 = trace[0][AUX_BASE + 6];
+        assert_eq!(
+            actual_aux6, expected_validation,
+            "aux[6] should contain the program validation hash"
+        );
+
+        // Verify aux[7] = inverse(program_vk).
+        let actual_aux7 = trace[0][AUX_BASE + 7];
+        assert_eq!(
+            program_vk * actual_aux7,
+            BabyBear::ONE,
+            "aux[7] should be the inverse of program_vk"
+        );
+    }
+
+    /// Test: EnqueueMessage without program (program_vk=0) has zero validation hash.
+    #[test]
+    fn test_enqueue_without_program_backward_compat() {
+        let mut state = CellState::new(10_000, 0);
+        let initial_queue_root = hash_2_to_1(BabyBear::ZERO, BabyBear::ZERO);
+        state.fields[4] = initial_queue_root;
+        state.refresh_commitment();
+
+        let effects = vec![Effect::EnqueueMessage {
+            message_hash: BabyBear::new(0xBEEF),
+            deposit_amount: 50,
+            sender_id: BabyBear::new(0xAA),
+            queue_len: 0,
+            program_vk: BabyBear::ZERO, // no program
+        }];
+
+        let (trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
+        let air = EffectVmAir::new(trace.len());
+
+        // Constraints must pass (backward compatible).
+        for alpha_val in [7u32, 13, 101] {
+            let alpha = BabyBear::new(alpha_val);
+            for row in 0..trace.len() - 1 {
+                let next_row = (row + 1) % trace.len();
+                let c = air.eval_constraints(&trace[row], &trace[next_row], &public_inputs, alpha);
+                assert_eq!(
+                    c,
+                    BabyBear::ZERO,
+                    "EnqueueMessage no-program: constraint non-zero at row {} alpha={}",
+                    row,
+                    alpha_val
+                );
+            }
+        }
+
+        // STARK roundtrip.
+        let proof = prove(&air, &trace, &public_inputs);
+        let result = verify(&air, &proof, &public_inputs);
+        assert!(
+            result.is_ok(),
+            "EnqueueMessage without program should verify: {:?}",
+            result.err()
+        );
+
+        // aux[6] and aux[7] must both be zero.
+        assert_eq!(
+            trace[0][AUX_BASE + 6],
+            BabyBear::ZERO,
+            "aux[6] should be zero when no program"
+        );
+        assert_eq!(
+            trace[0][AUX_BASE + 7],
+            BabyBear::ZERO,
+            "aux[7] should be zero when no program"
+        );
+    }
+
+    /// Test: EnqueueMessage with invalid validation hash fails constraint check.
+    #[test]
+    fn test_enqueue_program_invalid_validation_hash_fails() {
+        let mut state = CellState::new(10_000, 0);
+        let initial_queue_root = hash_2_to_1(BabyBear::ZERO, BabyBear::ZERO);
+        state.fields[4] = initial_queue_root;
+        state.refresh_commitment();
+
+        let msg_hash = BabyBear::new(0xDEAD);
+        let sender = BabyBear::new(0x5E);
+        let program_vk = BabyBear::new(0xABCD);
+
+        let effects = vec![Effect::EnqueueMessage {
+            message_hash: msg_hash,
+            deposit_amount: 50,
+            sender_id: sender,
+            queue_len: 0,
+            program_vk,
+        }];
+
+        let (mut trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
+        let air = EffectVmAir::new(trace.len());
+
+        // Corrupt aux[6] (the validation hash) to a wrong value.
+        trace[0][AUX_BASE + 6] = BabyBear::new(0x9999);
+
+        // Constraints should FAIL because the validation hash is wrong.
+        let alpha = BabyBear::new(7);
+        let c = air.eval_constraints(&trace[0], &trace[1], &public_inputs, alpha);
+        assert_ne!(
+            c,
+            BabyBear::ZERO,
+            "Corrupted validation hash should cause constraint failure"
+        );
     }
 }

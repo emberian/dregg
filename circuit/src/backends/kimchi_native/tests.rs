@@ -1348,10 +1348,11 @@ fn test_kimchi_native_derivation_adversarial_state_root_tampered() {
     let circuit = KimchiDerivationCircuit::new(w.clone());
     let mut wit = circuit.generate_witness();
 
-    // Tamper: change w[1] in the first body atom row (row 2) to a different value
-    // Row 0,1 are public inputs, row 2 is first body atom
-    // The gate enforces w[0] - w[1] = 0, so changing w[1] breaks it
-    wit[1][2] = Fp::from(77777u64); // tamper state_root copy
+    // Tamper: change w[1] in the first body atom row (row 3) to a different value
+    // Rows 0,1,2 are public inputs (state_root, derived_hash, rule_structure_hash),
+    // row 3 is the first body atom.
+    // The gate enforces w[0] - w[1] = 0, so changing w[1] breaks it.
+    wit[1][3] = Fp::from(77777u64); // tamper state_root copy
 
     // Try to prove with tampered witness.
     // Kimchi prover panics on invalid witness, so we catch_unwind.

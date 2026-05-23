@@ -6581,6 +6581,8 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "hex",
+ "pyana-captp",
+ "pyana-storage",
  "reqwest",
  "serde",
  "serde_json",
@@ -6846,6 +6848,7 @@ dependencies = [
  "pyana-amm",
  "pyana-blocklace",
  "pyana-bridge",
+ "pyana-captp",
  "pyana-cell",
  "pyana-circuit",
  "pyana-commit",
@@ -6857,10 +6860,14 @@ dependencies = [
  "pyana-orderbook",
  "pyana-sdk",
  "pyana-stablecoin",
+ "pyana-storage",
  "pyana-turn",
  "pyana-types",
+ "pyana-wire",
+ "serde_json",
  "token",
  "tokio",
+ "toml",
 ]
 
 [[package]]

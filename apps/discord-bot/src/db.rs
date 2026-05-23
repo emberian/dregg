@@ -176,6 +176,15 @@ impl Database {
         Ok(())
     }
 
+    /// Unlink a user's cell_id (remove from users table).
+    pub async fn unlink_user(&self, discord_id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM users WHERE discord_id = ?")
+            .bind(discord_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     // ─── Faucet rate limiting ───────────────────────────────────────────────────
 
     /// Get the timestamp of the user's last faucet claim. Returns None if never claimed.

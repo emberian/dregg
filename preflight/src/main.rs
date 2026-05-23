@@ -34,6 +34,16 @@ fn run_all_subsystems() -> Vec<SubsystemResult> {
         run_subsystem("Blocklace", checks::blocklace::run()),
         run_subsystem("Factory & Sovereign", checks::sovereign::run()),
         run_subsystem("Cross-backend", checks::backends::run()),
+        run_subsystem("CapTP", checks::captp::run()),
+        run_subsystem("DFA Routing", checks::routing::run()),
+        run_subsystem("Storage", checks::storage::run()),
+        run_subsystem("Nameservice", checks::nameservice::run()),
+        run_subsystem("Relay", checks::relay::run()),
+        run_subsystem("CLI", checks::cli::run()),
+        run_subsystem("Node", checks::node::run()),
+        run_subsystem("Wire Protocol", checks::wire::run()),
+        run_subsystem("Solver", checks::solver::run()),
+        run_subsystem("Bridges", checks::bridges::run()),
     ]
 }
 
@@ -171,6 +181,86 @@ mod tests {
         let results = checks::backends::run();
         for r in &results {
             assert!(r.passed, "backends::{} failed: {:?}", r.name, r.error);
+        }
+    }
+
+    #[test]
+    fn preflight_captp() {
+        let results = checks::captp::run();
+        for r in &results {
+            assert!(r.passed, "captp::{} failed: {:?}", r.name, r.error);
+        }
+    }
+
+    #[test]
+    fn preflight_routing() {
+        let results = checks::routing::run();
+        for r in &results {
+            assert!(r.passed, "routing::{} failed: {:?}", r.name, r.error);
+        }
+    }
+
+    #[test]
+    fn preflight_storage() {
+        let results = checks::storage::run();
+        for r in &results {
+            assert!(r.passed, "storage::{} failed: {:?}", r.name, r.error);
+        }
+    }
+
+    #[test]
+    fn preflight_nameservice() {
+        let results = checks::nameservice::run();
+        for r in &results {
+            assert!(r.passed, "nameservice::{} failed: {:?}", r.name, r.error);
+        }
+    }
+
+    #[test]
+    fn preflight_relay() {
+        let results = checks::relay::run();
+        for r in &results {
+            assert!(r.passed, "relay::{} failed: {:?}", r.name, r.error);
+        }
+    }
+
+    #[test]
+    fn preflight_cli() {
+        let results = checks::cli::run();
+        for r in &results {
+            assert!(r.passed, "cli::{} failed: {:?}", r.name, r.error);
+        }
+    }
+
+    #[test]
+    fn preflight_node() {
+        let results = checks::node::run();
+        for r in &results {
+            assert!(r.passed, "node::{} failed: {:?}", r.name, r.error);
+        }
+    }
+
+    #[test]
+    fn preflight_wire() {
+        let results = checks::wire::run();
+        for r in &results {
+            assert!(r.passed, "wire::{} failed: {:?}", r.name, r.error);
+        }
+    }
+
+    #[test]
+    fn preflight_solver() {
+        let results = checks::solver::run();
+        for r in &results {
+            assert!(r.passed, "solver::{} failed: {:?}", r.name, r.error);
+        }
+    }
+
+    #[test]
+    fn preflight_bridges() {
+        let results = checks::bridges::run();
+        for r in &results {
+            assert!(r.passed, "bridges::{} failed: {:?}", r.name, r.error);
         }
     }
 

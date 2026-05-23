@@ -73,7 +73,7 @@ pub struct EnqueueValidationContext {
 }
 
 /// Result of queue program validation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ValidationResult {
     /// Whether validation passed.
     pub valid: bool,
@@ -292,7 +292,7 @@ mod tests {
             name: "acl".to_string(),
             constraints: vec![
                 QueueConstraint::SenderAuthorized {
-                    authorized_set_root: BabyBear::new(0xACL),
+                    authorized_set_root: BabyBear::new(0xAC1),
                     authorized_senders: authorized.to_vec(),
                 },
                 QueueConstraint::MinDeposit {

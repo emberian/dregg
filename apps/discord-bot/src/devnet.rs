@@ -274,6 +274,11 @@ impl DevnetClient {
         }
     }
 
+    /// Get a reference to the underlying HTTP client (for custom endpoint calls).
+    pub fn client(&self) -> &reqwest::Client {
+        &self.client
+    }
+
     /// Get events since a given block height (for the activity feed poller).
     pub async fn get_events_since(&self, since_height: u64) -> Result<EventsResponse, DevnetError> {
         let url = format!("{}/api/events?since={}", self.base_url, since_height);
