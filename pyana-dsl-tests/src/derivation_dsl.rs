@@ -182,49 +182,11 @@ pub fn derivation_circuit_descriptor() -> CircuitDescriptor {
 
     // ========================================================================
     // C10: substitution_application
-    // derived_term[i] = is_var * (sum_j sel_j * sub[j]) + (1-is_var) * raw_value
+    // (derived_term[i] - expected)^2 == 0, where:
+    //   expected = is_var * sum(sel_j * sub_j) + (1 - is_var) * raw_value
     //
-    // Rewriting: derived_term - is_var * sum(sel_j * sub_j) - raw_value + is_var * raw_value == 0
-    //
-    // Equivalently: derived_term - sum(sel_j * sub_j) * is_var - raw_value * (1 - is_var) == 0
-    //
-    // The hand-written version uses (derived_term - expected)^2 per term, then sums.
-    // For constraint satisfaction equivalence, the linear form per term suffices.
-    // We emit one constraint per head term.
-    //
-    // Linear form:
-    //   derived_term[i] - sum_j(sel[i][j] * sub[j]) - raw_value[i] + is_var[i] * raw_value[i] == 0
-    //
-    // Wait — let's be careful with the algebra:
-    //   expected = is_var * var_resolved + (1 - is_var) * raw_value
-    //            = is_var * sum(sel_j * sub_j) + raw_value - is_var * raw_value
-    //
-    // Constraint: derived_term - expected == 0
-    //   derived_term - is_var * sum(sel_j * sub_j) - raw_value + is_var * raw_value == 0
-    //
-    // Terms:
-    //   +1 * derived_term[i]
-    //   -1 * raw_value[i]
-    //   +1 * is_var[i] * raw_value[i]      (degree 2)
-    //   -1 * sel[i][0] * sub[0]            (degree 2)
-    //   ...
-    //   -1 * sel[i][7] * sub[7]            (degree 2)
-    //
-    // Wait, where does is_var factor in for the selector*sub terms? In the original:
-    //   expected = is_var * var_resolved + (1 - is_var) * raw_value
-    //
-    // var_resolved = sum(sel_j * sub_j). Since selectors are binary and sum to is_var,
-    // when is_var=0 all sel_j=0, so var_resolved=0 and we get raw_value.
-    // When is_var=1, exactly one sel_j=1, so var_resolved=sub[j].
-    //
-    // So the constraint is:
-    //   derived_term - sum(sel_j * sub_j) - (1 - is_var) * raw_value == 0
-    //
-    // Which is:
-    //   derived_term - sum(sel_j * sub_j) - raw_value + is_var * raw_value == 0
-    //
-    // This works because when is_var=0: derived_term - 0 - raw_value + 0 == 0 => derived_term == raw_value
-    // When is_var=1: derived_term - sub[j] - raw_value + raw_value == 0 => derived_term == sub[j]. Correct!
+    // The hand-written AIR uses the squared form. We use Squared to match:
+    //   Squared { inner: derived_term - sum(sel_j * sub_j) - raw_value + is_var * raw_value }
     // ========================================================================
     for term_i in 0..MAX_HEAD_TERMS {
         let derived_col = col::HEAD_TERM_START + term_i;
@@ -244,7 +206,9 @@ pub fn derivation_circuit_descriptor() -> CircuitDescriptor {
             let sub_col = col::SUB_VALUE_START + var_j;
             terms_vec.push(term(neg_one(), &[sel_col, sub_col]));
         }
-        constraints.push(ConstraintExpr::Polynomial { terms: terms_vec });
+        constraints.push(ConstraintExpr::Squared {
+            inner: Box::new(ConstraintExpr::Polynomial { terms: terms_vec }),
+        });
     }
 
     // ========================================================================
@@ -444,8 +408,8 @@ pub fn derivation_circuit_descriptor() -> CircuitDescriptor {
     }
 
     // ========================================================================
-    // C27: check_term_sel_sum_equals_is_var — sum(sel_j) - is_var == 0
-    // (Same approach as C9: linear form is equivalent for satisfaction.)
+    // C27: check_term_sel_sum_equals_is_var — (sum(sel_j) - is_var)^2 == 0
+    // Same approach as C9: using Squared to match the hand-written AIR.
     // ========================================================================
     for slot in 0..col::NUM_CHECK_TERMS {
         let is_var_col = col::check_term_is_var(slot);
@@ -454,7 +418,9 @@ pub fn derivation_circuit_descriptor() -> CircuitDescriptor {
             terms_vec.push(term(BabyBear::ONE, &[col::check_term_sel(slot, var_j)]));
         }
         terms_vec.push(term(neg_one(), &[is_var_col]));
-        constraints.push(ConstraintExpr::Polynomial { terms: terms_vec });
+        constraints.push(ConstraintExpr::Squared {
+            inner: Box::new(ConstraintExpr::Polynomial { terms: terms_vec }),
+        });
     }
 
     // ========================================================================

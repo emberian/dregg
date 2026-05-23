@@ -33,6 +33,9 @@ p3-batch-stark = { workspace = true, optional = true }
 p3-lookup = { workspace = true, optional = true }
 p3-poseidon2-circuit-air = { workspace = true, optional = true }
 
+# Pyana DSL proc-macro for circuit generation
+pyana-dsl = { path = "../pyana-dsl" }
+
 blake3 = "1"
 getrandom = { workspace = true }
 serde = { version = "1", features = ["derive"] }

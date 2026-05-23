@@ -14,6 +14,7 @@ pyana-turn = { path = "../turn" }
 pyana-cell = { path = "../cell" }
 pyana-sdk = { path = "../sdk" }
 pyana-bridge = { path = "../bridge" }
+pyana-dsl-runtime = { path = "../pyana-dsl-runtime" }
 token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
 blake3 = "1"
 getrandom = { workspace = true }

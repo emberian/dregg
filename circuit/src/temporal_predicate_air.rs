@@ -1,4 +1,15 @@
-//! Temporal predicate AIR.
+//! **DEPRECATED**: Use [`crate::temporal_predicate_dsl`] instead.
+//!
+//! This hand-written implementation has been superseded by the DSL-generated version
+//! in `temporal_predicate_dsl.rs` which uses `#[pyana_circuit]` to produce a
+//! bit-for-bit equivalent StarkAir implementation with less manual code.
+//!
+//! All new callers should import from `temporal_predicate_dsl`. This file is kept
+//! for reference during the migration period and will be removed in a future release.
+//!
+//! ---
+//!
+//! Temporal predicate AIR (legacy).
 //!
 //! Proves that a property held CONTINUOUSLY over a range of steps in the IVC chain.
 //! This extends the single-point [`PredicateAir`](crate::predicate_air) to prove

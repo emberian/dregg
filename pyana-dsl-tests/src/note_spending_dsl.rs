@@ -249,7 +249,6 @@ pub fn generate_valid_note_spending_trace() -> (Vec<Vec<BabyBear>>, Vec<BabyBear
 /// commitment row and the second is a copy.
 pub fn generate_commitment_row_trace() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
     use pyana_circuit::note_spending_air::{create_test_witness, test_spending_key};
-    use pyana_circuit::poseidon2::hash_many;
 
     let key = test_spending_key(0xDEAD_BEEF);
     let witness = create_test_witness(

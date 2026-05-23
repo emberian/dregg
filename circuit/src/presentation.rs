@@ -27,7 +27,7 @@ use crate::merkle_air::{MerkleAir, MerkleLevelWitness, MerkleWitness};
 use crate::multi_step_air;
 use crate::poseidon2::hash_fact;
 use crate::stark::{self, MerkleStarkAir, StarkAir, StarkProof};
-use crate::temporal_predicate_air::{TemporalPredicateProof, verify_temporal_predicate};
+use crate::temporal_predicate_dsl::{TemporalPredicateProof, verify_temporal_predicate};
 
 /// The complete presentation witness (all private data).
 #[derive(Clone, Debug)]
@@ -2231,7 +2231,7 @@ mod tests {
     #[test]
     fn presentation_with_temporal_predicate_proof() {
         use crate::predicate_air::PredicateType;
-        use crate::temporal_predicate_air::prove_temporal_predicate;
+        use crate::temporal_predicate_dsl::prove_temporal_predicate;
 
         // Create a presentation with matching federation root.
         let mut witness = create_test_presentation();
@@ -2276,7 +2276,7 @@ mod tests {
     #[test]
     fn presentation_temporal_proof_wrong_state_root_rejected() {
         use crate::predicate_air::PredicateType;
-        use crate::temporal_predicate_air::prove_temporal_predicate;
+        use crate::temporal_predicate_dsl::prove_temporal_predicate;
 
         let mut witness = create_test_presentation();
         witness.federation_root = witness.issuer_membership.expected_root;

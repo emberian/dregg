@@ -39,3 +39,6 @@ mod wire_format_e2e;
 
 // Sovereign proof-carrying turns (Phase 2): wallet generates proof -> executor verifies
 mod sovereign_proof;
+
+// DSL circuit full pipeline: descriptor -> CellProgram -> ProgramRegistry -> executor dispatch
+mod dsl_pipeline;
