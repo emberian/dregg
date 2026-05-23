@@ -62,4 +62,6 @@ pub use budget::{
 };
 pub use causal::{CausalDag, CausalLedger, CausalTurn};
 pub use error::CoordError;
-pub use shared_budget::{SharedBudgetError, SharedResourceBudget};
+pub use shared_budget::{
+    DebitResolution, ResourceState, SharedBudgetError, SharedBudgetObserver, SharedResourceBudget,
+};

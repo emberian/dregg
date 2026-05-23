@@ -25,7 +25,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::finality::{Block, BlockId, Blocklace};
+use crate::{BlockId, Blocklace};
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -57,24 +57,24 @@ fn compute_rounds(blocklace: &Blocklace) -> (HashMap<BlockId, u64>, u64) {
     let mut in_degree: HashMap<BlockId, usize> = HashMap::new();
     let mut successors: HashMap<BlockId, Vec<BlockId>> = HashMap::new();
 
-    for (&id, block) in &blocklace.blocks {
+    for (id, block) in &blocklace.blocks {
         let pred_count = block
             .predecessors
             .iter()
             .filter(|p| blocklace.blocks.contains_key(*p))
             .count();
-        in_degree.insert(id, pred_count);
+        in_degree.insert(*id, pred_count);
         for pred in &block.predecessors {
             if blocklace.blocks.contains_key(pred) {
-                successors.entry(*pred).or_default().push(id);
+                successors.entry(*pred).or_default().push(*id);
             }
         }
     }
 
     let mut queue: VecDeque<BlockId> = in_degree
         .iter()
-        .filter(|(_, &deg)| deg == 0)
-        .map(|(&id, _)| id)
+        .filter(|(_, deg)| **deg == 0)
+        .map(|(id, _)| *id)
         .collect();
 
     while let Some(id) = queue.pop_front() {
@@ -159,6 +159,11 @@ fn wave_last_round(wave: u64, wavelength: u64) -> u64 {
 }
 
 /// Determine the leader for a given wave (round-robin by participant index).
+///
+/// # Panics
+///
+/// Panics if `participants` is empty. The caller (`tau_with_config`) guards
+/// against this by returning early when participants is empty.
 pub fn wave_leader(wave: u64, participants: &[[u8; 32]]) -> [u8; 32] {
     assert!(!participants.is_empty(), "need at least one participant");
     participants[(wave as usize) % participants.len()]
@@ -245,8 +250,8 @@ fn is_super_ratified(
     // Find all blocks at the wave's last round.
     let end_round_blocks: Vec<BlockId> = rounds
         .iter()
-        .filter(|(_, &r)| r == wave_end_round)
-        .map(|(&id, _)| id)
+        .filter(|(_, r)| **r == wave_end_round)
+        .map(|(id, _)| *id)
         .collect();
 
     // Count distinct participants with a block at the wave end that ratifies the leader.
@@ -299,14 +304,14 @@ fn find_all_final_leaders(
         // Find leader blocks: blocks by the designated leader at the wave's first round.
         let leader_blocks: Vec<BlockId> = rounds
             .iter()
-            .filter(|(id, &r)| {
-                r == wave_start
+            .filter(|(id, r)| {
+                **r == wave_start
                     && blocklace
                         .get(id)
                         .map(|b| b.creator == leader_key)
                         .unwrap_or(false)
             })
-            .map(|(&id, _)| id)
+            .map(|(id, _)| *id)
             .collect();
 
         // The leader must have exactly one block at the wave start (no equivocation).
@@ -369,9 +374,9 @@ fn xsort(blocklace: &Blocklace, blocks: &HashSet<BlockId>) -> Vec<BlockId> {
     // Collect zero in-degree nodes, sorted by block ID for determinism.
     let mut ready: std::collections::BinaryHeap<std::cmp::Reverse<BlockId>> =
         std::collections::BinaryHeap::new();
-    for (&id, &deg) in &in_degree {
-        if deg == 0 {
-            ready.push(std::cmp::Reverse(id));
+    for (id, deg) in &in_degree {
+        if *deg == 0 {
+            ready.push(std::cmp::Reverse(*id));
         }
     }
 
@@ -420,20 +425,42 @@ pub fn tau_with_config(
     let final_leaders = find_all_final_leaders(blocklace, &rounds, max_round, participants, config);
 
     let mut ordered = Vec::new();
-    let mut prev_leader_past: HashSet<BlockId> = HashSet::new();
+    let mut prev_covered: HashSet<BlockId> = HashSet::new();
 
     for leader_id in &final_leaders {
-        let leader_past = causal_past_inclusive(blocklace, leader_id);
-
-        // Blocks new to this leader's segment: in this leader's past but not
-        // in any previous leader's past.
+        // The leader's "coverage" is the union of causal pasts of all blocks
+        // at the wave-end round that ratify this leader. This captures all blocks
+        // that are ordered by this leader's finalization.
+        let leader_round = rounds.get(leader_id).copied().unwrap_or(1);
+        let leader_wave = round_to_wave(leader_round, config.wavelength);
+        let wave_end = wave_last_round(leader_wave, config.wavelength);
         let leader_creator = blocklace
             .get(leader_id)
             .map(|b| b.creator)
             .unwrap_or([0u8; 32]);
 
-        let new_blocks: HashSet<BlockId> = leader_past
-            .difference(&prev_leader_past)
+        // Collect the union of causal pasts of all wave-end blocks that ratify.
+        let mut coverage: HashSet<BlockId> = HashSet::new();
+        for (id, r) in &rounds {
+            if *r == wave_end {
+                if ratifies(
+                    blocklace,
+                    &rounds,
+                    id,
+                    leader_id,
+                    &leader_creator,
+                    participants,
+                ) {
+                    let past = causal_past_inclusive(blocklace, id);
+                    coverage.extend(past);
+                }
+            }
+        }
+
+        // Blocks new to this leader's segment: in coverage but not in
+        // any previous leader's coverage.
+        let new_blocks: HashSet<BlockId> = coverage
+            .difference(&prev_covered)
             .copied()
             .filter(|bid| {
                 // Exclude blocks from creators that equivocated (as visible from leader).
@@ -448,7 +475,7 @@ pub fn tau_with_config(
         let sorted = xsort(blocklace, &new_blocks);
         ordered.extend(sorted);
 
-        prev_leader_past = leader_past;
+        prev_covered = coverage;
     }
 
     ordered
@@ -464,7 +491,7 @@ pub fn is_cordial(blocklace: &Blocklace, block_id: &BlockId, participants: &[[u8
     let (rounds, _) = compute_rounds(blocklace);
 
     let round = match rounds.get(block_id) {
-        Some(&r) => r,
+        Some(r) => *r,
         None => return false,
     };
 
@@ -482,7 +509,7 @@ pub fn is_cordial(blocklace: &Blocklace, block_id: &BlockId, participants: &[[u8
     // Which participants have blocks at the previous round.
     let prev_round_creators: HashSet<[u8; 32]> = rounds
         .iter()
-        .filter(|(_, &r)| r == prev_round)
+        .filter(|(_, r)| **r == prev_round)
         .filter_map(|(id, _)| blocklace.get(id).map(|b| b.creator))
         .collect();
 
@@ -507,22 +534,23 @@ pub fn is_cordial(blocklace: &Blocklace, block_id: &BlockId, participants: &[[u8
 
 // ─── Integration helpers ─────────────────────────────────────────────────────
 
-/// Get the finalized total order of blocks that carry Turn payloads.
+/// Get the finalized total order of blocks with their payloads.
 ///
 /// Returns (block_id, payload_bytes) pairs in finalized order.
+/// Only includes blocks with non-empty payloads (i.e., actual turns/data,
+/// not empty heartbeats).
 pub fn finalized_turns(
     blocklace: &Blocklace,
     participants: &[[u8; 32]],
 ) -> Vec<(BlockId, Vec<u8>)> {
-    use crate::finality::Payload;
-
     tau(blocklace, participants)
         .into_iter()
         .filter_map(|id| {
             let block = blocklace.get(&id)?;
-            match &block.payload {
-                Payload::Turn(data) => Some((id, data.clone())),
-                _ => None,
+            if block.payload.is_empty() {
+                None
+            } else {
+                Some((id, block.payload.clone()))
             }
         })
         .collect()
@@ -538,28 +566,20 @@ pub fn is_finalized(blocklace: &Blocklace, block_id: &BlockId, participants: &[[
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::finality::{Block, Payload};
+    use crate::Block;
 
     fn make_key(byte: u8) -> [u8; 32] {
         [byte; 32]
     }
 
-    /// Create a block with a deterministic ID derived from its content.
+    /// Create a block using the root-level Block type.
     fn make_block(
         creator: [u8; 32],
         sequence: u64,
         predecessors: Vec<BlockId>,
-        payload: Payload,
+        payload: Vec<u8>,
     ) -> Block {
-        let id = Block::compute_id(&creator, &predecessors, &payload, sequence);
-        Block {
-            id,
-            creator,
-            predecessors,
-            payload,
-            sequence,
-            signature: [0u8; 64],
-        }
+        Block::new(creator, sequence, predecessors, payload)
     }
 
     /// Build a fully-connected blocklace: n participants, each producing one block
@@ -581,10 +601,10 @@ mod tests {
             let mut round_blocks = Vec::new();
             for (i, &participant) in participants.iter().enumerate() {
                 let seq = (round - 1) as u64;
-                let payload = Payload::Turn(vec![round as u8, i as u8]);
+                let payload = vec![round as u8, i as u8];
                 let block = make_block(participant, seq, preds.clone(), payload);
-                let id = block.id;
-                bl.insert(block);
+                let id = block.id();
+                bl.insert(block).unwrap();
                 round_blocks.push(id);
             }
             blocks_by_round.push(round_blocks);
@@ -631,8 +651,6 @@ mod tests {
 
     #[test]
     fn test_three_node_one_wave_finalized() {
-        // 3 nodes, 3 rounds = one full wave. All blocks are fully connected.
-        // Leader of wave 0 = participants[0]. Should be super-ratified.
         let participants = vec![make_key(1), make_key(2), make_key(3)];
         let (bl, _) = build_full_blocklace(&participants, 3);
 
@@ -653,45 +671,45 @@ mod tests {
 
     #[test]
     fn test_equivocating_block_excluded() {
-        // 3 nodes. Participant 1 equivocates at round 1 (produces two blocks).
+        // 3 nodes. Participant 1 equivocates at round 1 (produces two blocks at same round).
         let participants = vec![make_key(1), make_key(2), make_key(3)];
         let mut bl = Blocklace::new();
 
-        // Round 1: participant 1 equivocates (two blocks), others produce one each.
-        let b1a = make_block(make_key(1), 0, vec![], Payload::Turn(vec![1]));
-        let b1a_id = b1a.id;
-        let b1b = make_block(make_key(1), 1, vec![], Payload::Turn(vec![2])); // equivocation (different seq)
-        let b1b_id = b1b.id;
-        let b2 = make_block(make_key(2), 0, vec![], Payload::Turn(vec![3]));
-        let b2_id = b2.id;
-        let b3 = make_block(make_key(3), 0, vec![], Payload::Turn(vec![4]));
-        let b3_id = b3.id;
+        // Round 1: participant 1 equivocates (two blocks with different content), others produce one each.
+        let b1a = make_block(make_key(1), 0, vec![], vec![1]);
+        let b1a_id = b1a.id();
+        let b1b = make_block(make_key(1), 1, vec![], vec![2]); // different seq but same round (genesis)
+        let b1b_id = b1b.id();
+        let b2 = make_block(make_key(2), 0, vec![], vec![3]);
+        let b2_id = b2.id();
+        let b3 = make_block(make_key(3), 0, vec![], vec![4]);
+        let b3_id = b3.id();
 
-        bl.insert(b1a);
-        bl.insert(b1b);
-        bl.insert(b2);
-        bl.insert(b3);
+        bl.insert(b1a).unwrap();
+        bl.insert(b1b).unwrap();
+        bl.insert(b2).unwrap();
+        bl.insert(b3).unwrap();
 
         // Round 2: all see both equivocating blocks.
         let preds_r2 = vec![b1a_id, b1b_id, b2_id, b3_id];
-        let r2_1 = make_block(make_key(1), 2, preds_r2.clone(), Payload::Turn(vec![5]));
-        let r2_2 = make_block(make_key(2), 1, preds_r2.clone(), Payload::Turn(vec![6]));
-        let r2_3 = make_block(make_key(3), 1, preds_r2.clone(), Payload::Turn(vec![7]));
-        let r2_1_id = r2_1.id;
-        let r2_2_id = r2_2.id;
-        let r2_3_id = r2_3.id;
-        bl.insert(r2_1);
-        bl.insert(r2_2);
-        bl.insert(r2_3);
+        let r2_1 = make_block(make_key(1), 2, preds_r2.clone(), vec![5]);
+        let r2_2 = make_block(make_key(2), 1, preds_r2.clone(), vec![6]);
+        let r2_3 = make_block(make_key(3), 1, preds_r2.clone(), vec![7]);
+        let r2_1_id = r2_1.id();
+        let r2_2_id = r2_2.id();
+        let r2_3_id = r2_3.id();
+        bl.insert(r2_1).unwrap();
+        bl.insert(r2_2).unwrap();
+        bl.insert(r2_3).unwrap();
 
         // Round 3.
         let preds_r3 = vec![r2_1_id, r2_2_id, r2_3_id];
-        let r3_1 = make_block(make_key(1), 3, preds_r3.clone(), Payload::Turn(vec![8]));
-        let r3_2 = make_block(make_key(2), 2, preds_r3.clone(), Payload::Turn(vec![9]));
-        let r3_3 = make_block(make_key(3), 2, preds_r3.clone(), Payload::Turn(vec![10]));
-        bl.insert(r3_1);
-        bl.insert(r3_2);
-        bl.insert(r3_3);
+        let r3_1 = make_block(make_key(1), 3, preds_r3.clone(), vec![8]);
+        let r3_2 = make_block(make_key(2), 2, preds_r3.clone(), vec![9]);
+        let r3_3 = make_block(make_key(3), 2, preds_r3.clone(), vec![10]);
+        bl.insert(r3_1).unwrap();
+        bl.insert(r3_2).unwrap();
+        bl.insert(r3_3).unwrap();
 
         let result = tau(&bl, &participants);
 
@@ -708,8 +726,6 @@ mod tests {
 
     #[test]
     fn test_concurrent_blocks_deterministic_tiebreaker() {
-        // In a fully connected blocklace, genesis blocks are concurrent.
-        // xsort must order them deterministically by block ID.
         let participants = vec![make_key(1), make_key(2), make_key(3)];
         let (bl, blocks_by_round) = build_full_blocklace(&participants, 3);
 
@@ -727,8 +743,12 @@ mod tests {
         // All genesis blocks should be in the output.
         assert_eq!(genesis_positions.len(), 3);
 
+        // Sort by position to check ordering.
+        let mut sorted_by_pos = genesis_positions.clone();
+        sorted_by_pos.sort_by_key(|(pos, _)| *pos);
+
         // They should be sorted by ID (since they're concurrent).
-        for window in genesis_positions.windows(2) {
+        for window in sorted_by_pos.windows(2) {
             assert!(
                 window[0].0 < window[1].0,
                 "genesis blocks should maintain consistent order"
@@ -742,7 +762,6 @@ mod tests {
 
     #[test]
     fn test_multiple_waves() {
-        // 3 nodes, 6 rounds = 2 full waves.
         let participants = vec![make_key(1), make_key(2), make_key(3)];
         let (bl, _) = build_full_blocklace(&participants, 6);
 
@@ -755,34 +774,32 @@ mod tests {
 
     #[test]
     fn test_missing_leader_wave_skipped() {
-        // 3 nodes, 3 rounds. But the leader (participants[0]) does NOT produce a
-        // block at round 1, so wave 0 has no leader block => no finalization.
         let participants = vec![make_key(1), make_key(2), make_key(3)];
         let mut bl = Blocklace::new();
 
         // Round 1: only participants 2 and 3 produce blocks.
-        let b2 = make_block(make_key(2), 0, vec![], Payload::Turn(vec![1]));
-        let b3 = make_block(make_key(3), 0, vec![], Payload::Turn(vec![2]));
-        let b2_id = b2.id;
-        let b3_id = b3.id;
-        bl.insert(b2);
-        bl.insert(b3);
+        let b2 = make_block(make_key(2), 0, vec![], vec![1]);
+        let b3 = make_block(make_key(3), 0, vec![], vec![2]);
+        let b2_id = b2.id();
+        let b3_id = b3.id();
+        bl.insert(b2).unwrap();
+        bl.insert(b3).unwrap();
 
         // Round 2.
         let preds = vec![b2_id, b3_id];
-        let r2_2 = make_block(make_key(2), 1, preds.clone(), Payload::Turn(vec![3]));
-        let r2_3 = make_block(make_key(3), 1, preds.clone(), Payload::Turn(vec![4]));
-        let r2_2_id = r2_2.id;
-        let r2_3_id = r2_3.id;
-        bl.insert(r2_2);
-        bl.insert(r2_3);
+        let r2_2 = make_block(make_key(2), 1, preds.clone(), vec![3]);
+        let r2_3 = make_block(make_key(3), 1, preds.clone(), vec![4]);
+        let r2_2_id = r2_2.id();
+        let r2_3_id = r2_3.id();
+        bl.insert(r2_2).unwrap();
+        bl.insert(r2_3).unwrap();
 
         // Round 3.
         let preds3 = vec![r2_2_id, r2_3_id];
-        let r3_2 = make_block(make_key(2), 2, preds3.clone(), Payload::Turn(vec![5]));
-        let r3_3 = make_block(make_key(3), 2, preds3.clone(), Payload::Turn(vec![6]));
-        bl.insert(r3_2);
-        bl.insert(r3_3);
+        let r3_2 = make_block(make_key(2), 2, preds3.clone(), vec![5]);
+        let r3_3 = make_block(make_key(3), 2, preds3.clone(), vec![6]);
+        bl.insert(r3_2).unwrap();
+        bl.insert(r3_3).unwrap();
 
         let result = tau(&bl, &participants);
         assert!(
@@ -793,7 +810,6 @@ mod tests {
 
     #[test]
     fn test_monotonicity() {
-        // Once a block is finalized, adding more blocks must not remove it.
         let participants = vec![make_key(1), make_key(2), make_key(3)];
         let (mut bl, blocks_by_round) = build_full_blocklace(&participants, 3);
 
@@ -808,10 +824,10 @@ mod tests {
             let mut current_round_blocks = Vec::new();
             for (i, &participant) in participants.iter().enumerate() {
                 let seq = (round - 1) as u64;
-                let payload = Payload::Turn(vec![round as u8, i as u8]);
+                let payload = vec![round as u8, i as u8];
                 let block = make_block(participant, seq, prev_round_blocks.clone(), payload);
-                let id = block.id;
-                bl.insert(block);
+                let id = block.id();
+                bl.insert(block).unwrap();
                 current_round_blocks.push(id);
             }
             prev_round_blocks = current_round_blocks;
@@ -839,7 +855,6 @@ mod tests {
 
     #[test]
     fn test_seven_node_same_order_all_nodes() {
-        // 7 nodes, simulate independent tau computations (should be identical).
         let participants: Vec<[u8; 32]> = (1..=7u8).map(|i| make_key(i)).collect();
         let (bl, _) = build_full_blocklace(&participants, 3);
 
@@ -852,7 +867,6 @@ mod tests {
             );
         }
 
-        // With 7 nodes, supermajority = 5. Fully connected => finalization succeeds.
         assert!(
             !results[0].is_empty(),
             "7-node system should finalize blocks"
@@ -878,79 +892,77 @@ mod tests {
 
     #[test]
     fn test_is_cordial_insufficient_predecessors() {
-        // A block that references only 1 of 3 previous-round creators is NOT cordial.
         let participants = vec![make_key(1), make_key(2), make_key(3)];
         let mut bl = Blocklace::new();
 
-        let a1 = make_block(make_key(1), 0, vec![], Payload::Heartbeat);
-        let a1_id = a1.id;
-        let b1 = make_block(make_key(2), 0, vec![], Payload::Heartbeat);
-        let _b1_id = b1.id;
-        let c1 = make_block(make_key(3), 0, vec![], Payload::Heartbeat);
-        let _c1_id = c1.id;
+        // Empty payload = heartbeat equivalent.
+        let a1 = make_block(make_key(1), 0, vec![], vec![]);
+        let a1_id = a1.id();
+        let b1 = make_block(make_key(2), 0, vec![], vec![]);
+        let c1 = make_block(make_key(3), 0, vec![], vec![]);
 
-        bl.insert(a1);
-        bl.insert(b1);
-        bl.insert(c1);
+        bl.insert(a1).unwrap();
+        bl.insert(b1).unwrap();
+        bl.insert(c1).unwrap();
 
         // Lazy block only references one predecessor.
-        let lazy = make_block(make_key(1), 1, vec![a1_id], Payload::Heartbeat);
-        let lazy_id = lazy.id;
-        bl.insert(lazy);
+        let lazy = make_block(make_key(1), 1, vec![a1_id], vec![]);
+        let lazy_id = lazy.id();
+        bl.insert(lazy).unwrap();
 
         // 1/3 is not > 2/3, so not cordial.
         assert!(!is_cordial(&bl, &lazy_id, &participants));
     }
 
     #[test]
-    fn test_finalized_turns_filters_non_turn_payloads() {
-        // Blocks with Heartbeat/Ack payloads should not appear in finalized_turns.
+    fn test_finalized_turns_filters_empty_payloads() {
+        // Blocks with empty payloads should not appear in finalized_turns.
         let participants = vec![make_key(1), make_key(2), make_key(3)];
         let mut bl = Blocklace::new();
 
-        // Round 1: mix of Turn and Heartbeat payloads.
-        let a1 = make_block(make_key(1), 0, vec![], Payload::Turn(vec![1, 2, 3]));
-        let a1_id = a1.id;
-        let b1 = make_block(make_key(2), 0, vec![], Payload::Heartbeat);
-        let b1_id = b1.id;
-        let c1 = make_block(make_key(3), 0, vec![], Payload::Turn(vec![4, 5]));
-        let c1_id = c1.id;
-        bl.insert(a1);
-        bl.insert(b1);
-        bl.insert(c1);
+        // Round 1: mix of non-empty and empty payloads.
+        let a1 = make_block(make_key(1), 0, vec![], vec![1, 2, 3]);
+        let a1_id = a1.id();
+        let b1 = make_block(make_key(2), 0, vec![], vec![]); // "heartbeat" (empty)
+        let b1_id = b1.id();
+        let c1 = make_block(make_key(3), 0, vec![], vec![4, 5]);
+        let c1_id = c1.id();
+        bl.insert(a1).unwrap();
+        bl.insert(b1).unwrap();
+        bl.insert(c1).unwrap();
 
         // Round 2.
         let preds2 = vec![a1_id, b1_id, c1_id];
-        let a2 = make_block(make_key(1), 1, preds2.clone(), Payload::Turn(vec![6]));
-        let a2_id = a2.id;
-        let b2 = make_block(make_key(2), 1, preds2.clone(), Payload::Turn(vec![7]));
-        let b2_id = b2.id;
-        let c2 = make_block(make_key(3), 1, preds2.clone(), Payload::Turn(vec![8]));
-        let c2_id = c2.id;
-        bl.insert(a2);
-        bl.insert(b2);
-        bl.insert(c2);
+        let a2 = make_block(make_key(1), 1, preds2.clone(), vec![6]);
+        let a2_id = a2.id();
+        let b2 = make_block(make_key(2), 1, preds2.clone(), vec![7]);
+        let b2_id = b2.id();
+        let c2 = make_block(make_key(3), 1, preds2.clone(), vec![8]);
+        let c2_id = c2.id();
+        bl.insert(a2).unwrap();
+        bl.insert(b2).unwrap();
+        bl.insert(c2).unwrap();
 
         // Round 3.
         let preds3 = vec![a2_id, b2_id, c2_id];
-        let a3 = make_block(make_key(1), 2, preds3.clone(), Payload::Turn(vec![9]));
-        let b3 = make_block(make_key(2), 2, preds3.clone(), Payload::Turn(vec![10]));
-        let c3 = make_block(make_key(3), 2, preds3.clone(), Payload::Turn(vec![11]));
-        bl.insert(a3);
-        bl.insert(b3);
-        bl.insert(c3);
+        let a3 = make_block(make_key(1), 2, preds3.clone(), vec![9]);
+        let b3 = make_block(make_key(2), 2, preds3.clone(), vec![10]);
+        let c3 = make_block(make_key(3), 2, preds3.clone(), vec![11]);
+        bl.insert(a3).unwrap();
+        bl.insert(b3).unwrap();
+        bl.insert(c3).unwrap();
 
         let turns = finalized_turns(&bl, &participants);
 
-        // The Heartbeat block (b1) should not appear.
+        // The empty payload block (b1) should not appear.
         for (id, _payload) in &turns {
             assert_ne!(
                 id, &b1_id,
-                "heartbeat block should not appear in finalized_turns"
+                "empty-payload block should not appear in finalized_turns"
             );
         }
 
-        // All Turn payloads should appear.
+        // All non-empty payloads should appear.
         assert!(
             turns.len() >= 8,
             "expected at least 8 turns, got {}",

@@ -14,22 +14,24 @@
 //! - NoteCreate (5): Create a note (commitment creation, balance debit).
 //! - CreateObligation (6): Lock stake from balance as a bonded obligation.
 //! - FulfillObligation (7): Return locked stake on successful fulfillment.
+//! - Custom (8): CellProgram dispatch — state flows unchanged, domain constraints
+//!   proven externally. Params carry program VK hash + proof commitment.
 //!
 //! # Trace Layout (one row per effect)
 //!
 //! ```text
-//! | selector[8] | state_before[14] | effect_params[8] | state_after[14] | aux[8] |
+//! | selector[9] | state_before[14] | effect_params[8] | state_after[14] | aux[8] |
 //! ```
 //!
-//! Total width: 52 columns
+//! Total width: 53 columns
 //!
 //! ## Column Breakdown
 //!
-//! Selectors (cols 0..8): Exactly one active per row.
+//! Selectors (cols 0..9): Exactly one active per row.
 //!   - sel_noop, sel_transfer, sel_setfield, sel_grantcap, sel_notespend, sel_notecreate,
-//!     sel_create_obligation, sel_fulfill_obligation
+//!     sel_create_obligation, sel_fulfill_obligation, sel_custom
 //!
-//! State Before (cols 8..22):
+//! State Before (cols 9..23):
 //!   - balance_lo, balance_hi (u64 as two BabyBear limbs, 30+34 bits)
 //!   - nonce
 //!   - field_values[0..7] (8 custom fields)
@@ -37,13 +39,13 @@
 //!   - state_commitment (running Poseidon2 hash of full state)
 //!   - reserved
 //!
-//! Effect Params (cols 22..30):
+//! Effect Params (cols 23..31):
 //!   - param0..param7 (meaning depends on effect type)
 //!
-//! State After (cols 30..44):
+//! State After (cols 31..45):
 //!   - Same layout as state_before
 //!
-//! Aux (cols 44..52):
+//! Aux (cols 45..53):
 //!   - Auxiliary witness values (e.g., intermediate hashes, range proofs)
 //!
 //! # Constraints
@@ -57,6 +59,7 @@
 //!    - NoteCreate: commitment valid, balance decreases
 //!    - CreateObligation: balance decreases by stake_amount
 //!    - FulfillObligation: balance increases by stake_return
+//!    - Custom: state unchanged (domain constraints proven externally)
 //! 3. Transition constraints (row-to-row continuity):
 //!    - next_row.state_before == this_row.state_after
 //!    - next_row.nonce == this_row.nonce + 1 (or same for NoOp padding)
@@ -65,10 +68,11 @@
 //!    - Last non-padding row: state_after matches new_commitment
 //!    - Conservation: net balance delta == public input
 //!
-//! # Public Inputs (6 elements)
+//! # Public Inputs (7+ elements)
 //!
 //! [old_commitment, new_commitment, net_delta_magnitude, net_delta_sign,
-//!  effects_hash_lo, effects_hash_hi]
+//!  effects_hash_lo, effects_hash_hi, custom_effect_count,
+//!  ...custom_entries: (vk_hash[4], proof_commitment[4]) per custom effect]
 
 use crate::field::BabyBear;
 use crate::poseidon2::{hash_2_to_1, hash_many};
@@ -79,11 +83,11 @@ use crate::stark::{BoundaryConstraint, StarkAir};
 // ============================================================================
 
 /// Total trace width.
-/// Layout: 8 selectors + 14 state_before + 8 params + 14 state_after + 8 aux = 52.
-pub const EFFECT_VM_WIDTH: usize = 52;
+/// Layout: 14 selectors + 14 state_before + 8 params + 14 state_after + 8 aux = 58.
+pub const EFFECT_VM_WIDTH: usize = 58;
 
 /// Number of effect types (selectors).
-pub const NUM_EFFECTS: usize = 8;
+pub const NUM_EFFECTS: usize = 14;
 
 /// Selector column indices.
 pub mod sel {
@@ -95,6 +99,20 @@ pub mod sel {
     pub const NOTE_CREATE: usize = 5;
     pub const CREATE_OBLIGATION: usize = 6;
     pub const FULFILL_OBLIGATION: usize = 7;
+    /// Custom cell program dispatch: state flows normally, but domain-specific
+    /// constraints are proven externally. The Effect VM binds to the external
+    /// proof via `custom_proof_commitment` in the params.
+    pub const CUSTOM: usize = 8;
+    /// Slash an expired obligation: transfer locked stake to beneficiary.
+    pub const SLASH_OBLIGATION: usize = 9;
+    /// Seal: lock a field against mutation via sealed_field_mask.
+    pub const SEAL: usize = 10;
+    /// Unseal: unlock a sealed field (requires brand matching).
+    pub const UNSEAL: usize = 11;
+    /// MakeSovereign: transition cell mode_flag from 0 to 1.
+    pub const MAKE_SOVEREIGN: usize = 12;
+    /// CreateCellFromFactory: record factory VK hash + provenance.
+    pub const CREATE_CELL_FROM_FACTORY: usize = 13;
 }
 
 /// State column offsets (relative to state start).
@@ -110,15 +128,15 @@ pub mod state {
 }
 
 /// Absolute column indices for state_before.
-pub const STATE_BEFORE_BASE: usize = NUM_EFFECTS; // 8
+pub const STATE_BEFORE_BASE: usize = NUM_EFFECTS; // 14
 /// Absolute column indices for state_after.
-pub const STATE_AFTER_BASE: usize = STATE_BEFORE_BASE + state::SIZE + NUM_PARAMS; // 8 + 14 + 8 = 30
+pub const STATE_AFTER_BASE: usize = STATE_BEFORE_BASE + state::SIZE + NUM_PARAMS; // 14 + 14 + 8 = 36
 /// Effect parameter base column.
-pub const PARAM_BASE: usize = STATE_BEFORE_BASE + state::SIZE; // 8 + 14 = 22
+pub const PARAM_BASE: usize = STATE_BEFORE_BASE + state::SIZE; // 14 + 14 = 28
 /// Number of parameter columns.
 pub const NUM_PARAMS: usize = 8;
 /// Auxiliary witness base column.
-pub const AUX_BASE: usize = STATE_AFTER_BASE + state::SIZE; // 30 + 14 = 44
+pub const AUX_BASE: usize = STATE_AFTER_BASE + state::SIZE; // 36 + 14 = 50
 /// Number of auxiliary columns.
 pub const NUM_AUX: usize = 8;
 
@@ -155,6 +173,10 @@ pub const NUM_AUX: usize = 8;
 ///   param0 = obligation_id (hash identifying the obligation)
 ///   param1 = stake_return_lo (amount returned to obligor)
 ///   param2 = stake_return_hi
+///
+/// Custom (CellProgram dispatch):
+///   param0..param3 = custom_program_vk_hash (4 BabyBear elements identifying the program)
+///   param4..param7 = custom_proof_commitment (4 BabyBear elements = hash of external proof)
 pub mod param {
     pub const AMOUNT: usize = 0;
     pub const DIRECTION: usize = 1;
@@ -173,6 +195,25 @@ pub mod param {
     pub const FULFILL_OBLIGATION_ID: usize = 0;
     pub const FULFILL_RETURN_LO: usize = 1;
     pub const FULFILL_RETURN_HI: usize = 2;
+    // SlashObligation params.
+    pub const SLASH_OBLIGATION_ID: usize = 0;
+    pub const SLASH_STAKE_LO: usize = 1;
+    pub const SLASH_STAKE_HI: usize = 2;
+    pub const SLASH_BENEFICIARY: usize = 3;
+    // Seal params.
+    pub const SEAL_FIELD_IDX: usize = 0;
+    // Unseal params.
+    pub const UNSEAL_FIELD_IDX: usize = 0;
+    pub const UNSEAL_BRAND: usize = 1;
+    // MakeSovereign params: no balance params (mode flag only).
+    // CreateCellFromFactory params.
+    pub const FACTORY_VK_HASH: usize = 0;
+    pub const CHILD_VK_DERIVED: usize = 1;
+    // Custom cell program dispatch params.
+    /// VK hash identifying the custom program (4 elements = 4*30 = 120 bits).
+    pub const CUSTOM_VK_HASH_BASE: usize = 0;
+    /// Custom proof commitment (hash of the external proof, 4 elements).
+    pub const CUSTOM_PROOF_COMMIT_BASE: usize = 4;
 }
 
 /// Public input layout.
@@ -187,8 +228,19 @@ pub mod pi {
     /// Effects hash (2 BabyBear elements: lo, hi).
     pub const EFFECTS_HASH_LO: usize = 4;
     pub const EFFECTS_HASH_HI: usize = 5;
-    /// Total public inputs.
-    pub const COUNT: usize = 6;
+    /// Number of custom effects in this turn (0 if none).
+    pub const CUSTOM_EFFECT_COUNT: usize = 6;
+    /// Custom proof commitments start here.
+    /// For each custom effect i (0..custom_count):
+    ///   PI[CUSTOM_PROOFS_BASE + i*8 + 0..4] = custom_program_vk_hash (4 elements)
+    ///   PI[CUSTOM_PROOFS_BASE + i*8 + 4..8] = custom_proof_commitment (4 elements)
+    pub const CUSTOM_PROOFS_BASE: usize = 7;
+    /// Base public inputs (without custom proof data).
+    pub const BASE_COUNT: usize = 7;
+    /// Maximum number of custom effects supported per turn.
+    pub const MAX_CUSTOM_EFFECTS: usize = 4;
+    /// Elements per custom effect entry in PI (4 vk_hash + 4 proof_commit).
+    pub const CUSTOM_ENTRY_SIZE: usize = 8;
 }
 
 // ============================================================================
@@ -232,6 +284,53 @@ pub enum Effect {
         /// Amount returned to obligor on fulfillment.
         stake_return: u64,
     },
+    /// Custom cell program dispatch.
+    ///
+    /// State flows through normally (continuity enforced by the Effect VM).
+    /// Domain-specific constraints are proven in a separate proof identified by
+    /// `custom_proof_commitment`. The verifier checks that the external proof is
+    /// valid and that its hash matches this commitment.
+    Custom {
+        /// VK hash identifying the custom program (4 BabyBear elements packed into a hash).
+        program_vk_hash: [BabyBear; 4],
+        /// Hash of the external custom program proof (4 BabyBear elements).
+        proof_commitment: [BabyBear; 4],
+    },
+    /// Slash an expired obligation: transfer locked stake to beneficiary.
+    /// Balance of beneficiary increases by stake_amount.
+    SlashObligation {
+        /// Hash identifying the obligation to slash.
+        obligation_id: BabyBear,
+        /// Amount slashed to beneficiary.
+        stake_amount: u64,
+        /// Hash of the beneficiary (for cap_root update).
+        beneficiary_hash: BabyBear,
+    },
+    /// Seal: lock a field against mutation.
+    /// Sets sealed_field_mask |= (1 << field_idx) in the reserved state slot.
+    Seal {
+        /// Index of field to seal (0..7).
+        field_idx: u32,
+    },
+    /// Unseal: unlock a sealed field (requires brand matching via aux).
+    /// Clears sealed_field_mask &= ~(1 << field_idx).
+    Unseal {
+        /// Index of field to unseal.
+        field_idx: u32,
+        /// Brand hash proving authority to unseal.
+        brand: BabyBear,
+    },
+    /// MakeSovereign: transition cell mode from managed (0) to sovereign (1).
+    /// State constraint: mode_flag changes from 0 to 1. Balance/fields preserved.
+    MakeSovereign,
+    /// CreateCellFromFactory: record factory VK hash + provenance.
+    /// Uses aux columns for factory_vk and child_vk_derived.
+    CreateCellFromFactory {
+        /// Factory VK hash.
+        factory_vk: BabyBear,
+        /// Derived child VK hash (provenance record).
+        child_vk_derived: BabyBear,
+    },
 }
 
 /// Cell state that flows between rows.
@@ -247,6 +346,10 @@ pub struct CellState {
     pub capability_root: BabyBear,
     /// Running state commitment.
     pub state_commitment: BabyBear,
+    /// Sealed field mask: bit i set means field i is sealed against mutation.
+    pub sealed_field_mask: u32,
+    /// Mode flag: 0 = managed, 1 = sovereign.
+    pub mode_flag: u32,
 }
 
 impl CellState {
@@ -262,6 +365,8 @@ impl CellState {
             fields,
             capability_root,
             state_commitment,
+            sealed_field_mask: 0,
+            mode_flag: 0,
         }
     }
 
@@ -298,7 +403,9 @@ impl CellState {
         cols.extend_from_slice(&self.fields); // field_values[0..8]
         cols.push(self.capability_root); // cap_root
         cols.push(self.state_commitment); // state_commit
-        cols.push(BabyBear::ZERO); // reserved
+        cols.push(BabyBear::new(
+            self.sealed_field_mask | (self.mode_flag << 8),
+        )); // reserved: sealed_mask | mode_flag
         assert_eq!(cols.len(), state::SIZE);
         cols
     }
@@ -382,6 +489,46 @@ pub fn compute_effects_hash(effects: &[Effect]) -> (BabyBear, BabyBear) {
                 let (lo, hi) = split_u64(*stake_return);
                 hasher_inputs.push(lo);
                 hasher_inputs.push(hi);
+            }
+            Effect::Custom {
+                program_vk_hash,
+                proof_commitment,
+            } => {
+                hasher_inputs.push(BabyBear::new(8));
+                hasher_inputs.extend_from_slice(program_vk_hash);
+                hasher_inputs.extend_from_slice(proof_commitment);
+            }
+            Effect::SlashObligation {
+                obligation_id,
+                stake_amount,
+                beneficiary_hash,
+            } => {
+                hasher_inputs.push(BabyBear::new(9));
+                hasher_inputs.push(*obligation_id);
+                let (lo, hi) = split_u64(*stake_amount);
+                hasher_inputs.push(lo);
+                hasher_inputs.push(hi);
+                hasher_inputs.push(*beneficiary_hash);
+            }
+            Effect::Seal { field_idx } => {
+                hasher_inputs.push(BabyBear::new(10));
+                hasher_inputs.push(BabyBear::new(*field_idx));
+            }
+            Effect::Unseal { field_idx, brand } => {
+                hasher_inputs.push(BabyBear::new(11));
+                hasher_inputs.push(BabyBear::new(*field_idx));
+                hasher_inputs.push(*brand);
+            }
+            Effect::MakeSovereign => {
+                hasher_inputs.push(BabyBear::new(12));
+            }
+            Effect::CreateCellFromFactory {
+                factory_vk,
+                child_vk_derived,
+            } => {
+                hasher_inputs.push(BabyBear::new(13));
+                hasher_inputs.push(*factory_vk);
+                hasher_inputs.push(*child_vk_derived);
             }
         }
     }
@@ -477,6 +624,7 @@ impl StarkAir for EffectVmAir {
         let s_notecreate = local[sel::NOTE_CREATE];
         let s_create_obligation = local[sel::CREATE_OBLIGATION];
         let s_fulfill_obligation = local[sel::FULFILL_OBLIGATION];
+        let s_custom = local[sel::CUSTOM];
 
         // State accessors (before).
         let old_bal_lo = local[STATE_BEFORE_BASE + state::BALANCE_LO];
@@ -747,7 +895,113 @@ impl StarkAir for EffectVmAir {
             alpha_pow = alpha_pow * alpha;
         }
 
+        // -- Custom (CellProgram dispatch): state continuity only --
+        // The Custom effect does NOT alter balance, fields, or cap_root.
+        // State flows through unchanged (the custom program's constraints are
+        // proven externally; the Effect VM only binds the proof commitment to PI).
+        // Constraints: all state columns unchanged (same as NoOp for state).
+        for i in 0..state::SIZE {
+            let c = s_custom * (local[STATE_AFTER_BASE + i] - local[STATE_BEFORE_BASE + i]);
+            combined = combined + alpha_pow * c;
+            alpha_pow = alpha_pow * alpha;
+        }
+
         // ====================================================================
+
+        // -- SlashObligation: balance credit (slashed stake to beneficiary) --
+        // param0 = obligation_id, param1 = stake_lo, param2 = stake_hi, param3 = beneficiary
+        // new_bal_lo = old_bal_lo + stake_lo
+        let s_slash = local[sel::SLASH_OBLIGATION];
+        let slash_stake_lo = local[PARAM_BASE + param::SLASH_STAKE_LO];
+        let c_slash_bal = s_slash * (new_bal_lo - old_bal_lo - slash_stake_lo);
+        combined = combined + alpha_pow * c_slash_bal;
+        alpha_pow = alpha_pow * alpha;
+        let c_slash_hi = s_slash * (new_bal_hi - old_bal_hi);
+        combined = combined + alpha_pow * c_slash_hi;
+        alpha_pow = alpha_pow * alpha;
+        // SlashObligation: cap_root updated (obligation removed) — bound via aux[1].
+        let expected_slash_cap = local[AUX_BASE + 1];
+        let c_slash_cap = s_slash * (new_cap_root - expected_slash_cap);
+        combined = combined + alpha_pow * c_slash_cap;
+        alpha_pow = alpha_pow * alpha;
+        for i in 0..8 {
+            let c = s_slash
+                * (local[STATE_AFTER_BASE + state::FIELD_BASE + i]
+                    - local[STATE_BEFORE_BASE + state::FIELD_BASE + i]);
+            combined = combined + alpha_pow * c;
+            alpha_pow = alpha_pow * alpha;
+        }
+
+        // -- Seal: balance, fields, cap_root all unchanged --
+        let s_seal = local[sel::SEAL];
+        let c_seal_bal_lo = s_seal * (new_bal_lo - old_bal_lo);
+        combined = combined + alpha_pow * c_seal_bal_lo;
+        alpha_pow = alpha_pow * alpha;
+        let c_seal_bal_hi = s_seal * (new_bal_hi - old_bal_hi);
+        combined = combined + alpha_pow * c_seal_bal_hi;
+        alpha_pow = alpha_pow * alpha;
+        let c_seal_cap = s_seal * (new_cap_root - old_cap_root);
+        combined = combined + alpha_pow * c_seal_cap;
+        alpha_pow = alpha_pow * alpha;
+        for i in 0..8 {
+            let c = s_seal
+                * (local[STATE_AFTER_BASE + state::FIELD_BASE + i]
+                    - local[STATE_BEFORE_BASE + state::FIELD_BASE + i]);
+            combined = combined + alpha_pow * c;
+            alpha_pow = alpha_pow * alpha;
+        }
+
+        // -- Unseal: balance, fields, cap_root all unchanged --
+        let s_unseal = local[sel::UNSEAL];
+        let c_unseal_bal_lo = s_unseal * (new_bal_lo - old_bal_lo);
+        combined = combined + alpha_pow * c_unseal_bal_lo;
+        alpha_pow = alpha_pow * alpha;
+        let c_unseal_bal_hi = s_unseal * (new_bal_hi - old_bal_hi);
+        combined = combined + alpha_pow * c_unseal_bal_hi;
+        alpha_pow = alpha_pow * alpha;
+        let c_unseal_cap = s_unseal * (new_cap_root - old_cap_root);
+        combined = combined + alpha_pow * c_unseal_cap;
+        alpha_pow = alpha_pow * alpha;
+        for i in 0..8 {
+            let c = s_unseal
+                * (local[STATE_AFTER_BASE + state::FIELD_BASE + i]
+                    - local[STATE_BEFORE_BASE + state::FIELD_BASE + i]);
+            combined = combined + alpha_pow * c;
+            alpha_pow = alpha_pow * alpha;
+        }
+
+        // -- MakeSovereign: mode_flag 0->1, balance/fields/cap preserved --
+        let s_makesov = local[sel::MAKE_SOVEREIGN];
+        let old_reserved = local[STATE_BEFORE_BASE + state::RESERVED];
+        let new_reserved = local[STATE_AFTER_BASE + state::RESERVED];
+        let c_sov_mode = s_makesov * (new_reserved - old_reserved - BabyBear::new(256));
+        combined = combined + alpha_pow * c_sov_mode;
+        alpha_pow = alpha_pow * alpha;
+        let c_sov_bal_lo = s_makesov * (new_bal_lo - old_bal_lo);
+        combined = combined + alpha_pow * c_sov_bal_lo;
+        alpha_pow = alpha_pow * alpha;
+        let c_sov_bal_hi = s_makesov * (new_bal_hi - old_bal_hi);
+        combined = combined + alpha_pow * c_sov_bal_hi;
+        alpha_pow = alpha_pow * alpha;
+        let c_sov_cap = s_makesov * (new_cap_root - old_cap_root);
+        combined = combined + alpha_pow * c_sov_cap;
+        alpha_pow = alpha_pow * alpha;
+        for i in 0..8 {
+            let c = s_makesov
+                * (local[STATE_AFTER_BASE + state::FIELD_BASE + i]
+                    - local[STATE_BEFORE_BASE + state::FIELD_BASE + i]);
+            combined = combined + alpha_pow * c;
+            alpha_pow = alpha_pow * alpha;
+        }
+
+        // -- CreateCellFromFactory: state flows through unchanged --
+        let s_factory = local[sel::CREATE_CELL_FROM_FACTORY];
+        for i in 0..state::SIZE {
+            let c = s_factory * (local[STATE_AFTER_BASE + i] - local[STATE_BEFORE_BASE + i]);
+            combined = combined + alpha_pow * c;
+            alpha_pow = alpha_pow * alpha;
+        }
+
         // CONSTRAINT GROUP 3: Transition constraints (row continuity)
         // ====================================================================
         // next_row.state_before == this_row.state_after
@@ -775,7 +1029,7 @@ impl StarkAir for EffectVmAir {
         trace_len: usize,
     ) -> Vec<BoundaryConstraint> {
         let mut constraints = vec![];
-        if public_inputs.len() < pi::COUNT {
+        if public_inputs.len() < pi::BASE_COUNT {
             return constraints;
         }
 
@@ -867,6 +1121,12 @@ pub fn generate_effect_vm_trace(
             Effect::NoteCreate { .. } => sel::NOTE_CREATE,
             Effect::CreateObligation { .. } => sel::CREATE_OBLIGATION,
             Effect::FulfillObligation { .. } => sel::FULFILL_OBLIGATION,
+            Effect::Custom { .. } => sel::CUSTOM,
+            Effect::SlashObligation { .. } => sel::SLASH_OBLIGATION,
+            Effect::Seal { .. } => sel::SEAL,
+            Effect::Unseal { .. } => sel::UNSEAL,
+            Effect::MakeSovereign => sel::MAKE_SOVEREIGN,
+            Effect::CreateCellFromFactory { .. } => sel::CREATE_CELL_FROM_FACTORY,
         };
         row[sel_idx] = BabyBear::ONE;
 
@@ -965,6 +1225,70 @@ pub fn generate_effect_vm_trace(
                 net_delta += *stake_return as i64;
                 new_state.nonce += 1;
             }
+            Effect::Custom {
+                program_vk_hash,
+                proof_commitment,
+            } => {
+                // Write VK hash into params[0..4].
+                for i in 0..4 {
+                    row[PARAM_BASE + param::CUSTOM_VK_HASH_BASE + i] = program_vk_hash[i];
+                }
+                // Write proof commitment into params[4..8].
+                for i in 0..4 {
+                    row[PARAM_BASE + param::CUSTOM_PROOF_COMMIT_BASE + i] = proof_commitment[i];
+                }
+                // Custom effects do NOT change state (state flows through unchanged).
+                // The nonce still increments (it's a real effect, not padding).
+                new_state.nonce += 1;
+                // No balance change from the Effect VM perspective.
+            }
+            Effect::SlashObligation {
+                obligation_id,
+                stake_amount,
+                beneficiary_hash,
+            } => {
+                let (stake_lo, stake_hi) = split_u64(*stake_amount);
+                row[PARAM_BASE + param::SLASH_OBLIGATION_ID] = *obligation_id;
+                row[PARAM_BASE + param::SLASH_STAKE_LO] = stake_lo;
+                row[PARAM_BASE + param::SLASH_STAKE_HI] = stake_hi;
+                row[PARAM_BASE + param::SLASH_BENEFICIARY] = *beneficiary_hash;
+                // Slash credits the beneficiary: balance increases.
+                new_state.balance = new_state.balance.saturating_add(*stake_amount);
+                net_delta += *stake_amount as i64;
+                // Update cap_root to reflect obligation removal.
+                new_state.capability_root = hash_2_to_1(new_state.capability_root, *obligation_id);
+                row[AUX_BASE + 1] = new_state.capability_root;
+                new_state.nonce += 1;
+            }
+            Effect::Seal { field_idx } => {
+                row[PARAM_BASE + param::SEAL_FIELD_IDX] = BabyBear::new(*field_idx);
+                new_state.sealed_field_mask |= 1 << field_idx;
+                new_state.nonce += 1;
+            }
+            Effect::Unseal { field_idx, brand } => {
+                row[PARAM_BASE + param::UNSEAL_FIELD_IDX] = BabyBear::new(*field_idx);
+                row[PARAM_BASE + param::UNSEAL_BRAND] = *brand;
+                // Store brand in aux for constraint checking.
+                row[AUX_BASE + 6] = *brand;
+                new_state.sealed_field_mask &= !(1 << field_idx);
+                new_state.nonce += 1;
+            }
+            Effect::MakeSovereign => {
+                // Mode flag transitions from 0 to 1.
+                new_state.mode_flag = 1;
+                new_state.nonce += 1;
+            }
+            Effect::CreateCellFromFactory {
+                factory_vk,
+                child_vk_derived,
+            } => {
+                row[PARAM_BASE + param::FACTORY_VK_HASH] = *factory_vk;
+                row[PARAM_BASE + param::CHILD_VK_DERIVED] = *child_vk_derived;
+                // Store in aux columns for constraint verification.
+                row[AUX_BASE + 6] = *factory_vk;
+                row[AUX_BASE + 7] = *child_vk_derived;
+                new_state.nonce += 1;
+            }
         }
 
         // Refresh state commitment.
@@ -1015,8 +1339,32 @@ pub fn generate_effect_vm_trace(
         // current_state stays the same for padding.
     }
 
+    // Collect custom effect entries for public inputs.
+    let custom_entries: Vec<_> = effects
+        .iter()
+        .filter_map(|e| {
+            if let Effect::Custom {
+                program_vk_hash,
+                proof_commitment,
+            } = e
+            {
+                Some((*program_vk_hash, *proof_commitment))
+            } else {
+                None
+            }
+        })
+        .collect();
+    let custom_count = custom_entries.len();
+    assert!(
+        custom_count <= pi::MAX_CUSTOM_EFFECTS,
+        "Too many custom effects: {} (max {})",
+        custom_count,
+        pi::MAX_CUSTOM_EFFECTS
+    );
+
     // Build public inputs.
-    let mut public_inputs = Vec::with_capacity(pi::COUNT);
+    let pi_len = pi::BASE_COUNT + custom_count * pi::CUSTOM_ENTRY_SIZE;
+    let mut public_inputs = Vec::with_capacity(pi_len);
 
     // Old state commitment (single field element).
     public_inputs.push(initial_state.state_commitment);
@@ -1028,9 +1376,16 @@ pub fn generate_effect_vm_trace(
     // Effects hash.
     public_inputs.push(effects_hash_lo);
     public_inputs.push(effects_hash_hi);
+    // Custom effect count.
+    public_inputs.push(BabyBear::new(custom_count as u32));
 
-    assert_eq!(public_inputs.len(), pi::COUNT);
+    // Custom proof entries (vk_hash + proof_commitment per custom effect).
+    for (vk_hash, proof_commit) in &custom_entries {
+        public_inputs.extend_from_slice(vk_hash);
+        public_inputs.extend_from_slice(proof_commit);
+    }
 
+    assert_eq!(public_inputs.len(), pi_len);
     (trace, public_inputs)
 }
 
@@ -1045,7 +1400,7 @@ pub fn encode_net_delta(delta: i64) -> (BabyBear, BabyBear) {
 
 /// Extract the net balance delta from public inputs.
 pub fn extract_net_delta(public_inputs: &[BabyBear]) -> Option<i64> {
-    if public_inputs.len() < pi::COUNT {
+    if public_inputs.len() < pi::BASE_COUNT {
         return None;
     }
     let magnitude = public_inputs[pi::NET_DELTA_MAG].0 as i64;
@@ -1055,6 +1410,38 @@ pub fn extract_net_delta(public_inputs: &[BabyBear]) -> Option<i64> {
     } else {
         Some(magnitude)
     }
+}
+
+/// Extract the custom proof commitments from public inputs.
+/// Returns a vec of (program_vk_hash, proof_commitment) tuples.
+pub fn extract_custom_proof_commitments(
+    public_inputs: &[BabyBear],
+) -> Vec<([BabyBear; 4], [BabyBear; 4])> {
+    if public_inputs.len() < pi::BASE_COUNT {
+        return Vec::new();
+    }
+    let custom_count = public_inputs[pi::CUSTOM_EFFECT_COUNT].0 as usize;
+    let mut result = Vec::with_capacity(custom_count);
+    for i in 0..custom_count {
+        let base = pi::CUSTOM_PROOFS_BASE + i * pi::CUSTOM_ENTRY_SIZE;
+        if base + pi::CUSTOM_ENTRY_SIZE > public_inputs.len() {
+            break;
+        }
+        let vk_hash = [
+            public_inputs[base],
+            public_inputs[base + 1],
+            public_inputs[base + 2],
+            public_inputs[base + 3],
+        ];
+        let proof_commit = [
+            public_inputs[base + 4],
+            public_inputs[base + 5],
+            public_inputs[base + 6],
+            public_inputs[base + 7],
+        ];
+        result.push((vk_hash, proof_commit));
+    }
+    result
 }
 
 // ============================================================================

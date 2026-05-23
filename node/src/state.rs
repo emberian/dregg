@@ -209,6 +209,16 @@ pub struct NodeStateInner {
     /// Bounded ring buffer of recent committed events for the REST event stream
     /// endpoint (`GET /api/events?since_height=N`). Capped at `MAX_EVENT_LOG` entries.
     pub event_log: VecDeque<CommittedEvent>,
+
+    // ─── Solo Federation Mode ─────────────────────────────────────────────────
+    /// The operating mode of this node (Solo or Full).
+    /// In Solo mode, turns are processed immediately without BFT quorum and receipts
+    /// carry `Tentative` finality. In Full mode, standard quorum requirements apply.
+    pub federation_mode: pyana_federation::solo::FederationMode,
+
+    /// Solo consensus state: nullifier log, height tracking, auto-upgrade detection.
+    /// Only `Some` when `federation_mode == Solo`.
+    pub solo_consensus: Option<pyana_federation::solo::SoloConsensusState>,
 }
 
 /// Maximum number of events retained in the ring buffer for REST polling.
@@ -417,6 +427,8 @@ impl NodeState {
                     pyana_intent::delay_pool::DelayPoolConfig::default(),
                 ),
                 event_log: VecDeque::new(),
+                federation_mode: pyana_federation::solo::FederationMode::default(),
+                solo_consensus: None,
             })),
             events_tx,
             gossip: Arc::new(RwLock::new(None)),
@@ -484,6 +496,8 @@ impl NodeState {
                     pyana_intent::delay_pool::DelayPoolConfig::default(),
                 ),
                 event_log: VecDeque::new(),
+                federation_mode: pyana_federation::solo::FederationMode::default(),
+                solo_consensus: None,
             })),
             events_tx,
             gossip: Arc::new(RwLock::new(None)),

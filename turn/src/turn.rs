@@ -40,6 +40,32 @@ pub struct EmittedEvent {
     pub data: Vec<FieldElement>,
 }
 
+/// A custom program proof for CellProgram dispatch within the Effect VM.
+///
+/// When a sovereign cell has a deployed custom program (e.g., a CDP circuit),
+/// and the Effect VM turn includes a Custom effect row, the agent provides
+/// this proof alongside the Effect VM proof. The executor:
+/// 1. Verifies the Effect VM proof (state transition + conservation)
+/// 2. Checks that hash(proof_bytes) == proof_commitment from Effect VM PI
+/// 3. Verifies proof_bytes against the custom program identified by vk_hash
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CustomProgramProof {
+    /// The serialized proof bytes for the custom program.
+    pub proof_bytes: Vec<u8>,
+    /// Public inputs for the custom program proof (raw u32 BabyBear values).
+    pub public_inputs: Vec<u32>,
+}
+
+impl CustomProgramProof {
+    /// Convert raw public inputs to BabyBear elements for verification.
+    pub fn public_inputs_babybear(&self) -> Vec<pyana_circuit::field::BabyBear> {
+        self.public_inputs
+            .iter()
+            .map(|&v| pyana_circuit::field::BabyBear::new(v))
+            .collect()
+    }
+}
+
 /// A Turn is the atomic unit of agent execution.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Turn {
@@ -88,6 +114,19 @@ pub struct Turn {
     /// ledger's sovereign commitment is updated to this value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_proof_new_commitment: Option<[u8; 32]>,
+    /// Custom program proofs for CellProgram dispatch.
+    ///
+    /// When the Effect VM proof contains Custom effect rows, each custom effect
+    /// references an external proof via its `proof_commitment`. The actual proofs
+    /// are provided here, in the same order as they appear in the effect sequence.
+    ///
+    /// Verification flow:
+    /// 1. Effect VM proof is verified (standard state transition + conservation)
+    /// 2. For each custom proof entry:
+    ///    - hash(proof_bytes) must match the proof_commitment in the PI
+    ///    - The program identified by vk_hash must verify the proof
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_program_proofs: Option<Vec<CustomProgramProof>>,
 }
 
 impl Turn {

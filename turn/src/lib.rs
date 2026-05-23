@@ -113,7 +113,9 @@ pub use presence_discharge::{
     PresenceDischargeError, verify_presence_discharge,
 };
 pub use routing::RoutingDirective;
-pub use turn::{EmittedEvent, Finality, SovereignCellWitness, Turn, TurnReceipt, TurnResult};
+pub use turn::{
+    CustomProgramProof, EmittedEvent, Finality, SovereignCellWitness, Turn, TurnReceipt, TurnResult,
+};
 pub use verify::{
     VerifyError, sign_receipt, verify_receipt_chain, verify_receipt_chain_head,
     verify_receipt_chain_with_keys, verify_receipt_extends,

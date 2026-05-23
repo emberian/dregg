@@ -101,6 +101,7 @@ impl TurnBuilder {
             execution_proof: None,
             execution_proof_cell: None,
             execution_proof_new_commitment: None,
+            custom_program_proofs: None,
         }
     }
 

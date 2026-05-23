@@ -46,6 +46,7 @@ pub struct StatusResponse {
     pub latest_height: u64,
     pub revocation_count: u64,
     pub note_count: u64,
+    pub federation_mode: String,
 }
 
 #[derive(Serialize)]
@@ -948,12 +949,15 @@ async fn get_status(State(state): State<NodeState>) -> Json<StatusResponse> {
     let note_count = s.store.note_count().unwrap_or(0);
     let peer_count = s.peers.len();
 
+    let federation_mode = s.federation_mode.to_string();
+
     Json(StatusResponse {
         healthy: store_ok && wallet_ok,
         peer_count,
         latest_height,
         revocation_count,
         note_count,
+        federation_mode,
     })
 }
 
@@ -1132,10 +1136,26 @@ async fn post_submit_turn(
     let exec_result = executor.execute(&turn, &mut s.ledger);
 
     match exec_result {
-        pyana_turn::TurnResult::Committed { receipt, .. } => {
+        pyana_turn::TurnResult::Committed { mut receipt, .. } => {
             crate::metrics::inc_turns_executed("committed");
             crate::metrics::record_turn_execution_duration(start.elapsed().as_secs_f64());
             crate::metrics::set_ledger_cell_count(s.ledger.len() as f64);
+
+            // Solo mode: record in nullifier log, mark receipt as Tentative,
+            // and advance the solo consensus height.
+            if s.federation_mode == pyana_federation::solo::FederationMode::Solo {
+                receipt.finality = pyana_turn::Finality::Tentative;
+
+                if let Some(ref mut solo) = s.solo_consensus {
+                    // Record any nullifiers from this turn in the solo nullifier log.
+                    // The turn_hash itself serves as the sequencing entry for ordering.
+                    let height = solo.height;
+                    let _ = solo
+                        .nullifier_log
+                        .insert(turn_hash_bytes, turn_hash_bytes, height);
+                    solo.advance_height();
+                }
+            }
 
             s.wallet.append_receipt(receipt);
 
@@ -1169,7 +1189,7 @@ async fn post_submit_turn(
                 hash: turn_hash.clone(),
             });
 
-            // Gossip the turn to federation peers.
+            // Gossip the turn to federation peers (only if gossip is active).
             if let Some(gossip) = state.gossip().await {
                 let hash = turn_hash_bytes;
                 tokio::spawn(async move {
@@ -2003,8 +2023,22 @@ async fn post_resolve_conditional(
             let exec_result = executor.execute(&conditional.turn, &mut s.ledger);
 
             match exec_result {
-                pyana_turn::TurnResult::Committed { receipt, .. } => {
+                pyana_turn::TurnResult::Committed { mut receipt, .. } => {
+                    // Solo mode: mark receipt as Tentative and log in nullifier log.
+                    if s.federation_mode == pyana_federation::solo::FederationMode::Solo {
+                        receipt.finality = pyana_turn::Finality::Tentative;
+                        if let Some(ref mut solo) = s.solo_consensus {
+                            let height = solo.height;
+                            let _ = solo.nullifier_log.insert(
+                                receipt.turn_hash,
+                                receipt.turn_hash,
+                                height,
+                            );
+                            solo.advance_height();
+                        }
+                    }
                     let turn_hash = hex_encode(&receipt.turn_hash);
+                    s.wallet.append_receipt(receipt);
                     drop(s);
                     state.emit(NodeEvent::Receipt {
                         hash: turn_hash.clone(),

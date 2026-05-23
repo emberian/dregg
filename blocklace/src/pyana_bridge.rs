@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::finality::{Block, BlockId, Blocklace, Payload};
+use crate::finality::{BlockId, Blocklace, Payload};
 
 // ─── Execution Tiers ─────────────────────────────────────────────────────────
 
@@ -144,6 +144,8 @@ pub struct PyanaBlocklaceBridge {
     pub cod: CodManager,
     /// Finality height counter.
     finality_height: u64,
+    /// Number of ordered blocks already processed (cursor into the ordered list).
+    processed_cursor: usize,
 }
 
 impl PyanaBlocklaceBridge {
@@ -152,6 +154,7 @@ impl PyanaBlocklaceBridge {
         PyanaBlocklaceBridge {
             cod: CodManager::new(cod_budget),
             finality_height: 0,
+            processed_cursor: 0,
         }
     }
 
@@ -167,12 +170,16 @@ impl PyanaBlocklaceBridge {
     /// Process finalized blocks and produce turn receipts.
     ///
     /// Examines the ordered sequence in the finality tracker and produces
-    /// receipts for any newly-ordered Turn-payload blocks.
+    /// receipts for any newly-ordered Turn-payload blocks since the last call.
+    /// Only processes blocks that haven't been processed yet (idempotent cursor).
     pub fn process_finalized(&mut self, blocklace: &Blocklace) -> Vec<BlocklaceTurnReceipt> {
-        let ordered = blocklace.finality.ordering.ordered.clone();
+        let ordered = &blocklace.finality.ordering.ordered;
         let mut receipts = Vec::new();
 
-        for block_id in &ordered {
+        // Only process blocks we haven't seen yet.
+        let new_blocks = &ordered[self.processed_cursor..];
+
+        for block_id in new_blocks {
             if let Some(block) = blocklace.get(block_id) {
                 if let Payload::Turn(ref data) = block.payload {
                     self.finality_height += 1;
@@ -189,6 +196,12 @@ impl PyanaBlocklaceBridge {
             }
         }
 
+        self.processed_cursor = ordered.len();
         receipts
+    }
+
+    /// Get the current finality height (number of turns processed so far).
+    pub fn finality_height(&self) -> u64 {
+        self.finality_height
     }
 }

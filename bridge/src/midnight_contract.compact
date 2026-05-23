@@ -1,0 +1,236 @@
+// Midnight Bridge Contract (Compact language — TypeScript-like DSL for Midnight ZK programs)
+//
+// This is a DESIGN SKETCH. Compact compilation requires the Midnight toolchain
+// (compact compiler → ZKIR v3 → PLONK circuit). We write this as a reference
+// for the logic that will run on Midnight's side of the bridge.
+//
+// Deployment target: Midnight DApp shield (Zswap-integrated contract)
+//
+// Architecture:
+//   - lockForPyana: User locks NIGHT tokens on Midnight → pyana observer mints on pyana side.
+//   - unlockFromPyana: User presents pyana federation attestation → contract releases NIGHT.
+//
+// Trust model:
+//   - Midnight → pyana: Trust the pyana federation's observation of finalized Midnight blocks.
+//   - Pyana → Midnight: Trust the pyana federation's threshold signature (Ed25519, 2-of-3).
+//
+// References:
+//   - ~/midnight/compact/examples/ for Compact syntax
+//   - ~/midnight/midnight-ledger/spec/intents-transactions.md for tx format
+//   - ~/midnight/midnight-node/pallets/c2m-bridge/src/lib.rs for the Cardano bridge pattern
+
+// ============================================================================
+// Types
+// ============================================================================
+
+// The federation's public key for a given epoch.
+// On-chain, we store the current and previous epoch keys for key rotation.
+type FederationEpochKey = {
+  epoch: Field,
+  pubkey: Bytes<32>
+};
+
+// A record of a completed bridge-in (unlock) for replay prevention.
+type UsedNonce = {
+  epoch: Field,
+  nonce: Field
+};
+
+// ============================================================================
+// Contract State (private + public ledger entries)
+// ============================================================================
+
+// Public state (visible to all, stored in contract's unshielded ledger slot):
+//   - totalLocked: u64        — total NIGHT currently locked in the bridge
+//   - federationKey: Bytes<32> — current pyana federation aggregate public key
+//   - federationEpoch: u64    — current epoch number
+//   - minAmount: u64          — minimum bridge amount (governance-set)
+//   - maxAmount: u64          — maximum per-tx bridge amount (governance-set)
+//
+// Private state (Merkle-committed, ZK-proven):
+//   - usedNonces: Set<UsedNonce> — nonces used for unlocks (replay prevention)
+
+// ============================================================================
+// Lock: Midnight → Pyana direction
+// ============================================================================
+
+// @public
+// Lock NIGHT tokens on Midnight. The pyana observer will detect the BridgeLock
+// event and mint equivalent value on the pyana side.
+//
+// Inputs:
+//   amount: u64          — amount to lock (in STARS, 10^6 = 1 NIGHT)
+//   pyanaRecipient: Bytes<32> — pyana cell ID to receive the minted note
+//   nonce: u64           — caller-chosen nonce for correlation
+//
+// Effects:
+//   1. Transfer `amount` from caller's balance to this contract's locked pool.
+//   2. Emit BridgeLock(amount, pyanaRecipient, nonce) event.
+//   3. Increment totalLocked.
+//
+// The pyana observer watches for BridgeLock events in finalized blocks and
+// submits a MidnightToPyanaMessage to the federation for note minting.
+//
+export circuit lockForPyana(
+  amount: Field,
+  pyanaRecipient: Bytes<32>,
+  nonce: Field
+): [] {
+  // Enforce minimum and maximum amounts.
+  assert(amount >= contract.minAmount, "amount below minimum");
+  assert(amount <= contract.maxAmount, "amount above maximum");
+
+  // Transfer tokens from caller to contract's locked pool.
+  // In Compact, this would use the Zswap transfer mechanism:
+  //   transfer(caller, contract, amount);
+  // The exact API depends on Midnight's DApp shield interface.
+
+  // Update public state.
+  contract.totalLocked = contract.totalLocked + amount;
+
+  // Emit event for the pyana observer.
+  // In Midnight's Compact, events are part of the transaction's public outputs.
+  emit BridgeLock {
+    amount: amount,
+    pyanaRecipient: pyanaRecipient,
+    nonce: nonce
+  };
+}
+
+// ============================================================================
+// Unlock: Pyana → Midnight direction
+// ============================================================================
+
+// @public
+// Unlock NIGHT tokens on Midnight after verifying a pyana federation attestation.
+// Called by the user (or relayer) who burned a note on pyana and received an attestation.
+//
+// Inputs:
+//   amount: u64            — amount to unlock
+//   recipient: Bytes<32>   — Midnight public key to receive unlocked NIGHT
+//   nonce: u64             — replay-prevention nonce (unique per epoch)
+//   epoch: u64             — federation epoch of the attestation
+//   signature: Bytes<64>   — Ed25519 threshold signature from pyana federation
+//   nullifier: Bytes<32>   — the pyana nullifier that was burned
+//
+// Effects:
+//   1. Verify the federation signature over (nullifier || amount || recipient || nonce).
+//   2. Check nonce hasn't been used in this epoch.
+//   3. Transfer `amount` from contract's locked pool to `recipient`.
+//   4. Decrement totalLocked.
+//   5. Record nonce as used.
+//
+export circuit unlockFromPyana(
+  amount: Field,
+  recipient: Bytes<32>,
+  nonce: Field,
+  epoch: Field,
+  signature: Bytes<64>,
+  nullifier: Bytes<32>
+): [] {
+  // 1. Verify the epoch matches current or previous federation key.
+  //    (Allow previous epoch for in-flight attestations during key rotation.)
+  let validEpoch = (epoch == contract.federationEpoch)
+                || (epoch == contract.federationEpoch - 1);
+  assert(validEpoch, "attestation epoch is not current or previous");
+
+  // 2. Compute the message that was signed.
+  //    Canonical: BLAKE3_derive_key("pyana-midnight-bridge-v1", nullifier || amount_le || recipient || nonce_le)
+  let message = blake3DeriveKey(
+    "pyana-midnight-bridge-v1",
+    concat(nullifier, toLeBytes(amount), recipient, toLeBytes(nonce))
+  );
+
+  // 3. Verify Ed25519 signature against the federation's public key.
+  //    Compact provides ed25519_verify as a stdlib circuit gadget.
+  let pubkey = if epoch == contract.federationEpoch {
+    contract.federationKey
+  } else {
+    contract.previousFederationKey
+  };
+  assert(ed25519Verify(pubkey, message, signature), "invalid federation signature");
+
+  // 4. Check nonce has not been used (replay prevention).
+  //    The usedNonces set is Merkle-committed (private state with ZK membership proof).
+  assert(!usedNonces.contains({epoch: epoch, nonce: nonce}), "nonce already used");
+  usedNonces.insert({epoch: epoch, nonce: nonce});
+
+  // 5. Amount checks.
+  assert(amount >= contract.minAmount, "amount below minimum");
+  assert(amount <= contract.totalLocked, "insufficient locked balance");
+
+  // 6. Transfer from locked pool to recipient.
+  //    transfer(contract, recipient, amount);
+  contract.totalLocked = contract.totalLocked - amount;
+
+  // 7. Emit event for audit/indexing.
+  emit BridgeUnlock {
+    amount: amount,
+    recipient: recipient,
+    nullifier: nullifier,
+    epoch: epoch,
+    nonce: nonce
+  };
+}
+
+// ============================================================================
+// Governance: Key Rotation
+// ============================================================================
+
+// @governance (restricted to authorized governance multisig)
+// Rotate the federation public key to a new epoch.
+//
+// Called when the pyana federation rotates its threshold signing key.
+// The previous key remains valid for one more epoch to allow in-flight attestations.
+//
+export circuit rotateFederationKey(
+  newPubkey: Bytes<32>,
+  newEpoch: Field
+): [] {
+  // Only governance can rotate (checked by Midnight's access control layer).
+  assert(newEpoch == contract.federationEpoch + 1, "epoch must increment by 1");
+
+  contract.previousFederationKey = contract.federationKey;
+  contract.federationKey = newPubkey;
+  contract.federationEpoch = newEpoch;
+
+  emit FederationKeyRotated {
+    newPubkey: newPubkey,
+    newEpoch: newEpoch
+  };
+}
+
+// ============================================================================
+// Governance: Update Limits
+// ============================================================================
+
+// @governance
+export circuit updateBridgeLimits(
+  newMinAmount: Field,
+  newMaxAmount: Field
+): [] {
+  assert(newMinAmount < newMaxAmount, "min must be less than max");
+  contract.minAmount = newMinAmount;
+  contract.maxAmount = newMaxAmount;
+
+  emit BridgeLimitsUpdated {
+    minAmount: newMinAmount,
+    maxAmount: newMaxAmount
+  };
+}
+
+// ============================================================================
+// View functions (queries, no state mutation)
+// ============================================================================
+
+// @view
+// Returns the current total locked balance.
+export circuit getTotalLocked(): Field {
+  return contract.totalLocked;
+}
+
+// @view
+// Returns the current federation epoch and key.
+export circuit getFederationInfo(): [Field, Bytes<32>] {
+  return [contract.federationEpoch, contract.federationKey];
+}

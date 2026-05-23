@@ -200,7 +200,8 @@ pub use cross_state_derivation::{
 };
 pub use effect_vm::{
     CellState, EFFECT_VM_WIDTH, Effect, EffectVmAir, NUM_EFFECTS, compute_effects_hash,
-    encode_net_delta, extract_net_delta, generate_effect_vm_trace,
+    encode_net_delta, extract_custom_proof_commitments, extract_net_delta,
+    generate_effect_vm_trace,
 };
 pub use multi_step_air::{
     ALLOW_PREDICATE, MultiStepDerivationAir, MultiStepStarkAir, MultiStepWitness,

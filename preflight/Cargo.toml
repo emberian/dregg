@@ -25,6 +25,14 @@ pyana-bridge = { path = "../bridge" }
 pyana-types = { path = "../types" }
 token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
 
+# App crates — exercised by preflight app integration checks.
+pyana-stablecoin = { path = "../apps/stablecoin" }
+pyana-amm = { path = "../apps/amm" }
+pyana-orderbook = { path = "../apps/orderbook" }
+pyana-lending = { path = "../apps/lending" }
+pyana-identity = { path = "../apps/identity" }
+pyana-gallery = { path = "../apps/gallery" }
+
 blake3 = "1"
 curve25519-dalek = { version = "4", features = ["alloc"] }
 ed25519-dalek = { version = "2", features = ["std"] }

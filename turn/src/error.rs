@@ -216,6 +216,24 @@ pub enum TurnError {
 
     /// A bearer capability references a delegator who does not hold the required capability.
     BearerCapDelegatorLacksCapability { delegator: CellId, target: CellId },
+
+    /// A custom proof commitment in the Effect VM's public inputs does not match
+    /// the hash of the provided custom proof bytes.
+    CustomProofCommitmentMismatch {
+        index: usize,
+        expected: [u8; 16],
+        got: [u8; 16],
+    },
+
+    /// A custom program referenced by VK hash in a Custom effect is not deployed.
+    CustomProgramNotFound { index: usize, vk_hash: [u8; 32] },
+
+    /// A custom program's proof verification failed.
+    CustomProgramVerificationFailed {
+        index: usize,
+        program_vk: [u8; 32],
+        reason: String,
+    },
 }
 
 impl core::fmt::Display for TurnError {
@@ -487,6 +505,34 @@ impl core::fmt::Display for TurnError {
                 write!(
                     f,
                     "bearer cap delegator {delegator} does not hold capability to target {target}"
+                )
+            }
+            TurnError::CustomProofCommitmentMismatch {
+                index,
+                expected,
+                got,
+            } => {
+                write!(
+                    f,
+                    "custom proof commitment mismatch at index {index}: expected {expected:02x?}, got {got:02x?}"
+                )
+            }
+            TurnError::CustomProgramNotFound { index, vk_hash } => {
+                write!(
+                    f,
+                    "custom program not found at index {index}: vk_hash {:02x}{:02x}...",
+                    vk_hash[0], vk_hash[1]
+                )
+            }
+            TurnError::CustomProgramVerificationFailed {
+                index,
+                program_vk,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "custom program verification failed at index {index} (vk {:02x}{:02x}...): {reason}",
+                    program_vk[0], program_vk[1]
                 )
             }
         }

@@ -44,6 +44,18 @@
 //! an agent exhausts its allowance or when rebalance detects overspending. The COD
 //! "close and epoch transition" maps exactly to our `rebalance()`.
 //!
+//! ## Escalation: Tier 2 -> Tier 3
+//!
+//! When `is_overspent()` returns true, the system escalates to Tier 3:
+//!
+//! 1. **Detect** which debits conflict (sum exceeds balance)
+//! 2. **Pause** accepting new debits for this resource (state = Closing)
+//! 3. **Wait** for Cordial Miners to order the conflicting blocks via `tau()`
+//! 4. **Execute** in tau order -- first debit wins, later debits rejected if
+//!    balance insufficient
+//! 5. **Rebalance** -- compute new allowances from remaining balance
+//! 6. **Resume** -- state = Open with new allowances
+//!
 //! ## Dynamic Allowances
 //!
 //! Unlike the per-agent budget (where the balance is static between rebalances), a
@@ -57,8 +69,11 @@
 //! Credits (deposits into the pool) immediately increase the true balance and can
 //! trigger allowance expansion without a full rebalance.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
+use pyana_blocklace::finality::{
+    self, Block as BlocBlock, BlockId as BlocBlockId, Blocklace, Payload,
+};
 use pyana_cell::CellId;
 use serde::{Deserialize, Serialize};
 
@@ -73,6 +88,49 @@ pub type ResourceId = CellId;
 /// Identifies a participant (agent) in the shared resource budget.
 /// This is the agent's CellId (same as their identity key).
 pub type ParticipantId = CellId;
+
+// ─── Resource State Machine ─────────────────────────────────────────────────
+
+/// The escalation state of a shared resource budget.
+///
+/// Transitions:
+///   Open -> Closing (overspend detected)
+///   Closing -> Rebalancing (tau orders the conflicting blocks)
+///   Rebalancing -> Open (resolution applied, new allowances distributed)
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ResourceState {
+    /// Normal operation. Debits accepted within each agent's allowance.
+    Open,
+    /// Overspend detected. No new debits accepted until resolution.
+    /// Contains the set of block IDs whose debits collectively exceed the balance.
+    Closing { conflicting: Vec<BlocBlockId> },
+    /// Tau has ordered the conflicting blocks. Resolution in progress.
+    Rebalancing,
+}
+
+// ─── Debit Record ───────────────────────────────────────────────────────────
+
+/// A debit extracted from a blocklace block payload.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExtractedDebit {
+    /// The agent (block creator) who made the debit.
+    pub agent: ParticipantId,
+    /// The resource being debited.
+    pub resource_id: [u8; 32],
+    /// The amount debited.
+    pub amount: ResourceAmount,
+    /// The block ID containing this debit.
+    pub block_id: BlocBlockId,
+}
+
+/// Resolution outcome for a single debit block after tau ordering.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DebitResolution {
+    /// Debit was accepted (sufficient balance remained after prior debits).
+    Accepted,
+    /// Debit was rejected (insufficient balance after earlier debits in tau order).
+    Rejected,
+}
 
 // ─── AgentAllowance ──────────────────────────────────────────────────────────
 
@@ -190,6 +248,10 @@ pub struct SharedResourceBudget {
     /// Credits received during this epoch (deposits increase the balance).
     /// These are tracked separately so rebalance can account for inflows.
     pub epoch_credits: ResourceAmount,
+    /// The escalation state of this resource.
+    pub state: ResourceState,
+    /// Resolution outcomes for blocks processed during escalation.
+    pub resolutions: HashMap<BlocBlockId, DebitResolution>,
 }
 
 impl SharedResourceBudget {
@@ -231,6 +293,8 @@ impl SharedResourceBudget {
             allowances: HashMap::new(),
             total_balance,
             epoch_credits: 0,
+            state: ResourceState::Open,
+            resolutions: HashMap::new(),
         };
 
         budget.distribute_allowances();
@@ -242,7 +306,7 @@ impl SharedResourceBudget {
     /// Formula: ceiling = balance * (f+1) / (2f+1)
     ///
     /// Same formula as BudgetCoordinator. The sum of all ceilings exceeds the true
-    /// balance (intentionally) — this is what allows concurrent local spending.
+    /// balance (intentionally) -- this is what allows concurrent local spending.
     /// Safety: with at most f Byzantine agents, the maximum overspend is f * ceiling.
     pub fn compute_allowance_ceiling(&self) -> ResourceAmount {
         let f = self.byzantine_tolerance as u64;
@@ -266,17 +330,37 @@ impl SharedResourceBudget {
     ///
     /// This is the HOT PATH: no coordination with other agents or ordering nodes
     /// is needed as long as the agent's local allowance has remaining budget.
+    ///
+    /// Returns `Err(ResourceClosing)` if the resource is in escalation state.
     pub fn try_debit(
         &mut self,
         agent: ParticipantId,
         amount: ResourceAmount,
         digest: DebitDigest,
     ) -> Result<(), SharedBudgetError> {
+        // Reject debits if not in Open state.
+        if self.state != ResourceState::Open {
+            return Err(SharedBudgetError::ResourceClosing {
+                resource: self.resource,
+            });
+        }
+
         let allowance = self
             .allowances
             .get_mut(&agent)
             .ok_or(SharedBudgetError::UnknownParticipant { agent })?;
         allowance.try_debit(amount, digest)
+    }
+
+    /// Check whether a debit of `amount` from `agent` would cause overspend.
+    ///
+    /// Used by the tier classifier to decide Optimistic vs Ordered execution.
+    /// Does NOT mutate state -- purely a read check.
+    pub fn would_overspend(&self, agent: &ParticipantId, amount: ResourceAmount) -> bool {
+        match self.allowances.get(agent) {
+            Some(allowance) => amount > allowance.remaining(),
+            None => true, // Unknown agent => treat as overspend
+        }
     }
 
     /// Get the remaining allowance for a specific agent.
@@ -306,6 +390,146 @@ impl SharedResourceBudget {
     pub fn is_overspent(&self) -> bool {
         self.total_spent() > self.total_balance
     }
+
+    // ─── Blocklace Integration ──────────────────────────────────────────────
+
+    /// Derive the budget state from observed blocklace debits.
+    ///
+    /// Each agent's virtual chain in the blocklace contains their spending record
+    /// for this resource. This method walks each participant's chain, extracts
+    /// debits tagged with this resource's ID, and updates the local allowance state.
+    ///
+    /// The blocklace IS the source of truth. This method just computes allowances
+    /// from what's observable in the DAG.
+    ///
+    /// # Parameters
+    /// - `blocklace`: The local blocklace view.
+    /// - `resource_id`: The 32-byte resource identifier to filter debits for.
+    pub fn sync_from_blocklace(&mut self, blocklace: &Blocklace, resource_id: &[u8; 32]) {
+        for participant in &self.participants {
+            let creator_key: [u8; 32] = *participant.as_bytes();
+            let chain = blocklace.virtual_chain(&creator_key);
+            let total_spent: u64 = chain
+                .iter()
+                .filter_map(|block| extract_debit_for_resource(block, resource_id))
+                .sum();
+            self.update_spent(*participant, total_spent);
+        }
+    }
+
+    /// Update the spent amount for a participant from blocklace-observed data.
+    pub fn update_spent(&mut self, agent: ParticipantId, total_spent: ResourceAmount) {
+        if let Some(allowance) = self.allowances.get_mut(&agent) {
+            allowance.spent = total_spent;
+        }
+    }
+
+    /// Record a single observed debit for a participant.
+    ///
+    /// This is called incrementally (on each new block) rather than re-scanning
+    /// the entire virtual chain.
+    pub fn record_observed_debit(&mut self, agent: ParticipantId, amount: ResourceAmount) {
+        if let Some(allowance) = self.allowances.get_mut(&agent) {
+            allowance.spent = allowance.spent.saturating_add(amount);
+        }
+    }
+
+    /// Compute allowances from blocklace state (batch interface).
+    ///
+    /// Given a function that sums an agent's debits against this resource from
+    /// their virtual chain in the blocklace, compute the effective allowance state.
+    /// This enables deriving the bounded counter from the blocklace rather than
+    /// maintaining separate accounting.
+    ///
+    /// # Parameters
+    /// - `blocklace_debits`: maps each participant to their total debits observed
+    ///   in the blocklace for this resource since the last epoch.
+    pub fn sync_from_debit_map(
+        &mut self,
+        blocklace_debits: &HashMap<ParticipantId, ResourceAmount>,
+    ) {
+        for (agent, &debited) in blocklace_debits {
+            if let Some(allowance) = self.allowances.get_mut(agent) {
+                // The blocklace is the source of truth for what was spent.
+                allowance.spent = debited;
+            }
+        }
+    }
+
+    // ─── Escalation: Tier 2 -> Tier 3 ──────────────────────────────────────
+
+    /// Escalate to Tier 3: transition from Open to Closing.
+    ///
+    /// Called when `is_overspent()` returns true. Pauses new debits and records
+    /// the conflicting block IDs that need ordering by Cordial Miners.
+    ///
+    /// # Parameters
+    /// - `conflicting_blocks`: Block IDs whose aggregate debits exceed the balance.
+    pub fn escalate(&mut self, conflicting_blocks: Vec<BlocBlockId>) {
+        self.state = ResourceState::Closing {
+            conflicting: conflicting_blocks,
+        };
+    }
+
+    /// Resolve the escalation using tau-ordered blocks from Cordial Miners.
+    ///
+    /// Called once tau has provided a total order for the conflicting blocks.
+    /// Processes debits in tau order: first debit wins, later debits rejected
+    /// if balance is insufficient.
+    ///
+    /// After resolution, transitions to Open with new allowances based on the
+    /// remaining balance.
+    ///
+    /// # Parameters
+    /// - `ordered_blocks`: Block IDs in tau order (the total order from consensus).
+    /// - `blocklace`: The blocklace to look up block payloads.
+    /// - `resource_id`: The resource being resolved.
+    pub fn resolve_with_ordering(
+        &mut self,
+        ordered_blocks: &[BlocBlockId],
+        blocklace: &Blocklace,
+        resource_id: &[u8; 32],
+    ) {
+        self.state = ResourceState::Rebalancing;
+        self.resolutions.clear();
+
+        let mut remaining_balance = self.total_balance;
+
+        for block_id in ordered_blocks {
+            if let Some(block) = blocklace.get(block_id) {
+                if let Some(amount) = extract_debit_for_resource(block, resource_id) {
+                    if amount <= remaining_balance {
+                        // Accept this debit (it came first in tau order).
+                        remaining_balance -= amount;
+                        self.resolutions
+                            .insert(*block_id, DebitResolution::Accepted);
+                    } else {
+                        // Reject this debit (insufficient balance after earlier debits).
+                        self.resolutions
+                            .insert(*block_id, DebitResolution::Rejected);
+                    }
+                }
+            }
+        }
+
+        // Update the total balance to reflect accepted debits.
+        self.total_balance = remaining_balance;
+
+        // Rebalance: new epoch, fresh allowances from the remaining balance.
+        self.version += 1;
+        self.epoch_credits = 0;
+        self.distribute_allowances();
+        self.state = ResourceState::Open;
+    }
+
+    /// Check if a specific block's debit was accepted during escalation resolution.
+    pub fn is_accepted(&self, block_id: &BlocBlockId) -> Option<bool> {
+        self.resolutions
+            .get(block_id)
+            .map(|r| *r == DebitResolution::Accepted)
+    }
+
+    // ─── Rebalance (Non-Escalation Path) ───────────────────────────────────
 
     /// Rebalance: collect spending reports, reconcile, and redistribute allowances.
     ///
@@ -416,28 +640,142 @@ impl SharedResourceBudget {
         self.allowances.remove(agent);
         Ok(())
     }
+}
 
-    /// Compute allowances from blocklace state.
+// ─── Blocklace Observer ─────────────────────────────────────────────────────
+
+/// Manages multiple shared resource budgets and observes blocklace updates.
+///
+/// This is the on-new-block hook that monitors incoming blocks for resource debits
+/// and automatically triggers escalation when overspend is detected.
+#[derive(Clone, Debug, Default)]
+pub struct SharedBudgetObserver {
+    /// Per-resource budget managers.
+    pub budgets: HashMap<[u8; 32], SharedResourceBudget>,
+}
+
+impl SharedBudgetObserver {
+    /// Create a new observer with no budgets registered.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register a budget for observation.
+    pub fn register(&mut self, resource_id: [u8; 32], budget: SharedResourceBudget) {
+        self.budgets.insert(resource_id, budget);
+    }
+
+    /// Called when new blocks arrive in the blocklace.
     ///
-    /// Given a function that sums an agent's debits against this resource from
-    /// their virtual chain in the blocklace, compute the effective allowance state.
-    /// This enables deriving the bounded counter from the blocklace rather than
-    /// maintaining separate accounting.
+    /// For each block, checks if it contains a resource debit. If so, records it
+    /// and triggers escalation if overspend is detected.
     ///
-    /// # Parameters
-    /// - `blocklace_debits`: maps each participant to their total debits observed
-    ///   in the blocklace for this resource since the last epoch.
-    pub fn sync_from_blocklace(
-        &mut self,
-        blocklace_debits: &HashMap<ParticipantId, ResourceAmount>,
-    ) {
-        for (agent, &debited) in blocklace_debits {
-            if let Some(allowance) = self.allowances.get_mut(agent) {
-                // The blocklace is the source of truth for what was spent.
-                allowance.spent = debited;
+    /// Returns a list of resource IDs that entered escalation as a result.
+    pub fn on_blocklace_update(&mut self, new_blocks: &[&BlocBlock]) -> Vec<[u8; 32]> {
+        let mut escalated = Vec::new();
+
+        for block in new_blocks {
+            if let Some((resource_id, amount)) = extract_resource_debit(block) {
+                let agent = CellId::from_bytes(block.creator);
+                if let Some(budget) = self.budgets.get_mut(&resource_id) {
+                    budget.record_observed_debit(agent, amount);
+                    if budget.is_overspent() && budget.state == ResourceState::Open {
+                        // Collect all block IDs that contributed to this resource's debits.
+                        let conflicting = self.get_conflicting_blocks(&resource_id, budget);
+                        budget.escalate(conflicting);
+                        escalated.push(resource_id);
+                    }
+                }
             }
         }
+
+        escalated
     }
+
+    /// Gather the block IDs whose debits are involved in the overspend for a resource.
+    fn get_conflicting_blocks(
+        &self,
+        _resource_id: &[u8; 32],
+        _budget: &SharedResourceBudget,
+    ) -> Vec<BlocBlockId> {
+        // In a full implementation, this would walk the blocklace to find all
+        // debit blocks for this resource in the current epoch. For now we return
+        // an empty vec -- the caller should provide the actual conflicting blocks
+        // from their blocklace scan when calling `resolve_with_ordering`.
+        Vec::new()
+    }
+}
+
+// ─── Payload Debit Extraction ───────────────────────────────────────────────
+
+/// Debit payload format (encoded in Turn payloads):
+///
+/// ```text
+/// [0x44] [resource_id: 32 bytes] [amount: 8 bytes LE]
+/// ```
+///
+/// The 0x44 tag byte ('D' for debit) distinguishes debit payloads from other
+/// turn data. This is a simplified wire format; production would use postcard
+/// or a more structured encoding.
+const DEBIT_TAG: u8 = 0x44;
+
+/// Minimum size of a debit payload: tag(1) + resource_id(32) + amount(8) = 41.
+const DEBIT_PAYLOAD_MIN_SIZE: usize = 1 + 32 + 8;
+
+/// Extract a debit amount for a specific resource from a block's payload.
+///
+/// Returns `Some(amount)` if the block's payload is a Turn containing a debit
+/// for the given resource_id. Returns `None` otherwise.
+pub fn extract_debit_for_resource(block: &BlocBlock, resource_id: &[u8; 32]) -> Option<u64> {
+    match &block.payload {
+        Payload::Turn(data) | Payload::Data(data) => {
+            if data.len() < DEBIT_PAYLOAD_MIN_SIZE {
+                return None;
+            }
+            if data[0] != DEBIT_TAG {
+                return None;
+            }
+            let block_resource = &data[1..33];
+            if block_resource != resource_id.as_slice() {
+                return None;
+            }
+            let amount_bytes: [u8; 8] = data[33..41].try_into().ok()?;
+            Some(u64::from_le_bytes(amount_bytes))
+        }
+        _ => None,
+    }
+}
+
+/// Extract a (resource_id, amount) pair from a block regardless of resource.
+///
+/// Used by the observer to detect any debit in any block.
+pub fn extract_resource_debit(block: &BlocBlock) -> Option<([u8; 32], u64)> {
+    match &block.payload {
+        Payload::Turn(data) | Payload::Data(data) => {
+            if data.len() < DEBIT_PAYLOAD_MIN_SIZE {
+                return None;
+            }
+            if data[0] != DEBIT_TAG {
+                return None;
+            }
+            let mut resource_id = [0u8; 32];
+            resource_id.copy_from_slice(&data[1..33]);
+            let amount_bytes: [u8; 8] = data[33..41].try_into().ok()?;
+            Some((resource_id, u64::from_le_bytes(amount_bytes)))
+        }
+        _ => None,
+    }
+}
+
+/// Encode a debit payload for a given resource and amount.
+///
+/// This is the inverse of `extract_debit_for_resource` / `extract_resource_debit`.
+pub fn encode_debit_payload(resource_id: &[u8; 32], amount: u64) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(DEBIT_PAYLOAD_MIN_SIZE);
+    payload.push(DEBIT_TAG);
+    payload.extend_from_slice(resource_id);
+    payload.extend_from_slice(&amount.to_le_bytes());
+    payload
 }
 
 // ─── SharedBudgetError ───────────────────────────────────────────────────────
@@ -468,6 +806,8 @@ pub enum SharedBudgetError {
     },
     /// Not all participants submitted spending reports during rebalance.
     IncompleteReports { received: usize, expected: usize },
+    /// Resource is in Closing or Rebalancing state; no new debits accepted.
+    ResourceClosing { resource: ResourceId },
 }
 
 impl core::fmt::Display for SharedBudgetError {
@@ -514,6 +854,12 @@ impl core::fmt::Display for SharedBudgetError {
                 write!(
                     f,
                     "incomplete reports: received {received}, expected {expected}"
+                )
+            }
+            SharedBudgetError::ResourceClosing { resource } => {
+                write!(
+                    f,
+                    "resource {resource} is closing (escalation in progress), no new debits"
                 )
             }
         }
@@ -588,7 +934,7 @@ mod tests {
         let mut budget = SharedResourceBudget::new(pool_resource(), 9000, agents, 1).unwrap();
         // ceiling = 9000 * 2/3 = 6000
 
-        // All agents debit concurrently — no coordination needed.
+        // All agents debit concurrently -- no coordination needed.
         assert!(budget.try_debit(agent_a, 2000, test_digest(1)).is_ok());
         assert!(budget.try_debit(agent_b, 3000, test_digest(2)).is_ok());
         assert!(budget.try_debit(agent_c, 1500, test_digest(3)).is_ok());
@@ -631,7 +977,7 @@ mod tests {
         budget.try_debit(agent_a, 1000, test_digest(1)).unwrap();
         budget.try_debit(agent_a, 1000, test_digest(2)).unwrap();
 
-        // Now exhausted — signals that agent needs a rebalance.
+        // Now exhausted -- signals that agent needs a rebalance.
         let err = budget.try_debit(agent_a, 1, test_digest(3)).unwrap_err();
         assert!(matches!(
             err,
@@ -832,7 +1178,7 @@ mod tests {
     // ── Blocklace Sync Tests ─────────────────────────────────────────────
 
     #[test]
-    fn test_sync_from_blocklace() {
+    fn test_sync_from_debit_map() {
         let agents = test_agents(3);
         let agent_a = agents[0];
         let agent_b = agents[1];
@@ -844,7 +1190,7 @@ mod tests {
         observed.insert(agent_a, 1500u64);
         observed.insert(agent_b, 800u64);
 
-        budget.sync_from_blocklace(&observed);
+        budget.sync_from_debit_map(&observed);
 
         assert_eq!(budget.remaining(&agent_a), Some(6000 - 1500));
         assert_eq!(budget.remaining(&agent_b), Some(6000 - 800));
@@ -947,5 +1293,138 @@ mod tests {
         for &agent in &agents {
             assert_eq!(budget.remaining(&agent), Some(4000));
         }
+    }
+
+    // ── Escalation Tests (Tier 2 -> Tier 3) ─────────────────────────────
+
+    #[test]
+    fn test_escalation_blocks_new_debits() {
+        let agents = test_agents(3);
+        let agent_a = agents[0];
+
+        let mut budget = SharedResourceBudget::new(pool_resource(), 9000, agents, 1).unwrap();
+
+        // Escalate.
+        budget.escalate(vec![BlocBlockId([0xAA; 32])]);
+        assert_eq!(
+            budget.state,
+            ResourceState::Closing {
+                conflicting: vec![BlocBlockId([0xAA; 32])]
+            }
+        );
+
+        // New debits should be rejected.
+        let err = budget.try_debit(agent_a, 100, test_digest(1)).unwrap_err();
+        assert!(matches!(err, SharedBudgetError::ResourceClosing { .. }));
+    }
+
+    #[test]
+    fn test_would_overspend() {
+        let agents = test_agents(3);
+        let agent_a = agents[0];
+        let agent_b = agents[1];
+
+        let mut budget = SharedResourceBudget::new(pool_resource(), 3000, agents, 1).unwrap();
+        // ceiling = 2000
+
+        // Agent A hasn't spent anything: 2000 remaining.
+        assert!(!budget.would_overspend(&agent_a, 1000));
+        assert!(!budget.would_overspend(&agent_a, 2000));
+        assert!(budget.would_overspend(&agent_a, 2001));
+
+        // After spending, less remains.
+        budget.try_debit(agent_a, 1500, test_digest(1)).unwrap();
+        assert!(!budget.would_overspend(&agent_a, 500));
+        assert!(budget.would_overspend(&agent_a, 501));
+
+        // Unknown agent always overspends.
+        let unknown = CellId::from_bytes([0xFF; 32]);
+        assert!(budget.would_overspend(&unknown, 1));
+    }
+
+    #[test]
+    fn test_resource_state_lifecycle() {
+        let agents = test_agents(3);
+
+        let mut budget = SharedResourceBudget::new(pool_resource(), 9000, agents, 1).unwrap();
+        assert_eq!(budget.state, ResourceState::Open);
+
+        // Escalate.
+        let fake_blocks = vec![BlocBlockId([0x11; 32]), BlocBlockId([0x22; 32])];
+        budget.escalate(fake_blocks.clone());
+        assert_eq!(
+            budget.state,
+            ResourceState::Closing {
+                conflicting: fake_blocks
+            }
+        );
+
+        // We can't resolve without a real blocklace here, but we can test
+        // that resolve_with_ordering transitions back to Open.
+        // Use an empty ordered_blocks to simulate (no actual debits to resolve).
+        let sk = ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]);
+        let blocklace = Blocklace::new_simple(sk);
+        budget.resolve_with_ordering(&[], &blocklace, &[0xBB; 32]);
+
+        assert_eq!(budget.state, ResourceState::Open);
+        // Version incremented.
+        assert_eq!(budget.version, 1);
+    }
+
+    // ── Encode/Decode Debit Payload ─────────────────────────────────────
+
+    #[test]
+    fn test_encode_decode_debit_payload() {
+        let resource_id = [0xCC; 32];
+        let amount = 4200u64;
+
+        let payload = encode_debit_payload(&resource_id, amount);
+        assert_eq!(payload.len(), DEBIT_PAYLOAD_MIN_SIZE);
+        assert_eq!(payload[0], DEBIT_TAG);
+
+        // Decode via a mock block.
+        let sk = ed25519_dalek::SigningKey::from_bytes(&[0x01; 32]);
+        let block = BlocBlock::new(&sk, 0, Payload::Turn(payload), vec![]);
+
+        let extracted = extract_debit_for_resource(&block, &resource_id);
+        assert_eq!(extracted, Some(4200));
+
+        // Wrong resource returns None.
+        let wrong_resource = [0xDD; 32];
+        assert_eq!(extract_debit_for_resource(&block, &wrong_resource), None);
+    }
+
+    #[test]
+    fn test_extract_resource_debit_generic() {
+        let resource_id = [0xEE; 32];
+        let amount = 7777u64;
+
+        let payload = encode_debit_payload(&resource_id, amount);
+        let sk = ed25519_dalek::SigningKey::from_bytes(&[0x02; 32]);
+        let block = BlocBlock::new(&sk, 0, Payload::Turn(payload), vec![]);
+
+        let result = extract_resource_debit(&block);
+        assert_eq!(result, Some((resource_id, 7777)));
+    }
+
+    // ── Solo Mode Test ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_solo_agent_never_escalates() {
+        // Single agent with f=0 (no Byzantine tolerance needed with one agent).
+        // Note: need n >= 2*0+1 = 1 participant.
+        let agents = test_agents(1);
+        let solo = agents[0];
+
+        let mut budget = SharedResourceBudget::new(pool_resource(), 5000, agents, 0).unwrap();
+        // ceiling = 5000 * 1/1 = 5000 (full balance)
+
+        budget.try_debit(solo, 1000, test_digest(1)).unwrap();
+        budget.try_debit(solo, 2000, test_digest(2)).unwrap();
+        budget.try_debit(solo, 2000, test_digest(3)).unwrap();
+
+        // Solo agent spent exactly the balance: no overspend.
+        assert_eq!(budget.total_spent(), 5000);
+        assert!(!budget.is_overspent());
     }
 }

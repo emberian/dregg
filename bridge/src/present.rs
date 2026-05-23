@@ -2252,8 +2252,6 @@ pub fn verify_presentation_full(
         None => return false,
     };
 
-    use pyana_circuit::poseidon2_air::MerklePoseidon2StarkAir;
-
     let pi: Vec<BabyBear> = real
         .issuer_membership_stark_proof
         .public_inputs
@@ -2352,28 +2350,17 @@ pub fn verify_presentation_full(
     }
 
     // 5. Verify the real STARK proof.
-    //    Dispatch based on the AIR name: blinded (ring membership) or non-blinded.
-    use pyana_circuit::poseidon2_air::BlindedMerklePoseidon2StarkAir;
-    use pyana_circuit::stark::StarkAir;
+    //    Dispatch to DSL circuit based on AIR name.
     let air_name = &real.issuer_membership_stark_proof.air_name;
-    if air_name == BlindedMerklePoseidon2StarkAir.air_name() {
-        // Ring membership: pi[0] is blinded_leaf (unlinkable), pi[1] is root.
-        // The verifier does NOT check pi[0] against any expected value — it's random.
-        stark::verify(
-            &BlindedMerklePoseidon2StarkAir,
-            &real.issuer_membership_stark_proof,
-            &pi,
-        )
-        .is_ok()
-    } else {
-        // Legacy non-blinded: pi[0] is leaf_hash (linkable), pi[1] is root.
-        stark::verify(
-            &MerklePoseidon2StarkAir,
-            &real.issuer_membership_stark_proof,
-            &pi,
-        )
-        .is_ok()
-    }
+    let circuit =
+        pyana_dsl_runtime::descriptors::circuit_for_air_name(air_name).unwrap_or_else(|| {
+            if air_name.contains("blinded") {
+                pyana_dsl_runtime::descriptors::blinded_merkle_poseidon2_circuit()
+            } else {
+                pyana_dsl_runtime::descriptors::merkle_poseidon2_circuit()
+            }
+        });
+    stark::verify(&circuit, &real.issuer_membership_stark_proof, &pi).is_ok()
 }
 
 /// Verify that a proof's verifier nonce matches the expected challenge.
@@ -2693,38 +2680,26 @@ pub fn verify_proof_complete(
     // Dispatches on air_name to select the correct AIR for verification.
     // Any AIR that passes cryptographic verification is accepted — the tier is
     // informational only (per verification-policy-design.md).
-    use pyana_circuit::poseidon2_air::{BlindedMerklePoseidon2StarkAir, MerklePoseidon2StarkAir};
-    use pyana_circuit::stark::{MerkleStarkAir, StarkAir};
     let air_name = &real.issuer_membership_stark_proof.air_name;
-    let (stark_result, proof_tier) = if air_name == BlindedMerklePoseidon2StarkAir.air_name() {
-        (
-            stark::verify(
-                &BlindedMerklePoseidon2StarkAir,
-                &real.issuer_membership_stark_proof,
-                &pi,
-            ),
-            pyana_circuit::ProofTier::Production,
-        )
-    } else if air_name == MerklePoseidon2StarkAir.air_name() {
-        (
-            stark::verify(
-                &MerklePoseidon2StarkAir,
-                &real.issuer_membership_stark_proof,
-                &pi,
-            ),
-            pyana_circuit::ProofTier::Production,
-        )
-    } else if air_name == MerkleStarkAir.air_name() {
-        (
-            stark::verify(&MerkleStarkAir, &real.issuer_membership_stark_proof, &pi),
-            pyana_circuit::ProofTier::Experimental,
-        )
-    } else {
-        // Unknown AIR — cannot verify, reject.
-        return Err(VerifyError::StarkInvalid(format!(
-            "unknown AIR: {air_name} (no verifier available)"
-        )));
-    };
+    let (stark_result, proof_tier) =
+        if let Some(circuit) = pyana_dsl_runtime::descriptors::circuit_for_air_name(air_name) {
+            (
+                stark::verify(&circuit, &real.issuer_membership_stark_proof, &pi),
+                pyana_circuit::ProofTier::Production,
+            )
+        } else if air_name.contains("blinded") {
+            let circuit = pyana_dsl_runtime::descriptors::blinded_merkle_poseidon2_circuit();
+            (
+                stark::verify(&circuit, &real.issuer_membership_stark_proof, &pi),
+                pyana_circuit::ProofTier::Production,
+            )
+        } else {
+            let circuit = pyana_dsl_runtime::descriptors::merkle_poseidon2_circuit();
+            (
+                stark::verify(&circuit, &real.issuer_membership_stark_proof, &pi),
+                pyana_circuit::ProofTier::Production,
+            )
+        };
 
     if let Err(e) = stark_result {
         return Err(VerifyError::StarkInvalid(e));
@@ -2762,11 +2737,6 @@ pub fn verify_proof_complete(
 pub fn verify_presentation(proof: &BridgePresentationProof, federation_root: &[u8; 32]) -> bool {
     // A real STARK proof is required for cryptographic verification.
     if let Some(ref real) = proof.real_stark_proof {
-        use pyana_circuit::poseidon2_air::{
-            BlindedMerklePoseidon2StarkAir, MerklePoseidon2StarkAir,
-        };
-        use pyana_circuit::stark::StarkAir;
-
         let pi: Vec<BabyBear> = real
             .issuer_membership_stark_proof
             .public_inputs
@@ -2784,23 +2754,17 @@ pub fn verify_presentation(proof: &BridgePresentationProof, federation_root: &[u
             return false;
         }
 
-        // Dispatch based on AIR name: blinded (ring) or non-blinded.
+        // Dispatch to DSL circuit based on AIR name.
         let air_name = &real.issuer_membership_stark_proof.air_name;
-        if air_name == BlindedMerklePoseidon2StarkAir.air_name() {
-            stark::verify(
-                &BlindedMerklePoseidon2StarkAir,
-                &real.issuer_membership_stark_proof,
-                &pi,
-            )
-            .is_ok()
-        } else {
-            stark::verify(
-                &MerklePoseidon2StarkAir,
-                &real.issuer_membership_stark_proof,
-                &pi,
-            )
-            .is_ok()
-        }
+        let circuit = pyana_dsl_runtime::descriptors::circuit_for_air_name(air_name)
+            .unwrap_or_else(|| {
+                if air_name.contains("blinded") {
+                    pyana_dsl_runtime::descriptors::blinded_merkle_poseidon2_circuit()
+                } else {
+                    pyana_dsl_runtime::descriptors::merkle_poseidon2_circuit()
+                }
+            });
+        stark::verify(&circuit, &real.issuer_membership_stark_proof, &pi).is_ok()
     } else {
         // No real proof = not verified. Mock proofs provide no security guarantee.
         false
@@ -2817,11 +2781,6 @@ pub fn verify_presentation(proof: &BridgePresentationProof, federation_root: &[u
 /// Do NOT pass a value derived from the proof itself.
 pub fn verify_presentation_bb(proof: &BridgePresentationProof, expected_root: BabyBear) -> bool {
     if let Some(ref real) = proof.real_stark_proof {
-        use pyana_circuit::poseidon2_air::{
-            BlindedMerklePoseidon2StarkAir, MerklePoseidon2StarkAir,
-        };
-        use pyana_circuit::stark::StarkAir;
-
         let pi: Vec<BabyBear> = real
             .issuer_membership_stark_proof
             .public_inputs
@@ -2837,23 +2796,17 @@ pub fn verify_presentation_bb(proof: &BridgePresentationProof, expected_root: Ba
             return false;
         }
 
-        // Dispatch based on AIR name: blinded (ring) or non-blinded.
+        // Dispatch to DSL circuit based on AIR name.
         let air_name = &real.issuer_membership_stark_proof.air_name;
-        if air_name == BlindedMerklePoseidon2StarkAir.air_name() {
-            stark::verify(
-                &BlindedMerklePoseidon2StarkAir,
-                &real.issuer_membership_stark_proof,
-                &pi,
-            )
-            .is_ok()
-        } else {
-            stark::verify(
-                &MerklePoseidon2StarkAir,
-                &real.issuer_membership_stark_proof,
-                &pi,
-            )
-            .is_ok()
-        }
+        let circuit = pyana_dsl_runtime::descriptors::circuit_for_air_name(air_name)
+            .unwrap_or_else(|| {
+                if air_name.contains("blinded") {
+                    pyana_dsl_runtime::descriptors::blinded_merkle_poseidon2_circuit()
+                } else {
+                    pyana_dsl_runtime::descriptors::merkle_poseidon2_circuit()
+                }
+            });
+        stark::verify(&circuit, &real.issuer_membership_stark_proof, &pi).is_ok()
     } else {
         false
     }

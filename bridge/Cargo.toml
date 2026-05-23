@@ -17,11 +17,14 @@ pyana-dsl-runtime = { path = "../pyana-dsl-runtime" }
 token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
 macaroon = { path = "../macaroon" }
 blake3 = "1"
+ed25519-dalek = { version = "2", features = ["std"] }
+postcard = { version = "1", features = ["use-std"] }
 getrandom = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 criterion = { workspace = true }
+tokio = { version = "1", features = ["full"] }
 
 [[bench]]
 name = "presentation_bench"

@@ -576,7 +576,71 @@ impl TurnExecutor {
                 .map_err(|e| TurnError::ProofVerificationFailed(e))?;
         }
 
-        // 9. Update commitment (no re-execution!). Try the legacy map first, then registrations.
+        // 9. Verify custom program proofs (CellProgram dispatch).
+        //    If the Effect VM proof contains Custom effect rows, verify each
+        //    external custom proof and check that its hash matches the commitment.
+        if let Some(custom_proofs) = turn.custom_program_proofs.as_ref() {
+            let custom_commitments =
+                pyana_circuit::extract_custom_proof_commitments(&public_inputs);
+            if custom_commitments.len() != custom_proofs.len() {
+                return Err(TurnError::InvalidExecutionProof(format!(
+                    "custom proof count mismatch: PI declares {}, turn provides {}",
+                    custom_commitments.len(),
+                    custom_proofs.len()
+                )));
+            }
+            for (i, ((vk_hash_elems, proof_commit_elems), custom_proof)) in custom_commitments
+                .iter()
+                .zip(custom_proofs.iter())
+                .enumerate()
+            {
+                // Reconstruct the VK hash bytes from the 4 BabyBear elements.
+                let vk_hash_bytes = Self::babybear4_to_bytes16(vk_hash_elems);
+
+                // Verify the custom proof commitment: hash(custom_proof) must match proof_commit.
+                let actual_proof_hash = Self::hash_custom_proof(&custom_proof.proof_bytes);
+                let expected_commit = Self::babybear4_to_bytes16(proof_commit_elems);
+                if actual_proof_hash != expected_commit {
+                    return Err(TurnError::CustomProofCommitmentMismatch {
+                        index: i,
+                        expected: expected_commit,
+                        got: actual_proof_hash,
+                    });
+                }
+
+                // Look up the custom program by VK hash and verify.
+                let full_vk_hash = Self::expand_vk_hash_16_to_32(&vk_hash_bytes);
+                if let Some(program) = self.program_registry.get(&full_vk_hash) {
+                    program
+                        .verify_transition(
+                            &custom_proof.public_inputs_babybear(),
+                            &custom_proof.proof_bytes,
+                        )
+                        .map_err(|e| TurnError::CustomProgramVerificationFailed {
+                            index: i,
+                            program_vk: full_vk_hash,
+                            reason: e.to_string(),
+                        })?;
+                } else {
+                    return Err(TurnError::CustomProgramNotFound {
+                        index: i,
+                        vk_hash: full_vk_hash,
+                    });
+                }
+            }
+        } else {
+            // No custom proofs provided — verify that the Effect VM PI declares zero.
+            let custom_commitments =
+                pyana_circuit::extract_custom_proof_commitments(&public_inputs);
+            if !custom_commitments.is_empty() {
+                return Err(TurnError::InvalidExecutionProof(format!(
+                    "Effect VM proof declares {} custom effects but turn provides no custom proofs",
+                    custom_commitments.len()
+                )));
+            }
+        }
+
+        // 10. Update commitment (no re-execution!). Try the legacy map first, then registrations.
         if ledger.is_sovereign(cell_id) {
             let _ = ledger.update_sovereign_commitment(cell_id, new_commitment);
         } else {
@@ -630,6 +694,32 @@ impl TurnExecutor {
         for (i, &val) in values.iter().take(8).enumerate() {
             result[i * 4..i * 4 + 4].copy_from_slice(&val.to_le_bytes());
         }
+        result
+    }
+
+    /// Convert 4 BabyBear elements to a 16-byte array (for custom proof commitment matching).
+    fn babybear4_to_bytes16(elems: &[pyana_circuit::field::BabyBear; 4]) -> [u8; 16] {
+        let mut result = [0u8; 16];
+        for (i, elem) in elems.iter().enumerate() {
+            result[i * 4..i * 4 + 4].copy_from_slice(&elem.0.to_le_bytes());
+        }
+        result
+    }
+
+    /// Hash custom proof bytes to produce a 16-byte commitment (matching BabyBear[4]).
+    fn hash_custom_proof(proof_bytes: &[u8]) -> [u8; 16] {
+        let h = blake3::hash(proof_bytes);
+        let bytes = h.as_bytes();
+        let mut result = [0u8; 16];
+        result.copy_from_slice(&bytes[..16]);
+        result
+    }
+
+    /// Expand a 16-byte VK hash (from 4 BabyBear elements) to a 32-byte registry key.
+    /// The upper 16 bytes are zero-padded (registry lookup uses the full 32 bytes).
+    fn expand_vk_hash_16_to_32(short: &[u8; 16]) -> [u8; 32] {
+        let mut result = [0u8; 32];
+        result[..16].copy_from_slice(short);
         result
     }
 

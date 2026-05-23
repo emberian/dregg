@@ -63,7 +63,7 @@ pub struct Block {
 
 /// Serde helper for 64-byte arrays (Ed25519 signatures).
 /// Serde only implements Serialize/Deserialize for arrays up to [T; 32].
-mod serde_sig64 {
+pub(crate) mod serde_sig64 {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     pub fn serialize<S: Serializer>(bytes: &[u8; 64], serializer: S) -> Result<S::Ok, S::Error> {
@@ -113,13 +113,27 @@ impl Block {
             signature: [0u8; 64],
         }
     }
+
+    /// Serialize the block to bytes for wire transmission.
+    ///
+    /// Uses postcard's compact binary format.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_stdvec(self).expect("block serialization should not fail")
+    }
+
+    /// Deserialize a block from bytes.
+    ///
+    /// Returns `None` if the bytes are malformed.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        postcard::from_bytes(bytes).ok()
+    }
 }
 
 /// The local blocklace: stores all known blocks and their relationships.
 #[derive(Clone, Debug, Default)]
 pub struct Blocklace {
     /// All blocks by their ID.
-    blocks: HashMap<BlockId, Block>,
+    pub(crate) blocks: HashMap<BlockId, Block>,
     /// Forward edges: block_id -> set of blocks that reference it as a predecessor.
     successors: HashMap<BlockId, HashSet<BlockId>>,
     /// The latest block ID per creator (tip of each creator's chain).
@@ -288,6 +302,9 @@ impl Blocklace {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod finality_tests;
 
 #[cfg(test)]
 mod tests {

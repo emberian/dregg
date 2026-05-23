@@ -6276,9 +6276,12 @@ name = "pyana-blocklace"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "ed25519-dalek",
  "postcard",
  "proptest",
+ "rand 0.8.6",
  "serde",
+ "thiserror 2.0.18",
  "tracing",
 ]
 
@@ -6309,8 +6312,10 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "criterion",
+ "ed25519-dalek",
  "getrandom 0.3.4",
  "macaroon",
+ "postcard",
  "pyana-circuit",
  "pyana-commit",
  "pyana-dsl-runtime",
@@ -6318,6 +6323,7 @@ dependencies = [
  "pyana-turn",
  "serde",
  "token",
+ "tokio",
 ]
 
 [[package]]
@@ -6417,6 +6423,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "ed25519-dalek",
+ "pyana-blocklace",
  "pyana-cell",
  "pyana-turn",
  "pyana-types",
@@ -6667,6 +6674,7 @@ dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
  "postcard",
+ "pyana-blocklace",
  "pyana-cell",
  "pyana-circuit",
  "pyana-commit",
@@ -6719,13 +6727,19 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.3.4",
  "postcard",
+ "pyana-amm",
  "pyana-bridge",
  "pyana-cell",
  "pyana-circuit",
  "pyana-commit",
  "pyana-federation",
+ "pyana-gallery",
+ "pyana-identity",
  "pyana-intent",
+ "pyana-lending",
+ "pyana-orderbook",
  "pyana-sdk",
+ "pyana-stablecoin",
  "pyana-turn",
  "pyana-types",
  "token",

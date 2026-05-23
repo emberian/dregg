@@ -1043,7 +1043,21 @@ async fn handle_turn_message(state: &NodeState, from: SocketAddr, message: PeerM
             let exec_result = executor.execute(&signed_turn.turn, &mut s.ledger);
 
             match exec_result {
-                pyana_turn::TurnResult::Committed { receipt, .. } => {
+                pyana_turn::TurnResult::Committed { mut receipt, .. } => {
+                    // Solo mode: mark receipt as Tentative and log in nullifier log.
+                    if s.federation_mode == pyana_federation::solo::FederationMode::Solo {
+                        receipt.finality = pyana_turn::Finality::Tentative;
+                        if let Some(ref mut solo) = s.solo_consensus {
+                            let height = solo.height;
+                            let _ = solo.nullifier_log.insert(
+                                receipt.turn_hash,
+                                receipt.turn_hash,
+                                height,
+                            );
+                            solo.advance_height();
+                        }
+                    }
+
                     // Sync budget gate debit back to the coordinator.
                     if budget_gate_active {
                         // Copy silo_id before the mutable borrow.

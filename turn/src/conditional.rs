@@ -16,7 +16,6 @@
 use std::collections::HashSet;
 
 use pyana_circuit::BabyBear;
-use pyana_circuit::poseidon2_air::MerklePoseidon2StarkAir;
 use pyana_circuit::stark;
 use serde::{Deserialize, Serialize};
 

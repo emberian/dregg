@@ -11,6 +11,7 @@ description = "Two-layer turn coordination: causal chaining + atomic multi-party
 
 [dependencies]
 pyana-cell = { path = "../cell" }
+pyana-blocklace = { path = "../blocklace" }
 pyana-turn = { path = "../turn" }
 pyana-types = { path = "../types" }
 blake3 = "1"

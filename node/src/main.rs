@@ -7,6 +7,7 @@
 //! - Syncs state with federation peers
 
 mod api;
+mod blocklace_sync;
 mod bridge;
 mod federation_sync;
 mod genesis;
@@ -21,6 +22,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use pyana_federation::solo::FederationMode;
 use tracing::{error, info};
 
 #[derive(Parser)]
@@ -87,6 +89,23 @@ enum Command {
         /// genesis faucet cell.
         #[arg(long)]
         enable_faucet: bool,
+
+        /// Federation mode: "solo" for single-node devnet (default), "full" for BFT quorum.
+        ///
+        /// In solo mode, the node processes turns immediately without waiting for peers,
+        /// skips gossip/consensus, produces Tentative receipts, and uses a local
+        /// NullifierLog for sequencing. When peers are detected (via gossip), the node
+        /// can auto-upgrade to full mode.
+        #[arg(long, default_value = "solo")]
+        federation_mode: String,
+
+        /// Consensus engine: "blocklace" (default) or "morpheus" (legacy).
+        ///
+        /// "blocklace" uses the Cordial Miners blocklace for quiescent, leaderless
+        /// DAG-based BFT consensus with the tau total ordering function.
+        /// "morpheus" uses the legacy Morpheus DAG-BFT with timer-driven blocks.
+        #[arg(long, default_value = "blocklace")]
+        consensus: String,
     },
 
     /// Initialize the data directory and generate a node keypair.
@@ -219,6 +238,8 @@ async fn main() {
             enable_pruning,
             checkpoint_interval,
             enable_faucet,
+            federation_mode,
+            consensus,
         } => {
             run_node(
                 port,
@@ -233,6 +254,8 @@ async fn main() {
                 enable_pruning,
                 checkpoint_interval,
                 enable_faucet,
+                &federation_mode,
+                &consensus,
             )
             .await
         }
@@ -290,6 +313,8 @@ async fn run_node(
     enable_pruning: bool,
     checkpoint_interval: u64,
     enable_faucet: bool,
+    federation_mode_str: &str,
+    consensus_engine: &str,
 ) {
     let data_path = expand_path(data_dir);
 
@@ -307,6 +332,7 @@ async fn run_node(
     }
 
     // Initialize node state with configurable key file.
+    let has_peers = !peers.is_empty();
     let node_state = match state::NodeState::new_with_key_file(&data_path, peers, key_file) {
         Ok(s) => s,
         Err(e) => {
@@ -362,11 +388,29 @@ async fn run_node(
         }
     }
 
-    // Configure pruning.
+    // Parse federation mode from CLI flag.
+    let federation_mode: FederationMode = federation_mode_str.parse().unwrap_or_else(|e| {
+        error!("invalid --federation-mode value: {e}; defaulting to solo");
+        FederationMode::Solo
+    });
+
+    // Configure pruning and federation mode.
     {
         let mut s = node_state.write().await;
         s.pruning_enabled = enable_pruning;
         s.checkpoint_interval = checkpoint_interval;
+        s.federation_mode = federation_mode;
+
+        // In solo mode, initialize the SoloConsensusState with the node's signing key.
+        if federation_mode == FederationMode::Solo {
+            let signing_key = s.wallet.gossip_signing_key().to_bytes();
+            s.solo_consensus = Some(pyana_federation::solo::SoloConsensusState::new(signing_key));
+            // Solo mode does NOT require federation keys for finalization —
+            // the single node is authoritative.
+            info!("federation mode: Solo — single-node devnet, no quorum required");
+        } else {
+            info!("federation mode: Full — BFT quorum required for finality");
+        }
     }
 
     // Install Prometheus metrics recorder.
@@ -378,23 +422,63 @@ async fn run_node(
         pruning = enable_pruning,
         checkpoint_interval = checkpoint_interval,
         faucet = enable_faucet,
+        federation_mode = %federation_mode,
         "starting pyana-node"
     );
 
-    // Spawn federation sync background task.
-    let sync_state = node_state.clone();
-    let morpheus_config = if morpheus {
-        Some(federation_sync::MorpheusConfig {
-            node_index,
-            federation_size,
-        })
-    } else {
-        None
-    };
-    let gossip_port_copy = gossip_port;
-    tokio::spawn(async move {
-        federation_sync::run_federation_sync(sync_state, morpheus_config, gossip_port_copy).await;
-    });
+    // Spawn federation sync background task based on the chosen consensus engine.
+    // In solo mode with no peers, skip gossip entirely regardless of engine.
+    match consensus_engine {
+        "blocklace" => {
+            // Blocklace consensus: quiescent, leaderless DAG-based BFT.
+            if federation_mode == FederationMode::Full || has_peers {
+                info!(
+                    consensus = "blocklace",
+                    "using blocklace (Cordial Miners) consensus"
+                );
+                let sync_state = node_state.clone();
+                let gossip_port_copy = gossip_port;
+                tokio::spawn(async move {
+                    blocklace_sync::run_blocklace_sync(sync_state, gossip_port_copy).await;
+                });
+            } else {
+                info!("solo mode with no peers configured — blocklace sync skipped");
+            }
+        }
+        "morpheus" => {
+            // Legacy Morpheus consensus: timer-driven DAG-BFT.
+            info!(consensus = "morpheus", "using legacy Morpheus consensus");
+            if federation_mode == FederationMode::Full || has_peers {
+                let sync_state = node_state.clone();
+                let morpheus_config = if morpheus {
+                    Some(federation_sync::MorpheusConfig {
+                        node_index,
+                        federation_size,
+                    })
+                } else {
+                    None
+                };
+                let gossip_port_copy = gossip_port;
+                tokio::spawn(async move {
+                    federation_sync::run_federation_sync(
+                        sync_state,
+                        morpheus_config,
+                        gossip_port_copy,
+                    )
+                    .await;
+                });
+            } else {
+                info!("solo mode with no peers configured — gossip sync skipped");
+            }
+        }
+        _ => {
+            error!(
+                consensus = %consensus_engine,
+                "unknown consensus engine, expected 'blocklace' or 'morpheus'"
+            );
+            std::process::exit(1);
+        }
+    }
 
     // Build and serve the HTTP API.
     let app = api::router(node_state.clone(), enable_faucet, metrics_handle)

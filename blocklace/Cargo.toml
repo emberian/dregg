@@ -11,12 +11,15 @@ description = "Blocklace: a DAG-based structure for BFT consensus with cordial d
 
 [dependencies]
 blake3 = "1"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
 postcard = { version = "1", features = ["use-std"] }
 serde = { workspace = true }
+thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+rand = "0.8"
 
 [lints]
 workspace = true

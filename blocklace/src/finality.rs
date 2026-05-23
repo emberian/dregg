@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 // ─── Core Types ──────────────────────────────────────────────────────────────
 
 /// A block identity: the blake3 hash of the signed content.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct BlockId(pub [u8; 32]);
 
 impl std::fmt::Debug for BlockId {
@@ -75,6 +75,7 @@ pub struct Block {
     /// Hash pointers to predecessor blocks (what this block "sees").
     pub predecessors: Vec<BlockId>,
     /// Ed25519 signature over (creator, seq, payload_hash, predecessors).
+    #[serde(with = "crate::serde_sig64")]
     pub signature: [u8; 64],
 }
 
@@ -92,17 +93,25 @@ impl Eq for Block {}
 
 /// Finality level for a block in the blocklace.
 ///
-/// Blocks progress through finality levels as they accumulate acknowledgments.
+/// Blocks progress through finality levels as they accumulate acknowledgments:
+/// Local -> Bilateral -> Attested -> Ordered
+///
+/// - Local: only the creator knows about this block.
+/// - Bilateral: at least one other participant acknowledged it.
+/// - Attested: a quorum (2f+1) acknowledged it.
+/// - Ordered: the block is in the causal past of a super-ratified leader (total order assigned).
+///
+/// The ordering is monotone: once a block reaches a level, it never regresses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum FinalityLevel {
     /// Block is known locally only (just created or received).
     Local,
     /// Block has been acknowledged by at least one other participant.
     Bilateral,
-    /// Block has been included in a total order (consensus).
-    Ordered,
     /// Block has been attested by a quorum (2f+1 acknowledgments).
     Attested,
+    /// Block has been included in a total order (consensus).
+    Ordered,
 }
 
 /// Proof that a creator equivocated (produced conflicting blocks).
@@ -111,6 +120,23 @@ pub struct EquivocationProof {
     pub creator: [u8; 32],
     pub block_a: Block,
     pub block_b: Block,
+}
+
+/// Metrics snapshot for observability.
+#[derive(Clone, Debug)]
+pub struct BlocklaceMetrics {
+    /// Total number of blocks in the local view.
+    pub block_count: usize,
+    /// Number of detected equivocators.
+    pub equivocator_count: usize,
+    /// Finality lag: number of blocks between tip and last finalized.
+    pub finality_lag: usize,
+    /// Number of blocks that have been totally ordered.
+    pub ordered_count: usize,
+    /// Number of blocks that have been attested by quorum.
+    pub attested_count: usize,
+    /// Number of distinct block creators.
+    pub creator_count: usize,
 }
 
 /// State of ordering for blocks reaching consensus.
@@ -245,6 +271,21 @@ impl Block {
             })
     }
 
+    /// Serialize the block to bytes for wire transmission.
+    ///
+    /// Uses postcard's compact binary format. The result is deterministic
+    /// for a given block (same bytes every time).
+    pub fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_stdvec(self).expect("block serialization should not fail")
+    }
+
+    /// Deserialize a block from bytes.
+    ///
+    /// Returns `None` if the bytes are malformed.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        postcard::from_bytes(bytes).ok()
+    }
+
     /// Create and sign a new block.
     pub fn new(
         signing_key: &SigningKey,
@@ -292,6 +333,9 @@ impl FinalityTracker {
 
     /// Record that a block was acknowledged by a given creator.
     /// Returns the new finality level for the block.
+    ///
+    /// The returned level is monotone: once a block reaches Attested, subsequent
+    /// acks still return Attested (it never regresses to Bilateral).
     pub fn record_ack(&mut self, block_id: BlockId, acker: [u8; 32]) -> FinalityLevel {
         let ackers = self.ack_counts.entry(block_id).or_default();
         ackers.insert(acker);
@@ -299,20 +343,22 @@ impl FinalityTracker {
         if ackers.len() >= self.quorum_threshold {
             self.ordering.attested.insert(block_id);
             FinalityLevel::Attested
-        } else if !ackers.is_empty() {
+        } else {
+            // At least one acker is present (we just inserted), so this is Bilateral.
             self.ordering.bilateral.insert(block_id);
             FinalityLevel::Bilateral
-        } else {
-            FinalityLevel::Local
         }
     }
 
     /// Get the finality level for a block.
+    ///
+    /// Returns the highest level reached. Finality is monotone:
+    /// Local < Bilateral < Attested < Ordered.
     pub fn finality_of(&self, block_id: &BlockId) -> FinalityLevel {
-        if self.ordering.attested.contains(block_id) {
-            FinalityLevel::Attested
-        } else if self.ordering.ordered.contains(block_id) {
+        if self.ordering.ordered.contains(block_id) {
             FinalityLevel::Ordered
+        } else if self.ordering.attested.contains(block_id) {
+            FinalityLevel::Attested
         } else if self.ordering.bilateral.contains(block_id) {
             FinalityLevel::Bilateral
         } else {
@@ -340,7 +386,7 @@ impl FinalityTracker {
 /// never remove.
 pub struct Blocklace {
     /// All known blocks.
-    blocks: HashMap<BlockId, Block>,
+    pub(crate) blocks: HashMap<BlockId, Block>,
     /// Per-creator tip tracking (latest block per creator).
     tips: HashMap<[u8; 32], BlockId>,
     /// Detected equivocators.
@@ -399,6 +445,25 @@ impl Blocklace {
     /// Get detected equivocators.
     pub fn equivocators(&self) -> &HashSet<[u8; 32]> {
         &self.equivocators
+    }
+
+    /// Get metrics about the current blocklace state.
+    pub fn metrics(&self) -> BlocklaceMetrics {
+        let last_ordered = self.finality.ordering.ordered.last().copied();
+        let finality_lag = if last_ordered.is_some() {
+            self.blocks.len() - self.finality.ordering.ordered.len()
+        } else {
+            self.blocks.len()
+        };
+
+        BlocklaceMetrics {
+            block_count: self.blocks.len(),
+            equivocator_count: self.equivocators.len(),
+            finality_lag,
+            ordered_count: self.finality.ordering.ordered.len(),
+            attested_count: self.finality.ordering.attested.len(),
+            creator_count: self.tips.len(),
+        }
     }
 
     /// Get current tips (latest known block per creator).
@@ -471,6 +536,7 @@ impl Blocklace {
         // Check for equivocation.
         if let Some(proof) = self.detect_equivocation(&block) {
             self.equivocators.insert(block.creator);
+            self.tips.remove(&block.creator);
             // Still insert the block (we keep evidence) but report the equivocation.
             self.blocks.insert(id, block);
             return Err(BlockError::Equivocation {
@@ -480,16 +546,19 @@ impl Blocklace {
             });
         }
 
-        // Update tip if this is the highest seq for this creator.
-        let should_update_tip = match self.tips.get(&block.creator) {
-            Some(current_tip_id) => {
-                let current_tip = &self.blocks[current_tip_id];
-                block.seq > current_tip.seq
+        // Don't update tips for known equivocators.
+        if !self.equivocators.contains(&block.creator) {
+            // Update tip if this is the highest seq for this creator.
+            let should_update_tip = match self.tips.get(&block.creator) {
+                Some(current_tip_id) => {
+                    let current_tip = &self.blocks[current_tip_id];
+                    block.seq > current_tip.seq
+                }
+                None => true,
+            };
+            if should_update_tip {
+                self.tips.insert(block.creator, id);
             }
-            None => true,
-        };
-        if should_update_tip {
-            self.tips.insert(block.creator, id);
         }
 
         // Process ack payloads for finality tracking.
@@ -681,6 +750,25 @@ impl Blocklace {
         true
     }
 
+    /// Remove an equivocator from the blocklace.
+    ///
+    /// This marks the creator as an equivocator (if not already) and removes
+    /// their blocks from the tips map. The blocks themselves are retained as
+    /// evidence, but the equivocator will not be considered for tip tracking
+    /// or future operations.
+    ///
+    /// Returns `true` if this was a newly-detected equivocator.
+    pub fn remove_equivocator(&mut self, creator: &[u8; 32]) -> bool {
+        let was_new = self.equivocators.insert(*creator);
+        self.tips.remove(creator);
+        was_new
+    }
+
+    /// Check if a creator is a known equivocator.
+    pub fn is_equivocator(&self, creator: &[u8; 32]) -> bool {
+        self.equivocators.contains(creator)
+    }
+
     /// Export all blocks (for delta-merge to a peer).
     pub fn all_blocks(&self) -> Vec<Block> {
         self.blocks.values().cloned().collect()
@@ -699,6 +787,83 @@ impl Blocklace {
     pub fn iter(&self) -> impl Iterator<Item = (&BlockId, &Block)> {
         self.blocks.iter()
     }
+
+    /// Create a checkpoint of the current blocklace state.
+    ///
+    /// The checkpoint includes:
+    /// - All block data (serialized)
+    /// - Current tips per creator
+    /// - Detected equivocators
+    /// - Ordering state (what has been finalized)
+    ///
+    /// A new node joining the network can restore from this checkpoint
+    /// without replaying the full block history.
+    pub fn checkpoint(&self) -> CheckpointData {
+        let blocks: Vec<Vec<u8>> = self.blocks.values().map(|b| b.to_bytes()).collect();
+        CheckpointData {
+            blocks,
+            tips: self.tips.clone(),
+            equivocators: self.equivocators.iter().copied().collect(),
+            ordered_block_ids: self.finality.ordering.ordered.clone(),
+            attested_block_ids: self.finality.ordering.attested.iter().copied().collect(),
+        }
+    }
+
+    /// Restore a blocklace from a checkpoint.
+    ///
+    /// This trusts the checkpoint data (blocks are NOT re-verified against
+    /// signatures). Use only for trusted checkpoint sources (e.g., local disk,
+    /// or after verifying the checkpoint's own signature/hash).
+    pub fn from_checkpoint(
+        checkpoint: &CheckpointData,
+        self_key: SigningKey,
+        quorum_threshold: usize,
+    ) -> Result<Self, String> {
+        let mut lace = Self::new(self_key, quorum_threshold);
+
+        // Restore blocks (order doesn't matter since we skip closure checks).
+        for block_bytes in &checkpoint.blocks {
+            let block = Block::from_bytes(block_bytes)
+                .ok_or_else(|| "failed to deserialize block from checkpoint".to_string())?;
+            let id = block.id();
+            lace.blocks.insert(id, block);
+        }
+
+        // Restore tips.
+        lace.tips = checkpoint.tips.clone();
+
+        // Restore equivocators.
+        lace.equivocators = checkpoint.equivocators.iter().copied().collect();
+
+        // Restore ordering state.
+        lace.finality.ordering.ordered = checkpoint.ordered_block_ids.clone();
+        lace.finality.ordering.attested = checkpoint.attested_block_ids.iter().copied().collect();
+
+        // Restore self_seq from our own tip.
+        let self_creator = lace.self_creator();
+        if let Some(tip_id) = lace.tips.get(&self_creator) {
+            if let Some(tip_block) = lace.blocks.get(tip_id) {
+                lace.self_seq = tip_block.seq;
+            }
+        }
+
+        Ok(lace)
+    }
+}
+
+/// Snapshot of the blocklace state for persistence or new-node catch-up.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CheckpointData {
+    /// All blocks in serialized form.
+    pub blocks: Vec<Vec<u8>>,
+    /// Creator -> tip block ID.
+    pub tips: HashMap<[u8; 32], BlockId>,
+    /// Known equivocator public keys.
+    pub equivocators: Vec<[u8; 32]>,
+    /// Block IDs in their total order.
+    pub ordered_block_ids: Vec<BlockId>,
+    /// Block IDs that have been attested by quorum.
+    pub attested_block_ids: Vec<BlockId>,
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -728,7 +893,7 @@ fn topological_sort(
 
     let mut queue: VecDeque<BlockId> = in_degree
         .iter()
-        .filter(|(_, &deg)| deg == 0)
+        .filter(|&(_, &deg)| deg == 0)
         .map(|(id, _)| *id)
         .collect();
 
