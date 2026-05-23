@@ -968,6 +968,7 @@ async fn post_submit_turn(
         call_forest: CallForest::new(),
         depends_on: vec![],
         previous_receipt_hash: None,
+        conservation_proof: None,
     };
 
     // Sign the turn.

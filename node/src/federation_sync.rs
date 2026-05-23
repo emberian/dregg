@@ -803,23 +803,31 @@ pub async fn run_federation_sync(
             };
 
             if let Some(items) = batch {
-                // Broadcast released batch items via gossip as intent fulfillments.
-                // Real items are published; dummies are also published (indistinguishable
-                // at the gossip layer, fail verification silently on the receiver side).
+                // Broadcast released batch items via gossip as fulfillment reveals.
+                // Both real items and dummies are published (indistinguishable at the
+                // gossip layer). Dummies fail verification on the receiver side and are
+                // silently discarded. This provides timing decorrelation.
                 if let Some(gossip_handle) = state_delay_pool.gossip().await {
                     for item in &items {
                         match item {
                             pyana_intent::delay_pool::PoolItem::Real(result) => {
-                                let data = postcard::to_stdvec(&result.fulfillment)
-                                    .unwrap_or_default();
+                                // Serialize the intent_id + fulfiller commitment as the
+                                // reveal payload. Full fulfillment details are exchanged
+                                // via direct channel after the reveal is observed.
+                                let mut data = Vec::with_capacity(64);
+                                data.extend_from_slice(&result.commitment.intent_id);
+                                data.extend_from_slice(&result.commitment.commitment_hash);
                                 let hash = *blake3::hash(&data).as_bytes();
                                 gossip_handle.gossip_turn(hash, data).await;
                             }
                             pyana_intent::delay_pool::PoolItem::Dummy(dummy) => {
                                 // Publish dummy as a turn with the dummy's commitment_hash.
                                 // Receivers will fail to decode/verify and silently discard.
-                                let data = dummy.commitment_hash.to_vec();
-                                gossip_handle.gossip_turn(dummy.intent_id, data).await;
+                                let mut data = Vec::with_capacity(64);
+                                data.extend_from_slice(&dummy.intent_id);
+                                data.extend_from_slice(&dummy.commitment_hash);
+                                let hash = *blake3::hash(&data).as_bytes();
+                                gossip_handle.gossip_turn(hash, data).await;
                             }
                         }
                     }
