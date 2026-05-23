@@ -48,12 +48,6 @@ struct Args {
     #[arg(long, default_value = "http://127.0.0.1:8420", env = "PYANA_NODE_URL")]
     node_url: String,
 
-    /// Run in dev mode: allows starting with an all-zeroes federation root
-    /// if the node is unreachable.
-    /// WARNING: proof verification will reject all federation membership proofs.
-    #[arg(long, env = "PYANA_DEV")]
-    dev: bool,
-
     /// Listen address.
     #[arg(long, default_value = "127.0.0.1:3030", env = "PYANA_LISTEN")]
     listen: SocketAddr,
@@ -214,7 +208,7 @@ async fn main() {
 
     let args = Args::parse();
 
-    // Resolve federation root: explicit > node fetch > dev fallback.
+    // Resolve federation root: explicit > node fetch > refuse to start.
     let (federation_root, root_updated) = match &args.federation_root {
         Some(hex) => match parse_federation_root(hex) {
             Ok(root) => {
@@ -230,7 +224,7 @@ async fn main() {
             }
         },
         None => {
-            // Try fetching from the node.
+            // Fetch from the node (required).
             info!(node_url = %args.node_url, "fetching federation root from node...");
             match fetch_federation_root(&args.node_url).await {
                 Ok(root) => {
@@ -242,20 +236,15 @@ async fn main() {
                     (root, Some(Instant::now()))
                 }
                 Err(e) => {
-                    if args.dev {
-                        warn!(
-                            error = %e,
-                            "could not reach node; running in --dev mode with zeroed federation root"
-                        );
-                        ([0u8; 32], None)
-                    } else {
-                        error!(
-                            "failed to fetch federation root from node: {e}\n\
-                             Hint: start the devnet first, or pass --federation-root explicitly, \
-                             or use --dev for testing without verification."
-                        );
-                        std::process::exit(1);
-                    }
+                    error!(
+                        "cannot reach node at {}: {e}\n\
+                         A federation root is required for verification. Either:\n\
+                         - Start a devnet node (pyana-node) at the default address, or\n\
+                         - Pass --node-url pointing to a running node, or\n\
+                         - Pass --federation-root explicitly.",
+                        args.node_url
+                    );
+                    std::process::exit(1);
                 }
             }
         }

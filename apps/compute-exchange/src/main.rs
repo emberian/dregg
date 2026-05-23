@@ -130,18 +130,14 @@ struct CreateDisputeRequest {
 #[derive(Parser, Debug)]
 #[command(name = "compute-exchange")]
 struct Args {
-    /// Federation root hash (64 hex chars). If not provided, fetches from a federation node.
+    /// Federation root hash (64 hex chars). If not provided, fetches from the node.
     #[arg(long, env = "PYANA_FEDERATION_ROOT")]
     federation_root: Option<String>,
 
-    /// Federation node URL to sync root from (not yet implemented).
-    #[arg(long, env = "PYANA_FEDERATION_NODE")]
-    federation_node: Option<String>,
-
-    /// Run in dev mode: allows starting with an all-zeroes federation root.
-    /// WARNING: proof verification will reject all federation membership proofs.
-    #[arg(long, env = "PYANA_DEV")]
-    dev: bool,
+    /// URL of a running pyana-node to fetch the federation root from.
+    /// The app will query /status and /federation/roots on startup.
+    #[arg(long, default_value = "http://127.0.0.1:8420", env = "PYANA_NODE_URL")]
+    node_url: String,
 
     /// Listen address.
     #[arg(long, default_value = "127.0.0.1:3040", env = "PYANA_LISTEN")]
@@ -158,6 +154,86 @@ fn parse_federation_root(hex: &str) -> Result<[u8; 32], String> {
     hex_to_bytes32(hex).map_err(|e| format!("invalid federation root hex: {e}"))
 }
 
+// =============================================================================
+// Node Client
+// =============================================================================
+
+/// Response shape from the node's GET /status endpoint.
+#[derive(Deserialize)]
+struct NodeStatusResponse {
+    healthy: bool,
+    latest_height: u64,
+    #[allow(dead_code)]
+    peer_count: usize,
+}
+
+/// Response shape from the node's GET /federation/roots endpoint.
+#[derive(Deserialize)]
+struct AttestedRootInfo {
+    #[allow(dead_code)]
+    height: u64,
+    merkle_root: String,
+    #[allow(dead_code)]
+    timestamp: i64,
+    #[allow(dead_code)]
+    signatures: usize,
+}
+
+/// Fetch the latest federation root from a running node.
+///
+/// Queries `/federation/roots` and returns the merkle_root of the highest-height
+/// attested root. Falls back to `/status` to verify the node is reachable.
+async fn fetch_federation_root(node_url: &str) -> Result<[u8; 32], String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| format!("failed to build HTTP client: {e}"))?;
+
+    // First verify the node is healthy.
+    let status_url = format!("{node_url}/status");
+    let status: NodeStatusResponse = client
+        .get(&status_url)
+        .send()
+        .await
+        .map_err(|e| format!("node unreachable at {status_url}: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("invalid status response: {e}"))?;
+
+    if !status.healthy {
+        return Err("node reports unhealthy status".to_string());
+    }
+
+    // Fetch attested roots.
+    let roots_url = format!("{node_url}/federation/roots");
+    let roots: Vec<AttestedRootInfo> = client
+        .get(&roots_url)
+        .send()
+        .await
+        .map_err(|e| format!("failed to fetch federation roots: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("invalid federation roots response: {e}"))?;
+
+    if roots.is_empty() {
+        return Err(format!(
+            "node at height {} has no attested roots yet",
+            status.latest_height
+        ));
+    }
+
+    // Use the last root (highest height, the list is ordered).
+    let latest = roots.last().unwrap();
+    let root = hex_to_bytes32(&latest.merkle_root)
+        .map_err(|e| format!("invalid merkle_root hex from node: {e}"))?;
+
+    if root == [0u8; 32] {
+        return Err("node returned zeroed federation root".to_string());
+    }
+
+    Ok(root)
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -167,13 +243,13 @@ async fn main() {
 
     let args = Args::parse();
 
-    // Resolve federation root.
+    // Resolve federation root: explicit > node fetch > refuse to start.
     let federation_root = match &args.federation_root {
         Some(hex) => match parse_federation_root(hex) {
             Ok(root) => {
                 info!(
                     root = %bytes32_to_hex(&root),
-                    "federation root configured (from PYANA_FEDERATION_ROOT)"
+                    "federation root configured (explicit)"
                 );
                 root
             }
@@ -183,16 +259,28 @@ async fn main() {
             }
         },
         None => {
-            if args.dev {
-                warn!(
-                    "running in --dev mode with zeroed federation root; federation membership proofs will be rejected"
-                );
-                [0u8; 32]
-            } else {
-                error!(
-                    "no federation root configured. Set PYANA_FEDERATION_ROOT or --federation-root, or use --dev for testing without verification."
-                );
-                std::process::exit(1);
+            // Fetch from the node (required).
+            info!(node_url = %args.node_url, "fetching federation root from node...");
+            match fetch_federation_root(&args.node_url).await {
+                Ok(root) => {
+                    info!(
+                        root = %bytes32_to_hex(&root),
+                        node_url = %args.node_url,
+                        "federation root fetched from node"
+                    );
+                    root
+                }
+                Err(e) => {
+                    error!(
+                        "cannot reach node at {}: {e}\n\
+                         A federation root is required for verification. Either:\n\
+                         - Start a devnet node (pyana-node) at the default address, or\n\
+                         - Pass --node-url pointing to a running node, or\n\
+                         - Pass --federation-root explicitly.",
+                        args.node_url
+                    );
+                    std::process::exit(1);
+                }
             }
         }
     };

@@ -32,11 +32,14 @@ for i in 0 1 2; do
   cp "$DEVNET_DIR/node-$i.key" "$NODE_DIR/node.key"
 done
 
+BOUNTY_BOARD="$PROJECT_ROOT/target/release/pyana-bounty-board"
+COMPUTE_EXCHANGE="$PROJECT_ROOT/target/release/compute-exchange"
+
 cleanup() {
   echo ""
   echo "Cleaning up..."
-  kill $PID0 $PID1 $PID2 2>/dev/null || true
-  wait $PID0 $PID1 $PID2 2>/dev/null || true
+  kill $PID0 $PID1 $PID2 $PID_BB $PID_CE 2>/dev/null || true
+  wait $PID0 $PID1 $PID2 $PID_BB $PID_CE 2>/dev/null || true
   rm -rf "$DEVNET_DIR"
   echo "Done."
 }
@@ -118,6 +121,41 @@ for i in 0 1 2; do
   STATUS=$(curl -s "http://127.0.0.1:$PORT/status" 2>/dev/null || echo "{}")
   echo "Node $i: $STATUS"
 done
+
+echo ""
+echo "=== Starting Apps (bounty-board + compute-exchange) ==="
+# Apps fetch federation root from the running node — no --dev flag needed.
+if [ -x "$BOUNTY_BOARD" ]; then
+  echo "Starting bounty-board (HTTP :3030, node: 127.0.0.1:8420) ..."
+  "$BOUNTY_BOARD" --node-url "http://127.0.0.1:8420" --listen "127.0.0.1:3030" &
+  PID_BB=$!
+  sleep 1
+  BB_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:3030/health" 2>/dev/null)
+  if [ "$BB_CODE" = "200" ]; then
+    echo "  bounty-board: OK"
+  else
+    echo "  bounty-board: FAILED (HTTP $BB_CODE)"
+  fi
+else
+  echo "  bounty-board binary not found, skipping (build with: cargo build --release -p pyana-bounty-board)"
+  PID_BB=""
+fi
+
+if [ -x "$COMPUTE_EXCHANGE" ]; then
+  echo "Starting compute-exchange (HTTP :3040, node: 127.0.0.1:8420) ..."
+  "$COMPUTE_EXCHANGE" --node-url "http://127.0.0.1:8420" --listen "127.0.0.1:3040" &
+  PID_CE=$!
+  sleep 1
+  CE_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:3040/health" 2>/dev/null)
+  if [ "$CE_CODE" = "200" ]; then
+    echo "  compute-exchange: OK"
+  else
+    echo "  compute-exchange: FAILED (HTTP $CE_CODE)"
+  fi
+else
+  echo "  compute-exchange binary not found, skipping (build with: cargo build --release -p compute-exchange)"
+  PID_CE=""
+fi
 
 echo ""
 echo "=== Faucet Test (Node 0) ==="

@@ -7,7 +7,7 @@
 #
 # Prerequisites:
 #   1. Devnet running (pyana-node on port 8420)
-#   2. Bounty board running: cargo run -p pyana-bounty-board
+#   2. Bounty board running: cargo run -p pyana-bounty-board -- --node-url http://127.0.0.1:8420
 #
 # Usage:
 #   chmod +x demo.sh && ./demo.sh

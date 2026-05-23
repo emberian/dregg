@@ -3,10 +3,6 @@ name = "compute-exchange"
 version = "0.1.0"
 edition = "2024"
 
-[features]
-default = []
-dev = []
-
 [dependencies]
 pyana-app-framework = { path = "../../app-framework" }
 pyana-circuit = { path = "../../circuit", default-features = false, features = ["mock"] }
@@ -22,6 +18,7 @@ clap = { version = "4", features = ["derive", "env"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 blake3 = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [lints]
 workspace = true
