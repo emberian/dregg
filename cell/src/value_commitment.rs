@@ -782,9 +782,12 @@ pub fn verify_conservation_with_range(
         .zip(output_commitments.iter())
         .enumerate()
     {
-        range_proof
-            .verify_range(commitment)
-            .map_err(|e| FullConservationError::RangeProofFailed { output_index: i, source: e })?;
+        range_proof.verify_range(commitment).map_err(|e| {
+            FullConservationError::RangeProofFailed {
+                output_index: i,
+                source: e,
+            }
+        })?;
     }
 
     Ok(())
@@ -815,7 +818,10 @@ impl core::fmt::Display for FullConservationError {
                     expected, got
                 )
             }
-            Self::RangeProofFailed { output_index, source } => {
+            Self::RangeProofFailed {
+                output_index,
+                source,
+            } => {
                 write!(
                     f,
                     "range proof failed for output {}: {}",
@@ -1190,7 +1196,8 @@ mod tests {
         let blinding = test_scalar(87);
         let value = 12345u64;
         let commitment = ValueCommitment::commit(value, &blinding);
-        let proof = <BulletproofRangeProof as RangeProofTrait>::prove(value, &blinding, &commitment);
+        let proof =
+            <BulletproofRangeProof as RangeProofTrait>::prove(value, &blinding, &commitment);
         assert!(<BulletproofRangeProof as RangeProofTrait>::verify(&proof, &commitment).is_ok());
     }
 
@@ -1330,9 +1337,14 @@ mod tests {
             output_range_proofs: vec![legit_range_proof.clone(), legit_range_proof],
         };
         let result = verify_conservation_with_range(&inputs, &outputs, &full_proof, b"attack-tx");
-        assert!(result.is_err(), "full conservation with range proofs rejects the attack");
+        assert!(
+            result.is_err(),
+            "full conservation with range proofs rejects the attack"
+        );
         match result {
-            Err(FullConservationError::RangeProofFailed { output_index: 1, .. }) => {}
+            Err(FullConservationError::RangeProofFailed {
+                output_index: 1, ..
+            }) => {}
             other => panic!("expected RangeProofFailed at index 1, got {:?}", other),
         }
     }

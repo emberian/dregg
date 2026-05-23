@@ -56,7 +56,9 @@ pub mod wordlist;
 
 // Re-export primary types at crate root for convenience.
 pub use client::{PresentationResult, RevocationStatus, SiloClient};
-pub use committed_turn::{CommittedNoteInput, CommittedNoteOutput, CommittedTurnBuilder, OwnedNote};
+pub use committed_turn::{
+    CommittedNoteInput, CommittedNoteOutput, CommittedTurnBuilder, OwnedNote,
+};
 pub use error::SdkError;
 pub use runtime::{AgentRuntime, SubAgent};
 pub use wallet::{

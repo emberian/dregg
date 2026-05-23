@@ -381,7 +381,7 @@ impl ComposedTurn {
         };
         let signature = Signature::from_bytes(sig_bytes);
         let turn_hash = self.turn.hash();
-        
+
         verifying_key.verify_strict(&turn_hash, &signature).is_ok()
     }
 }

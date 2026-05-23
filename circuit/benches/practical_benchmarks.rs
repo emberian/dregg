@@ -329,8 +329,7 @@ fn bench_proof_verification(c: &mut Criterion) {
 #[cfg(feature = "mina")]
 fn bench_recursive_composition(c: &mut Criterion) {
     use pyana_circuit::backends::mina::{
-        PicklesRecursiveProof, PicklesStateTransition, prove_recursive_step,
-        verify_recursive_proof,
+        PicklesRecursiveProof, PicklesStateTransition, prove_recursive_step, verify_recursive_proof,
     };
 
     let mut group = c.benchmark_group("4_recursive_pickles");
@@ -527,9 +526,7 @@ fn bench_federation_ops(c: &mut Criterion) {
 
         for &num_ancestors in &[1, 4, 8] {
             let ancestor_hashes: Vec<BabyBear> = (0..num_ancestors)
-                .map(|i| {
-                    hash_many(&[BabyBear::new(0xBEEF_0000 + i as u32), BabyBear::new(0xCAFE)])
-                })
+                .map(|i| hash_many(&[BabyBear::new(0xBEEF_0000 + i as u32), BabyBear::new(0xCAFE)]))
                 .collect();
 
             group.bench_with_input(
@@ -544,7 +541,10 @@ fn bench_federation_ops(c: &mut Criterion) {
 
             let proof = prove_non_revocation(&ancestor_hashes, &tree).unwrap();
             group.bench_with_input(
-                BenchmarkId::new("verify_non_revocation", format!("{num_ancestors}_ancestors")),
+                BenchmarkId::new(
+                    "verify_non_revocation",
+                    format!("{num_ancestors}_ancestors"),
+                ),
                 &num_ancestors,
                 |b, _| {
                     b.iter(|| {

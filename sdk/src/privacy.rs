@@ -749,7 +749,13 @@ pub fn verify_note_spending(
     asset_type: BabyBear,
     proof: &StarkProof,
 ) -> Result<(), String> {
-    pyana_circuit::note_spending_air::verify_note_spend(nullifier, merkle_root, value, asset_type, proof)
+    pyana_circuit::note_spending_air::verify_note_spend(
+        nullifier,
+        merkle_root,
+        value,
+        asset_type,
+        proof,
+    )
 }
 
 // =============================================================================

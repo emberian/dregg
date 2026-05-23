@@ -59,10 +59,7 @@
 use crate::field::{BABYBEAR_P, BabyBear};
 
 #[cfg(feature = "mina")]
-use crate::stark::{
-    StarkAir, build_evaluation_domain, get_root_of_unity, interpolate,
-    poly_eval,
-};
+use crate::stark::{StarkAir, build_evaluation_domain, get_root_of_unity, interpolate, poly_eval};
 
 #[cfg(feature = "mina")]
 use ark_ff::PrimeField;

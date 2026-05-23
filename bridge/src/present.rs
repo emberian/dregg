@@ -1003,7 +1003,6 @@ impl BridgePresentationBuilder {
         request: &AuthRequest,
     ) -> Result<BridgePresentationProof, AuthError> {
         use pyana_circuit::ivc::prove_validated_ivc;
-        
 
         // 1. Get the final state.
         let final_step = self.chain.last().ok_or(AuthError::EmptyState)?;
@@ -2536,8 +2535,7 @@ impl VerifierConfig {
     /// Returns true if the given AIR name is accepted by this config.
     /// An empty `accepted_air_names` list means all known AIRs are accepted.
     pub fn accepts_air(&self, air_name: &str) -> bool {
-        self.accepted_air_names.is_empty()
-            || self.accepted_air_names.iter().any(|a| a == air_name)
+        self.accepted_air_names.is_empty() || self.accepted_air_names.iter().any(|a| a == air_name)
     }
 }
 

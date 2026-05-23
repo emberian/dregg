@@ -6487,9 +6487,7 @@ fn test_create_escrow_correct_cell_matches_target() {
 #[test]
 fn test_committed_conservation_valid_proof_passes() {
     use curve25519_dalek::scalar::Scalar;
-    use pyana_cell::{
-        ValueCommitment, prove_conservation,
-    };
+    use pyana_cell::{ValueCommitment, prove_conservation};
 
     // Setup: single agent cell with open permissions and a proof verifier.
     let (mut ledger, agent_id, _target_id) = setup_two_open_cells(100000, 0);
@@ -6583,9 +6581,7 @@ fn test_committed_conservation_valid_proof_passes() {
 #[test]
 fn test_committed_conservation_inflated_output_fails() {
     use curve25519_dalek::scalar::Scalar;
-    use pyana_cell::{
-        ValueCommitment, prove_conservation,
-    };
+    use pyana_cell::{ValueCommitment, prove_conservation};
 
     // Setup: single agent cell with open permissions and a proof verifier.
     let (mut ledger, agent_id, _target_id) = setup_two_open_cells(100000, 0);

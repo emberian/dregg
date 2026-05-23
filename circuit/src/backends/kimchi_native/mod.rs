@@ -33,10 +33,7 @@ use mina_poseidon::{
     poseidon::{ArithmeticSponge, Sponge},
     sponge::{DefaultFqSponge, DefaultFrSponge},
 };
-use poly_commitment::{
-    commitment::CommitmentCurve,
-    ipa::OpeningProof,
-};
+use poly_commitment::{commitment::CommitmentCurve, ipa::OpeningProof};
 
 pub(crate) type SpongeParams = PlonkSpongeConstantsKimchi;
 pub(crate) type BaseSponge = DefaultFqSponge<VestaParameters, SpongeParams, FULL_ROUNDS>;
@@ -64,7 +61,6 @@ pub(crate) fn u64_to_fp(v: u64) -> Fp {
 }
 
 pub(crate) fn fp_to_bytes32(fp: &Fp) -> [u8; 32] {
-    
     let bigint = fp.into_bigint();
     let limbs = bigint.as_ref();
     let mut out = [0u8; 32];
@@ -243,10 +239,7 @@ impl KimchiNativeBackend {
         let nb: [u8; 32] = proof.public_input_bytes[32..64]
             .try_into()
             .map_err(|_| "bad num bytes")?;
-        let num_ancestors = {
-            
-            bytes32_to_fp(&nb).into_bigint().as_ref()[0] as usize
-        };
+        let num_ancestors = { bytes32_to_fp(&nb).into_bigint().as_ref()[0] as usize };
         if num_ancestors != expected_elements.len() {
             return Ok(false);
         }
@@ -720,7 +713,6 @@ impl KimchiNativeBackend {
 
         // Token expiry check (verifier-side)
         if vbh != Fp::zero() && vnah != Fp::zero() {
-            
             let diff = vnah - vbh;
             let diff_u64 = diff.into_bigint().as_ref()[0];
             let top_bit = (diff_u64 >> (GTE_DIFF_BITS - 1)) & 1;
@@ -749,12 +741,11 @@ impl KimchiNativeBackend {
 // ============================================================================
 
 use super::{
-    AccumulatorBackend, AccumulatorInput, CrossStateBackend,
-    CrossStateCombiningRule, CrossStateOutput, CrossStateSource, DerivationBackend,
-    DerivationInput, DerivationOutput, FullProofBackend, IvcBackend, IvcFoldStep, IvcOutput,
-    PredicateBackend, PredicateInput, PredicateKind, PresentationBackend, PresentationInput,
-    PresentationOutput, ProofBackend, RelationalPredicateInput, TemporalPredicateInput,
-    TemporalPredicateOutput,
+    AccumulatorBackend, AccumulatorInput, CrossStateBackend, CrossStateCombiningRule,
+    CrossStateOutput, CrossStateSource, DerivationBackend, DerivationInput, DerivationOutput,
+    FullProofBackend, IvcBackend, IvcFoldStep, IvcOutput, PredicateBackend, PredicateInput,
+    PredicateKind, PresentationBackend, PresentationInput, PresentationOutput, ProofBackend,
+    RelationalPredicateInput, TemporalPredicateInput, TemporalPredicateOutput,
 };
 
 impl ProofBackend for KimchiNativeBackend {
@@ -970,7 +961,7 @@ impl DerivationBackend for KimchiNativeBackend {
 
         // Convert Fp values back to FieldElement (u64).
         // For Pasta field elements > u64::MAX, we take the low 64 bits.
-        
+
         let state_root_u64 = state_root_fp.into_bigint().as_ref()[0];
         let derived_hash_u64 = derived_hash_fp.into_bigint().as_ref()[0];
 
@@ -1078,7 +1069,6 @@ impl PredicateBackend for KimchiNativeBackend {
             .try_into()
             .map_err(|_| "e")?;
 
-        
         let num_steps_fp = bytes32_to_fp(&nb_bytes);
         let final_state_root_fp = bytes32_to_fp(&fsr_bytes);
         let initial_block_height_fp = bytes32_to_fp(&ibh_bytes);
@@ -1114,7 +1104,7 @@ impl PredicateBackend for KimchiNativeBackend {
             .iter()
             .map(|p| {
                 // Evaluate the predicate: value vs threshold with the given kind
-                
+
                 let v = p.value;
                 let t = p.threshold;
                 let result = match p.kind {
@@ -1171,7 +1161,7 @@ impl PredicateBackend for KimchiNativeBackend {
         let kb: [u8; 32] = proof.public_input_bytes[96..128]
             .try_into()
             .map_err(|_| "e")?;
-        
+
         let efh = bytes32_to_fp(&fb);
         let enp = bytes32_to_fp(&nb).into_bigint().as_ref()[0];
         let erc = bytes32_to_fp(&cb);
@@ -1302,10 +1292,7 @@ impl AccumulatorBackend for KimchiNativeBackend {
         let nb: [u8; 32] = proof.public_input_bytes[32..64]
             .try_into()
             .map_err(|_| "bad num bytes")?;
-        let proof_num = {
-            
-            bytes32_to_fp(&nb).into_bigint().as_ref()[0] as usize
-        };
+        let proof_num = { bytes32_to_fp(&nb).into_bigint().as_ref()[0] as usize };
         if proof_num != num_ancestors {
             return Ok(false);
         }
@@ -1368,7 +1355,6 @@ impl IvcBackend for KimchiNativeBackend {
 
         KimchiNativeBackend::verify_ivc(proof, &ir, &fr)?;
 
-        
         Ok(IvcOutput {
             initial_root: ir.into_bigint().as_ref()[0],
             final_root: fr.into_bigint().as_ref()[0],
@@ -1509,8 +1495,6 @@ impl PresentationBackend for KimchiNativeBackend {
                 return Err("Token expired".into());
             }
         }
-
-        
 
         // Extract presentation tag as 4 u64 elements
         let tag_bytes = fp_to_bytes32(&proof.presentation_tag);
@@ -1659,7 +1643,6 @@ impl CrossStateBackend for KimchiNativeBackend {
             .try_into()
             .map_err(|_| "bad bytes")?;
 
-        
         let composition_root_fp = bytes32_to_fp(&sr_bytes);
         let final_derived_hash_fp = bytes32_to_fp(&dh_bytes);
 

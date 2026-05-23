@@ -58,8 +58,8 @@ use crate::committed_threshold::{
     verify_committed_threshold as verify_committed_threshold_air,
 };
 use crate::compound_predicate_air::{
-    BooleanFormula, CompoundPredicateProof, MAX_COMPOUND_PREDICATES,
-    prove_compound_predicate, verify_compound_predicate,
+    BooleanFormula, CompoundPredicateProof, MAX_COMPOUND_PREDICATES, prove_compound_predicate,
+    verify_compound_predicate,
 };
 use crate::field::BabyBear;
 use crate::poseidon2;
@@ -75,9 +75,7 @@ use crate::relational_predicate_air::{
 use crate::temporal_predicate_air::p3_temporal::{
     P3TemporalPredicateProof, prove_temporal_predicate_p3, verify_temporal_predicate_p3,
 };
-use crate::temporal_predicate_air::{
-    TemporalPredicateProof, verify_temporal_predicate,
-};
+use crate::temporal_predicate_air::{TemporalPredicateProof, verify_temporal_predicate};
 
 // =============================================================================
 // Program Representation
@@ -1558,14 +1556,10 @@ fn verify_single_proof(
                 ..
             },
         ) => {
-            let expected_commitment =
-                expected_commitments
-                    .get(attribute)
-                    .copied()
-                    .unwrap_or({
-                        // If no explicit commitment provided, we cannot verify.
-                        BabyBear::ZERO
-                    });
+            let expected_commitment = expected_commitments.get(attribute).copied().unwrap_or({
+                // If no explicit commitment provided, we cannot verify.
+                BabyBear::ZERO
+            });
             verify_predicate(proof, BabyBear::new(*threshold as u32), expected_commitment)
         }
 

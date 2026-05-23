@@ -175,18 +175,13 @@ impl StealthAddress {
     /// Uses only the view key (no spending authority needed for scanning).
     ///
     /// Returns `true` if this address was generated for the given meta-address.
-    pub fn check_ownership(
-        &self,
-        view_private_key: &[u8; 32],
-        spend_pubkey: &[u8; 32],
-    ) -> bool {
+    pub fn check_ownership(&self, view_private_key: &[u8; 32], spend_pubkey: &[u8; 32]) -> bool {
         // Recompute shared secret: DH(v, R) = v * R
         let view_secret = X25519Secret::from(*view_private_key);
         let eph_pubkey = X25519Public::from(self.ephemeral_pubkey);
         let shared_dh = view_secret.diffie_hellman(&eph_pubkey);
 
-        let shared_secret =
-            derive_shared_secret(shared_dh.as_bytes(), &self.ephemeral_pubkey);
+        let shared_secret = derive_shared_secret(shared_dh.as_bytes(), &self.ephemeral_pubkey);
 
         // Recompute expected one-time pubkey: P' = shared_scalar * G_ed + S
         let expected = derive_one_time_pubkey(&shared_secret, spend_pubkey);
@@ -211,8 +206,7 @@ impl StealthAddress {
         let eph_pubkey = X25519Public::from(self.ephemeral_pubkey);
         let shared_dh = view_secret.diffie_hellman(&eph_pubkey);
 
-        let shared_secret =
-            derive_shared_secret(shared_dh.as_bytes(), &self.ephemeral_pubkey);
+        let shared_secret = derive_shared_secret(shared_dh.as_bytes(), &self.ephemeral_pubkey);
 
         // Derive the one-time spending key: k = shared_scalar + s (mod l)
         derive_one_time_spending_key(&shared_secret, spend_private_key)
@@ -254,8 +248,7 @@ impl StealthAnnouncement {
         let view_secret = X25519Secret::from(*view_private_key);
         let eph_pubkey = X25519Public::from(self.ephemeral_pubkey);
         let shared_dh = view_secret.diffie_hellman(&eph_pubkey);
-        let shared_secret =
-            derive_shared_secret(shared_dh.as_bytes(), &self.ephemeral_pubkey);
+        let shared_secret = derive_shared_secret(shared_dh.as_bytes(), &self.ephemeral_pubkey);
         shared_secret[0] == self.view_tag
     }
 }
@@ -276,9 +269,9 @@ fn derive_shared_secret(dh_output: &[u8; 32], ephemeral_pubkey: &[u8; 32]) -> [u
 /// We interpret the shared secret as an Ed25519 scalar (clamped) and compute
 /// the point addition on the Ed25519 curve.
 fn derive_one_time_pubkey(shared_secret: &[u8; 32], spend_pubkey: &[u8; 32]) -> [u8; 32] {
+    use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
     use curve25519_dalek::edwards::{CompressedEdwardsY, EdwardsPoint};
     use curve25519_dalek::scalar::Scalar;
-    use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 
     // Derive a sub-scalar from the shared secret (reduce mod l for Ed25519 safety)
     let scalar_bytes = derive_stealth_scalar(shared_secret);
@@ -302,7 +295,10 @@ fn derive_one_time_pubkey(shared_secret: &[u8; 32], spend_pubkey: &[u8; 32]) -> 
 ///
 /// The spend_private_key is an Ed25519 seed. We expand it to get the scalar,
 /// then add the shared scalar.
-fn derive_one_time_spending_key(shared_secret: &[u8; 32], spend_private_key: &[u8; 32]) -> [u8; 32] {
+fn derive_one_time_spending_key(
+    shared_secret: &[u8; 32],
+    spend_private_key: &[u8; 32],
+) -> [u8; 32] {
     use curve25519_dalek::scalar::Scalar;
 
     // Derive the shared scalar (same as in one_time_pubkey derivation)
@@ -455,7 +451,7 @@ mod tests {
         let (stealth_addr, shared_secret) = meta.generate_stealth_address();
         let note = Note::with_randomness(
             stealth_addr.one_time_pubkey, // owner = one-time pubkey
-            [1, 100, 0, 0, 0, 0, 0, 0],  // 100 units of asset 1
+            [1, 100, 0, 0, 0, 0, 0, 0],   // 100 units of asset 1
             [42u8; 32],
         );
 
@@ -485,8 +481,13 @@ mod tests {
         let keys = StealthKeys::from_keys([16u8; 32], [17u8; 32]);
         let meta = keys.meta_address();
 
-        let (stealth_addr, shared_secret) = meta.generate_stealth_address_with_ephemeral([18u8; 32]);
-        let note = Note::with_randomness(stealth_addr.one_time_pubkey, [1, 50, 0, 0, 0, 0, 0, 0], [0u8; 32]);
+        let (stealth_addr, shared_secret) =
+            meta.generate_stealth_address_with_ephemeral([18u8; 32]);
+        let note = Note::with_randomness(
+            stealth_addr.one_time_pubkey,
+            [1, 50, 0, 0, 0, 0, 0, 0],
+            [0u8; 32],
+        );
         let commitment = note.commitment();
 
         let announcement = StealthAnnouncement::new(&stealth_addr, commitment, &shared_secret);

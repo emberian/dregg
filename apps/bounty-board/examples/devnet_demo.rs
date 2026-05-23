@@ -18,41 +18,30 @@
 //! ## Running
 //!
 //! ```bash
-//! # Start the devnet node:
-//! cargo run -p pyana-node -- run --data-dir /tmp/devnet
-//!
-//! # Start the bounty board (connects to devnet node on default port):
-//! cargo run -p pyana-bounty-board -- --node-url http://127.0.0.1:8420
-//!
-//! # Run this demo:
+//! # Self-contained: starts the server in-process, no external node required.
 //! cargo run -p pyana-bounty-board --example devnet_demo
 //! ```
 //!
 //! ## Notes
 //!
 //! - Generating real STARK proofs takes ~200-500ms depending on hardware.
-//! - The demo uses `#[tokio::main]` for async HTTP calls to the bounty board.
-//! - Federation root is fetched from the running bounty board's /health endpoint,
-//!   then configured on the wallet side to match.
+//! - The demo starts the bounty board server in-process (no external dependencies).
+//! - Federation root is computed from the worker's proof key and configured on the
+//!   board so verification passes.
 
 use std::time::Instant;
 
-use pyana_sdk::{AgentWallet, AuthRequest, BabyBear};
 use pyana_circuit::ivc::IvcBuilder;
-use pyana_circuit::fold_air::{FoldWitness, RemovedFact, compute_test_checks_commitment};
+use pyana_sdk::{AgentWallet, AuthRequest, BabyBear};
 
+use pyana_bounty_board::server::{ServerConfig, start_server};
 use pyana_bounty_board::{
-    ClaimRequest, CreateBountyRequest, QualificationRequirement,
-    SubmitRequest, CompletionEvidence, ApproveRequest, compute_worker_commitment,
+    ApproveRequest, ClaimRequest, CompletionEvidence, CreateBountyRequest,
+    QualificationRequirement, SubmitRequest, compute_worker_commitment,
 };
 
 use reqwest::Client;
 use serde_json::Value;
-
-/// The bounty board base URL (override with BOUNTY_BOARD_URL env var).
-fn base_url() -> String {
-    std::env::var("BOUNTY_BOARD_URL").unwrap_or_else(|_| "http://127.0.0.1:3030".into())
-}
 
 /// Deterministic root key for the worker's credential token.
 /// In production this would be securely generated and managed.
@@ -62,13 +51,32 @@ const WORKER_ROOT_KEY: [u8; 32] = [0x42; 32];
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Pyana Bounty Board: Privacy-Preserving Devnet Demo ===\n");
 
-    let base = base_url();
+    // =========================================================================
+    // Step 0: Start the bounty board server in-process
+    // =========================================================================
+    println!("[0] Starting bounty board server in-process...");
+
+    // Compute the federation root that matches this worker's proof key BEFORE
+    // starting the server, so we can configure it from the start.
+    let proof_key = blake3::derive_key("pyana-proof-key-v1", &WORKER_ROOT_KEY);
+    let federation_root_bb = compute_synthetic_federation_root(&proof_key);
+    let federation_root_bytes = bb_to_bytes(federation_root_bb);
+
+    let config = ServerConfig {
+        federation_root: federation_root_bytes,
+        listen: "127.0.0.1:0".parse().unwrap(), // random port
+    };
+
+    let addr = start_server(config).await;
+    let base = format!("http://{addr}");
+    println!("    Bounty board listening on {base}");
+
+    // Give the server a moment to be ready.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
     let client = Client::new();
 
-    // =========================================================================
-    // Step 0: Verify the bounty board is running and get federation state
-    // =========================================================================
-    println!("[0] Checking bounty board health at {base}...");
+    // Verify it's running.
     let health: Value = client
         .get(format!("{base}/health"))
         .send()
@@ -76,15 +84,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .json()
         .await?;
 
-    let federation_root_hex = health["federation_root"]["value"]
-        .as_str()
-        .unwrap_or("0000000000000000000000000000000000000000000000000000000000000000");
+    let federation_root_hex = health["federation_root"]["value"].as_str().unwrap_or("?");
     let federation_root_live = health["federation_root"]["live"].as_bool().unwrap_or(false);
 
     println!("    Status: {}", health["status"]);
     println!("    Federation root: {federation_root_hex}");
     println!("    Root is live: {federation_root_live}");
-    println!("    Node connected: {}", health["node"]["connected"]);
+    assert!(federation_root_live, "Federation root should be configured");
     println!();
 
     // =========================================================================
@@ -101,12 +107,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Worker: claims bounties anonymously
     let mut worker_wallet = AgentWallet::new();
     let worker_pubkey = worker_wallet.public_key();
-    println!("    Worker pubkey: {} (PRIVATE - never revealed to issuer)", hex::encode(&worker_pubkey.0));
+    println!(
+        "    Worker pubkey: {} (PRIVATE - never revealed to issuer)",
+        hex::encode(&worker_pubkey.0)
+    );
 
     // Worker mints a credential token. In production, this token would be
     // issued by a federation authority. Here we mint locally for the demo.
     let worker_token = worker_wallet.mint_token(&WORKER_ROOT_KEY, "federation");
-    println!("    Worker credential minted: service='{}', can_prove={}", worker_token.service, worker_token.can_prove());
+    println!(
+        "    Worker credential minted: service='{}', can_prove={}",
+        worker_token.service,
+        worker_token.can_prove()
+    );
     println!();
 
     // =========================================================================
@@ -124,37 +137,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     // =========================================================================
-    // Step 3: Configure federation root on the bounty board
+    // Step 3: Create a bounty requiring federation membership
     // =========================================================================
-    println!("[3] Configuring federation root...");
-
-    // Compute the federation root that matches this worker's proof key.
-    // In production the federation root comes from the node's attestation.
-    // For the demo, we compute it from the worker's token and set it on the board.
-    let proof_key = blake3::derive_key("pyana-proof-key-v1", &WORKER_ROOT_KEY);
-    let federation_root_bb = compute_synthetic_federation_root(&proof_key);
-    let federation_root_bytes = bb_to_bytes(federation_root_bb);
-    let root_hex = hex::encode(&federation_root_bytes);
-
-    let set_root_resp: Value = client
-        .post(format!("{base}/admin/federation-root"))
-        .json(&serde_json::json!({"root": root_hex}))
-        .send()
-        .await?
-        .json()
-        .await?;
-    println!("    Set federation root: {}", set_root_resp["root"].as_str().unwrap_or("?"));
-    println!("    (This root matches our worker's proof key for the demo)");
-    println!();
-
-    // =========================================================================
-    // Step 4: Create a bounty requiring federation membership
-    // =========================================================================
-    println!("[4] Creating bounty requiring federation membership proof...");
+    println!("[3] Creating bounty requiring federation membership proof...");
 
     let create_req = CreateBountyRequest {
         title: "Security audit of escrow logic".into(),
-        description: "Full review of the conditional turn escrow. Must be a verified federation member.".into(),
+        description:
+            "Full review of the conditional turn escrow. Must be a verified federation member."
+                .into(),
         reward_amount: 25_000,
         reward_asset: 1,
         deadline_height: 5000,
@@ -181,9 +172,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     // =========================================================================
-    // Step 5: Generate the STARK qualification proof (the privacy magic)
+    // Step 4: Generate the STARK qualification proof (the privacy magic)
     // =========================================================================
-    println!("[5] Generating STARK federation membership proof...");
+    println!("[4] Generating STARK federation membership proof...");
     println!("    This proves 'I am a valid federation member' WITHOUT revealing");
     println!("    which member I am. The verifier learns only: set membership.");
     println!();
@@ -192,9 +183,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Generate a real STARK presentation proof via the worker's wallet.
     // This calls through to the bridge layer which produces a Poseidon2 STARK.
+    // For membership-only proofs, both action and service must be empty strings
+    // to match what verify_membership_proof expects (empty action/resource binding).
     let request = AuthRequest {
-        service: Some("federation".into()),
-        action: Some("".into()), // Membership-only, no action binding
+        service: Some("".into()),
+        action: Some("".into()),
         ..Default::default()
     };
 
@@ -203,31 +196,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proof_bytes = postcard::to_stdvec(&wire_proof)?;
 
     let proof_elapsed = proof_start.elapsed();
-    println!("    Proof generated in {:.1}ms ({} bytes)", proof_elapsed.as_secs_f64() * 1000.0, proof_bytes.len());
+    println!(
+        "    Proof generated in {:.1}ms ({} bytes)",
+        proof_elapsed.as_secs_f64() * 1000.0,
+        proof_bytes.len()
+    );
     println!("    Proof tier: real STARK (Poseidon2 Merkle membership)");
     println!();
 
     // =========================================================================
-    // Step 6: Compute blinded worker commitment (unlinkable identity)
+    // Step 5: Compute blinded worker commitment (unlinkable identity)
     // =========================================================================
-    println!("[6] Computing blinded worker commitment...");
+    println!("[5] Computing blinded worker commitment...");
 
     // Generate fresh randomness for the commitment.
     // Using a deterministic value for reproducibility in the demo.
     let commitment_randomness: [u8; 32] = *blake3::hash(b"demo-randomness-1").as_bytes();
     let worker_commitment = compute_worker_commitment(&worker_pubkey.0, &commitment_randomness);
 
-    println!("    Commitment: {} (Poseidon2 hash of pubkey || randomness)", hex::encode(&worker_commitment));
+    println!(
+        "    Commitment: {} (Poseidon2 hash of pubkey || randomness)",
+        hex::encode(&worker_commitment)
+    );
     println!("    This commitment is UNLINKABLE to the worker's real identity.");
     println!("    A different randomness produces a different commitment, so the");
     println!("    same worker claiming multiple bounties cannot be correlated.");
     println!();
 
     // =========================================================================
-    // Step 7: Claim the bounty via the HTTP API with the proof
+    // Step 6: Claim the bounty via the HTTP API with the proof
     // =========================================================================
-    println!("[7] Claiming bounty with STARK proof...");
-    println!("    Sending qualification_proof ({} bytes) to the board...", proof_bytes.len());
+    println!("[6] Claiming bounty with STARK proof...");
+    println!(
+        "    Sending qualification_proof ({} bytes) to the board...",
+        proof_bytes.len()
+    );
 
     let claim_req = ClaimRequest {
         bounty_id: bounty_id.clone(),
@@ -245,26 +248,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let claim_body: Value = claim_resp.json().await?;
 
     if claim_status.is_success() {
-        println!("    Claim ACCEPTED! Bounty status: {}", claim_body["status"]);
+        println!(
+            "    Claim ACCEPTED! Bounty status: {}",
+            claim_body["status"]
+        );
         println!("    The board verified our STARK proof without learning our identity.");
     } else {
-        println!("    Claim REJECTED: {}", claim_body["error"].as_str().unwrap_or("unknown"));
-        println!("    HTTP status: {claim_status}");
-        println!();
-        println!("    NOTE: Ensure the federation root is configured (step 3 above)");
-        println!("    or that the bounty board is connected to a live devnet node.");
-        return Ok(());
+        let error_msg = claim_body["error"].as_str().unwrap_or("unknown");
+        eprintln!("    Claim REJECTED: {error_msg}");
+        eprintln!("    HTTP status: {claim_status}");
+        return Err(format!("Claim failed: {error_msg}").into());
     }
     println!();
 
     // =========================================================================
-    // Step 8: Submit work (mock work product with proof-of-completion)
+    // Step 7: Submit work (mock work product with proof-of-completion)
     // =========================================================================
-    println!("[8] Submitting completed work...");
+    println!("[7] Submitting completed work...");
 
-    // In a real scenario, this would be a receipt chain, external hash, or peer review.
-    // Here we produce a mock completion proof to advance the lifecycle.
-    let completion_proof = blake3::hash(b"audit-report-hash-binding").as_bytes().to_vec();
+    let completion_proof = blake3::hash(b"audit-report-hash-binding")
+        .as_bytes()
+        .to_vec();
 
     let submit_req = SubmitRequest {
         bounty_id: bounty_id.clone(),
@@ -285,13 +289,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     println!("    Submission status: {}", submit_resp["status"]);
-    println!("    Completion proof hash: {}", submit_resp["completion_proof_hash"].as_str().unwrap_or("?"));
+    println!(
+        "    Completion proof hash: {}",
+        submit_resp["completion_proof_hash"].as_str().unwrap_or("?")
+    );
     println!();
 
     // =========================================================================
-    // Step 9: Issuer approves and payment is released
+    // Step 8: Issuer approves and payment is released
     // =========================================================================
-    println!("[9] Issuer approving submission (triggers atomic payment)...");
+    println!("[8] Issuer approving submission (triggers atomic payment)...");
 
     let approve_req = ApproveRequest {
         bounty_id: bounty_id.clone(),
@@ -307,14 +314,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     println!("    Approval status: {}", approve_resp["status"]);
-    println!("    Receipt hash: {}", approve_resp["receipt_hash"].as_str().unwrap_or("?"));
+    println!(
+        "    Receipt hash: {}",
+        approve_resp["receipt_hash"].as_str().unwrap_or("?")
+    );
     println!("    Payment released atomically via conditional turn.");
     println!();
 
     // =========================================================================
-    // Step 10: Verify final state
+    // Step 9: Verify final state
     // =========================================================================
-    println!("[10] Verifying final bounty state...");
+    println!("[9] Verifying final bounty state...");
 
     let status_resp: Value = client
         .get(format!("{base}/bounties/{bounty_id}/status"))
@@ -326,16 +336,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let final_status = &status_resp["status"];
     println!("    Final status: {final_status}");
     assert!(
-        final_status.as_object().map_or(false, |obj| obj.contains_key("Paid")),
+        final_status
+            .as_object()
+            .map_or(false, |obj| obj.contains_key("Paid")),
         "Expected bounty to be in Paid state, got: {final_status}"
     );
     println!("    Bounty lifecycle complete: Open -> Claimed -> Submitted -> Paid");
     println!();
 
     // =========================================================================
-    // Step 11: Demonstrate IVC standing proof generation (bonus)
+    // Step 10: Demonstrate IVC standing proof generation (bonus)
     // =========================================================================
-    println!("[11] Bonus: Generating IVC standing proof...");
+    println!("[10] Bonus: Generating IVC standing proof...");
     println!("    An IVC proof accumulates completed bounty steps into a");
     println!("    constant-size proof of standing (e.g., 'I completed >= 3 bounties').");
     println!("    No individual bounty IDs are revealed.");
@@ -344,34 +356,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ivc_start = Instant::now();
 
     // Build a 3-step IVC chain (simulating 3 completed bounties).
-    let initial_root = BabyBear::new(1);
+    // Uses create_test_chain which generates valid fold witnesses with proper
+    // Merkle membership proofs for removed facts.
+    let (initial_root, deltas) = pyana_circuit::ivc::create_test_chain(3);
     let mut builder = IvcBuilder::new(initial_root);
 
-    for i in 0..3u32 {
-        let old_root = BabyBear::new(i + 1);
-        let new_root = BabyBear::new(i + 2);
-        let fold = FoldWitness {
-            old_root,
-            new_root,
-            removed_facts: vec![RemovedFact {
-                predicate: BabyBear::new(100 + i),
-                terms: [old_root, new_root, BabyBear::new(i)],
-                membership_proof: None,
-            }],
-            num_added_checks: 1,
-            added_checks_commitment: compute_test_checks_commitment(1),
-        };
-        use pyana_circuit::ivc::FoldDelta;
-        builder.add_fold(FoldDelta::new(fold)).expect("fold should succeed");
+    for delta in &deltas {
+        builder
+            .add_fold(delta.clone())
+            .expect("fold should succeed");
     }
 
-    let ivc_proof = builder.finalize_with_air().expect("IVC finalization should produce a proof");
+    let ivc_proof = builder
+        .finalize_with_air()
+        .expect("IVC finalization should produce a proof");
     let ivc_bytes = postcard::to_stdvec(&ivc_proof)?;
 
     let ivc_elapsed = ivc_start.elapsed();
-    println!("    IVC proof generated in {:.1}ms", ivc_elapsed.as_secs_f64() * 1000.0);
-    println!("    Steps: {}, Size: {} bytes", ivc_proof.step_count, ivc_bytes.len());
-    println!("    Verification: {:?}", pyana_circuit::verify_ivc(&ivc_proof, Some(initial_root)));
+    println!(
+        "    IVC proof generated in {:.1}ms",
+        ivc_elapsed.as_secs_f64() * 1000.0
+    );
+    println!(
+        "    Steps: {}, Size: {} bytes",
+        ivc_proof.step_count,
+        ivc_bytes.len()
+    );
+    println!(
+        "    Verification: {:?}",
+        pyana_circuit::verify_ivc(&ivc_proof, Some(initial_root))
+    );
     println!();
 
     // Verify the IVC proof
@@ -388,7 +402,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Demo Complete ===");
     println!();
     println!("Privacy guarantees demonstrated:");
-    println!("  1. Worker proved federation membership via STARK ({:.0}ms)", proof_elapsed.as_secs_f64() * 1000.0);
+    println!(
+        "  1. Worker proved federation membership via STARK ({:.0}ms)",
+        proof_elapsed.as_secs_f64() * 1000.0
+    );
     println!("     - Verifier learned: 'someone in the federation is authorized'");
     println!("     - Verifier did NOT learn: which member, token contents, or identity");
     println!("  2. Worker commitment is unlinkable (fresh randomness per claim)");
@@ -397,7 +414,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("     - Proves 'I completed >= N bounties' without revealing which ones");
     println!("  4. Payment released atomically (conditional turn resolution)");
     println!();
-    println!("Full stack exercised: Wallet -> STARK proof -> HTTP API -> Verification -> State change");
+    println!(
+        "Full stack exercised: Wallet -> STARK proof -> HTTP API -> Verification -> State change"
+    );
 
     Ok(())
 }

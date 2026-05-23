@@ -86,7 +86,8 @@ pub(crate) use mina_poseidon::{
 pub(crate) use poly_commitment::{
     SRS as SrsTrait,
     commitment::{
-        CommitmentCurve, PolyComm, absorb_commitment, b_poly, b_poly_coefficients, shift_scalar, squeeze_challenge, squeeze_prechallenge,
+        CommitmentCurve, PolyComm, absorb_commitment, b_poly, b_poly_coefficients, shift_scalar,
+        squeeze_challenge, squeeze_prechallenge,
     },
     ipa::{OpeningProof, SRS},
 };

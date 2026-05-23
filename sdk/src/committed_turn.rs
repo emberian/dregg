@@ -11,15 +11,12 @@
 
 use curve25519_dalek::scalar::Scalar;
 
-use pyana_cell::note::{NoteCommitment, Nullifier};
-use pyana_cell::{
-    BulletproofRangeProof, FullConservationProof, ValueCommitment,
-    prove_conservation_with_range,
-};
 use pyana_cell::CellId;
+use pyana_cell::note::{NoteCommitment, Nullifier};
+use pyana_cell::{BulletproofRangeProof, ValueCommitment, prove_conservation_with_range};
+use pyana_turn::Turn;
 use pyana_turn::action::{Action, Authorization, CommitmentMode, DelegationMode, Effect, symbol};
 use pyana_turn::forest::CallForest;
-use pyana_turn::Turn;
 
 use crate::error::SdkError;
 
@@ -108,12 +105,7 @@ impl CommittedTurnBuilder {
     /// * `agent_cell` - The agent's cell ID (turn initiator).
     /// * `nonce` - Replay-protection nonce.
     /// * `fee` - Computron fee for this turn.
-    pub fn build(
-        &self,
-        agent_cell: CellId,
-        nonce: u64,
-        fee: u64,
-    ) -> Result<Turn, SdkError> {
+    pub fn build(&self, agent_cell: CellId, nonce: u64, fee: u64) -> Result<Turn, SdkError> {
         if self.inputs.is_empty() && self.outputs.is_empty() {
             return Err(SdkError::InvalidWitness(
                 "committed turn must have at least one input or output".into(),
@@ -132,19 +124,22 @@ impl CommittedTurnBuilder {
             .collect();
 
         // 2. Compute value commitments.
+        //    We use the default (non-asset-specific) generator because the current
+        //    BulletproofRangeProof implementation uses fixed PedersenGens(value_generator, R).
+        //    Asset type discrimination is enforced by the spending proof binding, not
+        //    by the commitment generator. Once STARK-based range proofs are available,
+        //    this can migrate to asset-specific generators.
         let input_commitments: Vec<ValueCommitment> = self
             .inputs
             .iter()
-            .map(|inp| ValueCommitment::commit_with_asset(inp.value, &inp.blinding, inp.asset_type))
+            .map(|inp| ValueCommitment::commit(inp.value, &inp.blinding))
             .collect();
 
         let output_commitments: Vec<ValueCommitment> = self
             .outputs
             .iter()
             .zip(output_blindings.iter())
-            .map(|(out, blinding)| {
-                ValueCommitment::commit_with_asset(out.value, blinding, out.asset_type)
-            })
+            .map(|(out, blinding)| ValueCommitment::commit(out.value, blinding))
             .collect();
 
         // 3. Compute excess blinding: sum(input_blindings) - sum(output_blindings).
@@ -152,9 +147,7 @@ impl CommittedTurnBuilder {
             .inputs
             .iter()
             .fold(Scalar::ZERO, |acc, inp| acc + inp.blinding);
-        let sum_output_blindings = output_blindings
-            .iter()
-            .fold(Scalar::ZERO, |acc, b| acc + b);
+        let sum_output_blindings = output_blindings.iter().fold(Scalar::ZERO, |acc, b| acc + b);
         let excess_blinding = sum_input_blindings - sum_output_blindings;
 
         // 4. Build the turn hash message for binding the conservation proof.
@@ -231,9 +224,7 @@ impl CommittedTurnBuilder {
 
         // 7. Assemble the action with all effects.
         let mut all_effects: Vec<Effect> = spend_effects;
-        let range_proofs: Vec<BulletproofRangeProof> =
-            create_effects.iter().map(|(_, rp)| rp.clone()).collect();
-        all_effects.extend(create_effects.into_iter().map(|(e, _)| e));
+        all_effects.extend(create_effects.into_iter().map(|(e, _rp)| e));
 
         let action = Action {
             target: agent_cell,
@@ -243,7 +234,7 @@ impl CommittedTurnBuilder {
             preconditions: Default::default(),
             effects: all_effects,
             may_delegate: DelegationMode::None,
-            commitment_mode: CommitmentMode::Committed,
+            commitment_mode: CommitmentMode::Full,
             balance_change: None,
         };
 
@@ -359,9 +350,7 @@ impl From<&OwnedNote> for CommittedNoteInput {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyana_cell::{
-        ValueCommitment, verify_conservation_with_range, FullConservationProof,
-    };
+    use pyana_cell::{FullConservationProof, ValueCommitment, verify_conservation_with_range};
 
     /// Deterministic scalar for testing.
     fn test_scalar(seed: u8) -> Scalar {
@@ -405,7 +394,9 @@ mod tests {
 
         // Check that the spend effect has a value_commitment.
         match &effects[0] {
-            Effect::NoteSpend { value_commitment, .. } => {
+            Effect::NoteSpend {
+                value_commitment, ..
+            } => {
                 assert!(value_commitment.is_some());
             }
             other => panic!("expected NoteSpend, got {:?}", other),
@@ -413,7 +404,11 @@ mod tests {
 
         // Check that the create effect has a value_commitment and range_proof.
         match &effects[1] {
-            Effect::NoteCreate { value_commitment, range_proof, .. } => {
+            Effect::NoteCreate {
+                value_commitment,
+                range_proof,
+                ..
+            } => {
                 assert!(value_commitment.is_some());
                 assert!(range_proof.is_some());
             }
@@ -465,16 +460,22 @@ mod tests {
 
         for effect in &turn.call_forest.roots[0].action.effects {
             match effect {
-                Effect::NoteSpend { value_commitment: Some(vc_bytes), .. } => {
-                    let vc = ValueCommitment::from_bytes(
-                        &pyana_cell::ValueCommitmentBytes(*vc_bytes),
-                    ).unwrap();
+                Effect::NoteSpend {
+                    value_commitment: Some(vc_bytes),
+                    ..
+                } => {
+                    let vc =
+                        ValueCommitment::from_bytes(&pyana_cell::ValueCommitmentBytes(*vc_bytes))
+                            .unwrap();
                     input_vcs.push(vc);
                 }
-                Effect::NoteCreate { value_commitment: Some(vc_bytes), .. } => {
-                    let vc = ValueCommitment::from_bytes(
-                        &pyana_cell::ValueCommitmentBytes(*vc_bytes),
-                    ).unwrap();
+                Effect::NoteCreate {
+                    value_commitment: Some(vc_bytes),
+                    ..
+                } => {
+                    let vc =
+                        ValueCommitment::from_bytes(&pyana_cell::ValueCommitmentBytes(*vc_bytes))
+                            .unwrap();
                     output_vcs.push(vc);
                 }
                 _ => {}
@@ -483,13 +484,13 @@ mod tests {
 
         // Verify the conservation proof.
         let turn_hash = turn.hash();
-        let result = verify_conservation_with_range(
-            &input_vcs,
-            &output_vcs,
-            &full_proof,
-            &turn_hash,
+        let result =
+            verify_conservation_with_range(&input_vcs, &output_vcs, &full_proof, &turn_hash);
+        assert!(
+            result.is_ok(),
+            "conservation proof should verify: {:?}",
+            result.err()
         );
-        assert!(result.is_ok(), "conservation proof should verify: {:?}", result.err());
     }
 
     #[test]
@@ -528,16 +529,22 @@ mod tests {
         let mut output_vcs = Vec::new();
         for effect in &turn.call_forest.roots[0].action.effects {
             match effect {
-                Effect::NoteSpend { value_commitment: Some(vc_bytes), .. } => {
-                    let vc = ValueCommitment::from_bytes(
-                        &pyana_cell::ValueCommitmentBytes(*vc_bytes),
-                    ).unwrap();
+                Effect::NoteSpend {
+                    value_commitment: Some(vc_bytes),
+                    ..
+                } => {
+                    let vc =
+                        ValueCommitment::from_bytes(&pyana_cell::ValueCommitmentBytes(*vc_bytes))
+                            .unwrap();
                     input_vcs.push(vc);
                 }
-                Effect::NoteCreate { value_commitment: Some(vc_bytes), .. } => {
-                    let vc = ValueCommitment::from_bytes(
-                        &pyana_cell::ValueCommitmentBytes(*vc_bytes),
-                    ).unwrap();
+                Effect::NoteCreate {
+                    value_commitment: Some(vc_bytes),
+                    ..
+                } => {
+                    let vc =
+                        ValueCommitment::from_bytes(&pyana_cell::ValueCommitmentBytes(*vc_bytes))
+                            .unwrap();
                     output_vcs.push(vc);
                 }
                 _ => {}
@@ -545,12 +552,8 @@ mod tests {
         }
 
         let turn_hash = turn.hash();
-        let result = verify_conservation_with_range(
-            &input_vcs,
-            &output_vcs,
-            &full_proof,
-            &turn_hash,
-        );
+        let result =
+            verify_conservation_with_range(&input_vcs, &output_vcs, &full_proof, &turn_hash);
         assert!(result.is_err(), "imbalanced turn should fail verification");
     }
 
@@ -618,16 +621,22 @@ mod tests {
         let mut output_vcs = Vec::new();
         for effect in &turn.call_forest.roots[0].action.effects {
             match effect {
-                Effect::NoteSpend { value_commitment: Some(vc_bytes), .. } => {
-                    let vc = ValueCommitment::from_bytes(
-                        &pyana_cell::ValueCommitmentBytes(*vc_bytes),
-                    ).unwrap();
+                Effect::NoteSpend {
+                    value_commitment: Some(vc_bytes),
+                    ..
+                } => {
+                    let vc =
+                        ValueCommitment::from_bytes(&pyana_cell::ValueCommitmentBytes(*vc_bytes))
+                            .unwrap();
                     input_vcs.push(vc);
                 }
-                Effect::NoteCreate { value_commitment: Some(vc_bytes), .. } => {
-                    let vc = ValueCommitment::from_bytes(
-                        &pyana_cell::ValueCommitmentBytes(*vc_bytes),
-                    ).unwrap();
+                Effect::NoteCreate {
+                    value_commitment: Some(vc_bytes),
+                    ..
+                } => {
+                    let vc =
+                        ValueCommitment::from_bytes(&pyana_cell::ValueCommitmentBytes(*vc_bytes))
+                            .unwrap();
                     output_vcs.push(vc);
                 }
                 _ => {}
@@ -635,12 +644,12 @@ mod tests {
         }
 
         let turn_hash = turn.hash();
-        let result = verify_conservation_with_range(
-            &input_vcs,
-            &output_vcs,
-            &full_proof,
-            &turn_hash,
+        let result =
+            verify_conservation_with_range(&input_vcs, &output_vcs, &full_proof, &turn_hash);
+        assert!(
+            result.is_ok(),
+            "multi-input/output should verify: {:?}",
+            result.err()
         );
-        assert!(result.is_ok(), "multi-input/output should verify: {:?}", result.err());
     }
 }

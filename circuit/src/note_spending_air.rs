@@ -844,7 +844,13 @@ mod tests {
         let proof = prove_note_spend(&witness);
 
         // Verify proof (now includes value + asset_type to prevent inflation)
-        let result = verify_note_spend(nullifier, merkle_root, witness.value, witness.asset_type, &proof);
+        let result = verify_note_spend(
+            nullifier,
+            merkle_root,
+            witness.value,
+            witness.asset_type,
+            &proof,
+        );
         assert!(
             result.is_ok(),
             "Note spending proof verification failed: {:?}",
@@ -875,7 +881,13 @@ mod tests {
 
         // Try to verify with wrong nullifier
         let wrong_nullifier = BabyBear::new(999999);
-        let result = verify_note_spend(wrong_nullifier, merkle_root, witness.value, witness.asset_type, &proof);
+        let result = verify_note_spend(
+            wrong_nullifier,
+            merkle_root,
+            witness.value,
+            witness.asset_type,
+            &proof,
+        );
         assert!(result.is_err(), "Should reject wrong nullifier");
     }
 
@@ -895,7 +907,13 @@ mod tests {
 
         // Try to verify with wrong Merkle root
         let wrong_root = BabyBear::new(888888);
-        let result = verify_note_spend(nullifier, wrong_root, witness.value, witness.asset_type, &proof);
+        let result = verify_note_spend(
+            nullifier,
+            wrong_root,
+            witness.value,
+            witness.asset_type,
+            &proof,
+        );
         assert!(result.is_err(), "Should reject wrong Merkle root");
     }
 
@@ -954,7 +972,13 @@ mod tests {
         // Tamper with trace commitment
         proof.trace_commitment[0] ^= 0xFF;
 
-        let result = verify_note_spend(nullifier, merkle_root, witness.value, witness.asset_type, &proof);
+        let result = verify_note_spend(
+            nullifier,
+            merkle_root,
+            witness.value,
+            witness.asset_type,
+            &proof,
+        );
         assert!(result.is_err(), "Tampered proof should be rejected");
     }
 
@@ -973,7 +997,13 @@ mod tests {
         let merkle_root = witness.merkle_root();
         let proof = prove_note_spend(&witness);
 
-        let result = verify_note_spend(nullifier, merkle_root, witness.value, witness.asset_type, &proof);
+        let result = verify_note_spend(
+            nullifier,
+            merkle_root,
+            witness.value,
+            witness.asset_type,
+            &proof,
+        );
         assert!(
             result.is_ok(),
             "Depth-8 note spending proof should verify: {:?}",
@@ -1049,7 +1079,13 @@ mod tests {
         let proof2 = stark::proof_from_bytes(&bytes).unwrap();
 
         // Verify the deserialized proof
-        let result = verify_note_spend(nullifier, merkle_root, witness.value, witness.asset_type, &proof2);
+        let result = verify_note_spend(
+            nullifier,
+            merkle_root,
+            witness.value,
+            witness.asset_type,
+            &proof2,
+        );
         assert!(result.is_ok(), "Deserialized proof should verify");
     }
 
@@ -1122,11 +1158,23 @@ mod tests {
 
         // Attempt to verify with inflated value (999999 instead of 500)
         let inflated_value = BabyBear::new(999999);
-        let result = verify_note_spend(nullifier, merkle_root, inflated_value, witness.asset_type, &proof);
+        let result = verify_note_spend(
+            nullifier,
+            merkle_root,
+            inflated_value,
+            witness.asset_type,
+            &proof,
+        );
         assert!(result.is_err(), "Should reject inflated value");
 
         // Correct value should work
-        let result = verify_note_spend(nullifier, merkle_root, witness.value, witness.asset_type, &proof);
+        let result = verify_note_spend(
+            nullifier,
+            merkle_root,
+            witness.value,
+            witness.asset_type,
+            &proof,
+        );
         assert!(result.is_ok(), "Correct value should verify");
     }
 

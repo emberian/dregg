@@ -945,6 +945,254 @@ pub fn execute_fulfillment_flow_with_key(
 }
 
 // ============================================================================
+// Committed payment fulfillment flow
+// ============================================================================
+
+/// A committed note input for the fulfillment flow.
+///
+/// The fulfiller provides these from their wallet's owned notes.
+#[derive(Clone, Debug)]
+pub struct CommittedFulfillmentInput {
+    /// The nullifier for this note.
+    pub nullifier: pyana_cell::Nullifier,
+    /// The Merkle root at the time of proof generation.
+    pub merkle_root: [u8; 32],
+    /// The plaintext value (known to the spender only).
+    pub value: u64,
+    /// The blinding factor from the commitment opening.
+    pub blinding: curve25519_dalek::scalar::Scalar,
+    /// Asset type identifier.
+    pub asset_type: u64,
+    /// Serialized STARK spending proof.
+    pub spending_proof: Vec<u8>,
+}
+
+/// A committed note output for the fulfillment flow.
+#[derive(Clone, Debug)]
+pub struct CommittedFulfillmentOutput {
+    /// The value to commit.
+    pub value: u64,
+    /// Asset type identifier.
+    pub asset_type: u64,
+    /// Recipient's public key.
+    pub recipient: [u8; 32],
+}
+
+/// Execute a committed (privacy-preserving) fulfillment-to-payment flow.
+///
+/// This is the committed counterpart of [`execute_fulfillment_flow_with_key`]:
+/// instead of building a cleartext transfer turn, it builds a turn where note
+/// values are hidden behind Pedersen commitments. The conservation proof ensures
+/// no inflation without revealing amounts.
+///
+/// # Flow
+///
+/// 1. Verifies the fulfillment (same as the cleartext path).
+/// 2. Builds a committed payment turn using the provided note inputs/outputs.
+/// 3. Executes the turn through the executor (which validates via the committed
+///    conservation path).
+/// 4. Returns the receipt proving the committed payment occurred.
+///
+/// # Arguments
+///
+/// * `intent` - The intent being fulfilled.
+/// * `fulfillment` - The fulfillment to verify and pay for.
+/// * `executor` - The turn executor.
+/// * `ledger` - The ledger to apply effects to.
+/// * `payer_cell` - The payer's cell ID.
+/// * `inputs` - Committed note inputs (notes the payer is spending).
+/// * `outputs` - Committed note outputs (notes being created for the fulfiller).
+/// * `nonce` - Replay-protection nonce.
+/// * `current_block` - Current block for freshness checking.
+/// * `root_key` - Optional root key for Trusted mode verification.
+pub fn execute_committed_fulfillment_flow(
+    intent: &Intent,
+    fulfillment: &FulfillmentWithPredicates,
+    executor: &TurnExecutor,
+    ledger: &mut Ledger,
+    payer_cell: CellId,
+    inputs: &[CommittedFulfillmentInput],
+    outputs: &[CommittedFulfillmentOutput],
+    nonce: u64,
+    current_block: u64,
+    root_key: Option<&[u8; 32]>,
+) -> Result<TurnReceipt, FulfillmentError> {
+    use curve25519_dalek::scalar::Scalar;
+    use pyana_cell::note::NoteCommitment;
+    use pyana_cell::{BulletproofRangeProof, ValueCommitment, prove_conservation_with_range};
+    use pyana_turn::action::{CommitmentMode, DelegationMode, symbol};
+
+    // Step 1: Verify the fulfillment (same verification as cleartext path).
+    let state_root = fulfillment.state_root;
+    verify_fulfillment_with_predicates_and_key(
+        fulfillment,
+        intent,
+        state_root,
+        current_block,
+        root_key,
+    )?;
+
+    // Step 2: Build the committed payment turn.
+    if inputs.is_empty() {
+        return Err(FulfillmentError::PaymentFailed(
+            "committed fulfillment requires at least one input note".into(),
+        ));
+    }
+
+    // Generate fresh output blindings.
+    let output_blindings: Vec<Scalar> = outputs
+        .iter()
+        .map(|_| {
+            let mut bytes = [0u8; 64];
+            getrandom::fill(&mut bytes).expect("getrandom failed");
+            Scalar::from_bytes_mod_order_wide(&bytes)
+        })
+        .collect();
+
+    // Compute value commitments.
+    // Use the default generator (not asset-specific) because the BulletproofRangeProof
+    // implementation uses fixed PedersenGens. Asset type is enforced by spending proofs.
+    let input_commitments: Vec<ValueCommitment> = inputs
+        .iter()
+        .map(|inp| ValueCommitment::commit(inp.value, &inp.blinding))
+        .collect();
+
+    let output_commitments: Vec<ValueCommitment> = outputs
+        .iter()
+        .zip(output_blindings.iter())
+        .map(|(out, blinding)| ValueCommitment::commit(out.value, blinding))
+        .collect();
+
+    // Build NoteSpend effects.
+    let mut all_effects: Vec<Effect> = inputs
+        .iter()
+        .zip(input_commitments.iter())
+        .map(|(inp, vc)| Effect::NoteSpend {
+            nullifier: inp.nullifier,
+            note_tree_root: inp.merkle_root,
+            value: inp.value,
+            asset_type: inp.asset_type,
+            spending_proof: inp.spending_proof.clone(),
+            value_commitment: Some(vc.to_bytes().0),
+        })
+        .collect();
+
+    // Build NoteCreate effects.
+    for (out, (vc, blinding)) in outputs
+        .iter()
+        .zip(output_commitments.iter().zip(output_blindings.iter()))
+    {
+        let mut creation_nonce = [0u8; 32];
+        getrandom::fill(&mut creation_nonce).expect("getrandom failed");
+        let mut note_randomness = [0u8; 32];
+        getrandom::fill(&mut note_randomness).expect("getrandom failed");
+
+        // Compute note commitment.
+        let note_commitment = {
+            let mut hasher = blake3::Hasher::new_derive_key("pyana-committed-note v1");
+            hasher.update(&out.recipient);
+            hasher.update(&vc.to_bytes().0);
+            hasher.update(&out.asset_type.to_le_bytes());
+            hasher.update(&creation_nonce);
+            hasher.update(&note_randomness);
+            *hasher.finalize().as_bytes()
+        };
+
+        let range_proof = BulletproofRangeProof::prove_range(out.value, blinding);
+
+        let mut encrypted_note = Vec::with_capacity(64);
+        encrypted_note.extend_from_slice(&out.recipient);
+        encrypted_note.extend_from_slice(&creation_nonce);
+
+        all_effects.push(Effect::NoteCreate {
+            commitment: NoteCommitment(note_commitment),
+            value: out.value,
+            asset_type: out.asset_type,
+            encrypted_note,
+            value_commitment: Some(vc.to_bytes().0),
+            range_proof: Some(postcard::to_allocvec(&range_proof).unwrap_or_default()),
+        });
+    }
+
+    // Build the action.
+    let action = Action {
+        target: payer_cell,
+        method: symbol("committed_fulfillment_payment"),
+        args: Vec::new(),
+        authorization: Authorization::Unchecked,
+        preconditions: Default::default(),
+        effects: all_effects,
+        may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Full,
+        balance_change: None,
+    };
+
+    let mut call_forest = CallForest::new();
+    call_forest.add_root(action);
+
+    // Build partial turn to get hash for binding the conservation proof.
+    let partial_turn = Turn {
+        agent: payer_cell,
+        nonce,
+        call_forest,
+        fee: 0,
+        memo: Some(format!(
+            "committed fulfillment payment for intent {:02x}{:02x}...",
+            intent.id[0], intent.id[1]
+        )),
+        valid_until: None,
+        previous_receipt_hash: None,
+        depends_on: vec![],
+        conservation_proof: None,
+    };
+
+    let turn_hash = partial_turn.hash();
+
+    // Generate conservation proof.
+    let sum_input_blindings = inputs
+        .iter()
+        .fold(Scalar::ZERO, |acc, inp| acc + inp.blinding);
+    let sum_output_blindings = output_blindings.iter().fold(Scalar::ZERO, |acc, b| acc + b);
+    let excess_blinding = sum_input_blindings - sum_output_blindings;
+
+    let output_values: Vec<u64> = outputs.iter().map(|o| o.value).collect();
+    let full_proof = prove_conservation_with_range(
+        &input_commitments,
+        &output_commitments,
+        &output_values,
+        &output_blindings,
+        &excess_blinding,
+        &turn_hash,
+    );
+
+    let proof_bytes = postcard::to_allocvec(&full_proof).map_err(|e| {
+        FulfillmentError::PaymentFailed(format!("failed to serialize conservation proof: {e}"))
+    })?;
+
+    let turn = Turn {
+        conservation_proof: Some(proof_bytes),
+        ..partial_turn
+    };
+
+    // Step 3: Execute the turn.
+    let result = executor.execute(&turn, ledger);
+
+    match result {
+        TurnResult::Committed { receipt, .. } => Ok(receipt),
+        TurnResult::Rejected { reason, .. } => Err(FulfillmentError::PaymentFailed(format!(
+            "committed payment turn rejected: {}",
+            reason
+        ))),
+        TurnResult::Expired => Err(FulfillmentError::PaymentFailed(
+            "committed payment turn expired during execution".into(),
+        )),
+        TurnResult::Pending => Err(FulfillmentError::PaymentFailed(
+            "committed payment turn unexpectedly pending".into(),
+        )),
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 

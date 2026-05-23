@@ -637,7 +637,13 @@ mod tests {
         let stark_proof = prove_note_spend(&witness);
 
         // Step 8: Verify the STARK proof (now includes value + asset_type)
-        let result = verify_note_spend(nullifier, tree_root, witness.value, witness.asset_type, &stark_proof);
+        let result = verify_note_spend(
+            nullifier,
+            tree_root,
+            witness.value,
+            witness.asset_type,
+            &stark_proof,
+        );
         assert!(
             result.is_ok(),
             "End-to-end STARK proof verification failed: {:?}",
@@ -647,12 +653,26 @@ mod tests {
         // Step 9: Verify that wrong nullifier/root fails
         let wrong_nullifier = BabyBear::new(0xBAD);
         assert!(
-            verify_note_spend(wrong_nullifier, tree_root, witness.value, witness.asset_type, &stark_proof).is_err(),
+            verify_note_spend(
+                wrong_nullifier,
+                tree_root,
+                witness.value,
+                witness.asset_type,
+                &stark_proof
+            )
+            .is_err(),
             "Should reject wrong nullifier"
         );
         let wrong_root = BabyBear::new(0xBAD);
         assert!(
-            verify_note_spend(nullifier, wrong_root, witness.value, witness.asset_type, &stark_proof).is_err(),
+            verify_note_spend(
+                nullifier,
+                wrong_root,
+                witness.value,
+                witness.asset_type,
+                &stark_proof
+            )
+            .is_err(),
             "Should reject wrong root"
         );
     }

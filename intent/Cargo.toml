@@ -11,6 +11,7 @@ description = "Distributed intent engine for privacy-preserving capability disco
 
 [dependencies]
 blake3 = "1"
+curve25519-dalek = { version = "4", features = ["alloc"] }
 getrandom = { workspace = true }
 postcard = { version = "1", features = ["alloc"] }
 pyana-cell = { path = "../cell" }

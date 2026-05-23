@@ -128,7 +128,8 @@ impl DelayPool {
             return false;
         }
 
-        let interval_elapsed = now.saturating_sub(self.last_release) >= self.config.batch_interval_secs;
+        let interval_elapsed =
+            now.saturating_sub(self.last_release) >= self.config.batch_interval_secs;
         let enough_items = self.items.len() >= self.config.min_batch_size;
         let timeout = self
             .items
@@ -378,8 +379,14 @@ mod tests {
         let batch = pool.release_batch(15);
         assert_eq!(batch.len(), 2);
 
-        let real_count = batch.iter().filter(|i| matches!(i, PoolItem::Real(_))).count();
-        let dummy_count = batch.iter().filter(|i| matches!(i, PoolItem::Dummy(_))).count();
+        let real_count = batch
+            .iter()
+            .filter(|i| matches!(i, PoolItem::Real(_)))
+            .count();
+        let dummy_count = batch
+            .iter()
+            .filter(|i| matches!(i, PoolItem::Dummy(_)))
+            .count();
         assert_eq!(real_count, 1);
         assert_eq!(dummy_count, 1);
     }
@@ -399,13 +406,22 @@ mod tests {
 
         // Tick at time 30: interval elapsed, injects 2 dummies -> total 3 items >= min_batch_size
         let batch = pool.tick(30);
-        assert!(batch.is_some(), "should release batch after interval with dummies");
+        assert!(
+            batch.is_some(),
+            "should release batch after interval with dummies"
+        );
 
         let batch = batch.unwrap();
         // 1 real + 2 dummies = 3
         assert_eq!(batch.len(), 3);
-        let real_count = batch.iter().filter(|i| matches!(i, PoolItem::Real(_))).count();
-        let dummy_count = batch.iter().filter(|i| matches!(i, PoolItem::Dummy(_))).count();
+        let real_count = batch
+            .iter()
+            .filter(|i| matches!(i, PoolItem::Real(_)))
+            .count();
+        let dummy_count = batch
+            .iter()
+            .filter(|i| matches!(i, PoolItem::Dummy(_)))
+            .count();
         assert_eq!(real_count, 1);
         assert_eq!(dummy_count, 2);
     }

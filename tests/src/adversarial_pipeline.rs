@@ -14,9 +14,7 @@
 //! 7. Conservation violation (excess != 0, transfer creates value)
 //! 8. Proof for wrong statement (wrong action binding in proof authorization)
 
-use pyana_cell::{
-    AuthRequired, Permissions,
-};
+use pyana_cell::{AuthRequired, Permissions};
 use pyana_turn::ProofVerifier;
 
 // =============================================================================

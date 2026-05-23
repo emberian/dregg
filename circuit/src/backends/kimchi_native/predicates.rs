@@ -129,7 +129,6 @@ impl KimchiCompareOp {
         }
     }
     pub fn from_fp(fp: &Fp) -> Option<Self> {
-        
         let v = fp.into_bigint().as_ref()[0];
         match v {
             0 => Some(Self::Gte),
@@ -190,7 +189,6 @@ impl KimchiArithmeticPredicateWitness {
         }
     }
     pub fn is_satisfiable(&self) -> bool {
-        
         let r = self.expression_result();
         let rv = r.into_bigint().as_ref()[0];
         let cv = self.comparison_value.into_bigint().as_ref()[0];
@@ -381,7 +379,7 @@ impl KimchiArithmeticPredicateCircuit {
                 row += 1;
 
                 // Bit decomposition: binary checks
-                
+
                 let du = diff.into_bigint().as_ref()[0];
                 for bi in 0..GTE_DIFF_BITS {
                     let bit = Fp::from((du >> bi) & 1);
@@ -471,7 +469,6 @@ impl KimchiRelationType {
         }
     }
     pub fn from_fp(fp: &Fp) -> Option<Self> {
-        
         let v = fp.into_bigint().as_ref()[0];
         match v {
             0 => Some(Self::GreaterThan),
@@ -510,7 +507,6 @@ impl KimchiRelationalPredicateWitness {
         }
     }
     pub fn is_satisfiable(&self) -> bool {
-        
         let a = self.value_a.into_bigint().as_ref()[0];
         let b = self.value_b.into_bigint().as_ref()[0];
         match self.relation {
@@ -689,7 +685,7 @@ impl KimchiRelationalPredicateCircuit {
                 row += 1;
 
                 // Bit decomposition witness
-                
+
                 let du = diff.into_bigint().as_ref()[0];
                 for bi in 0..GTE_DIFF_BITS {
                     let bit = Fp::from((du >> bi) & 1);
@@ -765,7 +761,7 @@ impl KimchiTemporalPredicateWitness {
         if self.values.len() != self.state_roots.len() || self.values.is_empty() {
             return false;
         }
-        
+
         let t = self.threshold.into_bigint().as_ref()[0];
         self.values.iter().all(|v| v.into_bigint().as_ref()[0] >= t)
     }
@@ -874,7 +870,7 @@ impl KimchiTemporalPredicateCircuit {
             row += 1;
 
             // Bit decomposition
-            
+
             let du = diff.into_bigint().as_ref()[0];
             for bi in 0..GTE_DIFF_BITS {
                 let bit = Fp::from((du >> bi) & 1);
@@ -1120,7 +1116,7 @@ impl KimchiCompoundPredicateCircuit {
         row += 1;
 
         // Bit decomposition of diff
-        
+
         let du = diff.into_bigint().as_ref()[0];
         for bi in 0..GTE_DIFF_BITS {
             let bit = Fp::from((du >> bi) & 1);

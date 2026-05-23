@@ -10,7 +10,6 @@ use pyana_federation::types::AttestedRoot;
 use pyana_turn::executor::{ComputronCosts, TurnExecutor};
 use pyana_turn::{Turn, TurnResult};
 
-
 /// Simulated clock for deterministic time progression.
 #[derive(Clone, Debug)]
 pub struct SimClock {

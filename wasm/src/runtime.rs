@@ -14,20 +14,15 @@ use std::collections::HashMap;
 use serde::Serialize;
 
 use pyana_cell::{
-    AuthRequired, Cell, CellId, Ledger, Note, NoteCommitment, Nullifier,
-    NullifierSet, RevocationChannel, RevocationChannelSet,
+    AuthRequired, Cell, CellId, Ledger, Note, NoteCommitment, Nullifier, NullifierSet,
+    RevocationChannel, RevocationChannelSet,
 };
-use pyana_intent::matcher::{
-    HeldCapability, MatchResult, Sensitivity, match_intent,
-};
+use pyana_intent::matcher::{HeldCapability, MatchResult, Sensitivity, match_intent};
 use pyana_intent::{
     ActionPattern, CommitmentId, Constraint, Intent, IntentKind, MatchSpec, VerificationMode,
 };
 use pyana_turn::conditional::{ConditionalTurn, ProofCondition};
-use pyana_turn::{
-    ComputronCosts,
-    Effect, TurnBuilder, TurnExecutor, TurnReceipt, TurnResult,
-};
+use pyana_turn::{ComputronCosts, Effect, TurnBuilder, TurnExecutor, TurnReceipt, TurnResult};
 
 // ============================================================================
 // Internal state types

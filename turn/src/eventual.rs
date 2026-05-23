@@ -524,7 +524,7 @@ mod tests {
             memo: None,
             valid_until: None,
             depends_on: vec![],
-        conservation_proof: None,
+            conservation_proof: None,
             previous_receipt_hash: None,
         }
     }
@@ -750,7 +750,7 @@ mod tests {
             memo: None,
             valid_until: None,
             depends_on: vec![],
-        conservation_proof: None,
+            conservation_proof: None,
             previous_receipt_hash: None,
         };
 

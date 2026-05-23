@@ -1427,7 +1427,6 @@ impl TurnExecutor {
             )
         })?;
 
-        
         verifying_key
             .verify_strict(&message, &signature)
             .map_err(|_| {
@@ -3035,18 +3034,16 @@ impl TurnExecutor {
                 if *recipient != claim_auth.cell_id {
                     return Err((
                         TurnError::InvalidEffect {
-                            reason: "committed escrow release: recipient does not match claim cell_id"
-                                .into(),
+                            reason:
+                                "committed escrow release: recipient does not match claim cell_id"
+                                    .into(),
                         },
                         path.to_vec(),
                     ));
                 }
-                let recipient_cell_ref = ledger.get(recipient).ok_or_else(|| {
-                    (
-                        TurnError::CellNotFound { id: *recipient },
-                        path.to_vec(),
-                    )
-                })?;
+                let recipient_cell_ref = ledger
+                    .get(recipient)
+                    .ok_or_else(|| (TurnError::CellNotFound { id: *recipient }, path.to_vec()))?;
                 let recipient_pubkey = recipient_cell_ref.public_key;
                 // Verify the claim_auth against the recipient_commitment.
                 if !verify_escrow_claim(
@@ -3130,8 +3127,7 @@ impl TurnExecutor {
                 if self.block_height <= record.timeout_height {
                     return Err((
                         TurnError::InvalidEffect {
-                            reason: "committed escrow timeout has not passed, cannot refund"
-                                .into(),
+                            reason: "committed escrow timeout has not passed, cannot refund".into(),
                         },
                         path.to_vec(),
                     ));
@@ -3146,12 +3142,9 @@ impl TurnExecutor {
                         path.to_vec(),
                     ));
                 }
-                let creator_cell_ref = ledger.get(creator).ok_or_else(|| {
-                    (
-                        TurnError::CellNotFound { id: *creator },
-                        path.to_vec(),
-                    )
-                })?;
+                let creator_cell_ref = ledger
+                    .get(creator)
+                    .ok_or_else(|| (TurnError::CellNotFound { id: *creator }, path.to_vec()))?;
                 let creator_pubkey = creator_cell_ref.public_key;
                 // Verify the claim_auth against the creator_commitment.
                 if !verify_escrow_claim(
@@ -4074,20 +4067,22 @@ impl TurnExecutor {
                 value_commitment: Some(vc_bytes),
                 ..
             } => {
-                let vc = ValueCommitment::from_bytes(&ValueCommitmentBytes(*vc_bytes))
-                    .ok_or_else(|| TurnError::CommittedConservationFailed {
+                let vc = ValueCommitment::from_bytes(&ValueCommitmentBytes(*vc_bytes)).ok_or_else(
+                    || TurnError::CommittedConservationFailed {
                         reason: "NoteSpend value_commitment is not a valid Ristretto point".into(),
-                    })?;
+                    },
+                )?;
                 inputs.push(vc);
             }
             Effect::NoteCreate {
                 value_commitment: Some(vc_bytes),
                 ..
             } => {
-                let vc = ValueCommitment::from_bytes(&ValueCommitmentBytes(*vc_bytes))
-                    .ok_or_else(|| TurnError::CommittedConservationFailed {
+                let vc = ValueCommitment::from_bytes(&ValueCommitmentBytes(*vc_bytes)).ok_or_else(
+                    || TurnError::CommittedConservationFailed {
                         reason: "NoteCreate value_commitment is not a valid Ristretto point".into(),
-                    })?;
+                    },
+                )?;
                 outputs.push(vc);
             }
             Effect::ExerciseViaCapability { inner_effects, .. } => {
@@ -4101,9 +4096,7 @@ impl TurnExecutor {
     }
 
     /// Verify range proofs on NoteCreate outputs with value commitments.
-    fn verify_output_range_proofs(
-        forest: &crate::forest::CallForest,
-    ) -> Result<(), TurnError> {
+    fn verify_output_range_proofs(forest: &crate::forest::CallForest) -> Result<(), TurnError> {
         for tree in &forest.roots {
             Self::verify_output_range_proofs_tree(tree)?;
         }
@@ -4127,11 +4120,12 @@ impl TurnExecutor {
                 range_proof,
                 ..
             } => {
-                let rp = range_proof.as_ref().ok_or_else(|| {
-                    TurnError::CommittedConservationFailed {
-                        reason: "NoteCreate has value_commitment but no range_proof".into(),
-                    }
-                })?;
+                let rp =
+                    range_proof
+                        .as_ref()
+                        .ok_or_else(|| TurnError::CommittedConservationFailed {
+                            reason: "NoteCreate has value_commitment but no range_proof".into(),
+                        })?;
                 if rp.is_empty() {
                     return Err(TurnError::CommittedConservationFailed {
                         reason: "NoteCreate range_proof is empty".into(),
@@ -4708,9 +4702,7 @@ impl TurnExecutor {
 
 // ─── Pipeline Execution ──────────────────────────────────────────────────────
 
-use crate::eventual::{
-    EventualRef, Pipeline, PipelineError, PipelineResult, TurnOutput,
-};
+use crate::eventual::{EventualRef, Pipeline, PipelineError, PipelineResult, TurnOutput};
 
 /// A resolution table mapping (turn_hash, output_slot) to concrete outputs.
 pub type ResolutionTable = HashMap<([u8; 32], u32), TurnOutput>;

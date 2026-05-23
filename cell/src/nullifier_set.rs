@@ -118,11 +118,7 @@ impl NullifierSet {
         // Binary search in the sorted vec to find the adjacent neighbors.
         let idx = sorted.binary_search(nullifier).unwrap_err();
 
-        let left_neighbor = if idx > 0 {
-            Some(sorted[idx - 1])
-        } else {
-            None
-        };
+        let left_neighbor = if idx > 0 { Some(sorted[idx - 1]) } else { None };
         let right_neighbor = if idx < sorted.len() {
             Some(sorted[idx])
         } else {

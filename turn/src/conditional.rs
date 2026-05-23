@@ -459,7 +459,6 @@ fn resolve_inner(
 
             let verified = trusted_executor_keys.iter().any(|key_bytes| {
                 if let Ok(vk) = ed25519_dalek::VerifyingKey::from_bytes(key_bytes) {
-                    
                     vk.verify_strict(&receipt_hash, &signature).is_ok()
                 } else {
                     false
@@ -920,7 +919,7 @@ mod tests {
             valid_until: None,
             previous_receipt_hash: None,
             depends_on: vec![],
-        conservation_proof: None,
+            conservation_proof: None,
         };
         let ct = ConditionalTurn {
             turn,
@@ -1058,7 +1057,7 @@ mod tests {
             valid_until: None,
             previous_receipt_hash: None,
             depends_on: vec![],
-        conservation_proof: None,
+            conservation_proof: None,
         };
         let ct = ConditionalTurn {
             turn,
@@ -1082,7 +1081,7 @@ mod tests {
             valid_until: None,
             previous_receipt_hash: None,
             depends_on: vec![],
-        conservation_proof: None,
+            conservation_proof: None,
         };
         let ct = ConditionalTurn {
             turn,
@@ -1108,7 +1107,7 @@ mod tests {
             valid_until: None,
             previous_receipt_hash: None,
             depends_on: vec![],
-        conservation_proof: None,
+            conservation_proof: None,
         };
         let ct = ConditionalTurn {
             turn,
@@ -1536,7 +1535,7 @@ mod tests {
             valid_until: None,
             previous_receipt_hash: None,
             depends_on: vec![],
-        conservation_proof: None,
+            conservation_proof: None,
         };
         let ct = ConditionalTurn {
             turn,
@@ -1562,7 +1561,7 @@ mod tests {
             valid_until: None,
             previous_receipt_hash: None,
             depends_on: vec![],
-        conservation_proof: None,
+            conservation_proof: None,
         };
         let ct = ConditionalTurn {
             turn,
@@ -1597,7 +1596,7 @@ mod tests {
             valid_until: None,
             previous_receipt_hash: None,
             depends_on: vec![],
-        conservation_proof: None,
+            conservation_proof: None,
         };
         let ct = ConditionalTurn {
             turn,
@@ -1622,7 +1621,7 @@ mod tests {
             valid_until: None,
             previous_receipt_hash: None,
             depends_on: vec![],
-        conservation_proof: None,
+            conservation_proof: None,
         };
         let ct = ConditionalTurn {
             turn,

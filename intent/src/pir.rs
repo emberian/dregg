@@ -499,12 +499,8 @@ pub fn generate_batch_pir_queries(
     }
 
     (
-        BatchPirQuery {
-            queries: queries_a,
-        },
-        BatchPirQuery {
-            queries: queries_b,
-        },
+        BatchPirQuery { queries: queries_a },
+        BatchPirQuery { queries: queries_b },
     )
 }
 
@@ -814,8 +810,7 @@ impl PrivateBrowseClient {
 
     /// Generate a fresh unlinkable commitment for posting an intent.
     pub fn next_commitment(&mut self) -> CommitmentId {
-        let commitment =
-            derive_unlinkable_commitment(&self.browsing_secret, self.nonce_counter);
+        let commitment = derive_unlinkable_commitment(&self.browsing_secret, self.nonce_counter);
         self.nonce_counter += 1;
         commitment
     }
@@ -1028,11 +1023,7 @@ impl EncryptedDatabase {
     ///
     /// The client uses the session secret and row index to derive the same
     /// per-row key and decrypt locally.
-    pub fn decrypt_row(
-        &self,
-        row_idx: usize,
-        session_secret: &[u8; 32],
-    ) -> Option<Vec<BabyBear>> {
+    pub fn decrypt_row(&self, row_idx: usize, session_secret: &[u8; 32]) -> Option<Vec<BabyBear>> {
         let encrypted_row = self.encrypted_rows.get(row_idx)?;
 
         let row_key = blake3::derive_key(
@@ -1494,8 +1485,7 @@ mod tests {
         let target_idx = 4;
 
         // Generate query with blinding.
-        let (query, blinding) =
-            generate_single_server_query(target_idx, padded.padded_rows);
+        let (query, blinding) = generate_single_server_query(target_idx, padded.padded_rows);
 
         // Server computes response.
         let response = compute_single_server_response(&query, &padded.entries);
@@ -1518,11 +1508,9 @@ mod tests {
         let padded = PaddedDatabase::from_index(&index, PirMode::SingleServerPadded);
 
         for target_idx in 0..index.num_rows() {
-            let (query, blinding) =
-                generate_single_server_query(target_idx, padded.padded_rows);
+            let (query, blinding) = generate_single_server_query(target_idx, padded.padded_rows);
             let response = compute_single_server_response(&query, &padded.entries);
-            let blinding_contrib =
-                compute_blinding_contribution(&blinding, &padded.entries);
+            let blinding_contrib = compute_blinding_contribution(&blinding, &padded.entries);
             let result = reconstruct_single_server(&response, &blinding_contrib);
 
             assert_eq!(
@@ -1571,10 +1559,7 @@ mod tests {
         // Decrypt each row and verify it matches the original.
         for i in 0..padded.padded_rows {
             let decrypted = encrypted.decrypt_row(i, &session_secret).unwrap();
-            assert_eq!(
-                decrypted, padded.entries[i],
-                "decrypt failed for row {i}"
-            );
+            assert_eq!(decrypted, padded.entries[i], "decrypt failed for row {i}");
         }
     }
 
@@ -1635,8 +1620,7 @@ mod tests {
 
     #[test]
     fn test_private_browse_client_next_commitment_increments() {
-        let mut client =
-            PrivateBrowseClient::with_secret(PirMode::TwoServer, [0xAA; 32]);
+        let mut client = PrivateBrowseClient::with_secret(PirMode::TwoServer, [0xAA; 32]);
         let c0 = client.next_commitment();
         let c1 = client.next_commitment();
         let c2 = client.next_commitment();
@@ -1656,8 +1640,10 @@ mod tests {
         let session_secret = [0x42u8; 32];
         let encrypted = EncryptedDatabase::encrypt(&padded, &session_secret);
 
-        let mut client =
-            PrivateBrowseClient::with_secret(PirMode::DownloadAll { max_db_size: 1000 }, [0xBB; 32]);
+        let mut client = PrivateBrowseClient::with_secret(
+            PirMode::DownloadAll { max_db_size: 1000 },
+            [0xBB; 32],
+        );
         client.set_db_info(info);
         client.set_cached_db(encrypted, session_secret);
 
@@ -1683,8 +1669,10 @@ mod tests {
         let session_secret = [0x42u8; 32];
         let encrypted = EncryptedDatabase::encrypt(&padded, &session_secret);
 
-        let mut client =
-            PrivateBrowseClient::with_secret(PirMode::DownloadAll { max_db_size: 1000 }, [0xBB; 32]);
+        let mut client = PrivateBrowseClient::with_secret(
+            PirMode::DownloadAll { max_db_size: 1000 },
+            [0xBB; 32],
+        );
         client.set_db_info(info);
         client.set_cached_db(encrypted, session_secret);
 
@@ -1723,10 +1711,7 @@ mod tests {
 
         // Should be able to find real tags.
         for tag in &index.tags {
-            assert!(
-                info.find_tag_index(tag).is_some(),
-                "should find tag: {tag}"
-            );
+            assert!(info.find_tag_index(tag).is_some(), "should find tag: {tag}");
         }
 
         // Should NOT find fake tags.
@@ -1739,8 +1724,7 @@ mod tests {
         let padded = PaddedDatabase::from_index(&index, PirMode::TwoServer);
         let targets = vec![0, 5, 9];
 
-        let (batch_a, batch_b) =
-            generate_batch_pir_queries(&targets, padded.padded_rows);
+        let (batch_a, batch_b) = generate_batch_pir_queries(&targets, padded.padded_rows);
         let resp_a = compute_batch_pir_response(&batch_a, &padded.entries);
         let resp_b = compute_batch_pir_response(&batch_b, &padded.entries);
         let results = combine_batch_pir_responses(&resp_a, &resp_b);

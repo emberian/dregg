@@ -1741,7 +1741,10 @@ fn spawn_morpheus_driver(
                 // Extract the QC from the latest finalized block for the attested root.
                 // The QC proves that n-f validators agreed on this block, which is
                 // what makes the root "attested" (not just locally computed).
-                let latest_finalized_qc = process.index.finalized.iter()
+                let latest_finalized_qc = process
+                    .index
+                    .finalized
+                    .iter()
                     .rev()
                     .find_map(|bk| process.index.blocks.get(bk))
                     .map(|block| block.data.one.clone());
@@ -1751,7 +1754,8 @@ fn spawn_morpheus_driver(
                     finalized_count,
                     latest_finalized_qc,
                     quorum_threshold,
-                ).await;
+                )
+                .await;
             }
 
             tokio::time::sleep(tick_interval).await;

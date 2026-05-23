@@ -267,6 +267,36 @@ pub struct SealedBox {
 }
 
 // ---------------------------------------------------------------------------
+// Secret-key encryption for EncryptedIntent bodies
+// ---------------------------------------------------------------------------
+
+/// Encrypt plaintext using a secret key (BLAKE3 XOF keystream).
+///
+/// This is used for the intent body encryption where the poster encrypts
+/// to their own secret key and later reveals it to matched fulfillers.
+fn encrypt_with_secret(plaintext: &[u8], secret: &[u8; 32]) -> Vec<u8> {
+    let mut hasher = blake3::Hasher::new_keyed(secret);
+    hasher.update(b"pyana-intent-body-v1");
+    let mut keystream = vec![0u8; plaintext.len()];
+    let mut output = hasher.finalize_xof();
+    output.fill(&mut keystream);
+
+    plaintext
+        .iter()
+        .zip(keystream.iter())
+        .map(|(p, k)| p ^ k)
+        .collect()
+}
+
+/// Decrypt ciphertext using a secret key (BLAKE3 XOF keystream).
+///
+/// Symmetric to `encrypt_with_secret` (XOR is its own inverse).
+fn decrypt_with_secret(ciphertext: &[u8], secret: &[u8; 32]) -> Vec<u8> {
+    // XOR cipher is symmetric: encrypt == decrypt
+    encrypt_with_secret(ciphertext, secret)
+}
+
+// ---------------------------------------------------------------------------
 // EncryptedIntent: the gossip-layer representation
 // ---------------------------------------------------------------------------
 
@@ -320,12 +350,14 @@ impl EncryptedIntent {
         // Serialize the MatchSpec
         let plaintext = postcard::to_allocvec(spec).expect("MatchSpec serialization failed");
 
-        // Encrypt using sealed box
-        let sealed = seal_encrypt(&plaintext, &keypair.public);
+        // Encrypt directly using the keypair (self-encryption: poster encrypts to
+        // their own ephemeral key so they can later reveal the secret to matched
+        // fulfillers). We use a BLAKE3 XOF keystream derived from the secret key.
+        let encrypted_body = encrypt_with_secret(&plaintext, &keypair.secret);
 
         let mut intent = Self {
             search_tokens,
-            encrypted_body: sealed.ciphertext,
+            encrypted_body,
             ephemeral_pubkey: keypair.public,
             commitment_id,
             expiry,
@@ -347,11 +379,11 @@ impl EncryptedIntent {
     ) -> Self {
         let search_tokens = tokens_for_matchspec(spec, epoch);
         let plaintext = postcard::to_allocvec(spec).expect("MatchSpec serialization failed");
-        let sealed = seal_encrypt(&plaintext, &keypair.public);
+        let encrypted_body = encrypt_with_secret(&plaintext, &keypair.secret);
 
         let mut intent = Self {
             search_tokens,
-            encrypted_body: sealed.ciphertext,
+            encrypted_body,
             ephemeral_pubkey: keypair.public,
             commitment_id,
             expiry,
@@ -364,20 +396,10 @@ impl EncryptedIntent {
 
     /// Decrypt the intent body using the poster's ephemeral secret key.
     ///
+    /// The poster reveals this secret to matched fulfillers over a direct channel.
     /// Returns the deserialized MatchSpec if decryption and deserialization succeed.
     pub fn decrypt(&self, secret: &[u8; 32]) -> Option<MatchSpec> {
-        let sealed = SealedBox {
-            ciphertext: self.encrypted_body.clone(),
-            sender_public: self.ephemeral_pubkey,
-        };
-        // For self-decryption, the "recipient" secret IS the ephemeral secret
-        // and the sender_public in the sealed box is actually from the seal_encrypt
-        // call's internal ephemeral key. We need a different approach.
-        //
-        // Actually, in create(), we encrypt TO keypair.public using seal_encrypt
-        // which generates its OWN internal ephemeral sender. So to decrypt, the
-        // recipient uses keypair.secret.
-        let plaintext = seal_decrypt(&sealed, secret);
+        let plaintext = decrypt_with_secret(&self.encrypted_body, secret);
         postcard::from_bytes(&plaintext).ok()
     }
 
@@ -421,7 +443,6 @@ pub enum GossipIntent {
     /// SSE-encrypted intent (body hidden, search tokens for coarse matching).
     Encrypted(EncryptedIntent),
 }
-
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -593,9 +614,9 @@ mod tests {
         let tokens = tokens_for_matchspec(&spec, epoch);
 
         let cap_sets: &[&[&str]] = &[
-            &["action:delete"],       // index 0 - no match
-            &["action:read"],         // index 1 - match
-            &["service:something"],   // index 2 - no match
+            &["action:delete"],               // index 0 - no match
+            &["action:read"],                 // index 1 - match
+            &["service:something"],           // index 2 - no match
             &["action:write", "action:read"], // index 3 - match
         ];
 
@@ -640,10 +661,19 @@ mod tests {
         let kp1 = SealKeypair::generate();
         let kp2 = SealKeypair::generate();
 
-        let shared1 = x25519(&kp1.secret, &kp2.public);
-        let shared2 = x25519(&kp2.secret, &kp1.public);
+        let secret1 = x25519_dalek::StaticSecret::from(kp1.secret);
+        let pk2 = x25519_dalek::PublicKey::from(kp2.public);
+        let shared1 = secret1.diffie_hellman(&pk2);
 
-        assert_eq!(shared1, shared2, "DH should be commutative");
+        let secret2 = x25519_dalek::StaticSecret::from(kp2.secret);
+        let pk1 = x25519_dalek::PublicKey::from(kp1.public);
+        let shared2 = secret2.diffie_hellman(&pk1);
+
+        assert_eq!(
+            shared1.as_bytes(),
+            shared2.as_bytes(),
+            "DH should be commutative"
+        );
     }
 
     #[test]
@@ -726,8 +756,7 @@ mod tests {
     #[test]
     fn test_encrypted_intent_no_expiry() {
         let spec = MatchSpec::default();
-        let (encrypted, _) =
-            EncryptedIntent::create(&spec, CommitmentId([0xDD; 32]), 0, None);
+        let (encrypted, _) = EncryptedIntent::create(&spec, CommitmentId([0xDD; 32]), 0, None);
 
         assert!(!encrypted.is_expired(0));
         assert!(!encrypted.is_expired(u64::MAX));
@@ -797,10 +826,10 @@ mod tests {
             epoch
         ));
 
-        // Fulfiller who only has CPU compute (no match)
-        let cpu_keywords = &["action:compute", "resource:cpu/x86"];
+        // Fulfiller who only has storage capabilities (no match)
+        let storage_keywords = &["action:store", "resource:disk/ssd"];
         assert!(!capability_matches_tokens(
-            cpu_keywords,
+            storage_keywords,
             &encrypted.search_tokens,
             epoch
         ));

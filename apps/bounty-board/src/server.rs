@@ -536,7 +536,10 @@ async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
 
     let all_bounties = state.board.list_bounties(&BountyFilter::default()).await;
     let open = all_bounties.iter().filter(|b| b.status == "open").count();
-    let claimed = all_bounties.iter().filter(|b| b.status == "claimed").count();
+    let claimed = all_bounties
+        .iter()
+        .filter(|b| b.status == "claimed")
+        .count();
     let submitted = all_bounties
         .iter()
         .filter(|b| b.status == "submitted")

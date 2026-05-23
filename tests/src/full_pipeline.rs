@@ -514,7 +514,13 @@ fn test_full_note_lifecycle() {
     );
 
     // --- Step 4: Verify note spending proof ---
-    let verify_result = verify_note_spend(circuit_nullifier, tree_root, witness.value, witness.asset_type, &stark_proof);
+    let verify_result = verify_note_spend(
+        circuit_nullifier,
+        tree_root,
+        witness.value,
+        witness.asset_type,
+        &stark_proof,
+    );
     assert!(
         verify_result.is_ok(),
         "note spending proof should verify: {:?}",

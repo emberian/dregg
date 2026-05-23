@@ -965,7 +965,9 @@ impl AgentWallet {
             // Root token holder: derive the proof key and look it up in the tree.
             let derived = Self::derive_proof_key(token.root_key());
             federation_tree.membership_proof(&derived)
-        } else { token.membership_proof.clone() };
+        } else {
+            token.membership_proof.clone()
+        };
 
         // Compute the caveat chain hash from the HMAC-verified attenuated token.
         let caveat_chain_hash = {
@@ -1578,11 +1580,9 @@ impl AgentWallet {
                     Ok(u32::from_le_bytes([sym[0], sym[1], sym[2], sym[3]])
                         % pyana_circuit::field::BABYBEAR_P)
                 }
-                pyana_trace::Term::Var(_) => {
-                    Err(SdkError::InvalidWitness(
-                        "cannot prove predicates on unground variables".into(),
-                    ))
-                }
+                pyana_trace::Term::Var(_) => Err(SdkError::InvalidWitness(
+                    "cannot prove predicates on unground variables".into(),
+                )),
             }
         } else {
             Ok(0)
@@ -2973,7 +2973,9 @@ impl AgentWallet {
         domain: &str,
         nonce: u64,
     ) -> Result<Turn, crate::error::SdkError> {
-        use crate::committed_turn::{CommittedNoteInput, CommittedNoteOutput, CommittedTurnBuilder};
+        use crate::committed_turn::{
+            CommittedNoteInput, CommittedNoteOutput, CommittedTurnBuilder,
+        };
 
         let agent_cell = self.cell_id(domain);
 
@@ -2984,10 +2986,7 @@ impl AgentWallet {
         }
 
         for &(amount, ref recipient) in recipients {
-            let asset_type = input_notes
-                .first()
-                .map(|n| n.asset_type)
-                .unwrap_or(0);
+            let asset_type = input_notes.first().map(|n| n.asset_type).unwrap_or(0);
             builder.add_output(CommittedNoteOutput {
                 value: amount,
                 asset_type,

@@ -162,8 +162,6 @@ pub fn build_conflict_set(read_cells: &[CellId], write_cells: &[CellId]) -> Conf
 /// This is a conservative over-approximation — the actual conflict depends on
 /// which effects succeed, but we assume all declared effects will execute.
 pub fn extract_access_sets(turn: &crate::turn::Turn) -> (Vec<CellId>, Vec<CellId>) {
-    
-
     let mut read_set = Vec::new();
     let mut write_set = Vec::new();
 

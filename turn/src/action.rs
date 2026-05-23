@@ -1002,11 +1002,24 @@ impl Effect {
             Effect::SetVerificationKey { new_vk, .. } => {
                 32 + new_vk.as_ref().map_or(1, |vk| 1 + vk.data.len())
             }
-            Effect::NoteSpend { spending_proof, value_commitment, .. } => {
+            Effect::NoteSpend {
+                spending_proof,
+                value_commitment,
+                ..
+            } => {
                 32 + 32 + 8 + 8 + spending_proof.len() + value_commitment.map_or(0, |_| 32) // nullifier + root + value + asset_type + proof + opt commitment
             }
-            Effect::NoteCreate { encrypted_note, value_commitment, range_proof, .. } => {
-                32 + 8 + 8 + encrypted_note.len() + value_commitment.map_or(0, |_| 32) + range_proof.as_ref().map_or(0, |rp| rp.len()) // commitment + value + asset_type + ciphertext + opt vc + opt rp
+            Effect::NoteCreate {
+                encrypted_note,
+                value_commitment,
+                range_proof,
+                ..
+            } => {
+                32 + 8
+                    + 8
+                    + encrypted_note.len()
+                    + value_commitment.map_or(0, |_| 32)
+                    + range_proof.as_ref().map_or(0, |rp| rp.len()) // commitment + value + asset_type + ciphertext + opt vc + opt rp
             }
             Effect::CreateSealPair { .. } => 32 + 32,
             Effect::Seal { .. } => 32 + 32 + 4,

@@ -1069,7 +1069,7 @@ pub fn estimate_verifier_rows(
         + bb_muls_constraint * 3
         + fri_layers * (fri_cost_per_layer * POSEIDON_GADGET_ROWS + 3 + 1);
 
-     // +1 final gate
+    // +1 final gate
     public_inputs + num_queries * rows_per_query + 1
 }
 

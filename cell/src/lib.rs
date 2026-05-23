@@ -77,6 +77,6 @@ pub use stealth::{StealthAddress, StealthAnnouncement, StealthKeys, StealthMetaA
 pub use value_commitment::{
     BulletproofRangeProof, CommittedNote, CommittedNoteOpening, ConservationError,
     ConservationProof, FullConservationError, FullConservationProof, ValueCommitment,
-    ValueCommitmentBytes, prove_conservation, prove_conservation_with_range,
-    verify_conservation, verify_conservation_with_range,
+    ValueCommitmentBytes, prove_conservation, prove_conservation_with_range, verify_conservation,
+    verify_conservation_with_range,
 };
