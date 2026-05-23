@@ -24,10 +24,10 @@ macaroon = { path = "../macaroon" }
 pyana-trace = { path = "../trace" }
 pyana-commit = { path = "../commit" }
 pyana-circuit = { path = "../circuit", default-features = false, features = ["mock"] }
-pyana-cell = { path = "../cell" }
-pyana-turn = { path = "../turn" }
-pyana-coord = { path = "../coord" }
-pyana-intent = { path = "../intent" }
+pyana-cell = { path = "../cell", default-features = false }
+pyana-turn = { path = "../turn", default-features = false }
+pyana-coord = { path = "../coord", default-features = false }
+pyana-intent = { path = "../intent", default-features = false }
 pyana-types = { path = "../types" }
 
 # Token crate without biscuit (biscuit-auth has complex deps)
@@ -36,7 +36,6 @@ token = { path = "../token", default-features = false, features = ["macaroon", "
 blake3 = "1"
 postcard = { version = "1", features = ["alloc"] }
 js-sys = "0.3"
-x25519-dalek = { version = "2", features = ["static_secrets"] }
 
 [dependencies.web-sys]
 version = "0.3"

@@ -3580,7 +3580,7 @@ impl AgentWallet {
             method,
             args: vec![],
             authorization: Authorization::Unchecked,
-            preconditions: pyana_cell::Preconditions::none(),
+            preconditions: pyana_cell::Preconditions::default(),
             effects: vec![Effect::CreateCellFromFactory {
                 factory_vk,
                 owner_pubkey,
@@ -3596,16 +3596,19 @@ impl AgentWallet {
         let tree = CallTree {
             action,
             children: vec![],
+            hash: [0u8; 32],
         };
-        let forest = CallForest { roots: vec![tree] };
+        let forest = CallForest { roots: vec![tree], forest_hash: [0u8; 32] };
 
         Turn {
             agent: agent_cell,
             nonce,
             fee,
+            memo: None,
             call_forest: forest,
             valid_until: None,
-            sovereign_witnesses: vec![],
+            sovereign_witnesses: std::collections::HashMap::new(),
+            conservation_proof: None,
             execution_proof: None,
             execution_proof_cell: None,
             execution_proof_new_commitment: None,

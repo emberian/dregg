@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stablecoin CDP</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <div class="header-content">
+            <h1 class="logo">Stablecoin CDP</h1>
+            <nav>
+                <a href="#" class="nav-link active" data-view="dashboard">Dashboard</a>
+                <a href="#" class="nav-link" data-view="open-cdp">Open CDP</a>
+                <a href="#" class="nav-link" data-view="liquidations">Liquidations</a>
+                <a href="#" class="nav-link" data-view="oracle">Oracle</a>
+            </nav>
+            <div class="wallet-status" id="wallet-status">
+                <span class="dot disconnected" id="wallet-dot"></span>
+                <span id="wallet-label">Connect Wallet</span>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <!-- Dashboard View -->
+        <section id="view-dashboard" class="view active">
+            <div class="section-header">
+                <h2>Your CDPs</h2>
+                <div class="oracle-ticker">
+                    <span class="ticker-label">ETH/USD:</span>
+                    <span class="ticker-value" id="current-price">--</span>
+                </div>
+            </div>
+            <div class="cdp-grid" id="cdp-grid">
+                <div class="empty-state">Loading CDPs...</div>
+            </div>
+        </section>
+
+        <!-- Open CDP View -->
+        <section id="view-open-cdp" class="view">
+            <div class="section-header">
+                <h2>Open New CDP</h2>
+            </div>
+            <form id="open-cdp-form" class="form-panel">
+                <div class="form-group">
+                    <label for="collateral-amount">Collateral Amount</label>
+                    <input type="number" id="collateral-amount" step="0.01" min="0" required placeholder="Amount of collateral to lock">
+                </div>
+                <div class="form-group">
+                    <label for="debt-amount">Debt to Mint</label>
+                    <input type="number" id="debt-amount" step="0.01" min="0" required placeholder="Stablecoin to mint">
+                </div>
+                <div class="ratio-display">
+                    <div class="ratio-row">
+                        <span class="ratio-label">Collateralization Ratio</span>
+                        <span class="ratio-value" id="open-ratio">--</span>
+                    </div>
+                    <div class="ratio-row">
+                        <span class="ratio-label">Minimum Required</span>
+                        <span class="ratio-value">150%</span>
+                    </div>
+                    <div class="ratio-row">
+                        <span class="ratio-label">Liquidation Threshold</span>
+                        <span class="ratio-value">120%</span>
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary btn-large">Open CDP</button>
+            </form>
+        </section>
+
+        <!-- Liquidations View -->
+        <section id="view-liquidations" class="view">
+            <div class="section-header">
+                <h2>Undercollateralized CDPs</h2>
+            </div>
+            <div class="liquidation-list" id="liquidation-list">
+                <div class="empty-state">Loading...</div>
+            </div>
+        </section>
+
+        <!-- Oracle View -->
+        <section id="view-oracle" class="view">
+            <div class="section-header">
+                <h2>Oracle Feed</h2>
+            </div>
+            <div class="oracle-panel">
+                <div class="oracle-current">
+                    <div class="stat">
+                        <span class="stat-label">Current Price</span>
+                        <span class="stat-value" id="oracle-price">--</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Last Updated</span>
+                        <span class="stat-value" id="oracle-updated">--</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Source</span>
+                        <span class="stat-value" id="oracle-source">--</span>
+                    </div>
+                </div>
+                <h3>Price History</h3>
+                <div class="price-history" id="price-history">
+                    <div class="empty-state">Loading...</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Manage CDP Modal -->
+        <div id="manage-modal" class="modal hidden">
+            <div class="modal-backdrop"></div>
+            <div class="modal-content">
+                <button class="modal-close">&times;</button>
+                <div id="manage-detail"></div>
+            </div>
+        </div>
+    </main>
+
+    <footer>
+        <div class="footer-content">
+            <span>Powered by <strong>pyana</strong> federation protocol</span>
+            <span class="connection-status" id="connection-status">API: checking...</span>
+        </div>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1282,40 +1282,6 @@ pub fn prove_dsl_kimchi(
         )?;
     }
 
-    // Debug: verify witness satisfies gates manually before prover
-    #[cfg(debug_assertions)]
-    {
-        let public_check: Vec<Fp> = witness[0][0..pc].to_vec();
-        for (row, gate) in gates.iter().enumerate() {
-            if gate.typ != GateType::Generic {
-                continue;
-            }
-            let get_c = |idx: usize| gate.coeffs.get(idx).copied().unwrap_or(Fp::zero());
-            let w = |col: usize| witness[col][row];
-            let sum1 = get_c(0) * w(0) + get_c(1) * w(1) + get_c(2) * w(2);
-            let mul1 = get_c(3) * w(0) * w(1);
-            let cst1 = get_c(4);
-            let pub1 = public_check.get(row).copied().unwrap_or(Fp::zero());
-            let result1 = sum1 + mul1 + cst1 - pub1;
-            assert!(
-                result1 == Fp::zero(),
-                "Pre-prover check FAILED at row {}: result={:?}, c=[{:?},{:?},{:?},{:?},{:?}], w=[{:?},{:?},{:?}], pub={:?}",
-                row, result1, get_c(0), get_c(1), get_c(2), get_c(3), get_c(4),
-                w(0), w(1), w(2), pub1
-            );
-            // Sub-gate 2
-            let sum2 = get_c(5) * w(3) + get_c(6) * w(4) + get_c(7) * w(5);
-            let mul2 = get_c(8) * w(3) * w(4);
-            let cst2 = get_c(9);
-            let result2 = sum2 + mul2 + cst2;
-            assert!(
-                result2 == Fp::zero(),
-                "Pre-prover sub-gate 2 FAILED at row {}: result={:?}",
-                row, result2
-            );
-        }
-    }
-
     // Create prover index
     let index = kimchi::prover_index::testing::new_index_for_test::<FULL_ROUNDS, Vesta>(gates, pc);
 

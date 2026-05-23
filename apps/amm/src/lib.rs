@@ -31,6 +31,7 @@ pub mod circuit;
 pub mod lp_token;
 pub mod pool;
 pub mod router;
+pub mod server;
 
 #[cfg(test)]
 mod tests;

@@ -31,6 +31,7 @@ pub mod escrow;
 pub mod matching;
 pub mod order;
 pub mod private_order;
+pub mod server;
 pub mod settlement;
 pub mod state_commitment;
 #[cfg(test)]

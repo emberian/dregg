@@ -6,13 +6,14 @@
 //! - Payment is released atomically via conditional turns on completion.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
 };
@@ -22,8 +23,10 @@ use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 use pyana_app_framework::hex::{bytes32_to_hex, hex_to_bytes32};
-use pyana_app_framework::{CellId, EngineConfig, PyanaEngine};
-use pyana_bounty_board::qualification::verify_qualification;
+use pyana_app_framework::{CellId, EscrowCondition, EngineConfig, PyanaEngine};
+use pyana_bounty_board::payment::{self, Escrow};
+use pyana_bounty_board::persist::{PersistConfig, PersistManager};
+use pyana_bounty_board::qualification::{FederationRootHistory, verify_qualification};
 use pyana_bounty_board::state::BoardState;
 use pyana_bounty_board::{
     ApproveRequest, Bounty, BountyFilter, BountyStatus, BountyStatusResponse, ClaimRequest,
@@ -55,6 +58,10 @@ struct Args {
     /// Root sync interval in seconds (how often to poll the node for new roots).
     #[arg(long, default_value = "30", env = "PYANA_SYNC_INTERVAL")]
     sync_interval: u64,
+
+    /// Directory for persisting state across restarts. If not set, state is in-memory only.
+    #[arg(long, env = "PYANA_STATE_DIR")]
+    state_dir: Option<PathBuf>,
 }
 
 // =============================================================================
@@ -65,8 +72,10 @@ struct Args {
 #[derive(Clone)]
 struct AppState {
     board: BoardState,
-    /// The federation root used for membership/qualification checks.
-    federation_root: Arc<RwLock<[u8; 32]>>,
+    /// Recent federation roots for multi-validator coherence.
+    /// Verification accepts proofs against any root in this window, tolerating
+    /// propagation lag between nodes in a multi-validator devnet.
+    root_history: Arc<RwLock<FederationRootHistory>>,
     /// When the federation root was last updated.
     root_last_updated: Arc<RwLock<Option<Instant>>>,
     /// The pyana engine for cryptographic proof verification.
@@ -158,6 +167,10 @@ async fn fetch_federation_root(node_url: &str) -> Result<[u8; 32], String> {
 }
 
 /// Background task that periodically syncs the federation root from the node.
+///
+/// New roots are pushed into the history window rather than replacing a single value.
+/// This ensures that proofs generated against recently-superseded roots remain valid
+/// for the duration of the window, resolving multi-validator coherence issues.
 async fn root_sync_task(state: AppState, interval_secs: u64) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
     // Skip the first immediate tick (we already fetched on startup).
@@ -168,15 +181,18 @@ async fn root_sync_task(state: AppState, interval_secs: u64) {
 
         match fetch_federation_root(&state.node_url).await {
             Ok(new_root) => {
-                let old_root = *state.federation_root.read().await;
-                *state.federation_root.write().await = new_root;
+                let mut history = state.root_history.write().await;
+                let was_known = history.is_known_root(&new_root);
+                history.push(new_root);
+                drop(history);
+
                 *state.root_last_updated.write().await = Some(Instant::now());
                 *state.node_connected.write().await = true;
 
-                if new_root != old_root {
+                if !was_known {
                     info!(
                         root = %bytes32_to_hex(&new_root),
-                        "federation root updated from node"
+                        "federation root updated from node (added to history)"
                     );
                 }
             }
@@ -254,7 +270,9 @@ async fn main() {
 
     let state = AppState {
         board: BoardState::new(),
-        federation_root: Arc::new(RwLock::new(federation_root)),
+        root_history: Arc::new(RwLock::new(FederationRootHistory::with_initial_root(
+            federation_root,
+        ))),
         root_last_updated: Arc::new(RwLock::new(root_updated)),
         engine: Arc::new(RwLock::new(PyanaEngine::new(EngineConfig::new(
             std::time::SystemTime::now()
@@ -690,37 +708,74 @@ struct WorkerQuery {
 // Admin / Utility Endpoints
 // =============================================================================
 
+/// Verify admin bearer token from the `Authorization` header.
+/// Returns `Err(Response)` with 401 if the token is missing or invalid.
+fn check_admin_auth(headers: &HeaderMap) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    let expected_token = std::env::var("PYANA_ADMIN_TOKEN").unwrap_or_default();
+    if expected_token.is_empty() {
+        // No token configured — admin endpoints are unprotected (dev mode).
+        return Ok(());
+    }
+
+    let auth_header = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    let provided_token = auth_header.strip_prefix("Bearer ").unwrap_or("");
+    if provided_token.is_empty() || provided_token != expected_token {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "unauthorized: invalid or missing admin token"})),
+        ));
+    }
+
+    Ok(())
+}
+
 /// POST /admin/height — advance the simulated block height.
 async fn advance_height(
+    headers: HeaderMap,
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    if let Err(e) = check_admin_auth(&headers) {
+        return e.into_response();
+    }
     let delta = body["delta"].as_u64().unwrap_or(1);
     state.board.advance_height(delta).await;
     let new_height = state.board.current_height().await;
-    Json(json!({"height": new_height}))
+    Json(json!({"height": new_height})).into_response()
 }
 
 /// POST /admin/expire — expire all bounties past their deadline.
-async fn expire_bounties(State(state): State<AppState>) -> impl IntoResponse {
+async fn expire_bounties(headers: HeaderMap, State(state): State<AppState>) -> impl IntoResponse {
+    if let Err(e) = check_admin_auth(&headers) {
+        return e.into_response();
+    }
     let count = state.board.expire_stale_bounties().await;
-    Json(json!({"expired": count}))
+    Json(json!({"expired": count})).into_response()
 }
 
 /// POST /admin/federation-root — set the federation root at runtime.
 ///
 /// Accepts JSON: `{"root": "abcd...1234"}` (64 hex chars).
 async fn set_federation_root(
+    headers: HeaderMap,
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    if let Err(e) = check_admin_auth(&headers) {
+        return e.into_response();
+    }
     let root_hex = match body["root"].as_str() {
         Some(s) => s,
         None => {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({"error": "missing 'root' field (64 hex chars)"})),
-            );
+            )
+                .into_response();
         }
     };
 
@@ -731,17 +786,19 @@ async fn set_federation_root(
                 return (
                     StatusCode::BAD_REQUEST,
                     Json(json!({"error": "refusing to set all-zeroes federation root"})),
-                );
+                )
+                    .into_response();
             }
             *state.federation_root.write().await = root;
             *state.root_last_updated.write().await = Some(Instant::now());
             info!(root = %bytes32_to_hex(&root), "federation root updated via admin endpoint");
-            (StatusCode::OK, Json(json!({"root": bytes32_to_hex(&root)})))
+            (StatusCode::OK, Json(json!({"root": bytes32_to_hex(&root)}))).into_response()
         }
         Err(_) => (
             StatusCode::BAD_REQUEST,
             Json(json!({"error": "invalid root hex (expected 64 hex chars)"})),
-        ),
+        )
+            .into_response(),
     }
 }
 

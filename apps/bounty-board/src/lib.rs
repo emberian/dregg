@@ -16,7 +16,9 @@
 //! who's working until delivery. Payment is released atomically via conditional
 //! turns.
 
+pub mod auth;
 pub mod payment;
+pub mod persist;
 pub mod qualification;
 pub mod server;
 pub mod state;

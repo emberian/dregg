@@ -12,6 +12,7 @@
 //! - Freshness is enforced by requiring `current_time - timestamp <= max_age`.
 //! - Multiple oracle sources can be supported via a median mechanism.
 
+use ed25519_dalek::{Signature, VerifyingKey};
 use pyana_circuit::field::BabyBear;
 use pyana_circuit::poseidon2;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -61,12 +62,36 @@ impl PriceAttestation {
     }
 
     /// Compute the message bytes that should be signed.
+    /// Message = asset_pair_bytes || price_le_bytes || timestamp_le_bytes
     pub fn message_bytes(&self) -> Vec<u8> {
         let mut msg = Vec::new();
         msg.extend_from_slice(self.asset_pair.as_bytes());
         msg.extend_from_slice(&self.price.to_le_bytes());
         msg.extend_from_slice(&self.timestamp.to_le_bytes());
         msg
+    }
+
+    /// Verify the Ed25519 signature over the attestation message.
+    ///
+    /// Returns Ok(()) if the signature is valid, Err if invalid or the key is malformed.
+    pub fn verify_signature(&self) -> Result<(), OracleError> {
+        // Reject placeholder signatures (all zeros)
+        if self.signature == [0u8; 64] {
+            return Err(OracleError::InvalidSignature);
+        }
+
+        let verifying_key = VerifyingKey::from_bytes(&self.oracle_pubkey)
+            .map_err(|_| OracleError::InvalidSignature)?;
+
+        let signature =
+            Signature::from_bytes(&self.signature);
+
+        let msg = self.message_bytes();
+
+        use ed25519_dalek::Verifier;
+        verifying_key
+            .verify(&msg, &signature)
+            .map_err(|_| OracleError::InvalidSignature)
     }
 }
 
@@ -106,8 +131,10 @@ impl PriceOracle {
 
     /// Submit a price attestation.
     ///
-    /// In a real system, this would verify the Ed25519 signature.
-    /// For now, we verify the oracle key is trusted and check freshness.
+    /// Verifies:
+    /// 1. The oracle key is in the trusted set
+    /// 2. The Ed25519 signature is valid over (asset_pair || price || timestamp)
+    /// 3. The attestation is fresh (not stale)
     pub fn submit_attestation(
         &mut self,
         attestation: PriceAttestation,
@@ -119,6 +146,9 @@ impl PriceOracle {
                 key: attestation.oracle_pubkey,
             });
         }
+
+        // Verify Ed25519 signature
+        attestation.verify_signature()?;
 
         // Check freshness
         let age = current_time.saturating_sub(attestation.timestamp);
@@ -191,8 +221,65 @@ impl PriceOracle {
     }
 }
 
-/// Helper: create a test attestation (no real signature).
+/// Helper: create a test attestation with a real Ed25519 signature.
+///
+/// The `oracle_key` parameter is treated as the 32-byte Ed25519 SIGNING key.
+/// The public key (for trusted_keys) is derived and stored in `oracle_pubkey`.
+/// This maintains backward compatibility — callers pass the same key to both
+/// `PriceOracle::new(trusted_keys)` and `test_attestation()`, but must now pass
+/// the DERIVED public key to trusted_keys.
+///
+/// For the common test pattern: use `test_oracle_pubkey(signing_key)` to derive
+/// the pubkey for the trusted_keys list.
 pub fn test_attestation(
+    asset_pair: &str,
+    price: u64,
+    timestamp: u64,
+    oracle_key: [u8; 32],
+) -> PriceAttestation {
+    test_attestation_signed(asset_pair, price, timestamp, &oracle_key)
+}
+
+/// Helper: create a test attestation with a real Ed25519 signature.
+///
+/// The `signing_key_bytes` must be the 32-byte Ed25519 secret key.
+/// The oracle_pubkey field is set to the derived verifying key.
+pub fn test_attestation_signed(
+    asset_pair: &str,
+    price: u64,
+    timestamp: u64,
+    signing_key_bytes: &[u8; 32],
+) -> PriceAttestation {
+    use ed25519_dalek::{Signer, SigningKey};
+
+    let signing_key = SigningKey::from_bytes(signing_key_bytes);
+    let oracle_pubkey: [u8; 32] = signing_key.verifying_key().to_bytes();
+
+    let mut msg = Vec::new();
+    msg.extend_from_slice(asset_pair.as_bytes());
+    msg.extend_from_slice(&price.to_le_bytes());
+    msg.extend_from_slice(&timestamp.to_le_bytes());
+
+    let sig = signing_key.sign(&msg);
+
+    PriceAttestation {
+        asset_pair: asset_pair.to_string(),
+        price,
+        timestamp,
+        oracle_pubkey,
+        signature: sig.to_bytes(),
+    }
+}
+
+/// Derive the Ed25519 public key from a signing key (for use in trusted_keys lists).
+pub fn test_oracle_pubkey(signing_key: &[u8; 32]) -> [u8; 32] {
+    use ed25519_dalek::SigningKey;
+    let sk = SigningKey::from_bytes(signing_key);
+    sk.verifying_key().to_bytes()
+}
+
+/// Helper: create a test attestation WITHOUT a real signature (for testing rejection).
+pub fn test_attestation_unsigned(
     asset_pair: &str,
     price: u64,
     timestamp: u64,
@@ -203,7 +290,7 @@ pub fn test_attestation(
         price,
         timestamp,
         oracle_pubkey: oracle_key,
-        signature: [0u8; 64], // placeholder signature
+        signature: [0u8; 64], // placeholder — will be rejected by verify_signature()
     }
 }
 
@@ -211,12 +298,20 @@ pub fn test_attestation(
 mod tests {
     use super::*;
 
-    const ORACLE_KEY: [u8; 32] = [0x01; 32];
+    // A fixed test signing key (32 bytes) — the pubkey is derived from this.
+    const TEST_SIGNING_KEY: [u8; 32] = [0x01; 32];
+
+    fn test_oracle_pubkey() -> [u8; 32] {
+        use ed25519_dalek::SigningKey;
+        let sk = SigningKey::from_bytes(&TEST_SIGNING_KEY);
+        sk.verifying_key().to_bytes()
+    }
 
     #[test]
     fn submit_and_query_price() {
-        let mut oracle = PriceOracle::new(vec![ORACLE_KEY], 100);
-        let attestation = test_attestation("ETH/USD", 2000_00, 50, ORACLE_KEY);
+        let pubkey = test_oracle_pubkey();
+        let mut oracle = PriceOracle::new(vec![pubkey], 100);
+        let attestation = test_attestation_signed("ETH/USD", 2000_00, 50, &TEST_SIGNING_KEY);
         oracle.submit_attestation(attestation, 60).unwrap();
 
         let price = oracle.get_price("ETH/USD", 70).unwrap();
@@ -224,17 +319,29 @@ mod tests {
     }
 
     #[test]
+    fn invalid_signature_rejected() {
+        let pubkey = test_oracle_pubkey();
+        let mut oracle = PriceOracle::new(vec![pubkey], 100);
+        // Use the unsigned helper — should be rejected
+        let attestation = test_attestation_unsigned("ETH/USD", 2000_00, 50, pubkey);
+        let result = oracle.submit_attestation(attestation, 60);
+        assert!(matches!(result, Err(OracleError::InvalidSignature)));
+    }
+
+    #[test]
     fn stale_price_rejected_on_submit() {
-        let mut oracle = PriceOracle::new(vec![ORACLE_KEY], 100);
-        let attestation = test_attestation("ETH/USD", 2000_00, 10, ORACLE_KEY);
+        let pubkey = test_oracle_pubkey();
+        let mut oracle = PriceOracle::new(vec![pubkey], 100);
+        let attestation = test_attestation_signed("ETH/USD", 2000_00, 10, &TEST_SIGNING_KEY);
         let result = oracle.submit_attestation(attestation, 200);
         assert!(matches!(result, Err(OracleError::StalePrice { .. })));
     }
 
     #[test]
     fn stale_price_rejected_on_query() {
-        let mut oracle = PriceOracle::new(vec![ORACLE_KEY], 100);
-        let attestation = test_attestation("ETH/USD", 2000_00, 50, ORACLE_KEY);
+        let pubkey = test_oracle_pubkey();
+        let mut oracle = PriceOracle::new(vec![pubkey], 100);
+        let attestation = test_attestation_signed("ETH/USD", 2000_00, 50, &TEST_SIGNING_KEY);
         oracle.submit_attestation(attestation, 60).unwrap();
 
         // Query at time 200: age = 200 - 50 = 150 > max_age(100)
@@ -244,21 +351,38 @@ mod tests {
 
     #[test]
     fn untrusted_oracle_rejected() {
-        let mut oracle = PriceOracle::new(vec![ORACLE_KEY], 100);
-        let bad_key = [0xFF; 32];
-        let attestation = test_attestation("ETH/USD", 2000_00, 50, bad_key);
+        let pubkey = test_oracle_pubkey();
+        let mut oracle = PriceOracle::new(vec![pubkey], 100);
+        // Use a different signing key (untrusted pubkey)
+        let bad_signing_key = [0xFF; 32];
+        let attestation = test_attestation_signed("ETH/USD", 2000_00, 50, &bad_signing_key);
         let result = oracle.submit_attestation(attestation, 60);
         assert!(matches!(result, Err(OracleError::UntrustedOracle { .. })));
     }
 
     #[test]
     fn commitment_deterministic() {
-        let a1 = test_attestation("ETH/USD", 2000, 100, ORACLE_KEY);
-        let a2 = test_attestation("ETH/USD", 2000, 100, ORACLE_KEY);
+        let a1 = test_attestation_signed("ETH/USD", 2000, 100, &TEST_SIGNING_KEY);
+        let a2 = test_attestation_signed("ETH/USD", 2000, 100, &TEST_SIGNING_KEY);
         assert_eq!(a1.commitment(), a2.commitment());
 
         // Different price => different commitment
-        let a3 = test_attestation("ETH/USD", 3000, 100, ORACLE_KEY);
+        let a3 = test_attestation_signed("ETH/USD", 3000, 100, &TEST_SIGNING_KEY);
         assert_ne!(a1.commitment(), a3.commitment());
+    }
+
+    #[test]
+    fn verify_signature_works() {
+        let attestation = test_attestation_signed("BTC/USD", 50000_00, 1000, &TEST_SIGNING_KEY);
+        assert!(attestation.verify_signature().is_ok());
+    }
+
+    #[test]
+    fn tampered_price_fails_signature() {
+        let mut attestation =
+            test_attestation_signed("BTC/USD", 50000_00, 1000, &TEST_SIGNING_KEY);
+        // Tamper with the price after signing
+        attestation.price = 99999_99;
+        assert!(attestation.verify_signature().is_err());
     }
 }

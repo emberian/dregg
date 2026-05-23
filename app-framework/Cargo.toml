@@ -29,6 +29,7 @@ blake3 = "1"
 [features]
 default = []
 dev = ["pyana-sdk/dev"]
+middleware = []
 
 [lints]
 workspace = true

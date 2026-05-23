@@ -22,7 +22,7 @@ use tracing::{info, warn};
 use pyana_app_framework::hex::{bytes32_to_hex, hex_to_bytes32};
 use pyana_app_framework::{CellId, EngineConfig, PyanaEngine};
 
-use crate::qualification::verify_qualification;
+use crate::qualification::{FederationRootHistory, verify_qualification};
 use crate::state::BoardState;
 use crate::{
     ApproveRequest, Bounty, BountyFilter, BountyStatus, BountyStatusResponse, ClaimRequest,
@@ -58,7 +58,7 @@ impl Default for ServerConfig {
 #[derive(Clone)]
 struct AppState {
     board: BoardState,
-    federation_root: Arc<RwLock<[u8; 32]>>,
+    root_history: Arc<RwLock<FederationRootHistory>>,
     root_last_updated: Arc<RwLock<Option<Instant>>>,
     engine: Arc<RwLock<PyanaEngine>>,
     node_url: Arc<String>,
@@ -83,7 +83,9 @@ pub async fn start_server(config: ServerConfig) -> SocketAddr {
 
     let state = AppState {
         board: BoardState::new(),
-        federation_root: Arc::new(RwLock::new(config.federation_root)),
+        root_history: Arc::new(RwLock::new(FederationRootHistory::with_initial_root(
+            config.federation_root,
+        ))),
         root_last_updated: Arc::new(RwLock::new(Some(Instant::now()))),
         engine: Arc::new(RwLock::new(PyanaEngine::new(EngineConfig::new(now_ts)))),
         node_url: Arc::new("none".to_string()),
@@ -225,8 +227,8 @@ async fn claim_bounty(
 
     let proof_bytes = req.qualification_proof.as_deref().unwrap_or(&[]);
     let engine = state.engine.read().await;
-    let federation_root = *state.federation_root.read().await;
-    match verify_qualification(&engine, &bounty.qualification, proof_bytes, federation_root) {
+    let root_history = state.root_history.read().await;
+    match verify_qualification(&engine, &bounty.qualification, proof_bytes, &root_history) {
         Ok(true) => {}
         Ok(false) => {
             return (
@@ -516,7 +518,9 @@ async fn set_federation_root(
                     Json(json!({"error": "refusing to set all-zeroes federation root"})),
                 );
             }
-            *state.federation_root.write().await = root;
+            let mut history = state.root_history.write().await;
+            history.push(root);
+            drop(history);
             *state.root_last_updated.write().await = Some(Instant::now());
             (StatusCode::OK, Json(json!({"root": bytes32_to_hex(&root)})))
         }
@@ -528,7 +532,11 @@ async fn set_federation_root(
 }
 
 async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
-    let federation_root = *state.federation_root.read().await;
+    let root_history = state.root_history.read().await;
+    let current_root = root_history.current().unwrap_or([0u8; 32]);
+    let history_depth = root_history.len();
+    drop(root_history);
+
     let root_last_updated = *state.root_last_updated.read().await;
     let node_connected = *state.node_connected.read().await;
 
@@ -550,15 +558,16 @@ async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
         .filter(|b| b.status == "expired")
         .count();
 
-    let root_is_live = federation_root != [0u8; 32];
+    let root_is_live = current_root != [0u8; 32];
 
     Json(json!({
         "status": "running",
         "service": "pyana-bounty-board",
         "federation_root": {
-            "value": bytes32_to_hex(&federation_root),
+            "value": bytes32_to_hex(&current_root),
             "live": root_is_live,
             "last_updated_secs_ago": root_age_secs,
+            "history_depth": history_depth,
         },
         "bounties": {
             "total": all_bounties.len(),

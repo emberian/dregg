@@ -5,7 +5,7 @@
 use axum::{
     Json,
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
 use serde_json::json;
@@ -566,22 +566,55 @@ pub async fn get_auction_result(
 // Admin Handlers
 // =============================================================================
 
+/// Verify admin bearer token from the `Authorization` header.
+/// Returns `Err(Response)` with 401 if the token is missing or invalid.
+fn check_admin_auth(headers: &HeaderMap) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    let expected_token = std::env::var("PYANA_ADMIN_TOKEN").unwrap_or_default();
+    if expected_token.is_empty() {
+        // No token configured — admin endpoints are unprotected (dev mode).
+        return Ok(());
+    }
+
+    let auth_header = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    let provided_token = auth_header.strip_prefix("Bearer ").unwrap_or("");
+    if provided_token.is_empty() || provided_token != expected_token {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "unauthorized: invalid or missing admin token"})),
+        ));
+    }
+
+    Ok(())
+}
+
 /// POST /admin/height — Advance block height (devnet utility).
 pub async fn advance_height(
+    headers: HeaderMap,
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    if let Err(e) = check_admin_auth(&headers) {
+        return e.into_response();
+    }
     let delta = body["delta"].as_u64().unwrap_or(1);
     state.auction_engine.advance_height(delta).await;
     let new_height = state.auction_engine.current_height().await;
-    Json(json!({"height": new_height}))
+    Json(json!({"height": new_height})).into_response()
 }
 
 /// POST /admin/settle/:id — Trigger settlement for an auction.
 pub async fn trigger_settle(
+    headers: HeaderMap,
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    if let Err(e) = check_admin_auth(&headers) {
+        return e.into_response();
+    }
     let auction_id = match id_from_hex(&id) {
         Some(bytes) => bytes,
         None => {

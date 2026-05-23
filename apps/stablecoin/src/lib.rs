@@ -44,6 +44,7 @@ pub mod cdp;
 pub mod circuit;
 pub mod liquidation;
 pub mod oracle;
+pub mod server;
 
 #[cfg(test)]
 mod tests;

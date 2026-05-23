@@ -39,6 +39,10 @@ pub struct FillProof {
     pub descriptor: MatchProofDescriptor,
     /// Whether constraints were verified (true in production; always true here).
     pub verified: bool,
+    /// The STARK proof bytes — publicly verifiable without trusting the matcher.
+    /// Anyone can call `MatchProofDescriptor::verify_stark_proof(public_inputs, &proof_bytes)`
+    /// to independently verify the match was fair.
+    pub proof_bytes: Vec<u8>,
 }
 
 /// Errors from verified matching (superset of MatchError).
@@ -120,7 +124,7 @@ impl VerifiedMatchingEngine {
             let witness = build_witness_for_fill(fill, &maker_positions);
             let descriptor = descriptor.with_witness(witness);
 
-            // Verify constraints (in production this generates/verifies a STARK).
+            // Verify constraints locally first (fast).
             if let Err(proof_err) = descriptor.verify_all_constraints() {
                 return Err(VerifiedMatchError::ProofViolation {
                     fill_index: idx,
@@ -128,10 +132,19 @@ impl VerifiedMatchingEngine {
                 });
             }
 
+            // Generate a real STARK proof that anyone can verify independently.
+            let proof_bytes = descriptor.generate_stark_proof().map_err(|e| {
+                VerifiedMatchError::ProofViolation {
+                    fill_index: idx,
+                    error: e,
+                }
+            })?;
+
             fill_proofs.push(FillProof {
                 fill: fill.clone(),
                 descriptor,
                 verified: true,
+                proof_bytes,
             });
         }
 

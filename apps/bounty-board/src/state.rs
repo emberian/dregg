@@ -14,6 +14,7 @@ use crate::{
     Bounty, BountyFilter, BountyStatus, BountySummary, bounty_id_hex, qualification_label,
     status_label,
 };
+use crate::persist::{BoardSnapshot, PersistManager, bytes32_hex, hex_bytes32};
 
 /// Wrapper for worker history (needed for ContentStore's Serialize/Deserialize bounds).
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -32,16 +33,103 @@ pub struct BoardState {
     escrow_cells: ContentStore<CellId>,
     /// Current simulated block height (for deadline checking).
     current_height: Arc<RwLock<u64>>,
+    /// Persistence manager (if configured).
+    persist: Option<PersistManager>,
 }
 
 impl BoardState {
-    /// Create a new empty board state.
+    /// Create a new empty board state (no persistence).
     pub fn new() -> Self {
         Self {
             bounties: ContentStore::new(),
             worker_history: ContentStore::new(),
             escrow_cells: ContentStore::new(),
             current_height: Arc::new(RwLock::new(0)),
+            persist: None,
+        }
+    }
+
+    /// Create a board state with persistence support.
+    pub fn with_persistence(persist: PersistManager) -> Self {
+        Self {
+            bounties: ContentStore::new(),
+            worker_history: ContentStore::new(),
+            escrow_cells: ContentStore::new(),
+            current_height: Arc::new(RwLock::new(0)),
+            persist: Some(persist),
+        }
+    }
+
+    /// Restore state from a snapshot (loaded from disk).
+    pub async fn restore_from_snapshot(&self, snapshot: BoardSnapshot) {
+        // Restore bounties.
+        for bounty in snapshot.bounties {
+            self.bounties.insert(bounty.id, bounty).await;
+        }
+
+        // Restore worker histories.
+        for (commitment_hex, history) in snapshot.worker_histories {
+            if let Some(commitment) = hex_bytes32(&commitment_hex) {
+                self.worker_history.insert(commitment, history).await;
+            }
+        }
+
+        // Restore escrow mappings.
+        for (bounty_id_hex, escrow_id_hex) in snapshot.escrows {
+            if let (Some(bounty_id), Some(escrow_bytes)) =
+                (hex_bytes32(&bounty_id_hex), hex_bytes32(&escrow_id_hex))
+            {
+                self.escrow_cells
+                    .insert(bounty_id, CellId::from_bytes(escrow_bytes))
+                    .await;
+            }
+        }
+
+        // Restore height.
+        *self.current_height.write().await = snapshot.current_height;
+    }
+
+    /// Take a snapshot of the current state (for persistence).
+    pub async fn snapshot(&self) -> BoardSnapshot {
+        let bounties: Vec<Bounty> = self
+            .bounties
+            .list()
+            .await
+            .into_iter()
+            .map(|(_, b)| b)
+            .collect();
+
+        let worker_histories: Vec<(String, WorkerHistory)> = self
+            .worker_history
+            .list()
+            .await
+            .into_iter()
+            .map(|(k, v)| (bytes32_hex(&k), v))
+            .collect();
+
+        let escrows: Vec<(String, String)> = self
+            .escrow_cells
+            .list()
+            .await
+            .into_iter()
+            .map(|(k, v)| (bytes32_hex(&k), bytes32_hex(v.as_bytes())))
+            .collect();
+
+        let current_height = *self.current_height.read().await;
+
+        BoardSnapshot {
+            bounties,
+            worker_histories,
+            current_height,
+            escrows,
+        }
+    }
+
+    /// Persist current state to disk (no-op if persistence not configured).
+    async fn persist(&self) {
+        if let Some(ref persist) = self.persist {
+            let snapshot = self.snapshot().await;
+            persist.save(&snapshot).await;
         }
     }
 
@@ -52,19 +140,26 @@ impl BoardState {
 
     /// Advance the block height (for testing / simulation).
     pub async fn advance_height(&self, delta: u64) {
-        let mut height = self.current_height.write().await;
-        *height += delta;
+        {
+            let mut height = self.current_height.write().await;
+            *height += delta;
+        }
+        self.persist().await;
     }
 
     /// Set the block height explicitly.
     pub async fn set_height(&self, height: u64) {
-        let mut h = self.current_height.write().await;
-        *h = height;
+        {
+            let mut h = self.current_height.write().await;
+            *h = height;
+        }
+        self.persist().await;
     }
 
     /// Insert a new bounty.
     pub async fn insert_bounty(&self, bounty: Bounty) {
         self.bounties.insert(bounty.id, bounty).await;
+        self.persist().await;
     }
 
     /// Get a bounty by ID.
@@ -74,11 +169,16 @@ impl BoardState {
 
     /// Update a bounty's status.
     pub async fn update_status(&self, id: &[u8; 32], status: BountyStatus) -> bool {
-        self.bounties
+        let updated = self
+            .bounties
             .update(id, |bounty| {
                 bounty.status = status;
             })
-            .await
+            .await;
+        if updated {
+            self.persist().await;
+        }
+        updated
     }
 
     /// Record a completed bounty for a worker commitment.
@@ -102,6 +202,7 @@ impl BoardState {
                 )
                 .await;
         }
+        self.persist().await;
     }
 
     /// Get a worker's completed bounty count.
@@ -125,6 +226,7 @@ impl BoardState {
     /// Store an escrow cell mapping.
     pub async fn set_escrow_cell(&self, bounty_id: [u8; 32], cell_id: CellId) {
         self.escrow_cells.insert(bounty_id, cell_id).await;
+        self.persist().await;
     }
 
     /// Get the escrow cell for a bounty.
@@ -199,6 +301,9 @@ impl BoardState {
             if updated {
                 expired_count += 1;
             }
+        }
+        if expired_count > 0 {
+            self.persist().await;
         }
         expired_count
     }

@@ -18,6 +18,7 @@
 
 pub mod escrow;
 pub mod hex;
+#[cfg(feature = "middleware")]
 pub mod middleware;
 pub mod store;
 

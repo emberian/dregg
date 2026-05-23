@@ -1782,6 +1782,7 @@ name = "compute-exchange"
 version = "0.1.0"
 dependencies = [
  "axum 0.8.9",
+ "axum-extra",
  "blake3",
  "clap",
  "postcard",
@@ -6081,6 +6082,7 @@ dependencies = [
 name = "pyana-amm"
 version = "0.1.0"
 dependencies = [
+ "axum 0.8.9",
  "blake3",
  "pyana-app-framework",
  "pyana-cell",
@@ -6090,6 +6092,7 @@ dependencies = [
  "pyana-types",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -6126,6 +6129,7 @@ name = "pyana-bounty-board"
 version = "0.1.0"
 dependencies = [
  "axum 0.8.9",
+ "axum-extra",
  "blake3",
  "clap",
  "postcard",
@@ -6377,10 +6381,12 @@ dependencies = [
 name = "pyana-identity"
 version = "0.1.0"
 dependencies = [
+ "axum 0.8.9",
  "blake3",
  "pyana-circuit",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -6499,6 +6505,7 @@ dependencies = [
 name = "pyana-orderbook"
 version = "0.1.0"
 dependencies = [
+ "axum 0.8.9",
  "blake3",
  "postcard",
  "pyana-app-framework",
@@ -6508,6 +6515,7 @@ dependencies = [
  "pyana-types",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -6550,7 +6558,9 @@ dependencies = [
 name = "pyana-stablecoin"
 version = "0.1.0"
 dependencies = [
+ "axum 0.8.9",
  "blake3",
+ "ed25519-dalek",
  "postcard",
  "pyana-app-framework",
  "pyana-cell",
@@ -6561,6 +6571,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -6679,13 +6690,11 @@ dependencies = [
  "js-sys",
  "macaroon",
  "postcard",
- "pyana-bridge",
  "pyana-cell",
  "pyana-circuit",
  "pyana-commit",
  "pyana-coord",
  "pyana-intent",
- "pyana-sdk",
  "pyana-trace",
  "pyana-turn",
  "pyana-types",
@@ -6695,7 +6704,6 @@ dependencies = [
  "token",
  "wasm-bindgen",
  "web-sys",
- "x25519-dalek",
 ]
 
 [[package]]

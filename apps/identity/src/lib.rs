@@ -21,6 +21,7 @@ pub mod holder;
 pub mod issuer;
 pub mod presentation;
 pub mod revocation;
+pub mod server;
 pub mod verifier;
 
 #[cfg(test)]
