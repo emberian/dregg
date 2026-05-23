@@ -2498,7 +2498,8 @@ pub fn verify_proof_complete(
     }
 
     // 4. Federation root binding: proof's root must match expected.
-    let expected_root = bytes_to_babybear(federation_root);
+    // Decode using the canonical bb_from_bytes (inverse of bb_to_bytes).
+    let expected_root = bb_from_bytes(federation_root);
     if pi[1] != expected_root {
         return Err(VerifyError::RootMismatch);
     }
