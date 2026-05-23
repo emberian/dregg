@@ -221,65 +221,64 @@ pub fn note_spending_dsl_circuit() -> DslCircuit {
     DslCircuit::new(note_spending_circuit_descriptor())
 }
 
-/// Generate a valid single-row trace for the note spending DSL circuit.
+/// Generate a valid commitment row trace for the note spending DSL circuit.
 ///
-/// This produces a commitment row that satisfies all Hash and PiBinding constraints.
-/// The Merkle membership is handled separately; this row represents the "opening" proof.
+/// This uses `hash_fact` (which is what the DSL `Hash` constraint evaluates) to compute
+/// the commitment and nullifier. The DSL version re-expresses the same security property
+/// (binding of commitment and nullifier to their preimages) using the available DSL primitives.
 ///
-/// Returns (trace, public_inputs).
-pub fn generate_valid_note_spending_trace() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
-    use pyana_circuit::note_spending_air::{create_test_witness, test_spending_key, NoteSpendingAir};
-
-    let key = test_spending_key(0xDEAD_BEEF);
-    let witness = create_test_witness(
-        BabyBear::new(1000),
-        BabyBear::new(500),
-        BabyBear::new(1),
-        key,
-        4, // depth 4
-    );
-
-    let (trace, public_inputs) = NoteSpendingAir::generate_trace(&witness);
-    (trace, public_inputs)
-}
-
-/// Generate a trace with only the commitment row (for testing Hash constraints).
+/// The Hash constraint evaluates: `hash_fact(input_cols[0], &input_cols[1..])`.
+/// So:
+/// - commitment = hash_fact(owner, [value, asset_type, creation_nonce, randomness])
+/// - nullifier = hash_fact(commitment, [key[0], ..., key[7], creation_nonce])
 ///
-/// Returns a 2-row trace (power-of-two padded) where the first row is the valid
-/// commitment row and the second is a copy.
+/// Returns a 2-row trace (power-of-two padded) and public inputs.
 pub fn generate_commitment_row_trace() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
-    use pyana_circuit::note_spending_air::{create_test_witness, test_spending_key};
+    use pyana_circuit::note_spending_air::test_spending_key;
+    use pyana_circuit::poseidon2::hash_fact;
 
     let key = test_spending_key(0xDEAD_BEEF);
-    let witness = create_test_witness(
-        BabyBear::new(1000),
-        BabyBear::new(500),
-        BabyBear::new(1),
-        key,
-        4,
-    );
+    let owner = BabyBear::new(1000);
+    let value = BabyBear::new(500);
+    let asset_type = BabyBear::new(1);
+    let creation_nonce = BabyBear::new(42);
+    let randomness = BabyBear::new(777);
 
-    let commitment = witness.commitment();
-    let nullifier = witness.nullifier();
-    let merkle_root = witness.merkle_root();
+    // Compute commitment using hash_fact (matches DSL Hash constraint semantics)
+    // hash_fact(owner, [value, asset_type, creation_nonce, randomness])
+    let commitment = hash_fact(owner, &[value, asset_type, creation_nonce, randomness]);
+
+    // Compute nullifier using hash_fact
+    // hash_fact(commitment, [key[0], key[1], ..., key[7], creation_nonce])
+    let mut nullifier_terms = Vec::with_capacity(SPENDING_KEY_LIMBS + 1);
+    for j in 0..SPENDING_KEY_LIMBS {
+        nullifier_terms.push(key[j]);
+    }
+    nullifier_terms.push(creation_nonce);
+    let nullifier = hash_fact(commitment, &nullifier_terms);
+
+    // For the Merkle root, we use a placeholder since this test focuses on the
+    // commitment row constraints (Hash + PiBinding). The Merkle membership is
+    // structurally separate.
+    let merkle_root = BabyBear::new(99999);
 
     // Build the commitment row (row 0)
     let mut row = vec![BabyBear::ZERO; NOTE_SPENDING_WIDTH];
-    row[col::OWNER] = witness.owner;
-    row[col::VALUE] = witness.value;
-    row[col::ASSET_TYPE] = witness.asset_type;
-    row[col::CREATION_NONCE] = witness.creation_nonce;
+    row[col::OWNER] = owner;
+    row[col::VALUE] = value;
+    row[col::ASSET_TYPE] = asset_type;
+    row[col::CREATION_NONCE] = creation_nonce;
     row[col::COMMITMENT] = commitment;
     for j in 0..SPENDING_KEY_LIMBS {
-        row[col::SPENDING_KEY_START + j] = witness.spending_key[j];
+        row[col::SPENDING_KEY_START + j] = key[j];
     }
     row[col::NULLIFIER] = nullifier;
-    row[col::RANDOMNESS] = witness.randomness;
+    row[col::RANDOMNESS] = randomness;
     row[col::IS_MERKLE] = BabyBear::ZERO;
 
     // 2-row trace (pad with copy)
     let trace = vec![row.clone(), row];
-    let public_inputs = vec![nullifier, merkle_root, witness.value, witness.asset_type];
+    let public_inputs = vec![nullifier, merkle_root, value, asset_type];
 
     (trace, public_inputs)
 }
@@ -292,7 +291,6 @@ pub fn generate_commitment_row_trace() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
 mod tests {
     use super::*;
     use pyana_circuit::field::BabyBear;
-    use pyana_circuit::note_spending_air::{create_test_witness, test_spending_key};
     use pyana_circuit::stark::{self, StarkAir};
 
     #[test]

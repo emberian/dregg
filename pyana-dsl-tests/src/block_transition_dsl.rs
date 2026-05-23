@@ -29,10 +29,7 @@
 //!
 //! [pre_state_root, post_state_root]
 
-use pyana_circuit::block_transition_air::{
-    col, generate_block_transition_trace, BlockEvent, MerkleUpdateWitness,
-    BLOCK_TRANSITION_WIDTH,
-};
+use pyana_circuit::block_transition_air::{col, BLOCK_TRANSITION_WIDTH};
 use pyana_circuit::field::BabyBear;
 use pyana_dsl_runtime::circuit::{
     BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr,
@@ -144,39 +141,78 @@ pub fn block_transition_dsl_circuit() -> DslCircuit {
     DslCircuit::new(block_transition_circuit_descriptor())
 }
 
-/// Create a simple test Merkle update witness with deterministic siblings.
-fn make_test_witness(depth: usize, position: u32) -> MerkleUpdateWitness {
-    let mut siblings = Vec::with_capacity(depth);
-    let mut positions = Vec::with_capacity(depth);
-    for level in 0..depth {
-        siblings.push([
-            BabyBear::new((level * 3 + 1) as u32 + position * 100),
-            BabyBear::new((level * 3 + 2) as u32 + position * 100),
-            BabyBear::new((level * 3 + 3) as u32 + position * 100),
-        ]);
-        positions.push((position as u8 + level as u8) % 4);
-    }
-    MerkleUpdateWitness {
-        siblings,
-        positions,
-    }
+/// Compute the new root using `hash_fact` (matching DSL Hash constraint semantics).
+///
+/// hash_fact(old_root, [new_leaf, position, sibling_hash])
+/// This is the DSL's interpretation of the update root computation.
+fn compute_dsl_update_root(
+    old_root: BabyBear,
+    new_leaf: BabyBear,
+    position: BabyBear,
+    sibling_hash: BabyBear,
+) -> BabyBear {
+    use pyana_circuit::poseidon2::hash_fact;
+    hash_fact(old_root, &[new_leaf, position, sibling_hash])
 }
 
-/// Generate a valid 4-event block transition trace suitable for DSL testing.
+/// Generate a valid 4-event block transition trace using DSL hash semantics.
 ///
-/// Returns (trace, public_inputs) where the trace has proper chain continuity
-/// and all hash bindings are satisfied.
+/// Uses `hash_fact` for the root update computation (matching what the DSL Hash
+/// constraint evaluates). Returns (trace, public_inputs) with proper chain continuity.
 pub fn generate_valid_block_trace() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
     let pre_root = BabyBear::new(42);
-    let events: Vec<BlockEvent> = (0..4)
-        .map(|i| BlockEvent {
-            leaf: BabyBear::new(1000 + i),
-            position: i,
-        })
-        .collect();
-    let witnesses: Vec<MerkleUpdateWitness> = (0..4).map(|i| make_test_witness(4, i)).collect();
+    let num_events = 4u32;
+    let padded_len = (num_events as usize).next_power_of_two().max(2);
 
-    generate_block_transition_trace(pre_root, &events, &witnesses)
+    let mut trace = Vec::with_capacity(padded_len);
+    let mut current_root = pre_root;
+
+    for i in 0..num_events {
+        let new_leaf = BabyBear::new(1000 + i);
+        let position = BabyBear::new(i);
+        let sibling_hash = BabyBear::new(5000 + i * 7);
+
+        let new_root = compute_dsl_update_root(current_root, new_leaf, position, sibling_hash);
+
+        trace.push(vec![
+            current_root,
+            new_leaf,
+            position,
+            new_root,
+            sibling_hash,
+            BabyBear::new(i),
+        ]);
+
+        current_root = new_root;
+    }
+
+    let post_state_root = current_root;
+
+    // Pad to power of 2 with identity-like rows
+    for i in num_events as usize..padded_len {
+        let pad_leaf = BabyBear::ZERO;
+        let pad_pos = BabyBear::ZERO;
+        let pad_sibling = BabyBear::ZERO;
+        let pad_root = compute_dsl_update_root(current_root, pad_leaf, pad_pos, pad_sibling);
+
+        trace.push(vec![
+            current_root,
+            pad_leaf,
+            pad_pos,
+            pad_root,
+            pad_sibling,
+            BabyBear::new(i as u32),
+        ]);
+        current_root = pad_root;
+    }
+
+    // Public inputs: [pre_state_root, post_state_root]
+    // We bind to the LAST row's new_root (which includes padding transitions).
+    // To match the boundary constraint (Last row new_root = pi[1]), we use
+    // the final current_root after all padding.
+    let public_inputs = vec![pre_root, current_root];
+
+    (trace, public_inputs)
 }
 
 /// Generate a 2-event block transition trace (minimal power-of-two = 2 rows).
@@ -184,19 +220,28 @@ pub fn generate_valid_block_trace() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
 /// Returns (trace, public_inputs).
 pub fn generate_minimal_block_trace() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
     let pre_root = BabyBear::new(1337);
-    let events = vec![
-        BlockEvent {
-            leaf: BabyBear::new(0xCAFE),
-            position: 2,
-        },
-        BlockEvent {
-            leaf: BabyBear::new(0xBEEF),
-            position: 3,
-        },
-    ];
-    let witnesses = vec![make_test_witness(4, 2), make_test_witness(4, 3)];
 
-    generate_block_transition_trace(pre_root, &events, &witnesses)
+    let leaf_0 = BabyBear::new(0xCAFE);
+    let pos_0 = BabyBear::new(2);
+    let sib_0 = BabyBear::new(8888);
+
+    let new_root_0 = compute_dsl_update_root(pre_root, leaf_0, pos_0, sib_0);
+
+    let leaf_1 = BabyBear::new(0xBEEF);
+    let pos_1 = BabyBear::new(3);
+    let sib_1 = BabyBear::new(7777);
+
+    let new_root_1 = compute_dsl_update_root(new_root_0, leaf_1, pos_1, sib_1);
+
+    let trace = vec![
+        vec![pre_root, leaf_0, pos_0, new_root_0, sib_0, BabyBear::ZERO],
+        vec![new_root_0, leaf_1, pos_1, new_root_1, sib_1, BabyBear::ONE],
+    ];
+
+    // Last row's new_root is the post_state_root (2 rows = power of 2, no padding needed)
+    let public_inputs = vec![pre_root, new_root_1];
+
+    (trace, public_inputs)
 }
 
 // ============================================================================

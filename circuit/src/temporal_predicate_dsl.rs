@@ -20,6 +20,10 @@ use crate::predicate_air::{PREDICATE_DIFF_BITS, PredicateType};
 use crate::stark::{self, BoundaryConstraint, StarkAir, StarkProof};
 use pyana_dsl::pyana_circuit;
 
+// Allow the macro-generated code to reference `pyana_circuit::field::BabyBear`
+// and `pyana_circuit::stark::StarkAir` when used within this crate.
+use crate as pyana_circuit;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // DSL-generated core AIR
 // ─────────────────────────────────────────────────────────────────────────────

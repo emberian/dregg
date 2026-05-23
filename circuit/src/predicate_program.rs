@@ -72,10 +72,12 @@ use crate::relational_predicate_air::{
     prove_relational as prove_relational_air, verify_relational as verify_relational_air,
 };
 #[cfg(feature = "plonky3")]
-use crate::temporal_predicate_air::p3_temporal::{
+use crate::temporal_predicate_dsl::p3_temporal::{
     P3TemporalPredicateProof, prove_temporal_predicate_p3, verify_temporal_predicate_p3,
 };
-use crate::temporal_predicate_air::{TemporalPredicateProof, verify_temporal_predicate};
+use crate::temporal_predicate_dsl::{
+    TemporalPredicateProof, prove_temporal_predicate, verify_temporal_predicate,
+};
 
 // =============================================================================
 // Program Representation
