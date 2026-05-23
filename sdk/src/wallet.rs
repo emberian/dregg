@@ -2944,6 +2944,59 @@ impl AgentWallet {
         let turn_hash = turn.hash();
         pyana_turn::EventualRef::new(turn_hash, slot)
     }
+
+    // =========================================================================
+    // Committed Payments
+    // =========================================================================
+
+    /// Build a committed (privacy-preserving) transfer turn from owned notes.
+    ///
+    /// Constructs a turn where note values are hidden behind Pedersen commitments.
+    /// The executor verifies conservation via the Schnorr excess signature and
+    /// Bulletproof range proofs, without learning any amounts.
+    ///
+    /// # Arguments
+    ///
+    /// * `input_notes` - Notes this wallet can spend (with full opening data).
+    /// * `recipients` - (amount, recipient_pubkey) pairs for outputs.
+    /// * `domain` - Domain string for deriving the agent's cell ID.
+    /// * `nonce` - Replay-protection nonce.
+    ///
+    /// # Returns
+    ///
+    /// A fully-formed [`Turn`] with `conservation_proof` set and all effects
+    /// carrying `value_commitment` fields, ready for signing and submission.
+    pub fn build_committed_transfer(
+        &self,
+        input_notes: &[crate::committed_turn::OwnedNote],
+        recipients: &[(u64, [u8; 32])],
+        domain: &str,
+        nonce: u64,
+    ) -> Result<Turn, crate::error::SdkError> {
+        use crate::committed_turn::{CommittedNoteInput, CommittedNoteOutput, CommittedTurnBuilder};
+
+        let agent_cell = self.cell_id(domain);
+
+        let mut builder = CommittedTurnBuilder::new();
+
+        for note in input_notes {
+            builder.add_input(CommittedNoteInput::from(note));
+        }
+
+        for &(amount, ref recipient) in recipients {
+            let asset_type = input_notes
+                .first()
+                .map(|n| n.asset_type)
+                .unwrap_or(0);
+            builder.add_output(CommittedNoteOutput {
+                value: amount,
+                asset_type,
+                recipient: *recipient,
+            });
+        }
+
+        builder.build(agent_cell, nonce, 0)
+    }
 }
 
 impl Default for AgentWallet {
