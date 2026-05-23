@@ -114,12 +114,14 @@ pub fn multi_step_circuit_descriptor() -> CircuitDescriptor {
 
     // C4b: Monotone decreasing:
     //   (1 - IS_ACTIVE) * is_active_next_aux == 0
-    // Expanded: is_active_next_aux - IS_ACTIVE * is_active_next_aux == 0
-    constraints.push(ConstraintExpr::Polynomial {
-        terms: vec![
-            term(BabyBear::ONE, &[is_active_next_aux]),
-            term(neg_one(), &[col::IS_ACTIVE, is_active_next_aux]),
-        ],
+    // Using InvertedGated: active when IS_ACTIVE == 0
+    constraints.push(ConstraintExpr::InvertedGated {
+        selector_col: col::IS_ACTIVE,
+        inner: Box::new(ConstraintExpr::Polynomial {
+            terms: vec![
+                term(BabyBear::ONE, &[is_active_next_aux]),
+            ],
+        }),
     });
 
     // ========================================================================

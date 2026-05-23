@@ -70,6 +70,19 @@ pub enum ConstraintExpr {
     /// Gated constraint: `local[selector_col] * inner == 0`
     Gated { selector_col: usize, inner: Box<ConstraintExpr> },
 
+    /// Constraint active when selector_col == 0 (inverted gating)
+    /// `(1 - local[selector_col]) * inner == 0`
+    InvertedGated {
+        selector_col: usize,
+        inner: Box<ConstraintExpr>,
+    },
+
+    /// Squared constraint: `inner^2 == 0` (equivalent to `inner == 0` for soundness,
+    /// but produces different numerical values when composed with alpha powers).
+    Squared {
+        inner: Box<ConstraintExpr>,
+    },
+
     /// Constrain col_output == Poseidon2_hash_fact(col_inputs[0], col_inputs[1..])
     /// The first input column is the predicate, the rest are terms.
     /// The evaluator computes hash_fact(predicate, &terms) and checks equality.
@@ -161,6 +174,13 @@ impl ConstraintExpr {
             }
             Self::Gated { selector_col, inner } => {
                 local[*selector_col] * inner.evaluate(local, next, pi)
+            }
+            Self::InvertedGated { selector_col, inner } => {
+                (BabyBear::ONE - local[*selector_col]) * inner.evaluate(local, next, pi)
+            }
+            Self::Squared { inner } => {
+                let v = inner.evaluate(local, next, pi);
+                v * v
             }
             Self::Hash { output_col, input_cols } => {
                 // First input is the predicate, rest are terms.
@@ -381,6 +401,13 @@ impl ConstraintExpr {
             Self::Gated { selector_col, inner } => {
                 let inner_max = inner.max_column_index().unwrap_or(0);
                 Some((*selector_col).max(inner_max))
+            }
+            Self::InvertedGated { selector_col, inner } => {
+                let inner_max = inner.max_column_index().unwrap_or(0);
+                Some((*selector_col).max(inner_max))
+            }
+            Self::Squared { inner } => {
+                inner.max_column_index()
             }
             Self::Hash { output_col, input_cols } => {
                 let max_input = input_cols.iter().copied().max().unwrap_or(0);

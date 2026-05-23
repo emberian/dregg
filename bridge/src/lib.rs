@@ -57,4 +57,4 @@ pub use present::{
     verify_revealed_facts_commitment, verify_wire_fold_chain,
 };
 #[cfg(feature = "turn")]
-pub use verifier::StarkProofVerifier;
+pub use verifier::{DslAwareProofVerifier, StarkProofVerifier};

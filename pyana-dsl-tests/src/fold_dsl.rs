@@ -23,7 +23,7 @@
 
 use pyana_circuit::field::BabyBear;
 use pyana_dsl_runtime::circuit::{
-    BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, PolyTerm,
+    BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr,
 };
 
 // Column indices (matching circuit/src/fold_air.rs col:: module)
@@ -99,21 +99,14 @@ pub fn fold_circuit_descriptor() -> CircuitDescriptor {
     let c_hash_valid_binary = ConstraintExpr::Binary { col: HASH_VALID };
 
     // Constraint 3: membership_root == old_root WHEN is_removal (row_type == 0)
-    // is_removal = (1 - row_type). We use a polynomial:
+    // is_removal = (1 - row_type). Using InvertedGated:
     //   (1 - ROW_TYPE) * (MEMBERSHIP_ROOT - OLD_ROOT) == 0
-    // Expanded: MEMBERSHIP_ROOT - OLD_ROOT - ROW_TYPE*MEMBERSHIP_ROOT + ROW_TYPE*OLD_ROOT
-    let neg_one = BabyBear::new(pyana_circuit::field::BABYBEAR_P - 1);
-    let c_membership_root = ConstraintExpr::Polynomial {
-        terms: vec![
-            // +MEMBERSHIP_ROOT
-            PolyTerm { coeff: BabyBear::ONE, col_indices: vec![MEMBERSHIP_ROOT] },
-            // -OLD_ROOT
-            PolyTerm { coeff: neg_one, col_indices: vec![OLD_ROOT] },
-            // -ROW_TYPE * MEMBERSHIP_ROOT
-            PolyTerm { coeff: neg_one, col_indices: vec![ROW_TYPE, MEMBERSHIP_ROOT] },
-            // +ROW_TYPE * OLD_ROOT
-            PolyTerm { coeff: BabyBear::ONE, col_indices: vec![ROW_TYPE, OLD_ROOT] },
-        ],
+    let c_membership_root = ConstraintExpr::InvertedGated {
+        selector_col: ROW_TYPE,
+        inner: Box::new(ConstraintExpr::Equality {
+            col_a: MEMBERSHIP_ROOT,
+            col_b: OLD_ROOT,
+        }),
     };
 
     // Constraint 4: OLD_ROOT == pi[0]
@@ -124,45 +117,15 @@ pub fn fold_circuit_descriptor() -> CircuitDescriptor {
 
     // Constraint 6: removal_count_increment (transition).
     // When is_removal (row_type == 0): next[REMOVAL_COUNT] == local[REMOVAL_COUNT] + 1
-    // We express this as: (1 - ROW_TYPE) * (next[REMOVAL_COUNT] - local[REMOVAL_COUNT_PLUS_ONE]) == 0
-    //
-    // Using Gated with a polynomial selector for (1 - ROW_TYPE):
-    // Actually, Gated uses local[selector_col] directly. We need the negated selector.
-    // Instead, use a Polynomial that multiplies the transition difference with (1 - ROW_TYPE).
-    //
-    // But Polynomial only accesses local[] columns, not next[]. So we use Gated around Transition:
-    //   inner = Transition { next_col: REMOVAL_COUNT, local_col: REMOVAL_COUNT_PLUS_ONE }
-    //   evaluates to: next[REMOVAL_COUNT] - local[REMOVAL_COUNT_PLUS_ONE]
-    //
-    // For gating with (1 - ROW_TYPE), we can't directly express this with a single Gated
-    // (which does local[selector] * inner). But we can add another auxiliary approach:
-    // since ROW_TYPE is 0 on removal rows and 1 on summary rows, we want the constraint
-    // to be zero on summary rows. We can use a trick: create a Polynomial that equals
-    // (1 - ROW_TYPE) * transition_value. But that requires next[].
-    //
-    // The simplest DSL-compatible approach: use Gated with an inverted selector concept.
-    // Since we don't have "inverted gated", we'll encode this as a Polynomial with next-row
-    // via the Transition inner of Gated.
-    //
-    // Actually — Gated { selector_col: ROW_TYPE, inner: Transition { ... } } gives us
-    // ROW_TYPE * (next[REMOVAL_COUNT] - local[REMOVAL_COUNT_PLUS_ONE]) which is the OPPOSITE
-    // of what we want. We want this to be active when ROW_TYPE == 0.
-    //
-    // Solution: We use the auxiliary column approach differently. On removal rows (row_type=0),
-    // the transition must hold. On summary rows (row_type=1), it doesn't matter. If we just
-    // use the transition without gating, it will be enforced on ALL rows including the summary.
-    // But we can set removal_count_plus_one on the summary row such that the transition is
-    // trivially satisfied (set it equal to the next row's removal_count, which on padding rows
-    // repeats the summary row's value).
-    //
-    // For this demo, we use a plain Transition gated by (1 - ROW_TYPE) expressed as:
-    // We introduce no gating and instead ensure the trace is set up so the transition
-    // holds everywhere (padding rows repeat the same removal_count).
-    //
-    // Actually the cleanest demo: just use the Transition directly. The test trace is
-    // constructed so that removal_count_plus_one == next row's removal_count for ALL rows.
-    let c_removal_count_transition =
-        ConstraintExpr::Transition { next_col: REMOVAL_COUNT, local_col: REMOVAL_COUNT_PLUS_ONE };
+    // Using InvertedGated:
+    //   (1 - ROW_TYPE) * (next[REMOVAL_COUNT] - local[REMOVAL_COUNT_PLUS_ONE]) == 0
+    let c_removal_count_transition = ConstraintExpr::InvertedGated {
+        selector_col: ROW_TYPE,
+        inner: Box::new(ConstraintExpr::Transition {
+            next_col: REMOVAL_COUNT,
+            local_col: REMOVAL_COUNT_PLUS_ONE,
+        }),
+    };
 
     // Constraint 7: root_transition_binding on summary rows.
     // ROW_TYPE * (MEMBERSHIP_ROOT - pi[4]) == 0

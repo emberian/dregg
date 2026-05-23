@@ -163,42 +163,21 @@ pub fn derivation_circuit_descriptor() -> CircuitDescriptor {
     // C9: head_sel_var_sum_equals_is_var — (sum(sel_j) - is_var)^2 == 0
     // For each head term: (sel[0] + sel[1] + ... + sel[7] - is_var)^2 == 0
     //
-    // This is degree 2. We expand: let S = sum(sel_j) - is_var.
-    // S^2 = (sum sel_j)^2 - 2*(sum sel_j)*is_var + is_var^2.
-    // Since all selectors are binary and at most one is set, sum^2 == sum (because
-    // sum is 0 or 1 when binary + one-hot). But we can't assume that in the constraint —
-    // the constraint ENFORCES it.
-    //
-    // Actually, expanding (S)^2 as a polynomial over 9 variables is complex. Let's use
-    // a different but equivalent formulation:
-    //   sum(sel_j) - is_var == 0
-    // This is degree 1 (linear) and SUFFICIENT because combined with binary constraints
-    // on all sel_j and is_var, it forces exactly-one when is_var=1 and all-zero when is_var=0.
-    //
-    // Wait — the hand-written AIR uses (sel_sum - is_var)^2. But for a single-row
-    // constraint, if the linear version evaluates to zero, the squared version also does.
-    // If the linear version is non-zero, the squared version is non-zero. They are
-    // equivalent for constraint satisfaction (a=0 iff a^2=0 in a field with char > 2).
-    //
-    // However for COMPOSABILITY with alpha-powers in eval_constraints, the linear and
-    // squared versions produce different polynomial values when composed. To match the
-    // hand-written AIR exactly, we'd need the squared form. But for EQUIVALENCE OF
-    // CONSTRAINT SATISFACTION (valid traces satisfy both, invalid traces fail both),
-    // the linear form suffices.
-    //
-    // For this proof-of-concept, we use linear form (it's cleaner in the descriptor).
-    // The equivalence test will verify satisfaction on valid/invalid traces.
+    // The hand-written AIR uses the squared form for alpha composition. We use
+    // Squared { inner: Polynomial { sum(sel_j) - is_var } } to match exactly.
     // ========================================================================
     for term_i in 0..MAX_HEAD_TERMS {
         let is_var_col = col::HEAD_IS_VAR_START + term_i;
-        // sum(sel_j for j in 0..8) - is_var == 0
+        // (sum(sel_j for j in 0..8) - is_var)^2 == 0
         let mut terms_vec = Vec::with_capacity(MAX_SUB_VARS + 1);
         for var_j in 0..MAX_SUB_VARS {
             terms_vec.push(term(BabyBear::ONE, &[col::head_sel_var(term_i, var_j)]));
         }
         // - is_var
         terms_vec.push(term(neg_one(), &[is_var_col]));
-        constraints.push(ConstraintExpr::Polynomial { terms: terms_vec });
+        constraints.push(ConstraintExpr::Squared {
+            inner: Box::new(ConstraintExpr::Polynomial { terms: terms_vec }),
+        });
     }
 
     // ========================================================================
