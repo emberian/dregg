@@ -175,10 +175,12 @@ fn main() {
     let alice_proof = prove_note_spend(&alice_witness);
     let proof_bytes = stark::proof_to_bytes(&alice_proof);
 
-    // Verify the STARK proof.
+    // Verify the STARK proof (now includes value + asset_type to prevent inflation).
     let verify = verify_note_spend(
         alice_witness.nullifier(),
         alice_witness.merkle_root(),
+        alice_witness.value,
+        alice_witness.asset_type,
         &alice_proof,
     );
     assert!(verify.is_ok());
@@ -267,6 +269,8 @@ fn main() {
     let bob_verify = verify_note_spend(
         bob_witness.nullifier(),
         bob_witness.merkle_root(),
+        bob_witness.value,
+        bob_witness.asset_type,
         &bob_proof,
     );
     assert!(bob_verify.is_ok());

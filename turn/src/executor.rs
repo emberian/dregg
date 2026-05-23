@@ -10,7 +10,7 @@ use std::sync::Mutex;
 use ed25519_dalek::{Signature, VerifyingKey};
 use pyana_cell::{
     AuthRequired, Cell, CellId, CellStateDelta, Ledger, LedgerDelta, Preconditions,
-    RevocationChannelSet,
+    RevocationChannelSet, ValueCommitment, ValueCommitmentBytes,
     note_bridge::{BridgedNullifierSet, PendingBridgeSet},
     preconditions::EvalContext,
     state::STATE_SLOTS,
@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use crate::action::{Action, Authorization, DelegationMode, Effect};
 use crate::budget_gate::BudgetGate;
 use crate::error::TurnError;
-use crate::escrow::{EscrowCondition, EscrowRecord};
+use crate::escrow::{CommittedEscrow, EscrowCondition, EscrowRecord, verify_escrow_claim};
 use crate::forest::CallTree;
 use crate::journal::{JournalEntry, LedgerJournal};
 use crate::routing::RoutingDirective;
@@ -166,6 +166,9 @@ pub struct TurnExecutor {
     /// Active escrow records, keyed by escrow ID.
     /// Tracks locked funds for conditional settlement (release to recipient or refund to creator).
     pub escrows: Mutex<HashMap<[u8; 32], EscrowRecord>>,
+    /// Active committed (privacy-preserving) escrow records, keyed by escrow ID.
+    /// Tracks committed escrows where parties and amounts are hidden behind commitments.
+    pub committed_escrows: Mutex<HashMap<[u8; 32], CommittedEscrow>>,
 }
 
 impl TurnExecutor {
@@ -188,6 +191,7 @@ impl TurnExecutor {
             revocation_channels: None,
             obligations: Mutex::new(HashMap::new()),
             escrows: Mutex::new(HashMap::new()),
+            committed_escrows: Mutex::new(HashMap::new()),
         }
     }
 
@@ -214,6 +218,7 @@ impl TurnExecutor {
             revocation_channels: None,
             obligations: Mutex::new(HashMap::new()),
             escrows: Mutex::new(HashMap::new()),
+            committed_escrows: Mutex::new(HashMap::new()),
         }
     }
 
@@ -1640,7 +1645,11 @@ impl TurnExecutor {
                 }
                 // Locking funds in an escrow or obligation stake is equivalent to
                 // sending value out — require Send permission on the source cell.
-                Effect::CreateEscrow { .. } | Effect::CreateObligation { .. } if !has_send => {
+                Effect::CreateEscrow { .. }
+                | Effect::CreateCommittedEscrow { .. }
+                | Effect::CreateObligation { .. }
+                    if !has_send =>
+                {
                     result.push((pyana_cell::permissions::Action::Send, "Send"));
                     has_send = true;
                 }
@@ -1650,6 +1659,8 @@ impl TurnExecutor {
                 // Access: None cannot be targeted.
                 Effect::ReleaseEscrow { .. }
                 | Effect::RefundEscrow { .. }
+                | Effect::ReleaseCommittedEscrow { .. }
+                | Effect::RefundCommittedEscrow { .. }
                 | Effect::FulfillObligation { .. }
                 | Effect::SlashObligation { .. } => {
                     result.push((pyana_cell::permissions::Action::Access, "Access"));
@@ -1925,6 +1936,7 @@ impl TurnExecutor {
                 spending_proof,
                 value,
                 asset_type,
+                ..
             } => {
                 // Validate nullifier is well-formed (non-zero).
                 if nullifier.0.iter().all(|&b| b == 0) {

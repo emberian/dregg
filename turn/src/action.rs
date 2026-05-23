@@ -7,10 +7,12 @@
 use pyana_cell::note_bridge::{BridgeReceipt, PortableNoteProof};
 use pyana_cell::state::FieldElement;
 use pyana_cell::{CapabilityRef, CellId, NoteCommitment, Nullifier, Preconditions, SealedBox};
+#[allow(unused_imports)]
+use pyana_cell::{ValueCommitment, ValueCommitmentBytes};
 use serde::{Deserialize, Serialize};
 
 use crate::conditional::{ConditionProof, ProofCondition};
-use crate::escrow::EscrowCondition;
+use crate::escrow::{EscrowClaimAuth, EscrowCondition};
 
 /// How much of the turn an action's signer commits to.
 ///
@@ -220,6 +222,12 @@ pub enum Effect {
         /// 2. The nullifier is correctly derived from the note's secret data
         /// 3. The note commitment exists in the note tree (Merkle membership against the root)
         spending_proof: Vec<u8>,
+        /// Optional Pedersen value commitment (compressed Ristretto point, 32 bytes).
+        /// When present, the executor uses the committed conservation path instead
+        /// of cleartext value comparison. All notes in a turn must either all have
+        /// commitments or all lack them (mixed is rejected).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value_commitment: Option<[u8; 32]>,
     },
     /// Create a new note (add commitment to note tree).
     NoteCreate {
@@ -230,6 +238,14 @@ pub enum Effect {
         asset_type: u64,
         /// Encrypted note content (only recipient can decrypt).
         encrypted_note: Vec<u8>,
+        /// Optional Pedersen value commitment (compressed Ristretto point, 32 bytes).
+        /// When present, the executor uses the committed conservation path.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value_commitment: Option<[u8; 32]>,
+        /// Optional range proof attesting the committed value is in [0, 2^64).
+        /// Required when value_commitment is present to prevent hidden inflation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        range_proof: Option<Vec<u8>>,
     },
     /// Create a new sealer/unsealer pair for partition-tolerant capability transfer.
     CreateSealPair {
@@ -395,6 +411,58 @@ pub enum Effect {
     RefundEscrow {
         /// ID of the escrow to refund.
         escrow_id: [u8; 32],
+    },
+    /// Create a privacy-preserving committed escrow.
+    ///
+    /// All party identities and the value are hidden behind cryptographic commitments.
+    /// The range proof must demonstrate the committed value is in `[0, 2^64)`.
+    /// The value commitment encodes the actual locked amount (verified via range proof),
+    /// and the corresponding cleartext amount is deducted from the creator's balance.
+    CreateCommittedEscrow {
+        /// Commitment to the creator's identity (BLAKE3 of CellId + blinding).
+        creator_commitment: [u8; 32],
+        /// Commitment to the recipient's identity (BLAKE3 of CellId + blinding).
+        recipient_commitment: [u8; 32],
+        /// Pedersen commitment to the escrowed value (compressed Ristretto).
+        value_commitment: ValueCommitmentBytes,
+        /// Commitment to the escrow condition (BLAKE3 of condition + nonce).
+        condition_commitment: [u8; 32],
+        /// Block height after which refund is allowed (public for enforcement).
+        timeout_height: u64,
+        /// Deterministic escrow ID (derived from commitments).
+        escrow_id: [u8; 32],
+        /// Range proof showing the committed value is in [0, 2^64).
+        range_proof: Vec<u8>,
+        /// The actual amount to lock (must match the value commitment opening).
+        /// This is needed to deduct from the creator's balance; the commitment
+        /// binds this value cryptographically via the range proof.
+        amount: u64,
+    },
+    /// Release a committed escrow by proving recipient identity.
+    ///
+    /// The claimer proves they are the recipient by revealing the opening of the
+    /// recipient_commitment and signing the escrow_id. In the initial implementation
+    /// this is a signed statement; a future version will accept a ZK presentation
+    /// proof bound to the escrow_id.
+    ReleaseCommittedEscrow {
+        /// ID of the committed escrow to release.
+        escrow_id: [u8; 32],
+        /// Authorization proving the claimer is the committed recipient.
+        claim_auth: EscrowClaimAuth,
+        /// The recipient CellId to credit (must match the claim_auth opening).
+        recipient: CellId,
+    },
+    /// Refund a committed escrow after timeout by proving creator identity.
+    ///
+    /// The creator proves their identity by revealing the opening of the
+    /// creator_commitment and signing the escrow_id.
+    RefundCommittedEscrow {
+        /// ID of the committed escrow to refund.
+        escrow_id: [u8; 32],
+        /// Authorization proving the claimer is the committed creator.
+        claim_auth: EscrowClaimAuth,
+        /// The creator CellId to credit (must match the claim_auth opening).
+        creator: CellId,
     },
     /// Exercise a capability from the actor's c-list in one atomic step.
     ///
@@ -576,6 +644,7 @@ impl Effect {
                 value,
                 asset_type,
                 spending_proof,
+                value_commitment,
             } => {
                 hasher.update(&[9u8]);
                 hasher.update(&nullifier.0);
@@ -583,12 +652,23 @@ impl Effect {
                 hasher.update(&value.to_le_bytes());
                 hasher.update(&asset_type.to_le_bytes());
                 hasher.update(spending_proof);
+                match value_commitment {
+                    Some(vc) => {
+                        hasher.update(&[1u8]);
+                        hasher.update(vc);
+                    }
+                    None => {
+                        hasher.update(&[0u8]);
+                    }
+                }
             }
             Effect::NoteCreate {
                 commitment,
                 value,
                 asset_type,
                 encrypted_note,
+                value_commitment,
+                range_proof,
             } => {
                 hasher.update(&[10u8]);
                 hasher.update(&commitment.0);
@@ -596,6 +676,25 @@ impl Effect {
                 hasher.update(&asset_type.to_le_bytes());
                 hasher.update(&(encrypted_note.len() as u64).to_le_bytes());
                 hasher.update(encrypted_note);
+                match value_commitment {
+                    Some(vc) => {
+                        hasher.update(&[1u8]);
+                        hasher.update(vc);
+                    }
+                    None => {
+                        hasher.update(&[0u8]);
+                    }
+                }
+                match range_proof {
+                    Some(rp) => {
+                        hasher.update(&[1u8]);
+                        hasher.update(&(rp.len() as u64).to_le_bytes());
+                        hasher.update(rp);
+                    }
+                    None => {
+                        hasher.update(&[0u8]);
+                    }
+                }
             }
             Effect::CreateSealPair {
                 sealer_holder,
@@ -813,6 +912,51 @@ impl Effect {
                 hasher.update(&[31u8]);
                 hasher.update(escrow_id);
             }
+            Effect::CreateCommittedEscrow {
+                creator_commitment,
+                recipient_commitment,
+                value_commitment,
+                condition_commitment,
+                timeout_height,
+                escrow_id,
+                range_proof,
+                amount,
+            } => {
+                hasher.update(&[32u8]);
+                hasher.update(creator_commitment);
+                hasher.update(recipient_commitment);
+                hasher.update(&value_commitment.0);
+                hasher.update(condition_commitment);
+                hasher.update(&timeout_height.to_le_bytes());
+                hasher.update(escrow_id);
+                hasher.update(&(range_proof.len() as u64).to_le_bytes());
+                hasher.update(range_proof);
+                hasher.update(&amount.to_le_bytes());
+            }
+            Effect::ReleaseCommittedEscrow {
+                escrow_id,
+                claim_auth,
+                recipient,
+            } => {
+                hasher.update(&[33u8]);
+                hasher.update(escrow_id);
+                hasher.update(&claim_auth.public_key);
+                hasher.update(&claim_auth.blinding);
+                hasher.update(&claim_auth.signature);
+                hasher.update(recipient.as_bytes());
+            }
+            Effect::RefundCommittedEscrow {
+                escrow_id,
+                claim_auth,
+                creator,
+            } => {
+                hasher.update(&[34u8]);
+                hasher.update(escrow_id);
+                hasher.update(&claim_auth.public_key);
+                hasher.update(&claim_auth.blinding);
+                hasher.update(&claim_auth.signature);
+                hasher.update(creator.as_bytes());
+            }
             Effect::SpawnWithDelegation {
                 child_public_key,
                 child_token_id,
@@ -858,11 +1002,11 @@ impl Effect {
             Effect::SetVerificationKey { new_vk, .. } => {
                 32 + new_vk.as_ref().map_or(1, |vk| 1 + vk.data.len())
             }
-            Effect::NoteSpend { spending_proof, .. } => {
-                32 + 32 + 8 + 8 + spending_proof.len() // nullifier + root + value + asset_type + proof
+            Effect::NoteSpend { spending_proof, value_commitment, .. } => {
+                32 + 32 + 8 + 8 + spending_proof.len() + value_commitment.map_or(0, |_| 32) // nullifier + root + value + asset_type + proof + opt commitment
             }
-            Effect::NoteCreate { encrypted_note, .. } => {
-                32 + 8 + 8 + encrypted_note.len() // commitment + value + asset_type + ciphertext
+            Effect::NoteCreate { encrypted_note, value_commitment, range_proof, .. } => {
+                32 + 8 + 8 + encrypted_note.len() + value_commitment.map_or(0, |_| 32) + range_proof.as_ref().map_or(0, |rp| rp.len()) // commitment + value + asset_type + ciphertext + opt vc + opt rp
             }
             Effect::CreateSealPair { .. } => 32 + 32,
             Effect::Seal { .. } => 32 + 32 + 4,
@@ -908,6 +1052,16 @@ impl Effect {
             }
             Effect::ReleaseEscrow { proof, .. } => 32 + proof.as_ref().map_or(0, |p| p.len()),
             Effect::RefundEscrow { .. } => 32,
+            Effect::CreateCommittedEscrow { range_proof, .. } => {
+                32 + 32 + 32 + 32 + 8 + 32 + range_proof.len() + 8
+                // creator_comm + recipient_comm + value_comm + condition_comm + timeout + escrow_id + range_proof + amount
+            }
+            Effect::ReleaseCommittedEscrow { .. } => {
+                32 + 32 + 32 + 64 + 32 // escrow_id + pubkey + blinding + signature + recipient
+            }
+            Effect::RefundCommittedEscrow { .. } => {
+                32 + 32 + 32 + 64 + 32 // escrow_id + pubkey + blinding + signature + creator
+            }
             Effect::ExerciseViaCapability { inner_effects, .. } => {
                 4 + inner_effects.iter().map(|e| e.data_bytes()).sum::<usize>()
             }

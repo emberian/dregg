@@ -11,15 +11,17 @@ description = "Agent cell model — capability-secure isolated execution context
 
 [features]
 default = ["crypto"]
-crypto = ["dep:chacha20poly1305", "dep:curve25519-dalek", "dep:ed25519-dalek", "dep:getrandom", "dep:x25519-dalek", "dep:zeroize"]
+crypto = ["dep:bulletproofs", "dep:chacha20poly1305", "dep:curve25519-dalek", "dep:ed25519-dalek", "dep:getrandom", "dep:merlin", "dep:x25519-dalek", "dep:zeroize"]
 zkvm = ["dep:pyana-circuit"]
 
 [dependencies]
 blake3 = "1"
+bulletproofs = { version = "5", optional = true }
 chacha20poly1305 = { workspace = true, optional = true }
 curve25519-dalek = { version = "4", features = ["alloc"], optional = true }
 ed25519-dalek = { version = "2", features = ["hazmat"], optional = true }
 getrandom = { workspace = true, optional = true }
+merlin = { version = "3", optional = true }
 postcard = { version = "1", features = ["alloc"] }
 pyana-circuit = { path = "../circuit", default-features = false, optional = true }
 pyana-types = { path = "../types" }

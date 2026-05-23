@@ -30,6 +30,8 @@ pub mod revocation_channel;
 pub mod seal;
 pub mod state;
 #[cfg(feature = "crypto")]
+pub mod stealth;
+#[cfg(feature = "crypto")]
 pub mod value_commitment;
 
 #[cfg(test)]
@@ -69,6 +71,8 @@ pub use seal::{SealError, SealPair, SealedBox, SealerPublic, test_seal_pair};
 pub use state::{
     CellState, FIELD_ZERO, FieldElement, FieldVisibility, PublicFieldView, STATE_SLOTS,
 };
+#[cfg(feature = "crypto")]
+pub use stealth::{StealthAddress, StealthAnnouncement, StealthKeys, StealthMetaAddress};
 #[cfg(feature = "crypto")]
 pub use value_commitment::{
     CommittedNote, CommittedNoteOpening, ConservationError, ConservationProof, ValueCommitment,

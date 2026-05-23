@@ -324,7 +324,7 @@ fn main() {
             let proof = prove_note_spend(&witness);
             let d_verify = time_op_avg(
                 || {
-                    let _ = verify_note_spend(nullifier, merkle_root, &proof);
+                    let _ = verify_note_spend(nullifier, merkle_root, witness.value, witness.asset_type, &proof);
                 },
                 50,
             );

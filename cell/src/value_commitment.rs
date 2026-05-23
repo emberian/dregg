@@ -522,16 +522,15 @@ impl core::fmt::Display for ConservationError {
 
 impl std::error::Error for ConservationError {}
 
-// ─── Range proof interface (not yet implemented) ──────────────────────────────
+// ─── Range proofs (Bulletproofs) ─────────────────────────────────────────────
 
 /// A range proof attesting that a committed value is in `[0, 2^64)`.
 ///
-/// This is an interface placeholder. The actual implementation will use either:
-/// - Bulletproofs (compact, ~700 bytes, native to Ristretto)
-/// - STARK-based bit decomposition (batchable with existing Plonky3 proofs)
+/// This is an interface trait. The concrete implementation (`BulletproofRangeProof`)
+/// uses the `bulletproofs` crate (dalek ecosystem, native to Ristretto).
 ///
-/// The trait is designed to support both backends.
-pub trait RangeProof: Sized {
+/// Future backends (e.g., STARK-based bit decomposition) can also implement this trait.
+pub trait RangeProofTrait: Sized {
     /// Prove that the value committed in `commitment` is in [0, 2^64).
     ///
     /// The prover needs the opening (value, blinding) to construct the proof.
@@ -572,6 +571,262 @@ impl core::fmt::Display for RangeProofError {
 }
 
 impl std::error::Error for RangeProofError {}
+
+// ─── Bulletproof range proof implementation ──────────────────────────────────
+
+use bulletproofs::{BulletproofGens, PedersenGens};
+use merlin::Transcript;
+
+/// Pedersen generators configured to match our value commitment scheme.
+///
+/// Bulletproofs needs `PedersenGens { B: value_generator, B_blinding: randomness_generator }`
+/// so that the commitment `v*B + r*B_blinding` matches our `ValueCommitment::commit`.
+fn pedersen_gens() -> PedersenGens {
+    PedersenGens {
+        B: value_generator(),
+        B_blinding: randomness_generator(),
+    }
+}
+
+/// Bulletproof generators for 64-bit range proofs (single value).
+///
+/// These are expensive to construct, so callers doing many proofs may want to
+/// cache this. For the trait implementation we construct on each call (correctness
+/// over performance — this is not on the hot path for transaction validation in
+/// production; batch APIs amortize the cost).
+fn bulletproof_gens() -> BulletproofGens {
+    BulletproofGens::new(64, 1)
+}
+
+/// Concrete range proof using the Bulletproofs protocol (logarithmic size, ~672 bytes for 64-bit).
+///
+/// Wraps a serialized `bulletproofs::RangeProof` so the struct is `Clone + Serialize + Deserialize`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BulletproofRangeProof {
+    /// Serialized bulletproof bytes (variable length, typically ~672 bytes for 64-bit).
+    pub proof_bytes: Vec<u8>,
+}
+
+impl BulletproofRangeProof {
+    /// Create a fresh Fiat-Shamir transcript for range proof domain separation.
+    fn transcript() -> Transcript {
+        Transcript::new(b"pyana-range-proof v1")
+    }
+
+    /// Prove that `value` is in `[0, 2^64)` given the blinding factor.
+    ///
+    /// Returns the range proof. The caller should have already constructed
+    /// `commitment = ValueCommitment::commit(value, blinding)`.
+    pub fn prove_range(value: u64, blinding: &Scalar) -> Self {
+        let bp_gens = bulletproof_gens();
+        let pc_gens = pedersen_gens();
+        let mut transcript = Self::transcript();
+
+        let (proof, _committed_value) = bulletproofs::RangeProof::prove_single(
+            &bp_gens,
+            &pc_gens,
+            &mut transcript,
+            value,
+            blinding,
+            64,
+        )
+        .expect("range proof creation should not fail for valid 64-bit value");
+
+        Self {
+            proof_bytes: proof.to_bytes(),
+        }
+    }
+
+    /// Verify that the commitment contains a value in `[0, 2^64)`.
+    pub fn verify_range(&self, commitment: &ValueCommitment) -> Result<(), RangeProofError> {
+        let bp_gens = bulletproof_gens();
+        let pc_gens = pedersen_gens();
+        let mut transcript = Self::transcript();
+
+        let proof = bulletproofs::RangeProof::from_bytes(&self.proof_bytes)
+            .map_err(|_| RangeProofError::Malformed)?;
+
+        let compressed = commitment.point.compress();
+        proof
+            .verify_single(&bp_gens, &pc_gens, &mut transcript, &compressed, 64)
+            .map_err(|_| RangeProofError::VerificationFailed)
+    }
+}
+
+impl RangeProofTrait for BulletproofRangeProof {
+    fn prove(value: u64, blinding: &Scalar, _commitment: &ValueCommitment) -> Self {
+        Self::prove_range(value, blinding)
+    }
+
+    fn verify(&self, commitment: &ValueCommitment) -> Result<(), RangeProofError> {
+        self.verify_range(commitment)
+    }
+
+    fn batch_verify(
+        proofs: &[Self],
+        commitments: &[ValueCommitment],
+    ) -> Result<(), RangeProofError> {
+        if proofs.len() != commitments.len() {
+            return Err(RangeProofError::LengthMismatch);
+        }
+        // Bulletproofs batch verification: verify each individually.
+        // (The bulletproofs crate supports batch verification via verify_multiple,
+        // but that requires all proofs to be aggregated together at proof time.
+        // For independently-created proofs, we verify each one.)
+        for (proof, commitment) in proofs.iter().zip(commitments.iter()) {
+            proof.verify(commitment)?;
+        }
+        Ok(())
+    }
+}
+
+// ─── Conservation proof with range proofs ────────────────────────────────────
+
+/// A full conservation proof that includes:
+/// 1. A Schnorr excess signature proving inputs and outputs balance.
+/// 2. Range proofs for each output commitment, preventing negative values.
+///
+/// Without range proofs, a malicious transactor could commit to a negative value
+/// (wrapping in the scalar field) on one output and inflate another output,
+/// while still satisfying the conservation equation. Range proofs close this attack
+/// by ensuring every output value is in `[0, 2^64)`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FullConservationProof {
+    /// The Schnorr-based conservation proof (excess signature).
+    pub conservation: ConservationProof,
+    /// One range proof per output commitment, in the same order as `output_commitments`.
+    pub output_range_proofs: Vec<BulletproofRangeProof>,
+}
+
+/// Prove conservation with range proofs for all outputs.
+///
+/// # Arguments
+///
+/// - `input_commitments`: value commitments from spent notes
+/// - `output_commitments`: value commitments from created notes
+/// - `output_values`: plaintext values for each output (needed to construct range proofs)
+/// - `output_blindings`: blinding factors for each output commitment
+/// - `excess_blinding`: `sum(input_blindings) - sum(output_blindings)`
+/// - `message`: binding context (e.g., transaction hash)
+///
+/// # Panics
+///
+/// Panics if `output_values.len() != output_commitments.len()` or
+/// `output_blindings.len() != output_commitments.len()`.
+pub fn prove_conservation_with_range(
+    input_commitments: &[ValueCommitment],
+    output_commitments: &[ValueCommitment],
+    output_values: &[u64],
+    output_blindings: &[Scalar],
+    excess_blinding: &Scalar,
+    message: &[u8],
+) -> FullConservationProof {
+    assert_eq!(output_values.len(), output_commitments.len());
+    assert_eq!(output_blindings.len(), output_commitments.len());
+
+    let conservation = prove_conservation(
+        input_commitments,
+        output_commitments,
+        excess_blinding,
+        message,
+    );
+
+    let output_range_proofs = output_values
+        .iter()
+        .zip(output_blindings.iter())
+        .map(|(&value, blinding)| BulletproofRangeProof::prove_range(value, blinding))
+        .collect();
+
+    FullConservationProof {
+        conservation,
+        output_range_proofs,
+    }
+}
+
+/// Verify a full conservation proof (Schnorr excess + output range proofs).
+///
+/// Checks:
+/// 1. The Schnorr excess signature is valid (values balance).
+/// 2. Every output commitment has a valid range proof (no negative values).
+///
+/// # Returns
+///
+/// `Ok(())` if conservation is proven and all outputs are in range.
+/// `Err(FullConservationError)` otherwise.
+pub fn verify_conservation_with_range(
+    input_commitments: &[ValueCommitment],
+    output_commitments: &[ValueCommitment],
+    proof: &FullConservationProof,
+    message: &[u8],
+) -> Result<(), FullConservationError> {
+    // Step 1: Verify the Schnorr conservation proof.
+    verify_conservation(
+        input_commitments,
+        output_commitments,
+        &proof.conservation,
+        message,
+    )
+    .map_err(FullConservationError::Conservation)?;
+
+    // Step 2: Verify range proofs for each output.
+    if proof.output_range_proofs.len() != output_commitments.len() {
+        return Err(FullConservationError::RangeProofCountMismatch {
+            expected: output_commitments.len(),
+            got: proof.output_range_proofs.len(),
+        });
+    }
+
+    for (i, (range_proof, commitment)) in proof
+        .output_range_proofs
+        .iter()
+        .zip(output_commitments.iter())
+        .enumerate()
+    {
+        range_proof
+            .verify_range(commitment)
+            .map_err(|e| FullConservationError::RangeProofFailed { output_index: i, source: e })?;
+    }
+
+    Ok(())
+}
+
+/// Errors from full conservation proof verification.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FullConservationError {
+    /// The Schnorr conservation proof failed.
+    Conservation(ConservationError),
+    /// Wrong number of range proofs relative to output commitments.
+    RangeProofCountMismatch { expected: usize, got: usize },
+    /// A specific output's range proof failed verification.
+    RangeProofFailed {
+        output_index: usize,
+        source: RangeProofError,
+    },
+}
+
+impl core::fmt::Display for FullConservationError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Conservation(e) => write!(f, "conservation proof failed: {}", e),
+            Self::RangeProofCountMismatch { expected, got } => {
+                write!(
+                    f,
+                    "range proof count mismatch: expected {} but got {}",
+                    expected, got
+                )
+            }
+            Self::RangeProofFailed { output_index, source } => {
+                write!(
+                    f,
+                    "range proof failed for output {}: {}",
+                    output_index, source
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for FullConservationError {}
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
@@ -864,5 +1119,247 @@ mod tests {
 
         assert_eq!(note1.note_commitment, note2.note_commitment);
         assert_eq!(note1.value_commitment.point, note2.value_commitment.point);
+    }
+
+    // ─── Range proof tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn range_proof_valid_zero() {
+        let blinding = test_scalar(80);
+        let value = 0u64;
+        let commitment = ValueCommitment::commit(value, &blinding);
+        let proof = BulletproofRangeProof::prove_range(value, &blinding);
+        assert!(proof.verify_range(&commitment).is_ok());
+    }
+
+    #[test]
+    fn range_proof_valid_one() {
+        let blinding = test_scalar(81);
+        let value = 1u64;
+        let commitment = ValueCommitment::commit(value, &blinding);
+        let proof = BulletproofRangeProof::prove_range(value, &blinding);
+        assert!(proof.verify_range(&commitment).is_ok());
+    }
+
+    #[test]
+    fn range_proof_valid_max() {
+        let blinding = test_scalar(82);
+        let value = u64::MAX;
+        let commitment = ValueCommitment::commit(value, &blinding);
+        let proof = BulletproofRangeProof::prove_range(value, &blinding);
+        assert!(proof.verify_range(&commitment).is_ok());
+    }
+
+    #[test]
+    fn range_proof_valid_large_value() {
+        let blinding = test_scalar(83);
+        let value = 1_000_000_000u64; // 1 billion
+        let commitment = ValueCommitment::commit(value, &blinding);
+        let proof = BulletproofRangeProof::prove_range(value, &blinding);
+        assert!(proof.verify_range(&commitment).is_ok());
+    }
+
+    #[test]
+    fn range_proof_wrong_commitment_fails() {
+        // Prove for one value, verify against a different commitment.
+        let blinding1 = test_scalar(84);
+        let blinding2 = test_scalar(85);
+        let commitment_wrong = ValueCommitment::commit(999, &blinding2);
+        let proof = BulletproofRangeProof::prove_range(42, &blinding1);
+        assert_eq!(
+            proof.verify_range(&commitment_wrong),
+            Err(RangeProofError::VerificationFailed)
+        );
+    }
+
+    #[test]
+    fn range_proof_wrong_value_commitment_fails() {
+        // Prove for value=100 but verify against commitment to value=200 (same blinding).
+        let blinding = test_scalar(86);
+        let proof = BulletproofRangeProof::prove_range(100, &blinding);
+        let wrong_commitment = ValueCommitment::commit(200, &blinding);
+        assert_eq!(
+            proof.verify_range(&wrong_commitment),
+            Err(RangeProofError::VerificationFailed)
+        );
+    }
+
+    #[test]
+    fn range_proof_trait_impl() {
+        // Test via the trait interface.
+        let blinding = test_scalar(87);
+        let value = 12345u64;
+        let commitment = ValueCommitment::commit(value, &blinding);
+        let proof = <BulletproofRangeProof as RangeProofTrait>::prove(value, &blinding, &commitment);
+        assert!(<BulletproofRangeProof as RangeProofTrait>::verify(&proof, &commitment).is_ok());
+    }
+
+    #[test]
+    fn range_proof_batch_verify() {
+        let values = [100u64, 200, 300];
+        let blindings: Vec<Scalar> = (0..3).map(|i| test_scalar(90 + i)).collect();
+        let commitments: Vec<ValueCommitment> = values
+            .iter()
+            .zip(blindings.iter())
+            .map(|(&v, b)| ValueCommitment::commit(v, b))
+            .collect();
+        let proofs: Vec<BulletproofRangeProof> = values
+            .iter()
+            .zip(blindings.iter())
+            .map(|(&v, b)| BulletproofRangeProof::prove_range(v, b))
+            .collect();
+
+        assert!(BulletproofRangeProof::batch_verify(&proofs, &commitments).is_ok());
+    }
+
+    #[test]
+    fn range_proof_batch_verify_length_mismatch() {
+        let blinding = test_scalar(93);
+        let commitment = ValueCommitment::commit(10, &blinding);
+        let proof = BulletproofRangeProof::prove_range(10, &blinding);
+
+        // More proofs than commitments.
+        assert_eq!(
+            BulletproofRangeProof::batch_verify(&[proof.clone(), proof], &[commitment]),
+            Err(RangeProofError::LengthMismatch)
+        );
+    }
+
+    // ─── Full conservation proof with range proofs ───────────────────────────
+
+    #[test]
+    fn full_conservation_valid_transaction() {
+        // 2 inputs (300, 500) -> 2 outputs (450, 350). Total 800 = 800.
+        let r_in1 = test_scalar(100);
+        let r_in2 = test_scalar(101);
+        let r_out1 = test_scalar(102);
+        let r_out2 = test_scalar(103);
+
+        let inputs = vec![
+            ValueCommitment::commit(300, &r_in1),
+            ValueCommitment::commit(500, &r_in2),
+        ];
+        let output_values = [450u64, 350];
+        let output_blindings = [r_out1, r_out2];
+        let outputs: Vec<ValueCommitment> = output_values
+            .iter()
+            .zip(output_blindings.iter())
+            .map(|(&v, b)| ValueCommitment::commit(v, b))
+            .collect();
+
+        let excess_blinding = (r_in1 + r_in2) - (r_out1 + r_out2);
+
+        let proof = prove_conservation_with_range(
+            &inputs,
+            &outputs,
+            &output_values,
+            &output_blindings,
+            &excess_blinding,
+            b"full-test-1",
+        );
+
+        assert!(verify_conservation_with_range(&inputs, &outputs, &proof, b"full-test-1").is_ok());
+    }
+
+    #[test]
+    fn full_conservation_negative_value_attack_fails() {
+        // Attack scenario: attacker tries to inflate by using a "negative" value.
+        //
+        // Honest: input 100 -> output 100 (no inflation).
+        // Attack: input 100 -> output (100 + 1_000_000) and output (-1_000_000 mod l).
+        //
+        // The conservation equation would pass because the values sum correctly
+        // in the scalar field. But the range proof on the "negative" output will fail
+        // because the attacker cannot produce a valid 64-bit range proof for a value
+        // that is actually (l - 1_000_000) when interpreted as a scalar.
+        //
+        // We simulate this by attempting to prove with a value that, when committed,
+        // would look negative. Since we cannot actually call prove_range with a "negative"
+        // u64, we instead show that a forged proof cannot verify:
+        // Commit to a value using the scalar field directly (bypassing u64).
+        let r_in = test_scalar(110);
+        let r_out_legit = test_scalar(111);
+        let r_out_attack = test_scalar(112);
+
+        let input_value = 100u64;
+        let inflated_value = 1_000_100u64; // more than input!
+
+        let inputs = vec![ValueCommitment::commit(input_value, &r_in)];
+
+        // The "legitimate" output gets the inflated value.
+        let output_legit = ValueCommitment::commit(inflated_value, &r_out_legit);
+
+        // The "attack" output must commit to a negative value so that
+        // sum(outputs) = sum(inputs). The "negative" value in the scalar field:
+        // negative_scalar = Scalar::from(input_value) - Scalar::from(inflated_value)
+        //                  = -(inflated_value - input_value) mod l
+        // This is NOT representable as a u64.
+        let negative_scalar = Scalar::from(input_value) - Scalar::from(inflated_value);
+        let output_attack = ValueCommitment {
+            point: negative_scalar * value_generator() + r_out_attack * randomness_generator(),
+        };
+
+        let outputs = vec![output_legit.clone(), output_attack.clone()];
+
+        // The excess should be zero-value (conservation holds in scalar field).
+        let excess_blinding = r_in - (r_out_legit + r_out_attack);
+
+        // Conservation proof alone would pass:
+        let conservation_proof =
+            prove_conservation(&inputs, &outputs, &excess_blinding, b"attack-tx");
+        assert!(
+            verify_conservation(&inputs, &outputs, &conservation_proof, b"attack-tx").is_ok(),
+            "conservation alone passes (this is the vulnerability without range proofs)"
+        );
+
+        // But the attacker cannot produce a valid range proof for the attack output.
+        // They can produce a range proof for the legit output:
+        let legit_range_proof = BulletproofRangeProof::prove_range(inflated_value, &r_out_legit);
+        assert!(legit_range_proof.verify_range(&output_legit).is_ok());
+
+        // For the attack output, any proof the attacker might try will fail.
+        // We simulate by using the legit proof against the attack commitment:
+        assert_eq!(
+            legit_range_proof.verify_range(&output_attack),
+            Err(RangeProofError::VerificationFailed)
+        );
+
+        // And the full conservation proof with mismatched range proofs would also fail:
+        let full_proof = FullConservationProof {
+            conservation: conservation_proof,
+            output_range_proofs: vec![legit_range_proof.clone(), legit_range_proof],
+        };
+        let result = verify_conservation_with_range(&inputs, &outputs, &full_proof, b"attack-tx");
+        assert!(result.is_err(), "full conservation with range proofs rejects the attack");
+        match result {
+            Err(FullConservationError::RangeProofFailed { output_index: 1, .. }) => {}
+            other => panic!("expected RangeProofFailed at index 1, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn full_conservation_range_proof_count_mismatch() {
+        let r_in = test_scalar(120);
+        let r_out = test_scalar(121);
+
+        let inputs = vec![ValueCommitment::commit(50, &r_in)];
+        let outputs = vec![ValueCommitment::commit(50, &r_out)];
+        let excess = r_in - r_out;
+
+        let conservation = prove_conservation(&inputs, &outputs, &excess, b"mismatch");
+
+        // Provide no range proofs (should be 1).
+        let full_proof = FullConservationProof {
+            conservation,
+            output_range_proofs: vec![],
+        };
+
+        assert_eq!(
+            verify_conservation_with_range(&inputs, &outputs, &full_proof, b"mismatch"),
+            Err(FullConservationError::RangeProofCountMismatch {
+                expected: 1,
+                got: 0
+            })
+        );
     }
 }

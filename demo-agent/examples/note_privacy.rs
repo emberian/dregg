@@ -111,6 +111,8 @@ fn main() {
     let verify_result = verify_note_spend(
         alice_witness.nullifier(),
         alice_witness.merkle_root(),
+        alice_witness.value,
+        alice_witness.asset_type,
         &alice_proof,
     );
     assert!(verify_result.is_ok(), "Alice's spending proof must verify");
@@ -208,6 +210,8 @@ fn main() {
     let bob_verify = verify_note_spend(
         bob_witness.nullifier(),
         bob_witness.merkle_root(),
+        bob_witness.value,
+        bob_witness.asset_type,
         &bob_proof,
     );
     assert!(bob_verify.is_ok(), "Bob's spending proof must verify");

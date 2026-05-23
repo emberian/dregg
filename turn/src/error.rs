@@ -149,6 +149,10 @@ pub enum TurnError {
 
     /// An effect was structurally invalid (malformed data, null identifiers, etc.).
     InvalidEffect { reason: String },
+
+    /// Committed (Pedersen) conservation check failed: the Schnorr proof over the
+    /// excess commitment is invalid, indicating value is not conserved.
+    CommittedConservationFailed { reason: String },
 }
 
 impl core::fmt::Display for TurnError {
@@ -329,6 +333,9 @@ impl core::fmt::Display for TurnError {
             }
             TurnError::InvalidEffect { reason } => {
                 write!(f, "invalid effect: {reason}")
+            }
+            TurnError::CommittedConservationFailed { reason } => {
+                write!(f, "committed conservation failed: {reason}")
             }
         }
     }

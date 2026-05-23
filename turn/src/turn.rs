@@ -37,6 +37,12 @@ pub struct Turn {
     /// Hashes of turns this turn depends on (for pipeline/eventual-send semantics).
     #[serde(default)]
     pub depends_on: Vec<[u8; 32]>,
+    /// Schnorr conservation proof (serialized `ConservationProof`) for the committed
+    /// value path. Required when all notes in the turn use Pedersen value commitments.
+    /// The proof demonstrates that `sum(input_commitments) - sum(output_commitments)`
+    /// is a commitment to zero (values balance without revealing amounts).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conservation_proof: Option<Vec<u8>>,
 }
 
 impl Turn {
