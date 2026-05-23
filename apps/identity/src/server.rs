@@ -18,7 +18,7 @@ use crate::presentation::{CredentialPresentation, PresentationBuilder};
 use crate::verifier::{VerificationPolicy, VerificationResult as VResult};
 use crate::{AttributeValue, CredentialId, IssuerId};
 use pyana_circuit::field::BabyBear;
-use pyana_circuit::predicate_types::PredicateType;
+use pyana_circuit::predicate_air::PredicateType;
 
 // =============================================================================
 // Application State

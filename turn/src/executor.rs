@@ -6722,8 +6722,7 @@ impl TurnExecutor {
                     break;
                 }
                 for j in 0..pyana_circuit::effect_vm::pi::CUSTOM_ENTRY_SIZE {
-                    public_inputs
-                        .push(BabyBear::new_canonical(proof.public_inputs[base + j]));
+                    public_inputs.push(BabyBear::new_canonical(proof.public_inputs[base + j]));
                 }
             }
 
@@ -6939,8 +6938,7 @@ impl TurnExecutor {
                     break;
                 }
                 for j in 0..pyana_circuit::effect_vm::pi::CUSTOM_ENTRY_SIZE {
-                    public_inputs
-                        .push(BabyBear::new_canonical(proof.public_inputs[base + j]));
+                    public_inputs.push(BabyBear::new_canonical(proof.public_inputs[base + j]));
                 }
             }
 

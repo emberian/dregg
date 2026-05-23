@@ -105,9 +105,9 @@ fn test_all_predicate_types_round_trip() {
 fn test_stark_proof_bytes_round_trip() {
     use pyana_circuit::merkle_air::{MerkleLevelWitness, MerkleWitness};
     use pyana_circuit::poseidon2;
-    use pyana_dsl_runtime::descriptors::merkle_poseidon2_circuit;
     use pyana_circuit::presentation::generate_merkle_poseidon2_stark_proof;
     use pyana_circuit::stark::verify;
+    use pyana_dsl_runtime::descriptors::merkle_poseidon2_circuit;
 
     // Build a Poseidon2-compatible Merkle witness (depth 4).
     let leaf_hash = BabyBear::new(12345);

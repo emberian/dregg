@@ -31,6 +31,15 @@ pub use pyana_circuit::dsl::temporal_absence;
 // beyond what pyana_circuit::dsl already provides).
 pub mod composition;
 
+// Re-export composition primitives.
+#[allow(deprecated)]
+pub use composition::{
+    AttachedSubProof, ComposedCircuitDescriptor, ComposedDslCircuit, ComposedProof,
+    ComposedVerification, IvcBinding, SubProofBinding, compose_aggregate, compose_and,
+    compose_chain, compose_or, compute_descriptor_vk_elements, generate_and_trace,
+    generate_chain_trace, verify_composed, verify_composed_full,
+};
+
 #[cfg(feature = "plonky3")]
 pub mod dsl_plonky3;
 
@@ -46,7 +55,7 @@ pub use pyana_circuit::dsl::{
 
 // Re-export production garbled circuit evaluation API.
 pub use pyana_circuit::dsl::garbled::{
-    ExtendedGateRecord, GarbledDslProof, GateType, prove_garbled_evaluation_dsl,
+    ExtendedGateRecord, GarbledDslProof, GateType as GarbledGateType, prove_garbled_evaluation_dsl,
     prove_garbled_evaluation_extended_dsl, prove_private_threshold_dsl,
     verify_garbled_evaluation_dsl, verify_private_threshold_dsl,
 };
@@ -86,10 +95,9 @@ pub use pyana_circuit::dsl::accumulator::{
 
 // Re-export DSL-native derivation proving API.
 pub use pyana_circuit::dsl::derivation::{
-    BODY_HASH_INV_START, EXTENDED_TRACE_WIDTH, MULTI_STEP_DSL_WIDTH,
-    derivation_circuit_descriptor, derivation_dsl_circuit, generate_derivation_trace_dsl,
-    generate_multi_step_trace_dsl, prove_authorization_dsl, prove_derivation_dsl,
-    verify_authorization_dsl, verify_derivation_dsl,
+    BODY_HASH_INV_START, EXTENDED_TRACE_WIDTH, MULTI_STEP_DSL_WIDTH, derivation_circuit_descriptor,
+    derivation_dsl_circuit, generate_derivation_trace_dsl, generate_multi_step_trace_dsl,
+    prove_authorization_dsl, prove_derivation_dsl, verify_authorization_dsl, verify_derivation_dsl,
 };
 
 /// Error returned when a caveat constraint is violated at runtime.
@@ -173,27 +181,26 @@ pub struct KimchiCircuitDescriptor {
     /// Total trace width (number of witness columns).
     pub trace_width: usize,
 }
+/// Kimchi gate types (for KimchiCircuitDescriptor).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KimchiGateType {
+    /// Generic arithmetic gate.
+    Generic,
+    /// Poseidon hash permutation gate.
+    Poseidon,
+}
 
 /// A single gate in a Kimchi circuit.
 #[derive(Debug, Clone)]
 pub struct KimchiGate {
     /// The type of gate.
-    pub typ: GateType,
+    pub typ: KimchiGateType,
     /// Coefficients for the gate polynomial.
     /// For Generic gates: `[c0, c1, c2, c3, c4]` enforcing
     /// `c0*w0 + c1*w1 + c2*w2 + c3*w3 + c4*w4 = 0`.
     pub coeffs: Vec<i64>,
     /// Number of wires used by this gate.
     pub wires: usize,
-}
-
-/// Kimchi gate types.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GateType {
-    /// Generic arithmetic gate with linear combination of wires.
-    Generic,
-    /// Poseidon hash permutation gate (12 wires per round).
-    Poseidon,
 }
 
 /// Descriptor for a pyana effect (constraint with state mutation).
@@ -233,7 +240,7 @@ pub mod kimchi_bridge {
         prove_dsl_circuit, prove_dsl_recursive, verify_dsl_proof, verify_dsl_recursive,
     };
 
-    use super::{GateType, KimchiCircuitDescriptor};
+    use super::{KimchiCircuitDescriptor, KimchiGateType};
 
     /// Convert a `KimchiCircuitDescriptor` (DSL codegen output) into a
     /// `DslCircuitDescriptor` (circuit-crate input for Kimchi proving).
@@ -244,8 +251,8 @@ pub mod kimchi_bridge {
                 .iter()
                 .map(|g| DslGate {
                     typ: match g.typ {
-                        GateType::Generic => DslGateType::Generic,
-                        GateType::Poseidon => DslGateType::Poseidon,
+                        KimchiGateType::Generic => DslGateType::Generic,
+                        KimchiGateType::Poseidon => DslGateType::Poseidon,
                     },
                     coeffs: g.coeffs.clone(),
                     wires: g.wires,

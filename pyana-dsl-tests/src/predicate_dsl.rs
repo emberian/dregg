@@ -29,7 +29,11 @@ mod tests {
     fn test_predicate_descriptor_validates() {
         let descriptor = predicate_descriptor();
         let result = descriptor.validate();
-        assert!(result.is_ok(), "Descriptor validation failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Descriptor validation failed: {:?}",
+            result.err()
+        );
         assert_eq!(descriptor.trace_width, TRACE_WIDTH);
         assert_eq!(descriptor.public_input_count, PUBLIC_INPUT_COUNT);
     }
@@ -66,7 +70,10 @@ mod tests {
 
     #[test]
     fn test_prove_predicate_dsl_api() {
-        let fh = hash_fact(BabyBear::new(100), &[BabyBear::new(1000), BabyBear::ZERO, BabyBear::ZERO]);
+        let fh = hash_fact(
+            BabyBear::new(100),
+            &[BabyBear::new(1000), BabyBear::ZERO, BabyBear::ZERO],
+        );
         let sr = BabyBear::new(99999);
         let commitment = compute_fact_commitment(fh, sr);
 

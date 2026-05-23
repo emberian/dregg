@@ -76,11 +76,7 @@ impl ProofVerifier for Poseidon2StarkVerifier {
 
         // Production verification uses the DSL Merkle Poseidon2 circuit.
         let circuit = pyana_dsl_runtime::descriptors::merkle_poseidon2_circuit();
-        match pyana_circuit::stark::verify(
-            &circuit,
-            &proof,
-            &public_inputs,
-        ) {
+        match pyana_circuit::stark::verify(&circuit, &proof, &public_inputs) {
             Ok(()) => Ok(true),
             Err(_) => Ok(false),
         }

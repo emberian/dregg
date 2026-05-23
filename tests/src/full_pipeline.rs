@@ -30,8 +30,8 @@ use pyana_circuit::{
     collect_body_fact_hashes, prove_authorization_stark, prove_authorization_with_membership,
     verify_authorization_stark, verify_authorization_with_membership,
 };
-use pyana_dsl_runtime::note_spending::{prove_note_spend, verify_note_spend};
 use pyana_commit::poseidon2_tree::{Poseidon2MerkleTree, commitment_to_field};
+use pyana_dsl_runtime::note_spending::{prove_note_spend, verify_note_spend};
 use pyana_sdk::wallet::{AgentWallet, AuthorizationPresentation, VerificationMode};
 use pyana_token::{Attenuation, AuthRequest, AuthToken, MacaroonToken};
 use pyana_turn::{

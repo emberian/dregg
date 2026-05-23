@@ -16,7 +16,11 @@ mod tests {
     fn test_relational_descriptor_validates() {
         let descriptor = relational_predicate_descriptor();
         let result = descriptor.validate();
-        assert!(result.is_ok(), "Descriptor validation failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Descriptor validation failed: {:?}",
+            result.err()
+        );
         assert_eq!(descriptor.trace_width, TRACE_WIDTH);
         assert_eq!(descriptor.public_input_count, PUBLIC_INPUT_COUNT);
     }

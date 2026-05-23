@@ -108,7 +108,7 @@ impl Credential {
     /// value to this specific credential.
     pub fn attribute_fact_commitment(&self, attr_name: &str) -> Option<BabyBear> {
         let fact_hash = self.attribute_fact_hash(attr_name)?;
-        Some(pyana_circuit::predicate_types::compute_fact_commitment(
+        Some(pyana_circuit::predicate_air::compute_fact_commitment(
             fact_hash,
             self.commitment,
         ))

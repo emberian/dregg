@@ -8,7 +8,7 @@
 
 use crate::presentation::{CredentialPresentation, PredicateRequirement, PresentationRequest};
 use pyana_circuit::field::BabyBear;
-use pyana_circuit::predicate_types::PredicateType;
+use pyana_circuit::predicate_air::PredicateType;
 
 /// A verification policy specifying what proofs are required.
 #[derive(Clone, Debug)]

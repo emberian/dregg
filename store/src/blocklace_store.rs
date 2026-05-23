@@ -194,10 +194,7 @@ impl PersistentStore {
         // Build a CheckpointData from our persisted state.
         let checkpoint = CheckpointData {
             blocks: blocks.iter().map(|b| b.to_bytes()).collect(),
-            tips: meta
-                .as_ref()
-                .map(|m| m.tips.clone())
-                .unwrap_or_default(),
+            tips: meta.as_ref().map(|m| m.tips.clone()).unwrap_or_default(),
             equivocators: meta
                 .as_ref()
                 .map(|m| m.equivocators.clone())

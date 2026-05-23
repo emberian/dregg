@@ -126,8 +126,7 @@ pub const BLOCKLACE_BLOCKS: TableDefinition<&[u8; 32], &[u8]> =
 /// Stores tips, equivocators, ordering state, and other blocklace metadata.
 /// Key: metadata key name (e.g., "meta").
 /// Value: postcard-serialized `BlocklaceMeta` struct.
-pub const BLOCKLACE_META: TableDefinition<&str, &[u8]> =
-    TableDefinition::new("blocklace_meta");
+pub const BLOCKLACE_META: TableDefinition<&str, &[u8]> = TableDefinition::new("blocklace_meta");
 
 /// Key for the blocklace metadata blob in the BLOCKLACE_META table.
 pub const BLOCKLACE_META_KEY: &str = "meta";

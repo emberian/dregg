@@ -58,8 +58,8 @@ impl PersistentStore {
     /// tracking the latest ledger checkpoint height.
     pub fn checkpoint_ledger(&self, ledger: &Ledger, height: u64) -> Result<()> {
         let snapshot = ledger_to_checkpoint(ledger, height);
-        let serialized = postcard::to_stdvec(&snapshot)
-            .map_err(|e| StoreError::Serialization(e.to_string()))?;
+        let serialized =
+            postcard::to_stdvec(&snapshot).map_err(|e| StoreError::Serialization(e.to_string()))?;
 
         let write_txn = self.db.begin_write()?;
         {

@@ -39,7 +39,12 @@ mod tests {
         let (circuit, trace, pi) = build_and_trace(inputs, predicate);
         let alpha = BabyBear::new(7);
         let result = circuit.eval_constraints(&trace[0], &trace[1], &pi, alpha);
-        assert_ne!(result, BabyBear::ZERO, "Expected invalid for {:?}", predicate);
+        assert_ne!(
+            result,
+            BabyBear::ZERO,
+            "Expected invalid for {:?}",
+            predicate
+        );
     }
 
     #[test]

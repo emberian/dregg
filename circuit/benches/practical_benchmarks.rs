@@ -18,12 +18,12 @@ use pyana_circuit::multi_step_air::{
     ALLOW_PREDICATE, MultiStepWitness, build_multi_step_witness, prove_authorization_stark,
     verify_authorization_stark,
 };
+use pyana_circuit::poseidon2;
+use pyana_circuit::stark::{proof_from_bytes, proof_to_bytes};
 use pyana_dsl_runtime::revocation::{
     DslRevocationTree, TREE_DEPTH as REVOCATION_TREE_DEPTH, prove_non_revocation_dsl,
     verify_non_revocation_dsl,
 };
-use pyana_circuit::poseidon2;
-use pyana_circuit::stark::{proof_from_bytes, proof_to_bytes};
 use pyana_token::{Attenuation, AuthRequest, AuthToken, MacaroonToken};
 
 // =============================================================================
@@ -551,7 +551,9 @@ fn bench_federation_ops(c: &mut Criterion) {
                 &num_ancestors,
                 |b, _| {
                     b.iter(|| {
-                        black_box(verify_non_revocation_dsl(&proof, revocation_root, first_hash).unwrap());
+                        black_box(
+                            verify_non_revocation_dsl(&proof, revocation_root, first_hash).unwrap(),
+                        );
                     });
                 },
             );

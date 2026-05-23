@@ -570,8 +570,8 @@ mod tests {
     #[test]
     fn end_to_end_note_spending_stark_from_real_tree() {
         use pyana_circuit::note_spending_air::{NoteSpendingAir, NoteSpendingWitness};
-        use pyana_dsl_runtime::note_spending::{prove_note_spend, verify_note_spend};
         use pyana_circuit::poseidon2::hash_many;
+        use pyana_dsl_runtime::note_spending::{prove_note_spend, verify_note_spend};
 
         // Step 1: Define a note's field-element preimage
         let owner = BabyBear::new(0xA11CE);

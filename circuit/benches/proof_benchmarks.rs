@@ -14,10 +14,6 @@ use pyana_circuit::multi_step_air::{
     MultiStepStarkAir, MultiStepWitness, build_multi_step_witness, prove_authorization_stark,
     verify_authorization_stark,
 };
-use pyana_dsl_runtime::revocation::{
-    DslRevocationTree, TREE_DEPTH as REVOCATION_TREE_DEPTH, prove_non_revocation_dsl,
-    verify_non_revocation_dsl,
-};
 use pyana_circuit::note_spending_air::{
     NoteSpendingAir, NoteSpendingWitness, create_test_witness as create_note_witness,
     prove_note_spend, test_spending_key, verify_note_spend,
@@ -28,6 +24,10 @@ use pyana_circuit::poseidon2_air::{
 };
 use pyana_circuit::stark::{
     self, MerkleStarkAir, StarkProof, generate_merkle_trace, proof_to_bytes,
+};
+use pyana_dsl_runtime::revocation::{
+    DslRevocationTree, TREE_DEPTH as REVOCATION_TREE_DEPTH, prove_non_revocation_dsl,
+    verify_non_revocation_dsl,
 };
 
 // =============================================================================

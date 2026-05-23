@@ -899,11 +899,8 @@ pub fn prove_vickrey_evaluation(
     }
     let output_hash = WideHash::from_poseidon2("pyana-vickrey-output-v1", &output_elements);
 
-    let dsl_proof = prove_garbled_evaluation_dsl(
-        &evaluation.gate_trace,
-        &commitment_wide,
-        &output_hash,
-    );
+    let dsl_proof =
+        prove_garbled_evaluation_dsl(&evaluation.gate_trace, &commitment_wide, &output_hash);
 
     pyana_circuit::stark::proof_to_bytes(&dsl_proof.stark_proof)
 }
@@ -1792,11 +1789,7 @@ impl VickreySettlementCircuit {
         let output_hash =
             WideHash::from_poseidon2("pyana-vickrey-settlement-output-v1", &output_elems);
 
-        let dsl_proof = prove_garbled_evaluation_dsl(
-            &gate_trace,
-            &commitment_wide,
-            &output_hash,
-        );
+        let dsl_proof = prove_garbled_evaluation_dsl(&gate_trace, &commitment_wide, &output_hash);
 
         pyana_circuit::stark::proof_to_bytes(&dsl_proof.stark_proof)
     }
@@ -2495,18 +2488,12 @@ fn prove_ring_membership(
 
     // Commitment encodes ring_root and blinded_leaf
     let commit_elems = vec![ring_root, blinded_leaf_val];
-    let commitment_wide =
-        WideHash::from_poseidon2("pyana-vickrey-ring-proof-v1", &commit_elems);
+    let commitment_wide = WideHash::from_poseidon2("pyana-vickrey-ring-proof-v1", &commit_elems);
 
     let output_elems = vec![blinded_leaf_val, ring_root];
-    let output_hash =
-        WideHash::from_poseidon2("pyana-vickrey-ring-output-v1", &output_elems);
+    let output_hash = WideHash::from_poseidon2("pyana-vickrey-ring-output-v1", &output_elems);
 
-    let dsl_proof = prove_garbled_evaluation_dsl(
-        &gate_trace,
-        &commitment_wide,
-        &output_hash,
-    );
+    let dsl_proof = prove_garbled_evaluation_dsl(&gate_trace, &commitment_wide, &output_hash);
 
     Ok(stark::proof_to_bytes(&dsl_proof.stark_proof))
 }
@@ -2519,12 +2506,10 @@ fn verify_ring_membership(proof_bytes: &[u8], blinded_leaf: BabyBear, ring_root:
 
     // Reconstruct the commitment and output hashes
     let commit_elems = vec![ring_root, blinded_leaf];
-    let commitment_wide =
-        WideHash::from_poseidon2("pyana-vickrey-ring-proof-v1", &commit_elems);
+    let commitment_wide = WideHash::from_poseidon2("pyana-vickrey-ring-proof-v1", &commit_elems);
 
     let output_elems = vec![blinded_leaf, ring_root];
-    let output_hash =
-        WideHash::from_poseidon2("pyana-vickrey-ring-output-v1", &output_elems);
+    let output_hash = WideHash::from_poseidon2("pyana-vickrey-ring-output-v1", &output_elems);
 
     // Reconstruct public inputs for the DSL circuit
     let mut public_inputs = Vec::with_capacity(8);

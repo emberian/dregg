@@ -20,10 +20,10 @@ use pyana_cell::note::{Note, NoteCommitment, Nullifier};
 use pyana_circuit::BabyBear;
 use pyana_circuit::field::BABYBEAR_P;
 use pyana_circuit::note_spending_air::{NoteSpendingWitness, key_to_field_elements};
-use pyana_dsl_runtime::note_spending::prove_note_spend;
 use pyana_circuit::poseidon2;
 use pyana_circuit::stark::{self, StarkProof};
 use pyana_commit::accumulator::{AccumulatorWitness, BabyBear4, PolynomialAccumulator};
+use pyana_dsl_runtime::note_spending::prove_note_spend;
 use pyana_dsl_runtime::revocation::{
     DslRevocationTree, generate_non_revocation_trace, non_revocation_dsl_circuit,
     revocation_hash_to_field,

@@ -77,7 +77,7 @@ fn collect_kimchi_gates(
                     // Diff computation gate
                     gates.push(quote! {
                         pyana_dsl_runtime::KimchiGate {
-                            typ: pyana_dsl_runtime::GateType::Generic,
+                            typ: pyana_dsl_runtime::KimchiGateType::Generic,
                             coeffs: vec![1, -1, 0, 0, 0],
                             wires: 2,
                         }
@@ -90,7 +90,7 @@ fn collect_kimchi_gates(
                     for _ in 0..64 {
                         gates.push(quote! {
                             pyana_dsl_runtime::KimchiGate {
-                                typ: pyana_dsl_runtime::GateType::Generic,
+                                typ: pyana_dsl_runtime::KimchiGateType::Generic,
                                 coeffs: vec![-1, 0, 0, 1, 0],
                                 wires: 2,
                             }
@@ -104,7 +104,7 @@ fn collect_kimchi_gates(
                     // the verifier interprets as a 64-bit range-check binding.
                     gates.push(quote! {
                         pyana_dsl_runtime::KimchiGate {
-                            typ: pyana_dsl_runtime::GateType::Generic,
+                            typ: pyana_dsl_runtime::KimchiGateType::Generic,
                             coeffs: vec![1, -1, 0, 0, 0],
                             wires: 2,
                         }
@@ -115,7 +115,7 @@ fn collect_kimchi_gates(
                     // Single equality gate: coeffs[0]=1, coeffs[1]=-1
                     gates.push(quote! {
                         pyana_dsl_runtime::KimchiGate {
-                            typ: pyana_dsl_runtime::GateType::Generic,
+                            typ: pyana_dsl_runtime::KimchiGateType::Generic,
                             coeffs: vec![1, -1, 0, 0, 0],
                             wires: 2,
                         }
@@ -127,7 +127,7 @@ fn collect_kimchi_gates(
                     // Proves (a - b) * inv == 1 where inv is the witness
                     gates.push(quote! {
                         pyana_dsl_runtime::KimchiGate {
-                            typ: pyana_dsl_runtime::GateType::Generic,
+                            typ: pyana_dsl_runtime::KimchiGateType::Generic,
                             coeffs: vec![0, 0, 0, 1, -1],
                             wires: 3,
                         }
@@ -140,7 +140,7 @@ fn collect_kimchi_gates(
                     for _ in 0..depth {
                         gates.push(quote! {
                             pyana_dsl_runtime::KimchiGate {
-                                typ: pyana_dsl_runtime::GateType::Poseidon,
+                                typ: pyana_dsl_runtime::KimchiGateType::Poseidon,
                                 coeffs: vec![],
                                 wires: 12,
                             }
@@ -156,7 +156,7 @@ fn collect_kimchi_gates(
                         // coeffs[0]=1 (old), coeffs[1]=-1 (amount), coeffs[2]=-1 (new)
                         gates.push(quote! {
                             pyana_dsl_runtime::KimchiGate {
-                                typ: pyana_dsl_runtime::GateType::Generic,
+                                typ: pyana_dsl_runtime::KimchiGateType::Generic,
                                 coeffs: vec![1, -1, -1, 0, 0],
                                 wires: 3,
                             }
@@ -167,7 +167,7 @@ fn collect_kimchi_gates(
                         // coeffs[0]=1 (old), coeffs[1]=1 (amount), coeffs[2]=-1 (new)
                         gates.push(quote! {
                             pyana_dsl_runtime::KimchiGate {
-                                typ: pyana_dsl_runtime::GateType::Generic,
+                                typ: pyana_dsl_runtime::KimchiGateType::Generic,
                                 coeffs: vec![1, 1, -1, 0, 0],
                                 wires: 3,
                             }
@@ -177,7 +177,7 @@ fn collect_kimchi_gates(
                         // new == value
                         gates.push(quote! {
                             pyana_dsl_runtime::KimchiGate {
-                                typ: pyana_dsl_runtime::GateType::Generic,
+                                typ: pyana_dsl_runtime::KimchiGateType::Generic,
                                 coeffs: vec![1, -1, 0, 0, 0],
                                 wires: 2,
                             }

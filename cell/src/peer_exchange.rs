@@ -343,12 +343,10 @@ impl PeerExchange {
         }
 
         // Verify commitment PIs match what we expect.
-        let proof_old = BabyBear::new_canonical(
-            proof.public_inputs[pyana_circuit::effect_vm::pi::OLD_COMMIT],
-        );
-        let proof_new = BabyBear::new_canonical(
-            proof.public_inputs[pyana_circuit::effect_vm::pi::NEW_COMMIT],
-        );
+        let proof_old =
+            BabyBear::new_canonical(proof.public_inputs[pyana_circuit::effect_vm::pi::OLD_COMMIT]);
+        let proof_new =
+            BabyBear::new_canonical(proof.public_inputs[pyana_circuit::effect_vm::pi::NEW_COMMIT]);
         if proof_old != old_commit_field {
             return Err(PeerExchangeError::InvalidTransitionProof(
                 "old_commitment in proof does not match expected value".to_string(),

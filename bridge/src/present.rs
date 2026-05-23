@@ -23,9 +23,9 @@ use pyana_circuit::{
     BabyBear, PresentationAir, PresentationProof, PresentationVerification, PresentationWitness,
     RealPresentationProof,
 };
-use pyana_dsl_runtime::fold::build_shared_tree;
 use pyana_commit::merkle::{MerkleProof, MerkleTree};
 use pyana_commit::{Fact, FieldElement, FoldDelta, SymbolTable, TokenState};
+use pyana_dsl_runtime::fold::build_shared_tree;
 use pyana_token::{Attenuation, AuthRequest, MacaroonToken};
 use pyana_trace::{AuthorizationTrace, Conclusion, Term as TraceTerm, symbol_from_str};
 

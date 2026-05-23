@@ -257,10 +257,7 @@ impl BlocklaceHandle {
                 })
                 .collect();
             all_blocks.sort_by_key(|(seq, _)| *seq);
-            all_blocks
-                .into_iter()
-                .map(|(_, id)| id)
-                .collect::<Vec<_>>()
+            all_blocks.into_iter().map(|(_, id)| id).collect::<Vec<_>>()
         } else {
             // Multi-party: run the full Cordial Miners tau ordering.
             // We build an ordering-compatible blocklace and maintain a mapping
@@ -487,7 +484,10 @@ pub async fn run_blocklace_sync(state: NodeState, gossip_port: u16) -> Option<Bl
     // Attempt to restore blocklace from persistent storage.
     let (blocklace, restored_executed_up_to) = {
         let s = state.read().await;
-        match s.store.load_blocklace(signing_key.clone(), quorum_threshold) {
+        match s
+            .store
+            .load_blocklace(signing_key.clone(), quorum_threshold)
+        {
             Ok(Some((restored_lace, executed_up_to))) => {
                 let block_count = restored_lace.len();
                 info!(
@@ -752,7 +752,10 @@ async fn handle_blocklace_message(
         BlocklaceGossipMessage::Frontier(their_tips) => {
             handle_frontier(handle, from, their_tips).await;
         }
-        BlocklaceGossipMessage::CheckpointAvailable { height, checkpoint_hash } => {
+        BlocklaceGossipMessage::CheckpointAvailable {
+            height,
+            checkpoint_hash,
+        } => {
             debug!(
                 from = %from,
                 height = height,
@@ -1290,10 +1293,7 @@ async fn maybe_checkpoint_ledger(state: &NodeState) {
         .map(|r| r.height)
         .unwrap_or(0);
 
-    let last_checkpoint_height = s
-        .store
-        .latest_ledger_checkpoint_height()
-        .unwrap_or(0);
+    let last_checkpoint_height = s.store.latest_ledger_checkpoint_height().unwrap_or(0);
 
     if current_height.saturating_sub(last_checkpoint_height) < LEDGER_CHECKPOINT_INTERVAL {
         return;
@@ -1422,7 +1422,9 @@ async fn maybe_produce_checkpoint(state: &NodeState, handle: &BlocklaceHandle) {
             return;
         }
         let height_bytes = finalized_height.to_le_bytes();
-        let _ = s.store.set_config("blocklace_checkpoint_latest_height", &height_bytes);
+        let _ = s
+            .store
+            .set_config("blocklace_checkpoint_latest_height", &height_bytes);
 
         let list_key = "blocklace_checkpoint_heights";
         let mut heights: Vec<u64> = s
@@ -1558,8 +1560,7 @@ pub async fn bootstrap_from_checkpoint(
 
     let url = format!("{}/api/blocklace/checkpoint", peer_url);
     let resp_bytes = fetch_checkpoint_http(&url).await?;
-    let checkpoint_resp: BlocklaceCheckpointResponse =
-        serde_json::from_slice(&resp_bytes).ok()?;
+    let checkpoint_resp: BlocklaceCheckpointResponse = serde_json::from_slice(&resp_bytes).ok()?;
 
     let blocklace_compressed = hex_decode_var(&checkpoint_resp.blocklace)?;
     let blocklace_bytes = decompress_checkpoint_data(&blocklace_compressed)?;
@@ -1580,7 +1581,9 @@ pub async fn bootstrap_from_checkpoint(
     };
 
     let blocklace = match pyana_blocklace::finality::Blocklace::from_checkpoint(
-        &checkpoint_data, self_key, quorum_threshold,
+        &checkpoint_data,
+        self_key,
+        quorum_threshold,
     ) {
         Ok(lace) => lace,
         Err(e) => {
@@ -1883,9 +1886,7 @@ async fn advance_constitution_wave(handle: &BlocklaceHandle) {
             let block = {
                 let mut lace = handle.lace.write().await;
                 lace.add_block(Payload::MembershipVote {
-                    action: MembershipAction::Leave {
-                        node_id: *node_key,
-                    },
+                    action: MembershipAction::Leave { node_id: *node_key },
                 })
             };
 

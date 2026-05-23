@@ -143,7 +143,7 @@ pub fn fold_circuit_descriptor() -> CircuitDescriptor {
             // (1-ROW_TYPE)*(1-HASH_VALID) == 0 is best expressed as a Polynomial:
             inner: Box::new(ConstraintExpr::Polynomial {
                 terms: vec![
-                    crate::circuit::PolyTerm { coeff: BabyBear::ONE, col_indices: vec![] },
+                    crate::dsl::circuit::PolyTerm { coeff: BabyBear::ONE, col_indices: vec![] },
                 ],
             }),
         }),

@@ -10,9 +10,7 @@ use crate::credential::Credential;
 use crate::revocation::NonRevocationProof;
 use crate::{AttributeName, AttributeValue};
 use pyana_circuit::field::BabyBear;
-use pyana_circuit::predicate_types::{
-    self as predicate_air, PredicateProof, PredicateType, PredicateWitness,
-};
+use pyana_circuit::predicate_air::{PredicateProof, PredicateType, PredicateWitness};
 use pyana_dsl_runtime::revocation::{
     DslRevocationTree, generate_non_revocation_trace, non_revocation_dsl_circuit,
 };
@@ -151,7 +149,7 @@ impl PresentationBuilder {
                 predicate_results.push(result);
             } else {
                 predicate_results.push(PredicateResult {
-                    attribute_name: attr_name.clone(),
+                    attribute_name: attr_name.to_string(),
                     predicate_type: *pred_type,
                     threshold: *threshold,
                     verified: false,

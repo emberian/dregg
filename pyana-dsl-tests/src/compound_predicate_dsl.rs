@@ -14,7 +14,11 @@ mod tests {
     #[test]
     fn descriptor_validates() {
         let desc = compound_predicate_circuit_descriptor();
-        assert!(desc.validate().is_ok(), "compound predicate descriptor should validate: {:?}", desc.validate().err());
+        assert!(
+            desc.validate().is_ok(),
+            "compound predicate descriptor should validate: {:?}",
+            desc.validate().err()
+        );
     }
 
     #[test]
@@ -41,14 +45,18 @@ mod tests {
         let circuit = compound_predicate_dsl_circuit();
         let proof = stark::prove(&circuit, &trace, &pi);
         let result = stark::verify(&circuit, &proof, &pi);
-        assert!(result.is_ok(), "STARK prove/verify failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "STARK prove/verify failed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
     fn test_prove_compound_dsl_api() {
         let formula = BooleanFormula::And(vec![0, 1]);
-        let proof = prove_compound_dsl(&[true, true], &formula, None)
-            .expect("should produce proof");
+        let proof =
+            prove_compound_dsl(&[true, true], &formula, None).expect("should produce proof");
         assert_eq!(proof.formula, formula);
     }
 }

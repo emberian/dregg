@@ -14,8 +14,8 @@ use pyana_circuit::temporal_absence_air::{
     prove_temporal_absence, verify_temporal_absence,
 };
 use pyana_dsl_runtime::temporal_absence::{
-    DslTimelineEntry, TemporalAbsenceDslWitness,
-    prove_temporal_absence_dsl, verify_temporal_absence_dsl,
+    DslTimelineEntry, TemporalAbsenceDslWitness, prove_temporal_absence_dsl,
+    verify_temporal_absence_dsl,
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -467,7 +467,19 @@ fn test_temporal_absence_dsl_wrong_params_rejected() {
     // Wrong t2
     assert!(!verify_temporal_absence_dsl(&proof, 11, 50, attr_x, root));
     // Wrong attribute
-    assert!(!verify_temporal_absence_dsl(&proof, 11, 49, BabyBear::new(0xCAFE), root));
+    assert!(!verify_temporal_absence_dsl(
+        &proof,
+        11,
+        49,
+        BabyBear::new(0xCAFE),
+        root
+    ));
     // Wrong root
-    assert!(!verify_temporal_absence_dsl(&proof, 11, 49, attr_x, BabyBear::new(1)));
+    assert!(!verify_temporal_absence_dsl(
+        &proof,
+        11,
+        49,
+        attr_x,
+        BabyBear::new(1)
+    ));
 }

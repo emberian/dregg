@@ -7138,8 +7138,10 @@ fn setup_sovereign_cell_for_proof_test() -> (Ledger, CellId, CellId, [u8; 32]) {
     let (sovereign_cell, _) = make_open_cell(10, 5000);
     let sovereign_id = sovereign_cell.id;
     // Compute the Poseidon2 CellState commitment (matches what EffectVmAir uses).
-    let vm_state =
-        pyana_circuit::CellState::new(sovereign_cell.state.balance, sovereign_cell.state.nonce as u32);
+    let vm_state = pyana_circuit::CellState::new(
+        sovereign_cell.state.balance,
+        sovereign_cell.state.nonce as u32,
+    );
     let commitment = TurnExecutor::babybear_to_commitment(vm_state.state_commitment);
     ledger.insert_cell(sovereign_cell).unwrap();
     // Override the stored commitment with the Poseidon2 value.
