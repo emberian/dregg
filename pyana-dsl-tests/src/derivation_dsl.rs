@@ -732,17 +732,34 @@ pub fn derivation_dsl_circuit() -> DslCircuit {
 mod tests {
     use super::*;
     use pyana_circuit::derivation_air::{
-        create_test_derivation, DerivationAir, DerivationStarkAir, DerivationWitness,
+        create_test_derivation, DerivationAir, DerivationWitness,
     };
     use pyana_circuit::constraint_prover::Air;
     use pyana_circuit::stark::StarkAir;
 
-    /// Generate a valid trace from the standard test derivation witness.
+    /// Extend a row from DERIVATION_AIR_WIDTH to EXTENDED_TRACE_WIDTH,
+    /// filling in the auxiliary inverse columns for C2.
+    fn extend_row(row: &mut Vec<BabyBear>) {
+        row.resize(EXTENDED_TRACE_WIDTH, BabyBear::ZERO);
+        // Fill inverse columns: inv[i] = body_hash[i]^{-1} when membership flag is set
+        for i in 0..MAX_BODY_ATOMS {
+            let flag = row[col::BODY_MEMBERSHIP_START + i];
+            let hash = row[col::BODY_HASH_START + i];
+            if flag == BabyBear::ONE && hash != BabyBear::ZERO {
+                row[BODY_HASH_INV_START + i] = hash.inverse().unwrap();
+            }
+        }
+    }
+
+    /// Generate a valid trace from the standard test derivation witness,
+    /// extended to EXTENDED_TRACE_WIDTH with auxiliary inverse columns for C2.
     fn valid_trace_and_pi() -> (Vec<BabyBear>, Vec<BabyBear>) {
         let witness = create_test_derivation();
         let air = DerivationAir::new(witness);
         let (trace, pi) = air.generate_trace();
-        (trace[0].clone(), pi)
+        let mut row = trace[0].clone();
+        extend_row(&mut row);
+        (row, pi)
     }
 
     #[test]
@@ -754,8 +771,8 @@ mod tests {
     #[test]
     fn descriptor_has_correct_width() {
         let desc = derivation_circuit_descriptor();
-        assert_eq!(desc.trace_width, DERIVATION_AIR_WIDTH);
-        assert_eq!(desc.trace_width, 371);
+        assert_eq!(desc.trace_width, EXTENDED_TRACE_WIDTH);
+        assert_eq!(desc.trace_width, 379); // 371 base + 8 inverse columns for C2
     }
 
     #[test]
@@ -782,7 +799,7 @@ mod tests {
     #[test]
     fn dsl_circuit_evaluates_to_zero_on_valid_trace() {
         let (row, pi) = valid_trace_and_pi();
-        let next = vec![BabyBear::ZERO; DERIVATION_AIR_WIDTH];
+        let next = vec![BabyBear::ZERO; EXTENDED_TRACE_WIDTH];
         let alpha = BabyBear::new(7); // arbitrary nonzero
 
         let dsl = derivation_dsl_circuit();
@@ -798,7 +815,7 @@ mod tests {
     #[test]
     fn dsl_circuit_rejects_tampered_body_root() {
         let (mut row, pi) = valid_trace_and_pi();
-        let next = vec![BabyBear::ZERO; DERIVATION_AIR_WIDTH];
+        let next = vec![BabyBear::ZERO; EXTENDED_TRACE_WIDTH];
         let alpha = BabyBear::new(13);
 
         // Tamper: set body_root[0] to a different value (but keep membership flag = 1)
@@ -817,7 +834,7 @@ mod tests {
     #[test]
     fn dsl_circuit_rejects_non_binary_membership_flag() {
         let (mut row, pi) = valid_trace_and_pi();
-        let next = vec![BabyBear::ZERO; DERIVATION_AIR_WIDTH];
+        let next = vec![BabyBear::ZERO; EXTENDED_TRACE_WIDTH];
         let alpha = BabyBear::new(7);
 
         // Tamper: set a membership flag to 2 (invalid — must be 0 or 1)
@@ -836,7 +853,7 @@ mod tests {
     #[test]
     fn dsl_circuit_rejects_wrong_derived_hash_pi() {
         let (row, mut pi) = valid_trace_and_pi();
-        let next = vec![BabyBear::ZERO; DERIVATION_AIR_WIDTH];
+        let next = vec![BabyBear::ZERO; EXTENDED_TRACE_WIDTH];
         let alpha = BabyBear::new(7);
 
         // Tamper: change public input for derived_hash
@@ -855,7 +872,7 @@ mod tests {
     #[test]
     fn dsl_circuit_rejects_wrong_substitution() {
         let (mut row, pi) = valid_trace_and_pi();
-        let next = vec![BabyBear::ZERO; DERIVATION_AIR_WIDTH];
+        let next = vec![BabyBear::ZERO; EXTENDED_TRACE_WIDTH];
         let alpha = BabyBear::new(7);
 
         // Tamper: change a substitution value without updating derived terms
@@ -875,7 +892,7 @@ mod tests {
     #[test]
     fn dsl_circuit_rejects_non_binary_selector() {
         let (mut row, pi) = valid_trace_and_pi();
-        let next = vec![BabyBear::ZERO; DERIVATION_AIR_WIDTH];
+        let next = vec![BabyBear::ZERO; EXTENDED_TRACE_WIDTH];
         let alpha = BabyBear::new(7);
 
         // Tamper: set a head selector to 2
@@ -951,12 +968,13 @@ mod tests {
         let air = DerivationAir::new(witness);
         let (trace, pi) = air.generate_trace();
         let mut row = trace[0].clone();
+        extend_row(&mut row);
 
         // Malicious prover: overwrite eq check terms to both be 5
         row[col::eq_check_term_a(0)] = BabyBear::new(5);
         row[col::eq_check_term_b(0)] = BabyBear::new(5);
 
-        let next = vec![BabyBear::ZERO; DERIVATION_AIR_WIDTH];
+        let next = vec![BabyBear::ZERO; EXTENDED_TRACE_WIDTH];
         let alpha = BabyBear::new(7);
 
         let dsl = derivation_dsl_circuit();
@@ -1029,6 +1047,7 @@ mod tests {
         let air = DerivationAir::new(witness);
         let (trace, pi) = air.generate_trace();
         let mut row = trace[0].clone();
+        extend_row(&mut row);
 
         // Malicious prover: fake GTE passing by setting term_a=100, term_b=10
         let fake_a = BabyBear::new(100);
@@ -1042,7 +1061,7 @@ mod tests {
             row[col::gte_diff_bit(i)] = BabyBear::new((diff_val >> i) & 1);
         }
 
-        let next = vec![BabyBear::ZERO; DERIVATION_AIR_WIDTH];
+        let next = vec![BabyBear::ZERO; EXTENDED_TRACE_WIDTH];
         let alpha = BabyBear::new(7);
 
         let dsl = derivation_dsl_circuit();
@@ -1114,12 +1133,13 @@ mod tests {
 
         let air = DerivationAir::new(witness);
         let (trace, pi) = air.generate_trace();
-        let row = &trace[0];
-        let next = vec![BabyBear::ZERO; DERIVATION_AIR_WIDTH];
+        let mut row = trace[0].clone();
+        extend_row(&mut row);
+        let next = vec![BabyBear::ZERO; EXTENDED_TRACE_WIDTH];
         let alpha = BabyBear::new(7);
 
         let dsl = derivation_dsl_circuit();
-        let result = dsl.eval_constraints(row, &next, &pi, alpha);
+        let result = dsl.eval_constraints(&row, &next, &pi, alpha);
 
         assert_eq!(
             result,

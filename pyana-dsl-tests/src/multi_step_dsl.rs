@@ -290,7 +290,7 @@ pub const MULTI_STEP_DSL_WIDTH: usize = MULTI_STEP_AIR_WIDTH + 4;
 ///
 /// Returns (trace, public_inputs) with auxiliary columns filled.
 pub fn generate_valid_multi_step_trace() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
-    use pyana_circuit::poseidon2::{hash_2_to_1, hash_fact};
+    use pyana_circuit::poseidon2::hash_fact;
     use pyana_circuit::derivation_air::{CircuitRule, BodyAtomPattern, DerivationWitness};
 
     let initial_state_root = BabyBear::new(99999);
@@ -429,6 +429,7 @@ pub fn generate_valid_multi_step_trace() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) 
 mod tests {
     use super::*;
     use pyana_circuit::field::BabyBear;
+    use pyana_circuit::stark::StarkAir;
 
     #[test]
     fn multi_step_descriptor_validates() {

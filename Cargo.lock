@@ -6387,6 +6387,7 @@ dependencies = [
  "pyana-cell",
  "pyana-circuit",
  "pyana-commit",
+ "pyana-dsl-runtime",
  "pyana-intent",
  "pyana-trace",
  "pyana-turn",

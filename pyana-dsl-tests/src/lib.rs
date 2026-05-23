@@ -1,7 +1,10 @@
 use pyana_dsl::{pyana_caveat, pyana_effect};
 
+pub mod accumulator_dsl;
 pub mod derivation_dsl;
 pub mod fold_dsl;
+pub mod multi_step_dsl;
+pub mod presentation_dsl;
 pub mod pyana_definitions;
 pub mod temporal_dsl;
 pub mod temporal_macro;

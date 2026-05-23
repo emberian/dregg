@@ -26,7 +26,7 @@
 //!
 //! Boundary constraints enforce sum == Acc and check == ONE on active rows.
 
-use pyana_circuit::accumulator_air::{self, col, pi, ExtElem, ACCUMULATOR_WIDTH, MAX_ANCESTORS};
+use pyana_circuit::accumulator_air::{col, pi, ExtElem, ACCUMULATOR_WIDTH, MAX_ANCESTORS};
 use pyana_circuit::field::{BabyBear, BABYBEAR_P};
 use pyana_dsl_runtime::circuit::{
     BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr,
@@ -406,6 +406,7 @@ pub fn generate_valid_accumulator_trace() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>)
 mod tests {
     use super::*;
     use pyana_circuit::field::BabyBear;
+    use pyana_circuit::stark::StarkAir;
 
     #[test]
     fn accumulator_descriptor_validates() {

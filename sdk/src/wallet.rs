@@ -3758,11 +3758,154 @@ impl AgentWallet {
             )))
         }
     }
+
+    /// Deploy a custom cell program to the federation.
+    ///
+    /// Serializes the `CircuitDescriptor` via postcard and submits it to the node's
+    /// `/programs/deploy` endpoint. On success, returns the 32-byte VK hash that
+    /// identifies the program in the registry.
+    ///
+    /// # Arguments
+    ///
+    /// * `node_url` - The base URL of the federation node.
+    /// * `descriptor` - The circuit descriptor defining valid state transitions.
+    /// * `version` - Program version for upgrade tracking.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if serialization fails, the HTTP request fails, or the
+    /// node rejects the program (e.g., validation failure).
+    #[cfg(feature = "federation-client")]
+    pub async fn deploy_program(
+        &self,
+        node_url: &str,
+        descriptor: &pyana_dsl_runtime::CircuitDescriptor,
+        version: u32,
+    ) -> Result<[u8; 32], SdkError> {
+        let serialized = postcard::to_allocvec(descriptor)
+            .map_err(|e| SdkError::Wire(format!("failed to serialize descriptor: {e}")))?;
+
+        let body = serde_json::json!({
+            "descriptor_bytes": hex_encode_bytes(&serialized),
+            "version": version,
+        });
+
+        let url = format!("{}/programs/deploy", node_url.trim_end_matches('/'));
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| SdkError::Wire(format!("program deploy request failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            return Err(SdkError::Wire(format!(
+                "program deploy returned status {}",
+                resp.status()
+            )));
+        }
+
+        let result: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| SdkError::Wire(format!("failed to parse deploy response: {e}")))?;
+
+        if result.get("deployed").and_then(|v| v.as_bool()) == Some(true) {
+            let vk_hex = result
+                .get("vk_hash")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| SdkError::Wire("deploy response missing vk_hash".into()))?;
+            let vk_bytes = hex_decode_bytes(vk_hex)
+                .map_err(|_| SdkError::Wire("invalid vk_hash hex in deploy response".into()))?;
+            if vk_bytes.len() != 32 {
+                return Err(SdkError::Wire("vk_hash is not 32 bytes".into()));
+            }
+            let mut vk = [0u8; 32];
+            vk.copy_from_slice(&vk_bytes);
+            Ok(vk)
+        } else {
+            let error = result
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown error");
+            Err(SdkError::Wire(format!(
+                "federation rejected program deployment: {error}"
+            )))
+        }
+    }
+
+    /// Execute a sovereign turn with a custom program proof.
+    ///
+    /// Generates a STARK proof of a valid state transition under the given program
+    /// and builds a proof-carrying turn for submission to the federation.
+    ///
+    /// # Arguments
+    ///
+    /// * `cell_id` - The sovereign cell to transition.
+    /// * `program` - The deployed cell program (must match the cell's VK).
+    /// * `witness` - Column name -> values mapping for trace generation.
+    /// * `num_rows` - Number of trace rows (must be a power of 2, >= 2).
+    /// * `public_inputs` - Public inputs for the proof (encodes old/new commitments).
+    /// * `new_commitment` - The new 32-byte state commitment after the transition.
+    /// * `nonce` - Turn nonce.
+    /// * `fee` - Turn fee in computrons.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if witness generation or proof generation fails.
+    pub fn execute_with_program(
+        &self,
+        cell_id: &CellId,
+        program: &pyana_dsl_runtime::CellProgram,
+        witness: &HashMap<String, Vec<BabyBear>>,
+        num_rows: usize,
+        public_inputs: &[BabyBear],
+        new_commitment: [u8; 32],
+        nonce: u64,
+        fee: u64,
+    ) -> Result<Turn, SdkError> {
+        // Generate the STARK proof using the program.
+        let proof_bytes = program
+            .prove_transition(witness, num_rows, public_inputs)
+            .map_err(SdkError::Program)?;
+
+        // Build a proof-carrying turn.
+        let agent_id = self.cell_id("default");
+        let turn = Turn {
+            agent: agent_id,
+            nonce,
+            fee,
+            call_forest: pyana_turn::CallForest { roots: vec![], forest_hash: [0u8; 32] },
+            valid_until: None,
+            execution_proof: Some(proof_bytes),
+            execution_proof_cell: Some(*cell_id),
+            execution_proof_new_commitment: Some(new_commitment),
+            sovereign_witnesses: HashMap::new(),
+            memo: None,
+            previous_receipt_hash: None,
+            depends_on: vec![],
+            conservation_proof: None,
+        };
+
+        Ok(turn)
+    }
 }
 
 /// Encode bytes to hex string (used by federation registration methods).
 fn hex_encode_bytes(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Decode a hex string into bytes.
+fn hex_decode_bytes(s: &str) -> Result<Vec<u8>, ()> {
+    if s.len() % 2 != 0 {
+        return Err(());
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| ()))
+        .collect()
 }
 
 /// A note detected as belonging to this wallet during stealth scanning.

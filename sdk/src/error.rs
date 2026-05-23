@@ -1,6 +1,7 @@
 //! Error types for the pyana SDK.
 
 use pyana_bridge::AuthError;
+use pyana_dsl_runtime::ProgramError;
 use pyana_token::TokenError;
 use pyana_turn::TurnError;
 
@@ -72,4 +73,8 @@ pub enum SdkError {
     /// A delegate holding the proof_key attempted to alter authorization facts.
     #[error("caveat integrity violation: token caveats do not match delegator's commitment")]
     CaveatIntegrityViolation,
+
+    /// A cell program operation failed (deployment, proof generation, or verification).
+    #[error("program error: {0}")]
+    Program(#[from] ProgramError),
 }

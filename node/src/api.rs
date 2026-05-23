@@ -2518,6 +2518,44 @@ async fn post_update_commitment(
     }
 }
 
+/// POST /programs/deploy — deploy a custom cell program to the federation.
+///
+/// Accepts a postcard-serialized CircuitDescriptor, validates it for safety,
+/// and stores it in the program registry. Returns the VK hash (program identity).
+#[tracing::instrument(skip_all)]
+async fn post_deploy_program(
+    State(state): State<NodeState>,
+    Json(req): Json<DeployProgramRequest>,
+) -> Result<Json<DeployProgramResponse>, StatusCode> {
+    // Decode hex descriptor bytes.
+    let descriptor_bytes =
+        hex_decode_var(&req.descriptor_bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    // Deserialize the CircuitDescriptor from postcard format.
+    let descriptor: pyana_dsl_runtime::CircuitDescriptor =
+        postcard::from_bytes(&descriptor_bytes).map_err(|_| {
+            StatusCode::BAD_REQUEST
+        })?;
+
+    // Create the CellProgram (computes VK hash).
+    let program = pyana_dsl_runtime::CellProgram::new(descriptor, req.version);
+
+    // Deploy to registry (validates safety bounds).
+    let mut s = state.write().await;
+    match s.program_registry.deploy(program) {
+        Ok(vk_hash) => Ok(Json(DeployProgramResponse {
+            deployed: true,
+            vk_hash: Some(hex_encode(&vk_hash)),
+            error: None,
+        })),
+        Err(e) => Ok(Json(DeployProgramResponse {
+            deployed: false,
+            vk_hash: None,
+            error: Some(e.to_string()),
+        })),
+    }
+}
+
 /// Verify an Ed25519 signature where the public key is the cell_id bytes.
 ///
 /// The cell_id doubles as the public key for sovereign cells (the cell_id IS
