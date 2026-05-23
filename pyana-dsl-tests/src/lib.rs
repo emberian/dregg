@@ -1,4 +1,6 @@
-use pyana_dsl::pyana_caveat;
+use pyana_dsl::{pyana_caveat, pyana_effect};
+
+// --- Phase 1 caveats (preserved) ---
 
 #[pyana_caveat]
 fn not_after(token_expiry: u64, current_time: u64) {
@@ -20,9 +22,63 @@ fn different_parties(sender: u64, receiver: u64) {
     require!(sender != receiver);
 }
 
+// --- Phase 2: Multi-constraint composition ---
+
+#[pyana_caveat]
+fn compound_check(balance: u64, threshold: u64, sender: u64, receiver: u64) {
+    require!(balance >= threshold);
+    require!(sender != receiver);
+}
+
+// --- Phase 2: Set membership ---
+
+#[pyana_caveat]
+fn service_scope(allowed_services: &std::collections::HashSet<u64>, requested: u64) {
+    require!(allowed_services.contains(requested));
+}
+
+// --- Phase 2: Effects with mutation ---
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Direction {
+    Outgoing,
+    Incoming,
+}
+
+#[pyana_effect]
+fn transfer(balance: &mut u64, amount: u64, direction: Direction) {
+    match direction {
+        Direction::Outgoing => {
+            require!(*balance >= amount);
+            *balance = *balance - amount;
+        }
+        Direction::Incoming => {
+            *balance = *balance + amount;
+        }
+    }
+}
+
+// --- Phase 2: Effect with permission ---
+
+#[pyana_effect(requires = "Send")]
+fn guarded_transfer(balance: &mut u64, amount: u64) {
+    require!(*balance >= amount);
+    *balance = *balance - amount;
+}
+
+// --- Phase 2: Simple effect (no match) ---
+
+#[pyana_effect]
+fn decrement(counter: &mut u64, step: u64) {
+    require!(*counter >= step);
+    *counter = *counter - step;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- Phase 1 tests (preserved) ---
 
     #[test]
     fn test_not_after_evaluator_pass() {
@@ -100,5 +156,206 @@ mod tests {
         let air = different_parties_air_constraints();
         // 2 params + 1 inverse witness = 3
         assert_eq!(air.width, 3);
+    }
+
+    // --- Phase 2: Effect mutation tests ---
+
+    #[test]
+    fn test_transfer_outgoing_pass() {
+        let mut balance = 100u64;
+        let result = transfer_check(&mut balance, 30, Direction::Outgoing);
+        assert!(result.is_ok());
+        assert_eq!(balance, 70);
+    }
+
+    #[test]
+    fn test_transfer_outgoing_fail_insufficient() {
+        let mut balance = 20u64;
+        let result = transfer_check(&mut balance, 30, Direction::Outgoing);
+        assert!(result.is_err());
+        // Balance should not be mutated on failure
+        assert_eq!(balance, 20);
+    }
+
+    #[test]
+    fn test_transfer_incoming() {
+        let mut balance = 50u64;
+        let result = transfer_check(&mut balance, 25, Direction::Incoming);
+        assert!(result.is_ok());
+        assert_eq!(balance, 75);
+    }
+
+    #[test]
+    fn test_decrement_pass() {
+        let mut counter = 10u64;
+        let result = decrement_check(&mut counter, 3);
+        assert!(result.is_ok());
+        assert_eq!(counter, 7);
+    }
+
+    #[test]
+    fn test_decrement_fail() {
+        let mut counter = 2u64;
+        let result = decrement_check(&mut counter, 5);
+        assert!(result.is_err());
+        assert_eq!(counter, 2);
+    }
+
+    // --- Phase 2: AIR descriptor for effects (old+new columns) ---
+
+    #[test]
+    fn test_effect_air_has_old_new_columns() {
+        let air = decrement_air_constraints();
+        // Mutable param `counter` gets 2 columns (old + new)
+        // Immutable param `step` gets 1 column
+        // Plus auxiliary columns from require (2) + mutation transition (2)
+        assert!(air.width >= 3); // at minimum: 2 (counter old+new) + 1 (step)
+        // Should have both a RangeCheck constraint and a Transition constraint
+        let has_transition = air.constraints.iter().any(|c| {
+            matches!(c, pyana_dsl_runtime::Constraint::Transition { .. })
+        });
+        assert!(has_transition, "effect AIR should have Transition constraint");
+    }
+
+    #[test]
+    fn test_transfer_air_has_match_constraints() {
+        let air = transfer_air_constraints();
+        // Transfer has mutable balance (2 cols) + amount (1) + direction (1)
+        // Plus match selector + arm constraints
+        assert!(air.width >= 4);
+        assert!(!air.constraints.is_empty());
+    }
+
+    // --- Phase 2: Set membership ---
+
+    #[test]
+    fn test_service_scope_pass() {
+        let mut allowed = std::collections::HashSet::new();
+        allowed.insert(1u64);
+        allowed.insert(2);
+        allowed.insert(3);
+        assert!(service_scope_check(&allowed, 2).is_ok());
+    }
+
+    #[test]
+    fn test_service_scope_fail() {
+        let mut allowed = std::collections::HashSet::new();
+        allowed.insert(1u64);
+        allowed.insert(2);
+        assert!(service_scope_check(&allowed, 99).is_err());
+    }
+
+    #[test]
+    fn test_service_scope_air_membership() {
+        let air = service_scope_air_constraints();
+        let has_membership = air.constraints.iter().any(|c| {
+            matches!(c, pyana_dsl_runtime::Constraint::MerkleMembership { .. })
+        });
+        assert!(has_membership, "membership caveat should emit MerkleMembership constraint");
+    }
+
+    // --- Phase 2: Multi-constraint composition ---
+
+    #[test]
+    fn test_compound_check_pass() {
+        assert!(compound_check_check(100, 50, 1, 2).is_ok());
+    }
+
+    #[test]
+    fn test_compound_check_fail_balance() {
+        assert!(compound_check_check(30, 50, 1, 2).is_err());
+    }
+
+    #[test]
+    fn test_compound_check_fail_same_party() {
+        assert!(compound_check_check(100, 50, 1, 1).is_err());
+    }
+
+    #[test]
+    fn test_compound_air_width_is_sum() {
+        let air = compound_check_air_constraints();
+        // 4 params (balance, threshold, sender, receiver) = 4
+        // + range check aux (2) for >=
+        // + inverse witness (1) for !=
+        // total = 7
+        assert_eq!(air.width, 7);
+        assert_eq!(air.constraints.len(), 2);
+    }
+
+    // --- Phase 2: Kimchi descriptor ---
+
+    #[test]
+    fn test_kimchi_equality_gate() {
+        let kimchi = exact_match_kimchi();
+        assert!(!kimchi.gates.is_empty());
+        assert_eq!(kimchi.public_input_count, 2);
+        // Equality gate has non-zero coefficients
+        let gate = &kimchi.gates[0];
+        assert_eq!(gate.typ, pyana_dsl_runtime::GateType::Generic);
+        assert!(gate.coeffs.iter().any(|c| *c != 0));
+    }
+
+    #[test]
+    fn test_kimchi_range_check_gates() {
+        let kimchi = not_after_kimchi();
+        // Range check: 1 diff gate + 64 binary gates + 1 reconstruction = 66
+        assert_eq!(kimchi.gates.len(), 66);
+        assert_eq!(kimchi.public_input_count, 2);
+        assert!(kimchi.trace_width > 2); // params + auxiliary
+    }
+
+    #[test]
+    fn test_kimchi_neq_inverse_gate() {
+        let kimchi = different_parties_kimchi();
+        assert!(!kimchi.gates.is_empty());
+        let gate = &kimchi.gates[0];
+        assert_eq!(gate.typ, pyana_dsl_runtime::GateType::Generic);
+        // Inverse-existence: coeffs[3]=1, coeffs[4]=-1
+        assert_eq!(gate.coeffs[3], 1);
+        assert_eq!(gate.coeffs[4], -1);
+    }
+
+    #[test]
+    fn test_kimchi_mutation_gate() {
+        let kimchi = decrement_kimchi();
+        // Should have gates for the range check AND the mutation
+        assert!(kimchi.gates.len() > 1);
+        // Find the SubAssign gate (coeffs[0]=1, coeffs[1]=-1, coeffs[2]=-1)
+        let has_sub_gate = kimchi.gates.iter().any(|g| {
+            g.typ == pyana_dsl_runtime::GateType::Generic
+                && g.coeffs.len() >= 3
+                && g.coeffs[0] == 1
+                && g.coeffs[1] == -1
+                && g.coeffs[2] == -1
+        });
+        assert!(has_sub_gate, "decrement kimchi should have SubAssign gate");
+    }
+
+    #[test]
+    fn test_kimchi_membership_poseidon() {
+        let kimchi = service_scope_kimchi();
+        // Membership uses Poseidon gates
+        let poseidon_count = kimchi.gates.iter().filter(|g| {
+            g.typ == pyana_dsl_runtime::GateType::Poseidon
+        }).count();
+        assert_eq!(poseidon_count, 32, "membership should emit 32 Poseidon gates (one per tree level)");
+    }
+
+    // --- Phase 2: Permission annotation ---
+
+    #[test]
+    fn test_permission_in_effect_descriptor() {
+        let desc = guarded_transfer_effect_descriptor();
+        assert_eq!(desc.name, "guarded_transfer");
+        assert_eq!(desc.required_permission, Some("Send"));
+        assert_eq!(desc.mutable_params, vec!["balance"]);
+    }
+
+    #[test]
+    fn test_effect_descriptor_no_permission() {
+        let desc = transfer_effect_descriptor();
+        assert_eq!(desc.name, "transfer");
+        assert_eq!(desc.required_permission, None);
+        assert_eq!(desc.mutable_params, vec!["balance"]);
     }
 }
