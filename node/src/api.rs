@@ -8,6 +8,9 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
+use argon2::password_hash::SaltString;
+use argon2::password_hash::rand_core::OsRng;
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use axum::extract::DefaultBodyLimit;
 use axum::http::Request;
 use axum::http::{HeaderValue, Method, header};
@@ -21,9 +24,6 @@ use axum::{
     middleware,
     routing::{get, post},
 };
-use argon2::password_hash::rand_core::OsRng;
-use argon2::password_hash::SaltString;
-use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use tokio::sync::Mutex;
@@ -538,8 +538,7 @@ async fn require_auth(
     match auth_header {
         Some(header) if header.starts_with("Bearer ") => {
             let token = &header[7..];
-            let expected_token_bytes =
-                blake3::derive_key("pyana-api-bearer-v1", bearer_seed);
+            let expected_token_bytes = blake3::derive_key("pyana-api-bearer-v1", bearer_seed);
             let expected_token: String = expected_token_bytes
                 .iter()
                 .map(|b| format!("{b:02x}"))
@@ -1128,8 +1127,8 @@ async fn post_wallet_unlock(
     match s.passphrase_hash.clone() {
         Some(stored_hash) => {
             // Verify against stored Argon2id hash.
-            let parsed = PasswordHash::new(&stored_hash)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let parsed =
+                PasswordHash::new(&stored_hash).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             if Argon2::default()
                 .verify_password(req.passphrase.as_bytes(), &parsed)
                 .is_err()

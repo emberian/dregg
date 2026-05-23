@@ -29,7 +29,7 @@ use pyana_token::{Attenuation, AuthRequest, MacaroonToken};
 use pyana_trace::{AuthorizationTrace, Conclusion, Term as TraceTerm, symbol_from_str};
 
 use crate::authorize::{self, AuthError};
-use crate::convert::macaroon_to_factset;
+use crate::convert::macaroon_to_factset_secure;
 use crate::delta::{further_attenuation_delta, initial_attenuation_delta};
 
 /// Trait for resolving issuer membership in a federation.
@@ -445,10 +445,9 @@ impl BridgePresentationBuilder {
 
     /// Attach a pre-generated federation membership proof for delegation scenarios.
     ///
-    /// When a delegatee holds a `proof_key` (BLAKE3 derivation of the real issuer key),
-    /// they cannot look up their key in the federation tree (which stores real keys).
-    /// Instead, the delegator pre-generates the membership proof at delegation time
-    /// and the delegatee passes it here.
+    /// Federation tree leaves are BLAKE3-derived proof keys (not raw root keys).
+    /// The delegator pre-generates the membership proof at delegation time using the
+    /// derived key, and the delegatee passes it here for direct use during proving.
     ///
     /// When this is set, `build_issuer_membership` and `build_issuer_membership_poseidon2`
     /// use this proof directly instead of querying the federation tree.
@@ -465,7 +464,7 @@ impl BridgePresentationBuilder {
     /// This is the initial token minted by the issuer. It has no caveats
     /// and represents unlimited access.
     pub fn set_root_token(&mut self, token: MacaroonToken) {
-        let (factset, syms) = macaroon_to_factset(&token);
+        let (factset, syms) = macaroon_to_factset_secure(&token);
         self.symbols.merge(&syms);
 
         let facts: Vec<Fact> = factset.iter().copied().collect();
@@ -730,7 +729,9 @@ impl BridgePresentationBuilder {
     }
 
     /// Deprecated: use [`prove_local_constraint_check_only`](Self::prove_local_constraint_check_only).
-    #[deprecated(note = "Use prove_local_constraint_check_only() with an explicit UnsafeLocalOnlyMarker")]
+    #[deprecated(
+        note = "Use prove_local_constraint_check_only() with an explicit UnsafeLocalOnlyMarker"
+    )]
     pub fn prove_fast(
         &mut self,
         request: &AuthRequest,
@@ -1729,9 +1730,8 @@ impl BridgePresentationBuilder {
         issuer_key_hash: BabyBear,
     ) -> Result<MerkleWitness, AuthError> {
         // Delegation path: use pre-generated membership proof if available.
-        // The delegator pre-generated this proof using the REAL issuer key (which IS
-        // in the federation tree). The delegatee's proof_key is a BLAKE3 derivation that
-        // would NOT be found in the tree directly.
+        // The delegator pre-generated this proof using the BLAKE3-derived proof key
+        // (which IS the tree leaf). The delegatee passes this proof directly.
         if let Some(proof) = &self.pre_generated_membership_proof {
             return self.build_issuer_membership_from_proof(proof, issuer_key_hash);
         }

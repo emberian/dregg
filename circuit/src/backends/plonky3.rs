@@ -178,7 +178,6 @@ fn deserialize_stark_proof(bytes: &[u8]) -> Result<stark::StarkProof, String> {
 impl ProofBackend for Plonky3Backend {
     type Proof = Plonky3Proof;
 
-    #[allow(unused_variables)]
     fn prove_membership(
         leaf: &[u8; 32],
         siblings: &[Vec<[u8; 32]>],
@@ -191,6 +190,7 @@ impl ProofBackend for Plonky3Backend {
 
         // Convert to BabyBear field elements.
         let leaf_hash = bytes32_to_babybear_reduce(leaf);
+        let expected_root = bytes32_to_babybear_reduce(root);
 
         let mut bb_siblings: Vec<[BabyBear; 3]> = Vec::with_capacity(depth);
         let mut positions: Vec<u8> = Vec::with_capacity(depth);
@@ -214,11 +214,19 @@ impl ProofBackend for Plonky3Backend {
         #[cfg(feature = "plonky3")]
         {
             // Generate the sound Merkle trace with inline Poseidon2 auxiliary columns.
-            let (trace, public_inputs) = plonky3_prover::generate_sound_merkle_trace(
-                leaf_hash,
-                &bb_siblings,
-                &positions,
-            );
+            let (trace, public_inputs) =
+                plonky3_prover::generate_sound_merkle_trace(leaf_hash, &bb_siblings, &positions);
+
+            // SECURITY: Verify the witness produces a root matching the expected root.
+            // Without this check, a caller could supply a mismatched witness and get
+            // a valid proof for a DIFFERENT root than intended.
+            if public_inputs.len() < 2 || public_inputs[1] != expected_root {
+                return Err(format!(
+                    "Witness does not match expected root: computed {:?}, expected {:?}",
+                    public_inputs.get(1),
+                    expected_root
+                ));
+            }
 
             // Prove with Plonky3 (native, production-grade).
             let p3_proof = plonky3_prover::prove_plonky3(&trace, &public_inputs);
@@ -252,6 +260,15 @@ impl ProofBackend for Plonky3Backend {
                 &bb_siblings,
                 &positions,
             );
+
+            // SECURITY: Verify the witness produces a root matching the expected root.
+            if pi.len() < 2 || pi[1] != expected_root {
+                return Err(format!(
+                    "Witness does not match expected root: computed {:?}, expected {:?}",
+                    pi.get(1),
+                    expected_root
+                ));
+            }
 
             let air = MerklePoseidon2StarkAir;
             let stark_proof = stark::prove(&air, &trace, &pi);
@@ -373,12 +390,8 @@ impl ProofBackend for Plonky3Backend {
             .iter()
             .map(|r| bytes32_to_babybear_reduce(r))
             .collect();
-        let transition_hash = compute_root_transition_hash(
-            old_root_bb,
-            new_root_bb,
-            &fact_hashes,
-            &WideHash::ZERO,
-        );
+        let transition_hash =
+            compute_root_transition_hash(old_root_bb, new_root_bb, &fact_hashes, &WideHash::ZERO);
 
         let pub_inputs_bytes = vec![
             babybear_to_bytes32(old_root_bb),
@@ -564,8 +577,9 @@ impl PredicateBackend for Plonky3Backend {
             state_root: None,
         };
 
-        let proof = prove_predicate(witness)
-            .ok_or_else(|| "Predicate proof generation failed (statement may be false)".to_string())?;
+        let proof = prove_predicate(witness).ok_or_else(|| {
+            "Predicate proof generation failed (statement may be false)".to_string()
+        })?;
 
         let proof_bytes = serialize_stark_proof(&proof.stark_proof);
         let pub_inputs_bytes = vec![
@@ -598,7 +612,7 @@ impl PredicateBackend for Plonky3Backend {
         crate::fold_air::verify_fold_stark(&stark_proof, &public_inputs)
             .or_else(|_| {
                 // The predicate AIR is different from fold. Use direct verification.
-                use crate::predicate_air::{PredicateType, PredicateWitness, PredicateAir};
+                use crate::predicate_air::{PredicateAir, PredicateType, PredicateWitness};
                 let dummy_witness = PredicateWitness {
                     private_value: BabyBear::ZERO,
                     threshold,
@@ -1051,11 +1065,7 @@ impl PresentationBackend for Plonky3Backend {
         use crate::binding::compute_presentation_tag;
 
         // 1. Prove IVC for the fold chain.
-        let ivc_steps: Vec<IvcFoldStep> = input
-            .fold_steps
-            .iter()
-            .cloned()
-            .collect();
+        let ivc_steps: Vec<IvcFoldStep> = input.fold_steps.iter().cloned().collect();
 
         let initial_root = ivc_steps
             .first()
@@ -1130,9 +1140,7 @@ impl PresentationBackend for Plonky3Backend {
         })
     }
 
-    fn verify_presentation(
-        proof: &Self::PresentationProof,
-    ) -> Result<PresentationOutput, String> {
+    fn verify_presentation(proof: &Self::PresentationProof) -> Result<PresentationOutput, String> {
         if proof.circuit_type != Plonky3CircuitType::Presentation {
             return Err("Wrong circuit type for presentation verification".into());
         }
@@ -1163,16 +1171,24 @@ impl PresentationBackend for Plonky3Backend {
         let presentation_tag = if proof.proof_bytes.len() >= 5 + tail_len {
             let tag_offset = proof.proof_bytes.len() - tail_len;
             let t0 = u32::from_le_bytes(
-                proof.proof_bytes[tag_offset..tag_offset + 4].try_into().unwrap_or([0; 4]),
+                proof.proof_bytes[tag_offset..tag_offset + 4]
+                    .try_into()
+                    .unwrap_or([0; 4]),
             );
             let t1 = u32::from_le_bytes(
-                proof.proof_bytes[tag_offset + 4..tag_offset + 8].try_into().unwrap_or([0; 4]),
+                proof.proof_bytes[tag_offset + 4..tag_offset + 8]
+                    .try_into()
+                    .unwrap_or([0; 4]),
             );
             let t2 = u32::from_le_bytes(
-                proof.proof_bytes[tag_offset + 8..tag_offset + 12].try_into().unwrap_or([0; 4]),
+                proof.proof_bytes[tag_offset + 8..tag_offset + 12]
+                    .try_into()
+                    .unwrap_or([0; 4]),
             );
             let t3 = u32::from_le_bytes(
-                proof.proof_bytes[tag_offset + 12..tag_offset + 16].try_into().unwrap_or([0; 4]),
+                proof.proof_bytes[tag_offset + 12..tag_offset + 16]
+                    .try_into()
+                    .unwrap_or([0; 4]),
             );
             [t0 as u64, t1 as u64, t2 as u64, t3 as u64]
         } else {
@@ -1183,16 +1199,24 @@ impl PresentationBackend for Plonky3Backend {
         let composition_commitment = if proof.proof_bytes.len() >= 5 + tail_len {
             let comp_offset = proof.proof_bytes.len() - 16;
             let c0 = u32::from_le_bytes(
-                proof.proof_bytes[comp_offset..comp_offset + 4].try_into().unwrap_or([0; 4]),
+                proof.proof_bytes[comp_offset..comp_offset + 4]
+                    .try_into()
+                    .unwrap_or([0; 4]),
             );
             let c1 = u32::from_le_bytes(
-                proof.proof_bytes[comp_offset + 4..comp_offset + 8].try_into().unwrap_or([0; 4]),
+                proof.proof_bytes[comp_offset + 4..comp_offset + 8]
+                    .try_into()
+                    .unwrap_or([0; 4]),
             );
             let c2 = u32::from_le_bytes(
-                proof.proof_bytes[comp_offset + 8..comp_offset + 12].try_into().unwrap_or([0; 4]),
+                proof.proof_bytes[comp_offset + 8..comp_offset + 12]
+                    .try_into()
+                    .unwrap_or([0; 4]),
             );
             let c3 = u32::from_le_bytes(
-                proof.proof_bytes[comp_offset + 12..comp_offset + 16].try_into().unwrap_or([0; 4]),
+                proof.proof_bytes[comp_offset + 12..comp_offset + 16]
+                    .try_into()
+                    .unwrap_or([0; 4]),
             );
             [c0 as u64, c1 as u64, c2 as u64, c3 as u64]
         } else {
@@ -1534,8 +1558,7 @@ mod tests {
             .map(|l| l.iter().map(|&s| babybear_to_bytes32(s)).collect())
             .collect();
 
-        let proof =
-            Plonky3Backend::prove_membership(&leaf_bytes, &siblings, &root_bytes).unwrap();
+        let proof = Plonky3Backend::prove_membership(&leaf_bytes, &siblings, &root_bytes).unwrap();
         assert_eq!(proof.circuit_type, Plonky3CircuitType::Membership);
         assert_eq!(proof.tier(), ProofTier::Production);
 

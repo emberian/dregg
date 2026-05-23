@@ -85,14 +85,11 @@ pub fn authorize_with_trace(
     // Convert the AuthRequest to a TraceRequest.
     let trace_request = auth_request_to_trace(request)?;
 
-    // Use a combined policy that supports both legacy (app/service with Contains)
-    // and secure (action_allowed/svc_action_allowed with MemberOf) fact formats.
-    // The bridge converts macaroon caveats to legacy-format facts via grant_to_facts(),
-    // so we need the legacy rules. The secure rules are also included for tokens
-    // converted via macaroon_to_factset_secure().
-    #[allow(deprecated)]
-    let mut rules = pyana_trace::policy::legacy_policy();
-    rules.extend(pyana_trace::standard_policy());
+    // Use the secure policy exclusively (hash-based action matching via MemberOf).
+    // The proof path now uses macaroon_to_factset_secure() which produces
+    // action_allowed/svc_action_allowed facts with exact hash equality, eliminating
+    // the substring-Contains vulnerability (e.g. "threadwrite" matching "write").
+    let rules = pyana_trace::standard_policy();
 
     // Run the evaluator.
     let evaluator = Evaluator::new(trace_facts, rules);
@@ -450,19 +447,19 @@ mod tests {
     #[test]
     fn test_authorize_app_scoped_allows() {
         let mut symbols = SymbolTable::new();
-        symbols.intern("app");
+        symbols.intern("action_allowed");
         symbols.intern("my-app");
-        symbols.intern("rw");
+        // Secure format: one action_allowed fact per action, with hashed action name.
+        let pred = symbols.intern("action_allowed");
+        let app_id = FieldElement::from_symbol("my-app");
+        let action_hash = FieldElement::from_symbol("read");
 
         let mut state = TokenState::new();
-        let app_pred = FieldElement::from_symbol("app");
-        let app_id = FieldElement::from_symbol("my-app");
-        let actions = FieldElement::from_symbol("rw");
-        state.add_fact(CommitFact::binary(app_pred, app_id, actions));
+        state.add_fact(CommitFact::binary(pred, app_id, action_hash));
 
         let request = AuthRequest {
             app_id: Some("my-app".into()),
-            action: Some("r".into()),
+            action: Some("read".into()),
             now: Some(1700000000),
             ..Default::default()
         };
@@ -473,7 +470,7 @@ mod tests {
         let trace = result.unwrap();
         match trace.conclusion {
             Conclusion::Allow { policy_rule_id } => {
-                assert_eq!(policy_rule_id, 1); // APP_ACTION rule
+                assert_eq!(policy_rule_id, 40); // APP_ACTION_SECURE rule
             }
             Conclusion::Deny => panic!("expected Allow"),
         }
@@ -482,19 +479,18 @@ mod tests {
     #[test]
     fn test_authorize_denied_wrong_app() {
         let mut symbols = SymbolTable::new();
-        symbols.intern("app");
-        symbols.intern("my-app");
-        symbols.intern("rw");
+        symbols.intern("action_allowed");
+        // Secure format: action_allowed(my-app, read)
+        let pred = symbols.intern("action_allowed");
+        let app_id = FieldElement::from_symbol("my-app");
+        let action_hash = FieldElement::from_symbol("read");
 
         let mut state = TokenState::new();
-        let app_pred = FieldElement::from_symbol("app");
-        let app_id = FieldElement::from_symbol("my-app");
-        let actions = FieldElement::from_symbol("rw");
-        state.add_fact(CommitFact::binary(app_pred, app_id, actions));
+        state.add_fact(CommitFact::binary(pred, app_id, action_hash));
 
         let request = AuthRequest {
             app_id: Some("other-app".into()),
-            action: Some("r".into()),
+            action: Some("read".into()),
             now: Some(1700000000),
             ..Default::default()
         };
@@ -522,19 +518,18 @@ mod tests {
     #[test]
     fn test_authorize_service_scoped() {
         let mut symbols = SymbolTable::new();
-        symbols.intern("service");
-        symbols.intern("http");
-        symbols.intern("rw");
+        symbols.intern("svc_action_allowed");
+        // Secure format: svc_action_allowed(http, read)
+        let pred = symbols.intern("svc_action_allowed");
+        let svc_id = FieldElement::from_symbol("http");
+        let action_hash = FieldElement::from_symbol("read");
 
         let mut state = TokenState::new();
-        let svc_pred = FieldElement::from_symbol("service");
-        let svc_id = FieldElement::from_symbol("http");
-        let actions = FieldElement::from_symbol("rw");
-        state.add_fact(CommitFact::binary(svc_pred, svc_id, actions));
+        state.add_fact(CommitFact::binary(pred, svc_id, action_hash));
 
         let request = AuthRequest {
             service: Some("http".into()),
-            action: Some("r".into()),
+            action: Some("read".into()),
             now: Some(1700000000),
             ..Default::default()
         };
@@ -545,7 +540,7 @@ mod tests {
         let trace = result.unwrap();
         match trace.conclusion {
             Conclusion::Allow { policy_rule_id } => {
-                assert_eq!(policy_rule_id, 2); // SERVICE_ACTION rule
+                assert_eq!(policy_rule_id, 41); // SERVICE_ACTION_SECURE rule
             }
             Conclusion::Deny => panic!("expected Allow"),
         }

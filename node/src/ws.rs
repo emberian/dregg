@@ -8,6 +8,9 @@ use std::net::SocketAddr;
 use std::sync::LazyLock;
 use std::time::Instant;
 
+use argon2::password_hash::SaltString;
+use argon2::password_hash::rand_core::OsRng;
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use axum::{
     extract::{
         ConnectInfo, State,
@@ -15,9 +18,6 @@ use axum::{
     },
     response::IntoResponse,
 };
-use argon2::password_hash::rand_core::OsRng;
-use argon2::password_hash::SaltString;
-use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Semaphore, broadcast};

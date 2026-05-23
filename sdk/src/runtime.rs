@@ -396,6 +396,10 @@ impl AgentRuntime {
             proof_key,
             membership_proof: None,
             caveat_chain_hash: None,
+            // Sub-agent delegations are local (same process), so no cross-boundary
+            // signature is required. The parent wallet's signing key is not available here.
+            delegator_signature: None,
+            delegator_public_key: None,
         })?;
 
         // Create the sub-agent's cell in the ledger.

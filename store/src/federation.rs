@@ -54,7 +54,9 @@ impl StoredAttestedRoot {
     }
 
     /// Deprecated alias for [`is_structurally_complete`](Self::is_structurally_complete).
-    #[deprecated(note = "Use is_structurally_complete() (count-only) or verify_signatures() for cryptographic verification")]
+    #[deprecated(
+        note = "Use is_structurally_complete() (count-only) or verify_signatures() for cryptographic verification"
+    )]
     pub fn is_valid(&self) -> bool {
         self.is_structurally_complete()
     }

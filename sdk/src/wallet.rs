@@ -501,6 +501,16 @@ pub struct DelegatedToken {
     /// the encoded token and generate proofs over fabricated authorization facts.
     #[serde(default)]
     pub caveat_chain_hash: Option<[u8; 32]>,
+    /// Ed25519 signature from the delegator over the delegation envelope.
+    ///
+    /// Signs `blake3::derive_key("pyana-delegation-binding-v1", caveat_chain_hash || proof_key || membership_leaf)`.
+    /// This prevents a malicious delegatee from mutating caveats and recomputing the
+    /// `caveat_chain_hash` — they cannot forge the delegator's signature.
+    #[serde(default)]
+    pub delegator_signature: Option<Signature>,
+    /// The delegator's public key, needed to verify `delegator_signature`.
+    #[serde(default)]
+    pub delegator_public_key: Option<PublicKey>,
 }
 
 /// A turn signed by this wallet's identity, ready for submission.
@@ -892,6 +902,11 @@ impl AgentWallet {
             Some(Self::compute_caveat_chain_hash(&decoded))
         };
 
+        // SECURITY: Sign the delegation envelope so the delegatee cannot mutate
+        // caveats and recompute caveat_chain_hash without the delegator's key.
+        let (delegator_signature, delegator_public_key) =
+            self.sign_delegation_envelope(&caveat_chain_hash, &proof_key, None);
+
         Ok(DelegatedToken {
             token_bytes: attenuated.encoded.clone(),
             service: attenuated.service.clone(),
@@ -902,15 +917,21 @@ impl AgentWallet {
             proof_key,
             membership_proof: None,
             caveat_chain_hash,
+            delegator_signature: Some(delegator_signature),
+            delegator_public_key: Some(delegator_public_key),
         })
     }
 
     /// Delegate a token to another agent with a pre-generated federation membership proof.
     ///
     /// When a `federation_tree` is provided, the delegator pre-generates a federation
-    /// membership proof using the REAL issuer key (which IS in the tree). The delegatee
-    /// receives this proof and can use it directly during presentation — they do not need
-    /// to look up their `proof_key` (a BLAKE3 derivation) in the federation tree.
+    /// membership proof using the BLAKE3-derived proof key (which IS in the tree as a
+    /// leaf). The delegatee receives this proof and can use it directly during
+    /// presentation without needing access to the tree.
+    ///
+    /// Federation tree leaves are BLAKE3-derived proof keys (`derive_proof_key(root_key)`),
+    /// NOT raw root keys. This ensures that the real issuer key is never exposed as a
+    /// tree leaf.
     ///
     /// Without a federation tree, the delegatee falls back to synthetic/test proofs or
     /// must supply the tree at proof-generation time.
@@ -938,16 +959,15 @@ impl AgentWallet {
             None
         };
 
-        // Pre-generate federation membership proof. The delegator looks up the REAL
-        // root key in the federation tree (the tree contains real keys, not their
-        // BLAKE3 derivations). The delegatee will use this proof directly at
-        // presentation time.
+        // Pre-generate federation membership proof. The federation tree contains
+        // BLAKE3-derived proof keys (not raw root keys). Look up the derived key.
         let membership_proof = if token.can_mint() {
-            // Root token holder: look up the real root_key in the federation tree.
-            federation_tree.membership_proof(token.root_key())
+            // Root token holder: derive the proof key and look it up in the tree.
+            let derived = Self::derive_proof_key(token.root_key());
+            federation_tree.membership_proof(&derived)
         } else if let Some(ref pre_existing) = token.membership_proof {
             // Delegating a delegated token: pass through the pre-generated proof.
-            // The proof is still bound to the same real issuer key and federation root.
+            // The proof is still bound to the same derived proof key and federation root.
             Some(pre_existing.clone())
         } else {
             None
@@ -959,6 +979,12 @@ impl AgentWallet {
             Some(Self::compute_caveat_chain_hash(&decoded))
         };
 
+        // SECURITY: Sign the delegation envelope so the delegatee cannot mutate
+        // caveats and recompute caveat_chain_hash without the delegator's key.
+        let membership_leaf = membership_proof.as_ref().map(|p| p.leaf_hash);
+        let (delegator_signature, delegator_public_key) =
+            self.sign_delegation_envelope(&caveat_chain_hash, &proof_key, membership_leaf.as_ref());
+
         Ok(DelegatedToken {
             token_bytes: attenuated.encoded.clone(),
             service: attenuated.service.clone(),
@@ -969,6 +995,8 @@ impl AgentWallet {
             proof_key,
             membership_proof,
             caveat_chain_hash,
+            delegator_signature: Some(delegator_signature),
+            delegator_public_key: Some(delegator_public_key),
         })
     }
 
@@ -1039,6 +1067,23 @@ impl AgentWallet {
             }
         }
 
+        // (d) Delegation envelope signature verification: if the delegator provided a
+        // signature, verify it to ensure the caveat_chain_hash has not been tampered with.
+        // This is the primary defense against a malicious delegate mutating caveats.
+        if let (Some(sig), Some(pubkey)) = (
+            &delegated.delegator_signature,
+            &delegated.delegator_public_key,
+        ) {
+            let membership_leaf = delegated.membership_proof.as_ref().map(|p| p.leaf_hash);
+            Self::verify_delegation_signature(
+                pubkey,
+                sig,
+                &delegated.caveat_chain_hash,
+                &delegated.proof_key,
+                membership_leaf.as_ref(),
+            )?;
+        }
+
         // SECURITY: The token is accepted with structural validation only. The HMAC chain
         // is NOT verified because we do not hold the root key. The token is marked as
         // unverified — callers MUST check `is_verified()` before trusting it for
@@ -1072,9 +1117,8 @@ impl AgentWallet {
         }
 
         // Store the pre-generated federation membership proof if provided.
-        // The delegator generated this from the REAL issuer key (in the federation tree).
-        // The delegatee uses it directly during proof generation, bypassing the lookup
-        // that would fail for the BLAKE3-derived proof_key.
+        // The delegator generated this from the BLAKE3-derived proof key (which is the
+        // tree leaf). The delegatee uses it directly during proof generation.
         held.membership_proof = delegated.membership_proof;
 
         // Store the caveat chain hash for integrity verification at proof time.
@@ -1688,6 +1732,75 @@ impl AgentWallet {
     pub fn sign_bytes(&self, message: &[u8]) -> Signature {
         let sig = self.signing_key.sign(message);
         Signature(sig.to_bytes())
+    }
+
+    /// Compute and sign the delegation envelope binding.
+    ///
+    /// The signing message is:
+    /// `blake3::derive_key("pyana-delegation-binding-v1", caveat_chain_hash || proof_key || membership_leaf)`
+    ///
+    /// This prevents a malicious delegatee from mutating caveats and recomputing the
+    /// `caveat_chain_hash` — they cannot forge the delegator's signature over the
+    /// new hash.
+    fn sign_delegation_envelope(
+        &self,
+        caveat_chain_hash: &Option<[u8; 32]>,
+        proof_key: &Option<[u8; 32]>,
+        membership_leaf: Option<&[u8; 32]>,
+    ) -> (Signature, PublicKey) {
+        let signing_message =
+            Self::compute_delegation_signing_message(caveat_chain_hash, proof_key, membership_leaf);
+        let sig = self.signing_key.sign(&signing_message);
+        (Signature(sig.to_bytes()), self.public_key)
+    }
+
+    /// Compute the canonical signing message for a delegation envelope.
+    fn compute_delegation_signing_message(
+        caveat_chain_hash: &Option<[u8; 32]>,
+        proof_key: &Option<[u8; 32]>,
+        membership_leaf: Option<&[u8; 32]>,
+    ) -> [u8; 32] {
+        let mut message_data = Vec::with_capacity(96);
+        if let Some(h) = caveat_chain_hash {
+            message_data.extend_from_slice(h);
+        }
+        if let Some(k) = proof_key {
+            message_data.extend_from_slice(k);
+        }
+        if let Some(r) = membership_leaf {
+            message_data.extend_from_slice(r);
+        }
+        blake3::derive_key("pyana-delegation-binding-v1", &message_data)
+    }
+
+    /// Verify a delegation envelope signature.
+    ///
+    /// Returns `Ok(())` if the signature is valid, or an error describing the failure.
+    pub(crate) fn verify_delegation_signature(
+        delegator_public_key: &PublicKey,
+        delegator_signature: &Signature,
+        caveat_chain_hash: &Option<[u8; 32]>,
+        proof_key: &Option<[u8; 32]>,
+        membership_leaf: Option<&[u8; 32]>,
+    ) -> Result<(), SdkError> {
+        use ed25519_dalek::Verifier;
+
+        let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&delegator_public_key.0)
+            .map_err(|e| {
+                SdkError::InvalidDelegation(format!("invalid delegator public key: {e}"))
+            })?;
+
+        let signing_message =
+            Self::compute_delegation_signing_message(caveat_chain_hash, proof_key, membership_leaf);
+
+        let signature = ed25519_dalek::Signature::from_bytes(&delegator_signature.0);
+        verifying_key
+            .verify(&signing_message, &signature)
+            .map_err(|e| {
+                SdkError::InvalidDelegation(format!(
+                    "delegation envelope signature verification failed: {e}"
+                ))
+            })
     }
 
     // =========================================================================
@@ -2750,8 +2863,7 @@ impl AgentWallet {
     /// the same hash regardless of in-memory representation differences.
     fn compute_caveat_chain_hash(token: &MacaroonToken) -> [u8; 32] {
         let caveats = token.inner().caveats.as_slice();
-        let serialized =
-            rmp_serde::to_vec(caveats).expect("caveat serialization should not fail");
+        let serialized = rmp_serde::to_vec(caveats).expect("caveat serialization should not fail");
         *blake3::hash(&serialized).as_bytes()
     }
 
@@ -3367,6 +3479,8 @@ mod tests {
             proof_key: None, // No proof_key (legacy delegation)
             membership_proof: None,
             caveat_chain_hash: None,
+            delegator_signature: None,
+            delegator_public_key: None,
         };
 
         // This will fail because "em2_test" is not a valid token, but let's test

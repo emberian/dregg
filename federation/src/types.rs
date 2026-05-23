@@ -255,7 +255,9 @@ impl QuorumCertificate {
     }
 
     /// Deprecated alias for [`has_quorum_count`](Self::has_quorum_count).
-    #[deprecated(note = "Use has_quorum_count() (count-only) or is_valid_with_keys()/verify_with_committee() for full verification")]
+    #[deprecated(
+        note = "Use has_quorum_count() (count-only) or is_valid_with_keys()/verify_with_committee() for full verification"
+    )]
     pub fn is_valid(&self) -> bool {
         self.has_quorum_count()
     }
