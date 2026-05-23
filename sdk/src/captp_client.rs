@@ -19,7 +19,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use pyana_captp::FederationId;
+use pyana_captp::GroupId;
 use pyana_captp::gc::{DropMessage, ImportGcManager};
 use pyana_captp::handoff::HandoffCertificate;
 use pyana_captp::pipeline::{PipelineRegistry, PipelinedAction};
@@ -42,7 +42,7 @@ use crate::error::SdkError;
 #[derive(Clone, Debug)]
 pub struct CapTpConfig {
     /// The federation ID this wallet operates within.
-    pub federation_id: FederationId,
+    pub federation_id: GroupId,
     /// The current block height (used for expiration checks).
     pub current_height: u64,
 }
@@ -61,12 +61,12 @@ pub struct EventualRef {
     /// The promise ID in the local pipeline registry.
     pub promise_id: u64,
     /// The federation hosting the target capability.
-    pub target_federation: FederationId,
+    pub target_federation: GroupId,
 }
 
 impl EventualRef {
     /// Create a new EventualRef for a local promise.
-    pub fn new(promise_id: u64, target_federation: FederationId) -> Self {
+    pub fn new(promise_id: u64, target_federation: GroupId) -> Self {
         Self {
             promise_id,
             target_federation,
@@ -95,7 +95,7 @@ pub struct LiveRef {
     /// The cell this reference points to.
     cell_id: CellId,
     /// The federation hosting the cell.
-    federation_id: FederationId,
+    federation_id: GroupId,
     /// What permissions we hold on the remote cell.
     permissions: AuthRequired,
     /// Shared import GC manager — we decrement on drop.
@@ -113,7 +113,7 @@ impl LiveRef {
     }
 
     /// Get the federation hosting the target cell.
-    pub fn federation_id(&self) -> FederationId {
+    pub fn federation_id(&self) -> GroupId {
         self.federation_id
     }
 
@@ -207,7 +207,7 @@ pub struct CapTpClient {
     /// Pipeline registry (shared with LiveRefs via Arc).
     pipeline_registry: Arc<Mutex<PipelineRegistry>>,
     /// Active CapTP sessions with peers.
-    sessions: std::collections::HashMap<FederationId, CapSession>,
+    sessions: std::collections::HashMap<GroupId, CapSession>,
 }
 
 impl CapTpClient {
@@ -223,7 +223,7 @@ impl CapTpClient {
     }
 
     /// Get the federation ID this client operates within.
-    pub fn federation_id(&self) -> FederationId {
+    pub fn federation_id(&self) -> GroupId {
         self.config.federation_id
     }
 
@@ -298,7 +298,7 @@ impl CapTpClient {
     /// caller is responsible for the network round-trip to present the swiss
     /// number and obtain confirmation.
     pub fn enliven(&mut self, uri: &PyanaUri, permissions: AuthRequired) -> LiveRef {
-        let federation_id = FederationId(uri.federation_id);
+        let federation_id = GroupId(uri.federation_id);
         let cell_id = CellId(uri.cell_id);
 
         // Record the import in the GC manager.
@@ -408,7 +408,7 @@ impl CapTpClient {
     /// An [`EventualRef`] representing the final result of the chain.
     pub fn pipeline(
         &mut self,
-        target_federation: FederationId,
+        target_federation: GroupId,
         actions: Vec<PipelinedAction>,
     ) -> Result<EventualRef, SdkError> {
         if actions.is_empty() {
@@ -509,7 +509,7 @@ mod tests {
 
     fn test_config() -> CapTpConfig {
         CapTpConfig {
-            federation_id: FederationId([0xAA; 32]),
+            federation_id: GroupId([0xAA; 32]),
             current_height: 100,
         }
     }
@@ -567,7 +567,7 @@ mod tests {
 
         let live_ref = client.enliven(&uri, AuthRequired::Signature);
         assert_eq!(live_ref.cell_id(), CellId([0xDD; 32]));
-        assert_eq!(live_ref.federation_id(), FederationId([0xCC; 32]));
+        assert_eq!(live_ref.federation_id(), GroupId([0xCC; 32]));
 
         // GC should track the import
         let gc = client.import_gc().lock().unwrap();
@@ -607,7 +607,7 @@ mod tests {
         let drop_msg = live_ref.release();
         assert!(drop_msg.is_some());
         let msg = drop_msg.unwrap();
-        assert_eq!(msg.target_federation, FederationId([0xCC; 32]));
+        assert_eq!(msg.target_federation, GroupId([0xCC; 32]));
         assert_eq!(msg.cell_id, CellId([0xDD; 32]));
 
         // Second release should be no-op
@@ -618,7 +618,7 @@ mod tests {
     #[test]
     fn pipeline_creates_chain() {
         let mut client = CapTpClient::new(test_config());
-        let target_fed = FederationId([0xDD; 32]);
+        let target_fed = GroupId([0xDD; 32]);
 
         let actions = vec![
             make_action("step_1"),
@@ -637,7 +637,7 @@ mod tests {
     #[test]
     fn pipeline_empty_chain_errors() {
         let mut client = CapTpClient::new(test_config());
-        let target_fed = FederationId([0xDD; 32]);
+        let target_fed = GroupId([0xDD; 32]);
 
         let result = client.pipeline(target_fed, vec![]);
         assert!(result.is_err());
@@ -646,7 +646,7 @@ mod tests {
     #[test]
     fn pipeline_to_eventual() {
         let mut client = CapTpClient::new(test_config());
-        let target_fed = FederationId([0xDD; 32]);
+        let target_fed = GroupId([0xDD; 32]);
 
         let actions = vec![make_action("initial")];
         let eventual = client.pipeline(target_fed, actions).unwrap();
@@ -700,7 +700,7 @@ mod tests {
             Some(3),
         );
 
-        assert_eq!(cert.introducer, FederationId([0xAA; 32]));
+        assert_eq!(cert.introducer, GroupId([0xAA; 32]));
         assert_eq!(cert.target_cell, cell);
         assert_eq!(cert.recipient_pk, recipient_pk);
         assert_eq!(cert.permissions, AuthRequired::Signature);
@@ -722,6 +722,6 @@ mod tests {
         let live_ref = client.enliven(&uri, AuthRequired::Signature);
         let eventual = live_ref.send(make_action("do_something"));
 
-        assert_eq!(eventual.target_federation, FederationId([0xCC; 32]));
+        assert_eq!(eventual.target_federation, GroupId([0xCC; 32]));
     }
 }

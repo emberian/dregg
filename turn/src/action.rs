@@ -561,6 +561,74 @@ pub enum Effect {
         /// Creation parameters (validated against factory descriptor).
         params: pyana_cell::factory::FactoryCreationParams,
     },
+
+    // ─── Queue Operations ─────────────────────────────────────────────────────
+    /// Allocate a new queue with specified capacity.
+    /// Costs: capacity * cost_per_slot computrons from the agent's balance.
+    /// The new queue is represented as a cell with queue metadata in its state fields.
+    QueueAllocate {
+        /// Capacity (max entries).
+        capacity: u64,
+        /// Optional program VK hash (for programmable queues).
+        program_vk: Option<[u8; 32]>,
+    },
+
+    /// Enqueue a message to a queue.
+    /// Sender pays deposit (anti-spam, refundable on dequeue).
+    QueueEnqueue {
+        /// Target queue (cell ID of the queue cell).
+        queue: CellId,
+        /// Content hash of the message (the message itself is delivered out-of-band).
+        message_hash: [u8; 32],
+        /// Deposit amount (computrons).
+        deposit: u64,
+    },
+
+    /// Dequeue the next message from a queue (FIFO consumption).
+    /// Only the queue owner can dequeue.
+    QueueDequeue {
+        /// Queue to dequeue from.
+        queue: CellId,
+    },
+
+    /// Resize a queue (change capacity).
+    /// Growing costs additional computrons. Shrinking is free (but can't shrink below current occupancy).
+    QueueResize {
+        /// Queue cell to resize.
+        queue: CellId,
+        /// New capacity.
+        new_capacity: u64,
+    },
+
+    /// Execute an atomic cross-queue transaction.
+    /// All operations succeed or all are rolled back.
+    QueueAtomicTx {
+        /// The operations to perform atomically.
+        operations: Vec<QueueTxOp>,
+    },
+
+    /// Execute a pipeline step: dequeue from source, route through pipeline, enqueue to sink(s).
+    QueuePipelineStep {
+        /// Pipeline identity (content-addressed from stage descriptions).
+        pipeline_id: [u8; 32],
+        /// Source queue.
+        source: CellId,
+        /// Sink queue(s) — pipeline determines routing.
+        sinks: Vec<CellId>,
+    },
+}
+
+/// An operation within an atomic queue transaction.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QueueTxOp {
+    /// Enqueue a message as part of an atomic transaction.
+    Enqueue {
+        queue: CellId,
+        message_hash: [u8; 32],
+        deposit: u64,
+    },
+    /// Dequeue a message as part of an atomic transaction.
+    Dequeue { queue: CellId },
 }
 
 /// An event emitted by an action.
@@ -1138,6 +1206,79 @@ impl Effect {
                 hasher.update(&(params.initial_caps.len() as u64).to_le_bytes());
                 hasher.update(&params.owner_pubkey);
             }
+            Effect::QueueAllocate {
+                capacity,
+                program_vk,
+            } => {
+                hasher.update(&[37u8]);
+                hasher.update(&capacity.to_le_bytes());
+                match program_vk {
+                    Some(vk) => {
+                        hasher.update(&[1u8]);
+                        hasher.update(vk);
+                    }
+                    None => {
+                        hasher.update(&[0u8]);
+                    }
+                }
+            }
+            Effect::QueueEnqueue {
+                queue,
+                message_hash,
+                deposit,
+            } => {
+                hasher.update(&[38u8]);
+                hasher.update(queue.as_bytes());
+                hasher.update(message_hash);
+                hasher.update(&deposit.to_le_bytes());
+            }
+            Effect::QueueDequeue { queue } => {
+                hasher.update(&[39u8]);
+                hasher.update(queue.as_bytes());
+            }
+            Effect::QueueResize {
+                queue,
+                new_capacity,
+            } => {
+                hasher.update(&[40u8]);
+                hasher.update(queue.as_bytes());
+                hasher.update(&new_capacity.to_le_bytes());
+            }
+            Effect::QueueAtomicTx { operations } => {
+                hasher.update(&[41u8]);
+                hasher.update(&(operations.len() as u64).to_le_bytes());
+                for op in operations {
+                    match op {
+                        QueueTxOp::Enqueue {
+                            queue,
+                            message_hash,
+                            deposit,
+                        } => {
+                            hasher.update(&[0u8]);
+                            hasher.update(queue.as_bytes());
+                            hasher.update(message_hash);
+                            hasher.update(&deposit.to_le_bytes());
+                        }
+                        QueueTxOp::Dequeue { queue } => {
+                            hasher.update(&[1u8]);
+                            hasher.update(queue.as_bytes());
+                        }
+                    }
+                }
+            }
+            Effect::QueuePipelineStep {
+                pipeline_id,
+                source,
+                sinks,
+            } => {
+                hasher.update(&[42u8]);
+                hasher.update(pipeline_id);
+                hasher.update(source.as_bytes());
+                hasher.update(&(sinks.len() as u64).to_le_bytes());
+                for sink in sinks {
+                    hasher.update(sink.as_bytes());
+                }
+            }
         }
         *hasher.finalize().as_bytes()
     }
@@ -1242,6 +1383,18 @@ impl Effect {
                     + params.initial_caps.len() * 34
                     + 32
             }
+            Effect::QueueAllocate { program_vk, .. } => {
+                8 + program_vk.map_or(1, |_| 33) // capacity + opt vk
+            }
+            Effect::QueueEnqueue { .. } => 32 + 32 + 8, // queue + message_hash + deposit
+            Effect::QueueDequeue { .. } => 32,          // queue
+            Effect::QueueResize { .. } => 32 + 8,       // queue + new_capacity
+            Effect::QueueAtomicTx { operations } => {
+                8 + operations.len() * (32 + 32 + 8) // count + ops (worst case: all enqueues)
+            }
+            Effect::QueuePipelineStep { sinks, .. } => {
+                32 + 32 + 8 + sinks.len() * 32 // pipeline_id + source + count + sinks
+            }
         }
     }
 
@@ -1298,6 +1451,12 @@ impl Effect {
             Effect::ExerciseViaCapability { .. } => pyana_cell::EFFECT_ALL,
             Effect::MakeSovereign { .. } => pyana_cell::EFFECT_SOVEREIGN_OPS,
             Effect::CreateCellFromFactory { .. } => pyana_cell::EFFECT_CREATE_CELL,
+            Effect::QueueAllocate { .. }
+            | Effect::QueueEnqueue { .. }
+            | Effect::QueueDequeue { .. }
+            | Effect::QueueResize { .. }
+            | Effect::QueueAtomicTx { .. }
+            | Effect::QueuePipelineStep { .. } => pyana_cell::EFFECT_QUEUE_OPS,
         }
     }
 }

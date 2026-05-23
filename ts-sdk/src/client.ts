@@ -27,6 +27,11 @@ import type {
 } from "./captp.js";
 
 import type {
+  QueueTxOp,
+  QueueStatus,
+} from "./effects.js";
+
+import type {
   DirectoryEntry,
   MountRequest,
   MountResult,
@@ -110,6 +115,20 @@ export interface RoutesClient {
   classify(path: string): Promise<ClassifyResult>;
 }
 
+/** Queue operations: allocate, enqueue, dequeue, atomicTx. */
+export interface QueuesClient {
+  /** Allocate a new queue with specified capacity. */
+  allocate(capacity: number, programVk?: string): Promise<{ queueId: string }>;
+  /** Enqueue a message to a queue. */
+  enqueue(queueId: string, messageHash: string, deposit: number): Promise<{ position: number }>;
+  /** Dequeue the next message from a queue. */
+  dequeue(queueId: string): Promise<{ messageHash: string; deposit: number }>;
+  /** Execute an atomic cross-queue transaction. */
+  atomicTx(operations: QueueTxOp[]): Promise<{ success: boolean; results: Array<{ index: number; ok: boolean }> }>;
+  /** Get the status of a queue. */
+  status(queueId: string): Promise<QueueStatus>;
+}
+
 // ---------------------------------------------------------------------------
 // Client Interface
 // ---------------------------------------------------------------------------
@@ -126,6 +145,8 @@ export interface PyanaClient {
   readonly federation: FederationClient;
   /** Routes sub-client: table, classify. */
   readonly routes: RoutesClient;
+  /** Queues sub-client: allocate, enqueue, dequeue, atomicTx. */
+  readonly queues: QueuesClient;
 
   // -- Cells --
   /** Create a new cell (optionally from a factory). */
@@ -630,6 +651,49 @@ export function createClient(nodeUrl: string, apiKey?: string): PyanaClient {
           base, `/federation/routes/classify?path=${encodeURIComponent(path)}`, apiKey
         );
         return unwrap(result, "routes.classify");
+      },
+    },
+
+    // -- Queues Sub-Client --
+    queues: {
+      async allocate(capacity, programVk) {
+        const result = await request<{ queueId: string }>(base, "/queues/allocate", apiKey, {
+          method: "POST",
+          body: { capacity, program_vk: programVk ?? null },
+        });
+        return unwrap(result, "queues.allocate");
+      },
+
+      async enqueue(queueId, messageHash, deposit) {
+        const result = await request<{ position: number }>(
+          base, `/queues/${queueId}/enqueue`, apiKey, {
+            method: "POST",
+            body: { message_hash: messageHash, deposit },
+          }
+        );
+        return unwrap(result, "queues.enqueue");
+      },
+
+      async dequeue(queueId) {
+        const result = await request<{ messageHash: string; deposit: number }>(
+          base, `/queues/${queueId}/dequeue`, apiKey, { method: "POST" }
+        );
+        return unwrap(result, "queues.dequeue");
+      },
+
+      async atomicTx(operations) {
+        const result = await request<{ success: boolean; results: Array<{ index: number; ok: boolean }> }>(
+          base, "/queues/atomic-tx", apiKey, {
+            method: "POST",
+            body: { operations },
+          }
+        );
+        return unwrap(result, "queues.atomicTx");
+      },
+
+      async status(queueId) {
+        const result = await request<QueueStatus>(base, `/queues/${queueId}/status`, apiKey);
+        return unwrap(result, "queues.status");
       },
     },
   };

@@ -40,9 +40,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 // Type stubs (standing in for actual pyana crate types in this exploration module)
 // ---------------------------------------------------------------------------
 
-/// A 32-byte identifier for a federation.
+/// A 32-byte identifier for a group (formerly "federation").
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct FederationId(pub [u8; 32]);
+pub struct GroupId(pub [u8; 32]);
 
 /// A 32-byte identifier for a cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -51,7 +51,7 @@ pub struct CellId(pub [u8; 32]);
 /// A pyana:// URI (swiss number + federation + cell).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SturdyRef {
-    pub federation_id: FederationId,
+    pub federation_id: GroupId,
     pub cell_id: CellId,
     pub swiss: [u8; 32],
 }
@@ -180,7 +180,7 @@ pub struct DirectoryCell {
     /// The cell ID of this directory (its identity in the blocklace).
     pub cell_id: CellId,
     /// The federation this directory belongs to.
-    pub federation_id: FederationId,
+    pub federation_id: GroupId,
     /// Global version counter (incremented on every mutation).
     pub version: Version,
     /// The entries in this directory, indexed by name.
@@ -203,7 +203,7 @@ impl DirectoryCell {
     /// anyone who holds a reference to this directory subscribes to the same topic.
     pub fn new(
         cell_id: CellId,
-        federation_id: FederationId,
+        federation_id: GroupId,
         members: HashSet<MemberId>,
         created_at: u64,
     ) -> Self {
@@ -224,7 +224,7 @@ impl DirectoryCell {
     /// Create a directory with a custom capacity.
     pub fn with_capacity(
         cell_id: CellId,
-        federation_id: FederationId,
+        federation_id: GroupId,
         members: HashSet<MemberId>,
         created_at: u64,
         max_entries: usize,
@@ -766,7 +766,7 @@ impl MetaDirectory {
     /// Create a new meta-directory.
     pub fn new(
         cell_id: CellId,
-        federation_id: FederationId,
+        federation_id: GroupId,
         members: HashSet<MemberId>,
         created_at: u64,
     ) -> Self {
@@ -847,7 +847,7 @@ pub struct DirectoryFactory {
     /// The meta-directory that new directories are registered in.
     meta_directory_cell_id: CellId,
     /// Federation context for new directories.
-    federation_id: FederationId,
+    federation_id: GroupId,
     /// Default capacity for created directories.
     default_capacity: usize,
     /// Maximum allowed members per created directory.
@@ -860,7 +860,7 @@ impl DirectoryFactory {
     /// Create a new directory factory.
     pub fn new(
         meta_directory_cell_id: CellId,
-        federation_id: FederationId,
+        federation_id: GroupId,
         default_capacity: usize,
         max_members: usize,
     ) -> Self {
@@ -1084,8 +1084,8 @@ mod tests {
         MemberId([id; 32])
     }
 
-    fn federation() -> FederationId {
-        FederationId([0xFE; 32])
+    fn federation() -> GroupId {
+        GroupId([0xFE; 32])
     }
 
     fn cell(id: u8) -> CellId {

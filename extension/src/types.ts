@@ -176,10 +176,34 @@ export type MessageType =
   | "pyana:revokeOriginPermission"
   | "pyana:getDisclosurePrefs"
   | "pyana:clearDisclosurePref"
+  // Queue operations
+  | "pyana:queueAllocate"
+  | "pyana:queueEnqueue"
+  | "pyana:queueDequeue"
+  | "pyana:queueAtomicTx"
+  | "pyana:queueStatus"
   // Internal decision messages
   | "pyana:provisionDecision"
   | "pyana:intentConfirmation"
   | "pyana:disclosureDecision";
+
+// ---------------------------------------------------------------------------
+// Queue types
+// ---------------------------------------------------------------------------
+
+/** An operation within an atomic queue transaction. */
+export type QueueTxOp =
+  | { type: "enqueue"; queue: string; messageHash: string; deposit: number }
+  | { type: "dequeue"; queue: string };
+
+/** Status of a queue cell. */
+export interface QueueStatus {
+  queueId: string;
+  occupancy: number;
+  capacity: number;
+  owner: string;
+  programVk?: string;
+}
 
 // ---------------------------------------------------------------------------
 // Authorization types

@@ -16,7 +16,17 @@ use pyana_wire::hardening::{
     message_cost,
 };
 use pyana_wire::message::{AuthorizationRequest, PROTOCOL_VERSION, WireMessage};
-use pyana_wire::server::{NoopVerifier, PeerRole, SiloConfig, SiloServer};
+use pyana_wire::server::{PeerRole, SiloConfig, SiloServer};
+
+// NoopVerifier is cfg-gated in the server module; for integration tests
+// we create a local one implementing the same trait.
+#[derive(Clone, Debug)]
+struct NoopVerifier;
+impl pyana_wire::server::ProofVerifier for NoopVerifier {
+    fn verify(&self, _proof_bytes: &[u8], _action: &str, _resource: &str) -> Result<bool, String> {
+        Ok(true)
+    }
+}
 
 use std::sync::Arc;
 use std::time::Duration;

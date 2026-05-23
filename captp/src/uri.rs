@@ -59,11 +59,18 @@ impl std::error::Error for UriError {}
 /// A `pyana://` URI representing a durable capability reference.
 ///
 /// Contains enough information to enliven (reconnect to) a capability:
-/// - `federation_id`: identifies the federation hosting the target
+/// - `federation_id`: identifies the federation (or reference group) hosting the target
 /// - `cell_id`: identifies the target cell/object
 /// - `swiss`: the bearer secret proving authorization
+///
+/// # Unified Lace Note
+///
+/// In the unified blocklace model, `federation_id` is semantically a `GroupId`
+/// (the reference group that orders/hosts the target cell). The field name is
+/// preserved for wire-format stability.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PyanaUri {
+    /// The group (federation) hosting the target. Equivalent to `GroupId` in the unified model.
     pub federation_id: [u8; 32],
     pub cell_id: [u8; 32],
     pub swiss: [u8; 32],

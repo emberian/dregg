@@ -100,7 +100,7 @@ pub use wallet::{
 pub use pyana_cell::{CellId, Ledger};
 pub use pyana_circuit::{BabyBear, IvcProof, verify_ivc};
 pub use pyana_token::{Attenuation, AuthRequest, AuthToken};
-pub use pyana_turn::{Effect, Turn, TurnBuilder, TurnReceipt};
+pub use pyana_turn::{Effect, QueueTxOp, Turn, TurnBuilder, TurnReceipt};
 pub use pyana_turn::{
     VerifyError, verify_receipt_chain, verify_receipt_chain_head, verify_receipt_extends,
 };
@@ -164,7 +164,7 @@ pub use names::{
 
 // Re-export CapTP client types for capability sharing and pipelining.
 pub use captp_client::{CapTpClient, CapTpConfig, EventualRef, LiveRef};
-pub use pyana_captp::FederationId;
 pub use pyana_captp::handoff::HandoffCertificate;
 pub use pyana_captp::pipeline::PipelinedAction;
 pub use pyana_captp::uri::PyanaUri;
+pub use pyana_captp::{FederationId, GroupId};

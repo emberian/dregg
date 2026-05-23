@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use pyana_captp::{FederationId, PyanaUri};
+use pyana_captp::{GroupId, PyanaUri};
 use pyana_cell::{AuthRequired, Ledger};
 use pyana_federation::node::Federation;
 use pyana_federation::types::AttestedRoot;
@@ -124,14 +124,14 @@ pub struct SimulationHarness {
     /// Key is (smaller_idx, larger_idx) to avoid duplicate pairs.
     pub captp_sessions: HashMap<(usize, usize), SimCapTpSession>,
     /// Federation IDs for each federation (derived deterministically from name).
-    pub federation_ids: Vec<FederationId>,
+    pub federation_ids: Vec<GroupId>,
 }
 
 impl SimulationHarness {
-    /// Derive a deterministic FederationId from a federation name.
-    fn derive_federation_id(name: &str) -> FederationId {
+    /// Derive a deterministic GroupId from a federation name.
+    fn derive_federation_id(name: &str) -> GroupId {
         let hash = blake3::derive_key("pyana-teasting-federation-id-v1", name.as_bytes());
-        FederationId(hash)
+        GroupId(hash)
     }
 
     /// Create a harness with a single federation of N nodes.
@@ -333,8 +333,8 @@ impl SimulationHarness {
         }
     }
 
-    /// Get the FederationId for a federation by index.
-    pub fn federation_id(&self, idx: usize) -> FederationId {
+    /// Get the GroupId for a federation by index.
+    pub fn federation_id(&self, idx: usize) -> GroupId {
         self.federation_ids[idx]
     }
 

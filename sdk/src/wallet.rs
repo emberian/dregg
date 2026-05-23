@@ -4463,6 +4463,267 @@ impl AgentWallet {
     pub fn captp_client_mut(&mut self) -> Option<&mut crate::captp_client::CapTpClient> {
         self.captp_client.as_mut()
     }
+
+    // =========================================================================
+    // Queue Operations
+    // =========================================================================
+
+    /// Allocate a new queue with specified capacity.
+    ///
+    /// Creates a turn containing a `QueueAllocate` effect. The new queue is
+    /// represented as a cell with queue metadata in its state fields. The cost
+    /// is `capacity * cost_per_slot` computrons from the agent's balance.
+    ///
+    /// # Arguments
+    ///
+    /// * `capacity` - Maximum number of entries the queue can hold.
+    /// * `program_vk` - Optional program verification key hash (for programmable queues).
+    ///
+    /// # Returns
+    ///
+    /// A [`Turn`] ready to be signed and submitted, or an error.
+    pub fn allocate_queue(
+        &self,
+        capacity: u64,
+        program_vk: Option<[u8; 32]>,
+    ) -> Result<Turn, SdkError> {
+        use pyana_turn::action::{Action, Authorization, DelegationMode};
+        use pyana_turn::forest::{CallForest, CallTree};
+
+        let effect = Effect::QueueAllocate {
+            capacity,
+            program_vk,
+        };
+
+        let action = Action {
+            target: self.cell_id("default"),
+            method: pyana_turn::action::symbol("queue_allocate"),
+            args: Vec::new(),
+            authorization: Authorization::Unchecked,
+            preconditions: Default::default(),
+            effects: vec![effect],
+            may_delegate: DelegationMode::None,
+            commitment_mode: Default::default(),
+            balance_change: None,
+        };
+
+        let tree = CallTree {
+            action,
+            children: vec![],
+            hash: [0u8; 32],
+        };
+
+        Ok(Turn {
+            agent: self.cell_id("default"),
+            nonce: 0,
+            fee: 0,
+            call_forest: CallForest {
+                roots: vec![tree],
+                forest_hash: [0u8; 32],
+            },
+            memo: None,
+            valid_until: None,
+            previous_receipt_hash: None,
+            depends_on: Vec::new(),
+            conservation_proof: None,
+            sovereign_witnesses: Default::default(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
+            custom_program_proofs: None,
+        })
+    }
+
+    /// Enqueue a message to a queue.
+    ///
+    /// The sender pays a deposit (anti-spam, refundable on dequeue). The message
+    /// content is delivered out-of-band; only the content hash is stored on-chain.
+    ///
+    /// # Arguments
+    ///
+    /// * `queue` - The CellId of the target queue.
+    /// * `message_hash` - BLAKE3 hash of the message content.
+    /// * `deposit` - Deposit amount in computrons (anti-spam bond).
+    ///
+    /// # Returns
+    ///
+    /// A [`Turn`] ready to be signed and submitted, or an error.
+    pub fn enqueue_message(
+        &self,
+        queue: CellId,
+        message_hash: [u8; 32],
+        deposit: u64,
+    ) -> Result<Turn, SdkError> {
+        use pyana_turn::action::{Action, Authorization, DelegationMode};
+        use pyana_turn::forest::{CallForest, CallTree};
+
+        let effect = Effect::QueueEnqueue {
+            queue,
+            message_hash,
+            deposit,
+        };
+
+        let action = Action {
+            target: self.cell_id("default"),
+            method: pyana_turn::action::symbol("queue_enqueue"),
+            args: Vec::new(),
+            authorization: Authorization::Unchecked,
+            preconditions: Default::default(),
+            effects: vec![effect],
+            may_delegate: DelegationMode::None,
+            commitment_mode: Default::default(),
+            balance_change: None,
+        };
+
+        let tree = CallTree {
+            action,
+            children: vec![],
+            hash: [0u8; 32],
+        };
+
+        Ok(Turn {
+            agent: self.cell_id("default"),
+            nonce: 0,
+            fee: 0,
+            call_forest: CallForest {
+                roots: vec![tree],
+                forest_hash: [0u8; 32],
+            },
+            memo: None,
+            valid_until: None,
+            previous_receipt_hash: None,
+            depends_on: Vec::new(),
+            conservation_proof: None,
+            sovereign_witnesses: Default::default(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
+            custom_program_proofs: None,
+        })
+    }
+
+    /// Dequeue the next message from a queue (FIFO consumption).
+    ///
+    /// Only the queue owner can dequeue. The deposit from the dequeued message
+    /// is refunded to the original sender.
+    ///
+    /// # Arguments
+    ///
+    /// * `queue` - The CellId of the queue to dequeue from.
+    ///
+    /// # Returns
+    ///
+    /// A [`Turn`] ready to be signed and submitted, or an error.
+    pub fn dequeue_message(&self, queue: CellId) -> Result<Turn, SdkError> {
+        use pyana_turn::action::{Action, Authorization, DelegationMode};
+        use pyana_turn::forest::{CallForest, CallTree};
+
+        let effect = Effect::QueueDequeue { queue };
+
+        let action = Action {
+            target: self.cell_id("default"),
+            method: pyana_turn::action::symbol("queue_dequeue"),
+            args: Vec::new(),
+            authorization: Authorization::Unchecked,
+            preconditions: Default::default(),
+            effects: vec![effect],
+            may_delegate: DelegationMode::None,
+            commitment_mode: Default::default(),
+            balance_change: None,
+        };
+
+        let tree = CallTree {
+            action,
+            children: vec![],
+            hash: [0u8; 32],
+        };
+
+        Ok(Turn {
+            agent: self.cell_id("default"),
+            nonce: 0,
+            fee: 0,
+            call_forest: CallForest {
+                roots: vec![tree],
+                forest_hash: [0u8; 32],
+            },
+            memo: None,
+            valid_until: None,
+            previous_receipt_hash: None,
+            depends_on: Vec::new(),
+            conservation_proof: None,
+            sovereign_witnesses: Default::default(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
+            custom_program_proofs: None,
+        })
+    }
+
+    /// Execute an atomic cross-queue transaction.
+    ///
+    /// All operations in the transaction succeed or all are rolled back. This
+    /// enables patterns like "dequeue from A, enqueue to B" atomically.
+    ///
+    /// # Arguments
+    ///
+    /// * `operations` - The queue operations to perform atomically.
+    ///
+    /// # Returns
+    ///
+    /// A [`Turn`] ready to be signed and submitted, or an error.
+    pub fn atomic_queue_tx(
+        &self,
+        operations: Vec<pyana_turn::QueueTxOp>,
+    ) -> Result<Turn, SdkError> {
+        use pyana_turn::action::{Action, Authorization, DelegationMode};
+        use pyana_turn::forest::{CallForest, CallTree};
+
+        if operations.is_empty() {
+            return Err(SdkError::InvalidWitness(
+                "atomic queue transaction must have at least one operation".into(),
+            ));
+        }
+
+        let effect = Effect::QueueAtomicTx { operations };
+
+        let action = Action {
+            target: self.cell_id("default"),
+            method: pyana_turn::action::symbol("queue_atomic_tx"),
+            args: Vec::new(),
+            authorization: Authorization::Unchecked,
+            preconditions: Default::default(),
+            effects: vec![effect],
+            may_delegate: DelegationMode::None,
+            commitment_mode: Default::default(),
+            balance_change: None,
+        };
+
+        let tree = CallTree {
+            action,
+            children: vec![],
+            hash: [0u8; 32],
+        };
+
+        Ok(Turn {
+            agent: self.cell_id("default"),
+            nonce: 0,
+            fee: 0,
+            call_forest: CallForest {
+                roots: vec![tree],
+                forest_hash: [0u8; 32],
+            },
+            memo: None,
+            valid_until: None,
+            previous_receipt_hash: None,
+            depends_on: Vec::new(),
+            conservation_proof: None,
+            sovereign_witnesses: Default::default(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
+            custom_program_proofs: None,
+        })
+    }
 }
 
 /// Encode bytes to hex string (used by federation registration methods).

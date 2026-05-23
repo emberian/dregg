@@ -8599,3 +8599,312 @@ fn test_bearer_cap_stark_delegation_invalid_proof_rejected() {
         other => panic!("expected Rejected, got: {:?}", other),
     }
 }
+
+// =============================================================================
+// Queue Operations Tests
+// =============================================================================
+
+/// Helper: set up a ledger with an agent cell that has enough balance for queue ops.
+fn setup_queue_test(balance: u64) -> (Ledger, CellId) {
+    let mut ledger = Ledger::new();
+    let (agent, _) = make_open_cell(50, balance);
+    let agent_id = agent.id;
+    ledger.insert_cell(agent).unwrap();
+    (ledger, agent_id)
+}
+
+/// Helper: allocate a queue via turn and return the queue CellId.
+fn allocate_queue(
+    executor: &TurnExecutor,
+    ledger: &mut Ledger,
+    agent_id: CellId,
+    capacity: u64,
+) -> CellId {
+    let nonce = ledger.get(&agent_id).unwrap().state.nonce;
+    let mut builder = TurnBuilder::new(agent_id, nonce);
+    {
+        let action = builder.action(agent_id, "queue_allocate");
+        action.effect(Effect::QueueAllocate {
+            capacity,
+            program_vk: None,
+        });
+    }
+    let turn = builder.fee(0).build();
+    let result = executor.execute(&turn, ledger);
+    assert!(result.is_committed(), "queue allocate failed: {:?}", result);
+
+    // Derive the queue cell ID (same derivation as the executor).
+    // The executor reads the nonce AFTER Phase 1 bumps it, so it sees nonce+1.
+    let nonce_during_effect = nonce + 1;
+    let hash = blake3::hash(
+        &[
+            agent_id.as_bytes().as_slice(),
+            &capacity.to_le_bytes(),
+            &nonce_during_effect.to_le_bytes(),
+        ]
+        .concat(),
+    );
+    let queue_seed: [u8; 32] = *hash.as_bytes();
+    let queue_token = [0u8; 32];
+    CellId::derive_raw(&queue_seed, &queue_token)
+}
+
+#[test]
+fn test_queue_allocate_creates_queue_cell() {
+    let (mut ledger, agent_id) = setup_queue_test(1000);
+    let executor = zero_cost_executor();
+
+    let queue_id = allocate_queue(&executor, &mut ledger, agent_id, 10);
+
+    // Verify queue cell exists.
+    let queue_cell = ledger.get(&queue_id).unwrap();
+    // Capacity should be 10.
+    let capacity = u64::from_le_bytes(queue_cell.state.fields[0][..8].try_into().unwrap());
+    assert_eq!(capacity, 10);
+    // Length should be 0.
+    let length = u64::from_le_bytes(queue_cell.state.fields[1][..8].try_into().unwrap());
+    assert_eq!(length, 0);
+    // Owner should be agent.
+    assert_eq!(queue_cell.state.fields[2], *agent_id.as_bytes());
+    // Agent balance should be reduced by capacity cost (10).
+    let agent_cell = ledger.get(&agent_id).unwrap();
+    assert_eq!(agent_cell.state.balance, 1000 - 10);
+}
+
+#[test]
+fn test_queue_enqueue_adds_message() {
+    let (mut ledger, agent_id) = setup_queue_test(1000);
+    let executor = zero_cost_executor();
+
+    let queue_id = allocate_queue(&executor, &mut ledger, agent_id, 10);
+
+    // Enqueue a message.
+    let msg_hash = [0xABu8; 32];
+    let nonce = ledger.get(&agent_id).unwrap().state.nonce;
+    let mut builder = TurnBuilder::new(agent_id, nonce);
+    {
+        let action = builder.action(agent_id, "enqueue");
+        action.effect(Effect::QueueEnqueue {
+            queue: queue_id,
+            message_hash: msg_hash,
+            deposit: 50,
+        });
+    }
+    let turn = builder.fee(0).build();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed(), "enqueue failed: {:?}", result);
+
+    // Verify queue length incremented.
+    let queue_cell = ledger.get(&queue_id).unwrap();
+    let length = u64::from_le_bytes(queue_cell.state.fields[1][..8].try_into().unwrap());
+    assert_eq!(length, 1);
+    // Verify message hash stored in field[4].
+    assert_eq!(queue_cell.state.fields[4], msg_hash);
+    // Verify deposit transferred: queue has the deposit, agent lost deposit.
+    assert_eq!(queue_cell.state.balance, 50);
+    let agent_cell = ledger.get(&agent_id).unwrap();
+    // Agent started with 1000, paid 10 for allocate, paid 50 for deposit.
+    assert_eq!(agent_cell.state.balance, 1000 - 10 - 50);
+}
+
+#[test]
+fn test_queue_dequeue_by_owner_succeeds() {
+    let (mut ledger, agent_id) = setup_queue_test(1000);
+    let executor = zero_cost_executor();
+
+    let queue_id = allocate_queue(&executor, &mut ledger, agent_id, 10);
+
+    // Enqueue a message first.
+    let msg_hash = [0xCDu8; 32];
+    let nonce = ledger.get(&agent_id).unwrap().state.nonce;
+    let mut builder = TurnBuilder::new(agent_id, nonce);
+    {
+        let action = builder.action(agent_id, "enqueue");
+        action.effect(Effect::QueueEnqueue {
+            queue: queue_id,
+            message_hash: msg_hash,
+            deposit: 100,
+        });
+    }
+    let turn = builder.fee(0).build();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed(), "enqueue failed: {:?}", result);
+
+    // Now dequeue (agent is the owner).
+    let nonce = ledger.get(&agent_id).unwrap().state.nonce;
+    let mut builder = TurnBuilder::new(agent_id, nonce);
+    {
+        let action = builder.action(agent_id, "dequeue");
+        action.effect(Effect::QueueDequeue { queue: queue_id });
+    }
+    let turn = builder.fee(0).build();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed(), "dequeue failed: {:?}", result);
+
+    // Queue length should be 0 again.
+    let queue_cell = ledger.get(&queue_id).unwrap();
+    let length = u64::from_le_bytes(queue_cell.state.fields[1][..8].try_into().unwrap());
+    assert_eq!(length, 0);
+
+    // Deposit should be refunded to the dequeuer (the owner/actor).
+    assert_eq!(queue_cell.state.balance, 0);
+    let agent_cell = ledger.get(&agent_id).unwrap();
+    // Agent: 1000 - 10 (alloc) - 100 (deposit) + 100 (refund) = 890
+    assert_eq!(agent_cell.state.balance, 1000 - 10 - 100 + 100);
+}
+
+#[test]
+fn test_queue_dequeue_by_non_owner_fails() {
+    let (mut ledger, agent_id) = setup_queue_test(1000);
+    let executor = zero_cost_executor();
+
+    let queue_id = allocate_queue(&executor, &mut ledger, agent_id, 10);
+
+    // Enqueue a message.
+    let nonce = ledger.get(&agent_id).unwrap().state.nonce;
+    let mut builder = TurnBuilder::new(agent_id, nonce);
+    {
+        let action = builder.action(agent_id, "enqueue");
+        action.effect(Effect::QueueEnqueue {
+            queue: queue_id,
+            message_hash: [0xEEu8; 32],
+            deposit: 50,
+        });
+    }
+    let turn = builder.fee(0).build();
+    executor.execute(&turn, &mut ledger);
+
+    // Create a different cell (non-owner) and try to dequeue.
+    let (other_cell, _) = make_open_cell(51, 500);
+    let other_id = other_cell.id;
+    ledger.insert_cell(other_cell).unwrap();
+
+    let mut builder = TurnBuilder::new(other_id, 0);
+    {
+        let action = builder.action(other_id, "dequeue");
+        action.effect(Effect::QueueDequeue { queue: queue_id });
+    }
+    let turn = builder.fee(0).build();
+    let result = executor.execute(&turn, &mut ledger);
+
+    // Should fail because other_id is not the queue owner.
+    match result {
+        crate::turn::TurnResult::Rejected { reason, .. } => match reason {
+            TurnError::InvalidEffect { reason: msg } => {
+                assert!(
+                    msg.contains("only the queue owner can dequeue"),
+                    "unexpected error: {}",
+                    msg
+                );
+            }
+            other => panic!("expected InvalidEffect, got: {:?}", other),
+        },
+        other => panic!("expected Rejected, got: {:?}", other),
+    }
+}
+
+#[test]
+fn test_queue_atomic_tx_all_succeed() {
+    let (mut ledger, agent_id) = setup_queue_test(2000);
+    let executor = zero_cost_executor();
+
+    // Allocate two queues.
+    let queue1_id = allocate_queue(&executor, &mut ledger, agent_id, 10);
+    let queue2_id = allocate_queue(&executor, &mut ledger, agent_id, 10);
+
+    // Execute an atomic tx that enqueues to both queues.
+    let nonce = ledger.get(&agent_id).unwrap().state.nonce;
+    let mut builder = TurnBuilder::new(agent_id, nonce);
+    {
+        let action = builder.action(agent_id, "atomic_enqueue");
+        action.effect(Effect::QueueAtomicTx {
+            operations: vec![
+                crate::action::QueueTxOp::Enqueue {
+                    queue: queue1_id,
+                    message_hash: [0x11u8; 32],
+                    deposit: 25,
+                },
+                crate::action::QueueTxOp::Enqueue {
+                    queue: queue2_id,
+                    message_hash: [0x22u8; 32],
+                    deposit: 25,
+                },
+            ],
+        });
+    }
+    let turn = builder.fee(0).build();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed(), "atomic tx failed: {:?}", result);
+
+    // Both queues should have length 1.
+    let q1 = ledger.get(&queue1_id).unwrap();
+    let q1_len = u64::from_le_bytes(q1.state.fields[1][..8].try_into().unwrap());
+    assert_eq!(q1_len, 1);
+
+    let q2 = ledger.get(&queue2_id).unwrap();
+    let q2_len = u64::from_le_bytes(q2.state.fields[1][..8].try_into().unwrap());
+    assert_eq!(q2_len, 1);
+}
+
+#[test]
+fn test_queue_atomic_tx_one_fails_all_rolled_back() {
+    let (mut ledger, agent_id) = setup_queue_test(2000);
+    let executor = zero_cost_executor();
+
+    // Allocate a queue with capacity 1 (can only hold one message).
+    let queue_id = allocate_queue(&executor, &mut ledger, agent_id, 1);
+
+    // Fill the queue.
+    let nonce = ledger.get(&agent_id).unwrap().state.nonce;
+    let mut builder = TurnBuilder::new(agent_id, nonce);
+    {
+        let action = builder.action(agent_id, "fill");
+        action.effect(Effect::QueueEnqueue {
+            queue: queue_id,
+            message_hash: [0xAAu8; 32],
+            deposit: 10,
+        });
+    }
+    let turn = builder.fee(0).build();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_committed(), "fill failed: {:?}", result);
+
+    // Record the agent balance before the atomic tx attempt.
+    let agent_balance_before = ledger.get(&agent_id).unwrap().state.balance;
+
+    // Attempt an atomic tx that tries to enqueue to the full queue.
+    let nonce = ledger.get(&agent_id).unwrap().state.nonce;
+    let mut builder = TurnBuilder::new(agent_id, nonce);
+    {
+        let action = builder.action(agent_id, "atomic_fail");
+        action.effect(Effect::QueueAtomicTx {
+            operations: vec![crate::action::QueueTxOp::Enqueue {
+                queue: queue_id,
+                message_hash: [0xBBu8; 32],
+                deposit: 10,
+            }],
+        });
+    }
+    let turn = builder.fee(0).build();
+    let result = executor.execute(&turn, &mut ledger);
+
+    // The turn should be rejected because the queue is full.
+    match result {
+        crate::turn::TurnResult::Rejected { reason, .. } => match reason {
+            TurnError::InvalidEffect { reason: msg } => {
+                assert!(msg.contains("full"), "unexpected error: {}", msg);
+            }
+            other => panic!("expected InvalidEffect, got: {:?}", other),
+        },
+        other => panic!("expected Rejected, got: {:?}", other),
+    }
+
+    // Agent balance should be unchanged (rolled back).
+    let agent_balance_after = ledger.get(&agent_id).unwrap().state.balance;
+    assert_eq!(agent_balance_before, agent_balance_after);
+
+    // Queue length should still be 1 (no additional messages).
+    let queue_cell = ledger.get(&queue_id).unwrap();
+    let length = u64::from_le_bytes(queue_cell.state.fields[1][..8].try_into().unwrap());
+    assert_eq!(length, 1);
+}

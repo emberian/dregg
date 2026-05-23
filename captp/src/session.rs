@@ -10,6 +10,8 @@ use pyana_cell::AuthRequired;
 use pyana_types::CellId;
 use serde::{Deserialize, Serialize};
 
+use crate::StrandId;
+
 /// A CapTP session between two federations/peers.
 ///
 /// Each session tracks:
@@ -22,6 +24,16 @@ use serde::{Deserialize, Serialize};
 pub struct CapSession {
     /// The remote peer's identity (typically their federation node ID).
     pub peer_id: [u8; 32],
+    /// The remote peer's strand identity in the unified lace model.
+    ///
+    /// In the unified model, CapTP sessions are bilateral between strands.
+    /// When set, this identifies the specific strand we are communicating with.
+    /// When `None`, the session uses the legacy `peer_id` (which was a federation/group ID).
+    ///
+    /// New code should set this; when both `peer_strand` and `peer_id` are set,
+    /// prefer `peer_strand` for GC keying and addressing.
+    #[serde(default)]
+    pub peer_strand: Option<StrandId>,
     /// Session epoch: incremented each time a new session is established with
     /// the same peer. Messages carrying a stale epoch are rejected.
     pub epoch: u64,
@@ -73,6 +85,7 @@ impl CapSession {
     pub fn new(peer_id: [u8; 32]) -> Self {
         Self {
             peer_id,
+            peer_strand: None,
             epoch: 0,
             exports: HashMap::new(),
             imports: HashMap::new(),
@@ -88,6 +101,24 @@ impl CapSession {
     pub fn with_epoch(peer_id: [u8; 32], epoch: u64) -> Self {
         Self {
             peer_id,
+            peer_strand: None,
+            epoch,
+            exports: HashMap::new(),
+            imports: HashMap::new(),
+            promises: HashMap::new(),
+            next_promise_id: 0,
+        }
+    }
+
+    /// Create a new CapTP session addressed by strand ID (unified lace model).
+    ///
+    /// In the unified model, sessions are bilateral between strands.
+    /// The `peer_id` is set to the strand ID for backward compatibility
+    /// with code that reads `peer_id`.
+    pub fn with_strand(peer_strand: StrandId, epoch: u64) -> Self {
+        Self {
+            peer_id: peer_strand,
+            peer_strand: Some(peer_strand),
             epoch,
             exports: HashMap::new(),
             imports: HashMap::new(),

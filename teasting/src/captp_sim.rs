@@ -6,9 +6,7 @@
 
 use std::collections::VecDeque;
 
-use pyana_captp::{
-    CapSession, ExportGcManager, FederationId, ImportGcManager, PyanaUri, SwissTable,
-};
+use pyana_captp::{CapSession, ExportGcManager, GroupId, ImportGcManager, PyanaUri, SwissTable};
 use pyana_cell::AuthRequired;
 use pyana_types::CellId;
 use pyana_wire::message::WireMessage;
@@ -19,9 +17,9 @@ use pyana_wire::message::WireMessage;
 /// CapSession, SwissTable, and GC logic.
 pub struct SimCapTpSession {
     /// Identity of federation A.
-    pub fed_a_id: FederationId,
+    pub fed_a_id: GroupId,
     /// Identity of federation B.
-    pub fed_b_id: FederationId,
+    pub fed_b_id: GroupId,
     /// A's session state (A's view of the relationship with B).
     pub session_a: CapSession,
     /// B's session state (B's view of the relationship with A).
@@ -49,7 +47,7 @@ impl SimCapTpSession {
     ///
     /// This performs the CapHello handshake by placing CapHello messages in both
     /// directions and marking the session as connected.
-    pub fn establish(fed_a_id: FederationId, fed_b_id: FederationId) -> Self {
+    pub fn establish(fed_a_id: GroupId, fed_b_id: GroupId) -> Self {
         let session_a = CapSession::new(fed_b_id.0);
         let session_b = CapSession::new(fed_a_id.0);
 
@@ -253,7 +251,7 @@ impl SimCapTpSession {
                 cell_id,
                 session_epoch: _,
             } => {
-                let fed_id = FederationId(*from_federation);
+                let fed_id = GroupId(*from_federation);
                 let cell = CellId(*cell_id);
                 self.import_gc_b.local_ref_dropped(fed_id, cell);
                 self.session_b.disconnect_import(&cell);
@@ -279,7 +277,7 @@ impl SimCapTpSession {
                 cell_id,
                 session_epoch: _,
             } => {
-                let fed_id = FederationId(*from_federation);
+                let fed_id = GroupId(*from_federation);
                 let cell = CellId(*cell_id);
                 self.export_gc_a.process_drop(cell, fed_id);
                 self.session_a.release_export(&cell);
@@ -295,12 +293,12 @@ impl SimCapTpSession {
 mod tests {
     use super::*;
 
-    fn fed_a_id() -> FederationId {
-        FederationId([0xAA; 32])
+    fn fed_a_id() -> GroupId {
+        GroupId([0xAA; 32])
     }
 
-    fn fed_b_id() -> FederationId {
-        FederationId([0xBB; 32])
+    fn fed_b_id() -> GroupId {
+        GroupId([0xBB; 32])
     }
 
     fn test_cell(n: u8) -> CellId {

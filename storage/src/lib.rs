@@ -37,7 +37,10 @@
 //! 6. Content-addressing eliminates indirection (nameless writes = cheap proofs)
 //! 7. Quotas compose with computrons (quota IS a computron allocation)
 
+pub mod atomic;
+pub mod blinded;
 pub mod content;
+pub mod dataflow;
 pub mod dedup;
 pub mod erasure;
 pub mod inbox;
@@ -45,11 +48,14 @@ pub mod metering;
 pub mod multi_asset;
 pub mod namespace_mount;
 pub mod operator;
+#[cfg(feature = "kzg")]
+pub mod poly_queue;
 pub mod programmable;
 pub mod pubsub;
 pub mod queue;
 pub mod quota;
 pub mod relay;
+pub mod sharding;
 pub mod wal;
 
 /// A content hash (blake3) identifying a blob.

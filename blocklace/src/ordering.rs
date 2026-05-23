@@ -581,6 +581,18 @@ impl ReferenceGroup {
         }
     }
 
+    /// Compute a deterministic group ID from the participant set.
+    /// Same participants (sorted) = same group ID, regardless of input order.
+    pub fn compute_id(&self) -> [u8; 32] {
+        let mut sorted = self.participants.clone();
+        sorted.sort();
+        let mut hasher = blake3::Hasher::new_derive_key("pyana-group-id-v1");
+        for p in &sorted {
+            hasher.update(p);
+        }
+        *hasher.finalize().as_bytes()
+    }
+
     /// Check if a key is a member of this reference group.
     pub fn is_member(&self, key: &[u8; 32]) -> bool {
         self.participants.contains(key)

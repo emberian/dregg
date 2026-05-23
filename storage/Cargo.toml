@@ -4,9 +4,26 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.94.0"
 
+[features]
+default = []
+kzg = ["poly-commitment", "ark-ec", "ark-ff", "ark-poly", "ark-bn254", "ark-std", "ark-serialize"]
+
 [dependencies]
 blake3 = "1"
 serde = { version = "1", features = ["derive"] }
+
+# KZG polynomial commitment from o1-labs/proof-systems (same rev as circuit crate).
+# We use PairingSRS for SRS generation + commit_non_hiding for polynomial commitments.
+# The "std" feature is required for the KZG module and SRS creation methods.
+poly-commitment = { git = "https://github.com/o1-labs/proof-systems", rev = "36a8b510", optional = true, default-features = false, features = ["std", "parallel"] }
+
+# Arkworks crypto (versions match proof-systems / ark 0.5)
+ark-ec = { version = "0.5", optional = true }
+ark-ff = { version = "0.5", features = ["asm"], optional = true }
+ark-poly = { version = "0.5", optional = true }
+ark-bn254 = { version = "0.5", optional = true }
+ark-std = { version = "0.5", optional = true }
+ark-serialize = { version = "0.5", optional = true }
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

@@ -133,7 +133,7 @@ impl SimRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyana_captp::FederationId;
+    use pyana_captp::GroupId;
     use pyana_types::CellId;
 
     fn test_cell(n: u8) -> CellId {
@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn federation_forwarding_route() {
-        let fed_id = FederationId([0x42; 32]);
+        let fed_id = GroupId([0x42; 32]);
         let router =
             SimRouter::with_routes(&[("/federated/partner/*", RouteTarget::Federation(fed_id))]);
 

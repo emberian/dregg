@@ -1,5 +1,18 @@
 //! Cross-federation bridge nodes.
 //!
+//! **DEPRECATED (Phase C):** This module implements the legacy relay pattern where
+//! a bridge node participates in multiple federations' gossip networks and manually
+//! relays messages between them. In the new model (see `multi_group`), cross-group
+//! interaction happens via the DAG using cross-references and `DagDeliveredProof`
+//! blocks. A node that subscribes to multiple reference groups naturally receives
+//! and forwards blocks between them through the dissemination layer.
+//!
+//! Use [`crate::multi_group::MultiGroupNode`] for new cross-group interactions.
+//! This module is retained for backward compatibility with nodes that have not
+//! migrated to the unified blocklace model.
+//!
+//! ## Legacy behavior (retained for compat)
+//!
 //! A bridge node participates in TWO (or more) federations' gossip networks
 //! simultaneously. It relays relevant messages between them:
 //! - Attested roots (so each federation knows the other's state)

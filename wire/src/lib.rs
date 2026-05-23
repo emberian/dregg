@@ -85,6 +85,18 @@ pub mod server;
 #[cfg(feature = "federation")]
 pub mod federation_bridge;
 
+// =============================================================================
+// Unified Lace Compatibility
+// =============================================================================
+//
+// In the unified blocklace model, a "federation" is simply a reference group
+// (GroupId). The wire protocol fields named `federation_id` and `federation_root`
+// are semantically equivalent to `group_id` and `group_root`. The field names
+// are frozen for wire-format stability; they will be renamed in protocol v2.
+//
+// See `blocklace::addressing::FabricAddress` for the full addressing taxonomy.
+// See `plans/unified-lace-propagation.md` for the full migration plan.
+
 /// Convenience re-exports for common usage.
 pub mod prelude {
     pub use crate::auth::{

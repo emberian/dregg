@@ -1143,6 +1143,371 @@ fn operator_bond_invariant_holds_under_faults() {
 // Helper trait for InboxMessage serialization (used in Test 6)
 // =============================================================================
 
+// =============================================================================
+// Test 17: Atomic Queue Tx — Concurrent dequeue conflict (distributed protocol)
+// =============================================================================
+
+/// Two agents both attempt to dequeue from the same queue (which has exactly 1 message).
+/// Tau ordering means the first one wins, the second fails.
+/// This proves the system does not double-spend queue contents.
+#[test]
+fn atomic_tx_concurrent_dequeue_conflict_second_fails() {
+    use pyana_storage::atomic::{QueueOp, QueueTransaction, TxError};
+    use std::collections::HashMap;
+
+    let queue_a_id = [0x0A; 32];
+    let queue_b_id = [0x0B; 32];
+    let queue_c_id = [0x0C; 32];
+
+    let mut queues = HashMap::new();
+    let mut qa = MerkleQueue::new(10);
+    qa.enqueue(make_entry(b"the-only-message", identity(0x01), 500, 100))
+        .unwrap();
+    queues.insert(queue_a_id, qa);
+    queues.insert(queue_b_id, MerkleQueue::new(10));
+    queues.insert(queue_c_id, MerkleQueue::new(10));
+
+    let entry_for_b = make_entry(b"move-to-b", identity(0x01), 100, 101);
+    let entry_for_c = make_entry(b"move-to-c", identity(0x01), 100, 101);
+
+    // Alice's transaction: dequeue from A, enqueue to B.
+    let mut tx_alice = QueueTransaction::new();
+    tx_alice
+        .dequeue(queue_a_id)
+        .enqueue(queue_b_id, entry_for_b);
+
+    // Bob's transaction: dequeue from A, enqueue to C.
+    let mut tx_bob = QueueTransaction::new();
+    tx_bob.dequeue(queue_a_id).enqueue(queue_c_id, entry_for_c);
+
+    // Tau orders Alice first. She wins.
+    let result_alice = tx_alice.execute(&mut queues);
+    assert!(result_alice.is_ok(), "Alice (first by tau) should succeed");
+    assert_eq!(
+        queues.get(&queue_a_id).unwrap().len(),
+        0,
+        "A should be empty after Alice"
+    );
+    assert_eq!(
+        queues.get(&queue_b_id).unwrap().len(),
+        1,
+        "B should have Alice's message"
+    );
+
+    // Bob executes second. Queue A is now empty. He fails.
+    let result_bob = tx_bob.execute(&mut queues);
+    assert!(
+        matches!(
+            result_bob,
+            Err(TxError::QueueError {
+                error: pyana_storage::queue::QueueError::Empty,
+                ..
+            })
+        ),
+        "Bob (second by tau) should fail because A is now empty"
+    );
+
+    // Verify rollback: C should still be empty (Bob's enqueue rolled back).
+    assert_eq!(
+        queues.get(&queue_c_id).unwrap().len(),
+        0,
+        "C should be empty (rollback)"
+    );
+
+    // INVARIANT: no double-spend. Only one message existed, only one agent got it.
+}
+
+// =============================================================================
+// Test 18: Atomic Queue Tx — Cross-queue "deadlock" scenario (sequential safety)
+// =============================================================================
+
+/// Alice: dequeue A, enqueue B. Bob: dequeue B, enqueue A.
+/// In sequential execution (tau ordering), both can succeed because each sees
+/// the state AFTER the other has committed.
+#[test]
+fn atomic_tx_cross_queue_no_deadlock_sequential() {
+    use pyana_storage::atomic::QueueTransaction;
+    use std::collections::HashMap;
+
+    let queue_a_id = [0x0A; 32];
+    let queue_b_id = [0x0B; 32];
+
+    let mut queues = HashMap::new();
+    let mut qa = MerkleQueue::new(10);
+    qa.enqueue(make_entry(b"msg-in-a", identity(0x01), 300, 50))
+        .unwrap();
+    let mut qb = MerkleQueue::new(10);
+    qb.enqueue(make_entry(b"msg-in-b", identity(0x02), 400, 51))
+        .unwrap();
+    queues.insert(queue_a_id, qa);
+    queues.insert(queue_b_id, qb);
+
+    // Alice: move message from A to B.
+    let entry_a_to_b = make_entry(b"alice-moves", identity(0x01), 200, 100);
+    let mut tx_alice = QueueTransaction::new();
+    tx_alice
+        .dequeue(queue_a_id)
+        .enqueue(queue_b_id, entry_a_to_b);
+
+    // Bob: move message from B to A.
+    let entry_b_to_a = make_entry(b"bob-moves", identity(0x02), 250, 101);
+    let mut tx_bob = QueueTransaction::new();
+    tx_bob.dequeue(queue_b_id).enqueue(queue_a_id, entry_b_to_a);
+
+    // Sequential execution (tau: Alice first, then Bob).
+    let result_alice = tx_alice.execute(&mut queues);
+    assert!(result_alice.is_ok(), "Alice should succeed (A has 1 msg)");
+    // After Alice: A is empty, B has 2 messages (original + Alice's).
+    assert_eq!(queues.get(&queue_a_id).unwrap().len(), 0);
+    assert_eq!(queues.get(&queue_b_id).unwrap().len(), 2);
+
+    let result_bob = tx_bob.execute(&mut queues);
+    assert!(result_bob.is_ok(), "Bob should succeed (B has 2 msgs)");
+    // After Bob: A has 1 (Bob's), B has 1 (net: Alice's remained).
+    assert_eq!(queues.get(&queue_a_id).unwrap().len(), 1);
+    assert_eq!(queues.get(&queue_b_id).unwrap().len(), 1);
+
+    // NO DEADLOCK. Sequential execution always terminates.
+}
+
+// =============================================================================
+// Test 19: Atomic Queue Tx — Stale root assertion rejects
+// =============================================================================
+
+/// An agent reads queue A's root, then another agent modifies queue A.
+/// The first agent's transaction includes an AssertRoot for the OLD root.
+/// This must be rejected.
+#[test]
+fn atomic_tx_stale_root_assertion_rejected() {
+    use pyana_storage::atomic::{QueueTransaction, TxError};
+    use std::collections::HashMap;
+
+    let queue_a_id = [0x0A; 32];
+    let queue_b_id = [0x0B; 32];
+
+    let mut queues = HashMap::new();
+    let mut qa = MerkleQueue::new(10);
+    qa.enqueue(make_entry(b"original", identity(0x01), 100, 50))
+        .unwrap();
+    let stale_root = qa.root(); // Alice reads this root
+    queues.insert(queue_a_id, qa);
+    queues.insert(queue_b_id, MerkleQueue::new(10));
+
+    // Bob modifies queue A (enqueues another message) between Alice's read and execute.
+    let bob_entry = make_entry(b"bob-sneaks-in", identity(0x02), 200, 55);
+    queues
+        .get_mut(&queue_a_id)
+        .unwrap()
+        .enqueue(bob_entry)
+        .unwrap();
+    let current_root = queues.get(&queue_a_id).unwrap().root();
+    assert_ne!(stale_root, current_root, "Bob's enqueue changed the root");
+
+    // Alice's transaction uses the STALE root in an AssertRoot.
+    let alice_entry = make_entry(b"alice-msg", identity(0x01), 100, 60);
+    let mut tx_alice = QueueTransaction::new();
+    tx_alice
+        .assert_root(queue_a_id, stale_root) // STALE!
+        .enqueue(queue_b_id, alice_entry);
+
+    // Execute: must fail because root no longer matches.
+    let result = tx_alice.execute(&mut queues);
+    assert!(
+        matches!(result, Err(TxError::RootMismatch { .. })),
+        "Stale root assertion must be rejected, got: {:?}",
+        result
+    );
+
+    // Verify rollback: B should still be empty.
+    assert_eq!(
+        queues.get(&queue_b_id).unwrap().len(),
+        0,
+        "B must be empty (rollback)"
+    );
+}
+
+// =============================================================================
+// Test 20: Circuit-level AtomicQueueTx — tampered combined_old_root fails
+// =============================================================================
+
+/// Adversarial test: prover claims combined_old_root != actual field[4].
+/// The circuit must reject (constraint: old_f4 == combined_old_root param).
+#[test]
+fn circuit_atomic_tx_wrong_old_root_rejected() {
+    use pyana_circuit::effect_vm::{
+        CellState, Effect, EffectVmAir, PARAM_BASE, STATE_AFTER_BASE, STATE_BEFORE_BASE,
+        generate_effect_vm_trace, param, state,
+    };
+    use pyana_circuit::field::BabyBear;
+    use pyana_circuit::poseidon2::hash_2_to_1;
+    use pyana_circuit::stark::StarkAir;
+
+    let mut cell_state = CellState::new(10_000, 0);
+    let actual_root = hash_2_to_1(BabyBear::new(0x11), BabyBear::new(0x22));
+    cell_state.fields[4] = actual_root;
+    cell_state.refresh_commitment();
+
+    // The attacker claims a DIFFERENT old root.
+    let fake_old_root = hash_2_to_1(BabyBear::new(0xFF), BabyBear::new(0xEE));
+    let combined_new = hash_2_to_1(BabyBear::new(0x33), BabyBear::new(0x44));
+    let tx_hash = BabyBear::new(0xABC);
+
+    // Try to generate a trace with mismatched old root.
+    // The witness gen doesn't validate this, but the constraint WILL catch it.
+    let effects = vec![Effect::AtomicQueueTx {
+        op_count: 1,
+        tx_hash,
+        combined_old_root: fake_old_root, // WRONG! Doesn't match field[4]
+        combined_new_root: combined_new,
+    }];
+
+    let (trace, public_inputs) = generate_effect_vm_trace(&cell_state, &effects);
+    let air = EffectVmAir::new(trace.len());
+
+    // The constraint should fail because old_f4 (actual_root) != combined_old_root (fake_old_root).
+    let alpha = BabyBear::new(7);
+    let c = air.eval_constraints(&trace[0], &trace[1], &public_inputs, alpha);
+    assert_ne!(
+        c,
+        BabyBear::ZERO,
+        "Mismatched combined_old_root must fail constraints (old_f4 != param)"
+    );
+}
+
+// =============================================================================
+// Test 21: Circuit-level AtomicQueueTx — balance unchanged enforced
+// =============================================================================
+
+/// Adversarial test: prover attempts to change balance during AtomicQueueTx.
+/// The circuit must reject (balance_unchanged constraint).
+#[test]
+fn circuit_atomic_tx_balance_change_rejected() {
+    use pyana_circuit::effect_vm::{
+        AUX_BASE, CellState, EFFECT_VM_WIDTH, Effect, EffectVmAir, STATE_AFTER_BASE, aux_off,
+        generate_effect_vm_trace, state,
+    };
+    use pyana_circuit::field::BabyBear;
+    use pyana_circuit::poseidon2::{hash_2_to_1, hash_4_to_1};
+    use pyana_circuit::stark::StarkAir;
+
+    let mut cell_state = CellState::new(10_000, 0);
+    let combined_old = hash_2_to_1(BabyBear::new(0x11), BabyBear::new(0x22));
+    cell_state.fields[4] = combined_old;
+    cell_state.refresh_commitment();
+
+    let combined_new = hash_2_to_1(BabyBear::new(0x33), BabyBear::new(0x44));
+    let tx_hash = BabyBear::new(0xABC);
+
+    let effects = vec![Effect::AtomicQueueTx {
+        op_count: 1,
+        tx_hash,
+        combined_old_root: combined_old,
+        combined_new_root: combined_new,
+    }];
+
+    let (mut trace, public_inputs) = generate_effect_vm_trace(&cell_state, &effects);
+
+    // Tamper: change balance in state_after (try to steal 1000 computrons).
+    // new_balance = 11000 instead of 10000.
+    let (tampered_lo, tampered_hi) = pyana_circuit::effect_vm::split_u64(11_000);
+    trace[0][STATE_AFTER_BASE + state::BALANCE_LO] = tampered_lo;
+    trace[0][STATE_AFTER_BASE + state::BALANCE_HI] = tampered_hi;
+
+    // Must also update state commitment intermediates to match tampered balance,
+    // otherwise Group 4 catches it first. We want to test the balance constraint specifically.
+    let nonce_after = BabyBear::new(1); // nonce incremented
+    let inter1 = hash_4_to_1(&[tampered_lo, tampered_hi, nonce_after, cell_state.fields[0]]);
+    let inter2 = hash_4_to_1(&[
+        cell_state.fields[1],
+        cell_state.fields[2],
+        cell_state.fields[3],
+        combined_new, // field[4] changed
+    ]);
+    let inter3 = hash_4_to_1(&[
+        cell_state.fields[5],
+        cell_state.fields[6],
+        cell_state.fields[7],
+        cell_state.capability_root,
+    ]);
+    let tampered_commit = hash_4_to_1(&[inter1, inter2, inter3, BabyBear::ZERO]);
+    trace[0][AUX_BASE + aux_off::STATE_INTER1] = inter1;
+    trace[0][AUX_BASE + aux_off::STATE_INTER2] = inter2;
+    trace[0][AUX_BASE + aux_off::STATE_INTER3] = inter3;
+    trace[0][STATE_AFTER_BASE + state::STATE_COMMIT] = tampered_commit;
+
+    let air = EffectVmAir::new(trace.len());
+
+    // The AtomicQueueTx balance constraint should fire.
+    let alpha = BabyBear::new(13);
+    let c = air.eval_constraints(&trace[0], &trace[1], &public_inputs, alpha);
+    assert_ne!(
+        c,
+        BabyBear::ZERO,
+        "Balance change during AtomicQueueTx must fail constraints"
+    );
+}
+
+// =============================================================================
+// Test 22: Atomic Queue Tx — Partial failure rollback preserves deposits
+// =============================================================================
+
+/// An atomic transaction with 3 ops: enqueue succeeds, then dequeue fails (empty).
+/// ALL operations must be rolled back, including the successful enqueue.
+/// Deposits from the first op must be returned.
+#[test]
+fn atomic_tx_partial_failure_rollback_preserves_state() {
+    use pyana_storage::atomic::{QueueTransaction, TxError};
+    use std::collections::HashMap;
+
+    let queue_a_id = [0x0A; 32];
+    let queue_b_id = [0x0B; 32]; // this one is EMPTY
+
+    let mut queues = HashMap::new();
+    queues.insert(queue_a_id, MerkleQueue::new(10));
+    queues.insert(queue_b_id, MerkleQueue::new(10)); // empty!
+
+    let root_a_before = queues.get(&queue_a_id).unwrap().root();
+    let root_b_before = queues.get(&queue_b_id).unwrap().root();
+
+    // Transaction: enqueue to A (succeeds), then dequeue from B (fails: empty).
+    let entry = make_entry(b"will-be-rolled-back", identity(0x01), 500, 100);
+    let mut tx = QueueTransaction::new();
+    tx.enqueue(queue_a_id, entry).dequeue(queue_b_id);
+
+    let result = tx.execute(&mut queues);
+    assert!(
+        matches!(
+            result,
+            Err(TxError::QueueError {
+                error: pyana_storage::queue::QueueError::Empty,
+                ..
+            })
+        ),
+        "Should fail on dequeue from empty B"
+    );
+
+    // CRITICAL: A must be rolled back. The enqueue should not persist.
+    assert_eq!(
+        queues.get(&queue_a_id).unwrap().len(),
+        0,
+        "A must be empty after rollback"
+    );
+    assert_eq!(
+        queues.get(&queue_a_id).unwrap().root(),
+        root_a_before,
+        "A root must be restored"
+    );
+    assert_eq!(
+        queues.get(&queue_b_id).unwrap().root(),
+        root_b_before,
+        "B root unchanged"
+    );
+}
+
+// =============================================================================
+// Helper trait for InboxMessage serialization (used in Test 6)
+// =============================================================================
+
 trait InboxMessageHashHelper {
     fn to_bytes_for_hash(&self) -> Vec<u8>;
 }

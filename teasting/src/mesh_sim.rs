@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use pyana_captp::FederationId;
+use pyana_captp::GroupId;
 use pyana_types::CellId;
 use pyana_wire::dfa_router::RouteTarget;
 
@@ -47,7 +47,7 @@ pub struct ServiceEntry {
     /// The cell ID that handles requests for this service.
     pub cell_id: CellId,
     /// The federation hosting this service.
-    pub federation_id: FederationId,
+    pub federation_id: GroupId,
     /// The sturdy reference URI string for accessing this service.
     pub sturdy_ref: String,
     /// Human-readable service name.
@@ -234,8 +234,8 @@ mod tests {
         CellId([n; 32])
     }
 
-    fn test_federation() -> FederationId {
-        FederationId([0xAA; 32])
+    fn test_federation() -> GroupId {
+        GroupId([0xAA; 32])
     }
 
     fn make_service(path: &str, name: &str, cell_byte: u8, tags: &[&str]) -> ServiceEntry {

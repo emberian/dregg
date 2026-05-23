@@ -1049,6 +1049,93 @@ pub fn execute_dequeue_message(env: &mut impl EffectEnv) {
     }
 }
 
+/// Execute the AtomicQueueTx effect.
+///
+/// Proves: field[4] transitions from combined_old_root to combined_new_root.
+/// Binding: aux[0] == hash(tx_hash, hash(combined_old_root, combined_new_root))
+/// State: field[4] changes, balance/cap/other fields unchanged.
+pub fn execute_atomic_queue_tx(env: &mut impl EffectEnv) {
+    let tx_hash_val = env.read_param(param::ATOMIC_TX_HASH);
+    let combined_old = env.read_param(param::ATOMIC_TX_COMBINED_OLD_ROOT);
+    let combined_new = env.read_param(param::ATOMIC_TX_COMBINED_NEW_ROOT);
+
+    // field[4] must equal combined_old_root before.
+    let old_f4 = env.read_state_before(state::FIELD_BASE + 4);
+    env.assert_eq(old_f4, combined_old);
+
+    // field[4] must become combined_new_root after.
+    env.write_state_after(state::FIELD_BASE + 4, combined_new);
+    let actual_f4 = env.read_state_after(state::FIELD_BASE + 4);
+    env.assert_eq(actual_f4, combined_new);
+
+    // Binding constraint: aux[0] == hash(tx_hash, hash(combined_old, combined_new))
+    let inner = env.hash_2_to_1(combined_old, combined_new);
+    let expected_binding = env.hash_2_to_1(tx_hash_val, inner);
+    let aux_binding = env.read_aux(0);
+    env.assert_eq(aux_binding, expected_binding);
+
+    // Balance unchanged.
+    env.assert_balance_unchanged();
+
+    // Cap root unchanged.
+    env.assert_cap_unchanged();
+
+    // Other fields (0..4, 5..8) unchanged.
+    for i in 0..4 {
+        env.assert_state_unchanged(state::FIELD_BASE + i);
+    }
+    for i in 5..8 {
+        env.assert_state_unchanged(state::FIELD_BASE + i);
+    }
+}
+
+/// Execute the PipelineStep effect.
+///
+/// Proves: source_new_root == hash(source_old_root, message_hash) (dequeue from source).
+/// State: field[4] transitions from source_old_root to source_new_root.
+/// aux[0] == expected_source_new, aux[1] == sink_new_root.
+pub fn execute_pipeline_step(env: &mut impl EffectEnv) {
+    let source_old = env.read_param(param::PIPELINE_SOURCE_OLD_ROOT);
+    let source_new = env.read_param(param::PIPELINE_SOURCE_NEW_ROOT);
+    let sink_new = env.read_param(param::PIPELINE_SINK_NEW_ROOT);
+    let msg_hash = env.read_param(param::PIPELINE_MESSAGE_HASH);
+
+    // Source dequeue: source_new_root == hash(source_old_root, message_hash)
+    let expected_source_new = env.hash_2_to_1(source_old, msg_hash);
+    env.assert_eq(source_new, expected_source_new);
+
+    // aux[0] must equal expected_source_new.
+    let aux_expected = env.read_aux(0);
+    env.assert_eq(aux_expected, expected_source_new);
+
+    // field[4] must equal source_old_root before.
+    let old_f4 = env.read_state_before(state::FIELD_BASE + 4);
+    env.assert_eq(old_f4, source_old);
+
+    // field[4] must become source_new_root after.
+    env.write_state_after(state::FIELD_BASE + 4, source_new);
+    let actual_f4 = env.read_state_after(state::FIELD_BASE + 4);
+    env.assert_eq(actual_f4, source_new);
+
+    // aux[1] must equal sink_new_root (pipeline binding).
+    let aux_sink = env.read_aux(1);
+    env.assert_eq(aux_sink, sink_new);
+
+    // Balance unchanged.
+    env.assert_balance_unchanged();
+
+    // Cap root unchanged.
+    env.assert_cap_unchanged();
+
+    // Other fields (0..4, 5..8) unchanged.
+    for i in 0..4 {
+        env.assert_state_unchanged(state::FIELD_BASE + i);
+    }
+    for i in 5..8 {
+        env.assert_state_unchanged(state::FIELD_BASE + i);
+    }
+}
+
 /// Execute the ResizeQueue effect.
 ///
 /// Proves: if growing, balance debited by delta * cost_per_slot.
@@ -1127,6 +1214,8 @@ pub fn dispatch_effect(env: &mut impl EffectEnv, sel_idx: usize) {
         sel::ENQUEUE_MESSAGE => execute_enqueue_message(env),
         sel::DEQUEUE_MESSAGE => execute_dequeue_message(env),
         sel::RESIZE_QUEUE => execute_resize_queue(env),
+        sel::ATOMIC_QUEUE_TX => execute_atomic_queue_tx(env),
+        sel::PIPELINE_STEP => execute_pipeline_step(env),
         _ => panic!("Unknown selector index: {}", sel_idx),
     }
 }

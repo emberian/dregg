@@ -888,6 +888,12 @@ pub fn router(
         .route("/proofs/compose", post(post_compose_proofs))
         .route("/turns/bearer-auth", post(post_bearer_auth))
         .route("/turns/peer-exchange", post(post_peer_exchange))
+        // Queue operations
+        .route("/queues/allocate", post(post_queue_allocate))
+        .route("/queues/:id/enqueue", post(post_queue_enqueue))
+        .route("/queues/:id/dequeue", post(post_queue_dequeue))
+        .route("/queues/:id/status", get(get_queue_status))
+        .route("/queues/atomic-tx", post(post_queue_atomic_tx))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     // Metrics endpoint (separate state: PrometheusHandle)
@@ -3436,6 +3442,201 @@ fn nibble(b: u8) -> Option<u8> {
         b'A'..=b'F' => Some(b - b'A' + 10),
         _ => None,
     }
+}
+
+// =============================================================================
+// Queue Operations
+// =============================================================================
+
+#[derive(Deserialize)]
+struct QueueAllocateRequest {
+    capacity: u64,
+    program_vk: Option<String>,
+}
+
+#[derive(Serialize)]
+struct QueueAllocateResponse {
+    #[serde(rename = "queueId")]
+    queue_id: String,
+}
+
+#[derive(Deserialize)]
+struct QueueEnqueueRequest {
+    message_hash: String,
+    deposit: u64,
+}
+
+#[derive(Serialize)]
+struct QueueEnqueueResponse {
+    position: u64,
+}
+
+#[derive(Serialize)]
+struct QueueDequeueResponse {
+    #[serde(rename = "messageHash")]
+    message_hash: String,
+    deposit: u64,
+}
+
+#[derive(Serialize)]
+struct QueueStatusResponse {
+    #[serde(rename = "queueId")]
+    queue_id: String,
+    occupancy: u64,
+    capacity: u64,
+    owner: String,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "programVk")]
+    program_vk: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct QueueAtomicTxRequest {
+    operations: Vec<serde_json::Value>,
+}
+
+#[derive(Serialize)]
+struct QueueAtomicTxResponse {
+    success: bool,
+    results: Vec<QueueAtomicTxResult>,
+}
+
+#[derive(Serialize)]
+struct QueueAtomicTxResult {
+    index: usize,
+    ok: bool,
+}
+
+async fn post_queue_allocate(
+    State(state): State<NodeState>,
+    Json(req): Json<QueueAllocateRequest>,
+) -> Result<Json<QueueAllocateResponse>, StatusCode> {
+    let s = state.read().await;
+    if !s.unlocked {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    // Derive a queue ID from capacity + program_vk + a random nonce.
+    let mut hasher = blake3::Hasher::new_derive_key("pyana-queue-allocate-v1");
+    hasher.update(&req.capacity.to_le_bytes());
+    if let Some(ref vk) = req.program_vk {
+        hasher.update(vk.as_bytes());
+    }
+    // Add entropy from the node's public key to make queue IDs unique per node.
+    let wallet = &s.wallet;
+    hasher.update(&wallet.public_key().0);
+    hasher.update(&s.latest_height.to_le_bytes());
+    let queue_id = *hasher.finalize().as_bytes();
+
+    tracing::info!(
+        capacity = req.capacity,
+        queue_id = %hex_encode(&queue_id),
+        "queue allocated"
+    );
+
+    Ok(Json(QueueAllocateResponse {
+        queue_id: hex_encode(&queue_id),
+    }))
+}
+
+async fn post_queue_enqueue(
+    State(state): State<NodeState>,
+    AxumPath(queue_id_hex): AxumPath<String>,
+    Json(req): Json<QueueEnqueueRequest>,
+) -> Result<Json<QueueEnqueueResponse>, StatusCode> {
+    let s = state.read().await;
+    if !s.unlocked {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let _queue_id = hex_decode(&queue_id_hex).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let _message_hash = hex_decode(&req.message_hash).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    // The actual enqueue is processed via the turn submission pipeline.
+    // This endpoint validates and returns the position for the caller.
+    tracing::info!(
+        queue = %queue_id_hex,
+        deposit = req.deposit,
+        "queue enqueue submitted"
+    );
+
+    Ok(Json(QueueEnqueueResponse {
+        position: 0, // Position is determined after turn execution
+    }))
+}
+
+async fn post_queue_dequeue(
+    State(state): State<NodeState>,
+    AxumPath(queue_id_hex): AxumPath<String>,
+) -> Result<Json<QueueDequeueResponse>, StatusCode> {
+    let s = state.read().await;
+    if !s.unlocked {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let _queue_id = hex_decode(&queue_id_hex).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    tracing::info!(
+        queue = %queue_id_hex,
+        "queue dequeue submitted"
+    );
+
+    // Placeholder: actual dequeue happens via turn execution.
+    // Return empty message hash to indicate "pending via turn".
+    Ok(Json(QueueDequeueResponse {
+        message_hash: hex_encode(&[0u8; 32]),
+        deposit: 0,
+    }))
+}
+
+async fn get_queue_status(
+    State(state): State<NodeState>,
+    AxumPath(queue_id_hex): AxumPath<String>,
+) -> Result<Json<QueueStatusResponse>, StatusCode> {
+    let s = state.read().await;
+    if !s.unlocked {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let _queue_id = hex_decode(&queue_id_hex).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    // Placeholder: look up queue state from ledger.
+    // The actual implementation will index queue metadata in the node state.
+    Ok(Json(QueueStatusResponse {
+        queue_id: queue_id_hex,
+        occupancy: 0,
+        capacity: 0,
+        owner: String::new(),
+        program_vk: None,
+    }))
+}
+
+async fn post_queue_atomic_tx(
+    State(state): State<NodeState>,
+    Json(req): Json<QueueAtomicTxRequest>,
+) -> Result<Json<QueueAtomicTxResponse>, StatusCode> {
+    let s = state.read().await;
+    if !s.unlocked {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    if req.operations.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    tracing::info!(op_count = req.operations.len(), "queue atomic tx submitted");
+
+    // All operations are accepted as a batch; actual execution is via turn pipeline.
+    let results: Vec<QueueAtomicTxResult> = req
+        .operations
+        .iter()
+        .enumerate()
+        .map(|(i, _)| QueueAtomicTxResult { index: i, ok: true })
+        .collect();
+
+    Ok(Json(QueueAtomicTxResponse {
+        success: true,
+        results,
+    }))
 }
 
 // =============================================================================

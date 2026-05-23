@@ -88,13 +88,24 @@ The system is implemented in approximately 355k lines of Rust across 41 workspac
 #include "sections/03-authorization.typ"
 #include "sections/04-proofs.typ"
 #include "sections/05-privacy.typ"
-#include "sections/06-federation.typ"
-#include "sections/07-economics.typ"
-#include "sections/08-agents.typ"
-#include "sections/09-implementation.typ"
-#include "sections/10-comparison.typ"
-#include "sections/11-future.typ"
-#include "sections/12-conclusion.typ"
+#include "sections/06-fabric.typ"
+#include "sections/07-captp.typ"
+#include "sections/08-storage.typ"
+#include "sections/09-service-mesh.typ"
+#include "sections/10-intents.typ"
+#include "sections/11-delegation.typ"
+#include "sections/12-bridges.typ"
+#include "sections/13-economics.typ"
+#include "sections/14-agents.typ"
+#include "sections/15-implementation.typ"
+#include "sections/16-formal-verification.typ"
+#include "sections/17-comparison.typ"
+#include "sections/18-future.typ"
+#include "sections/19-conclusion.typ"
+
+// --- Appendices -------------------------------------------------------------
+
+#include "sections/appendix-a-garbled-poseidon2.typ"
 
 // --- References --------------------------------------------------------------
 

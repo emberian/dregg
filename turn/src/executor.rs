@@ -827,6 +827,28 @@ impl TurnExecutor {
         self.trusted_destination_keys = keys;
     }
 
+    // ─── Unified Lace Aliases ──────────────────────────────────────────────
+    //
+    // In the unified blocklace model, a "federation" is a reference group (GroupId).
+    // These aliases provide forward-compatible naming.
+
+    /// Alias for [`set_trusted_federation_roots`](Self::set_trusted_federation_roots).
+    /// In the unified lace model, "federation roots" are "group roots".
+    pub fn set_trusted_group_roots(&mut self, roots: Vec<AttestedRoot>) {
+        self.set_trusted_federation_roots(roots);
+    }
+
+    /// Alias for [`add_trusted_federation_root`](Self::add_trusted_federation_root).
+    pub fn add_trusted_group_root(&mut self, root: AttestedRoot) {
+        self.add_trusted_federation_root(root);
+    }
+
+    /// Alias for [`set_local_federation_id`](Self::set_local_federation_id).
+    /// In the unified lace model, the "local federation ID" is the local group ID.
+    pub fn set_local_group_id(&mut self, id: [u8; 32]) {
+        self.set_local_federation_id(id);
+    }
+
     /// Add a single trusted destination federation key.
     pub fn add_trusted_destination_key(&mut self, key: [u8; 32]) {
         self.trusted_destination_keys.push(key);
@@ -5496,6 +5518,453 @@ impl TurnExecutor {
                 journal.record_create_cell(new_cell_id);
                 Ok(())
             }
+
+            // ─── Queue Operations ─────────────────────────────────────────────
+            Effect::QueueAllocate {
+                capacity,
+                program_vk,
+            } => {
+                // The queue cell is created with queue metadata encoded in state fields:
+                //   field[0]: capacity (le bytes)
+                //   field[1]: current length (0 initially)
+                //   field[2]: owner cell id (action_target bytes)
+                //   field[3]: program VK hash (if any)
+                let cost = *capacity;
+                let actor_cell = ledger
+                    .get(actor)
+                    .ok_or_else(|| (TurnError::CellNotFound { id: *actor }, path.to_vec()))?;
+                if actor_cell.state.balance < cost {
+                    return Err((
+                        TurnError::InsufficientBalance {
+                            cell: *actor,
+                            required: cost,
+                            available: actor_cell.state.balance,
+                        },
+                        path.to_vec(),
+                    ));
+                }
+
+                // Derive a queue cell ID from the actor + capacity + nonce.
+                let actor_nonce = ledger.get(actor).unwrap().state.nonce;
+                let hash = blake3::hash(
+                    &[
+                        actor.as_bytes().as_slice(),
+                        &capacity.to_le_bytes(),
+                        &actor_nonce.to_le_bytes(),
+                    ]
+                    .concat(),
+                );
+                let queue_seed: [u8; 32] = *hash.as_bytes();
+                let queue_token = [0u8; 32];
+                let queue_id = CellId::derive_raw(&queue_seed, &queue_token);
+
+                let mut queue_cell = pyana_cell::Cell::with_balance(queue_seed, queue_token, 0);
+                queue_cell.id = queue_id;
+                // Encode capacity in field[0].
+                queue_cell.state.fields[0][..8].copy_from_slice(&capacity.to_le_bytes());
+                // field[1] = current length = 0 (already zero).
+                // field[2] = owner (action_target).
+                queue_cell.state.fields[2] = *action_target.as_bytes();
+                // field[3] = program VK hash (if provided).
+                if let Some(vk) = program_vk {
+                    queue_cell.state.fields[3] = *vk;
+                }
+                // Open permissions on queue cell (managed by executor logic).
+                queue_cell.permissions = pyana_cell::Permissions {
+                    send: pyana_cell::AuthRequired::None,
+                    receive: pyana_cell::AuthRequired::None,
+                    set_state: pyana_cell::AuthRequired::None,
+                    set_permissions: pyana_cell::AuthRequired::Impossible,
+                    set_verification_key: pyana_cell::AuthRequired::Impossible,
+                    increment_nonce: pyana_cell::AuthRequired::None,
+                    delegate: pyana_cell::AuthRequired::None,
+                    access: pyana_cell::AuthRequired::None,
+                };
+
+                ledger
+                    .insert_cell(queue_cell)
+                    .map_err(|_| (TurnError::CellAlreadyExists { id: queue_id }, path.to_vec()))?;
+                journal.record_create_cell(queue_id);
+
+                // Deduct the cost from the actor's balance.
+                let old_balance = ledger.get(actor).unwrap().state.balance;
+                journal.record_set_balance(*actor, old_balance);
+                ledger.get_mut(actor).unwrap().state.balance -= cost;
+
+                Ok(())
+            }
+
+            Effect::QueueEnqueue {
+                queue,
+                message_hash,
+                deposit,
+            } => {
+                // Validate queue exists.
+                let queue_cell = ledger
+                    .get(queue)
+                    .ok_or_else(|| (TurnError::CellNotFound { id: *queue }, path.to_vec()))?;
+                let capacity =
+                    u64::from_le_bytes(queue_cell.state.fields[0][..8].try_into().unwrap());
+                let current_len =
+                    u64::from_le_bytes(queue_cell.state.fields[1][..8].try_into().unwrap());
+
+                if current_len >= capacity {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: format!(
+                                "queue {:?} is full ({}/{})",
+                                queue, current_len, capacity
+                            ),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+
+                // Check deposit: actor must have sufficient balance.
+                let actor_cell = ledger
+                    .get(actor)
+                    .ok_or_else(|| (TurnError::CellNotFound { id: *actor }, path.to_vec()))?;
+                if actor_cell.state.balance < *deposit {
+                    return Err((
+                        TurnError::InsufficientBalance {
+                            cell: *actor,
+                            required: *deposit,
+                            available: actor_cell.state.balance,
+                        },
+                        path.to_vec(),
+                    ));
+                }
+
+                // Deduct deposit from actor, credit to queue cell.
+                let old_actor_balance = ledger.get(actor).unwrap().state.balance;
+                let old_queue_balance = ledger.get(queue).unwrap().state.balance;
+                journal.record_set_balance(*actor, old_actor_balance);
+                journal.record_set_balance(*queue, old_queue_balance);
+                ledger.get_mut(actor).unwrap().state.balance -= *deposit;
+                ledger.get_mut(queue).unwrap().state.balance += *deposit;
+
+                // Increment queue length.
+                let old_len_field = ledger.get(queue).unwrap().state.fields[1];
+                let new_len = current_len + 1;
+                journal.record_set_field(*queue, 1, old_len_field);
+                let queue_mut = ledger.get_mut(queue).unwrap();
+                queue_mut.state.fields[1][..8].copy_from_slice(&new_len.to_le_bytes());
+
+                // Store the message hash in field[4] (latest enqueued message).
+                let old_field4 = queue_mut.state.fields[4];
+                journal.record_set_field(*queue, 4, old_field4);
+                queue_mut.state.fields[4] = *message_hash;
+
+                Ok(())
+            }
+
+            Effect::QueueDequeue { queue } => {
+                let queue_cell = ledger
+                    .get(queue)
+                    .ok_or_else(|| (TurnError::CellNotFound { id: *queue }, path.to_vec()))?;
+
+                // Only the queue owner can dequeue.
+                let owner_bytes = queue_cell.state.fields[2];
+                if owner_bytes != *action_target.as_bytes() {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "only the queue owner can dequeue".to_string(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+
+                let current_len =
+                    u64::from_le_bytes(queue_cell.state.fields[1][..8].try_into().unwrap());
+                if current_len == 0 {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "queue is empty, cannot dequeue".to_string(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+
+                // Decrement queue length.
+                let old_len_field = queue_cell.state.fields[1];
+                let new_len = current_len - 1;
+                journal.record_set_field(*queue, 1, old_len_field);
+                let queue_mut = ledger.get_mut(queue).unwrap();
+                queue_mut.state.fields[1][..8].copy_from_slice(&new_len.to_le_bytes());
+
+                // Refund the deposit to the dequeuer.
+                let queue_balance = queue_mut.state.balance;
+                let refund = if current_len > 0 {
+                    queue_balance / current_len
+                } else {
+                    0
+                };
+                if refund > 0 {
+                    let old_queue_balance = queue_mut.state.balance;
+                    journal.record_set_balance(*queue, old_queue_balance);
+                    queue_mut.state.balance -= refund;
+
+                    let old_actor_balance = ledger.get(action_target).unwrap().state.balance;
+                    journal.record_set_balance(*action_target, old_actor_balance);
+                    ledger.get_mut(action_target).unwrap().state.balance += refund;
+                }
+
+                Ok(())
+            }
+
+            Effect::QueueResize {
+                queue,
+                new_capacity,
+            } => {
+                // Extract all needed data from immutable borrows first.
+                let (owner_bytes, current_capacity, current_len, old_cap_field) = {
+                    let queue_cell = ledger
+                        .get(queue)
+                        .ok_or_else(|| (TurnError::CellNotFound { id: *queue }, path.to_vec()))?;
+                    (
+                        queue_cell.state.fields[2],
+                        u64::from_le_bytes(queue_cell.state.fields[0][..8].try_into().unwrap()),
+                        u64::from_le_bytes(queue_cell.state.fields[1][..8].try_into().unwrap()),
+                        queue_cell.state.fields[0],
+                    )
+                };
+
+                // Only the queue owner can resize.
+                if owner_bytes != *action_target.as_bytes() {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "only the queue owner can resize".to_string(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+
+                if *new_capacity < current_len {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: format!(
+                                "cannot shrink queue below current occupancy ({} < {})",
+                                new_capacity, current_len
+                            ),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+
+                // Growing costs additional computrons.
+                if *new_capacity > current_capacity {
+                    let additional = *new_capacity - current_capacity;
+                    let actor_balance = ledger
+                        .get(actor)
+                        .ok_or_else(|| (TurnError::CellNotFound { id: *actor }, path.to_vec()))?
+                        .state
+                        .balance;
+                    if actor_balance < additional {
+                        return Err((
+                            TurnError::InsufficientBalance {
+                                cell: *actor,
+                                required: additional,
+                                available: actor_balance,
+                            },
+                            path.to_vec(),
+                        ));
+                    }
+                    journal.record_set_balance(*actor, actor_balance);
+                    ledger.get_mut(actor).unwrap().state.balance -= additional;
+                }
+
+                // Update capacity field.
+                journal.record_set_field(*queue, 0, old_cap_field);
+                ledger.get_mut(queue).unwrap().state.fields[0][..8]
+                    .copy_from_slice(&new_capacity.to_le_bytes());
+
+                Ok(())
+            }
+
+            Effect::QueueAtomicTx { operations } => {
+                // Execute all operations atomically. On any failure, the journal
+                // handles rollback for the entire action.
+                for op in operations {
+                    match op {
+                        crate::action::QueueTxOp::Enqueue {
+                            queue,
+                            message_hash,
+                            deposit,
+                        } => {
+                            let queue_cell = ledger.get(queue).ok_or_else(|| {
+                                (TurnError::CellNotFound { id: *queue }, path.to_vec())
+                            })?;
+                            let capacity = u64::from_le_bytes(
+                                queue_cell.state.fields[0][..8].try_into().unwrap(),
+                            );
+                            let current_len = u64::from_le_bytes(
+                                queue_cell.state.fields[1][..8].try_into().unwrap(),
+                            );
+                            if current_len >= capacity {
+                                return Err((
+                                    TurnError::InvalidEffect {
+                                        reason: format!("atomic tx: queue {:?} is full", queue),
+                                    },
+                                    path.to_vec(),
+                                ));
+                            }
+                            let actor_cell = ledger.get(actor).ok_or_else(|| {
+                                (TurnError::CellNotFound { id: *actor }, path.to_vec())
+                            })?;
+                            if actor_cell.state.balance < *deposit {
+                                return Err((
+                                    TurnError::InsufficientBalance {
+                                        cell: *actor,
+                                        required: *deposit,
+                                        available: actor_cell.state.balance,
+                                    },
+                                    path.to_vec(),
+                                ));
+                            }
+
+                            let old_actor_balance = ledger.get(actor).unwrap().state.balance;
+                            let old_queue_balance = ledger.get(queue).unwrap().state.balance;
+                            journal.record_set_balance(*actor, old_actor_balance);
+                            journal.record_set_balance(*queue, old_queue_balance);
+                            ledger.get_mut(actor).unwrap().state.balance -= *deposit;
+                            ledger.get_mut(queue).unwrap().state.balance += *deposit;
+
+                            let old_len_field = ledger.get(queue).unwrap().state.fields[1];
+                            let new_len = current_len + 1;
+                            journal.record_set_field(*queue, 1, old_len_field);
+                            ledger.get_mut(queue).unwrap().state.fields[1][..8]
+                                .copy_from_slice(&new_len.to_le_bytes());
+
+                            let old_field4 = ledger.get(queue).unwrap().state.fields[4];
+                            journal.record_set_field(*queue, 4, old_field4);
+                            ledger.get_mut(queue).unwrap().state.fields[4] = *message_hash;
+                        }
+                        crate::action::QueueTxOp::Dequeue { queue } => {
+                            let queue_cell = ledger.get(queue).ok_or_else(|| {
+                                (TurnError::CellNotFound { id: *queue }, path.to_vec())
+                            })?;
+                            let owner_bytes = queue_cell.state.fields[2];
+                            if owner_bytes != *action_target.as_bytes() {
+                                return Err((
+                                    TurnError::InvalidEffect {
+                                        reason: "atomic tx: only the queue owner can dequeue"
+                                            .to_string(),
+                                    },
+                                    path.to_vec(),
+                                ));
+                            }
+                            let current_len = u64::from_le_bytes(
+                                queue_cell.state.fields[1][..8].try_into().unwrap(),
+                            );
+                            if current_len == 0 {
+                                return Err((
+                                    TurnError::InvalidEffect {
+                                        reason: "atomic tx: queue is empty, cannot dequeue"
+                                            .to_string(),
+                                    },
+                                    path.to_vec(),
+                                ));
+                            }
+                            let old_len_field = queue_cell.state.fields[1];
+                            let new_len = current_len - 1;
+                            journal.record_set_field(*queue, 1, old_len_field);
+                            ledger.get_mut(queue).unwrap().state.fields[1][..8]
+                                .copy_from_slice(&new_len.to_le_bytes());
+
+                            // Refund deposit.
+                            let queue_balance = ledger.get(queue).unwrap().state.balance;
+                            let refund = if current_len > 0 {
+                                queue_balance / current_len
+                            } else {
+                                0
+                            };
+                            if refund > 0 {
+                                let old_q_bal = ledger.get(queue).unwrap().state.balance;
+                                journal.record_set_balance(*queue, old_q_bal);
+                                ledger.get_mut(queue).unwrap().state.balance -= refund;
+
+                                let old_actor_bal =
+                                    ledger.get(action_target).unwrap().state.balance;
+                                journal.record_set_balance(*action_target, old_actor_bal);
+                                ledger.get_mut(action_target).unwrap().state.balance += refund;
+                            }
+                        }
+                    }
+                }
+                Ok(())
+            }
+
+            Effect::QueuePipelineStep {
+                pipeline_id: _,
+                source,
+                sinks,
+            } => {
+                // Validate source queue exists and has messages.
+                let source_cell = ledger
+                    .get(source)
+                    .ok_or_else(|| (TurnError::CellNotFound { id: *source }, path.to_vec()))?;
+                let source_owner = source_cell.state.fields[2];
+                if source_owner != *action_target.as_bytes() {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "pipeline step: actor must own the source queue".to_string(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                let source_len =
+                    u64::from_le_bytes(source_cell.state.fields[1][..8].try_into().unwrap());
+                if source_len == 0 {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "pipeline step: source queue is empty".to_string(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+
+                // Validate all sink queues exist and have capacity.
+                for sink in sinks {
+                    let sink_cell = ledger
+                        .get(sink)
+                        .ok_or_else(|| (TurnError::CellNotFound { id: *sink }, path.to_vec()))?;
+                    let sink_capacity =
+                        u64::from_le_bytes(sink_cell.state.fields[0][..8].try_into().unwrap());
+                    let sink_len =
+                        u64::from_le_bytes(sink_cell.state.fields[1][..8].try_into().unwrap());
+                    if sink_len >= sink_capacity {
+                        return Err((
+                            TurnError::InvalidEffect {
+                                reason: format!("pipeline step: sink queue {:?} is full", sink),
+                            },
+                            path.to_vec(),
+                        ));
+                    }
+                }
+
+                // Dequeue from source.
+                let old_source_len_field = ledger.get(source).unwrap().state.fields[1];
+                let new_source_len = source_len - 1;
+                journal.record_set_field(*source, 1, old_source_len_field);
+                ledger.get_mut(source).unwrap().state.fields[1][..8]
+                    .copy_from_slice(&new_source_len.to_le_bytes());
+
+                // Enqueue to each sink (fan-out).
+                for sink in sinks {
+                    let sink_len = u64::from_le_bytes(
+                        ledger.get(sink).unwrap().state.fields[1][..8]
+                            .try_into()
+                            .unwrap(),
+                    );
+                    let old_sink_len_field = ledger.get(sink).unwrap().state.fields[1];
+                    let new_sink_len = sink_len + 1;
+                    journal.record_set_field(*sink, 1, old_sink_len_field);
+                    ledger.get_mut(sink).unwrap().state.fields[1][..8]
+                        .copy_from_slice(&new_sink_len.to_le_bytes());
+                }
+
+                Ok(())
+            }
         }
     }
 
@@ -5673,6 +6142,12 @@ impl TurnExecutor {
             | Effect::RefundCommittedEscrow { .. } => self.costs.effect_base,
             Effect::MakeSovereign { .. } => self.costs.effect_base,
             Effect::CreateCellFromFactory { .. } => self.costs.create_cell,
+            Effect::QueueAllocate { .. }
+            | Effect::QueueEnqueue { .. }
+            | Effect::QueueDequeue { .. }
+            | Effect::QueueResize { .. }
+            | Effect::QueueAtomicTx { .. }
+            | Effect::QueuePipelineStep { .. } => self.costs.effect_base,
         };
         base.saturating_add(extra)
             .saturating_add((effect.data_bytes() as u64).saturating_mul(self.costs.per_byte))
@@ -6762,7 +7237,13 @@ fn rewrite_effect_targets(effects: &mut [Effect], placeholder: &CellId, resolved
             | Effect::ReleaseCommittedEscrow { .. }
             | Effect::RefundCommittedEscrow { .. }
             | Effect::MakeSovereign { .. }
-            | Effect::CreateCellFromFactory { .. } => {}
+            | Effect::CreateCellFromFactory { .. }
+            | Effect::QueueAllocate { .. }
+            | Effect::QueueEnqueue { .. }
+            | Effect::QueueDequeue { .. }
+            | Effect::QueueResize { .. }
+            | Effect::QueueAtomicTx { .. }
+            | Effect::QueuePipelineStep { .. } => {}
         }
     }
 }

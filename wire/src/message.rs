@@ -229,11 +229,15 @@ pub enum WireMessage {
     /// Establish a CapTP session with the peer, exporting initial swiss entries.
     ///
     /// Sent after the Hello/Welcome handshake to begin a capability session.
-    /// The `federation_id` identifies the sender's federation; `initial_exports`
-    /// lists cells the sender is making available to this peer.
+    /// The `group_id` identifies the sender's group (formerly `federation_id`);
+    /// `initial_exports` lists cells the sender is making available to this peer.
     CapHello {
-        /// The sender's federation identity.
-        federation_id: [u8; 32],
+        /// The sender's group identity (renamed from `federation_id` in protocol v2).
+        ///
+        /// Accepts `federation_id` from legacy senders via serde alias for
+        /// backward compatibility.
+        #[serde(alias = "federation_id")]
+        group_id: [u8; 32],
         /// Cell IDs that the sender is initially exporting to this peer.
         initial_exports: Vec<[u8; 32]>,
     },
@@ -243,8 +247,9 @@ pub enum WireMessage {
     /// All exports and imports for this session are invalidated. The peer should
     /// drop all references acquired during this session.
     CapGoodbye {
-        /// The federation terminating the session.
-        federation_id: [u8; 32],
+        /// The group terminating the session (renamed from `federation_id` in protocol v2).
+        #[serde(alias = "federation_id")]
+        group_id: [u8; 32],
         /// Human-readable reason for disconnection (optional).
         reason: Option<String>,
     },
@@ -275,11 +280,15 @@ pub enum WireMessage {
     /// Distributed GC: the remote peer dropped a reference to one of our exports.
     ///
     /// The receiver should decrement the reference count for the specified cell
-    /// from the specified federation. If the count reaches zero, the export can
+    /// from the specified strand/group. If the count reaches zero, the export can
     /// be cleaned up.
     DropRemoteRef {
-        /// The federation that is dropping the reference.
-        from_federation: [u8; 32],
+        /// The strand (or group, for legacy) that is dropping the reference.
+        ///
+        /// Renamed from `from_federation` in protocol v2. Accepts `from_federation`
+        /// from legacy senders via serde alias for backward compatibility.
+        #[serde(alias = "from_federation")]
+        from_strand: [u8; 32],
         /// The cell ID being dropped.
         cell_id: [u8; 32],
         /// The session epoch under which this drop was issued.
@@ -640,11 +649,11 @@ mod tests {
             },
             // CapTP variants
             WireMessage::CapHello {
-                federation_id: [0xF0; 32],
+                group_id: [0xF0; 32],
                 initial_exports: vec![[0xF1; 32], [0xF2; 32]],
             },
             WireMessage::CapGoodbye {
-                federation_id: [0xF0; 32],
+                group_id: [0xF0; 32],
                 reason: Some("shutting down".to_string()),
             },
             WireMessage::EnlivenSturdyRef {
@@ -658,7 +667,7 @@ mod tests {
                 error: None,
             },
             WireMessage::DropRemoteRef {
-                from_federation: [0xCC; 32],
+                from_strand: [0xCC; 32],
                 cell_id: [0xDD; 32],
                 session_epoch: 5,
             },

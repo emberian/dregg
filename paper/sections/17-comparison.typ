@@ -1,5 +1,5 @@
 // =============================================================================
-// Section 10: Related Work and Comparison
+// Section 17: Related Work and Comparison
 // =============================================================================
 
 = Related Work and Comparison
@@ -31,6 +31,32 @@ Ethereum achieves global consensus over shared state. Pyana differs fundamentall
 === Cosmos/IBC
 
 *Cosmos* @ibc provides inter-chain communication via light client verification. Pyana's cross-federation protocol is analogous but uses STARK proofs rather than light clients for cross-domain verification. Pyana's federations are smaller and purpose-built (3--20 nodes vs 100+), non-inflationary, and privacy-preserving.
+
+=== Anoma
+
+*Anoma*. Anoma shares Pyana's vision of intent-centric architecture: users declare what they want (intents) rather than how to get it (transactions). The key structural differences:
+
+#figure(
+  table(
+    columns: (auto, auto, auto),
+    align: (left, left, left),
+    table.header([*Dimension*], [*Pyana*], [*Anoma*]),
+    [Intent privacy], [Threshold-encrypted until batch close], [Visible to solvers immediately],
+    [Solver trust], [Open competition + STARK proofs], [Reputation-based solver market],
+    [Authority model], [Capabilities (delegation, attenuation, revocation)], [Predicates over resources],
+    [State model], [Sovereign cells, proof-carrying state], [Resource machine, shared state],
+    [Consensus], [Federated (3--20 nodes, emergent groups)], [Heterogeneous (Typhon, multi-chain)],
+    [Privacy], [Full ZK authorization + note model], [Information flow control (partial)],
+    [MEV protection], [Threshold encryption + challenge window], [Solver competition (weaker)],
+    [Proof system], [Multi-backend (STARK, Pickles, SP1)], [SNARK-focused (Halo2)],
+    [Governance], [Per-group constitutional/open/invite], [Protocol-level governance],
+  ),
+  caption: [Pyana vs. Anoma. Both are intent-centric; they differ on trust model, privacy, and state ownership.],
+)
+
+The deepest architectural difference: Anoma's resource machine operates over _shared mutable state_ (resources consumed and produced atomically). Pyana's cells are _sovereign_---each cell owns its state exclusively, and coordination happens via proof exchange rather than shared-state consensus. This makes Pyana naturally suited to privacy (cells never reveal state to the network) but requires more complex coordination protocols for multi-party operations.
+
+Anoma's solver market allows solvers to see intents during solving (enabling efficient optimization but creating MEV opportunities). Pyana's threshold encryption prevents any party from seeing intents before the batch closes---sacrificing some solver efficiency for stronger front-running protection.
 
 === Midnight
 
@@ -68,20 +94,20 @@ Zcash pioneered shielded transactions with SNARK proofs. Pyana adapts the note/n
 
 #figure(
   table(
-    columns: (auto, auto, auto, auto, auto),
-    align: (left, center, center, center, center),
-    table.header([*Property*], [*Pyana*], [*Ethereum*], [*Zcash*], [*seL4*]),
-    [Privacy], [Full ZK], [Transparent], [Shielded tx], [N/A],
-    [Delegation], [Full CDT], [None], [None], [Full CDT],
-    [Distribution], [Federated], [Global], [Global], [Single machine],
-    [Offline verify], [Yes], [No], [No], [N/A],
-    [Post-quantum], [STARK path], [No], [No (SNARKs)], [N/A],
-    [Authority model], [Capability], [Address], [Address], [Capability],
-    [Economic model], [Federated], [PoS global], [PoW global], [N/A],
-    [Agent support], [Native], [Smart contracts], [None], [Processes],
-    [Sovereign state], [Yes (default)], [No (global)], [No (global)], [No (kernel)],
-    [Multi-backend proofs], [Multi-backend], [1 (EVM)], [1 (Groth16)], [N/A],
-    [EVM interop], [SP1/Groth16], [Native], [No], [N/A],
+    columns: (auto, auto, auto, auto, auto, auto),
+    align: (left, center, center, center, center, center),
+    table.header([*Property*], [*Pyana*], [*Anoma*], [*Ethereum*], [*Zcash*], [*seL4*]),
+    [Privacy], [Full ZK], [Partial (IFC)], [Transparent], [Shielded tx], [N/A],
+    [Delegation], [Full CDT], [None], [None], [None], [Full CDT],
+    [Distribution], [Federated], [Heterogeneous], [Global], [Global], [Single machine],
+    [Offline verify], [Yes], [No], [No], [No], [N/A],
+    [Post-quantum], [STARK path], [No (Halo2)], [No], [No (SNARKs)], [N/A],
+    [Authority model], [Capability], [Predicate], [Address], [Address], [Capability],
+    [Intent-centric], [Yes (7-layer)], [Yes (solver)], [No], [No], [N/A],
+    [Sovereign state], [Yes (default)], [No (shared)], [No (global)], [No (global)], [No (kernel)],
+    [MEV protection], [Threshold enc.], [Solver comp.], [PBS], [N/A], [N/A],
+    [Multi-backend], [8 backends], [1 (Halo2)], [1 (EVM)], [1 (Groth16)], [N/A],
+    [EVM interop], [SP1/Groth16], [Planned], [Native], [No], [N/A],
   ),
-  caption: [System positioning. Pyana combines capability-based authority with zero-knowledge privacy, sovereign state ownership, and federated distribution.],
+  caption: [System positioning. Pyana combines capability-based authority with zero-knowledge privacy, sovereign state ownership, intent-centric solving, and federated distribution.],
 )

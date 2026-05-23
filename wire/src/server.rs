@@ -732,7 +732,16 @@ pub enum PeerRole {
     Member { participant_key: [u8; 32] },
     /// External CapTP peer. Gets only CapTP messages, no state replication.
     /// Promoted from Anonymous when they complete CapHello with valid session.
-    CapTpPeer { federation_id: [u8; 32] },
+    ///
+    /// In the unified lace model, `peer_strand` identifies the remote strand
+    /// (bilateral session partner). `group_id` is optional: you can have CapTP
+    /// with a strand that isn't in any group you know about.
+    CapTpPeer {
+        /// The remote strand's identity (32 bytes).
+        peer_strand: [u8; 32],
+        /// The group the strand belongs to, if known.
+        group_id: Option<[u8; 32]>,
+    },
     /// Light client. Gets only proofs and public commitments.
     LightClient,
     /// Unauthenticated. Limited to health check, public info, token presentation.
@@ -802,10 +811,17 @@ impl ConnectionAuth {
     }
 
     /// Upgrade to CapTpPeer role.
-    pub fn authenticate_as_captp_peer(&mut self, federation_id: [u8; 32]) {
+    ///
+    /// The `peer_strand` identifies the remote strand. In the unified model this
+    /// is the strand ID; for backward compat it may be the federation/group ID.
+    /// The `group_id` is optional and can be provided if the strand's group is known.
+    pub fn authenticate_as_captp_peer(&mut self, peer_strand: [u8; 32]) {
         // Only upgrade if currently Anonymous (don't downgrade Member).
         if matches!(self.role, PeerRole::Anonymous) {
-            self.role = PeerRole::CapTpPeer { federation_id };
+            self.role = PeerRole::CapTpPeer {
+                peer_strand,
+                group_id: None,
+            };
         }
     }
 }
@@ -1676,7 +1692,7 @@ impl SiloServer {
                 _ = shutdown_rx.recv() => {
                     // Server is shutting down: send CapGoodbye and close
                     let goodbye = WireMessage::CapGoodbye {
-                        federation_id: config.node_id,
+                        group_id: config.node_id,
                         reason: Some("server shutting down".to_string()),
                     };
                     let _ = crate::codec::write_message(&mut writer, &goodbye).await;
@@ -1794,9 +1810,9 @@ impl SiloServer {
             // Handle CapHello promoting Anonymous -> CapTpPeer (only effective
             // when auth is NOT enforced, since with auth the check_role_permission
             // blocks CapTP for Anonymous).
-            if let WireMessage::CapHello { federation_id, .. } = &msg {
+            if let WireMessage::CapHello { group_id, .. } = &msg {
                 let was_anonymous = matches!(conn_auth.role, PeerRole::Anonymous);
-                conn_auth.authenticate_as_captp_peer(*federation_id);
+                conn_auth.authenticate_as_captp_peer(*group_id);
                 if was_anonymous && matches!(conn_auth.role, PeerRole::CapTpPeer { .. }) {
                     rate_limiter
                         .update_limit(auth_config.rate_limits.limit_for_role(&conn_auth.role));
@@ -2233,10 +2249,10 @@ impl SiloServer {
             // CapTP Session Management
             // =================================================================
             WireMessage::CapHello {
-                federation_id,
+                group_id,
                 initial_exports,
             } => {
-                let fed_id = FederationId(federation_id);
+                let fed_id = FederationId(group_id);
                 let mut captp = captp_state.write().await;
 
                 // Allocate a new epoch for this session. If a previous session existed,
@@ -2244,7 +2260,7 @@ impl SiloServer {
                 let epoch = captp.allocate_epoch();
 
                 // Create or reset the session for this peer with the new epoch.
-                let session = CapSession::with_epoch(federation_id, epoch);
+                let session = CapSession::with_epoch(group_id, epoch);
                 captp.sessions.insert(fed_id, session);
 
                 // Record initial exports in the GC manager with session ID for
@@ -2259,16 +2275,16 @@ impl SiloServer {
 
                 // Respond with our own CapHello (session established).
                 Some(WireMessage::CapHello {
-                    federation_id: config.node_id,
+                    group_id: config.node_id,
                     initial_exports: vec![], // We export nothing by default on session init.
                 })
             }
 
             WireMessage::CapGoodbye {
-                federation_id,
+                group_id,
                 reason: _,
             } => {
-                let fed_id = FederationId(federation_id);
+                let fed_id = FederationId(group_id);
                 let mut captp = captp_state.write().await;
 
                 // Remove the session — all exports/imports for this peer are invalidated.
@@ -2330,11 +2346,11 @@ impl SiloServer {
             }
 
             WireMessage::DropRemoteRef {
-                from_federation,
+                from_strand,
                 cell_id,
                 session_epoch: msg_epoch,
             } => {
-                let fed_id = FederationId(from_federation);
+                let fed_id = FederationId(from_strand);
                 let cell = pyana_types::CellId(cell_id);
 
                 let mut captp = captp_state.write().await;
@@ -3392,7 +3408,8 @@ mod tests {
             participant_key: [0xAA; 32],
         };
         let captp = PeerRole::CapTpPeer {
-            federation_id: [0xBB; 32],
+            peer_strand: [0xBB; 32],
+            group_id: None,
         };
 
         // SubmitRevocation = state replication
@@ -3410,7 +3427,7 @@ mod tests {
 
         // CapTP messages
         let cap_hello = WireMessage::CapHello {
-            federation_id: [0; 32],
+            group_id: [0; 32],
             initial_exports: vec![],
         };
         assert!(!GossipFilter::should_send_to_peer(&cap_hello, &anon));

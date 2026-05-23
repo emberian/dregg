@@ -44,8 +44,8 @@ pub enum SemanticType {
     NullifierHash,
     /// Freshness bound (timestamp or block height).
     Timestamp,
-    /// Identity of a federation.
-    FederationId,
+    /// Identity of a group (formerly "federation").
+    GroupId,
     /// Identity of a cell.
     CellId,
     /// Capability secret (swiss number / unguessable token).
@@ -79,7 +79,7 @@ impl fmt::Display for SemanticType {
             Self::Balance => write!(f, "Balance"),
             Self::NullifierHash => write!(f, "NullifierHash"),
             Self::Timestamp => write!(f, "Timestamp"),
-            Self::FederationId => write!(f, "FederationId"),
+            Self::GroupId => write!(f, "GroupId"),
             Self::CellId => write!(f, "CellId"),
             Self::SwissNumber => write!(f, "SwissNumber"),
             Self::AccumulatedHash => write!(f, "AccumulatedHash"),
@@ -824,7 +824,7 @@ impl CompositionGraph {
     fn is_likely_external_input(&self, ty: &SemanticType) -> bool {
         matches!(
             ty,
-            SemanticType::FederationId
+            SemanticType::GroupId
                 | SemanticType::Timestamp
                 | SemanticType::Nonce
                 | SemanticType::ActionBinding

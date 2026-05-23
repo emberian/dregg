@@ -1,6 +1,6 @@
 //! DFA routing checks: compilation, classification, governance.
 
-use pyana_captp::FederationId;
+use pyana_captp::GroupId;
 use pyana_types::CellId;
 use pyana_wire::dfa_router::{
     GovernanceProof, GovernedRouter, RouteTarget, Router, compile_routes,
@@ -20,7 +20,7 @@ pub fn run() -> Vec<CheckResult> {
 fn make_test_routes() -> Vec<(&'static str, RouteTarget)> {
     let stablecoin_cell = CellId(*blake3::hash(b"stablecoin").as_bytes());
     let amm_cell = CellId(*blake3::hash(b"amm").as_bytes());
-    let remote_fed = FederationId(*blake3::hash(b"remote-federation").as_bytes());
+    let remote_fed = GroupId(*blake3::hash(b"remote-federation").as_bytes());
 
     vec![
         ("/cells/stablecoin/*", RouteTarget::Cell(stablecoin_cell)),

@@ -53,7 +53,10 @@
 //! └─────────────────────────────────────────────────────────────────────┘
 //! ```
 
+pub mod addressing;
 pub mod constitution;
+pub mod cross_reference;
+pub mod delegation;
 pub mod dissemination;
 pub mod finality;
 pub mod ordering;

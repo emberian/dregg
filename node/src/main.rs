@@ -13,6 +13,7 @@ mod genesis;
 pub mod gossip;
 mod mcp;
 pub mod metrics;
+pub mod multi_group;
 mod relay_service;
 mod routing_table;
 mod state;
@@ -98,6 +99,13 @@ enum Command {
         /// DAG-based BFT consensus with the tau total ordering function.
         #[arg(long, default_value = "blocklace")]
         consensus: String,
+
+        /// Reference groups to join (comma-separated group ID hex strings).
+        /// When specified, the node participates in multiple groups simultaneously
+        /// using cross-reference dissemination (Phase C) instead of the legacy
+        /// bridge relay pattern. Each group ID is a 64-character hex string.
+        #[arg(long, value_delimiter = ',')]
+        groups: Vec<String>,
     },
 
     /// Initialize the data directory and generate a node keypair.
@@ -286,6 +294,7 @@ async fn main() {
             enable_faucet,
             federation_mode,
             consensus,
+            groups,
         } => {
             run_node(
                 port,
@@ -301,6 +310,7 @@ async fn main() {
                 enable_faucet,
                 &federation_mode,
                 &consensus,
+                groups,
             )
             .await
         }
@@ -375,6 +385,7 @@ async fn main() {
 }
 
 /// Run the node: start HTTP API server and federation sync.
+#[allow(clippy::too_many_arguments)]
 async fn run_node(
     port: u16,
     bind: &str,
@@ -389,6 +400,7 @@ async fn run_node(
     enable_faucet: bool,
     federation_mode_str: &str,
     consensus_engine: &str,
+    groups: Vec<String>,
 ) {
     let data_path = expand_path(data_dir);
 

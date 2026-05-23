@@ -1,6 +1,6 @@
 //! CapTP subsystem checks: swiss table, session lifecycle, handoff, pipeline, store-and-forward.
 
-use pyana_captp::FederationId;
+use pyana_captp::GroupId;
 use pyana_captp::handoff::HandoffCertificate;
 use pyana_captp::pipeline::PipelineRegistry;
 use pyana_captp::session::CapSession;
@@ -107,8 +107,8 @@ fn check_session_lifecycle() -> Result<(), String> {
 
 fn check_handoff_roundtrip() -> Result<(), String> {
     let (introducer_key, introducer_pk) = generate_keypair();
-    let introducer_fed = FederationId(*blake3::hash(b"introducer-fed").as_bytes());
-    let target_fed = FederationId(*blake3::hash(b"target-fed").as_bytes());
+    let introducer_fed = GroupId(*blake3::hash(b"introducer-fed").as_bytes());
+    let target_fed = GroupId(*blake3::hash(b"target-fed").as_bytes());
     let target_cell = CellId(*blake3::hash(b"target-cell").as_bytes());
     let (_recipient_key, recipient_pk) = generate_keypair();
 
@@ -162,7 +162,7 @@ fn check_pipeline_resolve() -> Result<(), String> {
     let promise_id = registry.create_promise();
 
     // Pipeline messages to the unresolved promise.
-    let sender_fed = FederationId(*blake3::hash(b"sender-fed").as_bytes());
+    let sender_fed = GroupId(*blake3::hash(b"sender-fed").as_bytes());
     let msg = pyana_captp::pipeline::PipelinedMessage {
         target_promise_id: promise_id,
         action: pyana_captp::pipeline::PipelinedAction {
@@ -195,7 +195,7 @@ fn check_pipeline_resolve() -> Result<(), String> {
 
 fn check_store_forward_order() -> Result<(), String> {
     // Verify that store-and-forward messages maintain causal ordering.
-    let dest = FederationId(*blake3::hash(b"destination").as_bytes());
+    let dest = GroupId(*blake3::hash(b"destination").as_bytes());
 
     let msg1 = QueuedMessage {
         destination: dest,

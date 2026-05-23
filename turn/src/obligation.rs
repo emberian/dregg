@@ -327,6 +327,7 @@ pub fn check_expiry(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::DEFAULT_MAX_ROOT_AGE;
 
     fn alice() -> CellId {
         CellId([1u8; 32])

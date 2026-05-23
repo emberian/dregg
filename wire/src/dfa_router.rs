@@ -26,7 +26,7 @@
 
 use std::collections::HashMap;
 
-use pyana_captp::FederationId;
+use pyana_captp::GroupId;
 use pyana_types::CellId;
 
 // ---------------------------------------------------------------------------
@@ -40,8 +40,8 @@ pub enum RouteTarget {
     Cell(CellId),
     /// Route to a named handler (e.g. "intent_pool", "admin").
     Handler(String),
-    /// Forward to another federation.
-    Federation(FederationId),
+    /// Forward to another group (formerly "federation").
+    Federation(GroupId),
     /// Silently discard (capability revoked or blocked topic).
     Drop,
 }
@@ -418,8 +418,8 @@ pub enum DispatchDecision {
     DeliverToCell(CellId),
     /// Deliver to a named service handler.
     DeliverToHandler(String),
-    /// Forward to a peer federation.
-    ForwardToFederation(FederationId),
+    /// Forward to a peer group (formerly "federation").
+    ForwardToFederation(GroupId),
     /// Drop the message (revoked capability or blocked topic).
     Discard,
     /// No route matched; use default handling.
@@ -470,8 +470,8 @@ mod tests {
         CellId([n; 32])
     }
 
-    fn test_federation_id(n: u8) -> FederationId {
-        FederationId([n; 32])
+    fn test_federation_id(n: u8) -> GroupId {
+        GroupId([n; 32])
     }
 
     #[test]

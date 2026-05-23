@@ -102,6 +102,8 @@ export type {
 export type {
   Effect,
   EffectReceipt,
+  QueueTxOp,
+  QueueStatus,
 } from "./effects.js";
 
 // ---------------------------------------------------------------------------
@@ -115,6 +117,7 @@ export type {
   StorageClient,
   FederationClient,
   RoutesClient,
+  QueuesClient,
 } from "./client.js";
 
 export { createClient } from "./client.js";

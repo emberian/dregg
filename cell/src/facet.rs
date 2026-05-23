@@ -51,6 +51,7 @@ pub const EFFECT_OBLIGATION_OPS: EffectMask = 1 << 14;
 pub const EFFECT_ESCROW_OPS: EffectMask = 1 << 15;
 pub const EFFECT_DELEGATION_OPS: EffectMask = 1 << 16;
 pub const EFFECT_SOVEREIGN_OPS: EffectMask = 1 << 17;
+pub const EFFECT_QUEUE_OPS: EffectMask = 1 << 18;
 
 /// All effect kinds permitted (equivalent to no restriction).
 pub const EFFECT_ALL: EffectMask = 0xFFFF_FFFF;

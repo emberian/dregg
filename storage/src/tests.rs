@@ -1117,3 +1117,75 @@ fn integration_wal_dedup_durable_queue_compose() {
 
     cleanup_wal(&path);
 }
+
+// ============================================================================
+// Integration: pipeline + atomic (pipeline step is atomic)
+// ============================================================================
+
+#[test]
+fn integration_pipeline_step_is_atomic_via_transaction() {
+    use crate::atomic::QueueTransaction;
+    use crate::dataflow::{FilterPredicate, Pipeline, PipelineStage};
+    use std::collections::HashMap;
+
+    let source_id = [0x01; 32];
+    let sink_id = [0x02; 32];
+
+    // Set up queues.
+    let mut queues = HashMap::new();
+    let mut source = MerkleQueue::new(10);
+    let entry = QueueEntry {
+        content_hash: *blake3::hash(b"atomic_pipeline_msg").as_bytes(),
+        sender: [0xAA; 32],
+        deposit: 300,
+        enqueued_at: 50,
+        size: 20,
+    };
+    source.enqueue(entry.clone()).unwrap();
+    queues.insert(source_id, source);
+    queues.insert(sink_id, MerkleQueue::new(10));
+
+    // Record pre-state roots.
+    let source_root_before = queues[&source_id].root();
+    let sink_root_before = queues[&sink_id].root();
+
+    // Use a transaction to atomically move a message from source to sink.
+    let mut tx = QueueTransaction::new();
+    tx.assert_root(source_id, source_root_before)
+      .dequeue(source_id)
+      .enqueue(sink_id, entry.clone());
+
+    let result = tx.execute(&mut queues).unwrap();
+
+    // Both queues changed atomically.
+    assert_eq!(queues[&source_id].len(), 0);
+    assert_eq!(queues[&sink_id].len(), 1);
+    assert_ne!(queues[&source_id].root(), source_root_before);
+    assert_ne!(queues[&sink_id].root(), sink_root_before);
+
+    // Root transitions recorded.
+    assert!(!result.root_transitions.is_empty());
+
+    // Now verify pipeline also works on the same queue map.
+    // Re-populate source.
+    let entry2 = QueueEntry {
+        content_hash: *blake3::hash(b"second_msg").as_bytes(),
+        sender: [0xBB; 32],
+        deposit: 200,
+        enqueued_at: 51,
+        size: 10,
+    };
+    queues.get_mut(&source_id).unwrap().enqueue(entry2).unwrap();
+
+    let pipeline = Pipeline::new(vec![
+        PipelineStage::Source { queue_id: source_id },
+        PipelineStage::Filter {
+            predicate: FilterPredicate::MinDeposit(100),
+        },
+        PipelineStage::Sink { queue_id: sink_id },
+    ]);
+
+    let pipe_result = pipeline.step(&mut queues).unwrap();
+    assert_eq!(pipe_result.messages_processed, 1);
+    assert_eq!(queues[&sink_id].len(), 2); // Both messages in sink now.
+}

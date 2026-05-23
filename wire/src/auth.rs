@@ -485,12 +485,13 @@ mod tests {
     #[test]
     fn captp_peer_receives_captp_but_not_blocks() {
         let role = PeerRole::CapTpPeer {
-            federation_id: [0xCC; 32],
+            peer_strand: [0xCC; 32],
+            group_id: None,
         };
 
         // CapTP messages: should receive
         let cap_hello = WireMessage::CapHello {
-            federation_id: [0xDD; 32],
+            group_id: [0xDD; 32],
             initial_exports: vec![],
         };
         assert!(GossipFilter::should_send_to_peer(&cap_hello, &role));
@@ -533,7 +534,7 @@ mod tests {
 
         // CapTP
         let cap_hello = WireMessage::CapHello {
-            federation_id: [0xDD; 32],
+            group_id: [0xDD; 32],
             initial_exports: vec![],
         };
         assert!(GossipFilter::should_send_to_peer(&cap_hello, &role));

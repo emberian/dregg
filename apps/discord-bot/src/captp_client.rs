@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use pyana_captp::FederationId;
+use pyana_captp::GroupId;
 use pyana_captp::uri::PyanaUri;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
@@ -44,7 +44,7 @@ pub struct ExportedCapability {
 #[derive(Debug)]
 pub struct CapTPClient {
     /// The bot's own federation ID.
-    pub federation_id: FederationId,
+    pub federation_id: GroupId,
     /// The bot's cell ID (hex).
     pub bot_cell_id: String,
     /// The configured pyana node URL.
@@ -59,7 +59,7 @@ pub struct CapTPClient {
 
 impl CapTPClient {
     /// Create a new CapTP client for the bot.
-    pub fn new(federation_id: FederationId, bot_cell_id: String, node_url: String) -> Self {
+    pub fn new(federation_id: GroupId, bot_cell_id: String, node_url: String) -> Self {
         Self {
             federation_id,
             bot_cell_id,

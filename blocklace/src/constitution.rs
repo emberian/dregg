@@ -740,6 +740,321 @@ pub fn compute_threshold(n: usize) -> usize {
     (n * 2 / 3) + 1
 }
 
+// ─── Phase 3: Governance as a Lens ────────────────────────────────────────────
+
+/// How a reference group manages its membership.
+///
+/// The Constitution becomes OPTIONAL governance layered on top of emergent
+/// referencing. This enum captures the three modes of membership management.
+#[derive(Clone, Debug)]
+pub enum GovernanceMode {
+    /// Governed: constitutional vote required to join/leave.
+    /// This is the current behavior — preserved for DAOs, formal organizations.
+    Constitutional { manager: ConstitutionManager },
+    /// Permissionless: anyone can join by referencing, leave by stopping.
+    /// No votes, no threshold for admission. Still has timeout-based cleanup.
+    /// Good for open communities, public goods, permissionless networks.
+    Open {
+        /// Timeout: if a strand stops referencing for N waves, remove from group
+        timeout_waves: u64,
+    },
+    /// Invite-only: existing members can unilaterally add new members.
+    /// No threshold vote needed — any single member can invite.
+    /// Good for small teams, friend groups.
+    InviteOnly {
+        /// Current members (managed by invitation, not vote)
+        members: Vec<[u8; 32]>,
+        /// Timeout: if a strand stops producing for N waves, remove from group
+        timeout_waves: u64,
+    },
+}
+
+/// The result of processing a membership event.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MembershipChange {
+    /// A new member was added to the group.
+    Added([u8; 32]),
+    /// A member was removed from the group.
+    Removed([u8; 32]),
+    /// No change occurred.
+    NoChange,
+    /// The change requires a constitutional vote (only for Constitutional mode).
+    RequiresVote(MembershipProposal),
+}
+
+/// A reference group with optional governance.
+///
+/// This is the unified type that replaces the old "federation" concept.
+/// It wraps a `ReferenceGroup` (the set of strands running tau) with a
+/// governance mode (how membership is managed) and a subscription (for
+/// dissemination filtering).
+#[derive(Clone, Debug)]
+pub struct GovernedReferenceGroup {
+    /// The current reference group (who we run tau over).
+    pub group: crate::ordering::ReferenceGroup,
+    /// How membership is managed.
+    pub governance: GovernanceMode,
+    /// The subscription this group uses for dissemination.
+    pub subscription: crate::dissemination::Subscription,
+    /// Optional name (for discovery in namespace).
+    pub name: Option<String>,
+    /// Last active wave per member (for timeout tracking in Open/InviteOnly modes).
+    last_active: std::collections::HashMap<[u8; 32], u64>,
+}
+
+impl GovernedReferenceGroup {
+    /// Create a governed group (traditional federation behavior).
+    ///
+    /// Membership changes require constitutional vote. Preserves all existing
+    /// ConstitutionManager behavior.
+    pub fn constitutional(participants: Vec<[u8; 32]>, timeout_waves: u64) -> Self {
+        let constitution = Constitution::new(participants.clone(), timeout_waves);
+        let manager = ConstitutionManager::new(constitution);
+        let group = crate::ordering::ReferenceGroup::new(participants.clone(), timeout_waves);
+        let subscription = crate::dissemination::Subscription::from_reference_group(&group);
+        let last_active = participants.iter().map(|k| (*k, 0u64)).collect();
+        GovernedReferenceGroup {
+            group,
+            governance: GovernanceMode::Constitutional { manager },
+            subscription,
+            name: None,
+            last_active,
+        }
+    }
+
+    /// Create an open group (permissionless).
+    ///
+    /// Anyone can join by referencing group members. Members are removed
+    /// after `timeout_waves` of inactivity. No proposals, no votes.
+    pub fn open(initial_members: Vec<[u8; 32]>, timeout_waves: u64) -> Self {
+        let group = crate::ordering::ReferenceGroup::new(initial_members.clone(), timeout_waves);
+        let subscription = crate::dissemination::Subscription::from_reference_group(&group);
+        let last_active = initial_members.iter().map(|k| (*k, 0u64)).collect();
+        GovernedReferenceGroup {
+            group,
+            governance: GovernanceMode::Open { timeout_waves },
+            subscription,
+            name: None,
+            last_active,
+        }
+    }
+
+    /// Create an invite-only group.
+    ///
+    /// Any existing member can unilaterally invite a new member. Removal
+    /// happens via timeout (inactivity).
+    pub fn invite_only(founder: [u8; 32], timeout_waves: u64) -> Self {
+        let members = vec![founder];
+        let group = crate::ordering::ReferenceGroup::new(members.clone(), timeout_waves);
+        let subscription = crate::dissemination::Subscription::from_reference_group(&group);
+        let last_active = std::collections::HashMap::from([(founder, 0u64)]);
+        GovernedReferenceGroup {
+            group,
+            governance: GovernanceMode::InviteOnly {
+                members: members.clone(),
+                timeout_waves,
+            },
+            subscription,
+            name: None,
+            last_active,
+        }
+    }
+
+    /// Process a potential new member (behavior depends on governance mode).
+    ///
+    /// - **Open**: auto-adds the new strand.
+    /// - **InviteOnly**: requires `inviter` to be a current member.
+    /// - **Constitutional**: returns `RequiresVote` with a Join proposal.
+    pub fn on_new_reference(&mut self, new_strand: [u8; 32], wave: u64) -> MembershipChange {
+        // Already a member? No change.
+        if self.group.is_member(&new_strand) {
+            return MembershipChange::NoChange;
+        }
+
+        match &mut self.governance {
+            GovernanceMode::Open { .. } => {
+                // Auto-add: permissionless join.
+                self.group.participants.push(new_strand);
+                self.group.participants.sort();
+                self.group.threshold =
+                    crate::ordering::supermajority_threshold(self.group.participants.len());
+                self.subscription.subscribe(new_strand);
+                self.last_active.insert(new_strand, wave);
+                MembershipChange::Added(new_strand)
+            }
+            GovernanceMode::InviteOnly { members, .. } => {
+                // In invite-only mode, on_new_reference is used when an existing
+                // member explicitly invites (the caller must verify the inviter).
+                // For the raw "someone referenced us" case, this is a no-op.
+                // Use `invite()` method instead for explicit invitations.
+                // Here we treat it as a no-op (non-member referencing doesn't auto-add).
+                let _ = members;
+                MembershipChange::NoChange
+            }
+            GovernanceMode::Constitutional { .. } => {
+                // Requires a vote. Return the proposal for the caller to submit.
+                MembershipChange::RequiresVote(MembershipProposal::Join {
+                    node_key: new_strand,
+                    justification: vec![],
+                })
+            }
+        }
+    }
+
+    /// Invite a member (for InviteOnly mode).
+    ///
+    /// The `inviter` must be a current member. Returns `Added` if successful,
+    /// `NoChange` if the inviter is not a member or the strand is already a member.
+    pub fn invite(
+        &mut self,
+        inviter: &[u8; 32],
+        new_strand: [u8; 32],
+        wave: u64,
+    ) -> MembershipChange {
+        if self.group.is_member(&new_strand) {
+            return MembershipChange::NoChange;
+        }
+
+        match &mut self.governance {
+            GovernanceMode::InviteOnly { members, .. } => {
+                if !members.contains(inviter) {
+                    return MembershipChange::NoChange;
+                }
+                // Inviter is valid, add the new member.
+                members.push(new_strand);
+                members.sort();
+                self.group.participants.push(new_strand);
+                self.group.participants.sort();
+                self.group.threshold =
+                    crate::ordering::supermajority_threshold(self.group.participants.len());
+                self.subscription.subscribe(new_strand);
+                self.last_active.insert(new_strand, wave);
+                MembershipChange::Added(new_strand)
+            }
+            _ => MembershipChange::NoChange,
+        }
+    }
+
+    /// Process inactivity (behavior depends on governance mode).
+    ///
+    /// If a strand has been inactive for longer than the timeout, it is removed.
+    /// - **Open**: auto-removes after timeout.
+    /// - **InviteOnly**: auto-removes after timeout.
+    /// - **Constitutional**: returns `RequiresVote` with a Leave proposal.
+    pub fn on_inactivity(
+        &mut self,
+        strand: [u8; 32],
+        last_active: u64,
+        current_wave: u64,
+    ) -> MembershipChange {
+        if !self.group.is_member(&strand) {
+            return MembershipChange::NoChange;
+        }
+
+        let timeout = match &self.governance {
+            GovernanceMode::Open { timeout_waves } => *timeout_waves,
+            GovernanceMode::InviteOnly { timeout_waves, .. } => *timeout_waves,
+            GovernanceMode::Constitutional { .. } => {
+                // Constitutional mode uses its own timeout logic.
+                // Return a proposal for removal.
+                if current_wave.saturating_sub(last_active) > 0 {
+                    return MembershipChange::RequiresVote(MembershipProposal::Leave {
+                        node_key: strand,
+                        reason: LeaveReason::Timeout {
+                            last_active_wave: last_active,
+                            detected_at_wave: current_wave,
+                        },
+                    });
+                }
+                return MembershipChange::NoChange;
+            }
+        };
+
+        if current_wave.saturating_sub(last_active) > timeout {
+            // Remove the inactive strand.
+            self.group.participants.retain(|k| k != &strand);
+            self.group.threshold =
+                crate::ordering::supermajority_threshold(self.group.participants.len());
+            self.subscription.unsubscribe(&strand);
+            self.last_active.remove(&strand);
+
+            // Also remove from InviteOnly's member list if applicable.
+            if let GovernanceMode::InviteOnly { members, .. } = &mut self.governance {
+                members.retain(|k| k != &strand);
+            }
+
+            MembershipChange::Removed(strand)
+        } else {
+            MembershipChange::NoChange
+        }
+    }
+
+    /// Record activity from a member at a given wave.
+    pub fn record_activity(&mut self, strand: &[u8; 32], wave: u64) {
+        if let Some(entry) = self.last_active.get_mut(strand) {
+            if wave > *entry {
+                *entry = wave;
+            }
+        }
+    }
+
+    /// Get the last active wave for a member.
+    pub fn last_active_wave(&self, strand: &[u8; 32]) -> Option<u64> {
+        self.last_active.get(strand).copied()
+    }
+
+    /// Get the current ReferenceGroup (for tau_unified).
+    pub fn reference_group(&self) -> &crate::ordering::ReferenceGroup {
+        &self.group
+    }
+
+    /// Get the subscription (for dissemination filtering).
+    pub fn subscription(&self) -> &crate::dissemination::Subscription {
+        &self.subscription
+    }
+
+    /// Run tau over this group's subset of the blocklace.
+    pub fn finalize(
+        &self,
+        blocklace: &crate::Blocklace,
+        config: &crate::ordering::OrderingConfig,
+    ) -> Vec<crate::BlockId> {
+        crate::ordering::tau_unified(blocklace, &self.group, config)
+    }
+
+    /// Get the current member count.
+    pub fn member_count(&self) -> usize {
+        self.group.participants.len()
+    }
+
+    /// Check if a strand is a member.
+    pub fn is_member(&self, strand: &[u8; 32]) -> bool {
+        self.group.is_member(strand)
+    }
+}
+
+/// Bridge: upgrade an existing ConstitutionManager to a GovernedReferenceGroup.
+impl ConstitutionManager {
+    /// Upgrade to a GovernedReferenceGroup (preserves all existing behavior).
+    ///
+    /// The resulting group uses `GovernanceMode::Constitutional`, meaning
+    /// all membership changes still require a threshold vote.
+    pub fn into_governed_group(self) -> GovernedReferenceGroup {
+        let participants = self.current.participants.clone();
+        let timeout_waves = self.current.timeout_waves;
+        let group = crate::ordering::ReferenceGroup::new(participants.clone(), timeout_waves);
+        let subscription = crate::dissemination::Subscription::from_reference_group(&group);
+        let last_active = participants.iter().map(|k| (*k, 0u64)).collect();
+        GovernedReferenceGroup {
+            group,
+            governance: GovernanceMode::Constitutional { manager: self },
+            subscription,
+            name: None,
+            last_active,
+        }
+    }
+}
+
 // ─── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1630,5 +1945,359 @@ mod tests {
         assert!(mgr.verify_routes_commitment(&commitment));
         // And false for a wrong commitment
         assert!(!mgr.verify_routes_commitment(&wrong_commitment));
+    }
+
+    // ─── Phase 3: GovernedReferenceGroup Tests ─────────────────────────────
+
+    #[test]
+    fn constitutional_mode_preserves_existing_behavior() {
+        // Constitutional mode should require a vote for join.
+        let participants = make_participants(3);
+        let mut grp =
+            GovernedReferenceGroup::constitutional(participants.clone(), TEST_TIMEOUT_WAVES);
+
+        assert_eq!(grp.member_count(), 3);
+        assert!(grp.is_member(&make_node_key(1)));
+        assert!(!grp.is_member(&make_node_key(4)));
+
+        // Trying to add a new strand via on_new_reference should return RequiresVote.
+        let change = grp.on_new_reference(make_node_key(4), 1);
+        match change {
+            MembershipChange::RequiresVote(MembershipProposal::Join { node_key, .. }) => {
+                assert_eq!(node_key, make_node_key(4));
+            }
+            _ => panic!(
+                "constitutional mode should require a vote, got {:?}",
+                change
+            ),
+        }
+
+        // Member count unchanged.
+        assert_eq!(grp.member_count(), 3);
+        assert!(!grp.is_member(&make_node_key(4)));
+    }
+
+    #[test]
+    fn open_mode_new_reference_auto_adds_member() {
+        let initial = make_participants(2);
+        let mut grp = GovernedReferenceGroup::open(initial.clone(), 5);
+
+        assert_eq!(grp.member_count(), 2);
+
+        // A new strand references the group -> auto-added in open mode.
+        let new_strand = make_node_key(3);
+        let change = grp.on_new_reference(new_strand, 10);
+        assert_eq!(change, MembershipChange::Added(new_strand));
+
+        // Now a member.
+        assert_eq!(grp.member_count(), 3);
+        assert!(grp.is_member(&new_strand));
+
+        // Subscription also updated.
+        assert!(grp.subscription().is_directly_subscribed(&new_strand));
+    }
+
+    #[test]
+    fn open_mode_inactivity_auto_removes_member() {
+        let initial = make_participants(3);
+        let mut grp = GovernedReferenceGroup::open(initial.clone(), 5);
+
+        assert_eq!(grp.member_count(), 3);
+
+        // Record some activity for members 1 and 2, but not 3.
+        grp.record_activity(&make_node_key(1), 10);
+        grp.record_activity(&make_node_key(2), 10);
+        // Member 3 last active at wave 0.
+
+        // Check inactivity at wave 7 (7 - 0 = 7 > 5 timeout).
+        let change = grp.on_inactivity(make_node_key(3), 0, 7);
+        assert_eq!(change, MembershipChange::Removed(make_node_key(3)));
+
+        assert_eq!(grp.member_count(), 2);
+        assert!(!grp.is_member(&make_node_key(3)));
+        assert!(!grp.subscription().is_directly_subscribed(&make_node_key(3)));
+    }
+
+    #[test]
+    fn open_mode_no_removal_before_timeout() {
+        let initial = make_participants(3);
+        let mut grp = GovernedReferenceGroup::open(initial.clone(), 10);
+
+        // Member 3 last active at wave 5. Current wave 12. 12-5=7 <= 10 timeout.
+        grp.record_activity(&make_node_key(3), 5);
+        let change = grp.on_inactivity(make_node_key(3), 5, 12);
+        assert_eq!(change, MembershipChange::NoChange);
+        assert!(grp.is_member(&make_node_key(3)));
+    }
+
+    #[test]
+    fn invite_only_member_invites_new_strand_added() {
+        let founder = make_node_key(1);
+        let mut grp = GovernedReferenceGroup::invite_only(founder, 10);
+
+        assert_eq!(grp.member_count(), 1);
+        assert!(grp.is_member(&founder));
+
+        // Founder invites node 2.
+        let new_member = make_node_key(2);
+        let change = grp.invite(&founder, new_member, 5);
+        assert_eq!(change, MembershipChange::Added(new_member));
+        assert_eq!(grp.member_count(), 2);
+        assert!(grp.is_member(&new_member));
+    }
+
+    #[test]
+    fn invite_only_non_member_cannot_invite() {
+        let founder = make_node_key(1);
+        let mut grp = GovernedReferenceGroup::invite_only(founder, 10);
+
+        // Non-member (node 99) tries to invite node 2.
+        let non_member = make_node_key(99);
+        let new_strand = make_node_key(2);
+        let change = grp.invite(&non_member, new_strand, 5);
+        assert_eq!(change, MembershipChange::NoChange);
+        assert_eq!(grp.member_count(), 1);
+        assert!(!grp.is_member(&new_strand));
+    }
+
+    #[test]
+    fn governed_group_finalize_produces_correct_ordering() {
+        // GovernedReferenceGroup::finalize() should produce the same result
+        // as tau_unified called directly on the reference group.
+        let participants = make_participants(3);
+        let grp = GovernedReferenceGroup::open(participants.clone(), 10);
+
+        // Build a 3-round blocklace.
+        let mut bl = crate::Blocklace::new();
+        let mut blocks_by_round: Vec<Vec<crate::BlockId>> = Vec::new();
+
+        for round in 1..=3u64 {
+            let preds: Vec<crate::BlockId> = if round == 1 {
+                vec![]
+            } else {
+                blocks_by_round[(round - 2) as usize].clone()
+            };
+            let mut round_blocks = Vec::new();
+            for (i, &p) in participants.iter().enumerate() {
+                let block =
+                    crate::Block::new(p, round - 1, preds.clone(), vec![round as u8, i as u8]);
+                let id = bl.insert(block).unwrap();
+                round_blocks.push(id);
+            }
+            blocks_by_round.push(round_blocks);
+        }
+
+        let config = crate::ordering::OrderingConfig::default();
+
+        // Via GovernedReferenceGroup::finalize
+        let result_grp = grp.finalize(&bl, &config);
+
+        // Via tau_unified directly
+        let result_direct = crate::ordering::tau_unified(&bl, grp.reference_group(), &config);
+
+        assert_eq!(result_grp, result_direct);
+        assert_eq!(result_grp.len(), 9); // 3 participants * 3 rounds
+    }
+
+    #[test]
+    fn subscription_auto_updates_when_membership_changes() {
+        let initial = make_participants(2);
+        let mut grp = GovernedReferenceGroup::open(initial.clone(), 5);
+
+        // Initially subscribed to members 1 and 2.
+        assert!(grp.subscription().is_directly_subscribed(&make_node_key(1)));
+        assert!(grp.subscription().is_directly_subscribed(&make_node_key(2)));
+        assert!(!grp.subscription().is_directly_subscribed(&make_node_key(3)));
+
+        // Add member 3 via open reference.
+        grp.on_new_reference(make_node_key(3), 1);
+        assert!(grp.subscription().is_directly_subscribed(&make_node_key(3)));
+
+        // Remove member 2 via inactivity.
+        let change = grp.on_inactivity(make_node_key(2), 0, 10);
+        assert_eq!(change, MembershipChange::Removed(make_node_key(2)));
+        assert!(!grp.subscription().is_directly_subscribed(&make_node_key(2)));
+    }
+
+    #[test]
+    fn bridge_constitution_manager_into_governed_group_preserves_state() {
+        let participants = make_participants(4);
+        let mgr = ConstitutionManager::from_participants(participants.clone(), TEST_TIMEOUT_WAVES);
+
+        let governed = mgr.into_governed_group();
+
+        // Preserves member set.
+        assert_eq!(governed.member_count(), 4);
+        for p in &participants {
+            assert!(governed.is_member(p));
+        }
+
+        // Governance mode is Constitutional.
+        match &governed.governance {
+            GovernanceMode::Constitutional { manager } => {
+                assert_eq!(manager.threshold(), compute_threshold(4));
+                assert_eq!(manager.timeout_waves(), TEST_TIMEOUT_WAVES);
+            }
+            _ => panic!("expected Constitutional governance mode"),
+        }
+
+        // Subscription covers all members.
+        for p in &participants {
+            assert!(governed.subscription().is_directly_subscribed(p));
+        }
+    }
+
+    #[test]
+    fn finalize_same_result_as_tau_unified_directly() {
+        // Verify that GovernedReferenceGroup::finalize produces the exact same
+        // output as calling tau_unified with the group's reference group.
+        let participants = make_participants(3);
+        let grp = GovernedReferenceGroup::constitutional(participants.clone(), 10);
+
+        let mut bl = crate::Blocklace::new();
+        let mut blocks_by_round: Vec<Vec<crate::BlockId>> = Vec::new();
+
+        for round in 1..=6u64 {
+            let preds: Vec<crate::BlockId> = if round == 1 {
+                vec![]
+            } else {
+                blocks_by_round[(round - 2) as usize].clone()
+            };
+            let mut round_blocks = Vec::new();
+            for (i, &p) in participants.iter().enumerate() {
+                let block =
+                    crate::Block::new(p, round - 1, preds.clone(), vec![round as u8, i as u8]);
+                let id = bl.insert(block).unwrap();
+                round_blocks.push(id);
+            }
+            blocks_by_round.push(round_blocks);
+        }
+
+        let config = crate::ordering::OrderingConfig::default();
+        let result_finalize = grp.finalize(&bl, &config);
+        let result_tau = crate::ordering::tau_unified(&bl, grp.reference_group(), &config);
+
+        assert_eq!(result_finalize, result_tau);
+        assert_eq!(result_finalize.len(), 18); // 3 * 6 rounds
+    }
+
+    #[test]
+    fn mixed_constitutional_and_open_groups_same_blocklace() {
+        // Two groups (one constitutional, one open) can coexist on the same blocklace
+        // and produce independent orderings.
+        let all_participants: Vec<[u8; 32]> = (1..=6u8).map(make_node_key).collect();
+
+        // Build a shared blocklace with all 6 participants.
+        let mut bl = crate::Blocklace::new();
+        let mut blocks_by_round: Vec<Vec<crate::BlockId>> = Vec::new();
+
+        for round in 1..=3u64 {
+            let preds: Vec<crate::BlockId> = if round == 1 {
+                vec![]
+            } else {
+                blocks_by_round[(round - 2) as usize].clone()
+            };
+            let mut round_blocks = Vec::new();
+            for (i, &p) in all_participants.iter().enumerate() {
+                let block =
+                    crate::Block::new(p, round - 1, preds.clone(), vec![round as u8, i as u8]);
+                let id = bl.insert(block).unwrap();
+                round_blocks.push(id);
+            }
+            blocks_by_round.push(round_blocks);
+        }
+
+        // Constitutional group: participants 1, 2, 3.
+        let const_group = GovernedReferenceGroup::constitutional(
+            vec![make_node_key(1), make_node_key(2), make_node_key(3)],
+            10,
+        );
+
+        // Open group: participants 4, 5, 6.
+        let open_group = GovernedReferenceGroup::open(
+            vec![make_node_key(4), make_node_key(5), make_node_key(6)],
+            10,
+        );
+
+        let config = crate::ordering::OrderingConfig::default();
+        let result_const = const_group.finalize(&bl, &config);
+        let result_open = open_group.finalize(&bl, &config);
+
+        // Both should finalize their own members' blocks.
+        assert_eq!(
+            result_const.len(),
+            9,
+            "constitutional group: 3 members * 3 rounds"
+        );
+        assert_eq!(result_open.len(), 9, "open group: 3 members * 3 rounds");
+
+        // Outputs should be completely disjoint (different members).
+        let set_const: std::collections::HashSet<crate::BlockId> =
+            result_const.iter().copied().collect();
+        let set_open: std::collections::HashSet<crate::BlockId> =
+            result_open.iter().copied().collect();
+        assert!(
+            set_const.is_disjoint(&set_open),
+            "constitutional and open groups should produce disjoint orderings"
+        );
+
+        // Verify creators match expected groups.
+        for &bid in &result_const {
+            let block = bl.get(&bid).unwrap();
+            assert!(
+                [make_node_key(1), make_node_key(2), make_node_key(3)].contains(&block.creator),
+                "constitutional group output should only have members 1,2,3"
+            );
+        }
+        for &bid in &result_open {
+            let block = bl.get(&bid).unwrap();
+            assert!(
+                [make_node_key(4), make_node_key(5), make_node_key(6)].contains(&block.creator),
+                "open group output should only have members 4,5,6"
+            );
+        }
+    }
+
+    #[test]
+    fn open_mode_duplicate_reference_no_double_add() {
+        let initial = make_participants(2);
+        let mut grp = GovernedReferenceGroup::open(initial, 5);
+
+        let new_strand = make_node_key(3);
+
+        // First reference -> Added.
+        let change1 = grp.on_new_reference(new_strand, 1);
+        assert_eq!(change1, MembershipChange::Added(new_strand));
+        assert_eq!(grp.member_count(), 3);
+
+        // Second reference -> NoChange (already a member).
+        let change2 = grp.on_new_reference(new_strand, 2);
+        assert_eq!(change2, MembershipChange::NoChange);
+        assert_eq!(grp.member_count(), 3);
+    }
+
+    #[test]
+    fn invite_only_inactivity_removes_member() {
+        let founder = make_node_key(1);
+        let mut grp = GovernedReferenceGroup::invite_only(founder, 5);
+
+        // Invite member 2.
+        grp.invite(&founder, make_node_key(2), 0);
+        assert_eq!(grp.member_count(), 2);
+
+        // Member 2 goes inactive. Timeout check at wave 10 (10 - 0 = 10 > 5).
+        let change = grp.on_inactivity(make_node_key(2), 0, 10);
+        assert_eq!(change, MembershipChange::Removed(make_node_key(2)));
+        assert_eq!(grp.member_count(), 1);
+        assert!(!grp.is_member(&make_node_key(2)));
+    }
+
+    #[test]
+    fn governed_reference_group_name_optional() {
+        let mut grp = GovernedReferenceGroup::open(make_participants(2), 5);
+        assert_eq!(grp.name, None);
+
+        grp.name = Some("my-open-group".to_string());
+        assert_eq!(grp.name.as_deref(), Some("my-open-group"));
     }
 }

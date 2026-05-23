@@ -313,7 +313,7 @@ impl ShutdownCoordinator {
     /// Build the CapGoodbye message sent during shutdown.
     pub fn goodbye_message(&self) -> WireMessage {
         WireMessage::CapGoodbye {
-            federation_id: self.node_id,
+            group_id: self.node_id,
             reason: Some("server shutting down".to_string()),
         }
     }

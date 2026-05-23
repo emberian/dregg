@@ -10,13 +10,17 @@
 //! - **Export GC** (`ExportGcManager`): tracks who holds references to OUR capabilities.
 //! - **Import GC** (`ImportGcManager`): tracks what WE hold from remote federations,
 //!   and when to send `DropRef` messages.
+//!
+//! # TODO(unified-lace): migrate FederationId keys to StrandId
+//! GC tracking should be keyed by StrandId (the bilateral peer), not FederationId
+//! (the group). This is Phase B of the unified lace migration.
 
 use std::collections::HashMap;
 
 use pyana_types::CellId;
 use serde::{Deserialize, Serialize};
 
-use crate::FederationId;
+use crate::{FederationId, StrandId};
 
 // =============================================================================
 // Export-side GC
@@ -256,6 +260,47 @@ impl ExportGcManager {
     /// Returns true if there are no exports being tracked.
     pub fn is_empty(&self) -> bool {
         self.exports.is_empty()
+    }
+
+    // =========================================================================
+    // Strand-keyed methods (Phase B: unified lace migration)
+    // =========================================================================
+
+    /// Record that we exported a capability to a specific strand.
+    ///
+    /// In the unified lace model, exports are tracked per-strand (bilateral)
+    /// rather than per-group. This wraps the strand ID into a `FederationId`
+    /// internally for storage compatibility.
+    ///
+    /// Prefer this over [`record_export`] for new code.
+    pub fn record_export_by_strand(
+        &mut self,
+        cell_id: CellId,
+        to_strand: StrandId,
+        current_height: u64,
+        session_id: SessionId,
+    ) {
+        self.record_export_with_session(
+            cell_id,
+            FederationId(to_strand),
+            current_height,
+            session_id,
+        )
+    }
+
+    /// Process a `DropRef` keyed by strand ID with session validation.
+    ///
+    /// In the unified lace model, drops come from a strand, not a group.
+    /// This wraps the strand ID into a `FederationId` for internal lookup.
+    ///
+    /// Prefer this over [`process_drop_with_session`] for new code.
+    pub fn process_drop_by_strand(
+        &mut self,
+        cell_id: CellId,
+        from_strand: StrandId,
+        session_id: SessionId,
+    ) -> DropResult {
+        self.process_drop_with_session(cell_id, FederationId(from_strand), session_id)
     }
 }
 
