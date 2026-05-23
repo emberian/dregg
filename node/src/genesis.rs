@@ -123,8 +123,8 @@ pub fn run_genesis(validators: usize, epoch_length: u64, checkpoint_interval: u6
         });
     }
 
-    // BFT threshold: floor(n/3) + 1 for n validators (tolerates < n/3 faults).
-    let threshold = validators / 3 + 1;
+    // BFT quorum threshold: n - floor((n-1)/3) for n validators.
+    let threshold = pyana_federation::quorum_threshold(validators);
 
     // Build genesis config.
     let genesis = GenesisConfig {

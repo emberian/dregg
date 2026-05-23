@@ -346,9 +346,10 @@ impl BridgePresentationBuilder {
     /// # Arguments
     ///
     /// * `issuer_key` - The issuer's 32-byte key (hashed for federation membership).
-    /// * `federation_root` - The 32-byte federation root of trust.
+    /// * `federation_root` - The 32-byte canonical encoding of the federation root
+    ///   (produced by [`bb_to_bytes`]: u32 LE in bytes [0..4], zeros in [4..32]).
     pub fn new(issuer_key: [u8; 32], federation_root: [u8; 32]) -> Self {
-        let federation_root_bb = bytes_to_babybear(&federation_root);
+        let federation_root_bb = bb_from_bytes(&federation_root);
         Self {
             issuer_key,
             federation_root,
@@ -410,10 +411,13 @@ impl BridgePresentationBuilder {
     /// only suitable for testing.
     pub fn with_federation_tree(&mut self, tree: MerkleTree) -> &mut Self {
         // Recompute the federation root from the actual tree.
+        // The tree root is a full 32-byte BLAKE3 hash; compress it to BabyBear
+        // via Poseidon2, then store the canonical bb_to_bytes encoding so that
+        // verifiers can recover it with bb_from_bytes.
         let mut tree_clone = tree.clone();
         let root_bytes = tree_clone.root();
-        self.federation_root = root_bytes;
         self.federation_root_bb = bytes_to_babybear(&root_bytes);
+        self.federation_root = bb_to_bytes(self.federation_root_bb);
         self.federation_tree = Some(tree);
         self
     }
@@ -2056,6 +2060,27 @@ pub fn bytes_to_babybear_vec(bytes: &[u8; 32]) -> [BabyBear; 8] {
 pub fn bytes_to_babybear(bytes: &[u8; 32]) -> BabyBear {
     let limbs = bytes_to_babybear_vec(bytes);
     poseidon2::hash_many(&limbs)
+}
+
+/// Encode a BabyBear field element as a 32-byte array (canonical encoding).
+///
+/// The u32 value is stored in bytes [0..4] as little-endian, with bytes [4..32]
+/// zeroed. This is the canonical wire encoding used by the wallet, engine, and
+/// verifier. Use [`bb_from_bytes`] to decode.
+pub fn bb_to_bytes(bb: BabyBear) -> [u8; 32] {
+    let mut bytes = [0u8; 32];
+    bytes[..4].copy_from_slice(&bb.as_u32().to_le_bytes());
+    bytes
+}
+
+/// Decode a BabyBear field element from its canonical 32-byte encoding.
+///
+/// Reads bytes [0..4] as a little-endian u32 and constructs a canonical BabyBear
+/// element (reduced mod p). This is the inverse of [`bb_to_bytes`] and is used by
+/// all verification paths to recover a federation root from its wire representation.
+pub fn bb_from_bytes(bytes: &[u8; 32]) -> BabyBear {
+    let val = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    BabyBear::new_canonical(val)
 }
 
 /// Generate a fresh random blinding factor for ring membership proofs.

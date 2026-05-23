@@ -179,15 +179,12 @@ pub fn compute_epoch(height: u64, epoch_length: u64) -> u64 {
 
 /// Compute the BFT threshold for a given number of members.
 ///
-/// Uses the formula: `threshold = (n - 1) / 3 + 1` which is the minimum
-/// number of honest validators needed for BFT safety (tolerates f < n/3 faults).
+/// Delegates to [`crate::quorum_threshold`], the canonical formula:
+/// `threshold = n - floor((n-1)/3)`.
 ///
-/// For n=1: threshold=1, n=3: threshold=1, n=4: threshold=2, n=7: threshold=3.
+/// For n=1: threshold=1, n=2: threshold=2, n=3: threshold=2, n=4: threshold=3, n=7: threshold=5, n=10: threshold=7.
 pub fn compute_bft_threshold(member_count: usize) -> usize {
-    if member_count == 0 {
-        return 0;
-    }
-    (member_count - 1) / 3 + 1
+    crate::quorum_threshold(member_count)
 }
 
 // =============================================================================
@@ -628,13 +625,13 @@ mod tests {
     fn test_compute_bft_threshold() {
         assert_eq!(compute_bft_threshold(0), 0);
         assert_eq!(compute_bft_threshold(1), 1);
-        assert_eq!(compute_bft_threshold(2), 1);
-        assert_eq!(compute_bft_threshold(3), 1);
-        assert_eq!(compute_bft_threshold(4), 2);
-        assert_eq!(compute_bft_threshold(5), 2);
-        assert_eq!(compute_bft_threshold(6), 2);
-        assert_eq!(compute_bft_threshold(7), 3);
-        assert_eq!(compute_bft_threshold(10), 4);
+        assert_eq!(compute_bft_threshold(2), 2);
+        assert_eq!(compute_bft_threshold(3), 2);
+        assert_eq!(compute_bft_threshold(4), 3);
+        assert_eq!(compute_bft_threshold(5), 4);
+        assert_eq!(compute_bft_threshold(6), 4);
+        assert_eq!(compute_bft_threshold(7), 5);
+        assert_eq!(compute_bft_threshold(10), 7);
     }
 
     #[test]
@@ -645,7 +642,7 @@ mod tests {
         let (v3, _sk3) = make_validator(0);
 
         let mut config = EpochConfig::genesis(vec![v0.clone(), v1.clone(), v2.clone()], 100);
-        assert_eq!(config.threshold, 1); // (3-1)/3 + 1 = 1
+        assert_eq!(config.threshold, 2); // quorum_threshold(3) = 3 - 0 = 2 (was wrong: 1)
 
         // Propose adding v3.
         let transition = propose_epoch_transition(&config, &[v3.clone()], &[]).unwrap();
@@ -654,19 +651,19 @@ mod tests {
         assert_eq!(transition.to_epoch, 1);
         assert_eq!(transition.added_validators.len(), 1);
         assert_eq!(transition.removed_validators.len(), 0);
-        assert_eq!(transition.new_threshold, 2); // (4-1)/3 + 1 = 2
+        assert_eq!(transition.new_threshold, 3); // quorum_threshold(4) = 4 - 1 = 3
 
         // Fill in a valid-looking attestation.
         let mut transition = transition;
         transition.attestation.threshold = config.threshold;
-        transition.attestation.votes = vec![(0, Signature([0u8; 64]))];
+        transition.attestation.votes = vec![(0, Signature([0u8; 64])), (1, Signature([0u8; 64]))];
 
         // Apply it.
         apply_epoch_transition(&mut config, &transition).unwrap();
 
         assert_eq!(config.current_epoch, 1);
         assert_eq!(config.members.len(), 4);
-        assert_eq!(config.threshold, 2);
+        assert_eq!(config.threshold, 3);
         assert!(config.members.contains(&v3));
     }
 
@@ -679,35 +676,39 @@ mod tests {
 
         let mut config =
             EpochConfig::genesis(vec![v0.clone(), v1.clone(), v2.clone(), v3.clone()], 100);
-        assert_eq!(config.threshold, 2); // (4-1)/3 + 1 = 2
+        assert_eq!(config.threshold, 3); // quorum_threshold(4) = 4 - 1 = 3
 
         // Remove v3.
         let transition = propose_epoch_transition(&config, &[], &[v3.public_key.clone()]).unwrap();
 
-        assert_eq!(transition.new_threshold, 1); // (3-1)/3 + 1 = 1
+        assert_eq!(transition.new_threshold, 2); // quorum_threshold(3) = 3 - 0 = 2
 
         let mut transition = transition;
         transition.attestation.threshold = config.threshold;
-        transition.attestation.votes = vec![(0, Signature([0u8; 64])), (1, Signature([0u8; 64]))];
+        transition.attestation.votes = vec![
+            (0, Signature([0u8; 64])),
+            (1, Signature([0u8; 64])),
+            (2, Signature([0u8; 64])),
+        ];
 
         apply_epoch_transition(&mut config, &transition).unwrap();
 
         assert_eq!(config.current_epoch, 1);
         assert_eq!(config.members.len(), 3);
-        assert_eq!(config.threshold, 1);
+        assert_eq!(config.threshold, 2);
         assert!(!config.members.iter().any(|m| m.public_key == v3.public_key));
     }
 
     #[test]
     fn test_threshold_adjusts_correctly() {
-        // 4 members -> threshold 2
-        assert_eq!(compute_bft_threshold(4), 2);
-        // 7 members -> threshold 3
-        assert_eq!(compute_bft_threshold(7), 3);
-        // 10 members -> threshold 4
-        assert_eq!(compute_bft_threshold(10), 4);
-        // 13 members -> threshold 5
-        assert_eq!(compute_bft_threshold(13), 5);
+        // 4 members -> threshold 3
+        assert_eq!(compute_bft_threshold(4), 3);
+        // 7 members -> threshold 5
+        assert_eq!(compute_bft_threshold(7), 5);
+        // 10 members -> threshold 7
+        assert_eq!(compute_bft_threshold(10), 7);
+        // 13 members -> threshold 9
+        assert_eq!(compute_bft_threshold(13), 9);
     }
 
     #[test]

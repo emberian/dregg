@@ -96,3 +96,54 @@ pub use types::{
     ViewChangeMessage, Vote, generate_keypair, sign, verify, verify_attested_root_with_committee,
     verify_via_receipt_chain,
 };
+
+// =============================================================================
+// Canonical BFT Threshold Functions
+// =============================================================================
+
+/// Canonical BFT quorum threshold: minimum votes needed for safety.
+///
+/// For n validators tolerating f = floor((n-1)/3) Byzantine faults,
+/// quorum = n - f.
+///
+/// This is the ONE correct formula used throughout the system.
+/// - n=1 -> 1, n=2 -> 2, n=3 -> 2, n=4 -> 3, n=7 -> 5, n=10 -> 7
+pub fn quorum_threshold(n: usize) -> usize {
+    if n == 0 {
+        return 0;
+    }
+    let f = fault_tolerance(n);
+    n - f
+}
+
+/// Maximum Byzantine faults tolerable for n validators.
+///
+/// f = floor((n-1)/3)
+pub fn fault_tolerance(n: usize) -> usize {
+    n.saturating_sub(1) / 3
+}
+
+#[cfg(test)]
+mod threshold_tests {
+    use super::*;
+
+    #[test]
+    fn test_quorum_threshold() {
+        assert_eq!(quorum_threshold(1), 1);
+        assert_eq!(quorum_threshold(2), 2);
+        assert_eq!(quorum_threshold(3), 2);
+        assert_eq!(quorum_threshold(4), 3);
+        assert_eq!(quorum_threshold(7), 5);
+        assert_eq!(quorum_threshold(10), 7);
+    }
+
+    #[test]
+    fn test_fault_tolerance() {
+        assert_eq!(fault_tolerance(1), 0);
+        assert_eq!(fault_tolerance(2), 0);
+        assert_eq!(fault_tolerance(3), 0);
+        assert_eq!(fault_tolerance(4), 1);
+        assert_eq!(fault_tolerance(7), 2);
+        assert_eq!(fault_tolerance(10), 3);
+    }
+}

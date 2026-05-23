@@ -270,11 +270,30 @@ impl NodeState {
         };
 
         // Issue 3: Load persisted passphrase hash from the store.
+        // Migration: old BLAKE3 hashes are exactly 32 bytes; discard them and force
+        // re-setup with Argon2id.
         let passphrase_hash = match store.get_config("passphrase_hash") {
+            Ok(Some(bytes)) if bytes.len() > 32 => {
+                // PHC string format (Argon2id) — keep it.
+                String::from_utf8(bytes).ok()
+            }
             Ok(Some(bytes)) if bytes.len() == 32 => {
-                let mut hash = [0u8; 32];
-                hash.copy_from_slice(&bytes);
-                Some(hash)
+                // Legacy BLAKE3 hash — discard and force re-setup.
+                tracing::warn!(
+                    "discarding legacy BLAKE3 passphrase hash; user must set a new passphrase"
+                );
+                let _ = store.set_config("passphrase_hash", &[]);
+                let _ = store.set_config("bearer_seed", &[]);
+                None
+            }
+            _ => None,
+        };
+
+        let bearer_seed = match store.get_config("bearer_seed") {
+            Ok(Some(bytes)) if bytes.len() == 32 => {
+                let mut seed = [0u8; 32];
+                seed.copy_from_slice(&bytes);
+                Some(seed)
             }
             _ => None,
         };
@@ -302,6 +321,7 @@ impl NodeState {
                 peers,
                 unlocked: false,
                 passphrase_hash,
+                bearer_seed,
                 intent_pool: HashMap::new(),
                 consensus_queue: Vec::new(),
                 pending_conditionals: Vec::new(),
@@ -362,6 +382,7 @@ impl NodeState {
                 peers,
                 unlocked: false,
                 passphrase_hash: None,
+                bearer_seed: None,
                 intent_pool: HashMap::new(),
                 consensus_queue: Vec::new(),
                 pending_conditionals: Vec::new(),

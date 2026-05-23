@@ -43,8 +43,8 @@ impl ConsensusConfig {
     /// Create a new consensus configuration for n nodes.
     /// Threshold is set to n - f where f = floor((n-1)/3).
     pub fn new(num_nodes: usize) -> Self {
-        let max_faults = (num_nodes - 1) / 3;
-        let threshold = num_nodes - max_faults;
+        let max_faults = crate::fault_tolerance(num_nodes);
+        let threshold = crate::quorum_threshold(num_nodes);
         Self {
             num_nodes,
             threshold,
@@ -58,8 +58,8 @@ impl ConsensusConfig {
     /// Create an initial (genesis) configuration with an explicit member set.
     pub fn genesis(members: Vec<PublicKey>) -> Self {
         let num_nodes = members.len();
-        let max_faults = (num_nodes - 1) / 3;
-        let threshold = num_nodes - max_faults;
+        let max_faults = crate::fault_tolerance(num_nodes);
+        let threshold = crate::quorum_threshold(num_nodes);
         Self {
             num_nodes,
             threshold,
@@ -73,8 +73,8 @@ impl ConsensusConfig {
     /// Create the next epoch configuration with a new member set.
     pub fn next_epoch(&self, new_members: Vec<PublicKey>) -> Self {
         let num_nodes = new_members.len();
-        let max_faults = (num_nodes - 1) / 3;
-        let threshold = num_nodes - max_faults;
+        let max_faults = crate::fault_tolerance(num_nodes);
+        let threshold = crate::quorum_threshold(num_nodes);
         Self {
             num_nodes,
             threshold,

@@ -21,6 +21,9 @@ use axum::{
     middleware,
     routing::{get, post},
 };
+use argon2::password_hash::rand_core::OsRng;
+use argon2::password_hash::SaltString;
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use tokio::sync::Mutex;
@@ -510,8 +513,8 @@ impl RateLimiter {
 
 /// Authentication middleware requiring Bearer token for protected endpoints.
 ///
-/// The API token is derived from the wallet passphrase:
-/// `BLAKE3_derive_key("pyana-api-bearer-v1", passphrase_hash)`.
+/// The API token is derived from the bearer seed (which is itself derived from
+/// passphrase + salt via BLAKE3 at passphrase-set time).
 /// If no passphrase is set, all requests are allowed (initial setup phase).
 async fn require_auth(
     State(state): State<NodeState>,
@@ -521,7 +524,7 @@ async fn require_auth(
     let s = state.read().await;
 
     // If no passphrase is set yet, allow all requests (initial setup).
-    let Some(passphrase_hash) = s.passphrase_hash else {
+    let Some(ref bearer_seed) = s.bearer_seed else {
         drop(s);
         return Ok(next.run(req).await);
     };
@@ -535,7 +538,8 @@ async fn require_auth(
     match auth_header {
         Some(header) if header.starts_with("Bearer ") => {
             let token = &header[7..];
-            let expected_token_bytes = blake3::derive_key("pyana-api-bearer-v1", &passphrase_hash);
+            let expected_token_bytes =
+                blake3::derive_key("pyana-api-bearer-v1", bearer_seed);
             let expected_token: String = expected_token_bytes
                 .iter()
                 .map(|b| format!("{b:02x}"))
@@ -1080,6 +1084,26 @@ async fn get_cell_detail(
     }
 }
 
+/// Hash a passphrase with Argon2id and derive a bearer seed.
+///
+/// Returns (PHC string for storage, bearer_seed for token derivation).
+fn hash_passphrase(passphrase: &str) -> (String, [u8; 32]) {
+    let salt = SaltString::generate(&mut OsRng);
+    let argon2 = Argon2::default(); // Argon2id v19 with recommended params
+    let phc_string = argon2
+        .hash_password(passphrase.as_bytes(), &salt)
+        .expect("argon2 hash_password should not fail")
+        .to_string();
+    // Derive a separate bearer seed from passphrase + salt using BLAKE3.
+    // This is safe because BLAKE3 is a proper KDF and the input has high entropy
+    // (passphrase + random salt).
+    let bearer_seed = blake3::derive_key(
+        "pyana-node-bearer-v1",
+        format!("{}{}", passphrase, salt.as_str()).as_bytes(),
+    );
+    (phc_string, bearer_seed)
+}
+
 /// P1 Fix 4: Rate-limited passphrase unlock endpoint.
 async fn post_wallet_unlock(
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
@@ -1100,11 +1124,16 @@ async fn post_wallet_unlock(
     }
 
     let mut s = state.write().await;
-    let hash = blake3::derive_key("pyana-wallet-passphrase-v1", req.passphrase.as_bytes());
 
-    match s.passphrase_hash {
+    match s.passphrase_hash.clone() {
         Some(stored_hash) => {
-            if hash != stored_hash {
+            // Verify against stored Argon2id hash.
+            let parsed = PasswordHash::new(&stored_hash)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            if Argon2::default()
+                .verify_password(req.passphrase.as_bytes(), &parsed)
+                .is_err()
+            {
                 return Ok(Json(UnlockResponse {
                     success: false,
                     error: Some("invalid passphrase".to_string()),
@@ -1117,9 +1146,12 @@ async fn post_wallet_unlock(
             }))
         }
         None => {
-            s.passphrase_hash = Some(hash);
-            // Persist the passphrase hash to the store (same as WS unlock does).
-            let _ = s.store.set_config("passphrase_hash", &hash);
+            // First unlock sets the passphrase using Argon2id.
+            let (phc_string, bearer_seed) = hash_passphrase(&req.passphrase);
+            s.passphrase_hash = Some(phc_string.clone());
+            s.bearer_seed = Some(bearer_seed);
+            let _ = s.store.set_config("passphrase_hash", phc_string.as_bytes());
+            let _ = s.store.set_config("bearer_seed", &bearer_seed);
             s.unlocked = true;
             Ok(Json(UnlockResponse {
                 success: true,
@@ -1157,10 +1189,12 @@ async fn post_set_passphrase(
         }));
     }
 
-    let hash = blake3::derive_key("pyana-wallet-passphrase-v1", req.passphrase.as_bytes());
-    s.passphrase_hash = Some(hash);
-    // Persist the passphrase hash to the store so it survives restarts.
-    let _ = s.store.set_config("passphrase_hash", &hash);
+    let (phc_string, bearer_seed) = hash_passphrase(&req.passphrase);
+    s.passphrase_hash = Some(phc_string.clone());
+    s.bearer_seed = Some(bearer_seed);
+    // Persist the passphrase hash and bearer seed to the store so they survive restarts.
+    let _ = s.store.set_config("passphrase_hash", phc_string.as_bytes());
+    let _ = s.store.set_config("bearer_seed", &bearer_seed);
 
     Ok(Json(SetPassphraseResponse {
         success: true,
