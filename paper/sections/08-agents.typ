@@ -38,6 +38,10 @@ This is not a surface-level metaphor. The structural isomorphism runs deep: conf
 
 An AI agent comes into existence by creating a cell: generate Ed25519 keypair, create cell with initial state, receive initial capabilities via delegation from a parent agent or genesis ceremony. No agent is self-bootstrapping---every agent exists because some authority granted it initial capabilities.
 
+Agents are sovereign by default: the federation stores only a 32-byte commitment to the agent's state. The agent maintains its own state, generates its own proofs, and interacts with the federation only for ordering and discovery. An agent can go offline, operate peer-to-peer, and return to a federation at will.
+
+Alternatively, agents may be spawned via EROS-style factories---constrained constructors that produce cells with auditable capabilities and computable verification keys. A factory-spawned agent's provenance is machine-verifiable: anyone can inspect the factory's descriptor to know exactly what authority the agent was granted at birth.
+
 === Discovery
 
 Agents find each other through two mechanisms: (1) _three-party introduction_ where a mutual contact introduces them by emitting an `Effect::Introduce`, and (2) the _intent marketplace_ where needs are broadcast publicly while capabilities remain private. Direct peer relationships form through introduction (high-trust, targeted); marketplace relationships form through intents (low-trust, emergent).

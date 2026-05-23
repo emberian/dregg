@@ -19,6 +19,7 @@ use pyana_token::AuthToken;
 
 // Full runtime simulation modules.
 pub mod bindings;
+pub mod privacy;
 pub mod runtime;
 
 // ============================================================================

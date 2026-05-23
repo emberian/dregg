@@ -173,3 +173,35 @@ capss24:
   author: ["Aly, Abdelrahaman", "Ashur, Tomer", "Kales, Daniel", "Orsini, Emmanuela", "Schofnegger, Markus"]
   date: 2024
   serial-number: "IACR ePrint 2024/252"
+
+eros:
+  type: article
+  title: "The EROS Object System"
+  author: ["Shapiro, Jonathan S."]
+  date: 1999
+  parent:
+    type: proceedings
+    title: "ACM Symposium on Operating Systems Principles (SOSP)"
+
+dandelion:
+  type: article
+  title: "Dandelion++: Lightweight Cryptocurrency Networking with Formal Anonymity Guarantees"
+  author: ["Fanti, Giulia", "Venkatakrishnan, Shaileshh Bojja", "Bakshi, Surya", "Denby, Bradley", "Bhargava, Shruti", "Miller, Andrew", "Viswanath, Pramod"]
+  date: 2018
+  parent:
+    type: proceedings
+    title: "ACM SIGMETRICS"
+
+sp1:
+  type: web
+  title: "SP1: A Performant, 100% Open-Source, Contributor-Friendly zkVM"
+  author: ["Succinct Labs"]
+  url: "https://docs.succinct.xyz/"
+  date: 2024
+
+plonky3:
+  type: web
+  title: "Plonky3: A Toolkit for Implementing Polynomial IOPs"
+  author: ["Polygon Labs"]
+  url: "https://github.com/Plonky3/Plonky3"
+  date: 2024

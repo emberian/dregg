@@ -982,6 +982,102 @@ button { font-family: inherit; cursor: pointer; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.14); }
 
 /* ============================================================
+   CELL MODE BADGES
+   ============================================================ */
+.cell-badge--sovereign {
+  background: rgba(107, 163, 199, 0.12);
+  color: #6ba3c7;
+}
+.cell-badge--hosted {
+  background: rgba(232, 224, 208, 0.06);
+  color: var(--text-dim);
+}
+.cell-badge--factory {
+  background: rgba(217, 154, 63, 0.12);
+  color: var(--lantern);
+}
+
+/* ============================================================
+   STAT CARD HASH VALUES
+   ============================================================ */
+.stat-card__value--hash {
+  font-size: 11px;
+  word-break: break-all;
+}
+
+/* ============================================================
+   FEDERATION NODES
+   ============================================================ */
+.fed-node-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.fed-node-item:last-child { border-bottom: none; }
+.fed-node-item__icon {
+  font-size: 10px;
+  color: var(--success);
+  min-width: 14px;
+  text-align: center;
+}
+.fed-node-item__name {
+  flex: 1;
+  color: var(--text-dim);
+}
+
+/* ============================================================
+   APPS GRID
+   ============================================================ */
+.ex-apps-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
+}
+.app-card {
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition: all 0.15s;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.app-card:hover {
+  border-color: var(--border-2);
+  background: var(--surface-2);
+}
+.app-card__icon {
+  font-size: 22px;
+  opacity: 0.6;
+}
+.app-card__name {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.app-card__desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.app-card__status {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--accent-bright);
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+/* ============================================================
    RESPONSIVE
    ============================================================ */
 @media (max-width: 900px) {

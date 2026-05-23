@@ -13,7 +13,7 @@ export function initCrossfed(wasm) {
         intent matching. This is how pyana composes — multiple organizations can cooperate
         without sharing their internal state.
       </p>
-      <span class="next-hint" data-next="sandbox">Next: free-form code sandbox &#8594;</span>
+      <span class="next-hint" data-next="sovereign">Next: sovereign cells &#8594;</span>
     </div>
 
     <div class="crossfed-diagram" id="cf-diagram">
@@ -64,7 +64,7 @@ export function initCrossfed(wasm) {
   const explainerDiv = container.querySelector('#cf-explainer');
   let animating = false;
 
-  container.querySelector('.next-hint').addEventListener('click', () => navigateTo('sandbox'));
+  container.querySelector('.next-hint').addEventListener('click', () => navigateTo('sovereign'));
 
   container.querySelector('#cf-reset').addEventListener('click', () => {
     resetDiagram();

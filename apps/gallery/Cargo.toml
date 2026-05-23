@@ -6,7 +6,7 @@ description = "Federated art gallery with commit-reveal auctions on the pyana pr
 
 [dependencies]
 pyana-app-framework = { path = "../../app-framework" }
-pyana-circuit = { path = "../../circuit", default-features = false, features = ["mock"] }
+pyana-circuit = { path = "../../circuit", default-features = false }
 pyana-turn = { path = "../../turn" }
 # pyana-sdk not needed directly: PyanaEngine and CellId are re-exported via pyana-app-framework
 

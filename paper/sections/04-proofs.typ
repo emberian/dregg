@@ -276,7 +276,7 @@ Recursive verification collapses N proofs into 1:
 + *Chain* the recursive proofs: the proof verifying sub-proof $k$ also verifies the recursive proof covering sub-proofs $1, ..., k-1$.
 + The final output is a single STARK proof of constant size ($tilde 24$ KiB) that transitively attests to all sub-proofs.
 
-*Current status:* Recursive verification is implemented and working for pairs of proofs (verified via Plonky3). Arbitrary-$N$ aggregation uses sequential chaining (each step verifies the previous recursive proof). The `build_recursive_ivc_chain` function chains $N$ fold proofs into a single recursive attestation. Full composition of heterogeneous AIRs (derivation + fold + membership in one recursive proof) is designed but not yet operational.
+*Current status:* Recursive verification is operational for pairs of proofs (verified via Plonky3) and sequential IVC chains (`build_recursive_ivc_chain` chains $N$ fold proofs into a single recursive attestation). STARK-in-Pickles wrapping produces constant-size recursive SNARKs over the Pasta curve cycle. The DSL composition operators (`compose_and`, `compose_or`, `compose_chain`, `compose_aggregate`) provide structural proof combination with cryptographic binding. Full composition of heterogeneous AIRs (derivation + fold + membership + Effect VM in one recursive proof) is designed and structurally supported but not yet end-to-end operational for arbitrary combinations.
 
 == Soundness Analysis
 

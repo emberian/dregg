@@ -24,6 +24,11 @@ export function initSandbox(wasm) {
         <option value="merkle">Merkle Tree</option>
         <option value="datalog">Datalog Policy</option>
         <option value="pipeline">Full Pipeline</option>
+        <option value="stealth">Stealth Address</option>
+        <option value="bearer">Bearer Cap</option>
+        <option value="factory">Factory + Provenance</option>
+        <option value="composition">Proof Composition</option>
+        <option value="private-transfer">Private Transfer (Full)</option>
       </select>
     </div>
 
@@ -56,6 +61,18 @@ console.log('Token:', minted.token.slice(0, 40) + '...');
         <div><span>pyana.evaluateDatalog</span>(factsArr, reqObj) &rarr; {decision, matched_rule, steps}</div>
         <div><span>pyana.demonstrateFold</span>(factsArr, removeArr) &rarr; {old_root, new_root, verified}</div>
         <div><span>pyana.blake3Hash</span>(input) &rarr; hexStr</div>
+        <div><span>pyana.deriveStealthKeys</span>(mnemonic, passphrase) &rarr; {spend_pubkey, view_pubkey, ...}</div>
+        <div><span>pyana.createStealthAddress</span>(spendPub, viewPub) &rarr; {one_time_pubkey, ephemeral_pubkey}</div>
+        <div><span>pyana.checkStealthOwnership</span>(viewPriv, spendPub, ephPub, otPub) &rarr; {is_ours}</div>
+        <div><span>pyana.createValueCommitment</span>(amount, blinding) &rarr; {commitment, blinding}</div>
+        <div><span>pyana.verifyConservation</span>(inputsJson, outputsJson) &rarr; {valid}</div>
+        <div><span>pyana.createBearerCap</span>(delegatorHex, targetHex, action, expiry) &rarr; {bearer_token_hex}</div>
+        <div><span>pyana.verifyBearerCap</span>(tokenHex, delegatorHex, targetHex, action, expiry, now) &rarr; {valid}</div>
+        <div><span>pyana.createFromFactory</span>(factoryVkHex, ownerHex, balance) &rarr; {child_vk, param_hash}</div>
+        <div><span>pyana.verifyProvenance</span>(cellVkHex, factoryVksJson) &rarr; {from_factory}</div>
+        <div><span>pyana.makeCellSovereign</span>(cellIdHex, balance) &rarr; {state_commitment, mode}</div>
+        <div><span>pyana.peerExchange</span>(senderHex, receiverHex, amount) &rarr; {exchange_id, proof_commitment}</div>
+        <div><span>pyana.composeProofs</span>(proofsJson, mode) &rarr; {composed_proof, valid}</div>
       </div>
     </div>
   `;
@@ -76,15 +93,47 @@ console.log('Token:', minted.token.slice(0, 40) + '...');
       wasm.attenuate_token(token, keyBytes, service, actions, expiresSecs),
     verifyToken: (token, keyBytes, appId, action) =>
       wasm.verify_token(token, keyBytes, appId, action),
-    generateStarkProof: (leafValue, depth) => wasm.generate_demo_stark_proof(leafValue, depth),
-    verifyStarkProof: (json) => wasm.verify_demo_stark_proof(json),
-    tamperProof: (json) => wasm.tamper_demo_stark_proof(json),
+    generateStarkProof: (leafValue, depth) => wasm.generate_stark_proof(leafValue, depth),
+    verifyStarkProof: (json) => wasm.verify_stark_proof(json),
+    tamperProof: (json) => wasm.tamper_stark_proof(json),
     merkleRoot: (leaves) => wasm.compute_merkle_root(JSON.stringify(leaves)),
     merkleMembership: (leaves, target) => wasm.merkle_membership_proof(JSON.stringify(leaves), target),
     evaluateDatalog: (facts, req) => wasm.evaluate_datalog(JSON.stringify(facts), JSON.stringify(req)),
     demonstrateFold: (facts, remove) => wasm.demonstrate_fold(JSON.stringify(facts), JSON.stringify(remove)),
     computeIntentId: (json) => wasm.compute_intent_id ? wasm.compute_intent_id(json) : json,
     blake3Hash: (input) => wasm.blake3_hash ? wasm.blake3_hash(input) : input,
+    // Privacy / new exports
+    deriveStealthKeys: (mnemonic, passphrase) => wasm.derive_stealth_keys(mnemonic, passphrase),
+    createStealthAddress: (spendPub, viewPub) => wasm.create_stealth_address(spendPub, viewPub),
+    checkStealthOwnership: (viewPriv, spendPub, ephPub, otPub) =>
+      wasm.check_stealth_ownership(viewPriv, spendPub, ephPub, otPub),
+    scanStealthAnnouncements: (viewPriv, spendPub, announcementsJson) =>
+      wasm.scan_stealth_announcements(viewPriv, spendPub, announcementsJson),
+    createValueCommitment: (amount, blinding) => wasm.create_value_commitment(amount, blinding),
+    verifyConservation: (inputsJson, outputsJson) =>
+      wasm.verify_conservation_proof(inputsJson, outputsJson),
+    buildCommittedTurn: (paramsJson) => wasm.build_committed_turn(paramsJson),
+    generateRangeProof: (amount, blinding, commitment) =>
+      wasm.generate_range_proof(amount, blinding, commitment),
+    createBearerCap: (delegatorHex, targetHex, action, expiry) =>
+      wasm.create_bearer_cap(delegatorHex, targetHex, action, expiry),
+    verifyBearerCap: (tokenHex, delegatorHex, targetHex, action, expiry, currentTime) =>
+      wasm.verify_bearer_cap(tokenHex, delegatorHex, targetHex, action, expiry, currentTime),
+    createFromFactory: (factoryVkHex, ownerHex, balance) =>
+      wasm.create_from_factory(factoryVkHex, ownerHex, balance),
+    verifyProvenance: (cellVkHex, factoryVksJson) =>
+      wasm.verify_provenance(cellVkHex, factoryVksJson),
+    makeCellSovereign: (cellIdHex, balance) =>
+      wasm.make_cell_sovereign(cellIdHex, balance),
+    peerExchange: (senderHex, receiverHex, amount) =>
+      wasm.peer_exchange_with_proof(senderHex, receiverHex, amount),
+    composeProofs: (proofsJson, mode) => wasm.compose_proofs(proofsJson, mode),
+    buildFacetMask: (effectsJson) => wasm.build_facet_mask(effectsJson),
+    generateSseTokens: (keywordsJson) => wasm.generate_sse_tokens(keywordsJson),
+    sealIntentBody: (plaintextJson, recipientPubkey) =>
+      wasm.seal_intent_body(plaintextJson, recipientPubkey),
+    unsealIntentBody: (ciphertext, ephPub, nonce, privkey) =>
+      wasm.unseal_intent_body(ciphertext, ephPub, nonce, privkey),
   };
 
   function appendOutput(level, text) {
@@ -333,6 +382,150 @@ const tokenOk = await pyana.verifyToken(att.token, root.key_bytes, "app", "read"
 const proofOk = await pyana.verifyStarkProof(JSON.stringify(proof));
 console.log("6. Token valid:", tokenOk.allowed, "| Proof valid:", proofOk.valid);
 console.log("\\nPipeline complete in", (performance.now() - t0).toFixed(1), "ms");`,
+
+    stealth: `// Stealth Address — derive keys, create address, check ownership
+const keys = await pyana.deriveStealthKeys("correct horse battery staple", "demo");
+console.log("View pubkey:", Array.from(keys.view_pubkey).slice(0, 8).map(b => b.toString(16).padStart(2, '0')).join('') + "...");
+console.log("Spend pubkey:", Array.from(keys.spend_pubkey).slice(0, 8).map(b => b.toString(16).padStart(2, '0')).join('') + "...");
+
+// Sender creates one-time address
+const addr = await pyana.createStealthAddress(
+  new Uint8Array(keys.spend_pubkey),
+  new Uint8Array(keys.view_pubkey)
+);
+console.log("\\nOne-time address:", Array.from(addr.one_time_pubkey).slice(0, 8).map(b => b.toString(16).padStart(2, '0')).join('') + "...");
+console.log("Ephemeral pubkey:", Array.from(addr.ephemeral_pubkey).slice(0, 8).map(b => b.toString(16).padStart(2, '0')).join('') + "...");
+
+// Recipient checks ownership
+const check = await pyana.checkStealthOwnership(
+  new Uint8Array(keys.view_privkey),
+  new Uint8Array(keys.spend_pubkey),
+  new Uint8Array(addr.ephemeral_pubkey),
+  new Uint8Array(addr.one_time_pubkey)
+);
+console.log("\\nIs ours?", check.is_ours);
+console.log("Can derive spending key:", check.one_time_privkey !== null);`,
+
+    bearer: `// Bearer Capability — create, verify, check expiry
+// Generate hex keys (32 bytes = 64 hex chars)
+function randomHex() {
+  const b = new Uint8Array(32);
+  crypto.getRandomValues(b);
+  return Array.from(b).map(x => x.toString(16).padStart(2, '0')).join('');
+}
+
+const delegator = randomHex();
+const target = randomHex();
+console.log("Delegator:", delegator.slice(0, 16) + "...");
+console.log("Target cell:", target.slice(0, 16) + "...");
+
+// Create bearer cap (no expiry)
+const cap = await pyana.createBearerCap(delegator, target, "transfer", 0n);
+console.log("\\nBearer token:", cap.bearer_token_hex.slice(0, 24) + "...");
+console.log("Action:", cap.action);
+
+// Verify it
+const now = BigInt(Math.floor(Date.now() / 1000));
+const valid = await pyana.verifyBearerCap(cap.bearer_token_hex, delegator, target, "transfer", 0n, now);
+console.log("\\nValid:", valid.valid);
+console.log("Expired:", valid.expired);
+
+// Try wrong action
+const wrong = await pyana.verifyBearerCap(cap.bearer_token_hex, delegator, target, "admin", 0n, now);
+console.log("\\nWrong action valid:", wrong.valid, "(expected false)");`,
+
+    factory: `// Factory — deploy, create child, verify provenance
+function randomHex() {
+  const b = new Uint8Array(32);
+  crypto.getRandomValues(b);
+  return Array.from(b).map(x => x.toString(16).padStart(2, '0')).join('');
+}
+
+const factoryVk = randomHex();
+const ownerPk = randomHex();
+console.log("Factory VK:", factoryVk.slice(0, 20) + "...");
+
+// Create child cell from factory
+const child = await pyana.createFromFactory(factoryVk, ownerPk, 100n);
+console.log("\\nChild VK:", child.child_vk.slice(0, 20) + "...");
+console.log("Param hash:", child.param_hash.slice(0, 20) + "...");
+
+// Verify provenance
+const prov = await pyana.verifyProvenance(child.child_vk, JSON.stringify([factoryVk]));
+console.log("\\nFrom known factory:", prov.from_factory);
+console.log("Factory:", prov.factory_vk ? prov.factory_vk.slice(0, 20) + "..." : "none");
+
+// Try unknown cell
+const unknownCell = randomHex();
+const prov2 = await pyana.verifyProvenance(unknownCell, JSON.stringify([factoryVk]));
+console.log("\\nUnknown cell from factory:", prov2.from_factory, "(expected false)");`,
+
+    composition: `// Proof Composition — generate 3 proofs, compose with AND
+const t0 = performance.now();
+
+// Generate individual proofs
+const proof1 = await pyana.generateStarkProof(42, 3);
+console.log("1. Membership proof:", proof1.proof_size_bytes, "bytes");
+
+const proof2 = await pyana.generateStarkProof(99, 3);
+console.log("2. Second proof:", proof2.proof_size_bytes, "bytes");
+
+const proof3 = await pyana.generateStarkProof(7, 3);
+console.log("3. Third proof:", proof3.proof_size_bytes, "bytes");
+
+// Compose with AND
+const composed = await pyana.composeProofs(JSON.stringify([
+  { proof_json: JSON.stringify(proof1), public_inputs: [42, 3] },
+  { proof_json: JSON.stringify(proof2), public_inputs: [99, 3] },
+  { proof_json: JSON.stringify(proof3), public_inputs: [7, 3] },
+]), "and");
+
+console.log("\\nComposed (AND):", composed.composed_proof.slice(0, 32) + "...");
+console.log("Mode:", composed.mode);
+console.log("Input count:", composed.input_count);
+console.log("Valid:", composed.valid);
+console.log("\\nTotal time:", (performance.now() - t0).toFixed(1), "ms");`,
+
+    'private-transfer': `// Private Transfer — stealth address + commitment + conservation
+const t0 = performance.now();
+
+// 1. Recipient derives stealth keys
+const keys = await pyana.deriveStealthKeys("abandon abandon abandon", "test");
+console.log("1. Recipient stealth keys derived");
+
+// 2. Sender creates one-time address
+const addr = await pyana.createStealthAddress(
+  new Uint8Array(keys.spend_pubkey),
+  new Uint8Array(keys.view_pubkey)
+);
+console.log("2. One-time address created");
+
+// 3. Sender commits transfer amount (500 tokens)
+const blinding = new Uint8Array(32);
+crypto.getRandomValues(blinding);
+const commit = await pyana.createValueCommitment(500n, blinding);
+console.log("3. Value committed:", Array.from(new Uint8Array(commit.commitment)).slice(0,8).map(b=>b.toString(16).padStart(2,'0')).join('') + "...");
+
+// 4. Recipient scans and finds the payment
+const check = await pyana.checkStealthOwnership(
+  new Uint8Array(keys.view_privkey),
+  new Uint8Array(keys.spend_pubkey),
+  new Uint8Array(addr.ephemeral_pubkey),
+  new Uint8Array(addr.one_time_pubkey)
+);
+console.log("4. Recipient scan result: is_ours =", check.is_ours);
+
+// 5. Verify conservation (1000 in -> 500 transfer + 500 change)
+function rh() { return Array.from(crypto.getRandomValues(new Uint8Array(32))).map(b=>b.toString(16).padStart(2,'0')).join(''); }
+const conserv = await pyana.verifyConservation(
+  JSON.stringify([rh()]),
+  JSON.stringify([rh(), rh()])
+);
+console.log("5. Conservation valid:", conserv.valid);
+console.log("\\nFull private transfer in", (performance.now() - t0).toFixed(1), "ms");
+console.log("   Sender identity: HIDDEN (stealth address)");
+console.log("   Recipient identity: HIDDEN (one-time key)");
+console.log("   Amount: HIDDEN (Pedersen commitment)");`,
   };
 
   scenarioSelect.addEventListener('change', () => {

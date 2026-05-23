@@ -6,7 +6,7 @@
 
 == Recursive Proof Composition
 
-Recursive verification is implemented for pairs of proofs (verified via Plonky3). The path to a single constant-size proof covering all authorization sub-proofs requires composing heterogeneous AIRs (derivation + fold + membership) in one recursive proof. The `build_recursive_ivc_chain` function chains N fold proofs; extending this to heterogeneous composition is the primary remaining proof-system work.
+Recursive verification is operational for pairs of proofs (verified via Plonky3) and sequential IVC chains (`build_recursive_ivc_chain`). STARK-in-Pickles wrapping produces constant-size recursive SNARKs for Mina-compatible verification. The remaining work is composing heterogeneous AIRs (derivation + fold + membership + Effect VM) in a single recursive proof. The DSL composition operators (`compose_chain`, `compose_aggregate`) provide the structural framework; the circuit-level integration for arbitrary AIR widths is the primary remaining proof-system work.
 
 == Full Privacy Pipeline
 
@@ -18,7 +18,7 @@ Encrypted turn ordering (Section 6) requires either threshold decryption ceremon
 
 == Multi-Hop Gossip
 
-Gossip is currently one-hop. Multi-hop Plumtree forwarding is implemented but not yet wired between federation nodes for cross-silo dissemination. The protocol exists; the integration is pending.
+Gossip is currently one-hop for cross-silo dissemination. Multi-hop Plumtree forwarding and Dandelion++ stem routing are implemented for transaction privacy, but cross-silo multi-hop gossip for block propagation is not yet wired between federation nodes. The protocol exists; the integration is pending.
 
 == Formal Verification
 
@@ -43,9 +43,19 @@ Common patterns that could become protocol-level primitives:
 
 Current targets for agent-scale operation:
 - Sub-10ms proof generation for simple authority checks (latency-sensitive coordination)
-- Sub-1 KiB proofs for bandwidth-constrained gossip (Binius may deliver this)
-- True recursive composition for constant-size multi-capability proofs
+- Sub-1 KiB proofs for bandwidth-constrained gossip (Binius backend may deliver this)
+- Full heterogeneous recursive composition for constant-size multi-capability proofs
 - Hardware acceleration (GPU/FPGA proving for throughput)
+- Effect VM optimization: batch proving multiple turns in a single trace (amortized cost)
+
+== EVM Bridge Maturation
+
+The SP1-based EVM bridge is architecturally complete but the guest program requires regeneration against the current Plonky3 backend. Remaining work:
+- Regenerate SP1 guest ELF against Plonky3 STARK verifier
+- Deploy VK registry contract with governance (multisig parameter updates)
+- Production incremental Merkle tree for deposits
+- Gas optimization for the on-chain verification path
+- Cross-chain message passing (Base $arrow.r$ Pyana deposit confirmations)
 
 == Post-Quantum Migration
 

@@ -105,6 +105,45 @@ The privacy architecture is deployed in phases:
 
 *Phase 6 (future):* Federation privacy---turns encrypted or proved without revealing content to validators. See @sec-federation-privacy.
 
+== Implemented Privacy Mechanisms
+
+Beyond the credential privacy pipeline (Phases 1--6 above), several privacy mechanisms are operational today:
+
+=== Stealth Addresses
+
+Pyana implements stealth addresses for unlinkable payment receipt. The construction uses X25519 Diffie-Hellman for shared secret derivation and Ed25519 for the actual recipient key:
+
++ Sender computes ephemeral X25519 keypair $(r, R = r dot G)$.
++ Shared secret $s = "BLAKE3"("DH"(r, "recipient_scan_key"))$.
++ Stealth address derived: $"addr" = "recipient_spend_key" + "derive_ed25519"(s)$.
++ View tag $= s[0]$ enables fast scanning (recipients check one byte before attempting full derivation).
+
+Recipients scan by: check view tag (skip 255/256 irrelevant transactions), then attempt full derivation.
+
+=== Pedersen Commitments
+
+Value commitments use Pedersen commitments over Ristretto with per-asset-type generators:
+
+$ C = v dot G_"value" + r dot H + a dot G_"asset" $
+
+where $G_"value"$, $H$, and $G_"asset"$ are independent generators (derived via hash-to-group with distinct domain separators). The asset type $a$ is hidden inside the commitment---a verifier cannot determine the asset type without the opening.
+
+=== Bulletproof Range Proofs
+
+Range proofs use Bulletproofs over Ristretto to prove $v in [0, 2^(64))$ without revealing $v$. These are verified in the executor (not merely checked for non-empty bytes). The `RangeProofAir` also supports in-circuit range verification for STARK-based proofs.
+
+=== Dandelion++ Stem Routing
+
+Transaction propagation uses Dandelion++ @dandelion to obscure the originator's network identity. In the stem phase, transactions are forwarded along a random path ($p = 0.9$ forwarding probability, $tilde$10 hops expected before fluff). The fluff phase uses standard gossip. This prevents a network observer from correlating transaction origin with IP address.
+
+=== Delay Pool and Dummy Traffic
+
+Intent fulfillments pass through a _delay pool_: a 30-second batching window that collects fulfillments and releases them simultaneously, mixed with dummy traffic. This prevents timing correlation between intent broadcast and fulfillment response. The pool uses BLAKE3-keyed MAC authentication (encrypt-then-MAC) for SSE-encrypted intent streams.
+
+=== Commitment Tree Root History
+
+Proofs may reference any recent Merkle root (not only the latest). The federation maintains a sliding window of recent roots with TTL-based expiry. This accommodates proof generation latency: a prover can generate a STARK proof against root $R_n$ even if the current root has advanced to $R_(n+k)$, provided $R_n$ is still within the acceptance window.
+
 == Post-Quantum Safety
 
 All privacy additions maintain PQ safety:
@@ -113,5 +152,7 @@ All privacy additions maintain PQ safety:
 - Non-revocation uses Poseidon2 Merkle proofs
 - Predicates use BabyBear field arithmetic
 - The recursive verifier uses FRI (hash-based)
+- Stealth addresses use X25519/Ed25519 (classical; confined within peer relationships)
+- Pedersen/Bulletproofs use Ristretto (classical; value privacy only, not cross-federation)
 
-The only non-PQ component remains BLS12-381 threshold signatures in the federation layer, on the PQ migration roadmap awaiting lattice threshold signature standardization.
+The non-PQ components (BLS12-381 threshold signatures, Ed25519, X25519, Ristretto) are confined within federation trust boundaries or peer relationships. Everything that crosses a trust boundary uses hash-based (PQ-secure) proofs. The PQ migration roadmap awaits lattice threshold signature standardization for BLS replacement.

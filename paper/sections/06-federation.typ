@@ -4,9 +4,11 @@
 
 = Federation and Consensus <sec-federation>
 
-== Federation as Ordering Service
+== Federation as Ordering Service (Not Execution)
 
-The federation's role is minimal: agree on a total order of turns. Execution is deterministic given the ordering. State correctness is verified via state roots in blocks. The federation does NOT attest to cell state---cell state is proved by the cell's own receipt chain.
+The federation's role is deliberately minimal: agree on a total order of turns, deduplicate nullifiers, anchor Merkle roots, and provide discovery. The federation does NOT execute turns for sovereign cells---it verifies proofs and records commitments. State correctness is proved by the cell's own receipt chain.
+
+For sovereign cells (the default), the federation stores only a 32-byte commitment. The cell's owner maintains full state, generates STARK proofs of valid transitions, and submits proofs + nullifiers to the federation. The federation verifies the proof and includes the new commitment in its attested root. This is the notary model: the federation witnesses that a valid transition occurred without knowing what the transition contained.
 
 Attested roots serve as freshness anchors for offline verification. A verifier with a recent root can check any presentation without contacting the federation. There is no "call home" requirement.
 
@@ -145,6 +147,22 @@ Cross-silo turns use two-phase commit with threshold quorum certificates. Fast u
 
 Non-atomic operations use a causal DAG of hash-linked events, providing partial ordering without global consensus.
 
+== External Chain Interop
+
+Pyana provides three interop bridges, each using proof translation rather than consensus bridging:
+
+=== EVM Bridge (Ethereum/Base)
+
+SP1 wraps Pyana STARK proofs in Groth16 for on-chain verification at ~200K gas. The bridge includes an incremental Merkle tree for deposits ($O(log n)$ insertions), a VK registry with governance-controlled parameter updates, and commit-reveal frontrunning protection. *Status:* Architecture complete; guest program regeneration against Plonky3 backend in progress.
+
+=== Mina Bridge
+
+Native Pickles recursion via the STARK-in-Pickles pipeline. A Pyana STARK proof is verified inside a Kimchi circuit, producing a Pickles recursive proof compatible with Mina's verification infrastructure. Assisted recursion is operational. This enables Mina zkApps to natively verify Pyana state transitions.
+
+=== Midnight/Cardano Bridge
+
+Observation-based bridging using the same pattern as Midnight's Cardano bridge. The DSL's ZKIR v3 backend compiles Pyana constraint programs directly into Midnight-compatible contracts, enabling a Midnight validator to verify Pyana proofs without a trust bridge. This is a proof-translation layer, not a consensus bridge.
+
 == Network Layer
 
-Message dissemination uses Plumtree-inspired @plumtree hybrid push over QUIC: eager push (degree 3) for spanning-tree delivery, lazy push (`IHave` notifications) for redundancy, and periodic Bloom filter anti-entropy. All inter-silo communication uses QUIC (via Quinn) with multiplexed streams and 0-RTT resumption.
+Message dissemination uses Plumtree-inspired @plumtree hybrid push over QUIC: eager push (degree 3) for spanning-tree delivery, lazy push (`IHave` notifications) for redundancy, and periodic Bloom filter anti-entropy. All inter-silo communication uses QUIC (via Quinn) with multiplexed streams and 0-RTT resumption. Transaction propagation additionally uses Dandelion++ @dandelion stem routing for network-level privacy (see Section 5).

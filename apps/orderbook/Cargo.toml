@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 pyana-app-framework = { path = "../../app-framework" }
-pyana-circuit = { path = "../../circuit" }
+pyana-circuit = { path = "../../circuit", default-features = false, features = ["mock"] }
 pyana-turn = { path = "../../turn" }
 pyana-intent = { path = "../../intent" }
 pyana-types = { path = "../../types" }

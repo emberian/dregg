@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Explorer — Pyana</title>
-  <meta name="description" content="Chain explorer for pyana federation state: blocks, turns, receipts, cells, capabilities, proofs, and intents.">
+  <meta name="description" content="Chain explorer for pyana federation state: blocks, turns, receipts, cells, capabilities, proofs, intents, federation, notes, and apps.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0f0d'/%3E%3Ctext x='16' y='22' font-size='16' text-anchor='middle' fill='%235b8a5a' font-family='monospace'%3E%CF%80%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="style.css">
 </head>
@@ -98,6 +98,18 @@
           <span class="ex-nav__icon">&#9733;</span>
           <span class="ex-nav__label">Intents</span>
         </button>
+        <button class="ex-nav__item" data-page="federation">
+          <span class="ex-nav__icon">&#9678;</span>
+          <span class="ex-nav__label">Federation</span>
+        </button>
+        <button class="ex-nav__item" data-page="notes">
+          <span class="ex-nav__icon">&#9838;</span>
+          <span class="ex-nav__label">Notes</span>
+        </button>
+        <button class="ex-nav__item" data-page="apps">
+          <span class="ex-nav__icon">&#9881;</span>
+          <span class="ex-nav__label">Apps</span>
+        </button>
       </div>
       <div class="ex-nav__footer">
         <div class="ex-nav__height" id="nav-height">
@@ -184,7 +196,7 @@
       <section class="ex-page" id="page-cells">
         <div class="ex-page__header">
           <h2>Cells</h2>
-          <p>Agents in the federation ledger. Each cell has an identity, balance, capabilities, and delegation state.</p>
+          <p>Agents in the federation ledger. Hosted cells have full state on-chain; sovereign cells store only a commitment. Factory cells derive provenance from a parent VK.</p>
         </div>
         <div class="ex-table-container" id="cells-table">
           <div class="loading-placeholder">Loading cells...</div>
@@ -199,7 +211,7 @@
       <section class="ex-page" id="page-turns">
         <div class="ex-page__header">
           <h2>Turns</h2>
-          <p>Submitted turns (transactions) with their call forests, effects, and execution results.</p>
+          <p>Submitted turns with their call forests, effects, and execution results. Supports bearer auth, proof-carrying sovereign turns, and multi-party atomic turns.</p>
         </div>
         <div class="ex-table-container" id="turns-table">
           <div class="loading-placeholder">Loading turns...</div>
@@ -236,7 +248,7 @@
       <section class="ex-page" id="page-proofs">
         <div class="ex-page__header">
           <h2>Proofs</h2>
-          <p>STARK proofs generated and verified by the node — membership, predicate, and block transition proofs.</p>
+          <p>Proof system backends: STARK (BabyBear/Poseidon2), Kimchi (Pasta), and composed multi-proof bindings.</p>
         </div>
         <div class="ex-proofs-list" id="proofs-list">
           <div class="loading-placeholder">Loading proofs...</div>
@@ -247,7 +259,7 @@
       <section class="ex-page" id="page-intents">
         <div class="ex-page__header">
           <h2>Intents</h2>
-          <p>Active intents in the node's pool, fulfilled intents, and pending conditionals awaiting resolution.</p>
+          <p>Active intents in the node's pool. Supports encrypted SSE intents, delay pool, and commit-reveal fulfillment.</p>
         </div>
         <div class="ex-intents-sections">
           <div class="overview-panel">
@@ -268,6 +280,144 @@
               <div class="loading-placeholder">Loading conditionals...</div>
             </div>
           </div>
+        </div>
+      </section>
+
+      <!-- Federation page -->
+      <section class="ex-page" id="page-federation">
+        <div class="ex-page__header">
+          <h2>Federation</h2>
+          <p>3-node Morpheus BFT consensus: node health, block height, attested roots, and quorum certificates.</p>
+        </div>
+        <div class="overview-stats" id="federation-stats">
+          <div class="stat-card">
+            <div class="stat-card__label">Nodes</div>
+            <div class="stat-card__value" id="fed-stat-nodes">--</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card__label">Block Height</div>
+            <div class="stat-card__value" id="fed-stat-height">--</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card__label">Latest Root</div>
+            <div class="stat-card__value stat-card__value--hash" id="fed-stat-root">--</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card__label">Health</div>
+            <div class="stat-card__value" id="fed-stat-health">--</div>
+          </div>
+        </div>
+        <div class="overview-sections">
+          <div class="overview-panel">
+            <div class="overview-panel__header">
+              <h3>Node Status</h3>
+            </div>
+            <div class="overview-panel__body" id="federation-nodes">
+              <div class="loading-placeholder">Loading federation nodes...</div>
+            </div>
+          </div>
+          <div class="overview-panel">
+            <div class="overview-panel__header">
+              <h3>Root History</h3>
+            </div>
+            <div class="overview-panel__body" id="federation-root-history">
+              <div class="loading-placeholder">Loading root history...</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Notes page -->
+      <section class="ex-page" id="page-notes">
+        <div class="ex-page__header">
+          <h2>Notes</h2>
+          <p>Note tree state: commitments, nullifiers, hidden asset types, and root history.</p>
+        </div>
+        <div class="overview-stats" id="notes-stats">
+          <div class="stat-card">
+            <div class="stat-card__label">Total Notes</div>
+            <div class="stat-card__value" id="notes-stat-count">--</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card__label">Nullifier Set Root</div>
+            <div class="stat-card__value stat-card__value--hash" id="notes-stat-nullifier-root">--</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card__label">Note Tree Root</div>
+            <div class="stat-card__value stat-card__value--hash" id="notes-stat-tree-root">--</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card__label">Revocations</div>
+            <div class="stat-card__value" id="notes-stat-revocations">--</div>
+          </div>
+        </div>
+        <div class="overview-sections">
+          <div class="overview-panel">
+            <div class="overview-panel__header">
+              <h3>Recent Root History</h3>
+            </div>
+            <div class="overview-panel__body" id="notes-root-history">
+              <div class="loading-placeholder">Loading note tree roots...</div>
+            </div>
+          </div>
+          <div class="overview-panel">
+            <div class="overview-panel__header">
+              <h3>Checkpoint State</h3>
+            </div>
+            <div class="overview-panel__body" id="notes-checkpoint-state">
+              <div class="loading-placeholder">Loading checkpoint state...</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Apps page -->
+      <section class="ex-page" id="page-apps">
+        <div class="ex-page__header">
+          <h2>Apps</h2>
+          <p>Application-specific data: gallery auctions, AMM pools, orderbook, lending positions, CDPs, and credentials.</p>
+        </div>
+        <div class="ex-apps-grid" id="apps-grid">
+          <div class="app-card" data-app="gallery">
+            <div class="app-card__icon">&#9670;</div>
+            <div class="app-card__name">Gallery</div>
+            <div class="app-card__desc">NFT auctions with ZK ownership proofs</div>
+            <div class="app-card__status" id="app-gallery-status">--</div>
+          </div>
+          <div class="app-card" data-app="amm">
+            <div class="app-card__icon">&#9883;</div>
+            <div class="app-card__name">AMM Pools</div>
+            <div class="app-card__desc">Constant-product liquidity pools</div>
+            <div class="app-card__status" id="app-amm-status">--</div>
+          </div>
+          <div class="app-card" data-app="orderbook">
+            <div class="app-card__icon">&#9776;</div>
+            <div class="app-card__name">Orderbook</div>
+            <div class="app-card__desc">On-chain limit orders and matching</div>
+            <div class="app-card__status" id="app-orderbook-status">--</div>
+          </div>
+          <div class="app-card" data-app="lending">
+            <div class="app-card__icon">&#9733;</div>
+            <div class="app-card__name">Lending</div>
+            <div class="app-card__desc">CDP positions and collateral health</div>
+            <div class="app-card__status" id="app-lending-status">--</div>
+          </div>
+          <div class="app-card" data-app="stablecoin">
+            <div class="app-card__icon">&#8373;</div>
+            <div class="app-card__name">Stablecoin</div>
+            <div class="app-card__desc">Algorithmic stablecoin CDPs</div>
+            <div class="app-card__status" id="app-stablecoin-status">--</div>
+          </div>
+          <div class="app-card" data-app="identity">
+            <div class="app-card__icon">&#9906;</div>
+            <div class="app-card__name">Credentials</div>
+            <div class="app-card__desc">Anonymous credentials with RBAC</div>
+            <div class="app-card__status" id="app-identity-status">--</div>
+          </div>
+        </div>
+        <div class="ex-detail-panel" id="app-detail" hidden>
+          <button class="ex-detail-panel__close" id="app-detail-close">&times;</button>
+          <div class="ex-detail-panel__content" id="app-detail-content"></div>
         </div>
       </section>
     </main>

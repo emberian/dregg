@@ -34,7 +34,7 @@ Ethereum achieves global consensus over shared state. Pyana differs fundamentall
 
 === Midnight
 
-*Midnight* @midnight. Privacy-focused blockchain using Plonk proofs. Unlike Pyana, Midnight targets DeFi, requires chain liveness, and lacks capability delegation semantics. Midnight provides privacy for _transactions_; Pyana provides privacy for _authority_ (who delegated what to whom).
+*Midnight* @midnight. Privacy-focused blockchain using Plonk proofs. Unlike Pyana, Midnight targets DeFi, requires chain liveness, and lacks capability delegation semantics. Midnight provides privacy for _transactions_; Pyana provides privacy for _authority_ (who delegated what to whom). Pyana's DSL includes a ZKIR v3 backend that compiles constraint programs to Midnight-compatible contracts, enabling observation-based bridging (the same pattern used for Midnight-Cardano interop). This is not a consensus bridge---it is a proof-translation layer that allows a Midnight contract to verify Pyana state transitions natively.
 
 === Zcash
 
@@ -79,6 +79,9 @@ Zcash pioneered shielded transactions with SNARK proofs. Pyana adapts the note/n
     [Authority model], [Capability], [Address], [Address], [Capability],
     [Economic model], [Federated], [PoS global], [PoW global], [N/A],
     [Agent support], [Native], [Smart contracts], [None], [Processes],
+    [Sovereign state], [Yes (default)], [No (global)], [No (global)], [No (kernel)],
+    [Multi-backend proofs], [8 backends], [1 (EVM)], [1 (Groth16)], [N/A],
+    [EVM interop], [SP1/Groth16], [Native], [No], [N/A],
   ),
-  caption: [System positioning. Pyana combines capability-based authority with zero-knowledge privacy and federated distribution.],
+  caption: [System positioning. Pyana combines capability-based authority with zero-knowledge privacy, sovereign state ownership, and federated distribution.],
 )

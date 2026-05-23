@@ -2,7 +2,8 @@
  * pyana explorer — main application logic.
  *
  * Single-page chain explorer that connects to a pyana node and displays
- * federation state: blocks, turns, receipts, cells, capabilities, proofs, intents.
+ * federation state: blocks, turns, receipts, cells, capabilities, proofs,
+ * intents, federation status, notes, and deployed apps.
  */
 
 import * as api from './api.js';
@@ -52,19 +53,15 @@ function initNavigation() {
 }
 
 function navigateTo(page) {
-  // Update nav
   document.querySelectorAll('.ex-nav__item').forEach(el => el.classList.remove('active'));
   const navItem = document.querySelector(`[data-page="${page}"]`);
   if (navItem) navItem.classList.add('active');
 
-  // Update pages
   document.querySelectorAll('.ex-page').forEach(el => el.classList.remove('active'));
   const pageEl = document.getElementById(`page-${page}`);
   if (pageEl) pageEl.classList.add('active');
 
   currentPage = page;
-
-  // Load page-specific data
   loadPageData(page);
 }
 
@@ -83,36 +80,27 @@ function initSearch() {
 
 function handleSearch(query) {
   if (!query) return;
-
-  // Detect query type
   if (/^\d+$/.test(query)) {
-    // Block height
     navigateTo('blocks');
     highlightBlock(parseInt(query));
   } else if (query.length === 64 && /^[0-9a-fA-F]+$/.test(query)) {
-    // Full hex hash — could be cell, turn, or receipt
     navigateTo('cells');
     lookupByHash(query);
   } else if (query.length > 8 && /^[0-9a-fA-F]+$/.test(query)) {
-    // Partial hash
     navigateTo('cells');
     lookupByHash(query);
   }
 }
 
-async function highlightBlock(height) {
-  // Will be highlighted when blocks render
-}
+async function highlightBlock(height) { /* highlighted on render */ }
 
 async function lookupByHash(hash) {
-  // Try cell first
   try {
     const cell = await api.getCell(hash.padEnd(64, '0'));
     if (cell && cell.found) {
       renderCellDetail(cell);
-      return;
     }
-  } catch {}
+  } catch { /* ignore */ }
 }
 
 // =============================================================================
@@ -128,7 +116,6 @@ function initSettings() {
   const urlInput = document.getElementById('node-url-input');
   const autoRefreshToggle = document.getElementById('auto-refresh-toggle');
 
-  // Load current settings
   urlInput.value = api.getNodeUrl();
   autoRefreshToggle.checked = autoRefresh;
 
@@ -153,12 +140,10 @@ function initSettings() {
 
 function initKeyBindings() {
   document.addEventListener('keydown', (e) => {
-    // Focus search on /
     if (e.key === '/' && !isInputFocused()) {
       e.preventDefault();
       document.getElementById('search-input').focus();
     }
-    // Escape closes modals and detail panels
     if (e.key === 'Escape') {
       document.getElementById('settings-modal').hidden = true;
       document.querySelectorAll('.ex-detail-panel').forEach(el => el.hidden = true);
@@ -218,6 +203,9 @@ async function loadPageData(page) {
     case 'capabilities': await loadCapabilities(); break;
     case 'proofs': await loadProofs(); break;
     case 'intents': await loadIntents(); break;
+    case 'federation': await loadFederation(); break;
+    case 'notes': await loadNotes(); break;
+    case 'apps': await loadApps(); break;
   }
 }
 
@@ -253,7 +241,6 @@ function updateOverviewStats() {
 }
 
 async function loadOverview() {
-  // Update intent/conditional counts
   try {
     cachedIntents = await api.getIntents();
     document.getElementById('stat-intents').textContent = api.formatNumber(cachedIntents.length);
@@ -268,23 +255,19 @@ async function loadOverview() {
     document.getElementById('stat-conditionals').textContent = '--';
   }
 
-  // Checkpoint
   try {
     cachedCheckpoint = await api.getCheckpoint();
     renderCheckpoint(cachedCheckpoint);
   } catch {
-    document.getElementById('checkpoint-info').innerHTML =
-      '<div class="empty-state">No checkpoint available</div>';
+    document.getElementById('checkpoint-info').innerHTML = '<div class="empty-state">No checkpoint available</div>';
     document.getElementById('checkpoint-badge').textContent = '--';
   }
 
-  // Recent roots
   try {
     cachedBlocks = await api.getBlocks();
     renderRecentRoots(cachedBlocks.slice(-10).reverse());
   } catch {
-    document.getElementById('recent-roots').innerHTML =
-      '<div class="empty-state">No attested roots found</div>';
+    document.getElementById('recent-roots').innerHTML = '<div class="empty-state">No attested roots found</div>';
   }
 }
 
@@ -368,20 +351,10 @@ function renderBlocksTable(blocks) {
     container.innerHTML = '<div class="empty-state"><div class="empty-state__icon">&#9632;</div>No blocks found</div>';
     return;
   }
-
-  // Sort descending by height
   const sorted = [...blocks].sort((a, b) => b.height - a.height);
-
   container.innerHTML = `
     <table class="ex-table">
-      <thead>
-        <tr>
-          <th>Height</th>
-          <th>Merkle Root</th>
-          <th>Signatures</th>
-          <th>Time</th>
-        </tr>
-      </thead>
+      <thead><tr><th>Height</th><th>Merkle Root</th><th>Signatures</th><th>Time</th></tr></thead>
       <tbody>
         ${sorted.map(b => `
           <tr data-height="${b.height}">
@@ -394,12 +367,9 @@ function renderBlocksTable(blocks) {
       </tbody>
     </table>
   `;
-
-  // Click handler for rows
   container.querySelectorAll('tr[data-height]').forEach(row => {
     row.addEventListener('click', () => {
-      const height = parseInt(row.dataset.height);
-      const block = sorted.find(b => b.height === height);
+      const block = sorted.find(b => b.height === parseInt(row.dataset.height));
       if (block) renderBlockDetail(block);
     });
   });
@@ -409,7 +379,6 @@ function renderBlockDetail(block) {
   const panel = document.getElementById('block-detail');
   const content = document.getElementById('block-detail-content');
   panel.hidden = false;
-
   content.innerHTML = `
     <h4>Block #${block.height}</h4>
     <div class="detail-grid">
@@ -423,7 +392,6 @@ function renderBlockDetail(block) {
       <span class="detail-grid__value">${api.formatTime(block.timestamp)}</span>
     </div>
   `;
-
   document.getElementById('block-detail-close').onclick = () => panel.hidden = true;
 }
 
@@ -436,13 +404,28 @@ async function loadCells() {
     const cells = await api.getCells();
     renderCellsTable(cells);
   } catch (err) {
-    // getCells might 404 if endpoint doesn't exist yet
     document.getElementById('cells-table').innerHTML = `
       <div class="empty-state">
         <div class="empty-state__icon">&#9673;</div>
         Cell listing requires the /api/cells endpoint.<br>
         Use the search bar to look up a specific cell by ID.
       </div>`;
+  }
+}
+
+function classifyCell(cell) {
+  if (cell.mode === 'sovereign') return 'sovereign';
+  if (cell.mode === 'hosted') return 'hosted';
+  if (!cell.balance && !cell.has_delegate && cell.capability_count === 0 && !cell.has_program) return 'sovereign';
+  if (cell.has_program) return 'factory';
+  return 'hosted';
+}
+
+function renderCellMode(mode) {
+  switch (mode) {
+    case 'sovereign': return '<span class="cell-badge cell-badge--sovereign">sovereign</span>';
+    case 'factory': return '<span class="cell-badge cell-badge--factory">factory</span>';
+    default: return '<span class="cell-badge cell-badge--hosted">hosted</span>';
   }
 }
 
@@ -455,27 +438,21 @@ function renderCellsTable(cells) {
 
   container.innerHTML = `
     <table class="ex-table">
-      <thead>
-        <tr>
-          <th>Cell ID</th>
-          <th>Balance</th>
-          <th>Nonce</th>
-          <th>Capabilities</th>
-          <th>Delegation</th>
-          <th>Program</th>
-        </tr>
-      </thead>
+      <thead><tr><th>Cell ID</th><th>Mode</th><th>Balance</th><th>Nonce</th><th>Caps</th><th>Delegation</th><th>Program</th></tr></thead>
       <tbody>
-        ${cells.map(c => `
+        ${cells.map(c => {
+          const mode = classifyCell(c);
+          return `
           <tr data-cell-id="${c.id}">
             <td class="cell-hash">${api.shortHash(c.id, 10, 6)}</td>
+            <td>${renderCellMode(mode)}</td>
             <td class="cell-number">${api.formatNumber(c.balance)}</td>
             <td>${api.formatNumber(c.nonce)}</td>
             <td>${c.capability_count}</td>
             <td>${c.has_delegate ? '<span class="cell-badge cell-badge--info">delegated</span>' : '--'}</td>
             <td>${c.has_program ? '<span class="cell-badge cell-badge--success">active</span>' : '<span class="cell-badge cell-badge--warning">none</span>'}</td>
-          </tr>
-        `).join('')}
+          </tr>`;
+        }).join('')}
       </tbody>
     </table>
   `;
@@ -498,6 +475,14 @@ function renderCellDetail(cell) {
   const content = document.getElementById('cell-detail-content');
   panel.hidden = false;
 
+  const mode = classifyCell(cell);
+  let modeSection = `<span class="detail-grid__label">Mode</span><span class="detail-grid__value">${renderCellMode(mode)}</span>`;
+  if (mode === 'sovereign') {
+    modeSection += `<span class="detail-grid__label">Storage</span><span class="detail-grid__value">Commitment only (state held locally)</span>`;
+  } else if (mode === 'factory') {
+    modeSection += `<span class="detail-grid__label">Provenance</span><span class="detail-grid__value">Factory-created (VK derived from parent)</span>`;
+  }
+
   content.innerHTML = `
     <h4>Cell Detail</h4>
     <div class="detail-grid">
@@ -505,6 +490,7 @@ function renderCellDetail(cell) {
       <span class="detail-grid__value detail-grid__value--hash">${cell.id}</span>
       <span class="detail-grid__label">Status</span>
       <span class="detail-grid__value">${cell.found ? '<span class="cell-badge cell-badge--success">active</span>' : '<span class="cell-badge cell-badge--danger">not found</span>'}</span>
+      ${modeSection}
       <span class="detail-grid__label">Balance</span>
       <span class="detail-grid__value detail-grid__value--highlight">${api.formatNumber(cell.balance)} computrons</span>
       <span class="detail-grid__label">Nonce</span>
@@ -523,7 +509,6 @@ function renderCellDetail(cell) {
       <span class="detail-grid__value">${cell.proved_state ? '<span class="cell-badge cell-badge--success">verified</span>' : 'no'}</span>
     </div>
   `;
-
   document.getElementById('cell-detail-close').onclick = () => panel.hidden = true;
 }
 
@@ -532,7 +517,6 @@ function renderCellDetail(cell) {
 // =============================================================================
 
 async function loadTurns() {
-  // Turns are visible via receipts on the local node
   try {
     cachedReceipts = await api.getReceipts();
     renderTurnsFromReceipts(cachedReceipts);
@@ -540,8 +524,7 @@ async function loadTurns() {
     document.getElementById('turns-table').innerHTML = `
       <div class="empty-state">
         <div class="empty-state__icon">&#8634;</div>
-        Turns are tracked via the receipt chain.<br>
-        ${err.message}
+        Turns are tracked via the receipt chain.<br>${err.message}
       </div>`;
   }
 }
@@ -552,17 +535,9 @@ function renderTurnsFromReceipts(receipts) {
     container.innerHTML = '<div class="empty-state"><div class="empty-state__icon">&#8634;</div>No turns executed yet</div>';
     return;
   }
-
   container.innerHTML = `
     <table class="ex-table">
-      <thead>
-        <tr>
-          <th>Turn Hash</th>
-          <th>Computrons</th>
-          <th>Time</th>
-          <th>Status</th>
-        </tr>
-      </thead>
+      <thead><tr><th>Turn Hash</th><th>Computrons</th><th>Time</th><th>Status</th></tr></thead>
       <tbody>
         ${receipts.map(r => `
           <tr data-turn-hash="${r.turn_hash}">
@@ -575,7 +550,6 @@ function renderTurnsFromReceipts(receipts) {
       </tbody>
     </table>
   `;
-
   container.querySelectorAll('tr[data-turn-hash]').forEach(row => {
     row.addEventListener('click', () => {
       const receipt = receipts.find(r => r.turn_hash === row.dataset.turnHash);
@@ -604,9 +578,12 @@ function renderTurnDetail(receipt) {
       <span class="detail-grid__value">${api.formatTime(receipt.timestamp)}</span>
       <span class="detail-grid__label">Status</span>
       <span class="detail-grid__value"><span class="cell-badge cell-badge--success">committed</span></span>
+      <span class="detail-grid__label">Auth Mode</span>
+      <span class="detail-grid__value">${receipt.bearer_auth ? '<span class="cell-badge cell-badge--info">bearer</span>' : '<span class="cell-badge cell-badge--hosted">signature</span>'}</span>
+      <span class="detail-grid__label">Proof</span>
+      <span class="detail-grid__value">${receipt.has_proof ? '<span class="cell-badge cell-badge--success">proof-carrying</span>' : 'none'}</span>
     </div>
   `;
-
   document.getElementById('turn-detail-close').onclick = () => panel.hidden = true;
 }
 
@@ -620,10 +597,7 @@ async function loadReceipts() {
     renderReceiptChain(cachedReceipts);
   } catch (err) {
     document.getElementById('receipts-chain').innerHTML = `
-      <div class="empty-state">
-        <div class="empty-state__icon">&#9830;</div>
-        Unable to load receipts: ${err.message}
-      </div>`;
+      <div class="empty-state"><div class="empty-state__icon">&#9830;</div>Unable to load receipts: ${err.message}</div>`;
   }
 }
 
@@ -633,7 +607,6 @@ function renderReceiptChain(receipts) {
     container.innerHTML = '<div class="empty-state"><div class="empty-state__icon">&#9830;</div>No receipts in the chain yet</div>';
     return;
   }
-
   container.innerHTML = receipts.map(r => `
     <div class="receipt-item">
       <div class="receipt-item__header">
@@ -665,10 +638,7 @@ async function loadCapabilities() {
     renderCapabilities(cachedTokens);
   } catch (err) {
     document.getElementById('capabilities-list').innerHTML = `
-      <div class="empty-state">
-        <div class="empty-state__icon">&#8669;</div>
-        Unable to load capabilities: ${err.message}
-      </div>`;
+      <div class="empty-state"><div class="empty-state__icon">&#8669;</div>Unable to load capabilities: ${err.message}</div>`;
   }
 }
 
@@ -678,7 +648,6 @@ function renderCapabilities(tokens) {
     container.innerHTML = '<div class="empty-state"><div class="empty-state__icon">&#8669;</div>No capability tokens held</div>';
     return;
   }
-
   container.innerHTML = tokens.map(t => `
     <div class="cap-item">
       <span class="cap-item__id">${api.shortHash(t.id, 8, 4)}</span>
@@ -693,47 +662,62 @@ function renderCapabilities(tokens) {
 // =============================================================================
 
 async function loadProofs() {
-  // Proofs are generated locally; the node doesn't expose a proof list endpoint yet.
-  // Show PIR info as a proxy for proof system status.
+  const container = document.getElementById('proofs-list');
   try {
     const pirInfo = await api.getPirInfo();
-    renderProofsFromPir(pirInfo);
+    renderProofsView(pirInfo);
   } catch (err) {
-    document.getElementById('proofs-list').innerHTML = `
-      <div class="empty-state">
-        <div class="empty-state__icon">&#9651;</div>
-        Proof system info unavailable: ${err.message}
-      </div>`;
+    container.innerHTML = `
+      <div class="empty-state"><div class="empty-state__icon">&#9651;</div>Proof system info unavailable: ${err.message}</div>`;
   }
 }
 
-function renderProofsFromPir(pirInfo) {
+function renderProofsView(pirInfo) {
   const container = document.getElementById('proofs-list');
-
   container.innerHTML = `
+    <div class="proof-item">
+      <div class="proof-item__header">
+        <span class="proof-item__type">STARK</span>
+        <span class="proof-item__size">BabyBear field, Poseidon2 hash</span>
+      </div>
+      <div class="proof-item__details">
+        <div><div class="proof-item__detail-label">Backend</div><div class="proof-item__detail-value">MerklePoseidon2StarkAir (production)</div></div>
+        <div><div class="proof-item__detail-label">Uses</div><div class="proof-item__detail-value">Membership, block transition, presentation</div></div>
+        <div><div class="proof-item__detail-label">Verification</div><div class="proof-item__detail-value">FRI + Fiat-Shamir + action binding</div></div>
+      </div>
+    </div>
+    <div class="proof-item">
+      <div class="proof-item__header">
+        <span class="proof-item__type">Kimchi</span>
+        <span class="proof-item__size">Pasta curves</span>
+      </div>
+      <div class="proof-item__details">
+        <div><div class="proof-item__detail-label">Backend</div><div class="proof-item__detail-value">Plonkish constraint system</div></div>
+        <div><div class="proof-item__detail-label">Uses</div><div class="proof-item__detail-value">Recursive verification, IVC folding</div></div>
+        <div><div class="proof-item__detail-label">Status</div><div class="proof-item__detail-value">Spike phase (constraint system verified)</div></div>
+      </div>
+    </div>
+    <div class="proof-item">
+      <div class="proof-item__header">
+        <span class="proof-item__type">Composed</span>
+        <span class="proof-item__size">Multi-proof binding</span>
+      </div>
+      <div class="proof-item__details">
+        <div><div class="proof-item__detail-label">Binding</div><div class="proof-item__detail-value">BLAKE3 composition commitment over sub-proofs</div></div>
+        <div><div class="proof-item__detail-label">Modes</div><div class="proof-item__detail-value">sequential, parallel, recursive</div></div>
+        <div><div class="proof-item__detail-label">Public Inputs</div><div class="proof-item__detail-value">pi[2..6] action binding, pi[6..10] composition commitment</div></div>
+      </div>
+    </div>
     <div class="proof-item">
       <div class="proof-item__header">
         <span class="proof-item__type">PIR Index</span>
         <span class="proof-item__size">${pirInfo.num_rows} rows x ${pirInfo.row_width} cols</span>
       </div>
       <div class="proof-item__details">
-        <div>
-          <div class="proof-item__detail-label">Database Size</div>
-          <div class="proof-item__detail-value">${pirInfo.num_rows} capability tags</div>
-        </div>
-        <div>
-          <div class="proof-item__detail-label">Row Width</div>
-          <div class="proof-item__detail-value">${pirInfo.row_width} field elements</div>
-        </div>
-        <div>
-          <div class="proof-item__detail-label">Tags</div>
-          <div class="proof-item__detail-value">${pirInfo.tags.length > 0 ? pirInfo.tags.slice(0, 5).join(', ') + (pirInfo.tags.length > 5 ? '...' : '') : 'none'}</div>
-        </div>
+        <div><div class="proof-item__detail-label">Database Size</div><div class="proof-item__detail-value">${pirInfo.num_rows} capability tags</div></div>
+        <div><div class="proof-item__detail-label">Row Width</div><div class="proof-item__detail-value">${pirInfo.row_width} field elements</div></div>
+        <div><div class="proof-item__detail-label">Tags</div><div class="proof-item__detail-value">${pirInfo.tags.length > 0 ? pirInfo.tags.slice(0, 5).join(', ') + (pirInfo.tags.length > 5 ? '...' : '') : 'none'}</div></div>
       </div>
-    </div>
-    <div class="empty-state" style="padding: 20px;">
-      STARK proof verification requires the WASM verifier module.<br>
-      Proofs are generated during block transitions and membership queries.
     </div>
   `;
 }
@@ -743,7 +727,6 @@ function renderProofsFromPir(pirInfo) {
 // =============================================================================
 
 async function loadIntents() {
-  // Active intents
   try {
     cachedIntents = await api.getIntents();
     renderActiveIntents(cachedIntents);
@@ -752,8 +735,6 @@ async function loadIntents() {
     document.getElementById('intents-active').innerHTML =
       `<div class="empty-state">Unable to load intents: ${err.message}</div>`;
   }
-
-  // Pending conditionals
   try {
     cachedConditionals = await api.getPendingConditionals();
     renderConditionals(cachedConditionals);
@@ -770,7 +751,6 @@ function renderActiveIntents(intents) {
     container.innerHTML = '<div class="empty-state">No active intents in pool</div>';
     return;
   }
-
   container.innerHTML = intents.map(entry => {
     const intent = entry.intent;
     const kindLabel = intent.kind !== undefined ? `kind:${intent.kind}` : 'unknown';
@@ -781,8 +761,7 @@ function renderActiveIntents(intents) {
           <span class="intent-item__kind">${kindLabel}</span>
         </div>
         <div class="intent-item__details">
-          expiry: ${intent.expiry || '--'}
-          ${intent.matcher ? ` | actions: ${intent.matcher.actions?.length || 0}` : ''}
+          expiry: ${intent.expiry || '--'}${intent.matcher ? ` | actions: ${intent.matcher.actions?.length || 0}` : ''}
         </div>
       </div>
     `;
@@ -795,7 +774,6 @@ function renderConditionals(conditionals) {
     container.innerHTML = '<div class="empty-state">No pending conditionals</div>';
     return;
   }
-
   container.innerHTML = conditionals.map(c => `
     <div class="conditional-item">
       <div class="conditional-item__header">
@@ -807,4 +785,231 @@ function renderConditionals(conditionals) {
       </div>
     </div>
   `).join('');
+}
+
+// =============================================================================
+// Federation
+// =============================================================================
+
+async function loadFederation() {
+  try {
+    const status = cachedStatus || await api.getStatus();
+    const blocks = cachedBlocks || await api.getBlocks();
+    const checkpoint = cachedCheckpoint || await api.getCheckpoint().catch(() => null);
+
+    document.getElementById('fed-stat-nodes').textContent = api.formatNumber((status.peer_count || 0) + 1);
+    document.getElementById('fed-stat-height').textContent = api.formatNumber(status.latest_height);
+    document.getElementById('fed-stat-health').textContent = status.healthy ? 'healthy' : 'degraded';
+    document.getElementById('fed-stat-health').style.color = status.healthy ? 'var(--success)' : 'var(--danger)';
+
+    if (blocks && blocks.length > 0) {
+      const latest = blocks[blocks.length - 1];
+      document.getElementById('fed-stat-root').textContent = api.shortHash(latest.merkle_root, 8, 4);
+    }
+
+    renderFederationNodes(status, checkpoint);
+    renderFederationRootHistory(blocks);
+  } catch (err) {
+    document.getElementById('federation-nodes').innerHTML =
+      `<div class="empty-state">Unable to load federation status: ${err.message}</div>`;
+  }
+}
+
+function renderFederationNodes(status, checkpoint) {
+  const container = document.getElementById('federation-nodes');
+  let html = `
+    <div class="fed-node-item">
+      <span class="fed-node-item__icon">&#9679;</span>
+      <span class="fed-node-item__name">Local Node (self)</span>
+      <span class="cell-badge cell-badge--success">active</span>
+    </div>
+  `;
+  for (let i = 0; i < (status.peer_count || 0); i++) {
+    html += `
+      <div class="fed-node-item">
+        <span class="fed-node-item__icon">&#9679;</span>
+        <span class="fed-node-item__name">Peer ${i + 1}</span>
+        <span class="cell-badge cell-badge--info">connected</span>
+      </div>
+    `;
+  }
+  if (checkpoint) {
+    html += `
+      <div class="fed-node-item" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);">
+        <span class="fed-node-item__icon">&#9670;</span>
+        <span class="fed-node-item__name">Federation Members</span>
+        <span class="cell-badge cell-badge--info">${checkpoint.federation_members}</span>
+      </div>
+      <div class="fed-node-item">
+        <span class="fed-node-item__icon">&#9651;</span>
+        <span class="fed-node-item__name">QC Votes</span>
+        <span class="cell-badge cell-badge--success">${checkpoint.qc_votes}</span>
+      </div>
+      <div class="fed-node-item">
+        <span class="fed-node-item__icon">&#9776;</span>
+        <span class="fed-node-item__name">Epoch</span>
+        <span class="cell-badge cell-badge--hosted">${checkpoint.epoch}</span>
+      </div>
+    `;
+  }
+  container.innerHTML = html;
+}
+
+function renderFederationRootHistory(blocks) {
+  const container = document.getElementById('federation-root-history');
+  if (!blocks || !blocks.length) {
+    container.innerHTML = '<div class="empty-state">No roots attested yet</div>';
+    return;
+  }
+  const recent = blocks.slice(-15).reverse();
+  container.innerHTML = recent.map(r => `
+    <div class="root-item">
+      <span class="root-item__height">#${r.height}</span>
+      <span class="root-item__hash">${api.shortHash(r.merkle_root, 12, 6)}</span>
+      <span class="root-item__sigs">${r.signatures} sigs</span>
+      <span class="root-item__time">${api.relativeTime(r.timestamp)}</span>
+    </div>
+  `).join('');
+}
+
+// =============================================================================
+// Notes
+// =============================================================================
+
+async function loadNotes() {
+  try {
+    const status = cachedStatus || await api.getStatus();
+    const checkpoint = await api.getCheckpoint().catch(() => null);
+    const blocks = cachedBlocks || await api.getBlocks();
+
+    document.getElementById('notes-stat-count').textContent = api.formatNumber(status.note_count);
+    document.getElementById('notes-stat-revocations').textContent = api.formatNumber(status.revocation_count);
+
+    if (checkpoint) {
+      document.getElementById('notes-stat-nullifier-root').textContent = api.shortHash(checkpoint.nullifier_set_root, 8, 4);
+      document.getElementById('notes-stat-tree-root').textContent = api.shortHash(checkpoint.note_tree_root, 8, 4);
+    }
+
+    renderNoteRootHistory(blocks);
+    renderNoteCheckpointState(checkpoint);
+  } catch (err) {
+    document.getElementById('notes-root-history').innerHTML =
+      `<div class="empty-state">Unable to load note data: ${err.message}</div>`;
+  }
+}
+
+function renderNoteRootHistory(blocks) {
+  const container = document.getElementById('notes-root-history');
+  if (!blocks || !blocks.length) {
+    container.innerHTML = '<div class="empty-state">No roots attested yet</div>';
+    return;
+  }
+  const recent = blocks.slice(-12).reverse();
+  container.innerHTML = `
+    <div class="note-root-list">
+      ${recent.map(r => `
+        <div class="root-item">
+          <span class="root-item__height">#${r.height}</span>
+          <span class="root-item__hash">${api.shortHash(r.merkle_root, 12, 6)}</span>
+          <span class="root-item__time">${api.relativeTime(r.timestamp)}</span>
+        </div>
+      `).join('')}
+    </div>
+    <div style="margin-top: 12px; font-family: var(--mono); font-size: 10px; color: var(--text-muted);">
+      Each root represents a committed note tree state. Nullifiers prevent double-spend.
+    </div>
+  `;
+}
+
+function renderNoteCheckpointState(checkpoint) {
+  const container = document.getElementById('notes-checkpoint-state');
+  if (!checkpoint) {
+    container.innerHTML = '<div class="empty-state">No checkpoint available</div>';
+    return;
+  }
+  container.innerHTML = `
+    <div class="checkpoint-grid">
+      <div class="checkpoint-field">
+        <div class="checkpoint-field__label">Note Tree Root</div>
+        <div class="checkpoint-field__value checkpoint-field__value--hash">${api.shortHash(checkpoint.note_tree_root, 12, 6)}</div>
+      </div>
+      <div class="checkpoint-field">
+        <div class="checkpoint-field__label">Nullifier Set Root</div>
+        <div class="checkpoint-field__value checkpoint-field__value--hash">${api.shortHash(checkpoint.nullifier_set_root, 12, 6)}</div>
+      </div>
+      <div class="checkpoint-field">
+        <div class="checkpoint-field__label">Revocation Tree Root</div>
+        <div class="checkpoint-field__value checkpoint-field__value--hash">${api.shortHash(checkpoint.revocation_tree_root, 12, 6)}</div>
+      </div>
+      <div class="checkpoint-field">
+        <div class="checkpoint-field__label">Ledger State Root</div>
+        <div class="checkpoint-field__value checkpoint-field__value--hash">${api.shortHash(checkpoint.ledger_state_root, 12, 6)}</div>
+      </div>
+      <div class="checkpoint-field">
+        <div class="checkpoint-field__label">Height</div>
+        <div class="checkpoint-field__value">${api.formatNumber(checkpoint.height)}</div>
+      </div>
+      <div class="checkpoint-field">
+        <div class="checkpoint-field__label">Timestamp</div>
+        <div class="checkpoint-field__value">${api.formatTime(checkpoint.timestamp)}</div>
+      </div>
+    </div>
+    <div style="margin-top: 12px; font-family: var(--mono); font-size: 10px; color: var(--text-muted);">
+      Notes carry hidden asset types. Commitments = Poseidon2(value, asset_type, blinding). Nullifiers = BLAKE3(note_commitment, nullifier_key).
+    </div>
+  `;
+}
+
+// =============================================================================
+// Apps
+// =============================================================================
+
+async function loadApps() {
+  const grid = document.getElementById('apps-grid');
+  try {
+    const cells = await api.getCells();
+    const programCells = cells.filter(c => c.has_program);
+    const totalBalance = cells.reduce((sum, c) => sum + (c.balance || 0), 0);
+
+    document.getElementById('app-gallery-status').textContent = programCells.length > 0 ? programCells.length + ' contracts' : 'available';
+    document.getElementById('app-amm-status').textContent = totalBalance > 0 ? api.formatNumber(totalBalance) + ' locked' : 'available';
+    document.getElementById('app-orderbook-status').textContent = 'available';
+    document.getElementById('app-lending-status').textContent = 'available';
+    document.getElementById('app-stablecoin-status').textContent = 'available';
+    document.getElementById('app-identity-status').textContent = 'available';
+  } catch {
+    document.querySelectorAll('.app-card__status').forEach(el => { el.textContent = 'pending'; });
+  }
+
+  grid.querySelectorAll('.app-card').forEach(card => {
+    card.onclick = () => renderAppDetail(card.dataset.app);
+  });
+}
+
+function renderAppDetail(appName) {
+  const panel = document.getElementById('app-detail');
+  const content = document.getElementById('app-detail-content');
+  panel.hidden = false;
+
+  const apps = {
+    gallery: { title: 'Gallery Auctions', desc: 'NFT auctions with ZK ownership proofs. Each auction cell holds an asset commitment and accepts sealed bids.', fields: [['Auction Type', 'English, Dutch'], ['Ownership Proof', 'STARK membership over note tree'], ['Bid Mechanism', 'Sealed-bid commit-reveal'], ['Settlement', 'Atomic swap via conditional turns']] },
+    amm: { title: 'AMM Pools', desc: 'Constant-product (x*y=k) liquidity pools. LPs deposit paired assets and earn fees from swaps.', fields: [['Pool Type', 'Constant-product (Uniswap v2)'], ['LP Tokens', 'Minted on deposit, burned on withdrawal'], ['Fee Model', '0.3% swap fee to LP holders'], ['Reserves', 'Stored as sovereign cell commitments']] },
+    orderbook: { title: 'Orderbook', desc: 'On-chain limit order book with price-time priority matching.', fields: [['Order Types', 'Limit, market, fill-or-kill'], ['Matching', 'Price-time priority (continuous)'], ['Settlement', 'Atomic multi-party turns'], ['Cancellation', 'Bearer-auth revocation']] },
+    lending: { title: 'Lending Positions', desc: 'Collateralized debt positions with liquidation thresholds.', fields: [['Position Type', 'Isolated margin CDPs'], ['Collateral Ratio', 'Configurable per asset pair'], ['Liquidation', 'Triggered by price oracle conditionals'], ['Interest', 'Block-based accrual via sovereign witness']] },
+    stablecoin: { title: 'Stablecoin CDPs', desc: 'Algorithmic stablecoin backed by over-collateralized positions.', fields: [['Peg', '1:1 USD target'], ['Collateral', 'Multi-asset, configurable ratios'], ['Stability Fee', 'Per-epoch, collected on position close'], ['Health Factor', 'Computed from oracle + collateral ratio']] },
+    identity: { title: 'Anonymous Credentials', desc: 'RBAC-based datalog credentials with ZK presentation.', fields: [['Schema', 'Datalog rules (issuer defines)'], ['Presentation', 'STARK proof of attribute satisfaction'], ['Revocation', 'Merkle non-membership proof'], ['Privacy', 'Zero-knowledge (no identity linkage)']] },
+  };
+
+  const app = apps[appName] || { title: appName, desc: 'Details unavailable.', fields: [] };
+  content.innerHTML = `
+    <h4>${app.title}</h4>
+    <p style="font-size: 12px; color: var(--text-dim); margin-bottom: 16px; line-height: 1.6;">${app.desc}</p>
+    <div class="detail-grid">
+      ${app.fields.map(([label, value]) => `
+        <span class="detail-grid__label">${label}</span>
+        <span class="detail-grid__value">${value}</span>
+      `).join('')}
+    </div>
+  `;
+  document.getElementById('app-detail-close').onclick = () => panel.hidden = true;
 }

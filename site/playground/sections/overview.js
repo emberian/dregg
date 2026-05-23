@@ -84,6 +84,30 @@ export function initOverview() {
         <div class="overview-cap__title">Cross-Federation</div>
         <div class="overview-cap__desc">Bridge notes and tokens across federation boundaries with conditional turns and intent matching.</div>
       </div>
+      <div class="overview-cap" data-nav="sovereign">
+        <div class="overview-cap__title">Sovereign Cells</div>
+        <div class="overview-cap__desc">Opt a cell out of consensus. Peer-to-peer exchange with STARK proofs of state validity.</div>
+      </div>
+      <div class="overview-cap" data-nav="bearer">
+        <div class="overview-cap__title">Bearer Caps</div>
+        <div class="overview-cap__desc">Proof-carrying authorization. Transfer caps off-chain, exercise instantly. No state update needed.</div>
+      </div>
+      <div class="overview-cap" data-nav="factories">
+        <div class="overview-cap__title">Cell Factories</div>
+        <div class="overview-cap__desc">Deploy templates, create cells with verified provenance. Whitelisting and compliance patterns.</div>
+      </div>
+      <div class="overview-cap" data-nav="private-transfers">
+        <div class="overview-cap__title">Private Transfers</div>
+        <div class="overview-cap__desc">Stealth addresses + Pedersen commitments. Full sender/recipient/amount privacy with conservation proof.</div>
+      </div>
+      <div class="overview-cap" data-nav="composition">
+        <div class="overview-cap__title">Proof Composition</div>
+        <div class="overview-cap__desc">Compose multiple proofs (AND/OR/Chain/Aggregate) into a single verifiable commitment.</div>
+      </div>
+      <div class="overview-cap" data-nav="gallery">
+        <div class="overview-cap__title">Gallery</div>
+        <div class="overview-cap__desc">Sealed-bid auctions and AMM swaps. Real-world scenarios composing multiple primitives end-to-end.</div>
+      </div>
       <div class="overview-cap" data-nav="sandbox">
         <div class="overview-cap__title">Code Sandbox</div>
         <div class="overview-cap__desc">Write arbitrary JavaScript against the full pyana WASM API. Experiment freely.</div>
