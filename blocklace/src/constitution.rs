@@ -628,9 +628,17 @@ impl ConstitutionManager {
     /// `rejoin_grace_waves` (recently rejoined nodes get extra time).
     fn effective_timeout_for(&self, participant: &[u8; 32], base_timeout: u64) -> u64 {
         let joined_at = self.joined_at_wave.get(participant).copied().unwrap_or(0);
+
+        // Genesis participants (joined_at == 0) don't get rejoin grace —
+        // the grace period is specifically for nodes that were evicted and
+        // re-joined, to prevent evict-rejoin-evict oscillation.
+        if joined_at == 0 {
+            return base_timeout;
+        }
+
         let membership_duration = self.current_wave.saturating_sub(joined_at);
 
-        // If the node joined recently (within rejoin_grace_waves), give it
+        // If the node rejoined recently (within rejoin_grace_waves), give it
         // extra timeout tolerance to avoid evict-rejoin-evict oscillation.
         if membership_duration < self.current.rejoin_grace_waves {
             base_timeout.saturating_add(self.current.rejoin_grace_waves)

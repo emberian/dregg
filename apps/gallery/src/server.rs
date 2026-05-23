@@ -2,23 +2,26 @@
 //!
 //! Serves the gallery backend API and the static frontend files.
 //! WebSocket connections at `/ws` receive live updates for all gallery events.
+//!
+//! Uses `pyana-app-framework` for shared infrastructure: [`AppServer`] for
+//! standard middleware (health, CORS), [`AdminAuth`] extractor for admin
+//! endpoints, and [`JsonPersistence`] for atomic state snapshots.
 
-use std::net::SocketAddr;
-use std::path::Path;
 use std::sync::Arc;
 
 use axum::{
     Router,
     extract::{State, WebSocketUpgrade},
-    http::HeaderMap,
     response::IntoResponse,
     routing::{get, post},
 };
 use tokio::sync::Mutex;
-use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use tracing::info;
 
+use pyana_app_framework::auth::{AdminMode, AdminToken, HasAdminToken};
+use pyana_app_framework::persistence::JsonPersistence;
+use pyana_app_framework::server::{AppConfig, AppServer};
 use pyana_app_framework::{EngineConfig, PyanaEngine};
 
 use crate::artwork::ArtworkRegistry;
@@ -27,30 +30,6 @@ use crate::handlers;
 use crate::persistence::StateSnapshot;
 use crate::provenance::ProvenanceRegistry;
 use crate::ws::{WsBroadcaster, handle_ws_connection};
-
-// =============================================================================
-// Configuration
-// =============================================================================
-
-/// Configuration for the gallery server.
-pub struct ServerConfig {
-    /// Listen address.
-    pub listen: SocketAddr,
-    /// Path to frontend static files (for serving HTML/JS/CSS).
-    pub frontend_path: Option<String>,
-    /// Path to state persistence file (JSON).
-    pub state_file: Option<String>,
-}
-
-impl Default for ServerConfig {
-    fn default() -> Self {
-        Self {
-            listen: "127.0.0.1:3040".parse().unwrap(),
-            frontend_path: None,
-            state_file: None,
-        }
-    }
-}
 
 // =============================================================================
 // Application State
@@ -65,91 +44,26 @@ pub struct AppState {
     pub engine: Arc<Mutex<PyanaEngine>>,
     pub ws_broadcaster: WsBroadcaster,
     /// Admin token for protecting admin endpoints (from PYANA_ADMIN_TOKEN env var).
-    pub admin_token: Option<String>,
-    /// Path to state persistence file.
-    pub state_file: Option<String>,
+    pub admin_token: AdminToken,
+    /// Persistence handle for atomic JSON snapshots (None = persistence disabled).
+    pub persistence: Option<JsonPersistence>,
 }
 
-// =============================================================================
-// Admin Auth
-// =============================================================================
-
-/// Verify the admin bearer token from request headers.
-/// Returns true if auth passes (no token configured = open access for devnet).
-pub fn verify_admin_token(headers: &HeaderMap, admin_token: &Option<String>) -> bool {
-    let expected = match admin_token {
-        Some(t) => t,
-        None => return true, // No token configured — open access (devnet mode).
-    };
-
-    if expected.is_empty() {
-        return true; // Empty token means no auth required.
-    }
-
-    let auth_header = match headers.get("authorization") {
-        Some(h) => h,
-        None => return false,
-    };
-
-    let auth_str = match auth_header.to_str() {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
-
-    if let Some(token) = auth_str.strip_prefix("Bearer ") {
-        token == expected
-    } else {
-        false
+impl HasAdminToken for AppState {
+    fn admin_token(&self) -> &AdminToken {
+        &self.admin_token
     }
 }
 
 // =============================================================================
-// Public API
+// Route Construction
 // =============================================================================
 
-/// Start the gallery server in the background as a tokio task.
+/// Build the gallery application router (without framework middleware).
 ///
-/// Returns the actual `SocketAddr` the server is listening on.
-pub async fn start_server(config: ServerConfig) -> SocketAddr {
-    let now_ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-
-    let admin_token = std::env::var("PYANA_ADMIN_TOKEN").ok();
-
-    let artwork_registry = ArtworkRegistry::new();
-    let auction_engine = AuctionEngine::new();
-    let provenance_registry = ProvenanceRegistry::new();
-
-    // Attempt to load persisted state.
-    if let Some(ref state_file) = config.state_file {
-        if Path::new(state_file).exists() {
-            match StateSnapshot::load(state_file) {
-                Ok(snapshot) => {
-                    snapshot
-                        .restore(&artwork_registry, &auction_engine, &provenance_registry)
-                        .await;
-                    info!(path = %state_file, "restored state from persistence file");
-                }
-                Err(e) => {
-                    tracing::warn!(path = %state_file, error = %e, "failed to load state file, starting fresh");
-                }
-            }
-        }
-    }
-
-    let state = AppState {
-        artwork_registry,
-        auction_engine,
-        provenance_registry,
-        engine: Arc::new(Mutex::new(PyanaEngine::new(EngineConfig::new(now_ts)))),
-        ws_broadcaster: WsBroadcaster::new(),
-        admin_token,
-        state_file: config.state_file.clone(),
-    };
-
-    let mut app = Router::new()
+/// Callers can pass this to `AppServer::routes()` after calling `.with_state()`.
+pub fn gallery_routes() -> Router<AppState> {
+    Router::new()
         // Artwork endpoints.
         .route("/artworks", get(handlers::list_artworks))
         .route("/artworks", post(handlers::register_artwork))
@@ -163,32 +77,86 @@ pub async fn start_server(config: ServerConfig) -> SocketAddr {
         .route("/auctions/{id}/result", get(handlers::get_auction_result))
         // WebSocket.
         .route("/ws", get(ws_upgrade))
-        // Admin/devnet utilities (bearer-token-protected).
+        // Admin/devnet utilities (protected by AdminAuth extractor).
         .route("/admin/height", post(handlers::advance_height))
         .route("/admin/settle/{id}", post(handlers::trigger_settle))
         .route("/admin/persist", post(handlers::persist_state))
-        // Health.
+        // Health (gallery-specific: includes artwork/auction counts and block height).
         .route("/health", get(handlers::health_check))
-        .layer(CorsLayer::permissive())
-        .with_state(state);
+}
 
-    // Optionally serve frontend static files.
-    if let Some(ref frontend_path) = config.frontend_path {
-        app = app.fallback_service(ServeDir::new(frontend_path));
+// =============================================================================
+// Public API
+// =============================================================================
+
+/// Start the gallery server using the shared `AppServer` framework.
+///
+/// Returns the actual `SocketAddr` the server is listening on (runs in background).
+///
+/// The gallery uses `AdminMode::Open` when no `PYANA_ADMIN_TOKEN` is configured,
+/// matching devnet behavior (admin endpoints freely accessible without auth).
+pub async fn start_server(
+    config: AppConfig,
+    frontend_path: Option<String>,
+) -> std::net::SocketAddr {
+    let now_ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    let persistence = config.persistence();
+
+    // Use Open mode for admin auth: if no token is configured, admin endpoints
+    // are freely accessible (suitable for devnet). If PYANA_ADMIN_TOKEN is set,
+    // it will be enforced.
+    let admin_token = AdminToken::from_env_with_mode(AdminMode::Open);
+
+    let artwork_registry = ArtworkRegistry::new();
+    let auction_engine = AuctionEngine::new();
+    let provenance_registry = ProvenanceRegistry::new();
+
+    // Attempt to load persisted state via JsonPersistence.
+    if let Some(ref persist) = persistence {
+        match persist.load::<StateSnapshot>() {
+            Ok(Some(snapshot)) => {
+                snapshot
+                    .restore(&artwork_registry, &auction_engine, &provenance_registry)
+                    .await;
+                info!(path = %persist.path().display(), "restored state from persistence file");
+            }
+            Ok(None) => {
+                // No state file yet -- starting fresh.
+            }
+            Err(e) => {
+                tracing::warn!(path = %persist.path().display(), error = %e, "failed to load state file, starting fresh");
+            }
+        }
     }
 
-    let listener = tokio::net::TcpListener::bind(config.listen)
+    let state = AppState {
+        artwork_registry,
+        auction_engine,
+        provenance_registry,
+        engine: Arc::new(Mutex::new(PyanaEngine::new(EngineConfig::new(now_ts)))),
+        ws_broadcaster: WsBroadcaster::new(),
+        admin_token,
+        persistence,
+    };
+
+    let mut app_routes: Router = gallery_routes().with_state(state);
+
+    // Optionally serve frontend static files as a fallback.
+    if let Some(ref fp) = frontend_path {
+        app_routes = app_routes.fallback_service(ServeDir::new(fp));
+    }
+
+    AppServer::new(config)
+        .service_name("pyana-gallery")
+        .with_cors()
+        .routes(app_routes)
+        .serve_background()
         .await
-        .expect("failed to bind gallery server");
-    let addr = listener.local_addr().unwrap();
-
-    info!("Gallery server listening on http://{addr}");
-
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.expect("server error");
-    });
-
-    addr
+        .expect("failed to start gallery server")
 }
 
 /// WebSocket upgrade handler.

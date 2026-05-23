@@ -8,8 +8,8 @@ use crate::issuer::IssuerRegistry;
 use crate::presentation::{self, PresentationBuilder};
 use crate::revocation::RevocationManager;
 use crate::verifier::{VerificationPolicy, VerificationResult};
+use pyana_circuit::dsl::predicates::PredicateType;
 use pyana_circuit::field::BabyBear;
-use pyana_circuit::predicate_types::PredicateType;
 use std::collections::BTreeMap;
 
 /// Helper: create test issuer and holder IDs.

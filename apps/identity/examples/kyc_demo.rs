@@ -5,8 +5,8 @@
 //! 2. Alice proves she is >= 18, resides in "US", and is not blacklisted
 //! 3. The verifier accepts the proof without learning Alice's exact age or full credential
 
+use pyana_circuit::dsl::predicates::PredicateType;
 use pyana_circuit::field::BabyBear;
-use pyana_circuit::predicate_types::PredicateType;
 use pyana_identity::AttributeValue;
 use pyana_identity::issuer::IssuerRegistry;
 use pyana_identity::presentation::{self, PresentationBuilder};

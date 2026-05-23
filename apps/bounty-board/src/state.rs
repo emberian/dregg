@@ -1,7 +1,11 @@
-//! In-memory board state with persistence hooks.
+//! In-memory board state with snapshot support.
 //!
 //! The board stores all bounties, worker history, and escrow cell mappings.
 //! Uses `ContentStore` from the app framework for concurrent access from axum handlers.
+//!
+//! Persistence is handled externally: callers use [`BoardState::snapshot`] to take a
+//! serializable snapshot and [`BoardState::restore_from_snapshot`] to reload. The
+//! framework's `JsonPersistence` handles the actual I/O.
 
 use std::sync::Arc;
 
@@ -10,7 +14,7 @@ use tokio::sync::RwLock;
 use pyana_app_framework::CellId;
 use pyana_app_framework::store::ContentStore;
 
-use crate::persist::{BoardSnapshot, PersistManager, bytes32_hex, hex_bytes32};
+use crate::persist::{BoardSnapshot, bytes32_hex, hex_bytes32};
 use crate::{
     Bounty, BountyFilter, BountyStatus, BountySummary, bounty_id_hex, qualification_label,
     status_label,
@@ -33,30 +37,16 @@ pub struct BoardState {
     escrow_cells: ContentStore<CellId>,
     /// Current simulated block height (for deadline checking).
     current_height: Arc<RwLock<u64>>,
-    /// Persistence manager (if configured).
-    persist: Option<PersistManager>,
 }
 
 impl BoardState {
-    /// Create a new empty board state (no persistence).
+    /// Create a new empty board state.
     pub fn new() -> Self {
         Self {
             bounties: ContentStore::new(),
             worker_history: ContentStore::new(),
             escrow_cells: ContentStore::new(),
             current_height: Arc::new(RwLock::new(0)),
-            persist: None,
-        }
-    }
-
-    /// Create a board state with persistence support.
-    pub fn with_persistence(persist: PersistManager) -> Self {
-        Self {
-            bounties: ContentStore::new(),
-            worker_history: ContentStore::new(),
-            escrow_cells: ContentStore::new(),
-            current_height: Arc::new(RwLock::new(0)),
-            persist: Some(persist),
         }
     }
 
@@ -125,14 +115,6 @@ impl BoardState {
         }
     }
 
-    /// Persist current state to disk (no-op if persistence not configured).
-    async fn persist(&self) {
-        if let Some(ref persist) = self.persist {
-            let snapshot = self.snapshot().await;
-            persist.save(&snapshot).await;
-        }
-    }
-
     /// Get the current block height.
     pub async fn current_height(&self) -> u64 {
         *self.current_height.read().await
@@ -140,26 +122,19 @@ impl BoardState {
 
     /// Advance the block height (for testing / simulation).
     pub async fn advance_height(&self, delta: u64) {
-        {
-            let mut height = self.current_height.write().await;
-            *height += delta;
-        }
-        self.persist().await;
+        let mut height = self.current_height.write().await;
+        *height += delta;
     }
 
     /// Set the block height explicitly.
     pub async fn set_height(&self, height: u64) {
-        {
-            let mut h = self.current_height.write().await;
-            *h = height;
-        }
-        self.persist().await;
+        let mut h = self.current_height.write().await;
+        *h = height;
     }
 
     /// Insert a new bounty.
     pub async fn insert_bounty(&self, bounty: Bounty) {
         self.bounties.insert(bounty.id, bounty).await;
-        self.persist().await;
     }
 
     /// Get a bounty by ID.
@@ -169,16 +144,11 @@ impl BoardState {
 
     /// Update a bounty's status.
     pub async fn update_status(&self, id: &[u8; 32], status: BountyStatus) -> bool {
-        let updated = self
-            .bounties
+        self.bounties
             .update(id, |bounty| {
                 bounty.status = status;
             })
-            .await;
-        if updated {
-            self.persist().await;
-        }
-        updated
+            .await
     }
 
     /// Record a completed bounty for a worker commitment.
@@ -202,7 +172,6 @@ impl BoardState {
                 )
                 .await;
         }
-        self.persist().await;
     }
 
     /// Get a worker's completed bounty count.
@@ -226,7 +195,6 @@ impl BoardState {
     /// Store an escrow cell mapping.
     pub async fn set_escrow_cell(&self, bounty_id: [u8; 32], cell_id: CellId) {
         self.escrow_cells.insert(bounty_id, cell_id).await;
-        self.persist().await;
     }
 
     /// Get the escrow cell for a bounty.
@@ -301,9 +269,6 @@ impl BoardState {
             if updated {
                 expired_count += 1;
             }
-        }
-        if expired_count > 0 {
-            self.persist().await;
         }
         expired_count
     }

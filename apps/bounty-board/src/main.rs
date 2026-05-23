@@ -4,9 +4,11 @@
 //! - Issuers post bounties with rewards and qualification requirements.
 //! - Workers claim bounties by proving qualifications anonymously.
 //! - Payment is released atomically via conditional turns on completion.
+//!
+//! Uses the shared `AppServer` from `pyana-app-framework` for standard middleware
+//! (health, CORS, admin auth) and environment-based configuration.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -14,7 +16,7 @@ use std::time::Instant;
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
 };
@@ -23,10 +25,12 @@ use serde_json::json;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
 
+use pyana_app_framework::auth::{AdminAuth, AdminToken, HasAdminToken};
 use pyana_app_framework::hex::{bytes32_to_hex, hex_to_bytes32};
+use pyana_app_framework::persistence::JsonPersistence;
+use pyana_app_framework::server::{AppConfig, AppServer};
 use pyana_app_framework::{CellId, EngineConfig, EscrowCondition, PyanaEngine};
 use pyana_bounty_board::payment::{self, Escrow};
-use pyana_bounty_board::persist::{PersistConfig, PersistManager};
 use pyana_bounty_board::qualification::{FederationRootHistory, verify_qualification};
 use pyana_bounty_board::state::BoardState;
 use pyana_bounty_board::{
@@ -54,15 +58,16 @@ struct Args {
 
     /// Listen address.
     #[arg(long, default_value = "127.0.0.1:3030", env = "PYANA_LISTEN")]
-    listen: SocketAddr,
+    listen: String,
 
     /// Root sync interval in seconds (how often to poll the node for new roots).
     #[arg(long, default_value = "30", env = "PYANA_SYNC_INTERVAL")]
     sync_interval: u64,
 
-    /// Directory for persisting state across restarts. If not set, state is in-memory only.
-    #[arg(long, env = "PYANA_STATE_DIR")]
-    state_dir: Option<PathBuf>,
+    /// Path for persisting state across restarts. If not set, state is in-memory only.
+    /// Uses the framework's atomic JSON persistence (write-then-rename).
+    #[arg(long, env = "PYANA_STATE_FILE")]
+    state_file: Option<PathBuf>,
 }
 
 // =============================================================================
@@ -87,6 +92,16 @@ struct AppState {
     node_connected: Arc<RwLock<bool>>,
     /// Active escrows indexed by bounty ID (for payment release/refund).
     escrows: Arc<RwLock<HashMap<[u8; 32], Escrow>>>,
+    /// Admin token for admin endpoint authentication.
+    admin_token: AdminToken,
+    /// Optional persistence handle for state snapshots.
+    persistence: Option<JsonPersistence>,
+}
+
+impl HasAdminToken for AppState {
+    fn admin_token(&self) -> &AdminToken {
+        &self.admin_token
+    }
 }
 
 // =============================================================================
@@ -227,21 +242,24 @@ async fn main() {
 
     let args = Args::parse();
 
-    // Initialize persistence if --state-dir is provided.
-    let persist_manager = match &args.state_dir {
-        Some(dir) => {
-            let config = PersistConfig::new(dir.clone());
-            let mgr = PersistManager::new(Some(config));
-            mgr.initialize().await;
-            mgr
+    // Set up framework-based configuration.
+    let config = AppConfig::from_env().with_listen(&args.listen);
+
+    // Initialize persistence via framework's JsonPersistence.
+    let persistence = args.state_file.as_ref().map(|path| {
+        let p = JsonPersistence::new(path.clone());
+        if let Err(e) = p.initialize() {
+            error!(path = %path.display(), error = %e, "failed to initialize persistence");
+            std::process::exit(1);
         }
-        None => PersistManager::new(None),
-    };
+        info!(path = %path.display(), "persistence initialized");
+        p
+    });
 
     // Create board state with persistence support.
-    let board = if persist_manager.is_configured() {
-        let board = BoardState::with_persistence(persist_manager.clone());
-        if let Some(snapshot) = persist_manager.load().await {
+    let board = if let Some(ref persist) = persistence {
+        let board = BoardState::new();
+        if let Ok(Some(snapshot)) = persist.load() {
             board.restore_from_snapshot(snapshot).await;
             info!("restored board state from disk");
         }
@@ -309,12 +327,30 @@ async fn main() {
         node_url: Arc::new(args.node_url.clone()),
         node_connected: Arc::new(RwLock::new(node_connected)),
         escrows: Arc::new(RwLock::new(HashMap::new())),
+        admin_token: config.admin_token.clone(),
+        persistence: persistence.clone(),
     };
 
     // Spawn background root sync task.
     tokio::spawn(root_sync_task(state.clone(), args.sync_interval));
 
-    let app = Router::new()
+    // Build application routes.
+    let app_routes = app_router().with_state(state);
+
+    // Serve using the AppServer builder.
+    AppServer::new(config)
+        .service_name("pyana-bounty-board")
+        .with_health()
+        .with_cors()
+        .routes(app_routes)
+        .serve()
+        .await
+        .unwrap();
+}
+
+/// Build the application router (without state applied).
+fn app_router() -> Router<AppState> {
+    Router::new()
         // Bounty lifecycle
         .route("/bounties", post(create_bounty))
         .route("/bounties", get(list_bounties))
@@ -324,21 +360,10 @@ async fn main() {
         .route("/bounties/{id}/status", get(bounty_status))
         // Worker endpoints
         .route("/worker/bounties", get(worker_bounties))
-        // Admin / utility
+        // Admin (protected by framework's AdminAuth extractor)
         .route("/admin/height", post(advance_height))
         .route("/admin/expire", post(expire_bounties))
         .route("/admin/federation-root", post(set_federation_root))
-        .route("/health", get(health_check))
-        .with_state(state);
-
-    let addr = args.listen;
-    info!("pyana bounty board listening on {addr}");
-
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .expect("failed to bind");
-
-    axum::serve(listener, app).await.expect("server error");
 }
 
 // =============================================================================
@@ -431,6 +456,9 @@ async fn create_bounty(
     );
 
     state.board.insert_bounty(bounty).await;
+
+    // Persist state after mutation.
+    persist_state(&state).await;
 
     (
         StatusCode::CREATED,
@@ -529,6 +557,8 @@ async fn claim_bounty(
 
     info!(bounty_id = %id, "bounty claimed");
 
+    persist_state(&state).await;
+
     (
         StatusCode::OK,
         Json(json!({
@@ -601,6 +631,8 @@ async fn submit_work(
     state.board.update_status(&bounty_id, new_status).await;
 
     info!(bounty_id = %id, "work submitted");
+
+    persist_state(&state).await;
 
     (
         StatusCode::OK,
@@ -703,6 +735,8 @@ async fn approve_bounty(
 
     info!(bounty_id = %id, "bounty approved, payment released");
 
+    persist_state(&state).await;
+
     (
         StatusCode::OK,
         Json(json!({
@@ -795,73 +829,27 @@ struct WorkerQuery {
 }
 
 // =============================================================================
-// Admin / Utility Endpoints
+// Admin Endpoints (protected by framework AdminAuth extractor)
 // =============================================================================
 
-/// Verify admin bearer token from the `Authorization` header.
-/// Returns `Err(Response)` with 401 if the token is missing or invalid.
-/// Constant-time byte comparison to prevent timing side-channels on token check.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut acc = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        acc |= x ^ y;
-    }
-    acc == 0
-}
-
-/// Verify admin bearer token. Fails CLOSED: if PYANA_ADMIN_TOKEN is not set,
-/// admin endpoints reject all requests (production default).
-fn check_admin_auth(headers: &HeaderMap) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    let expected_token = match std::env::var("PYANA_ADMIN_TOKEN") {
-        Ok(t) if !t.is_empty() => t,
-        _ => {
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "admin access disabled: PYANA_ADMIN_TOKEN not configured"})),
-            ));
-        }
-    };
-
-    let auth_header = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    let provided = auth_header.strip_prefix("Bearer ").unwrap_or("");
-    if provided.is_empty() || !constant_time_eq(provided.as_bytes(), expected_token.as_bytes()) {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "unauthorized: invalid or missing admin token"})),
-        ));
-    }
-
-    Ok(())
-}
-
 /// POST /admin/height — advance the simulated block height.
+///
+/// Protected by the framework's `AdminAuth` extractor which validates the
+/// `Authorization: Bearer <token>` header against `PYANA_ADMIN_TOKEN`.
 async fn advance_height(
-    headers: HeaderMap,
+    _auth: AdminAuth,
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    if let Err(e) = check_admin_auth(&headers) {
-        return e.into_response();
-    }
     let delta = body["delta"].as_u64().unwrap_or(1);
     state.board.advance_height(delta).await;
     let new_height = state.board.current_height().await;
-    Json(json!({"height": new_height})).into_response()
+    persist_state(&state).await;
+    Json(json!({"height": new_height}))
 }
 
 /// POST /admin/expire — expire bounties past deadline and refund their escrows.
-async fn expire_bounties(headers: HeaderMap, State(state): State<AppState>) -> impl IntoResponse {
-    if let Err(e) = check_admin_auth(&headers) {
-        return e.into_response();
-    }
-
+async fn expire_bounties(_auth: AdminAuth, State(state): State<AppState>) -> impl IntoResponse {
     let current_height = state.board.current_height().await;
     let count = state.board.expire_stale_bounties().await;
 
@@ -887,20 +875,19 @@ async fn expire_bounties(headers: HeaderMap, State(state): State<AppState>) -> i
         }
     }
 
-    Json(json!({"expired": count})).into_response()
+    persist_state(&state).await;
+
+    Json(json!({"expired": count}))
 }
 
 /// POST /admin/federation-root — set the federation root at runtime.
 ///
 /// Accepts JSON: `{"root": "abcd...1234"}` (64 hex chars).
 async fn set_federation_root(
-    headers: HeaderMap,
+    _auth: AdminAuth,
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    if let Err(e) = check_admin_auth(&headers) {
-        return e.into_response();
-    }
     let root_hex = match body["root"].as_str() {
         Some(s) => s,
         None => {
@@ -946,59 +933,18 @@ async fn set_federation_root(
     }
 }
 
-/// GET /health — comprehensive health check.
+// =============================================================================
+// Persistence Helper
+// =============================================================================
+
+/// Persist the current board state using the framework's JsonPersistence.
 ///
-/// Returns app status, federation root info, bounty counts, and node connection status.
-async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
-    let root_history = state.root_history.read().await;
-    let current_root = root_history.current().unwrap_or([0u8; 32]);
-    let history_depth = root_history.len();
-    drop(root_history);
-
-    let root_last_updated = *state.root_last_updated.read().await;
-    let node_connected = *state.node_connected.read().await;
-
-    let root_age_secs = root_last_updated.map(|t| t.elapsed().as_secs());
-
-    // Count bounties by status.
-    let all_bounties = state.board.list_bounties(&BountyFilter::default()).await;
-    let open = all_bounties.iter().filter(|b| b.status == "open").count();
-    let claimed = all_bounties
-        .iter()
-        .filter(|b| b.status == "claimed")
-        .count();
-    let submitted = all_bounties
-        .iter()
-        .filter(|b| b.status == "submitted")
-        .count();
-    let paid = all_bounties.iter().filter(|b| b.status == "paid").count();
-    let expired = all_bounties
-        .iter()
-        .filter(|b| b.status == "expired")
-        .count();
-
-    let root_is_live = current_root != [0u8; 32];
-
-    Json(json!({
-        "status": "running",
-        "service": "pyana-bounty-board",
-        "federation_root": {
-            "value": bytes32_to_hex(&current_root),
-            "live": root_is_live,
-            "last_updated_secs_ago": root_age_secs,
-            "history_depth": history_depth,
-        },
-        "bounties": {
-            "total": all_bounties.len(),
-            "open": open,
-            "claimed": claimed,
-            "submitted": submitted,
-            "paid": paid,
-            "expired": expired,
-        },
-        "node": {
-            "url": state.node_url.as_str(),
-            "connected": node_connected,
+/// No-op if persistence is not configured.
+async fn persist_state(state: &AppState) {
+    if let Some(ref persistence) = state.persistence {
+        let snapshot = state.board.snapshot().await;
+        if let Err(e) = persistence.save(&snapshot) {
+            warn!(error = %e, "failed to persist state");
         }
-    }))
+    }
 }

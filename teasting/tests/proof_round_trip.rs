@@ -45,7 +45,7 @@ fn test_predicate_proof_serialization_round_trip() {
 
     // Verify the recovered proof.
     assert!(
-        verify_predicate(&recovered, BabyBear::new(18), fact_commitment),
+        verify_predicate(&recovered, BabyBear::new(18), fact_commitment).is_ok(),
         "Deserialized predicate proof should verify"
     );
 }
@@ -90,7 +90,7 @@ fn test_all_predicate_types_round_trip() {
         let recovered: PredicateProof = postcard::from_bytes(&bytes).unwrap();
 
         assert!(
-            verify_predicate(&recovered, BabyBear::new(threshold), fc),
+            verify_predicate(&recovered, BabyBear::new(threshold), fc).is_ok(),
             "{:?} proof failed verification after round-trip",
             pred_type,
         );

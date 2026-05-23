@@ -172,11 +172,14 @@ fn main() {
             prove_predicate(witness).expect("All bids are above minimum — proof must succeed");
 
         // Verify (as the auction contract would)
-        assert!(verify_predicate(
-            &validity_proof,
-            BabyBear::new(minimum_bid as u32),
-            fact_commitment,
-        ));
+        assert!(
+            verify_predicate(
+                &validity_proof,
+                BabyBear::new(minimum_bid as u32),
+                fact_commitment,
+            )
+            .is_ok()
+        );
 
         sealed_records.push(SealedBidRecord {
             commitment: bid_commitment,

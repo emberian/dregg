@@ -1,16 +1,18 @@
 //! Standalone pyana-gallery server binary.
-
-use std::net::SocketAddr;
+//!
+//! Uses the shared `AppServer` from `pyana-app-framework` for standard
+//! middleware (health, CORS, admin auth) and environment-based configuration.
 
 use clap::Parser;
-use pyana_gallery::server::{ServerConfig, start_server};
+use pyana_app_framework::server::AppConfig;
+use pyana_gallery::server::start_server;
 
 #[derive(Parser)]
 #[command(name = "pyana-gallery", about = "Federated art gallery server")]
 struct Cli {
     /// Listen address (host:port).
     #[arg(long, default_value = "0.0.0.0:3040")]
-    listen: SocketAddr,
+    listen: String,
 
     /// Path to frontend static files directory.
     #[arg(long, default_value = "frontend")]
@@ -32,13 +34,11 @@ async fn main() {
 
     let cli = Cli::parse();
 
-    let config = ServerConfig {
-        listen: cli.listen,
-        frontend_path: Some(cli.frontend),
-        state_file: Some(cli.state_file),
-    };
+    let config = AppConfig::from_env()
+        .with_listen(&cli.listen)
+        .with_state_file(&cli.state_file);
 
-    let addr = start_server(config).await;
+    let addr = start_server(config, Some(cli.frontend)).await;
     tracing::info!(%addr, node_url = %cli.node_url, "gallery server running");
 
     // Block forever (server runs in background task).

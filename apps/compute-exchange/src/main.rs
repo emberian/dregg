@@ -18,6 +18,7 @@
 //! ```
 
 mod auction;
+mod delivery_verification;
 mod orderbook;
 mod persistence;
 mod qualification;
@@ -38,6 +39,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tracing::{error, info, warn};
 
+use pyana_app_framework::dispute::{
+    self as dispute_framework, ComputeMetrics, DeliveryClaim, DisputeConfig, DisputeEvidence,
+    OptimisticSettlement, SettlementState as OptimisticState,
+};
 use pyana_app_framework::hex::{bytes32_to_hex, hex_to_bytes32};
 use pyana_app_framework::{CellId, FillConstraints};
 
@@ -113,6 +118,53 @@ struct CompleteSettlementRequest {
     provider_cell: String,
     /// Delivery proof bytes (hex-encoded).
     delivery_proof: String,
+}
+
+/// Request body for the optimistic claim submission.
+/// The provider attests to delivery metrics; the STARK proof is OPTIONAL EVIDENCE.
+#[derive(Debug, Serialize, Deserialize)]
+struct SubmitClaimRequest {
+    /// Provider cell ID (hex-encoded).
+    provider_cell: String,
+    /// FLOPS delivered.
+    flops_delivered: u64,
+    /// Duration of the computation in seconds.
+    duration_seconds: u64,
+    /// Quality score (0-10000 basis points).
+    quality_bps: u32,
+    /// Output hash (hex-encoded, 64 chars) — commitment to the result.
+    output_hash: String,
+    /// Optional: input hash for re-execution verification.
+    input_hash: Option<String>,
+    /// Provider's Ed25519 signature over the metrics (hex-encoded).
+    signature: String,
+    /// Optional STARK proof as evidence (hex-encoded). Strengthens the claim but
+    /// is NOT required for payment. The dispute window is the enforcement mechanism.
+    delivery_proof: Option<String>,
+}
+
+/// Request body for challenging a claim during the dispute window.
+#[derive(Debug, Serialize, Deserialize)]
+struct ChallengeClaimRequest {
+    /// Challenger cell ID (hex-encoded).
+    challenger_cell: String,
+    /// Amount the challenger is staking (must meet minimum).
+    challenger_stake: u64,
+    /// Type of challenge evidence.
+    evidence_type: String,
+    /// Evidence payload (interpretation depends on evidence_type):
+    /// - "re_execution_mismatch": JSON with claimed_output_hash, actual_output_hash, optional proof
+    /// - "proof_invalid": JSON with verification_error
+    /// - "metrics_impossible": JSON with reason, max_possible_flops
+    /// - "uptime_violation": JSON with missed_blocks, required_uptime_bps, actual_uptime_bps
+    evidence_payload: serde_json::Value,
+}
+
+/// Request body for finalizing an unchallenged settlement.
+#[derive(Debug, Serialize, Deserialize)]
+struct FinalizeSettlementRequest {
+    /// Who is requesting finalization (provider or anyone after window closes).
+    requestor_cell: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -324,9 +376,13 @@ async fn main() {
         .route("/orders", post(create_order))
         .route("/orders/{id}/reveal", post(reveal_order))
         .route("/orders/{id}", get(get_order))
-        // Settlement
+        // Settlement (legacy: STARK-enforced)
         .route("/settlements/{id}/complete", post(complete_settlement))
-        // Disputes
+        // Optimistic settlement (new: dispute-window enforced)
+        .route("/settlements/{id}/claim", post(submit_claim))
+        .route("/settlements/{id}/challenge", post(challenge_claim))
+        .route("/settlements/{id}/finalize", post(finalize_settlement))
+        // Disputes (legacy)
         .route("/disputes/{id}", post(create_dispute))
         // Utility
         .route("/health", get(health_check))
@@ -768,7 +824,14 @@ async fn get_order(State(state): State<AppState>, Path(id): Path<String>) -> imp
     }
 }
 
-/// POST /settlements/:id/complete — provider claims payment with proof of delivery.
+/// POST /settlements/:id/complete — provider claims payment with proof of delivery (LEGACY).
+///
+/// **DEPRECATED**: Use POST /settlements/:id/claim for the optimistic settlement flow.
+///
+/// This legacy endpoint requires STARK proof verification as the enforcement mechanism.
+/// The newer optimistic flow (submit_claim -> dispute window -> finalize) is preferred
+/// because it doesn't require the provider to generate an expensive ZK proof upfront.
+/// Instead, the STARK proof becomes optional evidence that strengthens the claim.
 ///
 /// The provider submits a ZK proof demonstrating they delivered the compute.
 /// This triggers `ReleaseEscrow` on the payment escrow via `EscrowManager`.
@@ -833,70 +896,61 @@ async fn complete_settlement(
         );
     }
 
-    // Verify the delivery proof is a valid STARK proof.
+    // Verify the delivery proof CRYPTOGRAPHICALLY.
+    //
     // The proof must:
-    // 1. Deserialize as a valid StarkProof
+    // 1. Deserialize as a valid StarkProof (PYNA header)
     // 2. Have the expected AIR name for compute delivery proofs
-    // 3. Be non-empty
-    if delivery_proof.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "delivery proof must not be empty"})),
-        );
-    }
+    // 3. Be structurally complete (non-empty queries, valid trace length)
+    // 4. PASS `stark::verify()` against the compute_delivery_descriptor() DSL circuit
+    //    with public inputs derived from the settlement's contracted SLA parameters
+    //
+    // Steps 1-3 are structural pre-checks; step 4 is the cryptographic verification
+    // that ensures the prover actually performed the contracted computation.
+    // Without step 4, ANY non-empty byte sequence with the right header would be
+    // accepted — a critical security vulnerability.
 
-    // Deserialize using the STARK proof's native binary format (not postcard).
-    // StarkProof uses a custom binary encoding with a "PYNA" magic header.
-    // The delivery proof demonstrates correct computation matching the SLA:
-    // - The provider ran the computation for the agreed duration
-    // - The output is a valid result of the specified workload
-    // - The computation met the latency/uptime SLA guarantees
-    let stark_proof = match pyana_circuit::stark::proof_from_bytes(&delivery_proof) {
-        Ok(proof) => proof,
-        Err(e) => {
+    // Reconstruct the SLA from the settlement's offering data.
+    let offering = match state.get_offering(&settlement.offering_id).await {
+        Some(o) => o,
+        None => {
+            error!(
+                settlement_id = %bytes32_to_hex(&settlement_id),
+                offering_id = %bytes32_to_hex(&settlement.offering_id),
+                "settlement references missing offering (data integrity error)"
+            );
             return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "error": format!(
-                        "delivery proof is not a valid STARK proof: {e}"
-                    )
-                })),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "settlement references a missing offering"})),
             );
         }
     };
 
-    // Verify the proof has a recognized AIR name for compute delivery proofs.
-    // Valid AIR names use the prefix "compute-delivery-" followed by the compute type
-    // (e.g., "compute-delivery-gpu-flops", "compute-delivery-inference").
-    if !stark_proof.air_name.starts_with("compute-delivery-") {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({
-                "error": format!(
-                    "delivery proof has unexpected AIR name '{}'; \
-                     expected prefix 'compute-delivery-'",
-                    stark_proof.air_name
-                )
-            })),
-        );
-    }
+    let compute_sla =
+        delivery_verification::ComputeSla::from_settlement(&settlement, &offering.sla);
 
-    // Verify basic structural integrity: must have query proofs and valid trace length.
-    if stark_proof.query_proofs.is_empty() || stark_proof.trace_len < 2 {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(
-                json!({"error": "delivery proof is structurally invalid (no queries or insufficient trace length)"}),
-            ),
-        );
+    match delivery_verification::verify_delivery_proof(&delivery_proof, &compute_sla) {
+        Ok(()) => {
+            info!(
+                settlement_id = %bytes32_to_hex(&settlement_id),
+                compute_hours = settlement.compute_hours,
+                "delivery proof cryptographically verified (STARK)"
+            );
+        }
+        Err(e) => {
+            warn!(
+                settlement_id = %bytes32_to_hex(&settlement_id),
+                error = %e,
+                "delivery proof verification FAILED"
+            );
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": format!("delivery proof rejected: {e}")
+                })),
+            );
+        }
     }
-
-    info!(
-        air_name = %stark_proof.air_name,
-        trace_len = stark_proof.trace_len,
-        num_queries = stark_proof.query_proofs.len(),
-        "delivery proof validated (STARK structure verified)"
-    );
 
     // Release the payment escrow via EscrowManager (provider gets paid).
     state
@@ -1051,6 +1105,526 @@ async fn create_dispute(
             "timeout_height": settlement.timeout_height,
             "current_height": current_height,
             "blocks_until_timeout": settlement.timeout_height - current_height,
+        })),
+    )
+}
+
+// =============================================================================
+// Optimistic Settlement Handlers
+// =============================================================================
+
+/// The dispute configuration for the compute exchange.
+/// 100 blocks dispute window, 10% challenger stake, tiered arbiter.
+fn compute_exchange_dispute_config() -> DisputeConfig {
+    DisputeConfig {
+        dispute_window_blocks: 100, // ~20 minutes at 12s blocks
+        challenger_stake_pct: 10,
+        arbiter_strategy: pyana_app_framework::dispute::ArbiterStrategy::Tiered {
+            cryptographic_deadline_blocks: 200,
+            federation_quorum: 3,
+            federation_deadline_blocks: 500,
+        },
+        winner_slash_pct: 80,
+        require_proof_in_claim: false, // STARK proof is optional evidence
+    }
+}
+
+/// POST /settlements/:id/claim — provider submits a delivery claim (optimistic).
+///
+/// Instead of requiring STARK verification as enforcement, the provider submits
+/// a signed attestation of delivery metrics. The STARK proof is OPTIONAL EVIDENCE
+/// that strengthens the claim but is not the enforcement mechanism.
+///
+/// After submission, a dispute window opens. If no challenge arrives before the
+/// deadline, the settlement is finalized (payment released, stake returned).
+async fn submit_claim(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<SubmitClaimRequest>,
+) -> impl IntoResponse {
+    let settlement_id = match hex_to_bytes32(&id) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "invalid settlement ID"})),
+            );
+        }
+    };
+
+    let provider = match cell_id_from_hex(&req.provider_cell) {
+        Some(id) => id,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "invalid provider_cell hex"})),
+            );
+        }
+    };
+
+    let output_hash = match hex_to_bytes32(&req.output_hash) {
+        Ok(h) => h,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "invalid output_hash hex"})),
+            );
+        }
+    };
+
+    let settlement = match state.get_settlement(&settlement_id).await {
+        Some(s) => s,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "settlement not found"})),
+            );
+        }
+    };
+
+    // Must be active.
+    if settlement.status != SettlementStatus::Active {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({"error": "settlement is not active"})),
+        );
+    }
+
+    // Verify the provider identity matches.
+    if settlement.provider != provider {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "only the provider can submit a claim"})),
+        );
+    }
+
+    // Parse optional fields.
+    let input_hash = req.input_hash.as_ref().and_then(|h| hex_to_bytes32(h).ok());
+
+    let signature = match hex_decode(&req.signature) {
+        Some(sig) if sig.len() == 64 => {
+            let mut arr = [0u8; 64];
+            arr.copy_from_slice(&sig);
+            arr
+        }
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "signature must be 128 hex chars (64 bytes)"})),
+            );
+        }
+    };
+
+    let delivery_proof = req.delivery_proof.as_ref().and_then(|p| hex_decode(p));
+
+    // If a STARK proof is provided, validate it as EVIDENCE (not enforcement).
+    // A valid proof strengthens the claim. An invalid proof is suspicious but
+    // doesn't block the claim — the dispute window handles enforcement.
+    let proof_verified = if let Some(ref proof_bytes) = delivery_proof {
+        let offering = state.get_offering(&settlement.offering_id).await;
+        if let Some(offering) = offering {
+            let sla =
+                delivery_verification::ComputeSla::from_settlement(&settlement, &offering.sla);
+            match delivery_verification::verify_delivery_proof(proof_bytes, &sla) {
+                Ok(()) => {
+                    info!(
+                        settlement_id = %bytes32_to_hex(&settlement_id),
+                        "optional STARK proof verified (strengthens claim)"
+                    );
+                    true
+                }
+                Err(e) => {
+                    warn!(
+                        settlement_id = %bytes32_to_hex(&settlement_id),
+                        error = %e,
+                        "optional STARK proof FAILED verification (claim still accepted, evidence weak)"
+                    );
+                    false
+                }
+            }
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    // Compute the dispute deadline.
+    let current_height = state.current_height().await;
+    let config = compute_exchange_dispute_config();
+    let dispute_deadline = current_height + config.dispute_window_blocks;
+
+    // Build the delivery claim.
+    let metrics = ComputeMetrics {
+        flops_delivered: req.flops_delivered,
+        duration_seconds: req.duration_seconds,
+        quality_bps: req.quality_bps,
+        output_hash,
+        input_hash,
+    };
+
+    let metrics_payload = serde_json::to_vec(&metrics).unwrap_or_default();
+    let proof_included = delivery_proof.is_some();
+
+    let claim = DeliveryClaim {
+        metrics_payload,
+        signature,
+        proof: delivery_proof,
+    };
+
+    // Build the optimistic settlement record.
+    let opt_settlement_id = dispute_framework::compute_settlement_id(
+        &settlement.sla_bond_escrow_id, // obligation backing the stake
+        &provider,
+        &settlement.consumer,
+        current_height,
+    );
+
+    // TODO: persist this in a dedicated ContentStore<OptimisticSettlement<DeliveryClaim>>
+    // once the full dispute lifecycle is wired through state.rs.
+    let _opt_settlement: OptimisticSettlement<DeliveryClaim> = OptimisticSettlement {
+        id: opt_settlement_id,
+        obligation_id: settlement.sla_bond_escrow_id,
+        claimant: provider,
+        counterparty: settlement.consumer,
+        claim,
+        dispute_deadline,
+        state: OptimisticState::Pending {
+            submitted_at: current_height,
+        },
+        stake_amount: settlement.sla_bond_amount,
+        payment_amount: settlement.payment_amount,
+    };
+
+    // Transition the settlement to a "claim pending" state.
+    // We reuse the existing Completed status with a note that it's optimistic.
+    // In a full implementation, SettlementStatus would have a ClaimPending variant.
+    state
+        .update_settlement_status(&settlement_id, SettlementStatus::Completed)
+        .await;
+
+    info!(
+        settlement_id = %bytes32_to_hex(&settlement_id),
+        dispute_deadline = dispute_deadline,
+        proof_included = proof_included,
+        proof_verified = proof_verified,
+        "delivery claim submitted (optimistic), dispute window open"
+    );
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "status": "claim_pending",
+            "settlement_id": bytes32_to_hex(&settlement_id),
+            "optimistic_settlement_id": bytes32_to_hex(&opt_settlement_id),
+            "dispute_deadline": dispute_deadline,
+            "current_height": current_height,
+            "blocks_until_finalization": config.dispute_window_blocks,
+            "proof_included": req.delivery_proof.is_some(),
+            "proof_verified": proof_verified,
+            "metrics": {
+                "flops_delivered": req.flops_delivered,
+                "duration_seconds": req.duration_seconds,
+                "quality_bps": req.quality_bps,
+                "output_hash": req.output_hash,
+            },
+        })),
+    )
+}
+
+/// POST /settlements/:id/challenge — challenge a pending delivery claim.
+///
+/// The challenger must stake (to prevent frivolous disputes) and provide evidence.
+/// If the challenge succeeds: provider's stake is slashed, challenger receives reward.
+/// If the challenge fails: challenger's stake goes to the provider.
+async fn challenge_claim(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<ChallengeClaimRequest>,
+) -> impl IntoResponse {
+    let settlement_id = match hex_to_bytes32(&id) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "invalid settlement ID"})),
+            );
+        }
+    };
+
+    let challenger = match cell_id_from_hex(&req.challenger_cell) {
+        Some(id) => id,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "invalid challenger_cell hex"})),
+            );
+        }
+    };
+
+    let settlement = match state.get_settlement(&settlement_id).await {
+        Some(s) => s,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "settlement not found"})),
+            );
+        }
+    };
+
+    // Must be in Completed state (which means claim was submitted in optimistic flow).
+    if settlement.status != SettlementStatus::Completed {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({"error": "settlement has no pending claim to challenge"})),
+        );
+    }
+
+    // Check the dispute window is still open.
+    let current_height = state.current_height().await;
+    let config = compute_exchange_dispute_config();
+    // Dispute deadline = settlement.created_at + DEFAULT_TIMEOUT_BLOCKS (we use timeout_height).
+    // For the optimistic flow, the dispute window is from claim submission.
+    // Since we don't store the claim time separately yet, use timeout_height as proxy.
+    if current_height >= settlement.timeout_height {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "dispute window has closed",
+                "deadline": settlement.timeout_height,
+                "current_height": current_height,
+            })),
+        );
+    }
+
+    // Check challenger stake meets minimum.
+    let min_stake =
+        dispute_framework::minimum_challenger_stake(settlement.sla_bond_amount, &config);
+    if req.challenger_stake < min_stake {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "insufficient challenger stake",
+                "required": min_stake,
+                "provided": req.challenger_stake,
+            })),
+        );
+    }
+
+    // Parse the evidence.
+    let evidence = match req.evidence_type.as_str() {
+        "re_execution_mismatch" => {
+            let claimed = req.evidence_payload["claimed_output_hash"]
+                .as_str()
+                .and_then(|h| hex_to_bytes32(h).ok())
+                .unwrap_or([0u8; 32]);
+            let actual = req.evidence_payload["actual_output_hash"]
+                .as_str()
+                .and_then(|h| hex_to_bytes32(h).ok())
+                .unwrap_or([0u8; 32]);
+            let proof = req.evidence_payload["execution_proof"]
+                .as_str()
+                .and_then(|p| hex_decode(p));
+            DisputeEvidence::ReExecutionMismatch {
+                claimed_output_hash: claimed,
+                actual_output_hash: actual,
+                execution_proof: proof,
+            }
+        }
+        "proof_invalid" => {
+            let error = req.evidence_payload["verification_error"]
+                .as_str()
+                .unwrap_or("unspecified")
+                .to_string();
+            DisputeEvidence::ProofInvalid {
+                verification_error: error,
+            }
+        }
+        "metrics_impossible" => {
+            let reason = req.evidence_payload["reason"]
+                .as_str()
+                .unwrap_or("unspecified")
+                .to_string();
+            let max_flops = req.evidence_payload["max_possible_flops"]
+                .as_u64()
+                .unwrap_or(0);
+            DisputeEvidence::MetricsImpossible {
+                reason,
+                max_possible_flops: max_flops,
+            }
+        }
+        "uptime_violation" => {
+            let blocks: Vec<u64> = req.evidence_payload["missed_blocks"]
+                .as_array()
+                .map(|arr| arr.iter().filter_map(|v| v.as_u64()).collect())
+                .unwrap_or_default();
+            let required = req.evidence_payload["required_uptime_bps"]
+                .as_u64()
+                .unwrap_or(9500) as u32;
+            let actual = req.evidence_payload["actual_uptime_bps"]
+                .as_u64()
+                .unwrap_or(0) as u32;
+            DisputeEvidence::UptimeViolation {
+                missed_heartbeat_blocks: blocks,
+                required_uptime_bps: required,
+                actual_uptime_bps: actual,
+            }
+        }
+        other => {
+            let payload = serde_json::to_vec(&req.evidence_payload).unwrap_or_default();
+            DisputeEvidence::Custom {
+                evidence_type: other.to_string(),
+                payload,
+            }
+        }
+    };
+
+    // Validate evidence structure.
+    if let Err(e) = dispute_framework::validate_evidence_structure(&evidence) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": format!("invalid evidence: {e}")})),
+        );
+    }
+
+    // Compute dispute ID.
+    let dispute_id =
+        dispute_framework::compute_dispute_id(&settlement_id, &challenger, current_height);
+
+    // Transition the settlement to disputed.
+    state
+        .update_settlement_status(&settlement_id, SettlementStatus::Disputed)
+        .await;
+
+    // Create the dispute record (using the existing Dispute struct for backward compat).
+    let dispute = Dispute {
+        settlement_id,
+        initiator: challenger,
+        reason: format!("challenge:{}", req.evidence_type),
+        status: DisputeStatus::Open,
+        filed_at: current_height,
+    };
+    state.insert_dispute(dispute).await;
+
+    info!(
+        settlement_id = %bytes32_to_hex(&settlement_id),
+        challenger = %bytes32_to_hex(challenger.as_bytes()),
+        evidence_type = %req.evidence_type,
+        challenger_stake = req.challenger_stake,
+        "claim challenged, dispute opened"
+    );
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "status": "disputed",
+            "settlement_id": bytes32_to_hex(&settlement_id),
+            "dispute_id": bytes32_to_hex(&dispute_id),
+            "evidence_type": req.evidence_type,
+            "challenger_stake": req.challenger_stake,
+            "min_stake_required": min_stake,
+            "resolution_strategy": "tiered (cryptographic -> federation)",
+        })),
+    )
+}
+
+/// POST /settlements/:id/finalize — finalize an unchallenged settlement.
+///
+/// Called after the dispute window closes with no challenge. Releases payment
+/// to the provider and returns their stake.
+///
+/// Anyone can call this (it's permissionless after the window closes), but
+/// typically the provider calls it to claim their payment.
+async fn finalize_settlement(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<FinalizeSettlementRequest>,
+) -> impl IntoResponse {
+    let settlement_id = match hex_to_bytes32(&id) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "invalid settlement ID"})),
+            );
+        }
+    };
+
+    let _requestor = match cell_id_from_hex(&req.requestor_cell) {
+        Some(id) => id,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "invalid requestor_cell hex"})),
+            );
+        }
+    };
+
+    let settlement = match state.get_settlement(&settlement_id).await {
+        Some(s) => s,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "settlement not found"})),
+            );
+        }
+    };
+
+    // Must be in Completed state (claim submitted, no dispute).
+    if settlement.status != SettlementStatus::Completed {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "settlement cannot be finalized (not in claim-pending state)",
+                "current_status": format!("{:?}", settlement.status),
+            })),
+        );
+    }
+
+    // Check the dispute window has closed.
+    let current_height = state.current_height().await;
+    if current_height < settlement.timeout_height {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "dispute window still open",
+                "deadline": settlement.timeout_height,
+                "current_height": current_height,
+                "blocks_remaining": settlement.timeout_height - current_height,
+            })),
+        );
+    }
+
+    // Dispute window closed without challenge. Finalize:
+    // 1. Release payment escrow to provider.
+    // 2. Return SLA bond to provider.
+    state
+        .release_escrow(&settlement.payment_escrow_id, &[])
+        .await;
+    state
+        .release_escrow(&settlement.sla_bond_escrow_id, &[])
+        .await;
+
+    // Update order status.
+    state
+        .update_order_status(&settlement.order_id, OrderStatus::Settled)
+        .await;
+
+    info!(
+        settlement_id = %bytes32_to_hex(&settlement_id),
+        payment = settlement.payment_amount,
+        stake_returned = settlement.sla_bond_amount,
+        "settlement finalized (unchallenged), payment released to provider"
+    );
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "status": "finalized",
+            "settlement_id": bytes32_to_hex(&settlement_id),
+            "payment_released": settlement.payment_amount,
+            "stake_returned": settlement.sla_bond_amount,
+            "finalized_at_height": current_height,
         })),
     )
 }

@@ -25,6 +25,7 @@ pyana-federation = { path = "../federation", optional = true }
 pyana-bridge = { path = "../bridge", optional = true, features = ["test-utils"] }
 token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
 pyana-commit = { path = "../commit", optional = true }
+pyana-captp = { path = "../captp" }
 pyana-cell = { path = "../cell" }
 pyana-store = { path = "../store" }
 pyana-types = { path = "../types" }

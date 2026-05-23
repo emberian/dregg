@@ -35,7 +35,7 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use pyana_circuit::predicate_types::{
+use pyana_circuit::compound_predicate_air::{
     BooleanFormula, CompoundPredicateProof, prove_compound_predicate, verify_compound_predicate,
 };
 use pyana_circuit::{
@@ -269,7 +269,7 @@ fn main() {
         println!(
             "    [{}] {:?} — threshold: {}, commitment: {}",
             idx,
-            proof.predicate_type,
+            proof.op,
             proof.threshold.as_u32(),
             proof.fact_commitment.as_u32()
         );
@@ -456,8 +456,10 @@ fn main() {
 
     let formula = BooleanFormula::And(vec![0, 1, 2, 3]);
 
+    // All sub-predicates are satisfied (true) for this candidate.
+    let sub_results: Vec<bool> = compound_predicates.iter().map(|_| true).collect();
     let compound_proof =
-        prove_compound_predicate(&compound_predicates, formula.clone(), &compound_commitments)
+        prove_compound_predicate(&sub_results, &formula, Some(&compound_commitments))
             .expect("compound proof should succeed");
 
     let compound_time = compound_start.elapsed();
@@ -469,13 +471,16 @@ fn main() {
 
     // Verify the compound proof
     let compound_verify_start = Instant::now();
-    let compound_valid =
-        verify_compound_predicate(&compound_proof, &compound_commitments, &formula);
+    let compound_valid = verify_compound_predicate(&compound_proof, &compound_commitments);
     let compound_verify_time = compound_verify_start.elapsed();
 
     println!(
         "  Compound verification: {} (in {:?})",
-        if compound_valid { "PASSED" } else { "FAILED" },
+        if compound_valid.is_ok() {
+            "PASSED"
+        } else {
+            "FAILED"
+        },
         compound_verify_time
     );
     println!();
@@ -518,7 +523,8 @@ fn main() {
     println!("  Selective disclosure proof: experience >= 5");
     println!(
         "  Generated in {:?}, verified: {}",
-        selective_time, stronger_valid
+        selective_time,
+        stronger_valid.is_ok()
     );
     println!();
     println!("  What the company NOW knows (with disclosure):");
@@ -655,8 +661,11 @@ fn main() {
         verification_result.is_ok(),
         "Fulfillment verification must pass"
     );
-    assert!(compound_valid, "Compound proof must verify");
-    assert!(stronger_valid, "Selective disclosure proof must verify");
+    assert!(compound_valid.is_ok(), "Compound proof must verify");
+    assert!(
+        stronger_valid.is_ok(),
+        "Selective disclosure proof must verify"
+    );
     assert!(lying_proof.is_none(), "Cannot prove false salary statement");
     assert!(stale_result.is_err(), "Stale state root must be rejected");
     assert!(!threshold_match, "Wrong threshold must not match");

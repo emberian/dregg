@@ -288,12 +288,15 @@ fn main() {
                 value: match_price * match_quantity,
                 asset_type: asset_usdc,
                 spending_proof: vec![0x01], // placeholder for demo
+                value_commitment: None,
             },
             Effect::NoteCreate {
                 commitment: alice_receives_commitment,
                 value: match_quantity,
                 asset_type: asset_eth,
                 encrypted_note: vec![0xAA; 64],
+                value_commitment: None,
+                range_proof: None,
             },
         ],
         may_delegate: DelegationMode::None,
@@ -315,12 +318,15 @@ fn main() {
                 value: match_quantity,
                 asset_type: asset_eth,
                 spending_proof: vec![0x01], // placeholder for demo
+                value_commitment: None,
             },
             Effect::NoteCreate {
                 commitment: bob_receives_commitment,
                 value: match_price * match_quantity,
                 asset_type: asset_usdc,
                 encrypted_note: vec![0xBB; 64],
+                value_commitment: None,
+                range_proof: None,
             },
         ],
         may_delegate: DelegationMode::None,

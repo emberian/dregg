@@ -868,12 +868,15 @@ fn run_atomic_swap(nullifier_set: &mut NullifierSet) -> Result<(), Box<dyn Error
                 value: 100,
                 asset_type: asset_a,
                 spending_proof: vec![0x01], // placeholder for demo
+                value_commitment: None,
             },
             Effect::NoteCreate {
                 commitment: a_recv.commitment(),
                 value: 50,
                 asset_type: asset_b,
                 encrypted_note: vec![0xAA; 64],
+                value_commitment: None,
+                range_proof: None,
             },
         ],
         may_delegate: DelegationMode::None,
@@ -894,12 +897,15 @@ fn run_atomic_swap(nullifier_set: &mut NullifierSet) -> Result<(), Box<dyn Error
                 value: 50,
                 asset_type: asset_b,
                 spending_proof: vec![0x01], // placeholder for demo
+                value_commitment: None,
             },
             Effect::NoteCreate {
                 commitment: b_recv.commitment(),
                 value: 100,
                 asset_type: asset_a,
                 encrypted_note: vec![0xBB; 64],
+                value_commitment: None,
+                range_proof: None,
             },
         ],
         may_delegate: DelegationMode::None,

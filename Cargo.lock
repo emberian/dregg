@@ -1802,6 +1802,7 @@ dependencies = [
  "postcard",
  "pyana-app-framework",
  "pyana-circuit",
+ "pyana-dsl-runtime",
  "pyana-intent",
  "pyana-turn",
  "reqwest",
@@ -6307,6 +6308,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "pyana-captp"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "bs58",
+ "getrandom 0.3.4",
+ "postcard",
+ "pyana-cell",
+ "pyana-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "pyana-cell"
 version = "0.1.0"
 dependencies = [
@@ -6566,6 +6581,7 @@ version = "0.1.0"
 dependencies = [
  "axum 0.8.9",
  "blake3",
+ "pyana-app-framework",
  "pyana-circuit",
  "pyana-dsl-runtime",
  "pyana-dsl-tests",
@@ -6598,11 +6614,15 @@ dependencies = [
 name = "pyana-lending"
 version = "0.1.0"
 dependencies = [
+ "axum 0.8.9",
  "blake3",
+ "pyana-app-framework",
  "pyana-circuit",
+ "pyana-dsl-runtime",
  "pyana-types",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -6678,6 +6698,7 @@ dependencies = [
  "postcard",
  "pyana-app-framework",
  "pyana-circuit",
+ "pyana-dsl-runtime",
  "pyana-intent",
  "pyana-turn",
  "pyana-types",
@@ -6730,6 +6751,7 @@ dependencies = [
  "pbkdf2",
  "postcard",
  "pyana-bridge",
+ "pyana-captp",
  "pyana-cell",
  "pyana-circuit",
  "pyana-commit",
@@ -6918,6 +6940,7 @@ dependencies = [
  "getrandom 0.3.4",
  "postcard",
  "pyana-bridge",
+ "pyana-captp",
  "pyana-cell",
  "pyana-circuit",
  "pyana-commit",

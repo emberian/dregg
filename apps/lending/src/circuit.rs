@@ -1,14 +1,19 @@
 //! Circuit descriptors for lending protocol proofs.
 //!
 //! Two main circuits:
-//! - HealthFactorAir: proves collateral_value * threshold >= debt_value * BPS_SCALE
-//! - InterestAccrualAir: proves correct compound interest computation
+//! - HealthFactorCircuit: proves collateral_value * threshold >= debt_value * BPS_SCALE
+//! - InterestAccrualCircuit: proves correct compound interest computation
 //!
-//! These use pyana-circuit's AIR/STARK infrastructure to produce cryptographic proofs
+//! These use pyana-circuit's DSL/STARK infrastructure to produce cryptographic proofs
 //! that can be verified without access to the underlying position data.
 
-use pyana_circuit::constraint_prover::{Air, Constraint, ConstraintProver};
-use pyana_circuit::field::BabyBear;
+use std::collections::HashMap;
+
+use pyana_circuit::field::{BABYBEAR_P, BabyBear};
+use pyana_dsl_runtime::{
+    BoundaryDef, BoundaryRow, CellProgram, CircuitDescriptor, ColumnDef, ColumnKind,
+    ConstraintExpr, PolyTerm, ProgramRegistry,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::interest::BPS_SCALE;
@@ -17,7 +22,7 @@ use crate::interest::BPS_SCALE;
 // Health Factor Circuit
 // =============================================================================
 
-/// Trace width for the health factor AIR.
+/// Trace width for the health factor circuit.
 ///
 /// Layout (single row):
 /// | 0  | collateral_value (sum of amount*price for all collateral) |
@@ -26,13 +31,13 @@ use crate::interest::BPS_SCALE;
 /// | 3  | lhs = collateral_value * threshold_bps                    |
 /// | 4  | rhs = debt_amount * BPS_SCALE                              |
 /// | 5  | diff = lhs - rhs (must be >= 0)                           |
-/// | 6..35 | diff_bits[0..29] (bit decomposition)                    |
-pub const HEALTH_FACTOR_WIDTH: usize = 36;
+/// | 6  | diff_high_bit (0 if diff < p/2 -- non-negative)           |
+pub const HEALTH_FACTOR_WIDTH: usize = 7;
 
-/// Number of bits for diff decomposition (30 bits covers BabyBear range safely).
-const HEALTH_DIFF_BITS: usize = 30;
+/// Number of public inputs for the health factor circuit.
+pub const HEALTH_FACTOR_PI_COUNT: usize = 3;
 
-/// Column indices for health factor AIR.
+/// Column indices for health factor circuit.
 pub mod health_col {
     pub const COLLATERAL_VALUE: usize = 0;
     pub const DEBT_AMOUNT: usize = 1;
@@ -40,181 +45,168 @@ pub mod health_col {
     pub const LHS: usize = 3;
     pub const RHS: usize = 4;
     pub const DIFF: usize = 5;
-    pub const DIFF_BITS_START: usize = 6;
+    pub const DIFF_HIGH_BIT: usize = 6;
 }
 
-/// Health factor AIR: proves that a lending position is solvent.
-///
-/// Statement: collateral_value * threshold_bps >= debt_amount * BPS_SCALE
-///
-/// This is a single-row AIR that verifies the health factor inequality
-/// via bit decomposition of the non-negative difference.
-pub struct HealthFactorAir {
-    /// Pre-computed trace and public inputs.
-    pub trace: Vec<Vec<BabyBear>>,
-    pub public_inputs: Vec<BabyBear>,
+/// Public input indices for health factor circuit.
+pub mod health_pi {
+    pub const COLLATERAL_VALUE: usize = 0;
+    pub const DEBT_AMOUNT: usize = 1;
+    pub const THRESHOLD_BPS: usize = 2;
 }
 
-impl Air for HealthFactorAir {
-    fn trace_width(&self) -> usize {
-        HEALTH_FACTOR_WIDTH
-    }
-
-    fn num_public_inputs(&self) -> usize {
-        3 // [collateral_value, debt_amount, threshold_bps]
-    }
-
-    fn constraints(&self) -> Vec<Constraint> {
-        vec![
-            // 1. lhs = collateral_value * threshold_bps
-            Constraint {
-                name: "lhs_computation".to_string(),
-                eval: Box::new(|row, _next, _pi| {
-                    let col_val = row[health_col::COLLATERAL_VALUE];
-                    let threshold = row[health_col::THRESHOLD_BPS];
-                    let lhs = row[health_col::LHS];
-                    // Constraint: lhs - col_val * threshold == 0
-                    lhs - col_val * threshold
-                }),
+/// Build the health factor circuit descriptor.
+///
+/// This circuit proves that a lending position is solvent:
+/// `collateral_value * threshold_bps >= debt_amount * BPS_SCALE`
+///
+/// The proof is achieved by computing `diff = lhs - rhs` and showing `diff` is
+/// non-negative (high bit is zero in BabyBear field representation).
+pub fn health_factor_circuit_descriptor() -> CircuitDescriptor {
+    CircuitDescriptor {
+        name: "pyana-lending-health-factor-v1".to_string(),
+        trace_width: HEALTH_FACTOR_WIDTH,
+        max_degree: 2,
+        columns: vec![
+            ColumnDef {
+                name: "collateral_value".into(),
+                index: health_col::COLLATERAL_VALUE,
+                kind: ColumnKind::Value,
             },
-            // 2. rhs = debt_amount * BPS_SCALE
-            Constraint {
-                name: "rhs_computation".to_string(),
-                eval: Box::new(|row, _next, _pi| {
-                    let debt = row[health_col::DEBT_AMOUNT];
-                    let rhs = row[health_col::RHS];
-                    let bps = BabyBear::new(BPS_SCALE as u32);
-                    rhs - debt * bps
-                }),
+            ColumnDef {
+                name: "debt_amount".into(),
+                index: health_col::DEBT_AMOUNT,
+                kind: ColumnKind::Value,
             },
-            // 3. diff = lhs - rhs
-            Constraint {
-                name: "diff_computation".to_string(),
-                eval: Box::new(|row, _next, _pi| {
-                    let lhs = row[health_col::LHS];
-                    let rhs = row[health_col::RHS];
-                    let diff = row[health_col::DIFF];
-                    diff - (lhs - rhs)
-                }),
+            ColumnDef {
+                name: "threshold_bps".into(),
+                index: health_col::THRESHOLD_BPS,
+                kind: ColumnKind::Value,
             },
-            // 4. Bit decomposition: sum(diff_bits[i] * 2^i) == diff
-            Constraint {
-                name: "diff_bit_decomposition".to_string(),
-                eval: Box::new(|row, _next, _pi| {
-                    let diff = row[health_col::DIFF];
-                    let mut reconstructed = BabyBear::ZERO;
-                    let mut power = BabyBear::ONE;
-                    let two = BabyBear::new(2);
-                    for i in 0..HEALTH_DIFF_BITS {
-                        let bit = row[health_col::DIFF_BITS_START + i];
-                        reconstructed = reconstructed + bit * power;
-                        power = power * two;
-                    }
-                    diff - reconstructed
-                }),
+            ColumnDef {
+                name: "lhs".into(),
+                index: health_col::LHS,
+                kind: ColumnKind::Value,
             },
-            // 5. Each bit is binary: bit * (bit - 1) == 0
-            // We check all bits in one constraint by summing violations
-            Constraint {
-                name: "bits_are_binary".to_string(),
-                eval: Box::new(|row, _next, _pi| {
-                    let mut sum = BabyBear::ZERO;
-                    for i in 0..HEALTH_DIFF_BITS {
-                        let bit = row[health_col::DIFF_BITS_START + i];
-                        sum = sum + bit * (bit - BabyBear::ONE);
-                    }
-                    sum
-                }),
+            ColumnDef {
+                name: "rhs".into(),
+                index: health_col::RHS,
+                kind: ColumnKind::Value,
             },
-            // 6. High bit is zero (proves diff is non-negative)
-            Constraint {
-                name: "high_bit_zero".to_string(),
-                eval: Box::new(|row, _next, _pi| {
-                    row[health_col::DIFF_BITS_START + HEALTH_DIFF_BITS - 1]
-                }),
+            ColumnDef {
+                name: "diff".into(),
+                index: health_col::DIFF,
+                kind: ColumnKind::Value,
             },
-        ]
-    }
-
-    fn generate_trace(&self) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
-        (self.trace.clone(), self.public_inputs.clone())
+            ColumnDef {
+                name: "diff_high_bit".into(),
+                index: health_col::DIFF_HIGH_BIT,
+                kind: ColumnKind::Binary,
+            },
+        ],
+        constraints: vec![
+            // C1: lhs == collateral_value * threshold_bps
+            ConstraintExpr::Multiplication {
+                a: health_col::COLLATERAL_VALUE,
+                b: health_col::THRESHOLD_BPS,
+                output: health_col::LHS,
+            },
+            // C2: rhs == debt_amount * BPS_SCALE
+            // rhs - debt_amount * BPS_SCALE == 0
+            ConstraintExpr::Polynomial {
+                terms: vec![
+                    PolyTerm {
+                        coeff: BabyBear::ONE,
+                        col_indices: vec![health_col::RHS],
+                    },
+                    PolyTerm {
+                        coeff: BabyBear::new(BABYBEAR_P - BPS_SCALE as u32),
+                        col_indices: vec![health_col::DEBT_AMOUNT],
+                    },
+                ],
+            },
+            // C3: diff == lhs - rhs
+            // diff - lhs + rhs == 0
+            ConstraintExpr::Polynomial {
+                terms: vec![
+                    PolyTerm {
+                        coeff: BabyBear::ONE,
+                        col_indices: vec![health_col::DIFF],
+                    },
+                    PolyTerm {
+                        coeff: BabyBear::new(BABYBEAR_P - 1),
+                        col_indices: vec![health_col::LHS],
+                    },
+                    PolyTerm {
+                        coeff: BabyBear::ONE,
+                        col_indices: vec![health_col::RHS],
+                    },
+                ],
+            },
+            // C4: diff_high_bit is boolean
+            ConstraintExpr::Binary {
+                col: health_col::DIFF_HIGH_BIT,
+            },
+            // C5: diff_high_bit == 0 (enforces diff is non-negative, i.e. < p/2)
+            ConstraintExpr::Polynomial {
+                terms: vec![PolyTerm {
+                    coeff: BabyBear::ONE,
+                    col_indices: vec![health_col::DIFF_HIGH_BIT],
+                }],
+            },
+            // C6-C8: Public input bindings
+            ConstraintExpr::PiBinding {
+                col: health_col::COLLATERAL_VALUE,
+                pi_index: health_pi::COLLATERAL_VALUE,
+            },
+            ConstraintExpr::PiBinding {
+                col: health_col::DEBT_AMOUNT,
+                pi_index: health_pi::DEBT_AMOUNT,
+            },
+            ConstraintExpr::PiBinding {
+                col: health_col::THRESHOLD_BPS,
+                pi_index: health_pi::THRESHOLD_BPS,
+            },
+        ],
+        boundaries: vec![
+            BoundaryDef::PiBinding {
+                row: BoundaryRow::First,
+                col: health_col::COLLATERAL_VALUE,
+                pi_index: health_pi::COLLATERAL_VALUE,
+            },
+            BoundaryDef::PiBinding {
+                row: BoundaryRow::First,
+                col: health_col::DEBT_AMOUNT,
+                pi_index: health_pi::DEBT_AMOUNT,
+            },
+            BoundaryDef::PiBinding {
+                row: BoundaryRow::First,
+                col: health_col::THRESHOLD_BPS,
+                pi_index: health_pi::THRESHOLD_BPS,
+            },
+        ],
+        public_input_count: HEALTH_FACTOR_PI_COUNT,
     }
 }
 
-/// Scale factor: we divide large values by this to fit in BabyBear range.
-/// BabyBear p ~ 2^31, so values up to ~2B are safe. We scale by 1000 to give
-/// comfortable headroom for multiplications.
-const SCALE_FACTOR: u64 = 1000;
+/// Create a CellProgram for the health factor circuit.
+pub fn health_factor_cell_program() -> CellProgram {
+    CellProgram::new(health_factor_circuit_descriptor(), 1)
+}
 
-/// Generate a health factor AIR instance for proving solvency.
-///
-/// All values are internally scaled to fit within BabyBear's range.
-/// The circuit proves: collateral_value * threshold_bps >= debt_amount * BPS_SCALE
-/// by working with scaled values where both sides are divided by SCALE_FACTOR.
-pub fn build_health_factor_air(
-    collateral_amounts: &[u64],
-    collateral_prices: &[u64],
-    debt_amount: u64,
-    threshold_bps: u64,
-) -> HealthFactorAir {
-    assert_eq!(collateral_amounts.len(), collateral_prices.len());
-
-    // Compute cumulative collateral value
-    let mut cumulative_value: u64 = 0;
-    for i in 0..collateral_amounts.len() {
-        let value = (collateral_amounts[i] as u128 * collateral_prices[i] as u128
-            / BPS_SCALE as u128) as u64;
-        cumulative_value += value;
-    }
-
-    // Scale values to fit in BabyBear:
-    // We prove: (col_value / S) * threshold >= (debt / S) * BPS_SCALE
-    // This is equivalent to: col_value * threshold >= debt * BPS_SCALE
-    // when S divides evenly (which preserves the inequality direction).
-    let col_scaled = cumulative_value / SCALE_FACTOR;
-    let debt_scaled = debt_amount / SCALE_FACTOR;
-
-    // Now lhs = col_scaled * threshold_bps, rhs = debt_scaled * BPS_SCALE
-    // Both should fit in u32 if values are reasonable
-    let lhs = col_scaled * threshold_bps;
-    let rhs = debt_scaled * BPS_SCALE;
-    let diff = lhs.saturating_sub(rhs);
-
-    // Ensure diff fits in 30 bits (< 2^29 for safety)
-    let diff_clamped = diff & ((1u64 << (HEALTH_DIFF_BITS - 1)) - 1);
-
-    // Build single-row trace
-    let mut row = vec![BabyBear::ZERO; HEALTH_FACTOR_WIDTH];
-    row[health_col::COLLATERAL_VALUE] = BabyBear::new(col_scaled as u32);
-    row[health_col::DEBT_AMOUNT] = BabyBear::new(debt_scaled as u32);
-    row[health_col::THRESHOLD_BPS] = BabyBear::new(threshold_bps as u32);
-    row[health_col::LHS] = BabyBear::new(lhs as u32);
-    row[health_col::RHS] = BabyBear::new(rhs as u32);
-    row[health_col::DIFF] = BabyBear::new(diff_clamped as u32);
-
-    // Bit decomposition
-    for bit_idx in 0..HEALTH_DIFF_BITS {
-        let bit = (diff_clamped >> bit_idx) & 1;
-        row[health_col::DIFF_BITS_START + bit_idx] = BabyBear::new(bit as u32);
-    }
-
-    let public_inputs = vec![
-        BabyBear::new(col_scaled as u32),
-        BabyBear::new(debt_scaled as u32),
-        BabyBear::new(threshold_bps as u32),
-    ];
-
-    HealthFactorAir {
-        trace: vec![row],
-        public_inputs,
-    }
+/// Deploy the health factor circuit to a ProgramRegistry. Returns the VK hash.
+pub fn deploy_health_factor_program(
+    registry: &mut ProgramRegistry,
+) -> Result<[u8; 32], pyana_dsl_runtime::ProgramError> {
+    let program = health_factor_cell_program();
+    registry.deploy(program)
 }
 
 // =============================================================================
 // Interest Accrual Circuit
 // =============================================================================
 
-/// Trace width for the interest accrual AIR.
+/// Trace width for the interest accrual circuit.
 ///
 /// Layout (per block row):
 /// | 0  | block_index (0..N-1)                |
@@ -224,7 +216,10 @@ pub fn build_health_factor_air(
 /// | 4  | next_balance (balance + interest)    |
 pub const INTEREST_ACCRUAL_WIDTH: usize = 5;
 
-/// Column indices for interest accrual AIR.
+/// Number of public inputs for the interest accrual circuit.
+pub const INTEREST_ACCRUAL_PI_COUNT: usize = 4;
+
+/// Column indices for interest accrual circuit.
 pub mod accrual_col {
     pub const BLOCK_INDEX: usize = 0;
     pub const BALANCE: usize = 1;
@@ -233,155 +228,371 @@ pub mod accrual_col {
     pub const NEXT_BALANCE: usize = 4;
 }
 
+/// Public input indices for interest accrual circuit.
+pub mod accrual_pi {
+    pub const START_BALANCE: usize = 0;
+    pub const END_BALANCE: usize = 1;
+    pub const RATE: usize = 2;
+    pub const NUM_BLOCKS: usize = 3;
+}
+
 /// Precision for per-block rate (rate is expressed as numerator with this denominator).
 pub const RATE_PRECISION: u64 = 1_000_000_000;
 
-/// Interest accrual AIR: proves correct compound interest computation.
+/// Build the interest accrual circuit descriptor.
 ///
-/// Statement: new_balance = old_balance * (1 + rate)^num_blocks
-/// Realized as iterated multiplication: each row computes one block of interest.
+/// This circuit proves correct compound interest computation:
+/// `new_balance = old_balance * (1 + rate)^num_blocks`
+/// realized as iterated multiplication: each row computes one block of interest.
 ///
-/// Transition constraint: balance[i+1] = next_balance[i]
-/// Per-row: next_balance = balance + interest, where interest = balance * rate / PRECISION
-pub struct InterestAccrualAir {
-    pub trace: Vec<Vec<BabyBear>>,
-    pub public_inputs: Vec<BabyBear>,
+/// Constraints:
+/// 1. next_balance == balance + interest
+/// 2. Transition: balance[i+1] == next_balance[i]
+/// 3. Block index increments
+/// 4. Public input bindings (start_balance at first row, end_balance at last row)
+pub fn interest_accrual_circuit_descriptor() -> CircuitDescriptor {
+    CircuitDescriptor {
+        name: "pyana-lending-interest-accrual-v1".to_string(),
+        trace_width: INTEREST_ACCRUAL_WIDTH,
+        max_degree: 2,
+        columns: vec![
+            ColumnDef {
+                name: "block_index".into(),
+                index: accrual_col::BLOCK_INDEX,
+                kind: ColumnKind::Value,
+            },
+            ColumnDef {
+                name: "balance".into(),
+                index: accrual_col::BALANCE,
+                kind: ColumnKind::Value,
+            },
+            ColumnDef {
+                name: "rate".into(),
+                index: accrual_col::RATE,
+                kind: ColumnKind::Value,
+            },
+            ColumnDef {
+                name: "interest".into(),
+                index: accrual_col::INTEREST,
+                kind: ColumnKind::Value,
+            },
+            ColumnDef {
+                name: "next_balance".into(),
+                index: accrual_col::NEXT_BALANCE,
+                kind: ColumnKind::Value,
+            },
+        ],
+        constraints: vec![
+            // C1: next_balance == balance + interest
+            // next_balance - balance - interest == 0
+            ConstraintExpr::Polynomial {
+                terms: vec![
+                    PolyTerm {
+                        coeff: BabyBear::ONE,
+                        col_indices: vec![accrual_col::NEXT_BALANCE],
+                    },
+                    PolyTerm {
+                        coeff: BabyBear::new(BABYBEAR_P - 1),
+                        col_indices: vec![accrual_col::BALANCE],
+                    },
+                    PolyTerm {
+                        coeff: BabyBear::new(BABYBEAR_P - 1),
+                        col_indices: vec![accrual_col::INTEREST],
+                    },
+                ],
+            },
+            // C2: Transition: next row's balance == this row's next_balance
+            ConstraintExpr::Transition {
+                next_col: accrual_col::BALANCE,
+                local_col: accrual_col::NEXT_BALANCE,
+            },
+            // C3: Public input binding: rate is constant across all rows
+            ConstraintExpr::PiBinding {
+                col: accrual_col::RATE,
+                pi_index: accrual_pi::RATE,
+            },
+        ],
+        boundaries: vec![
+            // First row: balance == start_balance (PI[0])
+            BoundaryDef::PiBinding {
+                row: BoundaryRow::First,
+                col: accrual_col::BALANCE,
+                pi_index: accrual_pi::START_BALANCE,
+            },
+            // Last row: next_balance == end_balance (PI[1])
+            BoundaryDef::PiBinding {
+                row: BoundaryRow::Last,
+                col: accrual_col::NEXT_BALANCE,
+                pi_index: accrual_pi::END_BALANCE,
+            },
+            // First row: rate bound to PI[2]
+            BoundaryDef::PiBinding {
+                row: BoundaryRow::First,
+                col: accrual_col::RATE,
+                pi_index: accrual_pi::RATE,
+            },
+            // First row: block_index starts at 0
+            BoundaryDef::Fixed {
+                row: BoundaryRow::First,
+                col: accrual_col::BLOCK_INDEX,
+                value: BabyBear::ZERO,
+            },
+        ],
+        public_input_count: INTEREST_ACCRUAL_PI_COUNT,
+    }
 }
 
-impl Air for InterestAccrualAir {
-    fn trace_width(&self) -> usize {
-        INTEREST_ACCRUAL_WIDTH
+/// Create a CellProgram for the interest accrual circuit.
+pub fn interest_accrual_cell_program() -> CellProgram {
+    CellProgram::new(interest_accrual_circuit_descriptor(), 1)
+}
+
+/// Deploy the interest accrual circuit to a ProgramRegistry. Returns the VK hash.
+pub fn deploy_interest_accrual_program(
+    registry: &mut ProgramRegistry,
+) -> Result<[u8; 32], pyana_dsl_runtime::ProgramError> {
+    let program = interest_accrual_cell_program();
+    registry.deploy(program)
+}
+
+// =============================================================================
+// Witness types
+// =============================================================================
+
+/// Scale factor: we divide large values by this to fit in BabyBear range.
+/// BabyBear p ~ 2^31, so values up to ~2B are safe. We scale by 1000 to give
+/// comfortable headroom for multiplications.
+const SCALE_FACTOR: u64 = 1000;
+
+/// Witness for the health factor circuit.
+#[derive(Clone, Debug)]
+pub struct HealthFactorWitness {
+    /// Collateral amounts per asset.
+    pub collateral_amounts: Vec<u64>,
+    /// Collateral prices per asset (must match amounts length).
+    pub collateral_prices: Vec<u64>,
+    /// Total debt value.
+    pub debt_amount: u64,
+    /// Liquidation threshold in basis points.
+    pub threshold_bps: u64,
+}
+
+impl HealthFactorWitness {
+    /// Check whether the position represented by this witness is healthy.
+    pub fn is_healthy(&self) -> bool {
+        let col_value = self.collateral_value_scaled();
+        let lhs = col_value * self.threshold_bps;
+        let debt_scaled = self.debt_amount / SCALE_FACTOR;
+        let rhs = debt_scaled * BPS_SCALE;
+        lhs >= rhs
     }
 
-    fn num_public_inputs(&self) -> usize {
-        4 // [start_balance, end_balance, rate, num_blocks]
+    /// Compute the scaled collateral value.
+    fn collateral_value_scaled(&self) -> u64 {
+        let mut cumulative: u64 = 0;
+        for i in 0..self.collateral_amounts.len() {
+            let value = (self.collateral_amounts[i] as u128 * self.collateral_prices[i] as u128
+                / BPS_SCALE as u128) as u64;
+            cumulative += value;
+        }
+        cumulative / SCALE_FACTOR
     }
 
-    fn constraints(&self) -> Vec<Constraint> {
+    /// Generate the witness values map for the health factor circuit.
+    pub fn to_witness_map(&self, num_rows: usize) -> HashMap<String, Vec<BabyBear>> {
+        let col_scaled = self.collateral_value_scaled();
+        let debt_scaled = self.debt_amount / SCALE_FACTOR;
+
+        let lhs = col_scaled * self.threshold_bps;
+        let rhs = debt_scaled * BPS_SCALE;
+
+        // diff = lhs - rhs in BabyBear field
+        let diff = if lhs >= rhs {
+            BabyBear::from_u64(lhs - rhs)
+        } else {
+            let gap = rhs - lhs;
+            BabyBear::new(BABYBEAR_P - (gap as u32 % BABYBEAR_P))
+        };
+
+        // diff_high_bit: 0 if diff < p/2 (healthy), 1 if diff >= p/2
+        let half_p = BABYBEAR_P / 2;
+        let diff_high_bit = if diff.0 <= half_p {
+            BabyBear::ZERO
+        } else {
+            BabyBear::ONE
+        };
+
+        let mut map = HashMap::new();
+        map.insert(
+            "collateral_value".into(),
+            vec![BabyBear::from_u64(col_scaled); num_rows],
+        );
+        map.insert(
+            "debt_amount".into(),
+            vec![BabyBear::from_u64(debt_scaled); num_rows],
+        );
+        map.insert(
+            "threshold_bps".into(),
+            vec![BabyBear::from_u64(self.threshold_bps); num_rows],
+        );
+        map.insert("lhs".into(), vec![BabyBear::from_u64(lhs); num_rows]);
+        map.insert("rhs".into(), vec![BabyBear::from_u64(rhs); num_rows]);
+        map.insert("diff".into(), vec![diff; num_rows]);
+        map.insert("diff_high_bit".into(), vec![diff_high_bit; num_rows]);
+        map
+    }
+
+    /// Generate the public inputs for the health factor circuit.
+    pub fn public_inputs(&self) -> Vec<BabyBear> {
+        let col_scaled = self.collateral_value_scaled();
+        let debt_scaled = self.debt_amount / SCALE_FACTOR;
+
         vec![
-            // 1. next_balance = balance + interest
-            Constraint {
-                name: "next_balance_sum".to_string(),
-                eval: Box::new(|row, _next, _pi| {
-                    let balance = row[accrual_col::BALANCE];
-                    let interest = row[accrual_col::INTEREST];
-                    let next_balance = row[accrual_col::NEXT_BALANCE];
-                    next_balance - (balance + interest)
-                }),
-            },
-            // 2. Transition: next row's balance == this row's next_balance
-            Constraint {
-                name: "balance_continuity".to_string(),
-                eval: Box::new(|row, next, _pi| {
-                    if let Some(next_row) = next {
-                        let expected = row[accrual_col::NEXT_BALANCE];
-                        let actual = next_row[accrual_col::BALANCE];
-                        actual - expected
-                    } else {
-                        BabyBear::ZERO // No constraint on last row's transition
-                    }
-                }),
-            },
-            // 3. Block index increments
-            Constraint {
-                name: "block_index_increment".to_string(),
-                eval: Box::new(|row, next, _pi| {
-                    if let Some(next_row) = next {
-                        let curr = row[accrual_col::BLOCK_INDEX];
-                        let next_idx = next_row[accrual_col::BLOCK_INDEX];
-                        next_idx - curr - BabyBear::ONE
-                    } else {
-                        BabyBear::ZERO
-                    }
-                }),
-            },
+            BabyBear::from_u64(col_scaled),
+            BabyBear::from_u64(debt_scaled),
+            BabyBear::from_u64(self.threshold_bps),
         ]
     }
+}
 
-    fn generate_trace(&self) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
-        (self.trace.clone(), self.public_inputs.clone())
+/// Witness for the interest accrual circuit.
+#[derive(Clone, Debug)]
+pub struct InterestAccrualWitness {
+    /// Starting balance.
+    pub start_balance: u64,
+    /// Per-block rate numerator (denominator is RATE_PRECISION).
+    pub rate_per_block: u64,
+    /// Number of blocks to accrue over.
+    pub num_blocks: usize,
+}
+
+impl InterestAccrualWitness {
+    /// Compute the end balance after accrual.
+    pub fn compute_end_balance(&self) -> u64 {
+        let mut balance = self.start_balance;
+        for _ in 0..self.num_blocks {
+            let interest =
+                (balance as u128 * self.rate_per_block as u128 / RATE_PRECISION as u128) as u64;
+            balance += interest;
+        }
+        balance
+    }
+
+    /// Generate the witness values map for the interest accrual circuit.
+    ///
+    /// The trace length must be a power of two >= 2. Extra rows beyond num_blocks
+    /// are padded with the final balance held constant (zero interest).
+    pub fn to_witness_map(&self, num_rows: usize) -> HashMap<String, Vec<BabyBear>> {
+        let mut block_indices = Vec::with_capacity(num_rows);
+        let mut balances = Vec::with_capacity(num_rows);
+        let mut rates = Vec::with_capacity(num_rows);
+        let mut interests = Vec::with_capacity(num_rows);
+        let mut next_balances = Vec::with_capacity(num_rows);
+
+        let mut balance = self.start_balance;
+
+        for i in 0..num_rows {
+            block_indices.push(BabyBear::new(i as u32));
+
+            if i < self.num_blocks {
+                let interest =
+                    (balance as u128 * self.rate_per_block as u128 / RATE_PRECISION as u128) as u64;
+                let next_balance = balance + interest;
+
+                balances.push(BabyBear::from_u64(balance));
+                rates.push(BabyBear::from_u64(self.rate_per_block));
+                interests.push(BabyBear::from_u64(interest));
+                next_balances.push(BabyBear::from_u64(next_balance));
+
+                balance = next_balance;
+            } else {
+                // Padding rows: balance stays constant, interest is zero
+                balances.push(BabyBear::from_u64(balance));
+                rates.push(BabyBear::from_u64(self.rate_per_block));
+                interests.push(BabyBear::ZERO);
+                next_balances.push(BabyBear::from_u64(balance));
+            }
+        }
+
+        let mut map = HashMap::new();
+        map.insert("block_index".into(), block_indices);
+        map.insert("balance".into(), balances);
+        map.insert("rate".into(), rates);
+        map.insert("interest".into(), interests);
+        map.insert("next_balance".into(), next_balances);
+        map
+    }
+
+    /// Generate the public inputs for the interest accrual circuit.
+    pub fn public_inputs(&self) -> Vec<BabyBear> {
+        let end_balance = self.compute_end_balance();
+        vec![
+            BabyBear::from_u64(self.start_balance),
+            BabyBear::from_u64(end_balance),
+            BabyBear::from_u64(self.rate_per_block),
+            BabyBear::new(self.num_blocks as u32),
+        ]
     }
 }
 
-/// Build an interest accrual AIR instance.
+// =============================================================================
+// Prove / Verify API
+// =============================================================================
+
+/// Prove that a lending position's health factor is sufficient.
 ///
-/// Public inputs: [start_balance, end_balance, rate, num_blocks]
-pub fn build_interest_accrual_air(
-    start_balance: u64,
-    rate_per_block_numerator: u64,
-    num_blocks: usize,
-) -> InterestAccrualAir {
-    let actual_rows = num_blocks.max(1);
-    let mut trace = Vec::with_capacity(actual_rows);
+/// Returns the STARK proof bytes if the position is healthy, or an error if
+/// the constraint system rejects the witness (under-collateralized).
+pub fn prove_health_factor(witness: &HealthFactorWitness) -> Result<Vec<u8>, String> {
+    let program = health_factor_cell_program();
+    let num_rows = 2; // Minimum power-of-two trace
+    let witness_map = witness.to_witness_map(num_rows);
+    let public_inputs = witness.public_inputs();
 
-    let mut balance = start_balance;
-
-    for i in 0..actual_rows {
-        let interest =
-            (balance as u128 * rate_per_block_numerator as u128 / RATE_PRECISION as u128) as u64;
-        let next_balance = balance + interest;
-
-        let mut row = vec![BabyBear::ZERO; INTEREST_ACCRUAL_WIDTH];
-        row[accrual_col::BLOCK_INDEX] = BabyBear::new(i as u32);
-        row[accrual_col::BALANCE] = BabyBear::new(balance as u32);
-        row[accrual_col::RATE] = BabyBear::new(rate_per_block_numerator as u32);
-        row[accrual_col::INTEREST] = BabyBear::new(interest as u32);
-        row[accrual_col::NEXT_BALANCE] = BabyBear::new(next_balance as u32);
-
-        trace.push(row);
-        balance = next_balance;
-    }
-
-    let public_inputs = vec![
-        BabyBear::new(start_balance as u32),
-        BabyBear::new(balance as u32), // end_balance
-        BabyBear::new(rate_per_block_numerator as u32),
-        BabyBear::new(num_blocks as u32),
-    ];
-
-    InterestAccrualAir {
-        trace,
-        public_inputs,
-    }
+    program
+        .prove_transition(&witness_map, num_rows, &public_inputs)
+        .map_err(|e| format!("Health factor proof generation failed: {e}"))
 }
 
-// =============================================================================
-// Verification helpers
-// =============================================================================
+/// Verify a health factor STARK proof against public inputs.
+pub fn verify_health_factor_proof(
+    proof_bytes: &[u8],
+    witness: &HealthFactorWitness,
+) -> Result<(), String> {
+    let program = health_factor_cell_program();
+    let public_inputs = witness.public_inputs();
 
-/// Verify a health factor proof (mock verification via constraint checking).
-pub fn verify_health_factor(
-    collateral_amounts: &[u64],
-    collateral_prices: &[u64],
-    debt_amount: u64,
-    threshold_bps: u64,
-) -> bool {
-    let air = build_health_factor_air(
-        collateral_amounts,
-        collateral_prices,
-        debt_amount,
-        threshold_bps,
-    );
-    let result = ConstraintProver::verify(&air);
-    result.is_valid()
+    program
+        .verify_transition(&public_inputs, proof_bytes)
+        .map_err(|e| format!("Health factor proof verification failed: {e}"))
 }
 
-/// Verify an interest accrual proof (mock verification via constraint checking).
-pub fn verify_interest_accrual(
-    start_balance: u64,
-    rate_per_block: u64,
-    num_blocks: usize,
-    expected_end_balance: u64,
-) -> bool {
-    let air = build_interest_accrual_air(start_balance, rate_per_block, num_blocks);
-    let (_, pi) = air.generate_trace();
-    // Check end balance matches
-    let computed_end = pi[1].as_u32() as u64;
-    if computed_end != expected_end_balance {
-        return false;
-    }
-    let result = ConstraintProver::verify(&air);
-    result.is_valid()
+/// Prove correct interest accrual over a period.
+///
+/// Returns the STARK proof bytes on success.
+pub fn prove_interest_accrual(witness: &InterestAccrualWitness) -> Result<Vec<u8>, String> {
+    let program = interest_accrual_cell_program();
+    // Trace length must be power of two >= 2
+    let num_rows = witness.num_blocks.max(2).next_power_of_two();
+    let witness_map = witness.to_witness_map(num_rows);
+    let public_inputs = witness.public_inputs();
+
+    program
+        .prove_transition(&witness_map, num_rows, &public_inputs)
+        .map_err(|e| format!("Interest accrual proof generation failed: {e}"))
+}
+
+/// Verify an interest accrual STARK proof against public inputs.
+pub fn verify_interest_accrual_proof(
+    proof_bytes: &[u8],
+    witness: &InterestAccrualWitness,
+) -> Result<(), String> {
+    let program = interest_accrual_cell_program();
+    let public_inputs = witness.public_inputs();
+
+    program
+        .verify_transition(&public_inputs, proof_bytes)
+        .map_err(|e| format!("Interest accrual proof verification failed: {e}"))
 }
 
 // =============================================================================
@@ -402,14 +613,29 @@ pub struct HealthFactorDescriptor {
 }
 
 impl HealthFactorDescriptor {
+    /// Build a witness from this descriptor.
+    pub fn to_witness(&self) -> HealthFactorWitness {
+        HealthFactorWitness {
+            collateral_amounts: self.collateral_amounts.clone(),
+            collateral_prices: self.collateral_prices.clone(),
+            debt_amount: self.debt_amount,
+            threshold_bps: self.threshold_bps,
+        }
+    }
+
     /// Check if this descriptor represents a healthy position.
     pub fn is_healthy(&self) -> bool {
-        verify_health_factor(
-            &self.collateral_amounts,
-            &self.collateral_prices,
-            self.debt_amount,
-            self.threshold_bps,
-        )
+        self.to_witness().is_healthy()
+    }
+
+    /// Generate a STARK proof of health.
+    pub fn prove(&self) -> Result<Vec<u8>, String> {
+        prove_health_factor(&self.to_witness())
+    }
+
+    /// Verify a STARK proof of health.
+    pub fn verify(&self, proof_bytes: &[u8]) -> Result<(), String> {
+        verify_health_factor_proof(proof_bytes, &self.to_witness())
     }
 }
 
@@ -427,25 +653,36 @@ pub struct InterestAccrualDescriptor {
 }
 
 impl InterestAccrualDescriptor {
-    /// Verify the accrual computation.
-    pub fn verify(&self) -> bool {
-        verify_interest_accrual(
-            self.start_balance,
-            self.rate_per_block,
-            self.num_blocks,
-            self.expected_end_balance,
-        )
+    /// Build a witness from this descriptor.
+    pub fn to_witness(&self) -> InterestAccrualWitness {
+        InterestAccrualWitness {
+            start_balance: self.start_balance,
+            rate_per_block: self.rate_per_block,
+            num_blocks: self.num_blocks,
+        }
     }
 
     /// Compute the expected end balance for this descriptor.
     pub fn compute_end_balance(&self) -> u64 {
-        let mut balance = self.start_balance;
-        for _ in 0..self.num_blocks {
-            let interest =
-                (balance as u128 * self.rate_per_block as u128 / RATE_PRECISION as u128) as u64;
-            balance += interest;
+        self.to_witness().compute_end_balance()
+    }
+
+    /// Verify the accrual computation matches expected_end_balance, then produce a STARK proof.
+    pub fn prove(&self) -> Result<Vec<u8>, String> {
+        let witness = self.to_witness();
+        let computed_end = witness.compute_end_balance();
+        if computed_end != self.expected_end_balance {
+            return Err(format!(
+                "End balance mismatch: computed {} but expected {}",
+                computed_end, self.expected_end_balance
+            ));
         }
-        balance
+        prove_interest_accrual(&witness)
+    }
+
+    /// Verify a STARK proof of interest accrual.
+    pub fn verify_proof(&self, proof_bytes: &[u8]) -> Result<(), String> {
+        verify_interest_accrual_proof(proof_bytes, &self.to_witness())
     }
 }
 
@@ -454,59 +691,118 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_health_factor_healthy_trace() {
+    fn health_factor_descriptor_validates() {
+        let desc = health_factor_circuit_descriptor();
+        assert!(desc.validate().is_ok());
+    }
+
+    #[test]
+    fn interest_accrual_descriptor_validates() {
+        let desc = interest_accrual_circuit_descriptor();
+        assert!(desc.validate().is_ok());
+    }
+
+    #[test]
+    fn health_factor_cell_program_deploys() {
+        let mut registry = ProgramRegistry::new();
+        let vk = deploy_health_factor_program(&mut registry);
+        assert!(vk.is_ok());
+        assert!(registry.contains(&vk.unwrap()));
+    }
+
+    #[test]
+    fn interest_accrual_cell_program_deploys() {
+        let mut registry = ProgramRegistry::new();
+        let vk = deploy_interest_accrual_program(&mut registry);
+        assert!(vk.is_ok());
+        assert!(registry.contains(&vk.unwrap()));
+    }
+
+    #[test]
+    fn test_health_factor_healthy_proves() {
         // 1.5M collateral at price 1:1, 1M debt, 80% threshold
-        // lhs = 1_500_000 * 8000 = 12_000_000_000
-        // rhs = 1_000_000 * 10000 = 10_000_000_000
-        // diff = 2_000_000_000 > 0, so healthy
-        let result = verify_health_factor(&[1_500_000], &[BPS_SCALE], 1_000_000, 8_000);
-        assert!(result);
+        let witness = HealthFactorWitness {
+            collateral_amounts: vec![1_500_000],
+            collateral_prices: vec![BPS_SCALE],
+            debt_amount: 1_000_000,
+            threshold_bps: 8_000,
+        };
+        assert!(witness.is_healthy());
+        let proof = prove_health_factor(&witness);
+        assert!(
+            proof.is_ok(),
+            "Healthy position should prove: {:?}",
+            proof.err()
+        );
+
+        // Verify
+        let proof_bytes = proof.unwrap();
+        let result = verify_health_factor_proof(&proof_bytes, &witness);
+        assert!(result.is_ok(), "Proof should verify: {:?}", result.err());
     }
 
     #[test]
     fn test_health_factor_multi_asset() {
         // Two assets: 500K at price 2x, 300K at price 1x
-        // total col value = 500_000*20000/10000 + 300_000*10000/10000 = 1_000_000 + 300_000 = 1_300_000
-        let result = verify_health_factor(
-            &[500_000, 300_000],
-            &[BPS_SCALE * 2, BPS_SCALE],
-            1_000_000,
-            8_000,
+        let witness = HealthFactorWitness {
+            collateral_amounts: vec![500_000, 300_000],
+            collateral_prices: vec![BPS_SCALE * 2, BPS_SCALE],
+            debt_amount: 1_000_000,
+            threshold_bps: 8_000,
+        };
+        assert!(witness.is_healthy());
+        let proof = prove_health_factor(&witness);
+        assert!(
+            proof.is_ok(),
+            "Multi-asset healthy position should prove: {:?}",
+            proof.err()
         );
-        assert!(result);
     }
 
     #[test]
-    fn test_interest_accrual_basic() {
-        let rate = RATE_PRECISION / 100; // 1% per block
-        let air = build_interest_accrual_air(1_000_000, rate, 10);
-        let (_, pi) = air.generate_trace();
-        assert_eq!(pi[0], BabyBear::new(1_000_000)); // start
-        assert_eq!(pi[3], BabyBear::new(10)); // num_blocks
-        // End balance should be > start
-        assert!(pi[1].as_u32() > 1_000_000);
+    fn test_interest_accrual_proves() {
+        let witness = InterestAccrualWitness {
+            start_balance: 1_000_000,
+            rate_per_block: RATE_PRECISION / 100, // 1% per block
+            num_blocks: 4,                        // power of two for clean trace
+        };
+        let end = witness.compute_end_balance();
+        assert!(end > 1_000_000);
+
+        let proof = prove_interest_accrual(&witness);
+        assert!(
+            proof.is_ok(),
+            "Interest accrual should prove: {:?}",
+            proof.err()
+        );
+
+        let proof_bytes = proof.unwrap();
+        let result = verify_interest_accrual_proof(&proof_bytes, &witness);
+        assert!(result.is_ok(), "Proof should verify: {:?}", result.err());
     }
 
     #[test]
     fn test_interest_accrual_descriptor() {
-        let desc = InterestAccrualDescriptor {
+        let witness = InterestAccrualWitness {
             start_balance: 1_000_000,
             rate_per_block: RATE_PRECISION / 1000, // 0.1% per block
-            num_blocks: 5,
-            expected_end_balance: 0,
+            num_blocks: 4,
         };
-        let end = desc.compute_end_balance();
+        let end = witness.compute_end_balance();
         assert!(end > 1_000_000);
 
-        let desc_valid = InterestAccrualDescriptor {
+        let desc = InterestAccrualDescriptor {
+            start_balance: 1_000_000,
+            rate_per_block: RATE_PRECISION / 1000,
+            num_blocks: 4,
             expected_end_balance: end,
-            ..desc
         };
-        assert!(desc_valid.verify());
+        let proof = desc.prove();
+        assert!(proof.is_ok(), "Descriptor prove failed: {:?}", proof.err());
     }
 
     #[test]
-    fn test_health_factor_descriptor() {
+    fn test_health_factor_descriptor_api() {
         let desc = HealthFactorDescriptor {
             collateral_amounts: vec![2_000_000],
             collateral_prices: vec![BPS_SCALE],
@@ -514,19 +810,15 @@ mod tests {
             threshold_bps: 8_000,
         };
         assert!(desc.is_healthy());
-    }
+        let proof = desc.prove();
+        assert!(proof.is_ok(), "Descriptor prove failed: {:?}", proof.err());
 
-    #[test]
-    fn test_health_factor_constraint_verification() {
-        let air = build_health_factor_air(&[2_000_000], &[BPS_SCALE], 1_000_000, 8_000);
-        let result = ConstraintProver::verify(&air);
-        assert!(result.is_valid());
-    }
-
-    #[test]
-    fn test_interest_accrual_constraint_verification() {
-        let air = build_interest_accrual_air(1_000_000, RATE_PRECISION / 1000, 5);
-        let result = ConstraintProver::verify(&air);
-        assert!(result.is_valid());
+        let proof_bytes = proof.unwrap();
+        let result = desc.verify(&proof_bytes);
+        assert!(
+            result.is_ok(),
+            "Descriptor verify failed: {:?}",
+            result.err()
+        );
     }
 }

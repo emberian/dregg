@@ -1,10 +1,14 @@
 //! Lending protocol demonstration: supply, borrow, accrue, repay, liquidate.
 //!
 //! This example walks through the full lifecycle of a lending position using
-//! pyana's obligation and temporal predicate primitives.
+//! pyana's obligation and temporal predicate primitives, with real STARK proofs.
 
 use pyana_lending::borrow::CollateralEntry;
-use pyana_lending::circuit::{HealthFactorDescriptor, InterestAccrualDescriptor, RATE_PRECISION};
+use pyana_lending::circuit::{
+    HealthFactorDescriptor, HealthFactorWitness, InterestAccrualDescriptor, InterestAccrualWitness,
+    RATE_PRECISION, prove_health_factor, prove_interest_accrual, verify_health_factor_proof,
+    verify_interest_accrual_proof,
+};
 use pyana_lending::interest::{BLOCKS_PER_YEAR, BPS_SCALE};
 use pyana_lending::liquidation::LiquidationResult;
 use pyana_lending::{LendingPool, Market};
@@ -77,35 +81,92 @@ fn main() {
         alice_value - 10_000_000
     );
 
-    // --- 4. Circuit Proofs ---
-    println!("\n[Circuit] Verifying health factor proof...");
+    // --- 4. STARK Circuit Proofs ---
+    println!("\n[Circuit] Generating STARK proof of health factor...");
+    let health_witness = HealthFactorWitness {
+        collateral_amounts: vec![8_000_000],
+        collateral_prices: vec![BPS_SCALE],
+        debt_amount: 5_000_000,
+        threshold_bps: 8_000,
+    };
+    assert!(health_witness.is_healthy());
+    match prove_health_factor(&health_witness) {
+        Ok(proof_bytes) => {
+            println!("  STARK proof generated ({} bytes)", proof_bytes.len());
+            match verify_health_factor_proof(&proof_bytes, &health_witness) {
+                Ok(()) => println!("  STARK proof verified successfully!"),
+                Err(e) => println!("  Verification failed: {}", e),
+            }
+        }
+        Err(e) => println!("  Proof generation failed: {}", e),
+    }
+
+    println!("\n[Circuit] Generating STARK proof of interest accrual...");
+    let accrual_witness = InterestAccrualWitness {
+        start_balance: 5_000_000,
+        rate_per_block: RATE_PRECISION / 10_000, // 0.01% per block
+        num_blocks: 8,                           // power of two for clean trace
+    };
+    let end_balance = accrual_witness.compute_end_balance();
+    println!(
+        "  After {} blocks at 0.01%%/block: {} -> {}",
+        accrual_witness.num_blocks, 5_000_000, end_balance
+    );
+    match prove_interest_accrual(&accrual_witness) {
+        Ok(proof_bytes) => {
+            println!("  STARK proof generated ({} bytes)", proof_bytes.len());
+            match verify_interest_accrual_proof(&proof_bytes, &accrual_witness) {
+                Ok(()) => println!("  STARK proof verified successfully!"),
+                Err(e) => println!("  Verification failed: {}", e),
+            }
+        }
+        Err(e) => println!("  Proof generation failed: {}", e),
+    }
+
+    // --- 5. Descriptor-based proofs ---
+    println!("\n[Circuit] Using descriptor API for health factor...");
     let health_desc = HealthFactorDescriptor {
         collateral_amounts: vec![8_000_000],
         collateral_prices: vec![BPS_SCALE],
         debt_amount: 5_000_000,
         threshold_bps: 8_000,
     };
-    println!("  Health factor proof valid: {}", health_desc.is_healthy());
+    println!("  Position healthy: {}", health_desc.is_healthy());
+    match health_desc.prove() {
+        Ok(proof) => {
+            println!("  Proof generated ({} bytes)", proof.len());
+            match health_desc.verify(&proof) {
+                Ok(()) => println!("  Proof verified!"),
+                Err(e) => println!("  Verify failed: {}", e),
+            }
+        }
+        Err(e) => println!("  Prove failed: {}", e),
+    }
 
-    println!("\n[Circuit] Verifying interest accrual proof...");
     let accrual_desc = InterestAccrualDescriptor {
         start_balance: 5_000_000,
-        rate_per_block: RATE_PRECISION / 10_000, // 0.01% per block
-        num_blocks: 10,
+        rate_per_block: RATE_PRECISION / 10_000,
+        num_blocks: 8,
         expected_end_balance: 0,
     };
-    let end_balance = accrual_desc.compute_end_balance();
-    println!(
-        "  After 10 blocks at 0.01%/block: {} -> {}",
-        5_000_000, end_balance
-    );
+    let computed_end = accrual_desc.compute_end_balance();
     let valid_desc = InterestAccrualDescriptor {
-        expected_end_balance: end_balance,
+        expected_end_balance: computed_end,
         ..accrual_desc
     };
-    println!("  Accrual proof valid: {}", valid_desc.verify());
+    println!("\n[Circuit] Using descriptor API for interest accrual...");
+    match valid_desc.prove() {
+        Ok(proof) => {
+            println!("  Proof generated ({} bytes)", proof.len());
+            match valid_desc.verify_proof(&proof) {
+                Ok(()) => println!("  Proof verified!"),
+                Err(e) => println!("  Verify failed: {}", e),
+            }
+        }
+        Err(e) => println!("  Prove failed: {}", e),
+    }
 
-    // --- 5. Repay ---
+    // --- 6. Repay ---
     let pos = pool
         .borrow_positions
         .iter()
@@ -121,7 +182,7 @@ fn main() {
         .unwrap();
     println!("  Position repaid: {}", pos.repaid);
 
-    // --- 6. Liquidation Demo ---
+    // --- 7. Liquidation Demo ---
     println!("\n[Liquidation] Demonstrating liquidation scenario...");
 
     // Create a new risky position
@@ -157,7 +218,7 @@ fn main() {
         println!("  Position is healthy, no liquidation needed");
     }
 
-    // --- 7. Withdraw ---
+    // --- 8. Withdraw ---
     let market = pool.get_market(1).unwrap();
     let final_value = supply_receipt.current_value(market.borrow_index);
     println!("\n[Withdraw] Alice's final supply value: {}", final_value);

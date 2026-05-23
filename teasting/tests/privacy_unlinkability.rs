@@ -110,16 +110,8 @@ fn test_blinded_predicate_proofs_unlinkable() {
 
     // Both verify against their respective (different) fact_commitments.
     use pyana_circuit::predicate_air::verify_predicate;
-    assert!(verify_predicate(
-        &proof1,
-        BabyBear::new(threshold),
-        fc_blinded1
-    ));
-    assert!(verify_predicate(
-        &proof2,
-        BabyBear::new(threshold),
-        fc_blinded2
-    ));
+    assert!(verify_predicate(&proof1, BabyBear::new(threshold), fc_blinded1).is_ok());
+    assert!(verify_predicate(&proof2, BabyBear::new(threshold), fc_blinded2).is_ok());
 }
 
 /// Multiple delegations from the same token: delegated presentations must not

@@ -13,8 +13,10 @@ use pyana_cell::note::Note;
 use pyana_cell::nullifier_set::NullifierSet;
 use pyana_circuit::{
     BabyBear,
-    note_spending_air::{create_test_witness, key_to_field_elements},
-    prove_note_spend, stark, verify_note_spend,
+    note_spending_air::{
+        create_test_witness, key_to_field_elements, prove_note_spend, verify_note_spend,
+    },
+    stark,
 };
 
 /// Asset type constant for GOLD.

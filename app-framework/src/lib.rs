@@ -45,6 +45,7 @@
 //! a single dependency instead of reaching into `pyana-intent`, `pyana-turn`, etc.
 
 pub mod auth;
+pub mod dispute;
 pub mod escrow;
 pub mod hex;
 pub mod middleware;
@@ -81,3 +82,10 @@ pub use pyana_types::CellId;
 pub use auth::{AdminAuth, AdminMode, AdminToken, HasAdminToken};
 pub use persistence::JsonPersistence;
 pub use server::{AppConfig, AppServer, ErrorResponse, api_error};
+
+// Re-export dispute framework types for apps implementing optimistic settlement.
+pub use dispute::{
+    ArbiterStrategy, ComputeMetrics, DeliveryClaim, Disputable, DisputeConfig, DisputeError,
+    DisputeEvidence, DisputeResolution, OptimisticSettlement, SettlementState,
+};
+pub use dispute::{DisputeId, SettlementId as DisputeSettlementId};

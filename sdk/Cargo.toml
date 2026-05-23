@@ -14,6 +14,7 @@ pyana-types = { path = "../types" }
 pyana-cell = { path = "../cell" }
 pyana-turn = { path = "../turn" }
 pyana-bridge = { path = "../bridge" }
+pyana-captp = { path = "../captp" }
 pyana-circuit = { path = "../circuit" }
 pyana-commit = { path = "../commit" }
 pyana-dsl-runtime = { path = "../pyana-dsl-runtime" }

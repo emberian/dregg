@@ -13,6 +13,7 @@ description = "Decentralized identity and verifiable credentials using pyana ZK 
 pyana-circuit = { path = "../../circuit", default-features = false, features = ["mock"] }
 pyana-dsl-runtime = { path = "../../pyana-dsl-runtime" }
 pyana-dsl-tests = { path = "../../pyana-dsl-tests" }
+pyana-app-framework = { path = "../../app-framework" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }

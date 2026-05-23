@@ -576,6 +576,11 @@ pub struct AgentWallet {
     /// a 32-byte commitment. The agent maintains the full cell state here and
     /// provides it as a witness in each turn targeting the cell.
     sovereign_cells: HashMap<CellId, Cell>,
+    /// Optional CapTP client for capability sharing, enlivening, and pipelining.
+    ///
+    /// Must be set via [`set_captp_client`](Self::set_captp_client) before using
+    /// the CapTP convenience methods.
+    captp_client: Option<crate::captp_client::CapTpClient>,
 }
 
 impl AgentWallet {
@@ -633,6 +638,7 @@ impl AgentWallet {
             derivation_path: None,
             stealth_keys,
             sovereign_cells: HashMap::new(),
+            captp_client: None,
         }
     }
 
@@ -682,6 +688,7 @@ impl AgentWallet {
             derivation_path: Some(path.to_string()),
             stealth_keys,
             sovereign_cells: HashMap::new(),
+            captp_client: None,
         }
     }
 
@@ -1824,26 +1831,34 @@ impl AgentWallet {
         // 2. Build the turn with proof authorization.
         let action = Action {
             target,
-            label: action_name.to_string(),
+            method: pyana_turn::action::symbol(action_name),
+            args: Vec::new(),
             authorization: Authorization::Proof {
-                proof: proof_bytes,
-                action: action_name.to_string(),
-                resource: resource_name.to_string(),
+                proof_bytes,
+                bound_action: action_name.to_string(),
+                bound_resource: resource_name.to_string(),
             },
+            preconditions: Default::default(),
             effects,
-            delegation: DelegationMode::None,
+            may_delegate: DelegationMode::None,
+            commitment_mode: Default::default(),
+            balance_change: None,
         };
 
         let tree = CallTree {
             action,
             children: vec![],
+            hash: [0u8; 32],
         };
 
         let turn = Turn {
             agent: self.cell_id("default"),
             nonce: 0, // Caller should set appropriately or use a TurnBuilder
             fee,
-            call_forest: CallForest { roots: vec![tree] },
+            call_forest: CallForest {
+                roots: vec![tree],
+                forest_hash: [0u8; 32],
+            },
             memo: None,
             valid_until: None,
             previous_receipt_hash: None,
@@ -4359,6 +4374,106 @@ impl AgentWallet {
         };
 
         Ok(turn)
+    }
+
+    // =========================================================================
+    // CapTP Convenience Methods
+    // =========================================================================
+
+    /// Share a cell as a `pyana://` URI (sturdy reference).
+    ///
+    /// Requires that a [`CapTpClient`](crate::captp_client::CapTpClient) has been
+    /// configured via [`set_captp_client`](Self::set_captp_client).
+    ///
+    /// The returned URI can be shared with any agent; they can enliven it to
+    /// obtain a live reference to the cell.
+    ///
+    /// # Arguments
+    ///
+    /// * `cell_id` - The cell to export as a capability.
+    ///
+    /// # Returns
+    ///
+    /// A `pyana://` URI string that can be shared out-of-band.
+    pub fn share_capability(
+        &mut self,
+        cell_id: CellId,
+    ) -> Result<pyana_captp::uri::PyanaUri, SdkError> {
+        let client = self.captp_client.as_mut().ok_or_else(|| {
+            SdkError::Wire("CapTP client not configured; call set_captp_client() first".into())
+        })?;
+        Ok(client.export_sturdy_ref(cell_id, pyana_cell::AuthRequired::Signature, None))
+    }
+
+    /// Accept (enliven) a `pyana://` URI, returning a live reference.
+    ///
+    /// Requires that a [`CapTpClient`](crate::captp_client::CapTpClient) has been
+    /// configured via [`set_captp_client`](Self::set_captp_client).
+    ///
+    /// The returned [`LiveRef`](crate::captp_client::LiveRef) tracks the import
+    /// in the GC manager and sends a DropRef message when dropped.
+    ///
+    /// # Arguments
+    ///
+    /// * `uri` - A `pyana://` URI string.
+    pub fn accept_capability(
+        &mut self,
+        uri: &str,
+    ) -> Result<crate::captp_client::LiveRef, SdkError> {
+        let client = self.captp_client.as_mut().ok_or_else(|| {
+            SdkError::Wire("CapTP client not configured; call set_captp_client() first".into())
+        })?;
+        client.enliven_uri(uri, pyana_cell::AuthRequired::Signature)
+    }
+
+    /// Create a handoff certificate for offline delegation of a cell to a recipient.
+    ///
+    /// Requires that a [`CapTpClient`](crate::captp_client::CapTpClient) has been
+    /// configured via [`set_captp_client`](Self::set_captp_client).
+    ///
+    /// The returned certificate can travel out-of-band (QR code, email, BLE).
+    /// The recipient presents it to the target federation to obtain access.
+    ///
+    /// # Arguments
+    ///
+    /// * `cell_id` - The cell to delegate.
+    /// * `recipient_pk` - The recipient's Ed25519 public key (32 bytes).
+    pub fn delegate_offline(
+        &mut self,
+        cell_id: CellId,
+        recipient_pk: [u8; 32],
+    ) -> Result<pyana_captp::handoff::HandoffCertificate, SdkError> {
+        let signing_key = pyana_types::SigningKey::from_bytes(&self.signing_key.to_bytes());
+        let client = self.captp_client.as_mut().ok_or_else(|| {
+            SdkError::Wire("CapTP client not configured; call set_captp_client() first".into())
+        })?;
+        Ok(client.create_handoff(
+            &signing_key,
+            cell_id,
+            recipient_pk,
+            pyana_cell::AuthRequired::Signature,
+            None,
+            None,
+        ))
+    }
+
+    /// Set the CapTP client for this wallet.
+    ///
+    /// Must be called before using [`share_capability`](Self::share_capability),
+    /// [`accept_capability`](Self::accept_capability), or
+    /// [`delegate_offline`](Self::delegate_offline).
+    pub fn set_captp_client(&mut self, client: crate::captp_client::CapTpClient) {
+        self.captp_client = Some(client);
+    }
+
+    /// Get a reference to the CapTP client, if configured.
+    pub fn captp_client(&self) -> Option<&crate::captp_client::CapTpClient> {
+        self.captp_client.as_ref()
+    }
+
+    /// Get a mutable reference to the CapTP client, if configured.
+    pub fn captp_client_mut(&mut self) -> Option<&mut crate::captp_client::CapTpClient> {
+        self.captp_client.as_mut()
     }
 }
 

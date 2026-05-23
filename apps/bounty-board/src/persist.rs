@@ -1,55 +1,24 @@
-//! File-based persistence for the bounty board state.
+//! State persistence for the bounty board — delegated to `pyana-app-framework`.
 //!
-//! Serializes the full board state to a JSON file on every mutation, and reloads
-//! from file on startup. The file path is configured via `--state-dir`.
+//! Uses the framework's [`JsonPersistence`] for atomic write-then-rename state
+//! snapshots. This module defines the [`BoardSnapshot`] type and provides the
+//! legacy `PersistConfig` / `PersistManager` types as thin wrappers for backward
+//! compatibility with existing code (e.g., the in-process server module).
 //!
 //! # File layout
 //!
-//! ```text
-//! <state-dir>/
-//!   board-state.json    — serialized bounty board (bounties, worker history, height)
-//! ```
-//!
-//! # Write strategy
-//!
-//! Writes are atomic: data is first written to a `.tmp` file, then renamed into place.
-//! This prevents corruption from partial writes on crash.
+//! State is persisted as a single JSON file at the configured path. Writes are
+//! atomic: data is serialized to a `.tmp` sibling, then renamed into place.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
-use tracing::{error, info, warn};
+use tracing::{error, info};
+
+use pyana_app_framework::persistence::JsonPersistence;
 
 use crate::Bounty;
 use crate::state::WorkerHistory;
-
-/// The filename used for the serialized board state.
-const STATE_FILENAME: &str = "board-state.json";
-
-/// Persistence configuration.
-#[derive(Clone, Debug)]
-pub struct PersistConfig {
-    /// Directory where state files are stored.
-    pub state_dir: PathBuf,
-}
-
-impl PersistConfig {
-    /// Create a new persist config for the given directory.
-    pub fn new(state_dir: PathBuf) -> Self {
-        Self { state_dir }
-    }
-
-    /// Full path to the state file.
-    pub fn state_file(&self) -> PathBuf {
-        self.state_dir.join(STATE_FILENAME)
-    }
-
-    /// Full path to the temporary state file (used for atomic writes).
-    fn tmp_file(&self) -> PathBuf {
-        self.state_dir.join(format!("{STATE_FILENAME}.tmp"))
-    }
-}
 
 /// The serializable snapshot of board state.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -64,100 +33,90 @@ pub struct BoardSnapshot {
     pub escrows: Vec<(String, String)>,
 }
 
-/// Persist manager that handles saving/loading state.
+/// Persistence configuration (legacy wrapper around a file path).
+///
+/// New code should use `JsonPersistence` directly from the framework.
+#[derive(Clone, Debug)]
+pub struct PersistConfig {
+    /// Path to the state file.
+    pub state_file: PathBuf,
+}
+
+impl PersistConfig {
+    /// Create a new persist config. The path should point to the state JSON file.
+    ///
+    /// For backward compatibility with the old `--state-dir` flag, if the path
+    /// is a directory, appends `board-state.json`.
+    pub fn new(path: PathBuf) -> Self {
+        let state_file = if path.extension().is_none() || path.is_dir() {
+            path.join("board-state.json")
+        } else {
+            path
+        };
+        Self { state_file }
+    }
+
+    /// Get the underlying file path.
+    pub fn state_file(&self) -> &PathBuf {
+        &self.state_file
+    }
+}
+
+/// Persist manager that wraps the framework's `JsonPersistence`.
+///
+/// Provides backward-compatible async API for code that hasn't been migrated
+/// to use `JsonPersistence` directly.
 #[derive(Clone)]
 pub struct PersistManager {
-    config: Option<PersistConfig>,
-    /// Track whether persistence is available (dir exists, writable).
-    available: std::sync::Arc<RwLock<bool>>,
+    inner: Option<JsonPersistence>,
 }
 
 impl PersistManager {
-    /// Create a persist manager. If `config` is None, persistence is disabled (in-memory only).
+    /// Create a persist manager. If `config` is None, persistence is disabled.
     pub fn new(config: Option<PersistConfig>) -> Self {
         Self {
-            config,
-            available: std::sync::Arc::new(RwLock::new(false)),
+            inner: config.map(|c| JsonPersistence::new(c.state_file)),
         }
     }
 
-    /// Initialize persistence: create state directory if needed, check writability.
+    /// Initialize persistence: create parent directory, check writability.
     pub async fn initialize(&self) -> bool {
-        let config = match &self.config {
-            Some(c) => c,
+        match &self.inner {
+            Some(persist) => match persist.initialize() {
+                Ok(()) => {
+                    info!(path = %persist.path().display(), "persistence initialized");
+                    true
+                }
+                Err(e) => {
+                    error!(error = %e, "failed to initialize persistence");
+                    false
+                }
+            },
             None => {
-                info!("persistence disabled (no --state-dir)");
-                return false;
-            }
-        };
-
-        // Create directory if it doesn't exist.
-        if let Err(e) = std::fs::create_dir_all(&config.state_dir) {
-            error!(
-                dir = %config.state_dir.display(),
-                error = %e,
-                "failed to create state directory, persistence disabled"
-            );
-            return false;
-        }
-
-        // Check writability by touching the tmp file.
-        let tmp = config.tmp_file();
-        match std::fs::write(&tmp, b"pyana-bounty-board-init") {
-            Ok(_) => {
-                let _ = std::fs::remove_file(&tmp);
-            }
-            Err(e) => {
-                error!(
-                    dir = %config.state_dir.display(),
-                    error = %e,
-                    "state directory not writable, persistence disabled"
-                );
-                return false;
+                info!("persistence disabled (no state file configured)");
+                false
             }
         }
-
-        *self.available.write().await = true;
-        info!(dir = %config.state_dir.display(), "persistence initialized");
-        true
     }
 
     /// Load state from disk. Returns None if no state file exists or persistence is disabled.
     pub async fn load(&self) -> Option<BoardSnapshot> {
-        let config = self.config.as_ref()?;
-        let path = config.state_file();
-
-        if !path.exists() {
-            info!(path = %path.display(), "no existing state file, starting fresh");
-            return None;
-        }
-
-        match std::fs::read_to_string(&path) {
-            Ok(contents) => match serde_json::from_str::<BoardSnapshot>(&contents) {
-                Ok(snapshot) => {
-                    info!(
-                        path = %path.display(),
-                        bounties = snapshot.bounties.len(),
-                        height = snapshot.current_height,
-                        "loaded state from disk"
-                    );
-                    Some(snapshot)
-                }
-                Err(e) => {
-                    error!(
-                        path = %path.display(),
-                        error = %e,
-                        "failed to parse state file, starting fresh"
-                    );
-                    None
-                }
-            },
-            Err(e) => {
-                error!(
-                    path = %path.display(),
-                    error = %e,
-                    "failed to read state file, starting fresh"
+        let persist = self.inner.as_ref()?;
+        match persist.load::<BoardSnapshot>() {
+            Ok(Some(snapshot)) => {
+                info!(
+                    bounties = snapshot.bounties.len(),
+                    height = snapshot.current_height,
+                    "loaded state from disk"
                 );
+                Some(snapshot)
+            }
+            Ok(None) => {
+                info!("no existing state file, starting fresh");
+                None
+            }
+            Err(e) => {
+                error!(error = %e, "failed to load state file, starting fresh");
                 None
             }
         }
@@ -165,58 +124,23 @@ impl PersistManager {
 
     /// Persist the given snapshot to disk (atomic write).
     ///
-    /// This is a no-op if persistence is not configured or not available.
+    /// No-op if persistence is not configured.
     pub async fn save(&self, snapshot: &BoardSnapshot) {
-        if !*self.available.read().await {
-            return;
-        }
-
-        let config = match &self.config {
-            Some(c) => c,
-            None => return,
-        };
-
-        let json = match serde_json::to_string_pretty(snapshot) {
-            Ok(j) => j,
-            Err(e) => {
-                error!(error = %e, "failed to serialize state");
-                return;
+        if let Some(ref persist) = self.inner {
+            if let Err(e) = persist.save(snapshot) {
+                error!(error = %e, "failed to persist state");
             }
-        };
-
-        let tmp = config.tmp_file();
-        let target = config.state_file();
-
-        // Write to temp file first (atomic write pattern).
-        if let Err(e) = std::fs::write(&tmp, json.as_bytes()) {
-            error!(
-                path = %tmp.display(),
-                error = %e,
-                "failed to write temporary state file"
-            );
-            return;
-        }
-
-        // Rename into place (atomic on POSIX).
-        if let Err(e) = std::fs::rename(&tmp, &target) {
-            error!(
-                from = %tmp.display(),
-                to = %target.display(),
-                error = %e,
-                "failed to rename state file into place"
-            );
-            return;
         }
     }
 
-    /// Whether persistence is enabled and available.
-    pub async fn is_available(&self) -> bool {
-        *self.available.read().await
-    }
-
-    /// Whether persistence is configured (even if not yet initialized).
+    /// Whether persistence is configured.
     pub fn is_configured(&self) -> bool {
-        self.config.is_some()
+        self.inner.is_some()
+    }
+
+    /// Get a reference to the underlying JsonPersistence (if configured).
+    pub fn persistence(&self) -> Option<&JsonPersistence> {
+        self.inner.as_ref()
     }
 }
 

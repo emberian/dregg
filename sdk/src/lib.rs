@@ -41,6 +41,7 @@
 //! }).unwrap();
 //! ```
 
+pub mod captp_client;
 pub mod client;
 pub mod committed_turn;
 pub mod discharge;
@@ -127,3 +128,10 @@ pub use verify::{
 
 // Re-export proof tier types for downstream use.
 pub use pyana_circuit::{CryptographicProof, ProofTier, VerifiedProof};
+
+// Re-export CapTP client types for capability sharing and pipelining.
+pub use captp_client::{CapTpClient, CapTpConfig, EventualRef, LiveRef};
+pub use pyana_captp::FederationId;
+pub use pyana_captp::handoff::HandoffCertificate;
+pub use pyana_captp::pipeline::PipelinedAction;
+pub use pyana_captp::uri::PyanaUri;

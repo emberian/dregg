@@ -14,13 +14,14 @@
 //! cargo run -p pyana-gallery --example devnet_gallery
 //! ```
 
-use pyana_gallery::server::{ServerConfig, start_server};
+use pyana_gallery::server::start_server;
 use pyana_gallery::{
     CreateAuctionRequest, RegisterArtworkRequest, RevealBidRequest, SubmitBidRequest,
     compute_bid_commitment, id_to_hex,
 };
 
 use pyana_app_framework::CellId;
+use pyana_app_framework::server::AppConfig;
 use reqwest::Client;
 use serde_json::Value;
 
@@ -35,12 +36,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // =========================================================================
     println!("[0] Starting gallery server...");
 
-    let config = ServerConfig {
-        listen: "127.0.0.1:0".parse().unwrap(),
-        frontend_path: None,
-    };
+    let config = AppConfig::default().with_listen("127.0.0.1:0");
 
-    let addr = start_server(config).await;
+    let addr = start_server(config, None).await;
     let base = format!("http://{addr}");
     println!("    Gallery server at {base}");
 

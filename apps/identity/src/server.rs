@@ -14,11 +14,11 @@ use tokio::sync::RwLock;
 
 use crate::credential::Credential;
 use crate::issuer::IssuerRegistry;
-use crate::presentation::{CredentialPresentation, PresentationBuilder};
+use crate::presentation::PresentationBuilder;
 use crate::verifier::{VerificationPolicy, VerificationResult as VResult};
-use crate::{AttributeValue, CredentialId, IssuerId};
+use crate::{AttributeValue, IssuerId};
+use pyana_circuit::dsl::predicates::PredicateType;
 use pyana_circuit::field::BabyBear;
-use pyana_circuit::predicate_air::PredicateType;
 
 // =============================================================================
 // Application State
@@ -143,7 +143,6 @@ pub fn router() -> Router<AppState> {
         .route("/presentations/verify", post(verify_presentation))
         .route("/revocations/{id}", post(revoke_credential))
         .route("/issuers", get(list_issuers))
-        .route("/health", get(health_check))
 }
 
 // =============================================================================
@@ -455,8 +454,4 @@ async fn list_issuers(State(state): State<AppState>) -> Json<Vec<IssuerResponse>
         })
         .collect();
     Json(results)
-}
-
-async fn health_check() -> &'static str {
-    "ok"
 }

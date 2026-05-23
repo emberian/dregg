@@ -7,8 +7,8 @@
 //! - Which federation root to trust
 
 use crate::presentation::{CredentialPresentation, PredicateRequirement, PresentationRequest};
+use pyana_circuit::dsl::predicates::PredicateType;
 use pyana_circuit::field::BabyBear;
-use pyana_circuit::predicate_air::PredicateType;
 
 /// A verification policy specifying what proofs are required.
 #[derive(Clone, Debug)]

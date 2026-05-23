@@ -278,16 +278,19 @@ async fn health_handler(service_name: String) -> impl IntoResponse {
 pub fn health_with_metadata<F, Fut>(
     service_name: impl Into<String>,
     metadata_fn: F,
-) -> impl Fn() -> Fut + Clone + Send + 'static
+) -> impl Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = serde_json::Value> + Send>>
++ Clone
++ Send
++ 'static
 where
     F: Fn() -> Fut + Clone + Send + 'static,
-    Fut: std::future::Future<Output = serde_json::Value> + Send,
+    Fut: std::future::Future<Output = serde_json::Value> + Send + 'static,
 {
     let name = service_name.into();
     move || {
         let name = name.clone();
         let metadata_fn = metadata_fn.clone();
-        async move {
+        Box::pin(async move {
             let timestamp = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())
@@ -304,7 +307,7 @@ where
                 }
             }
             base
-        }
+        })
     }
 }
 

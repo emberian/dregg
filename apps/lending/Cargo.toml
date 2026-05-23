@@ -4,12 +4,20 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+pyana-app-framework = { path = "../../app-framework" }
 pyana-circuit = { path = "../../circuit", default-features = false, features = ["mock"] }
+pyana-dsl-runtime = { path = "../../pyana-dsl-runtime" }
 pyana-types = { path = "../../types" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
 blake3 = "1"
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+
+[[bin]]
+name = "pyana-lending"
+path = "src/bin/pyana_lending.rs"
 
 [[example]]
 name = "lending_demo"

@@ -1,14 +1,17 @@
 //! Anonymous credential presentation using ring membership proofs.
 //!
 //! Allows a holder to prove "I am a member of this set" without revealing
-//! WHICH member they are. Uses the BlindedMerklePoseidon2StarkAir to generate
-//! a ring membership proof over a Merkle tree of credential commitments.
+//! WHICH member they are. Uses the DSL blinded Merkle Poseidon2 circuit to
+//! generate a ring membership proof over a Merkle tree of credential commitments.
 
 use crate::credential::Credential;
+use pyana_circuit::dsl::membership::{
+    MerkleLevelWitness, MerkleWitness, generate_blinded_merkle_poseidon2_trace,
+    prove_blinded_membership_dsl, verify_blinded_membership_dsl,
+};
 use pyana_circuit::field::BabyBear;
-use pyana_circuit::merkle_air::MerkleWitness;
 use pyana_circuit::poseidon2;
-use pyana_circuit::stark::{self, StarkProof};
+use pyana_circuit::stark::StarkProof;
 
 /// A registry of credential commitments for anonymous membership proofs.
 ///
@@ -75,8 +78,6 @@ impl AnonymousRegistry {
     ///
     /// Returns a MerkleWitness suitable for STARK proof generation.
     pub fn membership_witness(&self, commitment: &BabyBear) -> Option<MerkleWitness> {
-        use pyana_circuit::merkle_air::MerkleLevelWitness;
-
         let position = self.commitments.iter().position(|c| c == commitment)?;
 
         let capacity = 4usize.pow(self.depth as u32);
@@ -128,6 +129,8 @@ impl AnonymousRegistry {
     /// The proof demonstrates that the credential's commitment is in the registry
     /// without revealing which entry it corresponds to. A fresh blinding factor
     /// ensures unlinkability across presentations.
+    ///
+    /// Uses the DSL blinded Merkle Poseidon2 circuit for proof generation.
     pub fn prove_anonymous_membership(
         &self,
         credential: &Credential,
@@ -135,23 +138,31 @@ impl AnonymousRegistry {
     ) -> Option<AnonymousMembershipProof> {
         let witness = self.membership_witness(&credential.commitment)?;
 
-        // Generate the blinded Merkle proof using Poseidon2.
-        let action_commitment = pyana_circuit::binding::compute_action_binding(
-            "anonymous-membership",
-            "credential-registry",
-        );
+        let depth = witness.levels.len();
+        if depth < 2 {
+            return None;
+        }
 
-        let proof = pyana_circuit::presentation::generate_blinded_merkle_poseidon2_stark_proof(
-            &witness,
+        let siblings: Vec<[BabyBear; 3]> = witness.levels.iter().map(|l| l.siblings).collect();
+        let positions: Vec<u8> = witness.levels.iter().map(|l| l.position).collect();
+
+        // Generate the blinded Merkle proof using the DSL circuit.
+        let proof =
+            prove_blinded_membership_dsl(witness.leaf_hash, &siblings, &positions, blinding_factor)
+                .ok()?;
+
+        // Compute the blinded leaf for the public output.
+        let (_, public_inputs) = generate_blinded_merkle_poseidon2_trace(
+            witness.leaf_hash,
+            &siblings,
+            &positions,
             blinding_factor,
-            &action_commitment,
-            None,
-            None,
-        )?;
+        );
+        let blinded_leaf = public_inputs[0];
 
         Some(AnonymousMembershipProof {
             registry_root: self.root,
-            blinded_leaf: poseidon2::hash_2_to_1(credential.commitment, blinding_factor),
+            blinded_leaf,
             stark_proof: proof,
         })
     }
@@ -181,23 +192,7 @@ impl AnonymousMembershipProof {
             return false;
         }
 
-        // Verify the STARK proof using DSL blinded Merkle circuit.
-        let circuit = pyana_dsl_runtime::descriptors::blinded_merkle_poseidon2_circuit();
-        let public_inputs: Vec<BabyBear> = self
-            .stark_proof
-            .public_inputs
-            .iter()
-            .map(|&v| BabyBear::new_canonical(v))
-            .collect();
-
-        // Check that the root in public inputs matches.
-        if public_inputs.len() < 2 {
-            return false;
-        }
-        if public_inputs[1] != expected_root {
-            return false;
-        }
-
-        stark::verify(&circuit, &self.stark_proof, &public_inputs).is_ok()
+        // Verify the STARK proof using the DSL blinded Merkle circuit.
+        verify_blinded_membership_dsl(&self.stark_proof, self.blinded_leaf, expected_root).is_ok()
     }
 }

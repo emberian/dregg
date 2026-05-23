@@ -1,0 +1,10 @@
+[package]
+name = "pyana-rbg"
+version = "0.1.0"
+edition = "2021"
+description = "Robigalia-inspired VFS/storage layer for pyana's capability-secure distributed runtime"
+
+[dependencies]
+blake3 = "1"
+
+[dev-dependencies]

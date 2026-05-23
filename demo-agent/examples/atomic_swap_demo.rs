@@ -132,6 +132,7 @@ fn main() {
                 value: 100,
                 asset_type: asset_a,
                 spending_proof: vec![0x01], // placeholder for demo
+                value_commitment: None,
             },
             // Create new note for Alice (50 Asset B)
             Effect::NoteCreate {
@@ -139,6 +140,8 @@ fn main() {
                 value: 50,
                 asset_type: asset_b,
                 encrypted_note: vec![0xAA; 64], // Encrypted note data
+                value_commitment: None,
+                range_proof: None,
             },
         ],
         may_delegate: DelegationMode::None,
@@ -189,6 +192,7 @@ fn main() {
                 value: 50,
                 asset_type: asset_b,
                 spending_proof: vec![0x01], // placeholder for demo
+                value_commitment: None,
             },
             // Create new note for Bob (100 Asset A)
             Effect::NoteCreate {
@@ -196,6 +200,8 @@ fn main() {
                 value: 100,
                 asset_type: asset_a,
                 encrypted_note: vec![0xBB; 64],
+                value_commitment: None,
+                range_proof: None,
             },
         ],
         may_delegate: DelegationMode::None,

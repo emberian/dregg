@@ -1,21 +1,23 @@
 //! HTTP handlers for the gallery API.
 //!
 //! All handlers are async functions that take Axum extractors and return JSON responses.
+//! Admin endpoints are protected by the `AdminAuth` extractor from `pyana-app-framework`.
 
 use axum::{
     Json,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     response::IntoResponse,
 };
 use serde_json::json;
 use tracing::{info, warn};
 
+use pyana_app_framework::auth::AdminAuth;
 use pyana_app_framework::hex::hex_to_bytes32;
 use pyana_app_framework::{CellId, EscrowCondition};
 
 use crate::persistence::StateSnapshot;
-use crate::server::{AppState, verify_admin_token};
+use crate::server::AppState;
 use crate::{
     CreateAuctionRequest, RegisterArtworkRequest, RevealBidRequest, SubmitBidRequest, WsEvent,
     id_from_hex, id_to_hex,
@@ -573,24 +575,16 @@ pub async fn get_auction_result(
 }
 
 // =============================================================================
-// Admin Handlers (bearer-token-protected)
+// Admin Handlers (protected by AdminAuth extractor from pyana-app-framework)
 // =============================================================================
 
 /// POST /admin/height — Advance block height (devnet utility).
-/// Protected by PYANA_ADMIN_TOKEN bearer auth.
+/// Protected by AdminAuth extractor (reads PYANA_ADMIN_TOKEN from state).
 pub async fn advance_height(
-    headers: HeaderMap,
+    _auth: AdminAuth,
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    if !verify_admin_token(&headers, &state.admin_token) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "invalid or missing admin token"})),
-        )
-            .into_response();
-    }
-
     let delta = body["delta"].as_u64().unwrap_or(1);
     state.auction_engine.advance_height(delta).await;
     let new_height = state.auction_engine.current_height().await;
@@ -598,20 +592,12 @@ pub async fn advance_height(
 }
 
 /// POST /admin/settle/:id — Trigger settlement for an auction.
-/// Protected by PYANA_ADMIN_TOKEN bearer auth.
+/// Protected by AdminAuth extractor (reads PYANA_ADMIN_TOKEN from state).
 pub async fn trigger_settle(
-    headers: HeaderMap,
+    _auth: AdminAuth,
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    if !verify_admin_token(&headers, &state.admin_token) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "invalid or missing admin token"})),
-        )
-            .into_response();
-    }
-
     let auction_id = match id_from_hex(&id) {
         Some(bytes) => bytes,
         None => {
@@ -687,16 +673,8 @@ pub async fn trigger_settle(
 }
 
 /// POST /admin/persist — Force persist state to disk.
-/// Protected by PYANA_ADMIN_TOKEN bearer auth.
-pub async fn persist_state(headers: HeaderMap, State(state): State<AppState>) -> impl IntoResponse {
-    if !verify_admin_token(&headers, &state.admin_token) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "invalid or missing admin token"})),
-        )
-            .into_response();
-    }
-
+/// Protected by AdminAuth extractor (reads PYANA_ADMIN_TOKEN from state).
+pub async fn persist_state(_auth: AdminAuth, State(state): State<AppState>) -> impl IntoResponse {
     match do_persist(&state).await {
         Ok(path) => Json(json!({"status": "persisted", "path": path})).into_response(),
         Err(e) => (
@@ -745,11 +723,11 @@ async fn persist_state_background(state: &AppState) {
     }
 }
 
-/// Actually persist state to disk.
+/// Actually persist state to disk using the framework's `JsonPersistence`.
 async fn do_persist(state: &AppState) -> Result<String, String> {
-    let path = match &state.state_file {
-        Some(p) => p.clone(),
-        None => return Err("no state_file configured".to_string()),
+    let persist = match &state.persistence {
+        Some(p) => p,
+        None => return Err("no persistence configured".to_string()),
     };
 
     let snapshot = StateSnapshot::capture(
@@ -759,6 +737,6 @@ async fn do_persist(state: &AppState) -> Result<String, String> {
     )
     .await;
 
-    snapshot.save(&path).map_err(|e| e.to_string())?;
-    Ok(path)
+    persist.save(&snapshot).map_err(|e| e.to_string())?;
+    Ok(persist.path().display().to_string())
 }

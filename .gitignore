@@ -6,3 +6,4 @@ hints/benches/committee_128.json
 paper/*.pdf
 pdfs/
 ts-sdk/node_modules
+site/node_modules

@@ -37,6 +37,7 @@ pub mod borrow;
 pub mod circuit;
 pub mod interest;
 pub mod liquidation;
+pub mod server;
 pub mod supply;
 
 #[cfg(test)]

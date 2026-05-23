@@ -224,6 +224,109 @@ pub enum WireMessage {
     },
 
     // -------------------------------------------------------------------------
+    // CapTP Session Management
+    // -------------------------------------------------------------------------
+    /// Establish a CapTP session with the peer, exporting initial swiss entries.
+    ///
+    /// Sent after the Hello/Welcome handshake to begin a capability session.
+    /// The `federation_id` identifies the sender's federation; `initial_exports`
+    /// lists cells the sender is making available to this peer.
+    CapHello {
+        /// The sender's federation identity.
+        federation_id: [u8; 32],
+        /// Cell IDs that the sender is initially exporting to this peer.
+        initial_exports: Vec<[u8; 32]>,
+    },
+
+    /// Tear down a CapTP session, releasing all held references.
+    ///
+    /// All exports and imports for this session are invalidated. The peer should
+    /// drop all references acquired during this session.
+    CapGoodbye {
+        /// The federation terminating the session.
+        federation_id: [u8; 32],
+        /// Human-readable reason for disconnection (optional).
+        reason: Option<String>,
+    },
+
+    /// Present a `pyana://` URI to enliven a sturdy reference.
+    ///
+    /// The peer validates the swiss number and (if valid) responds with an
+    /// `EnlivenResponse` containing the granted cell reference.
+    EnlivenSturdyRef {
+        /// The full serialized PyanaUri (federation_id + cell_id + swiss).
+        uri_bytes: Vec<u8>,
+        /// The current federation height known to the requester.
+        requester_height: u64,
+    },
+
+    /// Response to an `EnlivenSturdyRef` request.
+    EnlivenResponse {
+        /// Whether the enliven succeeded.
+        success: bool,
+        /// On success: the cell ID that was enlivened.
+        cell_id: Option<[u8; 32]>,
+        /// On success: the permissions granted.
+        permissions_tag: u8,
+        /// On failure: the error reason.
+        error: Option<String>,
+    },
+
+    /// Distributed GC: the remote peer dropped a reference to one of our exports.
+    ///
+    /// The receiver should decrement the reference count for the specified cell
+    /// from the specified federation. If the count reaches zero, the export can
+    /// be cleaned up.
+    DropRemoteRef {
+        /// The federation that is dropping the reference.
+        from_federation: [u8; 32],
+        /// The cell ID being dropped.
+        cell_id: [u8; 32],
+    },
+
+    /// A pipelined message targeting an unresolved promise on the receiver.
+    ///
+    /// The receiver queues this message until the target promise resolves,
+    /// then delivers it. This enables cross-federation promise pipelining
+    /// (eliminating round-trip latency).
+    PipelinedMsg {
+        /// The promise ID on the RECEIVER's side.
+        target_promise_id: u64,
+        /// The method to invoke once the promise resolves.
+        method: String,
+        /// Serialized action arguments.
+        args: Vec<u8>,
+        /// Serialized authorization.
+        authorization: Vec<u8>,
+        /// Where to send the result (a promise on the SENDER's side).
+        result_promise_id: Option<u64>,
+        /// The federation sending this pipelined message.
+        sender_federation: [u8; 32],
+    },
+
+    /// Present a handoff certificate to the target federation.
+    ///
+    /// The recipient proves they own the recipient_pk named in the certificate
+    /// by including a signature. The target validates the introducer's signature,
+    /// checks the swiss number, and (if valid) responds with `HandoffAccepted`.
+    PresentHandoff {
+        /// The serialized `HandoffPresentation` (certificate + recipient signature).
+        presentation_bytes: Vec<u8>,
+        /// The introducer's public key (for signature verification).
+        introducer_pk: [u8; 32],
+    },
+
+    /// Response to a successful handoff presentation.
+    HandoffAccepted {
+        /// A routing token the recipient can use for subsequent access.
+        routing_token: [u8; 32],
+        /// The cell the recipient now has access to.
+        cell_id: [u8; 32],
+        /// The permissions granted (encoded as a tag byte).
+        permissions_tag: u8,
+    },
+
+    // -------------------------------------------------------------------------
     // Keepalive / Diagnostics
     // -------------------------------------------------------------------------
     /// Periodic heartbeat to keep connections alive.
@@ -265,6 +368,14 @@ impl WireMessage {
             Self::NonMembershipResponse { .. } => "NonMembershipResponse",
             Self::Hello { .. } => "Hello",
             Self::Welcome { .. } => "Welcome",
+            Self::CapHello { .. } => "CapHello",
+            Self::CapGoodbye { .. } => "CapGoodbye",
+            Self::EnlivenSturdyRef { .. } => "EnlivenSturdyRef",
+            Self::EnlivenResponse { .. } => "EnlivenResponse",
+            Self::DropRemoteRef { .. } => "DropRemoteRef",
+            Self::PipelinedMsg { .. } => "PipelinedMsg",
+            Self::PresentHandoff { .. } => "PresentHandoff",
+            Self::HandoffAccepted { .. } => "HandoffAccepted",
             Self::Ping { .. } => "Ping",
             Self::Pong { .. } => "Pong",
             Self::Error { .. } => "Error",
@@ -333,6 +444,14 @@ pub mod error_codes {
     pub const CONNECTION_LIMIT: u32 = 9;
     /// Internal server error.
     pub const INTERNAL_ERROR: u32 = 100;
+    /// No CapTP session established (CapHello required).
+    pub const CAPTP_SESSION_REQUIRED: u32 = 10;
+    /// The sturdy reference could not be enlivened (not found, expired, or exhausted).
+    pub const ENLIVEN_FAILED: u32 = 11;
+    /// Handoff validation failed.
+    pub const HANDOFF_FAILED: u32 = 12;
+    /// The GC drop was invalid (unknown federation or cell).
+    pub const INVALID_DROP: u32 = 13;
 }
 
 /// The current protocol version.

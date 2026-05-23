@@ -3,6 +3,9 @@
 //! This module provides a way to start the bounty board HTTP server within the
 //! same process (as a background tokio task), avoiding the need for a separate
 //! binary or a live devnet node.
+//!
+//! Uses the shared `AppServer` from `pyana-app-framework` for consistent
+//! infrastructure (health endpoint, CORS) across all pyana apps.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -19,7 +22,9 @@ use serde_json::json;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{info, warn};
 
+use pyana_app_framework::auth::{AdminAuth, AdminToken, HasAdminToken};
 use pyana_app_framework::hex::{bytes32_to_hex, hex_to_bytes32};
+use pyana_app_framework::server::{AppConfig, AppServer};
 use pyana_app_framework::{CellId, EngineConfig, PyanaEngine};
 
 use crate::qualification::{FederationRootHistory, verify_qualification};
@@ -63,6 +68,13 @@ struct AppState {
     engine: Arc<Mutex<PyanaEngine>>,
     node_url: Arc<String>,
     node_connected: Arc<RwLock<bool>>,
+    admin_token: AdminToken,
+}
+
+impl HasAdminToken for AppState {
+    fn admin_token(&self) -> &AdminToken {
+        &self.admin_token
+    }
 }
 
 // =============================================================================
@@ -74,7 +86,8 @@ struct AppState {
 /// Returns the actual `SocketAddr` the server is listening on (useful when
 /// the port is 0 for random assignment).
 ///
-/// The server runs until the tokio runtime is shut down.
+/// Uses the framework's `AppServer` for consistent infrastructure. The server
+/// runs until the tokio runtime is shut down.
 pub async fn start_server(config: ServerConfig) -> SocketAddr {
     let now_ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -90,9 +103,29 @@ pub async fn start_server(config: ServerConfig) -> SocketAddr {
         engine: Arc::new(Mutex::new(PyanaEngine::new(EngineConfig::new(now_ts)))),
         node_url: Arc::new("none".to_string()),
         node_connected: Arc::new(RwLock::new(false)),
+        // In-process server uses open admin mode (no token needed for tests/examples).
+        admin_token: AdminToken::open(),
     };
 
-    let app = Router::new()
+    let app_routes = app_router().with_state(state);
+
+    let app_config = AppConfig::default().with_listen(config.listen.to_string());
+
+    let addr = AppServer::new(app_config)
+        .service_name("pyana-bounty-board")
+        .with_health()
+        .with_cors()
+        .routes(app_routes)
+        .serve_background()
+        .await
+        .expect("failed to start bounty board server");
+
+    addr
+}
+
+/// Build the application router for the in-process server.
+fn app_router() -> Router<AppState> {
+    Router::new()
         .route("/bounties", post(create_bounty))
         .route("/bounties", get(list_bounties))
         .route("/bounties/{id}/claim", post(claim_bounty))
@@ -103,23 +136,10 @@ pub async fn start_server(config: ServerConfig) -> SocketAddr {
         .route("/admin/height", post(advance_height))
         .route("/admin/expire", post(expire_bounties))
         .route("/admin/federation-root", post(set_federation_root))
-        .route("/health", get(health_check))
-        .with_state(state);
-
-    let listener = tokio::net::TcpListener::bind(config.listen)
-        .await
-        .expect("failed to bind");
-    let addr = listener.local_addr().unwrap();
-
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.expect("server error");
-    });
-
-    addr
 }
 
 // =============================================================================
-// Handlers (duplicated from main.rs for self-contained in-process use)
+// Handlers
 // =============================================================================
 
 async fn create_bounty(
@@ -480,7 +500,12 @@ struct WorkerQuery {
     commitment: String,
 }
 
+// =============================================================================
+// Admin Endpoints (protected by framework AdminAuth extractor)
+// =============================================================================
+
 async fn advance_height(
+    _auth: AdminAuth,
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
@@ -490,12 +515,13 @@ async fn advance_height(
     Json(json!({"height": new_height}))
 }
 
-async fn expire_bounties(State(state): State<AppState>) -> impl IntoResponse {
+async fn expire_bounties(_auth: AdminAuth, State(state): State<AppState>) -> impl IntoResponse {
     let count = state.board.expire_stale_bounties().await;
     Json(json!({"expired": count}))
 }
 
 async fn set_federation_root(
+    _auth: AdminAuth,
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
@@ -529,57 +555,4 @@ async fn set_federation_root(
             Json(json!({"error": "invalid root hex (expected 64 hex chars)"})),
         ),
     }
-}
-
-async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
-    let root_history = state.root_history.read().await;
-    let current_root = root_history.current().unwrap_or([0u8; 32]);
-    let history_depth = root_history.len();
-    drop(root_history);
-
-    let root_last_updated = *state.root_last_updated.read().await;
-    let node_connected = *state.node_connected.read().await;
-
-    let root_age_secs = root_last_updated.map(|t| t.elapsed().as_secs());
-
-    let all_bounties = state.board.list_bounties(&BountyFilter::default()).await;
-    let open = all_bounties.iter().filter(|b| b.status == "open").count();
-    let claimed = all_bounties
-        .iter()
-        .filter(|b| b.status == "claimed")
-        .count();
-    let submitted = all_bounties
-        .iter()
-        .filter(|b| b.status == "submitted")
-        .count();
-    let paid = all_bounties.iter().filter(|b| b.status == "paid").count();
-    let expired = all_bounties
-        .iter()
-        .filter(|b| b.status == "expired")
-        .count();
-
-    let root_is_live = current_root != [0u8; 32];
-
-    Json(json!({
-        "status": "running",
-        "service": "pyana-bounty-board",
-        "federation_root": {
-            "value": bytes32_to_hex(&current_root),
-            "live": root_is_live,
-            "last_updated_secs_ago": root_age_secs,
-            "history_depth": history_depth,
-        },
-        "bounties": {
-            "total": all_bounties.len(),
-            "open": open,
-            "claimed": claimed,
-            "submitted": submitted,
-            "paid": paid,
-            "expired": expired,
-        },
-        "node": {
-            "url": state.node_url.as_str(),
-            "connected": node_connected,
-        }
-    }))
 }

@@ -133,15 +133,10 @@ fn test_dishonest_gte_cannot_prove() {
         state_root: None,
     };
 
-    assert!(
-        !witness.is_satisfiable(),
-        "15 >= 18 should not be satisfiable"
-    );
-
     let result = prove_predicate(witness);
     assert!(
         result.is_none(),
-        "Proof generation for a false GTE claim MUST return None"
+        "Proof generation for a false GTE claim MUST return None (15 >= 18 is not satisfiable)"
     );
 }
 
@@ -162,7 +157,6 @@ fn test_dishonest_lte_cannot_prove() {
         state_root: None,
     };
 
-    assert!(!witness.is_satisfiable());
     assert!(prove_predicate(witness).is_none());
 }
 
@@ -183,7 +177,6 @@ fn test_dishonest_gt_boundary() {
         state_root: None,
     };
 
-    assert!(!witness.is_satisfiable());
     assert!(prove_predicate(witness).is_none());
 }
 
@@ -203,7 +196,6 @@ fn test_dishonest_neq_equal_values() {
         state_root: None,
     };
 
-    assert!(!witness.is_satisfiable());
     assert!(prove_predicate(witness).is_none());
 }
 
@@ -221,7 +213,7 @@ fn test_dishonest_in_range_below() {
         BabyBear::new(high),
         fc,
     );
-    assert!(result.is_none(), "5 not in [10, 100] — proof must fail");
+    assert!(result.is_err(), "5 not in [10, 100] — proof must fail");
 }
 
 #[test]
@@ -238,7 +230,7 @@ fn test_dishonest_in_range_above() {
         BabyBear::new(high),
         fc,
     );
-    assert!(result.is_none(), "200 not in [10, 100] — proof must fail");
+    assert!(result.is_err(), "200 not in [10, 100] — proof must fail");
 }
 
 // =============================================================================
@@ -264,7 +256,7 @@ fn test_forged_proof_wrong_threshold() {
     let proof = prove_predicate(witness).unwrap();
 
     // Verify with the CORRECT threshold: passes.
-    assert!(verify_predicate(&proof, BabyBear::new(18), fc));
+    assert!(verify_predicate(&proof, BabyBear::new(18), fc).is_ok());
 
     // Try to verify with a DIFFERENT threshold (forging the claim to "25 >= 30"):
     // This MUST fail — the proof commits to threshold=18 in public inputs.
@@ -290,7 +282,7 @@ fn test_forged_proof_wrong_fact_commitment() {
     let proof = prove_predicate(witness).unwrap();
 
     // Verify with correct fact commitment: passes.
-    assert!(verify_predicate(&proof, BabyBear::new(threshold), fc));
+    assert!(verify_predicate(&proof, BabyBear::new(threshold), fc).is_ok());
 
     // Verify with a DIFFERENT fact commitment (trying to claim this proof
     // applies to a different token state): MUST fail.
@@ -325,7 +317,7 @@ fn test_forged_proof_replay_with_different_predicate_type() {
     // The proof was generated for GTE. Manually change the predicate_type to LTE
     // in an attempt to claim "25 <= 18" using the same proof data.
     let mut forged = gte_proof.clone();
-    forged.predicate_type = PredicateType::Lte;
+    forged.op = PredicateType::Lte;
 
     // The constraint proof's trace was generated for GTE (diff = value - threshold).
     // For LTE, the verifier expects diff = threshold - value.
@@ -342,7 +334,7 @@ fn test_forged_proof_replay_with_different_predicate_type() {
     // The trace digest in the ConstraintProof encodes the actual computation.
     // If the verifier doesn't re-derive which constraints to check from predicate_type,
     // this might pass. Document the current behavior:
-    if result {
+    if result.is_ok() {
         // This would indicate the predicate_type is not bound into the proof —
         // a soundness gap that should be fixed.
         panic!(
@@ -384,7 +376,7 @@ fn test_manipulated_proof_bit_flip() {
     // If it succeeds, verification must fail.
     if let Ok(corrupted) = postcard::from_bytes::<PredicateProof>(&bytes) {
         let result = verify_predicate(&corrupted, BabyBear::new(threshold), fc);
-        assert!(!result, "Bit-flipped proof MUST NOT verify");
+        assert!(result.is_err(), "Bit-flipped proof MUST NOT verify");
     }
     // If deserialization fails, that's also correct behavior (caught corruption).
 }
@@ -440,7 +432,6 @@ fn test_boundary_gte_equal_values() {
         state_root: None,
     };
 
-    assert!(witness.is_satisfiable());
     let proof = prove_predicate(witness).expect("18 >= 18 should prove");
     assert_predicate_verifies(&proof, BabyBear::new(threshold), fc);
 }

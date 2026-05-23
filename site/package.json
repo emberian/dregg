@@ -1,0 +1,14 @@
+{
+  "name": "pyana-site-tests",
+  "private": true,
+  "scripts": {
+    "test": "npx playwright test",
+    "test:headed": "npx playwright test --headed",
+    "test:explorer": "npx playwright test explorer/",
+    "test:playground": "npx playwright test playground/"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.42.0",
+    "serve": "^14.2.0"
+  }
+}

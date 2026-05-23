@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["macaroon", "secrets", "token", "tokenizer", "hints", "commit", "trace", "demo", "demo-agent", "federation", "circuit", "audit", "bridge", "wire", "store", "cell", "turn", "coord", "tests", "types", "sdk", "wasm", "node", "intent", "net", "discharge-gateway", "teasting", "apps/bounty-board", "apps/compute-exchange", "apps/gallery", "apps/identity", "apps/lending", "apps/amm", "apps/stablecoin", "apps/orderbook", "apps/discord-bot", "app-framework", "pyana-dsl", "pyana-dsl-runtime", "pyana-dsl-tests", "preflight", "blocklace"]
-exclude = ["chain", "chain/program"]
+members = ["macaroon", "secrets", "token", "tokenizer", "hints", "commit", "trace", "demo", "demo-agent", "federation", "circuit", "audit", "bridge", "wire", "store", "cell", "turn", "coord", "tests", "types", "sdk", "wasm", "node", "intent", "net", "discharge-gateway", "teasting", "apps/bounty-board", "apps/compute-exchange", "apps/gallery", "apps/identity", "apps/lending", "apps/amm", "apps/stablecoin", "apps/orderbook", "apps/discord-bot", "app-framework", "pyana-dsl", "pyana-dsl-runtime", "pyana-dsl-tests", "preflight", "blocklace", "captp"]
+exclude = ["chain", "chain/program", "rbg"]
 
 [workspace.package]
 version = "0.1.0"

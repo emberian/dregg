@@ -33,7 +33,7 @@ use std::sync::Arc;
 use axum::extract::FromRequestParts;
 use axum::http::StatusCode;
 use axum::http::request::Parts;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use pyana_sdk::embed::PyanaEngine;
 
@@ -97,7 +97,7 @@ impl FromRequestParts<EngineState> for StrictPresentation {
             .ok_or((StatusCode::BAD_REQUEST, "missing X-Pyana-Resource header"))?;
 
         // Verify against the engine with full action binding + freshness checks.
-        let engine = state.0.read().await;
+        let engine = state.0.lock().await;
         let federation_root = engine.federation_root();
         let verified = engine
             .verify_presentation_bytes(&proof_bytes, &action, &resource)
@@ -226,7 +226,7 @@ impl FromRequestParts<EngineState> for OptionalPresentation {
         };
 
         // Verify against the engine with full action binding + freshness checks.
-        let engine = state.0.read().await;
+        let engine = state.0.lock().await;
         let federation_root = engine.federation_root();
         let result = engine.verify_presentation_bytes(&proof_bytes, action_str, resource_str);
 
@@ -260,20 +260,19 @@ impl FromRequestParts<EngineState> for OptionalPresentation {
 // Shared types and helpers
 // =============================================================================
 
-/// Shared engine state that the extractors read from (RwLock variant).
+/// Shared engine state that the extractors read from (Mutex variant).
 ///
 /// Wrap your `PyanaEngine` in this type and pass it as axum state:
 ///
 /// ```ignore
-/// let state = EngineState(Arc::new(RwLock::new(engine)));
+/// let state = EngineState(Arc::new(Mutex::new(engine)));
 /// Router::new().with_state(state);
 /// ```
 ///
-/// Note: `PyanaEngine` is `Send` but not `Sync`. `tokio::sync::RwLock<T>` only
-/// requires `T: Send`, so this compiles correctly. If you need `std::sync::RwLock`
-/// semantics (blocking reads), use [`MutexEngineState`] instead.
+/// Note: `PyanaEngine` is `Send` but not `Sync` (contains `RefCell` internally).
+/// `tokio::sync::Mutex<T>` only requires `T: Send`, so this compiles correctly.
 #[derive(Clone)]
-pub struct EngineState(pub Arc<RwLock<PyanaEngine>>);
+pub struct EngineState(pub Arc<Mutex<PyanaEngine>>);
 
 /// Shared engine state using `tokio::sync::Mutex` (single-accessor variant).
 ///

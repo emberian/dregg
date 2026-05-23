@@ -9,8 +9,10 @@
 use crate::credential::Credential;
 use crate::revocation::NonRevocationProof;
 use crate::{AttributeName, AttributeValue};
+use pyana_circuit::dsl::predicates::{
+    PredicateProof, PredicateType, PredicateWitness, prove_predicate_dsl, verify_predicate_dsl,
+};
 use pyana_circuit::field::BabyBear;
-use pyana_circuit::predicate_air::{PredicateProof, PredicateType, PredicateWitness};
 use pyana_dsl_runtime::revocation::{
     DslRevocationTree, generate_non_revocation_trace, non_revocation_dsl_circuit,
 };
@@ -244,11 +246,11 @@ fn generate_predicate_proof(
         };
     }
 
-    // Generate the STARK proof.
-    let proof = pyana_circuit::predicate_air::prove_predicate(witness);
-    let verified = proof.as_ref().is_some_and(|p| {
-        pyana_circuit::predicate_air::verify_predicate(p, threshold_field, fact_commitment).is_ok()
-    });
+    // Generate the STARK proof using the DSL predicate circuit.
+    let proof = prove_predicate_dsl(&witness).ok();
+    let verified = proof
+        .as_ref()
+        .is_some_and(|p| verify_predicate_dsl(p, threshold_field, fact_commitment).is_ok());
 
     PredicateResult {
         attribute_name: attr_name.to_string(),

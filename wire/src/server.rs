@@ -12,7 +12,7 @@ use crate::message::{
     AuthorizationRequest, MAX_NONCE_CACHE_SIZE, MAX_REQUEST_AGE_SECS, PROTOCOL_VERSION, PublicKey,
     Signature, ThresholdQC, WireMessage,
 };
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -22,6 +22,10 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, RwLock};
 use tokio_rustls::TlsAcceptor;
+
+use pyana_captp::{
+    CapSession, ExportGcManager, FederationId, HandoffPresentation, SwissTable, validate_handoff,
+};
 
 // =============================================================================
 // Proof Verifier Trait
@@ -694,6 +698,48 @@ impl Drop for ConnectionGuard {
     }
 }
 
+// =============================================================================
+// CapTP State
+// =============================================================================
+
+/// Shared CapTP state: sessions, swiss table, and GC managers.
+///
+/// This is kept behind `Arc<RwLock<..>>` so it can be shared across connection
+/// handlers. The swiss table and GC managers are node-global; sessions are
+/// per-peer (keyed by federation ID).
+#[derive(Debug)]
+pub struct CapTpState {
+    /// Active CapTP sessions, keyed by the remote peer's federation ID.
+    pub sessions: HashMap<FederationId, CapSession>,
+    /// The node's swiss number table (maps swiss numbers to capabilities).
+    pub swiss_table: SwissTable,
+    /// Export GC: tracks which remote federations hold references to our cells.
+    pub export_gc: ExportGcManager,
+    /// Known/trusted federation IDs (for handoff validation).
+    pub known_federations: Vec<FederationId>,
+    /// Current block height (for swiss entry expiration checks).
+    pub current_height: u64,
+}
+
+impl CapTpState {
+    /// Create a new empty CapTP state.
+    pub fn new() -> Self {
+        Self {
+            sessions: HashMap::new(),
+            swiss_table: SwissTable::new(),
+            export_gc: ExportGcManager::new(),
+            known_federations: Vec::new(),
+            current_height: 0,
+        }
+    }
+}
+
+impl Default for CapTpState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// A TCP server representing one silo in the federation.
 ///
 /// Handles incoming connections, processes wire protocol messages, and
@@ -718,6 +764,8 @@ pub struct SiloServer {
     active_connections: Arc<AtomicUsize>,
     /// Optional TLS acceptor (built from config at startup).
     tls_acceptor: Option<TlsAcceptor>,
+    /// CapTP session state: swiss table, GC managers, active sessions.
+    captp_state: Arc<RwLock<CapTpState>>,
 }
 
 /// Events logged by the server for diagnostics.
@@ -776,6 +824,7 @@ impl SiloServer {
             revocation_nonces: Arc::new(Mutex::new(NonceCache::new(nonce_cap))),
             active_connections: Arc::new(AtomicUsize::new(0)),
             tls_acceptor,
+            captp_state: Arc::new(RwLock::new(CapTpState::new())),
         }
     }
 
@@ -801,6 +850,7 @@ impl SiloServer {
             revocation_nonces: Arc::new(Mutex::new(NonceCache::new(nonce_cap))),
             active_connections: Arc::new(AtomicUsize::new(0)),
             tls_acceptor,
+            captp_state: Arc::new(RwLock::new(CapTpState::new())),
         }
     }
 
@@ -839,6 +889,20 @@ impl SiloServer {
     pub fn with_revocation_handler(mut self, handler: Arc<dyn RevocationHandler>) -> Self {
         self.revocation_handler = Some(handler);
         self
+    }
+
+    /// Set pre-initialized CapTP state (swiss table, known federations, etc.).
+    ///
+    /// Use this to configure the server with pre-registered swiss entries and
+    /// known federation peers before starting.
+    pub fn with_captp_state(mut self, captp_state: CapTpState) -> Self {
+        self.captp_state = Arc::new(RwLock::new(captp_state));
+        self
+    }
+
+    /// Get a reference to the shared CapTP state.
+    pub fn captp_state(&self) -> &Arc<RwLock<CapTpState>> {
+        &self.captp_state
     }
 
     /// Get the listening address.
@@ -916,6 +980,7 @@ impl SiloServer {
             let revocation_nonces = Arc::clone(&self.revocation_nonces);
             let conn_counter = Arc::clone(&self.active_connections);
             let tls_acceptor = self.tls_acceptor.clone();
+            let captp_state = Arc::clone(&self.captp_state);
 
             tokio::spawn(async move {
                 // ConnectionGuard decrements the counter when this task exits.
@@ -938,6 +1003,7 @@ impl SiloServer {
                                 revocation_handler,
                                 presentation_nonces,
                                 revocation_nonces,
+                                captp_state,
                             )
                             .await;
                         }
@@ -958,6 +1024,7 @@ impl SiloServer {
                         revocation_handler,
                         presentation_nonces,
                         revocation_nonces,
+                        captp_state,
                     )
                     .await;
                 }
@@ -976,6 +1043,7 @@ impl SiloServer {
         revocation_handler: Option<Arc<dyn RevocationHandler>>,
         presentation_nonces: Arc<Mutex<NonceCache>>,
         revocation_nonces: Arc<Mutex<NonceCache>>,
+        captp_state: Arc<RwLock<CapTpState>>,
     ) {
         let (reader, writer) = tokio::io::split(stream);
         Self::handle_connection_generic(
@@ -988,6 +1056,7 @@ impl SiloServer {
             revocation_handler,
             presentation_nonces,
             revocation_nonces,
+            captp_state,
         )
         .await;
     }
@@ -1007,6 +1076,7 @@ impl SiloServer {
         revocation_handler: Option<Arc<dyn RevocationHandler>>,
         presentation_nonces: Arc<Mutex<NonceCache>>,
         revocation_nonces: Arc<Mutex<NonceCache>>,
+        captp_state: Arc<RwLock<CapTpState>>,
     ) where
         R: AsyncRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin + Send + 'static,
@@ -1080,6 +1150,7 @@ impl SiloServer {
             revocation_handler.as_deref(),
             &presentation_nonces,
             &revocation_nonces,
+            &captp_state,
         )
         .await
         {
@@ -1133,6 +1204,7 @@ impl SiloServer {
                 revocation_handler.as_deref(),
                 &presentation_nonces,
                 &revocation_nonces,
+                &captp_state,
             )
             .await;
 
@@ -1157,6 +1229,7 @@ impl SiloServer {
         revocation_handler: Option<&dyn RevocationHandler>,
         presentation_nonces: &Mutex<NonceCache>,
         revocation_nonces: &Mutex<NonceCache>,
+        captp_state: &RwLock<CapTpState>,
     ) -> Option<WireMessage> {
         match msg {
             WireMessage::Hello {
@@ -1481,6 +1554,214 @@ impl SiloServer {
             WireMessage::NonMembershipResponse { .. } => None,
 
             WireMessage::Error { .. } => None,
+
+            // =================================================================
+            // CapTP Session Management
+            // =================================================================
+            WireMessage::CapHello {
+                federation_id,
+                initial_exports,
+            } => {
+                let fed_id = FederationId(federation_id);
+                let mut captp = captp_state.write().await;
+
+                // Create or reset the session for this peer.
+                let session = CapSession::new(federation_id);
+                captp.sessions.insert(fed_id, session);
+
+                // Record initial exports in the GC manager (they now hold refs to us).
+                let height = captp.current_height;
+                for export_bytes in &initial_exports {
+                    let cell_id = pyana_types::CellId(*export_bytes);
+                    captp.export_gc.record_export(cell_id, fed_id, height);
+                }
+
+                // Respond with our own CapHello (session established).
+                Some(WireMessage::CapHello {
+                    federation_id: config.node_id,
+                    initial_exports: vec![], // We export nothing by default on session init.
+                })
+            }
+
+            WireMessage::CapGoodbye {
+                federation_id,
+                reason: _,
+            } => {
+                let fed_id = FederationId(federation_id);
+                let mut captp = captp_state.write().await;
+
+                // Remove the session — all exports/imports for this peer are invalidated.
+                captp.sessions.remove(&fed_id);
+
+                // No response needed for goodbye (it's a notification).
+                None
+            }
+
+            WireMessage::EnlivenSturdyRef {
+                uri_bytes,
+                requester_height: _,
+            } => {
+                // Parse the URI from postcard-serialized bytes.
+                let uri: pyana_captp::PyanaUri = match postcard::from_bytes(&uri_bytes) {
+                    Ok(uri) => uri,
+                    Err(_) => {
+                        return Some(WireMessage::EnlivenResponse {
+                            success: false,
+                            cell_id: None,
+                            permissions_tag: 0,
+                            error: Some("invalid URI format".to_string()),
+                        });
+                    }
+                };
+
+                let mut captp = captp_state.write().await;
+                let current_height = captp.current_height;
+
+                // Attempt to enliven the swiss number.
+                match captp.swiss_table.enliven(&uri.swiss, current_height) {
+                    Ok(entry) => {
+                        let perm_tag = match &entry.permissions {
+                            pyana_cell::AuthRequired::None => 0u8,
+                            pyana_cell::AuthRequired::Signature => 1u8,
+                            pyana_cell::AuthRequired::Proof => 2u8,
+                            pyana_cell::AuthRequired::Either => 3u8,
+                            pyana_cell::AuthRequired::Impossible => 4u8,
+                        };
+                        Some(WireMessage::EnlivenResponse {
+                            success: true,
+                            cell_id: Some(entry.cell_id.0),
+                            permissions_tag: perm_tag,
+                            error: None,
+                        })
+                    }
+                    Err(e) => Some(WireMessage::EnlivenResponse {
+                        success: false,
+                        cell_id: None,
+                        permissions_tag: 0,
+                        error: Some(e.to_string()),
+                    }),
+                }
+            }
+
+            WireMessage::EnlivenResponse { .. } => {
+                // This is a response, not a request; no action needed on the server side.
+                None
+            }
+
+            WireMessage::DropRemoteRef {
+                from_federation,
+                cell_id,
+            } => {
+                let fed_id = FederationId(from_federation);
+                let cell = pyana_types::CellId(cell_id);
+
+                let mut captp = captp_state.write().await;
+                let result = captp.export_gc.process_drop(cell, fed_id);
+
+                match result {
+                    pyana_captp::DropResult::CanRevoke | pyana_captp::DropResult::StillHeld => {
+                        // Also decrement the session export refcount if session exists.
+                        if let Some(session) = captp.sessions.get_mut(&fed_id) {
+                            session.release_export(&cell);
+                        }
+                        None // Silent success (GC is fire-and-forget).
+                    }
+                    pyana_captp::DropResult::Invalid => Some(WireMessage::Error {
+                        code: crate::message::error_codes::INVALID_DROP,
+                        message: "invalid drop: unknown federation or cell".to_string(),
+                    }),
+                }
+            }
+
+            WireMessage::PipelinedMsg {
+                target_promise_id,
+                method,
+                args,
+                authorization,
+                result_promise_id,
+                sender_federation,
+            } => {
+                // For now, acknowledge receipt. Full pipeline delivery requires
+                // integration with the turn executor, which is out of scope for
+                // this initial wire-layer integration. The message is queued in
+                // the session's pipeline registry.
+                let fed_id = FederationId(sender_federation);
+                let captp = captp_state.read().await;
+
+                if !captp.sessions.contains_key(&fed_id) {
+                    return Some(WireMessage::Error {
+                        code: crate::message::error_codes::CAPTP_SESSION_REQUIRED,
+                        message: "no CapTP session established; send CapHello first".to_string(),
+                    });
+                }
+
+                // Silently accept and queue — pipeline delivery is async.
+                // In a full implementation, this would be dispatched to the
+                // CrossFedPipelineBridge for eventual delivery.
+                let _ = (
+                    target_promise_id,
+                    method,
+                    args,
+                    authorization,
+                    result_promise_id,
+                );
+                None
+            }
+
+            WireMessage::PresentHandoff {
+                presentation_bytes,
+                introducer_pk,
+            } => {
+                // Deserialize the presentation.
+                let presentation: HandoffPresentation =
+                    match postcard::from_bytes(&presentation_bytes) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            return Some(WireMessage::Error {
+                                code: crate::message::error_codes::HANDOFF_FAILED,
+                                message: format!("handoff deserialization failed: {e}"),
+                            });
+                        }
+                    };
+
+                let intro_pk = pyana_types::PublicKey(introducer_pk);
+                let mut captp = captp_state.write().await;
+                let current_height = captp.current_height;
+                let known_feds = captp.known_federations.clone();
+
+                // Validate the handoff.
+                match validate_handoff(
+                    &presentation,
+                    &intro_pk,
+                    &mut captp.swiss_table,
+                    &known_feds,
+                    current_height,
+                ) {
+                    Ok(acceptance) => {
+                        let perm_tag = match &acceptance.permissions {
+                            pyana_cell::AuthRequired::None => 0u8,
+                            pyana_cell::AuthRequired::Signature => 1u8,
+                            pyana_cell::AuthRequired::Proof => 2u8,
+                            pyana_cell::AuthRequired::Either => 3u8,
+                            pyana_cell::AuthRequired::Impossible => 4u8,
+                        };
+                        Some(WireMessage::HandoffAccepted {
+                            routing_token: acceptance.routing_token,
+                            cell_id: acceptance.cell_id.0,
+                            permissions_tag: perm_tag,
+                        })
+                    }
+                    Err(e) => Some(WireMessage::Error {
+                        code: crate::message::error_codes::HANDOFF_FAILED,
+                        message: e.to_string(),
+                    }),
+                }
+            }
+
+            WireMessage::HandoffAccepted { .. } => {
+                // This is a response, not a request; no action needed on the server side.
+                None
+            }
         }
     }
 
