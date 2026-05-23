@@ -206,12 +206,19 @@ impl AppState {
 
     /// Release an escrow by submitting a turn to the engine via EscrowManager,
     /// then marking it resolved in the local store.
+    ///
+    /// Only marks the escrow resolved if the engine operation succeeds.
     pub async fn release_escrow(&self, id: &[u8; 32], proof: &[u8]) -> bool {
         // Submit a real ReleaseEscrow turn via the engine.
         let mut engine = self.engine.write().await;
         let mut mgr = EscrowManager::new(&mut engine);
-        let _ = mgr.release_with_proof(*id, proof);
+        let result = mgr.release_with_proof(*id, proof);
         drop(engine);
+
+        // Only mark resolved if the engine operation succeeded.
+        if result.is_err() {
+            return false;
+        }
 
         // Update the local record to reflect resolution.
         self.escrows
@@ -221,12 +228,19 @@ impl AppState {
 
     /// Refund an expired escrow by submitting a turn to the engine via EscrowManager,
     /// then marking it resolved in the local store.
+    ///
+    /// Only marks the escrow resolved if the engine operation succeeds.
     pub async fn refund_escrow(&self, id: &[u8; 32], current_height: u64) -> bool {
         // Submit a real RefundEscrow turn via the engine.
         let mut engine = self.engine.write().await;
         let mut mgr = EscrowManager::new(&mut engine);
-        let _ = mgr.refund_expired(*id, current_height);
+        let result = mgr.refund_expired(*id, current_height);
         drop(engine);
+
+        // Only mark resolved if the engine operation succeeded.
+        if result.is_err() {
+            return false;
+        }
 
         // Update the local record to reflect resolution.
         self.escrows

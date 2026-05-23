@@ -50,6 +50,14 @@ fn bench_poseidon2_stark_prove(c: &mut Criterion) {
         BabyBear::new(6),
         BabyBear::new(7),
         BabyBear::new(8),
+        BabyBear::new(9),
+        BabyBear::new(10),
+        BabyBear::new(11),
+        BabyBear::new(12),
+        BabyBear::new(13),
+        BabyBear::new(14),
+        BabyBear::new(15),
+        BabyBear::new(16),
     ];
     let (trace, public_inputs) = Poseidon2Air::generate_trace(&input);
     let air = Poseidon2Air;
@@ -703,9 +711,9 @@ fn bench_plonky3_backend(c: &mut Criterion) {
 
         group.bench_with_input(
             BenchmarkId::new("verify_merkle", format!("d={depth}")),
-            &(proof.clone(), public_inputs.clone()),
-            |b, (p, pi)| {
-                b.iter(|| black_box(verify_plonky3(p, pi).unwrap()));
+            &public_inputs,
+            |b, pi| {
+                b.iter(|| black_box(verify_plonky3(&proof, pi).unwrap()));
             },
         );
 

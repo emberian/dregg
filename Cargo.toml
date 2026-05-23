@@ -128,9 +128,6 @@ large_const_arrays = "allow"
 unused_enumerate_index = "allow"
 
 [workspace.lints.rust]
-unused_imports = "allow"
-unused_variables = "allow"
-dead_code = "allow"
 unexpected_cfgs = "allow"
 
 [profile.bench]

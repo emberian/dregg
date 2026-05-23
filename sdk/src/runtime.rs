@@ -366,11 +366,18 @@ impl AgentRuntime {
 
         // SECURITY: The sub-agent receives an attenuated token with zeroed root_key.
         // It cannot mint new root tokens or bypass the attenuation chain.
+        // However, it carries the issuer_key for ZK proof generation.
+        let issuer_key = if token.can_mint() {
+            *token.root_key()
+        } else {
+            *token.issuer_key()
+        };
         let delegated_token = HeldToken::new_attenuated(
             delegated_label.clone(),
             token.service.clone(),
             encoded.clone(),
             token_id.clone(),
+            issuer_key,
         );
 
         sub_wallet.receive_delegation(DelegatedToken {

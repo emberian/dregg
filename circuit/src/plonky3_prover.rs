@@ -90,7 +90,10 @@ pub type PyanaStarkConfig = StarkConfig<TestPcs, EF, TestChallenger>;
 pub type PyanaProof = Proof<PyanaStarkConfig>;
 
 pub fn create_config() -> PyanaStarkConfig {
-    let perm16 = default_babybear_poseidon2_16();
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+    let mut rng = SmallRng::seed_from_u64(1);
+    let perm16 = Perm16::new_from_rng_128(&mut rng);
 
     let hash = PaddingFreeSponge::new(perm16.clone());
     let compress = TruncatedPermutation::new(perm16.clone());
@@ -938,15 +941,13 @@ mod tests {
     #[test]
     #[ignore]
     fn plonky3_mulair7_our_config() {
-        use rand::{Rng, SeedableRng, rngs::SmallRng};
         let config = create_config();
         let air = MulAir7;
 
-        let mut rng = SmallRng::seed_from_u64(42);
-        let values: Vec<P3BabyBear> = (0..16)
-            .flat_map(|_| {
-                let a = P3BabyBear::new(rng.random_range(1..1000000));
-                let b = P3BabyBear::new(rng.random_range(1..1000000));
+        let values: Vec<P3BabyBear> = (1u32..=16)
+            .flat_map(|v| {
+                let a = P3BabyBear::new(v * 13 + 7);
+                let b = P3BabyBear::new(v * 37 + 11);
                 let c = a.exp_u64(6) * b;
                 [a, b, c]
             })
@@ -1037,6 +1038,57 @@ mod tests {
             "Minimal degree-3 AIR failed: {:?}",
             result.err()
         );
+    }
+
+    #[test]
+    #[ignore]
+    fn plonky3_minimal_degree4() {
+        let config = create_config();
+        let air = MinimalDegreeNAir::<4>;
+        let values: Vec<P3BabyBear> = (1u32..=16)
+            .flat_map(|v| {
+                let x = P3BabyBear::new(v);
+                [x, x.exp_u64(4)]
+            })
+            .collect();
+        let matrix = RowMajorMatrix::new(values, 2);
+        let proof = prove(&config, &air, matrix, &[]);
+        let result = verify(&config, &air, &proof, &[]);
+        assert!(result.is_ok(), "degree-4 failed: {:?}", result.err());
+    }
+
+    #[test]
+    #[ignore]
+    fn plonky3_minimal_degree5() {
+        let config = create_config();
+        let air = MinimalDegreeNAir::<5>;
+        let values: Vec<P3BabyBear> = (1u32..=16)
+            .flat_map(|v| {
+                let x = P3BabyBear::new(v);
+                [x, x.exp_u64(5)]
+            })
+            .collect();
+        let matrix = RowMajorMatrix::new(values, 2);
+        let proof = prove(&config, &air, matrix, &[]);
+        let result = verify(&config, &air, &proof, &[]);
+        assert!(result.is_ok(), "degree-5 failed: {:?}", result.err());
+    }
+
+    #[test]
+    #[ignore]
+    fn plonky3_minimal_degree6() {
+        let config = create_config();
+        let air = MinimalDegreeNAir::<6>;
+        let values: Vec<P3BabyBear> = (1u32..=16)
+            .flat_map(|v| {
+                let x = P3BabyBear::new(v);
+                [x, x.exp_u64(6)]
+            })
+            .collect();
+        let matrix = RowMajorMatrix::new(values, 2);
+        let proof = prove(&config, &air, matrix, &[]);
+        let result = verify(&config, &air, &proof, &[]);
+        assert!(result.is_ok(), "degree-6 failed: {:?}", result.err());
     }
 
     #[test]

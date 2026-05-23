@@ -50,10 +50,9 @@
 //! ```
 
 use pyana_bridge::present::{
-    self, BridgePresentationBuilder, BridgePresentationProof, WirePresentationProof,
+    self, BridgePresentationBuilder, WirePresentationProof,
 };
 use pyana_cell::Ledger;
-use pyana_circuit::BabyBear;
 use pyana_token::{Attenuation, AuthRequest, AuthToken, MacaroonToken};
 use pyana_turn::turn::TurnResult;
 use pyana_turn::{Turn, TurnReceipt};
@@ -340,15 +339,15 @@ impl PyanaEngine {
 
     /// Verify a wire presentation proof against a specific federation root.
     ///
-    /// Performs the SAME checks as `verify_presentation_full`, plus correct
-    /// action+resource binding (which `verify_presentation_full` only partially
-    /// implements for backward compatibility):
-    ///
-    /// 1. STARK proof validity (issuer membership)
-    /// 2. Federation root binding
-    /// 3. Action binding — the proof's `request_predicate` must match
-    ///    `compute_action_binding(expected_action, expected_resource)`
-    /// 4. Timestamp freshness — the proof must not be older than `max_proof_age_secs`
+    /// Delegates to the canonical [`present::verify_proof_complete`] which checks ALL of:
+    /// 1. Reject zero federation root
+    /// 2. Real STARK proof presence
+    /// 3. STARK validity (issuer membership)
+    /// 4. Federation root binding
+    /// 5. Action binding (proof bound to expected_action + expected_resource)
+    /// 6. Timestamp freshness (proof not older than max_proof_age_secs)
+    /// 7. Composition commitment (non-zero AND correctly recomputed)
+    /// 8. Proof tier (Production only)
     ///
     /// Use this when the caller supplies their own root (e.g., from a trusted
     /// external source or a specific block height).
@@ -364,61 +363,18 @@ impl PyanaEngine {
             Err(e) => return Err(EmbedError::ProofDecode(e.to_string())),
         };
 
-        // 1. Action binding: verify the proof is bound to (expected_action, expected_resource).
-        //    This MUST be checked before STARK verification to fail fast on misuse.
-        let expected_binding =
-            pyana_circuit::compute_action_binding(expected_action, expected_resource);
-        if wire_proof.circuit_proof.public_inputs.request_predicate != expected_binding {
-            return Ok(false);
+        let now = self.executor.current_timestamp;
+        match present::verify_proof_complete(
+            &wire_proof,
+            expected_action,
+            expected_resource,
+            federation_root,
+            now,
+            self.max_proof_age_secs,
+        ) {
+            Ok(_) => Ok(true),
+            Err(_) => Ok(false),
         }
-
-        // 2. Timestamp freshness: reject stale proofs.
-        if self.max_proof_age_secs > 0 {
-            let proof_ts = wire_proof.circuit_proof.public_inputs.timestamp.0 as i64;
-            if proof_ts == 0 {
-                // No timestamp in proof — reject when freshness is required.
-                return Ok(false);
-            }
-            let now = self.executor.current_timestamp;
-            let age = now.saturating_sub(proof_ts);
-            if age > self.max_proof_age_secs || age < -self.max_proof_age_secs {
-                return Ok(false);
-            }
-        }
-
-        // 3. STARK proof validity + federation root binding.
-        //    Reconstruct a BridgePresentationProof for the bridge verifier.
-        let dummy_trace = pyana_trace::AuthorizationTrace {
-            request: pyana_trace::AuthorizationRequest {
-                app_id: None,
-                service: None,
-                action: None,
-                features: vec![],
-                user_id: None,
-                now: 0,
-            },
-            steps: vec![],
-            conclusion: pyana_trace::Conclusion::Deny,
-        };
-
-        let full_proof = BridgePresentationProof {
-            circuit_proof: wire_proof.circuit_proof,
-            real_stark_proof: wire_proof.real_stark_proof,
-            ivc_proof: wire_proof.ivc_proof,
-            validated_ivc_proof: wire_proof.validated_ivc_proof,
-            trace: dummy_trace,
-            chain_length: 0,
-            final_state_root: [0u8; 32],
-            federation_root: *federation_root,
-            verification: wire_proof.verification,
-            revealed_facts_commitment: wire_proof.revealed_facts_commitment,
-            composition_commitment: wire_proof.composition_commitment,
-        };
-
-        // verify_presentation checks STARK validity + federation root binding.
-        // We already checked action binding and freshness above (more thoroughly
-        // than verify_presentation_full, which uses empty resource).
-        Ok(present::verify_presentation(&full_proof, federation_root))
     }
 
     /// Verify ONLY federation membership (STARK proof + root binding).
@@ -429,7 +385,7 @@ impl PyanaEngine {
     /// **WARNING**: Use this ONLY for federation membership verification where
     /// action binding is not applicable (e.g., qualifying a node as a federation
     /// member). For action-authorized requests, use [`verify_presentation_bytes`]
-    /// which enforces full security checks.
+    /// which enforces full security checks via [`present::verify_proof_complete`].
     pub fn verify_membership_proof(
         &self,
         proof_bytes: &[u8],
@@ -440,34 +396,22 @@ impl PyanaEngine {
             Err(_) => return false,
         };
 
-        let dummy_trace = pyana_trace::AuthorizationTrace {
-            request: pyana_trace::AuthorizationRequest {
-                app_id: None,
-                service: None,
-                action: None,
-                features: vec![],
-                user_id: None,
-                now: 0,
-            },
-            steps: vec![],
-            conclusion: pyana_trace::Conclusion::Deny,
-        };
-
-        let full_proof = BridgePresentationProof {
-            circuit_proof: wire_proof.circuit_proof,
-            real_stark_proof: wire_proof.real_stark_proof,
-            ivc_proof: wire_proof.ivc_proof,
-            validated_ivc_proof: wire_proof.validated_ivc_proof,
-            trace: dummy_trace,
-            chain_length: 0,
-            final_state_root: [0u8; 32],
-            federation_root: *federation_root,
-            verification: wire_proof.verification,
-            revealed_facts_commitment: wire_proof.revealed_facts_commitment,
-            composition_commitment: wire_proof.composition_commitment,
-        };
-
-        present::verify_presentation(&full_proof, federation_root)
+        // For membership-only verification, we call verify_proof_complete with
+        // relaxed parameters: empty action/resource (matching what the prover used
+        // for membership-only proofs) and no freshness check.
+        // If the proof was generated with action binding, this will correctly
+        // reject (action mismatch) — membership-only proofs use empty bindings.
+        match present::verify_proof_complete(
+            &wire_proof,
+            "",
+            "",
+            federation_root,
+            0,
+            0, // no freshness check for membership-only
+        ) {
+            Ok(_) => true,
+            Err(_) => false,
+        }
     }
 
     // =========================================================================

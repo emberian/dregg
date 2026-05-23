@@ -773,6 +773,42 @@ pub fn prove_standalone_dual_curve_wrap(
     let witness = generate_wrap_verifier_witness(&wrap_witness_data, &layout);
 
     // -------------------------------------------------------------------------
+    // DEBUG: verify native_scalar_mul_fq matches ark-ec for first challenge
+    // -------------------------------------------------------------------------
+    {
+        use ark_ec::CurveGroup;
+        if !opening.lr.is_empty() {
+            let (l0, r0) = opening.lr[0];
+            let u0 = challenges_fp[0];
+            let u0_inv = challenge_inverses_fp[0];
+
+            // ark-ec computation
+            let u_r_ark = r0.mul_bigint(u0.into_bigint()).into_affine();
+            let uinv_l_ark = l0.mul_bigint(u0_inv.into_bigint()).into_affine();
+
+            // native_scalar_mul_fq computation
+            let r0_fq = vesta_point_to_fq_coords(r0);
+            let l0_fq = vesta_point_to_fq_coords(l0);
+            let u0_fq = fp_to_fq(&u0);
+            let u0_inv_fq = fp_to_fq(&u0_inv);
+            let u_r_native = native_scalar_mul_fq(u0_fq, r0_fq);
+            let uinv_l_native = native_scalar_mul_fq(u0_inv_fq, l0_fq);
+
+            let u_r_expected = vesta_point_to_fq_coords(u_r_ark);
+            let uinv_l_expected = vesta_point_to_fq_coords(uinv_l_ark);
+
+            assert_eq!(
+                u_r_native, u_r_expected,
+                "native_scalar_mul_fq([u]*R) mismatch with ark-ec for round 0"
+            );
+            assert_eq!(
+                uinv_l_native, uinv_l_expected,
+                "native_scalar_mul_fq([u^-1]*L) mismatch with ark-ec for round 0"
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // 4. Create the Pallas proof (no create_recursive, no prev_challenges).
     //    The proof is self-contained because the circuit itself verifies the IPA.
     // -------------------------------------------------------------------------

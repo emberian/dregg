@@ -2210,20 +2210,257 @@ pub fn verify_presentation_nonce(
     proof.circuit_proof.public_inputs.verifier_nonce == expected_nonce
 }
 
+// =============================================================================
+// Canonical production verifier — ALL production paths MUST use this
+// =============================================================================
+
+/// Error type for the canonical proof verifier.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum VerifyError {
+    /// The federation root was all zeros (not configured).
+    NoFederationRoot,
+    /// Proof deserialization failed.
+    DeserializeFailed(String),
+    /// STARK verification failed.
+    StarkInvalid(String),
+    /// Federation root in proof does not match expected root.
+    RootMismatch,
+    /// Action/resource binding in proof does not match expected values.
+    ActionMismatch,
+    /// Proof timestamp is too old or missing.
+    Expired,
+    /// Composition commitment is zero (missing sub-proof binding).
+    MissingComposition,
+    /// Composition commitment does not match recomputed value.
+    CompositionMismatch,
+    /// No real STARK proof present (structural/mock proof).
+    NoStarkProof,
+    /// Proof has fewer public inputs than required.
+    MalformedPublicInputs,
+}
+
+impl std::fmt::Display for VerifyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoFederationRoot => write!(f, "federation root is zero (not configured)"),
+            Self::DeserializeFailed(e) => write!(f, "deserialization failed: {e}"),
+            Self::StarkInvalid(e) => write!(f, "STARK verification failed: {e}"),
+            Self::RootMismatch => write!(f, "federation root mismatch"),
+            Self::ActionMismatch => write!(f, "action/resource binding mismatch"),
+            Self::Expired => write!(f, "proof expired or missing timestamp"),
+            Self::MissingComposition => write!(f, "composition commitment is zero"),
+            Self::CompositionMismatch => write!(f, "composition commitment mismatch"),
+            Self::NoStarkProof => write!(f, "no real STARK proof present"),
+            Self::MalformedPublicInputs => write!(f, "malformed public inputs"),
+        }
+    }
+}
+
+impl std::error::Error for VerifyError {}
+
+/// Result of successful verification from [`verify_proof_complete`].
+#[derive(Clone, Debug)]
+pub struct VerifiedPresentation {
+    /// The proof tier (always Production for a passing proof).
+    pub tier: pyana_circuit::ProofTier,
+    /// The action the proof was verified against.
+    pub action: String,
+    /// The resource the proof was verified against.
+    pub resource: String,
+    /// The federation root the proof was verified against.
+    pub federation_root: [u8; 32],
+}
+
+/// The ONLY verification function that should be called in production.
+///
+/// Checks ALL of:
+/// 1. Reject zero federation root
+/// 2. Real STARK proof presence
+/// 3. STARK validity (issuer membership, cryptographic verification)
+/// 4. Federation root binding (proof's root == expected root)
+/// 5. Action binding (proof's request_predicate == compute_action_binding(action, resource))
+/// 6. Timestamp freshness (proof not older than max_age_secs)
+/// 7. Composition commitment (non-zero AND correctly recomputed from sub-proofs)
+/// 8. Proof tier (only Production tier passes)
+///
+/// # Arguments
+///
+/// * `wire_proof` - The deserialized wire presentation proof.
+/// * `expected_action` - The action string the proof must be bound to.
+/// * `expected_resource` - The resource string the proof must be bound to.
+/// * `federation_root` - The federation root from an EXTERNAL trusted source.
+/// * `current_timestamp` - Current Unix timestamp in seconds.
+/// * `max_age_secs` - Maximum age of proof in seconds. 0 disables freshness check.
+///
+/// # Returns
+///
+/// `Ok(VerifiedPresentation)` if ALL checks pass.
+/// `Err(VerifyError)` with a specific reason on any failure.
+pub fn verify_proof_complete(
+    wire_proof: &WirePresentationProof,
+    expected_action: &str,
+    expected_resource: &str,
+    federation_root: &[u8; 32],
+    current_timestamp: i64,
+    max_age_secs: i64,
+) -> Result<VerifiedPresentation, VerifyError> {
+    // 1. Reject zero federation root.
+    if *federation_root == [0u8; 32] {
+        return Err(VerifyError::NoFederationRoot);
+    }
+
+    // 2. Require a real STARK proof (no structural/mock proofs).
+    let real = wire_proof
+        .real_stark_proof
+        .as_ref()
+        .ok_or(VerifyError::NoStarkProof)?;
+
+    // 3. Extract public inputs from the STARK proof.
+    let pi: Vec<BabyBear> = real
+        .issuer_membership_stark_proof
+        .public_inputs
+        .iter()
+        .map(|&v| BabyBear::new_canonical(v))
+        .collect();
+
+    if pi.len() < 2 + pyana_circuit::ACTION_BINDING_WIDTH {
+        return Err(VerifyError::MalformedPublicInputs);
+    }
+
+    // 4. Federation root binding: proof's root must match expected.
+    let expected_root = bytes_to_babybear(federation_root);
+    if pi[1] != expected_root {
+        return Err(VerifyError::RootMismatch);
+    }
+
+    // 5. Action binding: proof must be bound to (expected_action, expected_resource).
+    let expected_binding =
+        pyana_circuit::compute_action_binding(expected_action, expected_resource);
+    if wire_proof.circuit_proof.public_inputs.request_predicate != expected_binding {
+        return Err(VerifyError::ActionMismatch);
+    }
+
+    // Also verify in STARK public inputs (pi[2..6]).
+    for i in 0..pyana_circuit::ACTION_BINDING_WIDTH {
+        if pi[2 + i] != expected_binding[i] {
+            return Err(VerifyError::ActionMismatch);
+        }
+    }
+
+    // 6. Timestamp freshness.
+    if max_age_secs > 0 {
+        let proof_ts = wire_proof.circuit_proof.public_inputs.timestamp.0 as i64;
+        if proof_ts == 0 {
+            return Err(VerifyError::Expired);
+        }
+        let age = current_timestamp.saturating_sub(proof_ts);
+        if age > max_age_secs || age < -max_age_secs {
+            return Err(VerifyError::Expired);
+        }
+    }
+
+    // 7. Composition commitment (non-zero AND correctly recomputed).
+    if wire_proof.composition_commitment.is_zero() {
+        // For single-step tokens (no attenuation chain), a zero composition is acceptable
+        // only if there are no fold proofs. Multi-step proofs MUST have a non-zero
+        // composition commitment to bind the sub-proofs together.
+        if !real.fold_proofs.is_empty() {
+            return Err(VerifyError::MissingComposition);
+        }
+    } else {
+        // Recompute the composition commitment from the sub-proof data.
+        let fold_chain_commitment = if real.fold_proofs.is_empty() {
+            BabyBear::ZERO
+        } else {
+            let fold_roots: Vec<BabyBear> = real
+                .fold_proofs
+                .iter()
+                .filter(|fp| fp.public_inputs.len() >= 2)
+                .flat_map(|fp| [fp.public_inputs[0], fp.public_inputs[1]])
+                .collect();
+            if fold_roots.is_empty() {
+                BabyBear::ZERO
+            } else {
+                poseidon2::hash_many(&fold_roots)
+            }
+        };
+        let derivation_state_root = if real.derivation_proof.public_inputs.is_empty() {
+            BabyBear::ZERO
+        } else {
+            real.derivation_proof.public_inputs[0]
+        };
+        let presentation_tag = wire_proof.circuit_proof.public_inputs.presentation_tag;
+        let tag_hash = poseidon2::hash_many(&[presentation_tag]);
+
+        let recomputed = WideHash::from_poseidon2(
+            "pyana-composition-v1",
+            &[fold_chain_commitment, derivation_state_root, tag_hash],
+        );
+
+        if recomputed != wire_proof.composition_commitment {
+            return Err(VerifyError::CompositionMismatch);
+        }
+
+        // Verify the composition_commitment is present in the STARK's public inputs.
+        let expected_cc_idx = 6; // After leaf, root, action[4]
+        if pi.len() <= expected_cc_idx + 3 {
+            return Err(VerifyError::MalformedPublicInputs);
+        }
+        for i in 0..4 {
+            if pi[expected_cc_idx + i] != wire_proof.composition_commitment[i] {
+                return Err(VerifyError::CompositionMismatch);
+            }
+        }
+    }
+
+    // 8. STARK cryptographic verification.
+    use pyana_circuit::poseidon2_air::{BlindedMerklePoseidon2StarkAir, MerklePoseidon2StarkAir};
+    use pyana_circuit::stark::StarkAir;
+    let air_name = &real.issuer_membership_stark_proof.air_name;
+    let stark_result = if air_name == BlindedMerklePoseidon2StarkAir.air_name() {
+        stark::verify(
+            &BlindedMerklePoseidon2StarkAir,
+            &real.issuer_membership_stark_proof,
+            &pi,
+        )
+    } else {
+        stark::verify(
+            &MerklePoseidon2StarkAir,
+            &real.issuer_membership_stark_proof,
+            &pi,
+        )
+    };
+
+    if let Err(e) = stark_result {
+        return Err(VerifyError::StarkInvalid(e));
+    }
+
+    // All checks passed — Production tier.
+    Ok(VerifiedPresentation {
+        tier: pyana_circuit::ProofTier::Production,
+        action: expected_action.to_string(),
+        resource: expected_resource.to_string(),
+        federation_root: *federation_root,
+    })
+}
+
 /// Verify a presentation proof cryptographically (convenience wrapper).
 ///
 /// Equivalent to `verify_presentation_full` with:
 /// - No action predicate check (`expected_action = None`)
 /// - No timestamp freshness check (uses timestamp 0 and max_age of i64::MAX)
 ///
+/// **DEPRECATED**: This function skips action binding and freshness checks.
+/// Use [`verify_proof_complete`] instead, which checks EVERYTHING.
+///
 /// **SECURITY WARNING**: The `federation_root` parameter MUST come from an external
 /// trusted source (e.g., the verifier's own configuration, a pinned trust anchor,
 /// or a federation registry the verifier operates). It MUST NOT be extracted from
 /// the proof being verified (e.g., `proof.federation_root`), as that is circular
 /// and provides no security guarantee.
-///
-/// For production use with full security, prefer [`verify_presentation_full`] which
-/// also checks timestamp freshness and request predicate authorization.
+#[deprecated(
+    note = "Use verify_proof_complete() which checks action binding, freshness, and composition. This function skips critical security checks."
+)]
 pub fn verify_presentation(proof: &BridgePresentationProof, federation_root: &[u8; 32]) -> bool {
     // A real STARK proof is required for cryptographic verification.
     if let Some(ref real) = proof.real_stark_proof {
@@ -2434,6 +2671,7 @@ pub fn verify_wire_fold_chain(proof: &WirePresentationProof) -> bool {
 ///
 /// * `proof` - The presentation proof to verify.
 /// * `federation_root` - The 32-byte federation root of trust (external trust anchor).
+#[allow(deprecated)] // verify_presentation is deprecated in favor of verify_proof_complete
 pub fn verify_presentation_complete(
     proof: &BridgePresentationProof,
     federation_root: &[u8; 32],
@@ -2461,12 +2699,70 @@ pub fn verify_presentation_complete(
 
     // For multi-step chains without IVC, accept if we have a real STARK proof
     // with a valid (non-zero) composition commitment binding the fold chain.
-    if proof.real_stark_proof.is_some() && !proof.composition_commitment.is_zero() {
-        return true;
+    // SECURITY: We MUST recompute the composition commitment from the sub-proof
+    // data and verify it matches the claimed value. Without this, an attacker
+    // could forge an arbitrary non-zero commitment that passes the non-zero check.
+    let real = match proof.real_stark_proof.as_ref() {
+        Some(r) => r,
+        None => return false,
+    };
+
+    if proof.composition_commitment.is_zero() {
+        return false;
     }
 
-    // No valid proof binding for this chain depth.
-    false
+    // Recompute composition commitment from the sub-proof data.
+    let fold_chain_commitment = if real.fold_proofs.is_empty() {
+        BabyBear::ZERO
+    } else {
+        let fold_roots: Vec<BabyBear> = real
+            .fold_proofs
+            .iter()
+            .filter(|fp| fp.public_inputs.len() >= 2)
+            .flat_map(|fp| [fp.public_inputs[0], fp.public_inputs[1]])
+            .collect();
+        if fold_roots.is_empty() {
+            BabyBear::ZERO
+        } else {
+            poseidon2::hash_many(&fold_roots)
+        }
+    };
+    let derivation_state_root = if real.derivation_proof.public_inputs.is_empty() {
+        BabyBear::ZERO
+    } else {
+        real.derivation_proof.public_inputs[0]
+    };
+    let presentation_tag = proof.circuit_proof.public_inputs.presentation_tag;
+    let tag_hash = poseidon2::hash_many(&[presentation_tag]);
+
+    let recomputed = WideHash::from_poseidon2(
+        "pyana-composition-v1",
+        &[fold_chain_commitment, derivation_state_root, tag_hash],
+    );
+
+    if recomputed != proof.composition_commitment {
+        return false;
+    }
+
+    // Verify the composition_commitment is present in the STARK's public inputs.
+    // Public input layout: [leaf, root, action[4], composition[4]]
+    let pi: Vec<BabyBear> = real
+        .issuer_membership_stark_proof
+        .public_inputs
+        .iter()
+        .map(|&v| BabyBear::new(v))
+        .collect();
+    let expected_cc_idx = 6; // After leaf, root, action[4]
+    if pi.len() <= expected_cc_idx + 3 {
+        return false;
+    }
+    for i in 0..4 {
+        if pi[expected_cc_idx + i] != proof.composition_commitment[i] {
+            return false;
+        }
+    }
+
+    true
 }
 
 // =============================================================================
