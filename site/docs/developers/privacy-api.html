@@ -57,6 +57,29 @@
       what stays hidden.
     </p>
 
+    <h2 id="privacy-summary">Privacy Stack Summary</h2>
+
+    <table class="comparison">
+      <thead><tr><th>What</th><th>How</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>Credential privacy</td><td>BlindedMerklePoseidon2StarkAir (ZK auth, unlinkable multi-show)</td><td>Working</td></tr>
+        <tr><td>Amount privacy</td><td>Pedersen commitments + Bulletproof range proofs</td><td>Working</td></tr>
+        <tr><td>Recipient privacy</td><td>Stealth addresses (per-transaction derived keys)</td><td>Working</td></tr>
+        <tr><td>Intent privacy</td><td>SSE encrypted headers + delay pool</td><td>Working</td></tr>
+        <tr><td>Network privacy</td><td>Dandelion++ origin hiding + message padding</td><td>Working</td></tr>
+        <tr><td>Transaction privacy</td><td>Committed conservation in executor</td><td>Working</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout callout--note">
+      <p>
+        <strong>Honest limitations:</strong> Intent CONTENT is partially visible -- SSE keyword
+        tokens are enumerable by knowledgeable observers who know the keyword space.
+        The executor sees sovereign state during mediated (non-peer-to-peer) interactions.
+        Use <code>peer_exchange_session()</code> for maximum privacy between known parties.
+      </p>
+    </div>
+
     <h2 id="anonymous-auth">Anonymous Authorization</h2>
 
     <p>Prove you are authorized without revealing which federation member you are.</p>
@@ -140,6 +163,52 @@ let presentation = wallet.authorize_anonymously(&token, &request).unwrap();
       <li><strong>Each server learns:</strong> That someone is querying. Nothing else.</li>
       <li><strong>Hidden:</strong> Which tag was searched for, which row was accessed.</li>
       <li><strong>Security model:</strong> Information-theoretic (not computational) -- non-collusion assumption.</li>
+    </ul>
+
+    <h2 id="stealth-addresses">Stealth Addresses (Recipient Privacy)</h2>
+
+    <p>Generate one-time receive addresses so senders cannot be linked to recipients.</p>
+
+    <div class="api-sig">
+      <span class="keyword">pub fn</span> <span class="fn-name">stealth_meta_address</span>(<span class="param">&amp;self</span>) -> <span class="type">StealthAddress</span>
+    </div>
+
+    <div class="api-sig">
+      <span class="keyword">pub fn</span> <span class="fn-name">private_transfer</span>(<span class="param">&amp;mut self, amount: u64, recipient: &amp;StealthAddress</span>) -> <span class="type">Result&lt;PrivateTransferProof, SdkError&gt;</span>
+    </div>
+
+    <ul>
+      <li><strong>Verifier learns:</strong> A nullifier, a new note commitment, a conservation proof (amounts balance).</li>
+      <li><strong>Hidden:</strong> Transfer amount, sender identity, recipient identity, which note was spent.</li>
+      <li><strong>Mechanism:</strong> Pedersen commitment to amount + Bulletproof range proof + stealth address derivation.</li>
+    </ul>
+
+    <pre><code>use pyana_sdk::AgentWallet;
+
+let mut alice = AgentWallet::new();
+let mut bob = AgentWallet::new();
+
+// Bob publishes his stealth meta-address (share publicly or via discovery)
+let bob_stealth = bob.stealth_meta_address();
+
+// Alice sends privately -- federation never sees the amount or recipient
+let proof = alice.private_transfer(500, &bob_stealth).unwrap();
+
+// Bob scans for incoming notes using his viewing key
+let incoming = bob.scan_for_notes(&note_tree).unwrap();</code></pre>
+
+    <h2 id="peer-exchange">Peer-to-Peer Exchange (No Federation)</h2>
+
+    <p>For maximum privacy, interact directly with a known peer. The federation is never contacted.</p>
+
+    <div class="api-sig">
+      <span class="keyword">pub fn</span> <span class="fn-name">peer_exchange_session</span>(<span class="param">&amp;mut self, peer: &amp;PublicKey</span>) -> <span class="type">Result&lt;PeerSession, SdkError&gt;</span>
+    </div>
+
+    <ul>
+      <li><strong>Network learns:</strong> Nothing (direct connection between peers).</li>
+      <li><strong>Federation learns:</strong> Nothing (not contacted).</li>
+      <li><strong>Peer learns:</strong> Your new state commitment + proof of valid transition.</li>
     </ul>
 
     <h2 id="verification">Verification Helpers</h2>

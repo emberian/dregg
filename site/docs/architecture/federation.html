@@ -52,19 +52,58 @@
     <h1>Federation Model</h1>
 
     <p>
-      Pyana supports multiple federation topologies: single federations operating
-      independently, cross-federation communication via bridge nodes, and multi-hop
-      relay chains connecting distant federations.
+      The federation is a notary, not a host. Think of it like DNS or a notary public:
+      you use it when you need to prove something to strangers or resolve disputes,
+      not for every operation. Most routine agent-to-agent interactions do not need
+      the federation at all.
     </p>
 
-    <h2 id="single">Single Federation</h2>
+    <h2 id="role">What the Federation Provides</h2>
+
+    <table class="comparison">
+      <thead><tr><th>Function</th><th>When Needed</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Ordering</strong></td><td>When two sovereign cells interact with the same third party and sequence matters</td></tr>
+        <tr><td><strong>Nullifier tracking</strong></td><td>When a sovereign cell spends a note from the shared note tree (double-spend prevention)</td></tr>
+        <tr><td><strong>Discovery</strong></td><td>When you need to find someone you do not already know (intent gossip)</td></tr>
+        <tr><td><strong>Root anchoring</strong></td><td>Periodic checkpoints so you can prove to strangers "my state was valid as of height H"</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="not-role">What the Federation Does NOT Do (Sovereign Mode)</h2>
+
+    <ul>
+      <li>Does <strong>NOT</strong> store your cell state -- only a 32-byte commitment hash.</li>
+      <li>Does <strong>NOT</strong> execute your transitions -- you prove locally, it verifies the proof.</li>
+      <li>Does <strong>NOT</strong> see transfer amounts -- committed conservation uses Pedersen commitments.</li>
+      <li>Does <strong>NOT</strong> know recipients -- stealth addresses hide who receives value.</li>
+      <li>Does <strong>NOT</strong> participate in peer-to-peer interactions between known parties.</li>
+    </ul>
+
+    <h2 id="when-needed">When Do You Need the Federation?</h2>
+
+    <table class="comparison">
+      <thead><tr><th>Situation</th><th>Need Federation?</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td>Transfer to a known peer</td><td>No</td><td>Direct proof exchange, both verify locally</td></tr>
+        <tr><td>Exercise capability on a peer's cell</td><td>No</td><td>Proof-carrying capability exercise</td></tr>
+        <tr><td>Prove state validity to a stranger</td><td>Yes</td><td>Needs an attested root anchor</td></tr>
+        <tr><td>Spend a note from the shared note tree</td><td>Yes</td><td>Nullifier ordering (double-spend)</td></tr>
+        <tr><td>Resolve a dispute over state</td><td>Yes</td><td>Need arbiter with ordering authority</td></tr>
+        <tr><td>Be discoverable (intent posting)</td><td>Yes</td><td>Gossip network for discovery</td></tr>
+        <tr><td>Trade on a public DEX (hosted cell)</td><td>Yes</td><td>DEX state is federation-maintained</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="topologies">Federation Topologies</h2>
+
+    <h3>Single Federation</h3>
     <p>
       The simplest deployment: N nodes (typically 4-7) run Morpheus consensus together,
-      producing attested roots at regular intervals. All agents connect to nodes within
-      this single federation.
+      producing attested roots at regular intervals.
     </p>
 
-    <h2 id="cross-fed">Cross-Federation</h2>
+    <h3>Cross-Federation</h3>
     <p>
       Bridge nodes connect to two (or more) federations' gossip networks and relay:
     </p>
@@ -75,12 +114,17 @@
       <li><strong>Conditional proofs</strong> -- Atomic cross-federation operations</li>
     </ul>
 
-    <h2 id="exit">Federation Exit</h2>
+    <h2 id="exit">Federation Exit and Sovereignty</h2>
     <p>
-      Agents own their state as receipt chains. To exit a federation, export the chain
-      (or the IVC-compressed constant-size proof). Any verifier can check the chain's
-      integrity without contacting the original federation. This is the anti-lock-in
-      guarantee: your state is sovereign.
+      Agents own their state. In sovereign mode, your cells exist on your machine.
+      The federation stores only your commitment hash. To exit a federation, simply
+      stop anchoring. Your state continues to exist locally. You can present it to
+      any verifier who trusts your last attested checkpoint.
+    </p>
+    <p>
+      For hosted cells, export the receipt chain (or IVC-compressed constant-size proof).
+      Any verifier can check the chain's integrity without contacting the original
+      federation.
     </p>
 
     <div class="stub-notice">

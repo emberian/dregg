@@ -56,9 +56,10 @@
     <h1>Operator Guide</h1>
 
     <p>
-      Running a pyana node makes you a participant in a federation -- validating
-      turns, attesting roots, and serving the HTTP API that browser extensions
-      and SDK clients connect to.
+      Running a pyana node makes you a participant in a federation -- a notary
+      service that provides ordering, nullifier tracking, discovery, and root
+      anchoring. In sovereign mode, your node verifies proofs and updates
+      32-byte commitments. It does not store or execute agent state.
     </p>
 
     <h2>Contents</h2>
@@ -74,29 +75,49 @@
       </ul>
     </div>
 
+    <h2>What Your Node Does (and Does Not Do)</h2>
+
+    <table class="comparison">
+      <thead><tr><th>Your Node Does</th><th>Your Node Does NOT</th></tr></thead>
+      <tbody>
+        <tr><td>Verify STARK proofs of valid state transitions</td><td>Execute transitions on behalf of agents (sovereign mode)</td></tr>
+        <tr><td>Track nullifiers (double-spend prevention)</td><td>See cell contents, balances, or capability sets</td></tr>
+        <tr><td>Provide ordering via BFT consensus</td><td>Know transfer amounts (Pedersen committed)</td></tr>
+        <tr><td>Anchor attested roots (periodic checkpoints)</td><td>Know transfer recipients (stealth addresses)</td></tr>
+        <tr><td>Relay discovery (intent gossip)</td><td>Store full agent state (only 32-byte commitments)</td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      For hosted cells (legacy/convenience mode), the node does execute and store
+      full state. But the default for new cells is sovereign: your node is a notary,
+      not a database.
+    </p>
+
     <h2>Architecture at a Glance</h2>
 
     <pre><code>pyana-node
   |
   +-- HTTP API (port 8420)       -- Serves extension + SDK clients
   |     /api/authorize           -- Token authorization
-  |     /api/turn                -- Turn submission
-  |     /api/intent              -- Intent broadcast
+  |     /api/turn                -- Proof-carrying turn submission
+  |     /api/intent              -- Intent broadcast (discovery)
   |     /api/faucet (devnet)     -- Token dispensing
   |     /status                  -- Health check
   |
   +-- WebSocket (port 8420/ws)   -- Real-time state updates
   |
   +-- Federation Sync            -- Gossip with peers
-  |     Morpheus DAG-BFT         -- Consensus (optional flag)
+  |     Morpheus DAG-BFT         -- Consensus (ordering)
   |     Ed25519 signatures       -- Message authentication
   |     Attested roots           -- Periodic commitment checkpoints
+  |     Nullifier set            -- Double-spend prevention
   |
   +-- MCP Server (stdio)         -- AI agent tool interface
   |
   +-- Bridge (port 8421)         -- Cross-federation relay
   |
-  +-- Storage (redb)             -- Local ACID state
+  +-- Storage (redb)             -- Commitment tree + nullifiers
         ~/.pyana/                 -- Data directory</code></pre>
 
     <h2>Quick Start</h2>

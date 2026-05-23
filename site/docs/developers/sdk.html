@@ -258,6 +258,65 @@ if let Some(proof) = wallet.export_state_proof() {
     assert!(verify_ivc(&proof));
 }</code></pre>
 
+    <h2 id="sovereign">Sovereign Cell Operations</h2>
+
+    <p>
+      These APIs let you take ownership of your cell state and interact directly
+      with peers, bypassing the federation entirely for routine operations.
+    </p>
+
+    <h3>Taking Sovereignty</h3>
+
+    <div class="api-sig">
+      <span class="keyword">pub fn</span> <span class="fn-name">make_sovereign</span>(<span class="param">&amp;mut self</span>) -> <span class="type">Result&lt;SovereignCell, SdkError&gt;</span>
+    </div>
+
+    <pre><code>// Transition your cell from hosted to sovereign mode.
+// After this, the federation stores only your 32-byte commitment hash.
+// You maintain full state locally and submit proofs of valid transitions.
+let sovereign = wallet.make_sovereign().unwrap();
+println!("Commitment: {:?}", sovereign.commitment());</code></pre>
+
+    <h3>Private Transfers</h3>
+
+    <div class="api-sig">
+      <span class="keyword">pub fn</span> <span class="fn-name">private_transfer</span>(<span class="param">&amp;mut self, amount: u64, recipient: &amp;StealthAddress</span>) -> <span class="type">Result&lt;PrivateTransferProof, SdkError&gt;</span>
+    </div>
+
+    <pre><code>// Amount-private send using Pedersen commitments.
+// The federation sees: a nullifier (double-spend check), a new note commitment,
+// and a conservation proof. It does NOT see the amount or recipient.
+let stealth_addr = bob_wallet.stealth_meta_address();
+let proof = wallet.private_transfer(1000, &stealth_addr).unwrap();</code></pre>
+
+    <h3>Stealth Receiving</h3>
+
+    <div class="api-sig">
+      <span class="keyword">pub fn</span> <span class="fn-name">stealth_meta_address</span>(<span class="param">&amp;self</span>) -> <span class="type">StealthAddress</span>
+    </div>
+
+    <pre><code>// Generate your stealth meta-address for receiving privately.
+// Senders derive a one-time address from this; only you can detect and spend.
+let my_stealth = wallet.stealth_meta_address();
+// Share my_stealth with potential senders</code></pre>
+
+    <h3>Peer-to-Peer Sessions</h3>
+
+    <div class="api-sig">
+      <span class="keyword">pub fn</span> <span class="fn-name">peer_exchange_session</span>(<span class="param">&amp;mut self, peer: &amp;PublicKey</span>) -> <span class="type">Result&lt;PeerSession, SdkError&gt;</span>
+    </div>
+
+    <pre><code>// Open a direct agent-to-agent session. No federation contact.
+// Both parties exchange signed state transitions with STARK proofs.
+let session = wallet.peer_exchange_session(&bob_pubkey).unwrap();
+
+// Send a state transition directly to Bob
+session.send_transition(my_transition, my_proof).await?;
+
+// Receive and verify Bob's transition
+let bob_transition = session.receive_transition().await?;
+// Bob's proof is verified automatically -- you learn his new commitment</code></pre>
+
     <h2 id="next">Next Steps</h2>
 
     <ul>

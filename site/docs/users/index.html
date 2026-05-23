@@ -68,8 +68,13 @@
       revealing how they obtained that authority. It combines unforgeable capability
       tokens (like API keys that can only get weaker, never stronger) with
       zero-knowledge STARK proofs (so verifiers learn only "yes, authorized" or
-      "no, denied"). Agents carry their own state as proof chains, enabling offline
-      verification and federation exit without data loss.
+      "no, denied").
+    </p>
+    <p>
+      Agents own their state on their own machine. The federation is a notary service --
+      used for ordering, double-spend prevention, and discovery -- not as a state host.
+      Between known parties, agents interact directly by exchanging signed proofs.
+      No federation contact, no permission needed.
     </p>
 
     <h2>Contents</h2>
@@ -104,9 +109,12 @@
 
     <h3>Federations</h3>
     <p>
-      A federation is a group of nodes running consensus together. Your wallet
-      connects to a federation through a local pyana-node. Multiple federations
-      can interoperate via bridge nodes.
+      A federation is a group of nodes that act as a notary service: providing ordering,
+      nullifier tracking (double-spend prevention), discovery, and root anchoring.
+      Your wallet connects to a federation through a local pyana-node, but most
+      routine interactions between known parties happen directly -- peer-to-peer --
+      without federation involvement. Think of the federation like DNS: you use it
+      to find people and prove things to strangers, not for every message.
     </p>
 
     <div class="callout callout--note">

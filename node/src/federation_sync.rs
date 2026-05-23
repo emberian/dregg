@@ -703,6 +703,35 @@ pub async fn run_federation_sync(
         }
     });
 
+    // Spawn a periodic sovereign registration expiry task.
+    // Every 60 seconds, expire sovereign cell registrations that have exceeded
+    // their TTL (last_activity + ttl_blocks < current_height). This prevents
+    // abandoned registrations from accumulating indefinitely.
+    let state_sovereign_expiry = state.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            let current_height = {
+                let s = state_sovereign_expiry.read().await;
+                s.store
+                    .latest_attested_root()
+                    .ok()
+                    .flatten()
+                    .map(|r| r.height)
+                    .unwrap_or(0)
+            };
+            let mut s = state_sovereign_expiry.write().await;
+            let expired = s.ledger.expire_sovereign_registrations(current_height);
+            if expired > 0 {
+                info!(
+                    expired_count = expired,
+                    height = current_height,
+                    "expired stale sovereign cell registrations"
+                );
+            }
+        }
+    });
+
     // Spawn a periodic pending turn timeout checker.
     // Checks every 30 seconds for pending turns that have exceeded their timeout
     // height and propagates broken-promise notifications to dependents.

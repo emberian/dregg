@@ -36,10 +36,10 @@
     <p class="hero__eyebrow">object-capabilities + zero-knowledge proofs + federated consensus</p>
     <h1>Your agents prove what they can do &mdash; without revealing <em>how they got there.</em></h1>
     <p class="hero__sub">
-      Pyana is a distributed object-capability runtime. Agents hold unforgeable capabilities,
-      delegate with attenuation, prove authorization with ZK STARKs, discover each other through
-      privacy-preserving intents, and carry their own state as proof chains. The network is a sealed
-      capability marketplace.
+      Pyana is a sovereign capability runtime. Agents own their state, prove authorization
+      with ZK STARKs, and interact peer-to-peer. The federation is a notary -- used for
+      ordering, double-spend prevention, and discovery. Between known parties, it is just
+      signed proofs exchanged directly.
     </p>
     <div class="hero__cta">
       <a class="btn btn--primary" href="demo.html">Try the Demo</a>
@@ -66,7 +66,7 @@
     </div>
     <div class="problem">
       <p class="problem__label problem__label--pain">Pain</p>
-      <p class="problem__text">Agent autonomy requires trust in the infrastructure. Exit a platform and you lose your history, your credentials, your proof of work. The federation owns your state.</p>
+      <p class="problem__text">Agent autonomy requires trust in the infrastructure. Exit a platform and you lose your history, your credentials, your proof of work. The infrastructure owns your state.</p>
     </div>
     <div class="problem">
       <p class="problem__label problem__label--solve">Pyana</p>
@@ -78,7 +78,7 @@
     </div>
     <div class="problem">
       <p class="problem__label problem__label--solve">Pyana</p>
-      <p class="problem__text">Agents own their state as receipt chains. Every committed turn produces a verifiable receipt. Leave any federation at any time, carrying your full history as a constant-size proof.</p>
+      <p class="problem__text">Agents own their state as sovereign cells. Your state lives on your machine. The federation stores only a 32-byte commitment. Leave at any time -- your state is already yours.</p>
     </div>
   </div>
 </section>
@@ -163,9 +163,9 @@ Storage                  redb ACID | OS keychain | note commitment tree
                          nullifier set | audit log</code></pre>
   </div>
   <p class="arch__caption">
-    <strong>Core insight:</strong> Capability attenuation <em>is</em> incrementally verifiable computation.
-    Each delegation is a fold over a committed fact set. The prover demonstrates a valid chain of
-    attenuations; the verifier checks a single STARK proof.
+    <strong>Core insight:</strong> Agents own their state. The federation is a notary (ordering,
+    nullifiers, discovery, root anchoring). Between known parties, it is just signed proofs
+    exchanged directly -- no federation contact, no storage footprint, no permission needed.
   </p>
 </section>
 
@@ -191,8 +191,8 @@ Storage                  redb ACID | OS keychain | note commitment tree
     </div>
     <div class="usecase">
       <p class="usecase__icon">sovereignty</p>
-      <p class="usecase__title">Agent Autonomy and Exit</p>
-      <p class="usecase__desc">Agents own their state as proof chains. Exit any federation at any time carrying your full history. No lock-in, no data hostage, no censorship vector.</p>
+      <p class="usecase__title">Sovereign Cells</p>
+      <p class="usecase__desc">Your state lives on your machine. The federation stores a 32-byte hash. Interact peer-to-peer with known parties -- no federation needed. Use the federation as a notary when you need ordering or want to prove state to strangers.</p>
     </div>
   </div>
 </section>

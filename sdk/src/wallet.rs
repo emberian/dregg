@@ -3163,11 +3163,12 @@ impl AgentWallet {
             target: agent_cell,
             method: pyana_turn::action::symbol("make_sovereign"),
             args: Vec::new(),
-            authorization: pyana_turn::Authorization::Caller,
+            authorization: pyana_turn::Authorization::Unchecked,
             effects: vec![Effect::MakeSovereign { cell: agent_cell }],
-            preconditions: None,
-            commitment_mode: pyana_turn::CommitmentMode::Instant,
-            delegation_mode: pyana_turn::DelegationMode::Direct,
+            preconditions: pyana_cell::Preconditions::default(),
+            may_delegate: pyana_turn::DelegationMode::None,
+            commitment_mode: pyana_turn::CommitmentMode::Full,
+            balance_change: None,
         };
         forest.add_root(action);
 
@@ -3233,11 +3234,12 @@ impl AgentWallet {
             target: agent_cell,
             method: pyana_turn::action::symbol("sovereign_execute"),
             args: Vec::new(),
-            authorization: pyana_turn::Authorization::Caller,
+            authorization: pyana_turn::Authorization::Unchecked,
             effects,
-            preconditions: None,
-            commitment_mode: pyana_turn::CommitmentMode::Instant,
-            delegation_mode: pyana_turn::DelegationMode::Direct,
+            preconditions: pyana_cell::Preconditions::default(),
+            may_delegate: pyana_turn::DelegationMode::None,
+            commitment_mode: pyana_turn::CommitmentMode::Full,
+            balance_change: None,
         };
         forest.add_root(action);
 
@@ -3443,6 +3445,148 @@ impl AgentWallet {
         let effects_hash = *blake3::hash(&effects_bytes).as_bytes();
         exchange.create_transition(old_commitment, new_commitment, effects_hash)
     }
+
+    // =========================================================================
+    // Ephemeral Federation Registration
+    // =========================================================================
+
+    /// Register this wallet's sovereign cell with a federation node (ephemeral).
+    ///
+    /// The federation stores only the state commitment and TTL metadata.
+    /// The registration expires after `ttl_blocks` of inactivity. Call this when
+    /// the sovereign cell needs federation services (ordering, nullifier check,
+    /// proving to strangers).
+    ///
+    /// # Arguments
+    ///
+    /// * `node_url` - The base URL of the federation node (e.g., "http://localhost:9000").
+    /// * `ttl_blocks` - How many blocks to keep the registration alive.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request fails or the node rejects the registration.
+    #[cfg(feature = "federation-client")]
+    pub async fn register_with_federation(
+        &self,
+        node_url: &str,
+        ttl_blocks: u64,
+    ) -> Result<(), SdkError> {
+        // Use the public key as the cell_id for sovereign cells.
+        let cell_id_bytes = self.public_key.0;
+
+        // Compute the current state commitment from the receipt chain head,
+        // or use a zero commitment if no state transitions have occurred.
+        let commitment = self.current_state_commitment().unwrap_or([0u8; 32]);
+
+        // Sign cell_id || commitment.
+        let mut message = Vec::with_capacity(64);
+        message.extend_from_slice(&cell_id_bytes);
+        message.extend_from_slice(&commitment);
+        let sig = self.signing_key.sign(&message);
+
+        let body = serde_json::json!({
+            "cell_id": hex_encode_bytes(&cell_id_bytes),
+            "commitment": hex_encode_bytes(&commitment),
+            "ttl_blocks": ttl_blocks,
+            "signature": hex_encode_bytes(&sig.to_bytes()),
+        });
+
+        let url = format!("{}/cells/register", node_url.trim_end_matches('/'));
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| SdkError::Wire(format!("federation register request failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            return Err(SdkError::Wire(format!(
+                "federation register returned status {}",
+                resp.status()
+            )));
+        }
+
+        let result: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| SdkError::Wire(format!("failed to parse register response: {e}")))?;
+
+        if result.get("registered").and_then(|v| v.as_bool()) == Some(true) {
+            Ok(())
+        } else {
+            let error = result
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown error");
+            Err(SdkError::Wire(format!(
+                "federation rejected registration: {error}"
+            )))
+        }
+    }
+
+    /// Deregister this wallet's sovereign cell from the federation.
+    ///
+    /// Voluntarily removes the cell's commitment from the federation node.
+    /// Call this when the cell no longer needs federation services.
+    ///
+    /// # Arguments
+    ///
+    /// * `node_url` - The base URL of the federation node.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request fails or the node rejects the deregistration.
+    #[cfg(feature = "federation-client")]
+    pub async fn deregister_from_federation(&self, node_url: &str) -> Result<(), SdkError> {
+        let cell_id_bytes = self.public_key.0;
+
+        // Sign just the cell_id for deregistration proof.
+        let sig = self.signing_key.sign(&cell_id_bytes);
+
+        let body = serde_json::json!({
+            "cell_id": hex_encode_bytes(&cell_id_bytes),
+            "signature": hex_encode_bytes(&sig.to_bytes()),
+        });
+
+        let url = format!("{}/cells/deregister", node_url.trim_end_matches('/'));
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| SdkError::Wire(format!("federation deregister request failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            return Err(SdkError::Wire(format!(
+                "federation deregister returned status {}",
+                resp.status()
+            )));
+        }
+
+        let result: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| SdkError::Wire(format!("failed to parse deregister response: {e}")))?;
+
+        if result.get("deregistered").and_then(|v| v.as_bool()) == Some(true) {
+            Ok(())
+        } else {
+            let error = result
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown error");
+            Err(SdkError::Wire(format!(
+                "federation rejected deregistration: {error}"
+            )))
+        }
+    }
+}
+
+/// Encode bytes to hex string (used by federation registration methods).
+fn hex_encode_bytes(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// A note detected as belonging to this wallet during stealth scanning.
@@ -4074,5 +4218,190 @@ mod tests {
             "verify_presentation_against should not return a decode error, got: {:?}",
             result.err()
         );
+    }
+
+    // =========================================================================
+    // Sovereign Cell Tests
+    // =========================================================================
+
+    #[test]
+    fn test_make_sovereign_builds_turn() {
+        let mut wallet = AgentWallet::new();
+        let cell_id = wallet.cell_id("test");
+
+        let turn = wallet.make_sovereign(&cell_id).unwrap();
+
+        // The turn targets the cell we specified.
+        assert_eq!(turn.agent, cell_id);
+        // It should have one action with MakeSovereign effect.
+        assert_eq!(turn.action_count(), 1);
+        // Sovereign witnesses should be empty (not needed for MakeSovereign).
+        assert!(turn.sovereign_witnesses.is_empty());
+        // Memo should describe the operation.
+        assert_eq!(turn.memo.as_deref(), Some("make_sovereign"));
+    }
+
+    #[test]
+    fn test_execute_sovereign_turn_requires_stored_state() {
+        let mut wallet = AgentWallet::new();
+        let cell_id = wallet.cell_id("test");
+
+        // Without stored state, should fail.
+        let result = wallet.execute_sovereign_turn(&cell_id, vec![], 0);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("no local sovereign state"));
+    }
+
+    #[test]
+    fn test_execute_sovereign_turn_with_stored_state() {
+        let mut wallet = AgentWallet::new();
+        let pk = wallet.public_key().0;
+        let token_id = *blake3::hash(b"test").as_bytes();
+        let cell = pyana_cell::Cell::with_balance(pk, token_id, 1000);
+        let cell_id = cell.id;
+
+        // Store sovereign state.
+        wallet.store_sovereign_state(cell.clone());
+
+        // Build a sovereign turn with a transfer effect.
+        let other_cell = CellId([99u8; 32]);
+        let effects = vec![Effect::Transfer {
+            from: cell_id,
+            to: other_cell,
+            amount: 100,
+        }];
+        let turn = wallet.execute_sovereign_turn(&cell_id, effects, 10).unwrap();
+
+        // Turn should reference the cell.
+        assert_eq!(turn.agent, cell_id);
+        assert_eq!(turn.fee, 10);
+        // Sovereign witness should be populated.
+        assert!(turn.sovereign_witnesses.contains_key(&cell_id));
+        let witness = &turn.sovereign_witnesses[&cell_id];
+        assert_eq!(witness.cell_state.id, cell_id);
+        assert_eq!(witness.state_proof, cell.state_commitment());
+    }
+
+    #[test]
+    fn test_store_and_retrieve_sovereign_state() {
+        let mut wallet = AgentWallet::new();
+        let pk = wallet.public_key().0;
+        let token_id = *blake3::hash(b"domain").as_bytes();
+        let cell = pyana_cell::Cell::with_balance(pk, token_id, 500);
+        let cell_id = cell.id;
+
+        // Initially empty.
+        assert_eq!(wallet.sovereign_cell_count(), 0);
+        assert!(wallet.sovereign_state(&cell_id).is_none());
+
+        // Store.
+        wallet.store_sovereign_state(cell.clone());
+        assert_eq!(wallet.sovereign_cell_count(), 1);
+
+        // Retrieve.
+        let retrieved = wallet.sovereign_state(&cell_id).unwrap();
+        assert_eq!(retrieved.id, cell_id);
+        assert_eq!(retrieved.state.balance, 500);
+    }
+
+    #[test]
+    fn test_apply_sovereign_effects() {
+        let mut wallet = AgentWallet::new();
+        let pk = wallet.public_key().0;
+        let token_id = *blake3::hash(b"domain").as_bytes();
+        let cell = pyana_cell::Cell::with_balance(pk, token_id, 1000);
+        let cell_id = cell.id;
+
+        wallet.store_sovereign_state(cell);
+
+        let other = CellId([99u8; 32]);
+
+        // Apply a transfer out.
+        let effects = vec![
+            Effect::Transfer { from: cell_id, to: other, amount: 300 },
+            Effect::IncrementNonce { cell: cell_id },
+        ];
+        wallet.apply_sovereign_effects(&cell_id, &effects).unwrap();
+
+        let state = wallet.sovereign_state(&cell_id).unwrap();
+        assert_eq!(state.state.balance, 700);
+        assert_eq!(state.state.nonce, 1);
+    }
+
+    #[test]
+    fn test_apply_sovereign_effects_transfer_in() {
+        let mut wallet = AgentWallet::new();
+        let pk = wallet.public_key().0;
+        let token_id = *blake3::hash(b"domain").as_bytes();
+        let cell = pyana_cell::Cell::with_balance(pk, token_id, 100);
+        let cell_id = cell.id;
+
+        wallet.store_sovereign_state(cell);
+
+        let other = CellId([88u8; 32]);
+        let effects = vec![Effect::Transfer { from: other, to: cell_id, amount: 500 }];
+        wallet.apply_sovereign_effects(&cell_id, &effects).unwrap();
+
+        let state = wallet.sovereign_state(&cell_id).unwrap();
+        assert_eq!(state.state.balance, 600);
+    }
+
+    #[test]
+    fn test_apply_sovereign_effects_missing_cell() {
+        let mut wallet = AgentWallet::new();
+        let cell_id = CellId([1u8; 32]);
+
+        let result = wallet.apply_sovereign_effects(&cell_id, &[]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_export_import_sovereign_state_roundtrip() {
+        let mut wallet = AgentWallet::new();
+        let pk = wallet.public_key().0;
+
+        // Store two sovereign cells.
+        let token_id_a = *blake3::hash(b"domain-a").as_bytes();
+        let cell_a = pyana_cell::Cell::with_balance(pk, token_id_a, 100);
+        let id_a = cell_a.id;
+        wallet.store_sovereign_state(cell_a);
+
+        let token_id_b = *blake3::hash(b"domain-b").as_bytes();
+        let cell_b = pyana_cell::Cell::with_balance(pk, token_id_b, 200);
+        let id_b = cell_b.id;
+        wallet.store_sovereign_state(cell_b);
+
+        assert_eq!(wallet.sovereign_cell_count(), 2);
+
+        // Export.
+        let exported = wallet.export_sovereign_state();
+        assert!(!exported.is_empty());
+
+        // Import into a fresh wallet.
+        let mut wallet2 = AgentWallet::new();
+        wallet2.import_sovereign_state(&exported).unwrap();
+
+        assert_eq!(wallet2.sovereign_cell_count(), 2);
+        assert_eq!(wallet2.sovereign_state(&id_a).unwrap().state.balance, 100);
+        assert_eq!(wallet2.sovereign_state(&id_b).unwrap().state.balance, 200);
+    }
+
+    #[test]
+    fn test_import_sovereign_state_invalid_data() {
+        let mut wallet = AgentWallet::new();
+        let result = wallet.import_sovereign_state(b"not valid postcard data");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("failed to deserialize sovereign state"));
+    }
+
+    #[test]
+    fn test_peer_exchange_session() {
+        let wallet = AgentWallet::new();
+        let exchange = wallet.peer_exchange_session("test");
+        // PeerExchange should be initialized with the wallet's cell_id.
+        let expected_cell_id = wallet.cell_id("test");
+        assert_eq!(exchange.cell_id(), expected_cell_id);
     }
 }

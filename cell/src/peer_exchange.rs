@@ -403,7 +403,6 @@ mod tests {
 
         let c0 = [0xAA; 32];
         let c1 = [0xBB; 32];
-        let c2 = [0xCC; 32];
         bob.register_peer(alice_cell, c0);
 
         // First transition should succeed (sequence 1).
@@ -411,14 +410,29 @@ mod tests {
         let alice_pubkey = alice.public_key();
         assert!(bob.verify_transition(&t1, &alice_pubkey).is_ok());
 
-        // Skip a transition: create sequence 2, then create sequence 3 without
-        // submitting 2 to bob. We simulate this by creating two transitions on
-        // Alice's side and only submitting the second.
-        let _t2 = alice.create_transition(c1, c2, [0x02; 32]);
-        let t3 = alice.create_transition(c2, [0xDD; 32], [0x03; 32]);
+        // Craft a transition with the correct old_commitment (c1) but wrong
+        // sequence (3 instead of 2) to trigger a pure sequence gap error.
+        let new_commitment = [0xDD; 32];
+        let effects_hash = [0x03; 32];
+        let timestamp = current_timestamp();
+        let bad_sequence = 3u64;
+
+        let message =
+            canonical_message(&c1, &new_commitment, &effects_hash, timestamp, bad_sequence);
+        let sig = alice.my_signing_key.sign(&message);
+
+        let gap_transition = PeerStateTransition {
+            cell_id: alice_cell,
+            old_commitment: c1,
+            new_commitment,
+            effects_hash,
+            timestamp,
+            sequence: bad_sequence,
+            signature: sig.to_bytes(),
+        };
 
         // Bob expects sequence 2, but gets 3.
-        let result = bob.verify_transition(&t3, &alice_pubkey);
+        let result = bob.verify_transition(&gap_transition, &alice_pubkey);
         assert_eq!(
             result,
             Err(PeerExchangeError::SequenceGap {
