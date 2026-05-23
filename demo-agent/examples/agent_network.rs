@@ -75,7 +75,7 @@ fn make_turn(agent: CellId, nonce: u64, effects: Vec<Effect>) -> pyana_turn::Tur
         target: agent,
         method: [0u8; 32],
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Default::default(),
         effects,
         may_delegate: DelegationMode::ParentsOwn,
@@ -430,7 +430,7 @@ fn main() {
         target: agent_id, // targets the agent itself (self-action)
         method: [0u8; 32],
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Default::default(),
         effects: vec![Effect::SetField {
             cell: agent_id,

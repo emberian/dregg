@@ -99,19 +99,22 @@ pub enum Authorization {
     },
     /// Capability token hash (breadstuff authorization).
     Breadstuff([u8; 32]),
-    /// No authorization (only valid if the cell's permissions allow it).
-    None,
+    /// No authorization provided (only valid if the cell's permissions allow it).
+    ///
+    /// Named `Unchecked` rather than `None` to make it grep-able and ensure
+    /// code review flags its usage. Previously called `None`.
+    Unchecked,
 }
 
 impl Authorization {
     /// Map this authorization to the corresponding AuthKind for permission checking.
-    /// Returns None for Authorization::None and Authorization::Breadstuff (handled separately).
+    /// Returns None for Authorization::Unchecked and Authorization::Breadstuff (handled separately).
     pub fn to_auth_kind(&self) -> Option<pyana_cell::AuthKind> {
         match self {
             Authorization::Signature(_, _) => Some(pyana_cell::AuthKind::Signature),
             Authorization::Proof { .. } => Some(pyana_cell::AuthKind::Proof),
             Authorization::Breadstuff(_) => None,
-            Authorization::None => None,
+            Authorization::Unchecked => None,
         }
     }
 
@@ -450,7 +453,7 @@ impl Action {
                 hasher.update(&[2u8]);
                 hasher.update(token);
             }
-            Authorization::None => {
+            Authorization::Unchecked => {
                 hasher.update(&[3u8]);
             }
         }

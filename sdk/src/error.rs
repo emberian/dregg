@@ -65,4 +65,11 @@ pub enum SdkError {
     /// A witness construction failed (e.g., unground variable in predicate proof).
     #[error("invalid witness: {0}")]
     InvalidWitness(String),
+
+    /// The caveat chain hash does not match the decoded token's caveats.
+    ///
+    /// This indicates the encoded token's caveats were mutated after delegation.
+    /// A delegate holding the proof_key attempted to alter authorization facts.
+    #[error("caveat integrity violation: token caveats do not match delegator's commitment")]
+    CaveatIntegrityViolation,
 }

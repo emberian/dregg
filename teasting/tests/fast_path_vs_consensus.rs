@@ -66,7 +66,7 @@ fn make_own_cell_turn(agent_id: CellId) -> Turn {
         target: agent_id,
         method: [0u8; 32],
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Preconditions::default(),
         effects: vec![],
         may_delegate: DelegationMode::None,
@@ -101,7 +101,7 @@ fn make_self_write_turn(agent_id: CellId) -> Turn {
         target: agent_id,
         method: [0u8; 32],
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Preconditions::default(),
         effects: vec![Effect::SetField {
             cell: agent_id,
@@ -140,7 +140,7 @@ fn make_cross_cell_turn(agent_id: CellId, target_id: CellId) -> Turn {
         target: target_id,
         method: [0u8; 32],
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Preconditions::default(),
         effects: vec![Effect::SetField {
             cell: target_id,

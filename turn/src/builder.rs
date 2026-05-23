@@ -143,7 +143,7 @@ impl ActionBuilder {
             target,
             method: method.to_string(),
             args: Vec::new(),
-            authorization: Authorization::None,
+            authorization: Authorization::Unchecked,
             preconditions: Preconditions::default(),
             effects: Vec::new(),
             may_delegate: DelegationMode::None,

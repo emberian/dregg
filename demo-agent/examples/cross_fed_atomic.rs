@@ -48,7 +48,7 @@ fn build_transfer_turn(agent: CellId, nonce: u64, from: CellId, to: CellId, amou
         target: from,
         method: [0u8; 32],
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Default::default(),
         effects: vec![Effect::Transfer { from, to, amount }],
         may_delegate: DelegationMode::None,

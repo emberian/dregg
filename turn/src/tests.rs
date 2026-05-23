@@ -484,7 +484,7 @@ fn test_real_signature_verification() {
         target: target_cell_id,
         method,
         args: vec![],
-        authorization: Authorization::None, // placeholder
+        authorization: Authorization::Unchecked, // placeholder
         preconditions: CellPreconditions::default(),
         effects: effects.clone(),
         may_delegate: DelegationMode::None,
@@ -611,7 +611,7 @@ fn test_wrong_key_signature_rejected() {
         target: target_id,
         method,
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: CellPreconditions::default(),
         effects: effects.clone(),
         may_delegate: DelegationMode::None,
@@ -1113,7 +1113,7 @@ fn test_call_forest_hash() {
         target: agent_id,
         method: symbol("test"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: CellPreconditions::default(),
         effects: vec![],
         may_delegate: DelegationMode::None,
@@ -1146,7 +1146,7 @@ fn test_call_forest_dfs_iteration() {
         target: id,
         method: symbol(name),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: CellPreconditions::default(),
         effects: vec![],
         may_delegate: DelegationMode::None,
@@ -1182,7 +1182,7 @@ fn test_call_tree_depth() {
         target: id,
         method: symbol("op"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: CellPreconditions::default(),
         effects: vec![],
         may_delegate: DelegationMode::None,
@@ -1788,7 +1788,7 @@ fn test_forest_total_effects() {
         target: id,
         method: symbol("op"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: CellPreconditions::default(),
         effects: (0..n)
             .map(|i| Effect::SetField {
@@ -1812,7 +1812,7 @@ fn test_forest_total_effects() {
 }
 
 // =============================================================================
-// Test: AuthRequired::None allows Authorization::None
+// Test: AuthRequired::None allows Authorization::Unchecked
 // =============================================================================
 
 #[test]
@@ -1837,7 +1837,7 @@ fn test_auth_none_allows_none() {
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
         let action = builder.action(target_id, "no_auth");
-        // Authorization::None — no auth provided.
+        // Authorization::Unchecked — no auth provided.
         action.set_field(target_id, 0, [42u8; 32]);
     }
     let turn = builder.fee(100).build();
@@ -1886,7 +1886,7 @@ fn test_action_hash_sensitivity() {
         target: id,
         method: symbol("test"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: CellPreconditions::default(),
         effects: vec![],
         may_delegate: DelegationMode::None,
@@ -2530,7 +2530,7 @@ fn test_partial_commitment_signature_valid() {
         target: cell_id,
         method: symbol("withdraw"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: CellPreconditions::default(),
         effects: vec![Effect::SetField {
             cell: cell_id,
@@ -2569,7 +2569,7 @@ fn test_partial_commitment_independent_of_other_actions() {
         target: cell_id,
         method: symbol("withdraw"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: CellPreconditions::default(),
         effects: vec![Effect::SetField {
             cell: cell_id,
@@ -2616,7 +2616,7 @@ fn test_full_commitment_invalidated_by_changes() {
         target: cell_id,
         method: symbol("transfer"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: CellPreconditions::default(),
         effects: vec![Effect::SetField {
             cell: cell_id,
@@ -2669,7 +2669,7 @@ fn test_compose_two_party_swap() {
         target: alice_cell,
         method: symbol("withdraw"),
         args: vec![],
-        authorization: Authorization::None, // will be set after signing
+        authorization: Authorization::Unchecked, // will be set after signing
         preconditions: CellPreconditions::default(),
         effects: vec![],
         may_delegate: DelegationMode::None,
@@ -2682,7 +2682,7 @@ fn test_compose_two_party_swap() {
         target: bob_cell,
         method: symbol("withdraw"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: CellPreconditions::default(),
         effects: vec![],
         may_delegate: DelegationMode::None,
@@ -2696,7 +2696,7 @@ fn test_compose_two_party_swap() {
         target: alice_cell,
         method: symbol("deposit"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: CellPreconditions::default(),
         effects: vec![],
         may_delegate: DelegationMode::None,
@@ -2708,7 +2708,7 @@ fn test_compose_two_party_swap() {
         target: bob_cell,
         method: symbol("deposit"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: CellPreconditions::default(),
         effects: vec![],
         may_delegate: DelegationMode::None,
@@ -2766,7 +2766,7 @@ fn test_compose_rejects_invalid_signature() {
         target: alice_cell,
         method: symbol("withdraw"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: CellPreconditions::default(),
         effects: vec![],
         may_delegate: DelegationMode::None,
@@ -2778,7 +2778,7 @@ fn test_compose_rejects_invalid_signature() {
         target: alice_cell,
         method: symbol("deposit"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: CellPreconditions::default(),
         effects: vec![],
         may_delegate: DelegationMode::None,
@@ -2831,7 +2831,7 @@ fn test_compose_validates_excess_balance() {
         target: alice_cell,
         method: symbol("withdraw"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: CellPreconditions::default(),
         effects: vec![],
         may_delegate: DelegationMode::None,
@@ -2875,7 +2875,7 @@ fn test_fragment_full_commitment_rejected() {
         target: cell_id,
         method: symbol("op"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: CellPreconditions::default(),
         effects: vec![],
         may_delegate: DelegationMode::None,
@@ -2917,7 +2917,7 @@ fn test_fragment_signature_count_mismatch() {
         target: cell_id,
         method: symbol("op"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: CellPreconditions::default(),
         effects: vec![],
         may_delegate: DelegationMode::None,
@@ -4647,7 +4647,7 @@ fn test_budget_gate_refund_on_turn_failure() {
         target: target_id,
         method: symbol("transfer"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Default::default(),
         effects: vec![Effect::Transfer {
             from: target_id,
@@ -4771,7 +4771,7 @@ fn test_spawn_with_delegation_child_gets_parent_caps() {
         target: parent_id,
         method: symbol("spawn_delegated"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Default::default(),
         effects: vec![Effect::SpawnWithDelegation {
             child_public_key: child_pk,
@@ -4845,7 +4845,7 @@ fn test_child_acts_via_delegated_caps() {
         target: parent_id,
         method: symbol("spawn"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Default::default(),
         effects: vec![Effect::SpawnWithDelegation {
             child_public_key: child_pk,
@@ -4882,7 +4882,7 @@ fn test_child_acts_via_delegated_caps() {
         target: target_id,
         method: symbol("set_field"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Default::default(),
         effects: vec![Effect::SetField {
             cell: target_id,
@@ -4945,7 +4945,7 @@ fn test_refresh_delegation_updates_snapshot() {
         target: parent_id,
         method: symbol("spawn"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Default::default(),
         effects: vec![Effect::SpawnWithDelegation {
             child_public_key: child_pk,
@@ -5001,7 +5001,7 @@ fn test_refresh_delegation_updates_snapshot() {
         target: child_id,
         method: symbol("refresh"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Default::default(),
         effects: vec![Effect::RefreshDelegation],
         may_delegate: DelegationMode::None,
@@ -5060,7 +5060,7 @@ fn test_revoke_delegation_bumps_epoch_and_clears_child() {
         target: parent_id,
         method: symbol("spawn"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Default::default(),
         effects: vec![Effect::SpawnWithDelegation {
             child_public_key: child_pk,
@@ -5104,7 +5104,7 @@ fn test_revoke_delegation_bumps_epoch_and_clears_child() {
         target: parent_id,
         method: symbol("revoke"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Default::default(),
         effects: vec![Effect::RevokeDelegation { child: child_id }],
         may_delegate: DelegationMode::None,
@@ -5160,7 +5160,7 @@ fn test_parent_new_cap_invisible_until_refresh() {
         target: parent_id,
         method: symbol("spawn"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Default::default(),
         effects: vec![Effect::SpawnWithDelegation {
             child_public_key: child_pk,
@@ -5205,7 +5205,7 @@ fn test_parent_new_cap_invisible_until_refresh() {
         target: target_b_id,
         method: symbol("use"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Default::default(),
         effects: vec![],
         may_delegate: DelegationMode::None,
@@ -5262,7 +5262,7 @@ fn test_parent_loses_cap_child_still_has_until_refresh() {
         target: parent_id,
         method: symbol("spawn"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Default::default(),
         effects: vec![Effect::SpawnWithDelegation {
             child_public_key: child_pk,
@@ -5305,7 +5305,7 @@ fn test_parent_loses_cap_child_still_has_until_refresh() {
         target: target_id,
         method: symbol("set"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Default::default(),
         effects: vec![Effect::SetField {
             cell: target_id,

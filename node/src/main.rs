@@ -280,6 +280,11 @@ async fn run_node(
         std::process::exit(1);
     }
 
+    // Check for `.devnet` marker and warn prominently.
+    if data_path.join(".devnet").exists() {
+        tracing::warn!("Running in DEVNET mode \u{2014} keys are not production-grade");
+    }
+
     // Initialize node state.
     let node_state = match state::NodeState::new(&data_path, peers) {
         Ok(s) => s,

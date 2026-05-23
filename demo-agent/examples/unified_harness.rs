@@ -698,7 +698,7 @@ fn run_pipeline(_ledger: &mut Ledger) -> Result<(), Box<dyn Error>> {
             target: agent,
             method: [0u8; 32],
             args: vec![],
-            authorization: Authorization::None,
+            authorization: Authorization::Unchecked,
             preconditions: Preconditions::default(),
             effects,
             may_delegate: DelegationMode::ParentsOwn,
@@ -853,7 +853,7 @@ fn run_atomic_swap(nullifier_set: &mut NullifierSet) -> Result<(), Box<dyn Error
         target: a_cell,
         method: symbol("atomic_swap"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Preconditions::default(),
         effects: vec![
             Effect::NoteSpend {
@@ -879,7 +879,7 @@ fn run_atomic_swap(nullifier_set: &mut NullifierSet) -> Result<(), Box<dyn Error
         target: b_cell,
         method: symbol("atomic_swap"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Preconditions::default(),
         effects: vec![
             Effect::NoteSpend {

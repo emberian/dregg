@@ -61,6 +61,27 @@ pub struct ChainStep {
     pub facts: Vec<Fact>,
 }
 
+/// Marker type that restricts access to the local-only constraint check path.
+///
+/// This type can only be constructed in test/benchmark code via
+/// [`UnsafeLocalOnlyMarker::new_for_testing`]. Production code should never
+/// hold an instance of this type.
+pub struct UnsafeLocalOnlyMarker(());
+
+impl UnsafeLocalOnlyMarker {
+    /// Construct the marker. Only call this in tests or benchmarks.
+    #[cfg(any(test, feature = "bench"))]
+    pub fn new_for_testing() -> Self {
+        Self(())
+    }
+
+    /// Escape hatch for non-test code that genuinely needs this (e.g., benchmarks
+    /// in separate crates). Deliberately ugly name to discourage casual use.
+    pub fn i_know_this_is_not_cryptographically_sound() -> Self {
+        Self(())
+    }
+}
+
 /// The high-level presentation builder that bridges plaintext tokens to ZK proofs.
 ///
 /// Usage:
@@ -617,7 +638,7 @@ impl BridgePresentationBuilder {
     /// 4. Generates a real Poseidon2 STARK proof for issuer membership.
     ///
     /// For the fast development path that skips real STARK proof generation,
-    /// use [`prove_fast()`](Self::prove_fast) instead.
+    /// use [`prove_local_constraint_check_only()`](Self::prove_local_constraint_check_only) instead.
     ///
     /// # Arguments
     ///
@@ -631,7 +652,7 @@ impl BridgePresentationBuilder {
         self.prove_real(request)
     }
 
-    /// Generate a fast (constraint-checked) presentation proof for the given authorization request.
+    /// Generate a local constraint-check-only presentation proof.
     ///
     /// **WARNING: NOT CRYPTOGRAPHICALLY SOUND.** This validates circuit constraints
     /// locally without producing a STARK proof. The resulting proof's `is_valid()`
@@ -648,14 +669,16 @@ impl BridgePresentationBuilder {
     ///
     /// # Arguments
     ///
+    /// * `_unsafe_marker` - Proof that the caller acknowledges this is not cryptographically sound.
     /// * `request` - The authorization request to prove.
     ///
     /// # Returns
     ///
     /// A `BridgePresentationProof` with `is_valid() == false` (no cryptographic proof).
     /// Use `is_constraint_checked()` to check if constraints passed locally.
-    pub fn prove_fast(
+    pub fn prove_local_constraint_check_only(
         &mut self,
+        _unsafe_marker: &UnsafeLocalOnlyMarker,
         request: &AuthRequest,
     ) -> Result<BridgePresentationProof, AuthError> {
         // 1. Get the final state.
@@ -702,8 +725,18 @@ impl BridgePresentationBuilder {
             federation_root: self.federation_root,
             verification,
             revealed_facts_commitment: self.revealed_facts_commitment,
-            composition_commitment: WideHash::ZERO, // prove_fast has no STARK binding
+            composition_commitment: WideHash::ZERO, // local constraint check has no STARK binding
         })
+    }
+
+    /// Deprecated: use [`prove_local_constraint_check_only`](Self::prove_local_constraint_check_only).
+    #[deprecated(note = "Use prove_local_constraint_check_only() with an explicit UnsafeLocalOnlyMarker")]
+    pub fn prove_fast(
+        &mut self,
+        request: &AuthRequest,
+    ) -> Result<BridgePresentationProof, AuthError> {
+        let marker = UnsafeLocalOnlyMarker::i_know_this_is_not_cryptographically_sound();
+        self.prove_local_constraint_check_only(&marker, request)
     }
 
     /// Generate a STARK-backed presentation proof using Poseidon2 hashing.

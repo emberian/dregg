@@ -2617,7 +2617,7 @@ mod tests {
             target: cell_id,
             method: *blake3::hash(b"noop").as_bytes(),
             args: vec![],
-            authorization: Authorization::None,
+            authorization: Authorization::Unchecked,
             preconditions: pyana_cell::Preconditions::default(),
             effects: vec![],
             may_delegate: DelegationMode::None,

@@ -81,7 +81,8 @@ pub fn run_genesis(validators: usize, epoch_length: u64, checkpoint_interval: u6
         });
 
         // Write the key file (hex-encoded).
-        let key_path = output.join(format!("node-{i}.key"));
+        // Use `devnet-node-` prefix so devnet keys are impossible to confuse with production.
+        let key_path = output.join(format!("devnet-node-{i}.key"));
         let key_hex = hex_encode(&key_bytes);
         std::fs::write(&key_path, &key_hex).unwrap_or_else(|e| {
             eprintln!("error: failed to write {}: {e}", key_path.display());
@@ -153,7 +154,14 @@ pub fn run_genesis(validators: usize, epoch_length: u64, checkpoint_interval: u6
         std::process::exit(1);
     });
 
-    println!("Genesis configuration generated in {}", output.display());
+    // Write `.devnet` marker so the runtime can detect devnet data directories.
+    let devnet_marker_path = output.join(".devnet");
+    std::fs::write(&devnet_marker_path, "# This directory contains devnet configuration.\n# Keys here are NOT production-grade.\n").unwrap_or_else(|e| {
+        eprintln!("error: failed to write .devnet marker: {e}");
+        std::process::exit(1);
+    });
+
+    println!("Devnet genesis configuration generated in {}", output.display());
     println!("  Federation ID: {}", genesis.federation_id);
     println!("  Validators: {validators}");
     println!("  Threshold: {threshold}");
@@ -162,10 +170,13 @@ pub fn run_genesis(validators: usize, epoch_length: u64, checkpoint_interval: u6
     println!();
     println!("Files:");
     println!("  {}", genesis_path.display());
+    println!("  {}", devnet_marker_path.display());
     for i in 0..validators {
-        println!("  {}", output.join(format!("node-{i}.key")).display());
+        println!("  {}", output.join(format!("devnet-node-{i}.key")).display());
         println!("  {}", output.join(format!("node-{i}.env")).display());
     }
+    println!();
+    println!("WARNING: These keys are for devnet use only. Do NOT use in production.");
 }
 
 fn hex_encode(bytes: &[u8]) -> String {

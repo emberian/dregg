@@ -506,7 +506,7 @@ mod tests {
             target: agent,
             method: [0u8; 32],
             args: vec![],
-            authorization: Authorization::None,
+            authorization: Authorization::Unchecked,
             preconditions: Preconditions::default(),
             effects,
             may_delegate: DelegationMode::ParentsOwn,
@@ -732,7 +732,7 @@ mod tests {
             target: id_a,
             method: [0u8; 32],
             args: vec![],
-            authorization: Authorization::None,
+            authorization: Authorization::Unchecked,
             preconditions: Preconditions::default(),
             effects: vec![],
             may_delegate: DelegationMode::None,
@@ -1161,7 +1161,7 @@ mod tests {
             target: id_alice, // targets the agent — no capability needed
             method: [0u8; 32],
             args: vec![],
-            authorization: Authorization::None,
+            authorization: Authorization::Unchecked,
             preconditions: Preconditions::default(),
             effects: vec![Effect::SetField {
                 cell: id_alice, // set field on Alice herself
@@ -1275,7 +1275,7 @@ mod tests {
             target: placeholder, // placeholder — resolved to id_bob
             method: [0u8; 32],
             args: vec![],
-            authorization: Authorization::None,
+            authorization: Authorization::Unchecked,
             preconditions: Preconditions::default(),
             effects: vec![Effect::SetField {
                 cell: placeholder, // placeholder — resolved to id_bob
@@ -1364,7 +1364,7 @@ mod tests {
             target: CellId::from_bytes([0u8; 32]),
             method: [0u8; 32],
             args: vec![],
-            authorization: Authorization::None,
+            authorization: Authorization::Unchecked,
             preconditions: Preconditions::default(),
             effects: vec![],
             may_delegate: DelegationMode::ParentsOwn,
@@ -1427,7 +1427,7 @@ mod tests {
             target: CellId::from_bytes([0u8; 32]),
             method: [0u8; 32],
             args: vec![],
-            authorization: Authorization::None,
+            authorization: Authorization::Unchecked,
             preconditions: Preconditions::default(),
             effects: vec![],
             may_delegate: DelegationMode::ParentsOwn,
@@ -1521,7 +1521,7 @@ mod tests {
             target: id_alice, // targets the agent — no capability needed
             method: [0u8; 32],
             args: vec![],
-            authorization: Authorization::None,
+            authorization: Authorization::Unchecked,
             preconditions: Preconditions::default(),
             effects: vec![Effect::SetField {
                 cell: id_alice,
@@ -1537,7 +1537,7 @@ mod tests {
             target: id_alice, // targets the agent
             method: [0u8; 32],
             args: vec![],
-            authorization: Authorization::None,
+            authorization: Authorization::Unchecked,
             preconditions: Preconditions::default(),
             effects: vec![Effect::SetField {
                 cell: id_alice,

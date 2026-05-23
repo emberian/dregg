@@ -92,7 +92,7 @@ impl<'a> EscrowManager<'a> {
             target: from,
             method: symbol("create_escrow"),
             args: vec![],
-            authorization: Authorization::None,
+            authorization: Authorization::Unchecked,
             preconditions: Default::default(),
             effects: vec![Effect::CreateEscrow {
                 cell: from,
@@ -146,7 +146,7 @@ impl<'a> EscrowManager<'a> {
             target: agent,
             method: symbol("release_escrow"),
             args: vec![],
-            authorization: Authorization::None,
+            authorization: Authorization::Unchecked,
             preconditions: Default::default(),
             effects: vec![Effect::ReleaseEscrow {
                 escrow_id,
@@ -192,7 +192,7 @@ impl<'a> EscrowManager<'a> {
             target: agent,
             method: symbol("refund_escrow"),
             args: vec![],
-            authorization: Authorization::None,
+            authorization: Authorization::Unchecked,
             preconditions: Default::default(),
             effects: vec![Effect::RefundEscrow { escrow_id }],
             may_delegate: DelegationMode::None,

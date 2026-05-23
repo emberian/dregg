@@ -140,7 +140,7 @@ fn main() {
             target: controller_id,
             method: symbol(&format!("spawn_worker_{}", i)),
             args: vec![],
-            authorization: Authorization::None,
+            authorization: Authorization::Unchecked,
             preconditions: Default::default(),
             effects: vec![Effect::SpawnWithDelegation {
                 child_public_key: pk,
@@ -219,7 +219,7 @@ fn main() {
                 target: target_svc,
                 method: symbol(&format!("worker_{}_turn_{}", worker_idx, turn_idx)),
                 args: vec![],
-                authorization: Authorization::None,
+                authorization: Authorization::Unchecked,
                 preconditions: Default::default(),
                 effects: vec![Effect::SetField {
                     cell: target_svc,
@@ -283,7 +283,7 @@ fn main() {
         target: new_svc_id,
         method: symbol("access_new_service"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Default::default(),
         effects: vec![Effect::SetField {
             cell: new_svc_id,
@@ -325,7 +325,7 @@ fn main() {
             target: *worker_id,
             method: symbol("refresh_delegation"),
             args: vec![],
-            authorization: Authorization::None,
+            authorization: Authorization::Unchecked,
             preconditions: Default::default(),
             effects: vec![Effect::RefreshDelegation],
             may_delegate: DelegationMode::None,
@@ -363,7 +363,7 @@ fn main() {
         target: new_svc_id,
         method: symbol("access_new_service_after_refresh"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Default::default(),
         effects: vec![Effect::SetField {
             cell: new_svc_id,
@@ -408,7 +408,7 @@ fn main() {
         target: controller_id,
         method: symbol("revoke_compromised_worker"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Default::default(),
         effects: vec![Effect::RevokeDelegation {
             child: compromised_worker,
@@ -457,7 +457,7 @@ fn main() {
         target: service_ids[0],
         method: symbol("worker_7_post_revocation"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Default::default(),
         effects: vec![Effect::SetField {
             cell: service_ids[0],
@@ -484,7 +484,7 @@ fn main() {
         target: service_ids[2],
         method: symbol("worker_3_still_works"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Default::default(),
         effects: vec![Effect::SetField {
             cell: service_ids[2],
@@ -607,7 +607,7 @@ fn main() {
         target: worker_0_id,
         method: symbol("refresh_after_stale"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Default::default(),
         effects: vec![Effect::RefreshDelegation],
         may_delegate: DelegationMode::None,

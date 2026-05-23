@@ -253,7 +253,7 @@ fn main() {
         target: target_id,
         method: symbol("set_state"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Default::default(),
         effects: vec![Effect::SetField {
             cell: target_id,

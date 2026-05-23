@@ -308,6 +308,18 @@ pub struct HeldToken {
     /// `None` for tokens minted locally (they can generate fresh proofs on the fly).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub membership_proof: Option<pyana_commit::merkle::MerkleProof>,
+    /// BLAKE3 hash of the serialized caveat chain, computed by the delegator at
+    /// delegation time from the HMAC-verified token.
+    ///
+    /// The delegatee verifies this hash against their decoded token's caveats before
+    /// using them for ZK proof generation. This prevents an attacker who holds the
+    /// `proof_key` from mutating caveats in the encoded token and generating proofs
+    /// over fabricated facts.
+    ///
+    /// `None` for tokens minted locally (they hold the root key and can verify the
+    /// HMAC chain directly).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caveat_chain_hash: Option<[u8; 32]>,
 }
 
 /// Default for deserialization of older snapshots that lack the `verified` field.
@@ -479,6 +491,14 @@ pub struct DelegatedToken {
     /// membership.
     #[serde(default)]
     pub membership_proof: Option<pyana_commit::merkle::MerkleProof>,
+    /// BLAKE3 hash of the serialized caveat chain, computed by the delegator from
+    /// the HMAC-verified token. The delegatee uses this to verify caveat integrity
+    /// before generating ZK proofs.
+    ///
+    /// Without this, a delegatee holding the `proof_key` could mutate caveats in
+    /// the encoded token and generate proofs over fabricated authorization facts.
+    #[serde(default)]
+    pub caveat_chain_hash: Option<[u8; 32]>,
 }
 
 /// A turn signed by this wallet's identity, ready for submission.
@@ -2666,6 +2686,55 @@ impl AgentWallet {
     /// any external delegation protocol implementations.
     pub(crate) fn derive_proof_key(root_key: &[u8; 32]) -> [u8; 32] {
         blake3::derive_key("pyana-proof-key-v1", root_key)
+    }
+
+    /// Compute a BLAKE3 commitment to a token's caveat chain.
+    ///
+    /// This hash is computed by the delegator (who holds the root key and can
+    /// verify the HMAC chain) and included in the delegation payload. The
+    /// delegatee verifies this hash against their decoded token's caveats before
+    /// using them for ZK proof generation.
+    ///
+    /// Uses deterministic serialization (rmp-serde) to ensure both sides compute
+    /// the same hash regardless of in-memory representation differences.
+    fn compute_caveat_chain_hash(token: &MacaroonToken) -> [u8; 32] {
+        let caveats = token.inner().caveats.as_slice();
+        let serialized =
+            rmp_serde::to_vec(caveats).expect("caveat serialization should not fail");
+        *blake3::hash(&serialized).as_bytes()
+    }
+
+    /// Compute the Poseidon2 Merkle root from a pre-generated membership proof.
+    ///
+    /// Re-walks the proof path using Poseidon2 hashing (same algorithm as
+    /// `build_issuer_membership_poseidon2_from_proof` in the bridge) to recover
+    /// the federation root that the proof was generated against.
+    fn compute_root_from_membership_proof(proof: &pyana_commit::merkle::MerkleProof) -> BabyBear {
+        let real_leaf_hash = Self::bytes_to_babybear(&proof.leaf_hash);
+        let mut current = real_leaf_hash;
+
+        for i in 0..proof.path_indices.len() {
+            let position = proof.path_indices[i];
+            let siblings = [
+                Self::bytes_to_babybear(&proof.siblings[i][0]),
+                Self::bytes_to_babybear(&proof.siblings[i][1]),
+                Self::bytes_to_babybear(&proof.siblings[i][2]),
+            ];
+
+            let mut children = [BabyBear::ZERO; 4];
+            let mut sib_idx = 0;
+            for j in 0..4u8 {
+                if j == position {
+                    children[j as usize] = current;
+                } else {
+                    children[j as usize] = siblings[sib_idx];
+                    sib_idx += 1;
+                }
+            }
+            current = poseidon2::hash_4_to_1(&children);
+        }
+
+        current
     }
 
     /// Derive a deterministic sibling hash for Merkle path construction.

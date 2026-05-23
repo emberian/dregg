@@ -122,7 +122,7 @@ fn main() {
         target: alice_cell_id,
         method: symbol("atomic_swap_fragment"),
         args: vec![],
-        authorization: Authorization::None, // Will be verified via fragment signature
+        authorization: Authorization::Unchecked, // Will be verified via fragment signature
         preconditions: Preconditions::default(),
         effects: vec![
             // Spend Alice's old note (100 Asset A)
@@ -179,7 +179,7 @@ fn main() {
         target: bob_cell_id,
         method: symbol("atomic_swap_fragment"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Preconditions::default(),
         effects: vec![
             // Spend Bob's old note (50 Asset B)

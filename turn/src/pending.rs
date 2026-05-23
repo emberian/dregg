@@ -415,7 +415,7 @@ mod tests {
             target: agent,
             method: [0u8; 32],
             args: vec![],
-            authorization: Authorization::None,
+            authorization: Authorization::Unchecked,
             preconditions: Preconditions::default(),
             effects: vec![],
             may_delegate: DelegationMode::None,

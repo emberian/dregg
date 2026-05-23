@@ -42,12 +42,51 @@ pub struct StoredAttestedRoot {
 }
 
 impl StoredAttestedRoot {
-    /// Check if this root has sufficient signatures.
-    pub fn is_valid(&self) -> bool {
+    /// Check structural completeness only (QC present, threshold count met).
+    ///
+    /// Does NOT verify signatures. For trusted verification, use
+    /// [`verify_signatures`](Self::verify_signatures) with the committee keys.
+    pub fn is_structurally_complete(&self) -> bool {
         if self.threshold_qc.is_some() {
             return true;
         }
         self.quorum_signatures.len() >= self.threshold
+    }
+
+    /// Deprecated alias for [`is_structurally_complete`](Self::is_structurally_complete).
+    #[deprecated(note = "Use is_structurally_complete() (count-only) or verify_signatures() for cryptographic verification")]
+    pub fn is_valid(&self) -> bool {
+        self.is_structurally_complete()
+    }
+
+    /// Verify signatures cryptographically against a set of known committee keys.
+    ///
+    /// Checks that the threshold count is met AND each signature verifies against
+    /// the corresponding public key in `committee`.
+    pub fn verify_signatures(&self, committee: &[PublicKey]) -> bool {
+        if self.quorum_signatures.len() < self.threshold {
+            return false;
+        }
+        let message = self.signing_message();
+        for (pk, sig) in &self.quorum_signatures {
+            if !committee.contains(pk) {
+                return false;
+            }
+            if !pk.verify(&message, sig) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Compute the canonical message that was signed for this attested root.
+    fn signing_message(&self) -> Vec<u8> {
+        let mut msg = Vec::new();
+        msg.extend_from_slice(b"pyana-attested-root-v1");
+        msg.extend_from_slice(&self.merkle_root);
+        msg.extend_from_slice(&self.height.to_le_bytes());
+        msg.extend_from_slice(&self.timestamp.to_le_bytes());
+        msg
     }
 
     /// Short hex of the Merkle root for display.

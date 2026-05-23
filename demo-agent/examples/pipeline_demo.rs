@@ -54,7 +54,7 @@ fn make_turn(agent: CellId, nonce: u64, effects: Vec<Effect>) -> Turn {
         target: agent,
         method: [0u8; 32],
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Preconditions::default(),
         effects,
         may_delegate: DelegationMode::ParentsOwn, // allows children to target other cells (chain-walking not yet implemented)
@@ -484,7 +484,7 @@ fn main() {
         target: id_alice, // targets the agent — no capability needed
         method: [0u8; 32],
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Preconditions::default(),
         effects: vec![Effect::SetField {
             cell: id_alice,

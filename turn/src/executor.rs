@@ -892,7 +892,7 @@ impl TurnExecutor {
             Authorization::Signature(_, _) => self.costs.signature_verify,
             Authorization::Proof { .. } => self.costs.proof_verify,
             Authorization::Breadstuff(_) => self.costs.signature_verify / 2, // cheaper
-            Authorization::None => 0,
+            Authorization::Unchecked => 0,
         };
         *computrons_used = computrons_used.saturating_add(auth_cost);
         if *computrons_used > budget {
@@ -1331,7 +1331,7 @@ impl TurnExecutor {
                     path,
                     action.target,
                 ),
-                Authorization::None => Err((
+                Authorization::Unchecked => Err((
                     TurnError::PermissionDenied {
                         cell: action.target,
                         action: action_name.to_string(),
@@ -3497,7 +3497,7 @@ impl TurnExecutor {
             Authorization::Signature(_, _) => self.costs.signature_verify,
             Authorization::Proof { .. } => self.costs.proof_verify,
             Authorization::Breadstuff(_) => self.costs.signature_verify / 2,
-            Authorization::None => 0,
+            Authorization::Unchecked => 0,
         });
 
         for effect in &tree.action.effects {

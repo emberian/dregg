@@ -362,13 +362,13 @@ fn attested_root_all_ordered() {
 #[test]
 fn attested_root_validity() {
     let root = sample_attested_root(1);
-    assert!(root.is_valid()); // 3 sigs >= threshold 2.
+    assert!(root.is_structurally_complete()); // 3 sigs >= threshold 2.
 
     let invalid = StoredAttestedRoot {
         threshold: 5,
         ..root
     };
-    assert!(!invalid.is_valid()); // 3 sigs < threshold 5.
+    assert!(!invalid.is_structurally_complete()); // 3 sigs < threshold 5.
 }
 
 // =============================================================================

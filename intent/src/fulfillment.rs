@@ -783,7 +783,7 @@ pub fn create_fulfillment_turn(
         target: payer_cell,
         method: pyana_turn::action::symbol("fulfillment_payment"),
         args: Vec::new(),
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Default::default(),
         effects: vec![Effect::Transfer {
             from: payer_cell,

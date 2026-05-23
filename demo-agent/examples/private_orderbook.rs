@@ -279,7 +279,7 @@ fn main() {
         target: alice_cell_id,
         method: symbol("orderbook_fill"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Preconditions::default(),
         effects: vec![
             Effect::NoteSpend {
@@ -306,7 +306,7 @@ fn main() {
         target: bob_cell_id,
         method: symbol("orderbook_fill"),
         args: vec![],
-        authorization: Authorization::None,
+        authorization: Authorization::Unchecked,
         preconditions: Preconditions::default(),
         effects: vec![
             Effect::NoteSpend {
