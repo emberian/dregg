@@ -10,7 +10,11 @@ postcard = { version = "1", features = ["alloc"] }
 blake3 = "1"
 
 [dev-dependencies]
-pyana-circuit = { path = "../circuit" }
+pyana-circuit = { path = "../circuit", features = ["mina"] }
+
+[features]
+default = []
+kimchi-bridge = ["pyana-circuit/mina"]
 
 [lints]
 workspace = true

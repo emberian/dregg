@@ -52,9 +52,11 @@
     <h1>Cryptographic Foundations</h1>
 
     <p>
-      Pyana's proof system is built on BabyBear-field STARKs with Poseidon2 as the
-      in-circuit hash function. This achieves post-quantum security on the verification
-      path (hash-based, no elliptic curve assumptions).
+      Pyana's proof system supports multiple backends. The primary path uses BabyBear-field
+      STARKs with Poseidon2 as the in-circuit hash function, achieving post-quantum security
+      on the verification path (hash-based, no elliptic curve assumptions). Additional backends
+      include Kimchi (Mina/Pasta curves), SP1 (RISC-V zkVM with Groth16 wrapping for EVM),
+      and native Plonky3. A constraint DSL compiles to all backends from a single source.
     </p>
 
     <h2 id="field">BabyBear Field</h2>
@@ -96,16 +98,40 @@
 
     <h2 id="airs">AIR Definitions</h2>
 
-    <p>The <code>pyana-circuit</code> crate defines these constraint systems:</p>
+    <p>The <code>pyana-circuit</code> crate defines 21 AIR constraint systems:</p>
 
     <ul>
       <li><strong>MultiStepDerivationAir</strong> -- Proves a multi-step Datalog derivation is valid</li>
       <li><strong>MerklePoseidon2StarkAir</strong> -- Proves Merkle membership (federation root)</li>
-      <li><strong>BlindedMerklePoseidon2StarkAir</strong> -- Blinded membership (anonymous presentation)</li>
       <li><strong>FoldAir</strong> -- Proves a state transition fold (IVC)</li>
       <li><strong>NoteSpendingAir</strong> -- Proves valid note spending (private transfers)</li>
       <li><strong>NonRevocationAir</strong> -- Proves sorted-Merkle non-membership (non-revocation)</li>
       <li><strong>PredicateAir</strong> -- Proves value predicates (gte, lte, range)</li>
+      <li><strong>AccumulatorAir</strong> -- Incremental accumulator updates</li>
+      <li><strong>ArithmeticPredicateAir</strong> -- Arithmetic relation proofs</li>
+      <li><strong>BlockTransitionAir</strong> -- Valid block/epoch transitions</li>
+      <li><strong>CompoundPredicateAir</strong> -- Composed predicate proofs</li>
+      <li><strong>DerivationAir</strong> -- Single-step Datalog derivation</li>
+      <li><strong>GarbledAir</strong> -- Garbled circuit evaluation</li>
+      <li><strong>NativeSignatureAir</strong> -- In-circuit signature verification</li>
+      <li><strong>Poseidon2Air</strong> -- Standalone Poseidon2 hashing</li>
+      <li><strong>Plonky3VerifierAir</strong> -- Recursive STARK verification in-circuit</li>
+      <li><strong>RelationalPredicateAir</strong> -- Multi-column relational predicates</li>
+      <li><strong>SchnorrAir</strong> -- Schnorr signature verification</li>
+      <li><strong>SovereignTransitionAir</strong> -- Sovereign cell state transitions</li>
+      <li><strong>TemporalAbsenceAir</strong> -- Prove non-existence over time range</li>
+      <li><strong>TemporalPredicateAir</strong> -- Time-bounded predicate proofs</li>
+      <li><strong>TurnValidityAir</strong> -- Full turn validity proof</li>
+    </ul>
+
+    <h2 id="backends">Proof Backends</h2>
+
+    <ul>
+      <li><strong>STARK (primary)</strong> -- BabyBear + FRI, ~24 KiB proofs, post-quantum, no trusted setup</li>
+      <li><strong>Kimchi (Mina)</strong> -- Pasta curves, IPA commitment, Mina-compatible format. Includes native derivation, fold, IVC, predicates, presentation circuits</li>
+      <li><strong>SP1</strong> -- Succinct's RISC-V zkVM. Proves Datalog execution as ordinary Rust compiled to RISC-V. Groth16 wrapping for EVM verification (~200k gas)</li>
+      <li><strong>Plonky3</strong> -- Native Plonky3 Air impl with recursive composition support</li>
+      <li><strong>Midnight</strong> -- ZKIR v3 compilation for Cardano/Midnight proof server (via DSL)</li>
     </ul>
 
     <h2 id="ivc">IVC (Incrementally Verifiable Computation)</h2>
@@ -134,8 +160,27 @@
       <li><strong>BLAKE3</strong> -- Domain-separated key derivation, fast Merkle trees</li>
     </ul>
 
+    <h2 id="evm-bridge">EVM Bridge (SP1 Groth16)</h2>
+
+    <p>
+      The <code>pyana-chain</code> crate wraps pyana STARK proofs in SP1's zkVM to produce
+      Groth16 proofs verifiable on Ethereum/Base at ~200k gas. The architecture:
+    </p>
+
+    <ol>
+      <li>Pyana STARK proof (large, not EVM-friendly) is the input</li>
+      <li>SP1 guest program verifies the STARK inside a RISC-V zkVM execution</li>
+      <li>SP1 produces a compact Groth16 proof</li>
+      <li>Groth16 proof is verified by SP1 verifier contract on Base/Ethereum</li>
+    </ol>
+
+    <p>
+      <strong>Status:</strong> In development. The guest program is being regenerated against
+      the Plonky3 backend. Do not use for real proofs until the guest is updated.
+    </p>
+
     <div class="stub-notice">
-      <p>Detailed security analysis, parameter selection rationale, and comparison with Plonky3 are being written.</p>
+      <p>Detailed security analysis and parameter selection rationale are being written.</p>
     </div>
 
   </div>

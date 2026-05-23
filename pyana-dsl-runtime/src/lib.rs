@@ -25,11 +25,12 @@ pub use circuit::{
 };
 
 // Re-export composition primitives.
+#[allow(deprecated)]
 pub use composition::{
     AttachedSubProof, ComposedCircuitDescriptor, ComposedDslCircuit, ComposedProof,
     ComposedVerification, IvcBinding, SubProofBinding, compose_aggregate, compose_and,
     compose_chain, compose_or, compute_descriptor_vk_elements, generate_and_trace,
-    generate_chain_trace, verify_composed,
+    generate_chain_trace, verify_composed, verify_composed_full,
 };
 
 /// Error returned when a caveat constraint is violated at runtime.
@@ -154,4 +155,45 @@ pub struct MembershipConstraint {
     pub tree_depth: usize,
     /// Identifier for the hash function used (e.g., "poseidon", "sha256").
     pub hash_function: &'static str,
+}
+
+// ============================================================================
+// Kimchi/Pickles Bridge
+// ============================================================================
+
+/// Re-export the circuit-crate's DSL-to-Kimchi bridge types.
+///
+/// When the `kimchi-bridge` feature is enabled, consumers can convert a
+/// `KimchiCircuitDescriptor` (produced by the DSL codegen) into real Kimchi
+/// gates and prove recursively via Pickles.
+#[cfg(feature = "kimchi-bridge")]
+pub mod kimchi_bridge {
+    pub use pyana_circuit::backends::kimchi_native::from_dsl::{
+        DslCircuitDescriptor, DslGate, DslGateType, DslRecursiveStep, compute_state_hash,
+        dsl_flat_witness_to_kimchi, dsl_to_kimchi_gates, dsl_witness_to_kimchi, prove_dsl_chain,
+        prove_dsl_circuit, prove_dsl_recursive, verify_dsl_proof, verify_dsl_recursive,
+    };
+
+    use super::{GateType, KimchiCircuitDescriptor};
+
+    /// Convert a `KimchiCircuitDescriptor` (DSL codegen output) into a
+    /// `DslCircuitDescriptor` (circuit-crate input for Kimchi proving).
+    pub fn to_dsl_descriptor(desc: &KimchiCircuitDescriptor) -> DslCircuitDescriptor {
+        DslCircuitDescriptor {
+            gates: desc
+                .gates
+                .iter()
+                .map(|g| DslGate {
+                    typ: match g.typ {
+                        GateType::Generic => DslGateType::Generic,
+                        GateType::Poseidon => DslGateType::Poseidon,
+                    },
+                    coeffs: g.coeffs.clone(),
+                    wires: g.wires,
+                })
+                .collect(),
+            public_input_count: desc.public_input_count,
+            trace_width: desc.trace_width,
+        }
+    }
 }

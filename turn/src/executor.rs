@@ -493,19 +493,37 @@ impl TurnExecutor {
             *h.as_bytes()
         };
 
-        // 6. Reconstruct public inputs: encode each 32-byte hash as 8 BabyBear elements.
-        let mut public_inputs: Vec<BabyBear> = Vec::with_capacity(32);
+        // 6. Reconstruct public inputs: encode each 32-byte hash as 8 BabyBear elements,
+        //    plus the balance delta at PI[32..34].
+        let sovereign_pi_count = pyana_circuit::SOVEREIGN_PUBLIC_INPUTS;
+        let mut public_inputs: Vec<BabyBear> = Vec::with_capacity(sovereign_pi_count);
         public_inputs.extend(Self::bytes32_to_babybear(&old_commitment));
         public_inputs.extend(Self::bytes32_to_babybear(&new_commitment));
         public_inputs.extend(Self::bytes32_to_babybear(&computed_effects_hash));
         public_inputs.extend(Self::bytes32_to_babybear(&cell_id_hash));
 
         // 7. Verify the proof's embedded public inputs match what we expect.
-        if proof.public_inputs.len() < 32 {
+        //    For the default SovereignTransitionAir, we expect 34 PIs (32 hashes + 2 delta).
+        //    For custom programs, we accept 32+ PIs (delta encoding is program-specific).
+        let vk_hash = self.get_cell_vk_hash(cell_id, ledger);
+        let has_custom_program = vk_hash.is_some();
+        let min_pi_count = if has_custom_program {
+            32
+        } else {
+            sovereign_pi_count
+        };
+        if proof.public_inputs.len() < min_pi_count {
             return Err(TurnError::InvalidExecutionProof(format!(
-                "proof has {} public inputs, expected at least 32",
-                proof.public_inputs.len()
+                "proof has {} public inputs, expected at least {}",
+                proof.public_inputs.len(),
+                min_pi_count
             )));
+        }
+        // For the default AIR, append the balance delta PIs from the proof (proven values).
+        if !has_custom_program && proof.public_inputs.len() >= sovereign_pi_count {
+            let delta_offset = pyana_circuit::DELTA_PI_OFFSET;
+            public_inputs.push(BabyBear(proof.public_inputs[delta_offset]));
+            public_inputs.push(BabyBear(proof.public_inputs[delta_offset + 1]));
         }
         for (i, expected_bb) in public_inputs.iter().enumerate() {
             let got = BabyBear(proof.public_inputs[i]);
@@ -538,7 +556,6 @@ impl TurnExecutor {
         // If the cell has a verification_key_hash binding it to a custom program,
         // look up that program in the registry and verify against it. Otherwise
         // fall back to the default SovereignTransitionAir.
-        let vk_hash = self.get_cell_vk_hash(cell_id, ledger);
         if let Some(vk) = vk_hash {
             if let Some(program) = self.program_registry.get(&vk) {
                 // Custom program verification via the DSL circuit runtime.
@@ -1259,7 +1276,10 @@ impl TurnExecutor {
         // Check capability: does the parent have access to the target?
         // The agent (top-level parent) implicitly has access to itself.
         // For other cells, the parent must hold a capability.
-        if &action.target != parent_cell {
+        // Bearer authorization bypasses this check: bearer caps carry their own
+        // delegation proof that validates authority without requiring a c-list entry.
+        let is_bearer_auth = matches!(&action.authorization, Authorization::Bearer(_));
+        if &action.target != parent_cell && !is_bearer_auth {
             let parent = ledger
                 .get(parent_cell)
                 .ok_or_else(|| (TurnError::CellNotFound { id: *parent_cell }, path.clone()))?;
@@ -1379,6 +1399,7 @@ impl TurnExecutor {
             Authorization::Signature(_, _) => self.costs.signature_verify,
             Authorization::Proof { .. } => self.costs.proof_verify,
             Authorization::Breadstuff(_) => self.costs.signature_verify / 2, // cheaper
+            Authorization::Bearer(_) => self.costs.signature_verify, // sig verification + delegation check
             Authorization::Unchecked => 0,
         };
         *computrons_used = computrons_used.saturating_add(auth_cost);
@@ -1658,6 +1679,12 @@ impl TurnExecutor {
         path: &[usize],
         turn_nonce: u64,
     ) -> Result<(), (TurnError, Vec<usize>)> {
+        // Bearer caps carry their own delegation proof and MUST always be verified,
+        // regardless of target cell permission level.
+        if let Authorization::Bearer(bearer_proof) = &action.authorization {
+            return self.verify_bearer_cap(bearer_proof, ledger, path);
+        }
+
         // Determine ALL required permissions for this action's effects.
         let required_actions = self.determine_required_permissions(action);
 
@@ -1818,6 +1845,7 @@ impl TurnExecutor {
                     path,
                     action.target,
                 ),
+                Authorization::Bearer(proof) => self.verify_bearer_cap(proof, ledger, path),
                 Authorization::Unchecked => Err((
                     TurnError::PermissionDenied {
                         cell: action.target,
@@ -1990,6 +2018,213 @@ impl TurnExecutor {
                 path.to_vec(),
             ))
         }
+    }
+
+    /// Verify a bearer capability proof: the parallel authorization path for capabilities
+    /// NOT in the actor's c-list but proven via delegation chain.
+    fn verify_bearer_cap(
+        &self,
+        proof: &crate::action::BearerCapProof,
+        ledger: &Ledger,
+        path: &[usize],
+    ) -> Result<(), (TurnError, Vec<usize>)> {
+        use crate::action::DelegationProofData;
+        if self.block_height > proof.expires_at {
+            return Err((
+                TurnError::BearerCapExpired {
+                    target: proof.target,
+                    expires_at: proof.expires_at,
+                    current_height: self.block_height,
+                },
+                path.to_vec(),
+            ));
+        }
+        if let Some(channel_id) = &proof.revocation_channel {
+            if let Some(ref channels) = self.revocation_channels {
+                if channels
+                    .check_exercise_permitted(
+                        channel_id,
+                        self.block_height,
+                        self.block_height,
+                        self.max_introduction_lifetime,
+                    )
+                    .is_err()
+                {
+                    return Err((
+                        TurnError::BearerCapRevoked {
+                            target: proof.target,
+                            channel_id: *channel_id,
+                        },
+                        path.to_vec(),
+                    ));
+                }
+            } else {
+                return Err((
+                    TurnError::BearerCapRevoked {
+                        target: proof.target,
+                        channel_id: *channel_id,
+                    },
+                    path.to_vec(),
+                ));
+            }
+        }
+        match &proof.delegation_proof {
+            DelegationProofData::SignedDelegation {
+                delegator_pk,
+                signature,
+                bearer_pk,
+            } => {
+                let message = Self::compute_bearer_delegation_message(
+                    &proof.target,
+                    &proof.permissions,
+                    bearer_pk,
+                    proof.expires_at,
+                    &self.local_federation_id,
+                );
+                let vk = VerifyingKey::from_bytes(delegator_pk).map_err(|_| {
+                    (
+                        TurnError::BearerCapInvalidProof {
+                            target: proof.target,
+                            reason: "invalid delegator public key".to_string(),
+                        },
+                        path.to_vec(),
+                    )
+                })?;
+                let sig = Signature::from_bytes(signature);
+                vk.verify_strict(&message, &sig).map_err(|_| {
+                    (
+                        TurnError::BearerCapInvalidProof {
+                            target: proof.target,
+                            reason: "delegation signature verification failed".to_string(),
+                        },
+                        path.to_vec(),
+                    )
+                })?;
+                let delegator_cell = ledger
+                    .iter()
+                    .find(|(_, cell)| cell.public_key == *delegator_pk)
+                    .map(|(_, cell)| cell);
+                let delegator_cell = delegator_cell.ok_or_else(|| {
+                    (
+                        TurnError::BearerCapDelegatorLacksCapability {
+                            delegator: CellId::from_bytes(*delegator_pk),
+                            target: proof.target,
+                        },
+                        path.to_vec(),
+                    )
+                })?;
+                if !Self::has_access_including_delegation_at(
+                    delegator_cell,
+                    &proof.target,
+                    self.block_height,
+                ) {
+                    return Err((
+                        TurnError::BearerCapDelegatorLacksCapability {
+                            delegator: delegator_cell.id,
+                            target: proof.target,
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                let delegator_cap = delegator_cell
+                    .capabilities
+                    .capabilities_for(&proof.target)
+                    .into_iter()
+                    .find(|cap| cap.permissions != AuthRequired::Impossible);
+                if let Some(cap) = delegator_cap {
+                    if !proof.permissions.is_narrower_or_equal(&cap.permissions) {
+                        return Err((
+                            TurnError::BearerCapAmplification {
+                                target: proof.target,
+                                delegator_permissions: cap.permissions.clone(),
+                                bearer_permissions: proof.permissions.clone(),
+                            },
+                            path.to_vec(),
+                        ));
+                    }
+                }
+                Ok(())
+            }
+            DelegationProofData::StarkDelegation {
+                proof_bytes,
+                root_issuer_commitment,
+            } => {
+                use pyana_circuit::field::BabyBear;
+                use pyana_circuit::stark;
+                let stark_proof = stark::proof_from_bytes(proof_bytes).map_err(|e| {
+                    (
+                        TurnError::BearerCapInvalidProof {
+                            target: proof.target,
+                            reason: format!("STARK proof deserialization failed: {e}"),
+                        },
+                        path.to_vec(),
+                    )
+                })?;
+                let mut public_inputs: Vec<BabyBear> = Vec::new();
+                public_inputs.extend(Self::bytes32_to_babybear(root_issuer_commitment));
+                public_inputs.extend(Self::bytes32_to_babybear(proof.target.as_bytes()));
+                if stark_proof.public_inputs.len() < public_inputs.len() {
+                    return Err((
+                        TurnError::BearerCapInvalidProof {
+                            target: proof.target,
+                            reason: format!(
+                                "STARK proof has {} public inputs, expected at least {}",
+                                stark_proof.public_inputs.len(),
+                                public_inputs.len()
+                            ),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                for (i, expected) in public_inputs.iter().enumerate() {
+                    if BabyBear(stark_proof.public_inputs[i]) != *expected {
+                        return Err((
+                            TurnError::BearerCapInvalidProof {
+                                target: proof.target,
+                                reason: format!("STARK public input mismatch at index {i}"),
+                            },
+                            path.to_vec(),
+                        ));
+                    }
+                }
+                let air = pyana_circuit::SovereignTransitionAir;
+                stark::verify(&air, &stark_proof, &public_inputs).map_err(|e| {
+                    (
+                        TurnError::BearerCapInvalidProof {
+                            target: proof.target,
+                            reason: format!("STARK proof verification failed: {e}"),
+                        },
+                        path.to_vec(),
+                    )
+                })?;
+                Ok(())
+            }
+        }
+    }
+
+    /// Compute the delegation message signed by a delegator for a bearer capability.
+    pub fn compute_bearer_delegation_message(
+        target: &CellId,
+        permissions: &AuthRequired,
+        bearer_pk: &[u8; 32],
+        expires_at: u64,
+        federation_id: &[u8; 32],
+    ) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"pyana-bearer-delegation-v1:");
+        hasher.update(federation_id);
+        hasher.update(target.as_bytes());
+        let perm_byte = match permissions {
+            AuthRequired::None => 0u8,
+            AuthRequired::Signature => 1u8,
+            AuthRequired::Proof => 2u8,
+            AuthRequired::Either => 3u8,
+            AuthRequired::Impossible => 4u8,
+        };
+        hasher.update(&[perm_byte]);
+        hasher.update(bearer_pk);
+        hasher.update(&expires_at.to_le_bytes());
+        *hasher.finalize().as_bytes()
     }
 
     /// Compute the message that should be signed for an action.
@@ -4241,6 +4476,9 @@ impl TurnExecutor {
             } => {
                 // Validate the factory exists in the registry and the creation is within
                 // the factory's declared constraints (program VK, capabilities, fields, mode, budget).
+                //
+                // For Derived/FromSet strategies, validate_and_record now checks that the
+                // claimed program_vk is correctly derived or in the approved set.
                 self.factory_registry
                     .borrow_mut()
                     .validate_and_record(factory_vk, params)
@@ -4252,6 +4490,31 @@ impl TurnExecutor {
                             path.to_vec(),
                         )
                     })?;
+
+                // Determine the effective child VK to install.
+                // For Derived strategy: compute the derived VK from factory_vk + params.
+                // For FromSet strategy: use the claimed VK (already validated above).
+                // For Fixed/None strategy: use params.program_vk as-is.
+                let effective_vk = {
+                    let registry = self.factory_registry.borrow();
+                    let descriptor = registry.get(factory_vk);
+                    match descriptor.and_then(|d| d.child_vk_strategy.as_ref()) {
+                        Some(pyana_cell::factory::ChildVkStrategy::Derived { base_vk }) => {
+                            let param_hash =
+                                pyana_cell::factory::ChildVkStrategy::compute_param_hash(params);
+                            Some(pyana_cell::factory::ChildVkStrategy::derive_child_vk(
+                                base_vk,
+                                &param_hash,
+                            ))
+                        }
+                        Some(pyana_cell::factory::ChildVkStrategy::FromSet { .. }) => {
+                            // Already validated; use the claimed VK.
+                            params.program_vk
+                        }
+                        Some(pyana_cell::factory::ChildVkStrategy::Fixed(vk)) => *vk,
+                        None => params.program_vk,
+                    }
+                };
 
                 // Create the cell.
                 let new_cell_id = CellId::derive_raw(owner_pubkey, token_id);
@@ -4271,8 +4534,8 @@ impl TurnExecutor {
                     }
                 }
 
-                // Install program VK if specified.
-                if let Some(vk_hash) = &params.program_vk {
+                // Install program VK — use effective_vk (which may be derived).
+                if let Some(vk_hash) = &effective_vk {
                     new_cell.verification_key = Some(pyana_cell::VerificationKey::from_parts(
                         *vk_hash,
                         vk_hash.to_vec(), // Minimal VK data — the hash IS the identifier
@@ -4494,6 +4757,7 @@ impl TurnExecutor {
             Authorization::Signature(_, _) => self.costs.signature_verify,
             Authorization::Proof { .. } => self.costs.proof_verify,
             Authorization::Breadstuff(_) => self.costs.signature_verify / 2,
+            Authorization::Bearer(_) => self.costs.signature_verify,
             Authorization::Unchecked => 0,
         });
 
@@ -5898,6 +6162,9 @@ pub fn execute_pipeline_result(
 /// A single sovereign cell's proof entry in an atomic multi-party turn.
 ///
 /// Each entry binds a cell to its STARK proof and commitment transition.
+/// The `balance_delta` field is a PRE-FLIGHT HINT only: the authoritative delta
+/// is EXTRACTED from the proof's public inputs by the verifier. This prevents
+/// a submitter from lying about their balance change.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AtomicProofEntry {
     /// The sovereign cell ID.
@@ -5910,9 +6177,41 @@ pub struct AtomicProofEntry {
     pub new_commitment: [u8; 32],
     /// The BLAKE3 hash of effects this cell is applying.
     pub effects_hash: [u8; 32],
-    /// Net balance change for this cell (positive = receives, negative = sends).
-    /// Used for cross-cell conservation check.
+    /// Pre-flight hint of net balance change (positive = receives, negative = sends).
+    /// NOT trusted by the executor: the real delta is extracted from PI[32..34] of the proof.
+    /// This field exists for client-side pre-validation and routing hints only.
     pub balance_delta: i64,
+}
+
+/// A mixed atomic turn containing both sovereign (proof-carrying) and hosted
+/// (federation-executed) cells in a single atomic operation.
+///
+/// Conservation is enforced across BOTH domains: sovereign deltas (extracted from
+/// proofs) plus hosted deltas (computed from execution) must sum to zero.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MixedAtomicTurn {
+    /// The agent submitting this turn (pays fee, provides nonce).
+    pub agent: CellId,
+    /// Nonce for replay protection.
+    pub nonce: u64,
+    /// Fee in computrons.
+    pub fee: u64,
+    /// Proof-carrying sovereign cell entries.
+    pub sovereign_entries: Vec<AtomicProofEntry>,
+    /// Hosted cell effects (federation executes these directly).
+    /// Each entry is (cell_id, effects_to_apply).
+    pub hosted_effects: Vec<(CellId, Vec<crate::action::Effect>)>,
+}
+
+/// Result of a successful mixed atomic turn execution.
+#[derive(Clone, Debug)]
+pub struct MixedAtomicResult {
+    /// New commitments for sovereign cells (in order of sovereign_entries).
+    pub sovereign_commitments: Vec<[u8; 32]>,
+    /// Proven balance deltas for sovereign cells (extracted from proofs).
+    pub sovereign_deltas: Vec<i64>,
+    /// Computed balance deltas for hosted cells.
+    pub hosted_deltas: Vec<i64>,
 }
 
 /// An atomic multi-party sovereign turn: multiple sovereign cells each provide
@@ -6022,6 +6321,9 @@ impl TurnExecutor {
     ) -> Result<Vec<[u8; 32]>, AtomicTurnError> {
         use pyana_circuit::SovereignTransitionAir;
         use pyana_circuit::field::BabyBear;
+        use pyana_circuit::sovereign_transition_air::{
+            DELTA_PI_OFFSET, SOVEREIGN_PUBLIC_INPUTS, extract_balance_delta,
+        };
         use pyana_circuit::stark;
 
         // 0. Basic validation.
@@ -6054,19 +6356,13 @@ impl TurnExecutor {
             });
         }
 
-        // 2. Cross-cell conservation check.
-        let net_excess: i64 = atomic_turn.proofs.iter().map(|e| e.balance_delta).sum();
-        if net_excess != 0 {
-            return Err(AtomicTurnError::ConservationViolation { net_excess });
-        }
-
-        // 3. Verify each proof entry.
+        // 2. Verify each proof entry and extract proven balance deltas.
         let air = SovereignTransitionAir;
         let mut new_commitments: Vec<(CellId, [u8; 32])> =
             Vec::with_capacity(atomic_turn.proofs.len());
+        let mut proven_deltas: Vec<i64> = Vec::with_capacity(atomic_turn.proofs.len());
 
         for entry in &atomic_turn.proofs {
-            // Check cell is sovereign.
             let stored_commitment = if let Some(c) = ledger.get_sovereign_commitment(&entry.cell_id)
             {
                 *c
@@ -6076,7 +6372,6 @@ impl TurnExecutor {
                 return Err(AtomicTurnError::NotSovereign(entry.cell_id));
             };
 
-            // Verify old_commitment matches stored.
             if entry.old_commitment != stored_commitment {
                 return Err(AtomicTurnError::CommitmentMismatch {
                     cell: entry.cell_id,
@@ -6085,7 +6380,6 @@ impl TurnExecutor {
                 });
             }
 
-            // Deserialize proof.
             let proof = stark::proof_from_bytes(&entry.proof).map_err(|e| {
                 AtomicTurnError::ProofFailed {
                     cell: entry.cell_id,
@@ -6093,45 +6387,83 @@ impl TurnExecutor {
                 }
             })?;
 
-            // Compute cell_id hash.
             let cell_id_hash = *blake3::hash(entry.cell_id.as_bytes()).as_bytes();
 
-            // Build expected public inputs.
-            let mut public_inputs: Vec<BabyBear> = Vec::with_capacity(32);
+            let mut public_inputs: Vec<BabyBear> = Vec::with_capacity(SOVEREIGN_PUBLIC_INPUTS);
             public_inputs.extend(Self::bytes32_to_babybear(&entry.old_commitment));
             public_inputs.extend(Self::bytes32_to_babybear(&entry.new_commitment));
             public_inputs.extend(Self::bytes32_to_babybear(&entry.effects_hash));
             public_inputs.extend(Self::bytes32_to_babybear(&cell_id_hash));
 
-            // Verify public inputs match.
-            if proof.public_inputs.len() < 32 {
+            if proof.public_inputs.len() < SOVEREIGN_PUBLIC_INPUTS {
                 return Err(AtomicTurnError::ProofFailed {
                     cell: entry.cell_id,
                     reason: format!(
-                        "proof has {} public inputs, expected at least 32",
-                        proof.public_inputs.len()
+                        "proof has {} public inputs, expected at least {}",
+                        proof.public_inputs.len(),
+                        SOVEREIGN_PUBLIC_INPUTS
                     ),
                 });
             }
+
+            // Extract delta PI from the proof itself (proven, not declared).
+            let delta_magnitude = BabyBear(proof.public_inputs[DELTA_PI_OFFSET]);
+            let delta_sign = BabyBear(proof.public_inputs[DELTA_PI_OFFSET + 1]);
+            public_inputs.push(delta_magnitude);
+            public_inputs.push(delta_sign);
+
             for (i, expected_bb) in public_inputs.iter().enumerate() {
                 let got = BabyBear(proof.public_inputs[i]);
                 if got != *expected_bb {
                     return Err(AtomicTurnError::ProofFailed {
                         cell: entry.cell_id,
-                        reason: "public input mismatch".to_string(),
+                        reason: format!("public input mismatch at index {}", i),
                     });
                 }
             }
 
-            // Verify the STARK proof.
-            stark::verify(&air, &proof, &public_inputs).map_err(|e| {
+            // Verify against custom program or default AIR.
+            let vk_hash = self.get_cell_vk_hash(&entry.cell_id, ledger);
+            if let Some(vk) = vk_hash {
+                if let Some(program) = self.program_registry.get(&vk) {
+                    program
+                        .verify_transition(&public_inputs, &entry.proof)
+                        .map_err(|e| AtomicTurnError::ProofFailed {
+                            cell: entry.cell_id,
+                            reason: e.to_string(),
+                        })?;
+                } else {
+                    return Err(AtomicTurnError::ProofFailed {
+                        cell: entry.cell_id,
+                        reason: format!(
+                            "cell has vk_hash {:02x}{:02x}... but no matching program",
+                            vk[0], vk[1]
+                        ),
+                    });
+                }
+            } else {
+                stark::verify(&air, &proof, &public_inputs).map_err(|e| {
+                    AtomicTurnError::ProofFailed {
+                        cell: entry.cell_id,
+                        reason: e,
+                    }
+                })?;
+            }
+
+            let proven_delta = extract_balance_delta(&public_inputs).ok_or_else(|| {
                 AtomicTurnError::ProofFailed {
                     cell: entry.cell_id,
-                    reason: e,
+                    reason: "failed to extract balance_delta from proof PI".to_string(),
                 }
             })?;
-
+            proven_deltas.push(proven_delta);
             new_commitments.push((entry.cell_id, entry.new_commitment));
+        }
+
+        // 3. Conservation check using PROVEN deltas (not declared entry.balance_delta).
+        let net_excess: i64 = proven_deltas.iter().sum();
+        if net_excess != 0 {
+            return Err(AtomicTurnError::ConservationViolation { net_excess });
         }
 
         // 4. All proofs verified + conservation holds. Commit atomically.
@@ -6163,5 +6495,202 @@ impl TurnExecutor {
         }
 
         Ok(resulting_commitments)
+    }
+
+    /// Execute a mixed atomic turn containing both sovereign (proof-carrying) and
+    /// hosted (federation-executed) cells in a single atomic operation.
+    ///
+    /// Conservation is enforced across BOTH: sovereign deltas (extracted from proofs)
+    /// plus hosted deltas (computed from execution) must sum to zero.
+    pub fn execute_mixed_atomic(
+        &self,
+        mixed_turn: &MixedAtomicTurn,
+        ledger: &mut Ledger,
+    ) -> Result<MixedAtomicResult, AtomicTurnError> {
+        use pyana_circuit::SovereignTransitionAir;
+        use pyana_circuit::field::BabyBear;
+        use pyana_circuit::sovereign_transition_air::{
+            DELTA_PI_OFFSET, SOVEREIGN_PUBLIC_INPUTS, extract_balance_delta,
+        };
+        use pyana_circuit::stark;
+
+        if mixed_turn.sovereign_entries.is_empty() && mixed_turn.hosted_effects.is_empty() {
+            return Err(AtomicTurnError::EmptyProofs);
+        }
+
+        let agent_cell = ledger
+            .get(&mixed_turn.agent)
+            .ok_or(AtomicTurnError::AgentNotFound(mixed_turn.agent))?;
+        if agent_cell.state.nonce != mixed_turn.nonce {
+            return Err(AtomicTurnError::NonceMismatch {
+                expected: agent_cell.state.nonce,
+                got: mixed_turn.nonce,
+            });
+        }
+        if agent_cell.state.balance < mixed_turn.fee {
+            return Err(AtomicTurnError::InsufficientFee {
+                available: agent_cell.state.balance,
+                required: mixed_turn.fee,
+            });
+        }
+
+        // Verify sovereign proofs and extract proven deltas.
+        let air = SovereignTransitionAir;
+        let mut sovereign_deltas: Vec<i64> = Vec::new();
+        let mut new_commitments: Vec<(CellId, [u8; 32])> = Vec::new();
+
+        for entry in &mixed_turn.sovereign_entries {
+            let stored_commitment = if let Some(c) = ledger.get_sovereign_commitment(&entry.cell_id)
+            {
+                *c
+            } else if let Some(reg) = ledger.get_sovereign_registration(&entry.cell_id) {
+                reg.commitment
+            } else {
+                return Err(AtomicTurnError::NotSovereign(entry.cell_id));
+            };
+
+            if entry.old_commitment != stored_commitment {
+                return Err(AtomicTurnError::CommitmentMismatch {
+                    cell: entry.cell_id,
+                    expected: stored_commitment,
+                    got: entry.old_commitment,
+                });
+            }
+
+            let proof = stark::proof_from_bytes(&entry.proof).map_err(|e| {
+                AtomicTurnError::ProofFailed {
+                    cell: entry.cell_id,
+                    reason: e,
+                }
+            })?;
+
+            let cell_id_hash = *blake3::hash(entry.cell_id.as_bytes()).as_bytes();
+            let mut public_inputs: Vec<BabyBear> = Vec::with_capacity(SOVEREIGN_PUBLIC_INPUTS);
+            public_inputs.extend(Self::bytes32_to_babybear(&entry.old_commitment));
+            public_inputs.extend(Self::bytes32_to_babybear(&entry.new_commitment));
+            public_inputs.extend(Self::bytes32_to_babybear(&entry.effects_hash));
+            public_inputs.extend(Self::bytes32_to_babybear(&cell_id_hash));
+
+            if proof.public_inputs.len() < SOVEREIGN_PUBLIC_INPUTS {
+                return Err(AtomicTurnError::ProofFailed {
+                    cell: entry.cell_id,
+                    reason: format!(
+                        "proof has {} public inputs, expected at least {}",
+                        proof.public_inputs.len(),
+                        SOVEREIGN_PUBLIC_INPUTS
+                    ),
+                });
+            }
+
+            let delta_magnitude = BabyBear(proof.public_inputs[DELTA_PI_OFFSET]);
+            let delta_sign = BabyBear(proof.public_inputs[DELTA_PI_OFFSET + 1]);
+            public_inputs.push(delta_magnitude);
+            public_inputs.push(delta_sign);
+
+            let vk_hash = self.get_cell_vk_hash(&entry.cell_id, ledger);
+            if let Some(vk) = vk_hash {
+                if let Some(program) = self.program_registry.get(&vk) {
+                    program
+                        .verify_transition(&public_inputs, &entry.proof)
+                        .map_err(|e| AtomicTurnError::ProofFailed {
+                            cell: entry.cell_id,
+                            reason: e.to_string(),
+                        })?;
+                } else {
+                    return Err(AtomicTurnError::ProofFailed {
+                        cell: entry.cell_id,
+                        reason: "program not found for vk_hash".to_string(),
+                    });
+                }
+            } else {
+                stark::verify(&air, &proof, &public_inputs).map_err(|e| {
+                    AtomicTurnError::ProofFailed {
+                        cell: entry.cell_id,
+                        reason: e,
+                    }
+                })?;
+            }
+
+            let proven_delta = extract_balance_delta(&public_inputs).ok_or_else(|| {
+                AtomicTurnError::ProofFailed {
+                    cell: entry.cell_id,
+                    reason: "failed to extract balance_delta from proof PI".to_string(),
+                }
+            })?;
+            sovereign_deltas.push(proven_delta);
+            new_commitments.push((entry.cell_id, entry.new_commitment));
+        }
+
+        // Compute hosted cell balance deltas from Transfer effects.
+        let mut hosted_deltas: Vec<i64> = Vec::new();
+        let mut hosted_mutations: Vec<(CellId, i64)> = Vec::new();
+
+        for (cell_id, effects) in &mixed_turn.hosted_effects {
+            let _cell = ledger
+                .get(cell_id)
+                .ok_or(AtomicTurnError::AgentNotFound(*cell_id))?;
+            let mut net_delta: i64 = 0;
+            for effect in effects {
+                if let crate::action::Effect::Transfer { from, to, amount } = effect {
+                    if from == cell_id {
+                        net_delta -= *amount as i64;
+                    }
+                    if to == cell_id {
+                        net_delta += *amount as i64;
+                    }
+                }
+            }
+            hosted_deltas.push(net_delta);
+            hosted_mutations.push((*cell_id, net_delta));
+        }
+
+        // Cross-domain conservation: sovereign + hosted must sum to zero.
+        let total_delta: i64 =
+            sovereign_deltas.iter().sum::<i64>() + hosted_deltas.iter().sum::<i64>();
+        if total_delta != 0 {
+            return Err(AtomicTurnError::ConservationViolation {
+                net_excess: total_delta,
+            });
+        }
+
+        // Commit atomically.
+        {
+            let agent = ledger.get_mut(&mixed_turn.agent).unwrap();
+            agent.state.balance -= mixed_turn.fee;
+            agent.state.increment_nonce();
+        }
+
+        for (cell_id, new_commitment) in &new_commitments {
+            if ledger.is_sovereign(cell_id) {
+                let _ = ledger.update_sovereign_commitment(cell_id, *new_commitment);
+            } else {
+                let old = ledger
+                    .get_sovereign_registration(cell_id)
+                    .map(|r| r.commitment)
+                    .unwrap_or([0u8; 32]);
+                let _ = ledger.update_sovereign_registration_commitment(
+                    cell_id,
+                    old,
+                    *new_commitment,
+                    self.block_height,
+                );
+            }
+        }
+
+        for (cell_id, delta) in &hosted_mutations {
+            if let Some(cell) = ledger.get_mut(cell_id) {
+                if *delta >= 0 {
+                    cell.state.balance += *delta as u64;
+                } else {
+                    cell.state.balance = cell.state.balance.saturating_sub((-delta) as u64);
+                }
+            }
+        }
+
+        Ok(MixedAtomicResult {
+            sovereign_commitments: new_commitments.iter().map(|(_, c)| *c).collect(),
+            sovereign_deltas,
+            hosted_deltas,
+        })
     }
 }

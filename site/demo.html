@@ -86,13 +86,15 @@
       <p class="demo-card__desc">
         Every push to <code>main</code> runs the full demo suite in CI. Real STARK proofs,
         real Datalog evaluation, real timing data. No simulations. 20+ authorization
-        scenarios end-to-end.
+        scenarios end-to-end. 8 application demos (DeFi suite, identity, gallery).
       </p>
       <ul class="demo-card__features">
         <li>Multi-org delegation with cross-domain STARK proofs</li>
         <li>IVC attenuation chains (incremental verifiable computation)</li>
         <li>Federation bootstrap with BFT consensus</li>
         <li>Privacy-preserving orderbook, escrow, atomic swaps</li>
+        <li>Anonymous credential issuance and selective disclosure</li>
+        <li>Stablecoin CDP, AMM swaps, lending protocol lifecycle</li>
         <li>RBAC Datalog policies, token revocation, budget enforcement</li>
         <li>Full timing data -- proof generation and verification latencies</li>
       </ul>
@@ -122,7 +124,8 @@
       <p class="demo-card__desc">
         Run the full authorization pipeline locally. The <code>demo</code> and
         <code>demo-agent</code> crates demonstrate minting, attenuation, proving,
-        and multi-agent cross-silo authorization.
+        and multi-agent cross-silo authorization. Application examples exercise the
+        full DeFi and identity stacks.
       </p>
       <pre><code>git clone https://github.com/emberian/pyana
 cd pyana
@@ -132,7 +135,12 @@ cargo build --release -p demo -p demo-agent
 cargo run --release -p demo
 
 # Multi-agent cross-silo
-cargo run --release -p demo-agent</code></pre>
+cargo run --release -p demo-agent
+
+# Application examples
+cargo run --release -p demo-agent --example base_anonymous_credential
+cargo run --release -p demo-agent --example base_private_transfer
+cargo run --release -p demo-agent --example intent_lifecycle</code></pre>
       <a class="demo-card__link" href="https://github.com/emberian/pyana" style="margin-top: var(--s4);">View Source &#8594;</a>
     </div>
 

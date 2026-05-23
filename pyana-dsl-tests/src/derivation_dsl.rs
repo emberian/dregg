@@ -716,7 +716,7 @@ pub fn derivation_circuit_descriptor() -> CircuitDescriptor {
     CircuitDescriptor {
         name: "pyana-derivation-dsl-v1".into(),
         trace_width: EXTENDED_TRACE_WIDTH,
-        max_degree: 3, // Gated(degree-1 selector * degree-2 inner) = degree 3
+        max_degree: 8, // AtLeastOne with 8 flags has degree 8; correctness over performance
         columns,
         constraints,
         boundaries,

@@ -226,8 +226,9 @@ pub use relational_predicate_air::{
     compute_value_commitment, prove_relational, prove_value_comparison, verify_relational,
 };
 pub use sovereign_transition_air::{
-    SOVEREIGN_PUBLIC_INPUTS, SOVEREIGN_TRANSITION_WIDTH, SovereignTransitionAir,
-    bytes32_to_babybear, compute_cell_id_hash, compute_transfer_effects_hash,
+    DELTA_PI_LEN, DELTA_PI_OFFSET, SOVEREIGN_PUBLIC_INPUTS, SOVEREIGN_TRANSITION_WIDTH,
+    SovereignTransitionAir, bytes32_to_babybear, compute_cell_id_hash,
+    compute_transfer_effects_hash, encode_balance_delta, extract_balance_delta,
     generate_sovereign_transition_trace,
 };
 pub use turn_validity_air::{

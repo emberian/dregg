@@ -24,7 +24,7 @@ use pyana_cell::ValueCommitmentBytes;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Serde helper for `[u8; 64]` (Ed25519 signatures — serde doesn't support arrays > 32).
-mod serde_sig64 {
+pub mod serde_sig64 {
     use super::*;
     pub fn serialize<S: Serializer>(bytes: &[u8; 64], ser: S) -> Result<S::Ok, S::Error> {
         bytes.as_ref().serialize(ser)

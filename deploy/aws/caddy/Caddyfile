@@ -1,4 +1,4 @@
-pyana.commonquant.com {
+devnet.pyana.fg-goose.online {
     # HTTP API
     handle /api/* {
         reverse_proxy localhost:8420

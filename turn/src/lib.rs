@@ -60,7 +60,10 @@ pub mod verify;
 mod tests;
 
 // Re-export primary types at crate root.
-pub use action::{Action, Authorization, CommitmentMode, DelegationMode, Effect, Event};
+pub use action::{
+    Action, Authorization, BearerCapProof, CommitmentMode, DelegationMode, DelegationProofData,
+    Effect, Event,
+};
 pub use budget_gate::{BudgetGate, BudgetSlice};
 pub use builder::{ActionBuilder, TurnBuilder};
 pub use composer::{ComposeError, ComposedTurn, SignedFragment, TurnComposer};
@@ -86,9 +89,9 @@ pub use eventual::{
 };
 pub use execution_path::{ExecutionPath, compute_execution_path};
 pub use executor::{
-    AtomicProofEntry, AtomicSovereignTurn, AtomicTurnError, ComputronCosts, ObligationRecord,
-    ProofVerifier, ResolutionTable, TurnExecutor, execute_pipeline, execute_pipeline_result,
-    resolve_eventual_ref,
+    AtomicProofEntry, AtomicSovereignTurn, AtomicTurnError, ComputronCosts, MixedAtomicResult,
+    MixedAtomicTurn, ObligationRecord, ProofVerifier, ResolutionTable, TurnExecutor,
+    execute_pipeline, execute_pipeline_result, resolve_eventual_ref,
 };
 pub use fast_path::{
     CellLockEntry, CellLockTable, FastPathConfig, FastPathError, TurnCertificate, TurnSign,

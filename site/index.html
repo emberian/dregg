@@ -33,13 +33,13 @@
 <!-- ==================== HERO ==================== -->
 <header class="hero">
   <div class="hero__inner">
-    <p class="hero__eyebrow">object-capabilities + zero-knowledge proofs + federated consensus</p>
+    <p class="hero__eyebrow">object-capabilities + zero-knowledge proofs + federated consensus + DSL-driven circuit compilation</p>
     <h1>Your agents prove what they can do &mdash; without revealing <em>how they got there.</em></h1>
     <p class="hero__sub">
       Pyana is a sovereign capability runtime. Agents own their state, prove authorization
-      with ZK STARKs, and interact peer-to-peer. The federation is a notary -- used for
-      ordering, double-spend prevention, and discovery. Between known parties, it is just
-      signed proofs exchanged directly.
+      with ZK STARKs, and interact peer-to-peer. Write constraints once in the DSL; compile to
+      8 proof backends. The federation is a notary -- used for ordering, double-spend prevention,
+      and discovery. Between known parties, it is just signed proofs exchanged directly.
     </p>
     <div class="hero__cta">
       <a class="btn btn--primary" href="demo.html">Try the Demo</a>
@@ -100,8 +100,8 @@
     </div>
     <div class="flow__step">
       <span class="flow__n">03 / Prove</span>
-      <p class="flow__name">Generate STARK proof</p>
-      <p class="flow__desc">The agent produces a ~24 KiB STARK proof that the attenuation chain is valid. Sub-second generation, post-quantum secure.</p>
+      <p class="flow__name">Generate ZK proof</p>
+      <p class="flow__desc">The agent produces a ~24 KiB proof that the attenuation chain is valid. Choice of backend: STARK, Kimchi, SP1, or Plonky3. Sub-second generation, post-quantum secure (STARK path).</p>
     </div>
     <div class="flow__step">
       <span class="flow__n">04 / Verify</span>
@@ -129,35 +129,187 @@
   </div>
 </section>
 
+<!-- ==================== DSL ==================== -->
+<section class="section wrap">
+  <span class="section__label">Constraint DSL</span>
+  <h2 class="section__title">Write once, prove everywhere</h2>
+  <p class="section__intro">
+    The <code>#[pyana_caveat]</code> and <code>#[pyana_effect]</code> macros compile constraint
+    functions into 8 proof backends from a single source. No manual circuit writing required.
+  </p>
+  <div class="flow">
+    <div class="flow__step">
+      <span class="flow__n">source</span>
+      <p class="flow__name">Constraint DSL</p>
+      <p class="flow__desc"><code>require!</code> statements, set membership checks, mutations, match arms. Plain Rust syntax with constraint semantics.</p>
+    </div>
+    <div class="flow__step">
+      <span class="flow__n">backend 1</span>
+      <p class="flow__name">Rust Evaluator</p>
+      <p class="flow__desc">Direct runtime check. 8 microsecond verification in trusted mode.</p>
+    </div>
+    <div class="flow__step">
+      <span class="flow__n">backend 2</span>
+      <p class="flow__name">STARK AIR</p>
+      <p class="flow__desc">BabyBear field, FRI commitment, ~24 KiB proofs. Post-quantum.</p>
+    </div>
+    <div class="flow__step">
+      <span class="flow__n">backend 3</span>
+      <p class="flow__name">Kimchi (Mina)</p>
+      <p class="flow__desc">Pasta curves, IPA commitment. Mina-compatible proof format.</p>
+    </div>
+    <div class="flow__step">
+      <span class="flow__n">backend 4</span>
+      <p class="flow__name">Midnight ZKIR</p>
+      <p class="flow__desc">Compiles to ZKIR v3 for Cardano/Midnight's proof server.</p>
+    </div>
+    <div class="flow__step">
+      <span class="flow__n">backend 5</span>
+      <p class="flow__name">SP1 (RISC-V zkVM)</p>
+      <p class="flow__desc">Proves execution in Succinct's zkVM. Groth16 wrapping for EVM.</p>
+    </div>
+    <div class="flow__step">
+      <span class="flow__n">backend 6</span>
+      <p class="flow__name">Plonky3</p>
+      <p class="flow__desc">Native Plonky3 Air impl with recursive composition support.</p>
+    </div>
+    <div class="flow__step">
+      <span class="flow__n">backend 7-8</span>
+      <p class="flow__name">Datalog + AIR Descriptor</p>
+      <p class="flow__desc">Policy rules for the Datalog evaluator, plus constraint topology descriptors for tooling.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== APPLICATIONS ==================== -->
+<section class="section wrap">
+  <span class="section__label">Applications</span>
+  <h2 class="section__title">Real apps, real proofs</h2>
+  <p class="section__intro">
+    Complete applications built on the capability runtime. Each uses sovereign cells, ZK proofs,
+    and the intent marketplace. Privacy by default -- values are Pedersen-committed, orders are
+    commit-reveal, and identities use stealth addresses.
+  </p>
+  <div class="usecases">
+    <div class="usecase">
+      <p class="usecase__icon">stablecoin</p>
+      <p class="usecase__title">Stablecoin (CDP)</p>
+      <p class="usecase__desc">Collateralized debt positions with ZK liquidation proofs. Oracle integration, minimum collateralization ratio enforcement in-circuit.</p>
+    </div>
+    <div class="usecase">
+      <p class="usecase__icon">amm</p>
+      <p class="usecase__title">AMM + LP Tokens</p>
+      <p class="usecase__desc">Constant-product automated market maker with router, LP token minting, and pool management. All swaps proved.</p>
+    </div>
+    <div class="usecase">
+      <p class="usecase__icon">orderbook</p>
+      <p class="usecase__title">Privacy Orderbook</p>
+      <p class="usecase__desc">Commit-reveal trading with private orders. Verified matching engine, escrow settlement, and state commitment proofs.</p>
+    </div>
+    <div class="usecase">
+      <p class="usecase__icon">lending</p>
+      <p class="usecase__title">Lending Protocol</p>
+      <p class="usecase__desc">Supply, borrow, interest accrual, and liquidation. ZK circuits prove collateral sufficiency without revealing positions.</p>
+    </div>
+    <div class="usecase">
+      <p class="usecase__icon">identity</p>
+      <p class="usecase__title">Anonymous Credentials</p>
+      <p class="usecase__desc">Issuer/holder/verifier pattern. Selective disclosure presentations, revocation, and anonymous proof of attributes.</p>
+    </div>
+    <div class="usecase">
+      <p class="usecase__icon">gallery</p>
+      <p class="usecase__title">Provenance Gallery</p>
+      <p class="usecase__desc">Artwork provenance tracking with sealed-bid auctions, WebSocket-driven real-time bidding, and settlement.</p>
+    </div>
+    <div class="usecase">
+      <p class="usecase__icon">compute</p>
+      <p class="usecase__title">Compute Exchange</p>
+      <p class="usecase__desc">Marketplace for compute resources. Qualification proofs, auction mechanism, and settlement with capability-gated access.</p>
+    </div>
+    <div class="usecase">
+      <p class="usecase__icon">bounty</p>
+      <p class="usecase__title">Bounty Board</p>
+      <p class="usecase__desc">Capability-gated task marketplace. Qualification verification, payment escrow, and proof-of-completion settlement.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== PRIVACY ==================== -->
+<section class="section wrap">
+  <span class="section__label">Privacy Stack</span>
+  <h2 class="section__title">Defense in depth, not a single toggle</h2>
+  <div class="primitives">
+    <div class="primitive">
+      <p class="primitive__name">Stealth Addresses</p>
+      <p class="primitive__desc">Ephemeral per-transaction CellIds derived from meta-addresses (spend + view keys). Unlinkable payments without coordination. Monero/EIP-5564 pattern.</p>
+    </div>
+    <div class="primitive">
+      <p class="primitive__name">Pedersen Commitments</p>
+      <p class="primitive__desc">Homomorphic value commitments over Ristretto. Amounts are hidden but arithmetic is verifiable (balance proofs, range proofs) without revealing values.</p>
+    </div>
+    <div class="primitive">
+      <p class="primitive__name">Dandelion++ Routing</p>
+      <p class="primitive__desc">Stem phase (single-hop relay, 90% probability per hop) before fluff (broadcast). Prevents network-level linkability of transactions to IP addresses.</p>
+    </div>
+    <div class="primitive">
+      <p class="primitive__name">Encrypted Turns</p>
+      <p class="primitive__desc">Turn payloads can be encrypted to specific recipients. The federation orders opaque blobs; only participants can read the content.</p>
+    </div>
+    <div class="primitive">
+      <p class="primitive__name">Faceted Capabilities</p>
+      <p class="primitive__desc">E-language restricted object views. Bitmask on capabilities controls which effect types are accessible. Read-only, transfer-only, admin-only facets.</p>
+    </div>
+    <div class="primitive">
+      <p class="primitive__name">Sealer/Unsealer Pairs</p>
+      <p class="primitive__desc">E-style rights amplification. X25519-ChaCha20Poly1305 pairs with forward secrecy (fresh ephemeral per seal). Partition-tolerant capability transfer.</p>
+    </div>
+  </div>
+</section>
+
 <!-- ==================== ARCHITECTURE ==================== -->
 <section class="section wrap">
   <span class="section__label">Architecture</span>
   <h2 class="section__title">Layered design, clean separation</h2>
   <div class="arch">
-    <pre><code>Browser Extension (wallet)
+    <pre><code>Applications             Stablecoin | AMM | Orderbook | Lending | Identity
+                         Gallery (provenance) | Compute Exchange | Bounty Board
+  ────────────────────────────────────────────────────────────────────
+Browser Extension (wallet)
   window.pyana: authorize | postIntent | offerCapability | provision
   ────────────────────────────────────────────────────────────────────
 SDK Layer                AgentWallet | AgentRuntime | SiloClient
   ────────────────────────────────────────────────────────────────────
+DSL                      #[pyana_caveat] | #[pyana_effect] | write once, 8 backends
+  Backends:              Rust | AIR | Datalog | Kimchi | Midnight | Plonky3 | SP1 | STARK
+  ────────────────────────────────────────────────────────────────────
 Intent Engine            Gossip broadcast | local Datalog matching | STARK fulfillment
   ────────────────────────────────────────────────────────────────────
-Network                  TCP wire protocol | QUIC relay | postcard framing
+Network                  QUIC P2P | Plumtree gossip | Dandelion++ (unlinkable relay)
   ────────────────────────────────────────────────────────────────────
 Federation               Morpheus adaptive BFT | BLS12-381 threshold sigs
                          Ed25519 consensus | epoch reconfig | revocation trees
   ────────────────────────────────────────────────────────────────────
 Coordination             Causal DAG | 2PC atomic | bounded counters (Stingray)
   ────────────────────────────────────────────────────────────────────
-Execution                Cells (isolated objects + c-lists) | Turns (atomic txns)
-                         Three-party introduction | routing directives
+Execution                Sovereign Cells (hosted OR sovereign mode) | Turns (atomic txns)
+                         EROS-style factories | Faceted capabilities (E-language)
+                         Eventual sends | Pipeline composition | Routing directives
   ────────────────────────────────────────────────────────────────────
-Proof                    BabyBear STARK + FRI (~24 KiB) | Poseidon2 in-circuit
-                         IVC fold chains | AIR: fold, derivation, Merkle
+Privacy                  Stealth addresses (Monero/EIP-5564 style) | Pedersen commitments
+                         Dandelion++ stem/fluff | Encrypted turns | Oblivious transfer
+                         Sealer/Unsealer (X25519-ChaCha20Poly1305 rights amplification)
+  ────────────────────────────────────────────────────────────────────
+Proof                    BabyBear STARK + FRI | 21 AIR circuits | Recursive composition
+                         Kimchi (Mina) backend | SP1 zkVM | Plonky3 native
+                         IVC fold chains | Proof-tier selection | ~24 KiB proofs
+  ────────────────────────────────────────────────────────────────────
+EVM Bridge               SP1 Groth16 wrapping (~200k gas) | Base/Ethereum verification
+                         VK governance | Incremental Merkle | Deposit/Withdraw cycle
   ────────────────────────────────────────────────────────────────────
 Commitment               4-ary Merkle trees (BLAKE3 fast / Poseidon2 ZK)
   ────────────────────────────────────────────────────────────────────
 Policy                   Datalog evaluator | Macaroon HMAC + Biscuit Ed25519
-                         X25519-ChaCha20Poly1305 seal/unseal
+                         Facet masks (E-style restricted views)
   ────────────────────────────────────────────────────────────────────
 Storage                  redb ACID | OS keychain | note commitment tree
                          nullifier set | audit log</code></pre>
@@ -182,7 +334,12 @@ Storage                  redb ACID | OS keychain | note commitment tree
     <div class="usecase">
       <p class="usecase__icon">privacy</p>
       <p class="usecase__title">Private Capability Exchange</p>
-      <p class="usecase__desc">Broadcast intents ("I need read access to X") without revealing your identity. Fulfillment is a STARK proof that leaks nothing about the satisfier's other capabilities.</p>
+      <p class="usecase__desc">Broadcast intents ("I need read access to X") without revealing your identity. Fulfillment is a STARK proof that leaks nothing about the satisfier's other capabilities. Dandelion++ routing prevents traffic analysis.</p>
+    </div>
+    <div class="usecase">
+      <p class="usecase__icon">defi</p>
+      <p class="usecase__title">Privacy-Preserving DeFi</p>
+      <p class="usecase__desc">Full application suite: stablecoin (CDP + liquidation), AMM with LP tokens, privacy orderbook (commit-reveal), lending with ZK collateral proofs, and compute exchange. All built on capability-gated sovereign cells.</p>
     </div>
     <div class="usecase">
       <p class="usecase__icon">federation</p>
@@ -194,6 +351,11 @@ Storage                  redb ACID | OS keychain | note commitment tree
       <p class="usecase__title">Sovereign Cells</p>
       <p class="usecase__desc">Your state lives on your machine. The federation stores a 32-byte hash. Interact peer-to-peer with known parties -- no federation needed. Use the federation as a notary when you need ordering or want to prove state to strangers.</p>
     </div>
+    <div class="usecase">
+      <p class="usecase__icon">bridge</p>
+      <p class="usecase__title">EVM Bridge (Base/Ethereum)</p>
+      <p class="usecase__desc">Wrap pyana STARK proofs in SP1 Groth16 for on-chain verification at ~200k gas. Deposit/withdraw cycle between EVM assets and pyana notes. VK governance for upgrade safety. <em>(In development -- guest program being regenerated against Plonky3 backend.)</em></p>
+    </div>
   </div>
 </section>
 
@@ -204,15 +366,19 @@ Storage                  redb ACID | OS keychain | note commitment tree
   <div class="primitives">
     <div class="primitive">
       <p class="primitive__name">Cells</p>
-      <p class="primitive__desc">Isolated objects with capability lists, balance, nonce, program predicates, and private notes. The unit of identity and state.</p>
+      <p class="primitive__desc">Isolated objects with capability lists, balance, nonce, program predicates, and private notes. Sovereign (32-byte commitment) or hosted mode. The unit of identity and state.</p>
     </div>
     <div class="primitive">
       <p class="primitive__name">Turns</p>
-      <p class="primitive__desc">Atomic state transitions from call forests. A turn either fully commits or fully rolls back. Multi-party turns compose across cells.</p>
+      <p class="primitive__desc">Atomic state transitions from call forests. A turn either fully commits or fully rolls back. Multi-party turns compose across cells. Eventual sends enable pipelining.</p>
     </div>
     <div class="primitive">
       <p class="primitive__name">Capabilities</p>
-      <p class="primitive__desc">Unforgeable references between cells. Created by introduction or minting. Only narrowed, never amplified. Attenuation is the delegation primitive.</p>
+      <p class="primitive__desc">Unforgeable references between cells. Created by introduction or minting. Only narrowed, never amplified. Faceted views restrict to specific effect types (E-language semantics).</p>
+    </div>
+    <div class="primitive">
+      <p class="primitive__name">Factories</p>
+      <p class="primitive__desc">EROS-style object factories. A factory's descriptor IS the constructor transparency -- anyone can inspect what capabilities, programs, and state it grants to creations.</p>
     </div>
     <div class="primitive">
       <p class="primitive__name">Intents</p>
@@ -220,7 +386,11 @@ Storage                  redb ACID | OS keychain | note commitment tree
     </div>
     <div class="primitive">
       <p class="primitive__name">Sealer/Unsealer</p>
-      <p class="primitive__desc">X25519-ChaCha20Poly1305 keypairs. Encrypt under a capability token; only the holder of both capability and key can recover plaintext.</p>
+      <p class="primitive__desc">X25519-ChaCha20Poly1305 keypairs for E-style rights amplification. Encrypt under a capability token; only the holder of both capability and key can recover plaintext.</p>
+    </div>
+    <div class="primitive">
+      <p class="primitive__name">Stealth Addresses</p>
+      <p class="primitive__desc">Ephemeral per-transaction CellIds for unlinkable payments. Monero/EIP-5564 pattern: meta-address (spend + view keys), one-time derivation, scan-and-detect.</p>
     </div>
     <div class="primitive">
       <p class="primitive__name">Receipt Chains</p>
@@ -259,11 +429,15 @@ Storage                  redb ACID | OS keychain | note commitment tree
       </tr>
       <tr>
         <td>Midnight</td>
-        <td>Privacy DeFi on Cardano. Pyana is a general-purpose runtime where "value" is just one kind of capability.</td>
+        <td>Privacy DeFi on Cardano. Pyana's DSL compiles to Midnight ZKIR v3 natively -- same constraints, different verification venue. Pyana is a general-purpose runtime where "value" is just one kind of capability.</td>
       </tr>
       <tr>
         <td>Cosmos IBC</td>
         <td>IBC requires active relayer liveness. Pyana verification is fully offline; the capability model replaces channel-based permissions.</td>
+      </tr>
+      <tr>
+        <td>SP1 / Succinct</td>
+        <td>SP1 is a proving backend. Pyana uses SP1 to wrap STARK proofs as Groth16 for EVM verification (~200k gas on Base/Ethereum).</td>
       </tr>
     </tbody>
   </table>
@@ -275,16 +449,28 @@ Storage                  redb ACID | OS keychain | note commitment tree
   <h2 class="section__title">Real system, real proofs</h2>
   <div class="stats">
     <div class="stat">
-      <p class="stat__number">~125k</p>
+      <p class="stat__number">~340k</p>
       <p class="stat__label">Lines of Rust</p>
     </div>
     <div class="stat">
-      <p class="stat__number">27</p>
+      <p class="stat__number">44</p>
       <p class="stat__label">Crates</p>
     </div>
     <div class="stat">
-      <p class="stat__number">900+</p>
+      <p class="stat__number">3900+</p>
       <p class="stat__label">Tests</p>
+    </div>
+    <div class="stat">
+      <p class="stat__number">21</p>
+      <p class="stat__label">AIR Circuits</p>
+    </div>
+    <div class="stat">
+      <p class="stat__number">8</p>
+      <p class="stat__label">Proof Backends</p>
+    </div>
+    <div class="stat">
+      <p class="stat__number">8</p>
+      <p class="stat__label">Applications</p>
     </div>
     <div class="stat">
       <p class="stat__number">~24 KiB</p>
@@ -293,10 +479,6 @@ Storage                  redb ACID | OS keychain | note commitment tree
     <div class="stat">
       <p class="stat__number">&lt;1s</p>
       <p class="stat__label">Proof Generation</p>
-    </div>
-    <div class="stat">
-      <p class="stat__number">3-node</p>
-      <p class="stat__label">Live Federation</p>
     </div>
   </div>
 </section>

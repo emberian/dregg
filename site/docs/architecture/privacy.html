@@ -142,6 +142,31 @@
       reveal in your proof's public inputs.
     </p>
 
+    <h2 id="sealers">Sealer/Unsealer Pairs</h2>
+    <p>
+      E-style rights amplification for partition-tolerant capability transfer.
+      Each pair is an X25519 keypair: sealing uses a fresh ephemeral key (forward secrecy),
+      DH-derived shared secret, and ChaCha20-Poly1305 AEAD. Only the unsealer holder
+      can decrypt. This enables encrypted capability exchange without online coordination.
+    </p>
+
+    <h2 id="facets">Faceted Capabilities</h2>
+    <p>
+      From the E programming language: a facet is a restricted view of an object.
+      In pyana, facets are bitmasks on capabilities that restrict which effect types
+      are permitted. Predefined facets include read-only (observation without mutation),
+      transfer-only, state-writer, and admin. Facets compose with attenuation -- a child's
+      mask must be a subset of the parent's mask. This is enforced in-circuit.
+    </p>
+
+    <h2 id="encrypted-turns">Encrypted Turns</h2>
+    <p>
+      Turn payloads can be encrypted to specific recipients. The federation orders
+      opaque blobs (it can verify the STARK proof of validity without seeing plaintext
+      content). Combined with Dandelion++ routing and stealth addresses, this provides
+      strong unlinkability for routine transactions.
+    </p>
+
     <div class="stub-notice">
       <p>Formal privacy model, composability analysis, and comparison with Zcash/Aleo privacy are being written.</p>
     </div>

@@ -6,7 +6,7 @@
  */
 
 const STORAGE_KEY = 'pyana_node_url';
-const DEFAULT_URL = 'https://pyana.commonquant.com';
+const DEFAULT_URL = 'https://devnet.pyana.fg-goose.online';
 
 /** Get the configured node URL. */
 export function getNodeUrl() {

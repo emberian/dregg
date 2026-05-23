@@ -1352,3 +1352,77 @@ impl Default for Ledger {
         Self::new()
     }
 }
+
+// =============================================================================
+// Sovereign History (IVC-compressed cell history)
+// =============================================================================
+
+/// Compressed history of a sovereign cell from genesis to current state.
+///
+/// A sovereign cell can produce a SINGLE proof covering its entire history.
+/// A stranger who has never followed this cell's chain can verify one IVC proof
+/// instead of replaying N individual state transitions.
+///
+/// The accumulated hash commits to the full sequence:
+///   `accumulated_hash = Poseidon2(previous_hash || effects_hash || step_count)`
+/// at each step, forming an irrevocable hash chain from genesis.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SovereignHistory {
+    /// The state commitment at genesis (first registered commitment).
+    pub genesis_commitment: [u8; 32],
+    /// The current (most recent) state commitment.
+    pub current_commitment: [u8; 32],
+    /// Number of valid transitions applied since genesis.
+    pub step_count: u64,
+    /// Running Poseidon2 hash accumulating the full transition history.
+    /// Each step: `new_hash = Poseidon2(old_hash || effects_hash_field || step_count)`.
+    pub accumulated_hash: [u8; 32],
+    /// Optional serialized IVC proof compressing all N transitions into one.
+    /// When present, a verifier checks this single proof rather than replaying history.
+    /// When absent, the cell has not yet compressed its history (lazy compression).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ivc_proof: Option<Vec<u8>>,
+}
+
+impl SovereignHistory {
+    /// Create a new history starting at genesis.
+    pub fn new(genesis_commitment: [u8; 32]) -> Self {
+        // Initial accumulated hash: H(genesis_commitment).
+        let accumulated_hash = *blake3::hash(&genesis_commitment).as_bytes();
+        SovereignHistory {
+            genesis_commitment,
+            current_commitment: genesis_commitment,
+            step_count: 0,
+            accumulated_hash,
+            ivc_proof: None,
+        }
+    }
+
+    /// Record a new transition step. This extends the hash chain but does NOT
+    /// regenerate the IVC proof (that is an expensive operation done on demand).
+    pub fn record_step(&mut self, new_commitment: [u8; 32], effects_hash: [u8; 32]) {
+        self.step_count += 1;
+        self.current_commitment = new_commitment;
+
+        // Extend accumulated hash: H(old_hash || effects_hash || step_count_le_bytes)
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&self.accumulated_hash);
+        hasher.update(&effects_hash);
+        hasher.update(&self.step_count.to_le_bytes());
+        self.accumulated_hash = *hasher.finalize().as_bytes();
+
+        // Invalidate the IVC proof (stale after a new step).
+        self.ivc_proof = None;
+    }
+
+    /// Attach a compressed IVC proof covering the full history.
+    /// This is produced offline by the sovereign cell's owner.
+    pub fn attach_ivc_proof(&mut self, proof: Vec<u8>) {
+        self.ivc_proof = Some(proof);
+    }
+
+    /// Returns true if this history has a compressed IVC proof attached.
+    pub fn has_ivc_proof(&self) -> bool {
+        self.ivc_proof.is_some()
+    }
+}

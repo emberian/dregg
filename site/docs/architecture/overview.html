@@ -53,38 +53,53 @@
     <h1>System Design</h1>
 
     <p>
-      Pyana is structured as a Rust workspace of 22+ crates. The core architecture
+      Pyana is structured as a Rust workspace of 44 crates. The core architecture
       follows the sovereign cell model: agents maintain their own state and execute
       transitions locally. The federation verifies proofs and provides ordering --
-      it does not store or execute on behalf of agents (in sovereign mode).
+      it does not store or execute on behalf of agents (in sovereign mode). A
+      constraint DSL compiles to 8 proof backends; 21 AIR circuits cover the full
+      authorization and state-transition space.
     </p>
 
     <h2 id="layers">Layer Architecture</h2>
 
-    <pre><code>Browser Extension (wallet UI)
+    <pre><code>Applications           Stablecoin | AMM | Orderbook | Lending | Identity
+                       Gallery (provenance) | Compute Exchange | Bounty Board
+  ---------------------------------------------------------------
+Browser Extension (wallet UI)
   window.pyana: authorize | postIntent | offerCapability | provision
   ---------------------------------------------------------------
 SDK Layer              AgentWallet | AgentRuntime | SiloClient
   ---------------------------------------------------------------
+DSL                    #[pyana_caveat] | #[pyana_effect] | write once, 8 backends
+  Backends:            Rust | AIR | Datalog | Kimchi | Midnight | Plonky3 | SP1 | STARK
+  ---------------------------------------------------------------
 Intent Engine          Gossip broadcast | local Datalog matching | STARK fulfillment
   ---------------------------------------------------------------
-Network                TCP wire protocol | QUIC relay | postcard framing
+Network                QUIC P2P | Plumtree gossip | Dandelion++ (unlinkable relay)
   ---------------------------------------------------------------
 Federation             Morpheus adaptive BFT | BLS12-381 threshold sigs
                        Ed25519 consensus | epoch reconfig | revocation trees
   ---------------------------------------------------------------
 Coordination           Causal DAG | 2PC atomic | bounded counters (Stingray)
   ---------------------------------------------------------------
-Execution              Cells (isolated objects + c-lists) | Turns (atomic txns)
-                       Three-party introduction | routing directives
+Execution              Sovereign Cells (hosted OR sovereign) | Turns (atomic txns)
+                       EROS-style factories | Faceted capabilities (E-language)
+                       Eventual sends | Pipeline composition | Routing directives
   ---------------------------------------------------------------
-Proof                  BabyBear STARK + FRI (~24 KiB) | Poseidon2 in-circuit
-                       IVC fold chains | AIR: fold, derivation, Merkle
+Privacy                Stealth addresses | Pedersen commitments | Dandelion++
+                       Encrypted turns | Sealer/Unsealer | Oblivious transfer
+  ---------------------------------------------------------------
+Proof                  BabyBear STARK + FRI | 21 AIR circuits | Recursive composition
+                       Kimchi (Mina) | SP1 zkVM | Plonky3 native | IVC fold chains
+  ---------------------------------------------------------------
+EVM Bridge             SP1 Groth16 (~200k gas) | Base/Ethereum verification
+                       VK governance | Incremental Merkle | Deposit/Withdraw
   ---------------------------------------------------------------
 Commitment             4-ary Merkle trees (BLAKE3 fast / Poseidon2 ZK)
   ---------------------------------------------------------------
 Policy                 Datalog evaluator | Macaroon HMAC + Biscuit Ed25519
-                       X25519-ChaCha20Poly1305 seal/unseal
+                       Facet masks (E-style restricted views)
   ---------------------------------------------------------------
 Storage                redb ACID | OS keychain | note commitment tree
                        nullifier set | audit log</code></pre>
@@ -97,8 +112,18 @@ Storage                redb ACID | OS keychain | note commitment tree
       <tbody>
         <tr><td><code>pyana-types</code></td><td>PublicKey, Signature, SigningKey -- shared type definitions</td></tr>
         <tr><td><code>pyana-token</code></td><td>Macaroon token minting, attenuation, verification, Datalog evaluator</td></tr>
-        <tr><td><code>pyana-cell</code></td><td>Cell model: isolated objects with c-lists, balance, notes, predicates</td></tr>
-        <tr><td><code>pyana-turn</code></td><td>Turn execution: atomic state transitions, receipt chains, call forests</td></tr>
+        <tr><td><code>pyana-cell</code></td><td>Cell model: sovereign/hosted objects with c-lists, factories, facets, stealth, sealers</td></tr>
+        <tr><td><code>pyana-turn</code></td><td>Turn execution: atomic state transitions, eventual sends, pipelines, call forests</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Constraint DSL</h3>
+    <table class="comparison">
+      <thead><tr><th>Crate</th><th>Role</th></tr></thead>
+      <tbody>
+        <tr><td><code>pyana-dsl</code></td><td>Proc-macro DSL: #[pyana_caveat] / #[pyana_effect] compiles to 8 backends</td></tr>
+        <tr><td><code>pyana-dsl-runtime</code></td><td>Runtime support types for DSL-generated code</td></tr>
+        <tr><td><code>pyana-dsl-tests</code></td><td>Integration tests for DSL compilation and execution</td></tr>
       </tbody>
     </table>
 
@@ -106,8 +131,9 @@ Storage                redb ACID | OS keychain | note commitment tree
     <table class="comparison">
       <thead><tr><th>Crate</th><th>Role</th></tr></thead>
       <tbody>
-        <tr><td><code>pyana-circuit</code></td><td>AIR definitions, BabyBear field, Poseidon2, STARK prover/verifier, IVC</td></tr>
+        <tr><td><code>pyana-circuit</code></td><td>21 AIR circuits, STARK prover/verifier, IVC, Kimchi/Mina/SP1/Plonky3 backends</td></tr>
         <tr><td><code>pyana-bridge</code></td><td>Bridge between SDK types and circuit types, presentation proof builder</td></tr>
+        <tr><td><code>pyana-chain</code></td><td>EVM bridge: SP1 Groth16 wrapping, Base/Ethereum verification, deposit/withdraw</td></tr>
         <tr><td><code>pyana-trace</code></td><td>Authorization trace representation (facts, steps, conclusions)</td></tr>
       </tbody>
     </table>
@@ -117,7 +143,7 @@ Storage                redb ACID | OS keychain | note commitment tree
       <thead><tr><th>Crate</th><th>Role</th></tr></thead>
       <tbody>
         <tr><td><code>pyana-federation</code></td><td>Morpheus DAG-BFT consensus, epoch management, attested roots</td></tr>
-        <tr><td><code>pyana-gossip</code></td><td>Gossip protocol for federation peer communication</td></tr>
+        <tr><td><code>pyana-net</code></td><td>QUIC P2P, Plumtree gossip, Dandelion++ routing, causal DAG</td></tr>
         <tr><td><code>pyana-wire</code></td><td>Wire protocol framing (postcard + length-prefixed)</td></tr>
       </tbody>
     </table>
@@ -130,6 +156,22 @@ Storage                redb ACID | OS keychain | note commitment tree
         <tr><td><code>pyana-node</code></td><td>Node binary: HTTP API, federation sync, MCP server, bridge</td></tr>
         <tr><td><code>pyana-wasm</code></td><td>WebAssembly build for browser extension and playground</td></tr>
         <tr><td><code>pyana-demo-agent</code></td><td>End-to-end demo exercising the full stack</td></tr>
+        <tr><td><code>pyana-app-framework</code></td><td>Shared framework for building pyana applications</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Applications (apps/)</h3>
+    <table class="comparison">
+      <thead><tr><th>Crate</th><th>Role</th></tr></thead>
+      <tbody>
+        <tr><td><code>pyana-stablecoin</code></td><td>CDP-based stablecoin with ZK liquidation proofs</td></tr>
+        <tr><td><code>pyana-amm</code></td><td>Constant-product AMM with LP tokens and router</td></tr>
+        <tr><td><code>pyana-orderbook</code></td><td>Privacy orderbook: commit-reveal, escrow, verified matching</td></tr>
+        <tr><td><code>pyana-lending</code></td><td>Supply/borrow/liquidation with ZK collateral proofs</td></tr>
+        <tr><td><code>pyana-identity</code></td><td>Anonymous credentials: issuer/holder/verifier, revocation</td></tr>
+        <tr><td><code>pyana-gallery</code></td><td>Provenance gallery with sealed-bid auctions</td></tr>
+        <tr><td><code>pyana-compute-exchange</code></td><td>Compute resource marketplace with qualification proofs</td></tr>
+        <tr><td><code>pyana-bounty-board</code></td><td>Capability-gated task marketplace</td></tr>
       </tbody>
     </table>
 

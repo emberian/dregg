@@ -327,7 +327,23 @@ impl DslAwareProofVerifier {
     /// The VK bytes are interpreted as the 32-byte program VK hash. The program
     /// is looked up in the registry, and the proof is verified against its
     /// `DslCircuit` AIR.
-    fn verify_dsl_program(&self, stark_proof: &stark::StarkProof, vk: &[u8]) -> bool {
+    ///
+    /// # Action Binding Convention for DSL Programs
+    ///
+    /// DSL programs follow the same public input convention as known AIRs:
+    /// the action binding (4 BabyBear elements) occupies `pi[0..4]`, and the
+    /// optional timestamp occupies `pi[4]`. Programs that declare fewer than
+    /// 5 public inputs cannot pass freshness checks when `max_proof_age_secs > 0`.
+    ///
+    /// This prevents a valid DSL proof from being replayed to authorize a
+    /// different action on the same cell.
+    fn verify_dsl_program(
+        &self,
+        stark_proof: &stark::StarkProof,
+        action: &str,
+        resource: &str,
+        vk: &[u8],
+    ) -> bool {
         if vk.len() < 32 {
             return false;
         }
@@ -347,6 +363,41 @@ impl DslAwareProofVerifier {
             .iter()
             .map(|&v| BabyBear::new_canonical(v))
             .collect();
+
+        // Action binding check: pi[0..4] must match the expected action binding.
+        // This prevents replay of a valid proof to authorize a different action.
+        if pi.len() < pyana_circuit::ACTION_BINDING_WIDTH {
+            return false;
+        }
+        let expected_binding = compute_action_binding(action, resource);
+        for i in 0..pyana_circuit::ACTION_BINDING_WIDTH {
+            if pi[i] != expected_binding[i] {
+                return false;
+            }
+        }
+
+        // Timestamp freshness check (same logic as the known-AIR path).
+        // For DSL programs, the timestamp lives at pi[ACTION_BINDING_WIDTH] (index 4).
+        let timestamp_idx = pyana_circuit::ACTION_BINDING_WIDTH; // = 4
+        if self.max_proof_age_secs > 0 {
+            if pi.len() <= timestamp_idx {
+                // Timestamp required but proof does not include one — reject.
+                return false;
+            }
+            let proof_timestamp = pi[timestamp_idx].0 as i64;
+            if proof_timestamp == 0 {
+                // No timestamp in proof — reject when freshness is required.
+                return false;
+            }
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+            let age = now.saturating_sub(proof_timestamp);
+            if age > self.max_proof_age_secs || age < -self.max_proof_age_secs {
+                return false;
+            }
+        }
 
         // Verify using the program's DslCircuit.
         let circuit = pyana_dsl_runtime::DslCircuit::new(program.descriptor.clone());
@@ -374,7 +425,7 @@ impl ProofVerifier for DslAwareProofVerifier {
         if KNOWN_AIR_NAMES.contains(&stark_proof.air_name.as_str()) {
             self.verify_known_air(&stark_proof, action, resource, vk)
         } else {
-            self.verify_dsl_program(&stark_proof, vk)
+            self.verify_dsl_program(&stark_proof, action, resource, vk)
         }
     }
 }

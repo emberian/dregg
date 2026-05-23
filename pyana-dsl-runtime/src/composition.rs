@@ -760,14 +760,43 @@ pub enum ComposedVerification {
 
 /// Verify a composed proof against its descriptor.
 ///
+/// **DEPRECATED**: Use [`verify_composed_full`] instead. This function does NOT
+/// cryptographically verify sub-proofs, making composition trivially forgeable.
+/// It is retained only for backward compatibility with tests that do not provide
+/// a registry.
+///
 /// Checks:
 /// 1. The main STARK proof verifies.
 /// 2. Each attached sub-proof's VK hash matches the binding.
-/// 3. Each attached sub-proof verifies against its own circuit.
+/// 3. Sub-proof bytes are non-empty (structural check only — NOT cryptographic).
 /// 4. PI bindings are consistent between sub-proofs and the main trace.
+#[deprecated(
+    since = "0.2.0",
+    note = "does not verify sub-proofs cryptographically; use verify_composed_full instead"
+)]
 pub fn verify_composed(
     descriptor: &ComposedCircuitDescriptor,
     proof: &ComposedProof,
+) -> ComposedVerification {
+    verify_composed_full(descriptor, proof, &|_| None)
+}
+
+/// Verify a composed proof against its descriptor with full cryptographic sub-proof verification.
+///
+/// The `registry` callback resolves a VK hash (32 bytes) to the corresponding
+/// `CircuitDescriptor`. For each sub-proof, the descriptor is looked up, the proof
+/// is deserialized and verified against the sub-circuit's AIR. If ANY sub-proof
+/// fails verification, the composed proof is invalid.
+///
+/// Checks:
+/// 1. The main STARK proof verifies.
+/// 2. Each attached sub-proof's VK hash matches the binding.
+/// 3. Each sub-proof is cryptographically verified against its circuit descriptor.
+/// 4. PI bindings are consistent between sub-proofs and the main trace.
+pub fn verify_composed_full(
+    descriptor: &ComposedCircuitDescriptor,
+    proof: &ComposedProof,
+    registry: &dyn Fn(&[u8; 32]) -> Option<CircuitDescriptor>,
 ) -> ComposedVerification {
     // 1. Verify main proof
     let circuit = ComposedDslCircuit::new(descriptor.clone());
@@ -788,13 +817,45 @@ pub fn verify_composed(
             return ComposedVerification::VkMismatch { index: i };
         }
 
-        // Verify the sub-proof itself (deserialize and verify)
-        // In a full implementation, we'd look up the sub-circuit by VK hash in a registry
-        // and verify. For now, we verify structural consistency.
+        // Sub-proof bytes must be non-empty
         if attached.proof_bytes.is_empty() {
             return ComposedVerification::SubProofInvalid {
                 index: i,
                 reason: "empty proof bytes".to_string(),
+            };
+        }
+
+        // Look up the sub-circuit descriptor by VK hash
+        let sub_descriptor = match registry(&attached.vk_hash) {
+            Some(desc) => desc,
+            None => {
+                return ComposedVerification::SubProofInvalid {
+                    index: i,
+                    reason: format!(
+                        "sub-circuit descriptor not found in registry for VK hash {:?}",
+                        &attached.vk_hash[..8]
+                    ),
+                };
+            }
+        };
+
+        // Deserialize the sub-proof
+        let sub_proof = match stark::proof_from_bytes(&attached.proof_bytes) {
+            Ok(p) => p,
+            Err(e) => {
+                return ComposedVerification::SubProofInvalid {
+                    index: i,
+                    reason: format!("failed to deserialize sub-proof: {}", e),
+                };
+            }
+        };
+
+        // Cryptographically verify the sub-proof against its circuit
+        let sub_circuit = DslCircuit::new(sub_descriptor);
+        if let Err(e) = stark::verify(&sub_circuit, &sub_proof, &attached.sub_public_inputs) {
+            return ComposedVerification::SubProofInvalid {
+                index: i,
+                reason: format!("sub-proof STARK verification failed: {}", e),
             };
         }
 

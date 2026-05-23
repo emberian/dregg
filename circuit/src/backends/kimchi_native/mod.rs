@@ -8,7 +8,9 @@
 //!
 //! Native Kimchi circuit backend for pyana derivation proofs.
 pub mod derivation;
+pub mod dsl_backend;
 pub mod fold;
+pub mod from_dsl;
 pub mod ivc;
 pub mod non_membership;
 pub mod predicates;
@@ -121,6 +123,8 @@ pub enum KimchiNativeCircuitType {
     RelationalPredicate,
     TemporalPredicate,
     CompoundPredicate,
+    /// Generic DSL circuit proven via the constraint-level backend.
+    Dsl,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]

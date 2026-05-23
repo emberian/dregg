@@ -9,20 +9,20 @@ clients and a permanent peer for ephemeral GitHub Actions federation nodes.
 ```
 Internet
   │
-  ├── Browser/Extension ──► https://pyana.commonquant.com (Caddy TLS)
+  ├── Browser/Extension ──► https://devnet.pyana.fg-goose.online (Caddy TLS)
   │                              │
   │                              ├── /api/*     → pyana-node :8420
   │                              ├── /ws        → pyana-node :8420 (WebSocket)
   │                              ├── /explorer  → static files
   │                              └── /playground → static files
   │
-  └── GitHub Actions nodes ──► pyana.commonquant.com:9420 (QUIC gossip)
+  └── GitHub Actions nodes ──► devnet.pyana.fg-goose.online:9420 (QUIC gossip)
 ```
 
 ## Prerequisites
 
 - AWS Graviton instance (t4g.small or larger) with Ubuntu 22.04+ or AL2023
-- Domain `pyana.commonquant.com` pointing to the instance's public IP
+- Domain `devnet.pyana.fg-goose.online` pointing to the instance's public IP
 - Ports open: 80 (HTTP, for ACME), 443 (HTTPS), 8420 (HTTP API, optional direct), 9420 (QUIC gossip)
 - SSH access configured
 - GitHub deploy key for the pyana repo
@@ -30,14 +30,14 @@ Internet
 ## First-Time Setup
 
 ```bash
-ssh ubuntu@pyana.commonquant.com
+ssh ubuntu@devnet.pyana.fg-goose.online
 curl -sSL https://raw.githubusercontent.com/emberian/pyana/main/deploy/aws/setup.sh | bash
 ```
 
 Or if you prefer to inspect first:
 
 ```bash
-ssh ubuntu@pyana.commonquant.com
+ssh ubuntu@devnet.pyana.fg-goose.online
 git clone git@github.com:emberian/pyana.git /tmp/pyana-setup
 less /tmp/pyana-setup/deploy/aws/setup.sh
 bash /tmp/pyana-setup/deploy/aws/setup.sh
@@ -46,7 +46,7 @@ bash /tmp/pyana-setup/deploy/aws/setup.sh
 ## Updating
 
 ```bash
-ssh ubuntu@pyana.commonquant.com
+ssh ubuntu@devnet.pyana.fg-goose.online
 bash /opt/pyana/deploy/aws/update.sh
 ```
 
@@ -66,7 +66,7 @@ sudo journalctl -u pyana-gateway -n 100 --no-pager
 sudo journalctl -u caddy -f
 
 # Health check
-curl https://pyana.commonquant.com/status
+curl https://devnet.pyana.fg-goose.online/status
 ```
 
 ## Ports

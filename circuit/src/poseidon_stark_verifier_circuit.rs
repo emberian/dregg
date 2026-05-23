@@ -541,15 +541,29 @@ impl PoseidonStarkVerifierCircuit {
                     row += fri_depth * POSEIDON_GADGET_ROWS;
 
                     // FRI folding check: folded = even + beta * odd
-                    let even = fri_layer.query_value % BABYBEAR_P;
-                    let odd = fri_layer.sibling_value % BABYBEAR_P;
-                    // beta * odd (BabyBear mul)
+                    // The "even" position is always the one in the lower half
+                    // (i.e., min(query_pos, sibling_pos)). If query_pos < sibling_pos,
+                    // the query is "even" and sibling is "odd". Otherwise, swap.
+                    let (even, odd) = if fri_layer.query_pos < fri_layer.sibling_pos {
+                        (
+                            fri_layer.query_value % BABYBEAR_P,
+                            fri_layer.sibling_value % BABYBEAR_P,
+                        )
+                    } else {
+                        (
+                            fri_layer.sibling_value % BABYBEAR_P,
+                            fri_layer.query_value % BABYBEAR_P,
+                        )
+                    };
+                    // beta * odd (BabyBear mul) — with beta=1, result is just `odd`
                     row = self.babybear_mul_witness(1, odd, &mut witness, row);
-                    // Addition gate
-                    let folded_approx = ((even as u64 + odd as u64) % BABYBEAR_MOD_FP) as u32;
+                    // Addition gate: w[0] + w[1] - w[2] = 0 (in Fp, NOT mod BabyBear)
+                    // The gate constrains native Fp addition, so w[2] must be the
+                    // unreduced sum (even + odd) as an Fp element, not (even + odd) % P.
+                    let sum_fp = Fp::from(even as u64) + Fp::from(odd as u64);
                     witness[0][row] = Fp::from(even as u64);
                     witness[1][row] = Fp::from(odd as u64);
-                    witness[2][row] = Fp::from(folded_approx as u64);
+                    witness[2][row] = sum_fp;
                     row += 1;
                 } else {
                     // Padding: fill with zeros
@@ -1311,6 +1325,45 @@ mod tests {
             );
         }
         // If prove() fails, that's the expected outcome for a tampered witness.
+    }
+
+    /// Test that the FRI folding witness works correctly across multiple seeds,
+    /// including seeds that produce query indices in the upper half of the FRI domain
+    /// (where query_pos > sibling_pos, requiring even/odd swap).
+    #[test]
+    fn fri_folding_witness_multi_seed() {
+        let seeds: &[u32] = &[
+            12345, 99999, 111, 222, 54321, 67890, 31337, 77777, 1, 999999,
+        ];
+        for &seed in seeds {
+            let (trace, pi) = generate_merkle_trace(
+                seed,
+                &[[10u32, 20, 30], [40, 50, 60], [70, 80, 90], [100, 110, 120]],
+                &[0u32, 1, 2, 3],
+            );
+            let air = MerkleStarkAir;
+            let proof = prove_poseidon(&air, &trace, &pi);
+            assert!(
+                verify_poseidon(&air, &proof, &pi).is_ok(),
+                "STARK proof should verify for seed {seed}"
+            );
+
+            let circuit = PoseidonStarkVerifierCircuit::new_minimal(proof);
+            let result = circuit.prove();
+            assert!(
+                result.is_ok(),
+                "Kimchi prover should accept witness for seed {seed}: {:?}",
+                result.err()
+            );
+
+            let kimchi_proof = result.unwrap();
+            let verify_result = PoseidonStarkVerifierCircuit::verify(&kimchi_proof);
+            assert!(
+                verify_result.is_ok(),
+                "Kimchi verifier should accept proof for seed {seed}: {:?}",
+                verify_result.err()
+            );
+        }
     }
 
     /// Helper to create a dummy proof for unit tests that don't need real proof data.

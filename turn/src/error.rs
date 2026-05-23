@@ -190,6 +190,32 @@ pub enum TurnError {
         attempted_effect: String,
         allowed_mask: u32,
     },
+
+    /// A bearer capability proof has expired.
+    BearerCapExpired {
+        target: CellId,
+        expires_at: u64,
+        current_height: u64,
+    },
+
+    /// A bearer capability's revocation channel has been tripped.
+    BearerCapRevoked {
+        target: CellId,
+        channel_id: ChannelId,
+    },
+
+    /// A bearer capability's delegation proof is invalid (bad signature, bad STARK proof, etc.).
+    BearerCapInvalidProof { target: CellId, reason: String },
+
+    /// A bearer capability attempts to amplify permissions beyond what the delegator holds.
+    BearerCapAmplification {
+        target: CellId,
+        delegator_permissions: AuthRequired,
+        bearer_permissions: AuthRequired,
+    },
+
+    /// A bearer capability references a delegator who does not hold the required capability.
+    BearerCapDelegatorLacksCapability { delegator: CellId, target: CellId },
 }
 
 impl core::fmt::Display for TurnError {
@@ -424,6 +450,43 @@ impl core::fmt::Display for TurnError {
                     f,
                     "facet violation: actor {actor} tried {attempted_effect} on target {target} \
                      via cap slot {cap_slot}, but capability mask 0x{allowed_mask:08x} does not permit it"
+                )
+            }
+            TurnError::BearerCapExpired {
+                target,
+                expires_at,
+                current_height,
+            } => {
+                write!(
+                    f,
+                    "bearer cap expired: target {target}, expires_at={expires_at}, current_height={current_height}"
+                )
+            }
+            TurnError::BearerCapRevoked { target, channel_id } => {
+                write!(
+                    f,
+                    "bearer cap revoked: target {target}, channel {:02x}{:02x}...",
+                    channel_id[0], channel_id[1]
+                )
+            }
+            TurnError::BearerCapInvalidProof { target, reason } => {
+                write!(f, "bearer cap invalid proof for target {target}: {reason}")
+            }
+            TurnError::BearerCapAmplification {
+                target,
+                delegator_permissions,
+                bearer_permissions,
+            } => {
+                write!(
+                    f,
+                    "bearer cap amplification on target {target}: bearer has {bearer_permissions:?} \
+                     but delegator only holds {delegator_permissions:?}"
+                )
+            }
+            TurnError::BearerCapDelegatorLacksCapability { delegator, target } => {
+                write!(
+                    f,
+                    "bearer cap delegator {delegator} does not hold capability to target {target}"
                 )
             }
         }

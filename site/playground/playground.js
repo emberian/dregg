@@ -197,7 +197,7 @@ async function fetchFederation() {
  */
 export async function connectToLiveNetwork() {
   // Fetch discovery to get gateway address
-  let gatewayWs = 'wss://pyana.commonquant.com/ws';
+  let gatewayWs = 'wss://devnet.pyana.fg-goose.online/ws';
   try {
     const resp = await fetch('../discovery.json');
     if (resp.ok) {

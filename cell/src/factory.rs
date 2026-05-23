@@ -14,6 +14,147 @@ use crate::cell::CellMode;
 use crate::id::CellId;
 use crate::permissions::AuthRequired;
 
+/// Strategy for determining the child cell's program VK at creation time.
+///
+/// This enables "computable child VK" — factories that derive the child's program
+/// based on creation parameters rather than having a single fixed VK.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChildVkStrategy {
+    /// Fixed VK — all children get the same program (legacy behavior).
+    Fixed(Option<[u8; 32]>),
+    /// Derived VK — child VK is computed from factory VK + creation parameters.
+    /// The derivation is: `child_vk = Poseidon2(factory_vk || param_hash)`
+    /// where `param_hash = Poseidon2(all_creation_params)`.
+    Derived {
+        /// The base VK from which children are derived (typically the factory's own VK).
+        base_vk: [u8; 32],
+    },
+    /// Registry lookup — child VK is chosen from a set of approved VKs.
+    /// Verification uses Merkle membership: `child_vk in approved_vks`.
+    FromSet {
+        /// The set of approved child VKs (order-independent Merkle tree).
+        approved_vks: Vec<[u8; 32]>,
+    },
+}
+
+impl ChildVkStrategy {
+    /// Compute the BLAKE3 hash of this strategy for descriptor hashing.
+    pub fn hash(&self) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new_derive_key("pyana-child-vk-strategy-v1");
+        match self {
+            ChildVkStrategy::Fixed(None) => {
+                hasher.update(&[0u8]);
+            }
+            ChildVkStrategy::Fixed(Some(vk)) => {
+                hasher.update(&[1u8]);
+                hasher.update(vk);
+            }
+            ChildVkStrategy::Derived { base_vk } => {
+                hasher.update(&[2u8]);
+                hasher.update(base_vk);
+            }
+            ChildVkStrategy::FromSet { approved_vks } => {
+                hasher.update(&[3u8]);
+                hasher.update(&(approved_vks.len() as u64).to_le_bytes());
+                for vk in approved_vks {
+                    hasher.update(vk);
+                }
+            }
+        }
+        *hasher.finalize().as_bytes()
+    }
+
+    /// Derive a child VK from creation parameters (for `Derived` strategy).
+    ///
+    /// Uses BLAKE3 keyed derivation: `child_vk = BLAKE3("pyana-derived-child-vk" || factory_vk || param_hash)`.
+    /// This is the off-circuit computation; the circuit version uses Poseidon2 over BabyBear elements.
+    pub fn derive_child_vk(factory_vk: &[u8; 32], param_hash: &[u8; 32]) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new_derive_key("pyana-derived-child-vk-v1");
+        hasher.update(factory_vk);
+        hasher.update(param_hash);
+        *hasher.finalize().as_bytes()
+    }
+
+    /// Compute the param_hash for a set of creation parameters.
+    ///
+    /// `param_hash = BLAKE3("pyana-factory-params" || mode || fields || caps_hash)`.
+    pub fn compute_param_hash(params: &FactoryCreationParams) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new_derive_key("pyana-factory-params-v1");
+        let mode_byte = match params.mode {
+            CellMode::Hosted => 0u8,
+            CellMode::Sovereign => 1u8,
+        };
+        hasher.update(&[mode_byte]);
+        hasher.update(&(params.initial_fields.len() as u64).to_le_bytes());
+        for (idx, val) in &params.initial_fields {
+            hasher.update(&idx.to_le_bytes());
+            hasher.update(&val.to_le_bytes());
+        }
+        hasher.update(&(params.initial_caps.len() as u64).to_le_bytes());
+        for cap in &params.initial_caps {
+            let target_byte = match &cap.target {
+                CapTarget::SelfCell => 0u8,
+                CapTarget::Specific(_) => 1u8,
+                CapTarget::Any => 2u8,
+            };
+            hasher.update(&[target_byte]);
+            let perm_byte = match &cap.max_permissions {
+                AuthRequired::None => 0u8,
+                AuthRequired::Signature => 1u8,
+                AuthRequired::Proof => 2u8,
+                AuthRequired::Either => 3u8,
+                AuthRequired::Impossible => 4u8,
+            };
+            hasher.update(&[perm_byte]);
+        }
+        *hasher.finalize().as_bytes()
+    }
+
+    /// Check if a given child VK is in the approved set.
+    pub fn is_in_approved_set(approved_vks: &[[u8; 32]], child_vk: &[u8; 32]) -> bool {
+        approved_vks.contains(child_vk)
+    }
+
+    /// Validate a claimed child VK against this strategy and the given creation params.
+    ///
+    /// Returns `Ok(())` if the claimed VK is valid for this strategy, otherwise an error.
+    pub fn validate_child_vk(
+        &self,
+        claimed_vk: &Option<[u8; 32]>,
+        params: &FactoryCreationParams,
+    ) -> Result<(), FactoryError> {
+        match self {
+            ChildVkStrategy::Fixed(expected) => {
+                if claimed_vk != expected {
+                    return Err(FactoryError::ProgramMismatch {
+                        expected: *expected,
+                        got: *claimed_vk,
+                    });
+                }
+                Ok(())
+            }
+            ChildVkStrategy::Derived { base_vk } => {
+                let param_hash = Self::compute_param_hash(params);
+                let expected_vk = Self::derive_child_vk(base_vk, &param_hash);
+                match claimed_vk {
+                    Some(vk) if *vk == expected_vk => Ok(()),
+                    _ => Err(FactoryError::DerivedVkMismatch {
+                        expected: expected_vk,
+                        got: *claimed_vk,
+                    }),
+                }
+            }
+            ChildVkStrategy::FromSet { approved_vks } => match claimed_vk {
+                Some(vk) if Self::is_in_approved_set(approved_vks, vk) => Ok(()),
+                _ => Err(FactoryError::VkNotInApprovedSet {
+                    claimed: *claimed_vk,
+                    set_size: approved_vks.len(),
+                }),
+            },
+        }
+    }
+}
+
 /// A factory descriptor: metadata about what a factory creates.
 ///
 /// This is inspectable by anyone without running the circuit. It describes the
@@ -22,8 +163,13 @@ use crate::permissions::AuthRequired;
 pub struct FactoryDescriptor {
     /// The factory's own program VK hash (identifies the factory).
     pub factory_vk: [u8; 32],
-    /// What program (if any) is installed on created cells.
+    /// What program (if any) is installed on created cells (legacy fixed VK).
     pub child_program_vk: Option<[u8; 32]>,
+    /// Strategy for determining child VK at creation time.
+    ///
+    /// If `None`, uses legacy behavior (`child_program_vk` must match exactly).
+    /// If `Some`, this strategy overrides `child_program_vk` for validation.
+    pub child_vk_strategy: Option<ChildVkStrategy>,
     /// Maximum capabilities the factory can grant to created cells.
     pub allowed_cap_templates: Vec<CapTemplate>,
     /// Initial field constraints (which fields are set, value ranges).
@@ -43,6 +189,16 @@ impl FactoryDescriptor {
             Some(vk) => {
                 hasher.update(&[1u8]);
                 hasher.update(vk);
+            }
+            None => {
+                hasher.update(&[0u8]);
+            }
+        }
+        // Include child_vk_strategy in hash.
+        match &self.child_vk_strategy {
+            Some(strategy) => {
+                hasher.update(&[1u8]);
+                hasher.update(&strategy.hash());
             }
             None => {
                 hasher.update(&[0u8]);
@@ -77,12 +233,20 @@ impl FactoryDescriptor {
     ///
     /// Returns `Ok(())` if all constraints pass, or an error describing the violation.
     pub fn validate_creation(&self, params: &FactoryCreationParams) -> Result<(), FactoryError> {
-        // Check child program VK.
-        if self.child_program_vk != params.program_vk {
-            return Err(FactoryError::ProgramMismatch {
-                expected: self.child_program_vk,
-                got: params.program_vk,
-            });
+        // Check child program VK using strategy if present, else legacy check.
+        match &self.child_vk_strategy {
+            Some(strategy) => {
+                strategy.validate_child_vk(&params.program_vk, params)?;
+            }
+            None => {
+                // Legacy behavior: exact match on child_program_vk.
+                if self.child_program_vk != params.program_vk {
+                    return Err(FactoryError::ProgramMismatch {
+                        expected: self.child_program_vk,
+                        got: params.program_vk,
+                    });
+                }
+            }
         }
 
         // Check mode.
@@ -312,6 +476,9 @@ pub struct Provenance {
     pub creation_proof_hash: Option<[u8; 32]>,
     /// The block height at which the cell was created.
     pub creation_height: u64,
+    /// If the child VK was derived, the param_hash used in derivation.
+    /// Third parties can verify: `cell.program_vk == derive(factory_vk, param_hash)`.
+    pub derivation_param_hash: Option<[u8; 32]>,
 }
 
 impl Provenance {
@@ -321,6 +488,7 @@ impl Provenance {
             created_by_factory: None,
             creation_proof_hash: None,
             creation_height: height,
+            derivation_param_hash: None,
         }
     }
 
@@ -330,6 +498,36 @@ impl Provenance {
             created_by_factory: Some(factory_vk),
             creation_proof_hash: proof_hash,
             creation_height: height,
+            derivation_param_hash: None,
+        }
+    }
+
+    /// Create a provenance for a factory-created cell with a derived VK.
+    pub fn from_factory_derived(
+        factory_vk: [u8; 32],
+        proof_hash: Option<[u8; 32]>,
+        height: u64,
+        param_hash: [u8; 32],
+    ) -> Self {
+        Provenance {
+            created_by_factory: Some(factory_vk),
+            creation_proof_hash: proof_hash,
+            creation_height: height,
+            derivation_param_hash: Some(param_hash),
+        }
+    }
+
+    /// Verify that a cell's program VK was correctly derived from the factory.
+    ///
+    /// Returns `true` if the derivation is valid, `false` if it cannot be verified
+    /// (e.g., no derivation_param_hash, or no factory VK).
+    pub fn verify_derivation(&self, cell_program_vk: &[u8; 32]) -> bool {
+        match (self.created_by_factory, self.derivation_param_hash) {
+            (Some(factory_vk), Some(param_hash)) => {
+                let expected = ChildVkStrategy::derive_child_vk(&factory_vk, &param_hash);
+                expected == *cell_program_vk
+            }
+            _ => false,
         }
     }
 }
@@ -352,6 +550,16 @@ pub enum FactoryError {
     BudgetExceeded { limit: u64, used: u64 },
     /// The factory VK doesn't match the claimed descriptor.
     FactoryVkMismatch { expected: [u8; 32], got: [u8; 32] },
+    /// The derived child VK doesn't match the expected derivation.
+    DerivedVkMismatch {
+        expected: [u8; 32],
+        got: Option<[u8; 32]>,
+    },
+    /// The claimed child VK is not in the factory's approved set.
+    VkNotInApprovedSet {
+        claimed: Option<[u8; 32]>,
+        set_size: usize,
+    },
 }
 
 impl std::fmt::Display for FactoryError {
@@ -392,6 +600,23 @@ impl std::fmt::Display for FactoryError {
                     f,
                     "factory VK mismatch: expected {:02x}{:02x}..., got {:02x}{:02x}...",
                     expected[0], expected[1], got[0], got[1]
+                )
+            }
+            FactoryError::DerivedVkMismatch { expected, got } => {
+                write!(
+                    f,
+                    "derived child VK mismatch: expected {:02x}{:02x}..., got {:?}",
+                    expected[0],
+                    expected[1],
+                    got.map(|g| format!("{:02x}{:02x}...", g[0], g[1]))
+                )
+            }
+            FactoryError::VkNotInApprovedSet { claimed, set_size } => {
+                write!(
+                    f,
+                    "child VK {:?} not in approved set of {} VKs",
+                    claimed.map(|c| format!("{:02x}{:02x}...", c[0], c[1])),
+                    set_size
                 )
             }
         }
@@ -510,6 +735,7 @@ mod tests {
         FactoryDescriptor {
             factory_vk: test_factory_vk(),
             child_program_vk: Some(test_child_vk()),
+            child_vk_strategy: None,
             allowed_cap_templates: vec![CapTemplate {
                 target: CapTarget::Specific(coordinator_id),
                 max_permissions: AuthRequired::None,
@@ -727,6 +953,7 @@ mod tests {
         let desc = FactoryDescriptor {
             factory_vk: test_factory_vk(),
             child_program_vk: None,
+            child_vk_strategy: None,
             allowed_cap_templates: vec![CapTemplate {
                 target: CapTarget::SelfCell,
                 max_permissions: AuthRequired::Signature,
@@ -757,6 +984,7 @@ mod tests {
         let desc = FactoryDescriptor {
             factory_vk: test_factory_vk(),
             child_program_vk: None,
+            child_vk_strategy: None,
             allowed_cap_templates: vec![CapTemplate {
                 target: CapTarget::Any,
                 max_permissions: AuthRequired::None,
@@ -781,5 +1009,200 @@ mod tests {
         };
 
         assert!(desc.validate_creation(&params).is_ok());
+    }
+
+    // =========================================================================
+    // Computable child VK tests
+    // =========================================================================
+
+    #[test]
+    fn test_derived_vk_strategy_creates_correct_vk() {
+        let factory_vk = test_factory_vk();
+        let desc = FactoryDescriptor {
+            factory_vk,
+            child_program_vk: None,
+            child_vk_strategy: Some(ChildVkStrategy::Derived {
+                base_vk: factory_vk,
+            }),
+            allowed_cap_templates: vec![],
+            field_constraints: vec![],
+            default_mode: CellMode::Hosted,
+            creation_budget: None,
+        };
+
+        // Compute what the derived VK should be for these params.
+        let params = FactoryCreationParams {
+            mode: CellMode::Hosted,
+            program_vk: None, // Will be overwritten with derived VK
+            initial_fields: vec![(0, 100), (1, 200)],
+            initial_caps: vec![],
+            owner_pubkey: [5u8; 32],
+        };
+        let param_hash = ChildVkStrategy::compute_param_hash(&params);
+        let derived_vk = ChildVkStrategy::derive_child_vk(&factory_vk, &param_hash);
+
+        // Creation with correct derived VK succeeds.
+        let params_with_vk = FactoryCreationParams {
+            program_vk: Some(derived_vk),
+            ..params.clone()
+        };
+        assert!(desc.validate_creation(&params_with_vk).is_ok());
+
+        // Creation with wrong VK fails.
+        let wrong_params = FactoryCreationParams {
+            program_vk: Some([0xAA; 32]),
+            ..params
+        };
+        let err = desc.validate_creation(&wrong_params).unwrap_err();
+        assert!(matches!(err, FactoryError::DerivedVkMismatch { .. }));
+    }
+
+    #[test]
+    fn test_derived_vk_different_params_different_vk() {
+        let factory_vk = test_factory_vk();
+
+        let params_a = FactoryCreationParams {
+            mode: CellMode::Hosted,
+            program_vk: None,
+            initial_fields: vec![(0, 1)], // token A
+            initial_caps: vec![],
+            owner_pubkey: [5u8; 32],
+        };
+        let params_b = FactoryCreationParams {
+            mode: CellMode::Hosted,
+            program_vk: None,
+            initial_fields: vec![(0, 2)], // token B
+            initial_caps: vec![],
+            owner_pubkey: [5u8; 32],
+        };
+
+        let hash_a = ChildVkStrategy::compute_param_hash(&params_a);
+        let hash_b = ChildVkStrategy::compute_param_hash(&params_b);
+        let vk_a = ChildVkStrategy::derive_child_vk(&factory_vk, &hash_a);
+        let vk_b = ChildVkStrategy::derive_child_vk(&factory_vk, &hash_b);
+
+        // Different params must produce different VKs.
+        assert_ne!(vk_a, vk_b);
+    }
+
+    #[test]
+    fn test_from_set_strategy_allows_approved_vk() {
+        let factory_vk = test_factory_vk();
+        let vk_admin = *blake3::hash(b"admin-program").as_bytes();
+        let vk_reader = *blake3::hash(b"reader-program").as_bytes();
+        let vk_writer = *blake3::hash(b"writer-program").as_bytes();
+
+        let desc = FactoryDescriptor {
+            factory_vk,
+            child_program_vk: None,
+            child_vk_strategy: Some(ChildVkStrategy::FromSet {
+                approved_vks: vec![vk_admin, vk_reader, vk_writer],
+            }),
+            allowed_cap_templates: vec![],
+            field_constraints: vec![],
+            default_mode: CellMode::Hosted,
+            creation_budget: None,
+        };
+
+        // Creating with an approved VK succeeds.
+        let params = FactoryCreationParams {
+            mode: CellMode::Hosted,
+            program_vk: Some(vk_reader),
+            initial_fields: vec![],
+            initial_caps: vec![],
+            owner_pubkey: [6u8; 32],
+        };
+        assert!(desc.validate_creation(&params).is_ok());
+
+        // Creating with an unapproved VK fails.
+        let bad_params = FactoryCreationParams {
+            program_vk: Some(*blake3::hash(b"rogue-program").as_bytes()),
+            ..params
+        };
+        let err = desc.validate_creation(&bad_params).unwrap_err();
+        assert!(matches!(err, FactoryError::VkNotInApprovedSet { .. }));
+    }
+
+    #[test]
+    fn test_from_set_rejects_none_vk() {
+        let factory_vk = test_factory_vk();
+        let vk_admin = *blake3::hash(b"admin-program").as_bytes();
+
+        let desc = FactoryDescriptor {
+            factory_vk,
+            child_program_vk: None,
+            child_vk_strategy: Some(ChildVkStrategy::FromSet {
+                approved_vks: vec![vk_admin],
+            }),
+            allowed_cap_templates: vec![],
+            field_constraints: vec![],
+            default_mode: CellMode::Hosted,
+            creation_budget: None,
+        };
+
+        let params = FactoryCreationParams {
+            mode: CellMode::Hosted,
+            program_vk: None, // Not in the set
+            initial_fields: vec![],
+            initial_caps: vec![],
+            owner_pubkey: [7u8; 32],
+        };
+        let err = desc.validate_creation(&params).unwrap_err();
+        assert!(matches!(err, FactoryError::VkNotInApprovedSet { .. }));
+    }
+
+    #[test]
+    fn test_provenance_derivation_verification() {
+        let factory_vk = test_factory_vk();
+
+        let params = FactoryCreationParams {
+            mode: CellMode::Hosted,
+            program_vk: None,
+            initial_fields: vec![(0, 42)],
+            initial_caps: vec![],
+            owner_pubkey: [8u8; 32],
+        };
+        let param_hash = ChildVkStrategy::compute_param_hash(&params);
+        let derived_vk = ChildVkStrategy::derive_child_vk(&factory_vk, &param_hash);
+
+        let prov = Provenance::from_factory_derived(factory_vk, None, 50, param_hash);
+        assert!(prov.verify_derivation(&derived_vk));
+        assert!(!prov.verify_derivation(&[0xBB; 32])); // wrong VK
+    }
+
+    #[test]
+    fn test_child_vk_strategy_hash_deterministic() {
+        let s1 = ChildVkStrategy::Derived {
+            base_vk: test_factory_vk(),
+        };
+        let s2 = ChildVkStrategy::Derived {
+            base_vk: test_factory_vk(),
+        };
+        assert_eq!(s1.hash(), s2.hash());
+    }
+
+    #[test]
+    fn test_child_vk_strategy_hash_differs_between_variants() {
+        let fixed = ChildVkStrategy::Fixed(Some(test_child_vk()));
+        let derived = ChildVkStrategy::Derived {
+            base_vk: test_factory_vk(),
+        };
+        let from_set = ChildVkStrategy::FromSet {
+            approved_vks: vec![test_child_vk()],
+        };
+        assert_ne!(fixed.hash(), derived.hash());
+        assert_ne!(derived.hash(), from_set.hash());
+        assert_ne!(fixed.hash(), from_set.hash());
+    }
+
+    #[test]
+    fn test_descriptor_hash_changes_with_strategy() {
+        let mut desc = worker_factory_descriptor();
+        let h1 = desc.hash();
+        desc.child_vk_strategy = Some(ChildVkStrategy::Derived {
+            base_vk: test_factory_vk(),
+        });
+        let h2 = desc.hash();
+        assert_ne!(h1, h2);
     }
 }

@@ -594,6 +594,30 @@ impl ConstraintExpr {
     }
 }
 
+/// Recursively check that all PiBinding references within a constraint expression
+/// are within the declared `pi_count`. Returns `Ok(())` if all references are valid,
+/// or `Err(pi_index)` with the first out-of-bounds pi_index found.
+fn check_pi_bounds_recursive(expr: &ConstraintExpr, pi_count: usize) -> Result<(), usize> {
+    match expr {
+        ConstraintExpr::PiBinding { pi_index, .. } => {
+            if *pi_index >= pi_count {
+                return Err(*pi_index);
+            }
+        }
+        ConstraintExpr::Gated { inner, .. } => {
+            check_pi_bounds_recursive(inner, pi_count)?;
+        }
+        ConstraintExpr::InvertedGated { inner, .. } => {
+            check_pi_bounds_recursive(inner, pi_count)?;
+        }
+        ConstraintExpr::Squared { inner } => {
+            check_pi_bounds_recursive(inner, pi_count)?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 impl CircuitDescriptor {
     /// Validate that this program is safe to deploy as a cell program.
     ///
@@ -656,15 +680,13 @@ impl CircuitDescriptor {
                 });
             }
 
-            // Check PiBinding references are within public_input_count
-            if let ConstraintExpr::PiBinding { pi_index, .. } = constraint {
-                if *pi_index >= self.public_input_count {
-                    return Err(ProgramValidationError::PiBindingOutOfBounds {
-                        constraint_index: i,
-                        pi_index: *pi_index,
-                        pi_count: self.public_input_count,
-                    });
-                }
+            // Check PiBinding references are within public_input_count (recursively)
+            if let Err(pi_index) = check_pi_bounds_recursive(constraint, self.public_input_count) {
+                return Err(ProgramValidationError::PiBindingOutOfBounds {
+                    constraint_index: i,
+                    pi_index,
+                    pi_count: self.public_input_count,
+                });
             }
         }
 

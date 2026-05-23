@@ -5,6 +5,7 @@
 //! preconditions, and produces effects.
 
 use pyana_cell::note_bridge::{BridgeReceipt, PortableNoteProof};
+use pyana_cell::permissions::AuthRequired;
 use pyana_cell::state::FieldElement;
 use pyana_cell::{CapabilityRef, CellId, NoteCommitment, Nullifier, Preconditions, SealedBox};
 #[allow(unused_imports)]
@@ -101,6 +102,13 @@ pub enum Authorization {
     },
     /// Capability token hash (breadstuff authorization).
     Breadstuff([u8; 32]),
+    /// Bearer capability: proof-carrying authorization that exercises a capability
+    /// WITHOUT requiring it to be in the actor's c-list. The proof demonstrates
+    /// delegated authority from a root holder through a delegation chain.
+    ///
+    /// This enables E-language alignment: a capability can be exercised immediately
+    /// in the same turn it is delegated, with no persistence in any cell's state.
+    Bearer(BearerCapProof),
     /// No authorization provided (only valid if the cell's permissions allow it).
     ///
     /// Named `Unchecked` rather than `None` to make it grep-able and ensure
@@ -109,14 +117,59 @@ pub enum Authorization {
     Unchecked,
 }
 
+/// Proof-carrying bearer capability: demonstrates delegated authority to exercise
+/// a capability without holding it in a c-list.
+///
+/// Bearer caps are ephemeral -- they exist only for the duration of a single turn
+/// and never persist in any cell's state. This makes them ideal for immediate
+/// inline delegation where a one-turn delay is unacceptable.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BearerCapProof {
+    /// The capability target being exercised.
+    pub target: CellId,
+    /// The permission level being exercised (must be subset of delegator's permissions).
+    pub permissions: AuthRequired,
+    /// The delegation chain proof (shows how authority flows from root to bearer).
+    pub delegation_proof: DelegationProofData,
+    /// Expiry height (mandatory for bearer caps -- limits the revocation window).
+    pub expires_at: u64,
+    /// Optional revocation channel binding. If set, the channel must be active
+    /// for the bearer cap to be exercisable.
+    pub revocation_channel: Option<[u8; 32]>,
+}
+
+/// How the delegation chain is proven for a bearer capability.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum DelegationProofData {
+    /// Signed attestation: delegator signs "I delegate {permissions} on {target}
+    /// to {bearer_pk} until {expires_at}".
+    SignedDelegation {
+        /// Public key of the delegator (must hold the cap in their c-list).
+        delegator_pk: [u8; 32],
+        /// Ed25519 signature from delegator over the delegation message.
+        #[serde(with = "crate::escrow::serde_sig64")]
+        signature: [u8; 64],
+        /// Public key of the bearer (the entity exercising the cap).
+        bearer_pk: [u8; 32],
+    },
+    /// STARK proof of derivation chain (verifiable without delegator online).
+    StarkDelegation {
+        /// Serialized STARK proof bytes.
+        proof_bytes: Vec<u8>,
+        /// Commitment to the root issuer of the capability.
+        root_issuer_commitment: [u8; 32],
+    },
+}
+
 impl Authorization {
     /// Map this authorization to the corresponding AuthKind for permission checking.
-    /// Returns None for Authorization::Unchecked and Authorization::Breadstuff (handled separately).
+    /// Returns None for Authorization::Unchecked, Breadstuff, and Bearer (handled separately).
     pub fn to_auth_kind(&self) -> Option<pyana_cell::AuthKind> {
         match self {
             Authorization::Signature(_, _) => Some(pyana_cell::AuthKind::Signature),
             Authorization::Proof { .. } => Some(pyana_cell::AuthKind::Proof),
             Authorization::Breadstuff(_) => None,
+            Authorization::Bearer(_) => None,
             Authorization::Unchecked => None,
         }
     }
@@ -545,6 +598,38 @@ impl Action {
             Authorization::Breadstuff(token) => {
                 hasher.update(&[2u8]);
                 hasher.update(token);
+            }
+            Authorization::Bearer(proof) => {
+                hasher.update(&[4u8]);
+                hasher.update(proof.target.as_bytes());
+                hasher.update(&proof.expires_at.to_le_bytes());
+                match &proof.delegation_proof {
+                    DelegationProofData::SignedDelegation {
+                        delegator_pk,
+                        signature,
+                        bearer_pk,
+                    } => {
+                        hasher.update(&[0u8]);
+                        hasher.update(delegator_pk);
+                        hasher.update(signature);
+                        hasher.update(bearer_pk);
+                    }
+                    DelegationProofData::StarkDelegation {
+                        proof_bytes,
+                        root_issuer_commitment,
+                    } => {
+                        hasher.update(&[1u8]);
+                        hasher.update(&(proof_bytes.len() as u64).to_le_bytes());
+                        hasher.update(proof_bytes);
+                        hasher.update(root_issuer_commitment);
+                    }
+                }
+                if let Some(rc) = &proof.revocation_channel {
+                    hasher.update(&[1u8]);
+                    hasher.update(rc);
+                } else {
+                    hasher.update(&[0u8]);
+                }
             }
             Authorization::Unchecked => {
                 hasher.update(&[3u8]);

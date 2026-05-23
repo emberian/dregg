@@ -40,6 +40,14 @@
 #[cfg(feature = "mina")]
 pub mod mina;
 
+/// STARK-in-Pickles wrapper: verify BabyBear STARK proofs inside Pickles recursive SNARKs.
+///
+/// Uses the Poseidon-committed STARK path (`poseidon_stark.rs`) for efficient in-circuit
+/// verification via native Kimchi Poseidon gates (~30K rows vs ~272K for BLAKE3 emulation).
+/// Bridges: PoseidonStarkProof -> Kimchi verifier circuit -> Pickles recursive proof.
+#[cfg(feature = "mina")]
+pub mod stark_in_pickles;
+
 /// Native Kimchi circuit backend: implements pyana's core proof statements
 /// (derivation, non-membership) as native Kimchi circuits over Fp.
 ///

@@ -65,13 +65,13 @@ pub use facet::{
     is_facet_attenuation,
 };
 pub use factory::{
-    CapGrant, CapTarget, CapTemplate, FactoryCreationParams, FactoryDescriptor, FactoryError,
-    FactoryRegistry, FieldConstraint, Provenance,
+    CapGrant, CapTarget, CapTemplate, ChildVkStrategy, FactoryCreationParams, FactoryDescriptor,
+    FactoryError, FactoryRegistry, FieldConstraint, Provenance,
 };
 pub use id::CellId;
 pub use ledger::{
     CellStateDelta, DEFAULT_SOVEREIGN_TTL, Ledger, LedgerDelta, LedgerError, MembershipProof, Side,
-    SovereignRegistration, WitnessDiff,
+    SovereignHistory, SovereignRegistration, WitnessDiff,
 };
 pub use note::{Note, NoteCommitment, NoteError, Nullifier, PositionedNote};
 #[cfg(feature = "crypto")]

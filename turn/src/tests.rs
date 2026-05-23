@@ -7974,3 +7974,491 @@ fn test_facet_attenuation_only_restricts() {
     );
     assert_eq!(result.unwrap().allowed_effects, Some(EFFECT_SET_FIELD));
 }
+
+// =============================================================================
+// Bearer Capability Tests
+// =============================================================================
+
+fn make_bearer_delegation(
+    delegator_kp: &TestKeypair,
+    target: &CellId,
+    bearer_pk: &[u8; 32],
+    permissions: &AuthRequired,
+    expires_at: u64,
+) -> crate::action::BearerCapProof {
+    use crate::action::{BearerCapProof, DelegationProofData};
+    let message = TurnExecutor::compute_bearer_delegation_message(
+        target,
+        permissions,
+        bearer_pk,
+        expires_at,
+        &[0u8; 32],
+    );
+    let sig = delegator_kp.signing_key.sign(&message);
+    BearerCapProof {
+        target: *target,
+        permissions: permissions.clone(),
+        delegation_proof: DelegationProofData::SignedDelegation {
+            delegator_pk: delegator_kp.public_key,
+            signature: sig.to_bytes(),
+            bearer_pk: *bearer_pk,
+        },
+        expires_at,
+        revocation_channel: None,
+    }
+}
+
+fn make_open_permissions() -> pyana_cell::Permissions {
+    pyana_cell::Permissions {
+        send: AuthRequired::None,
+        receive: AuthRequired::None,
+        set_state: AuthRequired::None,
+        set_permissions: AuthRequired::None,
+        set_verification_key: AuthRequired::None,
+        increment_nonce: AuthRequired::None,
+        delegate: AuthRequired::None,
+        access: AuthRequired::None,
+    }
+}
+
+fn make_bearer_turn(
+    bearer_id: CellId,
+    target_id: CellId,
+    auth: Authorization,
+    value: [u8; 32],
+) -> Turn {
+    Turn {
+        agent: bearer_id,
+        nonce: 0,
+        call_forest: CallForest {
+            roots: vec![CallTree {
+                action: Action {
+                    target: target_id,
+                    method: symbol("set_field"),
+                    args: vec![],
+                    authorization: auth,
+                    preconditions: pyana_cell::preconditions::Preconditions::default(),
+                    effects: vec![Effect::SetField {
+                        cell: target_id,
+                        index: 0,
+                        value,
+                    }],
+                    may_delegate: DelegationMode::None,
+                    commitment_mode: CommitmentMode::Full,
+                    balance_change: None,
+                },
+                children: vec![],
+                hash: [0u8; 32],
+            }],
+            forest_hash: [0u8; 32],
+        },
+        fee: 0,
+        memo: None,
+        valid_until: None,
+        previous_receipt_hash: None,
+        depends_on: vec![],
+        conservation_proof: None,
+        sovereign_witnesses: std::collections::HashMap::new(),
+        execution_proof: None,
+        execution_proof_cell: None,
+        execution_proof_new_commitment: None,
+    }
+}
+
+#[test]
+fn test_bearer_cap_signed_delegation_accepted() {
+    let mut ledger = pyana_cell::Ledger::new();
+    let delegator_kp = TestKeypair::from_seed(10);
+    let bearer_kp = TestKeypair::from_seed(11);
+    let token_id = [0u8; 32];
+    let mut delegator_cell = Cell::with_balance(delegator_kp.public_key, token_id, 1000);
+    delegator_cell.permissions = make_open_permissions();
+    let mut target_cell = Cell::with_balance([3u8; 32], token_id, 500);
+    target_cell.permissions = make_open_permissions();
+    let target_id = target_cell.id;
+    delegator_cell
+        .capabilities
+        .grant(target_id, AuthRequired::None);
+    let mut bearer_cell = Cell::with_balance(bearer_kp.public_key, token_id, 1000);
+    bearer_cell.permissions = make_open_permissions();
+    let bearer_id = bearer_cell.id;
+    ledger.insert_cell(delegator_cell).unwrap();
+    ledger.insert_cell(target_cell).unwrap();
+    ledger.insert_cell(bearer_cell).unwrap();
+    let executor = zero_cost_executor();
+    let bearer_proof = make_bearer_delegation(
+        &delegator_kp,
+        &target_id,
+        &bearer_kp.public_key,
+        &AuthRequired::None,
+        1000,
+    );
+    let turn = make_bearer_turn(
+        bearer_id,
+        target_id,
+        Authorization::Bearer(bearer_proof),
+        [99u8; 32],
+    );
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        result.is_committed(),
+        "bearer cap with valid signed delegation should be accepted, got: {:?}",
+        result
+    );
+    assert_eq!(ledger.get(&target_id).unwrap().state.fields[0], [99u8; 32]);
+}
+
+#[test]
+fn test_bearer_cap_expired_rejected() {
+    let mut ledger = pyana_cell::Ledger::new();
+    let delegator_kp = TestKeypair::from_seed(20);
+    let bearer_kp = TestKeypair::from_seed(21);
+    let token_id = [0u8; 32];
+    let mut delegator_cell = Cell::with_balance(delegator_kp.public_key, token_id, 1000);
+    delegator_cell.permissions = make_open_permissions();
+    let mut target_cell = Cell::with_balance([3u8; 32], token_id, 500);
+    target_cell.permissions = make_open_permissions();
+    let target_id = target_cell.id;
+    delegator_cell
+        .capabilities
+        .grant(target_id, AuthRequired::None);
+    let mut bearer_cell = Cell::with_balance(bearer_kp.public_key, token_id, 1000);
+    bearer_cell.permissions = make_open_permissions();
+    let bearer_id = bearer_cell.id;
+    ledger.insert_cell(delegator_cell).unwrap();
+    ledger.insert_cell(target_cell).unwrap();
+    ledger.insert_cell(bearer_cell).unwrap();
+    let mut executor = zero_cost_executor();
+    executor.set_block_height(10);
+    let bearer_proof = make_bearer_delegation(
+        &delegator_kp,
+        &target_id,
+        &bearer_kp.public_key,
+        &AuthRequired::None,
+        5,
+    );
+    let turn = make_bearer_turn(
+        bearer_id,
+        target_id,
+        Authorization::Bearer(bearer_proof),
+        [1u8; 32],
+    );
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        !result.is_committed(),
+        "expired bearer cap should be rejected"
+    );
+    match result {
+        crate::turn::TurnResult::Rejected { reason, .. } => assert!(
+            matches!(reason, TurnError::BearerCapExpired { .. }),
+            "expected BearerCapExpired, got: {:?}",
+            reason
+        ),
+        other => panic!("expected Rejected, got: {:?}", other),
+    }
+}
+
+#[test]
+fn test_bearer_cap_revoked_channel_rejected() {
+    use pyana_cell::{RevocationChannelSet, revocation_channel::RevocationChannel};
+    let mut ledger = pyana_cell::Ledger::new();
+    let delegator_kp = TestKeypair::from_seed(30);
+    let bearer_kp = TestKeypair::from_seed(31);
+    let token_id = [0u8; 32];
+    let mut delegator_cell = Cell::with_balance(delegator_kp.public_key, token_id, 1000);
+    delegator_cell.permissions = make_open_permissions();
+    let delegator_id = delegator_cell.id;
+    let mut target_cell = Cell::with_balance([3u8; 32], token_id, 500);
+    target_cell.permissions = make_open_permissions();
+    let target_id = target_cell.id;
+    delegator_cell
+        .capabilities
+        .grant(target_id, AuthRequired::None);
+    let mut bearer_cell = Cell::with_balance(bearer_kp.public_key, token_id, 1000);
+    bearer_cell.permissions = make_open_permissions();
+    let bearer_id = bearer_cell.id;
+    ledger.insert_cell(delegator_cell).unwrap();
+    ledger.insert_cell(target_cell).unwrap();
+    ledger.insert_cell(bearer_cell).unwrap();
+    let mut channels = RevocationChannelSet::new();
+    let mut channel = RevocationChannel::new(delegator_id, 0, 0);
+    let channel_id = channel.channel_id;
+    channel.trip(&delegator_id, [0u8; 32], 5).unwrap();
+    channels.register(channel).unwrap();
+    let mut executor = zero_cost_executor();
+    executor.set_revocation_channels(channels);
+    executor.set_block_height(10);
+    let mut bearer_proof = make_bearer_delegation(
+        &delegator_kp,
+        &target_id,
+        &bearer_kp.public_key,
+        &AuthRequired::None,
+        1000,
+    );
+    bearer_proof.revocation_channel = Some(channel_id);
+    let turn = make_bearer_turn(
+        bearer_id,
+        target_id,
+        Authorization::Bearer(bearer_proof),
+        [1u8; 32],
+    );
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        !result.is_committed(),
+        "bearer cap with tripped revocation channel should be rejected"
+    );
+    match result {
+        crate::turn::TurnResult::Rejected { reason, .. } => assert!(
+            matches!(reason, TurnError::BearerCapRevoked { .. }),
+            "expected BearerCapRevoked, got: {:?}",
+            reason
+        ),
+        other => panic!("expected Rejected, got: {:?}", other),
+    }
+}
+
+#[test]
+fn test_bearer_cap_amplification_rejected() {
+    let mut ledger = pyana_cell::Ledger::new();
+    let delegator_kp = TestKeypair::from_seed(40);
+    let bearer_kp = TestKeypair::from_seed(41);
+    let token_id = [0u8; 32];
+    let mut delegator_cell = Cell::with_balance(delegator_kp.public_key, token_id, 1000);
+    delegator_cell.permissions = make_open_permissions();
+    let mut target_cell = Cell::with_balance([3u8; 32], token_id, 500);
+    target_cell.permissions = make_open_permissions();
+    let target_id = target_cell.id;
+    delegator_cell
+        .capabilities
+        .grant(target_id, AuthRequired::Signature);
+    let mut bearer_cell = Cell::with_balance(bearer_kp.public_key, token_id, 1000);
+    bearer_cell.permissions = make_open_permissions();
+    let bearer_id = bearer_cell.id;
+    ledger.insert_cell(delegator_cell).unwrap();
+    ledger.insert_cell(target_cell).unwrap();
+    ledger.insert_cell(bearer_cell).unwrap();
+    let executor = zero_cost_executor();
+    let bearer_proof = make_bearer_delegation(
+        &delegator_kp,
+        &target_id,
+        &bearer_kp.public_key,
+        &AuthRequired::None,
+        1000,
+    );
+    let turn = make_bearer_turn(
+        bearer_id,
+        target_id,
+        Authorization::Bearer(bearer_proof),
+        [1u8; 32],
+    );
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        !result.is_committed(),
+        "bearer cap amplification should be rejected"
+    );
+    match result {
+        crate::turn::TurnResult::Rejected { reason, .. } => assert!(
+            matches!(reason, TurnError::BearerCapAmplification { .. }),
+            "expected BearerCapAmplification, got: {:?}",
+            reason
+        ),
+        other => panic!("expected Rejected, got: {:?}", other),
+    }
+}
+
+#[test]
+fn test_bearer_cap_delegator_lacks_capability_rejected() {
+    let mut ledger = pyana_cell::Ledger::new();
+    let delegator_kp = TestKeypair::from_seed(50);
+    let bearer_kp = TestKeypair::from_seed(51);
+    let token_id = [0u8; 32];
+    let mut delegator_cell = Cell::with_balance(delegator_kp.public_key, token_id, 1000);
+    delegator_cell.permissions = make_open_permissions();
+    let mut target_cell = Cell::with_balance([3u8; 32], token_id, 500);
+    target_cell.permissions = make_open_permissions();
+    let target_id = target_cell.id;
+    // NO capability granted to delegator for target
+    let mut bearer_cell = Cell::with_balance(bearer_kp.public_key, token_id, 1000);
+    bearer_cell.permissions = make_open_permissions();
+    let bearer_id = bearer_cell.id;
+    ledger.insert_cell(delegator_cell).unwrap();
+    ledger.insert_cell(target_cell).unwrap();
+    ledger.insert_cell(bearer_cell).unwrap();
+    let executor = zero_cost_executor();
+    let bearer_proof = make_bearer_delegation(
+        &delegator_kp,
+        &target_id,
+        &bearer_kp.public_key,
+        &AuthRequired::None,
+        1000,
+    );
+    let turn = make_bearer_turn(
+        bearer_id,
+        target_id,
+        Authorization::Bearer(bearer_proof),
+        [1u8; 32],
+    );
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        !result.is_committed(),
+        "bearer cap where delegator lacks capability should be rejected"
+    );
+    match result {
+        crate::turn::TurnResult::Rejected { reason, .. } => assert!(
+            matches!(reason, TurnError::BearerCapDelegatorLacksCapability { .. }),
+            "expected BearerCapDelegatorLacksCapability, got: {:?}",
+            reason
+        ),
+        other => panic!("expected Rejected, got: {:?}", other),
+    }
+}
+
+#[test]
+fn test_bearer_cap_invalid_signature_rejected() {
+    let mut ledger = pyana_cell::Ledger::new();
+    let delegator_kp = TestKeypair::from_seed(60);
+    let bearer_kp = TestKeypair::from_seed(61);
+    let wrong_kp = TestKeypair::from_seed(62);
+    let token_id = [0u8; 32];
+    let mut delegator_cell = Cell::with_balance(delegator_kp.public_key, token_id, 1000);
+    delegator_cell.permissions = make_open_permissions();
+    let mut target_cell = Cell::with_balance([3u8; 32], token_id, 500);
+    target_cell.permissions = make_open_permissions();
+    let target_id = target_cell.id;
+    delegator_cell
+        .capabilities
+        .grant(target_id, AuthRequired::None);
+    let mut bearer_cell = Cell::with_balance(bearer_kp.public_key, token_id, 1000);
+    bearer_cell.permissions = make_open_permissions();
+    let bearer_id = bearer_cell.id;
+    ledger.insert_cell(delegator_cell).unwrap();
+    ledger.insert_cell(target_cell).unwrap();
+    ledger.insert_cell(bearer_cell).unwrap();
+    let executor = zero_cost_executor();
+    let mut bearer_proof = make_bearer_delegation(
+        &wrong_kp,
+        &target_id,
+        &bearer_kp.public_key,
+        &AuthRequired::None,
+        1000,
+    );
+    if let crate::action::DelegationProofData::SignedDelegation {
+        ref mut delegator_pk,
+        ..
+    } = bearer_proof.delegation_proof
+    {
+        *delegator_pk = delegator_kp.public_key;
+    }
+    let turn = make_bearer_turn(
+        bearer_id,
+        target_id,
+        Authorization::Bearer(bearer_proof),
+        [1u8; 32],
+    );
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        !result.is_committed(),
+        "bearer cap with invalid signature should be rejected"
+    );
+    match result {
+        crate::turn::TurnResult::Rejected { reason, .. } => assert!(
+            matches!(reason, TurnError::BearerCapInvalidProof { .. }),
+            "expected BearerCapInvalidProof, got: {:?}",
+            reason
+        ),
+        other => panic!("expected Rejected, got: {:?}", other),
+    }
+}
+
+#[test]
+fn test_bearer_cap_same_turn_as_delegation() {
+    let mut ledger = pyana_cell::Ledger::new();
+    let delegator_kp = TestKeypair::from_seed(70);
+    let bearer_kp = TestKeypair::from_seed(71);
+    let token_id = [0u8; 32];
+    let mut delegator_cell = Cell::with_balance(delegator_kp.public_key, token_id, 1000);
+    delegator_cell.permissions = make_open_permissions();
+    let mut target_cell = Cell::with_balance([3u8; 32], token_id, 500);
+    target_cell.permissions = make_open_permissions();
+    let target_id = target_cell.id;
+    delegator_cell
+        .capabilities
+        .grant(target_id, AuthRequired::None);
+    let mut bearer_cell = Cell::with_balance(bearer_kp.public_key, token_id, 1000);
+    bearer_cell.permissions = make_open_permissions();
+    let bearer_id = bearer_cell.id;
+    ledger.insert_cell(delegator_cell).unwrap();
+    ledger.insert_cell(target_cell).unwrap();
+    ledger.insert_cell(bearer_cell).unwrap();
+    let executor = zero_cost_executor();
+    let bearer_proof = make_bearer_delegation(
+        &delegator_kp,
+        &target_id,
+        &bearer_kp.public_key,
+        &AuthRequired::None,
+        1000,
+    );
+    let turn = make_bearer_turn(
+        bearer_id,
+        target_id,
+        Authorization::Bearer(bearer_proof),
+        [42u8; 32],
+    );
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        result.is_committed(),
+        "bearer cap in same turn as delegation should work, got: {:?}",
+        result
+    );
+    assert_eq!(ledger.get(&target_id).unwrap().state.fields[0], [42u8; 32]);
+    assert!(
+        ledger.get(&bearer_id).unwrap().capabilities.is_empty(),
+        "bearer caps should NOT persist in the bearer's c-list"
+    );
+}
+
+#[test]
+fn test_bearer_cap_stark_delegation_invalid_proof_rejected() {
+    use crate::action::{BearerCapProof, DelegationProofData};
+    let mut ledger = pyana_cell::Ledger::new();
+    let bearer_kp = TestKeypair::from_seed(80);
+    let token_id = [0u8; 32];
+    let mut target_cell = Cell::with_balance([3u8; 32], token_id, 500);
+    target_cell.permissions = make_open_permissions();
+    let target_id = target_cell.id;
+    let mut bearer_cell = Cell::with_balance(bearer_kp.public_key, token_id, 1000);
+    bearer_cell.permissions = make_open_permissions();
+    let bearer_id = bearer_cell.id;
+    ledger.insert_cell(target_cell).unwrap();
+    ledger.insert_cell(bearer_cell).unwrap();
+    let executor = zero_cost_executor();
+    let bearer_proof = BearerCapProof {
+        target: target_id,
+        permissions: AuthRequired::None,
+        delegation_proof: DelegationProofData::StarkDelegation {
+            proof_bytes: vec![0xDE, 0xAD, 0xBE, 0xEF],
+            root_issuer_commitment: [1u8; 32],
+        },
+        expires_at: 1000,
+        revocation_channel: None,
+    };
+    let turn = make_bearer_turn(
+        bearer_id,
+        target_id,
+        Authorization::Bearer(bearer_proof),
+        [1u8; 32],
+    );
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        !result.is_committed(),
+        "bearer cap with invalid STARK proof should be rejected"
+    );
+    match result {
+        crate::turn::TurnResult::Rejected { reason, .. } => assert!(
+            matches!(reason, TurnError::BearerCapInvalidProof { .. }),
+            "expected BearerCapInvalidProof, got: {:?}",
+            reason
+        ),
+        other => panic!("expected Rejected, got: {:?}", other),
+    }
+}
