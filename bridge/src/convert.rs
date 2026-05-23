@@ -225,13 +225,15 @@ pub fn attenuation_to_facts(
     symbols: &mut SymbolTable,
 ) -> Vec<Fact> {
     // Convert the attenuation to wire caveats, then decode each as a grant,
-    // then convert grants to facts.
+    // then convert grants to secure hash-based facts.
+    // Uses grant_to_facts_secure to emit action_allowed/svc_action_allowed facts
+    // with exact hash equality matching (no substring vulnerability).
     let wire_caveats = pyana_caveats::attenuation_to_wire_caveats(attenuation);
     let mut facts = Vec::new();
 
     for wc in &wire_caveats {
         if let Ok(grant) = pyana_caveats::decode_grant(wc) {
-            facts.extend(grant_to_facts(&grant, symbols));
+            facts.extend(grant_to_facts_secure(&grant, symbols));
         }
     }
 
@@ -297,9 +299,9 @@ pub fn grant_to_facts_secure(grant: &PyanaGrant, symbols: &mut SymbolTable) -> V
             let action_names = action_to_names(actions);
             for name in &action_names {
                 let pred = symbols.intern("action_allowed");
-                // Hash the action name the same way FieldElement::from_symbol does
-                // (BLAKE3 hash truncated to 253 bits).
-                let action_hash = FieldElement::from_symbol(name);
+                // Intern the action name so the symbol table can resolve it
+                // back to the string for trace evaluation matching.
+                let action_hash = symbols.intern(name);
                 facts.push(Fact::binary(pred, id_fe, action_hash));
             }
             // Also emit the app predicate for app-matching (without actions string).
@@ -314,7 +316,8 @@ pub fn grant_to_facts_secure(grant: &PyanaGrant, symbols: &mut SymbolTable) -> V
             let action_names = action_to_names(actions);
             for action_name in &action_names {
                 let pred = symbols.intern("svc_action_allowed");
-                let action_hash = FieldElement::from_symbol(action_name);
+                // Intern the action name for symbol table resolution.
+                let action_hash = symbols.intern(action_name);
                 facts.push(Fact::binary(pred, name_fe, action_hash));
             }
             let svc_pred = symbols.intern("svc_registered");
@@ -456,8 +459,8 @@ mod tests {
         };
 
         let facts = attenuation_to_facts(&att, &mut symbols);
-        // 1 app + 2 features = 3 facts.
-        assert_eq!(facts.len(), 3);
+        // Secure format: 1 action_allowed + 1 app_registered + 2 features = 4 facts.
+        assert_eq!(facts.len(), 4);
 
         // All facts should have non-zero predicates.
         for fact in &facts {

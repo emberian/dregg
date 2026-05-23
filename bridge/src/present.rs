@@ -2621,30 +2621,61 @@ pub fn verify_proof_complete(
     }
 
     // 8. STARK cryptographic verification.
+    // Accepts both Production (Poseidon2) and Experimental (custom STARK) proofs.
+    // Only rejects Structural proofs (no cryptographic guarantees at all).
     use pyana_circuit::poseidon2_air::{BlindedMerklePoseidon2StarkAir, MerklePoseidon2StarkAir};
-    use pyana_circuit::stark::StarkAir;
+    use pyana_circuit::stark::{MerkleStarkAir, StarkAir};
     let air_name = &real.issuer_membership_stark_proof.air_name;
-    let stark_result = if air_name == BlindedMerklePoseidon2StarkAir.air_name() {
-        stark::verify(
-            &BlindedMerklePoseidon2StarkAir,
-            &real.issuer_membership_stark_proof,
-            &pi,
+    let (stark_result, proof_tier) = if air_name == BlindedMerklePoseidon2StarkAir.air_name() {
+        (
+            stark::verify(
+                &BlindedMerklePoseidon2StarkAir,
+                &real.issuer_membership_stark_proof,
+                &pi,
+            ),
+            pyana_circuit::ProofTier::Production,
+        )
+    } else if air_name == MerklePoseidon2StarkAir.air_name() {
+        (
+            stark::verify(
+                &MerklePoseidon2StarkAir,
+                &real.issuer_membership_stark_proof,
+                &pi,
+            ),
+            pyana_circuit::ProofTier::Production,
+        )
+    } else if air_name == MerkleStarkAir.air_name() {
+        // Custom STARK (Experimental tier) — cryptographically sound but with
+        // weaker parameters. Accepted for devnet and development use.
+        (
+            stark::verify(
+                &MerkleStarkAir,
+                &real.issuer_membership_stark_proof,
+                &pi,
+            ),
+            pyana_circuit::ProofTier::Experimental,
         )
     } else {
-        stark::verify(
-            &MerklePoseidon2StarkAir,
-            &real.issuer_membership_stark_proof,
-            &pi,
-        )
+        // Unknown AIR — reject as structural (no crypto guarantees).
+        return Err(VerifyError::StarkInvalid(format!(
+            "unknown AIR: {air_name} (only Production and Experimental tiers accepted)"
+        )));
     };
 
     if let Err(e) = stark_result {
         return Err(VerifyError::StarkInvalid(e));
     }
 
-    // All checks passed — Production tier.
+    // Only reject Structural tier (no cryptographic guarantees).
+    // Both Production (Plonky3/Poseidon2) and Experimental (custom STARK) are accepted.
+    if proof_tier == pyana_circuit::ProofTier::Structural {
+        return Err(VerifyError::StarkInvalid(
+            "structural proofs have no cryptographic guarantees".to_string(),
+        ));
+    }
+
     Ok(VerifiedPresentation {
-        tier: pyana_circuit::ProofTier::Production,
+        tier: proof_tier,
         action: expected_action.to_string(),
         resource: expected_resource.to_string(),
         federation_root: *federation_root,

@@ -296,9 +296,7 @@ fn field_element_to_u64(fe: &FieldElement) -> Option<u64> {
 /// Convert a `token::AuthRequest` to a `trace::AuthorizationRequest`.
 fn auth_request_to_trace(request: &AuthRequest) -> Result<TraceRequest, AuthError> {
     // Use symbol_from_bytes (raw zero-padded string) for request values.
-    // This is consistent with committed_facts_to_trace, enabling both:
-    // - Equality matching (same string -> same 32 bytes for unification)
-    // - Contains matching (raw string bytes preserve substring relationships)
+    // This is consistent with committed_facts_to_trace, enabling equality matching.
     let app_id = request
         .app_id
         .as_deref()
@@ -307,10 +305,17 @@ fn auth_request_to_trace(request: &AuthRequest) -> Result<TraceRequest, AuthErro
         .service
         .as_deref()
         .map(|s| symbol_from_bytes(s.as_bytes()));
+    // Parse the action string as a macaroon Action bitmask and convert to the
+    // canonical full action name for secure policy matching. Short forms like "r"
+    // map to "read", "w" to "write", etc. This ensures the trace action symbol
+    // matches the interned action names in action_allowed/svc_action_allowed facts.
     let action = request
         .action
         .as_deref()
-        .map(|s| symbol_from_bytes(s.as_bytes()));
+        .map(|s| {
+            let canonical = action_short_to_canonical(s);
+            symbol_from_bytes(canonical.as_bytes())
+        });
     let features: Vec<[u8; 32]> = request
         .features
         .iter()
@@ -336,6 +341,42 @@ fn auth_request_to_trace(request: &AuthRequest) -> Result<TraceRequest, AuthErro
         user_id,
         now,
     })
+}
+
+/// Convert a short action string (e.g. "r", "w", "rw") to its canonical full name.
+///
+/// If the action string is already a canonical name (e.g. "read", "write"),
+/// it passes through unchanged. For short bitmask-style strings, the first
+/// matching action is used (since the trace request supports a single action).
+///
+/// Mapping: r -> read, w -> write, c -> create, d -> delete, C -> control.
+/// Multi-action strings (e.g. "rw") map to the first action bit for the
+/// single-action trace request format.
+fn action_short_to_canonical(s: &str) -> String {
+    use pyana_macaroon::action::Action;
+
+    // If it's already a canonical name, pass through.
+    match s {
+        "read" | "write" | "create" | "delete" | "control" => return s.to_string(),
+        _ => {}
+    }
+
+    // Parse as Action bitmask and extract the first (lowest) action.
+    let action = Action::parse(s);
+    if action.contains(Action::READ) {
+        "read".to_string()
+    } else if action.contains(Action::WRITE) {
+        "write".to_string()
+    } else if action.contains(Action::CREATE) {
+        "create".to_string()
+    } else if action.contains(Action::DELETE) {
+        "delete".to_string()
+    } else if action.contains(Action::CONTROL) {
+        "control".to_string()
+    } else {
+        // Unknown action string - pass through as-is for compatibility.
+        s.to_string()
+    }
 }
 
 /// Emit budget and revocation state as trace facts from the AuthRequest.
@@ -449,6 +490,7 @@ mod tests {
         let mut symbols = SymbolTable::new();
         symbols.intern("action_allowed");
         symbols.intern("my-app");
+        symbols.intern("read");
         // Secure format: one action_allowed fact per action, with hashed action name.
         let pred = symbols.intern("action_allowed");
         let app_id = FieldElement::from_symbol("my-app");
@@ -480,6 +522,8 @@ mod tests {
     fn test_authorize_denied_wrong_app() {
         let mut symbols = SymbolTable::new();
         symbols.intern("action_allowed");
+        symbols.intern("my-app");
+        symbols.intern("read");
         // Secure format: action_allowed(my-app, read)
         let pred = symbols.intern("action_allowed");
         let app_id = FieldElement::from_symbol("my-app");
@@ -519,6 +563,8 @@ mod tests {
     fn test_authorize_service_scoped() {
         let mut symbols = SymbolTable::new();
         symbols.intern("svc_action_allowed");
+        symbols.intern("http");
+        symbols.intern("read");
         // Secure format: svc_action_allowed(http, read)
         let pred = symbols.intern("svc_action_allowed");
         let svc_id = FieldElement::from_symbol("http");

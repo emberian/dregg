@@ -50,6 +50,15 @@ enum Command {
         #[arg(long, default_value = "~/.pyana")]
         data_dir: String,
 
+        /// Path to the node key file (relative to data-dir or absolute).
+        /// Default: "node.key" in the data directory.
+        #[arg(long, default_value = "node.key")]
+        key_file: String,
+
+        /// Port for the gossip/federation sync protocol.
+        #[arg(long, default_value = "9420")]
+        gossip_port: u16,
+
         /// Use the full Morpheus DAG-based BFT consensus instead of simplified consensus.
         /// Requires the `morpheus` feature on pyana-federation.
         #[arg(long)]
@@ -196,6 +205,8 @@ async fn main() {
             bind,
             federation_peers,
             data_dir,
+            key_file,
+            gossip_port,
             morpheus,
             node_index,
             federation_size,
@@ -208,6 +219,8 @@ async fn main() {
                 &bind,
                 federation_peers,
                 &data_dir,
+                &key_file,
+                gossip_port,
                 morpheus,
                 node_index,
                 federation_size,
@@ -263,6 +276,8 @@ async fn run_node(
     bind: &str,
     peers: Vec<String>,
     data_dir: &str,
+    key_file: &str,
+    gossip_port: u16,
     morpheus: bool,
     node_index: usize,
     federation_size: usize,
@@ -285,14 +300,61 @@ async fn run_node(
         tracing::warn!("Running in DEVNET mode \u{2014} keys are not production-grade");
     }
 
-    // Initialize node state.
-    let node_state = match state::NodeState::new(&data_path, peers) {
+    // Initialize node state with configurable key file.
+    let node_state = match state::NodeState::new_with_key_file(&data_path, peers, key_file) {
         Ok(s) => s,
         Err(e) => {
             error!("failed to initialize node state: {e}");
             std::process::exit(1);
         }
     };
+
+    // Load genesis.json if present in the data directory.
+    let genesis_path = data_path.join("genesis.json");
+    if genesis_path.exists() {
+        match std::fs::read_to_string(&genesis_path) {
+            Ok(json_str) => {
+                match serde_json::from_str::<serde_json::Value>(&json_str) {
+                    Ok(genesis) => {
+                        let mut s = node_state.write().await;
+                        // Extract validator public keys from genesis.
+                        if let Some(validators) = genesis["validators"].as_array() {
+                            let mut fed_keys = Vec::new();
+                            for v in validators {
+                                if let Some(pk_hex) = v["public_key"].as_str() {
+                                    if let Some(pk_bytes) = hex_decode_32(pk_hex) {
+                                        fed_keys.push(pyana_types::PublicKey(pk_bytes));
+                                    }
+                                }
+                            }
+                            if !fed_keys.is_empty() {
+                                info!(
+                                    key_count = fed_keys.len(),
+                                    "loaded federation keys from genesis.json"
+                                );
+                                s.set_federation_keys(fed_keys);
+                            }
+                        }
+                        // Extract threshold from genesis.
+                        if let Some(threshold) = genesis["threshold"].as_u64() {
+                            s.decryption_threshold = threshold as usize;
+                        }
+                        // Extract checkpoint interval from genesis.
+                        if let Some(ci) = genesis["checkpoint_interval"].as_u64() {
+                            s.checkpoint_interval = ci;
+                        }
+                        info!(genesis = %genesis_path.display(), "genesis configuration loaded");
+                    }
+                    Err(e) => {
+                        error!(error = %e, "failed to parse genesis.json");
+                    }
+                }
+            }
+            Err(e) => {
+                error!(error = %e, "failed to read genesis.json");
+            }
+        }
+    }
 
     // Configure pruning.
     {
@@ -320,8 +382,9 @@ async fn run_node(
     } else {
         None
     };
+    let gossip_port_copy = gossip_port;
     tokio::spawn(async move {
-        federation_sync::run_federation_sync(sync_state, morpheus_config).await;
+        federation_sync::run_federation_sync(sync_state, morpheus_config, gossip_port_copy).await;
     });
 
     // Build and serve the HTTP API.
@@ -498,7 +561,8 @@ async fn run_bridge(
     if !federation_peers.is_empty() {
         let sync_state = node_state.clone();
         tokio::spawn(async move {
-            federation_sync::run_federation_sync(sync_state, None).await;
+            // Bridge mode uses default gossip port.
+            federation_sync::run_federation_sync(sync_state, None, 9420).await;
         });
     }
 

@@ -166,7 +166,9 @@ impl GossipHandle {
 /// If `morpheus_config` is `Some`, the full Morpheus DAG-based BFT consensus
 /// is enabled: a dedicated gossip topic carries protocol messages, and a timer
 /// loop drives the adapter.
-pub async fn run_federation_sync(state: NodeState, morpheus_config: Option<MorpheusConfig>) {
+///
+/// `gossip_port` specifies the UDP/QUIC port to bind for gossip (default 9420).
+pub async fn run_federation_sync(state: NodeState, morpheus_config: Option<MorpheusConfig>, gossip_port: u16) {
     let peers = {
         let s = state.read().await;
         s.peers.clone()
@@ -196,9 +198,10 @@ pub async fn run_federation_sync(state: NodeState, morpheus_config: Option<Morph
         return;
     }
 
-    // Create the PeerNode (QUIC endpoint).
+    // Create the PeerNode (QUIC endpoint) on the configured gossip port.
+    let bind_addr_str = format!("0.0.0.0:{gossip_port}");
     let peer_node = match PeerNode::new(PeerNodeConfig {
-        bind_addr: "0.0.0.0:0".parse().unwrap(),
+        bind_addr: bind_addr_str.parse().unwrap(),
         ..PeerNodeConfig::default()
     })
     .await

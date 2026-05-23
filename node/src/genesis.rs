@@ -81,11 +81,9 @@ pub fn run_genesis(validators: usize, epoch_length: u64, checkpoint_interval: u6
             xmss_root: xmss_root_hex,
         });
 
-        // Write the key file (hex-encoded).
-        // Use `devnet-node-` prefix so devnet keys are impossible to confuse with production.
-        let key_path = output.join(format!("devnet-node-{i}.key"));
-        let key_hex = hex_encode(&key_bytes);
-        std::fs::write(&key_path, &key_hex).unwrap_or_else(|e| {
+        // Write the key file as raw 32 bytes (matching what the runtime expects).
+        let key_path = output.join(format!("node-{i}.key"));
+        std::fs::write(&key_path, &key_bytes).unwrap_or_else(|e| {
             eprintln!("error: failed to write {}: {e}", key_path.display());
             std::process::exit(1);
         });
@@ -182,7 +180,7 @@ pub fn run_genesis(validators: usize, epoch_length: u64, checkpoint_interval: u6
     for i in 0..validators {
         println!(
             "  {}",
-            output.join(format!("devnet-node-{i}.key")).display()
+            output.join(format!("node-{i}.key")).display()
         );
         println!("  {}", output.join(format!("node-{i}.env")).display());
     }

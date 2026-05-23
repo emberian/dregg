@@ -7,14 +7,14 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 
 echo "Generating devnet configuration..."
-cargo run --release -p pyana-node -- genesis --validators 4 --output docker/devnet-config/
+cargo run --release -p pyana-node -- genesis --validators 3 --output docker/devnet-config/
 
 echo ""
 echo "Building Docker image..."
 docker compose -f docker/docker-compose.yml build
 
 echo ""
-echo "Starting 4-node devnet..."
+echo "Starting 3-node devnet..."
 docker compose -f docker/docker-compose.yml up -d
 
 echo ""
@@ -22,7 +22,6 @@ echo "Devnet is running!"
 echo "  Node 0 API: http://localhost:8420  (faucet enabled)"
 echo "  Node 1 API: http://localhost:8421"
 echo "  Node 2 API: http://localhost:8422"
-echo "  Node 3 API: http://localhost:8423"
 echo "  Explorer:   http://localhost:3000"
 echo ""
 echo "Faucet usage:"

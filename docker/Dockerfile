@@ -1,4 +1,6 @@
-FROM rust:1.82-slim AS builder
+FROM rust:latest AS builder
+# Install nightly toolchain matching rust-toolchain.toml
+RUN rustup toolchain install nightly-2026-01-01 && rustup default nightly-2026-01-01
 WORKDIR /build
 COPY . .
 RUN cargo build --release -p pyana-node

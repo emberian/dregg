@@ -226,25 +226,41 @@ pub struct WalletStatus {
 impl NodeState {
     /// Create a new NodeState from a data directory path and peer list.
     ///
-    /// Issue 4 fix: Loads `node.key` from the data directory to initialize
+    /// Uses the default key file name "node.key" in the data directory.
+    pub fn new(data_dir: &Path, peers: Vec<String>) -> Result<Self, String> {
+        Self::new_with_key_file(data_dir, peers, "node.key")
+    }
+
+    /// Create a new NodeState with a configurable key file path.
+    ///
+    /// The `key_file` is resolved relative to `data_dir` unless it is an absolute path.
+    ///
+    /// Issue 4 fix: Loads the key file from the data directory to initialize
     /// the wallet identity. If no key file exists, generates a fresh identity
     /// and writes the key (first-run behavior).
     ///
     /// Issue 3 fix: Loads persisted passphrase hash from the store.
     /// Issue 5 fix: Loads persisted proof hashes (nullifiers) from the store.
-    pub fn new(data_dir: &Path, peers: Vec<String>) -> Result<Self, String> {
+    pub fn new_with_key_file(data_dir: &Path, peers: Vec<String>, key_file: &str) -> Result<Self, String> {
         let db_path = data_dir.join("pyana.redb");
         let store =
             PersistentStore::open(&db_path).map_err(|e| format!("failed to open store: {e}"))?;
 
-        // Issue 4: Load or generate node identity key.
-        let key_path = data_dir.join("node.key");
+        // Resolve key file path: absolute paths are used as-is,
+        // relative paths are resolved from the data directory.
+        let key_path = if std::path::Path::new(key_file).is_absolute() {
+            std::path::PathBuf::from(key_file)
+        } else {
+            data_dir.join(key_file)
+        };
+
         let wallet = if key_path.exists() {
             let key_bytes_vec =
-                std::fs::read(&key_path).map_err(|e| format!("failed to read node.key: {e}"))?;
+                std::fs::read(&key_path).map_err(|e| format!("failed to read {}: {e}", key_path.display()))?;
             if key_bytes_vec.len() != 32 {
                 return Err(format!(
-                    "node.key has invalid length: expected 32, got {}",
+                    "{} has invalid length: expected 32, got {}",
+                    key_path.display(),
                     key_bytes_vec.len()
                 ));
             }
@@ -256,7 +272,7 @@ impl NodeState {
             let mut key_bytes = [0u8; 32];
             getrandom::fill(&mut key_bytes).map_err(|e| format!("getrandom failed: {e}"))?;
             std::fs::write(&key_path, key_bytes)
-                .map_err(|e| format!("failed to write node.key: {e}"))?;
+                .map_err(|e| format!("failed to write {}: {e}", key_path.display()))?;
             // Restrict file permissions to owner-only (0o600) to prevent other
             // users from reading the private key.
             #[cfg(unix)]
@@ -264,7 +280,7 @@ impl NodeState {
                 use std::os::unix::fs::PermissionsExt;
                 let perms = std::fs::Permissions::from_mode(0o600);
                 std::fs::set_permissions(&key_path, perms)
-                    .map_err(|e| format!("failed to set node.key permissions: {e}"))?;
+                    .map_err(|e| format!("failed to set {} permissions: {e}", key_path.display()))?;
             }
             AgentWallet::from_key_bytes(zeroize::Zeroizing::new(key_bytes))
         };

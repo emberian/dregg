@@ -136,7 +136,7 @@ fn test_end_to_end_macaroon_to_zk_proof() {
     };
     let token1 = root_token.attenuate(&att1).unwrap();
 
-    // Verify token1 still works for dashboard read.
+    // Verify token1 still works for dashboard read (token-level uses short action "r").
     let request1 = AuthRequest {
         app_id: Some("dashboard".into()),
         action: Some("r".into()),
@@ -154,7 +154,7 @@ fn test_end_to_end_macaroon_to_zk_proof() {
     };
     let token2 = token1.attenuate(&att2).unwrap();
 
-    // Verify token2 works for alice on dashboard.
+    // Verify token2 works for alice on dashboard (token-level uses short action "r").
     let request2 = AuthRequest {
         app_id: Some("dashboard".into()),
         action: Some("r".into()),
@@ -187,7 +187,7 @@ fn test_end_to_end_macaroon_to_zk_proof() {
     // ── Step 5: Generate the ZK presentation proof ──────────────────────────
     let auth_request = AuthRequest {
         app_id: Some("dashboard".into()),
-        action: Some("r".into()),
+        action: Some("read".into()),
         user_id: Some("alice".into()),
         now: Some(1700000000),
         ..Default::default()
@@ -210,7 +210,7 @@ fn test_end_to_end_macaroon_to_zk_proof() {
     // The trace should show Allow with the APP_ACTION rule.
     match &proof.trace.conclusion {
         Conclusion::Allow { policy_rule_id } => {
-            assert_eq!(*policy_rule_id, 1); // APP_ACTION
+            assert_eq!(*policy_rule_id, 40); // APP_ACTION_SECURE
         }
         Conclusion::Deny => panic!("Expected Allow conclusion"),
     }
@@ -247,7 +247,7 @@ fn test_end_to_end_denial() {
     // Try to authorize for a different app — should be denied.
     let request = AuthRequest {
         app_id: Some("admin-panel".into()),
-        action: Some("r".into()),
+        action: Some("read".into()),
         now: Some(1700000000),
         ..Default::default()
     };
@@ -351,16 +351,16 @@ fn test_fold_chain_verification() {
 #[test]
 fn test_authorization_trace_generation() {
     let mut symbols = SymbolTable::new();
-    symbols.intern("app");
+    symbols.intern("action_allowed");
     symbols.intern("my-app");
-    symbols.intern("read,write");
+    symbols.intern("read");
 
-    // Create a state with an app fact.
+    // Create a state with a secure action_allowed fact.
     let mut state = TokenState::new();
     state.add_fact(Fact::binary(
-        FieldElement::from_symbol("app"),
+        FieldElement::from_symbol("action_allowed"),
         FieldElement::from_symbol("my-app"),
-        FieldElement::from_symbol("read,write"),
+        FieldElement::from_symbol("read"),
     ));
 
     let request = AuthRequest {
@@ -372,8 +372,8 @@ fn test_authorization_trace_generation() {
 
     let trace = authorize::authorize_with_trace(&state, &request, &symbols).unwrap();
 
-    // Should be allowed by the APP_ACTION rule.
-    assert_eq!(trace.conclusion, Conclusion::Allow { policy_rule_id: 1 });
+    // Should be allowed by the APP_ACTION_SECURE rule.
+    assert_eq!(trace.conclusion, Conclusion::Allow { policy_rule_id: 40 });
 
     // Should have at least one derivation step.
     assert!(
@@ -440,7 +440,7 @@ fn test_service_scoped_full_pipeline() {
     // Authorize an HTTP read.
     let request = AuthRequest {
         service: Some("http".into()),
-        action: Some("r".into()),
+        action: Some("read".into()),
         now: Some(1700000000),
         ..Default::default()
     };
@@ -455,10 +455,10 @@ fn test_service_scoped_full_pipeline() {
     let proof = proof.unwrap();
     assert!(proof.is_constraint_checked());
 
-    // Should be allowed by the SERVICE_ACTION rule (rule ID 2).
+    // Should be allowed by the SERVICE_ACTION_SECURE rule (rule ID 41).
     match &proof.trace.conclusion {
         Conclusion::Allow { policy_rule_id } => {
-            assert_eq!(*policy_rule_id, 2);
+            assert_eq!(*policy_rule_id, 41);
         }
         Conclusion::Deny => panic!("Expected Allow"),
     }
@@ -569,7 +569,7 @@ fn test_presentation_air_full_verification() {
 
     let request = AuthRequest {
         app_id: Some("my-app".into()),
-        action: Some("r".into()),
+        action: Some("read".into()),
         now: Some(1700000000),
         ..Default::default()
     };
@@ -610,7 +610,7 @@ fn test_proof_metadata() {
 
     let request = AuthRequest {
         app_id: Some("app-1".into()),
-        action: Some("r".into()),
+        action: Some("read".into()),
         user_id: Some("alice".into()),
         now: Some(1700000000),
         ..Default::default()
@@ -648,7 +648,7 @@ fn test_deterministic_verification() {
 
         let request = AuthRequest {
             app_id: Some("det-app".into()),
-            action: Some("r".into()),
+            action: Some("read".into()),
             now: Some(1700000000),
             ..Default::default()
         };

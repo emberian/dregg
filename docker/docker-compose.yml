@@ -5,10 +5,12 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    command: run --data-dir /data --port 8420 --morpheus --node-index 0 --federation-size 4 --federation-peers node-1:9420,node-2:9420,node-3:9420 --enable-pruning --enable-faucet
+    command: run --data-dir /data --bind 0.0.0.0 --port 8420 --gossip-port 9420 --key-file node-0.key --morpheus --node-index 0 --federation-size 3 --federation-peers node-1:9420,node-2:9420 --enable-pruning --enable-faucet
     volumes:
       - node0-data:/data
-      - ./devnet-config/node-0.key:/data/node.key:ro
+      - ./devnet-config/node-0.key:/data/node-0.key:ro
+      - ./devnet-config/genesis.json:/data/genesis.json:ro
+      - ./devnet-config/.devnet:/data/.devnet:ro
     ports:
       - "8420:8420"
       - "9420:9420"
@@ -21,10 +23,12 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    command: run --data-dir /data --port 8420 --morpheus --node-index 1 --federation-size 4 --federation-peers node-0:9420,node-2:9420,node-3:9420
+    command: run --data-dir /data --bind 0.0.0.0 --port 8420 --gossip-port 9420 --key-file node-1.key --morpheus --node-index 1 --federation-size 3 --federation-peers node-0:9420,node-2:9420
     volumes:
       - node1-data:/data
-      - ./devnet-config/node-1.key:/data/node.key:ro
+      - ./devnet-config/node-1.key:/data/node-1.key:ro
+      - ./devnet-config/genesis.json:/data/genesis.json:ro
+      - ./devnet-config/.devnet:/data/.devnet:ro
     ports:
       - "8421:8420"
       - "9421:9420"
@@ -37,29 +41,15 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    command: run --data-dir /data --port 8420 --morpheus --node-index 2 --federation-size 4 --federation-peers node-0:9420,node-1:9420,node-3:9420
+    command: run --data-dir /data --bind 0.0.0.0 --port 8420 --gossip-port 9420 --key-file node-2.key --morpheus --node-index 2 --federation-size 3 --federation-peers node-0:9420,node-1:9420
     volumes:
       - node2-data:/data
-      - ./devnet-config/node-2.key:/data/node.key:ro
+      - ./devnet-config/node-2.key:/data/node-2.key:ro
+      - ./devnet-config/genesis.json:/data/genesis.json:ro
+      - ./devnet-config/.devnet:/data/.devnet:ro
     ports:
       - "8422:8420"
       - "9422:9420"
-    environment:
-      - RUST_LOG=info
-    networks:
-      - devnet
-
-  node-3:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-    command: run --data-dir /data --port 8420 --morpheus --node-index 3 --federation-size 4 --federation-peers node-0:9420,node-1:9420,node-2:9420
-    volumes:
-      - node3-data:/data
-      - ./devnet-config/node-3.key:/data/node.key:ro
-    ports:
-      - "8423:8420"
-      - "9423:9420"
     environment:
       - RUST_LOG=info
     networks:
@@ -78,7 +68,6 @@ volumes:
   node0-data:
   node1-data:
   node2-data:
-  node3-data:
 
 networks:
   devnet:
