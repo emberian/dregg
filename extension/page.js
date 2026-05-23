@@ -287,6 +287,27 @@ const pyana = {
   },
 
   /**
+   * Build, sign, and submit a turn to the pyana node.
+   * The turn is constructed locally (via WASM), signed with the wallet's key,
+   * and then POSTed to the configured node endpoint.
+   *
+   * @param {{action: string, resource?: string, amount?: number, recipient?: string, metadata?: object}} turnSpec
+   * @returns {Promise<{turnId?: string, submitted: boolean, error?: string, nodeResult?: object}>}
+   */
+  signTurn(turnSpec) {
+    return sendMessage('pyana:signTurn', { turnSpec });
+  },
+
+  /**
+   * Query the wallet's balance from the pyana node.
+   *
+   * @returns {Promise<{balance?: number, error?: string}>}
+   */
+  queryBalance() {
+    return sendMessage('pyana:queryBalance', {});
+  },
+
+  /**
    * Register an event listener for non-sensitive wallet events.
    *
    * @param {'ready'|'authorization'|'revoked'|'stealthNoteReceived'|'privateTransfer'} event

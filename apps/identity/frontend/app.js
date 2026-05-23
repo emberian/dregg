@@ -5,6 +5,26 @@
  * selective-disclosure presentations, verification, and revocation.
  */
 
+let DEVNET_KEY = '';
+
+async function loadConfig() {
+    try {
+        const resp = await fetch('/config.json');
+        if (resp.ok) {
+            const config = await resp.json();
+            DEVNET_KEY = config.devnet_api_key || '';
+        }
+    } catch (e) {
+        console.warn('Could not load config, mutations may fail:', e);
+    }
+}
+
+function apiHeaders(extra = {}) {
+    const headers = { 'Content-Type': 'application/json', ...extra };
+    if (DEVNET_KEY) headers['X-Devnet-Key'] = DEVNET_KEY;
+    return headers;
+}
+
 const App = (() => {
     const API = '';
 
@@ -512,7 +532,7 @@ const App = (() => {
     async function apiPost(path, body) {
         const resp = await fetch(API + path, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: apiHeaders(),
             body: JSON.stringify(body),
         });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -535,4 +555,7 @@ const App = (() => {
     };
 })();
 
-document.addEventListener('DOMContentLoaded', App.init);
+document.addEventListener('DOMContentLoaded', async () => {
+    await loadConfig();
+    App.init();
+});

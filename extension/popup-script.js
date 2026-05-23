@@ -191,6 +191,12 @@ recoverBtn.addEventListener('click', () => {
   chrome.tabs.create({ url: chrome.runtime.getURL('recovery.html') });
 });
 
+// Settings button — opens node configuration page.
+const settingsBtn = document.getElementById('settingsBtn');
+settingsBtn.addEventListener('click', () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL('settings.html') });
+});
+
 // ---------------------------------------------------------------------------
 // Intents fulfillment UI
 // ---------------------------------------------------------------------------

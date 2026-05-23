@@ -48,6 +48,23 @@ impl EventHandler for Handler {
         let commands = vec![
             commands::explorer::register(),
             commands::presence::register(),
+            commands::wallet::register(),
+            commands::transfer::register_send(),
+            commands::transfer::register_tip(),
+            commands::gallery::register(),
+            commands::defi::register_swap(),
+            commands::defi::register_pool(),
+            commands::defi::register_lend(),
+            commands::orderbook::register_order(),
+            commands::orderbook::register_book(),
+            commands::orderbook::register_trades(),
+            commands::identity::register(),
+            commands::status::register_status(),
+            commands::status::register_proof(),
+            commands::status::register_metrics(),
+            commands::social::register_faucet(),
+            commands::social::register_leaderboard(),
+            commands::social::register_history(),
         ];
 
         match Command::set_global_commands(&ctx.http, commands).await {
@@ -66,6 +83,24 @@ impl EventHandler for Handler {
             match name {
                 "explorer" => commands::explorer::handle(&ctx, &command, &self.state).await,
                 "presence" => commands::presence::handle(&ctx, &command, &self.state).await,
+                "wallet" => commands::wallet::handle(&ctx, &command, &self.state).await,
+                "send" | "tip" => commands::transfer::handle(&ctx, &command, &self.state).await,
+                "gallery" => commands::gallery::handle(&ctx, &command, &self.state).await,
+                "swap" => commands::defi::handle_swap(&ctx, &command, &self.state).await,
+                "pool" => commands::defi::handle_pool(&ctx, &command, &self.state).await,
+                "lend" => commands::defi::handle_lend(&ctx, &command, &self.state).await,
+                "order" => commands::orderbook::handle_order(&ctx, &command, &self.state).await,
+                "book" => commands::orderbook::handle_book(&ctx, &command, &self.state).await,
+                "trades" => commands::orderbook::handle_trades(&ctx, &command, &self.state).await,
+                "credential" => commands::identity::handle(&ctx, &command, &self.state).await,
+                "status" => commands::status::handle_status(&ctx, &command, &self.state).await,
+                "proof" => commands::status::handle_proof(&ctx, &command, &self.state).await,
+                "metrics" => commands::status::handle_metrics(&ctx, &command, &self.state).await,
+                "faucet" => commands::social::handle_faucet(&ctx, &command, &self.state).await,
+                "leaderboard" => {
+                    commands::social::handle_leaderboard(&ctx, &command, &self.state).await
+                }
+                "history" => commands::social::handle_history(&ctx, &command, &self.state).await,
                 _ => {
                     tracing::warn!("Unknown command: {name}");
                 }

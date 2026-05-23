@@ -52,6 +52,7 @@ pub mod forest;
 pub(crate) mod journal;
 pub mod obligation;
 pub mod pending;
+pub mod presence_discharge;
 pub mod routing;
 pub mod turn;
 pub mod verify;
@@ -106,6 +107,10 @@ pub use obligation::{
 pub use pending::{
     BrokenReason, PendingEntry, PendingHandle, PendingStatus, PendingTurnRegistry,
     ResolutionCondition, ResolutionEvent, ResolutionOutcome,
+};
+pub use presence_discharge::{
+    PresenceCaveat as PresenceCapCaveat, PresenceClaimRequirement, PresenceDischarge,
+    PresenceDischargeError, verify_presence_discharge,
 };
 pub use routing::RoutingDirective;
 pub use turn::{EmittedEvent, SovereignCellWitness, Turn, TurnReceipt, TurnResult};

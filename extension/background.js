@@ -6,8 +6,10 @@ const ENCRYPTED_STATE_KEY = 'pyana_wallet_encrypted';
 const MNEMONIC_KEY = 'pyana_mnemonic_encrypted';
 const STEALTH_KEYS_KEY = 'pyana_stealth_keys_encrypted';
 const ALLOWED_ORIGINS_KEY = 'pyana_allowed_origins';
-const NODE_WSS_URL = 'wss://localhost:8420/ws';
-const NODE_WS_URL = 'ws://localhost:8420/ws'; // Fallback for localhost only.
+const NODE_CONFIG_KEY = 'pyana_node_config';
+const DEFAULT_NODE_URL = 'https://devnet.pyana.fg-goose.online';
+const DEFAULT_NODE_WSS_URL = 'wss://devnet.pyana.fg-goose.online/ws';
+const DEFAULT_NODE_WS_URL = 'ws://localhost:8420/ws'; // Fallback for localhost only.
 const DISCOVERY_URL = 'https://emberian.github.io/pyana/discovery.json';
 const DISCOVERY_POLL_INTERVAL = 5 * 60 * 1000; // 5 minutes
 const PBKDF2_ITERATIONS = 600000; // OWASP recommendation for PBKDF2-SHA256
@@ -20,19 +22,134 @@ const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 60-second sliding window
 const PRIVACY_STATE_KEY = 'pyana_privacy_state'; // Tracks active privacy features
 
 // ---------------------------------------------------------------------------
-// WASM module loading
+// Node configuration (user-configurable via settings page)
+// ---------------------------------------------------------------------------
+
+let nodeConfig = {
+  nodeUrl: DEFAULT_NODE_URL,
+  wssUrl: DEFAULT_NODE_WSS_URL,
+  wsUrl: DEFAULT_NODE_WS_URL,
+  devnetKey: '', // X-Devnet-Key header value
+};
+
+/**
+ * Load node configuration from storage.
+ */
+async function loadNodeConfig() {
+  const stored = await chrome.storage.local.get(NODE_CONFIG_KEY);
+  if (stored[NODE_CONFIG_KEY]) {
+    nodeConfig = { ...nodeConfig, ...stored[NODE_CONFIG_KEY] };
+  }
+  return nodeConfig;
+}
+
+/**
+ * Save node configuration to storage.
+ */
+async function saveNodeConfig(config) {
+  nodeConfig = { ...nodeConfig, ...config };
+  await chrome.storage.local.set({ [NODE_CONFIG_KEY]: nodeConfig });
+  // Reconnect WebSocket with new URL.
+  if (nodeWs) {
+    nodeWs.close();
+    nodeWs = null;
+  }
+  connectNodeWs();
+}
+
+/**
+ * Get HTTP headers for node API requests.
+ */
+function getNodeHeaders() {
+  const headers = { 'Content-Type': 'application/json' };
+  if (nodeConfig.devnetKey) {
+    headers['X-Devnet-Key'] = nodeConfig.devnetKey;
+  }
+  return headers;
+}
+
+/**
+ * Make an HTTP request to the node API with proper error handling.
+ * @param {string} path - API path (e.g. '/turns/submit')
+ * @param {object} options - fetch options override
+ * @returns {Promise<{ok: boolean, data?: any, error?: string, status?: number}>}
+ */
+async function nodeRequest(path, options = {}) {
+  const url = nodeConfig.nodeUrl.replace(/\/$/, '') + path;
+  const baseHeaders = getNodeHeaders();
+  const mergedHeaders = { ...baseHeaders, ...(options.headers || {}) };
+  try {
+    const resp = await fetch(url, {
+      signal: AbortSignal.timeout(10000),
+      ...options,
+      headers: mergedHeaders,
+    });
+    if (resp.ok) {
+      const data = await resp.json().catch(() => null);
+      return { ok: true, data, status: resp.status };
+    } else {
+      const errText = await resp.text().catch(() => '');
+      return { ok: false, error: `HTTP ${resp.status}: ${errText}`, status: resp.status };
+    }
+  } catch (e) {
+    if (e.name === 'TimeoutError' || e.name === 'AbortError') {
+      return { ok: false, error: 'Node request timed out. Is the node online?' };
+    }
+    return { ok: false, error: `Network error: ${e.message}` };
+  }
+}
+
+// Load node config on startup.
+loadNodeConfig();
+
+// ---------------------------------------------------------------------------
+// WASM module loading (compatible with both Chrome and Firefox MV3 workers)
 // ---------------------------------------------------------------------------
 
 let wasm = null;
 let wasmLoaded = false;
 let wasmLoadError = null;
 
+// Load WASM without ES module import() — uses fetch + WebAssembly.instantiate.
+// The pyana_wasm.js glue is loaded via importScripts (no-modules build) or
+// inlined initialization when built with --target web.
 const wasmReady = (async () => {
   try {
-    wasm = await import('./pyana_wasm.js');
-    await wasm.default();
-    wasmLoaded = true;
-    console.log('[pyana] WASM module loaded');
+    // Try importScripts for no-modules build (Firefox-compatible).
+    try {
+      importScripts('./pyana_wasm.js');
+    } catch (_importErr) {
+      // importScripts failed — pyana_wasm.js may not exist yet (dev mode).
+      // Fall through to fetch-based loading below.
+    }
+
+    // If importScripts populated a global init function (wasm-bindgen no-modules),
+    // use it. Otherwise, try fetch-based loading for --target web builds.
+    if (typeof wasm_bindgen !== 'undefined') {
+      // wasm-bindgen no-modules pattern: wasm_bindgen is a global function.
+      const wasmUrl = chrome.runtime.getURL('pyana_wasm_bg.wasm');
+      await wasm_bindgen(wasmUrl);
+      wasm = wasm_bindgen;
+      wasmLoaded = true;
+      console.log('[pyana] WASM module loaded via importScripts/wasm_bindgen');
+    } else if (typeof __pyana_wasm_init !== 'undefined') {
+      // Alternative: custom global init if we bundled differently.
+      wasm = await __pyana_wasm_init();
+      wasmLoaded = true;
+      console.log('[pyana] WASM module loaded via __pyana_wasm_init');
+    } else {
+      // Fetch-based fallback: manually instantiate the WASM module.
+      const wasmUrl = chrome.runtime.getURL('pyana_wasm_bg.wasm');
+      const response = await fetch(wasmUrl);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch WASM: HTTP ${response.status}`);
+      }
+      const wasmBytes = await response.arrayBuffer();
+      const { instance } = await WebAssembly.instantiate(wasmBytes, {});
+      wasm = instance.exports;
+      wasmLoaded = true;
+      console.log('[pyana] WASM module loaded via fetch+instantiate');
+    }
   } catch (e) {
     console.error('[pyana] WASM module failed to load:', e.message);
     wasm = null;
@@ -779,25 +896,19 @@ async function privateTransfer(amount, assetType, recipientStealthMeta) {
     }));
     submitted = true;
   } else {
-    // Fallback: HTTP submission.
-    try {
-      const resp = await fetch('http://localhost:8420/turns/submit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          turn_id: turn.turn_id,
-          turn_bytes: Array.from(turn.turn_bytes),
-          committed: true,
-        }),
-      });
-      if (resp.ok) {
-        submitted = true;
-      } else {
-        const errText = await resp.text().catch(() => '');
-        return { error: `Node rejected committed turn: HTTP ${resp.status} ${errText}` };
-      }
-    } catch (e) {
-      return { error: `Failed to submit committed turn: ${e.message}` };
+    // Fallback: HTTP submission via configurable node URL.
+    const resp = await nodeRequest('/turns/submit', {
+      method: 'POST',
+      body: JSON.stringify({
+        turn_id: turn.turn_id,
+        turn_bytes: Array.from(turn.turn_bytes),
+        committed: true,
+      }),
+    });
+    if (resp.ok) {
+      submitted = true;
+    } else {
+      return { error: `Node rejected committed turn: ${resp.error}` };
     }
   }
 
@@ -1445,20 +1556,10 @@ async function authorize(request) {
     // incorrect — it doesn't match the circuit's expectation.
     let stateRoot = 0;
     try {
-      // Security: prefer HTTPS; fall back to HTTP only for localhost.
-      let statusResp = null;
-      try {
-        statusResp = await fetch('https://localhost:8420/status', {
-          signal: AbortSignal.timeout(2000),
-        });
-      } catch (_httpsErr) {
-        // HTTPS unavailable — allow HTTP only for localhost.
-        statusResp = await fetch('http://localhost:8420/status', {
-          signal: AbortSignal.timeout(2000),
-        });
-      }
-      if (statusResp.ok) {
-        const statusData = await statusResp.json();
+      // Fetch state root from the configured node.
+      const statusResult = await nodeRequest('/status');
+      if (statusResult.ok) {
+        const statusData = statusResult.data;
         // Validate the response is signed by the node if a signature is present.
         if (nodePublicKey && statusData.signature && statusData.payload) {
           if (!validateNodeSignature(statusData.payload, statusData.signature, nodePublicKey)) {
@@ -1957,20 +2058,18 @@ async function fulfillIntent(intentId, tokenId) {
 
   // Call the node's fulfillment endpoint.
   try {
-    const response = await fetch('http://localhost:8420/intents/fulfill', {
+    const response = await nodeRequest('/intents/fulfill', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(fulfillmentPayload),
     });
 
     if (!response.ok) {
-      const errorBody = await response.text().catch(() => '');
       return {
-        error: `Node rejected fulfillment: HTTP ${response.status}${errorBody ? ' - ' + errorBody : ''}`,
+        error: `Node rejected fulfillment: ${response.error}`,
       };
     }
 
-    const result = await response.json();
+    const result = response.data;
 
     // Log the fulfillment.
     wallet.log.push({
@@ -2352,6 +2451,116 @@ function handleOriginPermissionRequest(origin, method) {
 }
 
 // ---------------------------------------------------------------------------
+// signTurn — build, sign, and submit a turn to the node
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a turn locally (via WASM), sign it with the wallet key, and submit
+ * it to the configured pyana node via HTTP POST.
+ *
+ * @param {object} turnSpec - { action, resource, amount, recipient, metadata }
+ * @returns {Promise<{turnId?: string, submitted: boolean, error?: string}>}
+ */
+async function signTurn(turnSpec) {
+  requireWasm('signTurn');
+
+  const wallet = await loadState();
+  if (wallet.locked) {
+    return { error: 'Wallet is locked' };
+  }
+  if (!wallet.secretKey) {
+    return { error: 'Wallet secret key not available' };
+  }
+
+  // Build the turn via WASM.
+  let turnData;
+  if (wasm.build_turn) {
+    turnData = wasm.build_turn(JSON.stringify({
+      sender_pubkey: wallet.publicKey,
+      sender_privkey: wallet.secretKey,
+      action: turnSpec.action,
+      resource: turnSpec.resource || '*',
+      amount: turnSpec.amount || 0,
+      recipient: turnSpec.recipient || null,
+      metadata: turnSpec.metadata || null,
+      timestamp: Date.now(),
+    }));
+  } else {
+    // Minimal fallback: sign the turn spec directly.
+    const turnJson = JSON.stringify({
+      sender: wallet.publicKey,
+      action: turnSpec.action,
+      resource: turnSpec.resource || '*',
+      amount: turnSpec.amount || 0,
+      recipient: turnSpec.recipient || null,
+      metadata: turnSpec.metadata || null,
+      timestamp: Date.now(),
+    });
+    // Sign via WASM ed25519.
+    if (!wasm.sign_message) {
+      return { error: 'WASM sign_message export not available' };
+    }
+    const signature = wasm.sign_message(
+      new Uint8Array(wallet.secretKey),
+      new TextEncoder().encode(turnJson)
+    );
+    turnData = {
+      turn_id: 'js:' + Array.from(crypto.getRandomValues(new Uint8Array(16)))
+        .map(b => b.toString(16).padStart(2, '0')).join(''),
+      turn_bytes: Array.from(new TextEncoder().encode(turnJson)),
+      signature: Array.from(signature),
+    };
+  }
+
+  // Submit to the node.
+  const resp = await nodeRequest('/turns/submit', {
+    method: 'POST',
+    body: JSON.stringify({
+      turn_id: turnData.turn_id,
+      turn_bytes: Array.from(turnData.turn_bytes),
+      signature: turnData.signature ? Array.from(turnData.signature) : undefined,
+      sender_pubkey: wallet.publicKey,
+    }),
+  });
+
+  if (!resp.ok) {
+    return { error: `Failed to submit turn: ${resp.error}`, turnId: turnData.turn_id, submitted: false };
+  }
+
+  // Log the turn.
+  wallet.log.push({
+    action: turnSpec.action,
+    resource: turnSpec.resource || '*',
+    allowed: true,
+    timestamp: Date.now(),
+    mode: 'turn',
+    turnId: turnData.turn_id,
+  });
+  await saveState();
+
+  return { turnId: turnData.turn_id, submitted: true, nodeResult: resp.data };
+}
+
+/**
+ * Query balance from the configured node.
+ * @returns {Promise<{balance?: number, error?: string}>}
+ */
+async function queryBalance() {
+  const wallet = await loadState();
+  if (wallet.locked) {
+    return { error: 'Wallet is locked' };
+  }
+
+  const pubkeyHex = Array.from(wallet.publicKey)
+    .map(b => b.toString(16).padStart(2, '0')).join('');
+  const resp = await nodeRequest(`/accounts/${pubkeyHex}/balance`);
+  if (!resp.ok) {
+    return { error: `Failed to query balance: ${resp.error}` };
+  }
+  return { balance: resp.data?.balance ?? 0, raw: resp.data };
+}
+
+// ---------------------------------------------------------------------------
 // Message router
 // ---------------------------------------------------------------------------
 
@@ -2373,6 +2582,8 @@ const PAGE_ALLOWED_METHODS = new Set([
   'pyana:makeCellSovereign',
   'pyana:peerExchange',
   'pyana:composeProofs',
+  'pyana:signTurn',
+  'pyana:queryBalance',
   // Note: pyana:offerCapability, pyana:getCapabilities, pyana:listIntents are
   // NOT accessible from page context — popup-only.
 ]);
@@ -2400,6 +2611,8 @@ const POPUP_ONLY_METHODS = new Set([
   'pyana:getPrivacyState',
   'pyana:setCommittedTransferMode',
   'pyana:getStealthNotes',
+  'pyana:getNodeConfig',
+  'pyana:setNodeConfig',
 ]);
 
 async function handleMessage(message, sender) {
@@ -2729,6 +2942,33 @@ async function handleMessage(message, sender) {
       return { id: message.id, result };
     }
 
+    // --- Turn submission and balance ---
+
+    case 'pyana:signTurn': {
+      const result = await signTurn(message.turnSpec);
+      resetLockTimer();
+      return { id: message.id, result };
+    }
+
+    case 'pyana:queryBalance': {
+      const result = await queryBalance();
+      return { id: message.id, result };
+    }
+
+    // --- Node configuration (popup/settings only) ---
+
+    case 'pyana:getNodeConfig': {
+      return { id: message.id, result: { ...nodeConfig, devnetKey: nodeConfig.devnetKey ? '***' : '' } };
+    }
+
+    case 'pyana:setNodeConfig': {
+      if (!isExtensionPopup(sender)) {
+        return { id: message.id, error: 'Only available from the extension popup or settings page.' };
+      }
+      await saveNodeConfig(message.config);
+      return { id: message.id, result: { success: true, nodeUrl: nodeConfig.nodeUrl } };
+    }
+
     // --- Proof composition ---
 
     case 'pyana:composeProofs': {
@@ -2795,12 +3035,11 @@ let wsAuthenticated = false;
  */
 async function fetchNodePublicKey() {
   try {
-    let resp = null;
-    try {
-      resp = await fetch('https://localhost:8420/status', { signal: AbortSignal.timeout(2000) });
-    } catch (_e) {
-      resp = await fetch('http://localhost:8420/status', { signal: AbortSignal.timeout(2000) });
-    }
+    const statusUrl = nodeConfig.nodeUrl.replace(/\/$/, '') + '/status';
+    const resp = await fetch(statusUrl, {
+      signal: AbortSignal.timeout(3000),
+      headers: getNodeHeaders(),
+    });
     if (resp.ok) {
       const data = await resp.json();
       if (data.public_key) {
@@ -2860,15 +3099,17 @@ async function connectNodeWs() {
   wsAuthenticated = false;
 
   // Try wss:// first. Fall back to ws:// ONLY for localhost (Bug 6 fix).
-  tryConnect(NODE_WSS_URL, () => {
+  const wssUrl = nodeConfig.wssUrl || DEFAULT_NODE_WSS_URL;
+  const wsUrl = nodeConfig.wsUrl || DEFAULT_NODE_WS_URL;
+  tryConnect(wssUrl, () => {
     console.warn('[pyana] wss:// connection failed, falling back to ws:// (localhost only)');
-    const wsUrl = new URL(NODE_WS_URL);
-    if (wsUrl.hostname === 'localhost' || wsUrl.hostname === '127.0.0.1' || wsUrl.hostname === '::1') {
-      tryConnect(NODE_WS_URL, () => {
+    const parsedWsUrl = new URL(wsUrl);
+    if (parsedWsUrl.hostname === 'localhost' || parsedWsUrl.hostname === '127.0.0.1' || parsedWsUrl.hostname === '::1') {
+      tryConnect(wsUrl, () => {
         scheduleReconnect();
       });
     } else {
-      console.error('[pyana] Refusing ws:// fallback for non-localhost host:', wsUrl.hostname);
+      console.error('[pyana] Refusing ws:// fallback for non-localhost host:', parsedWsUrl.hostname);
       scheduleReconnect();
     }
   });

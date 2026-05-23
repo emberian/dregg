@@ -52,6 +52,19 @@ impl Database {
         .execute(&pool)
         .await?;
 
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_user TEXT NOT NULL,
+                to_user TEXT NOT NULL,
+                amount INTEGER NOT NULL,
+                tx_hash TEXT NOT NULL,
+                timestamp INTEGER NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await?;
+
         Ok(Self { pool })
     }
 
@@ -150,4 +163,129 @@ impl Database {
             .await?;
         Ok(rows.into_iter().map(|(id,)| id).collect())
     }
+
+    // ─── Wallet / user registration ────────────────────────────────────────────
+
+    /// Register a user's cell_id.
+    pub async fn register_user(&self, discord_id: &str, cell_id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("INSERT OR REPLACE INTO users (discord_id, cell_id) VALUES (?, ?)")
+            .bind(discord_id)
+            .bind(cell_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    // ─── Faucet rate limiting ───────────────────────────────────────────────────
+
+    /// Get the timestamp of the user's last faucet claim. Returns None if never claimed.
+    pub async fn get_last_faucet_claim(
+        &self,
+        discord_id: &str,
+    ) -> Result<Option<i64>, sqlx::Error> {
+        let row: Option<(String,)> = sqlx::query_as("SELECT value FROM kv WHERE key = ?")
+            .bind(format!("faucet:{discord_id}"))
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.and_then(|(v,)| v.parse::<i64>().ok()))
+    }
+
+    /// Record a faucet claim timestamp.
+    pub async fn set_faucet_claim(
+        &self,
+        discord_id: &str,
+        timestamp: i64,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)")
+            .bind(format!("faucet:{discord_id}"))
+            .bind(timestamp.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    // ─── Transaction history ────────────────────────────────────────────────────
+
+    /// Record a transaction in the local ledger.
+    pub async fn record_transaction(
+        &self,
+        from_discord_id: &str,
+        to_discord_id: &str,
+        amount: u64,
+        tx_hash: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO transactions (from_user, to_user, amount, tx_hash, timestamp) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(from_discord_id)
+        .bind(to_discord_id)
+        .bind(amount as i64)
+        .bind(tx_hash)
+        .bind(chrono_now())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Get recent transactions for a user (as sender or receiver).
+    pub async fn get_user_transactions(
+        &self,
+        discord_id: &str,
+        limit: u32,
+    ) -> Result<Vec<TransactionRecord>, sqlx::Error> {
+        let rows: Vec<TransactionRecord> = sqlx::query_as(
+            "SELECT from_user, to_user, amount, tx_hash, timestamp FROM transactions WHERE from_user = ? OR to_user = ? ORDER BY timestamp DESC LIMIT ?",
+        )
+        .bind(discord_id)
+        .bind(discord_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Get top holders (by number of faucet claims — proxy for balance in local ledger).
+    pub async fn get_leaderboard(&self, limit: u32) -> Result<Vec<(String, i64)>, sqlx::Error> {
+        let rows: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT to_user, SUM(amount) as total FROM transactions GROUP BY to_user ORDER BY total DESC LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Ensure extra tables exist (called from connect).
+    pub async fn ensure_extra_tables(&self) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_user TEXT NOT NULL,
+                to_user TEXT NOT NULL,
+                amount INTEGER NOT NULL,
+                tx_hash TEXT NOT NULL,
+                timestamp INTEGER NOT NULL
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+}
+
+/// A recorded transaction.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct TransactionRecord {
+    pub from_user: String,
+    pub to_user: String,
+    pub amount: i64,
+    pub tx_hash: String,
+    pub timestamp: i64,
+}
+
+fn chrono_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
 }

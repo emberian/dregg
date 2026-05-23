@@ -113,6 +113,130 @@ pub struct ExplorerStats {
     pub federation_nodes_total: u32,
 }
 
+// ─── Gallery response types ────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Artwork {
+    pub id: String,
+    pub title: String,
+    pub artist: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Auction {
+    pub id: String,
+    pub artwork_id: String,
+    pub title: String,
+    pub current_bid: u64,
+    pub bidder: Option<String>,
+    pub ends_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BidInfo {
+    pub auction_id: String,
+    pub title: String,
+    pub amount: u64,
+    pub status: String,
+}
+
+// ─── DeFi response types ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SwapResult {
+    pub amount_out: u64,
+    pub price_impact: f64,
+    pub tx_hash: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PoolInfo {
+    pub pool_id: String,
+    pub token_a: String,
+    pub token_b: String,
+    pub reserve_a: u64,
+    pub reserve_b: u64,
+    pub tvl: u64,
+    pub fee_rate: f64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LendingStatus {
+    pub supplied: u64,
+    pub borrowed: u64,
+    pub collateral_ratio: f64,
+    pub accrued_interest: u64,
+}
+
+// ─── Orderbook response types ─────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OrderLevel {
+    pub price: f64,
+    pub amount: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OrderbookSnapshot {
+    pub pair: String,
+    pub bids: Vec<OrderLevel>,
+    pub asks: Vec<OrderLevel>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TradeInfo {
+    pub price: f64,
+    pub amount: u64,
+    pub side: String,
+    pub timestamp: String,
+}
+
+// ─── Identity response types ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProofRequestResult {
+    pub request_id: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CredentialInfo {
+    pub credential_id: String,
+    pub schema: String,
+    pub issuer: String,
+    pub issued_at: String,
+}
+
+// ─── Status response types ────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FederationHealth {
+    pub status: String,
+    pub nodes_up: u32,
+    pub nodes_total: u32,
+    pub block_height: u64,
+    pub last_block_time: String,
+    pub avg_block_time_ms: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProofVerifyResult {
+    pub valid: bool,
+    pub air_name: Option<String>,
+    pub public_inputs: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DevnetMetrics {
+    pub tps: f64,
+    pub block_height: u64,
+    pub pending_turns: u64,
+    pub active_cells: u64,
+    pub memory_usage_mb: u64,
+    pub uptime_secs: u64,
+}
+
 // ─── Error type ─────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
@@ -261,5 +385,402 @@ impl DevnetClient {
     /// Get the explorer base URL for building links.
     pub fn explorer_base_url(&self) -> &'static str {
         "https://devnet.pyana.fg-goose.online/explorer"
+    }
+
+    // ─── Wallet / transfer endpoints ───────────────────────────────────────────
+
+    /// Register a cell on devnet.
+    pub async fn register_cell(&self, cell_id: &str, public_key: &str) -> Result<(), DevnetError> {
+        let url = format!("{}/api/cells/register", self.base_url);
+        let body = serde_json::json!({
+            "cell_id": cell_id,
+            "public_key": public_key,
+            "mode": "hosted",
+        });
+        let resp = self.client.post(&url).json(&body).send().await?;
+        if !resp.status().is_success() {
+            let msg = resp.text().await.unwrap_or_default();
+            return Err(DevnetError::Api(msg));
+        }
+        Ok(())
+    }
+
+    /// Get the balance of a cell.
+    pub async fn get_balance(&self, cell_id: &str) -> Result<u64, DevnetError> {
+        let url = format!("{}/api/node/cells/{cell_id}", self.base_url);
+        let resp = self.client.get(&url).send().await?;
+        if !resp.status().is_success() {
+            return Err(DevnetError::Api(format!("status {}", resp.status())));
+        }
+        let cell: CellDetails = resp.json().await?;
+        Ok(cell.balance)
+    }
+
+    /// Submit a transfer between two cells.
+    pub async fn submit_transfer(
+        &self,
+        from_cell: &str,
+        to_cell: &str,
+        amount: u64,
+        signature: &str,
+    ) -> Result<String, DevnetError> {
+        let url = format!("{}/api/turns/submit", self.base_url);
+        let body = serde_json::json!({
+            "turn_type": "transfer",
+            "from": from_cell,
+            "to": to_cell,
+            "amount": amount,
+            "signature": signature,
+        });
+        let resp = self.client.post(&url).json(&body).send().await?;
+        if !resp.status().is_success() {
+            let msg = resp.text().await.unwrap_or_default();
+            return Err(DevnetError::Api(msg));
+        }
+        let result: serde_json::Value = resp.json().await?;
+        Ok(result["tx_hash"].as_str().unwrap_or("unknown").to_string())
+    }
+
+    /// Request tokens from the devnet faucet.
+    pub async fn faucet_request(&self, cell_id: &str) -> Result<u64, DevnetError> {
+        let url = format!("{}/api/faucet", self.base_url);
+        let body = serde_json::json!({ "cell_id": cell_id });
+        let resp = self.client.post(&url).json(&body).send().await?;
+        if !resp.status().is_success() {
+            let msg = resp.text().await.unwrap_or_default();
+            return Err(DevnetError::Api(msg));
+        }
+        let result: serde_json::Value = resp.json().await?;
+        Ok(result["amount"].as_u64().unwrap_or(1000))
+    }
+
+    // ─── Gallery / auction endpoints ───────────────────────────────────────────
+
+    /// List artworks on devnet.
+    pub async fn list_artworks(&self) -> Result<Vec<Artwork>, DevnetError> {
+        let url = format!("{}/api/gallery/artworks", self.base_url);
+        let resp = self.client.get(&url).send().await?;
+        if !resp.status().is_success() {
+            return Err(DevnetError::Api(format!("status {}", resp.status())));
+        }
+        Ok(resp.json().await?)
+    }
+
+    /// List active auctions.
+    pub async fn list_auctions(&self) -> Result<Vec<Auction>, DevnetError> {
+        let url = format!("{}/api/gallery/auctions", self.base_url);
+        let resp = self.client.get(&url).send().await?;
+        if !resp.status().is_success() {
+            return Err(DevnetError::Api(format!("status {}", resp.status())));
+        }
+        Ok(resp.json().await?)
+    }
+
+    /// Place a bid on an auction.
+    pub async fn place_bid(
+        &self,
+        auction_id: &str,
+        bidder_cell: &str,
+        amount: u64,
+        signature: &str,
+    ) -> Result<(), DevnetError> {
+        let url = format!("{}/api/gallery/auctions/{auction_id}/bid", self.base_url);
+        let body = serde_json::json!({
+            "bidder": bidder_cell,
+            "amount": amount,
+            "signature": signature,
+        });
+        let resp = self.client.post(&url).json(&body).send().await?;
+        if !resp.status().is_success() {
+            let msg = resp.text().await.unwrap_or_default();
+            return Err(DevnetError::Api(msg));
+        }
+        Ok(())
+    }
+
+    /// Get a user's active bids.
+    pub async fn get_user_bids(&self, cell_id: &str) -> Result<Vec<BidInfo>, DevnetError> {
+        let url = format!("{}/api/gallery/bids", self.base_url);
+        let resp = self
+            .client
+            .get(&url)
+            .query(&[("cell_id", cell_id)])
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(DevnetError::Api(format!("status {}", resp.status())));
+        }
+        Ok(resp.json().await?)
+    }
+
+    // ─── DeFi endpoints ────────────────────────────────────────────────────────
+
+    /// Execute a swap on the AMM.
+    pub async fn amm_swap(
+        &self,
+        cell_id: &str,
+        from_token: &str,
+        to_token: &str,
+        amount: u64,
+        signature: &str,
+    ) -> Result<SwapResult, DevnetError> {
+        let url = format!("{}/api/defi/swap", self.base_url);
+        let body = serde_json::json!({
+            "cell_id": cell_id,
+            "from": from_token,
+            "to": to_token,
+            "amount": amount,
+            "signature": signature,
+        });
+        let resp = self.client.post(&url).json(&body).send().await?;
+        if !resp.status().is_success() {
+            let msg = resp.text().await.unwrap_or_default();
+            return Err(DevnetError::Api(msg));
+        }
+        Ok(resp.json().await?)
+    }
+
+    /// Get pool info.
+    pub async fn get_pool(&self, pool_id: &str) -> Result<PoolInfo, DevnetError> {
+        let url = format!("{}/api/defi/pools/{pool_id}", self.base_url);
+        let resp = self.client.get(&url).send().await?;
+        if !resp.status().is_success() {
+            return Err(DevnetError::Api(format!("status {}", resp.status())));
+        }
+        Ok(resp.json().await?)
+    }
+
+    /// Supply to lending protocol.
+    pub async fn lend_supply(
+        &self,
+        cell_id: &str,
+        amount: u64,
+        signature: &str,
+    ) -> Result<(), DevnetError> {
+        let url = format!("{}/api/defi/lend/supply", self.base_url);
+        let body = serde_json::json!({
+            "cell_id": cell_id,
+            "amount": amount,
+            "signature": signature,
+        });
+        let resp = self.client.post(&url).json(&body).send().await?;
+        if !resp.status().is_success() {
+            let msg = resp.text().await.unwrap_or_default();
+            return Err(DevnetError::Api(msg));
+        }
+        Ok(())
+    }
+
+    /// Borrow from lending protocol.
+    pub async fn lend_borrow(
+        &self,
+        cell_id: &str,
+        amount: u64,
+        signature: &str,
+    ) -> Result<(), DevnetError> {
+        let url = format!("{}/api/defi/lend/borrow", self.base_url);
+        let body = serde_json::json!({
+            "cell_id": cell_id,
+            "amount": amount,
+            "signature": signature,
+        });
+        let resp = self.client.post(&url).json(&body).send().await?;
+        if !resp.status().is_success() {
+            let msg = resp.text().await.unwrap_or_default();
+            return Err(DevnetError::Api(msg));
+        }
+        Ok(())
+    }
+
+    /// Get lending positions for a cell.
+    pub async fn lend_status(&self, cell_id: &str) -> Result<LendingStatus, DevnetError> {
+        let url = format!("{}/api/defi/lend/status", self.base_url);
+        let resp = self
+            .client
+            .get(&url)
+            .query(&[("cell_id", cell_id)])
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(DevnetError::Api(format!("status {}", resp.status())));
+        }
+        Ok(resp.json().await?)
+    }
+
+    // ─── Orderbook endpoints ───────────────────────────────────────────────────
+
+    /// Place a limit order.
+    pub async fn place_order(
+        &self,
+        cell_id: &str,
+        pair: &str,
+        side: &str,
+        price: f64,
+        amount: u64,
+        signature: &str,
+    ) -> Result<String, DevnetError> {
+        let url = format!("{}/api/orderbook/orders", self.base_url);
+        let body = serde_json::json!({
+            "cell_id": cell_id,
+            "pair": pair,
+            "side": side,
+            "price": price,
+            "amount": amount,
+            "signature": signature,
+        });
+        let resp = self.client.post(&url).json(&body).send().await?;
+        if !resp.status().is_success() {
+            let msg = resp.text().await.unwrap_or_default();
+            return Err(DevnetError::Api(msg));
+        }
+        let result: serde_json::Value = resp.json().await?;
+        Ok(result["order_id"].as_str().unwrap_or("unknown").to_string())
+    }
+
+    /// Cancel an order.
+    pub async fn cancel_order(
+        &self,
+        order_id: &str,
+        cell_id: &str,
+        signature: &str,
+    ) -> Result<(), DevnetError> {
+        let url = format!("{}/api/orderbook/orders/{order_id}/cancel", self.base_url);
+        let body = serde_json::json!({
+            "cell_id": cell_id,
+            "signature": signature,
+        });
+        let resp = self.client.post(&url).json(&body).send().await?;
+        if !resp.status().is_success() {
+            let msg = resp.text().await.unwrap_or_default();
+            return Err(DevnetError::Api(msg));
+        }
+        Ok(())
+    }
+
+    /// Get the orderbook for a pair.
+    pub async fn get_orderbook(&self, pair: &str) -> Result<OrderbookSnapshot, DevnetError> {
+        let url = format!("{}/api/orderbook/book/{pair}", self.base_url);
+        let resp = self.client.get(&url).send().await?;
+        if !resp.status().is_success() {
+            return Err(DevnetError::Api(format!("status {}", resp.status())));
+        }
+        Ok(resp.json().await?)
+    }
+
+    /// Get recent trades for a pair.
+    pub async fn get_trades(&self, pair: &str, limit: u32) -> Result<Vec<TradeInfo>, DevnetError> {
+        let url = format!("{}/api/orderbook/trades/{pair}", self.base_url);
+        let resp = self
+            .client
+            .get(&url)
+            .query(&[("limit", limit.to_string())])
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(DevnetError::Api(format!("status {}", resp.status())));
+        }
+        Ok(resp.json().await?)
+    }
+
+    // ─── Identity / credential endpoints ───────────────────────────────────────
+
+    /// Issue a verifiable credential.
+    pub async fn issue_credential(
+        &self,
+        issuer_cell: &str,
+        schema: &str,
+        attributes: &str,
+        signature: &str,
+    ) -> Result<String, DevnetError> {
+        let url = format!("{}/api/identity/credentials/issue", self.base_url);
+        let body = serde_json::json!({
+            "issuer": issuer_cell,
+            "schema": schema,
+            "attributes": attributes,
+            "signature": signature,
+        });
+        let resp = self.client.post(&url).json(&body).send().await?;
+        if !resp.status().is_success() {
+            let msg = resp.text().await.unwrap_or_default();
+            return Err(DevnetError::Api(msg));
+        }
+        let result: serde_json::Value = resp.json().await?;
+        Ok(result["credential_id"]
+            .as_str()
+            .unwrap_or("unknown")
+            .to_string())
+    }
+
+    /// Request a proof from another user.
+    pub async fn request_proof(
+        &self,
+        verifier_cell: &str,
+        subject_cell: &str,
+        predicate: &str,
+    ) -> Result<ProofRequestResult, DevnetError> {
+        let url = format!("{}/api/identity/proofs/request", self.base_url);
+        let body = serde_json::json!({
+            "verifier": verifier_cell,
+            "subject": subject_cell,
+            "predicate": predicate,
+        });
+        let resp = self.client.post(&url).json(&body).send().await?;
+        if !resp.status().is_success() {
+            let msg = resp.text().await.unwrap_or_default();
+            return Err(DevnetError::Api(msg));
+        }
+        Ok(resp.json().await?)
+    }
+
+    /// List credentials held by a cell.
+    pub async fn list_credentials(
+        &self,
+        cell_id: &str,
+    ) -> Result<Vec<CredentialInfo>, DevnetError> {
+        let url = format!("{}/api/identity/credentials", self.base_url);
+        let resp = self
+            .client
+            .get(&url)
+            .query(&[("cell_id", cell_id)])
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(DevnetError::Api(format!("status {}", resp.status())));
+        }
+        Ok(resp.json().await?)
+    }
+
+    // ─── Status / metrics endpoints ────────────────────────────────────────────
+
+    /// Get federation health.
+    pub async fn federation_health(&self) -> Result<FederationHealth, DevnetError> {
+        let url = format!("{}/api/node/health", self.base_url);
+        let resp = self.client.get(&url).send().await?;
+        if !resp.status().is_success() {
+            return Err(DevnetError::Api(format!("status {}", resp.status())));
+        }
+        Ok(resp.json().await?)
+    }
+
+    /// Verify a STARK proof on-chain.
+    pub async fn verify_proof(&self, proof_hex: &str) -> Result<ProofVerifyResult, DevnetError> {
+        let url = format!("{}/api/node/proofs/verify", self.base_url);
+        let body = serde_json::json!({ "proof": proof_hex });
+        let resp = self.client.post(&url).json(&body).send().await?;
+        if !resp.status().is_success() {
+            let msg = resp.text().await.unwrap_or_default();
+            return Err(DevnetError::Api(msg));
+        }
+        Ok(resp.json().await?)
+    }
+
+    /// Get devnet metrics.
+    pub async fn metrics(&self) -> Result<DevnetMetrics, DevnetError> {
+        let url = format!("{}/api/node/metrics", self.base_url);
+        let resp = self.client.get(&url).send().await?;
+        if !resp.status().is_success() {
+            return Err(DevnetError::Api(format!("status {}", resp.status())));
+        }
+        Ok(resp.json().await?)
     }
 }

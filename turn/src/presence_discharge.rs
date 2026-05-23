@@ -208,7 +208,9 @@ pub fn verify_presence_discharge(
     // 4. Check claim satisfies requirement.
     let attested_claim = discharge
         .claim()
-        .ok_or(PresenceDischargeError::UnknownClaimType(discharge.claim_tag))?;
+        .ok_or(PresenceDischargeError::UnknownClaimType(
+            discharge.claim_tag,
+        ))?;
 
     if !claim_satisfies(&attested_claim, &caveat.required_claim) {
         return Err(PresenceDischargeError::ClaimInsufficient {
@@ -229,16 +231,27 @@ fn claim_satisfies(
         // Exact match.
         (a, b) if a == b => true,
         // CurrentlyOnline satisfies OnlineWithin for any window.
-        (PresenceClaimRequirement::CurrentlyOnline, PresenceClaimRequirement::OnlineWithin { .. }) => true,
+        (
+            PresenceClaimRequirement::CurrentlyOnline,
+            PresenceClaimRequirement::OnlineWithin { .. },
+        ) => true,
         // OnlineForAtLeast(N) satisfies OnlineForAtLeast(M) if N >= M.
         (
-            PresenceClaimRequirement::OnlineForAtLeast { duration_secs: attested_dur },
-            PresenceClaimRequirement::OnlineForAtLeast { duration_secs: required_dur },
+            PresenceClaimRequirement::OnlineForAtLeast {
+                duration_secs: attested_dur,
+            },
+            PresenceClaimRequirement::OnlineForAtLeast {
+                duration_secs: required_dur,
+            },
         ) => attested_dur >= required_dur,
         // OnlineWithin(N) satisfies OnlineWithin(M) if N <= M (tighter is stronger).
         (
-            PresenceClaimRequirement::OnlineWithin { window_secs: attested_window },
-            PresenceClaimRequirement::OnlineWithin { window_secs: required_window },
+            PresenceClaimRequirement::OnlineWithin {
+                window_secs: attested_window,
+            },
+            PresenceClaimRequirement::OnlineWithin {
+                window_secs: required_window,
+            },
         ) => attested_window <= required_window,
         _ => false,
     }
@@ -268,8 +281,14 @@ impl std::fmt::Display for PresenceDischargeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidSignature => write!(f, "presence attestation signature invalid"),
-            Self::Expired { expired_at, current_time } => {
-                write!(f, "presence attestation expired at {expired_at} (now {current_time})")
+            Self::Expired {
+                expired_at,
+                current_time,
+            } => {
+                write!(
+                    f,
+                    "presence attestation expired at {expired_at} (now {current_time})"
+                )
             }
             Self::UserMismatch { expected, actual } => {
                 write!(f, "user mismatch: expected {expected}, got {actual}")
@@ -277,7 +296,10 @@ impl std::fmt::Display for PresenceDischargeError {
             Self::CellMismatch => write!(f, "cell ID mismatch"),
             Self::UnknownClaimType(tag) => write!(f, "unknown claim type tag: {tag}"),
             Self::ClaimInsufficient { attested, required } => {
-                write!(f, "attested claim {attested:?} does not satisfy required {required:?}")
+                write!(
+                    f,
+                    "attested claim {attested:?} does not satisfy required {required:?}"
+                )
             }
         }
     }
@@ -426,7 +448,9 @@ mod tests {
         // Require: online for at least 3600s — should pass (7200 >= 3600)
         let caveat = PresenceCaveat {
             issuer_key: key,
-            required_claim: PresenceClaimRequirement::OnlineForAtLeast { duration_secs: 3600 },
+            required_claim: PresenceClaimRequirement::OnlineForAtLeast {
+                duration_secs: 3600,
+            },
             user_id: 12345,
             cell_id: test_cell(),
         };
@@ -435,7 +459,9 @@ mod tests {
         // Require: online for at least 10000s — should fail (7200 < 10000)
         let caveat2 = PresenceCaveat {
             issuer_key: key,
-            required_claim: PresenceClaimRequirement::OnlineForAtLeast { duration_secs: 10000 },
+            required_claim: PresenceClaimRequirement::OnlineForAtLeast {
+                duration_secs: 10000,
+            },
             user_id: 12345,
             cell_id: test_cell(),
         };

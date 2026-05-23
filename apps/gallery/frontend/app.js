@@ -5,6 +5,26 @@
  * Manages the UI state: gallery grid, auction listings, bidding flow.
  */
 
+let DEVNET_KEY = '';
+
+async function loadConfig() {
+    try {
+        const resp = await fetch('/config.json');
+        if (resp.ok) {
+            const config = await resp.json();
+            DEVNET_KEY = config.devnet_api_key || '';
+        }
+    } catch (e) {
+        console.warn('Could not load config, mutations may fail:', e);
+    }
+}
+
+function apiHeaders(extra = {}) {
+    const headers = { 'Content-Type': 'application/json', ...extra };
+    if (DEVNET_KEY) headers['X-Devnet-Key'] = DEVNET_KEY;
+    return headers;
+}
+
 const App = (() => {
     // API base URL (configurable; defaults to same origin).
     const API_BASE = window.GALLERY_API || window.location.origin;
@@ -166,7 +186,7 @@ const App = (() => {
     async function apiPost(path, body) {
         const resp = await fetch(API_BASE + path, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: apiHeaders(),
             body: JSON.stringify(body),
         });
         return resp.json();
@@ -604,7 +624,8 @@ const App = (() => {
 })();
 
 // Initialize on DOM ready.
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+    await loadConfig();
     App.init();
 
     // If on auction.html, load the auction detail.

@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Pyana Wallet - Settings</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      padding: 32px;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    h1 { font-size: 22px; margin-bottom: 8px; color: #a78bfa; }
+    .subtitle { font-size: 13px; color: #9ca3af; margin-bottom: 24px; }
+    .section {
+      margin-bottom: 24px;
+      padding: 16px;
+      background: #16213e;
+      border-radius: 10px;
+    }
+    .section-title {
+      font-size: 14px; font-weight: 600;
+      color: #a78bfa; margin-bottom: 12px;
+    }
+    label {
+      display: block;
+      font-size: 12px; color: #9ca3af;
+      margin-bottom: 4px; margin-top: 12px;
+    }
+    label:first-of-type { margin-top: 0; }
+    input[type="text"], input[type="url"], input[type="password"] {
+      width: 100%; padding: 10px 12px;
+      background: #0f172a; border: 1px solid #374151; border-radius: 6px;
+      color: #e0e0e0; font-size: 13px; font-family: 'Courier New', monospace;
+    }
+    input:focus { outline: none; border-color: #a78bfa; }
+    input::placeholder { color: #6b7280; }
+    .help {
+      font-size: 11px; color: #6b7280; margin-top: 4px;
+    }
+    button {
+      padding: 10px 20px; border: none;
+      border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;
+      margin-top: 16px;
+    }
+    #saveBtn { background: #a78bfa; color: #1a1a2e; }
+    #saveBtn:hover { background: #8b5cf6; }
+    #resetBtn { background: #374151; color: #e0e0e0; margin-left: 8px; }
+    #resetBtn:hover { background: #4b5563; }
+    #testBtn { background: #065f46; color: #6ee7b7; margin-left: 8px; }
+    #testBtn:hover { background: #047857; }
+    .status-msg {
+      margin-top: 12px; padding: 8px 12px;
+      border-radius: 6px; font-size: 12px;
+      display: none;
+    }
+    .status-msg.success { display: block; background: #064e3b; color: #6ee7b7; border: 1px solid #065f46; }
+    .status-msg.error { display: block; background: #451a03; color: #fbbf24; border: 1px solid #92400e; }
+    .status-msg.info { display: block; background: #1e293b; color: #93c5fd; border: 1px solid #1e40af; }
+  </style>
+</head>
+<body>
+  <h1>Pyana Wallet Settings</h1>
+  <p class="subtitle">Configure node connection and devnet access.</p>
+
+  <div class="section">
+    <div class="section-title">Node Connection</div>
+    <label for="nodeUrl">Node URL (HTTP API)</label>
+    <input type="url" id="nodeUrl" placeholder="https://devnet.pyana.fg-goose.online">
+    <div class="help">The base URL for the pyana node's REST API. Used for turn submission, balance queries, and status checks.</div>
+
+    <label for="wssUrl">WebSocket URL (wss://)</label>
+    <input type="url" id="wssUrl" placeholder="wss://devnet.pyana.fg-goose.online/ws">
+    <div class="help">Secure WebSocket endpoint for real-time events (roots, revocations, receipts, intents).</div>
+
+    <label for="wsUrl">WebSocket Fallback (ws://, localhost only)</label>
+    <input type="url" id="wsUrl" placeholder="ws://localhost:8420/ws">
+    <div class="help">Insecure WebSocket fallback. Only used when the node is on localhost and wss:// fails.</div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Authentication</div>
+    <label for="devnetKey">X-Devnet-Key</label>
+    <input type="password" id="devnetKey" placeholder="Enter your devnet API key">
+    <div class="help">Included as the X-Devnet-Key header on all node requests. Required for devnet access.</div>
+  </div>
+
+  <div>
+    <button id="saveBtn">Save Settings</button>
+    <button id="testBtn">Test Connection</button>
+    <button id="resetBtn">Reset to Defaults</button>
+  </div>
+
+  <div id="statusMsg" class="status-msg"></div>
+
+  <script src="settings-script.js"></script>
+</body>
+</html>

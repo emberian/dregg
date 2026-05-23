@@ -1,0 +1,5 @@
+{
+  "devnet_api_key": "6a0078769c2e7bfb96341d843cfdcaca4b5c7d621b10e20d",
+  "devnet_url": "https://devnet.pyana.fg-goose.online",
+  "note": "This is a DEVNET key. Rotate for production."
+}

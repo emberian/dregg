@@ -17,15 +17,17 @@ const RESTRICTED_METHODS = new Set([
   'pyana:provision',
   'pyana:postIntent',
   'pyana:offerCapability',
+  'pyana:signTurn',
+  'pyana:queryBalance',
 ]);
 
 // Pending permission prompts: origin -> { resolve, reject }[]
 const pendingPermissions = new Map();
 
 // Inject page.js with the session nonce as a data attribute.
+// Note: NOT set as type="module" for Firefox MV3 compatibility.
 const script = document.createElement('script');
 script.src = chrome.runtime.getURL('page.js');
-script.type = 'module';
 script.dataset.pyanaNonce = SESSION_NONCE;
 (document.head || document.documentElement).appendChild(script);
 script.onload = () => script.remove();
