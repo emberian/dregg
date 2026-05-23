@@ -1,5 +1,7 @@
 use pyana_dsl::{pyana_caveat, pyana_effect};
 
+pub mod pyana_definitions;
+
 // --- Phase 1 caveats (preserved) ---
 
 #[pyana_caveat]

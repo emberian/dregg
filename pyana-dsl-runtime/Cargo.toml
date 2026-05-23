@@ -3,5 +3,11 @@ name = "pyana-dsl-runtime"
 version = "0.1.0"
 edition = "2024"
 
+[dependencies]
+pyana-circuit = { path = "../circuit" }
+
+[dev-dependencies]
+pyana-circuit = { path = "../circuit" }
+
 [lints]
 workspace = true

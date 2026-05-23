@@ -6229,6 +6229,9 @@ dependencies = [
 [[package]]
 name = "pyana-dsl-runtime"
 version = "0.1.0"
+dependencies = [
+ "pyana-circuit",
+]
 
 [[package]]
 name = "pyana-dsl-tests"

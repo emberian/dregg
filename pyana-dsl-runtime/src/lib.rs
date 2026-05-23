@@ -3,6 +3,12 @@
 //! This crate provides the types that proc-macro-generated code depends on:
 //! `ConstraintError`, `AirConstraintSet`, `Constraint`, `KimchiCircuitDescriptor`,
 //! `EffectDescriptor`, and supporting types.
+//!
+//! The [`circuit`] module provides a runtime-interpreted `StarkAir` implementation
+//! driven by a [`circuit::CircuitDescriptor`], enabling DSL macros to emit data
+//! rather than 2000 lines of codegen.
+
+pub mod circuit;
 
 /// Error returned when a caveat constraint is violated at runtime.
 #[derive(Debug, Clone, PartialEq, Eq)]
