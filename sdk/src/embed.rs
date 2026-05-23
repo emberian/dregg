@@ -439,6 +439,11 @@ impl PyanaEngine {
     /// action binding is not applicable (e.g., qualifying a node as a federation
     /// member). For action-authorized requests, use [`verify_presentation_bytes`]
     /// which enforces full security checks via [`present::verify_proof_complete`].
+    // AUDIT[P2]: returns `bool` and swallows the underlying error category.
+    // Callers cannot distinguish "decode failure" from "STARK rejected" from
+    // "wrong root". Consider returning `Result<(), MembershipError>` to surface
+    // failures into telemetry and prevent silent acceptance windows during
+    // partial federation rotations.
     pub fn verify_membership_proof(&self, proof_bytes: &[u8], federation_root: &[u8; 32]) -> bool {
         let wire_proof: WirePresentationProof = match postcard::from_bytes(proof_bytes) {
             Ok(p) => p,

@@ -95,6 +95,12 @@ impl std::error::Error for HandoffError {}
 /// Can travel out-of-band (QR code, email, file, BLE mesh message). The recipient
 /// presents this to the target federation along with a proof that they are indeed
 /// the named recipient.
+// AUDIT[P2]: Public fields enable post-receive tampering, but the validation flow
+// (`validate_handoff`) is verify-and-consume (no stored cert is reused), so the
+// analogous P0 against `HeldToken` does not apply here directly. Still, callers
+// that *store* a verified `HandoffCertificate` for later authority decisions
+// would need durable-binding semantics — flag for review if such a callsite is
+// introduced.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HandoffCertificate {
     /// Who is granting the handoff (the current holder introducing the recipient).

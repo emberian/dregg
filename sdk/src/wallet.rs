@@ -2376,7 +2376,7 @@ impl AgentWallet {
     /// let signed_turn = wallet.build_authorized_turn(
     ///     &token,
     ///     target,
-    ///     vec![Effect::Transfer { target, amount: 100 }],
+    ///     vec![Effect::Transfer { from: target, to: target, amount: 100 }],
     ///     "transfer",
     ///     "balance",
     ///     100, // fee
