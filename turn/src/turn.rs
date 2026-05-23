@@ -3,14 +3,31 @@
 //! A Turn wraps a CallForest with metadata: who initiated it, replay protection
 //! via nonce, fee payment, and optional memo/expiration.
 
+use std::collections::HashMap;
+
 use pyana_cell::state::FieldElement;
-use pyana_cell::{CellId, DerivationRecord, LedgerDelta};
+use pyana_cell::{Cell, CellId, DerivationRecord, LedgerDelta};
 use serde::{Deserialize, Serialize};
 
 use crate::action::Symbol;
 use crate::error::TurnError;
 use crate::forest::CallForest;
 use crate::routing::RoutingDirective;
+
+/// Witness data for a sovereign cell in a turn.
+///
+/// When a turn targets a sovereign cell, the submitter must provide the full
+/// cell state and prove it matches the stored commitment. The federation does
+/// not store sovereign cell state, so the agent must supply it.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SovereignCellWitness {
+    /// The full cell state (agent provides this).
+    pub cell_state: Cell,
+    /// Proof that this state matches the stored commitment.
+    /// For Phase 1a: BLAKE3 hash must equal `cell_state.state_commitment()`.
+    /// Later phases may use Merkle proofs from a state tree.
+    pub state_proof: [u8; 32],
+}
 
 /// An event emitted during turn execution, recorded in the receipt for audit/indexing.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -43,6 +60,14 @@ pub struct Turn {
     /// is a commitment to zero (values balance without revealing amounts).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conservation_proof: Option<Vec<u8>>,
+    /// Witnesses for sovereign cells targeted by this turn.
+    ///
+    /// When a turn's call forest targets a sovereign cell, the agent must provide
+    /// the full cell state here. The executor verifies that
+    /// `witness.state_proof == witness.cell_state.state_commitment()` and that this
+    /// matches the stored commitment in the ledger.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub sovereign_witnesses: HashMap<CellId, SovereignCellWitness>,
 }
 
 impl Turn {
