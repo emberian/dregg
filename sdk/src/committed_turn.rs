@@ -253,6 +253,9 @@ impl CommittedTurnBuilder {
             depends_on: Vec::new(),
             conservation_proof: None,
             sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
         };
 
         let turn_hash = partial_turn.hash();
@@ -275,6 +278,9 @@ impl CommittedTurnBuilder {
         let turn = Turn {
             conservation_proof: Some(proof_bytes),
             sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
             ..partial_turn
         };
 

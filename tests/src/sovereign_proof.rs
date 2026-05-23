@@ -1,0 +1,194 @@
+//! Integration test: Proof-carrying sovereign turns (Phase 2).
+//!
+//! Tests the full pipeline:
+//!   1. Wallet generates a STARK proof of valid state transition
+//!   2. Turn carries the proof (no sovereign_witnesses needed)
+//!   3. Executor verifies the proof and updates commitment (no re-execution)
+
+use pyana_cell::{Cell, CellId, CellMode, Ledger};
+use pyana_sdk::AgentWallet;
+use pyana_turn::{ComputronCosts, Effect, TurnExecutor, TurnResult};
+
+/// Create a sovereign cell in a ledger and return the cell + ledger.
+fn setup_sovereign_cell(balance: u64) -> (AgentWallet, CellId, Ledger) {
+    let wallet = AgentWallet::new();
+    let pub_key = wallet.public_key().0;
+    let token_id = *blake3::hash(b"test-domain").as_bytes();
+
+    let mut cell = Cell::with_balance(pub_key, token_id, balance);
+    cell.mode = CellMode::Sovereign;
+    let cell_id = cell.id;
+
+    // Compute the initial state commitment.
+    let commitment = cell.state_commitment();
+
+    // Store the cell state in the wallet.
+    let mut wallet = wallet;
+    wallet.store_sovereign_state(cell);
+
+    // Create a ledger with the sovereign commitment registered.
+    let mut ledger = Ledger::new();
+    // Register the cell as sovereign (commitment only, no full state).
+    ledger.register_sovereign_cell(cell_id, commitment).unwrap();
+
+    // The executor also needs the agent cell to exist for fee/nonce.
+    // Create a hosted version of the agent cell for the ledger's agent tracking.
+    let agent_cell = Cell::with_balance(pub_key, token_id, 10_000);
+    let _ = ledger.insert_cell(agent_cell);
+
+    (wallet, cell_id, ledger)
+}
+
+#[test]
+fn test_proof_carrying_sovereign_turn_accepted() {
+    let (mut wallet, cell_id, mut ledger) = setup_sovereign_cell(1000);
+
+    // Create a destination cell for the transfer.
+    let dest_key = [42u8; 32];
+    let dest_token_id = *blake3::hash(b"test-domain").as_bytes();
+    let dest_cell = Cell::with_balance(dest_key, dest_token_id, 0);
+    let dest_id = dest_cell.id;
+    let _ = ledger.insert_cell(dest_cell);
+
+    // Generate a proof-carrying turn: transfer 100 from our sovereign cell.
+    let effects = vec![Effect::Transfer {
+        from: cell_id,
+        to: dest_id,
+        amount: 100,
+    }];
+
+    let turn = wallet
+        .execute_sovereign_turn_with_proof(&cell_id, effects, 500)
+        .expect("should generate proof-carrying turn");
+
+    // Verify the turn has an execution_proof.
+    assert!(turn.execution_proof.is_some());
+    assert_eq!(turn.execution_proof_cell, Some(cell_id));
+    assert!(turn.execution_proof_new_commitment.is_some());
+    assert!(turn.sovereign_witnesses.is_empty());
+
+    // Execute with the TurnExecutor.
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let result = executor.execute(&turn, &mut ledger);
+
+    match result {
+        TurnResult::Committed { computrons_used, .. } => {
+            // Proof-carrying turns use zero computrons (just verification).
+            assert_eq!(computrons_used, 0);
+        }
+        TurnResult::Rejected { reason, .. } => {
+            panic!("Turn was rejected: {:?}", reason);
+        }
+        other => panic!("Unexpected result: {:?}", other),
+    }
+
+    // Verify the sovereign commitment was updated.
+    let new_commitment = ledger.get_sovereign_commitment(&cell_id);
+    assert!(new_commitment.is_some());
+    assert_eq!(
+        *new_commitment.unwrap(),
+        turn.execution_proof_new_commitment.unwrap()
+    );
+}
+
+#[test]
+fn test_proof_carrying_turn_tampered_commitment_rejected() {
+    let (mut wallet, cell_id, mut ledger) = setup_sovereign_cell(1000);
+
+    let dest_key = [43u8; 32];
+    let dest_token_id = *blake3::hash(b"test-domain").as_bytes();
+    let dest_cell = Cell::with_balance(dest_key, dest_token_id, 0);
+    let dest_id = dest_cell.id;
+    let _ = ledger.insert_cell(dest_cell);
+
+    let effects = vec![Effect::Transfer {
+        from: cell_id,
+        to: dest_id,
+        amount: 50,
+    }];
+
+    let mut turn = wallet
+        .execute_sovereign_turn_with_proof(&cell_id, effects, 500)
+        .expect("should generate proof-carrying turn");
+
+    // Tamper with the new commitment (simulates attacker trying to claim wrong state).
+    turn.execution_proof_new_commitment = Some([0xFFu8; 32]);
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let result = executor.execute(&turn, &mut ledger);
+
+    // Should be rejected because the proof's public inputs won't match the tampered commitment.
+    match result {
+        TurnResult::Rejected { reason, .. } => {
+            // Expected: the proof verification should fail because the public inputs
+            // don't match what's embedded in the STARK proof.
+            let reason_str = format!("{:?}", reason);
+            assert!(
+                reason_str.contains("new_commitment")
+                    || reason_str.contains("ProofVerificationFailed")
+                    || reason_str.contains("mismatch"),
+                "Expected commitment mismatch error, got: {}",
+                reason_str
+            );
+        }
+        TurnResult::Committed { .. } => {
+            panic!("Tampered turn should have been rejected!");
+        }
+        other => panic!("Unexpected result: {:?}", other),
+    }
+}
+
+#[test]
+fn test_backward_compat_witness_path_still_works() {
+    // Verify that turns WITHOUT execution_proof still work (Phase 1 witness path).
+    let wallet = AgentWallet::new();
+    let pub_key = wallet.public_key().0;
+    let token_id = *blake3::hash(b"test-domain").as_bytes();
+
+    let mut cell = Cell::with_balance(pub_key, token_id, 5000);
+    cell.mode = CellMode::Sovereign;
+    let cell_id = cell.id;
+    let commitment = cell.state_commitment();
+
+    let mut wallet = wallet;
+    wallet.store_sovereign_state(cell.clone());
+
+    let mut ledger = Ledger::new();
+    ledger.register_sovereign_cell(cell_id, commitment).unwrap();
+    let agent_cell = Cell::with_balance(pub_key, token_id, 10_000);
+    let _ = ledger.insert_cell(agent_cell);
+
+    let dest_key = [44u8; 32];
+    let dest_token_id = *blake3::hash(b"test-domain").as_bytes();
+    let dest_cell = Cell::with_balance(dest_key, dest_token_id, 0);
+    let dest_id = dest_cell.id;
+    let _ = ledger.insert_cell(dest_cell);
+
+    // Use the Phase 1 witness path (no proof, sovereign_witnesses populated).
+    let effects = vec![Effect::Transfer {
+        from: cell_id,
+        to: dest_id,
+        amount: 200,
+    }];
+
+    let turn = wallet
+        .execute_sovereign_turn(&cell_id, effects, 500)
+        .expect("should build witness-based turn");
+
+    // Verify it has witnesses but NO execution proof.
+    assert!(turn.execution_proof.is_none());
+    assert!(!turn.sovereign_witnesses.is_empty());
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let result = executor.execute(&turn, &mut ledger);
+
+    match result {
+        TurnResult::Committed { .. } => {
+            // Phase 1 path still works.
+        }
+        TurnResult::Rejected { reason, .. } => {
+            panic!("Witness-based turn should succeed: {:?}", reason);
+        }
+        other => panic!("Unexpected: {:?}", other),
+    }
+}

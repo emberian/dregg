@@ -68,6 +68,26 @@ pub struct Turn {
     /// matches the stored commitment in the ledger.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub sovereign_witnesses: HashMap<CellId, SovereignCellWitness>,
+    /// Execution proof for proof-carrying sovereign turns (Phase 3).
+    ///
+    /// When present, the executor bypasses all state manipulation and instead:
+    /// 1. Verifies the STARK proof (binding old_commitment -> new_commitment + effects_hash)
+    /// 2. Updates the sovereign cell's commitment directly
+    ///
+    /// This makes sovereign cell transitions O(1) regardless of internal complexity.
+    /// The proof's public inputs layout:
+    ///   [old_commitment_bb[0..8], new_commitment_bb[0..8], effects_hash_bb[0..8], cell_id_hash_bb[0..8]]
+    /// where each 32-byte value is encoded as 8 BabyBear elements (4 bytes each, LE).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_proof: Option<Vec<u8>>,
+    /// The target cell ID for proof-carrying turns. Required when `execution_proof` is Some.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_proof_cell: Option<CellId>,
+    /// The new commitment claimed by the execution proof.
+    /// The proof's public inputs must include this value. After verification, the
+    /// ledger's sovereign commitment is updated to this value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_proof_new_commitment: Option<[u8; 32]>,
 }
 
 impl Turn {

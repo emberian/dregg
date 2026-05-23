@@ -98,6 +98,9 @@ impl TurnBuilder {
             depends_on: Vec::new(),
             conservation_proof: None,
             sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
         }
     }
 

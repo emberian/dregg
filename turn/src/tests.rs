@@ -524,6 +524,9 @@ fn test_real_signature_verification() {
         depends_on: vec![],
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
     };
 
     let result = executor.execute(&turn, &mut ledger);
@@ -652,6 +655,9 @@ fn test_wrong_key_signature_rejected() {
         depends_on: vec![],
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
     };
 
     let result = executor.execute(&turn, &mut ledger);
@@ -1224,6 +1230,9 @@ fn test_empty_forest_rejected() {
         depends_on: vec![],
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
     };
 
     let result = executor.execute(&turn, &mut ledger);
@@ -4705,6 +4714,9 @@ fn test_budget_gate_refund_on_turn_failure() {
         conservation_proof: None,
         previous_receipt_hash: None,
         sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
     };
 
     let result = executor.execute(&turn, &mut ledger);
@@ -4835,6 +4847,9 @@ fn test_spawn_with_delegation_child_gets_parent_caps() {
         depends_on: vec![],
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
     };
 
     let result = executor.execute(&turn, &mut ledger);
@@ -4911,6 +4926,9 @@ fn test_child_acts_via_delegated_caps() {
         depends_on: vec![],
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
     };
     let result = executor.execute(&turn1, &mut ledger);
     assert!(result.is_committed());
@@ -4950,6 +4968,9 @@ fn test_child_acts_via_delegated_caps() {
         depends_on: vec![],
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
     };
     let result = executor.execute(&turn2, &mut ledger);
     assert!(
@@ -5015,6 +5036,9 @@ fn test_refresh_delegation_updates_snapshot() {
         depends_on: vec![],
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
     };
     executor.execute(&turn1, &mut ledger);
 
@@ -5069,6 +5093,9 @@ fn test_refresh_delegation_updates_snapshot() {
         depends_on: vec![],
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
     };
     let result = executor.execute(&turn2, &mut ledger);
     assert!(result.is_committed(), "refresh should work: {:?}", result);
@@ -5134,6 +5161,9 @@ fn test_revoke_delegation_bumps_epoch_and_clears_child() {
         depends_on: vec![],
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
     };
     executor.execute(&turn1, &mut ledger);
 
@@ -5176,6 +5206,9 @@ fn test_revoke_delegation_bumps_epoch_and_clears_child() {
         depends_on: vec![],
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
     };
     let result = executor.execute(&turn2, &mut ledger);
     assert!(result.is_committed(), "revoke should work: {:?}", result);
@@ -5238,6 +5271,9 @@ fn test_parent_new_cap_invisible_until_refresh() {
         depends_on: vec![],
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
     };
     executor.execute(&turn1, &mut ledger);
 
@@ -5281,6 +5317,9 @@ fn test_parent_new_cap_invisible_until_refresh() {
         depends_on: vec![],
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
     };
     let result = executor.execute(&turn2, &mut ledger);
     assert!(
@@ -5344,6 +5383,9 @@ fn test_parent_loses_cap_child_still_has_until_refresh() {
         depends_on: vec![],
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
     };
     executor.execute(&turn1, &mut ledger);
 
@@ -5389,6 +5431,9 @@ fn test_parent_loses_cap_child_still_has_until_refresh() {
         depends_on: vec![],
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
     };
     let result = executor.execute(&turn2, &mut ledger);
     assert!(
@@ -6744,6 +6789,9 @@ fn sovereign_cell_execute_turn_with_valid_witness() {
             );
             m
         },
+        execution_proof: None,
+        execution_proof_cell: None,
+        execution_proof_new_commitment: None,
     };
 
     let executor = zero_cost_executor();
@@ -6832,6 +6880,9 @@ fn sovereign_cell_rejected_without_witness() {
         depends_on: vec![],
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(), // NO witness!
+        execution_proof: None,
+        execution_proof_cell: None,
+        execution_proof_new_commitment: None,
     };
 
     let executor = zero_cost_executor();
@@ -6920,6 +6971,9 @@ fn sovereign_cell_rejected_with_wrong_commitment() {
             );
             m
         },
+        execution_proof: None,
+        execution_proof_cell: None,
+        execution_proof_new_commitment: None,
     };
 
     let executor = zero_cost_executor();
@@ -6985,6 +7039,9 @@ fn sovereign_cell_make_sovereign_effect() {
         depends_on: vec![],
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
     };
 
     let executor = zero_cost_executor();
@@ -7035,4 +7092,298 @@ fn sovereign_cell_state_commitment_deterministic() {
     let (mut cell5, _) = make_open_cell(5, 1000);
     cell5.state.fields[0] = [1u8; 32];
     assert_ne!(cell1.state_commitment(), cell5.state_commitment());
+}
+
+// =============================================================================
+// Tests: Phase 3 — Proof-carrying sovereign turns
+// =============================================================================
+
+/// Helper: set up a sovereign cell in the ledger and return (ledger, agent_id, sovereign_cell_id, old_commitment).
+fn setup_sovereign_cell_for_proof_test() -> (Ledger, CellId, CellId, [u8; 32]) {
+    let mut ledger = Ledger::new();
+    let (agent, _) = make_open_cell(1, 10000);
+    let agent_id = agent.id;
+    ledger.insert_cell(agent).unwrap();
+
+    // Create a cell, then make it sovereign.
+    let (sovereign_cell, _) = make_open_cell(10, 5000);
+    let sovereign_id = sovereign_cell.id;
+    let commitment = sovereign_cell.state_commitment();
+    ledger.insert_cell(sovereign_cell).unwrap();
+    let _ = ledger.make_sovereign(&sovereign_id).unwrap();
+
+    (ledger, agent_id, sovereign_id, commitment)
+}
+
+/// Helper: generate a valid sovereign execution proof for a balance transfer.
+///
+/// Returns (proof_bytes, new_commitment, effects_hash) where the proof is valid
+/// against the SovereignTransitionAir.
+fn generate_valid_sovereign_proof(
+    old_commitment: &[u8; 32],
+    new_commitment: &[u8; 32],
+    cell_id: &CellId,
+    effects_hash: &[u8; 32],
+) -> Vec<u8> {
+    use pyana_circuit::sovereign_transition_air::{
+        SovereignTransitionAir, generate_sovereign_transition_trace,
+    };
+    use pyana_circuit::stark::{proof_to_bytes, prove};
+
+    // Compute the cell_id hash the executor will use.
+    let cell_id_hash = *blake3::hash(cell_id.as_bytes()).as_bytes();
+
+    // Generate the trace and public inputs for a transfer of 100 outgoing.
+    let (trace, public_inputs) = generate_sovereign_transition_trace(
+        1000, // old_balance (arbitrary, just needs to satisfy the constraint)
+        100,  // transfer_amount
+        1,    // direction = outgoing
+        old_commitment,
+        new_commitment,
+        effects_hash,
+        &cell_id_hash,
+    );
+
+    let air = SovereignTransitionAir;
+    let proof = prove(&air, &trace, &public_inputs);
+    proof_to_bytes(&proof)
+}
+
+#[test]
+fn test_proof_carrying_turn_accepted() {
+    let (mut ledger, agent_id, sovereign_id, old_commitment) =
+        setup_sovereign_cell_for_proof_test();
+    let executor = zero_cost_executor();
+
+    // New commitment (what the sovereign claims as its post-state).
+    let new_commitment = [42u8; 32];
+
+    // Build a minimal turn with an empty call forest (the effects are proven, not executed).
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    // Add a dummy action so the forest isn't empty (required by executor).
+    {
+        let action = builder.action(agent_id, "noop");
+        let _ = action; // no effects
+    }
+    let mut turn = builder.fee(100).build();
+
+    // Compute effects hash the same way the executor will.
+    let effects_hash = {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"pyana-sovereign-effects-v1:");
+        // Hash effects from the turn's call forest (the noop has no effects so just the prefix).
+        for root in &turn.call_forest.roots {
+            hash_tree_effects_test(root, &mut hasher);
+        }
+        *hasher.finalize().as_bytes()
+    };
+
+    // Generate a valid STARK proof.
+    let proof_bytes = generate_valid_sovereign_proof(
+        &old_commitment,
+        &new_commitment,
+        &sovereign_id,
+        &effects_hash,
+    );
+
+    // Attach the proof to the turn.
+    turn.execution_proof = Some(proof_bytes);
+    turn.execution_proof_cell = Some(sovereign_id);
+    turn.execution_proof_new_commitment = Some(new_commitment);
+
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        result.is_committed(),
+        "proof-carrying turn should be committed, got: {:?}",
+        match &result {
+            crate::turn::TurnResult::Rejected { reason, .. } => format!("{}", reason),
+            _ => "non-rejected".to_string(),
+        }
+    );
+
+    // Verify the sovereign commitment was updated.
+    let stored = ledger.get_sovereign_commitment(&sovereign_id).unwrap();
+    assert_eq!(*stored, new_commitment);
+}
+
+#[test]
+fn test_proof_carrying_turn_wrong_old_commitment() {
+    let (mut ledger, agent_id, sovereign_id, _old_commitment) =
+        setup_sovereign_cell_for_proof_test();
+    let executor = zero_cost_executor();
+
+    // Use a WRONG old_commitment in the proof (doesn't match what's stored).
+    let wrong_old_commitment = [99u8; 32];
+    let new_commitment = [42u8; 32];
+
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let _action = builder.action(agent_id, "noop");
+    }
+    let mut turn = builder.fee(100).build();
+
+    let effects_hash = {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"pyana-sovereign-effects-v1:");
+        for root in &turn.call_forest.roots {
+            hash_tree_effects_test(root, &mut hasher);
+        }
+        *hasher.finalize().as_bytes()
+    };
+
+    // Generate proof with WRONG old_commitment.
+    let proof_bytes = generate_valid_sovereign_proof(
+        &wrong_old_commitment,
+        &new_commitment,
+        &sovereign_id,
+        &effects_hash,
+    );
+
+    turn.execution_proof = Some(proof_bytes);
+    turn.execution_proof_cell = Some(sovereign_id);
+    turn.execution_proof_new_commitment = Some(new_commitment);
+
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        result.is_rejected(),
+        "should reject: old commitment mismatch"
+    );
+    let (err, _) = result.unwrap_rejected();
+    assert!(
+        matches!(err, TurnError::SovereignCommitmentMismatch { .. }),
+        "expected SovereignCommitmentMismatch, got: {}",
+        err
+    );
+}
+
+#[test]
+fn test_proof_carrying_turn_wrong_effects_hash() {
+    let (mut ledger, agent_id, sovereign_id, old_commitment) =
+        setup_sovereign_cell_for_proof_test();
+    let executor = zero_cost_executor();
+
+    let new_commitment = [42u8; 32];
+
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let _action = builder.action(agent_id, "noop");
+    }
+    let mut turn = builder.fee(100).build();
+
+    // Use a WRONG effects hash in the proof.
+    let wrong_effects_hash = [77u8; 32];
+    let proof_bytes = generate_valid_sovereign_proof(
+        &old_commitment,
+        &new_commitment,
+        &sovereign_id,
+        &wrong_effects_hash, // doesn't match what executor computes
+    );
+
+    turn.execution_proof = Some(proof_bytes);
+    turn.execution_proof_cell = Some(sovereign_id);
+    turn.execution_proof_new_commitment = Some(new_commitment);
+
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_rejected(), "should reject: effects hash mismatch");
+    let (err, _) = result.unwrap_rejected();
+    assert!(
+        matches!(err, TurnError::EffectsHashMismatch { .. }),
+        "expected EffectsHashMismatch, got: {}",
+        err
+    );
+}
+
+#[test]
+fn test_proof_carrying_turn_invalid_proof_bytes() {
+    let (mut ledger, agent_id, sovereign_id, _old_commitment) =
+        setup_sovereign_cell_for_proof_test();
+    let executor = zero_cost_executor();
+
+    let new_commitment = [42u8; 32];
+
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let _action = builder.action(agent_id, "noop");
+    }
+    let mut turn = builder.fee(100).build();
+
+    // Invalid proof bytes (garbage).
+    turn.execution_proof = Some(vec![0xDE, 0xAD, 0xBE, 0xEF]);
+    turn.execution_proof_cell = Some(sovereign_id);
+    turn.execution_proof_new_commitment = Some(new_commitment);
+
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_rejected(), "should reject: invalid proof bytes");
+    let (err, _) = result.unwrap_rejected();
+    assert!(
+        matches!(err, TurnError::InvalidExecutionProof(_)),
+        "expected InvalidExecutionProof, got: {}",
+        err
+    );
+}
+
+#[test]
+fn test_proof_carrying_turn_requires_sovereign_cell() {
+    let (mut ledger, agent_id, _sovereign_id, _old_commitment) =
+        setup_sovereign_cell_for_proof_test();
+    let executor = zero_cost_executor();
+
+    // Target a NON-sovereign cell (the agent itself is hosted, not sovereign).
+    let new_commitment = [42u8; 32];
+
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let _action = builder.action(agent_id, "noop");
+    }
+    let mut turn = builder.fee(100).build();
+
+    turn.execution_proof = Some(vec![1, 2, 3, 4]);
+    turn.execution_proof_cell = Some(agent_id); // agent is NOT sovereign
+    turn.execution_proof_new_commitment = Some(new_commitment);
+
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_rejected(), "should reject: non-sovereign target");
+    let (err, _) = result.unwrap_rejected();
+    assert!(
+        matches!(err, TurnError::ProofCarryingRequiresSovereign { .. }),
+        "expected ProofCarryingRequiresSovereign, got: {}",
+        err
+    );
+}
+
+#[test]
+fn test_proof_carrying_turn_no_cell_specified() {
+    let (mut ledger, agent_id, _sovereign_id, _old_commitment) =
+        setup_sovereign_cell_for_proof_test();
+    let executor = zero_cost_executor();
+
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let _action = builder.action(agent_id, "noop");
+    }
+    let mut turn = builder.fee(100).build();
+
+    // execution_proof is set but execution_proof_cell is None.
+    turn.execution_proof = Some(vec![1, 2, 3, 4]);
+    turn.execution_proof_cell = None;
+    turn.execution_proof_new_commitment = Some([42u8; 32]);
+
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(result.is_rejected(), "should reject: no cell specified");
+    let (err, _) = result.unwrap_rejected();
+    assert!(
+        matches!(err, TurnError::InvalidExecutionProof(_)),
+        "expected InvalidExecutionProof, got: {}",
+        err
+    );
+}
+
+/// Helper: hash effects from a tree (matches the executor's internal method).
+fn hash_tree_effects_test(tree: &crate::forest::CallTree, hasher: &mut blake3::Hasher) {
+    for effect in &tree.action.effects {
+        hasher.update(&effect.hash());
+    }
+    for child in &tree.children {
+        hash_tree_effects_test(child, hasher);
+    }
 }

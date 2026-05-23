@@ -435,6 +435,9 @@ mod tests {
             conservation_proof: None,
             sovereign_witnesses: std::collections::HashMap::new(),
             previous_receipt_hash: None,
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
         }
     }
 

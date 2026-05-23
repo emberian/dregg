@@ -815,6 +815,9 @@ pub fn create_fulfillment_turn(
         depends_on: vec![],
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
+        execution_proof: None,
+        execution_proof_cell: None,
+        execution_proof_new_commitment: None,
     };
 
     ConditionalTurn {
@@ -1146,6 +1149,9 @@ pub fn execute_committed_fulfillment_flow(
         depends_on: vec![],
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
+        execution_proof: None,
+        execution_proof_cell: None,
+        execution_proof_new_commitment: None,
     };
 
     let turn_hash = partial_turn.hash();
@@ -1174,6 +1180,9 @@ pub fn execute_committed_fulfillment_flow(
     let turn = Turn {
         conservation_proof: Some(proof_bytes),
         sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
         ..partial_turn
     };
 

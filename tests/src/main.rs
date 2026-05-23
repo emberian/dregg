@@ -36,3 +36,6 @@ mod adversarial_pipeline;
 
 // Wire format end-to-end: wallet.authorize() -> postcard -> PyanaEngine::verify
 mod wire_format_e2e;
+
+// Sovereign proof-carrying turns (Phase 2): wallet generates proof -> executor verifies
+mod sovereign_proof;

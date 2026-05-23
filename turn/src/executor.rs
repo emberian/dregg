@@ -400,6 +400,161 @@ impl TurnExecutor {
         self.revocation_channels = Some(channels);
     }
 
+    /// Verify a STARK execution proof for a sovereign cell and update its commitment.
+    ///
+    /// This is the core of Phase 3: proof-carrying sovereign turns. The executor
+    /// does ZERO state manipulation — it only:
+    /// 1. Retrieves the stored commitment
+    /// 2. Verifies the STARK proof (public inputs bind old -> new commitment + effects hash)
+    /// 3. Updates the 32-byte commitment
+    ///
+    /// Public inputs layout (8 BabyBear elements, lo/hi per SovereignTransitionAir):
+    ///   [old_commitment_lo, old_commitment_hi, new_commitment_lo, new_commitment_hi,
+    ///    effects_hash_lo, effects_hash_hi, cell_id_hash_lo, cell_id_hash_hi]
+    fn verify_and_commit_proof(
+        &self,
+        cell_id: &CellId,
+        proof_bytes: &[u8],
+        turn: &Turn,
+        ledger: &mut Ledger,
+    ) -> Result<(), TurnError> {
+        use pyana_circuit::field::BabyBear;
+        use pyana_circuit::stark;
+
+        // 1. Get stored commitment (check both legacy sovereign_commitments and registrations).
+        let old_commitment = if let Some(c) = ledger.get_sovereign_commitment(cell_id) {
+            *c
+        } else if let Some(reg) = ledger.get_sovereign_registration(cell_id) {
+            reg.commitment
+        } else {
+            return Err(TurnError::SovereignNotRegistered { cell: *cell_id });
+        };
+
+        // 2. Deserialize the STARK proof.
+        let proof = stark::proof_from_bytes(proof_bytes)
+            .map_err(|e| TurnError::InvalidExecutionProof(e))?;
+
+        // 3. Get the new commitment from the turn.
+        let new_commitment = turn.execution_proof_new_commitment.ok_or_else(|| {
+            TurnError::InvalidExecutionProof(
+                "execution_proof_new_commitment is required".to_string(),
+            )
+        })?;
+
+        // 4. Compute the effects hash from the turn's call forest.
+        let computed_effects_hash = self.compute_turn_effects_hash(turn);
+
+        // 5. Compute cell_id hash for binding.
+        let cell_id_hash = {
+            let h = blake3::hash(cell_id.as_bytes());
+            *h.as_bytes()
+        };
+
+        // 6. Reconstruct public inputs: encode each 32-byte hash as 8 BabyBear elements.
+        let mut public_inputs: Vec<BabyBear> = Vec::with_capacity(32);
+        public_inputs.extend(Self::bytes32_to_babybear(&old_commitment));
+        public_inputs.extend(Self::bytes32_to_babybear(&new_commitment));
+        public_inputs.extend(Self::bytes32_to_babybear(&computed_effects_hash));
+        public_inputs.extend(Self::bytes32_to_babybear(&cell_id_hash));
+
+        // 7. Verify the proof's embedded public inputs match what we expect.
+        if proof.public_inputs.len() < 32 {
+            return Err(TurnError::InvalidExecutionProof(format!(
+                "proof has {} public inputs, expected at least 32",
+                proof.public_inputs.len()
+            )));
+        }
+        for (i, expected_bb) in public_inputs.iter().enumerate() {
+            let got = BabyBear(proof.public_inputs[i]);
+            if got != *expected_bb {
+                // Determine which field mismatched for a better error message.
+                if i < 8 {
+                    return Err(TurnError::SovereignCommitmentMismatch {
+                        cell: *cell_id,
+                        expected: old_commitment,
+                        got: new_commitment, // best-effort context
+                    });
+                } else if i < 16 {
+                    return Err(TurnError::InvalidExecutionProof(
+                        "new_commitment in proof does not match claimed value".to_string(),
+                    ));
+                } else if i < 24 {
+                    return Err(TurnError::EffectsHashMismatch {
+                        expected: computed_effects_hash,
+                        got: Self::babybear_slice_to_bytes32(&proof.public_inputs[16..24]),
+                    });
+                } else {
+                    return Err(TurnError::InvalidExecutionProof(
+                        "cell_id_hash in proof does not match target cell".to_string(),
+                    ));
+                }
+            }
+        }
+
+        // 8. Verify the STARK proof using the SovereignTransitionAir.
+        let air = pyana_circuit::SovereignTransitionAir;
+        stark::verify(&air, &proof, &public_inputs)
+            .map_err(|e| TurnError::ProofVerificationFailed(e))?;
+
+        // 9. Update commitment (no re-execution!). Try the legacy map first, then registrations.
+        if ledger.is_sovereign(cell_id) {
+            let _ = ledger.update_sovereign_commitment(cell_id, new_commitment);
+        } else {
+            // For registered sovereign cells, update via the registration path.
+            let _ = ledger.update_sovereign_registration_commitment(
+                cell_id,
+                old_commitment,
+                new_commitment,
+                self.block_height,
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Encode a 32-byte hash as 8 BabyBear field elements (4 bytes each, little-endian).
+    fn bytes32_to_babybear(bytes: &[u8; 32]) -> Vec<pyana_circuit::field::BabyBear> {
+        use pyana_circuit::field::BabyBear;
+        let mut result = Vec::with_capacity(8);
+        for chunk in bytes.chunks(4) {
+            let val = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            // Reduce mod BabyBear prime to ensure valid field element.
+            result.push(BabyBear(val % pyana_circuit::field::BABYBEAR_P));
+        }
+        result
+    }
+
+    /// Decode 8 u32 values (from proof public_inputs) back into a 32-byte hash.
+    fn babybear_slice_to_bytes32(values: &[u32]) -> [u8; 32] {
+        let mut result = [0u8; 32];
+        for (i, &val) in values.iter().take(8).enumerate() {
+            result[i * 4..i * 4 + 4].copy_from_slice(&val.to_le_bytes());
+        }
+        result
+    }
+
+    /// Compute a BLAKE3 hash of the turn's effects for proof-carrying verification.
+    ///
+    /// This hashes all effects in the call forest deterministically (DFS order).
+    fn compute_turn_effects_hash(&self, turn: &Turn) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"pyana-sovereign-effects-v1:");
+        for root in &turn.call_forest.roots {
+            Self::hash_tree_effects(root, &mut hasher);
+        }
+        *hasher.finalize().as_bytes()
+    }
+
+    /// Recursively hash effects from a call tree into a hasher.
+    fn hash_tree_effects(tree: &CallTree, hasher: &mut blake3::Hasher) {
+        for effect in &tree.action.effects {
+            hasher.update(&effect.hash());
+        }
+        for child in &tree.children {
+            Self::hash_tree_effects(child, hasher);
+        }
+    }
+
     /// Execute a turn against a ledger, returning the result.
     ///
     /// This is the main entry point. The executor:
@@ -504,6 +659,121 @@ impl TurnExecutor {
             let agent = ledger.get_mut(&turn.agent).unwrap();
             agent.state.balance -= turn.fee;
             agent.state.increment_nonce();
+        }
+
+        // =====================================================================
+        // PHASE 3: PROOF-CARRYING SOVEREIGN TURN (fastest path)
+        // When execution_proof is present, the executor does ZERO state
+        // manipulation. It verifies the STARK proof and updates one 32-byte
+        // commitment. This makes sovereign cells scalable — constant work
+        // regardless of internal state complexity.
+        // =====================================================================
+        if let Some(proof_bytes) = &turn.execution_proof {
+            let cell_id = match &turn.execution_proof_cell {
+                Some(id) => *id,
+                None => {
+                    // Refund budget debit if we short-circuit.
+                    if let (Some(gate_cell), Some((digest, fee))) =
+                        (&self.budget_gate, &budget_debit_digest)
+                    {
+                        gate_cell.lock().unwrap().fast_unlock(*fee, digest);
+                    }
+                    return TurnResult::Rejected {
+                        reason: TurnError::InvalidExecutionProof(
+                            "execution_proof present but execution_proof_cell is None".to_string(),
+                        ),
+                        at_action: vec![],
+                    };
+                }
+            };
+
+            // Check that the cell is sovereign (either in sovereign_commitments or sovereign_registrations).
+            if !ledger.is_sovereign(&cell_id) && !ledger.is_sovereign_registered(&cell_id) {
+                if let (Some(gate_cell), Some((digest, fee))) =
+                    (&self.budget_gate, &budget_debit_digest)
+                {
+                    gate_cell.lock().unwrap().fast_unlock(*fee, digest);
+                }
+                return TurnResult::Rejected {
+                    reason: TurnError::ProofCarryingRequiresSovereign { cell: cell_id },
+                    at_action: vec![],
+                };
+            }
+
+            match self.verify_and_commit_proof(&cell_id, proof_bytes, turn, ledger) {
+                Ok(()) => {
+                    // Budget gate: commit the debit after successful proof verification.
+                    if let (Some(gate_cell), Some((digest, _fee))) =
+                        (&self.budget_gate, &budget_debit_digest)
+                    {
+                        gate_cell.lock().unwrap().commit_debit(digest);
+                    }
+
+                    let post_state_hash = ledger.root();
+                    let turn_hash = turn.hash();
+                    let forest_hash = turn.call_forest.compute_hash();
+
+                    // Proof-carrying turns use a minimal receipt (zero computrons,
+                    // zero effects enumeration — the proof IS the validation).
+                    let effects_hash = self.compute_effects_hash(&[]);
+
+                    let receipt = TurnReceipt {
+                        turn_hash,
+                        forest_hash,
+                        pre_state_hash,
+                        post_state_hash,
+                        timestamp: self.current_timestamp,
+                        effects_hash,
+                        computrons_used: 0,
+                        action_count: 0,
+                        previous_receipt_hash: turn.previous_receipt_hash,
+                        agent: turn.agent,
+                        federation_id: self.local_federation_id,
+                        routing_directives: vec![],
+                        derivation_records: vec![],
+                        emitted_events: vec![],
+                        executor_signature: None,
+                    };
+
+                    // Fee distribution (same as normal path).
+                    let proposer_share = turn.fee / 2;
+                    let treasury_share = turn.fee * 3 / 10;
+                    if let Some(proposer_id) = &self.proposer_cell {
+                        if let Some(proposer) = ledger.get_mut(proposer_id) {
+                            proposer.state.balance += proposer_share;
+                        }
+                    }
+                    if let Some(treasury_id) = &self.treasury_cell {
+                        if let Some(treasury) = ledger.get_mut(treasury_id) {
+                            treasury.state.balance += treasury_share;
+                        }
+                    }
+
+                    let mut delta = pyana_cell::LedgerDelta::new();
+                    let mut agent_delta = pyana_cell::CellStateDelta::empty();
+                    agent_delta.balance_change = -(turn.fee as i64);
+                    agent_delta.nonce_increment = true;
+                    delta.updated.push((turn.agent, agent_delta));
+
+                    return TurnResult::Committed {
+                        ledger_delta: delta,
+                        receipt,
+                        computrons_used: 0,
+                    };
+                }
+                Err(err) => {
+                    // Refund budget debit on proof verification failure.
+                    if let (Some(gate_cell), Some((digest, fee))) =
+                        (&self.budget_gate, &budget_debit_digest)
+                    {
+                        gate_cell.lock().unwrap().fast_unlock(*fee, digest);
+                    }
+                    return TurnResult::Rejected {
+                        reason: err,
+                        at_action: vec![],
+                    };
+                }
+            }
         }
 
         // =====================================================================

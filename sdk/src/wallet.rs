@@ -3183,6 +3183,9 @@ impl AgentWallet {
             depends_on: Vec::new(),
             conservation_proof: None,
             sovereign_witnesses: HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
         };
 
         Ok(turn)
@@ -3209,12 +3212,16 @@ impl AgentWallet {
         fee: u64,
     ) -> Result<Turn, SdkError> {
         // 1. Get our local cell state.
-        let cell_state = self.sovereign_cells.get(cell_id).ok_or_else(|| {
-            SdkError::MissingKey(format!(
-                "no local sovereign state for cell {}; call store_sovereign_state() first",
-                cell_id
-            ))
-        })?.clone();
+        let cell_state = self
+            .sovereign_cells
+            .get(cell_id)
+            .ok_or_else(|| {
+                SdkError::MissingKey(format!(
+                    "no local sovereign state for cell {}; call store_sovereign_state() first",
+                    cell_id
+                ))
+            })?
+            .clone();
 
         // 2. Compute state_commitment.
         let state_commitment = cell_state.state_commitment();
@@ -3257,9 +3264,180 @@ impl AgentWallet {
             depends_on: Vec::new(),
             conservation_proof: None,
             sovereign_witnesses,
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
         };
 
         Ok(turn)
+    }
+
+    /// Execute a sovereign turn with STARK proof (Phase 2).
+    ///
+    /// The agent executes effects locally, generates a STARK proof that the state
+    /// transition is valid, and submits the proof. The federation verifies the proof
+    /// instead of re-executing (constant-time verification regardless of state complexity).
+    ///
+    /// This method:
+    /// 1. Gets the local sovereign cell state
+    /// 2. Computes the old commitment
+    /// 3. Applies effects locally (balance transfer)
+    /// 4. Computes the new commitment
+    /// 5. Generates the STARK proof (SovereignTransitionAir)
+    /// 6. Builds a Turn with `execution_proof: Some(proof_bytes)`
+    /// 7. `sovereign_witnesses` is EMPTY — the proof covers the transition
+    ///
+    /// # Arguments
+    ///
+    /// * `cell_id` - The sovereign cell to act on.
+    /// * `effects` - Effects to apply (currently supports Transfer).
+    /// * `fee` - Computron fee for this turn.
+    ///
+    /// # Returns
+    ///
+    /// A proof-carrying [`Turn`] ready for submission to the federation.
+    pub fn execute_sovereign_turn_with_proof(
+        &mut self,
+        cell_id: &CellId,
+        effects: Vec<Effect>,
+        fee: u64,
+    ) -> Result<Turn, SdkError> {
+        // 1. Get our local cell state.
+        let cell_state = self.sovereign_cells.get(cell_id).ok_or_else(|| {
+            SdkError::MissingKey(format!(
+                "no local sovereign state for cell {}; call store_sovereign_state() first",
+                cell_id
+            ))
+        })?.clone();
+
+        // 2. Compute old commitment.
+        let old_commitment = cell_state.state_commitment();
+
+        // 3. Determine transfer parameters from the effects.
+        // Phase 2 MVP: only supports a single Transfer effect.
+        let (transfer_amount, direction) = Self::extract_transfer_params(cell_id, &effects)?;
+
+        // 4. Apply effects locally to get the new state.
+        let mut new_cell_state = cell_state.clone();
+        for effect in &effects {
+            match effect {
+                Effect::Transfer { from, to, amount } => {
+                    if from == cell_id {
+                        new_cell_state.state.balance =
+                            new_cell_state.state.balance.saturating_sub(*amount);
+                    }
+                    if to == cell_id {
+                        new_cell_state.state.balance =
+                            new_cell_state.state.balance.saturating_add(*amount);
+                    }
+                }
+                Effect::SetField { cell, index, value } if cell == cell_id => {
+                    if *index < new_cell_state.state.fields.len() {
+                        new_cell_state.state.fields[*index] = *value;
+                    }
+                }
+                Effect::IncrementNonce { cell } if cell == cell_id => {
+                    new_cell_state.state.nonce += 1;
+                }
+                _ => {}
+            }
+        }
+
+        // 5. Compute new commitment.
+        let new_commitment = new_cell_state.state_commitment();
+
+        // 6. Compute effects hash (must match what the executor computes).
+        let effects_hash = Self::compute_sovereign_effects_hash(&effects);
+
+        // 7. Compute cell_id hash (must match executor's format).
+        let cell_id_hash = *blake3::hash(cell_id.as_bytes()).as_bytes();
+
+        // 8. Generate the STARK proof.
+        let (trace, public_inputs) =
+            pyana_circuit::sovereign_transition_air::generate_sovereign_transition_trace(
+                cell_state.state.balance,
+                transfer_amount,
+                direction,
+                &old_commitment,
+                &new_commitment,
+                &effects_hash,
+                &cell_id_hash,
+            );
+
+        let air = pyana_circuit::SovereignTransitionAir;
+        let proof = pyana_circuit::stark::prove(&air, &trace, &public_inputs);
+        let proof_bytes = pyana_circuit::stark::proof_to_bytes(&proof);
+
+        // 9. Update local sovereign state.
+        self.sovereign_cells.insert(*cell_id, new_cell_state);
+
+        // 10. Build the turn with execution_proof (no sovereign_witnesses needed).
+        let agent_cell = *cell_id;
+        let nonce = self.receipt_chain.len() as u64;
+
+        let mut forest = pyana_turn::forest::CallForest::new();
+        let action = pyana_turn::Action {
+            target: agent_cell,
+            method: pyana_turn::action::symbol("sovereign_execute_proven"),
+            args: Vec::new(),
+            authorization: pyana_turn::Authorization::Unchecked,
+            effects,
+            preconditions: pyana_cell::Preconditions::default(),
+            may_delegate: pyana_turn::DelegationMode::None,
+            commitment_mode: pyana_turn::CommitmentMode::Full,
+            balance_change: None,
+        };
+        forest.add_root(action);
+
+        let turn = Turn {
+            agent: agent_cell,
+            nonce,
+            call_forest: forest,
+            fee,
+            memo: Some("sovereign_proof_carrying".to_string()),
+            valid_until: None,
+            previous_receipt_hash: self.receipt_chain.last().map(|r| r.receipt_hash()),
+            depends_on: Vec::new(),
+            conservation_proof: None,
+            sovereign_witnesses: HashMap::new(), // Empty! Proof covers it.
+            execution_proof: Some(proof_bytes),
+            execution_proof_cell: Some(*cell_id),
+            execution_proof_new_commitment: Some(new_commitment),
+        };
+
+        Ok(turn)
+    }
+
+    /// Extract transfer parameters from effects for proof generation.
+    ///
+    /// Returns (amount, direction) where direction=1 for outgoing, 0 for incoming.
+    fn extract_transfer_params(
+        cell_id: &CellId,
+        effects: &[Effect],
+    ) -> Result<(u64, u32), SdkError> {
+        for effect in effects {
+            if let Effect::Transfer { from, to, amount } = effect {
+                if from == cell_id {
+                    return Ok((*amount, 1)); // outgoing
+                } else if to == cell_id {
+                    return Ok((*amount, 0)); // incoming
+                }
+            }
+        }
+        // No transfer found — use zero amount (other effects only).
+        Ok((0, 0))
+    }
+
+    /// Compute effects hash matching the executor's format.
+    ///
+    /// The executor hashes effects as: `blake3("pyana-sovereign-effects-v1:" || effect_hashes...)`.
+    fn compute_sovereign_effects_hash(effects: &[Effect]) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"pyana-sovereign-effects-v1:");
+        for effect in effects {
+            hasher.update(&effect.hash());
+        }
+        *hasher.finalize().as_bytes()
     }
 
     /// Store sovereign cell state in the wallet (agent maintains it).
@@ -3286,15 +3464,16 @@ impl AgentWallet {
         effects: &[Effect],
     ) -> Result<(), SdkError> {
         let cell = self.sovereign_cells.get_mut(cell_id).ok_or_else(|| {
-            SdkError::MissingKey(format!(
-                "no local sovereign state for cell {}",
-                cell_id
-            ))
+            SdkError::MissingKey(format!("no local sovereign state for cell {}", cell_id))
         })?;
 
         for effect in effects {
             match effect {
-                Effect::SetField { cell: target, index, value } if target == cell_id => {
+                Effect::SetField {
+                    cell: target,
+                    index,
+                    value,
+                } if target == cell_id => {
                     if *index < cell.state.fields.len() {
                         cell.state.fields[*index] = *value;
                     }
@@ -3335,9 +3514,8 @@ impl AgentWallet {
     /// [`export_sovereign_state`](Self::export_sovereign_state) and merges it
     /// into this wallet's sovereign cell map.
     pub fn import_sovereign_state(&mut self, data: &[u8]) -> Result<(), SdkError> {
-        let entries: Vec<(CellId, Cell)> = postcard::from_bytes(data).map_err(|e| {
-            SdkError::Wire(format!("failed to deserialize sovereign state: {e}"))
-        })?;
+        let entries: Vec<(CellId, Cell)> = postcard::from_bytes(data)
+            .map_err(|e| SdkError::Wire(format!("failed to deserialize sovereign state: {e}")))?;
         for (id, cell) in entries {
             self.sovereign_cells.insert(id, cell);
         }
@@ -3551,12 +3729,10 @@ impl AgentWallet {
 
         let url = format!("{}/cells/deregister", node_url.trim_end_matches('/'));
         let client = reqwest::Client::new();
-        let resp = client
-            .post(&url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| SdkError::Wire(format!("federation deregister request failed: {e}")))?;
+        let resp =
+            client.post(&url).json(&body).send().await.map_err(|e| {
+                SdkError::Wire(format!("federation deregister request failed: {e}"))
+            })?;
 
         if !resp.status().is_success() {
             return Err(SdkError::Wire(format!(
@@ -4271,7 +4447,9 @@ mod tests {
             to: other_cell,
             amount: 100,
         }];
-        let turn = wallet.execute_sovereign_turn(&cell_id, effects, 10).unwrap();
+        let turn = wallet
+            .execute_sovereign_turn(&cell_id, effects, 10)
+            .unwrap();
 
         // Turn should reference the cell.
         assert_eq!(turn.agent, cell_id);
@@ -4319,7 +4497,11 @@ mod tests {
 
         // Apply a transfer out.
         let effects = vec![
-            Effect::Transfer { from: cell_id, to: other, amount: 300 },
+            Effect::Transfer {
+                from: cell_id,
+                to: other,
+                amount: 300,
+            },
             Effect::IncrementNonce { cell: cell_id },
         ];
         wallet.apply_sovereign_effects(&cell_id, &effects).unwrap();
@@ -4340,7 +4522,11 @@ mod tests {
         wallet.store_sovereign_state(cell);
 
         let other = CellId([88u8; 32]);
-        let effects = vec![Effect::Transfer { from: other, to: cell_id, amount: 500 }];
+        let effects = vec![Effect::Transfer {
+            from: other,
+            to: cell_id,
+            amount: 500,
+        }];
         wallet.apply_sovereign_effects(&cell_id, &effects).unwrap();
 
         let state = wallet.sovereign_state(&cell_id).unwrap();

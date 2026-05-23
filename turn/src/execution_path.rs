@@ -114,6 +114,9 @@ mod tests {
             depends_on: vec![],
             conservation_proof: None,
             sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
         };
 
         assert_eq!(
@@ -166,6 +169,9 @@ mod tests {
             depends_on: vec![],
             conservation_proof: None,
             sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
         };
 
         assert_eq!(
@@ -191,6 +197,9 @@ mod tests {
             depends_on: vec![[0xaa; 32]],
             conservation_proof: None,
             sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
         };
 
         assert_eq!(

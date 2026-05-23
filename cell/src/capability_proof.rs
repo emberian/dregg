@@ -98,7 +98,10 @@ pub enum PeerEffect {
     /// Increment the target cell's nonce.
     IncrementNonce,
     /// Emit an event from the target cell.
-    EmitEvent { topic: FieldElement, data: Vec<FieldElement> },
+    EmitEvent {
+        topic: FieldElement,
+        data: Vec<FieldElement>,
+    },
 }
 
 impl PeerEffect {
@@ -147,10 +150,7 @@ pub enum CapabilityProofError {
     /// The signature over the proof is invalid.
     InvalidSignature,
     /// The holder_commitment doesn't match our last-known view of the holder's state.
-    CommitmentMismatch {
-        expected: [u8; 32],
-        got: [u8; 32],
-    },
+    CommitmentMismatch { expected: [u8; 32], got: [u8; 32] },
     /// The capability's permissions are insufficient for the requested effects.
     InsufficientPermissions {
         held: AuthRequired,
@@ -168,10 +168,7 @@ pub enum CapabilityProofError {
         current_height: u64,
     },
     /// The target_cell in the proof doesn't match our cell ID.
-    WrongTarget {
-        expected: CellId,
-        got: CellId,
-    },
+    WrongTarget { expected: CellId, got: CellId },
     /// STARK proof verification failed (for StarkMembership variant).
     StarkVerificationFailed,
 }
@@ -208,13 +205,11 @@ impl std::fmt::Display for CapabilityProofError {
                 expires_at, current_height
             ),
             Self::WrongTarget { expected, got } => {
-                write!(
-                    f,
-                    "proof targets {:?} but we are {:?}",
-                    got, expected
-                )
+                write!(f, "proof targets {:?} but we are {:?}", got, expected)
             }
-            Self::StarkVerificationFailed => write!(f, "STARK membership proof verification failed"),
+            Self::StarkVerificationFailed => {
+                write!(f, "STARK membership proof verification failed")
+            }
         }
     }
 }
@@ -444,10 +439,7 @@ fn verify_ed25519(_pubkey_bytes: &[u8; 32], _message: &[u8], _signature: &[u8; 6
 ///
 /// Constructs the signing message from the proof fields and produces an Ed25519 signature.
 #[cfg(feature = "crypto")]
-pub fn sign_capability_proof(
-    proof: &mut CapabilityProof,
-    signing_key: &ed25519_dalek::SigningKey,
-) {
+pub fn sign_capability_proof(proof: &mut CapabilityProof, signing_key: &ed25519_dalek::SigningKey) {
     use ed25519_dalek::Signer;
     let msg = proof.signing_message();
     let sig = signing_key.sign(&msg);
@@ -545,9 +537,11 @@ mod tests {
             value: [0u8; 32],
         }];
         let target_perms = crate::permissions::Permissions::default_user();
-        assert!(proof
-            .check_permissions_for_effects(&effects, &target_perms)
-            .is_ok());
+        assert!(
+            proof
+                .check_permissions_for_effects(&effects, &target_perms)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -704,7 +698,10 @@ mod tests {
         let holder_pubkey = holder_key.verifying_key().to_bytes();
         let ctx = make_context(target_cell, commitment, 1001, 100);
         let result = proof.verify(&holder_pubkey, &ctx);
-        assert!(matches!(result, Err(CapabilityProofError::InvalidSignature)));
+        assert!(matches!(
+            result,
+            Err(CapabilityProofError::InvalidSignature)
+        ));
     }
 
     #[test]
@@ -759,9 +756,11 @@ mod tests {
 
         let effects = vec![PeerEffect::Transfer { amount: 100 }];
         let target_perms = crate::permissions::Permissions::default_user();
-        assert!(proof
-            .check_permissions_for_effects(&effects, &target_perms)
-            .is_ok());
+        assert!(
+            proof
+                .check_permissions_for_effects(&effects, &target_perms)
+                .is_ok()
+        );
 
         // Cap with Proof permissions cannot satisfy Send (which requires Signature).
         let proof_only = make_signed_proof(
@@ -797,10 +796,7 @@ mod tests {
             &AuthRequired::Signature
         ));
         assert!(!can_satisfy(&AuthRequired::Signature, &AuthRequired::Proof));
-        assert!(can_satisfy(
-            &AuthRequired::Signature,
-            &AuthRequired::Either
-        ));
+        assert!(can_satisfy(&AuthRequired::Signature, &AuthRequired::Either));
 
         // Impossible can satisfy nothing except None.
         assert!(can_satisfy(&AuthRequired::Impossible, &AuthRequired::None));

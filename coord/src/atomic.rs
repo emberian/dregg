@@ -592,6 +592,9 @@ impl Coordinator {
             previous_receipt_hash: None,
             conservation_proof: None,
             sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
         };
 
         // Execute the turn with proper metering.
@@ -989,6 +992,9 @@ impl Participant {
             previous_receipt_hash: None,
             conservation_proof: None,
             sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
         };
 
         let executor = TurnExecutor::new(self.costs.clone());

@@ -235,9 +235,7 @@ impl PeerExchange {
 
     /// Get our current view of a peer's state commitment.
     pub fn peer_commitment(&self, peer: &CellId) -> Option<[u8; 32]> {
-        self.peer_views
-            .get(peer)
-            .map(|v| v.last_known_commitment)
+        self.peer_views.get(peer).map(|v| v.last_known_commitment)
     }
 
     /// Get this cell's ID.
@@ -326,8 +324,7 @@ mod tests {
         // Alice creates a transition.
         let new_commitment = [0xBB; 32];
         let effects_hash = *blake3::hash(b"transfer 100").as_bytes();
-        let transition =
-            alice.create_transition(initial_commitment, new_commitment, effects_hash);
+        let transition = alice.create_transition(initial_commitment, new_commitment, effects_hash);
 
         // Bob verifies it.
         let alice_pubkey = alice.public_key();
@@ -351,8 +348,7 @@ mod tests {
         let initial_commitment = [0xAA; 32];
         bob.register_peer(alice_cell, initial_commitment);
 
-        let mut transition =
-            alice.create_transition(initial_commitment, [0xBB; 32], [0xCC; 32]);
+        let mut transition = alice.create_transition(initial_commitment, [0xBB; 32], [0xCC; 32]);
 
         // Corrupt the signature.
         transition.signature[0] ^= 0xFF;
@@ -467,8 +463,13 @@ mod tests {
         let past_timestamp: i64 = 1; // Unix epoch + 1 second
         let sequence = 2u64;
 
-        let message =
-            canonical_message(&old_commitment, &new_commitment, &effects_hash, past_timestamp, sequence);
+        let message = canonical_message(
+            &old_commitment,
+            &new_commitment,
+            &effects_hash,
+            past_timestamp,
+            sequence,
+        );
         let sig = alice.my_signing_key.sign(&message);
 
         let backdated = PeerStateTransition {

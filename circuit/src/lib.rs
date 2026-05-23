@@ -106,6 +106,7 @@ pub mod relational_predicate_air;
 pub mod schnorr_air;
 pub mod schnorr_curve;
 pub mod schnorr_sig;
+pub mod sovereign_transition_air;
 pub mod stark;
 pub mod temporal_absence_air;
 
@@ -220,6 +221,11 @@ pub use presentation::{
 pub use relational_predicate_air::{
     RelationType, RelationalPredicateAir, RelationalPredicateProof, RelationalPredicateWitness,
     compute_value_commitment, prove_relational, prove_value_comparison, verify_relational,
+};
+pub use sovereign_transition_air::{
+    SOVEREIGN_PUBLIC_INPUTS, SOVEREIGN_TRANSITION_WIDTH, SovereignTransitionAir,
+    bytes32_to_babybear, compute_cell_id_hash, compute_transfer_effects_hash,
+    generate_sovereign_transition_trace,
 };
 pub use turn_validity_air::{
     TurnValidityAir, TurnValidityWitness, prove_turn_validity, verify_turn_validity,

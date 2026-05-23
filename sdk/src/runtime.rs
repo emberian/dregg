@@ -280,6 +280,9 @@ impl AgentRuntime {
             depends_on: Vec::new(),
             conservation_proof: None,
             sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
         };
 
         // Execute against the local ledger.
@@ -544,6 +547,9 @@ impl SubAgent {
             depends_on: Vec::new(),
             conservation_proof: None,
             sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
         };
 
         let mut ledger = self.ledger.lock().unwrap();

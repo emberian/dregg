@@ -163,6 +163,21 @@ pub enum TurnError {
         expected: [u8; 32],
         got: [u8; 32],
     },
+
+    /// A proof-carrying turn targets a cell that is not sovereign.
+    ProofCarryingRequiresSovereign { cell: CellId },
+
+    /// The execution proof bytes could not be deserialized into a valid STARK proof.
+    InvalidExecutionProof(String),
+
+    /// The effects hash in the proof's public inputs does not match the turn's actual effects.
+    EffectsHashMismatch { expected: [u8; 32], got: [u8; 32] },
+
+    /// The STARK proof verification failed.
+    ProofVerificationFailed(String),
+
+    /// The cell targeted by a proof-carrying turn has no stored sovereign commitment.
+    SovereignNotRegistered { cell: CellId },
 }
 
 impl core::fmt::Display for TurnError {
@@ -362,6 +377,28 @@ impl core::fmt::Display for TurnError {
                     f,
                     "sovereign commitment mismatch for cell {cell}: expected {:02x}{:02x}..., got {:02x}{:02x}...",
                     expected[0], expected[1], got[0], got[1]
+                )
+            }
+            TurnError::ProofCarryingRequiresSovereign { cell } => {
+                write!(f, "proof-carrying turn targets non-sovereign cell {cell}")
+            }
+            TurnError::InvalidExecutionProof(reason) => {
+                write!(f, "invalid execution proof: {reason}")
+            }
+            TurnError::EffectsHashMismatch { expected, got } => {
+                write!(
+                    f,
+                    "effects hash mismatch: expected {:02x}{:02x}..., got {:02x}{:02x}...",
+                    expected[0], expected[1], got[0], got[1]
+                )
+            }
+            TurnError::ProofVerificationFailed(reason) => {
+                write!(f, "execution proof verification failed: {reason}")
+            }
+            TurnError::SovereignNotRegistered { cell } => {
+                write!(
+                    f,
+                    "sovereign cell {cell} not registered (no stored commitment)"
                 )
             }
         }
