@@ -4,6 +4,7 @@
 const STORAGE_KEY = 'pyana_wallet';
 const ENCRYPTED_STATE_KEY = 'pyana_wallet_encrypted';
 const MNEMONIC_KEY = 'pyana_mnemonic_encrypted';
+const STEALTH_KEYS_KEY = 'pyana_stealth_keys_encrypted';
 const ALLOWED_ORIGINS_KEY = 'pyana_allowed_origins';
 const NODE_WSS_URL = 'wss://localhost:8420/ws';
 const NODE_WS_URL = 'ws://localhost:8420/ws'; // Fallback for localhost only.
@@ -16,6 +17,7 @@ const ORIGIN_PERMISSION_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours default
 const RATE_LIMIT_MAX_CALLS = 5; // Max authorize calls per origin per window
 const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 60-second sliding window
 // Internal encryption key is now randomly generated per session (see getInternalEncryptionKey).
+const PRIVACY_STATE_KEY = 'pyana_privacy_state'; // Tracks active privacy features
 
 // ---------------------------------------------------------------------------
 // WASM module loading
