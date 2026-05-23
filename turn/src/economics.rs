@@ -277,7 +277,8 @@ impl EpochMinter {
             return Some(0); // Already at or below equilibrium from epoch 0.
         }
         let ratio = self.policy.base_issuance / burn_per_epoch;
-        let halvings_needed = 64 - ratio.leading_zeros() as u64; // ceil(log2(ratio))
+        // ceil(log2(ratio)): number of halvings until issuance <= burn rate.
+        let halvings_needed = (u64::BITS - (ratio - 1).leading_zeros()) as u64;
         Some(halvings_needed * self.policy.halving_interval)
     }
 }

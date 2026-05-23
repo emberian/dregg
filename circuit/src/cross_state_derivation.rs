@@ -221,6 +221,7 @@ pub fn prove_cross_state_derivation_with_depth(
 }
 
 /// Generate a STARK proof for a single derivation witness.
+#[allow(deprecated)]
 fn prove_source_derivation_stark(witness: &DerivationWitness) -> StarkProof {
     use crate::constraint_prover::Air;
     use crate::derivation_air::DerivationAir;

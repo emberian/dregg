@@ -423,6 +423,66 @@ The `Custom` effect enables dispatch to DSL-generated CellProgram circuits---any
 
 The Effect VM handles turns of arbitrary length in a single proof, eliminating the per-effect proof overhead that would otherwise make complex turns (e.g., flash-loan factory spawning, multi-party swaps) prohibitively expensive. *Status:* Implemented and tested; conservation, state-continuity, and authority constraints are operational. The Effect VM is the default proof path for all sovereign cell transitions.
 
+== Formal Verification <sec-formal-verification>
+
+=== Typed Composition Checker
+
+The constraint DSL includes a typed composition checker that statically verifies circuit compositions before proof generation. The checker enforces:
+
+- *Public input compatibility*: Composed circuits must agree on shared public inputs (e.g., the fold chain's `final_root` must type-match the derivation's `initial_state_root`).
+- *Width consistency*: Aggregated traces must have compatible column counts, with padding columns zeroed.
+- *VK binding*: Each sub-circuit's verification key must be committed in the composition's public inputs.
+- *Soundness preservation*: Composition operators cannot weaken soundness below the minimum component security.
+
+The checker runs at compile time (via the DSL proc macros) and rejects invalid compositions before any witness generation occurs.
+
+=== Circuit Catalog
+
+The system maintains a catalog of 30 verified circuit descriptors, each with:
+
+- A formal specification (what the circuit proves, expressed as a logical statement).
+- Tested constraint satisfaction (positive AND negative witnesses---the circuit accepts valid traces and rejects adversarial ones).
+- Cross-backend consistency (all enabled backends produce the same conclusion for the same witness).
+- Security parameter documentation (field size, extension degree, FRI parameters, resulting soundness bound).
+
+=== Cryptographic Guarantees
+
+The proof system provides 11 formally stated cryptographic guarantees:
+
+#figure(
+  table(
+    columns: (auto, auto),
+    align: (left, left),
+    table.header([*Guarantee*], [*Mechanism*]),
+    [Capability monotonicity], [Fold chain: only fact removal, never addition (Merkle membership under old root)],
+    [Conservation], [Effect VM accumulator sums to zero (no value creation/destruction)],
+    [State continuity], [Hash chain: each effect's post-state = next effect's pre-state],
+    [Authority confinement], [EffectMask subset check per effect (monotonic narrowing)],
+    [Non-replayability], [Nullifier uniqueness (deterministic derivation + set non-membership)],
+    [Issuer validity], [Issuer membership proof under federation-attested root],
+    [Derivation soundness], [N-step Datalog derivation with accumulated hash chain],
+    [Revocation freshness], [Non-membership proof against revocation set root],
+    [IVC integrity], [Root continuity + step-count binding in accumulated hash],
+    [Recursive correctness], [FRI folding + Fiat-Shamir replay inside verifier circuit],
+    [Cross-backend equivalence], [Same CircuitDescriptor, same logical statement, same conclusion],
+  ),
+  caption: [Eleven cryptographic guarantees. Each is enforced by algebraic constraints in the STARK trace, not by runtime checks.],
+)
+
+=== Trust Assumptions
+
+The proof system operates under 7 explicit trust assumptions:
+
++ *Collision resistance of Poseidon2 over BabyBear*: The hash function does not admit practical collisions at the working security parameter.
++ *FRI soundness*: Low-degree testing with the configured parameters (50 queries, blowup 4) provides $tilde$100-bit soundness.
++ *Random oracle model*: Fiat-Shamir transcript hashing (BLAKE3) behaves as a random oracle.
++ *Field arithmetic correctness*: BabyBear and BabyBear4 field operations are correctly implemented.
++ *Honest verifier*: The verifier follows the protocol (does not leak challenges prematurely).
++ *Correct constraint generation*: The DSL compiler produces constraints faithful to the logical specification.
++ *Availability of federation-attested roots*: Verifiers can obtain a recent attested root (for freshness anchoring).
+
+Any violation of assumptions 1--4 would compromise soundness. Assumptions 5--7 are operational requirements. The system is designed so that assumptions 1--4 are well-studied cryptographic conjectures, not novel assumptions.
+
 == DSL-Only Circuit Architecture
 
 All proof logic is now defined exclusively through the constraint DSL (`circuit/src/dsl/`). The former standalone `_air.rs` files have been deleted---the DSL is the single source of truth, generating circuit implementations for all backends from `CircuitDescriptor` definitions. The production circuit library:

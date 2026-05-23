@@ -49,17 +49,8 @@ fn compute_federation_root_poseidon2(issuer_key: &[u8; 32]) -> BabyBear {
             BabyBear::new(hash_index(i, 1, issuer_key)),
             BabyBear::new(hash_index(i, 2, issuer_key)),
         ];
-        let mut children = [BabyBear::ZERO; 4];
-        let mut sib_idx = 0;
-        for j in 0..4u8 {
-            if j == position {
-                children[j as usize] = current;
-            } else {
-                children[j as usize] = siblings[sib_idx];
-                sib_idx += 1;
-            }
-        }
-        current = poseidon2::hash_4_to_1(&children);
+        let position_bb = BabyBear::new(position as u32);
+        current = poseidon2::hash_fact(current, &[siblings[0], siblings[1], siblings[2], position_bb]);
     }
     current
 }
@@ -238,17 +229,8 @@ fn test_fully_private_end_to_end() {
             BabyBear::new(hash_index(i, 1, &root_key)),
             BabyBear::new(hash_index(i, 2, &root_key)),
         ];
-        let mut children = [BabyBear::ZERO; 4];
-        let mut sib_idx = 0;
-        for j in 0..4u8 {
-            if j == position {
-                children[j as usize] = current;
-            } else {
-                children[j as usize] = siblings[sib_idx];
-                sib_idx += 1;
-            }
-        }
-        current = poseidon2::hash_4_to_1(&children);
+        let position_bb = BabyBear::new(position as u32);
+        current = poseidon2::hash_fact(current, &[siblings[0], siblings[1], siblings[2], position_bb]);
         all_siblings.push(siblings);
         all_positions.push(position);
     }

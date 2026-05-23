@@ -244,6 +244,14 @@ impl NoteSpendingWitness {
 }
 
 /// The note spending AIR. Proves knowledge of spending key + note preimage + Merkle membership.
+///
+/// DEPRECATED: Use `crate::dsl::note_spending::note_spending_dsl_circuit()` and
+/// `crate::dsl::note_spending::prove_note_spend_dsl()` instead.
+/// The DSL version uses `hash_fact`-based Merkle constraints (algebraically sound).
+/// This hand-written AIR uses `hash_4_to_1` (also sound, but the DSL is canonical).
+#[deprecated(
+    note = "Use crate::dsl::note_spending::{prove_note_spend_dsl, verify_note_spend_dsl} instead"
+)]
 pub struct NoteSpendingAir {
     /// Merkle tree depth (number of levels in the path).
     pub depth: usize,
@@ -503,12 +511,11 @@ impl StarkAir for NoteSpendingAir {
     }
 }
 
-/// Prove a note spend given the private witness.
-///
-/// Returns a STARK proof that can be verified with only the nullifier and merkle_root.
-/// The spending key and note contents remain private.
+/// Prove a note spend given the private witness (uses the hand-written AIR with hash_4_to_1).
 ///
 /// DEPRECATED: Use `crate::dsl::note_spending::prove_note_spend_dsl` instead.
+/// The DSL version uses `hash_fact`-based Merkle constraints. If you use this function,
+/// your witnesses must compute merkle roots via `hash_4_to_1` (the `NoteSpendingWitness::merkle_root()` method).
 #[deprecated(note = "Use crate::dsl::note_spending::prove_note_spend_dsl instead")]
 pub fn prove_note_spend(witness: &NoteSpendingWitness) -> StarkProof {
     let depth = witness.merkle_siblings.len();
@@ -517,20 +524,7 @@ pub fn prove_note_spend(witness: &NoteSpendingWitness) -> StarkProof {
     stark::prove(&air, &trace, &public_inputs)
 }
 
-/// Verify a note spending proof.
-///
-/// The verifier needs:
-/// - `nullifier`: the revealed nullifier (to check against double-spend set)
-/// - `merkle_root`: the committed note tree root
-/// - `value`: the note value (prevents value inflation attacks)
-/// - `asset_type`: the note asset type (prevents asset type substitution)
-/// - `proof`: the STARK proof
-///
-/// SECURITY: The value and asset_type are now public inputs bound by boundary
-/// constraints. A spender cannot claim a different value/asset_type than what
-/// is actually committed in the note — the proof will fail verification.
-///
-/// Returns Ok(()) if the proof is valid, Err with reason otherwise.
+/// Verify a note spending proof (uses the hand-written AIR with hash_4_to_1).
 ///
 /// DEPRECATED: Use `crate::dsl::note_spending::verify_note_spend_dsl` instead.
 #[deprecated(note = "Use crate::dsl::note_spending::verify_note_spend_dsl instead")]

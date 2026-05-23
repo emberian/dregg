@@ -37,10 +37,9 @@
 
 mod governance;
 mod namespace;
+mod registry;
 mod routes;
 mod storage;
-
-use std::sync::Arc;
 
 use axum::body::Bytes;
 use axum::extract::{Path, State};
@@ -49,15 +48,14 @@ use axum::response::IntoResponse;
 use axum::routing::{delete as delete_route, get, post, put};
 use axum::{Json, Router};
 use serde_json::json;
-use tokio::sync::RwLock;
 
-use pyana_app_framework::auth::{AdminAuth, AdminToken, HasAdminToken};
+use pyana_app_framework::auth::{AdminToken, HasAdminToken};
 use pyana_app_framework::server::{AppConfig, AppServer};
 
-use governance::{GovernanceEngine, Participant};
+use governance::Participant;
 use namespace::{AuthLevel, Namespace};
-use routes::RoutingTable;
-use storage::{ContentStore, hex};
+use registry::Registry;
+use storage::hex;
 
 // =============================================================================
 // Application State
@@ -68,6 +66,8 @@ use storage::{ContentStore, hex};
 struct AppState {
     /// The integrated namespace (router + storage + governance + capabilities).
     namespace: Namespace,
+    /// The capability registry (service mesh overlay).
+    registry: Registry,
     /// Admin token for protected endpoints.
     admin_token: AdminToken,
 }
@@ -94,6 +94,7 @@ async fn main() {
 
     let state = AppState {
         namespace,
+        registry: Registry::new(),
         admin_token: config.admin_token.clone(),
     };
 
@@ -173,8 +174,15 @@ fn app_router() -> Router<AppState> {
         .route("/routes/vote", post(vote_route))
         .route("/routes/commitment", get(route_commitment))
         // Namespace (DFA-routed) access
-        .route("/namespace/*path", get(namespace_read))
-        .route("/namespace/*path", post(namespace_write))
+        .route("/namespace/{*path}", get(namespace_read))
+        .route("/namespace/{*path}", post(namespace_write))
+        // Registry (capability service mesh)
+        .route("/registry/mount", post(registry_mount))
+        .route("/registry/unmount/{*path}", delete_route(registry_unmount))
+        .route("/registry/discover", get(registry_discover))
+        .route("/registry/resolve/{*path}", get(registry_resolve))
+        .route("/registry/update/{*path}", put(registry_update))
+        .route("/registry/health/{*path}", get(registry_health))
         // Governance
         .route("/governance/constitution", get(get_constitution))
         .route("/governance/proposals", get(get_proposals))
@@ -586,6 +594,326 @@ async fn namespace_write(
 }
 
 // =============================================================================
+// Registry Handlers (Capability Service Mesh)
+// =============================================================================
+
+/// Request body for mounting a service.
+#[derive(serde::Deserialize)]
+struct MountRequest {
+    /// The mount path (e.g. "/public/services/alice/price-oracle").
+    path: String,
+    /// Service name.
+    name: String,
+    /// Service kind.
+    kind: registry::ServiceKind,
+    /// The sturdy reference URI.
+    sturdy_ref: String,
+    /// Owner identity (hex-encoded 32 bytes).
+    #[serde(default)]
+    owner: Option<String>,
+    /// Expected version for CAS (0 for new mounts).
+    #[serde(default)]
+    expected_version: u64,
+    /// Discovery tags.
+    #[serde(default)]
+    tags: Vec<String>,
+    /// Human-readable description.
+    #[serde(default)]
+    description: String,
+    /// Optional expiry timestamp.
+    #[serde(default)]
+    expires_at: Option<u64>,
+    /// Optional health check endpoint.
+    #[serde(default)]
+    health_endpoint: Option<String>,
+}
+
+/// Request body for updating a service.
+#[derive(serde::Deserialize)]
+struct UpdateRequest {
+    /// Service name.
+    name: String,
+    /// Service kind.
+    kind: registry::ServiceKind,
+    /// The sturdy reference URI.
+    sturdy_ref: String,
+    /// Owner identity (hex-encoded 32 bytes).
+    #[serde(default)]
+    owner: Option<String>,
+    /// Expected version for CAS.
+    expected_version: u64,
+    /// Discovery tags.
+    #[serde(default)]
+    tags: Vec<String>,
+    /// Human-readable description.
+    #[serde(default)]
+    description: String,
+    /// Optional expiry timestamp.
+    #[serde(default)]
+    expires_at: Option<u64>,
+    /// Optional health check endpoint.
+    #[serde(default)]
+    health_endpoint: Option<String>,
+}
+
+/// Query parameters for discovery.
+#[derive(serde::Deserialize)]
+struct DiscoverQuery {
+    /// Tags to filter by (all must match). Passed as repeated `tag=X` params.
+    #[serde(default)]
+    tag: Vec<String>,
+}
+
+/// Parse owner hex string into 32-byte array, defaulting to zeros.
+fn parse_owner(owner_hex: Option<&str>) -> [u8; 32] {
+    match owner_hex {
+        Some(s) => hex::decode(s).unwrap_or([0u8; 32]),
+        None => [0u8; 32],
+    }
+}
+
+/// POST /registry/mount -- Mount a service at a named path (CAS semantics).
+async fn registry_mount(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<MountRequest>,
+) -> impl IntoResponse {
+    let auth = extract_auth_level(&headers);
+    let owner = parse_owner(req.owner.as_deref());
+
+    let entry = registry::ServiceEntry {
+        name: req.name,
+        kind: req.kind,
+        sturdy_ref: req.sturdy_ref,
+        owner,
+        version: 0, // set by registry
+        tags: req.tags,
+        description: req.description,
+        registered_at: 0, // set by registry
+        expires_at: req.expires_at,
+        health_endpoint: req.health_endpoint,
+    };
+
+    match state
+        .registry
+        .mount(
+            &state.namespace,
+            &req.path,
+            entry,
+            req.expected_version,
+            &auth,
+        )
+        .await
+    {
+        Ok(mounted) => (
+            StatusCode::CREATED,
+            Json(json!({
+                "path": mounted.path,
+                "name": mounted.entry.name,
+                "kind": mounted.entry.kind,
+                "version": mounted.entry.version,
+                "sturdy_ref": mounted.entry.sturdy_ref,
+            })),
+        )
+            .into_response(),
+        Err(e) => {
+            let status = match &e {
+                registry::RegistryError::VersionMismatch { .. } => StatusCode::CONFLICT,
+                registry::RegistryError::NotFound(_) => StatusCode::NOT_FOUND,
+                registry::RegistryError::Unauthorized(_) => StatusCode::FORBIDDEN,
+                registry::RegistryError::InvalidPath(_) => StatusCode::BAD_REQUEST,
+                registry::RegistryError::InvalidEntry(_) => StatusCode::BAD_REQUEST,
+            };
+            (status, Json(json!({"error": e.to_string()}))).into_response()
+        }
+    }
+}
+
+/// DELETE /registry/unmount/:path -- Remove a service entry.
+async fn registry_unmount(
+    State(state): State<AppState>,
+    Path(path): Path<String>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    let auth = extract_auth_level(&headers);
+    let full_path = format!("/{path}");
+
+    match state
+        .registry
+        .unmount(&state.namespace, &full_path, &auth)
+        .await
+    {
+        Ok(removed) => (
+            StatusCode::OK,
+            Json(json!({
+                "unmounted": full_path,
+                "name": removed.entry.name,
+                "version": removed.entry.version,
+            })),
+        )
+            .into_response(),
+        Err(e) => {
+            let status = match &e {
+                registry::RegistryError::NotFound(_) => StatusCode::NOT_FOUND,
+                registry::RegistryError::Unauthorized(_) => StatusCode::FORBIDDEN,
+                _ => StatusCode::BAD_REQUEST,
+            };
+            (status, Json(json!({"error": e.to_string()}))).into_response()
+        }
+    }
+}
+
+/// GET /registry/discover?tag=X&tag=Y -- Find services by tag (all must match).
+async fn registry_discover(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<DiscoverQuery>,
+) -> impl IntoResponse {
+    let auth = extract_auth_level(&headers);
+
+    let results = state
+        .registry
+        .discover(&state.namespace, &query.tag, &auth)
+        .await;
+
+    Json(json!({
+        "services": results,
+        "count": results.len(),
+        "tags_filter": query.tag,
+    }))
+}
+
+/// GET /registry/resolve/:path -- Resolve name to sturdy ref (the "introduction").
+async fn registry_resolve(
+    State(state): State<AppState>,
+    Path(path): Path<String>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    let auth = extract_auth_level(&headers);
+    let full_path = format!("/{path}");
+
+    match state
+        .registry
+        .resolve(&state.namespace, &full_path, &auth)
+        .await
+    {
+        Ok(mounted) => (
+            StatusCode::OK,
+            Json(json!({
+                "path": mounted.path,
+                "sturdy_ref": mounted.entry.sturdy_ref,
+                "name": mounted.entry.name,
+                "kind": mounted.entry.kind,
+                "version": mounted.entry.version,
+                "tags": mounted.entry.tags,
+                "description": mounted.entry.description,
+                "health": mounted.health,
+            })),
+        )
+            .into_response(),
+        Err(e) => {
+            let status = match &e {
+                registry::RegistryError::NotFound(_) => StatusCode::NOT_FOUND,
+                registry::RegistryError::Unauthorized(_) => StatusCode::FORBIDDEN,
+                _ => StatusCode::BAD_REQUEST,
+            };
+            (status, Json(json!({"error": e.to_string()}))).into_response()
+        }
+    }
+}
+
+/// PUT /registry/update/:path -- Update a mounted service (version CAS).
+async fn registry_update(
+    State(state): State<AppState>,
+    Path(path): Path<String>,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<UpdateRequest>,
+) -> impl IntoResponse {
+    let auth = extract_auth_level(&headers);
+    let full_path = format!("/{path}");
+    let owner = parse_owner(req.owner.as_deref());
+
+    let entry = registry::ServiceEntry {
+        name: req.name,
+        kind: req.kind,
+        sturdy_ref: req.sturdy_ref,
+        owner,
+        version: 0, // set by registry
+        tags: req.tags,
+        description: req.description,
+        registered_at: 0, // preserved from original
+        expires_at: req.expires_at,
+        health_endpoint: req.health_endpoint,
+    };
+
+    match state
+        .registry
+        .update(
+            &state.namespace,
+            &full_path,
+            entry,
+            req.expected_version,
+            &auth,
+        )
+        .await
+    {
+        Ok(mounted) => (
+            StatusCode::OK,
+            Json(json!({
+                "path": mounted.path,
+                "name": mounted.entry.name,
+                "kind": mounted.entry.kind,
+                "version": mounted.entry.version,
+                "sturdy_ref": mounted.entry.sturdy_ref,
+            })),
+        )
+            .into_response(),
+        Err(e) => {
+            let status = match &e {
+                registry::RegistryError::VersionMismatch { .. } => StatusCode::CONFLICT,
+                registry::RegistryError::NotFound(_) => StatusCode::NOT_FOUND,
+                registry::RegistryError::Unauthorized(_) => StatusCode::FORBIDDEN,
+                _ => StatusCode::BAD_REQUEST,
+            };
+            (status, Json(json!({"error": e.to_string()}))).into_response()
+        }
+    }
+}
+
+/// GET /registry/health/:path -- Check if mounted service is alive.
+async fn registry_health(
+    State(state): State<AppState>,
+    Path(path): Path<String>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    let auth = extract_auth_level(&headers);
+    let full_path = format!("/{path}");
+
+    match state
+        .registry
+        .health(&state.namespace, &full_path, &auth)
+        .await
+    {
+        Ok(status) => (
+            StatusCode::OK,
+            Json(json!({
+                "path": full_path,
+                "health": status,
+            })),
+        )
+            .into_response(),
+        Err(e) => {
+            let status = match &e {
+                registry::RegistryError::NotFound(_) => StatusCode::NOT_FOUND,
+                registry::RegistryError::Unauthorized(_) => StatusCode::FORBIDDEN,
+                _ => StatusCode::BAD_REQUEST,
+            };
+            (status, Json(json!({"error": e.to_string()}))).into_response()
+        }
+    }
+}
+
+// =============================================================================
 // Governance Handlers
 // =============================================================================
 
@@ -670,6 +998,7 @@ mod tests {
         let namespace = Namespace::new(participants, federation_id);
         let state = AppState {
             namespace,
+            registry: Registry::new(),
             admin_token: AdminToken::open(),
         };
         app_router().with_state(state)

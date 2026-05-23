@@ -45,3 +45,12 @@ mod sovereign_proof;
 
 // DSL circuit full pipeline: descriptor -> CellProgram -> ProgramRegistry -> executor dispatch
 mod dsl_pipeline;
+
+// CapTP effects pipeline: ExportSturdyRef, EnlivenRef, DropRef, ValidateHandoff via Effect VM STARK
+pub mod captp_effects_pipeline;
+
+// DFA routing proven in circuit: transition table commitment + STARK proof of classification
+pub mod dfa_circuit;
+
+// End-to-end service mesh: CAS, splice, mount, governance vote + route table
+pub mod service_mesh_e2e;

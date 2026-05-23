@@ -1,0 +1,75 @@
+{
+  "description": "Pre-funded devnet accounts. Keys are placeholders; run generate.sh to produce real Ed25519 keypairs.",
+  "accounts": [
+    {
+      "name": "alice",
+      "public_key": "aa01000000000000000000000000000000000000000000000000000000000001",
+      "balance": 10000000,
+      "role": "power-user",
+      "notes": "Has stablecoin CDP (1000 ETH collateral, 500 stablecoin debt), AMM LP positions in ETH/USDC and BTC/USDC pools"
+    },
+    {
+      "name": "bob",
+      "public_key": "aa02000000000000000000000000000000000000000000000000000000000002",
+      "balance": 5000000,
+      "role": "trader",
+      "notes": "Has open limit orders: buy 10 @ 95, sell 5 @ 105 on TOKEN/USDC orderbook"
+    },
+    {
+      "name": "carol",
+      "public_key": "aa03000000000000000000000000000000000000000000000000000000000003",
+      "balance": 1000000,
+      "role": "credential-holder",
+      "notes": "Has 3 issued credentials: age-verified, country-verified, org-membership"
+    },
+    {
+      "name": "dave",
+      "public_key": "aa04000000000000000000000000000000000000000000000000000000000004",
+      "balance": 500000,
+      "role": "new-user",
+      "notes": "Minimal state, fresh account for testing onboarding flows"
+    },
+    {
+      "name": "eve",
+      "public_key": "aa05000000000000000000000000000000000000000000000000000000000005",
+      "balance": 2000000,
+      "role": "creator",
+      "notes": "Has 2 gallery NFTs listed for auction (Generative Landscape #42, Abstract Composition #7)"
+    },
+    {
+      "name": "faucet",
+      "public_key": "aa06000000000000000000000000000000000000000000000000000000000006",
+      "balance": 100000000,
+      "role": "infrastructure",
+      "notes": "Dispenses computrons to new devnet users. Rate-limited per IP/account."
+    },
+    {
+      "name": "treasury",
+      "public_key": "aa07000000000000000000000000000000000000000000000000000000000007",
+      "balance": 50000000,
+      "role": "governance",
+      "notes": "DAO treasury, owns deployed app cells, collects protocol fees"
+    },
+    {
+      "name": "relay",
+      "public_key": "aa08000000000000000000000000000000000000000000000000000000000008",
+      "balance": 10000000,
+      "role": "infrastructure",
+      "notes": "Store-and-forward relay operator, authorized price oracle feeder"
+    },
+    {
+      "name": "nameservice",
+      "public_key": "aa09000000000000000000000000000000000000000000000000000000000009",
+      "balance": 5000000,
+      "role": "infrastructure",
+      "notes": "Name registry operator, identity credential issuer"
+    },
+    {
+      "name": "bridge-operator",
+      "public_key": "aa0a00000000000000000000000000000000000000000000000000000000000a",
+      "balance": 10000000,
+      "role": "infrastructure",
+      "notes": "Cross-chain bridge relay, authorized price oracle feeder"
+    }
+  ]
+}

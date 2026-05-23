@@ -190,23 +190,59 @@ The Blocklace itself provides causal ordering as a structural property: the DAG'
 
 == External Chain Interop
 
-Pyana provides three interop bridges, each using proof translation rather than consensus bridging:
+Pyana provides three interop bridges, each using proof translation rather than consensus bridging. Bridges are classified by trust level:
 
-=== EVM Bridge (Base Sepolia)
+- *Level 1 (observational):* One chain can observe the other's state roots. No proof verification.
+- *Level 1.5 (optimistic + dispute):* State transitions are accepted optimistically with a dispute window.
+- *Level 2 (proof-verified):* The remote chain verifies Pyana STARK proofs natively.
 
-SP1 wraps Pyana STARK proofs in Groth16 for on-chain verification at ~200K gas. The bridge includes Foundry deployment scripts for Base Sepolia, an incremental Merkle tree for deposits ($O(log n)$ insertions), a VK registry with governance-controlled parameter updates, and commit-reveal frontrunning protection. *Status:* Foundry scripts deployed to Base Sepolia; guest program regeneration against Plonky3 backend in progress.
+#figure(
+  table(
+    columns: (auto, auto, auto, auto, auto),
+    align: (left, center, left, left, left),
+    table.header([*Bridge*], [*Level*], [*Mechanism*], [*Timeline*], [*Status*]),
+    [EVM (Base/Ethereum)], [Level 2], [SP1 Groth16 wrapping], [~4 weeks], [Foundry deployed; guest regen in progress],
+    [Mina], [Level 2], [Native Pasta curves (STARK-in-Pickles)], [~8 weeks], [Assisted recursion operational],
+    [Midnight/Cardano], [Level 1.5], [Optimistic + dispute window], [~6 weeks], [Attestation bridge (L1) operational],
+  ),
+  caption: [Bridge status and trust levels. Level 2 provides full proof verification on the remote chain.],
+)
 
-=== Mina Bridge
+=== EVM Bridge (Level 2 via SP1)
 
-Native Pickles recursion via the STARK-in-Pickles pipeline. A Pyana STARK proof is verified inside a Kimchi circuit, producing a Pickles recursive proof compatible with Mina's verification infrastructure. Assisted recursion is operational. This enables Mina zkApps to natively verify Pyana state transitions.
+SP1 wraps Pyana STARK proofs in Groth16 for on-chain verification at ~200K gas. The architecture:
 
-=== Midnight/Cardano Bridge
++ *Pyana STARK proof generation* (off-chain): Effect VM proves the state transition.
++ *SP1 guest program* (off-chain): Verifies the STARK inside a RISC-V zkVM, producing a Groth16 proof.
++ *On-chain verification* (EVM): The Groth16 proof is verified by Succinct's deployed SP1 Verifier Gateway contract.
++ *State update* (EVM): The Pyana bridge contract updates the sovereign cell's commitment on-chain.
 
-Two-level bridge architecture:
+The bridge includes: Foundry deployment scripts for Base Sepolia, an incremental Merkle tree for deposits ($O(log n)$ insertions), a VK registry with governance-controlled parameter updates (multisig), and commit-reveal frontrunning protection. Sovereign cells can exist as on-chain entities with their state commitment stored in the bridge contract. *Status:* Foundry scripts deployed to Base Sepolia; guest program regeneration against Plonky3 backend in progress.
+
+=== Mina Bridge (Level 2, Native Pasta Curves)
+
+Native Pickles recursion via the STARK-in-Pickles pipeline. The Mina bridge achieves Level 2 trust because Mina's verification infrastructure natively supports Pickles recursive proofs:
+
++ *STARK generation* (Pyana): BabyBear/FRI proof of the state transition.
++ *Kimchi wrapping* (Pyana): The STARK is verified inside a Kimchi circuit (~30K gates) over Pasta curves.
++ *Pickles recursion* (Pyana): The Kimchi proof is accumulated into a Pickles recursive proof (constant-size, ~10 KiB).
++ *Mina verification* (Mina): The Pickles proof is natively verifiable by Mina validators and zkApps.
+
+This is the highest-fidelity bridge: Mina's proof system and Pyana's Kimchi backend share the same Pasta curve cycle (Pallas/Vesta). No wrapping tax beyond the Kimchi circuit overhead. Assisted recursion is operational. The estimated integration timeline for full production deployment is approximately 8 weeks (Kimchi gate optimization + Mina zkApp contract).
+
+=== Midnight/Cardano Bridge (Level 1.5, Optimistic + Dispute)
+
+The Midnight bridge operates at Level 1.5: state transitions are accepted optimistically with a dispute window during which any party can challenge by submitting a fraud proof.
 
 *Level 1 (implemented):* Attestation bridge. Pyana state roots are attested on Midnight as observation-based data, following the same pattern as Midnight's Cardano bridge. Midnight validators can verify that a Pyana state existed at a given height.
 
-*Level 2 (designed):* Proof-carrying bridge. The DSL's ZKIR v3 backend compiles Pyana constraint programs directly into Midnight-compatible contracts, enabling a Midnight validator to verify Pyana proofs natively via a FRI verifier in ZKIR. This is a proof-translation layer, not a consensus bridge.
+*Level 1.5 (implemented):* Optimistic acceptance with dispute. A Pyana state transition is posted to Midnight with a bond. During the dispute window (governance-configurable, default 24 hours):
+
+- Any party can challenge by presenting evidence of invalidity.
+- If challenged, the submitter must produce a full STARK proof within the response window.
+- If the proof is valid, the challenger's bond is slashed. If invalid (or no proof produced), the submitter's bond is slashed.
+
+*Level 2 (designed):* Proof-carrying bridge. The DSL's ZKIR v3 backend compiles Pyana constraint programs directly into Midnight-compatible contracts, enabling a Midnight validator to verify Pyana proofs natively via a FRI verifier in ZKIR. This is a proof-translation layer, not a consensus bridge. Implementation awaits ZKIR v3 stabilization.
 
 == Network Layer
 

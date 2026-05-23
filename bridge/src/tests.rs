@@ -57,18 +57,12 @@ fn compute_matching_federation_root_bb(key: &[u8; 32]) -> BabyBear {
             BabyBear::new(crate::present::hash_index(i, 1, key)),
             BabyBear::new(crate::present::hash_index(i, 2, key)),
         ];
-        // Use Poseidon2 hashing to match prove()'s issuer membership path.
-        let mut children = [BabyBear::ZERO; 4];
-        let mut sib_idx = 0;
-        for j in 0..4u8 {
-            if j == position {
-                children[j as usize] = current;
-            } else {
-                children[j as usize] = siblings[sib_idx];
-                sib_idx += 1;
-            }
-        }
-        current = poseidon2::hash_4_to_1(&children);
+        // Use hash_fact to match the DSL circuit's Hash constraint.
+        let position_bb = BabyBear::new(position as u32);
+        current = poseidon2::hash_fact(
+            current,
+            &[siblings[0], siblings[1], siblings[2], position_bb],
+        );
     }
     current
 }

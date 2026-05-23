@@ -42,3 +42,27 @@ impl RoutingDirective {
         *hasher.finalize().as_bytes()
     }
 }
+
+/// A record emitted by three-party introductions indicating that a new
+/// GC-tracked export was created.
+///
+/// When `Effect::Introduce` grants `recipient` access to `target`, the target
+/// cell's owning federation must track that `recipient` (or its federation) now
+/// holds a reference. Without this, introduced capabilities leak forever because
+/// no `DropRef` is ever sent for them.
+///
+/// The node/server layer consumes these records and registers them in the
+/// `ExportGcManager`, enabling proper distributed garbage collection.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IntroductionExport {
+    /// The cell being introduced (the capability target).
+    /// The owning federation should track this as an export.
+    pub target: CellId,
+    /// The cell receiving access (the introduction recipient).
+    /// Maps to a federation for GC tracking purposes.
+    pub recipient: CellId,
+    /// The turn that authorized this introduction.
+    pub authorizing_turn: [u8; 32],
+    /// Block height at which the introduced capability expires (if time-limited).
+    pub expires: Option<u64>,
+}

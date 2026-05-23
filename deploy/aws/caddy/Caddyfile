@@ -39,6 +39,15 @@ devnet.pyana.fg-goose.online {
         reverse_proxy localhost:8420
     }
 
+    # Governed Namespace (service mesh)
+    handle /namespace/* {
+        reverse_proxy localhost:3003
+    }
+    handle /app/namespace/* {
+        root * /opt/pyana/apps/governed-namespace/frontend
+        file_server
+    }
+
     # Chain explorer (static files)
     handle /explorer/* {
         root * /opt/pyana/site

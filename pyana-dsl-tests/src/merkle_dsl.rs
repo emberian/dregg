@@ -191,7 +191,7 @@ pub fn merkle_circuit_descriptor() -> CircuitDescriptor {
     CircuitDescriptor {
         name: "pyana-merkle-membership-dsl-v1".into(),
         trace_width: MERKLE_DSL_WIDTH,
-        max_degree: 4, // position_valid constraint is degree 4
+        max_degree: 5, // Hash with 5 input_cols has degree 5; position_valid is degree 4
         columns,
         constraints,
         boundaries,
@@ -280,7 +280,7 @@ mod tests {
         assert_eq!(desc.trace_width, MERKLE_DSL_WIDTH);
         assert_eq!(desc.public_input_count, MERKLE_DSL_PUBLIC_INPUTS);
         assert_eq!(desc.name, "pyana-merkle-membership-dsl-v1");
-        assert_eq!(desc.max_degree, 4);
+        assert_eq!(desc.max_degree, 5);
 
         // Should have: 1 Polynomial (position) + 1 Hash (parent) + 1 Transition (chain) = 3
         assert_eq!(desc.constraints.len(), 3);

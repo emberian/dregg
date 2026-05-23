@@ -719,6 +719,9 @@ pub struct CapTpState {
     pub known_federations: Vec<FederationId>,
     /// Current block height (for swiss entry expiration checks).
     pub current_height: u64,
+    /// Session epoch counter: incremented each time any session is established.
+    /// Used to assign unique epochs to sessions and reject stale-epoch messages.
+    pub next_session_epoch: u64,
 }
 
 impl CapTpState {
@@ -730,7 +733,59 @@ impl CapTpState {
             export_gc: ExportGcManager::new(),
             known_federations: Vec::new(),
             current_height: 0,
+            next_session_epoch: 1,
         }
+    }
+
+    /// Allocate a new session epoch (monotonically increasing).
+    pub fn allocate_epoch(&mut self) -> u64 {
+        let epoch = self.next_session_epoch;
+        self.next_session_epoch += 1;
+        epoch
+    }
+}
+
+impl CapTpState {
+    /// Process introduction export records from a committed turn receipt.
+    ///
+    /// For each `IntroductionExport`, registers the target capability as exported
+    /// to the recipient's federation in the `ExportGcManager`. This ensures that
+    /// capabilities created via 3-party introductions participate in distributed GC
+    /// (i.e., `DropRef` messages will eventually clean them up).
+    ///
+    /// `resolve_federation` maps a recipient CellId to the federation that owns it.
+    /// If resolution fails for a given export (recipient's federation is unknown),
+    /// that export is skipped — the node may retry later when the federation is
+    /// discovered.
+    ///
+    /// Returns the number of exports successfully registered.
+    pub fn process_introduction_exports(
+        &mut self,
+        exports: &[pyana_turn::IntroductionExport],
+        resolve_federation: impl Fn(&pyana_types::CellId) -> Option<FederationId>,
+    ) -> usize {
+        let height = self.current_height;
+        let mut registered = 0;
+        for export in exports {
+            if let Some(recipient_fed) = resolve_federation(&export.recipient) {
+                // Use the recipient's current session epoch if they have an active session,
+                // otherwise use 0 (legacy path). This ensures introduction exports are
+                // tied to the correct session for DropRef validation.
+                let session_id = self
+                    .sessions
+                    .get(&recipient_fed)
+                    .map(|s| s.epoch)
+                    .unwrap_or(0);
+                self.export_gc.record_export_with_session(
+                    export.target,
+                    recipient_fed,
+                    height,
+                    session_id,
+                );
+                registered += 1;
+            }
+        }
+        registered
     }
 }
 
@@ -1565,15 +1620,22 @@ impl SiloServer {
                 let fed_id = FederationId(federation_id);
                 let mut captp = captp_state.write().await;
 
-                // Create or reset the session for this peer.
-                let session = CapSession::new(federation_id);
+                // Allocate a new epoch for this session. If a previous session existed,
+                // the new epoch supersedes it, ensuring stale messages are rejected.
+                let epoch = captp.allocate_epoch();
+
+                // Create or reset the session for this peer with the new epoch.
+                let session = CapSession::with_epoch(federation_id, epoch);
                 captp.sessions.insert(fed_id, session);
 
-                // Record initial exports in the GC manager (they now hold refs to us).
+                // Record initial exports in the GC manager with session ID for
+                // session-level DropRef validation.
                 let height = captp.current_height;
                 for export_bytes in &initial_exports {
                     let cell_id = pyana_types::CellId(*export_bytes);
-                    captp.export_gc.record_export(cell_id, fed_id, height);
+                    captp
+                        .export_gc
+                        .record_export_with_session(cell_id, fed_id, height, epoch);
                 }
 
                 // Respond with our own CapHello (session established).
@@ -1651,12 +1713,45 @@ impl SiloServer {
             WireMessage::DropRemoteRef {
                 from_federation,
                 cell_id,
+                session_epoch: msg_epoch,
             } => {
                 let fed_id = FederationId(from_federation);
                 let cell = pyana_types::CellId(cell_id);
 
                 let mut captp = captp_state.write().await;
-                let result = captp.export_gc.process_drop(cell, fed_id);
+
+                // Session-level validation: the drop must come from a federation
+                // that has an active session. Extract the session epoch for validation.
+                let current_epoch = match captp.sessions.get(&fed_id) {
+                    Some(session) => session.epoch,
+                    None => {
+                        // No active session for this federation — reject the drop.
+                        // A Byzantine node on a different/stale session cannot interfere.
+                        return Some(WireMessage::Error {
+                            code: crate::message::error_codes::INVALID_DROP,
+                            message: "invalid drop: no active session for federation".to_string(),
+                        });
+                    }
+                };
+
+                // Epoch validation: reject messages from stale sessions.
+                // A non-zero msg_epoch that doesn't match the current session epoch
+                // means this message is from an old (terminated) session.
+                if msg_epoch != 0 && msg_epoch != current_epoch {
+                    return Some(WireMessage::Error {
+                        code: crate::message::error_codes::STALE_EPOCH,
+                        message: format!(
+                            "stale session epoch: message has epoch {msg_epoch}, \
+                             current session is epoch {current_epoch}"
+                        ),
+                    });
+                }
+
+                // Use session-aware drop to validate the session_id matches the
+                // epoch under which the export was recorded.
+                let result = captp
+                    .export_gc
+                    .process_drop_with_session(cell, fed_id, current_epoch);
 
                 match result {
                     pyana_captp::DropResult::CanRevoke | pyana_captp::DropResult::StillHeld => {
@@ -1668,7 +1763,8 @@ impl SiloServer {
                     }
                     pyana_captp::DropResult::Invalid => Some(WireMessage::Error {
                         code: crate::message::error_codes::INVALID_DROP,
-                        message: "invalid drop: unknown federation or cell".to_string(),
+                        message: "invalid drop: unknown federation, cell, or session mismatch"
+                            .to_string(),
                     }),
                 }
             }
@@ -1680,6 +1776,7 @@ impl SiloServer {
                 authorization,
                 result_promise_id,
                 sender_federation,
+                session_epoch: msg_epoch,
             } => {
                 // For now, acknowledge receipt. Full pipeline delivery requires
                 // integration with the turn executor, which is out of scope for
@@ -1688,10 +1785,25 @@ impl SiloServer {
                 let fed_id = FederationId(sender_federation);
                 let captp = captp_state.read().await;
 
-                if !captp.sessions.contains_key(&fed_id) {
+                let current_epoch = match captp.sessions.get(&fed_id) {
+                    Some(session) => session.epoch,
+                    None => {
+                        return Some(WireMessage::Error {
+                            code: crate::message::error_codes::CAPTP_SESSION_REQUIRED,
+                            message: "no CapTP session established; send CapHello first"
+                                .to_string(),
+                        });
+                    }
+                };
+
+                // Epoch validation: reject messages from stale (terminated) sessions.
+                if msg_epoch != 0 && msg_epoch != current_epoch {
                     return Some(WireMessage::Error {
-                        code: crate::message::error_codes::CAPTP_SESSION_REQUIRED,
-                        message: "no CapTP session established; send CapHello first".to_string(),
+                        code: crate::message::error_codes::STALE_EPOCH,
+                        message: format!(
+                            "stale session epoch: message has epoch {msg_epoch}, \
+                             current session is epoch {current_epoch}"
+                        ),
                     });
                 }
 
@@ -2372,6 +2484,75 @@ mod tests {
         assert_eq!(state.height, 2);
         assert!(state.is_revoked("tok-2"));
         assert_ne!(state.federation_root, root_after_first);
+    }
+
+    #[test]
+    fn captp_process_introduction_exports_registers_gc() {
+        use pyana_captp::DropResult;
+
+        let mut captp = CapTpState::new();
+        captp.current_height = 50;
+
+        let target_cell = pyana_types::CellId([0x11; 32]);
+        let recipient_cell = pyana_types::CellId([0x22; 32]);
+        let recipient_federation = FederationId([0xBB; 32]);
+
+        let exports = vec![pyana_turn::IntroductionExport {
+            target: target_cell,
+            recipient: recipient_cell,
+            authorizing_turn: [0xAA; 32],
+            expires: Some(150),
+        }];
+
+        // Process with a resolver that maps recipient -> federation
+        let registered = captp.process_introduction_exports(&exports, |cell_id| {
+            if *cell_id == recipient_cell {
+                Some(recipient_federation)
+            } else {
+                None
+            }
+        });
+
+        assert_eq!(registered, 1);
+
+        // Verify the export is tracked in the GC manager
+        let entry = captp
+            .export_gc
+            .get(&target_cell)
+            .expect("should be tracked");
+        assert_eq!(entry.total_refs, 1);
+        assert!(entry.holders.contains_key(&recipient_federation));
+        assert_eq!(entry.holders[&recipient_federation].count, 1);
+        assert_eq!(entry.holders[&recipient_federation].last_activity, 50);
+
+        // Simulate DropRef from recipient's federation -> cleans up
+        let result = captp
+            .export_gc
+            .process_drop(target_cell, recipient_federation);
+        assert_eq!(result, DropResult::CanRevoke);
+    }
+
+    #[test]
+    fn captp_process_introduction_exports_skips_unknown_federation() {
+        let mut captp = CapTpState::new();
+        captp.current_height = 10;
+
+        let target_cell = pyana_types::CellId([0x33; 32]);
+        let unknown_recipient = pyana_types::CellId([0x44; 32]);
+
+        let exports = vec![pyana_turn::IntroductionExport {
+            target: target_cell,
+            recipient: unknown_recipient,
+            authorizing_turn: [0xCC; 32],
+            expires: None,
+        }];
+
+        // Resolver returns None (federation unknown)
+        let registered = captp.process_introduction_exports(&exports, |_| None);
+
+        assert_eq!(registered, 0);
+        // Nothing tracked
+        assert!(captp.export_gc.is_empty());
     }
 
     #[test]

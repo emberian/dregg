@@ -364,7 +364,7 @@ impl DerivationAir {
 
 impl crate::constraint_prover::Air for DerivationAir {
     fn trace_width(&self) -> usize {
-        DERIVATION_AIR_WIDTH
+        crate::dsl::derivation::EXTENDED_TRACE_WIDTH
     }
     fn num_public_inputs(&self) -> usize {
         4
@@ -378,6 +378,10 @@ impl crate::constraint_prover::Air for DerivationAir {
 }
 
 /// Legacy StarkAir struct for derivation.
+///
+/// DEPRECATED: This is a stub that delegates all logic to `crate::dsl::derivation`.
+/// Use `crate::dsl::derivation::prove_derivation_dsl` directly.
+#[deprecated(note = "Use crate::dsl::derivation::{prove,verify}_derivation_dsl instead")]
 pub struct DerivationStarkAir {
     pub witness: DerivationWitness,
 }
@@ -390,7 +394,7 @@ impl DerivationStarkAir {
 
 impl crate::stark::StarkAir for DerivationStarkAir {
     fn width(&self) -> usize {
-        DERIVATION_AIR_WIDTH
+        crate::dsl::derivation::EXTENDED_TRACE_WIDTH
     }
     fn constraint_degree(&self) -> usize {
         2

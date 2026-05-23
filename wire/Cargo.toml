@@ -28,6 +28,7 @@ pyana-commit = { path = "../commit", optional = true }
 pyana-captp = { path = "../captp" }
 pyana-cell = { path = "../cell" }
 pyana-store = { path = "../store" }
+pyana-turn = { path = "../turn" }
 pyana-types = { path = "../types" }
 
 [dev-dependencies]

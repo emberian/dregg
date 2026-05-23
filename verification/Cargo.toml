@@ -1,0 +1,10 @@
+[package]
+name = "pyana-verification"
+version = "0.1.0"
+edition = "2021"
+description = "Deductive verification framework for proof composition soundness"
+
+[workspace]
+
+[dependencies]
+# Standalone: no pyana deps. This is a model checker, not a prover.

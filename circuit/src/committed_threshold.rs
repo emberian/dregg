@@ -128,6 +128,12 @@ pub fn compute_threshold_commitment(threshold: BabyBear, blinding: BabyBear) -> 
 /// The committed-threshold predicate AIR.
 ///
 /// Proves: value >= threshold AND Poseidon2(threshold, blinding) == threshold_commitment.
+///
+/// DEPRECATED: Use `crate::dsl::committed_threshold::prove_committed_threshold_dsl` and
+/// `crate::dsl::committed_threshold::verify_committed_threshold_dsl` instead.
+#[deprecated(
+    note = "Use crate::dsl::committed_threshold::{prove,verify}_committed_threshold_dsl instead"
+)]
 pub struct CommittedThresholdAir {
     pub witness: CommittedThresholdWitness,
 }

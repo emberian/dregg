@@ -12,6 +12,7 @@ cargo run -p pyana-identity         # :3052 — Verifiable credentials
 cargo run -p pyana-orderbook        # :3053 — Trading
 cargo run -p pyana-bounty-board     # :3001 — Bounties
 cargo run -p compute-exchange       # :3002 — GPU marketplace
+cargo run -p governed-namespace      # :3003 — Service mesh
 cargo run -p pyana-discord-bot      # Discord bot (no HTTP)
 ```
 
@@ -51,6 +52,10 @@ Real escrow (CreateObligation locks funds). Qualification via STARK membership/I
 ### `compute-exchange/` — GPU Marketplace
 
 Dual escrow (payment + SLA bond). Commit-reveal fulfillment with 3-strike penalty. STARK delivery proof verification. Dispute resolution with timeout.
+
+### `governed-namespace/` — Governed Service Mesh
+
+DAO-controlled capability registry with DFA-based routing. Files stored as nameless writes (content-addressed, no indirection). Route table governed by constitutional threshold vote (propose → vote → atomic DFA swap). Service mesh: mount capabilities at named paths, discover by tags, resolve to sturdy refs (`pyana://` URIs). Auth levels: Anonymous, Member, Admin, Multisig(N) — classified by DFA. The directory is a programmable introduction service: registering = making your services discoverable to the DAO.
 
 ### `discord-bot/` — Devnet Interface
 

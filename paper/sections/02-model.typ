@@ -132,3 +132,216 @@ E's promise pipelining requires a live vat (process) hosting the target object. 
 + *Proof-carrying*: A pipelined message carries (or can generate) a STARK proof that the sender is authorized to invoke the target. No live vat is needed to check authorization---verification is offline.
 + *Asynchronous, no blocking IPC*: Pipelines are submitted as batches with explicit dependency DAGs. There is no synchronous call semantics.
 + *Privacy*: The introduction graph is private to the parties involved. A routing directive is visible only to the node executing the turn and the introduced parties.
+
+== Capability Transport Protocol (CapTP) <sec-captp>
+
+CapTP is the wire-level protocol for distributed capability invocation. It extends Cap'n Proto's three-party handoff with store-and-forward semantics and provable effects:
+
+=== Sturdy References
+
+A _sturdy ref_ is a serializable, revocable capability reference that survives network partition and process restart. Unlike live references (which require the target vat to be reachable), sturdy refs are self-contained: they encode the target cell, a Swiss number (unforgeable designator), and an optional routing hint. Resolution proceeds:
+
++ Holder presents the sturdy ref to any node in the target's federation.
++ The node verifies the Swiss number against the target cell's c-list.
++ A live reference is returned (or an error if revoked / expired).
+
+Sturdy refs are the persistence boundary: they survive serialization to disk, transmission via sealed boxes, and federation restarts. Live refs exist only within an active session.
+
+=== Distributed Garbage Collection
+
+CapTP implements distributed reference counting with three mechanisms:
+
+- *Export/import tables*: Each CapTP session maintains tables mapping local capabilities to remote proxies. When a remote proxy is dropped, the exporter is notified.
+- *Weak references with liveness probes*: For long-lived capabilities crossing federation boundaries, weak refs avoid preventing GC. Periodic liveness probes detect unreachable targets.
+- *Third-party handoff*: When Alice introduces Bob to Carol, the handoff transfers the export entry directly---Alice's export table entry is replaced by a direct Bob-Carol binding, and Alice's reference count decrements.
+
+=== Pipelining and Store-and-Forward
+
+CapTP messages to offline targets are queued in _MerkleQueue inboxes_ (see @sec-storage-economics). The sender pays a deposit proportional to message size and TTL. Messages are delivered in causal order when the target becomes reachable. Pipeline messages (targeting an `EventualRef`) are queued against the resolution---when the promise resolves, queued messages are delivered without additional round-trips.
+
+=== Provable Effects in CapTP
+
+Four CapTP operations are encoded as provable Effect VM effects:
+
+#figure(
+  table(
+    columns: (auto, auto, auto),
+    align: (left, left, left),
+    table.header([*CapTP Operation*], [*Effect VM Effect*], [*What the STARK Proves*]),
+    [Send (invoke remote)], [Invoke], [Sender held authority for this invocation at send-time],
+    [Introduce (3-party)], [Introduce], [Introducer held caps to both parties; attenuation is monotonic],
+    [Grant (delegate cap)], [GrantCapability], [Granted cap is a valid attenuation of grantor's cap],
+    [Handoff (transfer export)], [Transfer], [Export entry moved atomically; no duplication],
+  ),
+  caption: [CapTP operations as provable effects. Each operation produces a STARK proof checkable offline.],
+)
+
+=== Comparison with Cap'n Proto RPC
+
+#figure(
+  table(
+    columns: (auto, auto, auto),
+    align: (left, left, left),
+    table.header([*Property*], [*Cap'n Proto*], [*Pyana CapTP*]),
+    [Trust domain], [Single (shared secret)], [Cross-federation (ZK proofs)],
+    [Offline targets], [Error], [Store-and-forward (MerkleQueue)],
+    [Persistence], [No (live refs only)], [Sturdy refs survive restart],
+    [GC], [Reference counting], [Distributed RC + weak refs + handoff],
+    [Verifiability], [None (trusted transport)], [STARK proof per operation],
+    [Privacy], [None], [Zero-knowledge (verifier learns only conclusion)],
+  ),
+  caption: [CapTP extends Cap'n Proto RPC to the trustless, partition-tolerant, privacy-preserving setting.],
+)
+
+== DFA Routing and Governed Namespaces <sec-dfa-routing>
+
+=== URL-Style Capability Addresses
+
+Capabilities are addressed via a URL-style path scheme: `federation://namespace/service/action`. Each path segment is classified by a deterministic finite automaton (DFA) that enforces governance rules. The DFA state machine is compiled from a constitutional rule set and proved in-circuit via STARK lookup tables.
+
+=== DFA Classification
+
+A _route classifier_ is a DFA with states $Q$, alphabet $Sigma$ (path characters), transition function $delta: Q times Sigma -> Q$, start state $q_0$, and accept states $F subset.eq Q$. Classification proceeds:
+
+$ "classify"("path") = cases("Accept"("policy") & "if" delta^*("path") in F, "Reject" & "otherwise") $
+
+The STARK proves correct DFA evaluation via lookup tables: each $(q_i, c_i, q_(i+1))$ transition is checked against a committed transition table. The proof size is $O(|"path"|)$ rows with constant-width columns.
+
+=== Constitutional Amendment
+
+Governance rules (which namespaces exist, who can mount services, ACL policies) are encoded in the DFA's transition table. Amendments follow the federation's Constitutional Consensus:
+
++ A member proposes a new DFA transition table (adding/removing routes).
++ $h$ members must reference the proposal in their blocks (same h-rule as membership).
++ On acceptance, the new DFA table is committed and its hash becomes part of the attested root.
++ Existing capabilities referencing removed routes become invalid at the next epoch boundary.
+
+=== DFA-Based Access Control Lists
+
+Each accept state in the DFA carries an ACL policy: a set of cell IDs (or capability predicates) permitted to invoke that route. The classifier proof demonstrates both "this path is well-formed" AND "the invoker satisfies the route's ACL." This replaces traditional string-matching ACLs with a provable, governance-amendable policy engine.
+
+== Service Mesh <sec-service-mesh>
+
+The service mesh is a governed namespace acting as a capability registry. It provides mount/discover/resolve semantics for services within a federation.
+
+=== Mounting Services
+
+A cell _mounts_ a service at a namespace path by presenting:
+
++ A capability proving authority to mount at that path (DFA-classified, ACL-checked).
++ A `ServiceDescriptor` specifying the service's interface (accepted effect types, required capabilities, pricing).
++ An optional verification key for callers to verify the service's responses.
+
+Mounting is an atomic turn effect (`Effect::Mount`) that updates the federation's service registry---a Merkle-committed map from paths to `ServiceDescriptor` entries.
+
+=== Discovery
+
+Service discovery uses three mechanisms:
+
+- *Direct resolution*: Given a full path, resolve to the mounted cell and descriptor in $O(log n)$ via Merkle lookup.
+- *Prefix enumeration*: Given a namespace prefix, enumerate all services mounted under it (governance-gated: enumeration requires a read capability on the prefix).
+- *Intent-based discovery*: Broadcast a need ("I require a service matching spec $S$") via the intent marketplace. Services self-identify privately via STARK proof.
+
+=== Resolution Protocol
+
+Resolution is a two-phase lookup:
+
++ *Route classification*: The DFA classifier proves the path is well-formed and the invoker satisfies the ACL.
++ *Service binding*: The registry returns the mounted cell's sturdy ref (CapTP) and service descriptor. The caller now has a live capability to the service.
+
+The entire resolution is a single turn (atomic, journal-rollback on failure). Failed resolution does not leak which services exist---the DFA classifier rejects invalid paths without distinguishing "path exists but unauthorized" from "path does not exist."
+
+== Nameservice <sec-nameservice>
+
+=== Petname Architecture
+
+Pyana's nameservice follows the petname model: names are always relative to the namer, never globally authoritative.
+
+- *Petnames* (local): Private, per-agent mappings from human-readable strings to cell IDs. Stored in the agent's sealed state. Never published.
+- *Edge names*: Names that one agent publishes about another (e.g., "Alice calls Bob 'my-accountant'"). Visible to third parties who query Alice's directory.
+- *Proposed names*: Names that a cell proposes for itself (self-description). Advisory only---never authoritative.
+
+=== Hierarchical Resolution
+
+Names resolve hierarchically through delegation:
+
+$ "resolve"("alice/contacts/bob") = "alice"."edge_names"["contacts/bob"] $
+
+Sub-delegation creates paths: Alice delegates naming authority for `alice/services/*` to a registry cell. The registry can create edge names under that prefix without Alice's per-name approval.
+
+=== Rental and Dispute
+
+Namespace paths under governed prefixes may be rented:
+
+- *Rental*: A cell pays a per-epoch fee (computrons) to hold a name. Non-payment triggers release after a grace period.
+- *Dispute*: If two cells claim the same proposed name, the DFA governance process adjudicates. Constitutional amendment can reassign contested names.
+- *Sub-delegation*: A name holder can sub-delegate portions of their namespace (e.g., `example.pyana/` holder delegates `example.pyana/api/` to a service cell).
+
+== Cell Migration and Teleportation <sec-cell-migration>
+
+=== Teleportation Between Federations
+
+A sovereign cell can _teleport_ from federation A to federation B:
+
++ Cell deregisters from federation A (publishes final commitment + IVC proof).
++ Cell registers with federation B (presents IVC proof as genesis state).
++ Federation B verifies the IVC proof covers valid history from genesis.
++ Cell is now sovereign under federation B's ordering service.
+
+The IVC proof carries the cell's entire history in constant size. No state is lost. The cell's identity ($"CellId"$) is unchanged---only the ordering service changes.
+
+=== Vat Splitting and Merging
+
+Complex agents may split into multiple cells or merge:
+
+- *Splitting*: A cell spawns $N$ child cells via factory, partitions its state across them, and proves (via STARK) that the partition is complete and non-overlapping. The parent cell's commitment becomes the Merkle root of the children's commitments.
+- *Merging*: $N$ cells with the same owner combine their state into a single cell. A STARK proves that the merged state is the union of the children's states, with conservation (no value created/destroyed in the merge).
+
+=== Fluid Trust Boundaries
+
+Trust boundaries are not static. A cell that begins sovereign under federation A may:
+
++ Teleport to federation B (different ordering service, different trust assumptions).
++ Split across federations (child cells in different federations, parent tracks them via IVC).
++ Merge with cells from other federations (requires cross-federation atomic coordination).
+
+The IVC proof ensures continuity: regardless of how many times a cell teleports, splits, or merges, its verifiable history is a single constant-size proof from genesis.
+
+== Deep Garbage Collection and State Lifecycle <sec-deep-gc>
+
+=== State Lifecycle Phases
+
+Every cell follows a four-phase lifecycle:
+
+#figure(
+  table(
+    columns: (auto, auto, auto, auto),
+    align: (left, left, left, left),
+    table.header([*Phase*], [*Condition*], [*Storage*], [*Behavior*]),
+    [Birth], [Factory creation or genesis], [Full state], [Active participant],
+    [Active], [Recent turn within TTL], [Commitment (sovereign) or full (hosted)], [Normal operation],
+    [Decay], [No turn for $>$ TTL, storage rent unpaid], [Commitment only (frozen)], [Cannot execute turns; can pay rent to reactivate],
+    [Forced Sovereignty], [Decay exceeds grace period], [Ejected from federation], [Must self-host or lose state],
+  ),
+  caption: [Cell lifecycle phases. Decay is reversible (pay rent); forced sovereignty is permanent ejection from hosted state.],
+)
+
+=== Storage Rent
+
+Hosted cells (federation stores full state) pay storage rent proportional to their state size:
+
+$ "rent"_"epoch" = "state_size_bytes" times "rent_rate_per_byte" $
+
+The rent rate is governance-adjustable. Rent is deducted automatically at epoch boundaries from the cell's computron balance. If balance is insufficient, the cell enters Decay. Sovereign cells (32-byte commitment only) pay a fixed minimal fee regardless of actual state size---the federation stores only the commitment.
+
+=== Epoch Rotation
+
+The GC cycle runs at epoch boundaries (governance-configurable, typically every 1000 blocks):
+
++ Enumerate all hosted cells with $"balance" < "rent_owed"$.
++ Transition insufficient-balance cells to Decay (freeze state, stop accepting turns).
++ Enumerate all Decay cells with $"decay_duration" > "grace_period"$.
++ Force-sovereignty expired cells: delete state from federation storage, retain only commitment.
++ Prune expired sovereign registrations (TTL exceeded, no renewal).
+
+Forced sovereignty is not state deletion---the cell's owner retains their IVC proof and can re-register at any time by presenting it. The federation merely stops hosting the state.

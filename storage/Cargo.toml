@@ -1,0 +1,12 @@
+[package]
+name = "pyana-storage"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94.0"
+
+[dependencies]
+blake3 = "1"
+serde = { version = "1", features = ["derive"] }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

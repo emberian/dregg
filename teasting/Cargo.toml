@@ -15,12 +15,14 @@ pyana-federation = { path = "../federation" }
 pyana-sdk = { path = "../sdk" }
 pyana-bridge = { path = "../bridge", features = ["test-utils"] }
 pyana-wire = { path = "../wire" }
+pyana-blocklace = { path = "../blocklace" }
 # pyana-node is a binary crate (no lib target); use its deps directly instead.
 # pyana-node = { path = "../node" }
 pyana-commit = { path = "../commit" }
 pyana-net = { path = "../net" }
 pyana-intent = { path = "../intent" }
 pyana-coord = { path = "../coord" }
+pyana-captp = { path = "../captp" }
 token = { path = "../token" }
 pyana-store = { path = "../store" }
 macaroon = { workspace = true, features = ["crypto"] }

@@ -22,6 +22,7 @@ serde = { workspace = true }
 
 [dev-dependencies]
 curve25519-dalek = { version = "4", features = ["alloc"] }
+pyana-captp = { path = "../captp" }
 proptest = { workspace = true }
 
 [lints]

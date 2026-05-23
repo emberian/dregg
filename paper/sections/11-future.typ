@@ -20,14 +20,13 @@ Encrypted turn ordering (Section 6) requires either threshold decryption ceremon
 
 Gossip is currently one-hop for cross-silo dissemination. Multi-hop Plumtree forwarding and Dandelion++ stem routing are implemented for transaction privacy, but cross-silo multi-hop gossip for block propagation is not yet wired between federation nodes. The protocol exists; the integration is pending.
 
-== Formal Verification
+== Formal Verification (Toward Full Proof Assistant Model)
 
-seL4's claim to fame is formal verification. Pyana's path:
-- STARK proof system provides computational soundness (cheating is exponentially unlikely)
-- Capability model is formally expressible (Datalog policies are decidable)
-- Conservation invariant is checked by the executor
-- Open: formal model of the full system (federation + cells + turns + proofs) in a proof assistant
-- Possible: extract the executor's critical path into a verified implementation
+The typed composition checker and 30-circuit catalog (Section 4) provide compile-time and test-time verification. The remaining path to full formal verification:
+- Extract the executor's critical path (turn validation, conservation check, nullifier dedup) into a verified Rust implementation via Verus or Prusti
+- Model the full system (federation + cells + turns + proofs) in Lean 4 or Coq
+- Prove that the 11 cryptographic guarantees (Section 4) compose correctly under concurrent execution
+- Verify that DFA routing (Section 2) correctly enforces constitutional governance rules
 
 == Agent Standard Library
 

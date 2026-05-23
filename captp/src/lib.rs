@@ -48,7 +48,7 @@ pub mod store_forward;
 pub mod sturdy;
 pub mod uri;
 
-pub use gc::{DropMessage, DropResult, ExportGcManager, ImportGcManager};
+pub use gc::{DropMessage, DropResult, ExportGcManager, ImportGcManager, SessionId};
 pub use handoff::{
     HandoffAcceptance, HandoffCertificate, HandoffError, HandoffPresentation, validate_handoff,
 };

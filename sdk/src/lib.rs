@@ -50,6 +50,7 @@ pub mod embed;
 pub mod error;
 pub mod full_turn_proof;
 pub mod mnemonic;
+pub mod names;
 pub mod privacy;
 pub mod runtime;
 pub mod verify;
@@ -128,6 +129,12 @@ pub use verify::{
 
 // Re-export proof tier types for downstream use.
 pub use pyana_circuit::{CryptographicProof, ProofTier, VerifiedProof};
+
+// Re-export name resolution types for the petname system.
+pub use names::{
+    EdgeNameEntry, NameError, NameProvenance, NameResolver, PetnameDb, PetnameEntry,
+    ProposedNameEntry, ResolvedName, WalletNames, WhoisResult,
+};
 
 // Re-export CapTP client types for capability sharing and pipelining.
 pub use captp_client::{CapTpClient, CapTpConfig, EventualRef, LiveRef};

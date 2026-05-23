@@ -1,0 +1,50 @@
+{
+  "description": "Initial DFA route table. Defines access control patterns for the federation namespace.",
+  "version": 1,
+  "routes": [
+    {
+      "pattern": "/public/*",
+      "target": "anonymous",
+      "description": "Publicly accessible endpoints. No authentication required.",
+      "methods": ["read"]
+    },
+    {
+      "pattern": "/services/*",
+      "target": "members",
+      "description": "Authenticated member services. Requires valid credential.",
+      "methods": ["read", "write"]
+    },
+    {
+      "pattern": "/admin/*",
+      "target": "admin",
+      "description": "Administrative endpoints. Restricted to validator operators.",
+      "methods": ["read", "write", "configure"]
+    },
+    {
+      "pattern": "/bridges/*",
+      "target": "bridge-operator",
+      "description": "Cross-chain bridge endpoints. Only bridge-operator can relay.",
+      "methods": ["read", "write", "relay"]
+    },
+    {
+      "pattern": "/names/*",
+      "target": "nameservice",
+      "description": "Name registry operations. Managed by nameservice operator.",
+      "methods": ["read", "write", "register"]
+    },
+    {
+      "pattern": "/faucet/*",
+      "target": "anonymous",
+      "description": "Faucet endpoint. Rate-limited, publicly accessible.",
+      "methods": ["write"]
+    },
+    {
+      "pattern": "/oracle/*",
+      "target": "relay",
+      "description": "Price oracle feed submission. Restricted to authorized feeders.",
+      "methods": ["write"]
+    }
+  ],
+  "commitment": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "commitment_note": "SHA-256 of canonical route serialization. Placeholder until generate.sh computes actual commitment."
+}

@@ -163,7 +163,7 @@ pub fn temporal_absence_descriptor() -> CircuitDescriptor {
     CircuitDescriptor {
         name: "pyana-temporal-absence-dsl-v1".into(),
         trace_width: TRACE_WIDTH,
-        max_degree: 2, // Hash constraint is effectively degree 2 in evaluation
+        max_degree: 4, // Hash with 4 input_cols has degree 4
         columns,
         constraints,
         boundaries,

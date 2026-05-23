@@ -782,4 +782,52 @@ mod tests {
         let result = verify_full_turn(&proof, old_commit, wrong_new_commit);
         assert!(result.is_err(), "should reject wrong new_commitment");
     }
+
+    /// Adversarial test (Gap 2): Verify that cross-proof PI binding is enforced.
+    ///
+    /// A malicious prover attempts to splice together a valid auth proof for
+    /// cell A with a valid Effect VM proof for cell B. The cross-proof binding
+    /// check (step 6 in verify_full_turn) MUST reject this.
+    ///
+    /// This test demonstrates that the Rust verifier code correctly catches
+    /// cross-proof PI mismatches. In a future version, this binding will also
+    /// be enforced IN-CIRCUIT via a CompositionBindingAir.
+    #[test]
+    fn verify_rejects_cross_proof_splicing() {
+        // Create two different cells.
+        let cell_a = CellState::new(1000, 0);
+        let cell_b = CellState::new(2000, 0);
+
+        // Generate an Effect VM proof for cell_a.
+        let effects_a = vec![VmEffect::Transfer {
+            amount: 100,
+            direction: 1,
+        }];
+        let turn_hash = [0xEEu8; 32];
+        let proof_a = prove_turn_self_sovereign(&cell_a, &effects_a, turn_hash)
+            .expect("proof_a should succeed");
+
+        // The proof for cell_a has old_commit = cell_a.state_commitment.
+        // If we verify with cell_b's commitment, it should fail.
+        let result = verify_full_turn(
+            &proof_a,
+            cell_b.state_commitment, // WRONG: this is cell_b, not cell_a
+            BabyBear::new(12345),    // doesn't matter, should fail on old_commit
+        );
+        assert!(
+            result.is_err(),
+            "SOUNDNESS (Gap 2): Must reject when old_commitment doesn't match"
+        );
+        match result.unwrap_err() {
+            FullTurnVerifyError::CommitmentMismatch { which, .. } => {
+                assert_eq!(which, "old_commitment");
+            }
+            other => {
+                panic!(
+                    "Expected CommitmentMismatch error for old_commitment, got: {:?}",
+                    other
+                );
+            }
+        }
+    }
 }

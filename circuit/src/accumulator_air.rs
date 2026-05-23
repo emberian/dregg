@@ -260,6 +260,12 @@ pub struct AccumulatorNonRevocationWitness {
 /// Proves that for each ancestor in a capability's derivation path, its
 /// revocation hash does NOT appear in the committed revocation set, using
 /// polynomial-evaluation accumulator verification.
+///
+/// DEPRECATED: Use `crate::dsl::accumulator::prove_accumulator_non_revocation_dsl` and
+/// `crate::dsl::accumulator::verify_accumulator_non_revocation_dsl` instead.
+#[deprecated(
+    note = "Use crate::dsl::accumulator::{prove,verify}_accumulator_non_revocation_dsl instead"
+)]
 pub struct AccumulatorNonRevocationAir;
 
 impl AccumulatorNonRevocationAir {

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::action::Symbol;
 use crate::error::TurnError;
 use crate::forest::CallForest;
-use crate::routing::RoutingDirective;
+use crate::routing::{IntroductionExport, RoutingDirective};
 
 /// Witness data for a sovereign cell in a turn.
 ///
@@ -268,6 +268,15 @@ pub struct TurnReceipt {
     /// Routing directives emitted by three-party introductions in this turn.
     #[serde(default)]
     pub routing_directives: Vec<RoutingDirective>,
+    /// GC export registrations from three-party introductions.
+    ///
+    /// Each entry indicates that `target` was introduced to `recipient`, meaning
+    /// the target's owning federation must record `recipient`'s federation as
+    /// holding a reference. The node/server layer consumes these to call
+    /// `ExportGcManager::record_export`, enabling proper distributed GC via
+    /// `DropRef` messages.
+    #[serde(default)]
+    pub introduction_exports: Vec<IntroductionExport>,
     /// Capability derivation records emitted by Grant, Introduce, SpawnWithDelegation,
     /// and Unseal effects in this turn. Verifiers use these to reconstruct the CDT.
     #[serde(default)]
@@ -318,6 +327,21 @@ impl TurnReceipt {
         hasher.update(&(self.routing_directives.len() as u64).to_le_bytes());
         for rd in &self.routing_directives {
             hasher.update(&rd.hash());
+        }
+        hasher.update(&(self.introduction_exports.len() as u64).to_le_bytes());
+        for ie in &self.introduction_exports {
+            hasher.update(ie.target.as_bytes());
+            hasher.update(ie.recipient.as_bytes());
+            hasher.update(&ie.authorizing_turn);
+            match ie.expires {
+                Some(t) => {
+                    hasher.update(&[1u8]);
+                    hasher.update(&t.to_le_bytes());
+                }
+                None => {
+                    hasher.update(&[0u8]);
+                }
+            }
         }
         hasher.update(&(self.derivation_records.len() as u64).to_le_bytes());
         for dr in &self.derivation_records {

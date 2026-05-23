@@ -158,6 +158,12 @@ pub fn prove_authorization(
 }
 
 /// Multi-step StarkAir struct.
+///
+/// DEPRECATED: This is a stub that delegates to `crate::dsl::derivation`.
+/// Use `prove_authorization_stark` which already uses the DSL internally.
+#[deprecated(
+    note = "Use prove_authorization_stark (DSL-native) instead of constructing this directly"
+)]
 pub struct MultiStepStarkAir {
     pub num_steps: usize,
 }
@@ -248,6 +254,29 @@ pub fn try_prove_authorization_stark(witness: &MultiStepWitness) -> Result<Stark
 }
 
 /// Verify a multi-step authorization STARK proof.
+///
+/// # Security Warning
+///
+/// This function verifies ONLY that the derivation rules were applied correctly.
+/// It does NOT verify that the body facts referenced in the derivation actually
+/// exist in any committed Merkle tree. A malicious prover can fabricate arbitrary
+/// body facts and still produce a valid derivation proof.
+///
+/// **For security-critical verification, use
+/// [`body_membership::verify_authorization_with_membership`] instead**, which
+/// additionally requires Merkle membership proofs for every body fact used.
+///
+/// This function is safe to use only when:
+/// - The body facts are independently verified by the caller (e.g., the executor
+///   already confirmed fact existence before proof generation)
+/// - The context is testing or non-adversarial
+///
+/// See: `circuit/src/body_membership.rs` for the composed proof that closes this gap.
+#[deprecated(
+    since = "0.5.0",
+    note = "Use body_membership::verify_authorization_with_membership for adversarial settings. \
+            This function does not verify body fact existence (soundness gap)."
+)]
 pub fn verify_authorization_stark(
     conclusion: BabyBear,
     accumulated_hash: BabyBear,

@@ -16,10 +16,15 @@ use serde::{Deserialize, Serialize};
 /// - **Exports**: capabilities we make available to the remote peer
 /// - **Imports**: capabilities the remote peer has made available to us
 /// - **Promises**: pending asynchronous resolutions (eventual references)
+/// - **Epoch**: a monotonically increasing generation counter, preventing stale
+///   messages from old sessions from being processed in the new session.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CapSession {
     /// The remote peer's identity (typically their federation node ID).
     pub peer_id: [u8; 32],
+    /// Session epoch: incremented each time a new session is established with
+    /// the same peer. Messages carrying a stale epoch are rejected.
+    pub epoch: u64,
     /// Capabilities we export TO this peer.
     pub exports: HashMap<CellId, ExportEntry>,
     /// Capabilities we import FROM this peer.
@@ -64,10 +69,26 @@ pub enum PromiseState {
 }
 
 impl CapSession {
-    /// Create a new CapTP session with a peer.
+    /// Create a new CapTP session with a peer (epoch 0).
     pub fn new(peer_id: [u8; 32]) -> Self {
         Self {
             peer_id,
+            epoch: 0,
+            exports: HashMap::new(),
+            imports: HashMap::new(),
+            promises: HashMap::new(),
+            next_promise_id: 0,
+        }
+    }
+
+    /// Create a new CapTP session with an explicit epoch.
+    ///
+    /// Use this when re-establishing a session with a peer that previously had
+    /// a session (the epoch should be incremented from the previous session's epoch).
+    pub fn with_epoch(peer_id: [u8; 32], epoch: u64) -> Self {
+        Self {
+            peer_id,
+            epoch,
             exports: HashMap::new(),
             imports: HashMap::new(),
             promises: HashMap::new(),
@@ -242,5 +263,51 @@ mod tests {
         // Export makes it active again
         session.export(CellId([0xdd; 32]), AuthRequired::Signature);
         assert!(session.is_active());
+    }
+
+    #[test]
+    fn session_epoch_tracks_generation() {
+        // First session: epoch 0 (default)
+        let session1 = CapSession::new([0x44; 32]);
+        assert_eq!(session1.epoch, 0);
+
+        // New session with explicit epoch (simulates re-establishment)
+        let session2 = CapSession::with_epoch([0x44; 32], 5);
+        assert_eq!(session2.epoch, 5);
+
+        // Epoch is distinct from the default — stale messages from epoch 0
+        // should be rejected when the current session is epoch 5.
+        assert_ne!(session1.epoch, session2.epoch);
+    }
+
+    #[test]
+    fn session_epoch_prevents_stale_message_processing() {
+        // Simulate: session 1 (epoch=1) is torn down, session 2 (epoch=2) established.
+        // A DropRef from epoch 1 arriving after session 2 is active should be rejected.
+        use crate::FederationId;
+        use crate::gc::{DropResult, ExportGcManager};
+
+        let mut gc = ExportGcManager::new();
+        let cell = CellId([0x55; 32]);
+        let fed = FederationId([0x66; 32]);
+
+        // Export was created during session epoch 1
+        gc.record_export_with_session(cell, fed, 100, 1);
+
+        // Session 1 is torn down, session 2 established (epoch=2).
+        // Re-export the same cell on session 2.
+        gc.record_export_with_session(cell, fed, 200, 2);
+        assert_eq!(gc.get(&cell).unwrap().total_refs, 2);
+
+        // Stale drop from old epoch 1: session_id is now 2, so epoch 1 fails.
+        let result = gc.process_drop_with_session(cell, fed, 1);
+        assert_eq!(result, DropResult::Invalid);
+
+        // Current epoch 2 works
+        let result = gc.process_drop_with_session(cell, fed, 2);
+        assert_eq!(result, DropResult::StillHeld);
+
+        let result = gc.process_drop_with_session(cell, fed, 2);
+        assert_eq!(result, DropResult::CanRevoke);
     }
 }

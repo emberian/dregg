@@ -18,8 +18,97 @@ import type {
   StealthMetaAddress,
   PrivateTransferParams,
   PrivateTransferResult,
-  NodeConfig,
 } from "./types.js";
+
+import type {
+  ExportResult,
+  EnlivenResult,
+  HandoffResult,
+} from "./captp.js";
+
+import type {
+  DirectoryEntry,
+  MountRequest,
+  MountResult,
+  DiscoverParams,
+} from "./directory.js";
+
+import type {
+  StorageQuota,
+  WriteResult,
+  SpliceResult,
+} from "./storage.js";
+
+import type {
+  RouteTable,
+  ClassifyResult,
+} from "./routing.js";
+
+import type {
+  FederationStatus,
+  Proposal,
+  ProposalKind,
+} from "./governance.js";
+
+// ---------------------------------------------------------------------------
+// Sub-Client Interfaces
+// ---------------------------------------------------------------------------
+
+/** CapTP operations: export, enliven, handoff. */
+export interface CapTpClient {
+  /** Export a cell as a shareable pyana:// sturdy reference URI. */
+  export(cellId: string, attenuate?: string): Promise<ExportResult>;
+  /** Enliven a pyana:// sturdy reference URI, returning a live session reference. */
+  enliven(uri: string): Promise<EnlivenResult>;
+  /** Create a handoff certificate for offline capability delegation. */
+  handoff(cellId: string, recipientPk: string): Promise<HandoffResult>;
+}
+
+/** Directory/namespace operations: list, mount, discover. */
+export interface DirectoryClient {
+  /** List entries at a directory path. */
+  list(path?: string): Promise<DirectoryEntry[]>;
+  /** Mount a new entry in the directory. */
+  mount(req: MountRequest): Promise<MountResult>;
+  /** Search directories by tag and/or kind. */
+  discover(params: DiscoverParams): Promise<DirectoryEntry[]>;
+  /** Resolve a single path to its entry. */
+  get(path: string): Promise<DirectoryEntry>;
+  /** Remove an entry from a directory. */
+  unmount(path: string): Promise<void>;
+}
+
+/** Content-addressed storage operations. */
+export interface StorageClient {
+  /** Upload data and receive a content hash. */
+  write(data: Uint8Array | string): Promise<WriteResult>;
+  /** Read data by content hash. */
+  read(hash: string): Promise<Uint8Array>;
+  /** Show current quota usage. */
+  quota(): Promise<StorageQuota>;
+  /** Atomic splice: replace bytes at offset in an existing object. */
+  splice(hash: string, offset: number, data: Uint8Array | string): Promise<SpliceResult>;
+  /** Delete a stored object by hash. */
+  delete(hash: string): Promise<{ hash: string; refund: number }>;
+}
+
+/** Federation governance operations. */
+export interface FederationClient {
+  /** Get federation status (constitution, height, proposals). */
+  status(): Promise<FederationStatus>;
+  /** Submit a governance proposal. */
+  propose(kind: ProposalKind): Promise<Proposal>;
+  /** Vote on a governance proposal. */
+  vote(proposalId: string, approve: boolean): Promise<void>;
+}
+
+/** Route table operations. */
+export interface RoutesClient {
+  /** Get the full DFA route table. */
+  table(): Promise<RouteTable>;
+  /** Classify a path through the DFA router. */
+  classify(path: string): Promise<ClassifyResult>;
+}
 
 // ---------------------------------------------------------------------------
 // Client Interface
@@ -27,6 +116,17 @@ import type {
 
 /** The full Pyana client interface for interacting with a node. */
 export interface PyanaClient {
+  /** CapTP sub-client: export, enliven, handoff. */
+  readonly captp: CapTpClient;
+  /** Directory sub-client: list, mount, discover. */
+  readonly directory: DirectoryClient;
+  /** Storage sub-client: write, read, quota. */
+  readonly storage: StorageClient;
+  /** Federation governance sub-client: status, propose, vote. */
+  readonly federation: FederationClient;
+  /** Routes sub-client: table, classify. */
+  readonly routes: RoutesClient;
+
   // -- Cells --
   /** Create a new cell (optionally from a factory). */
   createCell(params: CreateCellParams): Promise<CellId>;
@@ -369,5 +469,205 @@ export function createClient(nodeUrl: string, apiKey?: string): PyanaClient {
         publicKey: data.public_key,
       };
     },
+
+    // -- CapTP Sub-Client --
+    captp: {
+      async export(cellId, attenuate) {
+        const result = await request<ExportResult>(base, "/captp/export", apiKey, {
+          method: "POST",
+          body: { cell_id: cellId, attenuate: attenuate ?? null },
+        });
+        return unwrap(result, "captp.export");
+      },
+
+      async enliven(uri) {
+        const result = await request<EnlivenResult>(base, "/captp/enliven", apiKey, {
+          method: "POST",
+          body: { uri },
+        });
+        return unwrap(result, "captp.enliven");
+      },
+
+      async handoff(cellId, recipientPk) {
+        const result = await request<HandoffResult>(base, "/captp/handoff", apiKey, {
+          method: "POST",
+          body: { cell_id: cellId, recipient_pk: recipientPk },
+        });
+        return unwrap(result, "captp.handoff");
+      },
+    },
+
+    // -- Directory Sub-Client --
+    directory: {
+      async list(path) {
+        const p = encodeURIComponent(path ?? "/");
+        const result = await request<DirectoryEntry[]>(base, `/directory/list?path=${p}`, apiKey);
+        return unwrap(result, "directory.list");
+      },
+
+      async mount(req) {
+        const result = await request<MountResult>(base, "/directory/mount", apiKey, {
+          method: "POST",
+          body: {
+            path: req.path,
+            kind: req.kind,
+            sturdy_ref: req.sturdyRef,
+            tags: req.tags,
+            description: req.description,
+          },
+        });
+        return unwrap(result, "directory.mount");
+      },
+
+      async discover(params) {
+        const query = new URLSearchParams();
+        if (params.tags && params.tags.length > 0) query.set("tags", params.tags.join(","));
+        if (params.kind) query.set("kind", params.kind);
+        const qs = query.toString();
+        const result = await request<DirectoryEntry[]>(
+          base, `/directory/discover${qs ? "?" + qs : ""}`, apiKey
+        );
+        return unwrap(result, "directory.discover");
+      },
+
+      async get(path) {
+        const p = encodeURIComponent(path);
+        const result = await request<DirectoryEntry>(base, `/directory/get?path=${p}`, apiKey);
+        return unwrap(result, "directory.get");
+      },
+
+      async unmount(path) {
+        const result = await request(base, "/directory/unmount", apiKey, {
+          method: "POST",
+          body: { path },
+        });
+        if (!result.ok) throw new Error(`directory.unmount: ${result.error}`);
+      },
+    },
+
+    // -- Storage Sub-Client --
+    storage: {
+      async write(data) {
+        const payload = typeof data === "string" ? data : bufferToBase64(data);
+        const result = await request<WriteResult>(base, "/storage/write", apiKey, {
+          method: "POST",
+          body: { data: payload, encoding: typeof data === "string" ? "utf8" : "base64" },
+        });
+        return unwrap(result, "storage.write");
+      },
+
+      async read(hash) {
+        const result = await request<{ data: string; encoding: string }>(
+          base, `/storage/read/${hash}`, apiKey
+        );
+        const data = unwrap(result, "storage.read");
+        if (data.encoding === "base64") {
+          return base64ToBuffer(data.data);
+        }
+        return new TextEncoder().encode(data.data);
+      },
+
+      async quota() {
+        const result = await request<StorageQuota>(base, "/storage/quota", apiKey);
+        return unwrap(result, "storage.quota");
+      },
+
+      async splice(hash, offset, data) {
+        const payload = typeof data === "string" ? data : bufferToBase64(data);
+        const result = await request<SpliceResult>(base, "/storage/splice", apiKey, {
+          method: "POST",
+          body: {
+            hash,
+            offset,
+            data: payload,
+            encoding: typeof data === "string" ? "utf8" : "base64",
+          },
+        });
+        return unwrap(result, "storage.splice");
+      },
+
+      async delete(hash) {
+        const result = await request<{ hash: string; refund: number }>(
+          base, `/storage/delete/${hash}`, apiKey, { method: "DELETE" }
+        );
+        return unwrap(result, "storage.delete");
+      },
+    },
+
+    // -- Federation Sub-Client --
+    federation: {
+      async status() {
+        const result = await request<FederationStatus>(base, "/federation/status", apiKey);
+        return unwrap(result, "federation.status");
+      },
+
+      async propose(kind) {
+        const result = await request<Proposal>(base, "/federation/propose", apiKey, {
+          method: "POST",
+          body: { kind },
+        });
+        return unwrap(result, "federation.propose");
+      },
+
+      async vote(proposalId, approve) {
+        const result = await request(base, `/federation/proposals/${proposalId}/vote`, apiKey, {
+          method: "POST",
+          body: { approve },
+        });
+        if (!result.ok) throw new Error(`federation.vote: ${result.error}`);
+      },
+    },
+
+    // -- Routes Sub-Client --
+    routes: {
+      async table() {
+        const result = await request<RouteTable>(base, "/federation/routes", apiKey);
+        return unwrap(result, "routes.table");
+      },
+
+      async classify(path) {
+        const result = await request<ClassifyResult>(
+          base, `/federation/routes/classify?path=${encodeURIComponent(path)}`, apiKey
+        );
+        return unwrap(result, "routes.classify");
+      },
+    },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Utility: base64 encoding/decoding for storage
+// ---------------------------------------------------------------------------
+
+declare const Buffer: { from(input: Uint8Array | string, encoding?: string): { toString(encoding: string): string } & Uint8Array } | undefined;
+
+function bufferToBase64(buf: Uint8Array): string {
+  if (typeof btoa === "function") {
+    let binary = "";
+    for (let i = 0; i < buf.length; i++) {
+      binary += String.fromCharCode(buf[i]);
+    }
+    return btoa(binary);
+  }
+  // Node.js fallback
+  if (typeof Buffer !== "undefined") {
+    return Buffer.from(buf).toString("base64");
+  }
+  throw new Error("No base64 encoding available (neither btoa nor Buffer found)");
+}
+
+function base64ToBuffer(str: string): Uint8Array {
+  if (typeof atob === "function") {
+    const binary = atob(str);
+    const buf = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      buf[i] = binary.charCodeAt(i);
+    }
+    return buf;
+  }
+  // Node.js fallback
+  if (typeof Buffer !== "undefined") {
+    return new Uint8Array(Buffer.from(str, "base64"));
+  }
+  throw new Error("No base64 decoding available (neither atob nor Buffer found)");
 }

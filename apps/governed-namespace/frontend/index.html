@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Governed Namespace</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <div class="header-content">
+            <h1 class="logo">Governed Namespace</h1>
+            <nav>
+                <a href="#" class="nav-link active" data-view="files">Files</a>
+                <a href="#" class="nav-link" data-view="registry">Registry</a>
+                <a href="#" class="nav-link" data-view="routes">Routes</a>
+                <a href="#" class="nav-link" data-view="governance">Governance</a>
+                <a href="#" class="nav-link" data-view="namespace">Namespace</a>
+            </nav>
+            <div class="connection-badge" id="connection-badge">
+                <span class="dot disconnected" id="conn-dot"></span>
+                <span id="conn-label">connecting...</span>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <!-- Files View -->
+        <section id="view-files" class="view active">
+            <div class="section-header">
+                <h2>Content-Addressed Files</h2>
+                <p class="section-desc">Nameless VFS: upload content, receive blake3 hash. Knowledge of hash = authority to read.</p>
+            </div>
+
+            <div class="panels">
+                <!-- Upload -->
+                <div class="form-panel">
+                    <h3>Upload File</h3>
+                    <form id="upload-form">
+                        <div class="form-group">
+                            <label for="upload-content">Content</label>
+                            <textarea id="upload-content" rows="4" placeholder="Enter file content..."></textarea>
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-large">Upload</button>
+                    </form>
+                    <div class="result-box hidden" id="upload-result">
+                        <span class="result-label">Hash:</span>
+                        <code class="mono" id="upload-hash"></code>
+                    </div>
+                </div>
+
+                <!-- Read -->
+                <div class="form-panel">
+                    <h3>Read by Hash</h3>
+                    <form id="read-form">
+                        <div class="form-group">
+                            <label for="read-hash">Content Hash</label>
+                            <input type="text" id="read-hash" placeholder="blake3 hash (hex)..." class="mono">
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-large">Read</button>
+                    </form>
+                    <div class="result-box hidden" id="read-result">
+                        <span class="result-label">Content:</span>
+                        <pre id="read-content"></pre>
+                    </div>
+                </div>
+
+                <!-- Splice -->
+                <div class="form-panel">
+                    <h3>Splice (Update)</h3>
+                    <form id="splice-form">
+                        <div class="form-group">
+                            <label for="splice-hash">Old Hash</label>
+                            <input type="text" id="splice-hash" placeholder="Hash to replace..." class="mono">
+                        </div>
+                        <div class="form-group">
+                            <label for="splice-content">New Content</label>
+                            <textarea id="splice-content" rows="3" placeholder="New file content..."></textarea>
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-large">Splice</button>
+                    </form>
+                    <div class="result-box hidden" id="splice-result">
+                        <span class="result-label">New Hash:</span>
+                        <code class="mono" id="splice-new-hash"></code>
+                        <span class="status-badge status-warning" id="splice-nullified"></span>
+                    </div>
+                </div>
+
+                <!-- Delete -->
+                <div class="form-panel">
+                    <h3>Delete (Nullify)</h3>
+                    <form id="delete-form">
+                        <div class="form-group">
+                            <label for="delete-hash">Hash to Delete</label>
+                            <input type="text" id="delete-hash" placeholder="Hash to nullify..." class="mono">
+                        </div>
+                        <button type="submit" class="btn btn-danger btn-large">Delete</button>
+                    </form>
+                    <div class="result-box hidden" id="delete-result">
+                        <span class="result-label">Nullifier:</span>
+                        <code class="mono" id="delete-nullifier"></code>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Registry View -->
+        <section id="view-registry" class="view">
+            <div class="section-header">
+                <h2>Service Registry</h2>
+                <p class="section-desc">Capability service mesh: mount services at paths, discover by tags, resolve to sturdy refs.</p>
+            </div>
+
+            <div class="panels">
+                <!-- Mount -->
+                <div class="form-panel">
+                    <h3>Mount Service</h3>
+                    <form id="mount-form">
+                        <div class="form-group">
+                            <label for="mount-path">Path</label>
+                            <input type="text" id="mount-path" placeholder="/public/services/alice/oracle" class="mono">
+                        </div>
+                        <div class="form-group">
+                            <label for="mount-name">Name</label>
+                            <input type="text" id="mount-name" placeholder="price-oracle">
+                        </div>
+                        <div class="form-group">
+                            <label for="mount-kind">Kind</label>
+                            <select id="mount-kind">
+                                <option value="rpc">RPC</option>
+                                <option value="stream">Stream</option>
+                                <option value="store">Store</option>
+                                <option value="oracle">Oracle</option>
+                                <option value="relay">Relay</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="mount-ref">Sturdy Ref URI</label>
+                            <input type="text" id="mount-ref" placeholder="pyana://federation/cell/..." class="mono">
+                        </div>
+                        <div class="form-group">
+                            <label for="mount-tags">Tags (comma-separated)</label>
+                            <input type="text" id="mount-tags" placeholder="oracle, price, defi">
+                        </div>
+                        <div class="form-group">
+                            <label for="mount-desc">Description</label>
+                            <input type="text" id="mount-desc" placeholder="Real-time price oracle for ETH/USD">
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-large">Mount</button>
+                    </form>
+                    <div class="result-box hidden" id="mount-result">
+                        <span class="result-label">Mounted:</span>
+                        <code class="mono" id="mount-response"></code>
+                    </div>
+                </div>
+
+                <!-- Discover -->
+                <div class="form-panel">
+                    <h3>Discover Services</h3>
+                    <form id="discover-form">
+                        <div class="form-group">
+                            <label for="discover-tags">Tags (comma-separated)</label>
+                            <input type="text" id="discover-tags" placeholder="oracle, price">
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-large">Discover</button>
+                    </form>
+                    <div class="result-box hidden" id="discover-result">
+                        <div id="discover-list"></div>
+                    </div>
+                </div>
+
+                <!-- Resolve -->
+                <div class="form-panel">
+                    <h3>Resolve Path</h3>
+                    <form id="resolve-form">
+                        <div class="form-group">
+                            <label for="resolve-path">Service Path</label>
+                            <input type="text" id="resolve-path" placeholder="/public/services/alice/oracle" class="mono">
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-large">Resolve</button>
+                    </form>
+                    <div class="result-box hidden" id="resolve-result">
+                        <div id="resolve-detail"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Routes View -->
+        <section id="view-routes" class="view">
+            <div class="section-header">
+                <h2>Route Table</h2>
+                <p class="section-desc">DFA-governed routing table. Routes classify paths into access classes. Changes require governance vote.</p>
+            </div>
+
+            <div class="route-info">
+                <div class="info-card">
+                    <span class="info-label">DFA Commitment</span>
+                    <code class="mono info-value" id="route-commitment">--</code>
+                </div>
+                <div class="info-card">
+                    <span class="info-label">Version</span>
+                    <span class="info-value" id="route-version">--</span>
+                </div>
+            </div>
+
+            <div class="route-table-container">
+                <table class="data-table" id="route-table">
+                    <thead>
+                        <tr>
+                            <th>Prefix</th>
+                            <th>Class</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody id="route-table-body">
+                        <tr><td colspan="3" class="empty-state">Loading routes...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="panels" style="margin-top: 2rem;">
+                <!-- Propose Amendment -->
+                <div class="form-panel">
+                    <h3>Propose Amendment</h3>
+                    <form id="propose-form">
+                        <div class="form-group">
+                            <label for="propose-proposer">Proposer ID</label>
+                            <select id="propose-proposer">
+                                <option value="alice">alice</option>
+                                <option value="bob">bob</option>
+                                <option value="carol">carol</option>
+                                <option value="dave">dave</option>
+                                <option value="eve">eve</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="propose-description">Description</label>
+                            <input type="text" id="propose-description" placeholder="Add /grants/ route for new program">
+                        </div>
+                        <div class="form-group">
+                            <label for="propose-routes">Routes (JSON array)</label>
+                            <textarea id="propose-routes" rows="4" class="mono" placeholder='[{"prefix": "/public/", "class": "public", "description": "Public files"}]'></textarea>
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-large">Propose</button>
+                    </form>
+                    <div class="result-box hidden" id="propose-result">
+                        <span class="result-label">Proposal ID:</span>
+                        <code class="mono" id="propose-id"></code>
+                    </div>
+                </div>
+
+                <!-- Vote -->
+                <div class="form-panel">
+                    <h3>Vote on Proposal</h3>
+                    <form id="vote-form">
+                        <div class="form-group">
+                            <label for="vote-voter">Voter ID</label>
+                            <select id="vote-voter">
+                                <option value="alice">alice</option>
+                                <option value="bob">bob</option>
+                                <option value="carol">carol</option>
+                                <option value="dave">dave</option>
+                                <option value="eve">eve</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="vote-proposal">Proposal ID</label>
+                            <input type="text" id="vote-proposal" placeholder="Proposal ID..." class="mono">
+                        </div>
+                        <div class="form-group">
+                            <label>Vote</label>
+                            <div class="radio-group">
+                                <label><input type="radio" name="vote-approve" value="true" checked> Approve</label>
+                                <label><input type="radio" name="vote-approve" value="false"> Reject</label>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-large">Cast Vote</button>
+                    </form>
+                    <div class="result-box hidden" id="vote-result">
+                        <span class="result-label">Status:</span>
+                        <span id="vote-status"></span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Governance View -->
+        <section id="view-governance" class="view">
+            <div class="section-header">
+                <h2>Governance</h2>
+                <p class="section-desc">Constitutional consensus: participants, threshold voting, amendment history.</p>
+            </div>
+
+            <div class="panels">
+                <div class="form-panel wide">
+                    <h3>Constitution</h3>
+                    <div id="constitution-info">
+                        <div class="empty-state">Loading constitution...</div>
+                    </div>
+                </div>
+
+                <div class="form-panel wide">
+                    <h3>Proposals</h3>
+                    <div id="proposals-list">
+                        <div class="empty-state">Loading proposals...</div>
+                    </div>
+                </div>
+
+                <div class="form-panel wide">
+                    <h3>Amendment History</h3>
+                    <div id="amendments-list">
+                        <div class="empty-state">Loading amendments...</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Namespace View -->
+        <section id="view-namespace" class="view">
+            <div class="section-header">
+                <h2>Namespace Browser</h2>
+                <p class="section-desc">Navigate the DFA-routed namespace tree. Paths are classified by the routing DFA to determine access.</p>
+            </div>
+
+            <div class="panels">
+                <!-- Write to Namespace -->
+                <div class="form-panel">
+                    <h3>Write to Namespace</h3>
+                    <form id="ns-write-form">
+                        <div class="form-group">
+                            <label for="ns-write-path">Path</label>
+                            <input type="text" id="ns-write-path" placeholder="/public/readme.txt" class="mono">
+                        </div>
+                        <div class="form-group">
+                            <label for="ns-write-auth">Auth Level</label>
+                            <select id="ns-write-auth">
+                                <option value="">Anonymous</option>
+                                <option value="member">Member</option>
+                                <option value="admin">Admin</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="ns-write-content">Content</label>
+                            <textarea id="ns-write-content" rows="3" placeholder="File content..."></textarea>
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-large">Write</button>
+                    </form>
+                    <div class="result-box hidden" id="ns-write-result">
+                        <div id="ns-write-detail"></div>
+                    </div>
+                </div>
+
+                <!-- Read from Namespace -->
+                <div class="form-panel">
+                    <h3>Classify / Read Path</h3>
+                    <form id="ns-read-form">
+                        <div class="form-group">
+                            <label for="ns-read-path">Path</label>
+                            <input type="text" id="ns-read-path" placeholder="/public/readme.txt" class="mono">
+                        </div>
+                        <div class="form-group">
+                            <label for="ns-read-hash">Content Hash (optional)</label>
+                            <input type="text" id="ns-read-hash" placeholder="Omit to just classify the path" class="mono">
+                        </div>
+                        <div class="form-group">
+                            <label for="ns-read-auth">Auth Level</label>
+                            <select id="ns-read-auth">
+                                <option value="">Anonymous</option>
+                                <option value="member">Member</option>
+                                <option value="admin">Admin</option>
+                            </select>
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-large">Read / Classify</button>
+                    </form>
+                    <div class="result-box hidden" id="ns-read-result">
+                        <div id="ns-read-detail"></div>
+                    </div>
+                </div>
+
+                <!-- Route tree visualization -->
+                <div class="form-panel wide">
+                    <h3>Namespace Tree</h3>
+                    <div class="tree-container" id="namespace-tree">
+                        <div class="empty-state">Load routes to see namespace tree</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <div class="footer-content">
+            <span>Powered by <strong>pyana</strong> federation protocol</span>
+            <span class="connection-status" id="api-status">API: checking...</span>
+        </div>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>

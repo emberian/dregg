@@ -125,6 +125,338 @@ impl Default for ComputronCosts {
     }
 }
 
+// =============================================================================
+// Cell Migration Two-Phase Commit
+// =============================================================================
+
+/// State of a cell migration operation (two-phase commit protocol).
+///
+/// Cell migration moves a cell from one federation to another. Without a two-phase
+/// protocol, a network partition after the source freezes the cell but before the
+/// target receives the bundle would leave the cell in limbo (source thinks it's
+/// gone, target never received it).
+///
+/// The protocol:
+/// 1. Source freezes the cell (prevents further turns) and transitions to `Frozen`.
+/// 2. Source sends the migration bundle to the target.
+/// 3. Target acknowledges receipt -> source transitions to `AwaitingReceipt`.
+/// 4. On receipt confirmation, source permanently removes the cell (migration complete).
+/// 5. On timeout without receipt: source unfreezes the cell (migration cancelled).
+///
+/// The target checks for cancellation before accepting: if the source cancelled,
+/// the target must not accept the bundle (preventing double-existence).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MigrationState {
+    /// No migration in progress for this cell.
+    Idle,
+    /// The cell is frozen for migration. No turns may execute against it.
+    /// If `timeout` blocks elapse without transitioning to `AwaitingReceipt`,
+    /// the migration is cancelled and the cell is unfrozen.
+    Frozen {
+        /// The cell being migrated.
+        cell_id: CellId,
+        /// The target federation receiving the cell.
+        target: [u8; 32],
+        /// Block height at which the cell was frozen.
+        frozen_at: u64,
+        /// Maximum blocks to wait before auto-cancellation.
+        timeout: u64,
+    },
+    /// The migration bundle was sent and we are waiting for the target's receipt.
+    /// If `timeout` blocks elapse without confirmation, migration is cancelled.
+    AwaitingReceipt {
+        /// The cell being migrated.
+        cell_id: CellId,
+        /// The target federation.
+        target: [u8; 32],
+        /// Block height at which the bundle was sent.
+        sent_at: u64,
+        /// Maximum blocks to wait for receipt confirmation.
+        timeout: u64,
+    },
+    /// The migration completed successfully. The cell now lives on the target federation.
+    Completed {
+        /// The cell that was migrated.
+        cell_id: CellId,
+        /// The target federation that now owns the cell.
+        target: [u8; 32],
+        /// Block height at which the migration was confirmed.
+        confirmed_at: u64,
+    },
+    /// The migration was cancelled (timeout or explicit cancel).
+    /// The cell is unfrozen and available for local turns again.
+    Cancelled {
+        /// The cell whose migration was cancelled.
+        cell_id: CellId,
+        /// Reason for cancellation.
+        reason: MigrationCancelReason,
+    },
+}
+
+/// Reason a cell migration was cancelled.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MigrationCancelReason {
+    /// Timed out waiting for the target to acknowledge the bundle.
+    Timeout,
+    /// Explicitly cancelled by the source (e.g., operator intervention).
+    Explicit,
+    /// The target rejected the migration bundle.
+    TargetRejected,
+}
+
+/// Manages cell migration state for a federation's executor.
+///
+/// Tracks which cells are currently being migrated and enforces the two-phase
+/// commit protocol with timeout-based cancellation.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct CellMigrationManager {
+    /// Active migration states, keyed by cell ID.
+    migrations: HashMap<CellId, MigrationState>,
+}
+
+impl CellMigrationManager {
+    /// Create a new empty migration manager.
+    pub fn new() -> Self {
+        Self {
+            migrations: HashMap::new(),
+        }
+    }
+
+    /// Begin a cell migration: freeze the cell for transfer to the target federation.
+    ///
+    /// Returns `Err` if the cell is already being migrated.
+    pub fn begin_migration(
+        &mut self,
+        cell_id: CellId,
+        target: [u8; 32],
+        current_height: u64,
+        timeout: u64,
+    ) -> Result<(), MigrationError> {
+        if let Some(state) = self.migrations.get(&cell_id) {
+            match state {
+                MigrationState::Idle | MigrationState::Cancelled { .. } => {
+                    // Can start a new migration (previous was idle or cancelled)
+                }
+                _ => return Err(MigrationError::AlreadyMigrating),
+            }
+        }
+
+        self.migrations.insert(
+            cell_id,
+            MigrationState::Frozen {
+                cell_id,
+                target,
+                frozen_at: current_height,
+                timeout,
+            },
+        );
+        Ok(())
+    }
+
+    /// Record that the migration bundle was sent to the target.
+    ///
+    /// Transitions from `Frozen` to `AwaitingReceipt`.
+    pub fn bundle_sent(
+        &mut self,
+        cell_id: CellId,
+        current_height: u64,
+        receipt_timeout: u64,
+    ) -> Result<(), MigrationError> {
+        let state = self
+            .migrations
+            .get(&cell_id)
+            .ok_or(MigrationError::NotMigrating)?;
+
+        match state {
+            MigrationState::Frozen { target, .. } => {
+                let target = *target;
+                self.migrations.insert(
+                    cell_id,
+                    MigrationState::AwaitingReceipt {
+                        cell_id,
+                        target,
+                        sent_at: current_height,
+                        timeout: receipt_timeout,
+                    },
+                );
+                Ok(())
+            }
+            _ => Err(MigrationError::InvalidTransition),
+        }
+    }
+
+    /// Confirm that the target received and accepted the migration bundle.
+    ///
+    /// Transitions to `Completed`. After this, the cell can be removed from the
+    /// local ledger.
+    pub fn confirm_receipt(
+        &mut self,
+        cell_id: CellId,
+        current_height: u64,
+    ) -> Result<(), MigrationError> {
+        let state = self
+            .migrations
+            .get(&cell_id)
+            .ok_or(MigrationError::NotMigrating)?;
+
+        match state {
+            MigrationState::AwaitingReceipt { target, .. } => {
+                let target = *target;
+                self.migrations.insert(
+                    cell_id,
+                    MigrationState::Completed {
+                        cell_id,
+                        target,
+                        confirmed_at: current_height,
+                    },
+                );
+                Ok(())
+            }
+            _ => Err(MigrationError::InvalidTransition),
+        }
+    }
+
+    /// Check for timed-out migrations and cancel them.
+    ///
+    /// Returns the cell IDs of migrations that were cancelled due to timeout.
+    /// For each cancelled migration, the cell is unfrozen and available for local
+    /// turns again.
+    pub fn check_timeouts(&mut self, current_height: u64) -> Vec<CellId> {
+        let mut cancelled = Vec::new();
+
+        let timed_out: Vec<CellId> = self
+            .migrations
+            .iter()
+            .filter_map(|(cell_id, state)| match state {
+                MigrationState::Frozen {
+                    frozen_at, timeout, ..
+                } => {
+                    if current_height.saturating_sub(*frozen_at) > *timeout {
+                        Some(*cell_id)
+                    } else {
+                        None
+                    }
+                }
+                MigrationState::AwaitingReceipt {
+                    sent_at, timeout, ..
+                } => {
+                    if current_height.saturating_sub(*sent_at) > *timeout {
+                        Some(*cell_id)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            })
+            .collect();
+
+        for cell_id in timed_out {
+            self.migrations.insert(
+                cell_id,
+                MigrationState::Cancelled {
+                    cell_id,
+                    reason: MigrationCancelReason::Timeout,
+                },
+            );
+            cancelled.push(cell_id);
+        }
+
+        cancelled
+    }
+
+    /// Explicitly cancel a migration (e.g., operator intervention).
+    ///
+    /// The cell is unfrozen and available for local turns again.
+    pub fn cancel(
+        &mut self,
+        cell_id: CellId,
+        reason: MigrationCancelReason,
+    ) -> Result<(), MigrationError> {
+        let state = self
+            .migrations
+            .get(&cell_id)
+            .ok_or(MigrationError::NotMigrating)?;
+
+        match state {
+            MigrationState::Frozen { .. } | MigrationState::AwaitingReceipt { .. } => {
+                self.migrations
+                    .insert(cell_id, MigrationState::Cancelled { cell_id, reason });
+                Ok(())
+            }
+            _ => Err(MigrationError::InvalidTransition),
+        }
+    }
+
+    /// Check if a cell is currently frozen for migration.
+    ///
+    /// Returns `true` if the cell is in `Frozen` or `AwaitingReceipt` state,
+    /// meaning no local turns should execute against it.
+    pub fn is_frozen(&self, cell_id: &CellId) -> bool {
+        matches!(
+            self.migrations.get(cell_id),
+            Some(MigrationState::Frozen { .. } | MigrationState::AwaitingReceipt { .. })
+        )
+    }
+
+    /// Check if a migration was cancelled (target should reject the bundle).
+    pub fn is_cancelled(&self, cell_id: &CellId) -> bool {
+        matches!(
+            self.migrations.get(cell_id),
+            Some(MigrationState::Cancelled { .. })
+        )
+    }
+
+    /// Get the migration state for a cell.
+    pub fn get(&self, cell_id: &CellId) -> Option<&MigrationState> {
+        self.migrations.get(cell_id)
+    }
+
+    /// Remove completed or cancelled migration entries (cleanup).
+    pub fn gc_completed(&mut self) -> Vec<CellId> {
+        let removable: Vec<CellId> = self
+            .migrations
+            .iter()
+            .filter_map(|(cell_id, state)| match state {
+                MigrationState::Completed { .. } | MigrationState::Cancelled { .. } => {
+                    Some(*cell_id)
+                }
+                _ => None,
+            })
+            .collect();
+
+        for cell_id in &removable {
+            self.migrations.remove(cell_id);
+        }
+
+        removable
+    }
+}
+
+/// Errors that can occur during cell migration operations.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MigrationError {
+    /// The cell is already being migrated.
+    AlreadyMigrating,
+    /// The cell is not currently in a migration state.
+    NotMigrating,
+    /// The requested state transition is not valid from the current state.
+    InvalidTransition,
+}
+
+impl std::fmt::Display for MigrationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MigrationError::AlreadyMigrating => write!(f, "cell is already being migrated"),
+            MigrationError::NotMigrating => write!(f, "cell is not in a migration state"),
+            MigrationError::InvalidTransition => {
+                write!(f, "invalid migration state transition")
+            }
+        }
+    }
+}
+
+impl std::error::Error for MigrationError {}
+
 /// The turn executor: applies turns to a ledger atomically.
 pub struct TurnExecutor {
     /// Cost configuration for computron metering.
@@ -194,6 +526,10 @@ pub struct TurnExecutor {
     /// record intentionally does not store the cleartext amount. Only the executor knows
     /// this mapping; it is NOT exposed to observers.
     pub committed_escrow_amounts: Mutex<HashMap<[u8; 32], u64>>,
+    /// Cell migration manager: tracks cells that are being migrated to other federations.
+    /// Uses a two-phase commit protocol with timeout-based cancellation to prevent
+    /// cells from being lost during network partitions.
+    pub cell_migrations: Mutex<CellMigrationManager>,
     /// Factory registry: deployed factory descriptors and per-epoch creation counts.
     /// When a `CreateCellFromFactory` effect is processed, the factory's constraints
     /// are validated and budget is checked/recorded.
@@ -1158,6 +1494,7 @@ impl TurnExecutor {
                         agent: turn.agent,
                         federation_id: self.local_federation_id,
                         routing_directives: vec![],
+                        introduction_exports: vec![],
                         derivation_records: vec![],
                         emitted_events: vec![],
                         executor_signature: None,
@@ -1265,9 +1602,16 @@ impl TurnExecutor {
                 };
             }
             // Temporarily inject the witnessed cell into the ledger for execution.
-            // This uses the internal cells map directly via insert_cell.
-            // Since the cell is sovereign (not in `cells`), insert_cell won't conflict.
-            if let Err(_) = ledger.insert_cell(witness.cell_state.clone()) {
+            // If the cell already exists in the hosted table (e.g., because the
+            // sovereign cell IS the agent and was looked up for fee/nonce), replace
+            // it with the witnessed state (which is authoritative after commitment check).
+            if ledger.get(cell_id).is_some() {
+                // Cell already in hosted table (agent = sovereign cell case).
+                // Replace with witnessed state to ensure executor operates on correct state.
+                if let Some(existing) = ledger.get_mut(cell_id) {
+                    *existing = witness.cell_state.clone();
+                }
+            } else if let Err(_) = ledger.insert_cell(witness.cell_state.clone()) {
                 return TurnResult::Rejected {
                     reason: TurnError::InvalidEffect {
                         reason: format!("failed to inject sovereign witness for cell {}", cell_id),
@@ -1490,6 +1834,12 @@ impl TurnExecutor {
             agent: turn.agent,
             federation_id: self.local_federation_id,
             routing_directives: Self::collect_routing_directives(
+                &turn.call_forest,
+                &turn_hash,
+                self.block_height,
+                self.max_introduction_lifetime,
+            ),
+            introduction_exports: Self::collect_introduction_exports(
                 &turn.call_forest,
                 &turn_hash,
                 self.block_height,
@@ -5945,6 +6295,66 @@ impl TurnExecutor {
                 block_height,
                 max_introduction_lifetime,
                 directives,
+            );
+        }
+    }
+
+    /// Collect GC export registrations from introductions in the call forest.
+    ///
+    /// For each `Effect::Introduce { target, recipient, .. }`, emits an
+    /// `IntroductionExport` record. The node/server layer uses these to call
+    /// `ExportGcManager::record_export(target, recipient_federation, height)`,
+    /// ensuring that introduced capabilities participate in distributed GC.
+    ///
+    /// Without this, capabilities created via 3-party introductions bypass GC
+    /// tracking entirely — no `DropRef` is ever fired, causing the export table
+    /// to grow unboundedly.
+    fn collect_introduction_exports(
+        forest: &crate::forest::CallForest,
+        turn_hash: &[u8; 32],
+        block_height: u64,
+        max_introduction_lifetime: u64,
+    ) -> Vec<crate::routing::IntroductionExport> {
+        let mut exports = Vec::new();
+        for tree in &forest.roots {
+            Self::collect_introduction_exports_tree(
+                tree,
+                turn_hash,
+                block_height,
+                max_introduction_lifetime,
+                &mut exports,
+            );
+        }
+        exports
+    }
+
+    fn collect_introduction_exports_tree(
+        tree: &CallTree,
+        turn_hash: &[u8; 32],
+        block_height: u64,
+        max_introduction_lifetime: u64,
+        exports: &mut Vec<crate::routing::IntroductionExport>,
+    ) {
+        for effect in &tree.action.effects {
+            if let Effect::Introduce {
+                recipient, target, ..
+            } = effect
+            {
+                exports.push(crate::routing::IntroductionExport {
+                    target: *target,
+                    recipient: *recipient,
+                    authorizing_turn: *turn_hash,
+                    expires: Some(block_height + max_introduction_lifetime),
+                });
+            }
+        }
+        for child in &tree.children {
+            Self::collect_introduction_exports_tree(
+                child,
+                turn_hash,
+                block_height,
+                max_introduction_lifetime,
+                exports,
             );
         }
     }

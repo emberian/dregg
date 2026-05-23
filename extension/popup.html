@@ -6,23 +6,36 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      width: 320px;
+      width: 360px;
       min-height: 400px;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       background: #1a1a2e;
       color: #e0e0e0;
       padding: 16px;
     }
-    h1 { font-size: 18px; margin-bottom: 16px; color: #a78bfa; }
+    h1 { font-size: 18px; margin-bottom: 12px; color: #a78bfa; }
     .status {
       display: flex; align-items: center; gap: 8px;
-      margin-bottom: 16px; padding: 8px 12px;
+      margin-bottom: 12px; padding: 8px 12px;
       background: #16213e; border-radius: 8px;
     }
     .status-dot {
       width: 8px; height: 8px; border-radius: 50%; background: #4ade80;
     }
     .status-dot.locked { background: #f87171; }
+    .tabs {
+      display: flex; gap: 4px; margin-bottom: 12px;
+      border-bottom: 1px solid #374151; padding-bottom: 8px;
+    }
+    .tab-btn {
+      width: auto; padding: 6px 10px; font-size: 11px; font-weight: 500;
+      background: #16213e; color: #9ca3af; border: 1px solid #374151;
+      border-radius: 6px; cursor: pointer;
+    }
+    .tab-btn.active { background: #a78bfa; color: #1a1a2e; border-color: #a78bfa; }
+    .tab-btn:hover:not(.active) { background: #1e293b; color: #e0e0e0; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
     .section { margin-bottom: 16px; }
     .section-title {
       font-size: 12px; text-transform: uppercase;
@@ -70,6 +83,34 @@
       margin-bottom: 8px; display: none;
     }
     .hidden { display: none; }
+    .ref-item, .dir-item {
+      padding: 8px 12px; background: #16213e;
+      border-radius: 6px; margin-bottom: 4px; font-size: 11px;
+    }
+    .ref-item .ref-cell { color: #a78bfa; font-family: monospace; word-break: break-all; }
+    .ref-item .ref-meta { color: #6b7280; font-size: 10px; margin-top: 2px; }
+    .dir-item .dir-path { color: #fbbf24; }
+    .dir-item .dir-kind { color: #6b7280; font-size: 10px; }
+    .quota-bar {
+      height: 6px; background: #374151; border-radius: 3px;
+      margin: 4px 0 8px 0; overflow: hidden;
+    }
+    .quota-bar-fill {
+      height: 100%; background: #a78bfa; border-radius: 3px;
+      transition: width 0.3s;
+    }
+    .accept-input {
+      width: 100%; padding: 8px 12px; margin-bottom: 8px;
+      background: #16213e; border: 1px solid #374151; border-radius: 6px;
+      color: #e0e0e0; font-size: 12px; font-family: monospace;
+    }
+    .accept-input::placeholder { color: #6b7280; }
+    .small-btn {
+      width: auto; padding: 4px 10px; font-size: 11px;
+      background: #065f46; color: #6ee7b7; border: none;
+      border-radius: 4px; cursor: pointer; display: inline-block;
+    }
+    .small-btn.danger { background: #7f1d1d; color: #fca5a5; }
   </style>
 </head>
 <body>
@@ -81,54 +122,138 @@
   <div id="wasmError" class="warning" style="display: none;">
     Cryptographic module failed to load. Wallet operations requiring proof generation or key derivation are unavailable. Ensure your browser supports WebAssembly.
   </div>
-  <div class="section">
-    <div class="section-title">Tokens</div>
-    <div class="stat">
-      <span>Active tokens</span>
-      <span class="stat-value" id="tokenCount">0</span>
+
+  <!-- Tab navigation -->
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="wallet">Wallet</button>
+    <button class="tab-btn" data-tab="capabilities">Caps</button>
+    <button class="tab-btn" data-tab="directory">Directory</button>
+    <button class="tab-btn" data-tab="storage">Storage</button>
+  </div>
+
+  <!-- Wallet tab (existing functionality) -->
+  <div class="tab-content active" id="tab-wallet">
+    <div class="section">
+      <div class="section-title">Tokens</div>
+      <div class="stat">
+        <span>Active tokens</span>
+        <span class="stat-value" id="tokenCount">0</span>
+      </div>
+      <div class="stat">
+        <span>Receipt chain</span>
+        <span class="stat-value" id="chainLength">0</span>
+      </div>
     </div>
-    <div class="stat">
-      <span>Receipt chain</span>
-      <span class="stat-value" id="chainLength">0</span>
+    <div class="section">
+      <div class="section-title">Recent Authorizations</div>
+      <div id="logContainer">
+        <div class="empty">No recent authorizations</div>
+      </div>
+    </div>
+    <div id="passphraseSection" class="hidden">
+      <input type="password" id="passphraseInput" class="passphrase-input" placeholder="Enter passphrase to unlock">
+    </div>
+    <div id="passphraseSetupSection" class="hidden">
+      <p style="font-size: 12px; color: #fbbf24; margin-bottom: 8px;">Set a passphrase to protect your wallet:</p>
+      <input type="password" id="newPassphraseInput" class="passphrase-input" placeholder="Choose a strong passphrase">
+      <input type="password" id="confirmPassphraseInput" class="passphrase-input" placeholder="Confirm passphrase">
+      <button id="setPassphraseBtn" style="background: #4ade80; color: #1a1a2e; margin-bottom: 8px;">Set Passphrase</button>
+    </div>
+    <div id="mnemonicWarning" class="warning">
+      Write down these 24 words and store them safely. They are the ONLY way to recover your wallet.
+    </div>
+    <div id="mnemonicDisplay" class="mnemonic-display"></div>
+    <div class="section" id="intentsSection" style="display: none;">
+      <div class="section-title">Fulfillable Intents</div>
+      <div id="intentsContainer">
+        <div class="empty">No fulfillable intents</div>
+      </div>
+    </div>
+    <div class="section" id="permissionsSection" style="display: none;">
+      <div class="section-title">Allowed Origins</div>
+      <div id="permissionsContainer">
+        <div class="empty">No origins approved</div>
+      </div>
+    </div>
+    <button id="lockBtn">Lock Wallet</button>
+    <button id="backupBtn">Backup (Show Recovery Phrase)</button>
+    <button id="intentsBtn" style="background: #16213e; color: #e0e0e0; border: 1px solid #374151; margin-bottom: 8px;">Fulfill Intents</button>
+    <button id="managePermsBtn" style="background: #16213e; color: #e0e0e0; border: 1px solid #374151; margin-bottom: 8px;">Manage Permissions</button>
+    <button id="settingsBtn" style="background: #16213e; color: #e0e0e0; border: 1px solid #374151; margin-bottom: 8px;">Node Settings</button>
+    <button id="recoverBtn">Recover Wallet</button>
+  </div>
+
+  <!-- Capabilities tab -->
+  <div class="tab-content" id="tab-capabilities">
+    <div class="section">
+      <div class="section-title">Live References</div>
+      <div id="liveRefsContainer">
+        <div class="empty">No live references held</div>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-title">Accept Capability</div>
+      <input type="text" id="acceptUriInput" class="accept-input" placeholder="Paste pyana:// URI here">
+      <button id="acceptCapBtn" style="background: #065f46; color: #6ee7b7; margin-bottom: 8px;">Accept Capability</button>
+    </div>
+    <div class="section">
+      <div class="section-title">Share Capability</div>
+      <input type="text" id="shareCellInput" class="accept-input" placeholder="Cell ID (64-char hex)">
+      <button id="shareCapBtn" style="background: #a78bfa; color: #1a1a2e; margin-bottom: 8px;">Share as URI</button>
+      <div id="shareResult" style="display: none; margin-top: 8px;">
+        <div class="ref-item">
+          <div class="ref-cell" id="shareResultUri"></div>
+          <button class="small-btn" id="copyUriBtn" style="margin-top: 4px;">Copy URI</button>
+        </div>
+      </div>
     </div>
   </div>
-  <div class="section">
-    <div class="section-title">Recent Authorizations</div>
-    <div id="logContainer">
-      <div class="empty">No recent authorizations</div>
+
+  <!-- Directory tab -->
+  <div class="tab-content" id="tab-directory">
+    <div class="section">
+      <div class="section-title">Mounted Services</div>
+      <div id="directoryContainer">
+        <div class="empty">No services mounted</div>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-title">Discover Services</div>
+      <input type="text" id="discoverTagsInput" class="accept-input" placeholder="Tags (comma-separated)">
+      <button id="discoverBtn" style="background: #16213e; color: #e0e0e0; border: 1px solid #374151; margin-bottom: 8px;">Search</button>
+      <div id="discoveryResults"></div>
     </div>
   </div>
-  <div id="passphraseSection" class="hidden">
-    <input type="password" id="passphraseInput" class="passphrase-input" placeholder="Enter passphrase to unlock">
-  </div>
-  <div id="passphraseSetupSection" class="hidden">
-    <p style="font-size: 12px; color: #fbbf24; margin-bottom: 8px;">Set a passphrase to protect your wallet:</p>
-    <input type="password" id="newPassphraseInput" class="passphrase-input" placeholder="Choose a strong passphrase">
-    <input type="password" id="confirmPassphraseInput" class="passphrase-input" placeholder="Confirm passphrase">
-    <button id="setPassphraseBtn" style="background: #4ade80; color: #1a1a2e; margin-bottom: 8px;">Set Passphrase</button>
-  </div>
-  <div id="mnemonicWarning" class="warning">
-    Write down these 24 words and store them safely. They are the ONLY way to recover your wallet.
-  </div>
-  <div id="mnemonicDisplay" class="mnemonic-display"></div>
-  <div class="section" id="intentsSection" style="display: none;">
-    <div class="section-title">Fulfillable Intents</div>
-    <div id="intentsContainer">
-      <div class="empty">No fulfillable intents</div>
+
+  <!-- Storage tab -->
+  <div class="tab-content" id="tab-storage">
+    <div class="section">
+      <div class="section-title">Storage Quota</div>
+      <div id="quotaContainer">
+        <div class="stat">
+          <span>Bytes stored</span>
+          <span class="stat-value" id="quotaBytesStored">--</span>
+        </div>
+        <div class="stat">
+          <span>Limit</span>
+          <span class="stat-value" id="quotaBytesLimit">--</span>
+        </div>
+        <div class="quota-bar">
+          <div class="quota-bar-fill" id="quotaBarFill" style="width: 0%;"></div>
+        </div>
+        <div class="stat">
+          <span>Objects</span>
+          <span class="stat-value" id="quotaObjectCount">--</span>
+        </div>
+        <div class="stat">
+          <span>Computrons remaining</span>
+          <span class="stat-value" id="quotaComputrons">--</span>
+        </div>
+      </div>
+      <button id="refreshQuotaBtn" style="background: #16213e; color: #e0e0e0; border: 1px solid #374151; margin-bottom: 8px;">Refresh Quota</button>
     </div>
   </div>
-  <div class="section" id="permissionsSection" style="display: none;">
-    <div class="section-title">Allowed Origins</div>
-    <div id="permissionsContainer">
-      <div class="empty">No origins approved</div>
-    </div>
-  </div>
-  <button id="lockBtn">Lock Wallet</button>
-  <button id="backupBtn">Backup (Show Recovery Phrase)</button>
-  <button id="intentsBtn" style="background: #16213e; color: #e0e0e0; border: 1px solid #374151; margin-bottom: 8px;">Fulfill Intents</button>
-  <button id="managePermsBtn" style="background: #16213e; color: #e0e0e0; border: 1px solid #374151; margin-bottom: 8px;">Manage Permissions</button>
-  <button id="settingsBtn" style="background: #16213e; color: #e0e0e0; border: 1px solid #374151; margin-bottom: 8px;">Node Settings</button>
-  <button id="recoverBtn">Recover Wallet</button>
+
   <script src="popup-script.js"></script>
 </body>
 </html>

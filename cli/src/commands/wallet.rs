@@ -1,0 +1,172 @@
+//! Wallet operations: balance, transfer, delegate, info.
+
+use clap::Subcommand;
+
+use crate::config::Config;
+use crate::output::{Context, abbrev_hex, format_number};
+
+use super::{get_json, post_json};
+
+#[derive(Subcommand)]
+pub enum WalletCommand {
+    /// Show balances.
+    Balance,
+
+    /// Transfer computrons to another cell.
+    Transfer {
+        /// Recipient cell ID or public key.
+        to: String,
+
+        /// Amount of computrons to transfer.
+        amount: u64,
+
+        /// Optional memo/note.
+        #[arg(long)]
+        memo: Option<String>,
+    },
+
+    /// Delegate capability to a target cell.
+    Delegate {
+        /// Cell holding the capability.
+        cell_id: String,
+
+        /// Target to delegate to (cell ID or public key).
+        target: String,
+
+        /// Attenuation (restrict delegation scope).
+        #[arg(long)]
+        attenuate: Option<String>,
+    },
+
+    /// Show wallet identity information.
+    Info,
+}
+
+pub async fn run(
+    cmd: WalletCommand,
+    cfg: &Config,
+    ctx: &Context,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        WalletCommand::Balance => balance(cfg, ctx).await,
+        WalletCommand::Transfer { to, amount, memo } => transfer(cfg, ctx, &to, amount, memo).await,
+        WalletCommand::Delegate {
+            cell_id,
+            target,
+            attenuate,
+        } => delegate(cfg, ctx, &cell_id, &target, attenuate).await,
+        WalletCommand::Info => info(cfg, ctx).await,
+    }
+}
+
+async fn balance(cfg: &Config, ctx: &Context) -> Result<(), Box<dyn std::error::Error>> {
+    let spinner = ctx.spinner("Fetching wallet...");
+    let data = get_json(cfg, "/wallet").await?;
+    spinner.finish_and_clear();
+
+    if cfg.is_json() {
+        ctx.json_stdout(&data);
+        return Ok(());
+    }
+
+    let token_count = data["token_count"].as_u64().unwrap_or(0);
+    let receipt_chain = data["receipt_chain_length"].as_u64().unwrap_or(0);
+    let computrons = data["computrons"].as_u64().unwrap_or(0);
+
+    ctx.header("Wallet Balance");
+    ctx.kv("Computrons", &format_number(computrons));
+    ctx.kv("Tokens", &token_count.to_string());
+    ctx.kv("Receipt chain", &format_number(receipt_chain));
+
+    Ok(())
+}
+
+async fn transfer(
+    cfg: &Config,
+    ctx: &Context,
+    to: &str,
+    amount: u64,
+    memo: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let spinner = ctx.spinner(&format!(
+        "Transferring {} computrons...",
+        format_number(amount)
+    ));
+    let body = serde_json::json!({
+        "recipient": to,
+        "amount": amount,
+        "memo": memo.unwrap_or_default(),
+    });
+    let data = post_json(cfg, "/turn/submit", &body).await?;
+    spinner.finish_and_clear();
+
+    if cfg.is_json() {
+        ctx.json_stdout(&data);
+        return Ok(());
+    }
+
+    let turn_id = data["turn_id"].as_str().unwrap_or("?");
+    ctx.success(&format!(
+        "Transferred {} computrons to {}",
+        format_number(amount),
+        abbrev_hex(to, 8, 4)
+    ));
+    ctx.kv("Turn ID", &abbrev_hex(turn_id, 8, 4));
+
+    Ok(())
+}
+
+async fn delegate(
+    cfg: &Config,
+    ctx: &Context,
+    cell_id: &str,
+    target: &str,
+    attenuate: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let spinner = ctx.spinner("Delegating capability...");
+    let body = serde_json::json!({
+        "cell_id": cell_id,
+        "target": target,
+        "attenuation": attenuate,
+    });
+    let data = post_json(cfg, "/wallet/attenuate", &body).await?;
+    spinner.finish_and_clear();
+
+    if cfg.is_json() {
+        ctx.json_stdout(&data);
+        return Ok(());
+    }
+
+    let new_token = data["new_token_id"].as_str().unwrap_or("?");
+    ctx.success("Capability delegated:");
+    ctx.kv("From cell", &abbrev_hex(cell_id, 8, 4));
+    ctx.kv("To", &abbrev_hex(target, 8, 4));
+    ctx.kv("New token", &abbrev_hex(new_token, 8, 4));
+
+    Ok(())
+}
+
+async fn info(cfg: &Config, ctx: &Context) -> Result<(), Box<dyn std::error::Error>> {
+    let spinner = ctx.spinner("Fetching wallet info...");
+    let data = get_json(cfg, "/wallet").await?;
+    spinner.finish_and_clear();
+
+    if cfg.is_json() {
+        ctx.json_stdout(&data);
+        return Ok(());
+    }
+
+    let pk = data["public_key"].as_str().unwrap_or("unknown");
+    let unlocked = data["unlocked"].as_bool().unwrap_or(false);
+    let token_count = data["token_count"].as_u64().unwrap_or(0);
+    let receipt_chain = data["receipt_chain_length"].as_u64().unwrap_or(0);
+
+    ctx.header("Wallet Identity");
+    ctx.kv("Public Key", pk);
+    ctx.kv("Status", if unlocked { "unlocked" } else { "locked" });
+    ctx.kv("Tokens", &token_count.to_string());
+    ctx.kv("Receipts", &receipt_chain.to_string());
+    ctx.kv("Keyfile", &cfg.wallet.keyfile);
+
+    Ok(())
+}

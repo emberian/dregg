@@ -55,6 +55,7 @@ impl MerkleAir {
     }
 
     /// Compute what the parent hash should be given the current hash, position, and siblings.
+    /// Uses hash_4_to_1 with children arranged by position for multi-member Merkle trees.
     /// If position is out of range (>3), returns ZERO (constraint will catch this).
     pub fn compute_parent(current: BabyBear, position: u8, siblings: &[BabyBear; 3]) -> BabyBear {
         if position > 3 {

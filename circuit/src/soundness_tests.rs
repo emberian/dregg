@@ -632,18 +632,25 @@ mod note_spending_soundness {
 
     #[test]
     fn note_spending_constraints_are_nontrivial() {
+        use crate::note_spending_air::NOTE_SPENDING_WIDTH;
         // Verify that constraints are NOT vacuously zero for ALL inputs.
         // Generate random-ish trace rows and check that constraints are non-zero.
         let air = NoteSpendingAir::new(4);
         let alpha = BabyBear::new(13);
 
-        // A completely random row (not satisfying any constraint)
-        let random_row: Vec<BabyBear> =
-            (0..12).map(|i| BabyBear::new((i * 7 + 3) as u32)).collect();
-        let random_next: Vec<BabyBear> = (0..12)
+        // A completely random row (not satisfying any constraint) -- must be NOTE_SPENDING_WIDTH
+        let random_row: Vec<BabyBear> = (0..NOTE_SPENDING_WIDTH)
+            .map(|i| BabyBear::new((i * 7 + 3) as u32))
+            .collect();
+        let random_next: Vec<BabyBear> = (0..NOTE_SPENDING_WIDTH)
             .map(|i| BabyBear::new((i * 11 + 5) as u32))
             .collect();
-        let random_pi = vec![BabyBear::new(999), BabyBear::new(888)];
+        let random_pi = vec![
+            BabyBear::new(999),
+            BabyBear::new(888),
+            BabyBear::new(777),
+            BabyBear::new(666),
+        ];
 
         let c = air.eval_constraints(&random_row, &random_next, &random_pi, alpha);
         assert_ne!(

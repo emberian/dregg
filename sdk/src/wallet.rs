@@ -3022,17 +3022,7 @@ impl AgentWallet {
                 Self::bytes_to_babybear(&proof.siblings[i][2]),
             ];
 
-            let mut children = [BabyBear::ZERO; 4];
-            let mut sib_idx = 0;
-            for j in 0..4u8 {
-                if j == position {
-                    children[j as usize] = current;
-                } else {
-                    children[j as usize] = siblings[sib_idx];
-                    sib_idx += 1;
-                }
-            }
-            current = poseidon2::hash_4_to_1(&children);
+            current = MerkleAir::compute_parent(current, position, &siblings);
         }
 
         current
@@ -3471,21 +3461,19 @@ impl AgentWallet {
             }
         }
 
-        // 5. Compute new commitment.
-        let new_commitment = new_cell_state.state_commitment();
-
-        // 6. Compute effects hash (must match what the executor computes).
-        let _effects_hash = Self::compute_sovereign_effects_hash(&effects);
-
-        // 7. Compute cell_id hash (must match executor's format).
-        let _cell_id_hash = *blake3::hash(cell_id.as_bytes()).as_bytes();
-
-        // 8. Generate the STARK proof using EffectVmAir (DSL cutover).
+        // 5. Generate the STARK proof using EffectVmAir (DSL cutover).
         let vm_effects = Self::convert_effects_to_vm(cell_id, &effects);
         let initial_vm_state =
             pyana_circuit::CellState::new(cell_state.state.balance, cell_state.state.nonce as u32);
         let (trace, public_inputs) =
             pyana_circuit::generate_effect_vm_trace(&initial_vm_state, &vm_effects);
+
+        // 6. Extract new commitment from the proof's public inputs (PI[1] = new state commitment).
+        // The executor verifies this matches, so we must use the Poseidon2-based commitment
+        // that the Effect VM computed (not the blake3 cell.state_commitment()).
+        let new_commitment = pyana_turn::TurnExecutor::babybear_to_commitment(
+            public_inputs[pyana_circuit::effect_vm::pi::NEW_COMMIT],
+        );
 
         let air = pyana_circuit::EffectVmAir::new(trace.len());
         let proof = pyana_circuit::stark::prove(&air, &trace, &public_inputs);
@@ -4556,6 +4544,7 @@ mod tests {
             agent,
             federation_id: [0u8; 32],
             routing_directives: Vec::new(),
+            introduction_exports: Vec::new(),
             derivation_records: Vec::new(),
             emitted_events: Vec::new(),
             executor_signature: None,

@@ -708,9 +708,25 @@ pub struct BoundaryConstraint {
     pub value: BabyBear,
 }
 
+/// Legacy Merkle membership AIR with linear (non-algebraic) hash binding.
+///
+/// SECURITY WARNING: This AIR uses a trivially invertible linear constraint
+/// (`parent = current + sib0 + sib1 + sib2 + position`) which does NOT enforce
+/// correct Poseidon2 computation. It is retained for backward compatibility with
+/// existing proof infrastructure (bridge, wire, demo) but new code should use
+/// `crate::dsl::descriptors::merkle_poseidon2_circuit()` for algebraic soundness.
+#[deprecated(
+    note = "Use crate::dsl::descriptors::merkle_poseidon2_circuit() for algebraic soundness. MerkleStarkAir uses a linear hash binding that is not collision-resistant."
+)]
 pub struct MerkleStarkAir;
+/// Backward-compatible type alias.
+#[deprecated(
+    note = "Use crate::dsl::descriptors::merkle_poseidon2_circuit() for algebraic soundness."
+)]
+#[allow(deprecated)]
 pub type MerkleLinearAir = MerkleStarkAir;
 
+#[allow(deprecated)]
 impl StarkAir for MerkleStarkAir {
     fn width(&self) -> usize {
         6
@@ -2125,6 +2141,7 @@ pub fn proof_from_bytes(bytes: &[u8]) -> Result<StarkProof, String> {
 // ============================================================================
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
 

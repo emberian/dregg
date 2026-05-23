@@ -248,7 +248,7 @@ pub fn note_spending_circuit_descriptor() -> CircuitDescriptor {
     CircuitDescriptor {
         name: "pyana-note-spending-dsl-v1".into(),
         trace_width: NOTE_SPENDING_WIDTH,
-        max_degree: 2, // Hash + Binary are degree 2 in the DSL evaluation
+        max_degree: 5, // Hash with 5 input_cols has degree 5; Binary is degree 2
         columns,
         constraints,
         boundaries,

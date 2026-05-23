@@ -1940,18 +1940,7 @@ impl BridgePresentationBuilder {
                 bytes_to_babybear(&proof.siblings[i][2]),
             ];
 
-            // Use Poseidon2 hashing: arrange children by position, hash with hash_4_to_1
-            let mut children = [BabyBear::ZERO; 4];
-            let mut sib_idx = 0;
-            for j in 0..4u8 {
-                if j == position {
-                    children[j as usize] = current;
-                } else {
-                    children[j as usize] = siblings[sib_idx];
-                    sib_idx += 1;
-                }
-            }
-            let parent = poseidon2::hash_4_to_1(&children);
+            let parent = MerkleAir::compute_parent(current, position, &siblings);
 
             levels.push(MerkleLevelWitness { position, siblings });
             current = parent;
@@ -1972,7 +1961,7 @@ impl BridgePresentationBuilder {
     ///
     /// This is the Poseidon2 variant of the delegation path. The delegator pre-generated
     /// the proof using the REAL issuer key. We convert the byte-level siblings to BabyBear
-    /// field elements and use Poseidon2 hashing (hash_4_to_1) to compute parents.
+    /// field elements and use Poseidon2 hashing (hash_fact) to compute parents.
     ///
     /// The leaf_hash in the proof corresponds to the REAL issuer key, so we use it
     /// (converted to BabyBear) as the starting leaf for the witness computation.
@@ -1995,18 +1984,7 @@ impl BridgePresentationBuilder {
                 bytes_to_babybear(&proof.siblings[i][2]),
             ];
 
-            // Use Poseidon2 hashing: arrange children by position, hash with hash_4_to_1
-            let mut children = [BabyBear::ZERO; 4];
-            let mut sib_idx = 0;
-            for j in 0..4u8 {
-                if j == position {
-                    children[j as usize] = current;
-                } else {
-                    children[j as usize] = siblings[sib_idx];
-                    sib_idx += 1;
-                }
-            }
-            let parent = poseidon2::hash_4_to_1(&children);
+            let parent = MerkleAir::compute_parent(current, position, &siblings);
 
             levels.push(MerkleLevelWitness { position, siblings });
             current = parent;
@@ -2044,18 +2022,8 @@ impl BridgePresentationBuilder {
                 BabyBear::new(hash_index(i, 2, &self.issuer_key)),
             ];
 
-            // Use Poseidon2 hashing (collision-resistant) instead of linear sum
-            let mut children = [BabyBear::ZERO; 4];
-            let mut sib_idx = 0;
-            for j in 0..4u8 {
-                if j == position {
-                    children[j as usize] = current;
-                } else {
-                    children[j as usize] = siblings[sib_idx];
-                    sib_idx += 1;
-                }
-            }
-            let parent = poseidon2::hash_4_to_1(&children);
+            // Use hash_fact to match the DSL circuit's Hash constraint:
+            let parent = MerkleAir::compute_parent(current, position, &siblings);
 
             levels.push(MerkleLevelWitness { position, siblings });
             current = parent;
@@ -3691,17 +3659,11 @@ mod tests {
                 BabyBear::new(hash_index(i, 1, &key)),
                 BabyBear::new(hash_index(i, 2, &key)),
             ];
-            let mut children = [BabyBear::ZERO; 4];
-            let mut sib_idx = 0;
-            for j in 0..4u8 {
-                if j == position {
-                    children[j as usize] = current;
-                } else {
-                    children[j as usize] = siblings[sib_idx];
-                    sib_idx += 1;
-                }
-            }
-            current = poseidon2::hash_4_to_1(&children);
+            let position_bb = BabyBear::new(position as u32);
+            current = poseidon2::hash_fact(
+                current,
+                &[siblings[0], siblings[1], siblings[2], position_bb],
+            );
         }
         let expected_root_bb = current;
 
@@ -3736,17 +3698,11 @@ mod tests {
                 BabyBear::new(hash_index(i, 1, &key)),
                 BabyBear::new(hash_index(i, 2, &key)),
             ];
-            let mut children = [BabyBear::ZERO; 4];
-            let mut sib_idx = 0;
-            for j in 0..4u8 {
-                if j == position {
-                    children[j as usize] = current;
-                } else {
-                    children[j as usize] = siblings[sib_idx];
-                    sib_idx += 1;
-                }
-            }
-            current = poseidon2::hash_4_to_1(&children);
+            let position_bb = BabyBear::new(position as u32);
+            current = poseidon2::hash_fact(
+                current,
+                &[siblings[0], siblings[1], siblings[2], position_bb],
+            );
         }
         let fed_root_bb = current;
         let mut fed_root_bytes = [0u8; 32];
@@ -3814,17 +3770,11 @@ mod tests {
                 BabyBear::new(hash_index(i, 1, &key)),
                 BabyBear::new(hash_index(i, 2, &key)),
             ];
-            let mut children = [BabyBear::ZERO; 4];
-            let mut sib_idx = 0;
-            for j in 0..4u8 {
-                if j == position {
-                    children[j as usize] = current;
-                } else {
-                    children[j as usize] = siblings[sib_idx];
-                    sib_idx += 1;
-                }
-            }
-            current = poseidon2::hash_4_to_1(&children);
+            let position_bb = BabyBear::new(position as u32);
+            current = poseidon2::hash_fact(
+                current,
+                &[siblings[0], siblings[1], siblings[2], position_bb],
+            );
         }
         let fed_root_bb = current;
         let mut fed_root_bytes = [0u8; 32];
@@ -3912,17 +3862,11 @@ mod tests {
                 BabyBear::new(hash_index(i, 1, &key)),
                 BabyBear::new(hash_index(i, 2, &key)),
             ];
-            let mut children = [BabyBear::ZERO; 4];
-            let mut sib_idx = 0;
-            for j in 0..4u8 {
-                if j == position {
-                    children[j as usize] = current;
-                } else {
-                    children[j as usize] = siblings[sib_idx];
-                    sib_idx += 1;
-                }
-            }
-            current = poseidon2::hash_4_to_1(&children);
+            let position_bb = BabyBear::new(position as u32);
+            current = poseidon2::hash_fact(
+                current,
+                &[siblings[0], siblings[1], siblings[2], position_bb],
+            );
         }
         let fed_root_bb = current;
         let mut fed_root_bytes = [0u8; 32];
@@ -4113,17 +4057,11 @@ mod tests {
                 BabyBear::new(hash_index(i, 1, &key)),
                 BabyBear::new(hash_index(i, 2, &key)),
             ];
-            let mut children = [BabyBear::ZERO; 4];
-            let mut sib_idx = 0;
-            for j in 0..4u8 {
-                if j == position {
-                    children[j as usize] = current;
-                } else {
-                    children[j as usize] = siblings[sib_idx];
-                    sib_idx += 1;
-                }
-            }
-            current = poseidon2::hash_4_to_1(&children);
+            let position_bb = BabyBear::new(position as u32);
+            current = poseidon2::hash_fact(
+                current,
+                &[siblings[0], siblings[1], siblings[2], position_bb],
+            );
         }
         let fed_root_bb = current;
         let mut fed_root_bytes = [0u8; 32];

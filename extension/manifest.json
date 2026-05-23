@@ -3,17 +3,17 @@
   "name": "Pyana Wallet",
   "version": "0.1.0",
   "description": "Capability-based authorization wallet with zero-knowledge proofs",
-  "permissions": ["storage", "activeTab"],
+  "permissions": ["storage", "activeTab", "contextMenus"],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "dist/background.js"
   },
   "content_scripts": [{
     "matches": ["<all_urls>"],
-    "js": ["content.js"],
+    "js": ["dist/content.js"],
     "run_at": "document_start"
   }],
   "web_accessible_resources": [{
-    "resources": ["page.js"],
+    "resources": ["dist/page.js", "bip39_english.txt", "pyana_wasm.js", "pyana_wasm_bg.wasm"],
     "matches": ["<all_urls>"]
   }],
   "action": {

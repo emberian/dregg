@@ -457,6 +457,7 @@ mod tests {
             agent: turn.agent,
             federation_id: [0u8; 32],
             routing_directives: vec![],
+            introduction_exports: vec![],
             derivation_records: vec![],
             emitted_events: vec![],
             executor_signature: None,

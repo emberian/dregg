@@ -282,6 +282,11 @@ pub enum WireMessage {
         from_federation: [u8; 32],
         /// The cell ID being dropped.
         cell_id: [u8; 32],
+        /// The session epoch under which this drop was issued.
+        /// Must match the current session epoch; stale-epoch drops are rejected.
+        /// Defaults to 0 for backward compatibility with legacy senders.
+        #[serde(default)]
+        session_epoch: u64,
     },
 
     /// A pipelined message targeting an unresolved promise on the receiver.
@@ -302,6 +307,11 @@ pub enum WireMessage {
         result_promise_id: Option<u64>,
         /// The federation sending this pipelined message.
         sender_federation: [u8; 32],
+        /// The session epoch under which this message was sent.
+        /// Must match the current session epoch; stale-epoch messages are rejected.
+        /// Defaults to 0 for backward compatibility with legacy senders.
+        #[serde(default)]
+        session_epoch: u64,
     },
 
     /// Present a handoff certificate to the target federation.
@@ -452,6 +462,8 @@ pub mod error_codes {
     pub const HANDOFF_FAILED: u32 = 12;
     /// The GC drop was invalid (unknown federation or cell).
     pub const INVALID_DROP: u32 = 13;
+    /// The message carries a stale session epoch (from a terminated session).
+    pub const STALE_EPOCH: u32 = 14;
 }
 
 /// The current protocol version.
@@ -604,6 +616,7 @@ mod tests {
             WireMessage::DropRemoteRef {
                 from_federation: [0xCC; 32],
                 cell_id: [0xDD; 32],
+                session_epoch: 5,
             },
             WireMessage::PipelinedMsg {
                 target_promise_id: 42,
@@ -612,6 +625,7 @@ mod tests {
                 authorization: vec![0xDE, 0xAD],
                 result_promise_id: Some(99),
                 sender_federation: [0xEE; 32],
+                session_epoch: 7,
             },
             WireMessage::PresentHandoff {
                 presentation_bytes: vec![0x11; 200],

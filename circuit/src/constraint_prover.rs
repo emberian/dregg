@@ -247,6 +247,39 @@ pub struct ConstraintProof {
 }
 
 impl ConstraintProof {
+    /// Generate a constraint proof without verifying constraints.
+    ///
+    /// Use when the real cryptographic check is handled by a separate STARK proof
+    /// and this ConstraintProof is only needed for metadata (public inputs, size).
+    pub fn generate_unchecked(air: &dyn Air) -> Self {
+        let (trace, public_inputs) = air.generate_trace();
+        let num_rows = trace.len();
+        let num_cols = air.trace_width();
+
+        let mut hasher = blake3::Hasher::new();
+        for row in &trace {
+            for elem in row {
+                hasher.update(&elem.0.to_le_bytes());
+            }
+        }
+        let trace_digest = *hasher.finalize().as_bytes();
+
+        let log_rows = (num_rows.max(1) as f64).log2().ceil() as usize;
+        let security_bits = 128;
+        let fri_queries = security_bits / 2;
+        let simulated_proof_size_bytes =
+            num_cols * log_rows * fri_queries * 4 + public_inputs.len() * 4 + 32;
+
+        Self {
+            num_rows,
+            num_cols,
+            num_public_inputs: public_inputs.len(),
+            trace_digest,
+            public_inputs,
+            simulated_proof_size_bytes,
+        }
+    }
+
     /// Generate a constraint proof from a valid trace.
     pub fn generate(air: &dyn Air) -> Option<Self> {
         let (trace, public_inputs) = air.generate_trace();

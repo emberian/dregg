@@ -79,6 +79,7 @@ fn simulate_turn(agent: CellId, turn_number: u64, pre_state: [u8; 32]) -> TurnRe
         agent,
         federation_id: [0u8; 32],
         routing_directives: Vec::new(),
+        introduction_exports: Vec::new(),
         derivation_records: Vec::new(),
         emitted_events: Vec::new(),
         executor_signature: None,

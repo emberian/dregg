@@ -35,6 +35,7 @@ pub mod convert;
 pub mod delta;
 pub mod midnight;
 pub mod midnight_observer;
+pub mod mina;
 pub mod present;
 
 #[cfg(feature = "turn")]

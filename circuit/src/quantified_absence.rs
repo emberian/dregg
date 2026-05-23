@@ -80,6 +80,10 @@ pub type PredicateFn = fn(BabyBear) -> BabyBear;
 /// (i.e., the predicate does NOT hold for any element in the chunk).
 ///
 /// Public inputs: [chunk_index, chunk_size, initial_acc, final_acc, predicate_id]
+///
+/// NOTE: No DSL equivalent yet. This is a self-contained internal AIR with
+/// no external callers. A future DSL descriptor could replace it.
+#[deprecated(note = "Internal AIR with no DSL equivalent yet. Will be converted in a future pass.")]
 pub struct ChunkAbsenceAir;
 
 impl StarkAir for ChunkAbsenceAir {
@@ -427,6 +431,10 @@ pub struct QuantifiedAbsenceAccumulatorProof {
 /// (none are factored out into Acc_satisfying).
 ///
 /// Public inputs: [Acc_all(4), alpha(4), num_elements(1)] = 9 elements
+///
+/// NOTE: No DSL equivalent yet. This is a self-contained internal AIR with
+/// no external callers. A future DSL descriptor could replace it.
+#[deprecated(note = "Internal AIR with no DSL equivalent yet. Will be converted in a future pass.")]
 pub struct QuotientAccumulatorAir;
 
 impl StarkAir for QuotientAccumulatorAir {

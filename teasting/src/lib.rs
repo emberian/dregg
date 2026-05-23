@@ -36,5 +36,9 @@
 
 pub mod agent;
 pub mod assertions;
+pub mod captp_sim;
+pub mod fault;
 pub mod federation;
 pub mod harness;
+pub mod mesh_sim;
+pub mod router_sim;

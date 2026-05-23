@@ -17,6 +17,7 @@
 
 pub mod accumulator;
 pub mod circuit;
+pub mod committed_threshold;
 pub mod derivation;
 pub mod descriptors;
 pub mod fold;
@@ -82,6 +83,13 @@ pub use accumulator::{
     generate_accumulator_trace, prove_accumulator_non_revocation,
     prove_accumulator_non_revocation_dsl, verify_accumulator_non_revocation,
     verify_accumulator_non_revocation_dsl,
+};
+
+// Re-export DSL-native committed-threshold proving API.
+pub use committed_threshold::{
+    committed_threshold_circuit_descriptor, committed_threshold_dsl_circuit,
+    generate_committed_threshold_trace, prove_committed_threshold_dsl,
+    verify_committed_threshold_dsl,
 };
 
 // Re-export DSL-native derivation proving API.

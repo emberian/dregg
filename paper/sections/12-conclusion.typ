@@ -44,6 +44,15 @@ The system is operational: 355k lines of Rust across 41 crates, 4,046 tests, rea
 - 8 production applications (gallery, stablecoin, AMM, orderbook, lending, identity, compute-exchange, bounty-board)
 - Discord bot with custodial wallet and DeFi commands
 - Devnet deployment (3 federation nodes + app services + Caddy TLS + multi-arch Docker)
+- CapTP with sturdy refs, distributed GC, three-party handoff, pipelining, and store-and-forward
+- DFA routing with governable namespace classification provable via STARK lookup tables
+- Service mesh: governed capability registry with mount/discover/resolve and DFA-based ACLs
+- Petname nameservice: local petnames, edge names, proposed names, hierarchical resolution, sub-delegation, rental
+- Storage economics: space banks, computron-metered storage, MerkleQueue inboxes, sender-pays-deposit, erasure coding
+- Formal verification: typed composition checker, 30-circuit catalog, 11 cryptographic guarantees, 7 trust assumptions
+- Cell migration: teleportation between federations, vat splitting/merging, IVC proof carries full history
+- Deep GC: state lifecycle (birth/active/decay/forced sovereignty), storage rent, epoch rotation
+- `pyana` CLI: full-citizen command with cell/turn/cap/wallet/federation/namespace/storage/directory/proof/route/doctor
 - 20+ end-to-end demo scenarios covering delegation, revocation, multi-party turns, intent fulfillment, pipeline execution, cross-federation swaps, factory creation, and sovereign transitions
 
 What remains:

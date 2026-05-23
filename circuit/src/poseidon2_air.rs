@@ -48,6 +48,12 @@ pub const POSEIDON2_AIR_WIDTH: usize = WIDTH * 2;
 /// Both rows are identical (power-of-2 padding).
 ///
 /// Public inputs: [input_state[0..8], output_state[0..8]] (16 elements)
+///
+/// NOTE: This standalone Poseidon2 AIR is still useful for isolated hash proofs.
+/// For Merkle-based usage, prefer `crate::dsl::descriptors::merkle_poseidon2_circuit()`.
+#[deprecated(
+    note = "For Merkle usage, prefer crate::dsl::descriptors::merkle_poseidon2_circuit(). Standalone hash proofs may still use this."
+)]
 pub struct Poseidon2Air;
 
 impl Poseidon2Air {
@@ -154,6 +160,10 @@ impl StarkAir for Poseidon2Air {
 pub const MERKLE_POSEIDON2_WIDTH: usize = 10;
 
 /// AIR for Merkle membership proof using real Poseidon2 hashing (round-by-round).
+///
+/// DEPRECATED: Use `crate::dsl::descriptors::merkle_poseidon2_circuit()` for the DSL-native
+/// equivalent with identical algebraic soundness but unified constraint infrastructure.
+#[deprecated(note = "Use crate::dsl::descriptors::merkle_poseidon2_circuit() instead.")]
 pub struct MerklePoseidon2Air {
     pub depth: usize,
 }

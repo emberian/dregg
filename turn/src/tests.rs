@@ -4559,6 +4559,89 @@ fn test_introduction_routing_directive_hash() {
     assert_eq!(directive.authorizing_turn, receipt.turn_hash);
 }
 #[test]
+fn test_introduction_emits_gc_export_records() {
+    // Verify that Effect::Introduce populates introduction_exports in the receipt,
+    // enabling distributed GC for introduced capabilities.
+    let (mut ledger, alice_id, bob_id, carol_id) = setup_three_cells_for_introduction();
+    let executor = zero_cost_executor();
+    let mut builder = TurnBuilder::new(alice_id, 0);
+    {
+        let action = builder.action(alice_id, "introduce");
+        // Alice introduces Bob to Carol (Bob gets access to Carol)
+        action.introduce(alice_id, bob_id, carol_id, AuthRequired::None);
+    }
+    let turn = builder.fee(100).build();
+    let result = executor.execute(&turn, &mut ledger);
+    let (_, receipt, _) = result.unwrap_committed();
+
+    // Must emit exactly one introduction export record
+    assert_eq!(
+        receipt.introduction_exports.len(),
+        1,
+        "introduction should emit a GC export record"
+    );
+
+    let export = &receipt.introduction_exports[0];
+    // target = carol (the capability being introduced)
+    assert_eq!(export.target, carol_id);
+    // recipient = bob (who now holds the reference)
+    assert_eq!(export.recipient, bob_id);
+    // authorizing_turn matches the turn hash
+    assert_eq!(export.authorizing_turn, receipt.turn_hash);
+    // has an expiry (matching routing directive)
+    assert!(export.expires.is_some());
+    assert_eq!(
+        export.expires, receipt.routing_directives[0].expires,
+        "export expiry should match routing directive expiry"
+    );
+}
+
+#[test]
+fn test_introduction_gc_export_enables_drop_tracking() {
+    // End-to-end test: introduction creates GC export record, which can be
+    // registered in ExportGcManager, and then properly cleaned up via DropRef.
+    use pyana_captp::{ExportGcManager, FederationId};
+
+    let (mut ledger, alice_id, bob_id, carol_id) = setup_three_cells_for_introduction();
+    let executor = zero_cost_executor();
+    let mut builder = TurnBuilder::new(alice_id, 0);
+    {
+        let action = builder.action(alice_id, "introduce");
+        action.introduce(alice_id, bob_id, carol_id, AuthRequired::None);
+    }
+    let turn = builder.fee(100).build();
+    let result = executor.execute(&turn, &mut ledger);
+    let (_, receipt, _) = result.unwrap_committed();
+
+    // Simulate the node/server layer processing the introduction_exports:
+    // Bob's federation registers Carol as an export to Bob's federation.
+    let mut gc_mgr = ExportGcManager::new();
+    let bobs_federation = FederationId([0xBB; 32]);
+
+    for export in &receipt.introduction_exports {
+        // In production, resolve_federation(export.recipient) -> bobs_federation
+        gc_mgr.record_export(export.target, bobs_federation, 100);
+    }
+
+    // Verify: Carol is now tracked as exported to Bob's federation
+    let entry = gc_mgr.get(&carol_id).expect("carol should be tracked");
+    assert_eq!(entry.total_refs, 1);
+    assert!(entry.holders.contains_key(&bobs_federation));
+
+    // Simulate Bob's federation sending a DropRef when done with Carol
+    let drop_result = gc_mgr.process_drop(carol_id, bobs_federation);
+    assert_eq!(
+        drop_result,
+        pyana_captp::DropResult::CanRevoke,
+        "after drop, export should be revocable"
+    );
+
+    // Verify: export is now at zero refs
+    let entry = gc_mgr.get(&carol_id).unwrap();
+    assert_eq!(entry.total_refs, 0);
+}
+
+#[test]
 fn test_introduction_attenuation_preserves_level() {
     let (mut ledger, alice_id, bob_id, carol_id) = setup_three_cells_for_introduction();
     let executor = zero_cost_executor();
@@ -7304,22 +7387,28 @@ fn test_proof_carrying_turn_wrong_effects_hash() {
         setup_sovereign_cell_for_proof_test();
     let executor = zero_cost_executor();
 
-    let new_commitment = [42u8; 32];
+    // Generate a valid proof (Transfer 100 outgoing) and get its actual new_commitment.
+    let (proof_bytes, new_commitment) =
+        generate_valid_sovereign_proof_with_new_commit(&old_commitment);
 
+    // Build a turn with a Transfer(100 outgoing) effect from the sovereign cell
+    // PLUS a SetField effect. This produces the same delta (delta_mag=100, delta_sign=1)
+    // but a different effects_hash (because of the extra VmEffect::SetField).
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let _action = builder.action(agent_id, "noop");
+        let mut action = builder.action(sovereign_id, "sovereign_execute_proven");
+        action.effect(Effect::Transfer {
+            from: sovereign_id,
+            to: agent_id,
+            amount: 100,
+        });
+        action.effect(Effect::SetField {
+            cell: sovereign_id,
+            index: 0,
+            value: [1u8; 32],
+        });
     }
     let mut turn = builder.fee(100).build();
-
-    // Use a WRONG effects hash in the proof.
-    let wrong_effects_hash = [77u8; 32];
-    let proof_bytes = generate_valid_sovereign_proof(
-        &old_commitment,
-        &new_commitment,
-        &sovereign_id,
-        &wrong_effects_hash, // doesn't match what executor computes
-    );
 
     turn.execution_proof = Some(proof_bytes);
     turn.execution_proof_cell = Some(sovereign_id);

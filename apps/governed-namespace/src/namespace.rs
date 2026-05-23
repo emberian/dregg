@@ -28,7 +28,7 @@ use tokio::sync::RwLock;
 
 use crate::governance::{GovernanceEngine, Participant};
 use crate::routes::{Classification, RouteClass, RouteEntry, RoutingTable};
-use crate::storage::{ContentHash, ContentStore, StorageError, WriteReceipt, hex};
+use crate::storage::{ContentHash, ContentStore, StorageError, hex};
 
 /// The integrated namespace: routing + storage + governance + capability sharing.
 #[derive(Clone)]
@@ -72,7 +72,7 @@ pub struct NamespaceReadResult {
 }
 
 /// Errors from namespace operations.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NamespaceError {
     /// No route matched the given path (deny by default).
     NoRoute(String),

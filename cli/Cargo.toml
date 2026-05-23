@@ -1,0 +1,29 @@
+[package]
+name = "pyana-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "pyana"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive", "env", "color", "suggestions", "wrap_help"] }
+clap_complete = "4"
+console = "0.15"
+indicatif = "0.17"
+dialoguer = "0.11"
+comfy-table = "7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json"] }
+blake3 = "1"
+bs58 = "0.5"
+dirs = "5"
+urlencoding = "2"
+shellexpand = "3"
+
+[lints]
+workspace = true

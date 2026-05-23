@@ -63,6 +63,19 @@ if [ ! -f /opt/pyana-data/node.key ]; then
   sudo chown -R pyana:pyana /opt/pyana-data
 fi
 
+# Deploy genesis state (first run only)
+if [ ! -f /opt/pyana-data/genesis.json ]; then
+  echo "Deploying genesis state..."
+  if [ -f /opt/pyana/deploy/genesis/genesis.json ]; then
+    sudo cp /opt/pyana/deploy/genesis/genesis.json /opt/pyana-data/genesis.json
+    sudo chown pyana:pyana /opt/pyana-data/genesis.json
+    echo "  Genesis state installed from deploy/genesis/genesis.json"
+  else
+    echo "  WARNING: No genesis.json found. Run deploy/genesis/generate.sh first."
+    echo "  The node will start without pre-configured state."
+  fi
+fi
+
 # Install systemd service
 sudo cp /opt/pyana/deploy/aws/pyana-gateway.service /etc/systemd/system/
 sudo systemctl daemon-reload

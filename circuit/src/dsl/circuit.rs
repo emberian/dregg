@@ -140,6 +140,18 @@ pub enum ConstraintExpr {
         output_col: usize,
         input_cols: [usize; 4],
     },
+    /// Constrain output_col == Poseidon2_hash_4_to_1(children) where children are
+    /// reconstructed from (current_col, sib_cols[3], position_col) by placing
+    /// current at the position index and siblings in the remaining slots.
+    ///
+    /// This is the correct constraint for 4-ary Merkle membership: the parent hash
+    /// is position-independent (same for all 4 children's proofs).
+    MerkleHash {
+        output_col: usize,
+        current_col: usize,
+        sib_cols: [usize; 3],
+        position_col: usize,
+    },
     /// Lookup constraint: asserts that the tuple of values at `query_columns` in the
     /// current row appears in the named lookup table.
     ///
@@ -301,6 +313,29 @@ impl ConstraintExpr {
                     local[input_cols[2]],
                     local[input_cols[3]],
                 ];
+                let expected = crate::poseidon2::hash_4_to_1(&children);
+                expected - local[*output_col]
+            }
+            Self::MerkleHash {
+                output_col,
+                current_col,
+                sib_cols,
+                position_col,
+            } => {
+                // Reconstruct children in canonical order from (current, siblings, position)
+                let current = local[*current_col];
+                let position = local[*position_col].0 as u8;
+                let siblings = [local[sib_cols[0]], local[sib_cols[1]], local[sib_cols[2]]];
+                let mut children = [BabyBear::ZERO; 4];
+                let mut sib_idx = 0;
+                for i in 0..4u8 {
+                    if i == position {
+                        children[i as usize] = current;
+                    } else {
+                        children[i as usize] = siblings[sib_idx];
+                        sib_idx += 1;
+                    }
+                }
                 let expected = crate::poseidon2::hash_4_to_1(&children);
                 expected - local[*output_col]
             }
@@ -607,6 +642,10 @@ impl ConstraintExpr {
                 // hash_4_to_1([a,b,c,d]) - output: the hash is opaque, constraint is degree 1.
                 1
             }
+            Self::MerkleHash { .. } => {
+                // Position-aware hash_4_to_1(children): opaque hash, constraint is degree 1.
+                1
+            }
             Self::Lookup { query_columns, .. } => {
                 // Lookup is non-algebraic (membership test). Degree is 1 per column reference.
                 query_columns.len().max(1)
@@ -668,6 +707,20 @@ impl ConstraintExpr {
             } => {
                 let max_input = input_cols.iter().copied().max().unwrap_or(0);
                 Some((*output_col).max(max_input))
+            }
+            Self::MerkleHash {
+                output_col,
+                current_col,
+                sib_cols,
+                position_col,
+            } => {
+                let max_sib = sib_cols.iter().copied().max().unwrap_or(0);
+                Some(
+                    (*output_col)
+                        .max(*current_col)
+                        .max(max_sib)
+                        .max(*position_col),
+                )
             }
             Self::Lookup { query_columns, .. } => query_columns.iter().copied().max(),
         }

@@ -11,6 +11,11 @@ use pyana_sdk::AgentWallet;
 use pyana_turn::{ComputronCosts, Effect, TurnExecutor, TurnResult};
 
 /// Create a sovereign cell in a ledger and return the cell + ledger.
+///
+/// The executor requires the agent cell (= sovereign cell) to exist in the hosted
+/// table for nonce/fee checks. For proof-carrying turns, the cell is registered as
+/// both sovereign (commitment) AND hosted (balance/nonce). The proof replaces
+/// re-execution, but the executor still needs balance/nonce for basic validation.
 fn setup_sovereign_cell(balance: u64) -> (AgentWallet, CellId, Ledger) {
     let wallet = AgentWallet::new();
     let pub_key = wallet.public_key().0;
@@ -28,18 +33,14 @@ fn setup_sovereign_cell(balance: u64) -> (AgentWallet, CellId, Ledger) {
 
     // Store the cell state in the wallet.
     let mut wallet = wallet;
-    wallet.store_sovereign_state(cell);
+    wallet.store_sovereign_state(cell.clone());
 
-    // Create a ledger with the sovereign commitment registered.
+    // Create a ledger with both:
+    // 1. Sovereign commitment registration (for proof verification)
+    // 2. Hosted cell entry (for nonce/fee checks by executor)
     let mut ledger = Ledger::new();
-    // Register the cell as sovereign (commitment only, no full state).
     ledger.register_sovereign_cell(cell_id, commitment).unwrap();
-
-    // The executor also needs the agent cell to exist for fee/nonce.
-    // Use a different token_id to avoid conflicting with the sovereign cell's CellId.
-    let agent_token_id = *blake3::hash(b"test-domain-agent").as_bytes();
-    let agent_cell = Cell::with_balance(pub_key, agent_token_id, 10_000);
-    let _ = ledger.insert_cell(agent_cell);
+    let _ = ledger.insert_cell(cell);
 
     (wallet, cell_id, ledger)
 }
@@ -154,6 +155,10 @@ fn test_backward_compat_witness_path_still_works() {
 
     let mut cell = Cell::with_balance(pub_key, token_id, 5000);
     cell.mode = CellMode::Sovereign;
+    // Set permissive send permission — this test verifies the witness injection
+    // mechanism, not authorization. Default permissions require Signature which
+    // would need a separate authorization test path.
+    cell.permissions.send = pyana_cell::AuthRequired::None;
     let cell_id = cell.id;
     let commitment = cell.state_commitment();
 
@@ -162,9 +167,10 @@ fn test_backward_compat_witness_path_still_works() {
 
     let mut ledger = Ledger::new();
     ledger.register_sovereign_cell(cell_id, commitment).unwrap();
-    let agent_token_id = *blake3::hash(b"test-domain-agent").as_bytes();
-    let agent_cell = Cell::with_balance(pub_key, agent_token_id, 10_000);
-    let _ = ledger.insert_cell(agent_cell);
+    // Insert the sovereign cell into the hosted table too (executor needs it for
+    // nonce/fee lookup since turn.agent == cell_id). The witness injection will
+    // replace it with the witnessed state.
+    let _ = ledger.insert_cell(cell.clone());
 
     let dest_key = [44u8; 32];
     let dest_token_id = *blake3::hash(b"test-domain").as_bytes();

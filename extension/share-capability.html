@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Share Capability</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 400px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      padding: 24px;
+    }
+    h2 { font-size: 16px; color: #a78bfa; margin-bottom: 16px; }
+    .field { margin-bottom: 16px; }
+    .field label {
+      display: block; font-size: 11px; text-transform: uppercase;
+      color: #9ca3af; margin-bottom: 4px; letter-spacing: 0.05em;
+    }
+    .field input {
+      width: 100%; padding: 10px 12px;
+      background: #16213e; border: 1px solid #374151; border-radius: 6px;
+      color: #e0e0e0; font-size: 13px; font-family: monospace;
+    }
+    .field input::placeholder { color: #6b7280; }
+    .uri-display {
+      padding: 12px; background: #0f172a; border-radius: 8px;
+      border: 1px solid #374151; margin-bottom: 16px;
+      font-family: monospace; font-size: 12px;
+      color: #4ade80; word-break: break-all; line-height: 1.5;
+    }
+    .qr-container {
+      text-align: center; margin-bottom: 16px;
+      padding: 16px; background: #ffffff; border-radius: 8px;
+    }
+    .qr-container canvas { max-width: 180px; max-height: 180px; }
+    .qr-placeholder {
+      width: 180px; height: 180px; margin: 0 auto;
+      display: flex; align-items: center; justify-content: center;
+      color: #6b7280; font-size: 11px; border: 1px dashed #374151;
+      border-radius: 4px; background: #f8f8f8;
+    }
+    button {
+      width: 100%; padding: 10px; border: none;
+      border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;
+      margin-bottom: 8px;
+    }
+    #generateBtn { background: #a78bfa; color: #1a1a2e; }
+    #generateBtn:hover { background: #8b5cf6; }
+    #copyBtn { background: #065f46; color: #6ee7b7; }
+    #copyBtn:hover { background: #047857; }
+    #closeBtn { background: #16213e; color: #e0e0e0; border: 1px solid #374151; }
+    .hidden { display: none; }
+    .error { color: #f87171; font-size: 12px; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <h2>Share Capability</h2>
+
+  <div id="inputSection">
+    <div class="field">
+      <label>Cell ID</label>
+      <input type="text" id="cellIdInput" placeholder="64-character hex cell ID">
+    </div>
+    <button id="generateBtn">Generate Shareable URI</button>
+    <div id="errorMsg" class="error hidden"></div>
+  </div>
+
+  <div id="resultSection" class="hidden">
+    <div class="field">
+      <label>Shareable URI</label>
+      <div class="uri-display" id="uriDisplay"></div>
+    </div>
+    <div class="qr-container">
+      <div class="qr-placeholder" id="qrPlaceholder">
+        QR code generation requires a library.<br>
+        Copy the URI above instead.
+      </div>
+    </div>
+    <button id="copyBtn">Copy URI to Clipboard</button>
+  </div>
+
+  <button id="closeBtn">Close</button>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const preUri = params.get('uri');
+    const preCellId = params.get('cellId');
+
+    const cellIdInput = document.getElementById('cellIdInput');
+    const generateBtn = document.getElementById('generateBtn');
+    const inputSection = document.getElementById('inputSection');
+    const resultSection = document.getElementById('resultSection');
+    const uriDisplay = document.getElementById('uriDisplay');
+    const copyBtn = document.getElementById('copyBtn');
+    const closeBtn = document.getElementById('closeBtn');
+    const errorMsg = document.getElementById('errorMsg');
+
+    // If URI was pre-generated (context menu with valid cell ID), show result directly.
+    if (preUri) {
+      cellIdInput.value = preCellId || '';
+      uriDisplay.textContent = preUri;
+      inputSection.classList.add('hidden');
+      resultSection.classList.remove('hidden');
+    } else if (preCellId) {
+      cellIdInput.value = preCellId;
+    }
+
+    generateBtn.addEventListener('click', async () => {
+      const cellId = cellIdInput.value.trim();
+      if (!cellId || !/^[0-9a-fA-F]{64}$/.test(cellId)) {
+        errorMsg.textContent = 'Please enter a valid 64-character hex cell ID.';
+        errorMsg.classList.remove('hidden');
+        return;
+      }
+      errorMsg.classList.add('hidden');
+      generateBtn.textContent = 'Generating...';
+      generateBtn.disabled = true;
+
+      const response = await chrome.runtime.sendMessage({
+        type: 'pyana:shareCapability',
+        id: `share_${Date.now()}`,
+        cellId,
+      });
+
+      generateBtn.textContent = 'Generate Shareable URI';
+      generateBtn.disabled = false;
+
+      if (response && response.result && response.result.uri) {
+        uriDisplay.textContent = response.result.uri;
+        inputSection.classList.add('hidden');
+        resultSection.classList.remove('hidden');
+      } else {
+        const err = response?.result?.error || response?.error || 'Failed to generate URI';
+        errorMsg.textContent = err;
+        errorMsg.classList.remove('hidden');
+      }
+    });
+
+    copyBtn.addEventListener('click', () => {
+      navigator.clipboard.writeText(uriDisplay.textContent).then(() => {
+        copyBtn.textContent = 'Copied!';
+        setTimeout(() => { copyBtn.textContent = 'Copy URI to Clipboard'; }, 2000);
+      });
+    });
+
+    closeBtn.addEventListener('click', () => {
+      window.close();
+    });
+  </script>
+</body>
+</html>

@@ -42,8 +42,11 @@ export interface CreateCellParams {
 // Turn Types
 // ---------------------------------------------------------------------------
 
-/** An effect produced by a turn (state transition). */
-export interface Effect {
+/**
+ * A loosely-typed effect (legacy representation).
+ * @deprecated Use the discriminated union `Effect` from `./effects.js` for new code.
+ */
+export interface LegacyEffect {
   type: string;
   target?: CellId;
   amount?: number;
@@ -57,7 +60,7 @@ export interface Turn {
   amount?: number;
   recipient?: string;
   metadata?: Record<string, unknown>;
-  effects?: Effect[];
+  effects?: LegacyEffect[];
 }
 
 /** Finality level of a turn receipt. */

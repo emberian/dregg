@@ -18,6 +18,7 @@
 //! 8. Boundary constraints: first row initialization, final row accumulated hash binding
 
 use pyana_circuit::derivation_air::{MAX_BODY_ATOMS, col as dcol};
+use pyana_circuit::dsl::derivation::multi_col;
 use pyana_circuit::field::{BABYBEAR_P, BabyBear};
 use pyana_circuit::multi_step_air::{self, ALLOW_PREDICATE, MULTI_STEP_AIR_WIDTH, col, pi};
 use pyana_dsl_runtime::circuit::{
@@ -435,21 +436,30 @@ pub fn generate_valid_multi_step_trace() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) 
 
     for (i, base_row) in base_trace.iter().enumerate() {
         let mut row = base_row.clone();
+
+        // The DSL trace generator puts chaining columns at multi_col positions (379-383).
+        // Our descriptor uses multi_step_air::col positions (371-375). Copy them over.
+        row[col::STEP_INDEX] = row[multi_col::STEP_INDEX];
+        row[col::ACCUMULATED_HASH] = row[multi_col::ACCUMULATED_HASH];
+        row[col::PREV_ACCUMULATED] = row[multi_col::PREV_ACCUMULATED];
+        row[col::IS_FINAL_STEP] = row[multi_col::IS_FINAL_STEP];
+        row[col::IS_ACTIVE] = row[multi_col::IS_ACTIVE];
+
         row.resize(MULTI_STEP_DSL_WIDTH, BabyBear::ZERO);
 
         // is_active_next_aux (col 376): next row's IS_ACTIVE
         let next_active = if i + 1 < num_rows {
-            base_trace[i + 1][col::IS_ACTIVE]
+            base_trace[i + 1][multi_col::IS_ACTIVE]
         } else {
-            base_row[col::IS_ACTIVE] // last row wraps to self
+            row[col::IS_ACTIVE] // last row wraps to self
         };
         row[MULTI_STEP_AIR_WIDTH] = next_active;
 
         // prev_acc_next_aux (col 377): next row's PREV_ACCUMULATED
         let next_prev_acc = if i + 1 < num_rows {
-            base_trace[i + 1][col::PREV_ACCUMULATED]
+            base_trace[i + 1][multi_col::PREV_ACCUMULATED]
         } else {
-            base_row[col::PREV_ACCUMULATED]
+            row[col::PREV_ACCUMULATED]
         };
         row[MULTI_STEP_AIR_WIDTH + 1] = next_prev_acc;
 

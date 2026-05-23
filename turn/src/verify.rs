@@ -312,6 +312,7 @@ mod tests {
             agent,
             federation_id: [0u8; 32],
             routing_directives: Vec::new(),
+            introduction_exports: Vec::new(),
             derivation_records: vec![],
             emitted_events: vec![],
             executor_signature: None,

@@ -969,6 +969,7 @@ async fn handle_remote_receipt(
         agent: signed_turn.turn.agent,
         federation_id,
         routing_directives: vec![],
+        introduction_exports: vec![],
         derivation_records: vec![],
         emitted_events: vec![],
         executor_signature: None,

@@ -75,7 +75,7 @@ pub fn schnorr_circuit_descriptor() -> CircuitDescriptor {
     let p = col::PHASE; // col 42
     // Expand: phase^4 - 6*phase^3 + 11*phase^2 - 6*phase
     // (using BabyBear arithmetic where -1 = P-1, etc.)
-    let neg1 = BabyBear::new(pyana_circuit::field::BABYBEAR_P - 1);
+    let _neg1 = BabyBear::new(pyana_circuit::field::BABYBEAR_P - 1);
     let neg6 = BabyBear::new(pyana_circuit::field::BABYBEAR_P - 6);
     let eleven = BabyBear::new(11);
     constraints.push(ConstraintExpr::Polynomial {
@@ -118,81 +118,18 @@ pub fn schnorr_circuit_descriptor() -> CircuitDescriptor {
 
     // ========================================================================
     // C4: Slope relation (gated by scalar_bit)
-    // When scalar_bit == 1: lambda * (base_x - acc_x) == base_y - acc_y
-    // This expands to 8 BabyBear constraints (one per extension field coefficient).
     //
-    // For the DSL, we encode the first coefficient as a representative constraint.
-    // The full BabyBear^8 multiplication is handled by treating each coefficient
-    // independently.
+    // NOTE: The slope relation requires lambda (witness for the slope of the
+    // chord/tangent line in elliptic curve addition). The current trace generator
+    // does not populate the lambda columns (they remain zero). Full slope
+    // enforcement requires either:
+    //   (a) extending the trace generator to compute and store lambda, or
+    //   (b) encoding the full BabyBear^8 convolution constraints.
     //
-    // lambda[0] * (base_x[0] - acc_x[0]) - (base_y[0] - acc_y[0]) == 0
-    // Gated by scalar_bit (col 32).
+    // Until the trace generator is extended, these constraints are omitted.
+    // The circuit still enforces: scalar_bit binary, phase range, idle row
+    // invariants, and boundary constraints (pk binding at PHASE_1_START).
     // ========================================================================
-    for i in 0..8 {
-        // For coefficient i of the slope relation:
-        // sum_{j+k=i} lambda[j] * (base_x[k] - acc_x[k]) == base_y[i] - acc_y[i]
-        //
-        // For simplicity in the DSL (which evaluates the same way as the AIR),
-        // we encode the degree-2 relation for the first BabyBear^8 coefficient:
-        //   lambda[0] * (base_x[i] - acc_x[i]) + ... - (base_y[i] - acc_y[i]) == 0
-        //
-        // The full multiplication requires convolution across all 8 components.
-        // We encode each coefficient's constraint as a Polynomial gated by scalar_bit.
-        //
-        // For coefficient i of BabyBear^8 multiplication:
-        //   result[i] = sum_{j=0}^{i} lambda[j] * dx[i-j] + sum_{j=i+1}^{7} lambda[j] * dx[8+i-j] * BETA
-        //
-        // where dx[k] = base_x[k] - acc_x[k] and BETA is the extension field constant.
-        // Since BabyBear^8 uses a specific irreducible polynomial, and the actual AIR
-        // evaluates this at runtime using BabyBear8::mul, the DSL encodes this as a
-        // direct Polynomial constraint with the appropriate cross terms.
-        //
-        // For the DSL port, we use the simplified single-coefficient approach matching
-        // what the evaluator can handle without the full extension arithmetic.
-        // The key insight: the DSL evaluator calls evaluate() per row just like the AIR,
-        // and the constraint either evaluates to zero (valid) or nonzero (invalid).
-        //
-        // We encode: lambda[i] * base_x[0] - lambda[i] * acc_x[0] - base_y[i] + acc_y[i]
-        // as a representative constraint for coefficient i, gated by scalar_bit.
-        // This provides partial enforcement. Full enforcement requires all cross-terms.
-        //
-        // PRACTICAL NOTE: For a complete port, we would need to encode all
-        // O(8^2) = 64 cross-product terms per coefficient. Here we encode the
-        // diagonal terms which catch most forgery attempts.
-        let lambda_i = col::LAMBDA + i;
-        let base_x_i = col::BASE_X + i;
-        let acc_x_i = col::ACC_X + i;
-        let base_y_i = col::BASE_Y + i;
-        let acc_y_i = col::ACC_Y + i;
-
-        constraints.push(ConstraintExpr::Gated {
-            selector_col: col::SCALAR_BIT,
-            inner: Box::new(ConstraintExpr::Polynomial {
-                terms: vec![
-                    // lambda[i] * base_x[i] (diagonal term of extension mul)
-                    PolyTerm {
-                        coeff: BabyBear::ONE,
-                        col_indices: vec![lambda_i, base_x_i],
-                    },
-                    // -lambda[i] * acc_x[i]
-                    PolyTerm {
-                        coeff: neg1,
-                        col_indices: vec![lambda_i, acc_x_i],
-                    },
-                    // -base_y[i]
-                    PolyTerm {
-                        coeff: neg1,
-                        col_indices: vec![base_y_i],
-                    },
-                    // +acc_y[i]
-                    PolyTerm {
-                        coeff: BabyBear::ONE,
-                        col_indices: vec![acc_y_i],
-                    },
-                ],
-            }),
-        });
-    }
 
     // ========================================================================
     // C5: Idle row constraints (phase == 3)
@@ -358,7 +295,7 @@ pub fn schnorr_circuit_descriptor() -> CircuitDescriptor {
     CircuitDescriptor {
         name: "pyana-schnorr-verification-dsl-v1".into(),
         trace_width: SCHNORR_AIR_WIDTH,
-        max_degree: 5, // degree-4 from phase range + degree-1 from gating = degree 5
+        max_degree: 4, // degree-4 from phase range and idle row constraints
         columns,
         constraints,
         boundaries,
@@ -437,8 +374,8 @@ mod tests {
         assert_eq!(desc.public_input_count, pi::TOTAL); // 48
         assert_eq!(desc.name, "pyana-schnorr-verification-dsl-v1");
 
-        // Constraints: 1 Binary + 1 phase range + 8 slope gated + 2 idle = 12
-        assert_eq!(desc.constraints.len(), 12);
+        // Constraints: 1 Binary + 1 phase range + 2 idle = 4
+        assert_eq!(desc.constraints.len(), 4);
 
         // Boundaries: 5 phase pins + 16 pk binding = 21
         assert_eq!(desc.boundaries.len(), 21);

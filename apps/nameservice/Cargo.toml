@@ -1,0 +1,23 @@
+[package]
+name = "pyana-nameservice"
+version = "0.1.0"
+edition = "2024"
+description = "Federation name directory — registration, resolution, delegation, rental, and cross-federation lookups"
+
+[dependencies]
+pyana-types = { path = "../../types" }
+pyana-cell = { path = "../../cell", default-features = false }
+pyana-captp = { path = "../../captp" }
+pyana-app-framework = { path = "../../app-framework" }
+
+blake3 = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+
+[dev-dependencies]
+tower = "0.5"
+
+[lints]
+workspace = true

@@ -32,7 +32,11 @@ fn compute_federation_root_bb(issuer_key: &[u8; 32]) -> BabyBear {
             BabyBear::new(hash_index(i, 1, issuer_key)),
             BabyBear::new(hash_index(i, 2, issuer_key)),
         ];
-        current = MerkleAir::compute_parent(current, position, &siblings);
+        let position_bb = BabyBear::new(position as u32);
+        current = poseidon2::hash_fact(
+            current,
+            &[siblings[0], siblings[1], siblings[2], position_bb],
+        );
     }
     current
 }

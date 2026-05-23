@@ -1,0 +1,135 @@
+{
+  "description": "Applications deployed at genesis. Each app consists of one or more cells with programs.",
+  "apps": [
+    {
+      "name": "Stablecoin",
+      "cells": [
+        {
+          "cell_id": "ce11000000000000000000000000000000000000000000000000000000000001",
+          "program": "stablecoin_cdp_v1",
+          "owner": "treasury",
+          "description": "Collateralized debt position manager. Users lock collateral to mint stablecoins.",
+          "parameters": {
+            "collateral_ratio_bps": 15000,
+            "liquidation_ratio_bps": 12000,
+            "stability_fee_bps": 50
+          }
+        },
+        {
+          "cell_id": "ce11000000000000000000000000000000000000000000000000000000000002",
+          "program": "price_oracle_v1",
+          "owner": "treasury",
+          "description": "Price feed oracle. Authorized feeders push price updates.",
+          "parameters": {
+            "staleness_threshold_waves": 50,
+            "authorized_feeders": ["relay", "bridge-operator"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "AMM",
+      "cells": [
+        {
+          "cell_id": "ce11000000000000000000000000000000000000000000000000000000000003",
+          "program": "amm_pool_v1",
+          "owner": "treasury",
+          "description": "Constant-product AMM pool for ETH/USDC pair.",
+          "parameters": {
+            "token_a": "ETH",
+            "token_b": "USDC",
+            "fee_bps": 30
+          }
+        },
+        {
+          "cell_id": "ce11000000000000000000000000000000000000000000000000000000000004",
+          "program": "amm_pool_v1",
+          "owner": "treasury",
+          "description": "Constant-product AMM pool for BTC/USDC pair.",
+          "parameters": {
+            "token_a": "BTC",
+            "token_b": "USDC",
+            "fee_bps": 30
+          }
+        }
+      ]
+    },
+    {
+      "name": "Orderbook",
+      "cells": [
+        {
+          "cell_id": "ce11000000000000000000000000000000000000000000000000000000000005",
+          "program": "orderbook_v1",
+          "owner": "treasury",
+          "description": "Central limit order book with price-time priority matching.",
+          "parameters": {
+            "market": "TOKEN/USDC",
+            "tick_size": 1,
+            "max_orders_per_account": 100
+          }
+        }
+      ]
+    },
+    {
+      "name": "Gallery",
+      "cells": [
+        {
+          "cell_id": "ce11000000000000000000000000000000000000000000000000000000000006",
+          "program": "gallery_auction_v1",
+          "owner": "treasury",
+          "description": "NFT auction house. Creators list items, bidders compete in timed auctions.",
+          "parameters": {
+            "min_auction_duration_waves": 100,
+            "extension_threshold_waves": 10,
+            "platform_fee_bps": 250
+          }
+        }
+      ]
+    },
+    {
+      "name": "Nameservice",
+      "cells": [
+        {
+          "cell_id": "ce11000000000000000000000000000000000000000000000000000000000007",
+          "program": "name_registry_v1",
+          "owner": "nameservice",
+          "description": "Human-readable name to pyana:// URI mapping. Supports TTL and renewal.",
+          "parameters": {
+            "ttl_waves": 10000,
+            "registration_fee": 100,
+            "max_name_length": 64
+          }
+        }
+      ]
+    },
+    {
+      "name": "Governed Namespace",
+      "cells": [
+        {
+          "cell_id": "ce11000000000000000000000000000000000000000000000000000000000008",
+          "program": "governed_namespace_v1",
+          "owner": "treasury",
+          "description": "Root namespace cell. Controls DFA route delegation and access policy.",
+          "parameters": {
+            "root_authority": "treasury"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Identity Registry",
+      "cells": [
+        {
+          "cell_id": "ce11000000000000000000000000000000000000000000000000000000000009",
+          "program": "identity_registry_v1",
+          "owner": "nameservice",
+          "description": "Verifiable credential issuance and revocation registry.",
+          "parameters": {
+            "max_credentials_per_account": 50,
+            "default_expiry_waves": 100000
+          }
+        }
+      ]
+    }
+  ]
+}

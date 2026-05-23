@@ -119,6 +119,55 @@ Per the security audit (May 2026), all critical findings have been addressed:
 + QC forgery bypass (aggregate_qc short-circuit) removed.
 + Body fact membership now proven via Poseidon2 Merkle STARKs (not just asserted).
 
+== Command-Line Interface (`pyana`)
+
+The `pyana` CLI provides full-citizen access to all runtime operations. It is the primary interface for operators, developers, and advanced users:
+
+#figure(
+  table(
+    columns: (auto, auto),
+    align: (left, left),
+    table.header([*Subcommand*], [*Operations*]),
+    [`cell`], [Create, inspect, sovereign/hosted transition, split, merge, migrate],
+    [`turn`], [Build, sign, submit, inspect receipts, verify chains],
+    [`cap`], [Mint, attenuate, delegate, revoke, present, verify proofs],
+    [`wallet`], [Create identity, import/export, backup mnemonic, balance],
+    [`federation`], [Join, leave, status, peers, roots, epochs],
+    [`namespace`], [Mount, resolve, list, register petname, rent, dispute],
+    [`storage`], [Space bank status, quota, rent, erasure shards, GC status],
+    [`directory`], [Edge names, proposed names, lookup, publish],
+    [`proof`], [Generate, verify, export, compose, benchmark backends],
+    [`route`], [Classify path, inspect DFA, test ACL, amend proposal],
+    [`doctor`], [Diagnose node health, verify chain integrity, check connectivity],
+  ),
+  caption: [CLI subcommands. Each maps to SDK operations; the CLI is a thin shell over the Rust SDK.],
+)
+
+Common workflows:
+
+```
+# Create a sovereign cell and mint a root capability
+pyana wallet create --mnemonic
+pyana cell create --sovereign --federation devnet.pyana.io:8420
+pyana cap mint --service compute --root-key ./keys/root.key
+
+# Delegate an attenuated capability to another agent
+pyana cap delegate --token $TOKEN_ID --to $BOB_PUBKEY \
+  --restrict service=compute,action=inference,budget=5000
+
+# Submit a turn and verify the receipt
+pyana turn build --target $CELL_ID --effect set-field:counter=42
+pyana turn submit --signed
+pyana turn verify-receipt --latest
+
+# Bridge to Mina
+pyana proof generate --backend kimchi --turn $TURN_HASH
+pyana proof wrap-pickles --input $KIMCHI_PROOF
+
+# Check node health
+pyana doctor --full
+```
+
 == Cryptographic Dependencies
 
 - *Hash functions*: BLAKE3 (general purpose, MAC), Poseidon2 over BabyBear (STARK-friendly)

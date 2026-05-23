@@ -132,3 +132,55 @@ Federations are small and purpose-built. A 5-node federation serving a specific 
 )
 
 The key difference from Cosmos: Pyana does not need inflation because federations are small and operators have aligned interests. Cosmos needs inflation because validator sets are large and operators are pure infrastructure providers.
+
+== Storage Economics <sec-storage-economics>
+
+=== Space Banks
+
+A _space bank_ is a governance-managed allocation of storage capacity within a federation. Each federation maintains a total storage budget (governance-configurable, initially 1 TiB). Space banks partition this budget:
+
+$ "total_capacity" = sum_i "space_bank"(i)."allocation" $
+
+Cells draw from their assigned space bank. Over-allocation triggers a queue: new storage requests wait until existing data is GC'd or the bank's allocation is increased via governance vote.
+
+=== Computron-Metered Storage
+
+All persistent storage is metered in computrons:
+
+#figure(
+  table(
+    columns: (auto, auto, auto),
+    align: (left, right, left),
+    table.header([*Operation*], [*Cost*], [*Rationale*]),
+    [Write (per byte, per epoch)], [1 computron], [Ongoing cost for persistent state],
+    [Read (per byte)], [0.01 computrons], [Cheap reads encourage verification],
+    [MerkleQueue enqueue], [10 + size computrons], [Inbox anti-spam],
+    [Erasure shard storage], [0.5 computrons/byte/epoch], [Redundancy is half-price (amortized across shards)],
+  ),
+  caption: [Storage metering. Costs are governance-adjustable per federation.],
+)
+
+=== MerkleQueue Inboxes
+
+Each cell has a _MerkleQueue inbox_: a Merkle-committed FIFO queue of pending messages. The inbox provides:
+
+- *Sender-pays-deposit anti-spam*: The sender locks a deposit when enqueuing a message. If the recipient processes it, the deposit is refunded. If the message expires (TTL exceeded), the deposit is burned. This makes inbox flooding expensive.
+- *Causal ordering*: Messages in the inbox are ordered by their causal position in the Blocklace DAG.
+- *Offline delivery*: Messages persist in the inbox until the recipient processes them or they expire. No liveness requirement on the recipient.
+- *Provable delivery*: A STARK proof of inbox membership proves a message was delivered at a specific height.
+
+The deposit formula:
+
+$ "deposit" = "base_inbox_fee" + "message_size" times "per_byte_rate" + "ttl_blocks" times "per_block_rate" $
+
+With defaults: `base_inbox_fee = 100`, `per_byte_rate = 0.1`, `per_block_rate = 1`. A 1 KiB message with 1000-block TTL costs $100 + 102.4 + 1000 = 1202.4$ computrons deposit.
+
+=== Erasure Coding for State Availability
+
+Sovereign cells maintain their own state, but may opt into _erasure-coded availability_: the state is encoded as $k$-of-$n$ Reed-Solomon shards distributed across federation nodes. This provides:
+
+- *Data availability without trust*: Any $k$ shards reconstruct the full state. No single node holds enough to read the state alone (combined with encryption).
+- *Reduced per-node cost*: Each node stores $1/n$ of the state rather than a full copy.
+- *Proof of storage*: Nodes periodically prove they still hold their shard via a challenge-response protocol (random leaf queries against a committed shard Merkle root).
+
+Erasure coding is opt-in and priced at half the per-byte storage rate (the redundancy cost is amortized across the shard set). Cells that self-host exclusively pay zero storage to the federation.

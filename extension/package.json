@@ -1,0 +1,15 @@
+{
+  "name": "pyana-extension",
+  "private": true,
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "esbuild": "^0.21.0",
+    "typescript": "^5.5.0",
+    "@types/chrome": "^0.0.270"
+  }
+}

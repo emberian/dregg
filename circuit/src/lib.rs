@@ -72,25 +72,33 @@ pub mod binding;
 pub mod body_membership;
 pub mod chunked_derivation;
 pub mod constraint_prover;
+#[allow(deprecated)]
 pub mod cross_state_derivation;
 pub mod dsl;
 pub mod field;
 pub mod ivc;
 
 // Backward-compatible shim modules (type definitions + re-exports from DSL).
+// These contain deprecated StarkAir impls superseded by DSL descriptors.
+#[allow(deprecated)]
 pub mod accumulator_air;
 pub mod arithmetic_predicate_air;
 pub mod block_transition_air;
 pub mod compound_predicate_air;
+#[allow(deprecated)]
 pub mod derivation_air;
 pub mod fold_air;
 pub mod fold_types;
+#[allow(deprecated)]
 pub mod garbled_air;
 pub mod merkle_air;
 pub mod merkle_types;
+#[allow(deprecated)]
 pub mod multi_step_air;
 pub mod native_signature_air;
+#[allow(deprecated)]
 pub mod note_spending_air;
+#[allow(deprecated)]
 pub mod poseidon2_air;
 pub mod predicate_air;
 pub mod relational_predicate_air;
@@ -104,15 +112,20 @@ pub mod mock_prover {
     pub use crate::constraint_prover::*;
 }
 pub mod poseidon2;
+#[allow(deprecated)]
 pub mod presentation;
 
+#[allow(deprecated)]
 pub mod committed_threshold;
 pub mod effect_interp;
 pub mod effect_vm;
+#[allow(deprecated)]
 pub mod garbled;
 pub mod native_signature;
+#[allow(deprecated)]
 pub mod non_membership;
 pub mod predicate_program;
+#[allow(deprecated)]
 pub mod quantified_absence;
 pub mod schnorr_curve;
 pub mod schnorr_sig;
@@ -140,9 +153,11 @@ pub mod backends;
 pub mod proof_tier;
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests;
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod soundness_tests;
 
 // Proof tier types — prevents scaffold/test proofs from satisfying production verifiers.
@@ -162,6 +177,7 @@ pub use chunked_derivation::{
     ChunkedAuthorizationProof, DEFAULT_CHUNK_SIZE, prove_chunked_authorization,
     verify_chunked_authorization,
 };
+#[allow(deprecated)]
 pub use committed_threshold::{
     CommittedThresholdAir, CommittedThresholdProof, CommittedThresholdWitness,
     compute_threshold_commitment, generate_blinding, prove_committed_threshold,

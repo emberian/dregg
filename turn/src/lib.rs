@@ -114,7 +114,7 @@ pub use presence_discharge::{
     PresenceCaveat as PresenceCapCaveat, PresenceClaimRequirement, PresenceDischarge,
     PresenceDischargeError, verify_presence_discharge,
 };
-pub use routing::RoutingDirective;
+pub use routing::{IntroductionExport, RoutingDirective};
 pub use turn::{
     CustomProgramProof, EmittedEvent, Finality, SovereignCellWitness, Turn, TurnReceipt, TurnResult,
 };

@@ -100,16 +100,12 @@ pub fn merkle_poseidon2_descriptor() -> CircuitDescriptor {
         ],
     });
 
-    // C2: Parent hash binding
-    constraints.push(ConstraintExpr::Hash {
+    // C2: Parent hash binding (position-aware hash_4_to_1)
+    constraints.push(ConstraintExpr::MerkleHash {
         output_col: merkle_col::PARENT,
-        input_cols: vec![
-            merkle_col::CURRENT,
-            merkle_col::SIB0,
-            merkle_col::SIB1,
-            merkle_col::SIB2,
-            merkle_col::POSITION,
-        ],
+        current_col: merkle_col::CURRENT,
+        sib_cols: [merkle_col::SIB0, merkle_col::SIB1, merkle_col::SIB2],
+        position_col: merkle_col::POSITION,
     });
 
     // C3: Chain continuity
@@ -223,16 +219,12 @@ pub fn blinded_merkle_poseidon2_descriptor() -> CircuitDescriptor {
         ],
     });
 
-    // C2: Parent hash binding
-    constraints.push(ConstraintExpr::Hash {
+    // C2: Parent hash binding (position-aware hash_4_to_1)
+    constraints.push(ConstraintExpr::MerkleHash {
         output_col: merkle_col::PARENT,
-        input_cols: vec![
-            merkle_col::CURRENT,
-            merkle_col::SIB0,
-            merkle_col::SIB1,
-            merkle_col::SIB2,
-            merkle_col::POSITION,
-        ],
+        current_col: merkle_col::CURRENT,
+        sib_cols: [merkle_col::SIB0, merkle_col::SIB1, merkle_col::SIB2],
+        position_col: merkle_col::POSITION,
     });
 
     // C3: Chain continuity

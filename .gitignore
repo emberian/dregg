@@ -5,5 +5,11 @@ hints/benches/committee.json
 hints/benches/committee_128.json
 paper/*.pdf
 pdfs/
-ts-sdk/node_modules
-site/node_modules
+
+node_modules
+node_modules
+
+# Devnet secrets (generated locally, not tracked)
+deploy/genesis/keys/
+deploy/genesis/*.key
+deploy/genesis/secrets/

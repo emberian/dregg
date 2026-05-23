@@ -917,6 +917,185 @@ pub fn execute_validate_handoff(env: &mut impl EffectEnv) {
 }
 
 // ============================================================================
+// Storage Queue Effects: STARK-provable queue operations
+// ============================================================================
+
+/// Execute the AllocateQueue effect.
+///
+/// Proves: quota has sufficient balance for capacity * cost_per_slot.
+/// State transition: field[4] = empty_queue_hash, balance debited.
+pub fn execute_allocate_queue(env: &mut impl EffectEnv) {
+    let old_bal_lo = env.read_state_before(state::BALANCE_LO);
+    let old_bal_hi = env.read_state_before(state::BALANCE_HI);
+    let capacity = env.read_param(param::QUEUE_CAPACITY);
+    let cost_per_slot = env.read_param(param::QUEUE_COST_PER_SLOT);
+
+    // Allocation cost = capacity * cost_per_slot.
+    let alloc_cost = env.mul(capacity, cost_per_slot);
+
+    // Balance debit: new_bal_lo = old_bal_lo - alloc_cost.
+    let expected_new_lo = env.sub(old_bal_lo, alloc_cost);
+    env.write_state_after(state::BALANCE_LO, expected_new_lo);
+    let actual_new_lo = env.read_state_after(state::BALANCE_LO);
+    env.assert_eq(actual_new_lo, expected_new_lo);
+
+    // Hi unchanged.
+    env.write_state_after(state::BALANCE_HI, old_bal_hi);
+    let actual_new_hi = env.read_state_after(state::BALANCE_HI);
+    env.assert_eq(actual_new_hi, old_bal_hi);
+
+    // field[4] must become empty_queue_hash = hash_2_to_1(ZERO, ZERO).
+    let zero = env.constant(0);
+    let empty_queue_hash = env.hash_2_to_1(zero, zero);
+    env.write_state_after(state::FIELD_BASE + 4, empty_queue_hash);
+    let actual_f4 = env.read_state_after(state::FIELD_BASE + 4);
+    env.assert_eq(actual_f4, empty_queue_hash);
+
+    // Cap root unchanged.
+    env.assert_cap_unchanged();
+
+    // Other fields unchanged (0..4, 5..8).
+    for i in 0..4 {
+        env.assert_state_unchanged(state::FIELD_BASE + i);
+    }
+    for i in 5..8 {
+        env.assert_state_unchanged(state::FIELD_BASE + i);
+    }
+}
+
+/// Execute the EnqueueMessage effect.
+///
+/// Proves: deposit >= min_deposit (implicit via balance debit), queue not full.
+/// State transition: queue_root = hash(old_root, message_hash), balance debited.
+pub fn execute_enqueue_message(env: &mut impl EffectEnv) {
+    let old_bal_lo = env.read_state_before(state::BALANCE_LO);
+    let old_bal_hi = env.read_state_before(state::BALANCE_HI);
+    let message_hash = env.read_param(param::ENQUEUE_MSG_HASH);
+    let deposit = env.read_param(param::ENQUEUE_DEPOSIT);
+
+    // Queue root transition: new_root = hash(old_root, message_hash).
+    let old_queue_root = env.read_state_before(state::FIELD_BASE + 4);
+    let expected_new_root = env.hash_2_to_1(old_queue_root, message_hash);
+    env.write_state_after(state::FIELD_BASE + 4, expected_new_root);
+    let actual_f4 = env.read_state_after(state::FIELD_BASE + 4);
+    env.assert_eq(actual_f4, expected_new_root);
+
+    // Balance debit: new_bal_lo = old_bal_lo - deposit.
+    let expected_new_lo = env.sub(old_bal_lo, deposit);
+    env.write_state_after(state::BALANCE_LO, expected_new_lo);
+    let actual_new_lo = env.read_state_after(state::BALANCE_LO);
+    env.assert_eq(actual_new_lo, expected_new_lo);
+
+    // Hi unchanged.
+    env.write_state_after(state::BALANCE_HI, old_bal_hi);
+    let actual_new_hi = env.read_state_after(state::BALANCE_HI);
+    env.assert_eq(actual_new_hi, old_bal_hi);
+
+    // Cap root unchanged.
+    env.assert_cap_unchanged();
+
+    // Other fields unchanged (0..4, 5..8).
+    for i in 0..4 {
+        env.assert_state_unchanged(state::FIELD_BASE + i);
+    }
+    for i in 5..8 {
+        env.assert_state_unchanged(state::FIELD_BASE + i);
+    }
+}
+
+/// Execute the DequeueMessage effect.
+///
+/// Proves: message_hash matches head (non-zero), queue root advances.
+/// State transition: queue_root = hash(old_root, msg_hash), balance credited.
+pub fn execute_dequeue_message(env: &mut impl EffectEnv) {
+    let old_bal_lo = env.read_state_before(state::BALANCE_LO);
+    let old_bal_hi = env.read_state_before(state::BALANCE_HI);
+    let expected_msg_hash = env.read_param(param::DEQUEUE_EXPECTED_HASH);
+    let deposit_refund = env.read_param(param::DEQUEUE_DEPOSIT_REFUND);
+
+    // Non-empty queue proof: expected_msg_hash * inverse == 1.
+    let msg_inv = env.read_aux(1);
+    let product = env.mul(expected_msg_hash, msg_inv);
+    let one = env.constant(1);
+    env.assert_eq(product, one);
+
+    // Queue root advances: new_root = hash(old_root, expected_message_hash).
+    let old_queue_root = env.read_state_before(state::FIELD_BASE + 4);
+    let expected_new_root = env.hash_2_to_1(old_queue_root, expected_msg_hash);
+    env.write_state_after(state::FIELD_BASE + 4, expected_new_root);
+    let actual_f4 = env.read_state_after(state::FIELD_BASE + 4);
+    env.assert_eq(actual_f4, expected_new_root);
+
+    // Balance credit: new_bal_lo = old_bal_lo + deposit_refund.
+    let expected_new_lo = env.add(old_bal_lo, deposit_refund);
+    env.write_state_after(state::BALANCE_LO, expected_new_lo);
+    let actual_new_lo = env.read_state_after(state::BALANCE_LO);
+    env.assert_eq(actual_new_lo, expected_new_lo);
+
+    // Hi unchanged.
+    env.write_state_after(state::BALANCE_HI, old_bal_hi);
+    let actual_new_hi = env.read_state_after(state::BALANCE_HI);
+    env.assert_eq(actual_new_hi, old_bal_hi);
+
+    // Cap root unchanged.
+    env.assert_cap_unchanged();
+
+    // Other fields unchanged (0..4, 5..8).
+    for i in 0..4 {
+        env.assert_state_unchanged(state::FIELD_BASE + i);
+    }
+    for i in 5..8 {
+        env.assert_state_unchanged(state::FIELD_BASE + i);
+    }
+}
+
+/// Execute the ResizeQueue effect.
+///
+/// Proves: if growing, balance debited by delta * cost_per_slot.
+/// State transition: field[5] = new_capacity, balance adjusted.
+pub fn execute_resize_queue(env: &mut impl EffectEnv) {
+    let old_bal_lo = env.read_state_before(state::BALANCE_LO);
+    let old_bal_hi = env.read_state_before(state::BALANCE_HI);
+    let new_capacity = env.read_param(param::RESIZE_NEW_CAPACITY);
+    let old_capacity = env.read_param(param::RESIZE_OLD_CAPACITY);
+    let cost_per_slot = env.read_param(param::RESIZE_COST_PER_SLOT);
+
+    // Resize cost = (new_capacity - old_capacity) * cost_per_slot.
+    let delta = env.sub(new_capacity, old_capacity);
+    let resize_cost = env.mul(delta, cost_per_slot);
+
+    // Balance debit: new_bal_lo = old_bal_lo - resize_cost.
+    let expected_new_lo = env.sub(old_bal_lo, resize_cost);
+    env.write_state_after(state::BALANCE_LO, expected_new_lo);
+    let actual_new_lo = env.read_state_after(state::BALANCE_LO);
+    env.assert_eq(actual_new_lo, expected_new_lo);
+
+    // Hi unchanged.
+    env.write_state_after(state::BALANCE_HI, old_bal_hi);
+    let actual_new_hi = env.read_state_after(state::BALANCE_HI);
+    env.assert_eq(actual_new_hi, old_bal_hi);
+
+    // field[5] = new_capacity.
+    env.write_state_after(state::FIELD_BASE + 5, new_capacity);
+    let actual_f5 = env.read_state_after(state::FIELD_BASE + 5);
+    env.assert_eq(actual_f5, new_capacity);
+
+    // Cap root unchanged.
+    env.assert_cap_unchanged();
+
+    // Queue root (field[4]) unchanged.
+    env.assert_state_unchanged(state::FIELD_BASE + 4);
+
+    // Other fields (0..4, 6..8) unchanged.
+    for i in 0..4 {
+        env.assert_state_unchanged(state::FIELD_BASE + i);
+    }
+    for i in 6..8 {
+        env.assert_state_unchanged(state::FIELD_BASE + i);
+    }
+}
+
+// ============================================================================
 // Dispatch: single entry point for all effects
 // ============================================================================
 
@@ -944,6 +1123,10 @@ pub fn dispatch_effect(env: &mut impl EffectEnv, sel_idx: usize) {
         sel::ENLIVEN_REF => execute_enliven_ref(env),
         sel::DROP_REF => execute_drop_ref(env),
         sel::VALIDATE_HANDOFF => execute_validate_handoff(env),
+        sel::ALLOCATE_QUEUE => execute_allocate_queue(env),
+        sel::ENQUEUE_MESSAGE => execute_enqueue_message(env),
+        sel::DEQUEUE_MESSAGE => execute_dequeue_message(env),
+        sel::RESIZE_QUEUE => execute_resize_queue(env),
         _ => panic!("Unknown selector index: {}", sel_idx),
     }
 }

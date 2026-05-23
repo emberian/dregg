@@ -22,6 +22,14 @@ use crate::FederationId;
 // Export-side GC
 // =============================================================================
 
+/// A session identifier for tracking which CapTP session created an export.
+///
+/// Each time a CapTP session is established (via CapHello), a new session ID is
+/// generated. DropRef messages are only accepted from the same session that
+/// created the export, preventing Byzantine nodes on different sessions from
+/// interfering with GC state.
+pub type SessionId = u64;
+
 /// Per-holder reference count with activity tracking.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RefCount {
@@ -29,6 +37,9 @@ pub struct RefCount {
     pub count: u64,
     /// The block height at which this holder last acquired a reference.
     pub last_activity: u64,
+    /// The session ID under which this reference was created.
+    /// DropRef messages must carry a matching session ID to be accepted.
+    pub session_id: SessionId,
 }
 
 /// Export table entry: tracks who holds references to one of our capabilities.
@@ -76,11 +87,30 @@ impl ExportGcManager {
     ///
     /// Called when a capability is introduced to a peer (via 3-party handoff,
     /// sturdy ref enliven, or direct export).
+    ///
+    /// The `session_id` ties this export to a specific CapTP session. Only
+    /// DropRef messages carrying the same session_id will be accepted for this
+    /// holder, preventing Byzantine nodes from interfering via stale or forged
+    /// session credentials.
     pub fn record_export(
         &mut self,
         cell_id: CellId,
         to_federation: FederationId,
         current_height: u64,
+    ) {
+        self.record_export_with_session(cell_id, to_federation, current_height, 0)
+    }
+
+    /// Record an export with an explicit session ID for session-level validation.
+    ///
+    /// This is the primary entry point for session-aware code. The `session_id`
+    /// must match when processing a DropRef to prevent cross-session interference.
+    pub fn record_export_with_session(
+        &mut self,
+        cell_id: CellId,
+        to_federation: FederationId,
+        current_height: u64,
+        session_id: SessionId,
     ) {
         let entry = self.exports.entry(cell_id).or_insert_with(|| ExportEntry {
             cell_id,
@@ -95,10 +125,14 @@ impl ExportGcManager {
             .or_insert_with(|| RefCount {
                 count: 0,
                 last_activity: current_height,
+                session_id,
             });
 
         ref_count.count += 1;
         ref_count.last_activity = current_height;
+        // Update session_id to the most recent session (re-export to same federation
+        // on a new session supersedes the old session_id).
+        ref_count.session_id = session_id;
         entry.total_refs += 1;
     }
 
@@ -108,7 +142,35 @@ impl ExportGcManager {
     /// returns `DropResult::CanRevoke` indicating the export is dead and can be
     /// cleaned up. Returns `DropResult::Invalid` if the federation doesn't hold
     /// a reference or the cell isn't exported.
+    ///
+    /// This variant does NOT perform session validation and is retained for
+    /// backward compatibility with code that doesn't track session IDs.
+    /// Prefer [`process_drop_with_session`] for session-aware callers.
     pub fn process_drop(&mut self, cell_id: CellId, from_federation: FederationId) -> DropResult {
+        self.process_drop_inner(cell_id, from_federation, None)
+    }
+
+    /// Process a `DropRef` with session-level validation.
+    ///
+    /// The `session_id` must match the session under which the export was created.
+    /// If the session_id does not match, the drop is rejected as `DropResult::Invalid`,
+    /// preventing Byzantine nodes on different sessions from interfering with GC state.
+    pub fn process_drop_with_session(
+        &mut self,
+        cell_id: CellId,
+        from_federation: FederationId,
+        session_id: SessionId,
+    ) -> DropResult {
+        self.process_drop_inner(cell_id, from_federation, Some(session_id))
+    }
+
+    /// Internal: process a drop with optional session validation.
+    fn process_drop_inner(
+        &mut self,
+        cell_id: CellId,
+        from_federation: FederationId,
+        expected_session: Option<SessionId>,
+    ) -> DropResult {
         let entry = match self.exports.get_mut(&cell_id) {
             Some(e) => e,
             None => return DropResult::Invalid,
@@ -121,6 +183,13 @@ impl ExportGcManager {
 
         if ref_count.count == 0 {
             return DropResult::Invalid;
+        }
+
+        // Session-level validation: reject drops from non-matching sessions.
+        if let Some(expected) = expected_session {
+            if ref_count.session_id != expected {
+                return DropResult::Invalid;
+            }
         }
 
         ref_count.count -= 1;
@@ -488,6 +557,94 @@ mod tests {
         let msg = mgr.local_ref_dropped(fed_a(), cell_1());
         assert_eq!(msg, None);
     }
+
+    // --- Session-level validation tests (Bug 1 fix) ---
+
+    #[test]
+    fn export_drop_rejected_from_wrong_session() {
+        let mut mgr = ExportGcManager::new();
+        let cell = cell_1();
+        let fed = fed_a();
+
+        // Export on session 42
+        mgr.record_export_with_session(cell, fed, 100, 42);
+        assert_eq!(mgr.get(&cell).unwrap().total_refs, 1);
+
+        // Attempt drop with session 99 (wrong session) — must be rejected
+        let result = mgr.process_drop_with_session(cell, fed, 99);
+        assert_eq!(result, DropResult::Invalid);
+
+        // Total refs must be unchanged (drop was rejected)
+        assert_eq!(mgr.get(&cell).unwrap().total_refs, 1);
+
+        // Correct session succeeds
+        let result = mgr.process_drop_with_session(cell, fed, 42);
+        assert_eq!(result, DropResult::CanRevoke);
+    }
+
+    #[test]
+    fn export_drop_session_zero_accepted_by_legacy_process_drop() {
+        let mut mgr = ExportGcManager::new();
+        let cell = cell_1();
+        let fed = fed_a();
+
+        // Legacy record_export uses session_id 0
+        mgr.record_export(cell, fed, 100);
+
+        // Legacy process_drop (no session check) still works
+        let result = mgr.process_drop(cell, fed);
+        assert_eq!(result, DropResult::CanRevoke);
+    }
+
+    #[test]
+    fn export_session_superseded_by_reexport() {
+        let mut mgr = ExportGcManager::new();
+        let cell = cell_1();
+        let fed = fed_a();
+
+        // First export on session 1
+        mgr.record_export_with_session(cell, fed, 100, 1);
+
+        // Re-export on session 2 (supersedes session 1)
+        mgr.record_export_with_session(cell, fed, 200, 2);
+        assert_eq!(mgr.get(&cell).unwrap().total_refs, 2);
+
+        // Drop with old session 1 fails (session was superseded to 2)
+        let result = mgr.process_drop_with_session(cell, fed, 1);
+        assert_eq!(result, DropResult::Invalid);
+
+        // Drop with current session 2 works
+        let result = mgr.process_drop_with_session(cell, fed, 2);
+        assert_eq!(result, DropResult::StillHeld);
+
+        let result = mgr.process_drop_with_session(cell, fed, 2);
+        assert_eq!(result, DropResult::CanRevoke);
+    }
+
+    #[test]
+    fn byzantine_node_different_session_cannot_drop_others_refs() {
+        let mut mgr = ExportGcManager::new();
+        let cell = cell_1();
+
+        // Federation A exports on session 10
+        mgr.record_export_with_session(cell, fed_a(), 100, 10);
+        // Federation B exports on session 20
+        mgr.record_export_with_session(cell, fed_b(), 100, 20);
+
+        assert_eq!(mgr.get(&cell).unwrap().total_refs, 2);
+
+        // Byzantine B tries to drop A's ref using B's session — rejected
+        // (from_federation=fed_a but session=20 doesn't match A's session=10)
+        let result = mgr.process_drop_with_session(cell, fed_a(), 20);
+        assert_eq!(result, DropResult::Invalid);
+        assert_eq!(mgr.get(&cell).unwrap().total_refs, 2);
+
+        // A can drop its own ref with correct session
+        let result = mgr.process_drop_with_session(cell, fed_a(), 10);
+        assert_eq!(result, DropResult::StillHeld);
+    }
+
+    // --- Import GC tests ---
 
     #[test]
     fn import_multiple_federations_independent() {

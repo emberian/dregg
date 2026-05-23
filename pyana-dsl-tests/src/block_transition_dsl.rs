@@ -156,7 +156,7 @@ pub fn block_transition_circuit_descriptor() -> CircuitDescriptor {
     CircuitDescriptor {
         name: "pyana-block-transition-dsl-v1".into(),
         trace_width: BLOCK_TRANSITION_WIDTH,
-        max_degree: 2, // Hash is degree 2 in evaluation; Transition is degree 1
+        max_degree: 4, // Hash with 4 input_cols has degree 4; Transition is degree 1
         columns,
         constraints,
         boundaries,

@@ -987,4 +987,88 @@ mod tests {
         );
         assert!(result.unwrap_err().contains("Missing membership proof"));
     }
+
+    // ========================================================================
+    // ADVERSARIAL TEST (Gap 4): Fabricated body facts pass derivation-only
+    // verification but are caught by membership requirement.
+    // ========================================================================
+
+    /// Adversarial test: a malicious prover fabricates body facts that don't
+    /// exist in any Merkle tree. The derivation proof alone ACCEPTS these
+    /// (demonstrating the gap), but verify_authorization_with_membership REJECTS.
+    #[test]
+    #[allow(deprecated)]
+    fn test_adversarial_fabricated_facts_accepted_without_membership() {
+        use crate::multi_step_air::verify_authorization_stark;
+
+        let alice = BabyBear::new(1000);
+        let app = BabyBear::new(2000);
+        let allow_pred = BabyBear::new(ALLOW_PREDICATE);
+        let has_role_pred = BabyBear::new(600);
+
+        // The body fact: has_role(alice, app, 0)
+        // This fact is COMPLETELY FABRICATED - it does not exist in any tree.
+        let fabricated_fact_hash = hash_fact(has_role_pred, &[alice, app, BabyBear::ZERO]);
+
+        // Build a tree that does NOT contain the fabricated fact.
+        let tree_depth = 2;
+        let real_leaves = vec![
+            BabyBear::new(111),
+            BabyBear::new(222),
+            BabyBear::new(333),
+            BabyBear::new(444),
+        ];
+        let (state_root, _) = build_test_tree(&real_leaves, tree_depth);
+
+        // The derivation uses state_root and claims fabricated_fact_hash exists.
+        // A malicious prover can set body_hash to anything in the derivation trace.
+        let step = make_step(
+            1,
+            state_root,
+            allow_pred,
+            [alice, app, BabyBear::ZERO],
+            has_role_pred,
+            [alice, app, BabyBear::ZERO],
+            vec![alice, app],
+        );
+        let witness = build_multi_step_witness(state_root, BabyBear::new(42), vec![step]);
+        let conclusion = witness.conclusion();
+        let acc_hash = witness.final_accumulated_hash();
+
+        // THE GAP: verify_authorization_stark ALONE accepts the fabricated proof.
+        // This demonstrates why body membership is REQUIRED for soundness.
+        let derivation_proof = prove_authorization_stark(&witness);
+        let derivation_only_result =
+            verify_authorization_stark(conclusion, acc_hash, &derivation_proof);
+        assert!(
+            derivation_only_result.is_ok(),
+            "Gap 4 demonstration: derivation-only verification ACCEPTS fabricated facts. \
+             This is the soundness gap that body_membership fixes."
+        );
+
+        // THE FIX: verify_authorization_with_membership requires Merkle proofs.
+        // Since the fabricated fact is NOT in the tree, no valid Merkle proof exists.
+        // The verifier correctly rejects because expected_body_hashes has no proof.
+        let composite_proof = BodyMembershipProof {
+            derivation_proof,
+            membership_proofs: vec![], // No membership proofs (attacker can't produce them)
+            state_root,
+        };
+
+        let expected_body_hashes = vec![fabricated_fact_hash];
+        let result = verify_authorization_with_membership(
+            &composite_proof,
+            conclusion,
+            acc_hash,
+            &expected_body_hashes,
+        );
+        assert!(
+            result.is_err(),
+            "SOUNDNESS: verify_authorization_with_membership MUST reject fabricated facts"
+        );
+        assert!(
+            result.unwrap_err().contains("Missing membership proof"),
+            "Error should indicate missing membership proof for the fabricated fact"
+        );
+    }
 }

@@ -13,7 +13,6 @@
 //! - "Proposal P reached threshold T" → aggregated vote count proof
 //! - "The routing table changed from C_old to C_new via proposal P" → state transition proof
 
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
