@@ -96,6 +96,16 @@
       is proof verification (~2ms).
     </p>
 
+    <h2 id="sovereign-context">Tokens in Sovereign Mode</h2>
+    <p>
+      In sovereign mode, capabilities are part of the agent's local cell state.
+      The federation never sees your capability set. Exercising a capability on
+      another agent's cell works peer-to-peer: you prove "I hold this cap" via
+      a Merkle witness into your own state, and the target verifies locally. The
+      federation is only needed if you want to prove capability possession to a
+      stranger who requires an attested root anchor.
+    </p>
+
     <div class="stub-notice">
       <p>Full token lifecycle diagrams, error handling, and edge cases are being written.</p>
     </div>
@@ -105,7 +115,7 @@
 
 <footer class="site-foot">
   <div class="site-foot__inner">
-    <span class="site-foot__left">Pyana -- distributed object-capability runtime.</span>
+    <span class="site-foot__left">Pyana -- sovereign capability runtime.</span>
     <div class="site-foot__links">
       <a href="../../index.html">Home</a>
       <a href="../index.html">Docs</a>

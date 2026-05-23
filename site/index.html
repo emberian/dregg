@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Pyana — Distributed Object-Capability Runtime</title>
-  <meta name="description" content="Pyana: a distributed object-capability runtime. Agents hold unforgeable capabilities, delegate with attenuation, prove authorization with ZK STARKs, and carry their own state as proof chains.">
+  <title>Pyana — Sovereign Capability Runtime</title>
+  <meta name="description" content="Pyana: a sovereign capability runtime. Agents own their state, prove authorization with ZK STARKs, and interact peer-to-peer. The federation is a notary for ordering and discovery.">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Pyana">
-  <meta property="og:title" content="Pyana — Distributed Object-Capability Runtime">
-  <meta property="og:description" content="Your agents prove what they can do without revealing how they got there. ZK STARKs, federated BFT, offline verification.">
+  <meta property="og:title" content="Pyana — Sovereign Capability Runtime">
+  <meta property="og:description" content="Agents own their state. Prove authorization with ZK STARKs. Interact peer-to-peer. Federation as notary, not host.">
   <meta name="twitter:card" content="summary">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0f0d'/%3E%3Ctext x='16' y='22' font-size='16' text-anchor='middle' fill='%235b8a5a' font-family='monospace'%3E%CF%80%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="assets/style.css">
@@ -18,7 +18,7 @@
 <nav class="nav">
   <span class="nav__mark">&pi;</span>
   <span class="nav__name">Pyana</span>
-  <span class="nav__tag">distributed object-capability runtime</span>
+  <span class="nav__tag">sovereign capability runtime</span>
   <div class="nav__links">
     <a class="nav__link nav__link--active" href="index.html">Home</a>
     <a class="nav__link" href="docs/index.html">Docs</a>
@@ -106,7 +106,7 @@
     <div class="flow__step">
       <span class="flow__n">04 / Verify</span>
       <p class="flow__name">One bit: authorized</p>
-      <p class="flow__desc">The verifier checks the proof against an attested root. No online lookup needed. Sub-millisecond verification, fully offline.</p>
+      <p class="flow__desc">The verifier checks the proof against an attested root. No online lookup needed. ~2ms verification, fully offline.</p>
     </div>
   </div>
 
@@ -371,7 +371,7 @@ const result = await client.wallet.verify(restricted.token, { action: "read" });
 <!-- ==================== FOOTER ==================== -->
 <footer class="site-foot">
   <div class="site-foot__inner">
-    <span class="site-foot__left">Pyana -- distributed object-capability runtime. MIT OR Apache-2.0.</span>
+    <span class="site-foot__left">Pyana -- sovereign capability runtime. MIT OR Apache-2.0.</span>
     <div class="site-foot__links">
       <a href="docs/index.html">Docs</a>
       <a href="paper.html">Paper</a>

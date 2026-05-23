@@ -162,6 +162,34 @@
       </tbody>
     </table>
 
+    <h2 id="beyond-auth">Beyond Authorization Privacy</h2>
+
+    <p>
+      Authorization modes control what the verifier learns about your credentials.
+      Pyana's privacy stack extends further:
+    </p>
+
+    <ul>
+      <li><strong>Amount privacy:</strong> Transfer amounts are Pedersen commitments. The federation
+          verifies conservation (amounts balance) without seeing values.</li>
+      <li><strong>Recipient privacy:</strong> Stealth addresses derive one-time keys per transaction.
+          Only the recipient can detect and spend incoming notes.</li>
+      <li><strong>Sovereign cell privacy:</strong> In sovereign mode, the federation stores only a
+          32-byte hash of your state. It never sees balances, capabilities, or metadata.</li>
+      <li><strong>Peer-to-peer privacy:</strong> Between known parties, interactions happen directly
+          with no federation contact. Only your peer learns your new state commitment.</li>
+      <li><strong>Network privacy:</strong> Dandelion++ routing hides message origin. Fixed-size
+          message padding prevents traffic analysis.</li>
+    </ul>
+
+    <div class="callout callout--note">
+      <p>
+        <strong>Honest limitation:</strong> Intent content is partially visible. SSE keyword tokens
+        are enumerable by observers who know the keyword space. The executor sees sovereign
+        state during federation-mediated multi-party interactions.
+      </p>
+    </div>
+
     <div class="callout callout--note">
       <p>
         For the developer API behind these modes, see
@@ -175,7 +203,7 @@
 
 <footer class="site-foot">
   <div class="site-foot__inner">
-    <span class="site-foot__left">Pyana -- distributed object-capability runtime.</span>
+    <span class="site-foot__left">Pyana -- sovereign capability runtime.</span>
     <div class="site-foot__links">
       <a href="../../index.html">Home</a>
       <a href="../index.html">Docs</a>
