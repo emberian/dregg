@@ -19,6 +19,8 @@ use crate::error::SdkError;
 ///
 /// * `proof_bytes` - Serialized proof bytes.
 /// * `federation_root` - The 32-byte federation root of trust (public parameter).
+/// * `expected_action` - The action string the proof must be bound to (e.g., "read", "write").
+/// * `expected_resource` - The resource string the proof must be bound to (e.g., "api/v1/users").
 ///
 /// # Returns
 ///

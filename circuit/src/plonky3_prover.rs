@@ -101,13 +101,15 @@ pub fn create_config() -> PyanaStarkConfig {
 
     let challenge_mmcs = ExtensionMmcs::<P3BabyBear, EF, _>::new(val_mmcs.clone());
 
+    // log_blowup must be >= log2_ceil(max_constraint_degree - 1).
+    // For Poseidon2 S-box (degree 7): log2_ceil(6) = 3, so log_blowup >= 3.
     let fri_params = FriParameters {
-        log_blowup: 2,
+        log_blowup: 3,
         log_final_poly_len: 0,
         max_log_arity: 3,
-        num_queries: 2,
-        commit_proof_of_work_bits: 1,
-        query_proof_of_work_bits: 1,
+        num_queries: 50,
+        commit_proof_of_work_bits: 0,
+        query_proof_of_work_bits: 16,
         mmcs: challenge_mmcs,
     };
 
