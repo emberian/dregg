@@ -1,0 +1,270 @@
+# Pyana DSL: Advanced Systems Design
+
+How the DSL handles Datalog evaluation, temporal predicates, witness generation, and the full system ambitions (AMM, private DEX, anonymous credentials).
+
+## 1. Datalog in the DSL: Parameterized Constraint Templates
+
+Datalog evaluation is NOT a single circuit definition -- it is a *fixed-width parameterized AIR* that the DSL instantiates with compile-time constants.
+
+The derivation AIR has static maximums: MAX_BODY_ATOMS=8, MAX_SUB_VARS=8, MAX_HEAD_TERMS=4, MAX_EQUAL_CHECKS=4. Rules with fewer atoms/variables zero-pad unused slots; binary membership flags gate which slots are active. This makes the constraint system UNIFORM regardless of specific rule shape.
+
+The DSL expresses this directly:
+
+```rust
+#[pyana_circuit]
+mod derivation {
+    layout! {
+        rule_id: Field,
+        body: [BodyAtom; 8],        // fixed max, unused slots zero-padded
+        head_terms: [Term; 4],
+        substitution: [Field; 8],
+        eq_checks: [EqCheck; 4],
+        gte_check: RangeCheck<30>,
+        check_bindings: [TermBinding; 20],
+    }
+
+    constraints! {
+        for atom in body {
+            binary!(atom.membership);
+            require!(atom.membership * (atom.root - public.state_root) == 0);
+        }
+        for term in head_terms {
+            let resolved = term.is_var * dot(term.sel, substitution)
+                         + (1 - term.is_var) * term.raw;
+            require!(head_terms[term.index].value == resolved);
+        }
+        require!(derived_hash == hash!(head_pred, head_terms.*.value));
+        bind_check_terms!(check_bindings, substitution);
+    }
+}
+```
+
+The key insight: the DSL does NOT generate variable-width circuits per rule. It generates the FIXED 371-column AIR once. User-defined Datalog rules are data (the witness), not code (the constraints). The rule structure is committed via `policy_root = hash(rule_structure_hashes...)` and checked at verification time. The prover cannot substitute rules because the structure hash would differ.
+
+**Answer to "is Datalog always the runtime interpreter path?"** -- Yes, for rule DEFINITION and evaluation. The circuit is fixed; the rules are witness data. The DSL defines the constraint system that verifies arbitrary rule applications. New rules never require new circuits.
+
+## 2. Temporal Predicates: Dynamic Trace Length via Boundary Padding
+
+The temporal AIR proves "predicate held for N consecutive steps" using:
+- One row per step (value, threshold, diff, bits, accumulator, state_root)
+- Transition constraint: `next.accumulator == local.accumulator + 1`
+- Boundary constraints on first and last row
+
+```rust
+#[pyana_circuit]
+mod temporal_predicate {
+    layout! { step: Field, value: Field, diff: Field, bits: [Binary; 30], accumulator: Field, state_root: Field }
+
+    constraints! {
+        require!(diff == value - public.threshold);
+        range_check_inline!(diff, bits);
+    }
+
+    transition! {
+        require!(next.accumulator == local.accumulator + 1);
+        require!(next.step == local.step + 1);
+    }
+
+    boundary! {
+        first { step == 0; accumulator == 1; state_root == public.initial_root; }
+        last  { accumulator == public.num_steps; state_root == public.final_root; }
+    }
+}
+```
+
+**How `row(last)` works with dynamic trace length:** The trace is padded to the next power-of-two. Padding rows continue incrementing accumulator and step_index so transition constraints remain satisfied. `public.num_steps` is set to the PADDED length, and the boundary constraint checks `accumulator == public.num_steps` on the actual last row of the padded trace. The verifier confirms `padded_len >= claimed_real_steps` and `padded_len.is_power_of_two()`.
+
+Plonky3's `when_transition()` fires on all rows except the last, so padding rows must also satisfy transition constraints. The DSL handles this transparently: `boundary! { last { ... } }` compiles to a boundary constraint at `trace_len - 1`.
+
+## 3. Witness Generation Architecture
+
+**Option C: tiered generation.**
+
+| Circuit Type | Witness Source |
+|---|---|
+| Simple caveats (range check, comparison) | Auto-generated from DSL: inputs ARE the witness |
+| Temporal predicate | Auto-generated: sequential fill of value/diff/bits per step |
+| Derivation step | Hand-written: requires running the Datalog evaluator to find satisfying substitution |
+| Multi-step derivation chain | Hand-written: must sequence rule applications, compute accumulated hashes |
+| Merkle membership | Hand-written: requires fetching authentication path from tree |
+| AMM swap | Hand-written: must compute inverse for division, provide range proof witnesses |
+
+The DSL emits a `generate_trace()` method alongside `eval_constraints()`. For simple circuits, the macro fills it automatically from the layout struct. For complex circuits, the macro emits a SKELETON that the developer completes:
+
+```rust
+// Auto-generated by #[pyana_circuit] for temporal_predicate:
+impl TemporalPredicateAir {
+    pub fn generate_trace(&self) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
+        let mut trace = Vec::new();
+        for step in 0..self.witness.num_steps() {
+            let mut row = vec![BabyBear::ZERO; TEMPORAL_PREDICATE_WIDTH];
+            row[col::STEP_INDEX] = BabyBear::new(step as u32);
+            row[col::PREDICATE_VALUE] = self.witness.values[step];
+            // ... fill from witness fields matching layout names ...
+            trace.push(row);
+        }
+        (trace, self.public_inputs())
+    }
+}
+```
+
+For derivation (complex): the `DerivationWitness` struct is populated by imperative Rust (the `PredicateProgram` compiler, the intent executor, the Datalog evaluator). The witness generation code lives in `circuit/src/derivation_air.rs` as `generate_trace()` -- 300 lines of imperative code that the DSL cannot replace because it involves hash computation, substitution resolution, and bit decomposition of runtime values.
+
+**Principle:** The DSL defines WHAT the verifier checks. Witness generation is HOW the prover satisfies those checks. Simple cases are auto-generated. Complex cases (Datalog evaluation traces, Merkle path fetching, AMM arithmetic) are always hand-written imperative code.
+
+## 4. AMM / Private DEX
+
+### Public AMM (cleartext reserves)
+
+```rust
+#[pyana_circuit]
+mod constant_product_swap {
+    layout! {
+        old_x: Field, old_y: Field,
+        new_x: Field, new_y: Field,
+        input_amount: Field, output_amount: Field,
+        // For division: output = (old_y * input) / (old_x + input)
+        // We witness the quotient and prove: quotient * divisor == dividend (mod p)
+        divisor: Field,           // old_x + input_amount
+        dividend: Field,          // old_y * input_amount
+        // Range check that output < old_y (no draining)
+        drain_diff: Field, drain_bits: [Binary; 30],
+    }
+
+    constraints! {
+        // Conservation
+        require!(new_x == old_x + input_amount);
+        require!(new_y == old_y - output_amount);
+        // Division correctness (no actual division in-circuit)
+        require!(divisor == old_x + input_amount);
+        require!(dividend == old_y * input_amount);
+        require!(output_amount * divisor == dividend);  // exact division
+        // Invariant: k doesn't decrease
+        require!(new_x * new_y >= old_x * old_y);  // encoded via range check on diff
+        // No drain
+        require!(drain_diff == old_y - output_amount - 1);
+        range_check_inline!(drain_diff, drain_bits);
+    }
+
+    public_inputs! { old_state_hash, new_state_hash, pool_id }
+}
+```
+
+Division is handled by witnessing the quotient and proving `q * d == n` algebraically. No field inversion needed in constraints. The range check on `drain_diff` ensures `output < old_y`.
+
+The "old vs new" pattern: `old_x` and `new_x` are separate witness columns. The circuit binds them to committed state via `old_state_hash = hash(old_x, old_y, ...)` and `new_state_hash = hash(new_x, new_y, ...)` as public inputs. The verifier checks these against the cell's state transition.
+
+### Private AMM (committed reserves)
+
+Private swaps over Pedersen commitments require a separate layer. The DSL cannot directly express committed arithmetic because:
+1. Pedersen commitments live in a different group (Ristretto/Ed25519) than BabyBear
+2. Range proofs (Bulletproofs) are a non-STARK proof system
+3. The binding signature for conservation is Schnorr, not a polynomial constraint
+
+**Architecture:** Private AMM is a COMPOSITE proof:
+
+```rust
+#[pyana_compose]
+mod private_swap {
+    proofs! {
+        invariant: constant_product_swap,         // STARK: proves arithmetic correctness
+        input_range: bulletproof_range,            // Non-STARK: proves input > 0, < 2^64
+        output_range: bulletproof_range,           // Non-STARK: proves output > 0, < 2^64
+        conservation: binding_signature,           // Schnorr: proves commitments sum correctly
+    }
+
+    bind! {
+        invariant.public.input_amount_commitment == input_range.commitment;
+        invariant.public.output_amount_commitment == output_range.commitment;
+        conservation.excess == invariant.public.value_balance;
+    }
+}
+```
+
+The STARK proves arithmetic correctness over field elements. Bulletproofs provide range proofs over the committed values. The binding signature ties them together. The DSL's composition layer (`#[pyana_compose]`) orchestrates these heterogeneous proofs and defines what binds them.
+
+## 5. Anonymous Credentials (Presentation Proof)
+
+The presentation proof composes three sub-proofs:
+
+```rust
+#[pyana_compose]
+mod presentation {
+    proofs! {
+        membership: blinded_merkle_membership,    // issuer is in federation
+        derivation: multi_step_derivation,        // Datalog concludes ALLOW
+        fold_chain: ivc_hash_chain,               // receipt chain is valid
+    }
+
+    bind! {
+        // The derivation operates over the same state the fold chain committed to
+        fold_chain.public.final_root == derivation.public.initial_state_root;
+        // The issuer's key is a leaf in the federation tree
+        membership.public.root == public.federation_root;
+        // Composition commitment ties everything together
+        public.composition_commitment == hash!(
+            fold_chain.public.accumulated_hash,
+            derivation.public.derived_fact_hash,
+            public.presentation_tag
+        );
+    }
+
+    public_inputs! {
+        federation_root, presentation_tag, timestamp,
+        composition_commitment, verifier_nonce
+    }
+}
+```
+
+Each sub-proof is generated independently (potentially in parallel), then the composition layer verifies their public inputs are consistently bound. The `presentation_tag` includes fresh randomness for unlinkability -- different presentation of the same credential produces a different tag, preventing correlation across verifiers.
+
+## 6. Architectural Map
+
+```
++------------------------------------------------------------------+
+|                        DSL-DEFINED (constraints)                   |
+|------------------------------------------------------------------|
+| derivation_air        | Fixed 371-col AIR verifying any rule app  |
+| temporal_predicate    | Multi-row predicate continuity            |
+| multi_step_air        | Chained derivation with accumulated hash  |
+| constant_product_swap | AMM invariant (public reserves)           |
+| ivc_hash_chain        | Receipt chain integrity                   |
+| predicate_air         | Single range/comparison check             |
+| blinded_merkle        | Ring membership without revealing leaf    |
++------------------------------------------------------------------+
+
++------------------------------------------------------------------+
+|                 HAND-WRITTEN WITNESS GENERATORS                    |
+|------------------------------------------------------------------|
+| Datalog evaluator     | Runs rules, finds substitutions, builds   |
+|                       | derivation trace (substitution values,    |
+|                       | selector columns, body fact hashes)       |
+| Merkle path fetcher   | Queries tree for authentication path      |
+| AMM arithmetic        | Computes exact division quotient,         |
+|                       | bit-decomposes range check diffs          |
+| IVC stepper           | Hashes step-by-step, tracks accumulator   |
+| Temporal collector    | Gathers historical values from state DB   |
++------------------------------------------------------------------+
+
++------------------------------------------------------------------+
+|                    RUNTIME (not proven, trusted)                   |
+|------------------------------------------------------------------|
+| Gossip / networking   | Disseminates proofs between nodes         |
+| Persistence           | Stores note trees, cell state, proofs     |
+| Intent matching       | Finds compatible intents (coordinator)    |
+| Federation membership | Tracks who is in which federation          |
+| Policy distribution   | Publishes rule sets (policy_root binding) |
+| Key management        | Spending keys, viewing keys, derivation   |
++------------------------------------------------------------------+
+```
+
+The boundary is sharp: everything above the "RUNTIME" section produces or verifies cryptographic proofs. The runtime layer is trusted infrastructure that cannot forge proofs but can deny service (liveness, not safety).
+
+## 7. What This Means for Implementation
+
+1. **The DSL does not replace Datalog.** It provides the fixed verification substrate. Rules remain data.
+2. **Temporal predicates are fully DSL-expressible** including dynamic trace length via padding.
+3. **Witness generation is tiered:** auto for simple, manual for complex.
+4. **Private DeFi requires heterogeneous proof composition** (STARK + Bulletproofs + Schnorr). The DSL's `#[pyana_compose]` layer handles binding; individual proof systems remain specialized.
+5. **Anonymous credentials are the composition layer's primary use case.** Three independent sub-proofs bound by shared public inputs.
+6. **The "hard" part is not constraint expression but witness acquisition.** Fetching Merkle paths, running Datalog evaluation, computing AMM quotients -- these are prover-side computation that happens before the circuit ever runs.
