@@ -672,7 +672,11 @@ const MAX_BODY_SIZE: usize = 1_024 * 1_024;
 /// Includes CORS, body size limits, rate limiting on passphrase endpoints,
 /// per-identity rate limiting on turn submission, and Bearer token
 /// authentication on protected routes.
-pub fn router(state: NodeState, enable_faucet: bool) -> Router {
+pub fn router(
+    state: NodeState,
+    enable_faucet: bool,
+    metrics_handle: metrics_exporter_prometheus::PrometheusHandle,
+) -> Router {
     // Rate limiter for passphrase/unlock endpoints: 5 attempts per 60 seconds.
     let passphrase_limiter = RateLimiter::new(5, 60);
 
@@ -753,8 +757,14 @@ pub fn router(state: NodeState, enable_faucet: bool) -> Router {
         .route("/cell/{id}", get(get_cell))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
+    // Metrics endpoint (separate state: PrometheusHandle)
+    let metrics_route = Router::new()
+        .route("/metrics", get(crate::metrics::metrics_handler))
+        .with_state(metrics_handle);
+
     public_routes
         .merge(protected_routes)
+        .merge(metrics_route)
         .layer(DefaultBodyLimit::max(MAX_BODY_SIZE))
         .layer(middleware::from_fn(cors_middleware))
         .with_state(state)

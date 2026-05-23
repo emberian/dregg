@@ -115,18 +115,18 @@ jobs:
           COMMIT_SHA="${{ github.sha }}"
           TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-          # Combine all individual results into one array
-          RESULTS=$(jq -s '.' /tmp/demo_results/*.json)
+          # Combine all individual results into one array (use find to avoid ARG_MAX)
+          find /tmp/demo_results -name '*.json' -print0 | xargs -0 cat | jq -s '.' > /tmp/all_results.json
 
           # Build final document
           jq -n \
             --arg sha "$COMMIT_SHA" \
             --arg ts "$TIMESTAMP" \
-            --argjson results "$RESULTS" \
+            --slurpfile results /tmp/all_results.json \
             '{
               "commit": $sha,
               "timestamp": $ts,
-              "results": $results
+              "results": $results[0]
             }' > site/demos/results.json
 
       - name: Upload Pages artifact

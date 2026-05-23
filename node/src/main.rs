@@ -11,6 +11,7 @@ mod bridge;
 mod federation_sync;
 mod genesis;
 mod mcp;
+pub mod metrics;
 mod routing_table;
 mod state;
 mod ws;
@@ -368,6 +369,9 @@ async fn run_node(
         s.checkpoint_interval = checkpoint_interval;
     }
 
+    // Install Prometheus metrics recorder.
+    let metrics_handle = metrics::install_recorder();
+
     info!(
         port = port,
         data_dir = %data_path.display(),
@@ -393,7 +397,7 @@ async fn run_node(
     });
 
     // Build and serve the HTTP API.
-    let app = api::router(node_state.clone(), enable_faucet)
+    let app = api::router(node_state.clone(), enable_faucet, metrics_handle)
         .into_make_service_with_connect_info::<SocketAddr>();
     let bind_addr: std::net::IpAddr = bind.parse().unwrap_or_else(|_| {
         error!("invalid --bind address: {bind}, falling back to 127.0.0.1");

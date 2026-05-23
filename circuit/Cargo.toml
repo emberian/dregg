@@ -97,9 +97,13 @@ recursion = [
 [dev-dependencies]
 criterion = { workspace = true }
 pyana-bridge = { path = "../bridge" }
+pyana-cell = { path = "../cell" }
+pyana-trace = { path = "../trace" }
 token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
 pyana-turn = { path = "../turn" }
 getrandom = { workspace = true }
+blake3 = "1"
+rmp-serde = { workspace = true }
 
 [[bench]]
 name = "stark_bench"
