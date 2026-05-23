@@ -1,0 +1,11 @@
+[package]
+name = "pyana-dsl-tests"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+pyana-dsl = { path = "../pyana-dsl" }
+pyana-dsl-runtime = { path = "../pyana-dsl-runtime" }
+
+[lints]
+workspace = true

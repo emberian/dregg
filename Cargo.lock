@@ -6218,6 +6218,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "pyana-dsl"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "pyana-dsl-runtime"
+version = "0.1.0"
+
+[[package]]
+name = "pyana-dsl-tests"
+version = "0.1.0"
+dependencies = [
+ "pyana-dsl",
+ "pyana-dsl-runtime",
+]
+
+[[package]]
 name = "pyana-federation"
 version = "0.1.0"
 dependencies = [

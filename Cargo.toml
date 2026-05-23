@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["macaroon", "secrets", "token", "tokenizer", "hints", "morpheus", "commit", "trace", "demo", "demo-agent", "federation", "circuit", "audit", "bridge", "wire", "store", "cell", "turn", "coord", "tests", "types", "sdk", "wasm", "node", "intent", "net", "discharge-gateway", "teasting", "apps/bounty-board", "apps/compute-exchange", "app-framework"]
+members = ["macaroon", "secrets", "token", "tokenizer", "hints", "morpheus", "commit", "trace", "demo", "demo-agent", "federation", "circuit", "audit", "bridge", "wire", "store", "cell", "turn", "coord", "tests", "types", "sdk", "wasm", "node", "intent", "net", "discharge-gateway", "teasting", "apps/bounty-board", "apps/compute-exchange", "app-framework", "pyana-dsl", "pyana-dsl-runtime", "pyana-dsl-tests"]
 exclude = ["chain", "chain/program"]
 
 [workspace.package]
