@@ -36,6 +36,72 @@ import sys
 from pathlib import Path
 
 
+def _zeros32() -> list[int]:
+    return [0] * 32
+
+
+def build_witnessed_chain(state_dir: Path) -> list[dict]:
+    """Assemble a v1 WitnessedReceipt chain JSON from the per-turn proof
+    artifacts emitted by alice.py / bob.py.
+
+    v1 ships scope-(1) entries (proof + public_inputs, no inline witness
+    bundle) because the MCP tool layer does not yet expose the raw trace.
+    The replay-chain verifier treats this as a "verified" verdict — proof
+    is sound, scope-(2) replay is deferred to the lane that plumbs the
+    trace through generate_effect_vm_proof.
+
+    The on-disk shape mirrors `pyana_turn::WitnessedReceipt` exactly so
+    the verifier-side `ReplayEntry` deserialises it byte-for-byte.
+    """
+    chain: list[dict] = []
+    for name, fname in [("grant", "grant.proof.json"), ("exercise", "exercise.proof.json")]:
+        path = state_dir / fname
+        if not path.exists():
+            continue
+        artifact = json.loads(path.read_text())
+        proof_hex = artifact.get("proof_hex", "")
+        pi = artifact.get("public_inputs", []) or []
+        if not proof_hex:
+            continue
+        proof_bytes = list(bytes.fromhex(proof_hex))
+        chain.append({
+            # Minimal `receipt` placeholder — preserved as opaque JSON by
+            # the verifier (it's `serde_json::Value` on the Rust side).
+            "receipt": {"source": artifact.get("source", name)},
+            "proof_bytes": proof_bytes,
+            "public_inputs": [int(v) for v in pi],
+            "witness_hash": _zeros32(),
+        })
+    return chain
+
+
+def verify_chain_with_binary(verifier_bin: str, chain_path: Path) -> tuple[bool, str, int]:
+    """Run `pyana-verifier replay-chain <chain.json>` and parse the verdict."""
+    try:
+        proc = subprocess.Popen(
+            [verifier_bin, "replay-chain", str(chain_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        stdout, stderr = proc.communicate(timeout=120)
+    except FileNotFoundError:
+        return False, f"verifier binary not found at {verifier_bin}", 0
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        return False, "replay-chain timed out", proc.pid
+
+    rc = proc.returncode
+    parsed: dict[str, object] = {}
+    try:
+        parsed = json.loads(stdout)
+    except json.JSONDecodeError:
+        parsed = {"summary": f"unparseable verifier output: stdout={stdout!r} stderr={stderr!r}"}
+    overall = bool(parsed.get("overall_verified", False))
+    summary = str(parsed.get("summary", ""))
+    return overall and rc == 0, summary, proc.pid
+
+
 def verify_proof_with_binary(
     verifier_bin: str, proof_hex: str, public_inputs: list[int]
 ) -> tuple[bool, str, int]:
@@ -139,11 +205,36 @@ def main() -> int:
         exercise_verified = False
         exercise_reason = "no artifact"
 
+    # ── v1 replay-chain: WitnessedReceipt end-to-end ─────────────────────
+    # Build a WR-chain JSON from the same proof artifacts and run the new
+    # `pyana-verifier replay-chain` subcommand. This is the v1.D demo path
+    # per WITNESSED-RECEIPT-CHAIN-DESIGN.md §8 step 4: "export a chain of
+    # WitnessedReceipt to disk, and a tiny replayer invocation shows
+    # scope-(2) replay end-to-end."
+    chain = build_witnessed_chain(state_dir)
+    chain_path = state_dir / "witnessed-chain.json"
+    chain_path.write_text(json.dumps(chain, indent=2))
+    if chain:
+        replay_verified, replay_summary, replay_pid = verify_chain_with_binary(
+            args.verifier_bin, chain_path
+        )
+        if not replay_verified:
+            blocker_notes.append(f"replay-chain rejected: {replay_summary}")
+    else:
+        replay_verified = False
+        replay_summary = "no WR-chain entries (no proof artifacts on disk)"
+        replay_pid = 0
+        blocker_notes.append("BLOCKER: cannot run replay-chain (no proof artifacts)")
+
     result = {
         "grant_verified":     grant_verified,
         "grant_reason":       grant_reason,
         "exercise_verified":  exercise_verified,
         "exercise_reason":    exercise_reason,
+        "replay_chain_verified": replay_verified,
+        "replay_chain_summary":  replay_summary,
+        "replay_chain_entries":  len(chain),
+        "replay_chain_pid":      replay_pid,
         "pid":                os.getpid(),
         "independent_node":   True,
         "independent_binary": True,

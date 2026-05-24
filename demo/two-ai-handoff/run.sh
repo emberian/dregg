@@ -160,8 +160,12 @@ if [ $charlie_rc -ne 0 ]; then
 fi
 GRANT_VERIFIED=$(echo "$CHARLIE_OUT" | "$PY" -c 'import json,sys;print(json.load(sys.stdin).get("grant_verified", False))' 2>/dev/null || echo False)
 EXERCISE_VERIFIED=$(echo "$CHARLIE_OUT" | "$PY" -c 'import json,sys;print(json.load(sys.stdin).get("exercise_verified", False))' 2>/dev/null || echo False)
+REPLAY_CHAIN_VERIFIED=$(echo "$CHARLIE_OUT" | "$PY" -c 'import json,sys;print(json.load(sys.stdin).get("replay_chain_verified", False))' 2>/dev/null || echo False)
+REPLAY_CHAIN_SUMMARY=$(echo "$CHARLIE_OUT" | "$PY" -c 'import json,sys;print(json.load(sys.stdin).get("replay_chain_summary", ""))' 2>/dev/null || echo "")
 [ "$GRANT_VERIFIED" = "True" ]    && ok "grant proof verified by charlie"    || warn "grant proof NOT verified (see blockers)"
 [ "$EXERCISE_VERIFIED" = "True" ] && ok "exercise proof verified by charlie" || warn "exercise proof NOT verified (see blockers)"
+[ "$REPLAY_CHAIN_VERIFIED" = "True" ] && ok "replay-chain (WitnessedReceipt v1) verified: $REPLAY_CHAIN_SUMMARY" \
+                                     || warn "replay-chain NOT verified: $REPLAY_CHAIN_SUMMARY"
 
 # ── Step 9: receipt chain links grant -> exercise ──────────────────────────
 step 9 "receipt chain links grant -> exercise"
@@ -202,6 +206,10 @@ GRANT_VER_OK=0;    [ "$GRANT_VERIFIED" = "True" ]    && GRANT_VER_OK=1
 EXERCISE_VER_OK=0; [ "$EXERCISE_VERIFIED" = "True" ] && EXERCISE_VER_OK=1
 add_check "step 4/8 (charlie verifies grant proof)"          "$GRANT_VER_OK"
 add_check "step 4/8 (charlie verifies exercise proof)"       "$EXERCISE_VER_OK"
+
+# WitnessedReceipt v1.D — replay-chain end-to-end (see WITNESSED-RECEIPT-CHAIN-DESIGN.md §8).
+REPLAY_OK=0; [ "$REPLAY_CHAIN_VERIFIED" = "True" ] && REPLAY_OK=1
+add_check "WitnessedReceipt v1 replay-chain verdict (pyana-verifier replay-chain)" "$REPLAY_OK"
 
 # Observable balance deltas on Bob's ledger (expected.json transfer_amount=100).
 #
