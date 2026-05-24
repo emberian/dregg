@@ -84,11 +84,38 @@
 //!    - Last non-padding row: state_after matches new_commitment
 //!    - Conservation: net balance delta == public input
 //!
-//! # Public Inputs (7+ elements)
+//! # Public Inputs
 //!
-//! [old_commitment, new_commitment, net_delta_magnitude, net_delta_sign,
-//!  effects_hash_lo, effects_hash_hi, custom_effect_count,
-//!  ...custom_entries: (vk_hash[4], proof_commitment[4]) per custom effect]
+//! Base layout (`pi::BASE_COUNT` felts, Stage 7-γ.0a widening):
+//!
+//! ```text
+//!   [ 0.. 4]  OLD_COMMIT[4]                   cell pre-state commitment (Poseidon2)
+//!   [ 4.. 8]  NEW_COMMIT[4]                   cell post-state commitment (Poseidon2)
+//!   [ 8..12]  EFFECTS_HASH[4]                 Poseidon2 over per-cell projected effects
+//!   [12]      INIT_BAL_LO                     row 0 balance low limb
+//!   [13]      INIT_BAL_HI                     row 0 balance high limb
+//!   [14]      FINAL_BAL_LO                    last row balance low limb
+//!   [15]      FINAL_BAL_HI                    last row balance high limb
+//!   [16]      NET_DELTA_MAG                   |Δbalance|
+//!   [17]      NET_DELTA_SIGN                  0 = +, 1 = −
+//!   [18]      CURRENT_BLOCK_HEIGHT            federation block height
+//!   [19]      MAX_CUSTOM_EFFECTS              per-cell manifest cap
+//!   [20]      CUSTOM_EFFECT_COUNT             Σ sel_custom in trace
+//!   [21..25]  APPROVED_HANDOFFS[4]            CapTP federation-scoped Merkle root
+//!   [25..29]  TURN_HASH[4]                    Poseidon2 of Turn::hash() (7-γ.0a)
+//!   [29..33]  EFFECTS_HASH_GLOBAL[4]          Poseidon2 over canonical-DFS call_forest effects (7-γ.0a)
+//!   [33]      ACTOR_NONCE                     outer Turn::nonce (7-γ.0a; closes W-1 nonce gap)
+//!   [34..38]  PREVIOUS_RECEIPT_HASH[4]        Poseidon2 of previous_receipt_hash (7-γ.0a)
+//!   [38..]    CUSTOM_PROOFS                   per-custom-effect (vk_hash[4], proof_commit[4])
+//! ```
+//!
+//! The four 7-γ.0a additions (TURN_HASH, EFFECTS_HASH_GLOBAL, ACTOR_NONCE,
+//! PREVIOUS_RECEIPT_HASH) are *shared across all per-cell proofs of one
+//! turn*. The verifier's cross-proof PI matching loop
+//! (`verify_proof_carrying_turn_bundle` in `turn::executor`) enforces
+//! equality across the N proofs; per-proof binding to the canonical
+//! Turn::hash / call_forest is the executor's responsibility for now and
+//! becomes algebraic at Stage 7-γ.1.
 
 use crate::field::BabyBear;
 use crate::poseidon2::{hash_2_to_1, hash_4_to_1, hash_many};
@@ -589,13 +616,54 @@ pub mod pi {
     pub const APPROVED_HANDOFFS_BASE: usize = 21;
     pub const APPROVED_HANDOFFS_LEN: usize = 4;
 
+    // ---- Stage 7-γ.0a additions: turn-level identity bindings ----
+    //
+    // These four fields are *shared across all per-cell proofs of one turn*.
+    // Each per-cell proof carries the same values; the verifier's
+    // cross-proof PI matching loop (`verify_proof_carrying_turn_bundle`)
+    // enforces equality across the N proofs. Per-proof binding to the
+    // canonical Turn::hash and call_forest projection is executor-trusted
+    // for γ.0; γ.1 elevates the effects_hash_global -> Σ effects_local
+    // merge to an aggregation micro-AIR.
+    //
+    /// Poseidon2 of the canonical `Turn::hash()` (v3, post-Stage-7-α.1).
+    /// All per-cell proofs of one turn share this value; the verifier
+    /// rejects bundles whose per-cell proofs disagree.
+    pub const TURN_HASH_BASE: usize = 25;
+    pub const TURN_HASH_LEN: usize = 4;
+    /// Poseidon2 over the canonical-DFS-order traversal of the whole
+    /// `call_forest`'s effects (not per-cell). Closes P2 (projection
+    /// totality) at γ.1; for γ.0 it's a shared PI the executor verifies
+    /// against the turn's recomputed value.
+    pub const EFFECTS_HASH_GLOBAL_BASE: usize = 29;
+    pub const EFFECTS_HASH_GLOBAL_LEN: usize = 4;
+    /// Outer `Turn::nonce`, promoted to PI. Closes the differential-test
+    /// gap from task #49 (AIR previously did not witness the agent's
+    /// outer nonce bump). The verifier's PI-match loop rejects bundles
+    /// whose per-cell proofs disagree on the actor nonce, and the
+    /// executor checks PI[ACTOR_NONCE] == turn.nonce.
+    pub const ACTOR_NONCE: usize = 33;
+    /// Poseidon2 of `previous_receipt_hash` (32 bytes -> 4 felts) when
+    /// present, or the zero sentinel when absent. Binds each per-cell
+    /// proof to a specific receipt-chain position.
+    pub const PREVIOUS_RECEIPT_HASH_BASE: usize = 34;
+    pub const PREVIOUS_RECEIPT_HASH_LEN: usize = 4;
+
     // ---- Custom proof commitments ----
     /// For each custom effect i (0..custom_count):
     ///   PI[CUSTOM_PROOFS_BASE + i*8 + 0..4] = custom_program_vk_hash (4 elements)
     ///   PI[CUSTOM_PROOFS_BASE + i*8 + 4..8] = custom_proof_commitment (4 elements)
-    pub const CUSTOM_PROOFS_BASE: usize = 25;
+    pub const CUSTOM_PROOFS_BASE: usize = 38;
     /// Base public inputs (without custom proof data).
-    pub const BASE_COUNT: usize = 25;
+    ///
+    /// Layout (post Stage 7-γ.0a, BASE_COUNT bumped 25 -> 38):
+    ///   0..21  pre-γ.0a slots (commitments, balances, block height, etc.)
+    ///   21..25 APPROVED_HANDOFFS[4]
+    ///   25..29 TURN_HASH[4]              (γ.0a)
+    ///   29..33 EFFECTS_HASH_GLOBAL[4]    (γ.0a)
+    ///   33     ACTOR_NONCE               (γ.0a, single felt)
+    ///   34..38 PREVIOUS_RECEIPT_HASH[4]  (γ.0a)
+    pub const BASE_COUNT: usize = 38;
     /// Elements per custom effect entry in PI (4 vk_hash + 4 proof_commit).
     pub const CUSTOM_ENTRY_SIZE: usize = 8;
 
@@ -3532,10 +3600,13 @@ pub fn generate_effect_vm_trace(
     )
 }
 
-/// Extra context that goes into the widened PI layout (Stage 1).
+/// Extra context that goes into the widened PI layout (Stage 1 + 7-γ.0a).
 ///
 /// All fields have safe defaults for backwards-compat: zero block height,
-/// default `max_custom_effects`, empty approved-handoffs root.
+/// default `max_custom_effects`, empty approved-handoffs root, and
+/// all-zero Stage 7-γ.0a turn-identity fields. Callers that produce
+/// real per-cell proofs in the executor populate the γ.0a fields from
+/// the live `Turn` and call_forest.
 #[derive(Clone, Copy, Debug)]
 pub struct EffectVmContext {
     /// Federation block height at turn-commit time. Used by timeout-bearing
@@ -3546,6 +3617,19 @@ pub struct EffectVmContext {
     /// Federation-scoped approved-handoffs Merkle root (4-felt Poseidon2 form).
     /// Empty by default until Stage 7 populates the runtime emitter side.
     pub approved_handoffs_root: [BabyBear; 4],
+    /// Stage 7-γ.0a: Poseidon2 of canonical `Turn::hash()` (v3). Shared
+    /// across all per-cell proofs of one turn.
+    pub turn_hash: [BabyBear; 4],
+    /// Stage 7-γ.0a: Poseidon2 over the canonical-DFS-order traversal
+    /// of the entire call_forest's effects. Shared across the bundle.
+    pub effects_hash_global: [BabyBear; 4],
+    /// Stage 7-γ.0a: outer `Turn::nonce` promoted to PI; closes the
+    /// differential-test gap from task #49 (AIR did not witness the
+    /// agent's outer nonce bump). Shared across the bundle.
+    pub actor_nonce: u64,
+    /// Stage 7-γ.0a: Poseidon2 of `previous_receipt_hash` (or zero
+    /// sentinel when None). Shared across the bundle.
+    pub previous_receipt_hash: [BabyBear; 4],
 }
 
 impl Default for EffectVmContext {
@@ -3554,6 +3638,10 @@ impl Default for EffectVmContext {
             current_block_height: 0,
             max_custom_effects: pi::MAX_CUSTOM_EFFECTS_DEFAULT,
             approved_handoffs_root: [BabyBear::ZERO; 4],
+            turn_hash: [BabyBear::ZERO; 4],
+            effects_hash_global: [BabyBear::ZERO; 4],
+            actor_nonce: 0,
+            previous_receipt_hash: [BabyBear::ZERO; 4],
         }
     }
 }
@@ -4612,6 +4700,24 @@ pub fn generate_effect_vm_trace_ext(
     public_inputs[pi::CUSTOM_EFFECT_COUNT] = BabyBear::new(custom_count as u32);
     for i in 0..pi::APPROVED_HANDOFFS_LEN {
         public_inputs[pi::APPROVED_HANDOFFS_BASE + i] = context.approved_handoffs_root[i];
+    }
+
+    // ---- Stage 7-γ.0a turn-identity bindings ----
+    // These four fields are *shared across all per-cell proofs of one turn*.
+    // The verifier's cross-proof PI matching loop enforces equality across
+    // the bundle; per-proof binding to the canonical Turn::hash and
+    // call_forest projection is executor-trusted at γ.0 and becomes
+    // algebraic at γ.1.
+    for i in 0..pi::TURN_HASH_LEN {
+        public_inputs[pi::TURN_HASH_BASE + i] = context.turn_hash[i];
+    }
+    for i in 0..pi::EFFECTS_HASH_GLOBAL_LEN {
+        public_inputs[pi::EFFECTS_HASH_GLOBAL_BASE + i] = context.effects_hash_global[i];
+    }
+    public_inputs[pi::ACTOR_NONCE] =
+        BabyBear::new((context.actor_nonce & 0x7FFF_FFFF) as u32);
+    for i in 0..pi::PREVIOUS_RECEIPT_HASH_LEN {
+        public_inputs[pi::PREVIOUS_RECEIPT_HASH_BASE + i] = context.previous_receipt_hash[i];
     }
 
     // ---- Custom proof entries ----
