@@ -1,38 +1,32 @@
-//! Capability monotone attenuation invariant. **STUB.**
+//! Capability monotone attenuation invariant.
 //!
 //! > No turn can grant a capability that's broader than the granter's own
 //! > held capability.
 //!
-//! ## What this test would check
+//! Operationally: we set up a `parent` cell holding a capability over a
+//! `target` cell with random `parent_perms`. We then issue a turn from
+//! `parent` carrying `Effect::GrantCapability` that hands a copy of that
+//! capability to `recipient` with random `grant_perms`. INVARIANT: the
+//! executor commits iff `is_attenuation(parent_perms, grant_perms)` (i.e.
+//! the grant is narrower-or-equal). Otherwise it must reject with
+//! `DelegationDenied` and `recipient`'s c-list must be unchanged.
 //!
-//! Generate:
-//! - A ledger with `parent` and `recipient` cells.
-//! - A `parent`-held capability with random `AuthRequired::P` permissions.
-//! - A `Grant` turn from `parent` to `recipient` with random `Q`
-//!   permissions.
-//!
-//! INVARIANT: After execution, if the grant succeeds, `Q.is_narrower_or_equal(&P)`
-//! holds (the grant was attenuating). If `Q` is *wider* than `P` (not
-//! narrower-or-equal), the executor must reject — never granting wider
-//! capabilities than the parent holds.
-//!
-//! ## Why stubbed
-//!
-//! The capability-grant code path requires:
-//! - Setting up `parent` with the right initial c-list entry (and a
-//!   self-cap for `from`).
-//! - Constructing the `Effect::GrantCapability` action with the correct
-//!   `CapabilityRef` target/permissions.
-//! - Configuring `parent`'s `Permissions { delegate: ... }` to allow the
-//!   grant under `Authorization::Unchecked`.
-//!
-//! That's straightforward but it's a wider strategy surface than the three
-//! initial invariants and we're scoping this session to "ship 3, stub 4".
-//!
-//! Existing test that does roughly this in scenario form:
-//! `turn/tests/proptest_invariants.rs::proptest_capability_confinement_holds`.
+//! Note: a key edge case is the *self-grant* path — the executor short-
+//! circuits attenuation checks when `cap.target == from` because the
+//! signing cell holds an implicit strongest-cap over itself. We exclude
+//! self-grants from the strategy so every iteration exercises the real
+//! attenuation check.
 
 use crate::Invariant;
+use crate::generators::capability::arb_auth_required;
+use crate::generators::cell::{LedgerSpec, build_open_ledger};
+
+use proptest::prelude::*;
+use pyana_cell::{AuthRequired, CapabilityRef, is_attenuation};
+use pyana_turn::{
+    Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, TurnExecutor,
+    TurnResult, turn::Turn,
+};
 
 pub struct CapabilityAttenuation;
 
@@ -42,11 +36,180 @@ impl Invariant for CapabilityAttenuation {
         "granted capability permissions are always narrower-or-equal to the granter's held permissions";
 }
 
-#[test]
-#[ignore = "stubbed: implement in next session — see module docs"]
-fn capability_attenuation_holds() {
-    unimplemented!(
-        "Generate (parent_perms, grant_perms) pairs; execute Effect::GrantCapability \
-         through TurnExecutor; assert grant succeeds iff grant_perms.is_narrower_or_equal(&parent_perms)."
-    );
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(100))]
+
+    /// For any (parent_perms, grant_perms) pair, `Effect::GrantCapability`
+    /// commits iff `is_attenuation(parent_perms, grant_perms)`.
+    #[test]
+    fn capability_attenuation_holds(
+        parent_perms in arb_auth_required(),
+        grant_perms in arb_auth_required(),
+    ) {
+        // 3-cell ledger: 0 = parent (granter), 1 = recipient, 2 = target.
+        let spec = LedgerSpec {
+            n_cells: 3,
+            balance_each: 10_000,
+            wide_open: true,
+        };
+        let (mut ledger, ids) = build_open_ledger(&spec);
+        let parent_id = ids[0];
+        let recipient_id = ids[1];
+        let target_id = ids[2];
+
+        // Replace parent's auto-granted capability to `target` with one
+        // whose permissions are exactly `parent_perms`. The wide_open
+        // ledger gave parent an `AuthRequired::None` cap to every other
+        // cell — we revoke and re-grant so the attenuation check sees the
+        // expected ceiling.
+        {
+            let parent_cell = ledger.get_mut(&parent_id).unwrap();
+            // Find and revoke the existing slot pointing at `target`.
+            let slot = parent_cell
+                .capabilities
+                .lookup_by_target(&target_id)
+                .map(|c| c.slot);
+            if let Some(s) = slot {
+                parent_cell.capabilities.revoke(s);
+            }
+            parent_cell
+                .capabilities
+                .grant(target_id, parent_perms.clone());
+        }
+
+        // Recipient's c-list count before the grant — we'll compare after
+        // to detect whether the grant landed.
+        let recipient_caps_before: usize = ledger
+            .get(&recipient_id)
+            .unwrap()
+            .capabilities
+            .iter()
+            .count();
+
+        // Build the grant turn: parent issues GrantCapability(target,
+        // grant_perms) to recipient.
+        let nonce = ledger.get(&parent_id).unwrap().state.nonce();
+        let cap = CapabilityRef {
+            target: target_id,
+            // Slot is rewritten by the executor on grant; the value here
+            // is irrelevant.
+            slot: 0,
+            permissions: grant_perms.clone(),
+            breadstuff: None,
+            expires_at: None,
+            allowed_effects: None,
+        };
+        let action = Action {
+            target: parent_id,
+            method: [0u8; 32],
+            args: vec![],
+            authorization: Authorization::Unchecked,
+            preconditions: Default::default(),
+            effects: vec![Effect::GrantCapability {
+                from: parent_id,
+                to: recipient_id,
+                cap,
+            }],
+            may_delegate: DelegationMode::None,
+            commitment_mode: Default::default(),
+            balance_change: None,
+        };
+        let mut forest = CallForest::new();
+        forest.add_root(action);
+        let turn = Turn {
+            agent: parent_id,
+            nonce,
+            call_forest: forest,
+            fee: 0,
+            memo: None,
+            valid_until: None,
+            previous_receipt_hash: None,
+            depends_on: vec![],
+            conservation_proof: None,
+            sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
+            custom_program_proofs: None,
+        };
+
+        let executor = TurnExecutor::new(ComputronCosts::zero());
+        let result = executor.execute(&turn, &mut ledger);
+
+        let expected_accept = is_attenuation(&parent_perms, &grant_perms);
+
+        if expected_accept {
+            prop_assert!(
+                result.is_committed(),
+                "is_attenuation({:?}, {:?}) is true but executor rejected: {:?}",
+                parent_perms, grant_perms, result,
+            );
+            // Recipient's c-list must have grown by exactly one entry
+            // pointing at `target` with `grant_perms`.
+            let recipient_caps_after: Vec<_> = ledger
+                .get(&recipient_id)
+                .unwrap()
+                .capabilities
+                .iter()
+                .cloned()
+                .collect();
+            prop_assert_eq!(
+                recipient_caps_after.len(),
+                recipient_caps_before + 1,
+                "successful grant must add exactly one cap to recipient",
+            );
+            let found = recipient_caps_after.iter().any(|c| {
+                c.target == target_id && c.permissions == grant_perms
+            });
+            prop_assert!(
+                found,
+                "grant succeeded but recipient lacks an entry to target with the granted perms",
+            );
+        } else {
+            // is_attenuation returned false → grant_perms is wider than
+            // parent_perms. Must reject (DelegationDenied) and leave the
+            // recipient's c-list untouched.
+            prop_assert!(
+                result.is_rejected(),
+                "is_attenuation({:?}, {:?}) is false but executor accepted: {:?}",
+                parent_perms, grant_perms, result,
+            );
+            match &result {
+                TurnResult::Rejected { reason, .. } => {
+                    // The executor must reject specifically because the
+                    // grant was non-attenuating, not for some other reason
+                    // (CellNotFound, AuthorizationFailed, etc).
+                    let kind = format!("{:?}", reason);
+                    prop_assert!(
+                        kind.contains("DelegationDenied"),
+                        "expected DelegationDenied for non-attenuating grant, got {:?}",
+                        reason,
+                    );
+                }
+                other => prop_assert!(
+                    false,
+                    "expected Rejected, got {:?}",
+                    other,
+                ),
+            }
+            let recipient_caps_after = ledger
+                .get(&recipient_id)
+                .unwrap()
+                .capabilities
+                .iter()
+                .count();
+            prop_assert_eq!(
+                recipient_caps_after,
+                recipient_caps_before,
+                "rejected grant must not mutate recipient's c-list",
+            );
+            // Sanity: parent_perms is strictly narrower than grant_perms
+            // (the predicate is "granted narrower-or-equal to held"; if
+            // it's false, grant_perms is wider).
+            prop_assert!(
+                !AuthRequired::is_narrower_or_equal(&grant_perms, &parent_perms),
+                "consistency: is_attenuation returned false but grant_perms IS narrower-or-equal",
+            );
+        }
+    }
 }
