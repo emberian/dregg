@@ -80,7 +80,13 @@ ALLOWLIST_FILE_PATTERNS=(
     "sdk/src/wallet.rs"
     "tests/src/every_variant_roundtrip.rs"
     "app-framework/src/authorizer.rs"
-    "app-framework/src/escrow.rs"
+    # `app-framework/src/escrow.rs` is NOT allowlisted: P0f migrated it to
+    # the Authorizer-injected constructor, leaving only comments that
+    # reference the literal (which the comment skip handles).
+    # SDK-consensus demo: a CLI scaffold whose entire purpose is end-to-end
+    # plumbing demos against the in-memory engine. Tracked as a follow-up
+    # migration alongside the other demo-agent examples.
+    "demo/sdk-consensus/src/main.rs"
 )
 
 ROOT="${1:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
