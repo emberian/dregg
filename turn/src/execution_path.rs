@@ -57,7 +57,7 @@ pub fn compute_execution_path(turn: &Turn, ledger: &Ledger) -> ExecutionPath {
 
     // Look up the agent's public key from the ledger.
     let agent_public_key = match ledger.get(&turn.agent) {
-        Some(cell) => cell.public_key,
+        Some(cell) => cell.public_key(),
         // Agent cell doesn't exist — cannot determine ownership, route to consensus.
         None => return ExecutionPath::Consensus,
     };
@@ -69,7 +69,7 @@ pub fn compute_execution_path(turn: &Turn, ledger: &Ledger) -> ExecutionPath {
     for cell_id in &write_set {
         match ledger.get(cell_id) {
             Some(cell) => {
-                if cell.public_key != agent_public_key {
+                if cell.public_key() != agent_public_key {
                     return ExecutionPath::Consensus;
                 }
             }
@@ -92,7 +92,7 @@ mod tests {
     fn insert_cell(ledger: &mut Ledger, public_key: [u8; 32], balance: u64) -> CellId {
         let token_id = [0u8; 32];
         let cell = Cell::with_balance(public_key, token_id, balance);
-        let id = cell.id;
+        let id = cell.id();
         ledger.insert_cell(cell).unwrap();
         id
     }

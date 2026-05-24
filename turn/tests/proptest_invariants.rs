@@ -42,7 +42,7 @@ fn setup_ledger(n: u8, balance_each: u64) -> (Ledger, Vec<CellId>) {
     let mut ids = Vec::new();
     for i in 0..n {
         let cell = make_cell(i, balance_each);
-        let id = cell.id;
+        let id = cell.id();
         ledger.insert_cell(cell).unwrap();
         ids.push(id);
     }
@@ -328,7 +328,7 @@ proptest! {
                         continue; // self-transfer is a no-op
                     }
 
-                    let nonce = ledger.get(&from_id).unwrap().state.nonce;
+                    let nonce = ledger.get(&from_id).unwrap().state.nonce();
                     let fee = 0u64; // zero-cost for conservation testing
 
                     let mut forest = CallForest::new();
@@ -376,7 +376,7 @@ proptest! {
         }
 
         // INVARIANT: sum of all balances == initial_total - total_fees
-        let current_total: u64 = ids.iter().map(|id| ledger.get(id).unwrap().state.balance).sum();
+        let current_total: u64 = ids.iter().map(|id| ledger.get(id).unwrap().state.balance()).sum();
         prop_assert_eq!(current_total, initial_total - total_fees,
             "Balance conservation violated: initial={}, fees={}, current={}",
             initial_total, total_fees, current_total);
@@ -384,7 +384,7 @@ proptest! {
         // INVARIANT: no cell has "negative" balance (u64 can't be negative, but
         // we verify no underflow panic occurred by reaching this point).
         for id in &ids {
-            let balance = ledger.get(id).unwrap().state.balance;
+            let balance = ledger.get(id).unwrap().state.balance();
             // This is trivially true for u64, but documents the invariant.
             prop_assert!(balance <= initial_total,
                 "Cell balance {} exceeds initial total {}", balance, initial_total);
@@ -406,7 +406,7 @@ fn build_receipt_chain(
     let mut chain = Vec::new();
 
     for i in 0..n {
-        let nonce = ledger.get(&agent).unwrap().state.nonce;
+        let nonce = ledger.get(&agent).unwrap().state.nonce();
         let fee = 0u64;
 
         // Simple no-op action (targets self, no effects that need auth).
@@ -567,7 +567,7 @@ proptest! {
 
         // SpawnWithDelegation turn.
         {
-            let nonce = ledger.get(&parent_id).unwrap().state.nonce;
+            let nonce = ledger.get(&parent_id).unwrap().state.nonce();
             let mut forest = CallForest::new();
             let action = Action {
                 target: parent_id,
@@ -619,7 +619,7 @@ proptest! {
         // Modify parent's capabilities (add more).
         for i in 0..extra_caps {
             let new_target_cell = make_cell(100 + i, 1000);
-            let new_target_id = new_target_cell.id;
+            let new_target_id = new_target_cell.id();
             ledger.insert_cell(new_target_cell).unwrap();
             // Set permissions to None on new cell.
             ledger.get_mut(&new_target_id).unwrap().permissions = Permissions {
@@ -638,7 +638,7 @@ proptest! {
 
         if revoke_before_refresh {
             // Revoke the delegation from the parent's side.
-            let nonce = ledger.get(&parent_id).unwrap().state.nonce;
+            let nonce = ledger.get(&parent_id).unwrap().state.nonce();
             let mut forest = CallForest::new();
             let action = Action {
                 target: parent_id,
@@ -694,7 +694,7 @@ proptest! {
                 };
             }
 
-            let nonce = ledger.get(&child_id).unwrap().state.nonce;
+            let nonce = ledger.get(&child_id).unwrap().state.nonce();
             let mut forest = CallForest::new();
             let action = Action {
                 target: child_id,

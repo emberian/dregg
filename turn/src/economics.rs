@@ -210,7 +210,7 @@ impl EpochMinter {
         // the minted computrons are effectively lost (misconfiguration).
         // Production deployments MUST ensure the treasury cell exists at genesis.
         if let Some(treasury) = ledger.get_mut(&self.policy.treasury_cell) {
-            treasury.state.balance = treasury.state.balance.saturating_add(amount);
+            treasury.state.set_balance(treasury.state.balance().saturating_add(amount));
         } else {
             // Treasury cell not found — this is a configuration error.
             // Log and skip rather than panic. The computrons are not created.
@@ -374,7 +374,7 @@ mod tests {
 
         // Check treasury balance
         let treasury_cell = ledger.get(&treasury_id).unwrap();
-        assert_eq!(treasury_cell.state.balance, 1000 + 1_000_000);
+        assert_eq!(treasury_cell.state.balance(), 1000 + 1_000_000);
 
         // Block 500: not an epoch boundary, should not mint
         let result = minter.maybe_mint(&mut ledger, 500);

@@ -707,8 +707,8 @@ mod tests {
 
         let cell_a = make_open_cell(pk_a, 100_000);
         let cell_b = make_open_cell(pk_b, 100_000);
-        let id_a = cell_a.id;
-        let id_b = cell_b.id;
+        let id_a = cell_a.id();
+        let id_b = cell_b.id();
 
         ledger.insert_cell(cell_a).unwrap();
         ledger.insert_cell(cell_b).unwrap();
@@ -811,10 +811,10 @@ mod tests {
         let cell_c = make_open_cell(pk_c, 100_000);
         let cell_d = make_open_cell(pk_d, 100_000);
 
-        let id_a = cell_a.id;
-        let id_b = cell_b.id;
-        let id_c = cell_c.id;
-        let id_d = cell_d.id;
+        let id_a = cell_a.id();
+        let id_b = cell_b.id();
+        let id_c = cell_c.id();
+        let id_d = cell_d.id();
 
         ledger.insert_cell(cell_a).unwrap();
         ledger.insert_cell(cell_b).unwrap();
@@ -877,16 +877,16 @@ mod tests {
 
         // Check final balances (each turn pays 10_000 fee from the agent).
         let fee = 10_000u64;
-        let a_final = ledger.get(&id_a).unwrap().state.balance;
+        let a_final = ledger.get(&id_a).unwrap().state.balance();
         assert_eq!(a_final, 100_000 - fee - 100);
 
-        let b_final = ledger.get(&id_b).unwrap().state.balance;
+        let b_final = ledger.get(&id_b).unwrap().state.balance();
         assert_eq!(b_final, 100_000 - fee + 100 - 50);
 
-        let c_final = ledger.get(&id_c).unwrap().state.balance;
+        let c_final = ledger.get(&id_c).unwrap().state.balance();
         assert_eq!(c_final, 100_000 - fee - 25);
 
-        let d_final = ledger.get(&id_d).unwrap().state.balance;
+        let d_final = ledger.get(&id_d).unwrap().state.balance();
         assert_eq!(d_final, 100_000 - fee + 50 + 25);
     }
 
@@ -901,8 +901,8 @@ mod tests {
 
         let cell_a = make_open_cell(pk_a, 100_000);
         let cell_b = make_open_cell(pk_b, 100_000);
-        let id_a = cell_a.id;
-        let id_b = cell_b.id;
+        let id_a = cell_a.id();
+        let id_b = cell_b.id();
 
         ledger.insert_cell(cell_a).unwrap();
         ledger.insert_cell(cell_b).unwrap();
@@ -979,8 +979,8 @@ mod tests {
 
         let cell_a = make_open_cell(pk_a, 100_000);
         let cell_b = make_open_cell(pk_b, 100_000);
-        let id_a = cell_a.id;
-        let id_b = cell_b.id;
+        let id_a = cell_a.id();
+        let id_b = cell_b.id();
 
         ledger.insert_cell(cell_a).unwrap();
         ledger.insert_cell(cell_b).unwrap();
@@ -1025,7 +1025,7 @@ mod tests {
         let mut ledger = Ledger::new();
         let pk_a = [1u8; 32];
         let cell_a = make_open_cell(pk_a, 100_000);
-        let id_a = cell_a.id;
+        let id_a = cell_a.id();
         ledger.insert_cell(cell_a).unwrap();
 
         // Turn 0: creates a new cell.
@@ -1071,8 +1071,8 @@ mod tests {
         let pk_b = [2u8; 32];
         let cell_a = make_open_cell(pk_a, 100_000);
         let cell_b = make_open_cell(pk_b, 100_000);
-        let id_a = cell_a.id;
-        let id_b = cell_b.id;
+        let id_a = cell_a.id();
+        let id_b = cell_b.id();
         ledger.insert_cell(cell_a).unwrap();
         ledger.insert_cell(cell_b).unwrap();
 
@@ -1126,7 +1126,7 @@ mod tests {
         let mut ledger = Ledger::new();
         let pk_alice = [1u8; 32];
         let cell_alice = make_open_cell(pk_alice, 100_000);
-        let id_alice = cell_alice.id;
+        let id_alice = cell_alice.id();
         ledger.insert_cell(cell_alice).unwrap();
 
         // Turn A: creates a new cell with open permissions.
@@ -1249,8 +1249,8 @@ mod tests {
 
         let cell_alice = make_open_cell(pk_alice, 100_000);
         let cell_bob = make_open_cell(pk_bob, 100_000);
-        let id_alice = cell_alice.id;
-        let id_bob = cell_bob.id;
+        let id_alice = cell_alice.id();
+        let id_bob = cell_bob.id();
 
         ledger.insert_cell(cell_alice).unwrap();
         ledger.insert_cell(cell_bob).unwrap();
@@ -1353,8 +1353,8 @@ mod tests {
 
         let cell_alice = make_open_cell(pk_alice, 100_000);
         let cell_bob = make_open_cell(pk_bob, 100_000);
-        let id_alice = cell_alice.id;
-        let id_bob = cell_bob.id;
+        let id_alice = cell_alice.id();
+        let id_bob = cell_bob.id();
 
         ledger.insert_cell(cell_alice).unwrap();
         ledger.insert_cell(cell_bob).unwrap();
@@ -1431,7 +1431,7 @@ mod tests {
         let mut ledger = Ledger::new();
         let pk_alice = [1u8; 32];
         let cell_alice = make_open_cell(pk_alice, 100_000);
-        let id_alice = cell_alice.id;
+        let id_alice = cell_alice.id();
         ledger.insert_cell(cell_alice).unwrap();
 
         // Turn with a PipelinedSend that references a non-existent turn hash.
@@ -1495,7 +1495,7 @@ mod tests {
         let mut ledger = Ledger::new();
         let pk_alice = [1u8; 32];
         let cell_alice = make_open_cell(pk_alice, 100_000);
-        let id_alice = cell_alice.id;
+        let id_alice = cell_alice.id();
         ledger.insert_cell(cell_alice).unwrap();
 
         // Turn A: creates two new cells.

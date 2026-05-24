@@ -893,7 +893,7 @@ impl TurnExecutor {
                 if let TurnResult::Committed { .. } = &result {
                     if conditional.deposit_amount > 0 {
                         if let Some(cell) = ledger.get_mut(&conditional.turn.agent) {
-                            cell.state.balance += conditional.deposit_amount;
+                            cell.state.set_balance(cell.state.balance() + conditional.deposit_amount);
                         }
                     }
                 }
@@ -1691,10 +1691,10 @@ impl TurnExecutor {
         };
 
         // Check nonce.
-        if agent_cell.state.nonce != turn.nonce {
+        if agent_cell.state.nonce() != turn.nonce {
             return TurnResult::Rejected {
                 reason: TurnError::NonceReplay {
-                    expected: agent_cell.state.nonce,
+                    expected: agent_cell.state.nonce(),
                     got: turn.nonce,
                 },
                 at_action: vec![],
@@ -1702,12 +1702,12 @@ impl TurnExecutor {
         }
 
         // Check fee coverage (agent must have enough balance for the fee).
-        if agent_cell.state.balance < turn.fee {
+        if agent_cell.state.balance() < turn.fee {
             return TurnResult::Rejected {
                 reason: TurnError::InsufficientBalance {
                     cell: turn.agent,
                     required: turn.fee,
-                    available: agent_cell.state.balance,
+                    available: agent_cell.state.balance(),
                 },
                 at_action: vec![],
             };
@@ -1791,7 +1791,7 @@ impl TurnExecutor {
         // =====================================================================
         {
             let agent = ledger.get_mut(&turn.agent).unwrap();
-            agent.state.balance -= turn.fee;
+            agent.state.set_balance(agent.state.balance() - turn.fee);
             agent.state.increment_nonce();
         }
 
@@ -1876,12 +1876,12 @@ impl TurnExecutor {
                     let treasury_share = turn.fee * 3 / 10;
                     if let Some(proposer_id) = &self.proposer_cell {
                         if let Some(proposer) = ledger.get_mut(proposer_id) {
-                            proposer.state.balance += proposer_share;
+                            proposer.state.set_balance(proposer.state.balance() + proposer_share);
                         }
                     }
                     if let Some(treasury_id) = &self.treasury_cell {
                         if let Some(treasury) = ledger.get_mut(treasury_id) {
-                            treasury.state.balance += treasury_share;
+                            treasury.state.set_balance(treasury.state.balance() + treasury_share);
                         }
                     }
 
@@ -1963,12 +1963,12 @@ impl TurnExecutor {
                 };
             }
             // Verify the witness cell ID matches.
-            if witness.cell_state.id != *cell_id {
+            if witness.cell_state.id() != *cell_id {
                 return TurnResult::Rejected {
                     reason: TurnError::InvalidEffect {
                         reason: format!(
                             "sovereign witness cell ID mismatch: expected {}, got {}",
-                            cell_id, witness.cell_state.id
+                            cell_id, witness.cell_state.id()
                         ),
                     },
                     at_action: vec![],
@@ -2164,14 +2164,14 @@ impl TurnExecutor {
 
         if let Some(proposer_id) = &self.proposer_cell {
             if let Some(proposer) = ledger.get_mut(proposer_id) {
-                proposer.state.balance += proposer_share;
+                proposer.state.set_balance(proposer.state.balance() + proposer_share);
             }
             // If proposer cell doesn't exist in ledger, share is burned.
         }
 
         if let Some(treasury_id) = &self.treasury_cell {
             if let Some(treasury) = ledger.get_mut(treasury_id) {
-                treasury.state.balance += treasury_share;
+                treasury.state.set_balance(treasury.state.balance() + treasury_share);
             }
             // If treasury cell doesn't exist in ledger, share is burned.
         }
@@ -2266,18 +2266,18 @@ impl TurnExecutor {
             .get(&turn.agent)
             .ok_or(TurnError::CellNotFound { id: turn.agent })?;
 
-        if agent_cell.state.nonce != turn.nonce {
+        if agent_cell.state.nonce() != turn.nonce {
             return Err(TurnError::NonceReplay {
-                expected: agent_cell.state.nonce,
+                expected: agent_cell.state.nonce(),
                 got: turn.nonce,
             });
         }
 
-        if agent_cell.state.balance < turn.fee {
+        if agent_cell.state.balance() < turn.fee {
             return Err(TurnError::InsufficientBalance {
                 cell: turn.agent,
                 required: turn.fee,
-                available: agent_cell.state.balance,
+                available: agent_cell.state.balance(),
             });
         }
 
@@ -2384,7 +2384,7 @@ impl TurnExecutor {
                             let ancestor = ledger.get(&ancestor_id).unwrap();
                             let snapshot: Vec<pyana_cell::CapabilityRef> =
                                 ancestor.capabilities.iter().cloned().collect();
-                            let delegation_epoch = ancestor.state.delegation_epoch;
+                            let delegation_epoch = ancestor.state.delegation_epoch();
                             let now = self.current_timestamp as u64;
                             let max_staleness = self.max_introduction_lifetime;
 
@@ -2545,9 +2545,9 @@ impl TurnExecutor {
             for (cell_id, indices) in &proof_field_sets {
                 if indices.len() == STATE_SLOTS {
                     if let Some(c) = ledger.get_mut(cell_id) {
-                        if !c.state.proved_state {
-                            journal.record_set_proved_state(*cell_id, c.state.proved_state);
-                            c.state.proved_state = true;
+                        if !c.state.proved_state() {
+                            journal.record_set_proved_state(*cell_id, c.state.proved_state());
+                            c.state.set_proved_state(true);
                         }
                     }
                 }
@@ -2556,9 +2556,9 @@ impl TurnExecutor {
             // Non-proof authorization: if any field was modified, proved_state = false.
             for cell_id in &non_proof_field_cells {
                 if let Some(c) = ledger.get_mut(cell_id) {
-                    if c.state.proved_state {
-                        journal.record_set_proved_state(*cell_id, c.state.proved_state);
-                        c.state.proved_state = false;
+                    if c.state.proved_state() {
+                        journal.record_set_proved_state(*cell_id, c.state.proved_state());
+                        c.state.set_proved_state(false);
                     }
                 }
             }
@@ -2569,7 +2569,7 @@ impl TurnExecutor {
             let target = ledger
                 .get(&action.target)
                 .ok_or_else(|| (TurnError::CellNotFound { id: action.target }, path.clone()))?;
-            let current_balance = target.state.balance;
+            let current_balance = target.state.balance();
 
             // Check for underflow on withdrawal (negative delta).
             if delta < 0 {
@@ -2599,11 +2599,11 @@ impl TurnExecutor {
 
             // Record old balance for rollback and apply the delta.
             let cell_mut = ledger.get_mut(&action.target).unwrap();
-            journal.record_set_balance(action.target, cell_mut.state.balance);
+            journal.record_set_balance(action.target, cell_mut.state.balance());
             if delta < 0 {
-                cell_mut.state.balance -= delta.unsigned_abs();
+                cell_mut.state.set_balance(cell_mut.state.balance() - delta.unsigned_abs());
             } else {
-                cell_mut.state.balance += delta as u64;
+                cell_mut.state.set_balance(cell_mut.state.balance() + delta as u64);
             }
 
             // Update excess: withdrawal (negative delta) PRODUCES excess (adds to excess),
@@ -2763,7 +2763,7 @@ impl TurnExecutor {
                         delegator_pk, ..
                     } => ledger
                         .iter()
-                        .find(|(_, cell)| cell.public_key == *delegator_pk)
+                        .find(|(_, cell)| *cell.public_key() == *delegator_pk)
                         .and_then(|(_, cell)| {
                             cell.capabilities
                                 .capabilities_for(&bearer_proof.target)
@@ -3033,7 +3033,7 @@ impl TurnExecutor {
 
         let signature = Signature::from_bytes(&sig_bytes);
 
-        let verifying_key = VerifyingKey::from_bytes(&target_cell.public_key).map_err(|_| {
+        let verifying_key = VerifyingKey::from_bytes(&target_cell.public_key()).map_err(|_| {
             (
                 TurnError::InvalidAuthorization {
                     reason: "cell public key is not a valid Ed25519 point".to_string(),
@@ -3305,7 +3305,7 @@ impl TurnExecutor {
                 })?;
                 let delegator_cell = ledger
                     .iter()
-                    .find(|(_, cell)| cell.public_key == *delegator_pk)
+                    .find(|(_, cell)| *cell.public_key() == *delegator_pk)
                     .map(|(_, cell)| cell);
                 let delegator_cell = delegator_cell.ok_or_else(|| {
                     (
@@ -3323,7 +3323,7 @@ impl TurnExecutor {
                 ) {
                     return Err((
                         TurnError::BearerCapDelegatorLacksCapability {
-                            delegator: delegator_cell.id,
+                            delegator: delegator_cell.id(),
                             target: proof.target,
                         },
                         path.to_vec(),
@@ -3683,12 +3683,12 @@ impl TurnExecutor {
                 let from_cell = ledger
                     .get(from)
                     .ok_or_else(|| (TurnError::CellNotFound { id: *from }, path.to_vec()))?;
-                if from_cell.state.balance < *amount {
+                if from_cell.state.balance() < *amount {
                     return Err((
                         TurnError::InsufficientBalance {
                             cell: *from,
                             required: *amount,
-                            available: from_cell.state.balance,
+                            available: from_cell.state.balance(),
                         },
                         path.to_vec(),
                     ));
@@ -3696,17 +3696,17 @@ impl TurnExecutor {
                 if ledger.get(to).is_none() {
                     return Err((TurnError::TransferDestNotFound { id: *to }, path.to_vec()));
                 }
-                let to_balance = ledger.get(to).unwrap().state.balance;
+                let to_balance = ledger.get(to).unwrap().state.balance();
                 if to_balance.checked_add(*amount).is_none() {
                     return Err((TurnError::BalanceOverflow { cell: *to }, path.to_vec()));
                 }
                 // Record old balances, then apply.
-                let old_from_balance = ledger.get(from).unwrap().state.balance;
-                let old_to_balance = ledger.get(to).unwrap().state.balance;
+                let old_from_balance = ledger.get(from).unwrap().state.balance();
+                let old_to_balance = ledger.get(to).unwrap().state.balance();
                 journal.record_set_balance(*from, old_from_balance);
                 journal.record_set_balance(*to, old_to_balance);
-                ledger.get_mut(from).unwrap().state.balance -= *amount;
-                ledger.get_mut(to).unwrap().state.balance += *amount;
+                ledger.get_mut(from).unwrap().state.set_balance(old_from_balance - *amount);
+                ledger.get_mut(to).unwrap().state.set_balance(old_to_balance + *amount);
                 Ok(())
             }
 
@@ -3809,7 +3809,7 @@ impl TurnExecutor {
                 let c = ledger
                     .get_mut(cell)
                     .ok_or_else(|| (TurnError::CellNotFound { id: *cell }, path.to_vec()))?;
-                journal.record_set_nonce(*cell, c.state.nonce);
+                journal.record_set_nonce(*cell, c.state.nonce());
                 c.state.increment_nonce();
                 Ok(())
             }
@@ -3829,7 +3829,7 @@ impl TurnExecutor {
                     ));
                 }
                 let new_cell = Cell::with_balance(*public_key, *token_id, 0);
-                let id = new_cell.id;
+                let id = new_cell.id();
                 ledger
                     .insert_cell(new_cell)
                     .map_err(|_| (TurnError::CellAlreadyExists { id }, path.to_vec()))?;
@@ -4176,19 +4176,19 @@ impl TurnExecutor {
                         path.to_vec(),
                     )
                 })?;
-                if obligor_cell.state.balance < *stake_amount {
+                if obligor_cell.state.balance() < *stake_amount {
                     return Err((
                         TurnError::InsufficientBalance {
                             cell: *action_target,
                             required: *stake_amount,
-                            available: obligor_cell.state.balance,
+                            available: obligor_cell.state.balance(),
                         },
                         path.to_vec(),
                     ));
                 }
-                let old_balance = obligor_cell.state.balance;
+                let old_balance = obligor_cell.state.balance();
                 journal.record_set_balance(*action_target, old_balance);
-                ledger.get_mut(action_target).unwrap().state.balance -= *stake_amount;
+                ledger.get_mut(action_target).unwrap().state.set_balance(old_balance - *stake_amount);
 
                 // Derive obligation ID and store in registry.
                 let obligation_id = {
@@ -4309,9 +4309,9 @@ impl TurnExecutor {
                         path.to_vec(),
                     )
                 })?;
-                let old_balance = obligor_cell.state.balance;
+                let old_balance = obligor_cell.state.balance();
                 journal.record_set_balance(record.obligor, old_balance);
-                ledger.get_mut(&record.obligor).unwrap().state.balance += record.stake_amount;
+                ledger.get_mut(&record.obligor).unwrap().state.set_balance(old_balance + record.stake_amount);
                 // Mark as resolved.
                 {
                     let mut obligations = self.obligations.lock().unwrap();
@@ -4371,9 +4371,9 @@ impl TurnExecutor {
                         path.to_vec(),
                     )
                 })?;
-                let old_ben_balance = beneficiary_cell.state.balance;
+                let old_ben_balance = beneficiary_cell.state.balance();
                 journal.record_set_balance(record.beneficiary, old_ben_balance);
-                ledger.get_mut(&record.beneficiary).unwrap().state.balance += record.stake_amount;
+                ledger.get_mut(&record.beneficiary).unwrap().state.set_balance(old_ben_balance + record.stake_amount);
                 // Mark as resolved.
                 {
                     let mut obligations = self.obligations.lock().unwrap();
@@ -4456,20 +4456,20 @@ impl TurnExecutor {
                 let creator_cell = ledger
                     .get(cell)
                     .ok_or_else(|| (TurnError::CellNotFound { id: *cell }, path.to_vec()))?;
-                if creator_cell.state.balance < *amount {
+                if creator_cell.state.balance() < *amount {
                     return Err((
                         TurnError::InsufficientBalance {
                             cell: *cell,
                             required: *amount,
-                            available: creator_cell.state.balance,
+                            available: creator_cell.state.balance(),
                         },
                         path.to_vec(),
                     ));
                 }
                 // Lock the funds: subtract from creator.
-                let old_balance = creator_cell.state.balance;
+                let old_balance = creator_cell.state.balance();
                 journal.record_set_balance(*cell, old_balance);
-                ledger.get_mut(cell).unwrap().state.balance -= *amount;
+                ledger.get_mut(cell).unwrap().state.set_balance(old_balance - *amount);
 
                 // Store escrow record.
                 {
@@ -4667,9 +4667,9 @@ impl TurnExecutor {
                         path.to_vec(),
                     )
                 })?;
-                let old_recipient_balance = recipient_cell.state.balance;
+                let old_recipient_balance = recipient_cell.state.balance();
                 journal.record_set_balance(record.recipient, old_recipient_balance);
-                ledger.get_mut(&record.recipient).unwrap().state.balance += record.amount;
+                ledger.get_mut(&record.recipient).unwrap().state.set_balance(old_recipient_balance + record.amount);
                 // Mark escrow as resolved.
                 {
                     let mut escrows = self.escrows.lock().unwrap();
@@ -4728,9 +4728,9 @@ impl TurnExecutor {
                         path.to_vec(),
                     )
                 })?;
-                let old_creator_balance = creator_cell.state.balance;
+                let old_creator_balance = creator_cell.state.balance();
                 journal.record_set_balance(record.creator, old_creator_balance);
-                ledger.get_mut(&record.creator).unwrap().state.balance += record.amount;
+                ledger.get_mut(&record.creator).unwrap().state.set_balance(old_creator_balance + record.amount);
                 // Mark escrow as resolved.
                 {
                     let mut escrows = self.escrows.lock().unwrap();
@@ -4876,19 +4876,19 @@ impl TurnExecutor {
                         path.to_vec(),
                     )
                 })?;
-                if creator_cell.state.balance < *amount {
+                if creator_cell.state.balance() < *amount {
                     return Err((
                         TurnError::InsufficientBalance {
                             cell: *action_target,
                             required: *amount,
-                            available: creator_cell.state.balance,
+                            available: creator_cell.state.balance(),
                         },
                         path.to_vec(),
                     ));
                 }
-                let old_balance = creator_cell.state.balance;
+                let old_balance = creator_cell.state.balance();
                 journal.record_set_balance(*action_target, old_balance);
-                ledger.get_mut(action_target).unwrap().state.balance -= *amount;
+                ledger.get_mut(action_target).unwrap().state.set_balance(old_balance - *amount);
 
                 // Store committed escrow record.
                 let record = CommittedEscrow {
@@ -4965,7 +4965,7 @@ impl TurnExecutor {
                 let recipient_cell_ref = ledger
                     .get(recipient)
                     .ok_or_else(|| (TurnError::CellNotFound { id: *recipient }, path.to_vec()))?;
-                let recipient_pubkey = recipient_cell_ref.public_key;
+                let recipient_pubkey = recipient_cell_ref.public_key();
                 // Verify the claim_auth against the recipient_commitment.
                 if !verify_escrow_claim(
                     claim_auth,
@@ -4995,9 +4995,9 @@ impl TurnExecutor {
                 })?;
                 // Credit the escrowed amount to the recipient.
                 let recipient_cell = ledger.get(recipient).unwrap();
-                let old_balance = recipient_cell.state.balance;
+                let old_balance = recipient_cell.state.balance();
                 journal.record_set_balance(*recipient, old_balance);
-                ledger.get_mut(recipient).unwrap().state.balance += amount;
+                ledger.get_mut(recipient).unwrap().state.set_balance(old_balance + amount);
                 // Mark as resolved.
                 {
                     let mut committed = self.committed_escrows.lock().unwrap();
@@ -5066,7 +5066,7 @@ impl TurnExecutor {
                 let creator_cell_ref = ledger
                     .get(creator)
                     .ok_or_else(|| (TurnError::CellNotFound { id: *creator }, path.to_vec()))?;
-                let creator_pubkey = creator_cell_ref.public_key;
+                let creator_pubkey = creator_cell_ref.public_key();
                 // Verify the claim_auth against the creator_commitment.
                 if !verify_escrow_claim(
                     claim_auth,
@@ -5095,9 +5095,9 @@ impl TurnExecutor {
                     )
                 })?;
                 let creator_cell = ledger.get(creator).unwrap();
-                let old_balance = creator_cell.state.balance;
+                let old_balance = creator_cell.state.balance();
                 journal.record_set_balance(*creator, old_balance);
-                ledger.get_mut(creator).unwrap().state.balance += amount;
+                ledger.get_mut(creator).unwrap().state.set_balance(old_balance + amount);
                 // Mark as resolved.
                 {
                     let mut committed = self.committed_escrows.lock().unwrap();
@@ -5576,14 +5576,13 @@ impl TurnExecutor {
                         path.to_vec(),
                     )
                 })?;
-                let delegation_epoch = parent_cell_data.state.delegation_epoch;
+                let delegation_epoch = parent_cell_data.state.delegation_epoch();
                 let now = self.current_timestamp as u64;
                 let snapshot: Vec<pyana_cell::CapabilityRef> =
                     parent_cell_data.capabilities.iter().cloned().collect();
 
                 let child_id = CellId::derive_raw(child_public_key, child_token_id);
                 let mut child_cell = Cell::with_balance(*child_public_key, *child_token_id, 0);
-                child_cell.id = child_id;
                 child_cell.delegate = Some(*action_target);
                 let clist_bytes = postcard::to_allocvec(&snapshot).unwrap_or_default();
                 let clist_commitment =
@@ -5633,7 +5632,7 @@ impl TurnExecutor {
                     .ok_or_else(|| (TurnError::CellNotFound { id: parent_id }, path.to_vec()))?;
                 let new_snapshot: Vec<pyana_cell::CapabilityRef> =
                     parent_cell_data.capabilities.iter().cloned().collect();
-                let new_epoch = parent_cell_data.state.delegation_epoch;
+                let new_epoch = parent_cell_data.state.delegation_epoch();
                 let now = self.current_timestamp as u64;
 
                 let child_mut = ledger.get_mut(action_target).unwrap();
@@ -5670,7 +5669,7 @@ impl TurnExecutor {
                 let old_child_delegation = child_cell.delegation.clone();
 
                 let parent_mut = ledger.get_mut(action_target).unwrap();
-                let old_epoch = parent_mut.state.delegation_epoch;
+                let old_epoch = parent_mut.state.delegation_epoch();
                 journal.record_set_delegation_epoch(*action_target, old_epoch);
                 parent_mut.state.bump_delegation_epoch();
 
@@ -5816,19 +5815,19 @@ impl TurnExecutor {
                 let actor_cell = ledger
                     .get(actor)
                     .ok_or_else(|| (TurnError::CellNotFound { id: *actor }, path.to_vec()))?;
-                if actor_cell.state.balance < cost {
+                if actor_cell.state.balance() < cost {
                     return Err((
                         TurnError::InsufficientBalance {
                             cell: *actor,
                             required: cost,
-                            available: actor_cell.state.balance,
+                            available: actor_cell.state.balance(),
                         },
                         path.to_vec(),
                     ));
                 }
 
                 // Derive a queue cell ID from the actor + capacity + nonce.
-                let actor_nonce = ledger.get(actor).unwrap().state.nonce;
+                let actor_nonce = ledger.get(actor).unwrap().state.nonce();
                 let hash = blake3::hash(
                     &[
                         actor.as_bytes().as_slice(),
@@ -5842,7 +5841,6 @@ impl TurnExecutor {
                 let queue_id = CellId::derive_raw(&queue_seed, &queue_token);
 
                 let mut queue_cell = pyana_cell::Cell::with_balance(queue_seed, queue_token, 0);
-                queue_cell.id = queue_id;
                 // Encode capacity in field[0].
                 queue_cell.state.fields[0][..8].copy_from_slice(&capacity.to_le_bytes());
                 // field[1] = current length = 0 (already zero).
@@ -5870,9 +5868,9 @@ impl TurnExecutor {
                 journal.record_create_cell(queue_id);
 
                 // Deduct the cost from the actor's balance.
-                let old_balance = ledger.get(actor).unwrap().state.balance;
+                let old_balance = ledger.get(actor).unwrap().state.balance();
                 journal.record_set_balance(*actor, old_balance);
-                ledger.get_mut(actor).unwrap().state.balance -= cost;
+                ledger.get_mut(actor).unwrap().state.set_balance(old_balance - cost);
 
                 Ok(())
             }
@@ -5907,24 +5905,24 @@ impl TurnExecutor {
                 let actor_cell = ledger
                     .get(actor)
                     .ok_or_else(|| (TurnError::CellNotFound { id: *actor }, path.to_vec()))?;
-                if actor_cell.state.balance < *deposit {
+                if actor_cell.state.balance() < *deposit {
                     return Err((
                         TurnError::InsufficientBalance {
                             cell: *actor,
                             required: *deposit,
-                            available: actor_cell.state.balance,
+                            available: actor_cell.state.balance(),
                         },
                         path.to_vec(),
                     ));
                 }
 
                 // Deduct deposit from actor, credit to queue cell.
-                let old_actor_balance = ledger.get(actor).unwrap().state.balance;
-                let old_queue_balance = ledger.get(queue).unwrap().state.balance;
+                let old_actor_balance = ledger.get(actor).unwrap().state.balance();
+                let old_queue_balance = ledger.get(queue).unwrap().state.balance();
                 journal.record_set_balance(*actor, old_actor_balance);
                 journal.record_set_balance(*queue, old_queue_balance);
-                ledger.get_mut(actor).unwrap().state.balance -= *deposit;
-                ledger.get_mut(queue).unwrap().state.balance += *deposit;
+                ledger.get_mut(actor).unwrap().state.set_balance(old_actor_balance - *deposit);
+                ledger.get_mut(queue).unwrap().state.set_balance(old_queue_balance + *deposit);
 
                 // Increment queue length.
                 let old_len_field = ledger.get(queue).unwrap().state.fields[1];
@@ -5976,20 +5974,20 @@ impl TurnExecutor {
                 queue_mut.state.fields[1][..8].copy_from_slice(&new_len.to_le_bytes());
 
                 // Refund the deposit to the dequeuer.
-                let queue_balance = queue_mut.state.balance;
+                let queue_balance = queue_mut.state.balance();
                 let refund = if current_len > 0 {
                     queue_balance / current_len
                 } else {
                     0
                 };
                 if refund > 0 {
-                    let old_queue_balance = queue_mut.state.balance;
+                    let old_queue_balance = queue_mut.state.balance();
                     journal.record_set_balance(*queue, old_queue_balance);
-                    queue_mut.state.balance -= refund;
+                    queue_mut.state.set_balance(old_queue_balance - refund);
 
-                    let old_actor_balance = ledger.get(action_target).unwrap().state.balance;
+                    let old_actor_balance = ledger.get(action_target).unwrap().state.balance();
                     journal.record_set_balance(*action_target, old_actor_balance);
-                    ledger.get_mut(action_target).unwrap().state.balance += refund;
+                    ledger.get_mut(action_target).unwrap().state.set_balance(old_actor_balance + refund);
                 }
 
                 Ok(())
@@ -6041,7 +6039,7 @@ impl TurnExecutor {
                         .get(actor)
                         .ok_or_else(|| (TurnError::CellNotFound { id: *actor }, path.to_vec()))?
                         .state
-                        .balance;
+                        .balance();
                     if actor_balance < additional {
                         return Err((
                             TurnError::InsufficientBalance {
@@ -6053,7 +6051,7 @@ impl TurnExecutor {
                         ));
                     }
                     journal.record_set_balance(*actor, actor_balance);
-                    ledger.get_mut(actor).unwrap().state.balance -= additional;
+                    ledger.get_mut(actor).unwrap().state.set_balance(actor_balance - additional);
                 }
 
                 // Update capacity field.
@@ -6094,23 +6092,23 @@ impl TurnExecutor {
                             let actor_cell = ledger.get(actor).ok_or_else(|| {
                                 (TurnError::CellNotFound { id: *actor }, path.to_vec())
                             })?;
-                            if actor_cell.state.balance < *deposit {
+                            if actor_cell.state.balance() < *deposit {
                                 return Err((
                                     TurnError::InsufficientBalance {
                                         cell: *actor,
                                         required: *deposit,
-                                        available: actor_cell.state.balance,
+                                        available: actor_cell.state.balance(),
                                     },
                                     path.to_vec(),
                                 ));
                             }
 
-                            let old_actor_balance = ledger.get(actor).unwrap().state.balance;
-                            let old_queue_balance = ledger.get(queue).unwrap().state.balance;
+                            let old_actor_balance = ledger.get(actor).unwrap().state.balance();
+                            let old_queue_balance = ledger.get(queue).unwrap().state.balance();
                             journal.record_set_balance(*actor, old_actor_balance);
                             journal.record_set_balance(*queue, old_queue_balance);
-                            ledger.get_mut(actor).unwrap().state.balance -= *deposit;
-                            ledger.get_mut(queue).unwrap().state.balance += *deposit;
+                            ledger.get_mut(actor).unwrap().state.set_balance(old_actor_balance - *deposit);
+                            ledger.get_mut(queue).unwrap().state.set_balance(old_queue_balance + *deposit);
 
                             let old_len_field = ledger.get(queue).unwrap().state.fields[1];
                             let new_len = current_len + 1;
@@ -6155,21 +6153,21 @@ impl TurnExecutor {
                                 .copy_from_slice(&new_len.to_le_bytes());
 
                             // Refund deposit.
-                            let queue_balance = ledger.get(queue).unwrap().state.balance;
+                            let queue_balance = ledger.get(queue).unwrap().state.balance();
                             let refund = if current_len > 0 {
                                 queue_balance / current_len
                             } else {
                                 0
                             };
                             if refund > 0 {
-                                let old_q_bal = ledger.get(queue).unwrap().state.balance;
+                                let old_q_bal = ledger.get(queue).unwrap().state.balance();
                                 journal.record_set_balance(*queue, old_q_bal);
-                                ledger.get_mut(queue).unwrap().state.balance -= refund;
+                                ledger.get_mut(queue).unwrap().state.set_balance(old_q_bal - refund);
 
                                 let old_actor_bal =
-                                    ledger.get(action_target).unwrap().state.balance;
+                                    ledger.get(action_target).unwrap().state.balance();
                                 journal.record_set_balance(*action_target, old_actor_bal);
-                                ledger.get_mut(action_target).unwrap().state.balance += refund;
+                                ledger.get_mut(action_target).unwrap().state.set_balance(old_actor_bal + refund);
                             }
                         }
                     }
@@ -6467,10 +6465,10 @@ impl TurnExecutor {
         entries.sort_by_key(|(id, _)| *id.as_bytes());
         for (id, cell) in entries {
             hasher.update(id.as_bytes());
-            hasher.update(&cell.public_key);
-            hasher.update(&cell.token_id);
-            hasher.update(&cell.state.nonce.to_le_bytes());
-            hasher.update(&cell.state.balance.to_le_bytes());
+            hasher.update(cell.public_key());
+            hasher.update(cell.token_id());
+            hasher.update(&cell.state.nonce().to_le_bytes());
+            hasher.update(&cell.state.balance().to_le_bytes());
             for field in &cell.state.fields {
                 hasher.update(field);
             }
@@ -6960,7 +6958,7 @@ impl TurnExecutor {
 
         for (cell_id, old_balance) in &first_balance {
             if let Some(c) = ledger.get(cell_id) {
-                let diff = c.state.balance as i128 - *old_balance as i128;
+                let diff = c.state.balance() as i128 - *old_balance as i128;
                 if diff != 0 {
                     let e = updated_cells
                         .entry(*cell_id)
@@ -6973,7 +6971,7 @@ impl TurnExecutor {
 
         for (cell_id, old_nonce) in &first_nonce {
             if let Some(c) = ledger.get(cell_id) {
-                if c.state.nonce > *old_nonce {
+                if c.state.nonce() > *old_nonce {
                     let e = updated_cells
                         .entry(*cell_id)
                         .or_insert_with(CellStateDelta::empty);
@@ -8155,15 +8153,15 @@ impl TurnExecutor {
         let agent_cell = ledger
             .get(&atomic_turn.agent)
             .ok_or(AtomicTurnError::AgentNotFound(atomic_turn.agent))?;
-        if agent_cell.state.nonce != atomic_turn.nonce {
+        if agent_cell.state.nonce() != atomic_turn.nonce {
             return Err(AtomicTurnError::NonceMismatch {
-                expected: agent_cell.state.nonce,
+                expected: agent_cell.state.nonce(),
                 got: atomic_turn.nonce,
             });
         }
-        if agent_cell.state.balance < atomic_turn.fee {
+        if agent_cell.state.balance() < atomic_turn.fee {
             return Err(AtomicTurnError::InsufficientFee {
-                available: agent_cell.state.balance,
+                available: agent_cell.state.balance(),
                 required: atomic_turn.fee,
             });
         }
@@ -8352,7 +8350,7 @@ impl TurnExecutor {
         // Deduct fee and increment nonce.
         {
             let agent = ledger.get_mut(&atomic_turn.agent).unwrap();
-            agent.state.balance -= atomic_turn.fee;
+            agent.state.set_balance(agent.state.balance() - atomic_turn.fee);
             agent.state.increment_nonce();
         }
 
@@ -8406,15 +8404,15 @@ impl TurnExecutor {
         let agent_cell = ledger
             .get(&mixed_turn.agent)
             .ok_or(AtomicTurnError::AgentNotFound(mixed_turn.agent))?;
-        if agent_cell.state.nonce != mixed_turn.nonce {
+        if agent_cell.state.nonce() != mixed_turn.nonce {
             return Err(AtomicTurnError::NonceMismatch {
-                expected: agent_cell.state.nonce,
+                expected: agent_cell.state.nonce(),
                 got: mixed_turn.nonce,
             });
         }
-        if agent_cell.state.balance < mixed_turn.fee {
+        if agent_cell.state.balance() < mixed_turn.fee {
             return Err(AtomicTurnError::InsufficientFee {
-                available: agent_cell.state.balance,
+                available: agent_cell.state.balance(),
                 required: mixed_turn.fee,
             });
         }
@@ -8743,7 +8741,7 @@ impl TurnExecutor {
         // ====================================================================
         {
             let agent = ledger.get_mut(&mixed_turn.agent).unwrap();
-            agent.state.balance -= mixed_turn.fee;
+            agent.state.set_balance(agent.state.balance() - mixed_turn.fee);
             agent.state.increment_nonce();
         }
 
@@ -9055,7 +9053,7 @@ mod hardening_tests {
     fn previous_receipt_hash_replay_blocked() {
         let mut ledger = Ledger::new();
         let agent = make_permissive_cell(1, 1000);
-        let agent_id = agent.id;
+        let agent_id = agent.id();
         ledger.insert_cell(agent).unwrap();
 
         let executor = TurnExecutor::new(ComputronCosts::zero());
@@ -9086,7 +9084,7 @@ mod hardening_tests {
     fn previous_receipt_hash_wrong_chain_rejected() {
         let mut ledger = Ledger::new();
         let agent = make_permissive_cell(1, 1000);
-        let agent_id = agent.id;
+        let agent_id = agent.id();
         ledger.insert_cell(agent).unwrap();
 
         let executor = TurnExecutor::new(ComputronCosts::zero());
@@ -9116,7 +9114,7 @@ mod hardening_tests {
     fn previous_receipt_hash_correct_chain_accepted() {
         let mut ledger = Ledger::new();
         let agent = make_permissive_cell(1, 1000);
-        let agent_id = agent.id;
+        let agent_id = agent.id();
         ledger.insert_cell(agent).unwrap();
 
         let executor = TurnExecutor::new(ComputronCosts::zero());
@@ -9136,7 +9134,7 @@ mod hardening_tests {
     fn previous_receipt_hash_genesis_with_some_rejected() {
         let mut ledger = Ledger::new();
         let agent = make_permissive_cell(1, 1000);
-        let agent_id = agent.id;
+        let agent_id = agent.id();
         ledger.insert_cell(agent).unwrap();
 
         let executor = TurnExecutor::new(ComputronCosts::zero());
@@ -9163,7 +9161,7 @@ mod hardening_tests {
     fn migration_frozen_agent_blocks_execute() {
         let mut ledger = Ledger::new();
         let agent = make_permissive_cell(1, 1000);
-        let agent_id = agent.id;
+        let agent_id = agent.id();
         ledger.insert_cell(agent).unwrap();
 
         let executor = TurnExecutor::new(ComputronCosts::zero());
@@ -9192,9 +9190,9 @@ mod hardening_tests {
     fn migration_frozen_target_blocks_transfer() {
         let mut ledger = Ledger::new();
         let agent = make_permissive_cell(1, 10_000);
-        let agent_id = agent.id;
+        let agent_id = agent.id();
         let target = make_permissive_cell(2, 0);
-        let target_id = target.id;
+        let target_id = target.id();
         // Grant agent capability to target so cross-cell check passes.
         let mut a = agent;
         a.capabilities.grant(target_id, AuthRequired::None);
@@ -9253,7 +9251,7 @@ mod hardening_tests {
     fn migration_frozen_blocks_atomic_sovereign() {
         let mut ledger = Ledger::new();
         let agent = make_permissive_cell(1, 1000);
-        let agent_id = agent.id;
+        let agent_id = agent.id();
         let frozen_id = CellId([0xCC; 32]);
         ledger.insert_cell(agent).unwrap();
 
@@ -9296,9 +9294,9 @@ mod hardening_tests {
         let mut ledger = Ledger::new();
         // Agent (attacker) and victim cell both exist; victim REQUIRES Signature.
         let agent = make_permissive_cell(0xAA, 1000);
-        let agent_id = agent.id;
+        let agent_id = agent.id();
         let victim = make_signed_cell(0xBB, 1000);
-        let victim_id = victim.id;
+        let victim_id = victim.id();
         ledger.insert_cell(agent).unwrap();
         ledger.insert_cell(victim.clone()).unwrap();
 
@@ -9350,11 +9348,11 @@ mod hardening_tests {
     fn mixed_atomic_late_failure_rolls_back_hosted_mutations() {
         let mut ledger = Ledger::new();
         let agent = make_permissive_cell(0xAA, 100);
-        let agent_id = agent.id;
+        let agent_id = agent.id();
         let cell_b = make_permissive_cell(0xBB, 1_000);
-        let cell_b_id = cell_b.id;
+        let cell_b_id = cell_b.id();
         let cell_c = make_permissive_cell(0xCC, 50);
-        let cell_c_id = cell_c.id;
+        let cell_c_id = cell_c.id();
         ledger.insert_cell(agent).unwrap();
         ledger.insert_cell(cell_b).unwrap();
         ledger.insert_cell(cell_c).unwrap();
@@ -9407,8 +9405,8 @@ mod hardening_tests {
         assert!(r.is_err(), "expected late failure, got: {:?}", r);
 
         // Balances MUST be unchanged (rollback worked).
-        assert_eq!(ledger.get(&cell_b_id).unwrap().state.balance, 1_000);
-        assert_eq!(ledger.get(&cell_c_id).unwrap().state.balance, 50);
+        assert_eq!(ledger.get(&cell_b_id).unwrap().state.balance(), 1_000);
+        assert_eq!(ledger.get(&cell_c_id).unwrap().state.balance(), 50);
     }
 
     /// P2-2: set_timestamp MUST silently ignore backwards-in-time updates.
@@ -9431,9 +9429,9 @@ mod hardening_tests {
     fn mixed_atomic_hosted_unauthorized_transfer_blocked() {
         let mut ledger = Ledger::new();
         let agent = make_permissive_cell(0xAA, 100);
-        let agent_id = agent.id;
+        let agent_id = agent.id();
         let victim = make_signed_cell(0xBB, 10_000);
-        let victim_id = victim.id;
+        let victim_id = victim.id();
         ledger.insert_cell(agent).unwrap();
         ledger.insert_cell(victim).unwrap();
 
@@ -9468,7 +9466,7 @@ mod hardening_tests {
         assert!(matches!(r, Err(AtomicTurnError::HostedAuthorizationFailed { .. })));
 
         // Both balances UNCHANGED.
-        assert_eq!(ledger.get(&victim_id).unwrap().state.balance, 10_000);
-        assert_eq!(ledger.get(&agent_id).unwrap().state.balance, 100);
+        assert_eq!(ledger.get(&victim_id).unwrap().state.balance(), 10_000);
+        assert_eq!(ledger.get(&agent_id).unwrap().state.balance(), 100);
     }
 }

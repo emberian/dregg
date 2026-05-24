@@ -97,8 +97,8 @@ fn setup_two_open_cells(agent_balance: u64, target_balance: u64) -> (Ledger, Cel
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, agent_balance);
     let (target, _) = make_open_cell(2, target_balance);
-    let agent_id = agent.id;
-    let target_id = target.id;
+    let agent_id = agent.id();
+    let target_id = target.id();
 
     // Grant agent a capability to target.
     let mut agent_with_cap = agent;
@@ -202,10 +202,10 @@ fn test_simple_transfer() {
 
     // Agent paid 100 fee + transferred 200.
     let agent = ledger.get(&agent_id).unwrap();
-    assert_eq!(agent.state.balance, 1000 - 100 - 200);
+    assert_eq!(agent.state.balance(), 1000 - 100 - 200);
 
     let target = ledger.get(&target_id).unwrap();
-    assert_eq!(target.state.balance, 500 + 200);
+    assert_eq!(target.state.balance(), 500 + 200);
 }
 
 // =============================================================================
@@ -248,14 +248,14 @@ fn test_multi_action_with_children() {
 fn test_permission_denied_proof_required() {
     let mut ledger = Ledger::new();
     let (agent, agent_kp) = make_sig_cell(1, 5000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
 
     // Target requires Proof for set_state.
     let (mut target, _target_kp) = make_sig_cell(2, 0);
     target.permissions = Permissions::zkapp();
     // Give it a verification key so proofs can potentially work.
     target.verification_key = Some(VerificationKey::new(vec![1, 2, 3, 4]));
-    let target_id = target.id;
+    let target_id = target.id();
 
     let mut agent_with_cap = agent;
     agent_with_cap
@@ -297,12 +297,12 @@ fn test_permission_denied_proof_required() {
 fn test_permission_satisfied_with_proof() {
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 5000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
 
     let (mut target, _) = make_open_cell(2, 0);
     target.permissions = Permissions::zkapp();
     target.verification_key = Some(VerificationKey::new(vec![1, 2, 3, 4]));
-    let target_id = target.id;
+    let target_id = target.id();
 
     let mut agent_with_cap = agent;
     agent_with_cap
@@ -337,12 +337,12 @@ fn test_permission_satisfied_with_proof() {
 fn test_proof_rejected_by_verifier() {
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 5000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
 
     let (mut target, _) = make_open_cell(2, 0);
     target.permissions = Permissions::zkapp();
     target.verification_key = Some(VerificationKey::new(vec![1, 2, 3, 4]));
-    let target_id = target.id;
+    let target_id = target.id();
 
     let mut agent_with_cap = agent;
     agent_with_cap
@@ -382,12 +382,12 @@ fn test_proof_rejected_by_verifier() {
 fn test_proof_fail_closed_no_verifier() {
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 5000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
 
     let (mut target, _) = make_open_cell(2, 0);
     target.permissions = Permissions::zkapp();
     target.verification_key = Some(VerificationKey::new(vec![1, 2, 3, 4]));
-    let target_id = target.id;
+    let target_id = target.id();
 
     let mut agent_with_cap = agent;
     agent_with_cap
@@ -427,12 +427,12 @@ fn test_proof_fail_closed_no_verifier() {
 fn test_proof_rejected_no_verification_key() {
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 5000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
 
     let (mut target, _) = make_open_cell(2, 0);
     target.permissions = Permissions::zkapp();
     // No verification key set!
-    let target_id = target.id;
+    let target_id = target.id();
 
     let mut agent_with_cap = agent;
     agent_with_cap
@@ -472,11 +472,11 @@ fn test_proof_rejected_no_verification_key() {
 fn test_real_signature_verification() {
     let mut ledger = Ledger::new();
     let (agent, agent_kp) = make_sig_cell(1, 5000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
 
     // Target with Signature-required permissions.
     let (target, target_kp) = make_sig_cell(2, 0);
-    let target_id = target.id;
+    let target_id = target.id();
 
     let mut agent_with_cap = agent;
     agent_with_cap
@@ -562,10 +562,10 @@ fn test_real_signature_verification() {
 fn test_invalid_signature_rejected() {
     let mut ledger = Ledger::new();
     let (agent, _) = make_sig_cell(1, 5000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
 
     let (target, _target_kp) = make_sig_cell(2, 0);
-    let target_id = target.id;
+    let target_id = target.id();
 
     let mut agent_with_cap = agent;
     agent_with_cap
@@ -609,10 +609,10 @@ fn test_invalid_signature_rejected() {
 fn test_wrong_key_signature_rejected() {
     let mut ledger = Ledger::new();
     let (agent, agent_kp) = make_sig_cell(1, 5000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
 
     let (target, _target_kp) = make_sig_cell(2, 0);
-    let target_id = target.id;
+    let target_id = target.id();
 
     let mut agent_with_cap = agent;
     agent_with_cap
@@ -803,7 +803,7 @@ fn test_atomicity_child_failure_rollback() {
     let executor = zero_cost_executor();
 
     // Snapshot the initial state.
-    let initial_target_balance = ledger.get(&target_id).unwrap().state.balance;
+    let initial_target_balance = ledger.get(&target_id).unwrap().state.balance();
     let initial_target_field = ledger.get(&target_id).unwrap().state.fields[0];
 
     let mut builder = TurnBuilder::new(agent_id, 0);
@@ -832,11 +832,11 @@ fn test_atomicity_child_failure_rollback() {
     // Verify atomicity: parent's SetField was rolled back.
     let cell = ledger.get(&target_id).unwrap();
     assert_eq!(cell.state.fields[0], initial_target_field);
-    assert_eq!(cell.state.balance, initial_target_balance);
+    assert_eq!(cell.state.balance(), initial_target_balance);
 
     // Agent nonce IS incremented (fee+nonce commit is permanent, prevents DoS).
     let agent = ledger.get(&agent_id).unwrap();
-    assert_eq!(agent.state.nonce, 1);
+    assert_eq!(agent.state.nonce(), 1);
 }
 
 // =============================================================================
@@ -876,9 +876,9 @@ fn test_delegation_none_blocks_child() {
     let (agent, _) = make_open_cell(1, 5000);
     let (target1, _) = make_open_cell(2, 0);
     let (target2, _) = make_open_cell(3, 0);
-    let agent_id = agent.id;
-    let target1_id = target1.id;
-    let target2_id = target2.id;
+    let agent_id = agent.id();
+    let target1_id = target1.id();
+    let target2_id = target2.id();
 
     let mut agent_with_caps = agent;
     agent_with_caps
@@ -930,8 +930,8 @@ fn test_capability_isolation() {
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 5000);
     let (target, _) = make_open_cell(2, 0);
-    let agent_id = agent.id;
-    let target_id = target.id;
+    let agent_id = agent.id();
+    let target_id = target.id();
 
     // Agent does NOT have a capability to target.
     ledger.insert_cell(agent).unwrap();
@@ -1010,7 +1010,7 @@ fn test_nonce_increment_prevents_replay() {
 
     // Agent nonce should now be 1.
     let agent = ledger.get(&agent_id).unwrap();
-    assert_eq!(agent.state.nonce, 1);
+    assert_eq!(agent.state.nonce(), 1);
 
     // Try to replay with nonce 0 again: should fail.
     let mut builder2 = TurnBuilder::new(agent_id, 0);
@@ -1352,9 +1352,9 @@ fn test_create_cell_effect() {
 
     // New cell should exist with zero balance.
     let new_cell = ledger.get(&new_id).unwrap();
-    assert_eq!(new_cell.state.balance, 0);
-    assert_eq!(new_cell.public_key, new_pk);
-    assert_eq!(new_cell.token_id, new_token);
+    assert_eq!(new_cell.state.balance(), 0);
+    assert_eq!(*new_cell.public_key(), new_pk);
+    assert_eq!(*new_cell.token_id(), new_token);
 }
 
 // =============================================================================
@@ -1368,8 +1368,8 @@ fn test_create_cell_duplicate_rejected() {
 
     // Try to create a cell with the same identity as the existing target.
     let target = ledger.get(&target_id).unwrap();
-    let existing_pk = target.public_key;
-    let existing_token = target.token_id;
+    let existing_pk = *target.public_key();
+    let existing_token = *target.token_id();
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
@@ -1398,9 +1398,9 @@ fn test_grant_and_use_capability() {
     let (agent, _) = make_open_cell(1, 5000);
     let (target1, _) = make_open_cell(2, 0);
     let (target2, _) = make_open_cell(3, 0);
-    let agent_id = agent.id;
-    let target1_id = target1.id;
-    let target2_id = target2.id;
+    let agent_id = agent.id();
+    let target1_id = target1.id();
+    let target2_id = target2.id();
 
     let mut agent_with_cap = agent;
     agent_with_cap
@@ -1451,9 +1451,9 @@ fn test_revoke_capability() {
     let (agent, _) = make_open_cell(1, 5000);
     let (target, _) = make_open_cell(2, 0);
     let (other, _) = make_open_cell(3, 0);
-    let agent_id = agent.id;
-    let target_id = target.id;
-    let other_id = other.id;
+    let agent_id = agent.id();
+    let target_id = target.id();
+    let other_id = other.id();
 
     let mut agent_with_cap = agent;
     agent_with_cap
@@ -1496,7 +1496,7 @@ fn test_revoke_capability() {
 fn test_self_action_no_capability_needed() {
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 5000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
     ledger.insert_cell(agent).unwrap();
 
     let executor = zero_cost_executor();
@@ -1550,7 +1550,7 @@ fn test_multiple_root_actions() {
     let target = ledger.get(&target_id).unwrap();
     assert_eq!(target.state.fields[0], [1u8; 32]);
     assert_eq!(target.state.fields[1], [2u8; 32]);
-    assert_eq!(target.state.balance, 1100); // 1000 + 100 transfer
+    assert_eq!(target.state.balance(), 1100); // 1000 + 100 transfer
 }
 
 // =============================================================================
@@ -1632,8 +1632,8 @@ fn test_emit_event_no_state_change() {
     // Target state should be unchanged (events don't modify state).
     let target_after = ledger.get(&target_id).unwrap().state.clone();
     assert_eq!(target_before.fields, target_after.fields);
-    assert_eq!(target_before.nonce, target_after.nonce);
-    assert_eq!(target_before.balance, target_after.balance);
+    assert_eq!(target_before.nonce(), target_after.nonce());
+    assert_eq!(target_before.balance(), target_after.balance());
 }
 
 // =============================================================================
@@ -1645,7 +1645,7 @@ fn test_increment_nonce_effect() {
     let (mut ledger, agent_id, target_id) = setup_two_open_cells(5000, 0);
     let executor = zero_cost_executor();
 
-    assert_eq!(ledger.get(&target_id).unwrap().state.nonce, 0);
+    assert_eq!(ledger.get(&target_id).unwrap().state.nonce(), 0);
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
@@ -1657,7 +1657,7 @@ fn test_increment_nonce_effect() {
     let result = executor.execute(&turn, &mut ledger);
     assert!(result.is_committed());
 
-    assert_eq!(ledger.get(&target_id).unwrap().state.nonce, 1);
+    assert_eq!(ledger.get(&target_id).unwrap().state.nonce(), 1);
 }
 
 // =============================================================================
@@ -1784,10 +1784,10 @@ fn test_sequential_turns() {
 
     // Agent nonce should be 5.
     let agent = ledger.get(&agent_id).unwrap();
-    assert_eq!(agent.state.nonce, 5);
+    assert_eq!(agent.state.nonce(), 5);
 
     // Agent balance: 50000 - 5*100 = 49500.
-    assert_eq!(agent.state.balance, 49500);
+    assert_eq!(agent.state.balance(), 49500);
 }
 
 // =============================================================================
@@ -1860,11 +1860,11 @@ fn test_forest_total_effects() {
 fn test_auth_none_allows_none() {
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 5000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
 
     // Target with all-None permissions.
     let (target, _) = make_open_cell(2, 0);
-    let target_id = target.id;
+    let target_id = target.id();
 
     let mut agent_with_cap = agent;
     agent_with_cap
@@ -2020,11 +2020,11 @@ fn test_precondition_field_equals() {
 fn test_breadstuff_authorization() {
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 5000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
 
     // Target with Signature-level auth requirement.
     let (target, _) = make_sig_cell(2, 0);
-    let target_id = target.id;
+    let target_id = target.id();
 
     // The actor holds a capability with a matching breadstuff token (targeting the target cell).
     let token_hash = [0xAB; 32];
@@ -2063,10 +2063,10 @@ fn test_breadstuff_authorization() {
 fn test_breadstuff_wrong_token_rejected() {
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 5000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
 
     let (mut target, _) = make_sig_cell(2, 0);
-    let target_id = target.id;
+    let target_id = target.id();
 
     // Target has breadstuff [0xAB; 32], but we provide [0xCD; 32].
     target
@@ -2122,7 +2122,7 @@ fn test_ledger_delta_in_result() {
 
     // Delta should record the created cell.
     assert_eq!(delta.created.len(), 1);
-    assert_eq!(delta.created[0].public_key, new_pk);
+    assert_eq!(*delta.created[0].public_key(), new_pk);
 
     // Delta should record the updated agent.
     assert!(!delta.updated.is_empty());
@@ -2142,11 +2142,11 @@ fn test_ledger_delta_in_result() {
 fn test_frozen_cell_rejects_all() {
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 5000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
 
     let (mut frozen, _) = make_open_cell(2, 1000);
     frozen.permissions = Permissions::frozen();
-    let frozen_id = frozen.id;
+    let frozen_id = frozen.id();
 
     let mut agent_with_cap = agent;
     agent_with_cap
@@ -2183,12 +2183,12 @@ fn test_frozen_cell_rejects_all() {
 fn test_receive_permission_blocks_transfer() {
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 5000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
 
     // Destination cell has receive = Impossible (frozen).
     let (mut dest, _) = make_open_cell(2, 0);
     dest.permissions.receive = AuthRequired::Impossible;
-    let dest_id = dest.id;
+    let dest_id = dest.id();
 
     let mut agent_with_cap = agent;
     agent_with_cap
@@ -2232,12 +2232,12 @@ fn test_receive_permission_blocks_transfer() {
 fn test_receive_permission_requires_auth_blocks_transfer() {
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 5000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
 
     // Destination cell requires Signature to receive.
     let (mut dest, _) = make_open_cell(2, 0);
     dest.permissions.receive = AuthRequired::Signature;
-    let dest_id = dest.id;
+    let dest_id = dest.id();
 
     let mut agent_with_cap = agent;
     agent_with_cap
@@ -2281,13 +2281,13 @@ fn test_receive_permission_requires_auth_blocks_transfer() {
 fn test_mixed_effects_all_permissions_checked() {
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 5000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
 
     // Target: set_state = None (allowed), but send = Impossible.
     let (mut target, _) = make_open_cell(2, 1000);
     target.permissions.set_state = AuthRequired::None;
     target.permissions.send = AuthRequired::Impossible;
-    let target_id = target.id;
+    let target_id = target.id();
 
     let mut agent_with_cap = agent;
     agent_with_cap
@@ -2328,12 +2328,12 @@ fn test_mixed_effects_all_permissions_checked() {
 fn test_empty_proof_rejected() {
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 5000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
 
     let (mut target, _) = make_open_cell(2, 0);
     target.permissions = Permissions::zkapp();
     target.verification_key = Some(VerificationKey::new(vec![1, 2, 3, 4]));
-    let target_id = target.id;
+    let target_id = target.id();
 
     let mut agent_with_cap = agent;
     agent_with_cap
@@ -2375,9 +2375,9 @@ fn test_grant_capability_amplification_blocked() {
     let (agent, _) = make_open_cell(1, 5000);
     let (target1, _) = make_open_cell(2, 0);
     let (target2, _) = make_open_cell(3, 0);
-    let agent_id = agent.id;
-    let target1_id = target1.id;
-    let target2_id = target2.id;
+    let agent_id = agent.id();
+    let target1_id = target1.id();
+    let target2_id = target2.id();
 
     // Agent has capability to target1, but NOT to target2.
     let mut agent_with_cap = agent;
@@ -2437,9 +2437,9 @@ fn test_grant_capability_attenuation_only() {
     let (agent, _) = make_open_cell(1, 5000);
     let (target1, _) = make_open_cell(2, 0);
     let (target2, _) = make_open_cell(3, 0);
-    let agent_id = agent.id;
-    let target1_id = target1.id;
-    let target2_id = target2.id;
+    let agent_id = agent.id();
+    let target1_id = target1.id();
+    let target2_id = target2.id();
 
     // Agent has capability to target1 and target2,
     // but the cap to target2 requires Signature.
@@ -2501,9 +2501,9 @@ fn test_grant_capability_attenuation_succeeds() {
     let (agent, _) = make_open_cell(1, 5000);
     let (target1, _) = make_open_cell(2, 0);
     let (target2, _) = make_open_cell(3, 0);
-    let agent_id = agent.id;
-    let target1_id = target1.id;
-    let target2_id = target2.id;
+    let agent_id = agent.id();
+    let target1_id = target1.id();
+    let target2_id = target2.id();
 
     // Agent has capability to target1 and target2 with AuthRequired::None.
     let mut agent_with_cap = agent;
@@ -3028,8 +3028,8 @@ fn test_program_predicate_gte_enforced() {
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 5000);
     let target = make_programmed_cell(2, 0, program);
-    let agent_id = agent.id;
-    let target_id = target.id;
+    let agent_id = agent.id();
+    let target_id = target.id();
 
     let mut agent_with_cap = agent;
     agent_with_cap
@@ -3084,8 +3084,8 @@ fn test_program_immutable_field_enforced() {
     let mut target = make_programmed_cell(2, 0, program);
     // Initialize field[1] with a value.
     target.state.fields[1] = field_from_u64(42);
-    let agent_id = agent.id;
-    let target_id = target.id;
+    let agent_id = agent.id();
+    let target_id = target.id();
 
     let mut agent_with_cap = agent;
     agent_with_cap
@@ -3170,8 +3170,8 @@ fn test_program_sum_conservation_enforced() {
     target.state.fields[0] = field_from_u64(500);
     target.state.fields[1] = field_from_u64(300);
     target.state.fields[2] = field_from_u64(200);
-    let agent_id = agent.id;
-    let target_id = target.id;
+    let agent_id = agent.id();
+    let target_id = target.id();
 
     let mut agent_with_cap = agent;
     agent_with_cap
@@ -3225,9 +3225,9 @@ fn setup_three_open_cells(
     let (agent, _) = make_open_cell(1, agent_balance);
     let (cell_a, _) = make_open_cell(2, a_balance);
     let (cell_b, _) = make_open_cell(3, b_balance);
-    let agent_id = agent.id;
-    let a_id = cell_a.id;
-    let b_id = cell_b.id;
+    let agent_id = agent.id();
+    let a_id = cell_a.id();
+    let b_id = cell_b.id();
 
     let mut agent_with_caps = agent;
     agent_with_caps.capabilities.grant(a_id, AuthRequired::None);
@@ -3269,11 +3269,11 @@ fn test_balanced_transfer_via_excess() {
 
     // A lost 200.
     let a = ledger.get(&a_id).unwrap();
-    assert_eq!(a.state.balance, 800);
+    assert_eq!(a.state.balance(), 800);
 
     // B gained 200.
     let b = ledger.get(&b_id).unwrap();
-    assert_eq!(b.state.balance, 700);
+    assert_eq!(b.state.balance(), 700);
 }
 
 // =============================================================================
@@ -3307,7 +3307,7 @@ fn test_unbalanced_excess_rejected() {
 
     // A's balance should be unchanged (atomicity).
     let a = ledger.get(&a_id).unwrap();
-    assert_eq!(a.state.balance, 1000);
+    assert_eq!(a.state.balance(), 1000);
 }
 
 // =============================================================================
@@ -3321,10 +3321,10 @@ fn test_multiple_sources_one_sink() {
     let (cell_a, _) = make_open_cell(2, 500);
     let (cell_b, _) = make_open_cell(3, 500);
     let (cell_c, _) = make_open_cell(4, 0);
-    let agent_id = agent.id;
-    let a_id = cell_a.id;
-    let b_id = cell_b.id;
-    let c_id = cell_c.id;
+    let agent_id = agent.id();
+    let a_id = cell_a.id();
+    let b_id = cell_b.id();
+    let c_id = cell_c.id();
 
     let mut agent_with_caps = agent;
     agent_with_caps.capabilities.grant(a_id, AuthRequired::None);
@@ -3359,9 +3359,9 @@ fn test_multiple_sources_one_sink() {
         "multi-source single-sink should commit: {result:?}"
     );
 
-    assert_eq!(ledger.get(&a_id).unwrap().state.balance, 450);
-    assert_eq!(ledger.get(&b_id).unwrap().state.balance, 450);
-    assert_eq!(ledger.get(&c_id).unwrap().state.balance, 100);
+    assert_eq!(ledger.get(&a_id).unwrap().state.balance(), 450);
+    assert_eq!(ledger.get(&b_id).unwrap().state.balance(), 450);
+    assert_eq!(ledger.get(&c_id).unwrap().state.balance(), 100);
 }
 
 // =============================================================================
@@ -3408,8 +3408,8 @@ fn test_proof_circuit_withdraw_without_destination() {
             "composed withdrawal+deposit should succeed: {result:?}"
         );
 
-        assert_eq!(ledger.get(&a_id).unwrap().state.balance, 900);
-        assert_eq!(ledger.get(&b_id).unwrap().state.balance, 100);
+        assert_eq!(ledger.get(&a_id).unwrap().state.balance(), 900);
+        assert_eq!(ledger.get(&b_id).unwrap().state.balance(), 100);
     }
 }
 
@@ -3436,8 +3436,8 @@ fn test_explicit_transfer_still_works() {
         "explicit transfer should still work: {result:?}"
     );
 
-    assert_eq!(ledger.get(&a_id).unwrap().state.balance, 800);
-    assert_eq!(ledger.get(&b_id).unwrap().state.balance, 700);
+    assert_eq!(ledger.get(&a_id).unwrap().state.balance(), 800);
+    assert_eq!(ledger.get(&b_id).unwrap().state.balance(), 700);
 }
 
 // =============================================================================
@@ -3475,7 +3475,7 @@ fn test_balance_change_underflow_rejected() {
     }
 
     // A's balance unchanged (atomicity).
-    assert_eq!(ledger.get(&a_id).unwrap().state.balance, 100);
+    assert_eq!(ledger.get(&a_id).unwrap().state.balance(), 100);
 }
 
 // =============================================================================
@@ -3547,11 +3547,11 @@ fn test_balance_change_with_effects() {
     );
 
     let a = ledger.get(&a_id).unwrap();
-    assert_eq!(a.state.balance, 900);
+    assert_eq!(a.state.balance(), 900);
     assert_eq!(a.state.fields[0], [0xAA; 32]);
 
     let b = ledger.get(&b_id).unwrap();
-    assert_eq!(b.state.balance, 600);
+    assert_eq!(b.state.balance(), 600);
 }
 
 // =============================================================================
@@ -3578,7 +3578,7 @@ fn test_zero_balance_change_no_effect() {
     );
 
     // Balance unchanged.
-    assert_eq!(ledger.get(&a_id).unwrap().state.balance, 1000);
+    assert_eq!(ledger.get(&a_id).unwrap().state.balance(), 1000);
 }
 
 // =============================================================================
@@ -3590,8 +3590,8 @@ fn test_fee_charged_on_failure() {
     let (mut ledger, agent_id, target_id) = setup_two_open_cells(5000, 100);
     let executor = zero_cost_executor();
 
-    let initial_agent_balance = ledger.get(&agent_id).unwrap().state.balance;
-    let initial_agent_nonce = ledger.get(&agent_id).unwrap().state.nonce;
+    let initial_agent_balance = ledger.get(&agent_id).unwrap().state.balance();
+    let initial_agent_nonce = ledger.get(&agent_id).unwrap().state.nonce();
 
     // This turn will FAIL because it tries to transfer more than target has.
     let mut builder = TurnBuilder::new(agent_id, 0);
@@ -3614,12 +3614,12 @@ fn test_fee_charged_on_failure() {
     // and the nonce is incremented. This prevents DoS via expensive-but-failing turns.
     let agent = ledger.get(&agent_id).unwrap();
     assert_eq!(
-        agent.state.balance,
+        agent.state.balance(),
         initial_agent_balance - 500,
         "fee must be charged even on failure"
     );
     assert_eq!(
-        agent.state.nonce,
+        agent.state.nonce(),
         initial_agent_nonce + 1,
         "nonce must increment even on failure"
     );
@@ -3627,7 +3627,7 @@ fn test_fee_charged_on_failure() {
     // Target cell should be completely unaffected (Phase 2 rolled back).
     let target = ledger.get(&target_id).unwrap();
     assert_eq!(
-        target.state.balance, 100,
+        target.state.balance(), 100,
         "target balance must not change on failed turn"
     );
 }
@@ -3650,7 +3650,7 @@ fn test_permission_change_doesnt_affect_same_action() {
 
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 5000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
 
     // Target has Signature required for send but open for set_permissions.
     let (mut target, _) = make_open_cell(2, 1000);
@@ -3664,7 +3664,7 @@ fn test_permission_change_doesnt_affect_same_action() {
         delegate: AuthRequired::None,
         access: AuthRequired::None,
     };
-    let target_id = target.id;
+    let target_id = target.id();
 
     let mut agent_with_cap = agent;
     agent_with_cap
@@ -3721,7 +3721,7 @@ fn test_permission_change_doesnt_affect_same_action() {
 
     // Verify target balance is unchanged (transfer was blocked).
     let target = ledger.get(&target_id).unwrap();
-    assert_eq!(target.state.balance, 1000);
+    assert_eq!(target.state.balance(), 1000);
 
     // Verify permissions were NOT changed (entire action was rejected in Phase 2,
     // since verify_authorization fails before any effects are applied).
@@ -3740,12 +3740,12 @@ fn test_permission_change_doesnt_affect_same_action() {
 fn test_proved_state_set_by_proof() {
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 5000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
 
     let (mut target, _) = make_open_cell(2, 0);
     target.permissions = Permissions::zkapp();
     target.verification_key = Some(VerificationKey::new(vec![1, 2, 3, 4]));
-    let target_id = target.id;
+    let target_id = target.id();
 
     let mut agent_with_cap = agent;
     agent_with_cap
@@ -3755,7 +3755,7 @@ fn test_proved_state_set_by_proof() {
     ledger.insert_cell(target).unwrap();
 
     // Verify initial proved_state is false.
-    assert!(!ledger.get(&target_id).unwrap().state.proved_state);
+    assert!(!ledger.get(&target_id).unwrap().state.proved_state());
 
     let mut executor = zero_cost_executor();
     executor.set_proof_verifier(Box::new(AlwaysAcceptVerifier));
@@ -3775,7 +3775,7 @@ fn test_proved_state_set_by_proof() {
     assert!(result.is_committed());
 
     // proved_state should now be true.
-    assert!(ledger.get(&target_id).unwrap().state.proved_state);
+    assert!(ledger.get(&target_id).unwrap().state.proved_state());
 }
 
 // =============================================================================
@@ -3786,12 +3786,12 @@ fn test_proved_state_set_by_proof() {
 fn test_proved_state_cleared_by_signature() {
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 10000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
 
     let (mut target, _) = make_open_cell(2, 0);
     target.permissions = Permissions::zkapp();
     target.verification_key = Some(VerificationKey::new(vec![1, 2, 3, 4]));
-    let target_id = target.id;
+    let target_id = target.id();
 
     let mut agent_with_cap = agent;
     agent_with_cap
@@ -3815,7 +3815,7 @@ fn test_proved_state_cleared_by_signature() {
     let turn = builder.fee(500).build();
     let result = executor.execute(&turn, &mut ledger);
     assert!(result.is_committed());
-    assert!(ledger.get(&target_id).unwrap().state.proved_state);
+    assert!(ledger.get(&target_id).unwrap().state.proved_state());
 
     // Now change permissions to allow None auth for set_state so we can test non-proof field set.
     ledger.get_mut(&target_id).unwrap().permissions.set_state = AuthRequired::None;
@@ -3831,7 +3831,7 @@ fn test_proved_state_cleared_by_signature() {
     assert!(result.is_committed());
 
     // proved_state should now be false.
-    assert!(!ledger.get(&target_id).unwrap().state.proved_state);
+    assert!(!ledger.get(&target_id).unwrap().state.proved_state());
 }
 
 // =============================================================================
@@ -3842,12 +3842,12 @@ fn test_proved_state_cleared_by_signature() {
 fn test_proved_state_unchanged_when_no_fields_modified() {
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 10000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
 
     let (mut target, _) = make_open_cell(2, 500);
     target.permissions = Permissions::zkapp();
     target.verification_key = Some(VerificationKey::new(vec![1, 2, 3, 4]));
-    let target_id = target.id;
+    let target_id = target.id();
 
     let mut agent_with_cap = agent;
     agent_with_cap
@@ -3871,7 +3871,7 @@ fn test_proved_state_unchanged_when_no_fields_modified() {
     let turn = builder.fee(500).build();
     let result = executor.execute(&turn, &mut ledger);
     assert!(result.is_committed());
-    assert!(ledger.get(&target_id).unwrap().state.proved_state);
+    assert!(ledger.get(&target_id).unwrap().state.proved_state());
 
     // Now perform an action that doesn't touch any fields (just emit an event).
     // This should NOT clear proved_state.
@@ -3886,7 +3886,7 @@ fn test_proved_state_unchanged_when_no_fields_modified() {
     assert!(result.is_committed());
 
     // proved_state should still be true (no fields modified).
-    assert!(ledger.get(&target_id).unwrap().state.proved_state);
+    assert!(ledger.get(&target_id).unwrap().state.proved_state());
 }
 
 // =============================================================================
@@ -3897,12 +3897,12 @@ fn test_proved_state_unchanged_when_no_fields_modified() {
 fn test_precondition_proved_state_true() {
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 10000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
 
     let (mut target, _) = make_open_cell(2, 0);
     target.permissions = Permissions::zkapp();
     target.verification_key = Some(VerificationKey::new(vec![1, 2, 3, 4]));
-    let target_id = target.id;
+    let target_id = target.id();
 
     let mut agent_with_cap = agent;
     agent_with_cap
@@ -3950,7 +3950,7 @@ fn test_precondition_proved_state_false_rejects() {
     let executor = zero_cost_executor();
 
     // proved_state starts as false for a new cell.
-    assert!(!ledger.get(&target_id).unwrap().state.proved_state);
+    assert!(!ledger.get(&target_id).unwrap().state.proved_state());
 
     // Use a precondition that asserts proved_state = true (should fail).
     let mut builder = TurnBuilder::new(agent_id, 0);
@@ -3983,12 +3983,12 @@ fn test_precondition_proved_state_false_rejects() {
 fn test_partial_proof_fields_doesnt_set_proved() {
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 5000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
 
     let (mut target, _) = make_open_cell(2, 0);
     target.permissions = Permissions::zkapp();
     target.verification_key = Some(VerificationKey::new(vec![1, 2, 3, 4]));
-    let target_id = target.id;
+    let target_id = target.id();
 
     let mut agent_with_cap = agent;
     agent_with_cap
@@ -4015,7 +4015,7 @@ fn test_partial_proof_fields_doesnt_set_proved() {
     assert!(result.is_committed());
 
     // proved_state should still be false (only 3/8 fields set).
-    assert!(!ledger.get(&target_id).unwrap().state.proved_state);
+    assert!(!ledger.get(&target_id).unwrap().state.proved_state());
 }
 
 // =============================================================================
@@ -4028,7 +4028,7 @@ fn test_note_spend_and_create_conservation() {
     let kp = TestKeypair::from_seed(1);
     let mut ledger = Ledger::new();
     let agent = Cell::with_balance(kp.public_key, [0u8; 32], 10000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
     ledger.insert_cell(agent).unwrap();
 
     let mut executor = TurnExecutor::new(ComputronCosts::zero());
@@ -4081,7 +4081,7 @@ fn test_note_conservation_violated() {
     let kp = TestKeypair::from_seed(1);
     let mut ledger = Ledger::new();
     let agent = Cell::with_balance(kp.public_key, [0u8; 32], 10000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
     ledger.insert_cell(agent).unwrap();
 
     let mut executor = TurnExecutor::new(ComputronCosts::zero());
@@ -4138,7 +4138,7 @@ fn test_note_nft_transfer() {
     let kp = TestKeypair::from_seed(1);
     let mut ledger = Ledger::new();
     let agent = Cell::with_balance(kp.public_key, [0u8; 32], 10000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
     ledger.insert_cell(agent).unwrap();
 
     let mut executor = TurnExecutor::new(ComputronCosts::zero());
@@ -4187,7 +4187,7 @@ fn test_note_multiple_asset_types_conservation() {
     let kp = TestKeypair::from_seed(1);
     let mut ledger = Ledger::new();
     let agent = Cell::with_balance(kp.public_key, [0u8; 32], 10000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
     ledger.insert_cell(agent).unwrap();
 
     let mut executor = TurnExecutor::new(ComputronCosts::zero());
@@ -4245,7 +4245,7 @@ fn test_note_cross_asset_conservation_fails() {
     let kp = TestKeypair::from_seed(1);
     let mut ledger = Ledger::new();
     let agent = Cell::with_balance(kp.public_key, [0u8; 32], 10000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
     ledger.insert_cell(agent).unwrap();
 
     let mut executor = TurnExecutor::new(ComputronCosts::zero());
@@ -4296,7 +4296,7 @@ fn test_note_spend_rejected_without_proof() {
     let kp = TestKeypair::from_seed(1);
     let mut ledger = Ledger::new();
     let agent = Cell::with_balance(kp.public_key, [0u8; 32], 10000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
     ledger.insert_cell(agent).unwrap();
 
     let mut executor = TurnExecutor::new(ComputronCosts::zero());
@@ -4342,7 +4342,7 @@ fn test_note_spend_rejected_with_invalid_proof() {
     let kp = TestKeypair::from_seed(1);
     let mut ledger = Ledger::new();
     let agent = Cell::with_balance(kp.public_key, [0u8; 32], 10000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
     ledger.insert_cell(agent).unwrap();
 
     let mut executor = TurnExecutor::new(ComputronCosts::zero());
@@ -4388,7 +4388,7 @@ fn test_note_spend_rejected_without_verifier() {
     let kp = TestKeypair::from_seed(1);
     let mut ledger = Ledger::new();
     let agent = Cell::with_balance(kp.public_key, [0u8; 32], 10000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
     ledger.insert_cell(agent).unwrap();
 
     // No proof verifier set (fail-closed behavior).
@@ -4436,9 +4436,9 @@ fn setup_three_cells_for_introduction() -> (Ledger, CellId, CellId, CellId) {
     let (alice, _) = make_open_cell(10, 10000);
     let (bob, _) = make_open_cell(20, 1000);
     let (carol, _) = make_open_cell(30, 1000);
-    let alice_id = alice.id;
-    let bob_id = bob.id;
-    let carol_id = carol.id;
+    let alice_id = alice.id();
+    let bob_id = bob.id();
+    let carol_id = carol.id();
     let mut alice_with_caps = alice;
     alice_with_caps
         .capabilities
@@ -4476,9 +4476,9 @@ fn test_introduction_fails_without_cap_to_target() {
     let (alice, _) = make_open_cell(10, 10000);
     let (bob, _) = make_open_cell(20, 1000);
     let (carol, _) = make_open_cell(30, 1000);
-    let alice_id = alice.id;
-    let bob_id = bob.id;
-    let carol_id = carol.id;
+    let alice_id = alice.id();
+    let bob_id = bob.id();
+    let carol_id = carol.id();
     let mut a = alice;
     a.capabilities.grant(bob_id, AuthRequired::None);
     ledger.insert_cell(a).unwrap();
@@ -4507,9 +4507,9 @@ fn test_introduction_fails_without_cap_to_recipient() {
     let (alice, _) = make_open_cell(10, 10000);
     let (bob, _) = make_open_cell(20, 1000);
     let (carol, _) = make_open_cell(30, 1000);
-    let alice_id = alice.id;
-    let bob_id = bob.id;
-    let carol_id = carol.id;
+    let alice_id = alice.id();
+    let bob_id = bob.id();
+    let carol_id = carol.id();
     let mut a = alice;
     a.capabilities.grant(carol_id, AuthRequired::None);
     ledger.insert_cell(a).unwrap();
@@ -4538,9 +4538,9 @@ fn test_introduction_fails_with_amplification() {
     let (alice, _) = make_open_cell(10, 10000);
     let (bob, _) = make_open_cell(20, 1000);
     let (carol, _) = make_open_cell(30, 1000);
-    let alice_id = alice.id;
-    let bob_id = bob.id;
-    let carol_id = carol.id;
+    let alice_id = alice.id();
+    let bob_id = bob.id();
+    let carol_id = carol.id();
     let mut a = alice;
     a.capabilities.grant(bob_id, AuthRequired::None);
     a.capabilities.grant(carol_id, AuthRequired::Signature);
@@ -4902,15 +4902,15 @@ fn test_budget_gate_none_allows_all_turns() {
 fn test_spawn_with_delegation_child_gets_parent_caps() {
     let mut ledger = Ledger::new();
     let (mut parent, _) = make_open_cell(1, 100_000);
-    let parent_id = parent.id;
+    let parent_id = parent.id();
 
     // Give parent capabilities to target cells.
     let (target_a, _) = make_open_cell(10, 0);
     let (target_b, _) = make_open_cell(11, 0);
     let (target_c, _) = make_open_cell(12, 0);
-    let target_a_id = target_a.id;
-    let target_b_id = target_b.id;
-    let target_c_id = target_c.id;
+    let target_a_id = target_a.id();
+    let target_b_id = target_b.id();
+    let target_c_id = target_c.id();
 
     parent.capabilities.grant(target_a_id, AuthRequired::None);
     parent.capabilities.grant(target_b_id, AuthRequired::None);
@@ -4992,10 +4992,10 @@ fn test_spawn_with_delegation_child_gets_parent_caps() {
 fn test_child_acts_via_delegated_caps() {
     let mut ledger = Ledger::new();
     let (mut parent, _) = make_open_cell(1, 100_000);
-    let parent_id = parent.id;
+    let parent_id = parent.id();
 
     let (target, _) = make_open_cell(10, 0);
-    let target_id = target.id;
+    let target_id = target.id();
     parent.capabilities.grant(target_id, AuthRequired::None);
 
     ledger.insert_cell(parent).unwrap();
@@ -5049,7 +5049,7 @@ fn test_child_acts_via_delegated_caps() {
     assert!(result.is_committed());
 
     // Now child acts on target using delegated capability.
-    ledger.get_mut(&child_id).unwrap().state.balance = 100_000;
+    ledger.get_mut(&child_id).unwrap().state.set_balance(100_000);
 
     let value = [99u8; 32];
     let child_action = Action {
@@ -5104,10 +5104,10 @@ fn test_child_acts_via_delegated_caps() {
 fn test_refresh_delegation_updates_snapshot() {
     let mut ledger = Ledger::new();
     let (mut parent, _) = make_open_cell(1, 100_000);
-    let parent_id = parent.id;
+    let parent_id = parent.id();
 
     let (target_a, _) = make_open_cell(10, 0);
-    let target_a_id = target_a.id;
+    let target_a_id = target_a.id();
     parent.capabilities.grant(target_a_id, AuthRequired::None);
 
     ledger.insert_cell(parent).unwrap();
@@ -5161,7 +5161,7 @@ fn test_refresh_delegation_updates_snapshot() {
 
     // Parent gains a new capability.
     let (target_b, _) = make_open_cell(11, 0);
-    let target_b_id = target_b.id;
+    let target_b_id = target_b.id();
     ledger.insert_cell(target_b).unwrap();
     ledger
         .get_mut(&parent_id)
@@ -5180,7 +5180,7 @@ fn test_refresh_delegation_updates_snapshot() {
     );
 
     // Child refreshes delegation.
-    ledger.get_mut(&child_id).unwrap().state.balance = 100_000;
+    ledger.get_mut(&child_id).unwrap().state.set_balance(100_000);
     executor.set_timestamp(2000);
 
     let refresh = Action {
@@ -5231,10 +5231,10 @@ fn test_refresh_delegation_updates_snapshot() {
 fn test_revoke_delegation_bumps_epoch_and_clears_child() {
     let mut ledger = Ledger::new();
     let (mut parent, _) = make_open_cell(1, 100_000);
-    let parent_id = parent.id;
+    let parent_id = parent.id();
 
     let (target, _) = make_open_cell(10, 0);
-    let target_id = target.id;
+    let target_id = target.id();
     parent.capabilities.grant(target_id, AuthRequired::None);
 
     ledger.insert_cell(parent).unwrap();
@@ -5288,7 +5288,7 @@ fn test_revoke_delegation_bumps_epoch_and_clears_child() {
 
     // Verify child has delegation.
     assert!(ledger.get(&child_id).unwrap().delegation.is_some());
-    assert_eq!(ledger.get(&parent_id).unwrap().state.delegation_epoch, 0);
+    assert_eq!(ledger.get(&parent_id).unwrap().state.delegation_epoch(), 0);
 
     // Parent needs capability to child for RevokeDelegation effect.
     ledger
@@ -5334,7 +5334,7 @@ fn test_revoke_delegation_bumps_epoch_and_clears_child() {
     assert!(result.is_committed(), "revoke should work: {:?}", result);
 
     // Parent's epoch bumped.
-    assert_eq!(ledger.get(&parent_id).unwrap().state.delegation_epoch, 1);
+    assert_eq!(ledger.get(&parent_id).unwrap().state.delegation_epoch(), 1);
     // Child's delegation is cleared.
     assert!(ledger.get(&child_id).unwrap().delegation.is_none());
 }
@@ -5343,10 +5343,10 @@ fn test_revoke_delegation_bumps_epoch_and_clears_child() {
 fn test_parent_new_cap_invisible_until_refresh() {
     let mut ledger = Ledger::new();
     let (mut parent, _) = make_open_cell(1, 100_000);
-    let parent_id = parent.id;
+    let parent_id = parent.id();
 
     let (target_a, _) = make_open_cell(10, 0);
-    let target_a_id = target_a.id;
+    let target_a_id = target_a.id();
     parent.capabilities.grant(target_a_id, AuthRequired::None);
 
     ledger.insert_cell(parent).unwrap();
@@ -5400,7 +5400,7 @@ fn test_parent_new_cap_invisible_until_refresh() {
 
     // Parent gains new cap to target_b.
     let (target_b, _) = make_open_cell(11, 0);
-    let target_b_id = target_b.id;
+    let target_b_id = target_b.id();
     ledger.insert_cell(target_b).unwrap();
     ledger
         .get_mut(&parent_id)
@@ -5409,7 +5409,7 @@ fn test_parent_new_cap_invisible_until_refresh() {
         .grant(target_b_id, AuthRequired::None);
 
     // Child tries to use target_b via delegation — should fail.
-    ledger.get_mut(&child_id).unwrap().state.balance = 100_000;
+    ledger.get_mut(&child_id).unwrap().state.set_balance(100_000);
 
     let child_action = Action {
         target: target_b_id,
@@ -5454,10 +5454,10 @@ fn test_parent_new_cap_invisible_until_refresh() {
 fn test_parent_loses_cap_child_still_has_until_refresh() {
     let mut ledger = Ledger::new();
     let (mut parent, _) = make_open_cell(1, 100_000);
-    let parent_id = parent.id;
+    let parent_id = parent.id();
 
     let (target, _) = make_open_cell(10, 0);
-    let target_id = target.id;
+    let target_id = target.id();
     let slot = parent
         .capabilities
         .grant(target_id, AuthRequired::None)
@@ -5520,7 +5520,7 @@ fn test_parent_loses_cap_child_still_has_until_refresh() {
         .revoke(slot);
 
     // Child still has target in delegation snapshot — can still act.
-    ledger.get_mut(&child_id).unwrap().state.balance = 100_000;
+    ledger.get_mut(&child_id).unwrap().state.set_balance(100_000);
 
     let value = [77u8; 32];
     let child_action = Action {
@@ -5610,9 +5610,9 @@ fn setup_exercise_via_cap() -> (Ledger, CellId, CellId, CellId) {
     let (agent, _) = make_open_cell(1, 5000);
     let (target, _) = make_open_cell(2, 1000);
     let (cap_target, _) = make_open_cell(3, 2000);
-    let agent_id = agent.id;
-    let target_id = target.id;
-    let cap_target_id = cap_target.id;
+    let agent_id = agent.id();
+    let target_id = target.id();
+    let cap_target_id = cap_target.id();
 
     // Grant agent capability to target (slot 0) and cap_target (slot 1).
     let mut agent_with_caps = agent;
@@ -5658,11 +5658,11 @@ fn test_exercise_via_capability_transfer_succeeds() {
 
     // cap_target lost 500, agent gained 500 (minus fee).
     let cap_target = ledger.get(&cap_target_id).unwrap();
-    assert_eq!(cap_target.state.balance, 2000 - 500);
+    assert_eq!(cap_target.state.balance(), 2000 - 500);
 
     let agent = ledger.get(&agent_id).unwrap();
     // Started at 5000, paid 100 fee, received 500.
-    assert_eq!(agent.state.balance, 5000 - 100 + 500);
+    assert_eq!(agent.state.balance(), 5000 - 100 + 500);
 }
 
 #[test]
@@ -5670,8 +5670,8 @@ fn test_exercise_via_capability_insufficient_permissions() {
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 5000);
     let (cap_target, _) = make_open_cell(3, 2000);
-    let agent_id = agent.id;
-    let cap_target_id = cap_target.id;
+    let agent_id = agent.id();
+    let cap_target_id = cap_target.id();
 
     // Grant agent a capability with Impossible permissions (cannot exercise).
     let mut agent_with_caps = agent;
@@ -5755,9 +5755,9 @@ fn test_fee_distribution_basic() {
     let (agent, _) = make_open_cell(1, 10000);
     let (proposer, _) = make_open_cell(2, 0);
     let (treasury, _) = make_open_cell(3, 0);
-    let agent_id = agent.id;
-    let proposer_id = proposer.id;
-    let treasury_id = treasury.id;
+    let agent_id = agent.id();
+    let proposer_id = proposer.id();
+    let treasury_id = treasury.id();
 
     ledger.insert_cell(agent).unwrap();
     ledger.insert_cell(proposer).unwrap();
@@ -5779,13 +5779,13 @@ fn test_fee_distribution_basic() {
     assert!(result.is_committed());
 
     let agent_cell = ledger.get(&agent_id).unwrap();
-    assert_eq!(agent_cell.state.balance, 10000 - 1000); // fee deducted
+    assert_eq!(agent_cell.state.balance(), 10000 - 1000); // fee deducted
 
     let proposer_cell = ledger.get(&proposer_id).unwrap();
-    assert_eq!(proposer_cell.state.balance, 500); // 50% of 1000
+    assert_eq!(proposer_cell.state.balance(), 500); // 50% of 1000
 
     let treasury_cell = ledger.get(&treasury_id).unwrap();
-    assert_eq!(treasury_cell.state.balance, 300); // 30% of 1000
+    assert_eq!(treasury_cell.state.balance(), 300); // 30% of 1000
 
     // Total burned = 1000 - 500 - 300 = 200 (20%)
 }
@@ -5797,9 +5797,9 @@ fn test_fee_distribution_minimum_fee() {
     let (agent, _) = make_open_cell(1, 10000);
     let (proposer, _) = make_open_cell(2, 0);
     let (treasury, _) = make_open_cell(3, 0);
-    let agent_id = agent.id;
-    let proposer_id = proposer.id;
-    let treasury_id = treasury.id;
+    let agent_id = agent.id();
+    let proposer_id = proposer.id();
+    let treasury_id = treasury.id();
 
     ledger.insert_cell(agent).unwrap();
     ledger.insert_cell(proposer).unwrap();
@@ -5820,14 +5820,14 @@ fn test_fee_distribution_minimum_fee() {
     assert!(result.is_committed());
 
     let agent_cell = ledger.get(&agent_id).unwrap();
-    assert_eq!(agent_cell.state.balance, 10000 - 1);
+    assert_eq!(agent_cell.state.balance(), 10000 - 1);
 
     // fee/2 = 0, fee*3/10 = 0: both get nothing.
     let proposer_cell = ledger.get(&proposer_id).unwrap();
-    assert_eq!(proposer_cell.state.balance, 0);
+    assert_eq!(proposer_cell.state.balance(), 0);
 
     let treasury_cell = ledger.get(&treasury_id).unwrap();
-    assert_eq!(treasury_cell.state.balance, 0);
+    assert_eq!(treasury_cell.state.balance(), 0);
 }
 
 #[test]
@@ -5835,7 +5835,7 @@ fn test_fee_distribution_no_proposer_all_burned() {
     // Backward compat: no proposer/treasury configured -> 100% burned.
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 10000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
     ledger.insert_cell(agent).unwrap();
 
     let executor = zero_cost_executor(); // no proposer/treasury set
@@ -5851,7 +5851,7 @@ fn test_fee_distribution_no_proposer_all_burned() {
     assert!(result.is_committed());
 
     let agent_cell = ledger.get(&agent_id).unwrap();
-    assert_eq!(agent_cell.state.balance, 10000 - 1000);
+    assert_eq!(agent_cell.state.balance(), 10000 - 1000);
     // No other cells received anything (total supply decreased by 1000).
 }
 
@@ -5861,8 +5861,8 @@ fn test_fee_distribution_proposer_only() {
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 10000);
     let (proposer, _) = make_open_cell(2, 0);
-    let agent_id = agent.id;
-    let proposer_id = proposer.id;
+    let agent_id = agent.id();
+    let proposer_id = proposer.id();
 
     ledger.insert_cell(agent).unwrap();
     ledger.insert_cell(proposer).unwrap();
@@ -5882,7 +5882,7 @@ fn test_fee_distribution_proposer_only() {
     assert!(result.is_committed());
 
     let proposer_cell = ledger.get(&proposer_id).unwrap();
-    assert_eq!(proposer_cell.state.balance, 500); // 50%
+    assert_eq!(proposer_cell.state.balance(), 500); // 50%
     // Treasury share (300) is burned since no treasury is set.
 }
 
@@ -5891,7 +5891,7 @@ fn test_fee_distribution_missing_proposer_cell_in_ledger() {
     // Proposer cell configured but not in ledger -> share is burned gracefully.
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 10000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
     ledger.insert_cell(agent).unwrap();
 
     let nonexistent_proposer = CellId::from_bytes([0xDE; 32]);
@@ -5911,7 +5911,7 @@ fn test_fee_distribution_missing_proposer_cell_in_ledger() {
 
     // Agent still pays the full fee.
     let agent_cell = ledger.get(&agent_id).unwrap();
-    assert_eq!(agent_cell.state.balance, 10000 - 1000);
+    assert_eq!(agent_cell.state.balance(), 10000 - 1000);
     // Proposer share is burned (cell doesn't exist).
 }
 
@@ -5923,9 +5923,9 @@ fn test_fee_distribution_not_on_failure() {
     let (agent, _) = make_open_cell(1, 10000);
     let (proposer, _) = make_open_cell(2, 0);
     let (treasury, _) = make_open_cell(3, 0);
-    let agent_id = agent.id;
-    let proposer_id = proposer.id;
-    let treasury_id = treasury.id;
+    let agent_id = agent.id();
+    let proposer_id = proposer.id();
+    let treasury_id = treasury.id();
 
     ledger.insert_cell(agent).unwrap();
     ledger.insert_cell(proposer).unwrap();
@@ -5949,14 +5949,14 @@ fn test_fee_distribution_not_on_failure() {
 
     // Fee still deducted from agent (anti-DoS).
     let agent_cell = ledger.get(&agent_id).unwrap();
-    assert_eq!(agent_cell.state.balance, 10000 - 1000);
+    assert_eq!(agent_cell.state.balance(), 10000 - 1000);
 
     // Proposer and treasury get NOTHING on failure.
     let proposer_cell = ledger.get(&proposer_id).unwrap();
-    assert_eq!(proposer_cell.state.balance, 0);
+    assert_eq!(proposer_cell.state.balance(), 0);
 
     let treasury_cell = ledger.get(&treasury_id).unwrap();
-    assert_eq!(treasury_cell.state.balance, 0);
+    assert_eq!(treasury_cell.state.balance(), 0);
 }
 
 // =============================================================================
@@ -5970,8 +5970,8 @@ fn setup_escrow_cells(sender_balance: u64, recipient_balance: u64) -> (Ledger, C
     let mut ledger = Ledger::new();
     let (sender, _) = make_open_cell(10, sender_balance);
     let (recipient, _) = make_open_cell(11, recipient_balance);
-    let sender_id = sender.id;
-    let recipient_id = recipient.id;
+    let sender_id = sender.id();
+    let recipient_id = recipient.id();
     ledger.insert_cell(sender).unwrap();
     ledger.insert_cell(recipient).unwrap();
     (ledger, sender_id, recipient_id)
@@ -6010,11 +6010,11 @@ fn test_escrow_create_and_release_with_predicate() {
 
     // Sender should have lost 5000 (escrow) + 100 (fee).
     let sender = ledger.get(&sender_id).unwrap();
-    assert_eq!(sender.state.balance, 10000 - 5000 - 100);
+    assert_eq!(sender.state.balance(), 10000 - 5000 - 100);
 
     // Recipient still has 0.
     let recipient = ledger.get(&recipient_id).unwrap();
-    assert_eq!(recipient.state.balance, 0);
+    assert_eq!(recipient.state.balance(), 0);
 
     // Release escrow with valid predicate proof.
     let mut builder2 = TurnBuilder::new(sender_id, 1);
@@ -6036,11 +6036,11 @@ fn test_escrow_create_and_release_with_predicate() {
 
     // Recipient should now have 5000.
     let recipient = ledger.get(&recipient_id).unwrap();
-    assert_eq!(recipient.state.balance, 5000);
+    assert_eq!(recipient.state.balance(), 5000);
 
     // Sender paid two fees.
     let sender = ledger.get(&sender_id).unwrap();
-    assert_eq!(sender.state.balance, 10000 - 5000 - 100 - 100);
+    assert_eq!(sender.state.balance(), 10000 - 5000 - 100 - 100);
 }
 
 #[test]
@@ -6102,11 +6102,11 @@ fn test_escrow_create_and_timeout_refund() {
     let sender = ledger.get(&sender_id).unwrap();
     // Started 10000, lost 100 (fee create) + 100 (fee failed refund) + 100 (fee refund)
     // Lost 3000 to escrow, got 3000 back.
-    assert_eq!(sender.state.balance, 10000 - 100 - 100 - 100);
+    assert_eq!(sender.state.balance(), 10000 - 100 - 100 - 100);
 
     // Recipient still has 0.
     let recipient = ledger.get(&recipient_id).unwrap();
-    assert_eq!(recipient.state.balance, 0);
+    assert_eq!(recipient.state.balance(), 0);
 }
 
 #[test]
@@ -6170,7 +6170,7 @@ fn test_escrow_release_without_valid_proof_fails() {
 
     // Recipient still has 0.
     let recipient = ledger.get(&recipient_id).unwrap();
-    assert_eq!(recipient.state.balance, 0);
+    assert_eq!(recipient.state.balance(), 0);
 }
 
 #[test]
@@ -6230,7 +6230,7 @@ fn test_escrow_double_release_fails() {
 
     // Recipient should only have 4000 (from single release).
     let recipient = ledger.get(&recipient_id).unwrap();
-    assert_eq!(recipient.state.balance, 4000);
+    assert_eq!(recipient.state.balance(), 4000);
 }
 
 #[test]
@@ -6311,7 +6311,7 @@ fn test_escrow_release_with_proof_verifier() {
     );
 
     let recipient = ledger.get(&recipient_id).unwrap();
-    assert_eq!(recipient.state.balance, 5000);
+    assert_eq!(recipient.state.balance(), 5000);
 }
 
 #[test]
@@ -6361,7 +6361,7 @@ fn test_escrow_release_proof_rejected_by_verifier() {
 
     // Recipient still 0.
     let recipient = ledger.get(&recipient_id).unwrap();
-    assert_eq!(recipient.state.balance, 0);
+    assert_eq!(recipient.state.balance(), 0);
 }
 
 // =============================================================================
@@ -6423,7 +6423,7 @@ fn test_adversarial_obligation_rollback_on_turn_failure() {
     // Verify balance was fully restored (fee still deducted, but obligation stake returned).
     let agent = ledger.get(&agent_id).unwrap();
     // Fee is always deducted (Phase 1, never rolled back), but stake should be returned.
-    assert_eq!(agent.state.balance, 10000 - 100);
+    assert_eq!(agent.state.balance(), 10000 - 100);
 }
 
 /// Adversarial test: Escrow record must be removed on turn rollback.
@@ -6478,7 +6478,7 @@ fn test_adversarial_escrow_rollback_on_turn_failure() {
 
     // Verify sender's balance was restored (minus fee).
     let sender = ledger.get(&sender_id).unwrap();
-    assert_eq!(sender.state.balance, 10000 - 100);
+    assert_eq!(sender.state.balance(), 10000 - 100);
 }
 
 // =============================================================================
@@ -6570,7 +6570,7 @@ fn test_adversarial_fulfill_obligation_wrong_caller() {
     // Verify stake was returned to obligor.
     let agent = ledger.get(&agent_id).unwrap();
     // Started with 10000, paid 100 fee (turn1), lost 2000 stake, paid 100 fee (turn3), got 2000 back.
-    assert_eq!(agent.state.balance, 10000 - 100 - 2000 - 100 + 2000);
+    assert_eq!(agent.state.balance(), 10000 - 100 - 2000 - 100 + 2000);
 }
 
 // =============================================================================
@@ -6626,7 +6626,7 @@ fn test_adversarial_create_escrow_wrong_cell() {
 
     // Verify target's balance is unchanged.
     let target = ledger.get(&target_id).unwrap();
-    assert_eq!(target.state.balance, 5000);
+    assert_eq!(target.state.balance(), 5000);
 }
 
 /// Test that CreateEscrow succeeds when cell matches action target.
@@ -6661,7 +6661,7 @@ fn test_create_escrow_correct_cell_matches_target() {
 
     // Verify balance was deducted.
     let sender = ledger.get(&sender_id).unwrap();
-    assert_eq!(sender.state.balance, 10000 - 100 - 3000);
+    assert_eq!(sender.state.balance(), 10000 - 100 - 3000);
 }
 
 // =============================================================================
@@ -6852,12 +6852,12 @@ fn sovereign_cell_execute_turn_with_valid_witness() {
     // Setup: create a sovereign cell and register its commitment.
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 10_000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
     ledger.insert_cell(agent).unwrap();
 
     // Create a cell that will become sovereign.
     let (mut sovereign_cell, _) = make_open_cell(2, 500);
-    let sovereign_id = sovereign_cell.id;
+    let sovereign_id = sovereign_cell.id();
     sovereign_cell.mode = pyana_cell::CellMode::Sovereign;
 
     // Compute the initial commitment and register as sovereign.
@@ -6959,11 +6959,11 @@ fn sovereign_cell_rejected_without_witness() {
     // Setup: create a sovereign cell.
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 10_000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
     ledger.insert_cell(agent).unwrap();
 
     let (sovereign_cell, _) = make_open_cell(2, 500);
-    let sovereign_id = sovereign_cell.id;
+    let sovereign_id = sovereign_cell.id();
     let commitment = sovereign_cell.state_commitment();
     ledger
         .register_sovereign_cell(sovereign_id, commitment)
@@ -7037,11 +7037,11 @@ fn sovereign_cell_rejected_with_wrong_commitment() {
     // Setup: create a sovereign cell.
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 10_000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
     ledger.insert_cell(agent).unwrap();
 
     let (sovereign_cell, _) = make_open_cell(2, 500);
-    let sovereign_id = sovereign_cell.id;
+    let sovereign_id = sovereign_cell.id();
     let commitment = sovereign_cell.state_commitment();
     ledger
         .register_sovereign_cell(sovereign_id, commitment)
@@ -7056,7 +7056,7 @@ fn sovereign_cell_rejected_with_wrong_commitment() {
 
     // Create a tampered witness: claim a different state than what's committed.
     let mut tampered_cell = sovereign_cell.clone();
-    tampered_cell.state.balance = 999_999; // Lie about balance.
+    tampered_cell.state.set_balance(999_999); // Lie about balance.
     let tampered_commitment = tampered_cell.state_commitment();
 
     let turn = Turn {
@@ -7125,10 +7125,10 @@ fn sovereign_cell_make_sovereign_effect() {
     // Setup: create a hosted cell, then use MakeSovereign to transition it.
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 10_000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
 
     let (target, _) = make_open_cell(2, 500);
-    let target_id = target.id;
+    let target_id = target.id();
 
     let mut agent_with_cap = agent;
     agent_with_cap
@@ -7212,12 +7212,12 @@ fn sovereign_cell_state_commitment_deterministic() {
 
     // Different state => different commitment.
     let (mut cell3, _) = make_open_cell(5, 1000);
-    cell3.state.balance = 999;
+    cell3.state.set_balance(999);
     assert_ne!(cell1.state_commitment(), cell3.state_commitment());
 
     // Different nonce => different commitment.
     let (mut cell4, _) = make_open_cell(5, 1000);
-    cell4.state.nonce = 42;
+    cell4.state.set_nonce(42);
     assert_ne!(cell1.state_commitment(), cell4.state_commitment());
 
     // Different field => different commitment.
@@ -7236,16 +7236,16 @@ fn sovereign_cell_state_commitment_deterministic() {
 fn setup_sovereign_cell_for_proof_test() -> (Ledger, CellId, CellId, [u8; 32]) {
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 10000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
     ledger.insert_cell(agent).unwrap();
 
     // Create a cell, then make it sovereign.
     let (sovereign_cell, _) = make_open_cell(10, 5000);
-    let sovereign_id = sovereign_cell.id;
+    let sovereign_id = sovereign_cell.id();
     // Compute the Poseidon2 CellState commitment (matches what EffectVmAir uses).
     let vm_state = pyana_circuit::CellState::new(
-        sovereign_cell.state.balance,
-        sovereign_cell.state.nonce as u32,
+        sovereign_cell.state.balance(),
+        sovereign_cell.state.nonce() as u32,
     );
     let commitment = TurnExecutor::babybear_to_commitment(vm_state.state_commitment);
     ledger.insert_cell(sovereign_cell).unwrap();
@@ -7623,7 +7623,7 @@ fn test_custom_program_proof_carrying_turn() {
     // === Step 4: Set up the ledger with an agent and a sovereign cell ===
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 10000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
     ledger.insert_cell(agent).unwrap();
 
     // Register a sovereign cell with the custom program's VK hash.
@@ -7724,7 +7724,7 @@ fn test_custom_program_missing_from_registry_rejected() {
 
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, 10000);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
     ledger.insert_cell(agent).unwrap();
 
     // Register a sovereign cell with a VK hash that doesn't exist in the registry.
@@ -7845,8 +7845,8 @@ fn test_faceted_capability_permits_allowed_effects() {
 
     let alice_cell = Cell::with_balance(alice_pk, [0u8; 32], 100_000);
     let bob_cell = Cell::with_balance(bob_pk, [0u8; 32], 100_000);
-    let alice_id = alice_cell.id;
-    let bob_id = bob_cell.id;
+    let alice_id = alice_cell.id();
+    let bob_id = bob_cell.id();
 
     ledger.insert_cell(alice_cell).unwrap();
     ledger.insert_cell(bob_cell).unwrap();
@@ -7934,8 +7934,8 @@ fn test_faceted_capability_blocks_disallowed_effects() {
 
     let alice_cell = Cell::with_balance(alice_pk, [0u8; 32], 100_000);
     let bob_cell = Cell::with_balance(bob_pk, [0u8; 32], 100_000);
-    let alice_id = alice_cell.id;
-    let bob_id = bob_cell.id;
+    let alice_id = alice_cell.id();
+    let bob_id = bob_cell.id();
 
     ledger.insert_cell(alice_cell).unwrap();
     ledger.insert_cell(bob_cell).unwrap();
@@ -8032,8 +8032,8 @@ fn test_unfaceted_capability_allows_all_effects() {
 
     let alice_cell = Cell::with_balance(alice_pk, [0u8; 32], 100_000);
     let bob_cell = Cell::with_balance(bob_pk, [0u8; 32], 100_000);
-    let alice_id = alice_cell.id;
-    let bob_id = bob_cell.id;
+    let alice_id = alice_cell.id();
+    let bob_id = bob_cell.id();
 
     ledger.insert_cell(alice_cell).unwrap();
     ledger.insert_cell(bob_cell).unwrap();
@@ -8233,13 +8233,13 @@ fn test_bearer_cap_signed_delegation_accepted() {
     delegator_cell.permissions = make_open_permissions();
     let mut target_cell = Cell::with_balance([3u8; 32], token_id, 500);
     target_cell.permissions = make_open_permissions();
-    let target_id = target_cell.id;
+    let target_id = target_cell.id();
     delegator_cell
         .capabilities
         .grant(target_id, AuthRequired::None);
     let mut bearer_cell = Cell::with_balance(bearer_kp.public_key, token_id, 1000);
     bearer_cell.permissions = make_open_permissions();
-    let bearer_id = bearer_cell.id;
+    let bearer_id = bearer_cell.id();
     ledger.insert_cell(delegator_cell).unwrap();
     ledger.insert_cell(target_cell).unwrap();
     ledger.insert_cell(bearer_cell).unwrap();
@@ -8276,13 +8276,13 @@ fn test_bearer_cap_expired_rejected() {
     delegator_cell.permissions = make_open_permissions();
     let mut target_cell = Cell::with_balance([3u8; 32], token_id, 500);
     target_cell.permissions = make_open_permissions();
-    let target_id = target_cell.id;
+    let target_id = target_cell.id();
     delegator_cell
         .capabilities
         .grant(target_id, AuthRequired::None);
     let mut bearer_cell = Cell::with_balance(bearer_kp.public_key, token_id, 1000);
     bearer_cell.permissions = make_open_permissions();
-    let bearer_id = bearer_cell.id;
+    let bearer_id = bearer_cell.id();
     ledger.insert_cell(delegator_cell).unwrap();
     ledger.insert_cell(target_cell).unwrap();
     ledger.insert_cell(bearer_cell).unwrap();
@@ -8325,16 +8325,16 @@ fn test_bearer_cap_revoked_channel_rejected() {
     let token_id = [0u8; 32];
     let mut delegator_cell = Cell::with_balance(delegator_kp.public_key, token_id, 1000);
     delegator_cell.permissions = make_open_permissions();
-    let delegator_id = delegator_cell.id;
+    let delegator_id = delegator_cell.id();
     let mut target_cell = Cell::with_balance([3u8; 32], token_id, 500);
     target_cell.permissions = make_open_permissions();
-    let target_id = target_cell.id;
+    let target_id = target_cell.id();
     delegator_cell
         .capabilities
         .grant(target_id, AuthRequired::None);
     let mut bearer_cell = Cell::with_balance(bearer_kp.public_key, token_id, 1000);
     bearer_cell.permissions = make_open_permissions();
-    let bearer_id = bearer_cell.id;
+    let bearer_id = bearer_cell.id();
     ledger.insert_cell(delegator_cell).unwrap();
     ledger.insert_cell(target_cell).unwrap();
     ledger.insert_cell(bearer_cell).unwrap();
@@ -8385,13 +8385,13 @@ fn test_bearer_cap_amplification_rejected() {
     delegator_cell.permissions = make_open_permissions();
     let mut target_cell = Cell::with_balance([3u8; 32], token_id, 500);
     target_cell.permissions = make_open_permissions();
-    let target_id = target_cell.id;
+    let target_id = target_cell.id();
     delegator_cell
         .capabilities
         .grant(target_id, AuthRequired::Signature);
     let mut bearer_cell = Cell::with_balance(bearer_kp.public_key, token_id, 1000);
     bearer_cell.permissions = make_open_permissions();
-    let bearer_id = bearer_cell.id;
+    let bearer_id = bearer_cell.id();
     ledger.insert_cell(delegator_cell).unwrap();
     ledger.insert_cell(target_cell).unwrap();
     ledger.insert_cell(bearer_cell).unwrap();
@@ -8434,11 +8434,11 @@ fn test_bearer_cap_delegator_lacks_capability_rejected() {
     delegator_cell.permissions = make_open_permissions();
     let mut target_cell = Cell::with_balance([3u8; 32], token_id, 500);
     target_cell.permissions = make_open_permissions();
-    let target_id = target_cell.id;
+    let target_id = target_cell.id();
     // NO capability granted to delegator for target
     let mut bearer_cell = Cell::with_balance(bearer_kp.public_key, token_id, 1000);
     bearer_cell.permissions = make_open_permissions();
-    let bearer_id = bearer_cell.id;
+    let bearer_id = bearer_cell.id();
     ledger.insert_cell(delegator_cell).unwrap();
     ledger.insert_cell(target_cell).unwrap();
     ledger.insert_cell(bearer_cell).unwrap();
@@ -8482,13 +8482,13 @@ fn test_bearer_cap_invalid_signature_rejected() {
     delegator_cell.permissions = make_open_permissions();
     let mut target_cell = Cell::with_balance([3u8; 32], token_id, 500);
     target_cell.permissions = make_open_permissions();
-    let target_id = target_cell.id;
+    let target_id = target_cell.id();
     delegator_cell
         .capabilities
         .grant(target_id, AuthRequired::None);
     let mut bearer_cell = Cell::with_balance(bearer_kp.public_key, token_id, 1000);
     bearer_cell.permissions = make_open_permissions();
-    let bearer_id = bearer_cell.id;
+    let bearer_id = bearer_cell.id();
     ledger.insert_cell(delegator_cell).unwrap();
     ledger.insert_cell(target_cell).unwrap();
     ledger.insert_cell(bearer_cell).unwrap();
@@ -8538,13 +8538,13 @@ fn test_bearer_cap_same_turn_as_delegation() {
     delegator_cell.permissions = make_open_permissions();
     let mut target_cell = Cell::with_balance([3u8; 32], token_id, 500);
     target_cell.permissions = make_open_permissions();
-    let target_id = target_cell.id;
+    let target_id = target_cell.id();
     delegator_cell
         .capabilities
         .grant(target_id, AuthRequired::None);
     let mut bearer_cell = Cell::with_balance(bearer_kp.public_key, token_id, 1000);
     bearer_cell.permissions = make_open_permissions();
-    let bearer_id = bearer_cell.id;
+    let bearer_id = bearer_cell.id();
     ledger.insert_cell(delegator_cell).unwrap();
     ledger.insert_cell(target_cell).unwrap();
     ledger.insert_cell(bearer_cell).unwrap();
@@ -8583,10 +8583,10 @@ fn test_bearer_cap_stark_delegation_invalid_proof_rejected() {
     let token_id = [0u8; 32];
     let mut target_cell = Cell::with_balance([3u8; 32], token_id, 500);
     target_cell.permissions = make_open_permissions();
-    let target_id = target_cell.id;
+    let target_id = target_cell.id();
     let mut bearer_cell = Cell::with_balance(bearer_kp.public_key, token_id, 1000);
     bearer_cell.permissions = make_open_permissions();
-    let bearer_id = bearer_cell.id;
+    let bearer_id = bearer_cell.id();
     ledger.insert_cell(target_cell).unwrap();
     ledger.insert_cell(bearer_cell).unwrap();
     let executor = zero_cost_executor();
@@ -8630,7 +8630,7 @@ fn test_bearer_cap_stark_delegation_invalid_proof_rejected() {
 fn setup_queue_test(balance: u64) -> (Ledger, CellId) {
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(50, balance);
-    let agent_id = agent.id;
+    let agent_id = agent.id();
     ledger.insert_cell(agent).unwrap();
     (ledger, agent_id)
 }
@@ -8642,7 +8642,7 @@ fn allocate_queue(
     agent_id: CellId,
     capacity: u64,
 ) -> CellId {
-    let nonce = ledger.get(&agent_id).unwrap().state.nonce;
+    let nonce = ledger.get(&agent_id).unwrap().state.nonce();
     let mut builder = TurnBuilder::new(agent_id, nonce);
     {
         let action = builder.action(agent_id, "queue_allocate");
@@ -8690,7 +8690,7 @@ fn test_queue_allocate_creates_queue_cell() {
     assert_eq!(queue_cell.state.fields[2], *agent_id.as_bytes());
     // Agent balance should be reduced by capacity cost (10).
     let agent_cell = ledger.get(&agent_id).unwrap();
-    assert_eq!(agent_cell.state.balance, 1000 - 10);
+    assert_eq!(agent_cell.state.balance(), 1000 - 10);
 }
 
 #[test]
@@ -8702,7 +8702,7 @@ fn test_queue_enqueue_adds_message() {
 
     // Enqueue a message.
     let msg_hash = [0xABu8; 32];
-    let nonce = ledger.get(&agent_id).unwrap().state.nonce;
+    let nonce = ledger.get(&agent_id).unwrap().state.nonce();
     let mut builder = TurnBuilder::new(agent_id, nonce);
     {
         let action = builder.action(agent_id, "enqueue");
@@ -8723,10 +8723,10 @@ fn test_queue_enqueue_adds_message() {
     // Verify message hash stored in field[4].
     assert_eq!(queue_cell.state.fields[4], msg_hash);
     // Verify deposit transferred: queue has the deposit, agent lost deposit.
-    assert_eq!(queue_cell.state.balance, 50);
+    assert_eq!(queue_cell.state.balance(), 50);
     let agent_cell = ledger.get(&agent_id).unwrap();
     // Agent started with 1000, paid 10 for allocate, paid 50 for deposit.
-    assert_eq!(agent_cell.state.balance, 1000 - 10 - 50);
+    assert_eq!(agent_cell.state.balance(), 1000 - 10 - 50);
 }
 
 #[test]
@@ -8738,7 +8738,7 @@ fn test_queue_dequeue_by_owner_succeeds() {
 
     // Enqueue a message first.
     let msg_hash = [0xCDu8; 32];
-    let nonce = ledger.get(&agent_id).unwrap().state.nonce;
+    let nonce = ledger.get(&agent_id).unwrap().state.nonce();
     let mut builder = TurnBuilder::new(agent_id, nonce);
     {
         let action = builder.action(agent_id, "enqueue");
@@ -8753,7 +8753,7 @@ fn test_queue_dequeue_by_owner_succeeds() {
     assert!(result.is_committed(), "enqueue failed: {:?}", result);
 
     // Now dequeue (agent is the owner).
-    let nonce = ledger.get(&agent_id).unwrap().state.nonce;
+    let nonce = ledger.get(&agent_id).unwrap().state.nonce();
     let mut builder = TurnBuilder::new(agent_id, nonce);
     {
         let action = builder.action(agent_id, "dequeue");
@@ -8769,10 +8769,10 @@ fn test_queue_dequeue_by_owner_succeeds() {
     assert_eq!(length, 0);
 
     // Deposit should be refunded to the dequeuer (the owner/actor).
-    assert_eq!(queue_cell.state.balance, 0);
+    assert_eq!(queue_cell.state.balance(), 0);
     let agent_cell = ledger.get(&agent_id).unwrap();
     // Agent: 1000 - 10 (alloc) - 100 (deposit) + 100 (refund) = 890
-    assert_eq!(agent_cell.state.balance, 1000 - 10 - 100 + 100);
+    assert_eq!(agent_cell.state.balance(), 1000 - 10 - 100 + 100);
 }
 
 #[test]
@@ -8783,7 +8783,7 @@ fn test_queue_dequeue_by_non_owner_fails() {
     let queue_id = allocate_queue(&executor, &mut ledger, agent_id, 10);
 
     // Enqueue a message.
-    let nonce = ledger.get(&agent_id).unwrap().state.nonce;
+    let nonce = ledger.get(&agent_id).unwrap().state.nonce();
     let mut builder = TurnBuilder::new(agent_id, nonce);
     {
         let action = builder.action(agent_id, "enqueue");
@@ -8798,7 +8798,7 @@ fn test_queue_dequeue_by_non_owner_fails() {
 
     // Create a different cell (non-owner) and try to dequeue.
     let (other_cell, _) = make_open_cell(51, 500);
-    let other_id = other_cell.id;
+    let other_id = other_cell.id();
     ledger.insert_cell(other_cell).unwrap();
 
     let mut builder = TurnBuilder::new(other_id, 0);
@@ -8835,7 +8835,7 @@ fn test_queue_atomic_tx_all_succeed() {
     let queue2_id = allocate_queue(&executor, &mut ledger, agent_id, 10);
 
     // Execute an atomic tx that enqueues to both queues.
-    let nonce = ledger.get(&agent_id).unwrap().state.nonce;
+    let nonce = ledger.get(&agent_id).unwrap().state.nonce();
     let mut builder = TurnBuilder::new(agent_id, nonce);
     {
         let action = builder.action(agent_id, "atomic_enqueue");
@@ -8877,7 +8877,7 @@ fn test_queue_atomic_tx_one_fails_all_rolled_back() {
     let queue_id = allocate_queue(&executor, &mut ledger, agent_id, 1);
 
     // Fill the queue.
-    let nonce = ledger.get(&agent_id).unwrap().state.nonce;
+    let nonce = ledger.get(&agent_id).unwrap().state.nonce();
     let mut builder = TurnBuilder::new(agent_id, nonce);
     {
         let action = builder.action(agent_id, "fill");
@@ -8892,10 +8892,10 @@ fn test_queue_atomic_tx_one_fails_all_rolled_back() {
     assert!(result.is_committed(), "fill failed: {:?}", result);
 
     // Record the agent balance before the atomic tx attempt.
-    let agent_balance_before = ledger.get(&agent_id).unwrap().state.balance;
+    let agent_balance_before = ledger.get(&agent_id).unwrap().state.balance();
 
     // Attempt an atomic tx that tries to enqueue to the full queue.
-    let nonce = ledger.get(&agent_id).unwrap().state.nonce;
+    let nonce = ledger.get(&agent_id).unwrap().state.nonce();
     let mut builder = TurnBuilder::new(agent_id, nonce);
     {
         let action = builder.action(agent_id, "atomic_fail");
@@ -8922,7 +8922,7 @@ fn test_queue_atomic_tx_one_fails_all_rolled_back() {
     }
 
     // Agent balance should be unchanged (rolled back).
-    let agent_balance_after = ledger.get(&agent_id).unwrap().state.balance;
+    let agent_balance_after = ledger.get(&agent_id).unwrap().state.balance();
     assert_eq!(agent_balance_before, agent_balance_after);
 
     // Queue length should still be 1 (no additional messages).

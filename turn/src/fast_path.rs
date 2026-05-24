@@ -270,7 +270,7 @@ pub fn is_fast_path_eligible(turn: &Turn, ledger: &Ledger) -> bool {
 
     // Look up the agent's public key from the ledger.
     let agent_public_key = match ledger.get(&turn.agent) {
-        Some(cell) => cell.public_key,
+        Some(cell) => cell.public_key(),
         // If the agent cell doesn't exist in the ledger, it cannot be eligible.
         None => return false,
     };
@@ -279,7 +279,7 @@ pub fn is_fast_path_eligible(turn: &Turn, ledger: &Ledger) -> bool {
     for cell_id in &write_set {
         match ledger.get(cell_id) {
             Some(cell) => {
-                if cell.public_key != agent_public_key {
+                if cell.public_key() != agent_public_key {
                     return false;
                 }
             }
@@ -333,7 +333,7 @@ pub fn process_fast_path_lock(
     //    previously assumed verified upstream (P1-6) -- no longer.
     let agent_pk = ledger
         .get(&turn.agent)
-        .map(|c| c.public_key)
+        .map(|c| c.public_key())
         .ok_or(FastPathError::NotEligible)?;
     let verifying_key = VerifyingKey::from_bytes(&agent_pk)
         .map_err(|_| FastPathError::InvalidSignature)?;
@@ -367,7 +367,7 @@ pub fn process_fast_path_lock(
     for cell_id in &write_set {
         // Look up the cell's current nonce.
         if let Some(cell) = ledger.get(cell_id) {
-            let nonce = cell.state.nonce;
+            let nonce = cell.state.nonce();
 
             // Check for existing lock on this (cell, nonce).
             if let Some(existing) = table.locks.get(&(*cell_id, nonce)) {
@@ -397,7 +397,7 @@ pub fn process_fast_path_lock(
                 turn_hash,
                 locked_at_height: current_height,
                 locked_nonce: *nonce,
-                signer: agent_pk,
+                signer: *agent_pk,
                 budget_digest: None,
             },
         );
@@ -611,7 +611,7 @@ mod tests {
     fn insert_cell_with_key(ledger: &mut Ledger, public_key: [u8; 32], balance: u64) -> CellId {
         let token_id = [0u8; 32];
         let cell = Cell::with_balance(public_key, token_id, balance);
-        let id = cell.id;
+        let id = cell.id();
         ledger.insert_cell(cell).unwrap();
         id
     }

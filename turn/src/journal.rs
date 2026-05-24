@@ -362,12 +362,12 @@ impl LedgerJournal {
                 }
                 JournalEntry::SetBalance { cell, old_balance } => {
                     if let Some(c) = ledger.get_mut(&cell) {
-                        c.state.balance = old_balance;
+                        c.state.set_balance(old_balance);
                     }
                 }
                 JournalEntry::SetNonce { cell, old_nonce } => {
                     if let Some(c) = ledger.get_mut(&cell) {
-                        c.state.nonce = old_nonce;
+                        c.state.set_nonce(old_nonce);
                     }
                 }
                 JournalEntry::GrantCapability { cell, slot } => {
@@ -388,7 +388,7 @@ impl LedgerJournal {
                 }
                 JournalEntry::SetProvedState { cell, old_value } => {
                     if let Some(c) = ledger.get_mut(&cell) {
-                        c.state.proved_state = old_value;
+                        c.state.set_proved_state(old_value);
                     }
                 }
                 JournalEntry::SetPermissions {
@@ -414,7 +414,7 @@ impl LedgerJournal {
                 }
                 JournalEntry::SetDelegationEpoch { cell, old_epoch } => {
                     if let Some(c) = ledger.get_mut(&cell) {
-                        c.state.delegation_epoch = old_epoch;
+                        c.state.set_delegation_epoch(old_epoch);
                     }
                 }
                 // CRITICAL FIX: Remove obligation/escrow/nullifier insertions on rollback.
