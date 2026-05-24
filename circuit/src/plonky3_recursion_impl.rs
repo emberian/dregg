@@ -12,8 +12,12 @@
 //! 2. A wrapper implementing `FriRecursionConfig` that adds verifier parameters
 //! 3. A `FriRecursionBackendForExt<D>` that knows how to build the verifier circuit
 //!
-//! Our `P3MerklePoseidon2Air` (358 columns, degree-7) automatically satisfies the
-//! `RecursiveAir` trait via the blanket impl in `p3-recursion`.
+//! Any AIR that implements `p3-air::Air<InteractionSymbolicBuilder<F, EF>>`
+//! automatically satisfies the `RecursiveAir` trait via the blanket impl in
+//! `p3-recursion`. `P3MerklePoseidon2Air` (358 columns, degree-7) was the first
+//! AIR proven through this path; `prove_recursive_layer` is now generic so any
+//! `Air`-implementing AIR (e.g., `AggregationAir`, the Effect VM AIR via its
+//! `p3-air` bridge) can be wrapped without code duplication.
 //!
 //! ## Configuration
 //!
@@ -21,21 +25,26 @@
 //! - Extension: BinomialExtensionField<BabyBear, 4> (degree-4)
 //! - Hash/Compress/Challenger: Poseidon2 width-16 (matching recursion library)
 //! - FRI: log_blowup=3 (required for degree-7 AIR), cap_height=0, max_log_arity=1
+//!   — the same blowup is reused for lower-degree AIRs; it costs a little prover
+//!   work but the resulting recursion config is shared.
 
 #[cfg(feature = "recursion")]
 pub mod recursive {
     use std::sync::Arc;
 
+    use p3_air::{Air, BaseAir, SymbolicExpressionExt};
     use p3_baby_bear::{BabyBear as P3BabyBear, Poseidon2BabyBear, default_babybear_poseidon2_16};
     use p3_challenger::DuplexChallenger;
     use p3_circuit::{CircuitBuilder, CircuitRunner, NonPrimitiveOpId};
     use p3_circuit_prover::BatchStarkProver;
     use p3_commit::{ExtensionMmcs, Pcs};
     use p3_dft::Radix2DitParallel;
-    use p3_field::Field;
     use p3_field::extension::BinomialExtensionField;
+    use p3_field::{Algebra, Field};
     use p3_fri::{FriParameters, TwoAdicFriPcs};
     use p3_lookup::logup::LogUpGadget;
+    use p3_lookup::symbolic::InteractionSymbolicBuilder;
+    use p3_matrix::dense::RowMajorMatrix;
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_recursion::pcs::{
         InputProofTargets, MerkleCapTargets, RecValMmcs, set_fri_mmcs_private_data,
@@ -46,7 +55,9 @@ pub mod recursive {
         RecursionInput, RecursionOutput, build_and_prove_next_layer, ops::Poseidon2Config,
     };
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-    use p3_uni_stark::{Proof, StarkConfig, StarkGenericConfig, Val, prove, verify};
+    use p3_uni_stark::{
+        Proof, StarkConfig, StarkGenericConfig, SymbolicExpression, Val, prove, verify,
+    };
 
     use crate::field::BabyBear;
     use crate::plonky3_prover::{
@@ -272,59 +283,141 @@ pub mod recursive {
         FriRecursionBackend::new(Poseidon2Config::BABY_BEAR_D4_W16).for_extension_degree::<D>()
     }
 
-    /// Generate a recursion-compatible inner proof.
+    /// Trait alias capturing the bounds an AIR must satisfy to flow through this
+    /// recursion path. Any AIR implementing `p3-air::Air` against both the
+    /// uni-stark prover/verifier and the `InteractionSymbolicBuilder` (which is
+    /// what `p3-recursion`'s blanket `RecursiveAir` impl needs) satisfies this.
     ///
-    /// Uses the Poseidon2 width-16 config that the recursion library's in-circuit
-    /// verifier knows how to verify.
+    /// Concretely, this means:
+    /// 1. `BaseAir<F>` — width + public-value count for the prover/verifier.
+    /// 2. `Air<SymbolicAirBuilder<F>>` — what `p3_uni_stark` calls into when
+    ///    extracting symbolic constraints prior to proving.
+    /// 3. `Air<ProverConstraintFolder<SC>>` and
+    ///    `Air<VerifierConstraintFolder<SC>>` — what `p3_uni_stark::prove` and
+    ///    `verify` invoke for the standalone inner proof.
+    /// 4. `Air<DebugConstraintBuilder<F>>` — what `p3_uni_stark` uses for the
+    ///    debug-mode trace consistency check.
+    /// 5. `Air<InteractionSymbolicBuilder<F, EF>>` — what the recursion
+    ///    library's blanket `RecursiveAir` impl extracts symbolic constraints
+    ///    from for the verifier circuit.
+    ///
+    /// Plus `Sync + 'static` so the proof generator can hand the AIR around.
+    pub trait RecursableAir:
+        BaseAir<P3BabyBear>
+        + for<'a> Air<p3_uni_stark::ProverConstraintFolder<'a, PyanaRecursionConfig>>
+        + for<'a> Air<p3_uni_stark::VerifierConstraintFolder<'a, PyanaRecursionConfig>>
+        + for<'a> Air<p3_air::DebugConstraintBuilder<'a, P3BabyBear>>
+        + Air<p3_uni_stark::SymbolicAirBuilder<P3BabyBear>>
+        + Air<InteractionSymbolicBuilder<P3BabyBear, Challenge>>
+        + Sync
+        + 'static
+    {
+    }
+
+    impl<A> RecursableAir for A where
+        A: BaseAir<P3BabyBear>
+            + for<'a> Air<p3_uni_stark::ProverConstraintFolder<'a, PyanaRecursionConfig>>
+            + for<'a> Air<p3_uni_stark::VerifierConstraintFolder<'a, PyanaRecursionConfig>>
+            + for<'a> Air<p3_air::DebugConstraintBuilder<'a, P3BabyBear>>
+            + Air<p3_uni_stark::SymbolicAirBuilder<P3BabyBear>>
+            + Air<InteractionSymbolicBuilder<P3BabyBear, Challenge>>
+            + Sync
+            + 'static
+    {
+    }
+
+    /// Generate a recursion-compatible inner proof for `P3MerklePoseidon2Air`
+    /// from a pre-built trace.
+    ///
+    /// Kept as a convenience for the Merkle-membership POC; new callers should
+    /// prefer [`prove_inner_for_air`] which accepts any [`RecursableAir`].
     pub fn prove_for_recursion(
         trace: &[Vec<BabyBear>],
         public_inputs: &[BabyBear],
     ) -> RecursionCompatibleProof {
-        let config = create_recursion_config();
         let air = P3MerklePoseidon2Air;
-
         let matrix = trace_to_matrix(trace);
-        let p3_public: Vec<P3BabyBear> = public_inputs.iter().map(|&v| to_p3(v)).collect();
-
-        prove(&config, &air, matrix, &p3_public)
+        prove_inner_for_air(&air, matrix, public_inputs)
     }
 
-    /// Verify a recursion-compatible inner proof.
+    /// Verify a recursion-compatible inner proof for `P3MerklePoseidon2Air`.
     pub fn verify_for_recursion(
         proof: &RecursionCompatibleProof,
         public_inputs: &[BabyBear],
     ) -> Result<(), String> {
-        let config = create_recursion_config();
         let air = P3MerklePoseidon2Air;
+        verify_inner_for_air(&air, proof, public_inputs)
+    }
 
+    /// Generic inner proof generator: any AIR satisfying [`RecursableAir`]
+    /// can be proven with the recursion-compatible STARK config.
+    pub fn prove_inner_for_air<A>(
+        air: &A,
+        trace: RowMajorMatrix<P3BabyBear>,
+        public_inputs: &[BabyBear],
+    ) -> RecursionCompatibleProof
+    where
+        A: RecursableAir,
+    {
+        let config = create_recursion_config();
         let p3_public: Vec<P3BabyBear> = public_inputs.iter().map(|&v| to_p3(v)).collect();
-        verify(&config, &air, proof, &p3_public)
+        prove(&config, air, trace, &p3_public)
+    }
+
+    /// Generic inner proof verifier (paired with [`prove_inner_for_air`]).
+    pub fn verify_inner_for_air<A>(
+        air: &A,
+        proof: &RecursionCompatibleProof,
+        public_inputs: &[BabyBear],
+    ) -> Result<(), String>
+    where
+        A: RecursableAir,
+    {
+        let config = create_recursion_config();
+        let p3_public: Vec<P3BabyBear> = public_inputs.iter().map(|&v| to_p3(v)).collect();
+        verify(&config, air, proof, &p3_public)
             .map_err(|e| format!("Recursion-compatible verification failed: {:?}", e))
     }
 
-    /// Produce a recursive proof that verifies an inner proof in-circuit.
-    ///
-    /// This is the core recursion entry point. Given a proof generated by
-    /// `prove_for_recursion`, it builds a verifier circuit and proves it.
+    /// Produce a recursive proof that verifies a `P3MerklePoseidon2Air` inner
+    /// proof in-circuit. Kept for backwards-compatibility with the
+    /// Merkle-membership tests; new callers should prefer
+    /// [`prove_recursive_layer_for_air`].
     pub fn prove_recursive_layer(
         inner_proof: &RecursionCompatibleProof,
         public_inputs: &[BabyBear],
     ) -> Result<RecursionOutput<PyanaRecursionConfig>, String> {
+        let air = P3MerklePoseidon2Air;
+        prove_recursive_layer_for_air(&air, inner_proof, public_inputs)
+    }
+
+    /// Produce a recursive proof for any `RecursableAir` inner proof.
+    ///
+    /// This is the generalized core recursion entry point. The Effect VM AIR
+    /// (via its `p3-air` bridge), the simpler `AggregationAir`, and the
+    /// canonical `P3MerklePoseidon2Air` all flow through this single function.
+    pub fn prove_recursive_layer_for_air<A>(
+        air: &A,
+        inner_proof: &RecursionCompatibleProof,
+        public_inputs: &[BabyBear],
+    ) -> Result<RecursionOutput<PyanaRecursionConfig>, String>
+    where
+        A: RecursableAir,
+    {
         let config = create_recursion_config();
         let backend = create_recursion_backend();
         let params = ProveNextLayerParams::default();
 
-        let air = P3MerklePoseidon2Air;
         let p3_public: Vec<P3BabyBear> = public_inputs.iter().map(|&v| to_p3(v)).collect();
 
         let input = RecursionInput::UniStark {
             proof: inner_proof,
-            air: &air,
+            air,
             public_inputs: p3_public,
             preprocessed_commit: None,
         };
 
-        build_and_prove_next_layer::<PyanaRecursionConfig, P3MerklePoseidon2Air, _, D>(
+        build_and_prove_next_layer::<PyanaRecursionConfig, A, _, D>(
             &input, &config, &backend, &params,
         )
         .map_err(|e| format!("Recursive proof generation failed: {:?}", e))
@@ -389,6 +482,66 @@ pub mod recursive {
                 "Recursion-compatible inner proof failed: {:?}",
                 result.err()
             );
+        }
+
+        /// Block 1 (Kimchi survey § 9.1 starter task): demonstrate that the
+        /// recursion path is not bound to `P3MerklePoseidon2Air`. Take the
+        /// smallest other `Air`-implementing AIR in the crate
+        /// (`AggregationAir`, width 4, degree 1, 2 public inputs — the
+        /// minimum-non-trivial shape we have) and run it through the same
+        /// `prove_inner_for_air` / `prove_recursive_layer_for_air`
+        /// machinery. If this passes, the blanket `RecursiveAir` impl in
+        /// `p3-recursion` accepts a column count + constraint set that
+        /// differ from the Merkle POC, which is the *mechanical
+        /// generalization* the survey asked us to measure.
+        ///
+        /// Block 1 outcome: clean acceptance (no fork changes required) —
+        /// the `RecursableAir` trait alias captures exactly the bounds the
+        /// fork's blanket impl needs, and any AIR implementing the standard
+        /// `p3-air::Air<AB>` family flows through unmodified.
+        #[test]
+        fn recursive_aggregation_air_smoke() {
+            use crate::plonky3_recursion::AggregationAir;
+            use p3_field::PrimeCharacteristicRing;
+            use p3_matrix::dense::RowMajorMatrix;
+
+            // Build a minimal aggregation trace by hand: 4 rows, width 4.
+            // Row layout: [acc_in, leaf, root, acc_out].
+            //
+            // The AggregationAir constraints are:
+            //   - first row: acc_in == pv[0]
+            //   - last row: acc_out == pv[1]
+            //   - transition: acc_out[i] == acc_in[i+1]
+            //
+            // We pick PI = [0, X] and a hand-rolled chain that satisfies the
+            // transitions. The hash-chain computation is NOT enforced (this
+            // is the recursion-shape smoke test, not the AggregationAir
+            // soundness test — that lives in plonky3_recursion::tests).
+            let pv0 = P3BabyBear::ZERO;
+            let pv1 = P3BabyBear::from_u64(0xC0FFEE);
+            let rows: Vec<[P3BabyBear; 4]> = vec![
+                [pv0, P3BabyBear::from_u64(1), P3BabyBear::from_u64(2), P3BabyBear::from_u64(10)],
+                [P3BabyBear::from_u64(10), P3BabyBear::from_u64(3), P3BabyBear::from_u64(4), P3BabyBear::from_u64(20)],
+                [P3BabyBear::from_u64(20), P3BabyBear::from_u64(5), P3BabyBear::from_u64(6), P3BabyBear::from_u64(30)],
+                [P3BabyBear::from_u64(30), P3BabyBear::from_u64(7), P3BabyBear::from_u64(8), pv1],
+            ];
+            let flat: Vec<P3BabyBear> = rows.iter().flat_map(|r| r.iter().copied()).collect();
+            let matrix = RowMajorMatrix::new(flat, 4);
+
+            let pis_bb = vec![BabyBear::ZERO, BabyBear::new(0xC0FFEE)];
+
+            let air = AggregationAir;
+
+            // Inner proof generation through the generalized path.
+            let inner = prove_inner_for_air(&air, matrix, &pis_bb);
+            verify_inner_for_air(&air, &inner, &pis_bb)
+                .expect("AggregationAir inner proof must verify");
+
+            // Recursive layer through the generalized path.
+            let rec = prove_recursive_layer_for_air(&air, &inner, &pis_bb)
+                .expect("AggregationAir recursive layer must prove");
+            verify_recursive_layer(&rec)
+                .expect("AggregationAir recursive layer must verify");
         }
 
         /// Core POC: one layer of real in-circuit recursive STARK verification.
