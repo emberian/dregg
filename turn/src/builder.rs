@@ -521,6 +521,509 @@ impl<S> ActionBuilder<S> {
     }
 }
 
+// ─── Typed effect_* methods (P2.C) ────────────────────────────────────────────
+//
+// One method per existing `Effect` variant. The CapTP variants
+// (ExportSturdyRef, EnlivenRef, DropRef, ValidateHandoff) are owned by P1
+// and get their methods in a follow-up. `RegisterName` is not yet an
+// Effect variant and lands in a follow-up commit too.
+//
+// All methods are state-agnostic (available on any `S`) and consume self,
+// returning Self with the effect appended.
+impl<S> ActionBuilder<S> {
+    // §3.1 — Field & balance ---------------------------------------------------
+
+    pub fn effect_set_field(
+        mut self,
+        cell: CellId,
+        index: usize,
+        value: FieldElement,
+    ) -> Self {
+        self.effects.push(Effect::SetField { cell, index, value });
+        self
+    }
+
+    pub fn effect_transfer(mut self, from: CellId, to: CellId, amount: u64) -> Self {
+        self.effects.push(Effect::Transfer { from, to, amount });
+        self
+    }
+
+    pub fn effect_increment_nonce(mut self, cell: CellId) -> Self {
+        self.effects.push(Effect::IncrementNonce { cell });
+        self
+    }
+
+    // §3.2 — Capabilities ------------------------------------------------------
+
+    pub fn effect_grant_capability(
+        mut self,
+        from: CellId,
+        to: CellId,
+        cap: CapabilityRef,
+    ) -> Self {
+        self.effects.push(Effect::GrantCapability { from, to, cap });
+        self
+    }
+
+    pub fn effect_revoke_capability(mut self, cell: CellId, slot: u32) -> Self {
+        self.effects.push(Effect::RevokeCapability { cell, slot });
+        self
+    }
+
+    pub fn effect_introduce(
+        mut self,
+        introducer: CellId,
+        recipient: CellId,
+        target: CellId,
+        permissions: pyana_cell::AuthRequired,
+    ) -> Self {
+        self.effects.push(Effect::Introduce {
+            introducer,
+            recipient,
+            target,
+            permissions,
+        });
+        self
+    }
+
+    pub fn effect_exercise_via_capability(
+        mut self,
+        cap_slot: u32,
+        inner_effects: Vec<Effect>,
+    ) -> Self {
+        self.effects.push(Effect::ExerciseViaCapability {
+            cap_slot,
+            inner_effects,
+        });
+        self
+    }
+
+    pub fn effect_pipelined_send(
+        mut self,
+        target: crate::eventual::EventualRef,
+        action: Action,
+    ) -> Self {
+        self.effects.push(Effect::PipelinedSend {
+            target,
+            action: Box::new(action),
+        });
+        self
+    }
+
+    // §3.3 — Notes & seal-pairs ------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn effect_note_spend(
+        mut self,
+        nullifier: pyana_cell::Nullifier,
+        note_tree_root: [u8; 32],
+        value: u64,
+        asset_type: u64,
+        spending_proof: Vec<u8>,
+        value_commitment: Option<[u8; 32]>,
+    ) -> Self {
+        self.effects.push(Effect::NoteSpend {
+            nullifier,
+            note_tree_root,
+            value,
+            asset_type,
+            spending_proof,
+            value_commitment,
+        });
+        self
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn effect_note_create(
+        mut self,
+        commitment: pyana_cell::NoteCommitment,
+        value: u64,
+        asset_type: u64,
+        encrypted_note: Vec<u8>,
+        value_commitment: Option<[u8; 32]>,
+        range_proof: Option<Vec<u8>>,
+    ) -> Self {
+        self.effects.push(Effect::NoteCreate {
+            commitment,
+            value,
+            asset_type,
+            encrypted_note,
+            value_commitment,
+            range_proof,
+        });
+        self
+    }
+
+    pub fn effect_create_seal_pair(
+        mut self,
+        sealer_holder: CellId,
+        unsealer_holder: CellId,
+    ) -> Self {
+        self.effects.push(Effect::CreateSealPair {
+            sealer_holder,
+            unsealer_holder,
+        });
+        self
+    }
+
+    pub fn effect_seal(mut self, pair_id: [u8; 32], capability: CapabilityRef) -> Self {
+        self.effects.push(Effect::Seal {
+            pair_id,
+            capability,
+        });
+        self
+    }
+
+    pub fn effect_unseal(
+        mut self,
+        sealed_box: pyana_cell::SealedBox,
+        recipient: CellId,
+    ) -> Self {
+        self.effects.push(Effect::Unseal {
+            sealed_box,
+            recipient,
+        });
+        self
+    }
+
+    // §3.4 — Cell lifecycle ----------------------------------------------------
+
+    pub fn effect_create_cell(
+        mut self,
+        public_key: [u8; 32],
+        token_id: [u8; 32],
+        balance: u64,
+    ) -> Self {
+        self.effects.push(Effect::CreateCell {
+            public_key,
+            token_id,
+            balance,
+        });
+        self
+    }
+
+    pub fn effect_create_cell_from_factory(
+        mut self,
+        factory_vk: [u8; 32],
+        owner_pubkey: [u8; 32],
+        token_id: [u8; 32],
+        params: pyana_cell::FactoryCreationParams,
+    ) -> Self {
+        self.effects.push(Effect::CreateCellFromFactory {
+            factory_vk,
+            owner_pubkey,
+            token_id,
+            params,
+        });
+        self
+    }
+
+    pub fn effect_make_sovereign(mut self, cell: CellId) -> Self {
+        self.effects.push(Effect::MakeSovereign { cell });
+        self
+    }
+
+    pub fn effect_set_permissions(
+        mut self,
+        cell: CellId,
+        new_permissions: pyana_cell::Permissions,
+    ) -> Self {
+        self.effects.push(Effect::SetPermissions {
+            cell,
+            new_permissions,
+        });
+        self
+    }
+
+    pub fn effect_set_verification_key(
+        mut self,
+        cell: CellId,
+        new_vk: Option<pyana_cell::VerificationKey>,
+    ) -> Self {
+        self.effects
+            .push(Effect::SetVerificationKey { cell, new_vk });
+        self
+    }
+
+    // §3.5 — Delegation --------------------------------------------------------
+
+    pub fn effect_spawn_with_delegation(
+        mut self,
+        child_public_key: [u8; 32],
+        child_token_id: [u8; 32],
+        max_staleness: u64,
+    ) -> Self {
+        self.effects.push(Effect::SpawnWithDelegation {
+            child_public_key,
+            child_token_id,
+            max_staleness,
+        });
+        self
+    }
+
+    pub fn effect_refresh_delegation(mut self) -> Self {
+        self.effects.push(Effect::RefreshDelegation);
+        self
+    }
+
+    pub fn effect_revoke_delegation(mut self, child: CellId) -> Self {
+        self.effects.push(Effect::RevokeDelegation { child });
+        self
+    }
+
+    // §3.6 — Bridge ------------------------------------------------------------
+
+    pub fn effect_bridge_mint(
+        mut self,
+        portable_proof: pyana_cell::note_bridge::PortableNoteProof,
+    ) -> Self {
+        self.effects.push(Effect::BridgeMint { portable_proof });
+        self
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn effect_bridge_lock(
+        mut self,
+        nullifier: [u8; 32],
+        destination: [u8; 32],
+        value: u64,
+        asset_type: u64,
+        timeout_height: u64,
+        spending_proof: Vec<u8>,
+    ) -> Self {
+        self.effects.push(Effect::BridgeLock {
+            nullifier,
+            destination,
+            value,
+            asset_type,
+            timeout_height,
+            spending_proof,
+        });
+        self
+    }
+
+    pub fn effect_bridge_finalize(
+        mut self,
+        nullifier: [u8; 32],
+        receipt: pyana_cell::note_bridge::BridgeReceipt,
+    ) -> Self {
+        self.effects
+            .push(Effect::BridgeFinalize { nullifier, receipt });
+        self
+    }
+
+    pub fn effect_bridge_cancel(mut self, nullifier: [u8; 32]) -> Self {
+        self.effects.push(Effect::BridgeCancel { nullifier });
+        self
+    }
+
+    // §3.7 — Obligations -------------------------------------------------------
+
+    pub fn effect_create_obligation(
+        mut self,
+        beneficiary: CellId,
+        condition: crate::conditional::ProofCondition,
+        deadline_height: u64,
+        stake: pyana_cell::NoteCommitment,
+        stake_amount: u64,
+    ) -> Self {
+        self.effects.push(Effect::CreateObligation {
+            beneficiary,
+            condition,
+            deadline_height,
+            stake,
+            stake_amount,
+        });
+        self
+    }
+
+    pub fn effect_fulfill_obligation(
+        mut self,
+        obligation_id: [u8; 32],
+        proof: crate::conditional::ConditionProof,
+    ) -> Self {
+        self.effects.push(Effect::FulfillObligation {
+            obligation_id,
+            proof,
+        });
+        self
+    }
+
+    pub fn effect_slash_obligation(mut self, obligation_id: [u8; 32]) -> Self {
+        self.effects.push(Effect::SlashObligation { obligation_id });
+        self
+    }
+
+    // §3.8 — Escrow ------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn effect_create_escrow(
+        mut self,
+        cell: CellId,
+        recipient: CellId,
+        amount: u64,
+        condition: crate::escrow::EscrowCondition,
+        timeout_height: u64,
+        escrow_id: [u8; 32],
+    ) -> Self {
+        self.effects.push(Effect::CreateEscrow {
+            cell,
+            recipient,
+            amount,
+            condition,
+            timeout_height,
+            escrow_id,
+        });
+        self
+    }
+
+    pub fn effect_release_escrow(
+        mut self,
+        escrow_id: [u8; 32],
+        proof: Option<Vec<u8>>,
+    ) -> Self {
+        self.effects
+            .push(Effect::ReleaseEscrow { escrow_id, proof });
+        self
+    }
+
+    pub fn effect_refund_escrow(mut self, escrow_id: [u8; 32]) -> Self {
+        self.effects.push(Effect::RefundEscrow { escrow_id });
+        self
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn effect_create_committed_escrow(
+        mut self,
+        creator_commitment: [u8; 32],
+        recipient_commitment: [u8; 32],
+        value_commitment: pyana_cell::ValueCommitmentBytes,
+        condition_commitment: [u8; 32],
+        timeout_height: u64,
+        escrow_id: [u8; 32],
+        range_proof: Vec<u8>,
+        amount: u64,
+    ) -> Self {
+        self.effects.push(Effect::CreateCommittedEscrow {
+            creator_commitment,
+            recipient_commitment,
+            value_commitment,
+            condition_commitment,
+            timeout_height,
+            escrow_id,
+            range_proof,
+            amount,
+        });
+        self
+    }
+
+    pub fn effect_release_committed_escrow(
+        mut self,
+        escrow_id: [u8; 32],
+        claim_auth: crate::escrow::EscrowClaimAuth,
+        recipient: CellId,
+    ) -> Self {
+        self.effects.push(Effect::ReleaseCommittedEscrow {
+            escrow_id,
+            claim_auth,
+            recipient,
+        });
+        self
+    }
+
+    pub fn effect_refund_committed_escrow(
+        mut self,
+        escrow_id: [u8; 32],
+        claim_auth: crate::escrow::EscrowClaimAuth,
+        creator: CellId,
+    ) -> Self {
+        self.effects.push(Effect::RefundCommittedEscrow {
+            escrow_id,
+            claim_auth,
+            creator,
+        });
+        self
+    }
+
+    // §3.9 — Events ------------------------------------------------------------
+
+    pub fn effect_emit_event(
+        mut self,
+        cell: CellId,
+        topic: &str,
+        data: Vec<FieldElement>,
+    ) -> Self {
+        self.effects.push(Effect::EmitEvent {
+            cell,
+            event: Event::new(symbol(topic), data),
+        });
+        self
+    }
+
+    // §3.10 — Queues -----------------------------------------------------------
+
+    pub fn effect_queue_allocate(
+        mut self,
+        capacity: u64,
+        program_vk: Option<[u8; 32]>,
+    ) -> Self {
+        self.effects.push(Effect::QueueAllocate {
+            capacity,
+            program_vk,
+        });
+        self
+    }
+
+    pub fn effect_queue_enqueue(
+        mut self,
+        queue: CellId,
+        message_hash: [u8; 32],
+        deposit: u64,
+    ) -> Self {
+        self.effects.push(Effect::QueueEnqueue {
+            queue,
+            message_hash,
+            deposit,
+        });
+        self
+    }
+
+    pub fn effect_queue_dequeue(mut self, queue: CellId) -> Self {
+        self.effects.push(Effect::QueueDequeue { queue });
+        self
+    }
+
+    pub fn effect_queue_resize(mut self, queue: CellId, new_capacity: u64) -> Self {
+        self.effects.push(Effect::QueueResize {
+            queue,
+            new_capacity,
+        });
+        self
+    }
+
+    pub fn effect_queue_atomic_tx(
+        mut self,
+        operations: Vec<crate::action::QueueTxOp>,
+    ) -> Self {
+        self.effects.push(Effect::QueueAtomicTx { operations });
+        self
+    }
+
+    pub fn effect_queue_pipeline_step(
+        mut self,
+        pipeline_id: [u8; 32],
+        source: CellId,
+        sinks: Vec<CellId>,
+    ) -> Self {
+        self.effects.push(Effect::QueuePipelineStep {
+            pipeline_id,
+            source,
+            sinks,
+        });
+        self
+    }
+}
+
 // `.build()` is only available in an `Authorized` state.
 impl<S: Authorized> ActionBuilder<S> {
     /// Finalize the builder into an `Action`. Only available once
