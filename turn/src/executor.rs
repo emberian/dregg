@@ -525,6 +525,15 @@ pub struct TurnExecutor {
     /// Pending bridges: notes locked for cross-federation transfer (two-phase protocol).
     /// Tracks notes that are committed-to-burn but not yet permanently spent.
     pub pending_bridges: Mutex<PendingBridgeSet>,
+    /// Phased bridge receipt log (Stage 9 P3.D / DESIGN-receipts.md §5).
+    ///
+    /// Records monotone phase advancements per `bridge_id` for the four-phase
+    /// envelope protocol. Independent of `pending_bridges` (which is keyed on
+    /// `nullifier`, predates the full envelope format, and only tracks the
+    /// source-side state machine). On `BridgeFinalize`, the executor admits a
+    /// synthetic `Witnessed → Finalized` envelope pair so a future Refund for
+    /// the same bridge_id is rejected as non-monotone.
+    pub bridge_phase_log: Mutex<pyana_cell::note_bridge::BridgePhaseLog>,
     /// Trusted Ed25519 public keys for destination federation receipt verification.
     /// Used during BridgeFinalize to validate that the receipt was signed by a
     /// legitimate destination federation.
@@ -626,6 +635,7 @@ impl TurnExecutor {
             local_federation_id: [0u8; 32],
             bridged_nullifiers: Mutex::new(BridgedNullifierSet::new()),
             pending_bridges: Mutex::new(PendingBridgeSet::new()),
+            bridge_phase_log: Mutex::new(pyana_cell::note_bridge::BridgePhaseLog::new()),
             trusted_destination_keys: Vec::new(),
             proposer_cell: None,
             treasury_cell: None,
@@ -661,6 +671,7 @@ impl TurnExecutor {
             local_federation_id: [0u8; 32],
             bridged_nullifiers: Mutex::new(BridgedNullifierSet::new()),
             pending_bridges: Mutex::new(PendingBridgeSet::new()),
+            bridge_phase_log: Mutex::new(pyana_cell::note_bridge::BridgePhaseLog::new()),
             trusted_destination_keys: Vec::new(),
             proposer_cell: None,
             treasury_cell: None,
@@ -692,6 +703,7 @@ impl TurnExecutor {
             local_federation_id: [0u8; 32],
             bridged_nullifiers: Mutex::new(BridgedNullifierSet::new()),
             pending_bridges: Mutex::new(PendingBridgeSet::new()),
+            bridge_phase_log: Mutex::new(pyana_cell::note_bridge::BridgePhaseLog::new()),
             trusted_destination_keys: Vec::new(),
             proposer_cell: None,
             treasury_cell: None,
@@ -1411,6 +1423,167 @@ impl TurnExecutor {
         }
 
         Ok(())
+    }
+
+    /// Stage 7-γ.0d: cross-proof PI matching for a bundle of per-cell proofs
+    /// from one turn.
+    ///
+    /// Given the N per-cell proof PI vectors that a turn's bundle has
+    /// produced (one entry per touched cell, in any order), enforces that
+    /// all of them agree on the four "turn-identity" PI fields introduced
+    /// at γ.0a:
+    ///
+    ///   - PI[TURN_HASH_BASE..+4]
+    ///   - PI[EFFECTS_HASH_GLOBAL_BASE..+4]
+    ///   - PI[ACTOR_NONCE]
+    ///   - PI[PREVIOUS_RECEIPT_HASH_BASE..+4]
+    ///
+    /// Also enforces — if `turn` is provided — that the shared values
+    /// match the canonical `Turn::hash`-derived projection
+    /// (`compute_turn_identity_pi`). This second check is the
+    /// executor-side enforcement that γ.0 keeps trusted; γ.1 will move
+    /// the `effects_hash_global ↔ Σ effects_local` direction into an
+    /// aggregation micro-AIR.
+    ///
+    /// Per-proof STARK verification is the caller's responsibility (see
+    /// `verify_and_commit_proof` for the single-cell case). This function
+    /// only checks PI consistency across the bundle and against the turn.
+    ///
+    /// Returns `Ok(())` if every PI vector in `bundle_pis` agrees with
+    /// every other on the four shared slots and (when `turn.is_some()`)
+    /// with the canonical projection.
+    pub fn verify_proof_carrying_turn_bundle(
+        bundle_pis: &[Vec<pyana_circuit::field::BabyBear>],
+        turn: Option<&Turn>,
+    ) -> Result<(), TurnError> {
+        use pyana_circuit::effect_vm::pi;
+        use pyana_circuit::field::BabyBear;
+
+        if bundle_pis.is_empty() {
+            return Ok(());
+        }
+
+        // Every PI vector must be at least as long as the base layout —
+        // shorter vectors can't carry the γ.0a slots at all.
+        for (i, p) in bundle_pis.iter().enumerate() {
+            if p.len() < pi::BASE_COUNT {
+                return Err(TurnError::InvalidExecutionProof(format!(
+                    "bundle proof {} has {} public inputs, expected at least {} \
+                     (Stage 7-γ.0a layout)",
+                    i,
+                    p.len(),
+                    pi::BASE_COUNT
+                )));
+            }
+        }
+
+        // Determine the canonical "shared" values. When the turn is
+        // supplied, use Turn::compute_turn_identity_pi (executor-trusted
+        // source of truth). Otherwise, take the first proof's values as
+        // the reference and verify the rest match — useful for federation
+        // verifiers that receive a bundle without re-deriving the Turn.
+        let (ref_turn_hash, ref_eff_global, ref_actor_nonce, ref_prev_receipt): (
+            [BabyBear; 4],
+            [BabyBear; 4],
+            BabyBear,
+            [BabyBear; 4],
+        ) = if let Some(t) = turn {
+            let (th, eg, an, pr) = Self::compute_turn_identity_pi(t);
+            (
+                th,
+                eg,
+                BabyBear::new((an & 0x7FFF_FFFF) as u32),
+                pr,
+            )
+        } else {
+            let p0 = &bundle_pis[0];
+            let mut th = [BabyBear::ZERO; 4];
+            let mut eg = [BabyBear::ZERO; 4];
+            let mut pr = [BabyBear::ZERO; 4];
+            for i in 0..4 {
+                th[i] = p0[pi::TURN_HASH_BASE + i];
+                eg[i] = p0[pi::EFFECTS_HASH_GLOBAL_BASE + i];
+                pr[i] = p0[pi::PREVIOUS_RECEIPT_HASH_BASE + i];
+            }
+            (th, eg, p0[pi::ACTOR_NONCE], pr)
+        };
+
+        // Per-proof check: each proof must agree with the reference on
+        // every shared slot. Errors name the slot and the proof index.
+        for (proof_idx, p) in bundle_pis.iter().enumerate() {
+            for i in 0..pi::TURN_HASH_LEN {
+                if p[pi::TURN_HASH_BASE + i] != ref_turn_hash[i] {
+                    return Err(TurnError::InvalidExecutionProof(format!(
+                        "bundle PI mismatch: TURN_HASH felt {} differs in proof {} \
+                         (expected {:?}, got {:?})",
+                        i, proof_idx, ref_turn_hash[i], p[pi::TURN_HASH_BASE + i],
+                    )));
+                }
+            }
+            for i in 0..pi::EFFECTS_HASH_GLOBAL_LEN {
+                if p[pi::EFFECTS_HASH_GLOBAL_BASE + i] != ref_eff_global[i] {
+                    return Err(TurnError::InvalidExecutionProof(format!(
+                        "bundle PI mismatch: EFFECTS_HASH_GLOBAL felt {} differs in \
+                         proof {} (expected {:?}, got {:?})",
+                        i, proof_idx, ref_eff_global[i],
+                        p[pi::EFFECTS_HASH_GLOBAL_BASE + i],
+                    )));
+                }
+            }
+            if p[pi::ACTOR_NONCE] != ref_actor_nonce {
+                return Err(TurnError::InvalidExecutionProof(format!(
+                    "bundle PI mismatch: ACTOR_NONCE differs in proof {} \
+                     (expected {:?}, got {:?})",
+                    proof_idx, ref_actor_nonce, p[pi::ACTOR_NONCE],
+                )));
+            }
+            for i in 0..pi::PREVIOUS_RECEIPT_HASH_LEN {
+                if p[pi::PREVIOUS_RECEIPT_HASH_BASE + i] != ref_prev_receipt[i] {
+                    return Err(TurnError::InvalidExecutionProof(format!(
+                        "bundle PI mismatch: PREVIOUS_RECEIPT_HASH felt {} differs in \
+                         proof {} (expected {:?}, got {:?})",
+                        i, proof_idx, ref_prev_receipt[i],
+                        p[pi::PREVIOUS_RECEIPT_HASH_BASE + i],
+                    )));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Convenience: verify a bundle of per-cell `(StarkProof, public_inputs)`
+    /// pairs from the same turn.
+    ///
+    /// Runs the per-proof STARK verifier on each pair (against the standard
+    /// `EffectVmAir`) and then calls
+    /// [`verify_proof_carrying_turn_bundle`] to enforce that the shared
+    /// γ.0a PI slots agree across proofs and (when `turn` is supplied)
+    /// against the canonical Turn projection.
+    ///
+    /// Note: this convenience handles the default-AIR path only; the
+    /// custom-program-VK path is the caller's responsibility because the
+    /// per-cell AIR identity is cell-dependent in that case. The single-cell
+    /// `verify_and_commit_proof` remains the path of record for production
+    /// today; this helper exists to back tests and to give future
+    /// multi-cell aggregation callers (Stage 7-γ.1+) a stable entry point.
+    pub fn verify_bundle_with_stark(
+        bundle: &[(
+            pyana_circuit::stark::StarkProof,
+            Vec<pyana_circuit::field::BabyBear>,
+        )],
+        turn: Option<&Turn>,
+    ) -> Result<(), TurnError> {
+        use pyana_circuit::stark;
+
+        for (i, (proof, pis)) in bundle.iter().enumerate() {
+            let air = pyana_circuit::EffectVmAir::new(proof.trace_len);
+            stark::verify(&air, proof, pis).map_err(|e| {
+                TurnError::ProofVerificationFailed(format!("bundle proof {}: {}", i, e))
+            })?;
+        }
+        let pi_vecs: Vec<Vec<_>> = bundle.iter().map(|(_, pis)| pis.clone()).collect();
+        Self::verify_proof_carrying_turn_bundle(&pi_vecs, turn)
     }
 
     /// Read the per-cell `max_custom_effects` from the cell's program manifest.
