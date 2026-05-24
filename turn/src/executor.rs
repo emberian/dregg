@@ -1799,8 +1799,18 @@ impl TurnExecutor {
                             slot_hash: hash_to_bb(slot_hash_bytes.as_bytes()),
                         });
                     }
-                    Effect::CreateCell { .. } => {
-                        push_pending_shim(vm_effects, 0x104u32);
+                    Effect::CreateCell { public_key, token_id, balance } => {
+                        // Stage 3: real AIR coverage. CreateCell rejects
+                        // non-zero balance via executor, so the actor's
+                        // balance doesn't change — passthrough is correct.
+                        let mut hasher = blake3::Hasher::new();
+                        hasher.update(public_key);
+                        hasher.update(token_id);
+                        hasher.update(&balance.to_le_bytes());
+                        let create_hash_bytes = hasher.finalize();
+                        vm_effects.push(VmEffect::CreateCell {
+                            create_hash: hash_to_bb(create_hash_bytes.as_bytes()),
+                        });
                     }
                     Effect::CreateSealPair { sealer_holder, unsealer_holder } => {
                         // Stage 3: real AIR coverage. Hash both holders into
@@ -1826,8 +1836,18 @@ impl TurnExecutor {
                             event_hash: hash_to_bb(event_hash_bytes.as_bytes()),
                         });
                     }
-                    Effect::SpawnWithDelegation { .. } => {
-                        push_pending_shim(vm_effects, 0x107u32);
+                    Effect::SpawnWithDelegation { child_public_key, child_token_id, max_staleness } => {
+                        // Stage 3: real AIR coverage. Passthrough — the
+                        // child cell is its own entity; actor's state
+                        // doesn't change.
+                        let mut hasher = blake3::Hasher::new();
+                        hasher.update(child_public_key);
+                        hasher.update(child_token_id);
+                        hasher.update(&max_staleness.to_le_bytes());
+                        let spawn_hash_bytes = hasher.finalize();
+                        vm_effects.push(VmEffect::SpawnWithDelegation {
+                            spawn_hash: hash_to_bb(spawn_hash_bytes.as_bytes()),
+                        });
                     }
                     Effect::RefreshDelegation => {
                         // Stage 3: real AIR coverage. No params on the
@@ -1854,8 +1874,12 @@ impl TurnExecutor {
                     Effect::BridgeFinalize { .. } => {
                         push_pending_shim(vm_effects, 0x203u32);
                     }
-                    Effect::BridgeCancel { .. } => {
-                        push_pending_shim(vm_effects, 0x204u32);
+                    Effect::BridgeCancel { nullifier } => {
+                        // Stage 3: real AIR coverage. Passthrough — bridge
+                        // state lives off-trace; nullifier binds intent.
+                        vm_effects.push(VmEffect::BridgeCancel {
+                            nullifier_hash: hash_to_bb(nullifier),
+                        });
                     }
                     Effect::Introduce { .. } => {
                         push_pending_shim(vm_effects, 0x301u32);
@@ -1881,8 +1905,20 @@ impl TurnExecutor {
                     Effect::RefundCommittedEscrow { .. } => {
                         push_pending_shim(vm_effects, 0x406u32);
                     }
-                    Effect::ExerciseViaCapability { .. } => {
-                        push_pending_shim(vm_effects, 0x501u32);
+                    Effect::ExerciseViaCapability { cap_slot, inner_effects } => {
+                        // Stage 3: real AIR coverage. From the actor's POV
+                        // this is passthrough — the inner_effects act on
+                        // the target cell. Bind (cap_slot, inner_effects)
+                        // via effects_hash so the prover can't swap them.
+                        let mut hasher = blake3::Hasher::new();
+                        hasher.update(&cap_slot.to_le_bytes());
+                        for inner in inner_effects {
+                            hasher.update(&inner.hash());
+                        }
+                        let exercise_hash_bytes = hasher.finalize();
+                        vm_effects.push(VmEffect::ExerciseViaCapability {
+                            exercise_hash: hash_to_bb(exercise_hash_bytes.as_bytes()),
+                        });
                     }
 
                     _ => {
