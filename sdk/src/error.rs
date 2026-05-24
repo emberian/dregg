@@ -24,6 +24,12 @@ pub enum SdkError {
     #[error("wire error: {0}")]
     Wire(String),
 
+    /// A CapTP operation was attempted before
+    /// [`AgentWallet::set_captp_client`](crate::AgentWallet::set_captp_client)
+    /// was called.
+    #[error("CapTP client not configured; call set_captp_client() first")]
+    CapTpNotConfigured,
+
     /// The wallet has no token matching the requested operation.
     #[error("no such token: {0}")]
     TokenNotFound(String),

@@ -2376,6 +2376,135 @@ impl AgentWallet {
         Signature(sig.to_bytes())
     }
 
+    /// Sign an [`Action`](pyana_turn::action::Action) by replacing its
+    /// authorization with a real [`Signature`](pyana_turn::action::Authorization)
+    /// over the canonical signing message.
+    ///
+    /// This is the SDK-side wrapper for the "ed25519 sign-an-action" dance
+    /// that today is replicated across `apps/nameservice` (with a `[0u8; 64]`
+    /// placeholder) and `runtime::AgentRuntime::execute` (with manual
+    /// `TurnExecutor::compute_signing_message` calls). It uses the
+    /// `pyana-action-sig-v2` domain that `TurnExecutor` requires.
+    ///
+    /// # Arguments
+    ///
+    /// * `action` - The action to sign. Its existing `authorization` is
+    ///   overwritten.
+    /// * `federation_id` - The 32-byte federation identifier this action
+    ///   is being authorized against. Must match what the executor will
+    ///   use during verification (`pyana-action-sig-v2` binds the
+    ///   federation into the signing message to prevent cross-federation
+    ///   replay).
+    ///
+    /// # Returns
+    ///
+    /// A clone of `action` with `authorization` set to
+    /// `Authorization::Signature(sig)` over the canonical message bytes.
+    pub fn sign_action(
+        &self,
+        action: pyana_turn::action::Action,
+        federation_id: &[u8; 32],
+    ) -> pyana_turn::action::Action {
+        use pyana_turn::action::{Action, Authorization};
+        use pyana_turn::executor::TurnExecutor;
+        let unsigned = Action {
+            authorization: Authorization::Unchecked,
+            ..action
+        };
+        let message = TurnExecutor::compute_signing_message(&unsigned, federation_id);
+        let sig = self.signing_key.sign(&message);
+        Action {
+            authorization: Authorization::from_sig_bytes(sig.to_bytes()),
+            ..unsigned
+        }
+    }
+
+    /// Build a self-signed single-effect [`Action`](pyana_turn::action::Action)
+    /// targeting one cell.
+    ///
+    /// Equivalent to the `ActionBuilder::new(target, method, caller).signed_by(sig)`
+    /// flow but performs the sign step here, so callers do not have to manually
+    /// invoke `TurnExecutor::compute_signing_message` or carry zero-signature
+    /// placeholders. The `caller` field is set to the wallet's default cell.
+    ///
+    /// For multi-effect actions, prefer building an [`Action`] directly (e.g.
+    /// through `pyana_turn::builder::ActionBuilder`) and then calling
+    /// [`sign_action`](Self::sign_action).
+    ///
+    /// # Arguments
+    ///
+    /// * `target` - The cell the action targets.
+    /// * `method` - The action method name (e.g. `"transfer"`, `"register_name"`).
+    /// * `effects` - Effects to include in the action.
+    /// * `federation_id` - Federation binding for the canonical signing message.
+    pub fn make_action(
+        &self,
+        target: CellId,
+        method: &str,
+        effects: Vec<Effect>,
+        federation_id: &[u8; 32],
+    ) -> pyana_turn::action::Action {
+        use pyana_turn::action::{Action, Authorization, DelegationMode};
+        let unsigned = Action {
+            target,
+            method: pyana_turn::action::symbol(method),
+            args: Vec::new(),
+            authorization: Authorization::Unchecked,
+            preconditions: Default::default(),
+            effects,
+            may_delegate: DelegationMode::None,
+            commitment_mode: Default::default(),
+            balance_change: None,
+        };
+        self.sign_action(unsigned, federation_id)
+    }
+
+    /// Build a self-signed single-action [`Turn`] ready for submission.
+    ///
+    /// This is the "Turn skeleton" helper called out in `SDK-REVIEW.md` as
+    /// the Tier-0 missing primitive. It bundles one already-signed action
+    /// into a [`Turn`] with sane defaults: fee=0, no memo, no expiry,
+    /// `previous_receipt_hash` taken from the wallet's receipt chain head.
+    ///
+    /// The agent field is `wallet.cell_id("default")`. Use
+    /// [`make_turn_for`](Self::make_turn_for) if you need a non-default
+    /// domain.
+    ///
+    /// The action is *not* re-signed here — callers should produce it via
+    /// [`make_action`](Self::make_action) or [`sign_action`](Self::sign_action).
+    pub fn make_turn(&self, action: pyana_turn::action::Action) -> Turn {
+        self.make_turn_for("default", action)
+    }
+
+    /// Like [`make_turn`](Self::make_turn) but with an explicit agent domain.
+    pub fn make_turn_for(&self, domain: &str, action: pyana_turn::action::Action) -> Turn {
+        use pyana_turn::forest::{CallForest, CallTree};
+        let tree = CallTree {
+            action,
+            children: vec![],
+            hash: [0u8; 32],
+        };
+        Turn {
+            agent: self.cell_id(domain),
+            nonce: 0,
+            fee: 0,
+            call_forest: CallForest {
+                roots: vec![tree],
+                forest_hash: [0u8; 32],
+            },
+            memo: None,
+            valid_until: None,
+            previous_receipt_hash: self.receipt_chain.last().map(|r| r.receipt_hash()),
+            depends_on: Vec::new(),
+            conservation_proof: None,
+            sovereign_witnesses: Default::default(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
+            custom_program_proofs: None,
+        }
+    }
+
     /// Build a complete turn authorized by a held token.
     ///
     /// This is the high-level convenience method that wires together token authorization
@@ -5277,9 +5406,7 @@ impl AgentWallet {
         &mut self,
         cell_id: CellId,
     ) -> Result<pyana_captp::uri::PyanaUri, SdkError> {
-        let client = self.captp_client.as_mut().ok_or_else(|| {
-            SdkError::Wire("CapTP client not configured; call set_captp_client() first".into())
-        })?;
+        let client = self.captp_mut()?;
         Ok(client.export_sturdy_ref(cell_id, pyana_cell::AuthRequired::Signature, None))
     }
 
@@ -5298,9 +5425,7 @@ impl AgentWallet {
         &mut self,
         uri: &str,
     ) -> Result<crate::captp_client::LiveRef, SdkError> {
-        let client = self.captp_client.as_mut().ok_or_else(|| {
-            SdkError::Wire("CapTP client not configured; call set_captp_client() first".into())
-        })?;
+        let client = self.captp_mut()?;
         client.enliven_uri(uri, pyana_cell::AuthRequired::Signature)
     }
 
@@ -5322,9 +5447,7 @@ impl AgentWallet {
         recipient_pk: [u8; 32],
     ) -> Result<pyana_captp::handoff::HandoffCertificate, SdkError> {
         let signing_key = pyana_types::SigningKey::from_bytes(&self.signing_key.to_bytes());
-        let client = self.captp_client.as_mut().ok_or_else(|| {
-            SdkError::Wire("CapTP client not configured; call set_captp_client() first".into())
-        })?;
+        let client = self.captp_mut()?;
         Ok(client.create_handoff(
             &signing_key,
             cell_id,
@@ -5352,6 +5475,14 @@ impl AgentWallet {
     /// Get a mutable reference to the CapTP client, if configured.
     pub fn captp_client_mut(&mut self) -> Option<&mut crate::captp_client::CapTpClient> {
         self.captp_client.as_mut()
+    }
+
+    /// Internal helper: get a mutable CapTP client or return
+    /// [`SdkError::CapTpNotConfigured`].
+    fn captp_mut(&mut self) -> Result<&mut crate::captp_client::CapTpClient, SdkError> {
+        self.captp_client
+            .as_mut()
+            .ok_or(SdkError::CapTpNotConfigured)
     }
 
     // =========================================================================
