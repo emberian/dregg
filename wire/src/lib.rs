@@ -75,6 +75,7 @@
 //! ```
 
 pub mod auth;
+pub mod captp_routing;
 pub mod codec;
 pub mod connection;
 pub mod dfa_router;

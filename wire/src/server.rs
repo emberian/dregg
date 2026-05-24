@@ -29,6 +29,8 @@ use pyana_captp::{
     CapSession, ExportGcManager, FederationId, HandoffPresentation, SwissTable, validate_handoff,
 };
 
+use crate::captp_routing;
+
 // =============================================================================
 // Proof Verifier Trait
 // =============================================================================
@@ -907,6 +909,23 @@ pub struct CapTpState {
     /// Session epoch counter: incremented each time any session is established.
     /// Used to assign unique epochs to sessions and reject stale-epoch messages.
     pub next_session_epoch: u64,
+    /// Stage 7 / P1.B: pending CapTP routing turns.
+    ///
+    /// Every CapTP wire handler builds a `Turn` carrying the corresponding
+    /// runtime `Effect` (ExportSturdyRef / EnlivenRef / DropRef /
+    /// ValidateHandoff) via `crate::captp_routing::build_captp_turn` and
+    /// pushes it here. The node layer drains this queue and runs each
+    /// turn through `TurnExecutor::execute`, producing the on-chain
+    /// receipt-chain entry that mirrors the wire-layer mutation. Until
+    /// the node integration lands the queue is informational, but the
+    /// structural commitment (every CapTP mutation has a corresponding
+    /// runtime Effect) is in place.
+    ///
+    /// The wire layer also performs the federation-mirror mutation
+    /// immediately (e.g., `swiss_table.enliven`); the drained turn is
+    /// the receipt-side record. P1.C tightens the AIR membership
+    /// constraints to bind the mirror's Merkle root.
+    pub pending_captp_turns: Vec<pyana_turn::Turn>,
 }
 
 impl CapTpState {
@@ -919,7 +938,14 @@ impl CapTpState {
             known_federations: Vec::new(),
             current_height: 0,
             next_session_epoch: 1,
+            pending_captp_turns: Vec::new(),
         }
+    }
+
+    /// Drain pending CapTP routing turns. The node layer calls this in
+    /// its main loop and executes each turn through `TurnExecutor`.
+    pub fn drain_pending_captp_turns(&mut self) -> Vec<pyana_turn::Turn> {
+        std::mem::take(&mut self.pending_captp_turns)
     }
 
     /// Allocate a new session epoch (monotonically increasing).
@@ -2255,14 +2281,27 @@ impl SiloServer {
                 let session = CapSession::with_epoch(group_id, epoch);
                 captp.sessions.insert(fed_id, session);
 
-                // Record initial exports in the GC manager with session ID for
-                // session-level DropRef validation.
+                // Stage 7 / P1.B: each initial export is also routed as an
+                // ExportSturdyRef Effect. The wire layer enqueues the turn
+                // and applies the federation-mirror mutation; the node
+                // drains the queue to produce the on-chain receipt.
                 let height = captp.current_height;
+                let agent_cell = pyana_types::CellId(config.node_id);
                 for export_bytes in &initial_exports {
                     let cell_id = pyana_types::CellId(*export_bytes);
+                    // Wire-layer mirror mutation (unchanged).
                     captp
                         .export_gc
                         .record_export_with_session(cell_id, fed_id, height, epoch);
+                    // Routed Effect: the export's swiss number isn't on
+                    // the wire here (CapHello only carries cell ids), so
+                    // we use the cell_id bytes as a deterministic stub.
+                    // The full handshake fills in the swiss properly.
+                    let effect = captp_routing::export_sturdy_ref_effect(*export_bytes, cell_id);
+                    let turn = captp_routing::build_captp_turn(
+                        agent_cell, cell_id, effect, 0,
+                    );
+                    captp.pending_captp_turns.push(turn);
                 }
 
                 // Respond with our own CapHello (session established).
@@ -2305,6 +2344,7 @@ impl SiloServer {
 
                 let mut captp = captp_state.write().await;
                 let current_height = captp.current_height;
+                let agent_cell = pyana_types::CellId(config.node_id);
 
                 // Attempt to enliven the swiss number.
                 match captp.swiss_table.enliven(&uri.swiss, current_height) {
@@ -2316,6 +2356,16 @@ impl SiloServer {
                             pyana_cell::AuthRequired::Either => 3u8,
                             pyana_cell::AuthRequired::Impossible => 4u8,
                         };
+                        let bearer_cell = entry.cell_id;
+                        // Stage 7 / P1.B: route the EnlivenRef as a Turn.
+                        let effect = captp_routing::enliven_ref_effect(uri.swiss, bearer_cell);
+                        let turn = captp_routing::build_captp_turn(
+                            agent_cell,
+                            bearer_cell,
+                            effect,
+                            0,
+                        );
+                        captp.pending_captp_turns.push(turn);
                         Some(WireMessage::EnlivenResponse {
                             success: true,
                             cell_id: Some(entry.cell_id.0),
@@ -2386,6 +2436,15 @@ impl SiloServer {
                         if let Some(session) = captp.sessions.get_mut(&fed_id) {
                             session.release_export(&cell);
                         }
+                        // Stage 7 / P1.B: route the DropRef as a Turn.
+                        // ref_id = the cell_id bytes (matches what the wire
+                        // message identifies).
+                        let agent_cell = pyana_types::CellId(config.node_id);
+                        let effect = captp_routing::drop_ref_effect(cell_id);
+                        let turn = captp_routing::build_captp_turn(
+                            agent_cell, cell, effect, 0,
+                        );
+                        captp.pending_captp_turns.push(turn);
                         None // Silent success (GC is fire-and-forget).
                     }
                     pyana_captp::DropResult::Invalid => Some(WireMessage::Error {
@@ -2484,6 +2543,20 @@ impl SiloServer {
                             pyana_cell::AuthRequired::Either => 3u8,
                             pyana_cell::AuthRequired::Impossible => 4u8,
                         };
+                        // Stage 7 / P1.B: route the ValidateHandoff as a
+                        // Turn. The cert_hash is BLAKE3 over the
+                        // presentation bytes (consume-on-use binding).
+                        let cert_hash: [u8; 32] = blake3::hash(&presentation_bytes).into();
+                        let agent_cell = pyana_types::CellId(config.node_id);
+                        let target_cell = acceptance.cell_id;
+                        let effect = captp_routing::validate_handoff_effect(cert_hash);
+                        let turn = captp_routing::build_captp_turn(
+                            agent_cell,
+                            target_cell,
+                            effect,
+                            0,
+                        );
+                        captp.pending_captp_turns.push(turn);
                         Some(WireMessage::HandoffAccepted {
                             routing_token: acceptance.routing_token,
                             cell_id: acceptance.cell_id.0,
