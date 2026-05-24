@@ -1322,8 +1322,8 @@ async fn get_cell_detail(
             has_delegate: cell.delegate.is_some(),
             delegate: cell.delegate.as_ref().map(|d| hex_encode(&d.0)),
             has_program: !matches!(cell.program, pyana_cell::CellProgram::None),
-            public_key: hex_encode(&cell.public_key()),
-            token_id: hex_encode(&cell.token_id()),
+            public_key: hex_encode(cell.public_key()),
+            token_id: hex_encode(cell.token_id()),
             proved_state: cell.state.proved_state(),
         })),
         None => Ok(Json(CellDetailResponse {

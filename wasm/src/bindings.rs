@@ -151,7 +151,7 @@ pub fn get_cell_state(handle: usize, cell_id_hex: &str) -> Result<JsValue, JsErr
 
         let result = CellStateView {
             cell_id: hex_encode(&cell.id().0),
-            public_key: hex_encode(&cell.public_key()),
+            public_key: hex_encode(cell.public_key()),
             balance: cell.state.balance(),
             nonce: cell.state.nonce(),
             fields: cell.state.fields.iter().map(|f| hex_encode(f)).collect(),
