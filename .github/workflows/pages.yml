@@ -46,7 +46,16 @@ jobs:
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
       - name: Build WASM
-        run: wasm-pack build wasm --target web --out-dir ../site/demo/pkg
+        # Output must match the path imported by the playground/sandbox
+        # (../pkg/pyana_wasm.js). The build script copies site/pkg/ verbatim
+        # into dist/pkg/. (Was ../site/demo/pkg, which nothing imported.)
+        #
+        # Known-fragile: pyana-cell's default crypto feature pulls bulletproofs
+        # -> clear_on_drop whose build.rs can't target wasm32. If this step
+        # fails, the deploy will fall back to a committed site/pkg/ if one
+        # exists, otherwise the playground will be WASM-less. See commit
+        # 89f8e693 for the deferred remediation plan.
+        run: wasm-pack build wasm --target web --out-dir ../site/pkg
         continue-on-error: true
 
       - name: Build extension WASM
@@ -112,6 +121,11 @@ jobs:
           typst compile paper/pyana.typ site/paper/pyana.pdf
 
       - name: Build site
+        # BASE_PATH rewrites absolute hrefs/srcs so the site works under
+        # GitHub Pages' /pyana/ subpath. Drop to "" if a custom domain (CNAME)
+        # is configured for emberian.github.io/pyana later.
+        env:
+          BASE_PATH: /pyana
         run: |
           cd site
           npm install

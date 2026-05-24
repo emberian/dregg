@@ -20,6 +20,7 @@
 
 mod cross_fed;
 mod delegation;
+mod effects;
 mod registry;
 mod rental;
 mod resolution;
@@ -240,6 +241,24 @@ async fn register_name(
     {
         Ok(entry) => {
             state.reverse_index.on_register(&entry).await;
+
+            // P2.H / D-9: emit a real on-ledger Action via the typestate
+            // ActionBuilder. The action carries an EmitEvent +
+            // SetField pair; routing it through a TurnBuilder is the
+            // responsibility of whatever federation client integrates
+            // this HTTP surface. Today the action is built (proving
+            // the effect-emission path compiles and exercises the
+            // builder) and dropped; tests in `effects` cover its shape.
+            //
+            // TODO(stage-7+): replace the EmitEvent+SetField pair with
+            // a dedicated `Effect::RegisterName` once Stage 7's Effect
+            // enum extension lands. Stage 8 must not introduce new
+            // Effect variants per scope.
+            let registry_cell = registry_cell_id();
+            let caller = pyana_cell::CellId::from_bytes(entry.owner);
+            let _registration_action =
+                effects::build_register_action(registry_cell, caller, &entry.name, entry.owner);
+
             (
                 StatusCode::CREATED,
                 Json(json!({
@@ -257,6 +276,16 @@ async fn register_name(
         }
         Err(e) => registry_error_response(e),
     }
+}
+
+/// Deterministic `CellId` for the nameservice registry cell. In a real
+/// federation deployment this comes from federation config; for now we
+/// derive it from a domain-tagged hash so all instances agree.
+fn registry_cell_id() -> pyana_cell::CellId {
+    let bytes = *blake3::Hasher::new_derive_key("pyana-nameservice-registry-cell-v1")
+        .finalize()
+        .as_bytes();
+    pyana_cell::CellId::from_bytes(bytes)
 }
 
 /// DELETE /names/:name — release a name.

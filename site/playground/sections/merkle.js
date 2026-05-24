@@ -88,8 +88,14 @@ dave</textarea>
 
       renderTreeViz(vizDiv, leaves, result.root_hex);
 
+      // tree_depth isn't returned by WASM; derive from leaf count.
+      // FactSet uses a 4-ary commitment tree, so depth = ceil(log_4(n)).
+      const depth = result.num_leaves <= 1
+        ? 1
+        : Math.ceil(Math.log(result.num_leaves) / Math.log(4));
+
       showResult(resultDiv, 'success',
-        `Tree built: ${result.num_leaves} leaves, depth ${result.tree_depth}\nRoot: ${result.root_hex}`);
+        `Tree built: ${result.num_leaves} leaves, depth ${depth}\nRoot: ${result.root_hex}`);
       showExplainer(explainerDiv, {
         prover: `All ${leaves.length} leaves in memory\nFull tree structure known\nCan generate proofs for any leaf`,
         verifier: `Sees only: root hash (${result.root_hex.slice(0, 16)}...)\nThis single hash commits to all ${leaves.length} leaves\nAny change to any leaf changes the root`,

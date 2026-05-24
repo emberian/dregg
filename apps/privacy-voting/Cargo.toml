@@ -8,6 +8,8 @@ pyana-app-framework = { path = "../../app-framework" }
 pyana-storage = { path = "../../storage" }
 pyana-sdk = { path = "../../sdk" }
 pyana-types = { path = "../../types" }
+pyana-turn = { path = "../../turn" }
+pyana-cell = { path = "../../cell", default-features = false }
 token = { path = "../../token" }
 
 serde = { workspace = true }

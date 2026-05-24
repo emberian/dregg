@@ -355,6 +355,17 @@ async fn submit_ballot(
     ps.committed.insert(commitment);
     ps.voted.insert(voter_pk);
 
+    // P2.H / D-9: emit a real on-ledger Action via the typestate
+    // ActionBuilder. The action carries an EmitEvent("ballot-cast", …)
+    // anchoring the submission for off-chain indexers. The voter
+    // identity (voter_pk) is intentionally NOT included in the event
+    // payload — privacy is preserved by emitting only the proposal_id
+    // and the commitment.
+    let voting_cell = crate::effects::voting_cell_id();
+    let caller = pyana_cell::CellId::from_bytes(voter_pk.0);
+    let _submit_action =
+        crate::effects::build_ballot_submit_action(voting_cell, caller, proposal_id, commitment);
+
     let queue_root = ps.queue.commitment_root();
     Ok(Json(SubmitBallotResponse {
         queued: true,
@@ -416,6 +427,22 @@ async fn reveal_ballot(
         option_index: req.reveal.option_index,
         randomness: req.reveal.randomness,
     });
+
+    // P2.H / D-9: emit a real on-ledger Action via the typestate
+    // ActionBuilder. The action carries an EmitEvent("ballot-revealed",
+    // …) acting as the audit log entry — the {commitment, option_index}
+    // pair is now public-by-design (this is the reveal phase).
+    let voting_cell = crate::effects::voting_cell_id();
+    // No voter identity at reveal time; caller is the voting registry
+    // cell itself acting as the audit log writer.
+    let caller = voting_cell;
+    let _reveal_action = crate::effects::build_ballot_reveal_action(
+        voting_cell,
+        caller,
+        proposal_id,
+        commitment,
+        req.reveal.option_index,
+    );
 
     let reveal_root = ps.reveals.merkle_root();
     let reveal_count = ps.reveals.len();

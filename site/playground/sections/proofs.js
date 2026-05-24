@@ -77,7 +77,7 @@ export function initProofs(wasm) {
 
     const t0 = performance.now();
     try {
-      const proof = wasm.generate_demo_stark_proof(leaf, depth);
+      const proof = wasm.generate_stark_proof(leaf, depth);
       proveTimeMs = performance.now() - t0;
       currentProof = proof;
 
@@ -119,7 +119,9 @@ export function initProofs(wasm) {
 
     const t0 = performance.now();
     try {
-      const result = wasm.verify_demo_stark_proof(JSON.stringify(currentProof));
+      // generate_stark_proof returns a ProofResult { proof_json, proof_size_bytes, ... }
+      // where proof_json is already the serialized StarkProof — pass it through directly.
+      const result = wasm.verify_stark_proof(currentProof.proof_json);
       const verifyTime = performance.now() - t0;
 
       container.querySelector('#pf-stat-verify').textContent = `${verifyTime.toFixed(1)}ms`;
@@ -145,12 +147,12 @@ export function initProofs(wasm) {
     if (!currentProof) return;
 
     try {
-      // Tamper
-      const tampered = wasm.tamper_demo_stark_proof(JSON.stringify(currentProof));
+      // Tamper: pass the inner StarkProof JSON (not the wrapper).
+      const tampered = wasm.tamper_stark_proof(currentProof.proof_json);
 
       // Try to verify tampered proof
       const t0 = performance.now();
-      const result = wasm.verify_demo_stark_proof(tampered);
+      const result = wasm.verify_stark_proof(tampered);
       const verifyTime = performance.now() - t0;
 
       if (!result.valid) {

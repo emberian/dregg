@@ -101,10 +101,15 @@ default: DENY</pre>
       const result = wasm.evaluate_datalog(JSON.stringify(facts), JSON.stringify(request));
       const elapsed = (performance.now() - t0).toFixed(2);
 
-      const isAllowed = result.decision === 'ALLOW' || result.decision === 'allow';
+      // WASM returns: { conclusion: "allow"|"deny", policy_rule_id, num_derivation_steps, steps[] }
+      const decision = result.conclusion;
+      const ruleLabel = result.policy_rule_id != null
+        ? `rule #${result.policy_rule_id}`
+        : '(default deny)';
+      const isAllowed = decision === 'allow';
 
       showResult(resultDiv, isAllowed ? 'success' : 'warning',
-        `Decision: ${result.decision}\nMatched rule: ${result.matched_rule || '(default deny)'}`);
+        `Decision: ${decision}\nMatched rule: ${ruleLabel}`);
 
       // Render derivation trace
       if (result.steps && result.steps.length > 0) {
@@ -116,11 +121,9 @@ default: DENY</pre>
           <div class="result-panel__body">`;
 
         result.steps.forEach((step, i) => {
-          const icon = step.result === 'match' || step.result === 'ALLOW' ? '&#10003;' : '&#10007;';
-          const cls = step.result === 'match' || step.result === 'ALLOW' ? 'success' : 'info';
-          traceHtml += `<div class="output-entry ${cls}" style="display:flex;gap:8px;">
-            <span>${icon}</span>
-            <span>Step ${i + 1}: ${escapeHtml(step.rule || step.description || '')} &rarr; ${escapeHtml(step.result || '')}</span>
+          traceHtml += `<div class="output-entry info" style="display:flex;gap:8px;">
+            <span>&#10003;</span>
+            <span>Step ${i + 1}: rule #${step.rule_id} derived ${step.num_bindings} binding(s) &rarr; <code>${escapeHtml(step.derived_predicate_hex.slice(0, 24))}...</code></span>
           </div>`;
         });
 
@@ -132,7 +135,7 @@ default: DENY</pre>
 
       showExplainer(explainerDiv, {
         prover: `Token facts: ${facts.length} predicates\nRequest: app_id="${request.app_id}", action="${request.action}"\nFull fact set visible to evaluator`,
-        verifier: `Decision: ${result.decision}\nMatched rule: ${result.matched_rule || 'default deny'}\nDerivation: ${result.steps?.length || 0} evaluation steps\nDeterministic: same facts + request always yields same decision`,
+        verifier: `Decision: ${decision}\nMatched rule: ${ruleLabel}\nDerivation: ${result.num_derivation_steps} evaluation steps\nDeterministic: same facts + request always yields same decision`,
         delta: `The evaluator's trace is fully auditable. Unlike opaque access-control lists, Datalog shows exactly WHY a decision was made. This enables debugging, compliance, and formal verification of policies.`,
         timing: elapsed,
       });

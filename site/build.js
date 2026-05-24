@@ -12,6 +12,36 @@ const { transform } = require('lightningcss');
 const SRC = path.join(__dirname, 'src');
 const DIST = path.join(__dirname, 'dist');
 
+// Site root prefix for absolute paths in built HTML/CSS.
+//
+// GitHub Pages serves this project at https://emberian.github.io/pyana/, so
+// templates that write `href="/foo"` must become `href="/pyana/foo"` before
+// upload. CI sets BASE_PATH=/pyana; local dev leaves it empty so `npm run
+// serve` works at http://localhost:3000/ unchanged. A leading slash is
+// enforced; a trailing slash is stripped.
+let BASE_PATH = process.env.BASE_PATH || '';
+if (BASE_PATH && !BASE_PATH.startsWith('/')) BASE_PATH = '/' + BASE_PATH;
+if (BASE_PATH.endsWith('/')) BASE_PATH = BASE_PATH.slice(0, -1);
+
+// Rewrite root-absolute references (href="/x", src="/x", url(/x)) to include
+// the BASE_PATH. Matches a single leading slash followed by a non-slash to
+// avoid touching protocol-relative URLs ("//cdn...") or empty-root hrefs.
+// Skipped when BASE_PATH is empty.
+function applyBasePath(content) {
+  if (!BASE_PATH) return content;
+  // href="/x" or href='/x' or src=... — same shape
+  content = content.replace(
+    /\b(href|src)=(["'])\/(?!\/)/g,
+    (_, attr, q) => `${attr}=${q}${BASE_PATH}/`
+  );
+  // CSS url(/x), url("/x"), url('/x')
+  content = content.replace(
+    /url\(\s*(["']?)\/(?!\/)/g,
+    (_, q) => `url(${q}${BASE_PATH}/`
+  );
+  return content;
+}
+
 // Copy-through directories (preserved exactly)
 const COPY_DIRS = [
   'playground',
@@ -67,6 +97,11 @@ function copyDir(src, dst) {
     const d = path.join(dst, entry.name);
     if (entry.isDirectory()) {
       copyDir(s, d);
+    } else if (BASE_PATH && /\.(html|css|js)$/.test(entry.name)) {
+      // Rewrite root-absolute references in shipped text files so the
+      // copy-through dirs (playground, explorer, old-site, ...) honor BASE_PATH.
+      const text = fs.readFileSync(s, 'utf-8');
+      fs.writeFileSync(d, applyBasePath(text), 'utf-8');
     } else {
       fs.copyFileSync(s, d);
     }
@@ -154,6 +189,7 @@ function processHtml(file) {
   content = processIncludes(content, file);
   content = highlightCode(content);
   content = highlightInlineCode(content);
+  content = applyBasePath(content);
   return content;
 }
 
@@ -176,7 +212,7 @@ function buildCss() {
     minify: true,
   });
 
-  writeDist('assets/style.css', result.code.toString());
+  writeDist('assets/style.css', applyBasePath(result.code.toString()));
 }
 
 function build() {

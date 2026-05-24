@@ -9,6 +9,7 @@ pyana-types = { path = "../../types" }
 pyana-cell = { path = "../../cell", default-features = false }
 pyana-captp = { path = "../../captp" }
 pyana-app-framework = { path = "../../app-framework" }
+pyana-turn = { path = "../../turn" }
 
 blake3 = "1"
 serde = { workspace = true }

@@ -32,6 +32,7 @@
 //! [`DelegatedToken`]: pyana_sdk::wallet::DelegatedToken
 
 pub mod ballot;
+pub mod effects;
 pub mod eligibility;
 pub mod proposal;
 pub mod server;

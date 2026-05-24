@@ -145,6 +145,9 @@ export function initMarketplace(wasm) {
     revealBtn.disabled = mktState.phase !== 'bids_submitted' || animating;
     executeBtn.disabled = mktState.phase !== 'revealed' || animating;
     disputeBtn.disabled = mktState.phase !== 'revealed' || animating;
+    // Reset must follow the same rule so it can't yank state out from under
+    // an in-flight async handler (caused: TypeError on mktState.job.budget).
+    resetBtn.disabled = animating;
 
     // Participant highlights
     const allParts = container.querySelectorAll('.mkt-participant');

@@ -65,9 +65,9 @@ function createPyanaApi() {
       wasm.attenuate_token(token, keyBytes, service, actions, expiresSecs),
     verifyToken: (token, keyBytes, appId, action) =>
       wasm.verify_token(token, keyBytes, appId, action),
-    generateStarkProof: (leafValue, depth) => wasm.generate_demo_stark_proof(leafValue, depth),
-    verifyStarkProof: (json) => wasm.verify_demo_stark_proof(json),
-    tamperProof: (json) => wasm.tamper_demo_stark_proof(json),
+    generateStarkProof: (leafValue, depth) => wasm.generate_stark_proof(leafValue, depth),
+    verifyStarkProof: (json) => wasm.verify_stark_proof(json),
+    tamperProof: (json) => wasm.tamper_stark_proof(json),
     merkleRoot: (leaves) => wasm.compute_merkle_root(JSON.stringify(leaves)),
     merkleMembership: (leaves, target) => wasm.merkle_membership_proof(JSON.stringify(leaves), target),
     evaluateDatalog: (facts, req) => wasm.evaluate_datalog(JSON.stringify(facts), JSON.stringify(req)),

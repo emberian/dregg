@@ -6684,6 +6684,7 @@ dependencies = [
  "hex",
  "hints",
  "postcard",
+ "pyana-cell",
  "pyana-commit",
  "pyana-turn",
  "pyana-types",
@@ -6784,6 +6785,7 @@ dependencies = [
  "pyana-app-framework",
  "pyana-captp",
  "pyana-cell",
+ "pyana-turn",
  "pyana-types",
  "serde",
  "serde_json",
@@ -6955,8 +6957,10 @@ dependencies = [
  "ed25519-dalek",
  "http-body-util",
  "pyana-app-framework",
+ "pyana-cell",
  "pyana-sdk",
  "pyana-storage",
+ "pyana-turn",
  "pyana-types",
  "serde",
  "serde_json",
@@ -7194,6 +7198,7 @@ dependencies = [
  "pyana-dsl-runtime",
  "pyana-types",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -7212,7 +7217,9 @@ dependencies = [
 name = "pyana-verifier"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "hex",
+ "postcard",
  "pyana-circuit",
  "pyana-types",
  "serde",
