@@ -79,6 +79,7 @@ pub mod queue_programs;
 pub mod routing;
 pub mod turn;
 pub mod verify;
+pub mod witnessed_receipt;
 
 #[cfg(test)]
 mod tests;
@@ -152,4 +153,7 @@ pub use turn::{
 pub use verify::{
     VerifyError, sign_receipt, verify_receipt_chain, verify_receipt_chain_head,
     verify_receipt_chain_with_keys, verify_receipt_extends,
+};
+pub use witnessed_receipt::{
+    AggregateMembership, WitnessAvailability, WitnessBundle, WitnessedReceipt,
 };
