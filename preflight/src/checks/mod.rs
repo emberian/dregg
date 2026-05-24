@@ -1,5 +1,6 @@
 pub mod apps;
 pub mod backends;
+pub mod demo_agent;
 pub mod blocklace;
 pub mod boot;
 pub mod bridges;

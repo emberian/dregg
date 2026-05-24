@@ -44,6 +44,7 @@ fn run_all_subsystems() -> Vec<SubsystemResult> {
         run_subsystem("Wire Protocol", checks::wire::run()),
         run_subsystem("Solver", checks::solver::run()),
         run_subsystem("Bridges", checks::bridges::run()),
+        run_subsystem("Demo-Agent Examples", checks::demo_agent::run()),
     ]
 }
 
@@ -261,6 +262,18 @@ mod tests {
         let results = checks::bridges::run();
         for r in &results {
             assert!(r.passed, "bridges::{} failed: {:?}", r.name, r.error);
+        }
+    }
+
+    #[test]
+    fn preflight_demo_agent() {
+        let results = checks::demo_agent::run();
+        for r in &results {
+            assert!(
+                r.passed,
+                "demo_agent::{} failed: {:?}",
+                r.name, r.error
+            );
         }
     }
 

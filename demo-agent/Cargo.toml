@@ -138,5 +138,23 @@ name = "cross_federation_nft_swap"
 [[example]]
 name = "payment_channel_burst"
 
+[[example]]
+name = "base_anonymous_credential"
+
+[[example]]
+name = "base_private_transfer"
+
+[[example]]
+name = "private_auction"
+
+[[example]]
+name = "private_hiring"
+
+[[example]]
+name = "seal_unseal_transfer"
+
+[[example]]
+name = "three_party_introduction"
+
 [lints]
 workspace = true
