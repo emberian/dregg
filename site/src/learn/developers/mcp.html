@@ -1,4 +1,5 @@
 <layout src="_layouts/default.html">
+<title>MCP Integration (AI Agent Tools) — Pyana</title>
 
 <div class="docs-layout">
   <aside class="docs-sidebar">
@@ -8,7 +9,7 @@
     <nav class="docs-breadcrumb">
       <a href="/learn.html">Learn</a>
       <span class="docs-breadcrumb__sep">/</span>
-      <a href="/learn/developers/">Developers</a>
+      <a href="/learn/developers/sdk.html">Developers</a>
       <span class="docs-breadcrumb__sep">/</span>
       <span>Mcp</span>
     </nav>
@@ -56,11 +57,15 @@
       <li><code>tools/call</code> -- Invoke a tool</li>
     </ul>
 
-    <div class="stub-notice">
-      <p>Detailed MCP tool schemas, example conversations, and integration guides are being written.</p>
-    </div>
+    <p>
+      The JSON-Schema for each tool's input/output is served from the
+      <code>tools/list</code> endpoint at runtime — point your MCP client at
+      a running pyana-node and read the live schema rather than chasing a
+      copy in these docs. End-to-end transcripts and authorisation patterns
+      (read-only cap, scoped writer, federation observer) are covered in
+      <code>docs/agent-authorization.md</code>.
+    </p>
 
-  </div>
   </main>
 </div>
 

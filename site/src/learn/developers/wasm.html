@@ -1,4 +1,5 @@
 <layout src="_layouts/default.html">
+<title>WASM Playground — Pyana</title>
 
 <div class="docs-layout">
   <aside class="docs-sidebar">
@@ -8,7 +9,7 @@
     <nav class="docs-breadcrumb">
       <a href="/learn.html">Learn</a>
       <span class="docs-breadcrumb__sep">/</span>
-      <a href="/learn/developers/">Developers</a>
+      <a href="/learn/developers/sdk.html">Developers</a>
       <span class="docs-breadcrumb__sep">/</span>
       <span>Wasm</span>
     </nav>
@@ -47,11 +48,16 @@ wasm-bindgen target/wasm32-unknown-unknown/release/pyana_wasm.wasm \
       See <code>site/extension/</code> for the extension source.
     </p>
 
-    <div class="stub-notice">
-      <p>Detailed WASM API documentation and extension development guide are being written.</p>
-    </div>
+    <p>
+      The exported API surface is whatever <code>#[wasm_bindgen]</code> annotates
+      in <code>wasm/src/lib.rs</code> — generated <code>.d.ts</code> bindings
+      land next to the WASM blob in <code>site/pkg/</code> after a build, so
+      consult the typed declarations rather than a hand-written wrapper. The
+      <a href="/playground/">playground</a> exercises the full API live; lift
+      patterns from <code>site/playground/sections/*</code> for an idiomatic
+      starting point.
+    </p>
 
-  </div>
   </main>
 </div>
 

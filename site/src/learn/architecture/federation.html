@@ -1,4 +1,5 @@
 <layout src="_layouts/default.html">
+<title>Federation Model — Pyana</title>
 
 <div class="docs-layout">
   <aside class="docs-sidebar">
@@ -8,7 +9,7 @@
     <nav class="docs-breadcrumb">
       <a href="/learn.html">Learn</a>
       <span class="docs-breadcrumb__sep">/</span>
-      <a href="/learn/architecture/">Architecture</a>
+      <a href="/learn/architecture/overview.html">Architecture</a>
       <span class="docs-breadcrumb__sep">/</span>
       <span>Federation</span>
     </nav>
@@ -116,11 +117,15 @@
       the full Blocklace history.
     </p>
 
-    <div class="stub-notice">
-      <p>Detailed cross-federation protocol, trust model, and bridge security analysis are being written.</p>
-    </div>
+    <h2 id="further-reading">Further reading</h2>
+    <p>
+      The cross-federation handshake, observation-bridge model, and threat
+      analysis for bridges to external chains live in
+      <code>docs/anonymous-bridging-design.md</code> and
+      <code>TRUST_MODEL.md</code>. The summary above covers the in-federation
+      consensus shape; the docs cover what changes when you span two of them.
+    </p>
 
-  </div>
   </main>
 </div>
 

@@ -1,4 +1,5 @@
 <layout src="_layouts/default.html">
+<title>Token Lifecycle — Pyana</title>
 
 <div class="docs-layout">
   <aside class="docs-sidebar">
@@ -8,7 +9,7 @@
     <nav class="docs-breadcrumb">
       <a href="/learn.html">Learn</a>
       <span class="docs-breadcrumb__sep">/</span>
-      <a href="/learn/developers/">Developers</a>
+      <a href="/learn/developers/sdk.html">Developers</a>
       <span class="docs-breadcrumb__sep">/</span>
       <span>Tokens</span>
     </nav>
@@ -69,11 +70,17 @@
       stranger who requires an attested root anchor.
     </p>
 
-    <div class="stub-notice">
-      <p>Full token lifecycle diagrams, error handling, and edge cases are being written.</p>
-    </div>
+    <p>
+      For an animated walk-through of a delegation envelope (issue → attenuate
+      → revoke → expire), see the
+      <a href="/learn/architecture/capabilities.html">capabilities</a> page;
+      the v2 envelope structure and authority-policy decision graph are
+      covered there. Token-error edge cases (expired, malformed, revoked,
+      mis-scoped) surface as typed errors from
+      <code>pyana_token::verify</code> — match on the variant rather than
+      the message string.
+    </p>
 
-  </div>
   </main>
 </div>
 

@@ -1,4 +1,5 @@
 <layout src="_layouts/default.html">
+<title>Security Hardening — Pyana</title>
 
 <div class="docs-layout">
   <aside class="docs-sidebar">
@@ -8,7 +9,7 @@
     <nav class="docs-breadcrumb">
       <a href="/learn.html">Learn</a>
       <span class="docs-breadcrumb__sep">/</span>
-      <a href="/learn/operators/">Operators</a>
+      <a href="/learn/operators/running-a-node.html">Operators</a>
       <span class="docs-breadcrumb__sep">/</span>
       <span>Security</span>
     </nav>
@@ -39,11 +40,15 @@
       <li>STARK proof verification is computationally bounded (~2ms per proof)</li>
     </ul>
 
-    <div class="stub-notice">
-      <p>Full security hardening checklist, systemd unit files, and container security profiles are being written.</p>
-    </div>
+    <h2 id="not-yet-documented">Out of scope here</h2>
+    <p>
+      Sample systemd unit files, container seccomp / apparmor profiles, and a
+      full deployment audit checklist ship with the operator release rather
+      than these protocol docs. The items above plus standard reverse-proxy
+      hygiene cover the practical attack surface; the missing pieces are
+      operational ergonomics, not security primitives.
+    </p>
 
-  </div>
   </main>
 </div>
 
