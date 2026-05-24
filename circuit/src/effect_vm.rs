@@ -145,17 +145,21 @@ use crate::stark::{BoundaryConstraint, StarkAir};
 ///   EnlivenRef row (was tautological; now bound to swiss_table_root):
 ///     aux[0] = root  (= state_after.fields[4]).
 ///     aux[1] = leaf = hash_2_to_1(swiss, hash_2_to_1(cell_id, perms)).
-///     aux[6] = Merkle sibling (prover-supplied).
+///     aux[6] = Merkle sibling, pinned to state_before.fields[4]
+///              (old swiss_table_root) — append-only chain.
 ///     aux[7] = chosen = hash_2_to_1(leaf, sibling).
 ///     AIR constrains aux[7] == aux[0] == state_after.fields[4]
+///     AND aux[6] == state_before.fields[4].
 ///     (committed swiss_table_root mirror; full state_commitment
 ///     binds via PI).
 ///   DropRef row (holder_federation now bound to refcount_table_root):
 ///     aux[0] = inverse(refcount_param)  (refcount > 0 witness; existing).
 ///     aux[1] = leaf = hash_2_to_1(cell_id, holder_federation).
-///     aux[6] = Merkle sibling (prover-supplied).
+///     aux[6] = Merkle sibling, pinned to state_before.fields[3]
+///              (old refcount_table_root) — append-only chain.
 ///     aux[7] = chosen = hash_2_to_1(leaf, sibling).
 ///     AIR constrains aux[7] == state_after.fields[3]
+///     AND aux[6] == state_before.fields[3].
 ///     (committed refcount_table_root mirror).
 ///   ValidateHandoff row (was tautological; now bound to PI
 ///     APPROVED_HANDOFFS_BASE position 0):
@@ -2568,6 +2572,15 @@ impl StarkAir for EffectVmAir {
             let c_chosen_eq_root = s_enliven * (aux_chosen - aux_root);
             combined = combined + alpha_pow * c_chosen_eq_root;
             alpha_pow = alpha_pow * alpha;
+            // Stage 7 / P1.C tightening: pin the sibling to
+            // `state_before.fields[4]` so the new root is an
+            // append-only extension of the old root. Without this
+            // constraint, the prover could supply any sibling and
+            // obtain any new root, severing the chain.
+            let f4_before = local[STATE_BEFORE_BASE + state::FIELD_BASE + 4];
+            let c_sib_chain = s_enliven * (aux_sibling - f4_before);
+            combined = combined + alpha_pow * c_sib_chain;
+            alpha_pow = alpha_pow * alpha;
 
             // field[6] must increment by 1 (use_count).
             let old_f6 = local[STATE_BEFORE_BASE + state::FIELD_BASE + 6];
@@ -2654,6 +2667,14 @@ impl StarkAir for EffectVmAir {
             let f3_after = local[STATE_AFTER_BASE + state::FIELD_BASE + 3];
             let c_root = s_drop * (aux_chosen - f3_after);
             combined = combined + alpha_pow * c_root;
+            alpha_pow = alpha_pow * alpha;
+            // Stage 7 / P1.C tightening: pin the sibling to
+            // `state_before.fields[3]` (old refcount_table_root).
+            // Without this, the prover could pick any sibling and
+            // obtain any new root.
+            let f3_before = local[STATE_BEFORE_BASE + state::FIELD_BASE + 3];
+            let c_sib_chain = s_drop * (aux_sibling - f3_before);
+            combined = combined + alpha_pow * c_sib_chain;
             alpha_pow = alpha_pow * alpha;
 
             // Balance unchanged.
@@ -8146,6 +8167,10 @@ mod tests {
             current_block_height: 12345,
             max_custom_effects: pi::MAX_CUSTOM_EFFECTS_DEFAULT,
             approved_handoffs_root: [BabyBear::ZERO; 4],
+            turn_hash: [BabyBear::ZERO; 4],
+            effects_hash_global: [BabyBear::ZERO; 4],
+            actor_nonce: 0,
+            previous_receipt_hash: [BabyBear::ZERO; 4],
         };
         let (_trace, public_inputs) = generate_effect_vm_trace_ext(&state, &effects, context);
         assert_eq!(
@@ -8172,6 +8197,10 @@ mod tests {
             current_block_height: 0,
             max_custom_effects: pi::MAX_CUSTOM_EFFECTS_HARD_CAP + 1,
             approved_handoffs_root: [BabyBear::ZERO; 4],
+            turn_hash: [BabyBear::ZERO; 4],
+            effects_hash_global: [BabyBear::ZERO; 4],
+            actor_nonce: 0,
+            previous_receipt_hash: [BabyBear::ZERO; 4],
         };
         let _ = generate_effect_vm_trace_ext(&state, &effects, context);
     }
@@ -8440,6 +8469,244 @@ mod tests {
             trace[trace.len() - 1][AUX_BASE + aux_off::CUSTOM_COUNT_ACC],
             BabyBear::ONE,
             "acc[last] must equal total custom count"
+        );
+    }
+
+    // ========================================================================
+    // Stage 7 / P1.C adversarial tests for the 4 CapTP AIR variants.
+    //
+    // Each variant: tamper a witness aux column, evaluate constraints,
+    // assert non-zero (AIR rejects). Verdicts in the commit message.
+    // ========================================================================
+
+    fn assert_air_rejects(
+        trace: &[Vec<BabyBear>],
+        public_inputs: &[BabyBear],
+        row: usize,
+        label: &str,
+    ) {
+        let air = EffectVmAir::new(trace.len());
+        let next = (row + 1) % trace.len();
+        // Sweep a few alphas to avoid an accidental zero for one challenge.
+        let mut any_nonzero = false;
+        for alpha_val in [7u32, 13, 101, 2017, 31337] {
+            let alpha = BabyBear::new(alpha_val);
+            let c = air.eval_constraints(&trace[row], &trace[next], public_inputs, alpha);
+            if c != BabyBear::ZERO {
+                any_nonzero = true;
+                break;
+            }
+        }
+        assert!(
+            any_nonzero,
+            "{}: AIR should reject tampered trace (constraint was zero for all alphas)",
+            label,
+        );
+    }
+
+    #[test]
+    fn test_captp_export_sturdy_ref_adversarial_wrong_swiss() {
+        let mut state = CellState::new(1000, 0);
+        state.fields[7] = BabyBear::new(5);
+        state.refresh_commitment();
+        let effects = vec![Effect::ExportSturdyRef {
+            cell_id: BabyBear::new(0xCE11),
+            permissions: BabyBear::new(0x7),
+            random_seed: BabyBear::new(0x5EED),
+            export_counter: 5,
+        }];
+        let (mut trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
+        // Tamper: claim a fake swiss number.
+        trace[0][AUX_BASE + 0] = trace[0][AUX_BASE + 0] + BabyBear::ONE;
+        assert_air_rejects(&trace, &public_inputs, 0, "ExportSturdyRef wrong swiss");
+    }
+
+    #[test]
+    fn test_captp_enliven_ref_adversarial_wrong_leaf() {
+        let mut state = CellState::new(1000, 0);
+        state.fields[6] = BabyBear::new(2);
+        state.refresh_commitment();
+        let effects = vec![Effect::EnlivenRef {
+            swiss_number: BabyBear::new(0x5155),
+            presenter_id: BabyBear::new(0x9E5),
+            expected_cell_id: BabyBear::new(0xCE11),
+            expected_permissions: BabyBear::new(0x7),
+        }];
+        let (mut trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
+        // Tamper: corrupt the leaf.
+        trace[0][AUX_BASE + 1] = trace[0][AUX_BASE + 1] + BabyBear::ONE;
+        assert_air_rejects(&trace, &public_inputs, 0, "EnlivenRef wrong leaf");
+    }
+
+    #[test]
+    fn test_captp_enliven_ref_adversarial_wrong_sibling() {
+        let mut state = CellState::new(1000, 0);
+        state.fields[6] = BabyBear::new(2);
+        state.fields[4] = BabyBear::new(0x4444); // non-zero old root
+        state.refresh_commitment();
+        let effects = vec![Effect::EnlivenRef {
+            swiss_number: BabyBear::new(0x5155),
+            presenter_id: BabyBear::new(0x9E5),
+            expected_cell_id: BabyBear::new(0xCE11),
+            expected_permissions: BabyBear::new(0x7),
+        }];
+        let (mut trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
+        // Tamper: change the sibling so it disagrees with
+        // state_before.fields[4]. The new sibling-chain constraint
+        // must fire.
+        trace[0][AUX_BASE + 6] = trace[0][AUX_BASE + 6] + BabyBear::ONE;
+        assert_air_rejects(&trace, &public_inputs, 0, "EnlivenRef wrong sibling");
+    }
+
+    #[test]
+    fn test_captp_enliven_ref_adversarial_wrong_root() {
+        let mut state = CellState::new(1000, 0);
+        state.fields[6] = BabyBear::new(2);
+        state.refresh_commitment();
+        let effects = vec![Effect::EnlivenRef {
+            swiss_number: BabyBear::new(0x5155),
+            presenter_id: BabyBear::new(0x9E5),
+            expected_cell_id: BabyBear::new(0xCE11),
+            expected_permissions: BabyBear::new(0x7),
+        }];
+        let (mut trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
+        // Tamper: claim aux_root != state_after.fields[4]. Hits the
+        // c_root_field constraint.
+        trace[0][AUX_BASE + 0] = trace[0][AUX_BASE + 0] + BabyBear::ONE;
+        assert_air_rejects(&trace, &public_inputs, 0, "EnlivenRef wrong root");
+    }
+
+    #[test]
+    fn test_captp_drop_ref_adversarial_wrong_leaf() {
+        let mut state = CellState::new(1000, 0);
+        state.fields[5] = BabyBear::new(3);
+        state.refresh_commitment();
+        let effects = vec![Effect::DropRef {
+            cell_id: BabyBear::new(0xCE11),
+            holder_federation: BabyBear::new(0xFED1),
+            current_refcount: 3,
+        }];
+        let (mut trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
+        trace[0][AUX_BASE + 1] = trace[0][AUX_BASE + 1] + BabyBear::ONE;
+        assert_air_rejects(&trace, &public_inputs, 0, "DropRef wrong leaf");
+    }
+
+    #[test]
+    fn test_captp_drop_ref_adversarial_wrong_sibling() {
+        let mut state = CellState::new(1000, 0);
+        state.fields[5] = BabyBear::new(3);
+        state.fields[3] = BabyBear::new(0x3333);
+        state.refresh_commitment();
+        let effects = vec![Effect::DropRef {
+            cell_id: BabyBear::new(0xCE11),
+            holder_federation: BabyBear::new(0xFED1),
+            current_refcount: 3,
+        }];
+        let (mut trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
+        // Wrong sibling: must hit sibling-chain constraint.
+        trace[0][AUX_BASE + 6] = trace[0][AUX_BASE + 6] + BabyBear::ONE;
+        assert_air_rejects(&trace, &public_inputs, 0, "DropRef wrong sibling");
+    }
+
+    #[test]
+    fn test_captp_drop_ref_adversarial_wrong_root_mirror() {
+        let mut state = CellState::new(1000, 0);
+        state.fields[5] = BabyBear::new(3);
+        state.refresh_commitment();
+        let effects = vec![Effect::DropRef {
+            cell_id: BabyBear::new(0xCE11),
+            holder_federation: BabyBear::new(0xFED1),
+            current_refcount: 3,
+        }];
+        let (mut trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
+        // Tamper: change state_after.fields[3] (the materialised
+        // refcount_table_root) to disagree with aux_chosen.
+        trace[0][STATE_AFTER_BASE + state::FIELD_BASE + 3] =
+            trace[0][STATE_AFTER_BASE + state::FIELD_BASE + 3] + BabyBear::ONE;
+        assert_air_rejects(&trace, &public_inputs, 0, "DropRef wrong root mirror");
+    }
+
+    #[test]
+    fn test_captp_validate_handoff_adversarial_wrong_root() {
+        let state = CellState::new(1000, 0);
+        let cert_hash = BabyBear::new(0xCE87);
+        let recipient_pk = BabyBear::new(0x8EC1);
+        let introducer_pk = BabyBear::new(0x1117);
+        let pks = hash_2_to_1(recipient_pk, introducer_pk);
+        let leaf = hash_2_to_1(cert_hash, pks);
+        let sibling = BabyBear::ZERO;
+        let expected_root = hash_2_to_1(leaf, sibling);
+
+        let effects = vec![Effect::ValidateHandoff {
+            certificate_hash: cert_hash,
+            recipient_pk,
+            introducer_pk,
+            approved_set_root: expected_root,
+        }];
+        let mut context = EffectVmContext::default();
+        // Set PI root to the WRONG value. The trace generator pulls
+        // approved_set_root from context, so the PARAM in the trace
+        // will not satisfy hash(leaf, sibling) == root.
+        context.approved_handoffs_root[0] = expected_root + BabyBear::ONE;
+        let (trace, public_inputs) = generate_effect_vm_trace_ext(&state, &effects, context);
+        assert_air_rejects(&trace, &public_inputs, 0, "ValidateHandoff wrong PI root");
+    }
+
+    #[test]
+    fn test_captp_validate_handoff_adversarial_wrong_leaf() {
+        let state = CellState::new(1000, 0);
+        let cert_hash = BabyBear::new(0xCE87);
+        let recipient_pk = BabyBear::new(0x8EC1);
+        let introducer_pk = BabyBear::new(0x1117);
+        let pks = hash_2_to_1(recipient_pk, introducer_pk);
+        let leaf = hash_2_to_1(cert_hash, pks);
+        let sibling = BabyBear::ZERO;
+        let expected_root = hash_2_to_1(leaf, sibling);
+
+        let effects = vec![Effect::ValidateHandoff {
+            certificate_hash: cert_hash,
+            recipient_pk,
+            introducer_pk,
+            approved_set_root: expected_root,
+        }];
+        let mut context = EffectVmContext::default();
+        context.approved_handoffs_root[0] = expected_root;
+        let (mut trace, public_inputs) = generate_effect_vm_trace_ext(&state, &effects, context);
+        // Tamper aux[0] (leaf). Must violate leaf-derivation constraint.
+        trace[0][AUX_BASE + 0] = trace[0][AUX_BASE + 0] + BabyBear::ONE;
+        assert_air_rejects(&trace, &public_inputs, 0, "ValidateHandoff wrong leaf");
+    }
+
+    #[test]
+    fn test_captp_validate_handoff_adversarial_prover_chosen_root() {
+        // Real and deep verdict for ValidateHandoff: prover cannot
+        // invent their own root even if they provide a matching
+        // sibling, because PARAM must equal PI.
+        let state = CellState::new(1000, 0);
+        let cert_hash = BabyBear::new(0xCE87);
+        let recipient_pk = BabyBear::new(0x8EC1);
+        let introducer_pk = BabyBear::new(0x1117);
+        let pks = hash_2_to_1(recipient_pk, introducer_pk);
+        let leaf = hash_2_to_1(cert_hash, pks);
+        let prover_root = hash_2_to_1(leaf, BabyBear::ZERO);
+
+        let effects = vec![Effect::ValidateHandoff {
+            certificate_hash: cert_hash,
+            recipient_pk,
+            introducer_pk,
+            approved_set_root: prover_root,
+        }];
+        let context = EffectVmContext::default(); // PI root = 0
+        let (mut trace, public_inputs) = generate_effect_vm_trace_ext(&state, &effects, context);
+        // Force the PARAM to the prover-chosen root (overriding the
+        // context-bound value the trace generator wrote).
+        trace[0][PARAM_BASE + param::HANDOFF_APPROVED_SET_ROOT] = prover_root;
+        // PI says 0; PARAM says prover_root; c_pi_bind must fire.
+        assert_air_rejects(
+            &trace,
+            &public_inputs,
+            0,
+            "ValidateHandoff prover-chosen root",
         );
     }
 }
