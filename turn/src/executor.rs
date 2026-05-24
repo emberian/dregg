@@ -1772,8 +1772,15 @@ impl TurnExecutor {
                     Effect::SetVerificationKey { cell, .. } if cell == cell_id => {
                         push_pending_shim(vm_effects, 0x102u32);
                     }
-                    Effect::RevokeCapability { cell, .. } if cell == cell_id => {
-                        push_pending_shim(vm_effects, 0x103u32);
+                    Effect::RevokeCapability { cell, slot } if cell == cell_id => {
+                        // Stage 3: real AIR coverage. Mirrors GrantCapability.
+                        // The slot's bytes are hashed and the result is mixed
+                        // into capability_root deterministically by the AIR.
+                        let slot_bytes = slot.to_le_bytes();
+                        let slot_hash_bytes = blake3::hash(&slot_bytes);
+                        vm_effects.push(VmEffect::RevokeCapability {
+                            slot_hash: hash_to_bb(slot_hash_bytes.as_bytes()),
+                        });
                     }
                     Effect::CreateCell { .. } => {
                         push_pending_shim(vm_effects, 0x104u32);
