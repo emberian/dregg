@@ -460,6 +460,33 @@ fn all_effect_variants() -> Vec<Variant> {
                 sinks: vec![cell_c],
             },
         },
+        // -- CapTP runtime effects (Stage 7 / P1.A) -----------------------------
+        Variant {
+            label: "ExportSturdyRef",
+            effect: Effect::ExportSturdyRef {
+                swiss_number: [0xCDu8; 32],
+                target: cell_b,
+            },
+        },
+        Variant {
+            label: "EnlivenRef",
+            effect: Effect::EnlivenRef {
+                swiss_number: [0xCDu8; 32],
+                bearer: cell_b,
+            },
+        },
+        Variant {
+            label: "DropRef",
+            effect: Effect::DropRef {
+                ref_id: [0xCDu8; 32],
+            },
+        },
+        Variant {
+            label: "ValidateHandoff",
+            effect: Effect::ValidateHandoff {
+                cert_hash: [0xCDu8; 32],
+            },
+        },
     ]
 }
 
@@ -513,6 +540,10 @@ fn assert_variant_coverage(e: &Effect) -> &'static str {
         Effect::QueueResize { .. } => "QueueResize",
         Effect::QueueAtomicTx { .. } => "QueueAtomicTx",
         Effect::QueuePipelineStep { .. } => "QueuePipelineStep",
+        Effect::ExportSturdyRef { .. } => "ExportSturdyRef",
+        Effect::EnlivenRef { .. } => "EnlivenRef",
+        Effect::DropRef { .. } => "DropRef",
+        Effect::ValidateHandoff { .. } => "ValidateHandoff",
     }
 }
 

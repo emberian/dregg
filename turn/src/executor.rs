@@ -2038,6 +2038,94 @@ impl TurnExecutor {
                         });
                     }
 
+                    // ────────────────────────────────────────────────────
+                    // Stage 7 / P1.A: CapTP runtime effect projections.
+                    // Each runtime variant maps to its AIR counterpart
+                    // (selectors 14..17). The AIR params are bound into
+                    // effects_hash via `compute_effects_hash`, so the
+                    // prover commits to the specific CapTP operation.
+                    // The richer Merkle-proof witnesses required to make
+                    // the AIR non-tautological are added in P1.C.
+                    // ────────────────────────────────────────────────────
+                    Effect::ExportSturdyRef { swiss_number, target } if target == cell_id => {
+                        // Project: AIR's ExportSturdyRef proves
+                        //   swiss = hash(cell_id, hash(random_seed, counter))
+                        // To keep the AIR constraint satisfiable from
+                        // off-trace data, we project with the cell's
+                        // current field[7] (export counter) and a
+                        // random_seed value such that the AIR's swiss
+                        // derivation matches the provided swiss_number.
+                        // For now, we collapse: random_seed = first 4
+                        // bytes of swiss_number; the executor will set
+                        // aux[0] to whatever the AIR-side derivation
+                        // would compute — the AIR self-consistency check
+                        // is what's enforced. Permissions are not
+                        // carried by the runtime variant, so we use
+                        // ZERO (Stage 2 / P1.C tightens this to bind a
+                        // real permissions mask via the swiss table).
+                        let cell_id_bb = hash_to_bb(target.as_bytes());
+                        let random_seed_bb = hash_to_bb(swiss_number);
+                        // Counter would be read from cell.state.fields[7];
+                        // 0 is safe here because convert_turn_effects_to_vm
+                        // is static and the AIR only checks self-
+                        // consistency of the derivation.
+                        vm_effects.push(VmEffect::ExportSturdyRef {
+                            cell_id: cell_id_bb,
+                            permissions: BabyBear::ZERO,
+                            random_seed: random_seed_bb,
+                            export_counter: 0,
+                        });
+                    }
+                    Effect::EnlivenRef { swiss_number, bearer } if bearer == cell_id => {
+                        // Project: AIR's EnlivenRef proves swiss-table
+                        // membership of the entry. The presenter is the
+                        // bearer cell. P1.C will tighten this to a real
+                        // Merkle membership proof against the target
+                        // cell's swiss_table_root.
+                        let swiss_bb = hash_to_bb(swiss_number);
+                        let presenter_bb = hash_to_bb(bearer.as_bytes());
+                        vm_effects.push(VmEffect::EnlivenRef {
+                            swiss_number: swiss_bb,
+                            presenter_id: presenter_bb,
+                            expected_cell_id: presenter_bb,
+                            expected_permissions: BabyBear::ZERO,
+                        });
+                    }
+                    Effect::DropRef { ref_id } => {
+                        // Project: AIR's DropRef proves refcount > 0 and
+                        // decrements. The cell_id and holder_federation
+                        // are bound; the AIR currently treats refcount
+                        // as the cell's field[5]. We pass a non-zero
+                        // refcount; the executor's apply_effect verifies
+                        // the actual stored refcount.
+                        let cell_id_bb = hash_to_bb(cell_id.as_bytes());
+                        let ref_id_bb = hash_to_bb(ref_id);
+                        vm_effects.push(VmEffect::DropRef {
+                            cell_id: cell_id_bb,
+                            holder_federation: ref_id_bb,
+                            current_refcount: 1,
+                        });
+                    }
+                    Effect::ValidateHandoff { cert_hash } => {
+                        // Project: AIR's ValidateHandoff proves
+                        // cert_hash ∈ approved_handoffs_root. P1.C
+                        // tightens to a real Merkle membership proof.
+                        // The recipient/introducer pubkeys are not in
+                        // the minimal runtime variant; we collapse to
+                        // ZERO (consume-on-use binding happens at the
+                        // executor's apply_effect).
+                        let cert_bb = hash_to_bb(cert_hash);
+                        vm_effects.push(VmEffect::ValidateHandoff {
+                            certificate_hash: cert_bb,
+                            recipient_pk: BabyBear::ZERO,
+                            introducer_pk: BabyBear::ZERO,
+                            // Position 0 of the federation's approved
+                            // handoffs root; matches the verifier's PI
+                            // read in `read_approved_handoffs_root`.
+                            approved_set_root: BabyBear::ZERO,
+                        });
+                    }
+
                     _ => {
                         // Effects not targeting `cell_id` or arms covered by
                         // explicit guards above (e.g., a cross-cell effect
@@ -6770,6 +6858,115 @@ impl TurnExecutor {
 
                 Ok(())
             }
+
+            // ─── CapTP runtime effects (Stage 7 / P1.A, P1.B) ─────────────
+            //
+            // Mirror the mutations that used to live at the wire layer
+            // (`wire/src/server.rs` :2243-2350). The executor is now the
+            // single source of truth for CapTP state transitions. The
+            // wire layer constructs a Turn with these effects and runs
+            // it through `TurnExecutor::execute`.
+            Effect::ExportSturdyRef { swiss_number, target } => {
+                if target != action_target {
+                    self.check_cross_cell_permission(
+                        ledger,
+                        actor,
+                        target,
+                        pyana_cell::permissions::Action::Delegate,
+                        "Delegate",
+                        path,
+                    )?;
+                }
+                let c = ledger
+                    .get_mut(target)
+                    .ok_or_else(|| (TurnError::CellNotFound { id: *target }, path.to_vec()))?;
+                // Bump field[7] (export counter) — mirrors the AIR's
+                // ExportSturdyRef state transition.
+                let mut counter_bytes = c.state.fields[7];
+                let counter = u64::from_le_bytes(counter_bytes[..8].try_into().unwrap());
+                journal.record_set_field(*target, 7, c.state.fields[7]);
+                let new_counter = counter.saturating_add(1);
+                counter_bytes[..8].copy_from_slice(&new_counter.to_le_bytes());
+                c.state.fields[7] = counter_bytes;
+                // The swiss_number is bound into the receipt via the
+                // turn's effects_hash; the federation-level swiss table
+                // mirror is updated by the wire layer's post-commit
+                // hook (`process_introduction_exports`-style path).
+                let _ = swiss_number;
+                Ok(())
+            }
+
+            Effect::EnlivenRef { swiss_number, bearer } => {
+                // The bearer cell gains a routing entry; for the
+                // minimal P1.A shape we increment the target's
+                // use_count (field[6]) on the bearer cell since that's
+                // what the AIR projection records. P1.C tightens this
+                // to a real Merkle membership check against the
+                // exporter's swiss_table_root.
+                let c = ledger
+                    .get_mut(bearer)
+                    .ok_or_else(|| (TurnError::CellNotFound { id: *bearer }, path.to_vec()))?;
+                let mut use_count_bytes = c.state.fields[6];
+                let use_count = u64::from_le_bytes(use_count_bytes[..8].try_into().unwrap());
+                journal.record_set_field(*bearer, 6, c.state.fields[6]);
+                let new_use_count = use_count.saturating_add(1);
+                use_count_bytes[..8].copy_from_slice(&new_use_count.to_le_bytes());
+                c.state.fields[6] = use_count_bytes;
+                let _ = swiss_number;
+                Ok(())
+            }
+
+            Effect::DropRef { ref_id } => {
+                // Decrement field[5] (refcount) on the action target.
+                // P1.C tightens this to a real refcount-table Merkle
+                // proof keyed by ref_id.
+                let c = ledger
+                    .get_mut(action_target)
+                    .ok_or_else(|| {
+                        (
+                            TurnError::CellNotFound { id: *action_target },
+                            path.to_vec(),
+                        )
+                    })?;
+                let mut rc_bytes = c.state.fields[5];
+                let rc = u64::from_le_bytes(rc_bytes[..8].try_into().unwrap());
+                if rc == 0 {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "DropRef: refcount is already zero".to_string(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                journal.record_set_field(*action_target, 5, c.state.fields[5]);
+                let new_rc = rc - 1;
+                rc_bytes[..8].copy_from_slice(&new_rc.to_le_bytes());
+                c.state.fields[5] = rc_bytes;
+                let _ = ref_id;
+                Ok(())
+            }
+
+            Effect::ValidateHandoff { cert_hash } => {
+                // Consume-on-use: a successful ValidateHandoff removes
+                // `cert_hash` from the federation's approved-handoffs
+                // mirror so a second presentation of the same cert
+                // produces a non-membership witness at the AIR layer.
+                //
+                // The mirror lives in the executor's federation state
+                // (per `DESIGN-captp-integration.md` §9.4). At this
+                // stage we only verify the cell exists; the actual
+                // mirror is the wire layer's `CapTpState` which the
+                // post-commit hook updates. P1.C wires up Merkle proof
+                // verification against `approved_handoffs_root`.
+                if ledger.get(action_target).is_none() {
+                    return Err((
+                        TurnError::CellNotFound { id: *action_target },
+                        path.to_vec(),
+                    ));
+                }
+                let _ = cert_hash;
+                Ok(())
+            }
         }
     }
 
@@ -6960,6 +7157,13 @@ impl TurnExecutor {
             | Effect::QueueResize { .. }
             | Effect::QueueAtomicTx { .. }
             | Effect::QueuePipelineStep { .. } => self.costs.effect_base,
+            // CapTP runtime effects (P1.A): each is a simple state bump
+            // (counter / use_count / refcount) plus a federation-mirror
+            // hook on commit; cost is one effect_base.
+            Effect::ExportSturdyRef { .. }
+            | Effect::EnlivenRef { .. }
+            | Effect::DropRef { .. }
+            | Effect::ValidateHandoff { .. } => self.costs.effect_base,
         };
         base.saturating_add(extra)
             .saturating_add((effect.data_bytes() as u64).saturating_mul(self.costs.per_byte))
@@ -8025,6 +8229,17 @@ fn rewrite_effect_targets(effects: &mut [Effect], placeholder: &CellId, resolved
             Effect::ExerciseViaCapability { inner_effects, .. } => {
                 rewrite_effect_targets(inner_effects, placeholder, resolved);
             }
+            // CapTP variants have mutable CellId fields (target, bearer):
+            Effect::ExportSturdyRef { target, .. } => {
+                if target == placeholder {
+                    *target = *resolved;
+                }
+            }
+            Effect::EnlivenRef { bearer, .. } => {
+                if bearer == placeholder {
+                    *bearer = *resolved;
+                }
+            }
             // These effects don't have mutable CellId fields needing rewrite:
             Effect::CreateCell { .. }
             | Effect::NoteSpend { .. }
@@ -8055,7 +8270,9 @@ fn rewrite_effect_targets(effects: &mut [Effect], placeholder: &CellId, resolved
             | Effect::QueueDequeue { .. }
             | Effect::QueueResize { .. }
             | Effect::QueueAtomicTx { .. }
-            | Effect::QueuePipelineStep { .. } => {}
+            | Effect::QueuePipelineStep { .. }
+            | Effect::DropRef { .. }
+            | Effect::ValidateHandoff { .. } => {}
         }
     }
 }

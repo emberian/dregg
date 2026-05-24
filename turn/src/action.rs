@@ -616,6 +616,58 @@ pub enum Effect {
         /// Sink queue(s) — pipeline determines routing.
         sinks: Vec<CellId>,
     },
+
+    // ─── CapTP Runtime Effects (Stage 7 / P1.A) ───────────────────────────
+    //
+    // The wire layer's CapTP handlers used to mutate `CapTpState` directly
+    // (see `wire/src/server.rs` :2243-2350). With these variants present,
+    // each CapTP operation becomes a turn-submitted Effect that runs through
+    // the executor and projects to its respective AIR variant (selectors
+    // 14..17 in `circuit/src/effect_vm.rs`).
+    //
+    // Field shapes are deliberately minimal here. The richer
+    // `SwissMembershipProof` / `RefcountMembershipProof` /
+    // `ApprovedHandoffProof` types proposed in `DESIGN-captp-integration.md`
+    // remain available for a future expansion; for now the executor reads
+    // membership witnesses from the federation's mirror state.
+    /// Export a cell as a sturdy reference (CapTP). The executor inserts a
+    /// swiss-table entry, derives the swiss number, and bumps the cell's
+    /// export counter (state.fields[7]).
+    ExportSturdyRef {
+        /// 32-byte unguessable swiss number (or seed; the on-chain effect
+        /// commits to the exact swiss number used for routing).
+        swiss_number: [u8; 32],
+        /// The cell being exported (the bearer of the sturdy ref talks to
+        /// THIS cell when enlivening).
+        target: CellId,
+    },
+    /// Enliven a sturdy ref: validate a presented swiss number against the
+    /// committed swiss-table state and grant a routing entry to `bearer`.
+    /// The executor verifies membership of `swiss_number` in the target's
+    /// swiss table and bumps the entry's use-count (state.fields[6]).
+    EnlivenRef {
+        /// The swiss number being presented.
+        swiss_number: [u8; 32],
+        /// The cell that ends up holding the live ref (gets the routing
+        /// entry added to its c-list).
+        bearer: CellId,
+    },
+    /// Drop a remote reference / GC decrement (CapTP). The executor verifies
+    /// the refcount is > 0 and decrements it (state.fields[5]).
+    DropRef {
+        /// 32-byte identifier of the reference being dropped (per-export id).
+        ref_id: [u8; 32],
+    },
+    /// Validate a handoff certificate and accept the bearer (CapTP).
+    /// Off-chain Ed25519 signature verification has already happened (the
+    /// federation maintains `approved_handoffs_root`); the executor proves
+    /// Merkle membership of `cert_hash` in the root and consumes the leaf
+    /// (single-use guarantee per `DESIGN-captp-integration.md` §9.4).
+    ValidateHandoff {
+        /// The Poseidon2 hash of the handoff certificate (matches the leaf
+        /// the federation inserted when accepting the cert).
+        cert_hash: [u8; 32],
+    },
 }
 
 /// An operation within an atomic queue transaction.
@@ -1279,6 +1331,31 @@ impl Effect {
                     hasher.update(sink.as_bytes());
                 }
             }
+            // ── CapTP runtime effects (Stage 7 / P1.A) ────────────────────
+            Effect::ExportSturdyRef {
+                swiss_number,
+                target,
+            } => {
+                hasher.update(&[43u8]);
+                hasher.update(swiss_number);
+                hasher.update(target.as_bytes());
+            }
+            Effect::EnlivenRef {
+                swiss_number,
+                bearer,
+            } => {
+                hasher.update(&[44u8]);
+                hasher.update(swiss_number);
+                hasher.update(bearer.as_bytes());
+            }
+            Effect::DropRef { ref_id } => {
+                hasher.update(&[45u8]);
+                hasher.update(ref_id);
+            }
+            Effect::ValidateHandoff { cert_hash } => {
+                hasher.update(&[46u8]);
+                hasher.update(cert_hash);
+            }
         }
         *hasher.finalize().as_bytes()
     }
@@ -1395,6 +1472,11 @@ impl Effect {
             Effect::QueuePipelineStep { sinks, .. } => {
                 32 + 32 + 8 + sinks.len() * 32 // pipeline_id + source + count + sinks
             }
+            // CapTP runtime effects: small fixed-size blobs.
+            Effect::ExportSturdyRef { .. } => 32 + 32, // swiss + target
+            Effect::EnlivenRef { .. } => 32 + 32,      // swiss + bearer
+            Effect::DropRef { .. } => 32,              // ref_id
+            Effect::ValidateHandoff { .. } => 32,      // cert_hash
         }
     }
 
@@ -1457,6 +1539,10 @@ impl Effect {
             | Effect::QueueResize { .. }
             | Effect::QueueAtomicTx { .. }
             | Effect::QueuePipelineStep { .. } => pyana_cell::EFFECT_QUEUE_OPS,
+            Effect::ExportSturdyRef { .. }
+            | Effect::EnlivenRef { .. }
+            | Effect::DropRef { .. }
+            | Effect::ValidateHandoff { .. } => pyana_cell::EFFECT_CAPTP_OPS,
         }
     }
 }

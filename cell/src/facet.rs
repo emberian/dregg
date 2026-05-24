@@ -52,6 +52,11 @@ pub const EFFECT_ESCROW_OPS: EffectMask = 1 << 15;
 pub const EFFECT_DELEGATION_OPS: EffectMask = 1 << 16;
 pub const EFFECT_SOVEREIGN_OPS: EffectMask = 1 << 17;
 pub const EFFECT_QUEUE_OPS: EffectMask = 1 << 18;
+/// CapTP operations: ExportSturdyRef, EnlivenRef, DropRef, ValidateHandoff.
+///
+/// Stage 7 / P1.A: these are the runtime emitters for the AIR-only orphan
+/// CapTP variants (selectors 14..17 in `circuit/src/effect_vm.rs`).
+pub const EFFECT_CAPTP_OPS: EffectMask = 1 << 19;
 
 /// All effect kinds permitted (equivalent to no restriction).
 pub const EFFECT_ALL: EffectMask = 0xFFFF_FFFF;
