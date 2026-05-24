@@ -777,15 +777,30 @@ impl IntentPool {
             AutoFulfillPolicy::Never => false,
             AutoFulfillPolicy::Always => true,
             AutoFulfillPolicy::ForPatterns(patterns) => {
-                if let Some(ref resource_pattern) = intent.matcher.resource_pattern {
-                    patterns.iter().any(|p| {
-                        globset::Glob::new(p)
-                            .map(|g| g.compile_matcher().is_match(resource_pattern))
-                            .unwrap_or(false)
-                    })
-                } else {
-                    false
-                }
+                // Policy patterns are matched against the intent's
+                // declared resource_pattern. We accept either form of
+                // match: literal equality (exact pattern matching) or
+                // mutual glob coverage (policy glob covers the intent's
+                // pattern, or the intent's pattern as a glob covers the
+                // policy entry). `matcher::resource_matches` is the
+                // canonical predicate used elsewhere in the crate for
+                // glob-aware comparison.
+                //
+                // Previously this called `Glob::new(p).is_match(intent_pattern)`,
+                // which treats the intent's pattern as a LITERAL string
+                // — so policy `"documents/*"` against intent
+                // `"documents/*"` would fail because `*` doesn't match
+                // a literal `*`. The fix treats both sides
+                // glob-symmetrically.
+                let intent_resource = match intent.matcher.resource_pattern.as_deref() {
+                    Some(rp) => rp,
+                    None => return false,
+                };
+                patterns.iter().any(|p| {
+                    p == intent_resource
+                        || crate::matcher::resource_matches(intent_resource, p)
+                        || crate::matcher::resource_matches(p, intent_resource)
+                })
             }
         }
     }
@@ -1627,5 +1642,80 @@ mod tests {
         pool.mark_fulfilled(intent_id);
         let result = pool.receive_local_intent(intent, 101);
         assert_eq!(result, Err(ReceiveError::AlreadyFulfilled));
+    }
+
+    // -------------------------------------------------------------------
+    // AutoFulfillPolicy::ForPatterns regression test (audit #4)
+    //
+    // Previously the policy ran `Glob::new(p).is_match(intent_pattern)`,
+    // which treats the intent's resource_pattern as a LITERAL string.
+    // For the obvious case `ForPatterns(vec!["documents/*"])` against
+    // intent `resource_pattern = "documents/*"`, the glob `documents/*`
+    // would NOT match the literal `"documents/*"` because `*` isn't a
+    // literal `*`. The patched implementation uses symmetric
+    // `resource_matches` plus literal equality so this case works.
+    // -------------------------------------------------------------------
+    #[test]
+    fn test_for_patterns_matches_literal_equality() {
+        let pool = IntentPool::new(
+            CommitmentId([0x11; 32]),
+            IntentPoolConfig {
+                max_intents: 100,
+                gc_interval_secs: 60,
+                auto_match: true,
+                minimum_stake_value: 0,
+            },
+            AutoFulfillPolicy::ForPatterns(vec!["documents/*".into()]),
+            test_known_root(),
+        );
+        let spec = MatchSpec {
+            actions: vec![ActionPattern {
+                action: Some("read".into()),
+                resource: None,
+            }],
+            constraints: vec![],
+            min_budget: None,
+            resource_pattern: Some("documents/*".into()),
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        let intent = Intent::new(IntentKind::Need, spec, CommitmentId([0x33; 32]), 9999, None);
+        assert!(
+            pool.should_auto_fulfill(&intent),
+            "documents/* policy must match documents/* intent"
+        );
+    }
+
+    #[test]
+    fn test_for_patterns_rejects_unrelated_pattern() {
+        let pool = IntentPool::new(
+            CommitmentId([0x11; 32]),
+            IntentPoolConfig {
+                max_intents: 100,
+                gc_interval_secs: 60,
+                auto_match: true,
+                minimum_stake_value: 0,
+            },
+            AutoFulfillPolicy::ForPatterns(vec!["documents/*".into()]),
+            test_known_root(),
+        );
+        let spec = MatchSpec {
+            actions: vec![ActionPattern {
+                action: Some("read".into()),
+                resource: None,
+            }],
+            constraints: vec![],
+            min_budget: None,
+            resource_pattern: Some("images/*".into()),
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        let intent = Intent::new(IntentKind::Need, spec, CommitmentId([0x33; 32]), 9999, None);
+        assert!(
+            !pool.should_auto_fulfill(&intent),
+            "documents/* policy must NOT match images/* intent"
+        );
     }
 }

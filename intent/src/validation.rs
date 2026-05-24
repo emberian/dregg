@@ -23,6 +23,21 @@ pub const MAX_STRING_LEN: usize = 256;
 /// Maximum length of a resource pattern.
 pub const MAX_RESOURCE_PATTERN_LEN: usize = 256;
 
+/// Maximum number of predicate requirements attached to an intent.
+///
+/// Predicate requirements drive STARK predicate-proof verification at
+/// fulfillment time; an unbounded list lets a malicious poster force
+/// fulfillers to run arbitrarily many proofs.
+pub const MAX_PREDICATE_REQUIREMENTS: usize = 16;
+
+/// Maximum length of any predicate field string (attribute, predicate type).
+pub const MAX_PREDICATE_STRING_LEN: usize = 128;
+
+/// Allowed predicate types — keep aligned with `verify_predicate_requirement`
+/// in `intent::fulfillment`. Anything outside this set will fail to verify
+/// anyway, so we reject at intake.
+const ALLOWED_PREDICATE_TYPES: &[&str] = &["gte", "lte", "gt", "lt", "neq", "eq", "in_range"];
+
 /// Validation errors for intent fields.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ValidationError {
@@ -46,6 +61,14 @@ pub enum ValidationError {
     ZeroBudget,
     /// Fill constraints are invalid.
     InvalidFillConstraints(String),
+    /// Too many predicate requirements attached.
+    TooManyPredicateRequirements { count: usize, max: usize },
+    /// A predicate field string exceeds the maximum length.
+    PredicateStringTooLong { len: usize, max: usize },
+    /// Predicate type is not in the supported set.
+    UnknownPredicateType(String),
+    /// `in_range` predicate must have `upper_bound` set and `>= threshold`.
+    InvalidPredicateRange { threshold: u64, upper_bound: Option<u64> },
 }
 
 impl std::fmt::Display for ValidationError {
@@ -83,6 +106,27 @@ impl std::fmt::Display for ValidationError {
             }
             Self::InvalidFillConstraints(msg) => {
                 write!(f, "invalid fill constraints: {msg}")
+            }
+            Self::TooManyPredicateRequirements { count, max } => {
+                write!(
+                    f,
+                    "too many predicate requirements: {count} exceeds max {max}"
+                )
+            }
+            Self::PredicateStringTooLong { len, max } => {
+                write!(f, "predicate string too long: {len} exceeds max {max}")
+            }
+            Self::UnknownPredicateType(t) => {
+                write!(f, "unknown predicate type: {t}")
+            }
+            Self::InvalidPredicateRange {
+                threshold,
+                upper_bound,
+            } => {
+                write!(
+                    f,
+                    "invalid in_range bounds: threshold={threshold}, upper_bound={upper_bound:?}"
+                )
             }
         }
     }
@@ -177,6 +221,47 @@ pub fn validate_intent(intent: &Intent) -> Result<(), ValidationError> {
                 "min_fill_amount ({}) must be <= max_fill_amount ({})",
                 fc.min_fill_amount, fc.max_fill_amount
             )));
+        }
+    }
+
+    // SECURITY: Validate predicate requirements. Previously these were
+    // unvalidated; a malicious poster could attach unbounded predicate
+    // proofs and force fulfillers to verify each one.
+    if spec.predicate_requirements.len() > MAX_PREDICATE_REQUIREMENTS {
+        return Err(ValidationError::TooManyPredicateRequirements {
+            count: spec.predicate_requirements.len(),
+            max: MAX_PREDICATE_REQUIREMENTS,
+        });
+    }
+    for req in &spec.predicate_requirements {
+        if req.attribute.len() > MAX_PREDICATE_STRING_LEN {
+            return Err(ValidationError::PredicateStringTooLong {
+                len: req.attribute.len(),
+                max: MAX_PREDICATE_STRING_LEN,
+            });
+        }
+        if req.predicate_type.len() > MAX_PREDICATE_STRING_LEN {
+            return Err(ValidationError::PredicateStringTooLong {
+                len: req.predicate_type.len(),
+                max: MAX_PREDICATE_STRING_LEN,
+            });
+        }
+        if !ALLOWED_PREDICATE_TYPES.contains(&req.predicate_type.as_str()) {
+            return Err(ValidationError::UnknownPredicateType(
+                req.predicate_type.clone(),
+            ));
+        }
+        if req.predicate_type == "in_range" {
+            let upper = req.upper_bound;
+            match upper {
+                Some(u) if u >= req.threshold => {}
+                _ => {
+                    return Err(ValidationError::InvalidPredicateRange {
+                        threshold: req.threshold,
+                        upper_bound: upper,
+                    });
+                }
+            }
         }
     }
 
@@ -550,6 +635,78 @@ mod tests {
             None,
             constraints,
         );
+        assert!(validate_intent(&intent).is_ok());
+    }
+
+    // -------------------------------------------------------------------
+    // Predicate requirement validation
+    // -------------------------------------------------------------------
+
+    fn pred(attribute: &str, ptype: &str, threshold: u64) -> crate::PredicateRequirement {
+        crate::PredicateRequirement {
+            attribute: attribute.into(),
+            predicate_type: ptype.into(),
+            threshold,
+            upper_bound: None,
+            state_root_freshness: 100,
+        }
+    }
+
+    #[test]
+    fn test_too_many_predicate_requirements_rejected() {
+        let mut intent = make_valid_intent();
+        intent.matcher.predicate_requirements = (0..(MAX_PREDICATE_REQUIREMENTS + 1))
+            .map(|i| pred(&format!("attr_{i}"), "gte", 1))
+            .collect();
+        assert!(matches!(
+            validate_intent(&intent),
+            Err(ValidationError::TooManyPredicateRequirements { .. })
+        ));
+    }
+
+    #[test]
+    fn test_predicate_string_length_capped() {
+        let mut intent = make_valid_intent();
+        let long_name = "x".repeat(MAX_PREDICATE_STRING_LEN + 1);
+        intent.matcher.predicate_requirements = vec![pred(&long_name, "gte", 1)];
+        assert!(matches!(
+            validate_intent(&intent),
+            Err(ValidationError::PredicateStringTooLong { .. })
+        ));
+    }
+
+    #[test]
+    fn test_unknown_predicate_type_rejected() {
+        let mut intent = make_valid_intent();
+        intent.matcher.predicate_requirements = vec![pred("balance", "bogus_op", 100)];
+        assert!(matches!(
+            validate_intent(&intent),
+            Err(ValidationError::UnknownPredicateType(_))
+        ));
+    }
+
+    #[test]
+    fn test_in_range_without_upper_bound_rejected() {
+        let mut intent = make_valid_intent();
+        // in_range with no upper_bound is structurally invalid.
+        intent.matcher.predicate_requirements =
+            vec![pred("balance", "in_range", 100)];
+        assert!(matches!(
+            validate_intent(&intent),
+            Err(ValidationError::InvalidPredicateRange { .. })
+        ));
+    }
+
+    #[test]
+    fn test_in_range_with_valid_bounds_accepted() {
+        let mut intent = make_valid_intent();
+        intent.matcher.predicate_requirements = vec![crate::PredicateRequirement {
+            attribute: "balance".into(),
+            predicate_type: "in_range".into(),
+            threshold: 100,
+            upper_bound: Some(500),
+            state_root_freshness: 100,
+        }];
         assert!(validate_intent(&intent).is_ok());
     }
 }
