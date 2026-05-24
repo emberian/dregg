@@ -24,6 +24,16 @@ import { initFullTurnProof } from './sections/full-turn-proof.js';
 import { initTieredRevocation } from './sections/tiered-revocation.js';
 import { initCircuitPlayground } from './sections/circuit-playground.js';
 
+// New-world sections
+import { initThemeToggle } from './sections/theme-toggle.js';
+import { initBlindedQueues } from './sections/blinded-queues.js';
+import { initProgrammableQueues } from './sections/programmable-queues.js';
+import { initRingTrades } from './sections/ring-trades.js';
+import { initInboxes } from './sections/inboxes.js';
+import { initBatchExecutor } from './sections/batch-executor.js';
+import { initNameservice } from './sections/nameservice.js';
+import { initDelegationV2 } from './sections/delegation-v2.js';
+
 // ============================================================================
 // Global Shared State
 // ============================================================================
@@ -348,6 +358,14 @@ async function main() {
   initFullTurnProof(wasmExports);
   initTieredRevocation(wasmExports);
   initCircuitPlayground(wasmExports);
+  initThemeToggle();
+  initBlindedQueues(wasmExports);
+  initProgrammableQueues(wasmExports);
+  initRingTrades(wasmExports);
+  initInboxes(wasmExports);
+  initBatchExecutor(wasmExports);
+  initNameservice(wasmExports);
+  initDelegationV2(wasmExports);
 
   // Initial state render
   notifyStateChange();
