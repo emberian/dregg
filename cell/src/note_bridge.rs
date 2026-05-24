@@ -446,6 +446,533 @@ impl PendingBridgeSet {
     }
 }
 
+// ============================================================================
+// Stage 9 P3.D: Phased BridgeReceiptEnvelope (DESIGN-receipts.md §5)
+// ============================================================================
+//
+// The single-shot `BridgeReceipt` above (the Phase 2 mint-ack) is preserved
+// for backward compatibility. The types below give the full four-phase
+// receipt protocol described in DESIGN-receipts.md §5: shared envelope
+// (bridge_id, src/dst federation, sequence, previous-phase link) and
+// per-phase payloads (Locked, Witnessed, Finalized, Refunded). A per-
+// bridge `BridgePhaseLog` enforces monotone phase advancement and rejects
+// replay attempts.
+//
+// The envelope is NOT a drop-in replacement for `BridgeReceipt` in
+// `Effect::BridgeFinalize` (which would require touching the Effect enum —
+// outside this lane's write surface). Instead, both coexist: the executor's
+// finalize handler still consumes a `BridgeReceipt` (Phase-2 ack); the
+// envelope is what federations exchange end-to-end and what
+// `BridgePhaseLog` records.
+
+/// The four phases of a cross-federation bridge.
+///
+/// `Locked` — source has locked the note (Phase 1).
+/// `Witnessed` — destination has observed Phase 1 and minted; this is the
+///   Phase-2 mint-ack receipt's phase tag. (The design doc calls this `Mint`.)
+/// `Finalized` — source has consumed the witness and made the lock permanent.
+/// `Refunded` — source has timed out without a witness and unlocked the note.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum BridgePhase {
+    /// Phase 1: source locked the note.
+    Locked = 1,
+    /// Phase 2: destination witnessed the lock and minted.
+    Witnessed = 2,
+    /// Phase 3: source consumed the witness and finalized the burn.
+    Finalized = 3,
+    /// Phase 4: source timed out and refunded.
+    Refunded = 4,
+}
+
+impl BridgePhase {
+    /// The numeric tag baked into hashes (stable across schema migrations).
+    pub fn tag(self) -> u8 {
+        self as u8
+    }
+
+    /// The next phase that MAY legally follow `self`, or `None` if `self` is
+    /// terminal. `Locked → {Witnessed, Refunded}`; `Witnessed → Finalized`;
+    /// `Finalized` and `Refunded` are terminal.
+    pub fn next_valid(self) -> &'static [BridgePhase] {
+        match self {
+            BridgePhase::Locked => &[BridgePhase::Witnessed, BridgePhase::Refunded],
+            BridgePhase::Witnessed => &[BridgePhase::Finalized],
+            BridgePhase::Finalized | BridgePhase::Refunded => &[],
+        }
+    }
+}
+
+/// Per-phase payload carried inside a [`BridgeReceiptEnvelope`].
+///
+/// Each variant carries only the fields meaningful to that phase. The shared
+/// envelope fields (bridge_id, src/dst federation, sequence, etc.) live on
+/// the envelope.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BridgePhasePayload {
+    /// Phase 1 payload (source-side lock).
+    Locked {
+        /// Nullifier of the locked note.
+        nullifier: [u8; 32],
+        /// Asset type id (used for cross-fed asset registry).
+        asset_type: u64,
+        /// Value being bridged.
+        value: u64,
+        /// Source-side timeout after which Refund is allowed.
+        timeout_height: u64,
+        /// BLAKE3 of the portable spending proof bytes (binds the proof
+        /// to this lock without inlining it).
+        spending_proof_digest: [u8; 32],
+    },
+    /// Phase 2 payload (destination-side mint-ack).
+    Witnessed {
+        /// Mint height on the destination.
+        mint_height: u64,
+        /// Commitment to the minted note on the destination.
+        mint_commitment: [u8; 32],
+    },
+    /// Phase 3 payload (source-side finalize).
+    Finalized {
+        /// Block height on the source when the finalize was applied.
+        finalize_height: u64,
+        /// Source's permanent-nullifier-set root after this finalize.
+        post_nullifier_root: [u8; 32],
+    },
+    /// Phase 4 payload (source-side refund/timeout cancel).
+    Refunded {
+        /// Block height on the source when the refund was applied
+        /// (must be `> timeout_height` of the corresponding Phase 1).
+        refund_height: u64,
+    },
+}
+
+impl BridgePhasePayload {
+    /// The phase tag for this payload variant. Must match the envelope's
+    /// `phase` field; the envelope-builders enforce this invariant.
+    pub fn phase(&self) -> BridgePhase {
+        match self {
+            BridgePhasePayload::Locked { .. } => BridgePhase::Locked,
+            BridgePhasePayload::Witnessed { .. } => BridgePhase::Witnessed,
+            BridgePhasePayload::Finalized { .. } => BridgePhase::Finalized,
+            BridgePhasePayload::Refunded { .. } => BridgePhase::Refunded,
+        }
+    }
+}
+
+/// Compute the deterministic `bridge_id` that identifies a bridge instance
+/// across phases and federations.
+///
+/// `BLAKE3_derive_key("pyana-bridge-id-v1", lock_nullifier || src_fed ||
+/// dst_fed || initiating_nonce_le)`. The Phase-1 lock nullifier (source-side)
+/// ensures uniqueness — under the source's nullifier-uniqueness invariant
+/// no two locks reuse the same nullifier — and `initiating_nonce` provides
+/// per-source replay protection if the same (nullifier, src, dst) tuple
+/// ever recurred (e.g. cross-version).
+pub fn compute_bridge_id(
+    lock_nullifier: &[u8; 32],
+    src_fed: &[u8; 32],
+    dst_fed: &[u8; 32],
+    initiating_nonce: u64,
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key("pyana-bridge-id-v1");
+    hasher.update(lock_nullifier);
+    hasher.update(src_fed);
+    hasher.update(dst_fed);
+    hasher.update(&initiating_nonce.to_le_bytes());
+    *hasher.finalize().as_bytes()
+}
+
+/// Phased bridge receipt envelope (Stage 9 / DESIGN-receipts.md §5).
+///
+/// Shared shape across all four phases. The `payload` discriminator's
+/// phase tag must equal `phase`; constructors enforce this. The
+/// `previous_phase_receipt_hash` chains phases together: Phase 1 has
+/// `None`; Phase 2 binds Phase 1; Phase 3 binds Phase 2; Phase 4 binds
+/// Phase 1. A [`BridgePhaseLog`] enforces this on entry.
+///
+/// The cross-federation QC (BLS or Ed25519 votes) lives on the next layer up
+/// (`FederationReceipt` from `pyana-federation`). This envelope is the
+/// *body* the QC commits to; serialize and pass through `body_hash` to
+/// get the signing message.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BridgeReceiptEnvelope {
+    /// Version tag: `1` corresponds to `pyana-bridge-envelope-v1`.
+    pub version: u32,
+    /// Which phase this receipt represents.
+    pub phase: BridgePhase,
+    /// Cross-phase join key (see [`compute_bridge_id`]).
+    pub bridge_id: [u8; 32],
+    /// Source federation id (always the federation that initiated).
+    pub src_federation: [u8; 32],
+    /// Destination federation id.
+    pub dst_federation: [u8; 32],
+    /// Block height on the issuing federation (source for L/F/R, dst for W).
+    pub block_height: u64,
+    /// Hash of the previous-phase envelope's `body_hash()`. `None` only
+    /// for Phase 1 (the genesis lock).
+    pub previous_phase_receipt_hash: Option<[u8; 32]>,
+    /// Phase-specific payload.
+    pub payload: BridgePhasePayload,
+}
+
+impl BridgeReceiptEnvelope {
+    /// Current wire-format version.
+    pub const VERSION: u32 = 1;
+
+    /// Compute the canonical body hash — the message a federation's
+    /// quorum certificate (BLS or Ed25519) signs over. Domain-separated
+    /// via BLAKE3 derive_key; cannot collide with any other pyana hash.
+    pub fn body_hash(&self) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new_derive_key("pyana-bridge-envelope-v1");
+        hasher.update(&self.version.to_le_bytes());
+        hasher.update(&[self.phase.tag()]);
+        hasher.update(&self.bridge_id);
+        hasher.update(&self.src_federation);
+        hasher.update(&self.dst_federation);
+        hasher.update(&self.block_height.to_le_bytes());
+        match self.previous_phase_receipt_hash {
+            Some(h) => {
+                hasher.update(&[1u8]);
+                hasher.update(&h);
+            }
+            None => {
+                hasher.update(&[0u8]);
+            }
+        }
+        // Payload binding: each variant contributes a stable byte tag plus
+        // its fields in declaration order.
+        match &self.payload {
+            BridgePhasePayload::Locked {
+                nullifier,
+                asset_type,
+                value,
+                timeout_height,
+                spending_proof_digest,
+            } => {
+                hasher.update(&[0x01]);
+                hasher.update(nullifier);
+                hasher.update(&asset_type.to_le_bytes());
+                hasher.update(&value.to_le_bytes());
+                hasher.update(&timeout_height.to_le_bytes());
+                hasher.update(spending_proof_digest);
+            }
+            BridgePhasePayload::Witnessed {
+                mint_height,
+                mint_commitment,
+            } => {
+                hasher.update(&[0x02]);
+                hasher.update(&mint_height.to_le_bytes());
+                hasher.update(mint_commitment);
+            }
+            BridgePhasePayload::Finalized {
+                finalize_height,
+                post_nullifier_root,
+            } => {
+                hasher.update(&[0x03]);
+                hasher.update(&finalize_height.to_le_bytes());
+                hasher.update(post_nullifier_root);
+            }
+            BridgePhasePayload::Refunded { refund_height } => {
+                hasher.update(&[0x04]);
+                hasher.update(&refund_height.to_le_bytes());
+            }
+        }
+        *hasher.finalize().as_bytes()
+    }
+
+    /// Build a Phase-1 (Locked) envelope. `previous_phase_receipt_hash` is
+    /// always `None` for Phase 1.
+    pub fn new_locked(
+        bridge_id: [u8; 32],
+        src_federation: [u8; 32],
+        dst_federation: [u8; 32],
+        block_height: u64,
+        nullifier: [u8; 32],
+        asset_type: u64,
+        value: u64,
+        timeout_height: u64,
+        spending_proof_digest: [u8; 32],
+    ) -> Self {
+        Self {
+            version: Self::VERSION,
+            phase: BridgePhase::Locked,
+            bridge_id,
+            src_federation,
+            dst_federation,
+            block_height,
+            previous_phase_receipt_hash: None,
+            payload: BridgePhasePayload::Locked {
+                nullifier,
+                asset_type,
+                value,
+                timeout_height,
+                spending_proof_digest,
+            },
+        }
+    }
+
+    /// Build a Phase-2 (Witnessed) envelope. Must reference a Phase-1
+    /// envelope's `body_hash` via `prior_lock_hash`.
+    pub fn new_witnessed(
+        bridge_id: [u8; 32],
+        src_federation: [u8; 32],
+        dst_federation: [u8; 32],
+        block_height: u64,
+        prior_lock_hash: [u8; 32],
+        mint_height: u64,
+        mint_commitment: [u8; 32],
+    ) -> Self {
+        Self {
+            version: Self::VERSION,
+            phase: BridgePhase::Witnessed,
+            bridge_id,
+            src_federation,
+            dst_federation,
+            block_height,
+            previous_phase_receipt_hash: Some(prior_lock_hash),
+            payload: BridgePhasePayload::Witnessed {
+                mint_height,
+                mint_commitment,
+            },
+        }
+    }
+
+    /// Build a Phase-3 (Finalized) envelope. References the Phase-2
+    /// (Witnessed) envelope's body_hash.
+    pub fn new_finalized(
+        bridge_id: [u8; 32],
+        src_federation: [u8; 32],
+        dst_federation: [u8; 32],
+        block_height: u64,
+        prior_witness_hash: [u8; 32],
+        finalize_height: u64,
+        post_nullifier_root: [u8; 32],
+    ) -> Self {
+        Self {
+            version: Self::VERSION,
+            phase: BridgePhase::Finalized,
+            bridge_id,
+            src_federation,
+            dst_federation,
+            block_height,
+            previous_phase_receipt_hash: Some(prior_witness_hash),
+            payload: BridgePhasePayload::Finalized {
+                finalize_height,
+                post_nullifier_root,
+            },
+        }
+    }
+
+    /// Build a Phase-4 (Refunded) envelope. References the Phase-1
+    /// (Locked) envelope's body_hash (NOT a Phase 2 — refund is the
+    /// alternative branch).
+    pub fn new_refunded(
+        bridge_id: [u8; 32],
+        src_federation: [u8; 32],
+        dst_federation: [u8; 32],
+        block_height: u64,
+        prior_lock_hash: [u8; 32],
+        refund_height: u64,
+    ) -> Self {
+        Self {
+            version: Self::VERSION,
+            phase: BridgePhase::Refunded,
+            bridge_id,
+            src_federation,
+            dst_federation,
+            block_height,
+            previous_phase_receipt_hash: Some(prior_lock_hash),
+            payload: BridgePhasePayload::Refunded { refund_height },
+        }
+    }
+}
+
+/// Errors specific to the phased bridge receipt protocol.
+///
+/// Distinct from `BridgeError` so callers can match on the structural
+/// reasons (replay vs. non-monotone advancement vs. unknown bridge).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BridgePhaseError {
+    /// A receipt for an unknown bridge_id was presented for a phase
+    /// that requires a prior phase.
+    UnknownBridge { bridge_id: [u8; 32] },
+    /// Phase 1 was issued for a bridge_id that already has a Phase 1.
+    DuplicateLock { bridge_id: [u8; 32] },
+    /// The receipt's `phase` does not legally follow the bridge's last
+    /// recorded phase (covers same-phase replay, out-of-order, and
+    /// terminal-phase advancement).
+    NonMonotoneAdvancement {
+        bridge_id: [u8; 32],
+        last_phase: BridgePhase,
+        attempted_phase: BridgePhase,
+    },
+    /// The receipt's `previous_phase_receipt_hash` does not match the
+    /// stored body_hash of the prior phase.
+    PreviousPhaseHashMismatch {
+        bridge_id: [u8; 32],
+        expected: [u8; 32],
+        actual: Option<[u8; 32]>,
+    },
+    /// The envelope's payload variant disagrees with its `phase` field.
+    PayloadPhaseMismatch {
+        envelope_phase: BridgePhase,
+        payload_phase: BridgePhase,
+    },
+    /// The envelope's bridge_id does not match the expected value (e.g.
+    /// Phase-2 envelope's bridge_id differs from Phase-1's).
+    BridgeIdMismatch {
+        expected: [u8; 32],
+        actual: [u8; 32],
+    },
+}
+
+impl core::fmt::Display for BridgePhaseError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            BridgePhaseError::UnknownBridge { .. } => {
+                write!(f, "no bridge_id recorded for this advancement")
+            }
+            BridgePhaseError::DuplicateLock { .. } => {
+                write!(f, "bridge already has a Phase-1 lock recorded")
+            }
+            BridgePhaseError::NonMonotoneAdvancement {
+                last_phase,
+                attempted_phase,
+                ..
+            } => {
+                write!(
+                    f,
+                    "non-monotone phase advancement: last={:?}, attempted={:?}",
+                    last_phase, attempted_phase
+                )
+            }
+            BridgePhaseError::PreviousPhaseHashMismatch { .. } => {
+                write!(f, "previous_phase_receipt_hash mismatch")
+            }
+            BridgePhaseError::PayloadPhaseMismatch {
+                envelope_phase,
+                payload_phase,
+            } => {
+                write!(
+                    f,
+                    "envelope phase={:?} but payload is {:?}",
+                    envelope_phase, payload_phase
+                )
+            }
+            BridgePhaseError::BridgeIdMismatch { .. } => {
+                write!(f, "bridge_id mismatch across phases")
+            }
+        }
+    }
+}
+
+impl std::error::Error for BridgePhaseError {}
+
+/// Per-bridge phase log enforcing monotone advancement and replay rejection.
+///
+/// Maps `bridge_id -> (last_phase, last_body_hash)`. On admission, an
+/// envelope must:
+///
+/// 1. Carry a `payload.phase() == envelope.phase`.
+/// 2. If `phase == Locked`, the bridge_id must not already be present.
+/// 3. Otherwise, the bridge_id must be present, the new phase must be in
+///    `last_phase.next_valid()`, and `previous_phase_receipt_hash` must
+///    equal the stored `last_body_hash`.
+///
+/// This is the "race condition" defense (Phase 3 + Phase 4 cannot both
+/// be recorded for the same bridge: once Refunded is logged, Finalized
+/// fails monotone-check; once Finalized is logged, Refunded fails too).
+#[derive(Clone, Debug, Default)]
+pub struct BridgePhaseLog {
+    entries: HashMap<[u8; 32], (BridgePhase, [u8; 32])>,
+}
+
+impl BridgePhaseLog {
+    /// Create an empty phase log.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Number of bridges tracked.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether the log is empty.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Look up the last recorded phase for a bridge.
+    pub fn get(&self, bridge_id: &[u8; 32]) -> Option<(BridgePhase, [u8; 32])> {
+        self.entries.get(bridge_id).copied()
+    }
+
+    /// Admit a phase envelope.
+    ///
+    /// On success, the log is updated to (envelope.phase, envelope.body_hash()).
+    /// On failure, the log is unchanged.
+    pub fn admit(&mut self, envelope: &BridgeReceiptEnvelope) -> Result<(), BridgePhaseError> {
+        // 0. Envelope's payload phase tag must match its envelope phase.
+        let payload_phase = envelope.payload.phase();
+        if payload_phase != envelope.phase {
+            return Err(BridgePhaseError::PayloadPhaseMismatch {
+                envelope_phase: envelope.phase,
+                payload_phase,
+            });
+        }
+
+        let body_hash = envelope.body_hash();
+        let bridge_id = envelope.bridge_id;
+
+        match envelope.phase {
+            BridgePhase::Locked => {
+                // Phase 1 must be the first phase.
+                if envelope.previous_phase_receipt_hash.is_some() {
+                    return Err(BridgePhaseError::PreviousPhaseHashMismatch {
+                        bridge_id,
+                        expected: [0u8; 32],
+                        actual: envelope.previous_phase_receipt_hash,
+                    });
+                }
+                if self.entries.contains_key(&bridge_id) {
+                    return Err(BridgePhaseError::DuplicateLock { bridge_id });
+                }
+                self.entries
+                    .insert(bridge_id, (BridgePhase::Locked, body_hash));
+                Ok(())
+            }
+            // Phases 2..4 require a prior entry and a monotone transition.
+            phase => {
+                let (last_phase, last_hash) = self
+                    .entries
+                    .get(&bridge_id)
+                    .copied()
+                    .ok_or(BridgePhaseError::UnknownBridge { bridge_id })?;
+                if !last_phase.next_valid().contains(&phase) {
+                    return Err(BridgePhaseError::NonMonotoneAdvancement {
+                        bridge_id,
+                        last_phase,
+                        attempted_phase: phase,
+                    });
+                }
+                match envelope.previous_phase_receipt_hash {
+                    Some(h) if h == last_hash => {}
+                    other => {
+                        return Err(BridgePhaseError::PreviousPhaseHashMismatch {
+                            bridge_id,
+                            expected: last_hash,
+                            actual: other,
+                        });
+                    }
+                }
+                self.entries.insert(bridge_id, (phase, body_hash));
+                Ok(())
+            }
+        }
+    }
+}
+
 /// Initiate a bridge: lock the note for cross-federation transfer.
 ///
 /// This is Phase 1 of the two-phase bridge protocol. The note is locked
@@ -1552,5 +2079,312 @@ mod tests {
         let other_key = ed25519_dalek::SigningKey::from_bytes(&[0x99u8; 32]);
         let other_vk = other_key.verifying_key();
         assert!(!verify_bridge_receipt(&receipt, &[other_vk.to_bytes()]));
+    }
+
+    // ========================================================================
+    // Stage 9 P3.D: BridgeReceiptEnvelope phase chain tests
+    // ========================================================================
+
+    fn lock_envelope(bridge_id: [u8; 32]) -> BridgeReceiptEnvelope {
+        BridgeReceiptEnvelope::new_locked(
+            bridge_id,
+            [0xAA; 32],         // src
+            [0xBB; 32],         // dst
+            10,                 // block_height
+            [0x01; 32],         // nullifier
+            7,                  // asset_type
+            500,                // value
+            100,                // timeout_height
+            [0x77; 32],         // spending_proof_digest
+        )
+    }
+
+    #[test]
+    fn bridge_envelope_payload_phase_matches() {
+        let lock = lock_envelope([0xC1; 32]);
+        assert_eq!(lock.phase, BridgePhase::Locked);
+        assert_eq!(lock.payload.phase(), BridgePhase::Locked);
+    }
+
+    #[test]
+    fn bridge_envelope_body_hash_changes_with_phase() {
+        let lock = lock_envelope([0xC1; 32]);
+        let lock_hash = lock.body_hash();
+
+        let witness = BridgeReceiptEnvelope::new_witnessed(
+            lock.bridge_id,
+            lock.src_federation,
+            lock.dst_federation,
+            12,
+            lock_hash,
+            13,
+            [0x44; 32],
+        );
+        let witness_hash = witness.body_hash();
+        assert_ne!(lock_hash, witness_hash, "phases must produce distinct body hashes");
+
+        // Same envelope re-built must hash identically.
+        let lock2 = lock_envelope([0xC1; 32]);
+        assert_eq!(lock_hash, lock2.body_hash(), "body_hash must be deterministic");
+    }
+
+    #[test]
+    fn bridge_phase_log_happy_path_lock_witness_finalize() {
+        let bridge_id = compute_bridge_id(&[0x01; 32], &[0xAA; 32], &[0xBB; 32], 1);
+        let mut log = BridgePhaseLog::new();
+
+        let lock = lock_envelope(bridge_id);
+        let lock_hash = lock.body_hash();
+        log.admit(&lock).expect("lock admission");
+
+        let witness = BridgeReceiptEnvelope::new_witnessed(
+            bridge_id, [0xAA; 32], [0xBB; 32], 12, lock_hash, 13, [0x44; 32],
+        );
+        let witness_hash = witness.body_hash();
+        log.admit(&witness).expect("witness admission after lock");
+
+        let finalize = BridgeReceiptEnvelope::new_finalized(
+            bridge_id, [0xAA; 32], [0xBB; 32], 15, witness_hash, 16, [0xEE; 32],
+        );
+        log.admit(&finalize).expect("finalize admission after witness");
+
+        let (last_phase, _) = log.get(&bridge_id).unwrap();
+        assert_eq!(last_phase, BridgePhase::Finalized);
+    }
+
+    #[test]
+    fn bridge_phase_log_happy_path_lock_refund() {
+        let bridge_id = compute_bridge_id(&[0x02; 32], &[0xAA; 32], &[0xBB; 32], 2);
+        let mut log = BridgePhaseLog::new();
+
+        let lock = lock_envelope(bridge_id);
+        let lock_hash = lock.body_hash();
+        log.admit(&lock).expect("lock admission");
+
+        let refund = BridgeReceiptEnvelope::new_refunded(
+            bridge_id, [0xAA; 32], [0xBB; 32], 200, lock_hash, 201,
+        );
+        log.admit(&refund).expect("refund admission after lock");
+
+        let (last_phase, _) = log.get(&bridge_id).unwrap();
+        assert_eq!(last_phase, BridgePhase::Refunded);
+    }
+
+    /// Replay rejection: admitting the same phase twice must fail
+    /// (DuplicateLock for Phase 1, NonMonotoneAdvancement for others).
+    #[test]
+    fn bridge_phase_log_rejects_replay_same_phase() {
+        let bridge_id = compute_bridge_id(&[0x03; 32], &[0xAA; 32], &[0xBB; 32], 3);
+        let mut log = BridgePhaseLog::new();
+
+        let lock = lock_envelope(bridge_id);
+        log.admit(&lock).expect("first lock admission");
+
+        // Second Phase-1 lock for same bridge_id — must fail.
+        let err = log.admit(&lock).expect_err("duplicate lock must fail");
+        assert!(matches!(err, BridgePhaseError::DuplicateLock { .. }));
+
+        // Advance to witness, then try to witness again.
+        let lock_hash = lock.body_hash();
+        let witness = BridgeReceiptEnvelope::new_witnessed(
+            bridge_id, [0xAA; 32], [0xBB; 32], 12, lock_hash, 13, [0x44; 32],
+        );
+        log.admit(&witness).expect("first witness");
+        // Replay witness — its previous_hash matches but the log is now at
+        // Witnessed, which doesn't allow Witnessed as a next phase. So this
+        // must surface as a NonMonotoneAdvancement error.
+        let err = log.admit(&witness).expect_err("witness replay must fail");
+        assert!(
+            matches!(
+                err,
+                BridgePhaseError::NonMonotoneAdvancement {
+                    last_phase: BridgePhase::Witnessed,
+                    attempted_phase: BridgePhase::Witnessed,
+                    ..
+                }
+            ),
+            "expected NonMonotoneAdvancement, got {err:?}"
+        );
+    }
+
+    /// Race-condition defense: Finalize and Refund cannot both be admitted.
+    /// Whichever arrives first wins; the other is rejected as non-monotone.
+    #[test]
+    fn bridge_phase_log_finalize_refund_race_resolved_by_log() {
+        // Variant A: refund first, then finalize must fail.
+        let bridge_id_a = compute_bridge_id(&[0x04; 32], &[0xAA; 32], &[0xBB; 32], 4);
+        let mut log_a = BridgePhaseLog::new();
+        let lock_a = lock_envelope(bridge_id_a);
+        let lock_hash_a = lock_a.body_hash();
+        log_a.admit(&lock_a).unwrap();
+        // Refund (legal after Locked).
+        let refund_a = BridgeReceiptEnvelope::new_refunded(
+            bridge_id_a, [0xAA; 32], [0xBB; 32], 200, lock_hash_a, 201,
+        );
+        log_a.admit(&refund_a).expect("refund after lock is legal");
+        // Now a witness from a slow destination arrives — must be rejected
+        // (Refunded is terminal; next_valid() is empty).
+        let witness_a = BridgeReceiptEnvelope::new_witnessed(
+            bridge_id_a, [0xAA; 32], [0xBB; 32], 195, lock_hash_a, 196, [0x55; 32],
+        );
+        let err = log_a
+            .admit(&witness_a)
+            .expect_err("witness after refund must fail");
+        assert!(
+            matches!(
+                err,
+                BridgePhaseError::NonMonotoneAdvancement {
+                    last_phase: BridgePhase::Refunded,
+                    attempted_phase: BridgePhase::Witnessed,
+                    ..
+                }
+            ),
+            "expected NonMonotoneAdvancement, got {err:?}"
+        );
+
+        // Variant B: witness+finalize first, then refund must fail.
+        let bridge_id_b = compute_bridge_id(&[0x05; 32], &[0xAA; 32], &[0xBB; 32], 5);
+        let mut log_b = BridgePhaseLog::new();
+        let lock_b = lock_envelope(bridge_id_b);
+        let lock_hash_b = lock_b.body_hash();
+        log_b.admit(&lock_b).unwrap();
+        let witness_b = BridgeReceiptEnvelope::new_witnessed(
+            bridge_id_b, [0xAA; 32], [0xBB; 32], 12, lock_hash_b, 13, [0x44; 32],
+        );
+        let witness_hash_b = witness_b.body_hash();
+        log_b.admit(&witness_b).unwrap();
+        let finalize_b = BridgeReceiptEnvelope::new_finalized(
+            bridge_id_b,
+            [0xAA; 32],
+            [0xBB; 32],
+            15,
+            witness_hash_b,
+            16,
+            [0xEE; 32],
+        );
+        log_b.admit(&finalize_b).expect("finalize after witness");
+        // Late refund — must fail (Finalized is terminal).
+        let refund_b = BridgeReceiptEnvelope::new_refunded(
+            bridge_id_b, [0xAA; 32], [0xBB; 32], 200, lock_hash_b, 201,
+        );
+        let err = log_b
+            .admit(&refund_b)
+            .expect_err("refund after finalize must fail");
+        assert!(
+            matches!(
+                err,
+                BridgePhaseError::NonMonotoneAdvancement {
+                    last_phase: BridgePhase::Finalized,
+                    attempted_phase: BridgePhase::Refunded,
+                    ..
+                }
+            ),
+            "expected NonMonotoneAdvancement, got {err:?}"
+        );
+    }
+
+    /// Witness with a corrupt `previous_phase_receipt_hash` must be
+    /// rejected (chain-link forgery defense).
+    #[test]
+    fn bridge_phase_log_rejects_chain_link_forgery() {
+        let bridge_id = compute_bridge_id(&[0x06; 32], &[0xAA; 32], &[0xBB; 32], 6);
+        let mut log = BridgePhaseLog::new();
+        let lock = lock_envelope(bridge_id);
+        log.admit(&lock).unwrap();
+
+        // Forged witness: claims a different prior hash.
+        let mut witness = BridgeReceiptEnvelope::new_witnessed(
+            bridge_id, [0xAA; 32], [0xBB; 32], 12, [0xDE; 32], 13, [0x44; 32],
+        );
+        let err = log.admit(&witness).expect_err("forged witness must fail");
+        assert!(matches!(
+            err,
+            BridgePhaseError::PreviousPhaseHashMismatch { .. }
+        ));
+
+        // Same witness with `None` previous_phase_receipt_hash — also fails.
+        witness.previous_phase_receipt_hash = None;
+        let err = log.admit(&witness).expect_err("missing prior hash must fail");
+        assert!(matches!(
+            err,
+            BridgePhaseError::PreviousPhaseHashMismatch { .. }
+        ));
+    }
+
+    /// Payload variant must match envelope.phase or admission fails.
+    #[test]
+    fn bridge_phase_log_rejects_payload_phase_mismatch() {
+        let bridge_id = [0x07; 32];
+        let mut log = BridgePhaseLog::new();
+
+        // Hand-construct a Locked envelope carrying a Witnessed payload.
+        let bogus = BridgeReceiptEnvelope {
+            version: BridgeReceiptEnvelope::VERSION,
+            phase: BridgePhase::Locked,
+            bridge_id,
+            src_federation: [0xAA; 32],
+            dst_federation: [0xBB; 32],
+            block_height: 10,
+            previous_phase_receipt_hash: None,
+            payload: BridgePhasePayload::Witnessed {
+                mint_height: 13,
+                mint_commitment: [0x44; 32],
+            },
+        };
+
+        let err = log
+            .admit(&bogus)
+            .expect_err("payload/phase mismatch must fail");
+        assert!(matches!(
+            err,
+            BridgePhaseError::PayloadPhaseMismatch { .. }
+        ));
+    }
+
+    /// Witnessing for an unknown bridge_id must fail.
+    #[test]
+    fn bridge_phase_log_rejects_witness_without_lock() {
+        let bridge_id = compute_bridge_id(&[0x08; 32], &[0xAA; 32], &[0xBB; 32], 8);
+        let mut log = BridgePhaseLog::new();
+
+        let witness = BridgeReceiptEnvelope::new_witnessed(
+            bridge_id, [0xAA; 32], [0xBB; 32], 12, [0xDE; 32], 13, [0x44; 32],
+        );
+        let err = log
+            .admit(&witness)
+            .expect_err("witness without lock must fail");
+        assert!(matches!(err, BridgePhaseError::UnknownBridge { .. }));
+    }
+
+    /// Compute_bridge_id must be deterministic AND distinguishable across
+    /// changes to any input.
+    #[test]
+    fn compute_bridge_id_distinguishes_inputs() {
+        let id = compute_bridge_id(&[0x01; 32], &[0xAA; 32], &[0xBB; 32], 1);
+        assert_eq!(
+            id,
+            compute_bridge_id(&[0x01; 32], &[0xAA; 32], &[0xBB; 32], 1),
+            "deterministic"
+        );
+        assert_ne!(
+            id,
+            compute_bridge_id(&[0x02; 32], &[0xAA; 32], &[0xBB; 32], 1),
+            "nullifier"
+        );
+        assert_ne!(
+            id,
+            compute_bridge_id(&[0x01; 32], &[0xCC; 32], &[0xBB; 32], 1),
+            "src"
+        );
+        assert_ne!(
+            id,
+            compute_bridge_id(&[0x01; 32], &[0xAA; 32], &[0xDD; 32], 1),
+            "dst"
+        );
+        assert_ne!(
+            id,
+            compute_bridge_id(&[0x01; 32], &[0xAA; 32], &[0xBB; 32], 2),
+            "nonce"
+        );
     }
 }
