@@ -1802,8 +1802,16 @@ impl TurnExecutor {
                     Effect::CreateCell { .. } => {
                         push_pending_shim(vm_effects, 0x104u32);
                     }
-                    Effect::CreateSealPair { .. } => {
-                        push_pending_shim(vm_effects, 0x105u32);
+                    Effect::CreateSealPair { sealer_holder, unsealer_holder } => {
+                        // Stage 3: real AIR coverage. Hash both holders into
+                        // a single pair_hash bound via effects_hash.
+                        let mut hasher = blake3::Hasher::new();
+                        hasher.update(sealer_holder.as_bytes());
+                        hasher.update(unsealer_holder.as_bytes());
+                        let pair_hash_bytes = hasher.finalize();
+                        vm_effects.push(VmEffect::CreateSealPair {
+                            pair_hash: hash_to_bb(pair_hash_bytes.as_bytes()),
+                        });
                     }
                     Effect::EmitEvent { cell, event } if cell == cell_id => {
                         // Stage 3: real AIR coverage. event_hash binds the
@@ -1822,10 +1830,16 @@ impl TurnExecutor {
                         push_pending_shim(vm_effects, 0x107u32);
                     }
                     Effect::RefreshDelegation => {
-                        push_pending_shim(vm_effects, 0x108u32);
+                        // Stage 3: real AIR coverage. No params on the
+                        // runtime side; selector alone records intent.
+                        vm_effects.push(VmEffect::RefreshDelegation);
                     }
-                    Effect::RevokeDelegation { .. } => {
-                        push_pending_shim(vm_effects, 0x109u32);
+                    Effect::RevokeDelegation { child } => {
+                        // Stage 3: real AIR coverage. child_hash binds the
+                        // target cell into effects_hash.
+                        vm_effects.push(VmEffect::RevokeDelegation {
+                            child_hash: hash_to_bb(child.as_bytes()),
+                        });
                     }
                     Effect::IncrementNonce { cell } if cell == cell_id => {
                         // No AIR effect needed — nonce increments are implicit

@@ -99,17 +99,17 @@ use crate::stark::{BoundaryConstraint, StarkAir};
 // ============================================================================
 
 /// Total trace width.
-/// Layout: 28 selectors + 14 state_before + 8 params + 14 state_after + 23 aux = 87.
+/// Layout: 31 selectors + 14 state_before + 8 params + 14 state_after + 23 aux = 90.
 /// (aux[8..10] = state commitment intermediates;
 ///  aux[11] = cumulative custom-effect count (sum-check, Stage 1);
 ///  aux[12..20] = old_reserved bit-decomposition for sealing honesty (Stage 2);
 ///  aux[20] = mode_flag bit;
 ///  aux[21] = ResizeQueue delta sign (Stage 2: 0=grow, 1=shrink);
 ///  aux[22] = ResizeQueue |delta| magnitude (Stage 2))
-pub const EFFECT_VM_WIDTH: usize = 87;
+pub const EFFECT_VM_WIDTH: usize = 90;
 
 /// Number of effect types (selectors).
-pub const NUM_EFFECTS: usize = 28;
+pub const NUM_EFFECTS: usize = 31;
 
 /// Selector column indices.
 pub mod sel {
@@ -172,6 +172,17 @@ pub mod sel {
     /// enforces full state passthrough and the new VK hash is bound into
     /// effects_hash.
     pub const SET_VERIFICATION_KEY: usize = 27;
+    /// CreateSealPair: register a new sealer/unsealer brand pair. State
+    /// passthrough; pair_hash binds (sealer_holder, unsealer_holder) into
+    /// effects_hash.
+    pub const CREATE_SEAL_PAIR: usize = 28;
+    /// RefreshDelegation: bump the cell's delegation epoch. No VM state
+    /// columns track the epoch directly, so this is a passthrough variant
+    /// (the epoch lives off-trace); the selector alone records the intent.
+    pub const REFRESH_DELEGATION: usize = 29;
+    /// RevokeDelegation: invalidate a child cell's delegation snapshot.
+    /// State passthrough; child_hash binds the target into effects_hash.
+    pub const REVOKE_DELEGATION: usize = 30;
 }
 
 /// State column offsets (relative to state start).
@@ -554,6 +565,16 @@ pub enum Effect {
     /// state passthrough and `vk_hash` binds the new VK into effects_hash.
     /// `vk_hash == 0` represents "set to None" (revoke the VK).
     SetVerificationKey { vk_hash: BabyBear },
+    /// CreateSealPair: register a new sealer/unsealer brand pair. Same
+    /// passthrough shape; `pair_hash` is BLAKE3(sealer_holder ‖ unsealer_holder).
+    CreateSealPair { pair_hash: BabyBear },
+    /// RefreshDelegation: bump the delegation epoch. No params (the cell's
+    /// epoch lives off-trace); selector alone records the intent. State
+    /// passthrough.
+    RefreshDelegation,
+    /// RevokeDelegation: invalidate a child cell's delegation. State
+    /// passthrough; `child_hash` binds the target cell into effects_hash.
+    RevokeDelegation { child_hash: BabyBear },
     /// Spend a note (reveal nullifier, credit balance).
     NoteSpend { nullifier: BabyBear, value: u64 },
     /// Create a note (create commitment, debit balance).
@@ -976,6 +997,17 @@ pub fn compute_effects_hash(effects: &[Effect]) -> (BabyBear, BabyBear) {
             Effect::SetVerificationKey { vk_hash } => {
                 hasher_inputs.push(BabyBear::new(27));
                 hasher_inputs.push(*vk_hash);
+            }
+            Effect::CreateSealPair { pair_hash } => {
+                hasher_inputs.push(BabyBear::new(28));
+                hasher_inputs.push(*pair_hash);
+            }
+            Effect::RefreshDelegation => {
+                hasher_inputs.push(BabyBear::new(29));
+            }
+            Effect::RevokeDelegation { child_hash } => {
+                hasher_inputs.push(BabyBear::new(30));
+                hasher_inputs.push(*child_hash);
             }
             Effect::NoteSpend { nullifier, value } => {
                 hasher_inputs.push(BabyBear::new(4));
@@ -1721,6 +1753,35 @@ impl StarkAir for EffectVmAir {
                     - local[STATE_BEFORE_BASE + state::FIELD_BASE + i]);
             combined = combined + alpha_pow * c;
             alpha_pow = alpha_pow * alpha;
+        }
+
+        // -- CreateSealPair, RefreshDelegation, RevokeDelegation: all the
+        //    same passthrough shape as EmitEvent / SetPermissions /
+        //    SetVerificationKey. State columns must be unchanged; only
+        //    nonce ticks. The variant-specific param (or absence) lives in
+        //    PARAM_BASE+0 and contributes via effects_hash.
+        for s_sel_idx in [
+            sel::CREATE_SEAL_PAIR,
+            sel::REFRESH_DELEGATION,
+            sel::REVOKE_DELEGATION,
+        ] {
+            let s_v = local[s_sel_idx];
+            let c_bal_lo = s_v * (new_bal_lo - old_bal_lo);
+            combined = combined + alpha_pow * c_bal_lo;
+            alpha_pow = alpha_pow * alpha;
+            let c_bal_hi = s_v * (new_bal_hi - old_bal_hi);
+            combined = combined + alpha_pow * c_bal_hi;
+            alpha_pow = alpha_pow * alpha;
+            let c_cap = s_v * (new_cap_root - old_cap_root);
+            combined = combined + alpha_pow * c_cap;
+            alpha_pow = alpha_pow * alpha;
+            for i in 0..8 {
+                let c = s_v
+                    * (local[STATE_AFTER_BASE + state::FIELD_BASE + i]
+                        - local[STATE_BEFORE_BASE + state::FIELD_BASE + i]);
+                combined = combined + alpha_pow * c;
+                alpha_pow = alpha_pow * alpha;
+            }
         }
 
         // -- RevokeCapability: capability_root update --
@@ -3371,6 +3432,9 @@ pub fn generate_effect_vm_trace_ext(
             Effect::EmitEvent { .. } => sel::EMIT_EVENT,
             Effect::SetPermissions { .. } => sel::SET_PERMISSIONS,
             Effect::SetVerificationKey { .. } => sel::SET_VERIFICATION_KEY,
+            Effect::CreateSealPair { .. } => sel::CREATE_SEAL_PAIR,
+            Effect::RefreshDelegation => sel::REFRESH_DELEGATION,
+            Effect::RevokeDelegation { .. } => sel::REVOKE_DELEGATION,
         };
         row[sel_idx] = BabyBear::ONE;
 
@@ -3445,6 +3509,18 @@ pub fn generate_effect_vm_trace_ext(
             Effect::SetVerificationKey { vk_hash } => {
                 // Same shape as SetPermissions: VK lives off-trace.
                 row[PARAM_BASE + 0] = *vk_hash;
+                new_state.nonce += 1;
+            }
+            Effect::CreateSealPair { pair_hash } => {
+                row[PARAM_BASE + 0] = *pair_hash;
+                new_state.nonce += 1;
+            }
+            Effect::RefreshDelegation => {
+                // No params; selector alone records the intent.
+                new_state.nonce += 1;
+            }
+            Effect::RevokeDelegation { child_hash } => {
+                row[PARAM_BASE + 0] = *child_hash;
                 new_state.nonce += 1;
             }
             Effect::NoteSpend { nullifier, value } => {
@@ -4590,6 +4666,30 @@ mod tests {
                 "SetField constraints non-zero with alpha={}: c={}",
                 alpha_val,
                 c.0
+            );
+        }
+    }
+
+    #[test]
+    fn test_passthrough_variants_verify() {
+        // CreateSealPair, RefreshDelegation, RevokeDelegation all share the
+        // EmitEvent passthrough shape. One round-trip each.
+        for effect in [
+            Effect::CreateSealPair { pair_hash: BabyBear::new(0x111) },
+            Effect::RefreshDelegation,
+            Effect::RevokeDelegation { child_hash: BabyBear::new(0x222) },
+        ] {
+            let state = make_initial_state(700);
+            let effects = vec![effect.clone()];
+            let (trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
+            let air = EffectVmAir::new(trace.len());
+            let proof = prove(&air, &trace, &public_inputs);
+            let result = verify(&air, &proof, &public_inputs);
+            assert!(
+                result.is_ok(),
+                "Passthrough variant {:?} should verify: {:?}",
+                effect,
+                result.err()
             );
         }
     }
