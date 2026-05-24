@@ -225,33 +225,38 @@ impl QueueTransaction {
     }
 
     /// Compute the transaction hash (for Effect VM binding).
-    /// This hash can be used as a public input to prove the atomic operation.
+    ///
+    /// Routes through Commitment<QueueTransactionMarker> so the Effect VM
+    /// can absorb the Poseidon2 form as a public input. Returns the BLAKE3
+    /// form for back-compat; dual-form via `tx_hash_dual`.
     pub fn tx_hash(&self) -> [u8; 32] {
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(b"queue_tx_v1");
+        self.tx_hash_dual().blake3
+    }
 
+    /// Dual-form (BLAKE3 + Poseidon2) transaction commitment for Effect VM use.
+    pub fn tx_hash_dual(&self) -> crate::commitment::QueueTransactionCommitment {
+        let mut canonical = Vec::new();
         for op in &self.ops {
             match op {
                 QueueOp::Enqueue { queue_id, entry } => {
-                    hasher.update(b"enqueue");
-                    hasher.update(queue_id);
-                    hasher.update(&entry.content_hash);
-                    hasher.update(&entry.sender);
-                    hasher.update(&entry.deposit.to_le_bytes());
+                    canonical.extend_from_slice(b"enqueue");
+                    canonical.extend_from_slice(queue_id);
+                    canonical.extend_from_slice(&entry.content_hash);
+                    canonical.extend_from_slice(&entry.sender);
+                    canonical.extend_from_slice(&entry.deposit.to_le_bytes());
                 }
                 QueueOp::Dequeue { queue_id } => {
-                    hasher.update(b"dequeue");
-                    hasher.update(queue_id);
+                    canonical.extend_from_slice(b"dequeue");
+                    canonical.extend_from_slice(queue_id);
                 }
                 QueueOp::AssertRoot { queue_id, expected_root } => {
-                    hasher.update(b"assert_root");
-                    hasher.update(queue_id);
-                    hasher.update(expected_root);
+                    canonical.extend_from_slice(b"assert_root");
+                    canonical.extend_from_slice(queue_id);
+                    canonical.extend_from_slice(expected_root);
                 }
             }
         }
-
-        *hasher.finalize().as_bytes()
+        crate::commitment::Commitment::seal(&canonical[..])
     }
 
     /// Rollback all queues to their snapshots.

@@ -438,7 +438,7 @@ mod tests {
         let root = op.receive_message(&owner, msg, 200, 10).unwrap();
 
         // Root should be non-empty (not the empty queue root).
-        assert_ne!(root, *blake3::hash(b"empty_queue").as_bytes());
+        assert_ne!(root, crate::queue::empty_queue_root());
 
         // Should have 1 pending message.
         assert_eq!(op.total_pending(), 1);
@@ -678,7 +678,7 @@ mod tests {
 
         // Empty root.
         let empty_root = op.inbox_root(&owner).unwrap();
-        assert_eq!(empty_root, *blake3::hash(b"empty_queue").as_bytes());
+        assert_eq!(empty_root, crate::queue::empty_queue_root());
 
         // Enqueue changes root.
         let msg1 = test_msg([0xAA; 32], b"first");

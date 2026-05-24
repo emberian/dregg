@@ -285,73 +285,85 @@ fn apply_transform(transform: &TransformFn, mut entry: QueueEntry) -> QueueEntry
 }
 
 /// Compute the pipeline identity hash from its stages.
+///
+/// Routes through Commitment<PipelineSpecMarker>. Returns BLAKE3 form;
+/// dual-form via `compute_pipeline_id_dual`.
 fn compute_pipeline_id(stages: &[PipelineStage]) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"pipeline_v1");
+    compute_pipeline_id_dual(stages).blake3
+}
 
+/// Dual-form (BLAKE3 + Poseidon2) pipeline identity commitment.
+pub fn compute_pipeline_id_dual(
+    stages: &[PipelineStage],
+) -> crate::commitment::PipelineSpecCommitment {
+    let mut canonical = Vec::new();
     for stage in stages {
-        match stage {
-            PipelineStage::Source { queue_id } => {
-                hasher.update(b"source");
-                hasher.update(queue_id);
-            }
-            PipelineStage::Filter { predicate } => {
-                hasher.update(b"filter");
-                hash_predicate(&mut hasher, predicate);
-            }
-            PipelineStage::Transform { transform } => {
-                hasher.update(b"transform");
-                match transform {
-                    TransformFn::Identity => hasher.update(b"identity"),
-                    TransformFn::Anonymize => hasher.update(b"anonymize"),
-                    TransformFn::Tag { tag } => {
-                        hasher.update(b"tag");
-                        hasher.update(tag)
-                    }
-                };
-            }
-            PipelineStage::Router { routes } => {
-                hasher.update(b"router");
-                for (pred, sink_id) in routes {
-                    hash_predicate(&mut hasher, pred);
-                    hasher.update(sink_id);
+        canonicalize_stage(&mut canonical, stage);
+    }
+    crate::commitment::Commitment::seal(&canonical[..])
+}
+
+fn canonicalize_stage(buf: &mut Vec<u8>, stage: &PipelineStage) {
+    match stage {
+        PipelineStage::Source { queue_id } => {
+            buf.extend_from_slice(b"source");
+            buf.extend_from_slice(queue_id);
+        }
+        PipelineStage::Filter { predicate } => {
+            buf.extend_from_slice(b"filter");
+            canonicalize_predicate(buf, predicate);
+        }
+        PipelineStage::Transform { transform } => {
+            buf.extend_from_slice(b"transform");
+            match transform {
+                TransformFn::Identity => buf.extend_from_slice(b"identity"),
+                TransformFn::Anonymize => buf.extend_from_slice(b"anonymize"),
+                TransformFn::Tag { tag } => {
+                    buf.extend_from_slice(b"tag");
+                    buf.extend_from_slice(tag);
                 }
             }
-            PipelineStage::Sink { queue_id } => {
-                hasher.update(b"sink");
-                hasher.update(queue_id);
+        }
+        PipelineStage::Router { routes } => {
+            buf.extend_from_slice(b"router");
+            for (pred, sink_id) in routes {
+                canonicalize_predicate(buf, pred);
+                buf.extend_from_slice(sink_id);
             }
-            PipelineStage::FanOut { queue_ids } => {
-                hasher.update(b"fanout");
-                for id in queue_ids {
-                    hasher.update(id);
-                }
+        }
+        PipelineStage::Sink { queue_id } => {
+            buf.extend_from_slice(b"sink");
+            buf.extend_from_slice(queue_id);
+        }
+        PipelineStage::FanOut { queue_ids } => {
+            buf.extend_from_slice(b"fanout");
+            for id in queue_ids {
+                buf.extend_from_slice(id);
             }
         }
     }
-
-    *hasher.finalize().as_bytes()
 }
 
-/// Hash a predicate into a hasher for pipeline identity computation.
-fn hash_predicate(hasher: &mut blake3::Hasher, predicate: &FilterPredicate) {
+/// Canonical-bytes encoding of a predicate, used inside the pipeline-id
+/// commitment computation.
+fn canonicalize_predicate(buf: &mut Vec<u8>, predicate: &FilterPredicate) {
     match predicate {
         FilterPredicate::ContentPrefix(prefix) => {
-            hasher.update(b"content_prefix");
-            hasher.update(prefix);
+            buf.extend_from_slice(b"content_prefix");
+            buf.extend_from_slice(prefix);
         }
         FilterPredicate::Sender(sender) => {
-            hasher.update(b"sender");
-            hasher.update(sender);
+            buf.extend_from_slice(b"sender");
+            buf.extend_from_slice(sender);
         }
         FilterPredicate::MinDeposit(min) => {
-            hasher.update(b"min_deposit");
-            hasher.update(&min.to_le_bytes());
+            buf.extend_from_slice(b"min_deposit");
+            buf.extend_from_slice(&min.to_le_bytes());
         }
         FilterPredicate::Custom { description, hash } => {
-            hasher.update(b"custom");
-            hasher.update(description.as_bytes());
-            hasher.update(hash);
+            buf.extend_from_slice(b"custom");
+            buf.extend_from_slice(description.as_bytes());
+            buf.extend_from_slice(hash);
         }
     }
 }

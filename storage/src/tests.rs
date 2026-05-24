@@ -595,7 +595,7 @@ fn queue_dequeue_proof_verifiable() {
     let (_, proof2) = q.dequeue().unwrap();
     assert!(crate::queue::verify_dequeue_proof(&proof2));
     // After last dequeue, new_root should be the empty root.
-    assert_eq!(proof2.new_root, *blake3::hash(b"empty_queue").as_bytes());
+    assert_eq!(proof2.new_root, crate::queue::empty_queue_root());
 }
 
 // ============================================================================

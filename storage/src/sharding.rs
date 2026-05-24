@@ -166,13 +166,22 @@ impl ShardedQueue {
 }
 
 /// Compute the combined root from all shard roots.
+///
+/// Routes through Commitment<ShardSetMarker> from the typed framework.
+/// Returns the BLAKE3 form; dual-form via `compute_combined_root_dual`.
 fn compute_combined_root(shards: &[MerkleQueue]) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"sharded_queue_v1");
+    compute_combined_root_dual(shards).blake3
+}
+
+/// Dual-form (BLAKE3 + Poseidon2) combined-shard-root commitment.
+pub fn compute_combined_root_dual(
+    shards: &[MerkleQueue],
+) -> crate::commitment::ShardSetCommitment {
+    let mut canonical = Vec::with_capacity(shards.len() * 32);
     for shard in shards {
-        hasher.update(&shard.root());
+        canonical.extend_from_slice(&shard.root());
     }
-    *hasher.finalize().as_bytes()
+    crate::commitment::Commitment::seal(&canonical[..])
 }
 
 // ============================================================================

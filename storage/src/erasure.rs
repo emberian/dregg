@@ -74,9 +74,11 @@ impl ErasureEncoder {
 
         let n_data = data_chunks.len();
 
-        // Emit data chunks.
+        // Emit data chunks. Commitments route through the typed
+        // Commitment<ErasureChunkMarker> framework (BLAKE3 + Poseidon2);
+        // the on-disk wire form stays as a [u8; 32] BLAKE3 hash.
         for (i, chunk_data) in data_chunks.iter().enumerate() {
-            let commitment = *blake3::hash(chunk_data).as_bytes();
+            let commitment = chunk_commitment_dual(chunk_data).blake3;
             chunks.push(ErasureChunk {
                 index: i,
                 data: chunk_data.clone(),
@@ -101,7 +103,7 @@ impl ErasureEncoder {
                     }
                 }
             }
-            let commitment = *blake3::hash(&parity).as_bytes();
+            let commitment = chunk_commitment_dual(&parity).blake3;
             chunks.push(ErasureChunk {
                 index: n_data + p,
                 data: parity,
@@ -196,17 +198,33 @@ impl ErasureEncoder {
 
 /// Verify that a chunk's data matches its commitment.
 pub fn verify_chunk(chunk: &ErasureChunk) -> bool {
-    let computed = *blake3::hash(&chunk.data).as_bytes();
-    computed == chunk.commitment
+    chunk_commitment_dual(&chunk.data).blake3 == chunk.commitment
 }
 
-/// Compute the root commitment for a set of chunks (Merkle root of commitments).
+/// Dual-form commitment for a single erasure chunk's data.
+pub fn chunk_commitment_dual(
+    data: &[u8],
+) -> crate::commitment::ErasureChunkCommitment {
+    crate::commitment::Commitment::seal(data)
+}
+
+/// Compute the root commitment for a set of chunks.
+///
+/// Routes through Commitment<ErasureSetMarker>; returns the BLAKE3 form
+/// wrapped in `ContentHash`. Dual-form via `root_commitment_dual`.
 pub fn root_commitment(chunks: &[ErasureChunk]) -> ContentHash {
-    let mut hasher = blake3::Hasher::new();
+    ContentHash(root_commitment_dual(chunks).blake3)
+}
+
+/// Dual-form combined-root commitment for a set of erasure chunks.
+pub fn root_commitment_dual(
+    chunks: &[ErasureChunk],
+) -> crate::commitment::ErasureSetCommitment {
+    let mut canonical = Vec::with_capacity(chunks.len() * 32);
     for chunk in chunks {
-        hasher.update(&chunk.commitment);
+        canonical.extend_from_slice(&chunk.commitment);
     }
-    ContentHash(*hasher.finalize().as_bytes())
+    crate::commitment::Commitment::seal(&canonical[..])
 }
 
 /// Verify a chunk against a root commitment.

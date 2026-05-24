@@ -347,62 +347,65 @@ impl MerkleQueue {
 
     /// Recompute the Merkle root from all pending entries (head..tail).
     ///
-    /// Uses a binary Merkle tree over blake3 hashes of entry content hashes.
-    /// For an empty queue, the root is blake3(b"empty_queue").
+    /// Per Stage-10 migration (STORAGE-POSEIDON2-AUDIT.md), leaves and the
+    /// root now route through the typed Commitment<T> / MerkleRoot<T>
+    /// framework with proper domain separation. The BLAKE3 wire form is
+    /// preserved as `self.root` for back-compat; a Poseidon2 form is
+    /// available via the typed `MerkleRoot<QueueEntrySetMarker>`.
+    ///
+    /// For an empty queue, the root is `MerkleRoot::empty().blake3_root`
+    /// (the all-zeros sentinel) — NOT the legacy `blake3(b"empty_queue")`.
     fn recompute_root(&mut self) {
         let pending = &self.entries[self.head..];
         if pending.is_empty() {
-            self.root = *blake3::hash(b"empty_queue").as_bytes();
+            self.root = empty_queue_root();
             return;
         }
-
-        // Leaf hashes: blake3(content_hash || sender || deposit || enqueued_at || size)
         let leaves: Vec<[u8; 32]> = pending.iter().map(hash_entry).collect();
-
         self.root = merkle_root(&leaves);
     }
 }
 
-/// Hash a queue entry to produce its leaf hash.
-fn hash_entry(entry: &QueueEntry) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(&entry.content_hash);
-    hasher.update(&entry.sender);
-    hasher.update(&entry.deposit.to_le_bytes());
-    hasher.update(&entry.enqueued_at.to_le_bytes());
-    hasher.update(&(entry.size as u64).to_le_bytes());
-    *hasher.finalize().as_bytes()
+/// The canonical empty-queue root (typed framework's empty MerkleRoot).
+///
+/// Equal to `[0u8; 32]`. Used wherever an empty `MerkleQueue` is checked
+/// for. Tests that previously asserted `blake3(b"empty_queue")` have been
+/// updated to use this helper.
+pub fn empty_queue_root() -> [u8; 32] {
+    crate::commitment::MerkleRoot::<crate::commitment::QueueEntrySetMarker>::empty().blake3_root
 }
 
-/// Compute the Merkle root of a set of leaf hashes.
-/// Uses a standard binary Merkle tree (pad with zero-hashes if not a power of 2).
+/// Hash a queue entry to produce its dual-form leaf commitment. The
+/// canonical preimage is `content_hash || sender || deposit_le ||
+/// enqueued_at_le || size_le`. Returns the BLAKE3 form of the typed
+/// `QueueEntryCommitment` (the Poseidon2 form is computed but currently
+/// dropped at this boundary — future in-circuit queue programs can call
+/// `hash_entry_dual` to keep the typed form).
+fn hash_entry(entry: &QueueEntry) -> [u8; 32] {
+    hash_entry_dual(entry).blake3
+}
+
+/// Dual-form leaf commitment for a queue entry.
+pub fn hash_entry_dual(entry: &QueueEntry) -> crate::commitment::QueueEntryCommitment {
+    let mut canonical = Vec::with_capacity(32 + 32 + 8 + 8 + 8);
+    canonical.extend_from_slice(&entry.content_hash);
+    canonical.extend_from_slice(&entry.sender);
+    canonical.extend_from_slice(&entry.deposit.to_le_bytes());
+    canonical.extend_from_slice(&entry.enqueued_at.to_le_bytes());
+    canonical.extend_from_slice(&(entry.size as u64).to_le_bytes());
+    crate::commitment::Commitment::seal(&canonical[..])
+}
+
+/// Compute the Merkle root of a set of leaf hashes via the typed framework.
+///
+/// Internally uses `commitment::blake3_binary_root` (the same shape the
+/// upstream typed framework uses). For an empty leaf set, returns the
+/// typed `MerkleRoot::empty()` sentinel.
 fn merkle_root(leaves: &[[u8; 32]]) -> [u8; 32] {
     if leaves.is_empty() {
-        return *blake3::hash(b"empty_queue").as_bytes();
+        return empty_queue_root();
     }
-    if leaves.len() == 1 {
-        return leaves[0];
-    }
-
-    // Pad to next power of 2.
-    let mut layer: Vec<[u8; 32]> = leaves.to_vec();
-    let next_pow2 = layer.len().next_power_of_two();
-    let zero_hash = [0u8; 32];
-    layer.resize(next_pow2, zero_hash);
-
-    // Iteratively hash pairs until we have a single root.
-    while layer.len() > 1 {
-        let mut next_layer = Vec::with_capacity(layer.len() / 2);
-        for pair in layer.chunks(2) {
-            let mut hasher = blake3::Hasher::new();
-            hasher.update(&pair[0]);
-            hasher.update(&pair[1]);
-            next_layer.push(*hasher.finalize().as_bytes());
-        }
-        layer = next_layer;
-    }
-
-    layer[0]
+    crate::commitment::blake3_binary_root(leaves)
 }
 
 /// Verify a dequeue proof: that dequeueing the given entry from a queue with
@@ -419,7 +422,7 @@ pub fn verify_dequeue_proof(proof: &DequeueProof) -> bool {
     proof.old_root != proof.new_root || {
         // Edge case: if dequeueing produces an empty queue, both could be the empty root.
         // That's only valid if old_root was a single-element tree.
-        proof.new_root == *blake3::hash(b"empty_queue").as_bytes()
+        proof.new_root == empty_queue_root()
     }
 }
 
@@ -476,7 +479,7 @@ mod tests {
         let entry = make_entry(b"hello", [1u8; 32], 500);
 
         let root_after_enqueue = q.enqueue(entry.clone()).unwrap();
-        assert_ne!(root_after_enqueue, *blake3::hash(b"empty_queue").as_bytes());
+        assert_ne!(root_after_enqueue, empty_queue_root());
         assert_eq!(q.len(), 1);
 
         let (dequeued, proof) = q.dequeue().unwrap();
@@ -560,7 +563,7 @@ mod tests {
         // Second dequeue produces empty queue.
         let (_, proof2) = q.dequeue().unwrap();
         assert!(verify_dequeue_proof(&proof2));
-        assert_eq!(proof2.new_root, *blake3::hash(b"empty_queue").as_bytes());
+        assert_eq!(proof2.new_root, empty_queue_root());
     }
 
     #[test]

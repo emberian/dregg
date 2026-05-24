@@ -600,111 +600,120 @@ fn validate_dequeue_constraints(
 // ============================================================================
 
 /// Compute the VK hash for a queue program (content-addressed identity).
+///
+/// Routes through the typed Commitment<QueueProgramMarker> framework: the
+/// canonical preimage is the same bytes the legacy BLAKE3 hasher absorbed
+/// (sans the old `b"queue_program_vk_v1"` tag — the typed framework's
+/// derive_key supplies domain separation). Both BLAKE3 and Poseidon2
+/// forms are computed; this function returns the BLAKE3 form for
+/// back-compat. A dual-form variant is available via `compute_vk_dual`.
 fn compute_vk_hash(enqueue: &QueueProgram, dequeue: Option<&QueueProgram>) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"queue_program_vk_v1");
-    hasher.update(enqueue.name.as_bytes());
-
-    // Hash each constraint type and parameters.
-    for constraint in &enqueue.constraints {
-        hash_constraint(&mut hasher, constraint);
-    }
-
-    // Hash lookup tables.
-    for table in &enqueue.lookup_tables {
-        hasher.update(table.name.as_bytes());
-        for entry in &table.entries {
-            hasher.update(entry);
-        }
-    }
-
-    // Hash dequeue program if present.
-    if let Some(deq) = dequeue {
-        hasher.update(b"dequeue:");
-        hasher.update(deq.name.as_bytes());
-        for constraint in &deq.constraints {
-            hash_constraint(&mut hasher, constraint);
-        }
-    }
-
-    *hasher.finalize().as_bytes()
+    compute_vk_dual(enqueue, dequeue).blake3
 }
 
-/// Hash a single constraint into a hasher.
-fn hash_constraint(hasher: &mut blake3::Hasher, constraint: &QueueConstraint) {
+/// Dual-form (BLAKE3 + Poseidon2) VK commitment for a queue program.
+pub fn compute_vk_dual(
+    enqueue: &QueueProgram,
+    dequeue: Option<&QueueProgram>,
+) -> crate::commitment::QueueProgramCommitment {
+    let mut canonical = Vec::new();
+    canonical.extend_from_slice(enqueue.name.as_bytes());
+    canonical.push(0); // delimiter
+
+    for constraint in &enqueue.constraints {
+        canonicalize_constraint(&mut canonical, constraint);
+    }
+    for table in &enqueue.lookup_tables {
+        canonical.extend_from_slice(table.name.as_bytes());
+        canonical.push(0);
+        for entry in &table.entries {
+            canonical.extend_from_slice(entry);
+        }
+    }
+    if let Some(deq) = dequeue {
+        canonical.extend_from_slice(b"dequeue:");
+        canonical.extend_from_slice(deq.name.as_bytes());
+        canonical.push(0);
+        for constraint in &deq.constraints {
+            canonicalize_constraint(&mut canonical, constraint);
+        }
+    }
+    crate::commitment::Commitment::seal(&canonical[..])
+}
+
+/// Append the canonical encoding of a single constraint to a byte buffer.
+/// Used as a sub-step in the typed-framework VK commitment computation.
+fn canonicalize_constraint(buf: &mut Vec<u8>, constraint: &QueueConstraint) {
     match constraint {
         QueueConstraint::SenderAuthorized { authorized_set_root } => {
-            hasher.update(b"sender_authorized");
-            hasher.update(authorized_set_root);
+            buf.extend_from_slice(b"sender_authorized");
+            buf.extend_from_slice(authorized_set_root);
         }
         QueueConstraint::ContentPattern { required_prefix } => {
-            hasher.update(b"content_pattern");
-            hasher.update(required_prefix);
+            buf.extend_from_slice(b"content_pattern");
+            buf.extend_from_slice(required_prefix);
         }
         QueueConstraint::MinDeposit { amount } => {
-            hasher.update(b"min_deposit");
-            hasher.update(&amount.to_le_bytes());
+            buf.extend_from_slice(b"min_deposit");
+            buf.extend_from_slice(&amount.to_le_bytes());
         }
         QueueConstraint::MaxSize { bytes } => {
-            hasher.update(b"max_size");
-            hasher.update(&(*bytes as u64).to_le_bytes());
+            buf.extend_from_slice(b"max_size");
+            buf.extend_from_slice(&(*bytes as u64).to_le_bytes());
         }
         QueueConstraint::RateLimit { max_per_epoch, epoch_duration } => {
-            hasher.update(b"rate_limit");
-            hasher.update(&max_per_epoch.to_le_bytes());
-            hasher.update(&epoch_duration.to_le_bytes());
+            buf.extend_from_slice(b"rate_limit");
+            buf.extend_from_slice(&max_per_epoch.to_le_bytes());
+            buf.extend_from_slice(&epoch_duration.to_le_bytes());
         }
         QueueConstraint::MonotonicSequence => {
-            hasher.update(b"monotonic_sequence");
+            buf.extend_from_slice(b"monotonic_sequence");
         }
         QueueConstraint::TemporalGate { not_before, not_after } => {
-            hasher.update(b"temporal_gate");
-            hasher.update(&not_before.unwrap_or(0).to_le_bytes());
-            hasher.update(&not_after.unwrap_or(u64::MAX).to_le_bytes());
+            buf.extend_from_slice(b"temporal_gate");
+            buf.extend_from_slice(&not_before.unwrap_or(0).to_le_bytes());
+            buf.extend_from_slice(&not_after.unwrap_or(u64::MAX).to_le_bytes());
         }
         QueueConstraint::PreimageGate { commitment } => {
-            hasher.update(b"preimage_gate");
-            hasher.update(commitment);
+            buf.extend_from_slice(b"preimage_gate");
+            buf.extend_from_slice(commitment);
         }
         QueueConstraint::Custom { expr, description } => {
-            hasher.update(b"custom");
-            hasher.update(expr.as_bytes());
-            hasher.update(description.as_bytes());
+            buf.extend_from_slice(b"custom");
+            buf.extend_from_slice(expr.as_bytes());
+            buf.extend_from_slice(description.as_bytes());
         }
     }
 }
 
 /// Compute a Merkle root over a set of authorized sender keys.
+///
+/// Routes through the typed MerkleRoot<AuthorizedKeySetMarker>; returns the
+/// BLAKE3 form for back-compat. The empty sentinel is `[0u8; 32]`. Per-key
+/// leaves are domain-tagged `blake3_with_tag(TAG_AUTHORIZED_KEY_SET, &key)`.
 fn compute_authorized_set_root(authorized: &[[u8; 32]]) -> [u8; 32] {
+    compute_authorized_set_root_dual(authorized).blake3_root
+}
+
+/// Dual-form (BLAKE3 + Poseidon2) authorized-key-set Merkle root.
+pub fn compute_authorized_set_root_dual(
+    authorized: &[[u8; 32]],
+) -> crate::commitment::AuthorizedKeySetRoot {
+    use crate::commitment::{
+        AuthorizedKeySetRoot, blake3_with_tag, canonical_32_to_felts_4, domain,
+    };
     if authorized.is_empty() {
-        return *blake3::hash(b"empty_authorized_set").as_bytes();
+        return AuthorizedKeySetRoot::empty();
     }
-    if authorized.len() == 1 {
-        return *blake3::hash(&authorized[0]).as_bytes();
-    }
-
-    let mut leaves: Vec<[u8; 32]> = authorized
+    let blake3_leaves: Vec<[u8; 32]> = authorized
         .iter()
-        .map(|k| *blake3::hash(k).as_bytes())
+        .map(|k| blake3_with_tag(domain::TAG_AUTHORIZED_KEY_SET, k))
         .collect();
-
-    // Pad to next power of 2.
-    let next_pow2 = leaves.len().next_power_of_two();
-    leaves.resize(next_pow2, [0u8; 32]);
-
-    // Iteratively hash pairs.
-    while leaves.len() > 1 {
-        let mut next_layer = Vec::with_capacity(leaves.len() / 2);
-        for pair in leaves.chunks(2) {
-            let mut hasher = blake3::Hasher::new();
-            hasher.update(&pair[0]);
-            hasher.update(&pair[1]);
-            next_layer.push(*hasher.finalize().as_bytes());
-        }
-        leaves = next_layer;
-    }
-
-    leaves[0]
+    let poseidon2_leaves: Vec<[pyana_circuit::field::BabyBear; 4]> = blake3_leaves
+        .iter()
+        .map(canonical_32_to_felts_4)
+        .collect();
+    crate::commitment::MerkleRoot::from_leaves(&blake3_leaves, &poseidon2_leaves)
 }
 
 // ============================================================================
