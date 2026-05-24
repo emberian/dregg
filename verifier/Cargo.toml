@@ -16,6 +16,7 @@ path = "src/main.rs"
 [dependencies]
 pyana-circuit = { path = "../circuit" }
 pyana-types = { path = "../types" }
+pyana-commit = { path = "../commit" }
 # Federation primitives (cross-fed bundle, FederationReceipt verify path).
 # `default-features = false` so we do NOT pull tokio / crossbeam-channel — the
 # verifier binary stays a non-async, no-runtime, ledger-free process.

@@ -27,7 +27,12 @@ use pyana_circuit::stark::StarkAir;
 use pyana_circuit::{EffectVmAir, field::BabyBear, stark};
 use serde::{Deserialize, Serialize};
 
+pub mod bilateral_pair;
 pub mod cross_fed;
+pub use bilateral_pair::{
+    BilateralBundle, BilateralEntry, BilateralVerdict, fabricate_witnessed_receipt,
+    verify_bilateral_bundle, verify_bilateral_bundle_json,
+};
 pub use cross_fed::{
     CommitteeDescriptor, CrossFedVerdict, ValidatorDescriptor, verify_cross_fed_bundle,
 };
@@ -306,14 +311,14 @@ impl ReplayWitnessBundle {
     }
 }
 
-/// Mirror of `pyana_turn::WitnessedReceipt`. The inner `receipt` is parsed
-/// only enough to extract its `turn_hash` for verdict pretty-printing.
+/// Mirror of `pyana_turn::WitnessedReceipt`. The inner `receipt` deserializes
+/// directly to `pyana_turn::TurnReceipt` (we already depend on `pyana-turn`),
+/// so the replayer can cross-check the proof's PI against the receipt's
+/// authoritative `turn_hash` and `previous_receipt_hash`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplayEntry {
-    /// Raw inner-receipt JSON, preserved so we don't have to mirror the
-    /// full TurnReceipt struct in this crate.
-    #[serde(default)]
-    pub receipt: serde_json::Value,
+    /// The full TurnReceipt this proof attests to.
+    pub receipt: pyana_turn::TurnReceipt,
     pub proof_bytes: Vec<u8>,
     pub public_inputs: Vec<u32>,
     #[serde(default)]
@@ -383,14 +388,20 @@ pub fn replay_chain(entries: &[ReplayEntry]) -> ReplayChainOutput {
         BabyBear::new(0x0bad_c0deu32 % (1u32 << 31)),
     ];
 
+    let mut prev_receipt_hash: Option<[u8; 32]> = None;
     for (idx, wr) in entries.iter().enumerate() {
-        let verdict = replay_one(wr, &alphas);
+        let verdict = replay_one_with_prev(wr, &alphas, prev_receipt_hash);
         let is_ok = matches!(verdict, ReplayVerdict::Verified);
         if is_ok {
             verified += 1;
         } else if first_failure.is_none() {
             first_failure = Some(idx);
         }
+        // The next entry's receipt.previous_receipt_hash must equal
+        // this entry's receipt_hash(). We capture the hash here regardless
+        // of verdict so a downstream mismatch surfaces a clear chain-walk
+        // rejection at the next iteration rather than leaving a gap.
+        prev_receipt_hash = Some(wr.receipt.receipt_hash());
         per_entry.push(verdict);
         let _ = blake3::hash(b"replay-progress"); // keep blake3 used in non-test builds
     }
@@ -417,14 +428,144 @@ pub fn replay_chain(entries: &[ReplayEntry]) -> ReplayChainOutput {
     }
 }
 
-fn replay_one(wr: &ReplayEntry, alphas: &[BabyBear]) -> ReplayVerdict {
-    // Step 1: STARK proof verification.
+/// Cross-bind the proof's claimed public inputs against the receipt the WR
+/// carries (and the prior receipt's hash, for the chain-walk invariant).
+///
+/// Returns `Some(reason)` on rejection, `None` on pass. This is the
+/// EXECUTOR-HONESTY-AUDIT cross-cutting #3 enforcement: PI is not merely
+/// deserialized, it is *checked against an expected value*.
+///
+/// Concretely:
+/// - PI[TURN_HASH_BASE..+4] must equal canonical_32_to_felts_4(receipt.turn_hash).
+///   Closes T11 (stale-proof replay against a different receipt) at the
+///   verifier layer.
+/// - PI[PREVIOUS_RECEIPT_HASH_BASE..+4] must equal
+///   canonical_32_to_felts_4(receipt.previous_receipt_hash.unwrap_or(0)).
+///   Closes T8 (forged chain link) at the verifier layer.
+/// - When `prev_receipt_hash` is `Some`, the receipt's own
+///   `previous_receipt_hash` field must equal it. This is the chain-walk
+///   invariant: receipt[N].previous_receipt_hash == receipt[N-1].receipt_hash().
+/// - PI[IS_AGENT_CELL] must be 1 for the single-proof-per-WR replay shape
+///   (γ.2 multi-cell bundles use a different code path).
+///
+/// Does NOT cross-check EFFECTS_HASH_GLOBAL or ACTOR_NONCE: those derive
+/// from the Turn (call_forest, nonce), not the Receipt. The receipt's
+/// `turn_hash` field commits to both via the canonical Turn::hash, and
+/// the TURN_HASH PI binding above transitively guards them — a divergent
+/// EFFECTS_HASH_GLOBAL or ACTOR_NONCE in the proof's PI would imply a
+/// different Turn::hash, which the TURN_HASH check catches.
+pub fn check_receipt_pi_binding(
+    wr: &ReplayEntry,
+    prev_receipt_hash: Option<[u8; 32]>,
+) -> Option<String> {
+    use pyana_circuit::effect_vm::pi;
+    use pyana_commit::typed::canonical_32_to_felts_4;
+
+    // Chain-walk invariant (T8): receipt[N].previous_receipt_hash must
+    // match receipt[N-1].receipt_hash().
+    match (prev_receipt_hash, wr.receipt.previous_receipt_hash) {
+        (Some(expected), Some(claimed)) if expected != claimed => {
+            return Some(format!(
+                "chain-walk break: receipt.previous_receipt_hash {} != prior receipt_hash {}",
+                hex::encode(claimed),
+                hex::encode(expected)
+            ));
+        }
+        (Some(expected), None) => {
+            return Some(format!(
+                "chain-walk break: receipt.previous_receipt_hash is None, expected {}",
+                hex::encode(expected)
+            ));
+        }
+        _ => {}
+    }
+
+    // PI length sanity: must carry at least the γ.0a turn-identity slots.
+    let pi_len = wr.public_inputs.len();
+    if pi_len < pi::TURN_HASH_BASE + pi::TURN_HASH_LEN {
+        return Some(format!(
+            "PI too short for receipt binding: have {} elements, need at least {}",
+            pi_len,
+            pi::TURN_HASH_BASE + pi::TURN_HASH_LEN
+        ));
+    }
+
+    // TURN_HASH binding (T11).
+    let expected_turn_hash = canonical_32_to_felts_4(&wr.receipt.turn_hash);
+    for i in 0..pi::TURN_HASH_LEN {
+        let claimed = wr.public_inputs[pi::TURN_HASH_BASE + i];
+        let expected = expected_turn_hash[i].as_u32();
+        if claimed != expected {
+            return Some(format!(
+                "PI[TURN_HASH_BASE+{}] = {} but canonical_32_to_felts_4(receipt.turn_hash)[{}] = {}",
+                i, claimed, i, expected
+            ));
+        }
+    }
+
+    // PREVIOUS_RECEIPT_HASH binding (T8 algebraic side).
+    if pi_len >= pi::PREVIOUS_RECEIPT_HASH_BASE + pi::PREVIOUS_RECEIPT_HASH_LEN {
+        let prev_bytes = wr.receipt.previous_receipt_hash.unwrap_or([0u8; 32]);
+        let expected_prev = canonical_32_to_felts_4(&prev_bytes);
+        for i in 0..pi::PREVIOUS_RECEIPT_HASH_LEN {
+            let claimed = wr.public_inputs[pi::PREVIOUS_RECEIPT_HASH_BASE + i];
+            let expected = expected_prev[i].as_u32();
+            if claimed != expected {
+                return Some(format!(
+                    "PI[PREVIOUS_RECEIPT_HASH_BASE+{}] = {} but canonical_32_to_felts_4(receipt.previous_receipt_hash)[{}] = {}",
+                    i, claimed, i, expected
+                ));
+            }
+        }
+    }
+
+    // IS_AGENT_CELL binding (γ.2): for the v1 single-proof-per-WR shape,
+    // the one proof in the entry MUST be the agent's cell proof, so
+    // PI[IS_AGENT_CELL] must be 1.
+    if pi_len > pi::IS_AGENT_CELL {
+        let claimed = wr.public_inputs[pi::IS_AGENT_CELL];
+        if claimed != 1 {
+            return Some(format!(
+                "PI[IS_AGENT_CELL] = {} but single-proof replay requires 1 (agent-cell proof)",
+                claimed
+            ));
+        }
+    }
+
+    None
+}
+
+/// Inner replay: cross-binds the proof's public inputs against the receipt
+/// fields the receipt itself authoritatively names, AND against the prior
+/// receipt's hash (chain-walk invariant).
+///
+/// `prev_receipt_hash`: when `Some`, the verifier requires
+/// `wr.receipt.previous_receipt_hash == Some(prev_receipt_hash)`. Pass
+/// `None` for the chain's head (genesis position).
+fn replay_one_with_prev(
+    wr: &ReplayEntry,
+    alphas: &[BabyBear],
+    prev_receipt_hash: Option<[u8; 32]>,
+) -> ReplayVerdict {
+    // Step 1: STARK proof verification (algebraic soundness).
     let (proof_verdict, code) =
         verify_effect_vm_proof(&wr.proof_bytes, &wr.public_inputs, AUTO_DETECT_VK_HASH);
     if code != exit_code::VERIFIED {
         return ReplayVerdict::Rejected {
             reason: format!("STARK verify failed: {}", proof_verdict.reason),
         };
+    }
+
+    // Step 1b: PI completeness — cross-check the proof's claimed public
+    // inputs against the receipt's authoritatively-stated turn-identity
+    // fields. Per EXECUTOR-HONESTY-AUDIT.md cross-cutting #3 and threats
+    // T8/T11, the verifier must reject a proof whose PI does not match the
+    // receipt it accompanies, even if the proof itself is algebraically
+    // sound. Without this, an executor could swap a proof for a different
+    // turn (T11) or fake the chain-walk link (T8) and the chain-level
+    // verifier would not notice.
+    if let Some(reason) = check_receipt_pi_binding(wr, prev_receipt_hash) {
+        return ReplayVerdict::Rejected { reason };
     }
 
     // Step 2: trace-side replay (witness bundle).
@@ -529,6 +670,112 @@ fn replay_one(wr: &ReplayEntry, alphas: &[BabyBear]) -> ReplayVerdict {
     ReplayVerdict::Verified
 }
 
+// ---------------------------------------------------------------------------
+// Block 3 — Optional recursive scope-2 verification mode
+// ---------------------------------------------------------------------------
+//
+// The replay loop above performs scope-2 verification by re-running
+// `EffectVmAir::eval_constraints` against every consecutive row pair of
+// the inline witness bundle. That is *trust-and-replay*: the verifier
+// re-does the prover's algebraic work locally.
+//
+// With the now-working `plonky3-recursion` path (see
+// `pyana_circuit::plonky3_recursion_impl`), a producer can instead ship
+// a *recursive proof* attesting that the inner trace was valid. The
+// verifier then just runs `verify_recursive_layer` on the recursive
+// proof; no row-by-row replay needed. This trades a one-time recursive
+// proof generation (~seconds, fixed cost) for asymptotic verifier work
+// independent of trace length.
+//
+// Block 3 wires this as an **opt-in compression**: the trust-and-replay
+// path stays the default (`replay_one_with_prev` above is unchanged);
+// callers wanting the recursive-verify path call
+// `verify_recursive_replay` instead.
+//
+// The on-disk format for the recursive proof is whatever the producer
+// emits via `pyana_circuit::plonky3_verifier_air::RecursiveIvcStep::recursive_layer_bytes`
+// (postcard-encoded `BatchStarkProof<PyanaRecursionConfig>`). The
+// verifier deserialises and runs `verify_recursive_layer` on it.
+
+/// Verdict for the recursive-mode scope-2 replay.
+///
+/// Distinct from [`ReplayVerdict`] because the recursion path has
+/// different failure modes (deserialisation, recursion-config mismatch,
+/// inner-proof commitment mismatch) that don't map cleanly onto the
+/// trust-and-replay vocabulary.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RecursiveReplayVerdict {
+    /// The recursive proof verified — by transitive soundness, the inner
+    /// trace satisfied the Effect VM AIR constraints.
+    Verified,
+    /// The scope-1 (per-WR STARK) verification failed; we never reached
+    /// the recursive layer.
+    InnerProofRejected { reason: String },
+    /// The recursive-layer proof bytes failed to deserialise or verify.
+    RecursiveProofRejected { reason: String },
+}
+
+/// Verify a [`ReplayEntry`] using the optional recursive scope-2 mode.
+///
+/// Steps:
+/// 1. Run the same scope-1 STARK verification + receipt-PI binding as
+///    [`replay_one`] (so a malformed scope-1 chain is rejected even when
+///    the recursive proof would otherwise verify).
+/// 2. Deserialise `recursive_layer_bytes` as a postcard-encoded
+///    `BatchStarkProof<PyanaRecursionConfig>` and verify it via
+///    `pyana_circuit::plonky3_recursion_impl::recursive::verify_recursive_layer`.
+///
+/// Returns `Verified` only when *both* checks pass. The trust-and-replay
+/// path (`replay_one_with_prev`) remains the default; this function is
+/// only invoked when the caller explicitly opts in.
+#[cfg(feature = "recursion-replay")]
+pub fn verify_recursive_replay(
+    wr: &ReplayEntry,
+    recursive_layer_bytes: &[u8],
+    prev_receipt_hash: Option<[u8; 32]>,
+) -> RecursiveReplayVerdict {
+    use pyana_circuit::plonky3_recursion_impl::recursive::{
+        PyanaRecursionConfig, verify_recursive_layer,
+    };
+
+    // Step 1: scope-1 STARK verification.
+    let (proof_verdict, code) =
+        verify_effect_vm_proof(&wr.proof_bytes, &wr.public_inputs, AUTO_DETECT_VK_HASH);
+    if code != exit_code::VERIFIED {
+        return RecursiveReplayVerdict::InnerProofRejected {
+            reason: format!("STARK verify failed: {}", proof_verdict.reason),
+        };
+    }
+
+    // Step 1b: PI completeness — same cross-binding as the trust-replay path.
+    if let Some(reason) = check_receipt_pi_binding(wr, prev_receipt_hash) {
+        return RecursiveReplayVerdict::InnerProofRejected { reason };
+    }
+
+    // Step 2: recursive-layer verification.
+    let batch_proof: p3_circuit_prover::BatchStarkProof<PyanaRecursionConfig> =
+        match postcard::from_bytes(recursive_layer_bytes) {
+            Ok(p) => p,
+            Err(e) => {
+                return RecursiveReplayVerdict::RecursiveProofRejected {
+                    reason: format!("postcard decode failed: {e}"),
+                };
+            }
+        };
+
+    // Reconstruct the output wrapper that `verify_recursive_layer` expects.
+    // The prover-data is reconstructible from the proof itself.
+    use pyana_circuit::plonky3_recursion_impl::recursive::RecursionOutputCompat;
+    let output = RecursionOutputCompat::from_proof_only(batch_proof);
+
+    match verify_recursive_layer(&output.0) {
+        Ok(()) => RecursiveReplayVerdict::Verified,
+        Err(e) => RecursiveReplayVerdict::RecursiveProofRejected {
+            reason: format!("recursive verify failed: {e}"),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -575,6 +822,28 @@ mod tests {
         assert!(out.first_failure.is_none());
     }
 
+    fn sample_receipt() -> pyana_turn::TurnReceipt {
+        pyana_turn::TurnReceipt {
+            turn_hash: [0u8; 32],
+            forest_hash: [0u8; 32],
+            pre_state_hash: [0u8; 32],
+            post_state_hash: [0u8; 32],
+            timestamp: 0,
+            effects_hash: [0u8; 32],
+            computrons_used: 0,
+            action_count: 0,
+            previous_receipt_hash: None,
+            agent: pyana_types::CellId::from_bytes([0u8; 32]),
+            federation_id: [0u8; 32],
+            routing_directives: Vec::new(),
+            introduction_exports: Vec::new(),
+            derivation_records: Vec::new(),
+            emitted_events: Vec::new(),
+            executor_signature: None,
+            finality: Default::default(),
+        }
+    }
+
     #[test]
     fn replay_chain_detects_witness_hash_tamper() {
         // Build a WR-shaped entry where the bundle is present but the
@@ -586,7 +855,7 @@ mod tests {
             availability: ReplayWitnessAvailability::Inline,
         };
         let entry = ReplayEntry {
-            receipt: serde_json::Value::Null,
+            receipt: sample_receipt(),
             proof_bytes: vec![],
             public_inputs: vec![],
             witness_bundle: Some(bundle),
@@ -605,7 +874,7 @@ mod tests {
         // when proof + hash zero coexist; here proof is empty so step 1
         // already fails.
         let entry = ReplayEntry {
-            receipt: serde_json::Value::Null,
+            receipt: sample_receipt(),
             proof_bytes: vec![],
             public_inputs: vec![],
             witness_bundle: None,
@@ -614,5 +883,152 @@ mod tests {
         };
         let out = replay_chain(&[entry]);
         assert!(!out.overall_verified);
+    }
+
+    // ---- PI completeness adversarial tests (EXECUTOR-HONESTY-AUDIT #3) ----
+
+    /// Build a `ReplayEntry` whose `public_inputs` populate just the
+    /// turn-identity slots from the receipt — used by adversarial tests
+    /// to validate that tampering with PI[i] is rejected even though
+    /// (without real proof bytes) the STARK step fails first. The
+    /// `check_receipt_pi_binding` function is called directly so we can
+    /// isolate PI completeness from algebraic soundness.
+    fn entry_with_pi_from_receipt(receipt: pyana_turn::TurnReceipt) -> ReplayEntry {
+        use pyana_circuit::effect_vm::pi;
+        use pyana_commit::typed::canonical_32_to_felts_4;
+        let mut pi_vec = vec![0u32; pi::BASE_COUNT];
+        let th = canonical_32_to_felts_4(&receipt.turn_hash);
+        for i in 0..pi::TURN_HASH_LEN {
+            pi_vec[pi::TURN_HASH_BASE + i] = th[i].as_u32();
+        }
+        let prev = canonical_32_to_felts_4(&receipt.previous_receipt_hash.unwrap_or([0u8; 32]));
+        for i in 0..pi::PREVIOUS_RECEIPT_HASH_LEN {
+            pi_vec[pi::PREVIOUS_RECEIPT_HASH_BASE + i] = prev[i].as_u32();
+        }
+        pi_vec[pi::IS_AGENT_CELL] = 1;
+        ReplayEntry {
+            receipt,
+            proof_bytes: vec![],
+            public_inputs: pi_vec,
+            witness_bundle: None,
+            witness_hash: [0u8; 32],
+            aggregate_membership: None,
+        }
+    }
+
+    #[test]
+    fn pi_binding_accepts_consistent_pi() {
+        let mut r = sample_receipt();
+        r.turn_hash = [0x42u8; 32];
+        let entry = entry_with_pi_from_receipt(r);
+        assert!(
+            check_receipt_pi_binding(&entry, None).is_none(),
+            "consistent PI must not be rejected"
+        );
+    }
+
+    #[test]
+    fn pi_binding_rejects_tampered_turn_hash() {
+        use pyana_circuit::effect_vm::pi;
+        let mut r = sample_receipt();
+        r.turn_hash = [0x42u8; 32];
+        let mut entry = entry_with_pi_from_receipt(r);
+        // Tamper with PI[TURN_HASH_BASE]: even though the proof would
+        // verify algebraically (we don't run the STARK here), the
+        // verifier MUST reject because the PI no longer matches the
+        // receipt's claimed turn_hash. Closes T11 at the verifier layer.
+        entry.public_inputs[pi::TURN_HASH_BASE] ^= 0xDEAD_BEEF;
+        let reason = check_receipt_pi_binding(&entry, None)
+            .expect("tampered PI[TURN_HASH_BASE] must be rejected");
+        assert!(
+            reason.contains("TURN_HASH_BASE"),
+            "rejection should name TURN_HASH_BASE; got: {reason}"
+        );
+    }
+
+    #[test]
+    fn pi_binding_rejects_tampered_previous_receipt_hash() {
+        use pyana_circuit::effect_vm::pi;
+        let mut r = sample_receipt();
+        r.turn_hash = [0x42u8; 32];
+        r.previous_receipt_hash = Some([0x33u8; 32]);
+        let mut entry = entry_with_pi_from_receipt(r);
+        // Tamper with PI[PREVIOUS_RECEIPT_HASH_BASE]. Closes T8.
+        entry.public_inputs[pi::PREVIOUS_RECEIPT_HASH_BASE] ^= 0xCAFE;
+        let reason = check_receipt_pi_binding(&entry, None)
+            .expect("tampered PI[PREVIOUS_RECEIPT_HASH_BASE] must be rejected");
+        assert!(
+            reason.contains("PREVIOUS_RECEIPT_HASH_BASE"),
+            "rejection should name PREVIOUS_RECEIPT_HASH_BASE; got: {reason}"
+        );
+    }
+
+    #[test]
+    fn pi_binding_rejects_tampered_is_agent_cell() {
+        use pyana_circuit::effect_vm::pi;
+        let mut r = sample_receipt();
+        r.turn_hash = [0x42u8; 32];
+        let mut entry = entry_with_pi_from_receipt(r);
+        // Tamper IS_AGENT_CELL to 0.
+        entry.public_inputs[pi::IS_AGENT_CELL] = 0;
+        let reason = check_receipt_pi_binding(&entry, None)
+            .expect("non-agent IS_AGENT_CELL in single-proof replay must be rejected");
+        assert!(
+            reason.contains("IS_AGENT_CELL"),
+            "rejection should name IS_AGENT_CELL; got: {reason}"
+        );
+    }
+
+    #[test]
+    fn pi_binding_rejects_chain_walk_break() {
+        let mut r = sample_receipt();
+        r.turn_hash = [0x42u8; 32];
+        // The receipt's previous_receipt_hash says one thing...
+        r.previous_receipt_hash = Some([0x77u8; 32]);
+        let entry = entry_with_pi_from_receipt(r);
+        // ...but the chain-walk says the prior receipt hashed to
+        // something else. The verifier must catch this (T8).
+        let reason = check_receipt_pi_binding(&entry, Some([0x88u8; 32]))
+            .expect("chain-walk break must be rejected");
+        assert!(
+            reason.contains("chain-walk"),
+            "rejection should name chain-walk; got: {reason}"
+        );
+    }
+
+    #[test]
+    fn pi_binding_rejects_missing_previous_receipt_hash_in_chain() {
+        let mut r = sample_receipt();
+        r.turn_hash = [0x42u8; 32];
+        // Receipt claims to be a head (no previous_receipt_hash)...
+        r.previous_receipt_hash = None;
+        let entry = entry_with_pi_from_receipt(r);
+        // ...but the chain-walk says it should chain from somewhere.
+        let reason = check_receipt_pi_binding(&entry, Some([0x55u8; 32]))
+            .expect("missing previous_receipt_hash mid-chain must be rejected");
+        assert!(
+            reason.contains("chain-walk"),
+            "rejection should name chain-walk; got: {reason}"
+        );
+    }
+
+    #[test]
+    fn pi_binding_rejects_short_pi() {
+        let mut r = sample_receipt();
+        r.turn_hash = [0x42u8; 32];
+        let entry = ReplayEntry {
+            receipt: r,
+            proof_bytes: vec![],
+            public_inputs: vec![0u32; 10], // too short to carry TURN_HASH
+            witness_bundle: None,
+            witness_hash: [0u8; 32],
+            aggregate_membership: None,
+        };
+        let reason = check_receipt_pi_binding(&entry, None)
+            .expect("PI too short to carry turn-identity slots must be rejected");
+        assert!(
+            reason.contains("too short"),
+            "rejection should name 'too short'; got: {reason}"
+        );
     }
 }

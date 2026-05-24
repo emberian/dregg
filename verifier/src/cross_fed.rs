@@ -360,7 +360,7 @@ fn witnessed_to_replay(wr: &pyana_turn::WitnessedReceipt) -> crate::ReplayEntry 
             availability: crate::ReplayWitnessAvailability::Inline,
         });
     crate::ReplayEntry {
-        receipt: serde_json::to_value(&wr.receipt).unwrap_or(serde_json::Value::Null),
+        receipt: wr.receipt.clone(),
         proof_bytes: wr.proof_bytes.clone(),
         public_inputs: wr.public_inputs.clone(),
         witness_bundle: bundle,
