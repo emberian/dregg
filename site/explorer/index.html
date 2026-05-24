@@ -7,6 +7,8 @@
   <meta name="description" content="Chain explorer for pyana federation state: blocks, turns, receipts, cells, capabilities, proofs, intents, federation, notes, and apps.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0f0d'/%3E%3Ctext x='16' y='22' font-size='16' text-anchor='middle' fill='%235b8a5a' font-family='monospace'%3E%CF%80%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="../_includes/vizzer.css">
+  <script type="module" src="../_includes/runtime-bootstrap.js"></script>
 </head>
 <body>
   <!-- Header -->
@@ -29,6 +31,7 @@
         <span class="ex-connection__dot"></span>
         <span class="ex-connection__label">connecting...</span>
       </div>
+      <button class="ex-header__link" id="admin-token-clear" hidden title="Clear stored admin bearer token">Clear admin token</button>
       <button class="ex-header__settings-btn" id="settings-btn" title="Node settings">&#9881;</button>
       <a class="ex-header__link" href="../index.html">Home</a>
       <a class="ex-header__link" href="../docs/index.html">Docs</a>
@@ -117,6 +120,18 @@
         <button class="ex-nav__item" data-page="apps">
           <span class="ex-nav__icon">&#9881;</span>
           <span class="ex-nav__label">Apps</span>
+        </button>
+        <button class="ex-nav__item" data-page="queues">
+          <span class="ex-nav__icon">&#9776;</span>
+          <span class="ex-nav__label">Queues</span>
+        </button>
+        <button class="ex-nav__item" data-page="names">
+          <span class="ex-nav__icon">&#9674;</span>
+          <span class="ex-nav__label">Names</span>
+        </button>
+        <button class="ex-nav__item" data-page="delegations">
+          <span class="ex-nav__icon">&#8669;</span>
+          <span class="ex-nav__label">Delegations</span>
         </button>
       </div>
       <div class="ex-nav__footer">
@@ -452,8 +467,93 @@
           <div class="ex-detail-panel__content" id="app-detail-content"></div>
         </div>
       </section>
+
+      <!-- Queues page -->
+      <section class="ex-page" id="page-queues">
+        <div class="ex-page__header">
+          <h2>Queues</h2>
+          <p>Programmable, blinded, and inbox queues across registered services. Anonymous reads show summaries (depth, root, vk_hash); entry listings require an admin token.</p>
+        </div>
+        <div class="ex-subtabs" role="tablist" aria-label="Queue family">
+          <button class="ex-subtab active" data-subtab="programmable" role="tab" aria-selected="true">Programmable</button>
+          <button class="ex-subtab" data-subtab="blinded" role="tab" aria-selected="false">Blinded</button>
+          <button class="ex-subtab" data-subtab="inbox" role="tab" aria-selected="false">Inbox</button>
+        </div>
+        <div id="queues-content">
+          <div class="loading-placeholder">Loading queues...</div>
+        </div>
+        <div class="ex-detail-panel" id="queue-detail" hidden>
+          <button class="ex-detail-panel__close" id="queue-detail-close">&times;</button>
+          <div class="ex-detail-panel__content" id="queue-detail-content"></div>
+        </div>
+      </section>
+
+      <!-- Names page -->
+      <section class="ex-page" id="page-names">
+        <div class="ex-page__header">
+          <h2>Names</h2>
+          <p>Nameservice registrations. Resolve a name to its pyana:// URI, inspect ownership, expiry, and tags.</p>
+        </div>
+        <div class="ex-filters">
+          <input type="text" id="names-search" placeholder="Prefix filter (e.g. alice)" class="ex-search__input" spellcheck="false" autocomplete="off">
+          <select id="names-filter" class="ex-select">
+            <option value="">All statuses</option>
+            <option value="active">Active</option>
+            <option value="grace">Grace</option>
+            <option value="expired">Expired</option>
+            <option value="disputed">Disputed</option>
+          </select>
+          <select id="names-sort" class="ex-select">
+            <option value="name">Sort: name</option>
+            <option value="expiry">Sort: expiry</option>
+            <option value="recent">Sort: most recent</option>
+          </select>
+        </div>
+        <div id="names-content">
+          <div class="loading-placeholder">Loading names...</div>
+        </div>
+        <div class="ex-detail-panel" id="name-detail" hidden>
+          <button class="ex-detail-panel__close" id="name-detail-close">&times;</button>
+          <div class="ex-detail-panel__content" id="name-detail-content"></div>
+        </div>
+      </section>
+
+      <!-- Delegations page -->
+      <section class="ex-page" id="page-delegations">
+        <div class="ex-page__header">
+          <h2>Delegations</h2>
+          <p>Known signed-delegation chains. Each row shows delegator → delegatee, caveats, and the authority policy.</p>
+        </div>
+        <div class="ex-filters">
+          <input type="text" id="delegations-search" placeholder="Search delegator / delegatee / cap_id" class="ex-search__input" spellcheck="false" autocomplete="off">
+        </div>
+        <div id="delegations-content">
+          <div class="loading-placeholder">Loading delegations...</div>
+        </div>
+        <div class="ex-detail-panel" id="delegation-detail" hidden>
+          <button class="ex-detail-panel__close" id="delegation-detail-close">&times;</button>
+          <div class="ex-detail-panel__content" id="delegation-detail-content"></div>
+        </div>
+      </section>
     </main>
   </div>
+
+  <!-- Admin auth dialog (opened on demand by views that hit auth-required endpoints) -->
+  <dialog id="auth-dialog" class="ex-dialog">
+    <form method="dialog" class="ex-dialog__form">
+      <h3 class="ex-dialog__title">Admin token required</h3>
+      <p class="ex-dialog__desc" id="auth-dialog-desc">
+        This view calls an authenticated endpoint. Paste an admin bearer token to continue.
+        The token is held only in sessionStorage and is wiped when this tab closes.
+      </p>
+      <input type="password" id="auth-dialog-input" class="ex-dialog__input"
+             placeholder="Bearer token" autocomplete="off" spellcheck="false">
+      <div class="ex-dialog__actions">
+        <button type="button" class="btn btn-secondary" id="auth-dialog-cancel">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="auth-dialog-submit">Save &amp; retry</button>
+      </div>
+    </form>
+  </dialog>
 
   <script type="module">
     // Boot the modular explorer app

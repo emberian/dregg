@@ -6,6 +6,7 @@
  */
 
 const STORAGE_KEY = 'pyana_node_url';
+const ADMIN_TOKEN_KEY = 'pyana_admin_token';
 const DEFAULT_URL = 'https://devnet.pyana.fg-goose.online';
 
 /** Get the configured node URL. */
@@ -18,12 +19,40 @@ export function setNodeUrl(url) {
   localStorage.setItem(STORAGE_KEY, url);
 }
 
+/** Thrown when an authenticated endpoint is hit without a valid token. */
+export class AuthRequired extends Error {
+  constructor(path) { super(`AuthRequired: ${path}`); this.name = 'AuthRequired'; }
+}
+
+/** Get the admin bearer token (sessionStorage — wiped on tab close). */
+export function getAdminToken() {
+  return sessionStorage.getItem(ADMIN_TOKEN_KEY) || '';
+}
+
+/** Set the admin bearer token. Fires `pyana:admin-token-changed`. */
+export function setAdminToken(token) {
+  if (token) sessionStorage.setItem(ADMIN_TOKEN_KEY, token);
+  else sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+  window.dispatchEvent(new CustomEvent('pyana:admin-token-changed'));
+}
+
+/** Clear the admin bearer token. */
+export function clearAdminToken() {
+  sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+  window.dispatchEvent(new CustomEvent('pyana:admin-token-changed'));
+}
+
 /** Make a GET request to the node API. */
-async function get(path) {
+async function get(path, { auth = false } = {}) {
   const base = getNodeUrl();
-  const res = await fetch(`${base}${path}`, {
-    headers: { 'Accept': 'application/json' },
-  });
+  const headers = { 'Accept': 'application/json' };
+  if (auth) {
+    const tok = getAdminToken();
+    if (!tok) throw new AuthRequired(path);
+    headers['Authorization'] = `Bearer ${tok}`;
+  }
+  const res = await fetch(`${base}${path}`, { headers });
+  if (res.status === 401 || res.status === 403) throw new AuthRequired(path);
   if (!res.ok) {
     throw new Error(`GET ${path} returned ${res.status}`);
   }
@@ -125,6 +154,70 @@ export async function getFederationStatus() {
     getCheckpoint().catch(() => null),
   ]);
   return { ...status, roots, checkpoint, node_count: (status.peer_count || 0) + 1 };
+}
+
+// =============================================================================
+// Service / queue / name / delegation endpoints
+//
+// These hit the node's service-mesh / nameservice / delegation surface. The
+// node implementations of these endpoints are in flight; until they ship, the
+// views fall back to mock data when these throw.
+// =============================================================================
+
+/** List registered services. */
+export async function listServices() {
+  return get('/api/services');
+}
+
+/** Get programmable-queue summary (anonymous). */
+export async function getProgrammableQueue(service) {
+  return get(`/api/services/${encodeURIComponent(service)}/queue/programmable`);
+}
+/** Get blinded-queue summary (anonymous). */
+export async function getBlindedQueue(service) {
+  return get(`/api/services/${encodeURIComponent(service)}/queue/blinded`);
+}
+/** Get inbox-queue summary (anonymous). */
+export async function getInboxQueue(service) {
+  return get(`/api/services/${encodeURIComponent(service)}/queue/inbox`);
+}
+
+/** Get programmable-queue entries (admin). */
+export async function getProgrammableQueueEntries(service) {
+  return get(`/api/services/${encodeURIComponent(service)}/queue/programmable/entries`, { auth: true });
+}
+/** Get blinded-queue entries (admin). */
+export async function getBlindedQueueEntries(service) {
+  return get(`/api/services/${encodeURIComponent(service)}/queue/blinded/entries`, { auth: true });
+}
+/** Get inbox-queue entries (admin). */
+export async function getInboxQueueEntries(service) {
+  return get(`/api/services/${encodeURIComponent(service)}/queue/inbox/entries`, { auth: true });
+}
+
+/** List names matching an optional prefix + tag filter. */
+export async function listNames({ prefix = '', tag = '' } = {}) {
+  const qs = new URLSearchParams();
+  if (prefix) qs.set('prefix', prefix);
+  if (tag) qs.set('tag', tag);
+  const suffix = qs.toString() ? `?${qs}` : '';
+  return get(`/api/names${suffix}`);
+}
+
+/** Resolve a single name to its pyana:// URI + metadata. */
+export async function resolveName(name) {
+  return get(`/api/names/${encodeURIComponent(name)}`);
+}
+
+/** List known signed delegations matching an optional free-text query. */
+export async function listDelegations({ q = '' } = {}) {
+  const suffix = q ? `?q=${encodeURIComponent(q)}` : '';
+  return get(`/api/delegations${suffix}`);
+}
+
+/** Get a single delegation envelope by id or envelope-hash. */
+export async function getDelegation(idOrHash) {
+  return get(`/api/delegations/${encodeURIComponent(idOrHash)}`);
 }
 
 /** Ping the node to test connectivity. Returns true if reachable. */
