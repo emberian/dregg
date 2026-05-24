@@ -39,6 +39,7 @@
 
 pub mod atomic;
 pub mod blinded;
+pub mod commitment;
 pub mod content;
 pub mod dataflow;
 pub mod dedup;

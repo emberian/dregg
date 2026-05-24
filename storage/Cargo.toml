@@ -12,6 +12,14 @@ kzg = ["poly-commitment", "ark-ec", "ark-ff", "ark-poly", "ark-bn254", "ark-std"
 blake3 = "1"
 serde = { version = "1", features = ["derive"] }
 
+# Path dependency on pyana-circuit for Poseidon2 + BabyBear primitives.
+# storage is in the root Cargo.toml `exclude` list, so it builds as a
+# standalone crate — but we can still take a path dependency on a workspace
+# crate. We use only the public Poseidon2/BabyBear surface; no upstream
+# visibility changes were required (see STORAGE-POSEIDON2-AUDIT.md, "Notes
+# on the Poseidon2 source").
+pyana-circuit = { path = "../circuit" }
+
 # KZG polynomial commitment from o1-labs/proof-systems (same rev as circuit crate).
 # We use PairingSRS for SRS generation + commit_non_hiding for polynomial commitments.
 # The "std" feature is required for the KZG module and SRS creation methods.
