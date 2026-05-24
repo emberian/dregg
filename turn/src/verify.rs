@@ -256,13 +256,16 @@ pub fn verify_receipt_chain_with_keys(
                 return Err(VerifyError::ExecutorSignatureInvalid { index: i });
             }
             let sig_array: [u8; 64] = sig_bytes[..64].try_into().unwrap();
-            let receipt_hash = receipt.receipt_hash();
+            // Stage 9 R-4: the executor signs the canonical narrow message
+            // (see `TurnReceipt::canonical_executor_signed_message`), not the
+            // full `receipt_hash()`. Verifiers reproduce that message here.
+            let msg = receipt.canonical_executor_signed_message();
             let signature = ed25519_dalek::Signature::from_bytes(&sig_array);
 
             let mut verified = false;
             for pubkey_bytes in executor_pubkeys {
                 if let Ok(vk) = ed25519_dalek::VerifyingKey::from_bytes(pubkey_bytes) {
-                    if vk.verify_strict(&receipt_hash, &signature).is_ok() {
+                    if vk.verify_strict(&msg, &signature).is_ok() {
                         verified = true;
                         break;
                     }
@@ -279,12 +282,13 @@ pub fn verify_receipt_chain_with_keys(
 }
 
 /// Sign a receipt with the given Ed25519 signing key.
-/// Returns the 64-byte signature over the receipt hash.
+/// Returns the 64-byte signature over
+/// [`TurnReceipt::canonical_executor_signed_message`] (Stage 9 R-4).
 pub fn sign_receipt(receipt: &TurnReceipt, signing_key: &[u8; 32]) -> Vec<u8> {
     use ed25519_dalek::Signer;
     let sk = ed25519_dalek::SigningKey::from_bytes(signing_key);
-    let receipt_hash = receipt.receipt_hash();
-    let sig = sk.sign(&receipt_hash);
+    let msg = receipt.canonical_executor_signed_message();
+    let sig = sk.sign(&msg);
     sig.to_bytes().to_vec()
 }
 
@@ -495,6 +499,48 @@ mod tests {
         let r1 = make_receipt(agent, [1u8; 32], [2u8; 32], None);
         let r2 = make_receipt(agent, [1u8; 32], [2u8; 32], None);
         assert_eq!(r1.receipt_hash(), r2.receipt_hash());
+    }
+
+    /// Stage 9 R-4 (P3.C): the executor's signature round-trips through the
+    /// canonical narrow message and is rejected under a foreign key.
+    #[test]
+    fn test_executor_signature_roundtrip_canonical_message() {
+        let agent = CellId::from_bytes([1u8; 32]);
+        let mut receipt = make_receipt(agent, [1u8; 32], [2u8; 32], None);
+        receipt.timestamp = 0xBEEF;
+        receipt.turn_hash = [0xAB; 32];
+
+        let signing_seed = [0x42u8; 32];
+        let sig_bytes = sign_receipt(&receipt, &signing_seed);
+        assert_eq!(sig_bytes.len(), 64);
+        receipt.executor_signature = Some(sig_bytes);
+
+        let sk = ed25519_dalek::SigningKey::from_bytes(&signing_seed);
+        let pk = sk.verifying_key().to_bytes();
+
+        // Verifies under the correct key.
+        verify_receipt_chain_with_keys(&[receipt.clone()], &[pk])
+            .expect("canonical-message signature must verify under correct key");
+
+        // Rejected under a foreign key.
+        let bogus = [0x99u8; 32];
+        let err = verify_receipt_chain_with_keys(&[receipt.clone()], &[bogus])
+            .expect_err("foreign key must not verify");
+        assert!(matches!(
+            err,
+            VerifyError::ExecutorSignatureInvalid { .. }
+        ));
+
+        // If the receipt body fields the canonical message commits to are
+        // mutated (e.g. post_state_hash), the signature stops verifying.
+        let mut tampered = receipt.clone();
+        tampered.post_state_hash = [0xFF; 32];
+        let err = verify_receipt_chain_with_keys(&[tampered], &[pk])
+            .expect_err("tampered post_state_hash must invalidate executor signature");
+        assert!(matches!(
+            err,
+            VerifyError::ExecutorSignatureInvalid { .. }
+        ));
     }
 
     #[test]
