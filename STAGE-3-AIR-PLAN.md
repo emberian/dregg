@@ -1,5 +1,30 @@
 # Stage 3 Effect VM AIR additions — implementation plan
 
+**STATUS: COMPLETE (2026-05-24).** All 22 originally-shimmed Effect
+variants now have real AIR coverage; `push_pending_shim` is fully
+removed from `convert_turn_effects_to_vm`. NUM_EFFECTS grew from 24
+to 46; EFFECT_VM_WIDTH 83 → 105. `test_stage3_multi_variant_compose`
+exercises 23 variants in one trace and verifies end-to-end.
+
+The plan below documents the per-variant decisions taken during
+implementation. The recommended order was followed loosely; later
+batches combined related variants when their constraint shape allowed
+(e.g., the passthrough loop sweeps 14 selectors at once).
+
+Implementation commits (in order):
+- `ec9b2469` RevokeCapability
+- `d4a66dbf` EmitEvent
+- `5dc88065` SetPermissions
+- `528aec6e` SetVerificationKey
+- `8a64d81f` CreateSealPair, RefreshDelegation, RevokeDelegation
+- `8d32aa42` CreateCell, SpawnWithDelegation, BridgeCancel, ExerciseViaCapability
+- `845a4cc2` Introduce, PipelinedSend
+- `3475bb64` CreateEscrow, BridgeLock (balance debit), CreateCommittedEscrow
+- `d9d7687b` align compute_balance_delta_from_effects with new debit variants
+- `bec93808` BridgeMint, BridgeFinalize, ReleaseEscrow, RefundEscrow, ReleaseCommittedEscrow, RefundCommittedEscrow
+- `cea77c6c` remove unused push_pending_shim helper + multi-variant compose test
+- `f2b84cb7` retire effect-vm-pending-shim feature
+
 Produced 2026-05-24 from a read-only Explore investigation of the codebase
 following the demo passing end-to-end (commit `0141c509`). This document is
 the bridge between the current state (18 honest VM variants, 23 shimmed)
