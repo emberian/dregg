@@ -78,10 +78,10 @@
 //! against the same `pyana_turn::TurnExecutor` code-path that native
 //! CLIs use.
 
-use pyana_app_framework::{Action, AppWallet, CellId, Effect, Event, FieldElement, symbol};
-use pyana_cell::{
-    AuthRequired, CapTarget, CapTemplate, CellMode, ChildVkStrategy, FactoryDescriptor,
-    FieldConstraint, StateConstraint,
+use pyana_app_framework::{
+    Action, AppWallet, AuthRequired, CapTarget, CapTemplate, CellId, CellMode, ChildVkStrategy,
+    Effect, Event, FactoryDescriptor, FieldConstraint, FieldElement, InspectorDescriptor,
+    StarbridgeAppContext, StateConstraint, symbol,
 };
 
 // =============================================================================
@@ -372,6 +372,116 @@ pub fn build_transfer_action(
 }
 
 // =============================================================================
+// StarbridgeAppContext mount
+// =============================================================================
+
+/// Register the nameservice starbridge-app on a [`StarbridgeAppContext`].
+///
+/// Concrete `register(ctx)` hook a host calls at startup to bind this
+/// app's factory descriptors and inspector surfaces into the shared
+/// context. After this call:
+///
+/// - `ctx.factory_registry().get(&NAME_FACTORY_VK)` returns the
+///   [`name_factory_descriptor`]. The in-browser PyanaRuntime can
+///   resolve `window.pyana.createFromFactory(NAME_FACTORY_VK, ..)`
+///   against the host's HTTP descriptor service backed by this
+///   registry.
+/// - `ctx.inspector_registry().get("name")` returns the
+///   [`InspectorDescriptor`] pointing the Studio at
+///   `/starbridge-apps/nameservice/inspectors.js` for any
+///   `<pyana-name uri="..."/>` mount.
+/// - `ctx.inspector_registry().get("name-registry")` returns the
+///   parent-list inspector (the registry-cell view that links
+///   into individual name cells).
+///
+/// Returns the registered `factory_vk` so the host can log or
+/// surface it.
+///
+/// ## Typical host wiring
+///
+/// ```ignore
+/// use pyana_app_framework::{
+///     AgentWallet, AppServer, AppConfig, AppWallet, EmbeddedExecutor,
+///     StarbridgeAppContext,
+/// };
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let federation_id = [42u8; 32];
+///     let wallet = AppWallet::new(AgentWallet::new(), federation_id);
+///     let executor = EmbeddedExecutor::new(&wallet, "default");
+///     let ctx = StarbridgeAppContext::new(wallet.clone(), executor.clone());
+///
+///     // Each starbridge-app contributes its factories + inspectors.
+///     starbridge_nameservice::register(&ctx);
+///     // starbridge_identity::register(&ctx);
+///     // ...
+///
+///     AppServer::new(AppConfig::from_env())
+///         .service_name("starbridge-host")
+///         .with_health()
+///         .with_cors()
+///         .with_wallet(wallet)
+///         .with_embedded_executor(executor)
+///         .with_starbridge(ctx)
+///         .serve()
+///         .await
+///         .unwrap();
+/// }
+/// ```
+///
+/// Per-handler use: extract `axum::Extension<StarbridgeAppContext>`
+/// and reach `ctx.wallet()`, `ctx.executor()`, or
+/// `ctx.factory_registry()` uniformly across all starbridge-apps
+/// mounted on the same host.
+pub fn register(ctx: &StarbridgeAppContext) -> [u8; 32] {
+    // 1. Register the name factory descriptor. The returned vk is
+    // `NAME_FACTORY_VK`; downstream code looks descriptors up by it.
+    let factory_vk = ctx.register_factory(name_factory_descriptor());
+
+    // 2. Register the per-name inspector. The descriptor points the
+    // Studio runtime at this app's `inspectors.js` module under the
+    // `<pyana-name uri="..."/>` webcomponent name. The shape matches
+    // `site/_includes/studio/inspectors.js`'s registration grammar.
+    ctx.register_inspector(InspectorDescriptor {
+        kind: "name".into(),
+        descriptor: serde_json::json!({
+            "component": "pyana-name",
+            "module": "/starbridge-apps/nameservice/inspectors.js",
+            "uri_prefix": "pyana://cell/",
+            "summary_fields": ["name_hash", "owner_hash", "expiry"],
+            "factory_vk_hex": hex_encode(&factory_vk),
+            "child_program_vk_hex": hex_encode(&NAME_CHILD_PROGRAM_VK),
+        }),
+    });
+
+    // 3. Register the registry-list inspector (the parent view that
+    // links to each name cell). Apps with no parent view can skip
+    // this; for nameservice it is the "browse all registered names"
+    // surface.
+    ctx.register_inspector_with("name-registry", || {
+        serde_json::json!({
+            "component": "pyana-name-registry",
+            "module": "/starbridge-apps/nameservice/inspectors.js",
+            "uri_prefix": "pyana://cell/",
+            "child_inspector": "name",
+        })
+    });
+
+    factory_vk
+}
+
+/// Hex-encode a 32-byte array (small helper used by inspector
+/// descriptor JSON). Kept private to this crate.
+fn hex_encode(bytes: &[u8; 32]) -> String {
+    let mut s = String::with_capacity(64);
+    for b in bytes {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
+}
+
+// =============================================================================
 // Helpers
 // =============================================================================
 
@@ -400,10 +510,16 @@ fn u64_field(value: u64) -> FieldElement {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyana_app_framework::{AgentWallet, Authorization};
+    use pyana_app_framework::{AgentWallet, Authorization, EmbeddedExecutor};
 
     fn test_wallet() -> AppWallet {
         AppWallet::new(AgentWallet::new(), [42u8; 32])
+    }
+
+    fn test_context() -> StarbridgeAppContext {
+        let wallet = test_wallet();
+        let executor = EmbeddedExecutor::new(&wallet, "default");
+        StarbridgeAppContext::new(wallet, executor)
     }
 
     fn test_cell() -> CellId {
@@ -644,6 +760,71 @@ mod tests {
             other => panic!("expected SetField, got {other:?}"),
         }
         assert!(matches!(&action.effects[1], Effect::EmitEvent { .. }));
+    }
+
+    // ── StarbridgeAppContext mount integration. ──────────────────────────
+
+    #[test]
+    fn register_installs_name_factory_descriptor() {
+        let ctx = test_context();
+        assert_eq!(ctx.factory_registry().len(), 0);
+        let vk = register(&ctx);
+        assert_eq!(vk, NAME_FACTORY_VK);
+        assert_eq!(ctx.factory_registry().len(), 1);
+        let got = ctx
+            .factory_registry()
+            .get(&NAME_FACTORY_VK)
+            .expect("factory descriptor registered");
+        assert_eq!(got.factory_vk, NAME_FACTORY_VK);
+        assert_eq!(got.child_program_vk, Some(NAME_CHILD_PROGRAM_VK));
+        assert_eq!(got.default_mode, CellMode::Sovereign);
+    }
+
+    #[test]
+    fn register_installs_inspector_descriptors() {
+        let ctx = test_context();
+        register(&ctx);
+        let name_insp = ctx
+            .inspector_registry()
+            .get("name")
+            .expect("name inspector registered");
+        assert_eq!(name_insp.descriptor["component"], "pyana-name");
+        assert_eq!(
+            name_insp.descriptor["module"],
+            "/starbridge-apps/nameservice/inspectors.js"
+        );
+        let registry_insp = ctx
+            .inspector_registry()
+            .get("name-registry")
+            .expect("name-registry inspector registered");
+        assert_eq!(registry_insp.descriptor["component"], "pyana-name-registry");
+        assert_eq!(registry_insp.descriptor["child_inspector"], "name");
+    }
+
+    #[test]
+    fn register_is_idempotent_on_factory() {
+        // Calling register twice with the same ctx should not panic
+        // and should not duplicate the factory entry (constructor
+        // transparency: one descriptor per factory_vk).
+        let ctx = test_context();
+        register(&ctx);
+        register(&ctx);
+        assert_eq!(ctx.factory_registry().len(), 1);
+    }
+
+    #[test]
+    fn register_inspector_descriptor_contains_factory_vk_hex() {
+        // Inspectors need the factory VK to mount the
+        // constructor-transparency view. Confirm the JSON carries it
+        // as a hex string.
+        let ctx = test_context();
+        register(&ctx);
+        let name_insp = ctx.inspector_registry().get("name").unwrap();
+        let hex = name_insp.descriptor["factory_vk_hex"]
+            .as_str()
+            .expect("factory_vk_hex must be a string");
+        assert_eq!(hex.len(), 64);
+        assert_eq!(hex, hex_encode(&NAME_FACTORY_VK));
     }
 
     #[test]

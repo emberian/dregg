@@ -64,8 +64,8 @@ pub mod filter;
 pub mod router;
 
 pub use air::{
-    AirTrace, AirTraceRow, DfaError, compile_to_air, compile_to_air_from_table,
-    generate_air_trace, verify_acceptance, verify_air_trace,
+    AirTrace, AirTraceRow, DfaError, compile_to_air, compile_to_air_from_table, generate_air_trace,
+    verify_acceptance, verify_air_trace,
 };
 pub use compiler::{DEAD_STATE, Dfa, Pattern, StateId, Transition};
 pub use filter::{FilterTree, TopicFilter};

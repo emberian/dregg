@@ -8,7 +8,7 @@ use serenity::all::{
 
 use crate::BotState;
 use crate::embeds;
-use crate::wallet::DerivedWallet;
+use crate::wallet::{UserWallet, sign_legacy};
 
 /// Register the /send command.
 pub fn register_send() -> CreateCommand {
@@ -138,7 +138,11 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
     };
 
     // Derive sender's wallet to sign the transfer.
-    let wallet = DerivedWallet::derive(&state.config.bot_secret, sender_id);
+    let wallet = UserWallet::derive(
+        &state.config.bot_secret,
+        sender_id,
+        state.federation_id_bytes,
+    );
     let signature = sign_transfer(&wallet, &recipient_cell, amount);
 
     // Submit transfer to devnet.
@@ -180,16 +184,20 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
     }
 }
 
-/// Sign a transfer message using BLAKE3.
-fn sign_transfer(wallet: &DerivedWallet, to_cell: &str, amount: u64) -> String {
+/// Sign a transfer using the legacy BLAKE3-MAC wire scheme the current
+/// devnet `/api/turns/submit` endpoint expects. The body is
+/// `b"transfer:" + to_cell + b":" + amount_le_bytes` and the MAC is
+/// `blake3(body || raw_secret)` per `wallet::sign_legacy`.
+///
+/// When the devnet wire format moves to canonical signed Actions,
+/// replace with `wallet.app.make_action(...)` + post the action bytes.
+fn sign_transfer(wallet: &UserWallet, to_cell: &str, amount: u64) -> String {
     let mut msg = Vec::new();
     msg.extend_from_slice(b"transfer:");
     msg.extend_from_slice(to_cell.as_bytes());
     msg.extend_from_slice(b":");
     msg.extend_from_slice(&amount.to_le_bytes());
-    msg.extend_from_slice(&wallet.private_key);
-    let sig = blake3::hash(&msg);
-    hex::encode(sig.as_bytes())
+    sign_legacy(wallet, &msg)
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

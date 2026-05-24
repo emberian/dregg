@@ -4,6 +4,26 @@
 //! shareable `PyanaUri` values. It is stored as an axum [`Extension`] so handlers can
 //! extract it and export capabilities to incoming connections.
 //!
+//! # Triage (post-Lane B wire changes — 2026-05-24)
+//!
+//! Verified still useful and correct. The `SwissTable` API surface
+//! used here (`SwissTable::export -> [u8; 32]`, `SwissTable::make_uri
+//! -> Option<PyanaUri>`) matches `captp/src/sturdy.rs` as of Lane B
+//! (`captp/src/sturdy.rs:85, 143`). Lane B's wire changes
+//! restructured `wire/src/{captp_server, hardening}.rs` (the QUIC
+//! transport layer); the app-side `CapTpServer` wrapper here is the
+//! *application-facing* sturdy-ref minting + revocation surface and
+//! is independent of the wire-transport rewrite.
+//!
+//! Verdict: **(a) still useful for app-side CapTP serving**.
+//! Apps that mount this carry a `CapTpServer` Extension on their
+//! Router so HTTP handlers can call `server.export(cell, perms, ...)`
+//! and return the resulting `PyanaUri` to the requesting client. No
+//! changes needed for the current wire surface; if a future wire
+//! change forces `SwissTable::export` to return a `Result` (rather
+//! than infallibly returning a swiss number), the change is local —
+//! propagate the `Result` in `CapTpServer::export`'s signature.
+//!
 //! # Signature note (disagreement with brief)
 //!
 //! The brief stated that `SwissTable::export` returns a `PyanaUri` directly. Reality:

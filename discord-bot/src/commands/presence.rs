@@ -8,7 +8,7 @@ use serenity::all::{
 use crate::BotState;
 use crate::embeds;
 use crate::presence::{PresenceAttestation, PresenceClaim};
-use crate::wallet::DerivedWallet;
+use crate::wallet::UserWallet;
 
 /// Register the /presence command.
 pub fn register() -> CreateCommand {
@@ -111,8 +111,8 @@ async fn handle_attest(ctx: &Context, command: &CommandInteraction, state: &BotS
     // Parse the claim type from options.
     let claim = parse_claim_from_options(command).unwrap_or(PresenceClaim::CurrentlyOnline);
 
-    // Get the user's cell ID.
-    let wallet = DerivedWallet::derive(&state.config.bot_secret, user_id);
+    // Get the user's cell ID via the canonical AppWallet.
+    let wallet = UserWallet::derive(&state.config.bot_secret, user_id, state.federation_id_bytes);
 
     let _ = command
         .create_response(
@@ -125,7 +125,7 @@ async fn handle_attest(ctx: &Context, command: &CommandInteraction, state: &BotS
 
     let result = {
         let mut tracker = state.presence.lock().await;
-        tracker.attest(user_id, wallet.cell_id, claim.clone())
+        tracker.attest(user_id, wallet.cell_id_bytes(), claim.clone())
     };
 
     match result {

@@ -427,6 +427,19 @@ pub mod recursive {
     pub fn verify_recursive_layer(
         output: &RecursionOutput<PyanaRecursionConfig>,
     ) -> Result<(), String> {
+        verify_recursive_batch_proof(&output.0)
+    }
+
+    /// Verify a recursive proof from just the inner `BatchStarkProof`.
+    ///
+    /// Useful when the proof was serialised by itself (the
+    /// `Rc<CircuitProverData<SC>>` half of `RecursionOutput` is only
+    /// needed for *chaining* the proof into another recursion layer, not
+    /// for verifying it). Block 3's scope-2 recursive replay path uses
+    /// this entrypoint with postcard-decoded bytes.
+    pub fn verify_recursive_batch_proof(
+        proof: &p3_circuit_prover::BatchStarkProof<PyanaRecursionConfig>,
+    ) -> Result<(), String> {
         let config = create_recursion_config();
         let mut prover = BatchStarkProver::new(config);
         // Register the NPO table provers that were used to produce the recursive proof.
@@ -435,8 +448,19 @@ pub mod recursive {
         // split_coeff_tables = false because Poseidon2Config::D (4) == extension degree D (4)
         prover.register_recompose_table::<D>(false);
         prover
-            .verify_all_tables(&output.0)
+            .verify_all_tables(proof)
             .map_err(|e| format!("Recursive proof verification failed: {:?}", e))
+    }
+
+    /// Verify a recursive proof from postcard-serialised bytes.
+    ///
+    /// Convenience wrapper for the verifier side: decodes the
+    /// `BatchStarkProof` then delegates to [`verify_recursive_batch_proof`].
+    pub fn verify_recursive_layer_bytes(bytes: &[u8]) -> Result<(), String> {
+        let proof: p3_circuit_prover::BatchStarkProof<PyanaRecursionConfig> =
+            postcard::from_bytes(bytes)
+                .map_err(|e| format!("Recursive proof postcard decode failed: {e}"))?;
+        verify_recursive_batch_proof(&proof)
     }
 
     /// End-to-end: generate an inner Merkle membership proof, then prove it recursively.
@@ -520,10 +544,30 @@ pub mod recursive {
             let pv0 = P3BabyBear::ZERO;
             let pv1 = P3BabyBear::from_u64(0xC0FFEE);
             let rows: Vec<[P3BabyBear; 4]> = vec![
-                [pv0, P3BabyBear::from_u64(1), P3BabyBear::from_u64(2), P3BabyBear::from_u64(10)],
-                [P3BabyBear::from_u64(10), P3BabyBear::from_u64(3), P3BabyBear::from_u64(4), P3BabyBear::from_u64(20)],
-                [P3BabyBear::from_u64(20), P3BabyBear::from_u64(5), P3BabyBear::from_u64(6), P3BabyBear::from_u64(30)],
-                [P3BabyBear::from_u64(30), P3BabyBear::from_u64(7), P3BabyBear::from_u64(8), pv1],
+                [
+                    pv0,
+                    P3BabyBear::from_u64(1),
+                    P3BabyBear::from_u64(2),
+                    P3BabyBear::from_u64(10),
+                ],
+                [
+                    P3BabyBear::from_u64(10),
+                    P3BabyBear::from_u64(3),
+                    P3BabyBear::from_u64(4),
+                    P3BabyBear::from_u64(20),
+                ],
+                [
+                    P3BabyBear::from_u64(20),
+                    P3BabyBear::from_u64(5),
+                    P3BabyBear::from_u64(6),
+                    P3BabyBear::from_u64(30),
+                ],
+                [
+                    P3BabyBear::from_u64(30),
+                    P3BabyBear::from_u64(7),
+                    P3BabyBear::from_u64(8),
+                    pv1,
+                ],
             ];
             let flat: Vec<P3BabyBear> = rows.iter().flat_map(|r| r.iter().copied()).collect();
             let matrix = RowMajorMatrix::new(flat, 4);
@@ -540,8 +584,7 @@ pub mod recursive {
             // Recursive layer through the generalized path.
             let rec = prove_recursive_layer_for_air(&air, &inner, &pis_bb)
                 .expect("AggregationAir recursive layer must prove");
-            verify_recursive_layer(&rec)
-                .expect("AggregationAir recursive layer must verify");
+            verify_recursive_layer(&rec).expect("AggregationAir recursive layer must verify");
         }
 
         /// Core POC: one layer of real in-circuit recursive STARK verification.

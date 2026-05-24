@@ -870,6 +870,95 @@ fn tool_definitions() -> Vec<McpToolDef> {
                 "required": ["auction_id", "amount"]
             }),
         },
+        // ─── CapTP Delivery (γ.1 / Seam 3) ─────────────────────────────────────────
+        McpToolDef {
+            name: "pyana_captp_deliver",
+            description: "Construct and submit a Turn whose root action is authorized by `Authorization::CapTpDelivered` (introducer-signed HandoffCertificate + sender Ed25519 sig over the canonical delivery message). The node wallet plays the recipient/sender; the introducer key is constructed in-process for testing. Returns the turn hash and the cert nonce.",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "target_cell": { "type": "string", "description": "Hex-encoded 32-byte target cell (the action target & gateway-mirror agent)" },
+                    "introducer_sk": { "type": "string", "description": "Hex-encoded 32-byte introducer Ed25519 secret seed (testing-only). When omitted, a fresh ephemeral introducer key is generated." },
+                    "introducer_federation": { "type": "string", "description": "Hex-encoded 32-byte introducer federation id. Defaults to BLAKE3(introducer_pk)." },
+                    "target_federation": { "type": "string", "description": "Hex-encoded 32-byte target federation id (default: zero federation, matching the executor default)." },
+                    "permissions": { "type": "string", "enum": ["none","signature","proof","either"], "description": "Permission level encoded in the cert (default: signature)" },
+                    "expires_at": { "type": "integer", "description": "Optional cert expiry (block height)." },
+                    "swiss": { "type": "string", "description": "Hex-encoded 32-byte swiss number (default: random)." },
+                    "effects": {
+                        "type": "array",
+                        "description": "Effects to attach to the captp.route action (typically a single effect). Each effect is per the parse_effect_json contract.",
+                        "items": { "type": "object" }
+                    }
+                },
+                "required": ["target_cell"]
+            }),
+        },
+        // ─── Sovereign Cell Witness (reshaped) ─────────────────────────────────────
+        McpToolDef {
+            name: "pyana_sign_sovereign_witness",
+            description: "Build a properly-signed `SovereignCellWitness` for a sovereign cell currently in the local ledger. Signs the canonical message (cell_id || old_commitment || new_commitment || effects_hash || timestamp || sequence) with the node wallet's Ed25519 key. Pass `attach_proof=true` to also generate an Effect-VM STARK proof binding the transition. Returns the witness postcard-encoded as hex plus structured fields.",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "cell_id": { "type": "string", "description": "Hex-encoded 32-byte sovereign cell ID. Must be registered via `pyana_make_sovereign` first." },
+                    "new_commitment": { "type": "string", "description": "Hex-encoded 32-byte post-state commitment claimed by the witness. If omitted, derived as BLAKE3(cell_id || old_commitment || effects_hash || sequence)." },
+                    "effects_hash": { "type": "string", "description": "Hex-encoded 32-byte BLAKE3 over the effects applied. If omitted, set to zero." },
+                    "attach_proof": { "type": "boolean", "description": "If true, also generate a STARK transition_proof binding (old, new, effects_hash) via EffectVmAir. Default: false." },
+                    "vm_effect_amount": { "type": "integer", "description": "If `attach_proof` is set, the (single-effect VM) amount to use for the synthetic transition. Default: 0." }
+                },
+                "required": ["cell_id"]
+            }),
+        },
+        // ─── Slot caveats / StateConstraint surface ───────────────────────────────
+        // (Note: extends pyana_read_cell to include the cell program's
+        // declared `StateConstraint` set — no new tool needed for the read
+        // path; clients invoking pyana_read_cell will see `program.kind` and
+        // `program.state_constraints` in the JSON response.)
+        // ─── γ.2 bilateral binding receipts ────────────────────────────────────────
+        McpToolDef {
+            name: "pyana_bilateral_action",
+            description: "Submit a Turn with a single bilateral effect (Transfer / GrantCapability / Introduce) and return the WitnessedReceipts for BOTH cells involved. The executor's bilateral schedule binds the from-side and to-side accumulator roots; this tool surfaces the per-side trace + proof bytes so callers can verify the bilateral identity end-to-end.",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "mode": { "type": "string", "enum": ["transfer","grant","introduce"], "description": "Which bilateral effect to emit." },
+                    "from": { "type": "string", "description": "Hex-encoded 32-byte 'from' cell (transfer source / grant donor / introduce introducer)." },
+                    "to": { "type": "string", "description": "Hex-encoded 32-byte 'to' cell (transfer recipient / grant recipient / introduce recipient)." },
+                    "target": { "type": "string", "description": "(introduce only) Hex-encoded 32-byte target cell the introduction references." },
+                    "amount": { "type": "integer", "description": "(transfer only) Computron amount to transfer." },
+                    "permissions": { "type": "string", "enum": ["none","signature","proof","either"], "description": "(grant / introduce) Permission level for the granted capability. Default: signature." }
+                },
+                "required": ["mode","from","to"]
+            }),
+        },
+        // ─── Factory creation via canonical Effect::CreateCellFromFactory ──────────
+        McpToolDef {
+            name: "pyana_create_cell_from_factory_effect",
+            description: "Emit a canonical `Effect::CreateCellFromFactory` inside a Turn so the new cell is created through the factory descriptor's validate_creation path (instead of the legacy direct insertion). Use this from the wasm/extension surface when a factory has been deployed and you want all child-cell creations to flow through the descriptor's constraints.",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "factory_vk": { "type": "string", "description": "Hex-encoded 32-byte factory VK." },
+                    "owner_pubkey": { "type": "string", "description": "Hex-encoded 32-byte owner pubkey for the new cell. Defaults to this node's wallet pubkey." },
+                    "token_id": { "type": "string", "description": "Hex-encoded 32-byte token-domain id (default: BLAKE3(\"pyana-mcp-factory-token\"))." },
+                    "sovereign": { "type": "boolean", "description": "Whether the new cell is sovereign (default: false)." },
+                    "program_vk": { "type": "string", "description": "Hex-encoded 32-byte child program VK (must match the factory's Fixed strategy when set)." },
+                    "initial_fields": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "index": { "type": "integer" },
+                                "value": { "type": "integer" }
+                            },
+                            "required": ["index","value"]
+                        },
+                        "description": "Initial field overrides as { index, value } pairs (u32 index, u64 value)."
+                    }
+                },
+                "required": ["factory_vk"]
+            }),
+        },
     ]
 }
 
@@ -925,6 +1014,16 @@ async fn dispatch_tool(name: &str, params: Value, state: &NodeState) -> McpToolR
         // Gallery
         "pyana_list_auctions" => tool_list_auctions(&params, state).await,
         "pyana_place_bid" => tool_place_bid(&params, state).await,
+        // CapTP delivery
+        "pyana_captp_deliver" => tool_captp_deliver(&params, state).await,
+        // Sovereign witness (reshaped)
+        "pyana_sign_sovereign_witness" => tool_sign_sovereign_witness(&params, state).await,
+        // γ.2 bilateral binding
+        "pyana_bilateral_action" => tool_bilateral_action(&params, state).await,
+        // Canonical factory-driven cell creation
+        "pyana_create_cell_from_factory_effect" => {
+            tool_create_cell_from_factory_effect(&params, state).await
+        }
         _ => McpToolResult::error(format!("unknown tool: {name}")),
     }
 }
@@ -1879,14 +1978,15 @@ async fn tool_read_cell(params: &Value, state: &NodeState) -> McpToolResult {
     let cell_id = pyana_cell::CellId(cell_id_bytes);
     let cell_opt = s.ledger.get(&cell_id);
     let is_sovereign = s.ledger.is_sovereign(&cell_id);
-    let (found, balance, nonce, capability_count) = match cell_opt {
+    let (found, balance, nonce, capability_count, program_json) = match cell_opt {
         Some(c) => (
             true,
             Some(c.state.balance()),
             Some(c.state.nonce()),
             Some(c.capabilities.len()),
+            Some(describe_cell_program(&c.program)),
         ),
-        None => (false, None, None, None),
+        None => (false, None, None, None, None),
     };
 
     McpToolResult::json(&serde_json::json!({
@@ -1896,7 +1996,48 @@ async fn tool_read_cell(params: &Value, state: &NodeState) -> McpToolResult {
         "nonce": nonce,
         "capability_count": capability_count,
         "is_sovereign": is_sovereign,
+        // Slot caveats — the cell program's declared StateConstraint set,
+        // serialized so MCP callers can see what's perpetually enforced on
+        // every state-modifying turn. `kind` is "None" / "Predicate" /
+        // "Circuit"; `state_constraints` (when present) is the structured
+        // constraint vocabulary defined by `pyana_cell::program::StateConstraint`.
+        "program": program_json,
     }))
+}
+
+/// Render a `CellProgram` into a JSON value that exposes its kind and
+/// (for predicate programs) the full structured `StateConstraint` list.
+///
+/// This is the slot-caveat surface on the MCP read path: callers can
+/// discover what invariants the cell's program enforces on every turn
+/// without having to peek into postcard bytes.
+fn describe_cell_program(program: &pyana_cell::CellProgram) -> serde_json::Value {
+    match program {
+        pyana_cell::CellProgram::None => serde_json::json!({
+            "kind": "None",
+            "state_constraints": [],
+            "note": "no slot caveats declared; any authorized state change is valid",
+        }),
+        pyana_cell::CellProgram::Predicate(constraints) => {
+            // Serialize via serde so the full structured vocabulary
+            // (FieldEquals, WriteOnce, Monotonic, BoundDelta, …) is
+            // exposed verbatim — callers can match on the discriminants
+            // to reason about what the cell enforces.
+            let cs: serde_json::Value =
+                serde_json::to_value(constraints).unwrap_or(serde_json::Value::Array(Vec::new()));
+            serde_json::json!({
+                "kind": "Predicate",
+                "state_constraints": cs,
+                "constraint_count": constraints.len(),
+            })
+        }
+        pyana_cell::CellProgram::Circuit { circuit_hash } => serde_json::json!({
+            "kind": "Circuit",
+            "circuit_hash": hex_encode(circuit_hash),
+            "state_constraints": [],
+            "note": "circuit-program: post-state validity is enforced by the AIR proof in the action authorization",
+        }),
+    }
 }
 
 async fn tool_get_receipt_chain(params: &Value, state: &NodeState) -> McpToolResult {
@@ -3514,7 +3655,11 @@ async fn tool_get_blocklace_status(state: &NodeState) -> McpToolResult {
     let peer_count = s.peers.len();
 
     // Report what we know from the federation state.
-    let federation_mode = format!("{:?}", s.federation_mode);
+    let federation_mode = if s.solo_consensus.as_ref().is_some_and(|s| s.is_solo) {
+        "solo".to_string()
+    } else {
+        "full".to_string()
+    };
     let federation_configured = s.federation_configured;
     let participant_count = s.known_federation_keys.len();
 
@@ -3832,6 +3977,826 @@ async fn tool_place_bid(params: &Value, state: &NodeState) -> McpToolResult {
         "nonce": hex_encode(&nonce),
         "note": "Bid committed. Save the nonce for the reveal phase. Amount hidden until reveal."
     }))
+}
+
+// =============================================================================
+// CapTP delivery tool (γ.1 / Seam 3)
+// =============================================================================
+
+/// Construct a Turn whose root action carries `Authorization::CapTpDelivered`.
+///
+/// MCP-side glue for the same primitive the wire layer uses
+/// (`wire::captp_routing::build_captp_turn_delivered`). Because the node crate
+/// does not depend on `wire`, this tool re-implements the small construction
+/// directly against `pyana-turn` + `pyana-captp` primitives. The introducer
+/// signs the `HandoffCertificate`, the wallet (acting as recipient) signs the
+/// canonical `captp_delivered_signing_message`, and the resulting Turn carries
+/// both signatures inside the authorization.
+async fn tool_captp_deliver(params: &Value, state: &NodeState) -> McpToolResult {
+    let target_cell_hex = match params.get("target_cell").and_then(|v| v.as_str()) {
+        Some(h) => h,
+        None => return McpToolResult::error("missing required parameter: target_cell"),
+    };
+    let target_cell_bytes = match hex_decode(target_cell_hex) {
+        Ok(b) => b,
+        Err(_) => return McpToolResult::error("invalid hex for target_cell"),
+    };
+
+    let permissions_str = params
+        .get("permissions")
+        .and_then(|v| v.as_str())
+        .unwrap_or("signature");
+    let permissions = match permissions_str {
+        "none" | "None" => pyana_cell::AuthRequired::None,
+        "signature" | "Signature" => pyana_cell::AuthRequired::Signature,
+        "proof" | "Proof" => pyana_cell::AuthRequired::Proof,
+        "either" | "Either" => pyana_cell::AuthRequired::Either,
+        other => {
+            return McpToolResult::error(format!(
+                "invalid permissions: '{other}' (none|signature|proof|either)"
+            ));
+        }
+    };
+
+    let swiss: [u8; 32] = match params.get("swiss").and_then(|v| v.as_str()) {
+        Some(h) => match hex_decode(h) {
+            Ok(b) => b,
+            Err(_) => return McpToolResult::error("invalid hex for swiss"),
+        },
+        None => {
+            let mut s = [0u8; 32];
+            if getrandom::fill(&mut s).is_err() {
+                return McpToolResult::error("failed to generate swiss");
+            }
+            s
+        }
+    };
+
+    let expires_at = params.get("expires_at").and_then(|v| v.as_u64());
+
+    let target_federation_bytes: [u8; 32] =
+        match params.get("target_federation").and_then(|v| v.as_str()) {
+            Some(h) => match hex_decode(h) {
+                Ok(b) => b,
+                Err(_) => return McpToolResult::error("invalid hex for target_federation"),
+            },
+            None => [0u8; 32],
+        };
+    let target_federation = pyana_types::FederationId(target_federation_bytes);
+
+    let introducer_sk = match params.get("introducer_sk").and_then(|v| v.as_str()) {
+        Some(h) => match hex_decode(h) {
+            Ok(b) => pyana_types::SigningKey::from_bytes(&b),
+            Err(_) => return McpToolResult::error("invalid hex for introducer_sk"),
+        },
+        None => {
+            let mut seed = [0u8; 32];
+            if getrandom::fill(&mut seed).is_err() {
+                return McpToolResult::error("failed to generate introducer seed");
+            }
+            pyana_types::SigningKey::from_bytes(&seed)
+        }
+    };
+    let introducer_pk_bytes = introducer_sk.verifying_key_bytes();
+
+    let introducer_federation_bytes: [u8; 32] =
+        match params.get("introducer_federation").and_then(|v| v.as_str()) {
+            Some(h) => match hex_decode(h) {
+                Ok(b) => b,
+                Err(_) => return McpToolResult::error("invalid hex for introducer_federation"),
+            },
+            None => *blake3::hash(&introducer_pk_bytes).as_bytes(),
+        };
+    let introducer_federation = pyana_types::FederationId(introducer_federation_bytes);
+
+    let parsed_effects: Vec<pyana_turn::Effect> =
+        match params.get("effects").and_then(|v| v.as_array()) {
+            Some(arr) => {
+                let mut out = Vec::with_capacity(arr.len());
+                for ev in arr {
+                    match parse_effect_json(ev) {
+                        Ok(e) => out.push(e),
+                        Err(msg) => return McpToolResult::error(format!("invalid effect: {msg}")),
+                    }
+                }
+                out
+            }
+            None => Vec::new(),
+        };
+
+    let mut s = state.write().await;
+    if !s.unlocked {
+        return McpToolResult::error("wallet is locked; unlock first");
+    }
+
+    let recipient_pk = s.wallet.public_key().0;
+    let target_cell_id = pyana_cell::CellId(target_cell_bytes);
+    let target_cell_captp = pyana_types::CellId(target_cell_bytes);
+
+    let cert = pyana_captp::HandoffCertificate::create(
+        &introducer_sk,
+        introducer_federation,
+        target_federation,
+        target_cell_captp,
+        recipient_pk,
+        permissions,
+        None,
+        expires_at,
+        None,
+        swiss,
+    );
+
+    let agent_cell_id = target_cell_id;
+
+    let turn_nonce = s.wallet.receipt_chain_length() as u64;
+    let signing_msg = pyana_turn::Authorization::captp_delivered_signing_message(
+        &cert.nonce,
+        &agent_cell_id,
+        &target_cell_id,
+        turn_nonce,
+        &parsed_effects,
+    );
+    let recipient_signature = pyana_types::sign(&s.wallet.gossip_signing_key(), &signing_msg);
+
+    if s.ledger.get(&target_cell_id).is_none() {
+        let stub = pyana_cell::Cell::remote_stub_with_id_pk_balance(
+            target_cell_id,
+            recipient_pk,
+            1_000_000,
+        );
+        let _ = s.ledger.insert_cell(stub);
+    }
+
+    let cert_nonce_hex = hex_encode(&cert.nonce);
+    let action = pyana_turn::Action {
+        target: target_cell_id,
+        method: pyana_turn::action::symbol("captp.route"),
+        args: vec![],
+        authorization: pyana_turn::Authorization::CapTpDelivered {
+            handoff_cert: cert,
+            introducer_pk: introducer_pk_bytes,
+            sender_pk: recipient_pk,
+            sender_signature: recipient_signature.0,
+        },
+        preconditions: pyana_cell::Preconditions::default(),
+        effects: parsed_effects,
+        may_delegate: pyana_turn::DelegationMode::None,
+        commitment_mode: pyana_turn::CommitmentMode::Full,
+        balance_change: None,
+    };
+    let mut forest = CallForest::new();
+    forest.add_root(action);
+
+    let turn = Turn {
+        agent: agent_cell_id,
+        nonce: turn_nonce,
+        fee: 10_000,
+        memo: Some("captp.route (mcp)".to_string()),
+        valid_until: None,
+        call_forest: forest,
+        depends_on: vec![],
+        previous_receipt_hash: s.wallet.receipt_chain().last().map(|r| r.receipt_hash()),
+        conservation_proof: None,
+        sovereign_witnesses: std::collections::HashMap::new(),
+        execution_proof: None,
+        execution_proof_cell: None,
+        execution_proof_new_commitment: None,
+        custom_program_proofs: None,
+    };
+    let turn_hash = hex_encode(&turn.hash());
+
+    let executor = pyana_turn::TurnExecutor::new(pyana_turn::ComputronCosts::default());
+    let exec_result = executor.execute(&turn, &mut s.ledger);
+
+    match exec_result {
+        pyana_turn::TurnResult::Committed { receipt, .. } => {
+            s.wallet.append_receipt(receipt);
+            drop(s);
+            state.emit(crate::state::NodeEvent::Receipt {
+                hash: turn_hash.clone(),
+            });
+            McpToolResult::json(&serde_json::json!({
+                "delivered": true,
+                "turn_hash": turn_hash,
+                "cert_nonce": cert_nonce_hex,
+                "introducer_pk": hex_encode(&introducer_pk_bytes),
+                "introducer_federation": hex_encode(&introducer_federation_bytes),
+                "target_federation": hex_encode(&target_federation_bytes),
+                "recipient_pk": hex_encode(&recipient_pk),
+                "permissions": permissions_str,
+                "swiss": hex_encode(&swiss),
+            }))
+        }
+        pyana_turn::TurnResult::Rejected { reason, .. } => {
+            drop(s);
+            McpToolResult::json(&serde_json::json!({
+                "delivered": false,
+                "error": format!("captp delivery rejected: {reason}"),
+                "turn_hash": turn_hash,
+                "cert_nonce": cert_nonce_hex,
+            }))
+        }
+        _ => {
+            drop(s);
+            McpToolResult::json(&serde_json::json!({
+                "delivered": false,
+                "error": "captp delivery did not commit",
+            }))
+        }
+    }
+}
+
+// =============================================================================
+// Sovereign witness signing (reshaped per soundness-sweep redesign)
+// =============================================================================
+
+/// Build a `SovereignCellWitness` for a sovereign cell currently in the
+/// local ledger, signed with the node wallet's Ed25519 key.
+///
+/// The canonical signing message includes (cell_id, old_commitment,
+/// new_commitment, effects_hash, timestamp, sequence) — see
+/// `SovereignCellWitness::signing_message`. Per the soundness-sweep
+/// redesign the executor verifies the signature against the cell's
+/// `public_key()` with `verify_strict`, enforces a monotonic per-cell
+/// `sequence`, and (when `attach_proof` is set) verifies the optional
+/// STARK `transition_proof` through the EffectVmAir path.
+async fn tool_sign_sovereign_witness(params: &Value, state: &NodeState) -> McpToolResult {
+    let cell_id_hex = match params.get("cell_id").and_then(|v| v.as_str()) {
+        Some(h) => h,
+        None => return McpToolResult::error("missing required parameter: cell_id"),
+    };
+    let cell_id_bytes = match hex_decode(cell_id_hex) {
+        Ok(b) => b,
+        Err(_) => return McpToolResult::error("invalid hex for cell_id"),
+    };
+    let cell_id = pyana_cell::CellId(cell_id_bytes);
+
+    let effects_hash: [u8; 32] = match params.get("effects_hash").and_then(|v| v.as_str()) {
+        Some(h) => match hex_decode(h) {
+            Ok(b) => b,
+            Err(_) => return McpToolResult::error("invalid hex for effects_hash"),
+        },
+        None => [0u8; 32],
+    };
+    let attach_proof = params
+        .get("attach_proof")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let vm_effect_amount = params
+        .get("vm_effect_amount")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
+    let s = state.read().await;
+    if !s.unlocked {
+        return McpToolResult::error("wallet is locked; unlock first");
+    }
+
+    let cell = match s.ledger.get(&cell_id) {
+        Some(c) => c.clone(),
+        None => {
+            return McpToolResult::error(format!(
+                "cell {} not found in local ledger; create it before signing a witness",
+                cell_id_hex
+            ));
+        }
+    };
+
+    let old_commitment: [u8; 32] = match s.ledger.get_sovereign_commitment(&cell_id) {
+        Some(c) => *c,
+        None => cell.state_commitment(),
+    };
+
+    let sequence = s.ledger.last_sovereign_witness_sequence(&cell_id) + 1;
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    let new_commitment: [u8; 32] = match params.get("new_commitment").and_then(|v| v.as_str()) {
+        Some(h) => match hex_decode(h) {
+            Ok(b) => b,
+            Err(_) => return McpToolResult::error("invalid hex for new_commitment"),
+        },
+        None => {
+            let mut hasher = blake3::Hasher::new_derive_key("pyana-mcp-witness-new-commit-v1");
+            hasher.update(&cell_id.0);
+            hasher.update(&old_commitment);
+            hasher.update(&effects_hash);
+            hasher.update(&sequence.to_le_bytes());
+            *hasher.finalize().as_bytes()
+        }
+    };
+
+    let signing_msg = pyana_turn::SovereignCellWitness::signing_message(
+        &cell_id,
+        &old_commitment,
+        &new_commitment,
+        &effects_hash,
+        timestamp,
+        sequence,
+    );
+    let sig = pyana_types::sign(&s.wallet.gossip_signing_key(), &signing_msg);
+
+    let transition_proof_hex = if attach_proof {
+        let vm_effects = vec![pyana_circuit::effect_vm::Effect::Transfer {
+            amount: vm_effect_amount,
+            direction: 1,
+        }];
+        let (proof_hex, _pi, _trace, _wh) =
+            generate_effect_vm_proof(cell.state.balance(), cell.state.nonce(), &vm_effects);
+        proof_hex
+    } else {
+        String::new()
+    };
+    let transition_proof_field: serde_json::Value = if transition_proof_hex.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::Value::String(transition_proof_hex.clone())
+    };
+
+    let transition_proof_bytes: Option<Vec<u8>> = if transition_proof_hex.is_empty() {
+        None
+    } else {
+        hex_decode_var(&transition_proof_hex).ok()
+    };
+    let witness = pyana_turn::SovereignCellWitness {
+        cell_id,
+        old_commitment,
+        new_commitment,
+        effects_hash,
+        timestamp,
+        sequence,
+        signature: sig.0,
+        cell_state: cell.clone(),
+        transition_proof: transition_proof_bytes,
+    };
+    let witness_postcard = postcard::to_stdvec(&witness).unwrap_or_default();
+    let signer_pk_hex = hex_encode(cell.public_key());
+    drop(s);
+
+    McpToolResult::json(&serde_json::json!({
+        "signed": true,
+        "cell_id": cell_id_hex,
+        "old_commitment": hex_encode(&old_commitment),
+        "new_commitment": hex_encode(&new_commitment),
+        "effects_hash": hex_encode(&effects_hash),
+        "timestamp": timestamp,
+        "sequence": sequence,
+        "signature": hex_encode(&sig.0),
+        "signer_pubkey": signer_pk_hex,
+        "transition_proof_hex": transition_proof_field,
+        "witness_postcard_hex": hex_encode(&witness_postcard),
+        "note": "Attach `witness_postcard_hex` (deserialized) to Turn::sovereign_witnesses[cell_id] before submitting the turn; the executor will re-verify the Ed25519 signature against the cell's public key and (when present) the STARK transition_proof.",
+    }))
+}
+
+// =============================================================================
+// γ.2 bilateral binding receipts
+// =============================================================================
+
+/// Submit a Turn carrying exactly one bilateral effect (Transfer / Grant /
+/// Introduce) and surface per-side WitnessedReceipts. The executor's
+/// `ExpectedBilateral::from_turn` derives the same schedule the AIR PIs
+/// project into; this tool returns the trace + proof for the from- and
+/// to-side cells so the caller can independently verify the bilateral
+/// identity via `WitnessedReceipt::verify_bilateral_chain`.
+async fn tool_bilateral_action(params: &Value, state: &NodeState) -> McpToolResult {
+    let mode = match params.get("mode").and_then(|v| v.as_str()) {
+        Some(m) => m.to_string(),
+        None => return McpToolResult::error("missing required parameter: mode"),
+    };
+    let from_hex = match params.get("from").and_then(|v| v.as_str()) {
+        Some(h) => h,
+        None => return McpToolResult::error("missing required parameter: from"),
+    };
+    let to_hex = match params.get("to").and_then(|v| v.as_str()) {
+        Some(h) => h,
+        None => return McpToolResult::error("missing required parameter: to"),
+    };
+    let from_bytes = match hex_decode(from_hex) {
+        Ok(b) => b,
+        Err(_) => return McpToolResult::error("invalid hex for from"),
+    };
+    let to_bytes = match hex_decode(to_hex) {
+        Ok(b) => b,
+        Err(_) => return McpToolResult::error("invalid hex for to"),
+    };
+    let from_cell = pyana_cell::CellId(from_bytes);
+    let to_cell = pyana_cell::CellId(to_bytes);
+
+    let permissions_str = params
+        .get("permissions")
+        .and_then(|v| v.as_str())
+        .unwrap_or("signature");
+    let permissions = match permissions_str {
+        "none" | "None" => pyana_cell::AuthRequired::None,
+        "signature" | "Signature" => pyana_cell::AuthRequired::Signature,
+        "proof" | "Proof" => pyana_cell::AuthRequired::Proof,
+        "either" | "Either" => pyana_cell::AuthRequired::Either,
+        other => {
+            return McpToolResult::error(format!(
+                "invalid permissions: '{other}' (none|signature|proof|either)"
+            ));
+        }
+    };
+
+    let effect = match mode.as_str() {
+        "transfer" => {
+            let amount = match params.get("amount").and_then(|v| v.as_u64()) {
+                Some(a) => a,
+                None => return McpToolResult::error("missing required parameter: amount"),
+            };
+            pyana_turn::Effect::Transfer {
+                from: from_cell,
+                to: to_cell,
+                amount,
+            }
+        }
+        "grant" => {
+            let cap = pyana_cell::CapabilityRef {
+                target: from_cell,
+                slot: 0,
+                permissions,
+                breadstuff: None,
+                expires_at: None,
+                allowed_effects: None,
+            };
+            pyana_turn::Effect::GrantCapability {
+                from: from_cell,
+                to: to_cell,
+                cap,
+            }
+        }
+        "introduce" => {
+            let target_hex = match params.get("target").and_then(|v| v.as_str()) {
+                Some(h) => h,
+                None => return McpToolResult::error("missing required parameter: target"),
+            };
+            let target_bytes = match hex_decode(target_hex) {
+                Ok(b) => b,
+                Err(_) => return McpToolResult::error("invalid hex for target"),
+            };
+            pyana_turn::Effect::Introduce {
+                introducer: from_cell,
+                recipient: to_cell,
+                target: pyana_cell::CellId(target_bytes),
+                permissions,
+            }
+        }
+        other => {
+            return McpToolResult::error(format!(
+                "invalid mode: '{other}' (transfer|grant|introduce)"
+            ));
+        }
+    };
+
+    let mut s = state.write().await;
+    if !s.unlocked {
+        return McpToolResult::error("wallet is locked; unlock first");
+    }
+
+    if s.ledger.get(&from_cell).is_none() {
+        let stub = pyana_cell::Cell::remote_stub_with_id_pk_balance(
+            from_cell,
+            s.wallet.public_key().0,
+            10_000_000,
+        );
+        let _ = s.ledger.insert_cell(stub);
+    }
+    if s.ledger.get(&to_cell).is_none() {
+        let stub = pyana_cell::Cell::remote_stub_with_id(to_cell);
+        let _ = s.ledger.insert_cell(stub);
+    }
+
+    let agent_cell_id = from_cell;
+
+    let action = pyana_turn::Action {
+        target: from_cell,
+        method: pyana_turn::action::symbol("bilateral"),
+        args: vec![],
+        authorization: pyana_turn::Authorization::Unchecked,
+        preconditions: pyana_cell::Preconditions::default(),
+        effects: vec![effect.clone()],
+        may_delegate: pyana_turn::DelegationMode::None,
+        commitment_mode: pyana_turn::CommitmentMode::Full,
+        balance_change: None,
+    };
+    let mut forest = CallForest::new();
+    forest.add_root(action);
+
+    let turn_nonce = s.wallet.receipt_chain_length() as u64;
+    let turn = Turn {
+        agent: agent_cell_id,
+        nonce: turn_nonce,
+        fee: 10_000,
+        memo: Some(format!("bilateral {mode}")),
+        valid_until: None,
+        call_forest: forest,
+        depends_on: vec![],
+        previous_receipt_hash: s.wallet.receipt_chain().last().map(|r| r.receipt_hash()),
+        conservation_proof: None,
+        sovereign_witnesses: std::collections::HashMap::new(),
+        execution_proof: None,
+        execution_proof_cell: None,
+        execution_proof_new_commitment: None,
+        custom_program_proofs: None,
+    };
+    let turn_hash = hex_encode(&turn.hash());
+
+    let from_pre = s
+        .ledger
+        .get(&from_cell)
+        .map(|c| (c.state.balance(), c.state.nonce()));
+    let to_pre = s
+        .ledger
+        .get(&to_cell)
+        .map(|c| (c.state.balance(), c.state.nonce()));
+
+    let executor = pyana_turn::TurnExecutor::new(pyana_turn::ComputronCosts::default());
+    let exec_result = executor.execute(&turn, &mut s.ledger);
+
+    let (committed_receipt_opt, error_str) = match exec_result {
+        pyana_turn::TurnResult::Committed { receipt, .. } => {
+            s.wallet.append_receipt(receipt.clone());
+            (Some(receipt), None)
+        }
+        pyana_turn::TurnResult::Rejected { reason, .. } => {
+            (None, Some(format!("turn rejected: {reason}")))
+        }
+        _ => (None, Some("bilateral turn did not commit".to_string())),
+    };
+    drop(s);
+
+    let receipt = match committed_receipt_opt {
+        Some(r) => r,
+        None => {
+            return McpToolResult::json(&serde_json::json!({
+                "committed": false,
+                "error": error_str.unwrap_or_else(|| "unknown".to_string()),
+                "turn_hash": turn_hash,
+            }));
+        }
+    };
+
+    let sched = pyana_turn::bilateral_schedule::ExpectedBilateral::from_turn(&turn);
+    let from_counts = sched.counts_for(&from_cell);
+    let to_counts = sched.counts_for(&to_cell);
+
+    let (from_vm, to_vm): (
+        Vec<pyana_circuit::effect_vm::Effect>,
+        Vec<pyana_circuit::effect_vm::Effect>,
+    ) = match &effect {
+        pyana_turn::Effect::Transfer { amount, .. } => (
+            vec![pyana_circuit::effect_vm::Effect::Transfer {
+                amount: *amount,
+                direction: 1,
+            }],
+            vec![pyana_circuit::effect_vm::Effect::Transfer {
+                amount: *amount,
+                direction: 0,
+            }],
+        ),
+        pyana_turn::Effect::GrantCapability { cap, .. } => (
+            vec![pyana_circuit::effect_vm::Effect::GrantCapability {
+                cap_entry: pyana_circuit::BabyBear::new(cap.slot.wrapping_add(1)),
+            }],
+            vec![pyana_circuit::effect_vm::Effect::GrantCapability {
+                cap_entry: pyana_circuit::BabyBear::new(cap.slot.wrapping_add(1)),
+            }],
+        ),
+        pyana_turn::Effect::Introduce { .. } => (
+            vec![pyana_circuit::effect_vm::Effect::NoOp],
+            vec![pyana_circuit::effect_vm::Effect::NoOp],
+        ),
+        _ => (Vec::new(), Vec::new()),
+    };
+
+    let (from_proof_hex, from_pi, from_trace, _from_wh) = match from_pre {
+        Some((b, n)) if !from_vm.is_empty() => generate_effect_vm_proof(b, n, &from_vm),
+        _ => (String::new(), Vec::new(), Vec::new(), String::new()),
+    };
+    let (to_proof_hex, to_pi, to_trace, _to_wh) = match to_pre {
+        Some((b, n)) if !to_vm.is_empty() => generate_effect_vm_proof(b, n, &to_vm),
+        _ => (String::new(), Vec::new(), Vec::new(), String::new()),
+    };
+
+    let build_witnessed = |proof_hex: &str, pi: &[u64], trace_rows: &[Vec<u32>]| -> Value {
+        if proof_hex.is_empty() {
+            return serde_json::Value::Null;
+        }
+        let trace_bb: Vec<Vec<pyana_circuit::BabyBear>> = trace_rows
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|&v| pyana_circuit::BabyBear::new(v))
+                    .collect()
+            })
+            .collect();
+        let proof_bytes = match hex_decode_var(proof_hex) {
+            Ok(b) => b,
+            Err(_) => return serde_json::Value::Null,
+        };
+        let pi_u32: Vec<u32> = pi.iter().map(|x| *x as u32).collect();
+        let wr = pyana_turn::WitnessedReceipt::from_components(
+            receipt.clone(),
+            proof_bytes,
+            pi_u32,
+            if trace_bb.is_empty() {
+                None
+            } else {
+                Some(trace_bb.as_slice())
+            },
+        );
+        serde_json::to_value(&wr).unwrap_or(serde_json::Value::Null)
+    };
+
+    let from_wr_json = build_witnessed(&from_proof_hex, &from_pi, &from_trace);
+    let to_wr_json = build_witnessed(&to_proof_hex, &to_pi, &to_trace);
+
+    McpToolResult::json(&serde_json::json!({
+        "committed": true,
+        "mode": mode,
+        "turn_hash": turn_hash,
+        "from_cell": from_hex,
+        "to_cell": to_hex,
+        "expected_schedule": {
+            "transfers": sched.transfers.len(),
+            "grants": sched.grants.len(),
+            "introduces": sched.introduces.len(),
+        },
+        "from_side": {
+            "outbound_transfer": from_counts.outbound_transfer,
+            "outbound_grant": from_counts.outbound_grant,
+            "intro_as_introducer": from_counts.intro_as_introducer,
+            "intro_as_recipient": from_counts.intro_as_recipient,
+            "intro_as_target": from_counts.intro_as_target,
+            "witnessed_receipt": from_wr_json,
+        },
+        "to_side": {
+            "inbound_transfer": to_counts.inbound_transfer,
+            "inbound_grant": to_counts.inbound_grant,
+            "intro_as_introducer": to_counts.intro_as_introducer,
+            "intro_as_recipient": to_counts.intro_as_recipient,
+            "intro_as_target": to_counts.intro_as_target,
+            "witnessed_receipt": to_wr_json,
+        },
+        "note": "Both sides' WitnessedReceipts cover the same TurnReceipt; together they expose the γ.2 bilateral algebraic binding (per-cell PI projection). Use WitnessedReceipt::verify_bilateral_chain off-line to re-derive the schedule and check accumulator-root equality.",
+    }))
+}
+
+// =============================================================================
+// FactoryDescriptor canonical creation path
+// =============================================================================
+
+/// Emit an `Effect::CreateCellFromFactory` so the new cell is created
+/// through the factory descriptor's validate_creation path. This is the
+/// canonical replacement for the legacy `pyana_create_from_factory` tool,
+/// which inserted cells via direct ledger manipulation; the new tool routes
+/// through the executor and the factory descriptor's invariants.
+async fn tool_create_cell_from_factory_effect(params: &Value, state: &NodeState) -> McpToolResult {
+    let factory_vk_hex = match params.get("factory_vk").and_then(|v| v.as_str()) {
+        Some(h) => h,
+        None => return McpToolResult::error("missing required parameter: factory_vk"),
+    };
+    let factory_vk = match hex_decode(factory_vk_hex) {
+        Ok(b) => b,
+        Err(_) => return McpToolResult::error("invalid hex for factory_vk"),
+    };
+    let sovereign = params
+        .get("sovereign")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let program_vk: Option<[u8; 32]> = match params.get("program_vk").and_then(|v| v.as_str()) {
+        Some(h) => match hex_decode(h) {
+            Ok(b) => Some(b),
+            Err(_) => return McpToolResult::error("invalid hex for program_vk"),
+        },
+        None => None,
+    };
+
+    let initial_fields: Vec<(u32, u64)> =
+        match params.get("initial_fields").and_then(|v| v.as_array()) {
+            Some(arr) => {
+                let mut out = Vec::with_capacity(arr.len());
+                for entry in arr {
+                    let idx = entry
+                        .get("index")
+                        .and_then(|v| v.as_u64())
+                        .ok_or_else(|| "initial_fields[*].index missing".to_string());
+                    let val = entry
+                        .get("value")
+                        .and_then(|v| v.as_u64())
+                        .ok_or_else(|| "initial_fields[*].value missing".to_string());
+                    match (idx, val) {
+                        (Ok(i), Ok(v)) => out.push((i as u32, v)),
+                        (Err(e), _) | (_, Err(e)) => return McpToolResult::error(e),
+                    }
+                }
+                out
+            }
+            None => Vec::new(),
+        };
+
+    let mut s = state.write().await;
+    if !s.unlocked {
+        return McpToolResult::error("wallet is locked; unlock first");
+    }
+
+    let owner_pubkey: [u8; 32] = match params.get("owner_pubkey").and_then(|v| v.as_str()) {
+        Some(h) => match hex_decode(h) {
+            Ok(b) => b,
+            Err(_) => return McpToolResult::error("invalid hex for owner_pubkey"),
+        },
+        None => s.wallet.public_key().0,
+    };
+    let token_id: [u8; 32] = match params.get("token_id").and_then(|v| v.as_str()) {
+        Some(h) => match hex_decode(h) {
+            Ok(b) => b,
+            Err(_) => return McpToolResult::error("invalid hex for token_id"),
+        },
+        None => blake3::derive_key("pyana-mcp-factory-token-v1", &factory_vk),
+    };
+
+    let mode = if sovereign {
+        pyana_cell::CellMode::Sovereign
+    } else {
+        pyana_cell::CellMode::Hosted
+    };
+
+    let params_struct = pyana_cell::factory::FactoryCreationParams {
+        mode,
+        program_vk,
+        initial_fields,
+        initial_caps: Vec::new(),
+        owner_pubkey,
+    };
+
+    let effect = pyana_turn::Effect::CreateCellFromFactory {
+        factory_vk,
+        owner_pubkey,
+        token_id,
+        params: params_struct,
+    };
+
+    let agent_cell_id = pyana_cell::CellId::derive_raw(&s.wallet.public_key().0, &[0u8; 32]);
+    let nonce = s.wallet.receipt_chain_length() as u64;
+    let turn = Turn {
+        agent: agent_cell_id,
+        nonce,
+        fee: 10_000,
+        memo: Some("create cell from factory (mcp)".to_string()),
+        valid_until: None,
+        call_forest: build_signed_forest(agent_cell_id, vec![effect], &s.wallet),
+        depends_on: vec![],
+        previous_receipt_hash: s.wallet.receipt_chain().last().map(|r| r.receipt_hash()),
+        conservation_proof: None,
+        sovereign_witnesses: std::collections::HashMap::new(),
+        execution_proof: None,
+        execution_proof_cell: None,
+        execution_proof_new_commitment: None,
+        custom_program_proofs: None,
+    };
+    let turn_hash = hex_encode(&turn.hash());
+
+    let executor = pyana_turn::TurnExecutor::new(pyana_turn::ComputronCosts::default());
+    let exec_result = executor.execute(&turn, &mut s.ledger);
+
+    let new_cell_id = pyana_cell::CellId::derive_raw(&owner_pubkey, &token_id);
+    let new_cell_hex = hex_encode(&new_cell_id.0);
+
+    match exec_result {
+        pyana_turn::TurnResult::Committed { receipt, .. } => {
+            s.wallet.append_receipt(receipt);
+            drop(s);
+            state.emit(crate::state::NodeEvent::Receipt {
+                hash: turn_hash.clone(),
+            });
+            McpToolResult::json(&serde_json::json!({
+                "created": true,
+                "factory_vk": factory_vk_hex,
+                "new_cell_id": new_cell_hex,
+                "owner_pubkey": hex_encode(&owner_pubkey),
+                "token_id": hex_encode(&token_id),
+                "sovereign": sovereign,
+                "turn_hash": turn_hash,
+                "note": "Created via Effect::CreateCellFromFactory; the executor ran the factory descriptor's validate_creation path before insertion.",
+            }))
+        }
+        pyana_turn::TurnResult::Rejected { reason, .. } => {
+            drop(s);
+            McpToolResult::json(&serde_json::json!({
+                "created": false,
+                "error": format!("factory creation rejected: {reason}"),
+                "turn_hash": turn_hash,
+            }))
+        }
+        _ => {
+            drop(s);
+            McpToolResult::error("factory creation turn did not commit")
+        }
+    }
 }
 
 // =============================================================================

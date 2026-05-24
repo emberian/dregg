@@ -41,6 +41,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::preconditions::EvalContext;
+use crate::predicate::WitnessedPredicate;
 use crate::state::{CellState, FIELD_ZERO, FieldElement, STATE_SLOTS};
 
 /// A cell program defines valid state transitions.
@@ -381,6 +382,26 @@ pub enum StateConstraint {
         variants: Vec<SimpleStateConstraint>,
     },
 
+    // ─── Witness-attached unification (PREDICATE-INVENTORY §3) ───
+    /// A witness-attached predicate (DFA classification, temporal-DSL
+    /// proof, blinded-set non-revocation, bridge predicate, custom
+    /// AIR…). Per PREDICATE-INVENTORY §3 / §7, this is the unified
+    /// shape that subsumes the typed
+    /// [`StateConstraint::TemporalPredicate`] variant (which is kept
+    /// as a typed convenience but is structurally a `Witnessed { wp:
+    /// WitnessedPredicate { kind: Temporal, … } }`).
+    ///
+    /// The executor evaluates by:
+    /// 1. Resolving `wp.input_ref` against the cell state / action
+    ///    witness / sender pk.
+    /// 2. Reading the proof bytes from
+    ///    `action.witness_blobs[wp.proof_witness_index]`.
+    /// 3. Calling the registry's verifier for `wp.kind`.
+    ///
+    /// Replay: per PREDICATE-INVENTORY §6.3, the receipt snapshots the
+    /// commitment at receipt-time so scope-2 replay is deterministic.
+    Witnessed { wp: WitnessedPredicate },
+
     // ─── Escape hatch ───
     /// DSL-authored predicate. The executor evaluates by hash lookup in
     /// the pyana-dsl runtime expression table. Per eval §5.4 the variant
@@ -424,6 +445,11 @@ pub enum ProgramError {
     BoundDeltaNotWired { peer_cell: crate::id::CellId },
     /// `TemporalPredicate` requires an attached witness proof.
     TemporalPredicateWitnessMissing { dsl_hash: [u8; 32] },
+    /// A `Witnessed { wp }` constraint cannot be evaluated locally
+    /// because the executor's per-action witness-binding pass has not
+    /// run yet (the executor's witnessed-predicate registry verifies
+    /// the proof; the static evaluator only declares the requirement).
+    WitnessedPredicateRequiresExecutor { kind_name: &'static str },
 }
 
 impl core::fmt::Display for ProgramError {
@@ -458,6 +484,12 @@ impl core::fmt::Display for ProgramError {
             }
             ProgramError::TemporalPredicateWitnessMissing { .. } => {
                 write!(f, "TemporalPredicate requires an attached witness proof")
+            }
+            ProgramError::WitnessedPredicateRequiresExecutor { kind_name } => {
+                write!(
+                    f,
+                    "witnessed predicate ({kind_name}) requires executor-side registry dispatch"
+                )
             }
         }
     }
@@ -1076,6 +1108,23 @@ fn evaluate_constraint(
                     description: "no AnyOf branch satisfied".into(),
                 }),
             )
+        }
+
+        StateConstraint::Witnessed { wp } => {
+            // The static evaluator does not have access to the
+            // executor's witness-binding pass; it surfaces the
+            // sentinel so the executor's witnessed-predicate dispatch
+            // path can intercept and call the registered verifier.
+            let kind_name: &'static str = match wp.kind {
+                crate::predicate::WitnessedPredicateKind::Dfa => "Dfa",
+                crate::predicate::WitnessedPredicateKind::Temporal => "Temporal",
+                crate::predicate::WitnessedPredicateKind::MerkleMembership => "MerkleMembership",
+                crate::predicate::WitnessedPredicateKind::BlindedSet => "BlindedSet",
+                crate::predicate::WitnessedPredicateKind::BridgePredicate => "BridgePredicate",
+                crate::predicate::WitnessedPredicateKind::PedersenEquality => "PedersenEquality",
+                crate::predicate::WitnessedPredicateKind::Custom { .. } => "Custom",
+            };
+            Err(ProgramError::WitnessedPredicateRequiresExecutor { kind_name })
         }
 
         StateConstraint::Custom { ir_hash, .. } => {

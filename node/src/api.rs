@@ -991,7 +991,11 @@ async fn get_status(State(state): State<NodeState>) -> Json<StatusResponse> {
     let note_count = s.store.note_count().unwrap_or(0);
     let peer_count = s.peers.len();
 
-    let federation_mode = s.federation_mode.to_string();
+    let federation_mode = if s.solo_consensus.as_ref().is_some_and(|s| s.is_solo) {
+        "solo".to_string()
+    } else {
+        "full".to_string()
+    };
 
     Json(StatusResponse {
         healthy: store_ok && wallet_ok,
@@ -1191,10 +1195,9 @@ async fn post_submit_turn(
 
             // Solo mode: record in nullifier log, mark receipt as Tentative,
             // and advance the solo consensus height.
-            if s.federation_mode == pyana_federation::solo::FederationMode::Solo {
-                receipt.finality = pyana_turn::Finality::Tentative;
-
-                if let Some(ref mut solo) = s.solo_consensus {
+            if let Some(ref mut solo) = s.solo_consensus {
+                if solo.is_solo {
+                    receipt.finality = pyana_turn::Finality::Tentative;
                     // Record any nullifiers from this turn in the solo nullifier log.
                     // The turn_hash itself serves as the sequencing entry for ordering.
                     let height = solo.height;
@@ -2190,9 +2193,9 @@ async fn post_resolve_conditional(
             match exec_result {
                 pyana_turn::TurnResult::Committed { mut receipt, .. } => {
                     // Solo mode: mark receipt as Tentative and log in nullifier log.
-                    if s.federation_mode == pyana_federation::solo::FederationMode::Solo {
-                        receipt.finality = pyana_turn::Finality::Tentative;
-                        if let Some(ref mut solo) = s.solo_consensus {
+                    if let Some(ref mut solo) = s.solo_consensus {
+                        if solo.is_solo {
+                            receipt.finality = pyana_turn::Finality::Tentative;
                             let height = solo.height;
                             let _ = solo.nullifier_log.insert(
                                 receipt.turn_hash,

@@ -56,6 +56,7 @@ fn mock_attested_root(fed_name: &str, height: u64) -> AttestedRoot {
         quorum_signatures: vec![],
         threshold_qc: None,
         threshold: 0,
+        federation_id: pyana_types::FederationId::PLACEHOLDER,
     }
 }
 

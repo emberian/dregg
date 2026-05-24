@@ -1299,6 +1299,7 @@ async fn execute_finalized_turn(
                 quorum_signatures: Vec::new(),
                 threshold_qc: None,
                 threshold: federation_threshold,
+                federation_id: pyana_types::FederationId(s.federation_id),
             };
             let signing_msg = attested.signing_message();
             let local_pk = s.wallet.public_key().clone();
@@ -1325,6 +1326,7 @@ async fn execute_finalized_turn(
                 quorum_signatures: attested.quorum_signatures.clone(),
                 threshold_qc: attested.threshold_qc.clone(),
                 threshold: attested.threshold,
+                federation_id: attested.federation_id,
             };
             if let Err(e) = s.store.store_attested_root(&stored) {
                 warn!(error = %e, height = new_height, "failed to persist attested root");

@@ -284,11 +284,19 @@ mod tests {
             entries: vec![
                 BilateralEntry {
                     cell_id: alice,
-                    witnessed_receipt: fabricate_witnessed_receipt(&turn, &alice, dummy_receipt(alice)),
+                    witnessed_receipt: fabricate_witnessed_receipt(
+                        &turn,
+                        &alice,
+                        dummy_receipt(alice),
+                    ),
                 },
                 BilateralEntry {
                     cell_id: bob,
-                    witnessed_receipt: fabricate_witnessed_receipt(&turn, &bob, dummy_receipt(alice)),
+                    witnessed_receipt: fabricate_witnessed_receipt(
+                        &turn,
+                        &bob,
+                        dummy_receipt(alice),
+                    ),
                 },
             ],
         };
@@ -389,7 +397,11 @@ mod tests {
             entries: vec![
                 BilateralEntry {
                     cell_id: alice,
-                    witnessed_receipt: fabricate_witnessed_receipt(&turn, &alice, dummy_receipt(alice)),
+                    witnessed_receipt: fabricate_witnessed_receipt(
+                        &turn,
+                        &alice,
+                        dummy_receipt(alice),
+                    ),
                 },
                 BilateralEntry {
                     cell_id: attacker,
@@ -451,11 +463,19 @@ mod tests {
             entries: vec![
                 BilateralEntry {
                     cell_id: alice,
-                    witnessed_receipt: fabricate_witnessed_receipt(&turn, &alice, dummy_receipt(alice)),
+                    witnessed_receipt: fabricate_witnessed_receipt(
+                        &turn,
+                        &alice,
+                        dummy_receipt(alice),
+                    ),
                 },
                 BilateralEntry {
                     cell_id: bob,
-                    witnessed_receipt: fabricate_witnessed_receipt(&turn, &bob, dummy_receipt(alice)),
+                    witnessed_receipt: fabricate_witnessed_receipt(
+                        &turn,
+                        &bob,
+                        dummy_receipt(alice),
+                    ),
                 },
             ],
         };
@@ -496,11 +516,19 @@ mod tests {
             entries: vec![
                 BilateralEntry {
                     cell_id: alice,
-                    witnessed_receipt: fabricate_witnessed_receipt(&turn, &alice, dummy_receipt(alice)),
+                    witnessed_receipt: fabricate_witnessed_receipt(
+                        &turn,
+                        &alice,
+                        dummy_receipt(alice),
+                    ),
                 },
                 BilateralEntry {
                     cell_id: bob,
-                    witnessed_receipt: fabricate_witnessed_receipt(&turn, &bob, dummy_receipt(alice)),
+                    witnessed_receipt: fabricate_witnessed_receipt(
+                        &turn,
+                        &bob,
+                        dummy_receipt(alice),
+                    ),
                 },
             ],
         };
@@ -532,15 +560,27 @@ mod tests {
             entries: vec![
                 BilateralEntry {
                     cell_id: alice,
-                    witnessed_receipt: fabricate_witnessed_receipt(&turn, &alice, dummy_receipt(alice)),
+                    witnessed_receipt: fabricate_witnessed_receipt(
+                        &turn,
+                        &alice,
+                        dummy_receipt(alice),
+                    ),
                 },
                 BilateralEntry {
                     cell_id: bob,
-                    witnessed_receipt: fabricate_witnessed_receipt(&turn, &bob, dummy_receipt(alice)),
+                    witnessed_receipt: fabricate_witnessed_receipt(
+                        &turn,
+                        &bob,
+                        dummy_receipt(alice),
+                    ),
                 },
                 BilateralEntry {
                     cell_id: carol,
-                    witnessed_receipt: fabricate_witnessed_receipt(&turn, &carol, dummy_receipt(alice)),
+                    witnessed_receipt: fabricate_witnessed_receipt(
+                        &turn,
+                        &carol,
+                        dummy_receipt(alice),
+                    ),
                 },
             ],
         };
@@ -553,5 +593,4 @@ mod tests {
         assert_eq!(verdict.introduce_count, 1);
         assert_eq!(verdict.entry_count, 3);
     }
-
 }

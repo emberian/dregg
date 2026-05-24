@@ -10,6 +10,51 @@
 //! All privacy-preserving mechanics (nullifier uniqueness, Merkle membership) live in
 //! `pyana_storage::blinded`. This module is a thin HTTP skin.
 //!
+//! # Triage (storage→cell-program migration — 2026-05-24)
+//!
+//! `STORAGE-AS-CELL-PROGRAMS.md §3.4` lays out the migration plan for
+//! `BlindedQueue`: it becomes a cell-program pattern with a sovereign
+//! cell carrying `(commitments_root, nullifier_root, capacity,
+//! consumed_count)` slots, governed by `StateConstraint`s
+//! (`Monotonic(commitments_root)`, `Monotonic(nullifier_root)`,
+//! `Monotonic(consumed_count)`, `FieldLte(consumed_count, capacity)`),
+//! plus one `WitnessedPredicate::Custom { vk_hash }` for the spend
+//! AIR. The Lane B trust-boundary conversion this module performs
+//! (raw 32-byte hash → typed `Commitment4` via
+//! `canonical_32_to_felts_4`) survives the migration — it just moves
+//! into the executor's effect-evaluator instead of living in HTTP
+//! handlers.
+//!
+//! Post-migration shape:
+//!
+//! - `POST /commit` becomes a thin proxy that produces a signed
+//!   `Action` carrying `Effect::SetField(commitments_root)` +
+//!   `Effect::EmitEvent("blinded-commit")` and submits it through the
+//!   embedded executor. The endpoint no longer holds the queue state;
+//!   the executor's ledger does.
+//! - `POST /consume` and `POST /consume-private` likewise produce
+//!   `Effect::SetField(nullifier_root)` +
+//!   `Effect::SetField(consumed_count)` +
+//!   `Effect::EmitEvent("blinded-consume")` actions; the spending
+//!   proof is verified by the cell-program's `WitnessedPredicate`
+//!   (one new vk_hash registration), not by the HTTP handler.
+//! - `GET /status` reads the cell's state fields out of the ledger
+//!   instead of out of the in-process `BlindedQueue` Mutex.
+//!
+//! Verdict: **(c) needs updates post-migration**. The endpoint
+//! stays — it remains the HTTP-language entry-point for clients that
+//! cannot speak the executor's native turn format — but its
+//! implementation collapses to "build signed action, submit through
+//! `StarbridgeAppContext::executor()`, surface the resulting receipt
+//! as JSON." That refactor blocks on the cell-program migration
+//! itself; in the interim this module continues to wrap
+//! `pyana_storage::blinded::BlindedQueue` directly.
+//!
+//! When migrating: the existing tests (`commit_and_status_roundtrip`)
+//! become integration tests against the cell-program executor; the
+//! `EndpointState` struct loses its `Arc<Mutex<BlindedQueue>>` field
+//! and gains a `cell_id: CellId` + `executor: EmbeddedExecutor` pair.
+//!
 //! # Usage
 //!
 //! ```ignore

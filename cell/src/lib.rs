@@ -31,6 +31,7 @@ pub mod oblivious_transfer;
 pub mod peer_exchange;
 pub mod permissions;
 pub mod preconditions;
+pub mod predicate;
 pub mod program;
 pub mod revocation_channel;
 #[cfg(feature = "crypto")]
@@ -45,7 +46,9 @@ pub mod value_commitment;
 mod tests;
 
 // Re-exports for convenience.
-pub use capability::{AttenuatedCap, CapabilityRef, CapabilitySet, is_attenuation};
+pub use capability::{
+    AttenuatedCap, CapabilityCaveat, CapabilityRef, CapabilitySet, is_attenuation,
+};
 #[cfg(feature = "crypto")]
 pub use capability_proof::{
     CapabilityExerciseRequest, CapabilityExerciseResponse, CapabilityProof, CapabilityProofData,
@@ -95,7 +98,12 @@ pub use oblivious_transfer::{
 pub use peer_exchange::{PeerCellView, PeerExchange, PeerExchangeError, PeerStateTransition};
 pub use permissions::{Action, AuthKind, AuthRequired, Permissions};
 pub use preconditions::{
-    CellStatePrecondition, EvalContext, NetworkPrecondition, Preconditions, TimeRange,
+    CellStatePrecondition, EvalContext, NetworkPrecondition, PreconditionClause, Preconditions,
+    PreconditionsBuilder, TimeRange,
+};
+pub use predicate::{
+    InputRef, PredicateInput, WitnessedPredicate, WitnessedPredicateError, WitnessedPredicateKind,
+    WitnessedPredicateRegistry, WitnessedPredicateVerifier,
 };
 pub use program::{CellProgram, ProgramError, StateConstraint, field_from_u64, field_from_u64_be};
 pub use revocation_channel::{

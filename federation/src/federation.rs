@@ -304,6 +304,44 @@ impl Federation {
     pub fn id_matches(&self, fed_id: &FederationId) -> bool {
         self.id == *fed_id
     }
+
+    /// Build an `AttestedRoot` bound to this federation.
+    ///
+    /// This is the *only* canonical constructor for an `AttestedRoot` —
+    /// it enforces `blocklace_block_id` and `finality_round` presence and
+    /// pre-populates the threshold from the federation's committee.
+    ///
+    /// The returned root has empty `quorum_signatures` and no `threshold_qc`;
+    /// the caller collects member signatures over
+    /// `root.signing_message_with_federation(&federation.id())` and appends them
+    /// before publishing.
+    ///
+    /// Per design §4: every `AttestedRoot` produced via this federation MUST
+    /// bind to a specific blocklace block — this enforces the binding.
+    pub fn build_attested_root(
+        &self,
+        merkle_root: [u8; 32],
+        note_tree_root: Option<[u8; 32]>,
+        nullifier_set_root: Option<[u8; 32]>,
+        height: u64,
+        timestamp: i64,
+        blocklace_block_id: [u8; 32],
+        finality_round: u64,
+    ) -> pyana_types::AttestedRoot {
+        pyana_types::AttestedRoot {
+            merkle_root,
+            note_tree_root,
+            nullifier_set_root,
+            height,
+            timestamp,
+            blocklace_block_id: Some(blocklace_block_id),
+            finality_round: Some(finality_round),
+            quorum_signatures: Vec::new(),
+            threshold_qc: None,
+            threshold: self.threshold_usize(),
+            federation_id: self.id,
+        }
+    }
 }
 
 impl std::fmt::Debug for Federation {

@@ -5,15 +5,23 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Trace and proof inspection for pyana turn execution (seed crate for the browser explorer)"
+description = "Studio-shape trace event emitter for the pyana turn substrate"
 
 [dependencies]
 pyana-cell = { path = "../cell" }
 pyana-circuit = { path = "../circuit" }
 pyana-turn = { path = "../turn" }
+pyana-captp = { path = "../captp" }
+pyana-federation = { path = "../federation", default-features = false }
+pyana-types = { path = "../types" }
 hex = "0.4"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+blake3 = "1"
+
+[lib]
+name = "pyana_observability"
+path = "src/lib.rs"
 
 [[bin]]
 name = "pyana-observability"

@@ -7,7 +7,7 @@ use serenity::all::{
 
 use crate::BotState;
 use crate::embeds;
-use crate::wallet::DerivedWallet;
+use crate::wallet::UserWallet;
 
 /// Register the /wallet command with all subcommands.
 pub fn register() -> CreateCommand {
@@ -76,13 +76,17 @@ async fn handle_create(ctx: &Context, command: &CommandInteraction, state: &BotS
     }
 
     // Derive keys.
-    let wallet = DerivedWallet::derive(&state.config.bot_secret, command.user.id.get());
-    let cell_id = wallet.cell_id_hex();
+    let wallet = UserWallet::derive(
+        &state.config.bot_secret,
+        command.user.id.get(),
+        state.federation_id_bytes,
+    );
+    let cell_id = wallet.cell_id_hex().to_string();
 
     // Register on devnet.
     if let Err(e) = state
         .devnet
-        .register_cell(&cell_id, &wallet.public_key_hex())
+        .register_cell(&cell_id, wallet.public_key_hex())
         .await
     {
         let embed = embeds::error_embed(
@@ -215,7 +219,7 @@ async fn handle_export(ctx: &Context, command: &CommandInteraction, state: &BotS
         }
     }
 
-    let wallet = DerivedWallet::derive(&state.config.bot_secret, user_id);
+    let wallet = UserWallet::derive(&state.config.bot_secret, user_id, state.federation_id_bytes);
 
     let embed = embeds::pyana_embed("Private Key Export")
         .description("**Keep this secret!** Anyone with this key controls your cell.")

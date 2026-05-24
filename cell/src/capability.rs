@@ -1,8 +1,43 @@
 use serde::{Deserialize, Serialize};
 
-use crate::facet::EffectMask;
+use crate::facet::{EffectMask, FacetConstraint};
 use crate::id::CellId;
 use crate::permissions::AuthRequired;
+use crate::predicate::WitnessedPredicate;
+
+/// A typed capability caveat — the unified "constraint on cap exercise"
+/// shape per PREDICATE-INVENTORY §3.5 + §7.6.
+///
+/// Existing capability authority predicates (the lattice attenuation
+/// shape: `allowed_effects: Option<EffectMask>` on
+/// [`CapabilityRef`] / [`AttenuatedCap`], and the order-theoretic
+/// `is_narrower_or_equal`/`is_facet_attenuation` checks) stay in their
+/// current shape — they are *order-theoretic*, not witness-attached, and
+/// PREDICATE-INVENTORY §3.6 case 3 explicitly excludes them from the
+/// unification.
+///
+/// `CapabilityCaveat` is the *additive* surface for cap holders to
+/// carry witness-attached predicates on their exercise (e.g. "this cap
+/// only fires when you produce a DFA-match proof against the
+/// governance-bound route table"), and to declare per-cap
+/// `FacetConstraint`s as first-class typed caveats rather than via the
+/// bitmask + side-channel constraint shape on `ExtendedFacet`.
+///
+/// v1 ships the type and a serde round-trip; production wiring (cap
+/// exercise reaching for `caveats: Vec<CapabilityCaveat>` on every
+/// `CapabilityRef`) is the PREDICATE-INVENTORY §7.6 Phase-6 payoff and
+/// stays additive.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CapabilityCaveat {
+    /// A typed facet constraint (rate limit, max-transfer, allowed
+    /// targets, budget). The existing `FacetConstraint` enum is the
+    /// canonical shape; this variant carries one of them.
+    FacetConstraint(FacetConstraint),
+    /// A witness-attached predicate gating cap exercise. The cap
+    /// holder must produce a proof that satisfies the registered
+    /// verifier kind. Per PREDICATE-INVENTORY §3.5 + §8.3.
+    Witnessed(WitnessedPredicate),
+}
 
 /// A reference to a capability — an entry in a cell's c-list.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

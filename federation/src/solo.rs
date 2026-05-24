@@ -24,64 +24,21 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
-// FederationMode
+// Solo Mode — Now A Property of Committee Size
 // =============================================================================
+//
+// Per FEDERATION-UNIFICATION-DESIGN.md §3, the legacy `FederationMode { Full,
+// Solo }` enum and `effective_quorum_threshold(mode, n)` helper are gone.
+// "Solo" is no longer a runtime mode — it is a property of `members.len() == 1`
+// (equivalently, `Federation::is_solo()`). Callers compute threshold via
+// `quorum_threshold(num_nodes)` (which returns 1 for n=1 naturally) or read
+// it directly from `Federation::threshold()`.
 
-/// The operating mode of a federation node.
-///
-/// Controls quorum requirements and finality semantics.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum FederationMode {
-    /// Full BFT: require 2f+1 signatures for finality (standard behavior).
-    Full,
-    /// Solo: single node processes all turns. No BFT safety but full liveness.
-    /// Safe when there are no Byzantine adversaries (devnet, single-operator).
-    Solo,
-}
-
-impl Default for FederationMode {
-    fn default() -> Self {
-        FederationMode::Full
-    }
-}
-
-impl std::fmt::Display for FederationMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            FederationMode::Full => write!(f, "full"),
-            FederationMode::Solo => write!(f, "solo"),
-        }
-    }
-}
-
-impl std::str::FromStr for FederationMode {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "full" => Ok(FederationMode::Full),
-            "solo" => Ok(FederationMode::Solo),
-            other => Err(format!(
-                "unknown federation mode: '{}' (expected 'full' or 'solo')",
-                other
-            )),
-        }
-    }
-}
-
-// =============================================================================
-// Quorum Threshold (mode-aware)
-// =============================================================================
-
-/// Compute the effective quorum threshold for a given mode and node count.
-///
-/// In Full mode: standard BFT threshold (n - f where f = n/3).
-/// In Solo mode: 1 (the local node's signature is sufficient).
-pub fn effective_quorum_threshold(mode: FederationMode, num_nodes: usize) -> usize {
-    match mode {
-        FederationMode::Full => crate::quorum_threshold(num_nodes),
-        FederationMode::Solo => 1,
-    }
+/// True when a federation of `num_nodes` is operating in degenerate-committee
+/// ("solo") mode. Convenience predicate for the call sites that historically
+/// switched on `FederationMode::Solo`.
+pub fn is_solo_committee(num_nodes: usize) -> bool {
+    num_nodes <= 1
 }
 
 // =============================================================================
@@ -283,15 +240,19 @@ impl std::error::Error for NullifierConflict {}
 
 /// Solo-mode consensus state: a thin wrapper that auto-finalizes without quorum.
 ///
-/// When in solo mode, the node:
+/// When operating with a committee of one (solo), the node:
 /// 1. Produces blocks unilaterally (it is always the leader)
 /// 2. Signs blocks with its own key only (no waiting for votes)
 /// 3. Produces Tentative receipts for consensus-path turns
 /// 4. Maintains a nullifier log for ordering
+///
+/// Solo is detected by inspecting the federation committee size, not a separate
+/// mode enum (see FEDERATION-UNIFICATION-DESIGN.md §3).
 #[derive(Clone, Debug)]
 pub struct SoloConsensusState {
-    /// The current operating mode.
-    pub mode: FederationMode,
+    /// Is the node currently operating as solo (committee of one)? Flipped to
+    /// `false` by `detect_peers` when a peer joins.
+    pub is_solo: bool,
     /// Current block height (increments on each finalized block).
     pub height: u64,
     /// Signing key for this node.
@@ -306,7 +267,7 @@ impl SoloConsensusState {
     /// Create a new solo consensus state.
     pub fn new(signing_key: [u8; 32]) -> Self {
         Self {
-            mode: FederationMode::Solo,
+            is_solo: true,
             height: 0,
             signing_key,
             nullifier_log: NullifierLog::new(signing_key),
@@ -314,19 +275,24 @@ impl SoloConsensusState {
         }
     }
 
-    /// Signal that peers have been detected. The node should upgrade to Full mode.
+    /// Signal that peers have been detected. The node should upgrade to multi-
+    /// node operation.
     pub fn detect_peers(&mut self) {
         self.peers_detected = true;
         tracing::info!(
-            "peers detected at height {}: upgrading federation mode from Solo to Full",
+            "peers detected at height {}: leaving solo (committee-of-one) operation",
             self.height
         );
-        self.mode = FederationMode::Full;
+        self.is_solo = false;
     }
 
-    /// Get the effective quorum threshold for the current mode.
+    /// Get the effective quorum threshold for the current committee size.
     pub fn effective_threshold(&self, num_nodes: usize) -> usize {
-        effective_quorum_threshold(self.mode, num_nodes)
+        if self.is_solo {
+            1
+        } else {
+            crate::quorum_threshold(num_nodes)
+        }
     }
 
     /// Advance height (called after processing a turn in solo mode).
@@ -344,36 +310,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_federation_mode_display_and_parse() {
-        assert_eq!(FederationMode::Full.to_string(), "full");
-        assert_eq!(FederationMode::Solo.to_string(), "solo");
-        assert_eq!(
-            "full".parse::<FederationMode>().unwrap(),
-            FederationMode::Full
-        );
-        assert_eq!(
-            "solo".parse::<FederationMode>().unwrap(),
-            FederationMode::Solo
-        );
-        assert_eq!(
-            "Solo".parse::<FederationMode>().unwrap(),
-            FederationMode::Solo
-        );
-        assert!("invalid".parse::<FederationMode>().is_err());
-    }
-
-    #[test]
-    fn test_effective_threshold_full_mode() {
-        assert_eq!(effective_quorum_threshold(FederationMode::Full, 3), 2);
-        assert_eq!(effective_quorum_threshold(FederationMode::Full, 4), 3);
-        assert_eq!(effective_quorum_threshold(FederationMode::Full, 7), 5);
-    }
-
-    #[test]
-    fn test_effective_threshold_solo_mode() {
-        assert_eq!(effective_quorum_threshold(FederationMode::Solo, 3), 1);
-        assert_eq!(effective_quorum_threshold(FederationMode::Solo, 7), 1);
-        assert_eq!(effective_quorum_threshold(FederationMode::Solo, 100), 1);
+    fn test_is_solo_committee() {
+        assert!(is_solo_committee(0));
+        assert!(is_solo_committee(1));
+        assert!(!is_solo_committee(2));
+        assert!(!is_solo_committee(7));
     }
 
     #[test]
@@ -440,21 +381,14 @@ mod tests {
     }
 
     #[test]
-    fn test_solo_mode_fast_path_threshold() {
-        // In solo mode, fast-path certificate only needs 1 signature.
-        let threshold = effective_quorum_threshold(FederationMode::Solo, 3);
-        assert_eq!(threshold, 1);
-    }
-
-    #[test]
     fn test_solo_state_upgrade_to_full() {
         let key = [0xCC; 32];
         let mut state = SoloConsensusState::new(key);
-        assert_eq!(state.mode, FederationMode::Solo);
+        assert!(state.is_solo);
         assert_eq!(state.effective_threshold(3), 1);
 
         state.detect_peers();
-        assert_eq!(state.mode, FederationMode::Full);
+        assert!(!state.is_solo);
         assert_eq!(state.effective_threshold(3), 2);
     }
 
@@ -499,7 +433,7 @@ mod tests {
 
         // In solo mode, threshold = 1.
         assert_eq!(state.effective_threshold(3), 1);
-        assert_eq!(state.mode, FederationMode::Solo);
+        assert!(state.is_solo);
 
         // Simulate processing a turn: the node is the sole sequencer.
         let nullifier = [0x42; 32];
@@ -512,60 +446,49 @@ mod tests {
         assert_eq!(state.height, 1);
 
         // In solo mode, consensus-path receipts should have Tentative finality.
-        let finality = match state.mode {
-            FederationMode::Solo => Finality::Tentative,
-            FederationMode::Full => Finality::Final,
+        let finality = if state.is_solo {
+            Finality::Tentative
+        } else {
+            Finality::Final
         };
         assert_eq!(finality, Finality::Tentative);
     }
 
     #[test]
     fn test_solo_fast_path_single_signature_sufficient() {
-        // Scenario: In solo mode, fast-path certificate needs only 1 signature.
-        //
-        // The turn crate's assemble_certificate(turn, hash, sigs, threshold) already
-        // accepts threshold=1 (proven by test_execute_certified_turn in fast_path.rs).
-        // Here we verify that effective_quorum_threshold returns 1 in Solo mode,
-        // meaning a single local node signature is sufficient for certification.
-        let solo_threshold = effective_quorum_threshold(FederationMode::Solo, 3);
-        let full_threshold = effective_quorum_threshold(FederationMode::Full, 3);
-
         // Solo: 1 signature is enough for fast-path certificate.
-        assert_eq!(solo_threshold, 1);
-        // Full: standard BFT threshold (2 for n=3).
-        assert_eq!(full_threshold, 2);
-
-        // For larger federations, solo is still 1 while full scales.
-        assert_eq!(effective_quorum_threshold(FederationMode::Solo, 7), 1);
-        assert_eq!(effective_quorum_threshold(FederationMode::Full, 7), 5);
+        let key = [0xCC; 32];
+        let state = SoloConsensusState::new(key);
+        assert_eq!(state.effective_threshold(3), 1);
     }
 
     #[test]
     fn test_mode_upgrade_solo_to_full() {
-        // Scenario: Start solo, peer joins, switch to Full.
+        // Scenario: Start solo, peer joins, switch to multi-node operation.
         use pyana_turn::Finality;
 
         let key = [0xDD; 32];
         let mut state = SoloConsensusState::new(key);
 
         // Initially solo.
-        assert_eq!(state.mode, FederationMode::Solo);
+        assert!(state.is_solo);
 
         // Process a turn in solo mode -> Tentative.
-        let finality_before = match state.mode {
-            FederationMode::Solo => Finality::Tentative,
-            FederationMode::Full => Finality::Final,
+        let finality_before = if state.is_solo {
+            Finality::Tentative
+        } else {
+            Finality::Final
         };
         assert_eq!(finality_before, Finality::Tentative);
 
-        // Peer joins -> upgrade to Full.
+        // Peer joins -> upgrade.
         state.detect_peers();
-        assert_eq!(state.mode, FederationMode::Full);
+        assert!(!state.is_solo);
 
-        // Subsequent turns get Final finality.
-        let finality_after = match state.mode {
-            FederationMode::Solo => Finality::Tentative,
-            FederationMode::Full => Finality::Final,
+        let finality_after = if state.is_solo {
+            Finality::Tentative
+        } else {
+            Finality::Final
         };
         assert_eq!(finality_after, Finality::Final);
 

@@ -55,6 +55,7 @@ fn sample_attested_root(height: u64) -> StoredAttestedRoot {
         ],
         threshold_qc: None,
         threshold: 2,
+        federation_id: pyana_types::FederationId::PLACEHOLDER,
     }
 }
 
@@ -1235,6 +1236,7 @@ fn test_attested_root_includes_note_tree() {
         quorum_signatures: vec![(PublicKey([0x11; 32]), Signature([0x22; 64]))],
         threshold_qc: None,
         threshold: 1,
+        federation_id: pyana_types::FederationId::PLACEHOLDER,
     };
 
     // Store and recover.

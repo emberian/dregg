@@ -147,6 +147,35 @@ pub enum WireMessage {
         threshold_qc: Option<ThresholdQC>,
     },
 
+    /// Proactive push of the sender's attested root to a peer federation.
+    ///
+    /// Unlike `AttestedRoot` (which is the *response* to a pull request), this
+    /// is unsolicited and originates from the federation owning the root. It
+    /// is sent periodically (e.g., on every commit) to peers in the local
+    /// `KnownFederations` registry so cross-federation verifiers do not have
+    /// to poll. Closes Silver Vision §3.2 ("no wire route for proactive
+    /// AttestedRoot push").
+    ///
+    /// Receivers SHOULD verify the quorum signatures (or threshold QC) under
+    /// the sender's known committee before applying the root locally. The
+    /// `sender_federation` field anchors the push to a specific federation so
+    /// a verifier can look the committee up in `KnownFederations`.
+    AttestedRootPush {
+        /// The federation pushing the root (anchors the verifier's committee
+        /// lookup).
+        sender_federation: [u8; 32],
+        /// The Merkle root of the revocation tree at the pushed height.
+        root: [u8; 32],
+        /// The block height at which this root was finalized.
+        height: u64,
+        /// Unix timestamp when finalized.
+        timestamp: i64,
+        /// Quorum signatures: (public_key, signature) pairs.
+        signatures: Vec<(PublicKey, Signature)>,
+        /// Optional threshold aggregate QC (constant-size BLS).
+        threshold_qc: Option<ThresholdQC>,
+    },
+
     // -------------------------------------------------------------------------
     // Revocation
     // -------------------------------------------------------------------------
@@ -323,6 +352,32 @@ pub enum WireMessage {
         session_epoch: u64,
     },
 
+    /// Notification that a previously-issued promise has broken.
+    ///
+    /// Sent by a federation that was supposed to resolve `promise_id` but
+    /// can no longer do so (peer disconnected mid-resolution, target cell
+    /// revoked, executor rejected the resolving turn, etc.). The receiver
+    /// MUST cascade the breakage to any downstream promises in its own
+    /// pipeline registry.
+    ///
+    /// Closes audit GAP-5 (no transport-side broken-promise propagation).
+    PromiseBroken {
+        /// The promise ID on the RECEIVER's side that has broken.
+        ///
+        /// Matches `result_promise_id` from a previously-sent `PipelinedMsg`.
+        promise_id: u64,
+        /// Human-readable reason for the breakage (propagated into
+        /// cascading notifications on the receiver's side).
+        reason: String,
+        /// The federation sending this notification (the one that owned
+        /// the broken promise on its end).
+        sender_federation: [u8; 32],
+        /// The session epoch this notification was issued under.
+        /// Stale-epoch breakage notifications are ignored.
+        #[serde(default)]
+        session_epoch: u64,
+    },
+
     /// Present a handoff certificate to the target federation.
     ///
     /// The recipient proves they own the recipient_pk named in the certificate
@@ -427,6 +482,7 @@ impl WireMessage {
             Self::PresentationResult { .. } => "PresentationResult",
             Self::RequestAttestedRoot => "RequestAttestedRoot",
             Self::AttestedRoot { .. } => "AttestedRoot",
+            Self::AttestedRootPush { .. } => "AttestedRootPush",
             Self::SubmitRevocation { .. } => "SubmitRevocation",
             Self::RevocationAck { .. } => "RevocationAck",
             Self::RequestNonMembership { .. } => "RequestNonMembership",
@@ -439,6 +495,7 @@ impl WireMessage {
             Self::EnlivenResponse { .. } => "EnlivenResponse",
             Self::DropRemoteRef { .. } => "DropRemoteRef",
             Self::PipelinedMsg { .. } => "PipelinedMsg",
+            Self::PromiseBroken { .. } => "PromiseBroken",
             Self::PresentHandoff { .. } => "PresentHandoff",
             Self::HandoffAccepted { .. } => "HandoffAccepted",
             Self::PeerChallenge { .. } => "PeerChallenge",
@@ -690,6 +747,20 @@ mod tests {
                 result_promise_id: Some(99),
                 sender_federation: [0xEE; 32],
                 session_epoch: 7,
+            },
+            WireMessage::PromiseBroken {
+                promise_id: 99,
+                reason: "peer disconnected".to_string(),
+                sender_federation: [0xEE; 32],
+                session_epoch: 7,
+            },
+            WireMessage::AttestedRootPush {
+                sender_federation: [0xFA; 32],
+                root: [0xAB; 32],
+                height: 17,
+                timestamp: 1700000017,
+                signatures: vec![(PublicKey([0xCC; 32]), Signature([0xBB; 64]))],
+                threshold_qc: None,
             },
             WireMessage::PresentHandoff {
                 presentation_bytes: vec![0x11; 200],

@@ -721,22 +721,19 @@ pub enum RecursiveReplayVerdict {
 /// 1. Run the same scope-1 STARK verification + receipt-PI binding as
 ///    [`replay_one`] (so a malformed scope-1 chain is rejected even when
 ///    the recursive proof would otherwise verify).
-/// 2. Deserialise `recursive_layer_bytes` as a postcard-encoded
-///    `BatchStarkProof<PyanaRecursionConfig>` and verify it via
-///    `pyana_circuit::plonky3_recursion_impl::recursive::verify_recursive_layer`.
+/// 2. Decode `recursive_layer_bytes` (postcard-encoded
+///    `BatchStarkProof<PyanaRecursionConfig>`) and verify via
+///    [`pyana_circuit::plonky3_recursion_impl::recursive::verify_recursive_layer_bytes`].
 ///
 /// Returns `Verified` only when *both* checks pass. The trust-and-replay
 /// path (`replay_one_with_prev`) remains the default; this function is
 /// only invoked when the caller explicitly opts in.
-#[cfg(feature = "recursion-replay")]
 pub fn verify_recursive_replay(
     wr: &ReplayEntry,
     recursive_layer_bytes: &[u8],
     prev_receipt_hash: Option<[u8; 32]>,
 ) -> RecursiveReplayVerdict {
-    use pyana_circuit::plonky3_recursion_impl::recursive::{
-        PyanaRecursionConfig, verify_recursive_layer,
-    };
+    use pyana_circuit::plonky3_recursion_impl::recursive::verify_recursive_layer_bytes;
 
     // Step 1: scope-1 STARK verification.
     let (proof_verdict, code) =
@@ -753,22 +750,7 @@ pub fn verify_recursive_replay(
     }
 
     // Step 2: recursive-layer verification.
-    let batch_proof: p3_circuit_prover::BatchStarkProof<PyanaRecursionConfig> =
-        match postcard::from_bytes(recursive_layer_bytes) {
-            Ok(p) => p,
-            Err(e) => {
-                return RecursiveReplayVerdict::RecursiveProofRejected {
-                    reason: format!("postcard decode failed: {e}"),
-                };
-            }
-        };
-
-    // Reconstruct the output wrapper that `verify_recursive_layer` expects.
-    // The prover-data is reconstructible from the proof itself.
-    use pyana_circuit::plonky3_recursion_impl::recursive::RecursionOutputCompat;
-    let output = RecursionOutputCompat::from_proof_only(batch_proof);
-
-    match verify_recursive_layer(&output.0) {
+    match verify_recursive_layer_bytes(recursive_layer_bytes) {
         Ok(()) => RecursiveReplayVerdict::Verified,
         Err(e) => RecursiveReplayVerdict::RecursiveProofRejected {
             reason: format!("recursive verify failed: {e}"),

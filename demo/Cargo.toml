@@ -7,14 +7,26 @@ edition.workspace = true
 blake3 = "1"
 ed25519-dalek = { version = "2", features = ["std"] }
 getrandom = { workspace = true }
+hex = "0.4"
+postcard = { version = "1", features = ["use-std"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+pyana-captp = { path = "../captp" }
+pyana-cell = { path = "../cell" }
+pyana-circuit = { path = "../circuit" }
 pyana-commit = { path = "../commit" }
 pyana-federation = { path = "../federation" }
-pyana-circuit = { path = "../circuit" }
+pyana-turn = { path = "../turn" }
 pyana-types = { path = "../types" }
+pyana-verifier = { path = "../verifier" }
 
 [[bin]]
 name = "pyana-demo"
 path = "src/main.rs"
+
+[[bin]]
+name = "silver-helper"
+path = "two-ai-handoff/silver_helper.rs"
 
 [lints]
 workspace = true

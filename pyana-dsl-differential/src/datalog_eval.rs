@@ -113,9 +113,11 @@ fn split_top_level_commas(s: &str) -> Vec<String> {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 enum Predicate {
     /// A `name(Var)` fact-lookup binding — emitted by gen_datalog for every
     /// param. We accept-and-ignore: the value is already in the bindings.
+    /// `name` and `var` are kept for debug-printing during diagnostics.
     FactLookup { name: String, var: String },
     /// `Lhs OP Rhs` arithmetic constraint.
     BinaryOp { lhs: String, op: BinOp, rhs: String },

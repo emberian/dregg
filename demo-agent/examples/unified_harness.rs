@@ -222,6 +222,7 @@ fn setup_genesis() -> Result<SharedState, Box<dyn Error>> {
         nullifier_set_root: None,
         quorum_signatures: Vec::new(),
         threshold: 2,
+        federation_id: pyana_types::FederationId::PLACEHOLDER,
     };
 
     let signing_message = genesis_root.signing_message();

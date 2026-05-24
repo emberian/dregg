@@ -168,6 +168,13 @@ pub mod plonky3_verifier_air;
 #[cfg(feature = "recursion")]
 pub mod plonky3_recursion_impl;
 
+/// Effect-VM-shape bridge AIR for the `p3-recursion` path. See module
+/// docs — this is a *shape* mirror of `effect_vm::EffectVmAir` used to
+/// measure that the recursion library accepts the Effect VM's column and
+/// PI counts (Block 1/2 of the Golden Vision recursion lane).
+#[cfg(feature = "recursion")]
+pub mod effect_vm_p3_air;
+
 pub mod backends;
 pub mod proof_tier;
 

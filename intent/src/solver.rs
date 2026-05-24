@@ -210,10 +210,19 @@ impl RingSolver {
                 });
             }
 
+            // Scoring convention (audit §7): score = number of participants.
+            // This matches `validate_ring` so the same ring produces the
+            // same score whichever entry point built it. The accumulated
+            // edge-weight `score` above is informative (it would tilt
+            // toward exact-match rings) but conflicting with
+            // `validate_ring`, which is the canonical scorer. We retain
+            // the edge-score loop for the early `valid` filter (rings
+            // with any non-positive edge score must be discarded).
+            let _ = score;
             rings.push(RingTrade {
                 participants,
                 settlements,
-                score,
+                score: cycle.len() as f64,
             });
         }
 

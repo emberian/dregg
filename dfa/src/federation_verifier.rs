@@ -63,7 +63,8 @@ impl FederationQcVerifier {
 
 impl fmt::Debug for FederationQcVerifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("FederationQcVerifier").finish_non_exhaustive()
+        f.debug_struct("FederationQcVerifier")
+            .finish_non_exhaustive()
     }
 }
 

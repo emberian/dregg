@@ -242,6 +242,7 @@ fn all_effect_variants() -> Vec<Variant> {
                         quorum_signatures: vec![],
                         threshold_qc: None,
                         threshold: 0,
+                        federation_id: pyana_types::FederationId::PLACEHOLDER,
                     },
                     spending_proof: vec![],
                     destination_commitment: NoteCommitment([0u8; 32]),

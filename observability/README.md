@@ -1,102 +1,262 @@
 # pyana-observability
 
-Seed crate for the in-browser **turn explorer**.
+Studio-shape trace event emitter for the pyana turn substrate.
 
 ## What it does
 
-A standalone binary that constructs a one-Turn-one-Transfer scenario, runs the
-real `TurnExecutor` on an in-memory `Ledger`, then **separately** generates the
-Effect VM trace + STARK proof for the same transition, verifies it, and emits
-**everything** as a single JSON document on stdout.
+`pyana-observability` is **two things** in one crate:
 
-The output is the proposed wire format an off-line explorer would consume to
-"replay" any turn step by step.
+1. **A library** (`pyana_observability`) exposing typed trace event types and
+   an in-process emitter. Other crates can construct `TraceEvent` values and
+   push them onto an `EventLog` without taking on a tracing dependency.
+2. **A binary** (`pyana-observability`) that runs a **tour**: constructs a
+   scenario exercising every event variant the Studio inspector cares
+   about, executes a real `TurnExecutor` against an in-memory `Ledger`,
+   and emits a single JSON document on stdout containing the full event
+   log in emission order.
 
 ## Run
 
 ```
-cargo run -p pyana-observability
-```
-
-The entire JSON document is pretty-printed to stdout. Pipe through `jq` or
-redirect to a file:
-
-```
 cargo run -p pyana-observability > /tmp/trace.json
-cargo run -p pyana-observability | jq '.air.trace_width'
+cargo run -p pyana-observability | jq '.events | length'
+cargo run -p pyana-observability | jq '.events[].kind' | sort | uniq -c
 ```
 
-## JSON schema (v1)
+## JSON schema (v1 — `pyana-observability-event-stream-v1`)
 
-Top-level keys:
+### Top level
 
-| field              | shape                                                                          |
-| ------------------ | ------------------------------------------------------------------------------ |
-| `schema_version`   | `1`                                                                            |
-| `schema_name`      | `"pyana-observability-turn-trace-v1"`                                          |
-| `turn`             | `{ agent, nonce, fee, memo, valid_until, action_count, effects[], turn_hash }` |
-| `pre_state`        | array of cell views (cell_id, balance, nonce, state_commitment, ...)           |
-| `post_state`       | same shape as `pre_state`                                                      |
-| `receipt`          | full `TurnReceipt` flattened: turn_hash, forest_hash, pre/post state_hash, effects_hash, timestamp, action_count, computrons_used, federation_id, finality, receipt_hash |
-| `vm_effects`       | array of `effect_vm::Effect` projected for the agent cell                      |
-| `air`              | `{ air_name, trace_width, trace_height, trace_first_row[], public_input_count, public_inputs[] }` |
-| `proof`            | `{ air_name, trace_len, num_cols, fri_layers, query_count, pow_bits, size_bytes_json, trace_commitment, constraint_commitment }` |
-| `verification`     | `{ verified, error, trace_len, public_input_count }`                           |
-| `notes`            | provenance + caveats                                                           |
+```json
+{
+  "schema_version": 1,
+  "schema_name":    "pyana-observability-event-stream-v1",
+  "event_count":    <usize>,
+  "events":         [ <TraceEvent>, ... ]
+}
+```
 
-All 32-byte values are hex-encoded (lowercase, no `0x`). Field elements
-(`BabyBear`) are emitted as raw `u32`.
+The order of `events[]` is the order in which they were emitted. Each event
+also carries `envelope.seq`, a monotonic counter starting at 0; pairs of
+events with the same `timestamp` may be ordered using `seq`.
 
-## What the explorer would do with this
+### Event shape
 
-For each turn, the explorer can:
+Every event is:
 
-1. Render the Turn (effects, fee, agent) as a structured form.
-2. Show pre/post diffs by cell (balance/nonce/state_commitment).
-3. Display the Effect VM trace as a matrix (`trace_height` rows × `trace_width`
-   cols). Highlight cells that change between rows; that is, *literally* show
-   the AIR step-by-step.
-4. Cross-reference: receipt's `effects_hash` ↔ effects shown ↔ `vm_effects`.
-5. Verify the proof in WASM (the verifier is already pure Rust; a wasm build
-   of `pyana-circuit` would let the browser independently confirm
-   `verification.verified`).
+```json
+{
+  "kind":     "<discriminator>",
+  "envelope": { ... cross-cutting context ... },
+  "payload":  { ... variant body ... }
+}
+```
 
-## What is **not** here (yet) — follow-up
+`kind` is one of:
 
-1. **One-shot demo only.** The Turn is constructed locally with a hardcoded
-   single Transfer. To trace **any** turn, the executor would need to expose
-   a streaming hook (`fn on_step(&mut StepEvent)`) or write a per-turn
-   side-channel `EventLog`. Both touch trust-critical code (`executor.rs`)
-   and want a real design conversation — out of scope for the seed crate.
+| kind                          | meaning                                              |
+|-------------------------------|------------------------------------------------------|
+| `authorization`               | an `Authorization` variant was observed              |
+| `sovereign_witness_verified`  | a sovereign-cell witness was verified                |
+| `state_constraint_evaluated`  | a slot caveat (`StateConstraint`) was evaluated      |
+| `bilateral_receipt`           | one γ.2 bilateral entry was folded into a root       |
+| `bilateral_rollup`            | per-cell roll-up of the seven-direction γ.2 PI       |
+| `federation`                  | federation join / leave / attestation / id-derive    |
+| `turn_lifecycle`              | turn submitted / committed / rejected / expired      |
 
-2. **Effect projection duplicated.** `project_turn_effects_for_cell` mirrors
-   `pyana_turn::executor::TurnExecutor::convert_turn_effects_to_vm`, which
-   is `pub(self)` (private to `impl TurnExecutor`). Widening visibility
-   would couple the trust-critical executor's call shape to an observability
-   concern. The future "any-turn trace" tool will either:
+### Envelope
 
-   - extract the projection into a `pub fn` in `effect_vm::projection`, or
-   - have the executor itself emit the projected vec into a side-channel
-     during execution.
+```json
+{
+  "schema_version": 1,
+  "seq":            <u64>,
+  "timestamp":      "<ISO-8601 / RFC 3339 UTC>",
+  "turn_hash":      "<hex>"  // optional
+  "actor":          "<hex>"  // optional CellId
+  "federation_id":  "<hex>"  // optional
+  "cell_id":        "<hex>"  // optional CellId
+}
+```
 
-3. **Hosted vs. sovereign.** A hosted-cell turn (which this demo is) does
-   **not** actually carry a STARK proof through the executor — it goes the
-   classical path. We **separately** generate the Effect VM trace to demo
-   the pathway. For sovereign cells the executor itself verifies a real
-   STARK proof; an explorer fed those turns would have the proof
-   **already**.
+All optional envelope fields are omitted when not applicable (e.g. a
+federation `IdDerived` event has no `turn_hash`).
 
-4. **Trace rendering.** Only `trace_first_row` is emitted. For step-by-step
-   replay the explorer wants `trace[row]` for every row. Trivial extension
-   (loop over rows) — left out to keep the demo output skim-readable.
+### Per-variant payloads
 
-5. **Inter-cell view.** Only the agent's effect projection is emitted; a
-   transfer also has a recipient-side projection. The explorer would want
-   one Effect-VM-trace block **per touched cell**.
+#### `authorization`
 
-## Code-touch report
+Tag field: `auth_kind`. One of `signature`, `proof`, `breadstuff`, `bearer`,
+`unchecked`, `cap_tp_delivered`. Each variant emits:
 
-- **No production code modified.** No `pub` widening, no instrumentation
-  hooks, no executor changes.
-- The only file outside `observability/` touched is the workspace root
-  `Cargo.toml` (added `observability` to `[workspace.members]`).
+- `signature`: `r_hex`, `s_hex` (64-char each)
+- `proof`: `proof_bytes_hash` (BLAKE3 hex), `proof_bytes_len`, `bound_action`, `bound_resource`
+- `breadstuff`: `token_hash`
+- `bearer`: `target`, `permissions`, `expires_at`, `revocation_channel?`, `allowed_effects?`, `delegation { delegation_kind: signed_delegation | stark_delegation, ... }`
+- `unchecked`: empty payload
+- `cap_tp_delivered`: `cert_hash`, `introducer_federation`, `target_federation`, `target_cell`, `recipient_pk`, `introducer_pk`, `sender_pk`, `sender_signature_prefix`, `cert_nonce`, `expires_at?`, `max_uses?`, `permissions`, `allowed_effects?`
+
+**Boundary discipline.** Proof bytes and bearer delegation proof bytes are
+hashed before emission — never serialized in full. Bearer signing keys and
+introducer secrets never leave the producer.
+
+#### `sovereign_witness_verified`
+
+```json
+{
+  "cell_id":           "<hex>",
+  "sequence":          <u64>,
+  "has_stark_proof":   <bool>,
+  "old_commitment":    "<hex>",
+  "new_commitment":    "<hex>",
+  "effects_hash":      "<hex>",
+  "witness_timestamp": "<ISO-8601>"
+}
+```
+
+**Boundary discipline.** Per `BOUNDARIES.md §2.6`, the witness cleartext
+(`cell_state`) is cleartext-inside the cell owner. This payload deliberately
+omits cleartext slot values, the cell signing key, and the commitment
+preimage. Only commitments + `(cell_id, sequence, has_stark_proof)` are
+emitted.
+
+#### `state_constraint_evaluated`
+
+```json
+{
+  "constraint_kind":     "<one of 21 snake_case kinds>",
+  "slot_index":          <u8 or null>,
+  "extra_slot_indices":  [<u8>, ...]  // omitted when empty
+  "accepted":            <bool>,
+  "reason":              "<string>"   // omitted when accepted == true
+}
+```
+
+`constraint_kind` values: `field_equals`, `field_gte`, `field_lte`,
+`sum_equals`, `write_once`, `immutable`, `monotonic`, `strict_monotonic`,
+`bounded_by`, `field_delta`, `field_delta_in_range`, `field_gte_height`,
+`field_lte_height`, `sum_equals_across`, `sender_authorized`,
+`capability_uniqueness`, `rate_limit`, `rate_limit_by_sum`, `temporal_gate`,
+`preimage_gate`, `monotonic_sequence`, `allowed_transitions`,
+`temporal_predicate`, `bound_delta`, `any_of`, `custom`.
+
+**Boundary discipline.** The cleartext slot value is never emitted — only
+the constraint kind, slot index, and the structured rejection reason
+(which is the executor's public error path).
+
+#### `bilateral_receipt`
+
+```json
+{
+  "direction":         "<one of seven>",
+  "transfer_id":       "<hex; 4 BabyBears = 16 bytes = 32 hex chars>",
+  "peer_cell_id":      "<hex; CellId>",
+  "accumulator_root":  "<hex; 4 BabyBears>",
+  "amount":            <u64 or absent>
+}
+```
+
+`direction` is one of `outbound_transfer`, `inbound_transfer`,
+`outbound_grant`, `inbound_grant`, `intro_as_introducer`,
+`intro_as_recipient`, `intro_as_target` — mirroring the seven PI count
+slots from `bilateral_schedule::BilateralCounts`.
+
+`amount` is present only for transfers.
+
+#### `bilateral_rollup`
+
+```json
+{
+  "counts": { outbound_transfer, inbound_transfer, outbound_grant, inbound_grant, intro_as_introducer, intro_as_recipient, intro_as_target },
+  "roots":  { outgoing_transfer, incoming_transfer, outgoing_grant, incoming_grant, intro_as_introducer, intro_as_recipient, intro_as_target }
+}
+```
+
+Each root is the hex packing of a `[BabyBear; 4]` (32 hex chars). The
+counts are u32 frequencies of each direction.
+
+#### `federation`
+
+Tag field: `event`. One of `id_derived`, `member_joined`, `member_left`,
+`attestation`. Payload shapes:
+
+- `id_derived`: `federation_id`, `epoch`, `threshold`, `member_count`, `members[]`
+- `member_joined` / `member_left`: `federation_id_before`, `federation_id_after`, `epoch_after`, `member_pk`
+- `attestation`: `federation_id`, `epoch`, `message_hash`, `signer_count`, `attestation_kind` (`bls` | `ed25519` | `mixed`)
+
+#### `turn_lifecycle`
+
+Tag field: `phase`. One of `submitted`, `committed`, `rejected`, `expired`, `pending`.
+
+- `submitted`: `nonce`, `fee`, `action_count`, `valid_until?`, `previous_receipt_hash?`
+- `committed`: `receipt_hash`, `forest_hash`, `pre_state_hash`, `post_state_hash`, `effects_hash`, `timestamp`, `action_count`, `computrons_used`, `finality`
+- `rejected`: `reason`, `at_action?`
+- `expired`: empty payload
+- `pending`: `waiting_on`
+
+## Replay-friendliness
+
+Each event is self-contained. To reconstruct a timeline:
+
+1. Group events by `envelope.turn_hash` to form per-turn slices.
+2. Within each slice, sort by `envelope.seq` to recover emission order.
+3. The `bilateral_rollup` event closes a turn's bilateral story; the
+   per-cell `counts` + `roots` match the PI vector the γ.2 AIR binds.
+4. The `turn_lifecycle.committed` event carries the canonical receipt
+   hashes — link it to the actual `TurnReceipt` artifact out of band.
+
+An external tool can re-derive the bilateral roots from the
+`bilateral_receipt` per-entry events alone (each carries the post-fold
+root for its direction), without consulting any other state.
+
+## Library API
+
+```rust
+use pyana_observability::{Emitter, TraceEvent, EventEnvelope};
+use pyana_observability::events::{EventBody, AuthorizationPayload};
+
+let em = Emitter::new();
+let (seq, ts) = em.next_envelope_seed();
+em.emit(TraceEvent::Authorization(EventBody {
+    envelope: EventEnvelope::new(seq, ts).with_turn_hash(&turn_hash),
+    payload: AuthorizationPayload::from_authorization(&auth),
+}));
+println!("{}", em.snapshot().to_pretty_string());
+```
+
+## Hex / time conventions
+
+- **Hashes / commitments / pubkeys**: 32 bytes → 64 lowercase hex chars,
+  no `0x` prefix.
+- **Bilateral roots / IDs**: 4 × `BabyBear` (each `u32` LE) → 16 bytes → 32
+  lowercase hex chars.
+- **Timestamps**: ISO 8601 / RFC 3339 UTC with millisecond precision,
+  e.g. `2026-05-24T12:34:56.789Z`.
+
+## Boundary discipline (`BOUNDARIES.md` compliance)
+
+This crate emits only what is **acceptance-inside** or **commitment-inside**
+the world outside the cell owner. Concretely:
+
+- No cleartext cell state, slot values, or commitment preimages.
+- No private keys, no full bearer-cap delegation proofs, no full STARK
+  proof bytes (only their BLAKE3 hash and length).
+- Authorization payloads emit certificate hashes, public keys, and the
+  recipient's signature prefix — never the introducer's private key.
+- The sovereign witness payload emits `(cell_id, sequence,
+  has_stark_proof)` plus public commitments — never the witness cleartext.
+
+## What is **not** here (yet)
+
+1. **Hook calls in other crates.** The library API exists; integration
+   points in `turn/`, `cell/`, `federation/`, `wire/`, etc. are not yet
+   wired (the lanes that own those crates are mid-refactor; touching them
+   here is out of scope per the brief). The tour binary synthesises events
+   itself rather than driving them through the executor.
+2. **Persistent log.** Events live in memory; a write-to-disk / WAL
+   surface is future work.
+3. **Concurrent emission.** `Emitter` is `Rc<RefCell<_>>` — single-threaded
+   per process. A multi-thread emitter would swap in `Arc<Mutex<_>>` (or a
+   lock-free channel) without changing the public types.
+4. **Effect-VM trace emission.** The old single-document JSON dump
+   bundled the Effect VM trace; the new event stream does not. A future
+   `air_trace` event variant would close this.

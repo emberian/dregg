@@ -203,7 +203,7 @@ pub struct ThresholdQC(pub Vec<u8>);
 /// In the unified lace model, a `FederationId` is semantically equivalent to a
 /// `GroupId` (the content-hash of a reference group's strands). Routing layers
 /// treat them interchangeably.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub struct FederationId(pub [u8; 32]);
 
 impl FederationId {
@@ -306,6 +306,13 @@ pub struct AttestedRoot {
     pub threshold_qc: Option<ThresholdQC>,
     /// The number of signatures required for validity.
     pub threshold: usize,
+    /// The federation id this attestation is produced by. Bound into the
+    /// signing message preimage so that a verifier who reconstructs the
+    /// message can detect cross-federation attestation swaps without
+    /// consulting any out-of-band state. `FederationId::PLACEHOLDER`
+    /// (all-zero) for legacy roots produced before v3 was wired.
+    #[serde(default)]
+    pub federation_id: FederationId,
 }
 
 impl AttestedRoot {
@@ -331,6 +338,7 @@ impl AttestedRoot {
             quorum_signatures,
             threshold_qc,
             threshold,
+            federation_id: FederationId::PLACEHOLDER,
         }
     }
 
@@ -423,10 +431,15 @@ impl AttestedRoot {
     /// produces a different message than `note_tree_root = None, nullifier_set_root = Some(X)`.
     pub fn signing_message(&self) -> Vec<u8> {
         let mut msg = Vec::new();
+        // v3 binds the federation_id into the preimage so a verifier
+        // reconstructing the message can detect cross-federation attestation
+        // swaps without consulting any out-of-band state (audit F2 applied to
+        // attested roots).
         // v2 binds the blocklace block_id + finality_round so that two
         // attested roots at the same `height` from different blocklace forks
         // are distinguishable (closes audit F3).
-        msg.extend_from_slice(b"pyana-attested-root-v2");
+        msg.extend_from_slice(b"pyana-attested-root-v3");
+        msg.extend_from_slice(&self.federation_id.0);
         msg.extend_from_slice(&self.merkle_root);
         match self.note_tree_root {
             Some(ref note_root) => {
@@ -675,6 +688,7 @@ mod tests {
             ],
             threshold_qc: None,
             threshold: 2,
+            federation_id: FederationId::PLACEHOLDER,
         };
         assert!(root.has_quorum()); // 3 sigs >= threshold 2
 
@@ -729,6 +743,7 @@ mod tests {
             quorum_signatures: vec![],
             threshold_qc: None,
             threshold: 2,
+            federation_id: FederationId::PLACEHOLDER,
         };
 
         // Sign with real keys.
@@ -768,6 +783,7 @@ mod tests {
             quorum_signatures: vec![(PublicKey([0xAA; 32]), Signature([0xBB; 64]))],
             threshold_qc: None,
             threshold: 1,
+            federation_id: FederationId::PLACEHOLDER,
         };
         let bytes = postcard::to_stdvec(&root).unwrap();
         let decoded: AttestedRoot = postcard::from_bytes(&bytes).unwrap();

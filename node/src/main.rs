@@ -25,7 +25,6 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use pyana_federation::solo::FederationMode;
 use tracing::{error, info};
 
 #[derive(Parser)]
@@ -459,28 +458,43 @@ async fn run_node(
         }
     }
 
-    // Parse federation mode from CLI flag.
-    let federation_mode: FederationMode = federation_mode_str.parse().unwrap_or_else(|e| {
-        error!("invalid --federation-mode value: {e}; defaulting to solo");
-        FederationMode::Solo
-    });
+    // Load known federations from disk so cross-federation receipt verification
+    // can route through the unified registry on startup.
+    {
+        let mut s = node_state.write().await;
+        match s.load_known_federations(&data_path) {
+            Ok(0) => {}
+            Ok(n) => info!(count = n, "loaded peer federations from known_federations/"),
+            Err(e) => tracing::warn!(error = %e, "failed to load known_federations"),
+        }
+    }
 
-    // Configure pruning and federation mode.
+    // Parse federation mode from CLI flag. "solo" is shorthand for a
+    // committee-of-one federation; "full" turns BFT quorum on. Per
+    // FEDERATION-UNIFICATION-DESIGN.md §5, "solo" is no longer a separate
+    // runtime mode — it just configures threshold=1 and skips peer gossip.
+    let is_solo_mode = match federation_mode_str.to_lowercase().as_str() {
+        "solo" => true,
+        "full" => false,
+        other => {
+            error!("invalid --federation-mode value: '{other}'; defaulting to solo");
+            true
+        }
+    };
+
+    // Configure pruning and solo state.
     {
         let mut s = node_state.write().await;
         s.pruning_enabled = enable_pruning;
         s.checkpoint_interval = checkpoint_interval;
-        s.federation_mode = federation_mode;
 
         // In solo mode, initialize the SoloConsensusState with the node's signing key.
-        if federation_mode == FederationMode::Solo {
+        if is_solo_mode {
             let signing_key = s.wallet.gossip_signing_key().to_bytes();
             s.solo_consensus = Some(pyana_federation::solo::SoloConsensusState::new(signing_key));
-            // Solo mode does NOT require federation keys for finalization —
-            // the single node is authoritative.
-            info!("federation mode: Solo — single-node devnet, no quorum required");
+            info!("federation mode: solo (committee of one) — no quorum required");
         } else {
-            info!("federation mode: Full — BFT quorum required for finality");
+            info!("federation mode: full — BFT quorum required for finality");
         }
     }
 
@@ -523,7 +537,7 @@ async fn run_node(
         pruning = enable_pruning,
         checkpoint_interval = checkpoint_interval,
         faucet = enable_faucet,
-        federation_mode = %federation_mode,
+        federation_mode = if is_solo_mode { "solo" } else { "full" },
         "starting pyana-node"
     );
 
@@ -543,7 +557,7 @@ async fn run_node(
     match consensus_engine {
         "blocklace" => {
             // Blocklace consensus: quiescent, leaderless DAG-based BFT.
-            if federation_mode == FederationMode::Full || has_peers {
+            if !is_solo_mode || has_peers {
                 info!(
                     consensus = "blocklace",
                     "using blocklace (Cordial Miners) consensus"

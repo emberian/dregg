@@ -27,7 +27,8 @@
 
 use pyana_verifier::{
     CommitteeDescriptor, JsonRequest, ReplayEntry, VerifierOutput, exit_code,
-    parse_public_inputs_json, replay_chain, verify_cross_fed_bundle, verify_effect_vm_proof,
+    parse_public_inputs_json, replay_chain, verify_bilateral_bundle_json, verify_cross_fed_bundle,
+    verify_effect_vm_proof,
 };
 use std::{
     env,
@@ -44,6 +45,9 @@ fn main() {
     }
     if args.len() >= 2 && (args[1] == "verify-cross-fed-bundle" || args[1] == "cross-fed") {
         run_verify_cross_fed_bundle(&args[2..]);
+    }
+    if args.len() >= 2 && (args[1] == "bilateral-pair" || args[1] == "bilateral-bundle") {
+        run_bilateral_pair(&args[2..]);
     }
 
     // Detect JSON-stdin mode: no args, or stdin is not a tty.
@@ -289,6 +293,58 @@ fn run_verify_cross_fed_bundle(args: &[String]) -> ! {
     });
     println!("{}", json);
     let code = if verdict.overall_verified {
+        exit_code::VERIFIED
+    } else {
+        exit_code::REJECTED
+    };
+    process::exit(code);
+}
+
+// ---------------------------------------------------------------------------
+// bilateral-pair subcommand (Stage 7-γ.2 Phase 1)
+// ---------------------------------------------------------------------------
+
+/// `pyana-verifier bilateral-pair <bundle.json>`
+///
+/// Reads a JSON-encoded `BilateralBundle` (the on-disk shape produced by
+/// `pyana_verifier::BilateralBundle`), runs the off-AIR bilateral
+/// cross-cell consistency check from `STAGE-7-GAMMA-2-PI-DESIGN.md` §4,
+/// and prints a `BilateralVerdict` JSON to stdout.
+///
+/// Exit code: 0 = verified, 1 = rejected, 2 = read / parse error.
+///
+/// The bundle JSON shape:
+/// ```json
+/// {
+///   "turn": <Turn>,
+///   "entries": [
+///     {"cell_id": "<32-byte hex>", "witnessed_receipt": <WitnessedReceipt>},
+///     ...
+///   ]
+/// }
+/// ```
+fn run_bilateral_pair(args: &[String]) -> ! {
+    let path = match args.first() {
+        Some(p) => p,
+        None => {
+            eprintln!("Usage: pyana-verifier bilateral-pair <bundle.json>");
+            process::exit(exit_code::ERROR);
+        }
+    };
+
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("cannot read {}: {}", path, e);
+            process::exit(exit_code::ERROR);
+        }
+    };
+
+    let verdict = verify_bilateral_bundle_json(&text);
+    let json = serde_json::to_string_pretty(&verdict)
+        .unwrap_or_else(|_| r#"{"verified":false,"reason":"serialisation error"}"#.to_string());
+    println!("{}", json);
+    let code = if verdict.verified {
         exit_code::VERIFIED
     } else {
         exit_code::REJECTED

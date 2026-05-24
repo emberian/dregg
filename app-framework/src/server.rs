@@ -207,6 +207,32 @@ impl AppServer {
         self.executor.as_ref()
     }
 
+    /// Install a [`StarbridgeAppContext`](crate::starbridge::StarbridgeAppContext)
+    /// as an axum `Extension<StarbridgeAppContext>` layer.
+    ///
+    /// Apps that have already registered their factories and inspectors
+    /// on the context can mount it here; handlers extract it via
+    /// `axum::Extension<StarbridgeAppContext>` and reach the wallet,
+    /// executor, factory registry, and inspector registry uniformly.
+    ///
+    /// Typical wiring in an app's `main.rs`:
+    /// ```ignore
+    /// let wallet = AppWallet::new(AgentWallet::new(), federation_id);
+    /// let executor = EmbeddedExecutor::new(&wallet, "default");
+    /// let ctx = StarbridgeAppContext::new(wallet.clone(), executor.clone());
+    /// starbridge_nameservice::register(&ctx);
+    /// AppServer::new(config)
+    ///     .with_wallet(wallet)
+    ///     .with_embedded_executor(executor)
+    ///     .with_starbridge(ctx)
+    ///     .serve()
+    ///     .await
+    /// ```
+    pub fn with_starbridge(self, ctx: crate::starbridge::StarbridgeAppContext) -> Self {
+        let router = self.router.layer(axum::Extension(ctx));
+        Self { router, ..self }
+    }
+
     /// Set the service name (used in health responses and startup logging).
     pub fn service_name(mut self, name: impl Into<String>) -> Self {
         self.service_name = name.into();

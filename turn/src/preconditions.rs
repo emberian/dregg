@@ -1,90 +1,43 @@
 //! Ergonomic precondition builders for [`Action::preconditions`].
 //!
-//! The underlying [`pyana_cell::Preconditions`] struct is the canonical
-//! shape — the executor reads it directly in
-//! `TurnExecutor::check_preconditions`. This module exposes a small
-//! enum-shaped builder API so app/userspace callers do not have to know
-//! the field layout to express simple "see-then-set" guards.
+//! Per PREDICATE-INVENTORY §4.3 case 1 + §7.5, the duplicate surface
+//! between this module and `pyana_cell::preconditions` was collapsed.
+//! The canonical clause enum and builder live in `pyana_cell` now;
+//! this module re-exports them as
+//! [`Precondition`] / [`build`] / [`extend`] so existing callers
+//! compile unchanged, but the evaluator is the cell-side one
+//! ([`pyana_cell::Preconditions::evaluate`]).
 //!
-//! See `APPS-USERSPACE-GAPS.md` §Gap 2 for the design framing. The three
-//! variants the gap calls out — `SlotEquals`, `SlotZero`,
-//! `NonceAtLeast` — map straight to fields on the existing struct:
+//! ## What changed
 //!
-//! | builder variant         | underlying field                    |
-//! |-------------------------|-------------------------------------|
-//! | `SlotEquals(idx, val)`  | `cell_state.field_equals.push(..)`  |
-//! | `SlotZero(idx)`         | `cell_state.field_equals` with `[0u8; 32]` |
-//! | `NonceAtLeast(n)`       | `cell_state.min_nonce = Some(n)`    |
-//!
-//! The verifier-side check lives in
-//! `pyana_cell::CellStatePrecondition::evaluate`, which the executor
-//! invokes from `TurnExecutor::check_preconditions` before applying any
-//! effects in the action. Violations reject the action (returning the
-//! corresponding [`pyana_cell::PreconditionError`]) before any state
-//! mutation runs.
+//! - `Precondition` is a thin re-export of `pyana_cell::PreconditionClause`,
+//!   which adds a `Witnessed(WitnessedPredicate)` variant alongside
+//!   the existing `SlotEquals`, `SlotZero`, `NonceAtLeast`.
+//! - `build` / `extend` delegate to the cell-side
+//!   [`pyana_cell::PreconditionsBuilder`] / [`pyana_cell::Preconditions::extend_clauses`].
+//! - No parallel evaluator. The verifier-side check still lives in
+//!   `pyana_cell::CellStatePrecondition::evaluate`, invoked from
+//!   `TurnExecutor::check_preconditions` before any effects in the
+//!   action are applied.
 
-use pyana_cell::state::FieldElement;
-use pyana_cell::{CellStatePrecondition, Preconditions};
-
-/// A single see-then-set precondition.
-///
-/// Compose these into a [`Preconditions`] via [`build`] / [`extend`].
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Precondition {
-    /// The cell's storage slot at `index` must equal `value`.
-    SlotEquals { index: usize, value: FieldElement },
-    /// The cell's storage slot at `index` must be zero (the all-zero
-    /// `FieldElement`). Shorthand for `SlotEquals { index, value: [0; 32] }`.
-    SlotZero { index: usize },
-    /// The cell's `nonce` must be at least `min`. Use when an action
-    /// needs monotonic-nonce semantics but cannot pin to an exact value
-    /// (which would race against concurrent submitters).
-    NonceAtLeast(u64),
-}
-
-impl Precondition {
-    /// Apply this precondition onto a [`CellStatePrecondition`].
-    pub fn apply(&self, cs: &mut CellStatePrecondition) {
-        match *self {
-            Precondition::SlotEquals { index, value } => {
-                cs.field_equals.push((index, value));
-            }
-            Precondition::SlotZero { index } => {
-                cs.field_equals.push((index, [0u8; 32]));
-            }
-            Precondition::NonceAtLeast(n) => {
-                cs.min_nonce = Some(match cs.min_nonce {
-                    Some(prev) => prev.max(n),
-                    None => n,
-                });
-            }
-        }
-    }
-}
+pub use pyana_cell::PreconditionClause as Precondition;
+use pyana_cell::Preconditions;
 
 /// Build a [`Preconditions`] from a slice of [`Precondition`]s.
 pub fn build(items: &[Precondition]) -> Preconditions {
-    let mut out = Preconditions::default();
-    extend(&mut out, items);
-    out
+    Preconditions::builder().extend(items).build()
 }
 
 /// Extend an existing [`Preconditions`] with additional [`Precondition`]s.
 pub fn extend(target: &mut Preconditions, items: &[Precondition]) {
-    if items.is_empty() {
-        return;
-    }
-    let cs = target.cell_state.get_or_insert_with(Default::default);
-    for item in items {
-        item.apply(cs);
-    }
+    target.extend_clauses(items);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use pyana_cell::EvalContext;
-    use pyana_cell::state::CellState;
+    use pyana_cell::state::{CellState, FieldElement};
 
     fn state_with(nonce: u64, fields: &[(usize, FieldElement)]) -> CellState {
         let mut s = CellState::new(0);
@@ -158,5 +111,14 @@ mod tests {
         let pre = build(&[Precondition::NonceAtLeast(3), Precondition::NonceAtLeast(7)]);
         let cs = pre.cell_state.as_ref().expect("cell_state present");
         assert_eq!(cs.min_nonce, Some(7));
+    }
+
+    #[test]
+    fn witnessed_clause_appends_to_witnessed_field() {
+        use pyana_cell::{InputRef, WitnessedPredicate};
+        let wp = WitnessedPredicate::dfa([1u8; 32], InputRef::Sender, 0);
+        let pre = build(&[Precondition::Witnessed(wp.clone())]);
+        assert_eq!(pre.witnessed.len(), 1);
+        assert_eq!(pre.witnessed[0], wp);
     }
 }

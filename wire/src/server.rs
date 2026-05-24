@@ -947,6 +947,44 @@ pub struct CapTpState {
     /// peer was supposed to resolve and emit broken-promise notifications.
     /// (Closes audit GAP-7.)
     pub outstanding_peer_promises: HashMap<FederationId, Vec<u64>>,
+    /// Outbound broken-promise notifications produced by
+    /// [`Self::on_peer_disconnect`] and by inbound `PromiseBroken`
+    /// cascades. The node tick drains this and converts each entry into a
+    /// `WireMessage::PromiseBroken` directed at
+    /// [`BrokenPromiseNotification::notify_federation`]. (Closes audit
+    /// GAP-5 on the *send* side: the cascade no longer dies in the wire
+    /// layer.)
+    pub pending_broken_promises: Vec<pyana_captp::BrokenPromiseNotification>,
+    /// Inbound proactive `AttestedRootPush` messages from peers in the
+    /// known-federations set, awaiting node-side quorum verification +
+    /// application. The node tick drains this, verifies the signatures
+    /// against the sender federation's committee, and applies the root to
+    /// the cross-federation root index. The wire layer does NOT verify
+    /// signatures here — the federation/node layer owns the committee
+    /// keys.
+    pub pending_attested_root_pushes: Vec<PendingAttestedRoot>,
+}
+
+/// A queued inbound proactive `AttestedRootPush` message.
+///
+/// The wire layer parks these on [`CapTpState::pending_attested_root_pushes`]
+/// after gating on the known-federations set. The node tick drains the
+/// queue and runs full quorum verification + cross-federation root
+/// application against the appropriate committee.
+#[derive(Clone, Debug)]
+pub struct PendingAttestedRoot {
+    /// The federation that pushed the root.
+    pub sender_federation: FederationId,
+    /// The Merkle root.
+    pub root: [u8; 32],
+    /// The block height at which the root was finalized.
+    pub height: u64,
+    /// Unix timestamp.
+    pub timestamp: i64,
+    /// Quorum signatures (under the sender's committee).
+    pub signatures: Vec<(PublicKey, Signature)>,
+    /// Optional threshold aggregate QC.
+    pub threshold_qc: Option<ThresholdQC>,
 }
 
 impl CapTpState {
@@ -963,7 +1001,38 @@ impl CapTpState {
             pipeline_bridge: CrossFedPipelineBridge::new(),
             seen_handoff_nonces: HashSet::new(),
             outstanding_peer_promises: HashMap::new(),
+            pending_broken_promises: Vec::new(),
+            pending_attested_root_pushes: Vec::new(),
         }
+    }
+
+    /// Synchronize `known_federations` from a node-level
+    /// [`pyana_federation::KnownFederations`] registry.
+    ///
+    /// Per FEDERATION-UNIFICATION-DESIGN.md §7: the wire layer keeps the
+    /// id-list shape used for routing, but its source of truth is now the
+    /// node-level `KnownFederations` registry. Call this after registering
+    /// or removing a peer federation to keep CapTP routing in sync.
+    pub fn sync_known_federations(&mut self, registry: &pyana_federation::KnownFederations) {
+        self.known_federations = registry.ids();
+    }
+
+    /// Drain pending broken-promise notifications.
+    ///
+    /// The node tick calls this to learn which promises must be reported
+    /// to peers (each notification carries the federation to notify and
+    /// the promise id on that federation's side that has broken).
+    pub fn drain_pending_broken_promises(&mut self) -> Vec<pyana_captp::BrokenPromiseNotification> {
+        std::mem::take(&mut self.pending_broken_promises)
+    }
+
+    /// Drain pending inbound `AttestedRootPush` messages.
+    ///
+    /// The node tick drains this and verifies each push against the
+    /// sender federation's committee in `KnownFederations` before
+    /// applying it to the cross-federation root index.
+    pub fn drain_pending_attested_root_pushes(&mut self) -> Vec<PendingAttestedRoot> {
+        std::mem::take(&mut self.pending_attested_root_pushes)
     }
 
     /// Drain pending CapTP routing turns. The node layer calls this in
@@ -1039,6 +1108,15 @@ impl CapTpState {
                 notifications.extend(notifs);
             }
         }
+
+        // Queue the notifications for outbound delivery. The node tick
+        // drains `pending_broken_promises` and dispatches each as a
+        // `WireMessage::PromiseBroken` to `notify_federation`. Previously
+        // these notifications were returned to the caller (which only
+        // *logged* them), so peers awaiting results were left in limbo.
+        // (Closes audit GAP-5 on the send side.)
+        self.pending_broken_promises
+            .extend(notifications.iter().cloned());
 
         notifications
     }
@@ -2091,6 +2169,7 @@ impl SiloServer {
             | WireMessage::CapGoodbye { .. }
             | WireMessage::EnlivenSturdyRef { .. }
             | WireMessage::PipelinedMsg { .. }
+            | WireMessage::PromiseBroken { .. }
             | WireMessage::PresentHandoff { .. }
             | WireMessage::DropRemoteRef { .. } => {
                 if role.allows_captp() {
@@ -2121,6 +2200,7 @@ impl SiloServer {
             WireMessage::Welcome { .. }
             | WireMessage::PresentationResult { .. }
             | WireMessage::AttestedRoot { .. }
+            | WireMessage::AttestedRootPush { .. }
             | WireMessage::RevocationAck { .. }
             | WireMessage::NonMembershipResponse { .. }
             | WireMessage::EnlivenResponse { .. }
@@ -2461,6 +2541,53 @@ impl SiloServer {
 
             WireMessage::AttestedRoot { .. } | WireMessage::RevocationAck { .. } => None,
 
+            // -----------------------------------------------------------------
+            // Proactive AttestedRoot push from a peer federation.
+            //
+            // The sender pushes its current root unsolicited (it is in our
+            // `KnownFederations` registry and we are presumed to want updates).
+            // We:
+            //   (a) drop the push if the sender is not in our known set
+            //       (do NOT auto-trust strangers),
+            //   (b) record it as a pending push for the node tick to verify
+            //       quorum signatures + apply to the cross-federation
+            //       root index.
+            //
+            // The wire layer does NOT verify the quorum here — that is the
+            // node/federation layer's job (it owns the committee keys via
+            // `KnownFederations`). The wire layer only routes the message
+            // and gates it on the known-federation list.
+            //
+            // Closes Silver Vision §3.2 ("no wire route for proactive
+            // AttestedRoot push").
+            WireMessage::AttestedRootPush {
+                sender_federation,
+                root,
+                height,
+                timestamp,
+                signatures,
+                threshold_qc,
+            } => {
+                let fed_id = FederationId(sender_federation);
+                let mut captp = captp_state.write().await;
+                if !captp.known_federations.contains(&fed_id) {
+                    // Unknown sender — silently drop. Returning an Error
+                    // would amplify reflection-style probing.
+                    return None;
+                }
+                captp
+                    .pending_attested_root_pushes
+                    .push(PendingAttestedRoot {
+                        sender_federation: fed_id,
+                        root,
+                        height,
+                        timestamp,
+                        signatures,
+                        threshold_qc,
+                    });
+                None
+            }
+
             WireMessage::NonMembershipResponse { .. } => None,
 
             WireMessage::Error { .. } => None,
@@ -2723,6 +2850,57 @@ impl SiloServer {
                 None
             }
 
+            // -----------------------------------------------------------------
+            // Inbound broken-promise notification from a peer.
+            //
+            // The peer is informing us that a promise WE held against THEM
+            // (i.e., one of our local promises awaiting their resolution)
+            // can never resolve. Cascade the breakage through our local
+            // pipeline registry so anything waiting on it learns too.
+            // Closes audit GAP-5 (no transport-side broken-promise
+            // propagation) on the receive side.
+            WireMessage::PromiseBroken {
+                promise_id,
+                reason,
+                sender_federation,
+                session_epoch: msg_epoch,
+            } => {
+                let fed_id = FederationId(sender_federation);
+                let mut captp = captp_state.write().await;
+
+                // Epoch validation mirrors the PipelinedMsg path: reject
+                // breakage from a torn-down session so a stale peer cannot
+                // poison our live promises by claiming they're broken.
+                let current_epoch = match captp.sessions.get(&fed_id) {
+                    Some(session) => session.epoch,
+                    None => {
+                        return Some(WireMessage::Error {
+                            code: crate::message::error_codes::CAPTP_SESSION_REQUIRED,
+                            message: "no CapTP session established for PromiseBroken".to_string(),
+                        });
+                    }
+                };
+                if msg_epoch != 0 && msg_epoch != current_epoch {
+                    return Some(WireMessage::Error {
+                        code: crate::message::error_codes::STALE_EPOCH,
+                        message: format!(
+                            "stale session epoch on PromiseBroken: message epoch {msg_epoch}, \
+                             current {current_epoch}"
+                        ),
+                    });
+                }
+
+                let cascaded = captp
+                    .pipeline_bridge
+                    .on_remote_breakage(fed_id, promise_id, reason);
+                // Queue further notifications onto our own pending list so
+                // the node tick can forward them to *our* upstream peers.
+                for n in cascaded {
+                    captp.pending_broken_promises.push(n);
+                }
+                None
+            }
+
             WireMessage::PresentHandoff {
                 presentation_bytes,
                 introducer_pk,
@@ -2847,6 +3025,83 @@ impl SiloServer {
             Ok(result) => result,
             Err(_) => false,
         }
+    }
+
+    /// Proactively push this silo's current attested root to a list of peer
+    /// federations.
+    ///
+    /// Per Silver Vision E2E §3.2, today the wire protocol only *responds*
+    /// to `RequestAttestedRoot` (pull-only). Steady-state operation wants
+    /// federations to *push* their latest roots to peers in their
+    /// `KnownFederations` registry so cross-federation verifiers do not
+    /// have to poll. This method is the implementation of that push.
+    ///
+    /// The caller is expected to drive this from:
+    ///   - on every local commit (push to all peers in `KnownFederations`)
+    ///   - periodically (re-push so peers that disconnected can catch up)
+    ///   - on first contact (push as part of session establishment)
+    ///
+    /// Each push opens a fresh TCP connection. Errors per-peer do not abort
+    /// the whole broadcast; they're returned in the result vector for the
+    /// caller to log / retry.
+    ///
+    /// **Coordination with Mega-Federation**: this method consumes the
+    /// `KnownFederations` registry passively (the caller passes in the
+    /// peer addresses derived from the registry). The wire layer does not
+    /// own the federation→address mapping.
+    pub async fn push_attested_root_to_peers(
+        &self,
+        peer_addrs: &[String],
+    ) -> Vec<(String, Result<(), ConnectionError>)> {
+        // Snapshot the local attested root.
+        let (root, height, signatures, threshold_qc) = {
+            let st = self.state.read().await;
+            (
+                st.federation_root,
+                st.height,
+                st.root_signatures.clone(),
+                st.threshold_qc.clone(),
+            )
+        };
+        let push = WireMessage::AttestedRootPush {
+            sender_federation: self.config.node_id,
+            root,
+            height,
+            timestamp: current_timestamp(),
+            signatures,
+            threshold_qc,
+        };
+
+        let mut results = Vec::with_capacity(peer_addrs.len());
+        for peer_addr in peer_addrs {
+            let r = self.send_attested_root_push(peer_addr, &push).await;
+            results.push((peer_addr.clone(), r));
+        }
+        results
+    }
+
+    /// Internal: open a connection, handshake, and send a single
+    /// `AttestedRootPush` payload. Closes the connection on completion.
+    async fn send_attested_root_push(
+        &self,
+        peer_addr: &str,
+        push: &WireMessage,
+    ) -> Result<(), ConnectionError> {
+        let mut conn = PeerConnection::connect(peer_addr).await?;
+        let hello = WireMessage::Hello {
+            node_id: self.config.node_id,
+            node_name: self.config.name.clone(),
+            protocol_version: PROTOCOL_VERSION,
+            capabilities: self.config.capabilities.clone(),
+        };
+        conn.send(hello).await?;
+        let _welcome = conn.recv().await?;
+        conn.send(push.clone()).await?;
+        // Push is fire-and-forget: the receiver acknowledges by silently
+        // queueing onto its `pending_attested_root_pushes`. We do not wait
+        // for a response — receivers should not respond to pushes (it would
+        // double bandwidth on a broadcast).
+        Ok(())
     }
 
     /// Present a token to a remote peer.

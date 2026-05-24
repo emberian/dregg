@@ -19,7 +19,7 @@ use pyana_circuit::stark::{
     verify,
 };
 use pyana_federation::types::{AttestedRoot, PublicKey};
-use pyana_federation::{generate_keypair, sign};
+use pyana_federation::{FederationId, generate_keypair, sign};
 
 fn short_hex(bytes: &[u8]) -> String {
     bytes[..4].iter().map(|b| format!("{b:02x}")).collect()
@@ -197,6 +197,7 @@ fn main() {
         threshold_qc: None,
         quorum_signatures: Vec::new(),
         threshold: 2,
+        federation_id: FederationId::PLACEHOLDER,
     };
 
     // Sign with quorum (2 of 3).

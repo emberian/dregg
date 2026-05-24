@@ -117,7 +117,10 @@ fn bilateral_pair_demo_happy_path_then_tamper() {
         "honest bilateral bundle should exit 0; verdict={:?}",
         verdict
     );
-    assert!(verdict.verified, "verdict.verified must be true: {verdict:?}");
+    assert!(
+        verdict.verified,
+        "verdict.verified must be true: {verdict:?}"
+    );
     assert_eq!(verdict.entry_count, 2);
     assert_eq!(verdict.transfer_count, 1);
     assert_eq!(verdict.grant_count, 0);

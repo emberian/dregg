@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::tables;
 use crate::{PersistentStore, Result, StoreError};
 
-pub use pyana_types::{PublicKey, Signature, ThresholdQC};
+pub use pyana_types::{FederationId, PublicKey, Signature, ThresholdQC};
 
 /// A stored attested root, capturing the federation's consensus state at a
 /// particular block height.
@@ -46,6 +46,10 @@ pub struct StoredAttestedRoot {
     pub threshold_qc: Option<ThresholdQC>,
     /// The number of signatures required for validity.
     pub threshold: usize,
+    /// The federation id this attestation is produced by (v3 binding).
+    /// `FederationId::PLACEHOLDER` for legacy roots produced before v3.
+    #[serde(default)]
+    pub federation_id: FederationId,
 }
 
 impl StoredAttestedRoot {
@@ -90,13 +94,14 @@ impl StoredAttestedRoot {
 
     /// Compute the canonical message that was signed for this attested root.
     ///
-    /// Mirrors [`pyana_types::AttestedRoot::signing_message`] (v2): includes
-    /// `note_tree_root`, `nullifier_set_root`, `blocklace_block_id`, and
-    /// `finality_round` with `0x00 | 0x01 || value` framing for unambiguous
-    /// `Option` encoding.
+    /// Mirrors [`pyana_types::AttestedRoot::signing_message`] (v3): includes
+    /// `federation_id`, `note_tree_root`, `nullifier_set_root`,
+    /// `blocklace_block_id`, and `finality_round` with `0x00 | 0x01 || value`
+    /// framing for unambiguous `Option` encoding.
     fn signing_message(&self) -> Vec<u8> {
         let mut msg = Vec::new();
-        msg.extend_from_slice(b"pyana-attested-root-v2");
+        msg.extend_from_slice(b"pyana-attested-root-v3");
+        msg.extend_from_slice(&self.federation_id.0);
         msg.extend_from_slice(&self.merkle_root);
         match self.note_tree_root {
             Some(ref r) => {

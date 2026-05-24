@@ -346,6 +346,7 @@ fn test_note_bridge_between_federations() {
         quorum_signatures: vec![],
         threshold_qc: None,
         threshold: 0,
+        federation_id: pyana_types::FederationId::PLACEHOLDER,
     };
 
     // Alice initiates the bridge: lock the note in Fed A's pending set.

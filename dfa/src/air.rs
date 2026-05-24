@@ -77,7 +77,7 @@ pub fn verify_air_trace(dfa: &Dfa, input: &[u8], trace: &[AirTraceRow]) -> bool 
 
 use serde::{Deserialize, Serialize};
 
-use crate::router::{Router, RouteTable};
+use crate::router::{RouteTable, Router};
 
 /// The full AIR-ready witness for a routed input: the route table commitment
 /// the trace was generated against, the trace itself, and the table's

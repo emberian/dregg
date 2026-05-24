@@ -1,34 +1,43 @@
-//! `pyana-observability` — turn execution + proof generation trace emitter.
+//! `pyana-observability` — Studio-shape trace event tour.
 //!
-//! This is the **seed crate** for the in-browser turn explorer. It:
+//! Constructs and executes a tour scenario that exercises every event
+//! variant the Studio inspector cares about: every `Authorization` kind,
+//! sovereign-witness verification (both with and without STARK proof),
+//! a sample of `StateConstraint` evaluation outcomes (accept and reject),
+//! γ.2 bilateral receipts for a Transfer + a Grant + an Introduce, and
+//! Federation id-derivation / join / leave / attestation events.
 //!
-//! 1. Constructs a minimal realistic Turn (single `Transfer` effect).
-//! 2. Runs the executor on an in-memory ledger.
-//! 3. Inspects pre/post cell state via the public ledger API.
-//! 4. Projects the Turn's effects into the Effect VM's per-cell effect stream
-//!    (duplicating the executor's private `convert_turn_effects_to_vm` projection
-//!    rather than widening visibility on production code).
-//! 5. Runs `generate_effect_vm_trace` + `stark::prove` + `stark::verify`.
-//! 6. Emits a single JSON document covering all of the above to stdout.
-//!
-//! The emitted JSON is intended as the wire format an off-line explorer would
-//! consume. It is **not** the executor's internal trace stream — that would
-//! require instrumenting `executor.rs` itself (a separate, larger lift).
+//! The output is a single JSON document on stdout containing the full
+//! event log in emission order — the wire shape a Studio Inspector
+//! consumes. Pipe through `jq` or redirect to a file.
 
-use pyana_cell::{AuthRequired, Cell, CellId, Ledger, Permissions, state::FIELD_ZERO};
-use pyana_circuit::{
-    EffectVmAir,
-    effect_vm::{self, generate_effect_vm_trace},
-    field::BabyBear,
-    stark,
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use pyana_captp::{HandoffCertificate, HandoffPresentation};
+use pyana_cell::program::{ReadSet, StateConstraint};
+use pyana_cell::state::{CellState, FIELD_ZERO, FieldElement, field_from_u64_be};
+use pyana_cell::{AuthRequired, Cell, CellProgram, EffectMask, Ledger, Permissions};
+use pyana_circuit::field::BabyBear;
+use pyana_federation::{Federation, LocalSeat};
+use pyana_observability::Emitter;
+use pyana_observability::events::{
+    AuthorizationPayload, BearerDelegationSummary, BilateralReceiptPayload, BilateralRollupPayload,
+    EventBody, EventEnvelope, FederationPayload, SovereignWitnessPayload, StateConstraintPayload,
+    TraceEvent, TurnLifecyclePayload,
+};
+use pyana_turn::action::{Authorization, BearerCapProof, DelegationProofData};
+use pyana_turn::bilateral_schedule::{
+    BilateralCounts, BilateralRoots, ExpectedBilateral, GrantEntry, IntroduceEntry, TransferEntry,
 };
 use pyana_turn::builder::ActionBuilder;
-use pyana_turn::{ComputronCosts, DelegationMode, Effect, TurnBuilder, TurnExecutor, TurnResult};
-use serde::Serialize;
-use serde_json::{Value, json};
+use pyana_turn::{ComputronCosts, DelegationMode, TurnBuilder, TurnExecutor, TurnResult};
+use pyana_types::{FederationId, SigningKey, generate_keypair, sign};
 
-fn hex32(bytes: &[u8; 32]) -> String {
-    hex::encode(bytes)
+fn unix_millis_now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 fn open_permissions() -> Permissions {
@@ -53,129 +62,132 @@ fn make_cell(seed: u8, balance: u64) -> Cell {
     cell
 }
 
-/// Capture the per-cell, per-Turn `Effect` snapshot. Mirrors only the
-/// fields meaningful for a Transfer (the demo case); a full implementation
-/// would re-render every effect variant.
-#[derive(Serialize)]
-struct EffectView {
-    action_index: usize,
-    kind: &'static str,
-    from: Option<String>,
-    to: Option<String>,
-    amount: Option<u64>,
-}
-
-fn render_effects(turn: &pyana_turn::Turn) -> Vec<EffectView> {
-    let mut out = Vec::new();
-    for (i, tree) in turn.call_forest.roots.iter().enumerate() {
-        for effect in &tree.action.effects {
-            match effect {
-                Effect::Transfer { from, to, amount } => out.push(EffectView {
-                    action_index: i,
-                    kind: "Transfer",
-                    from: Some(hex32(from.as_bytes())),
-                    to: Some(hex32(to.as_bytes())),
-                    amount: Some(*amount),
-                }),
-                other => out.push(EffectView {
-                    action_index: i,
-                    kind: variant_name(other),
-                    from: None,
-                    to: None,
-                    amount: None,
-                }),
-            }
-        }
-    }
-    out
-}
-
-fn variant_name(effect: &Effect) -> &'static str {
-    match effect {
-        Effect::Transfer { .. } => "Transfer",
-        Effect::SetField { .. } => "SetField",
-        Effect::GrantCapability { .. } => "GrantCapability",
-        Effect::RevokeCapability { .. } => "RevokeCapability",
-        Effect::IncrementNonce { .. } => "IncrementNonce",
-        _ => "Other",
-    }
-}
-
-/// Project a Turn's effects into the Effect VM's `Effect` stream from the
-/// perspective of one cell.
-///
-/// **Duplicated** from `pyana_turn::executor::TurnExecutor::convert_turn_effects_to_vm`
-/// (which is a private helper). Widening visibility on the production executor
-/// would force the trust-critical entry point's call shape to depend on an
-/// observability concern; copying the projection keeps the executor untouched.
-/// The trade-off: a future "any-turn trace" tool must keep these projections in
-/// lockstep (see README for follow-up).
-fn project_turn_effects_for_cell(
-    turn: &pyana_turn::Turn,
-    cell_id: &CellId,
-) -> Vec<effect_vm::Effect> {
-    use pyana_turn::forest::CallTree;
-
-    fn walk(tree: &CallTree, cell_id: &CellId, out: &mut Vec<effect_vm::Effect>) {
-        for effect in &tree.action.effects {
-            match effect {
-                Effect::Transfer { from, to, amount } => {
-                    if from == cell_id {
-                        out.push(effect_vm::Effect::Transfer {
-                            amount: *amount,
-                            direction: 1,
-                        });
-                    } else if to == cell_id {
-                        out.push(effect_vm::Effect::Transfer {
-                            amount: *amount,
-                            direction: 0,
-                        });
-                    }
-                }
-                _ => {
-                    // Demo intentionally narrowed to Transfer; the production
-                    // projection handles the full effect set.
-                }
-            }
-        }
-        for child in &tree.children {
-            walk(child, cell_id, out);
-        }
-    }
-
-    let mut out = Vec::new();
-    for tree in &turn.call_forest.roots {
-        walk(tree, cell_id, &mut out);
-    }
-    out
-}
-
-fn cell_state_view(label: &str, ledger: &Ledger, id: &CellId) -> Value {
-    let cell = ledger.get(id).expect("cell missing");
-    let fields: Vec<String> = cell
-        .state
-        .fields
-        .iter()
-        .map(|f| hex32(f))
-        .filter(|hex| hex != &hex32(&FIELD_ZERO))
-        .collect();
-    json!({
-        "label": label,
-        "cell_id": hex32(id.as_bytes()),
-        "balance": cell.state.balance(),
-        "nonce": cell.state.nonce(),
-        "non_zero_fields": fields,
-        "state_commitment": hex32(&cell.state_commitment()),
-    })
-}
-
-fn bb_vec(values: &[BabyBear]) -> Vec<u32> {
-    values.iter().map(|b| b.as_u32()).collect()
-}
-
 fn main() {
+    let em = Emitter::new();
+    em.set_clock(unix_millis_now);
+
     // ------------------------------------------------------------------
-    // 1. Build a tiny ledger: agent (sender) + recipient.
+    // 1. Build a federation and emit id-derivation + join + attestation
+    //    events.
+    // ------------------------------------------------------------------
+    emit_federation_tour(&em);
+
+    // ------------------------------------------------------------------
+    // 2. Build a real Turn, execute it, emit lifecycle + bilateral events.
+    // ------------------------------------------------------------------
+    let turn_hash = emit_turn_lifecycle(&em);
+
+    // ------------------------------------------------------------------
+    // 3. Synthesize one of every Authorization variant and emit each.
+    //    These are decorative: they share the turn_hash from §2 so a
+    //    Studio timeline groups them with the executed turn.
+    // ------------------------------------------------------------------
+    emit_authorization_tour(&em, &turn_hash);
+
+    // ------------------------------------------------------------------
+    // 4. Sovereign-witness events: one with STARK, one without.
+    // ------------------------------------------------------------------
+    emit_sovereign_witness_tour(&em, &turn_hash);
+
+    // ------------------------------------------------------------------
+    // 5. Slot-caveat evaluation: accept + reject.
+    // ------------------------------------------------------------------
+    emit_state_constraint_tour(&em, &turn_hash);
+
+    // ------------------------------------------------------------------
+    // 6. Emit the JSON event stream.
+    // ------------------------------------------------------------------
+    let snapshot = em.snapshot();
+    println!("{}", snapshot.to_pretty_string());
+}
+
+// =========================================================================
+// Federation tour
+// =========================================================================
+
+fn emit_federation_tour(em: &Emitter) {
+    // Build a two-member federation deterministically. We use
+    // `verifier_only` because that constructor doesn't pull the BLS
+    // setup (heavyweight + needs trusted setup state).
+    let (sk_a, pk_a) = generate_keypair();
+    let (_sk_b, pk_b) = generate_keypair();
+    let fed_initial = Federation::verifier_only(vec![pk_a, pk_b], 0, 2);
+    let fed_id_initial = fed_initial.id_bytes();
+
+    let (seq, ts) = em.next_envelope_seed();
+    em.emit(TraceEvent::Federation(EventBody {
+        envelope: EventEnvelope::new(seq, ts).with_federation_id(&fed_id_initial),
+        payload: FederationPayload::IdDerived {
+            federation_id: hex32(&fed_id_initial),
+            epoch: fed_initial.epoch(),
+            threshold: fed_initial.threshold(),
+            member_count: fed_initial.members().len(),
+            members: fed_initial.members().iter().map(|m| hex32(&m.0)).collect(),
+        },
+    }));
+
+    // Add a third member, simulating a committee rotation.
+    let (_sk_c, pk_c) = generate_keypair();
+    let mut sorted = vec![pk_a, pk_b, pk_c];
+    sorted.sort_by(|a, b| a.0.cmp(&b.0));
+    let fed_after = Federation::verifier_only(sorted, 1, 2);
+    let fed_id_after = fed_after.id_bytes();
+
+    let (seq, ts) = em.next_envelope_seed();
+    em.emit(TraceEvent::Federation(EventBody {
+        envelope: EventEnvelope::new(seq, ts).with_federation_id(&fed_id_after),
+        payload: FederationPayload::MemberJoined {
+            federation_id_before: hex32(&fed_id_initial),
+            federation_id_after: hex32(&fed_id_after),
+            epoch_after: fed_after.epoch(),
+            member_pk: hex32(&pk_c.0),
+        },
+    }));
+
+    // Simulate a member leaving (back to the original committee, but
+    // epoch advanced).
+    let fed_post_leave = Federation::verifier_only(vec![pk_a, pk_b], 2, 2);
+    let fed_id_post_leave = fed_post_leave.id_bytes();
+
+    let (seq, ts) = em.next_envelope_seed();
+    em.emit(TraceEvent::Federation(EventBody {
+        envelope: EventEnvelope::new(seq, ts).with_federation_id(&fed_id_post_leave),
+        payload: FederationPayload::MemberLeft {
+            federation_id_before: hex32(&fed_id_after),
+            federation_id_after: hex32(&fed_id_post_leave),
+            epoch_after: fed_post_leave.epoch(),
+            member_pk: hex32(&pk_c.0),
+        },
+    }));
+
+    // Attestation event: the original federation signs a message.
+    let message = b"observability-tour-attestation";
+    let sig = sign(&sk_a, message);
+    let message_hash = blake3::hash(message);
+    // We're modelling "one Ed25519 voter" here. A real `ReceiptQc::Votes`
+    // would carry several `(pubkey, sig)` pairs; the Studio displays the
+    // signer count.
+    let _ = sig; // sig is verifiable but the trace doesn't carry it
+    let (seq, ts) = em.next_envelope_seed();
+    em.emit(TraceEvent::Federation(EventBody {
+        envelope: EventEnvelope::new(seq, ts).with_federation_id(&fed_id_initial),
+        payload: FederationPayload::Attestation {
+            federation_id: hex32(&fed_id_initial),
+            epoch: 0,
+            message_hash: hex32(message_hash.as_bytes()),
+            signer_count: 1,
+            attestation_kind: "ed25519",
+        },
+    }));
+}
+
+// =========================================================================
+// Turn lifecycle + bilateral tour
+// =========================================================================
+
+fn emit_turn_lifecycle(em: &Emitter) -> [u8; 32] {
+    // ------------------------------------------------------------------
+    // Build a real ledger and execute a Turn.
     // ------------------------------------------------------------------
     let mut ledger = Ledger::new();
     let agent_cell = make_cell(1, 1_000);
@@ -183,25 +195,15 @@ fn main() {
     let agent_id = agent_cell.id();
     let recipient_id = recipient_cell.id();
 
-    // Grant agent a capability to recipient (open permissions, but the
-    // executor still requires a capability handle).
     let mut agent_with_cap = agent_cell;
     agent_with_cap
         .capabilities
         .grant(recipient_id, AuthRequired::None);
-
     ledger.insert_cell(agent_with_cap).expect("insert agent");
     ledger
         .insert_cell(recipient_cell)
         .expect("insert recipient");
 
-    // Snapshot pre-state for the JSON dump.
-    let pre_agent = cell_state_view("agent_pre", &ledger, &agent_id);
-    let pre_recipient = cell_state_view("recipient_pre", &ledger, &recipient_id);
-
-    // ------------------------------------------------------------------
-    // 2. Build the Turn: single Transfer from agent -> recipient.
-    // ------------------------------------------------------------------
     let executor = TurnExecutor::new(ComputronCosts::zero());
     let transfer_amount: u64 = 100;
     let fee: u64 = 50;
@@ -209,170 +211,518 @@ fn main() {
     let mut builder = TurnBuilder::new(agent_id, 0);
     let action = ActionBuilder::new_unchecked_for_tests(agent_id, "transfer", agent_id)
         .effect_transfer(agent_id, recipient_id, transfer_amount)
-        // ParentsOwn keeps the action's authority within the agent.
         .delegation(DelegationMode::ParentsOwn)
         .build();
     builder.add_action(action);
     let turn = builder.fee(fee).build();
+    let turn_hash = turn.hash();
 
-    let turn_hash_pre = turn.hash();
+    // Emit `Submitted`.
+    let (seq, ts) = em.next_envelope_seed();
+    em.emit(TraceEvent::TurnLifecycle(EventBody {
+        envelope: EventEnvelope::new(seq, ts)
+            .with_turn_hash(&turn_hash)
+            .with_actor(&agent_id),
+        payload: TurnLifecyclePayload::Submitted {
+            nonce: turn.nonce,
+            fee: turn.fee,
+            action_count: turn.action_count(),
+            valid_until: turn.valid_until,
+            previous_receipt_hash: turn.previous_receipt_hash.as_ref().map(hex32),
+        },
+    }));
 
-    // ------------------------------------------------------------------
-    // 3. Execute, capture receipt.
-    // ------------------------------------------------------------------
-    let result = executor.execute(&turn, &mut ledger);
-    let (_delta, receipt, computrons_used) = match result {
+    // Execute and emit lifecycle outcome.
+    match executor.execute(&turn, &mut ledger) {
         TurnResult::Committed {
-            ledger_delta,
+            ledger_delta: _,
             receipt,
             computrons_used,
-        } => (ledger_delta, receipt, computrons_used),
+        } => {
+            let (seq, ts) = em.next_envelope_seed();
+            em.emit(TraceEvent::TurnLifecycle(EventBody {
+                envelope: EventEnvelope::new(seq, ts)
+                    .with_turn_hash(&turn_hash)
+                    .with_actor(&agent_id),
+                payload: TurnLifecyclePayload::Committed {
+                    receipt_hash: hex32(&receipt.receipt_hash()),
+                    forest_hash: hex32(&receipt.forest_hash),
+                    pre_state_hash: hex32(&receipt.pre_state_hash),
+                    post_state_hash: hex32(&receipt.post_state_hash),
+                    effects_hash: hex32(&receipt.effects_hash),
+                    timestamp: receipt.timestamp,
+                    action_count: receipt.action_count as usize,
+                    computrons_used,
+                    finality: format!("{:?}", receipt.finality),
+                },
+            }));
+        }
         TurnResult::Rejected { reason, at_action } => {
-            eprintln!("turn rejected at {:?}: {}", at_action, reason);
-            std::process::exit(1);
+            let (seq, ts) = em.next_envelope_seed();
+            em.emit(TraceEvent::TurnLifecycle(EventBody {
+                envelope: EventEnvelope::new(seq, ts)
+                    .with_turn_hash(&turn_hash)
+                    .with_actor(&agent_id),
+                payload: TurnLifecyclePayload::Rejected {
+                    reason: reason.to_string(),
+                    at_action,
+                },
+            }));
         }
         TurnResult::Expired => {
-            eprintln!("turn expired");
-            std::process::exit(1);
+            let (seq, ts) = em.next_envelope_seed();
+            em.emit(TraceEvent::TurnLifecycle(EventBody {
+                envelope: EventEnvelope::new(seq, ts)
+                    .with_turn_hash(&turn_hash)
+                    .with_actor(&agent_id),
+                payload: TurnLifecyclePayload::Expired,
+            }));
         }
         TurnResult::Pending => {
-            eprintln!("turn pending");
-            std::process::exit(1);
+            let (seq, ts) = em.next_envelope_seed();
+            em.emit(TraceEvent::TurnLifecycle(EventBody {
+                envelope: EventEnvelope::new(seq, ts)
+                    .with_turn_hash(&turn_hash)
+                    .with_actor(&agent_id),
+                payload: TurnLifecyclePayload::Pending {
+                    waiting_on: "sovereign-witness".to_string(),
+                },
+            }));
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Bilateral receipts. We construct a richer synthetic schedule to
+    // cover all three entry kinds (Transfer/Grant/Introduce) — the
+    // executor-run turn above only contains a Transfer.
+    // ------------------------------------------------------------------
+    let bystander_cell = make_cell(3, 0);
+    let bystander_id = bystander_cell.id();
+
+    let transfers = vec![TransferEntry {
+        from: agent_id,
+        to: recipient_id,
+        amount: transfer_amount,
+    }];
+    let grants = vec![GrantEntry {
+        from: agent_id,
+        to: recipient_id,
+        cap_entry_hash: blake3::hash(b"observability-tour-grant").into(),
+    }];
+    let introduces = vec![IntroduceEntry {
+        introducer: agent_id,
+        recipient: recipient_id,
+        target: bystander_id,
+        permissions: AuthRequired::Signature,
+    }];
+    let sched = ExpectedBilateral {
+        transfers: transfers.clone(),
+        grants: grants.clone(),
+        introduces: introduces.clone(),
     };
 
-    // Post-state snapshots.
-    let post_agent = cell_state_view("agent_post", &ledger, &agent_id);
-    let post_recipient = cell_state_view("recipient_post", &ledger, &recipient_id);
+    let actor_nonce = turn.nonce;
 
-    // ------------------------------------------------------------------
-    // 4. Project this Turn's effects into the Effect VM's per-cell stream
-    //    (agent side, since the agent is debited).
-    // ------------------------------------------------------------------
-    let vm_effects = project_turn_effects_for_cell(&turn, &agent_id);
+    // Walk the schedule and emit one BilateralReceipt event per side. We
+    // recompute the rolling accumulator using the same per-cell roots
+    // helper the AIR uses; the post-fold root for each entry is the
+    // value `BilateralRoots` carries after that entry has been absorbed.
+    //
+    // We emit them per-cell so a Studio inspector can render each cell's
+    // timeline as the rolling per-direction accumulator.
+    for cell_id in [&agent_id, &recipient_id, &bystander_id] {
+        let counts = sched.counts_for(cell_id);
+        let roots = sched.roots_for(cell_id, actor_nonce);
 
-    // Effect VM expects at least one effect.
-    assert!(
-        !vm_effects.is_empty(),
-        "no VM-side effects projected for agent {:?}",
-        agent_id
+        // Per-entry emission.
+        for entry in &transfers {
+            if &entry.from == cell_id {
+                emit_bilateral(
+                    em,
+                    cell_id,
+                    &turn_hash,
+                    pyana_observability::events::transfer_entry_outbound(
+                        entry,
+                        actor_nonce,
+                        &roots.outgoing_transfer,
+                    ),
+                );
+            }
+            if &entry.to == cell_id {
+                emit_bilateral(
+                    em,
+                    cell_id,
+                    &turn_hash,
+                    pyana_observability::events::transfer_entry_inbound(
+                        entry,
+                        actor_nonce,
+                        &roots.incoming_transfer,
+                    ),
+                );
+            }
+        }
+        for entry in &grants {
+            if &entry.from == cell_id {
+                emit_bilateral(
+                    em,
+                    cell_id,
+                    &turn_hash,
+                    pyana_observability::events::grant_entry_outbound(
+                        entry,
+                        actor_nonce,
+                        &roots.outgoing_grant,
+                    ),
+                );
+            }
+            if &entry.to == cell_id {
+                emit_bilateral(
+                    em,
+                    cell_id,
+                    &turn_hash,
+                    pyana_observability::events::grant_entry_inbound(
+                        entry,
+                        actor_nonce,
+                        &roots.incoming_grant,
+                    ),
+                );
+            }
+        }
+        for entry in &introduces {
+            if &entry.introducer == cell_id {
+                emit_bilateral(
+                    em,
+                    cell_id,
+                    &turn_hash,
+                    pyana_observability::events::intro_entry_introducer(
+                        entry,
+                        actor_nonce,
+                        &roots.intro_as_introducer,
+                    ),
+                );
+            }
+            if &entry.recipient == cell_id {
+                emit_bilateral(
+                    em,
+                    cell_id,
+                    &turn_hash,
+                    pyana_observability::events::intro_entry_recipient(
+                        entry,
+                        actor_nonce,
+                        &roots.intro_as_recipient,
+                    ),
+                );
+            }
+            if &entry.target == cell_id {
+                emit_bilateral(
+                    em,
+                    cell_id,
+                    &turn_hash,
+                    pyana_observability::events::intro_entry_target(
+                        entry,
+                        actor_nonce,
+                        &roots.intro_as_target,
+                    ),
+                );
+            }
+        }
+
+        // Per-cell rollup at end-of-turn.
+        let (seq, ts) = em.next_envelope_seed();
+        em.emit(TraceEvent::BilateralRollup(EventBody {
+            envelope: EventEnvelope::new(seq, ts)
+                .with_turn_hash(&turn_hash)
+                .with_cell_id(cell_id),
+            payload: BilateralRollupPayload {
+                counts: counts.into(),
+                roots: roots.into(),
+            },
+        }));
+    }
+
+    turn_hash
+}
+
+fn emit_bilateral(
+    em: &Emitter,
+    cell_id: &pyana_cell::CellId,
+    turn_hash: &[u8; 32],
+    payload: BilateralReceiptPayload,
+) {
+    let (seq, ts) = em.next_envelope_seed();
+    em.emit(TraceEvent::BilateralReceipt(EventBody {
+        envelope: EventEnvelope::new(seq, ts)
+            .with_turn_hash(turn_hash)
+            .with_cell_id(cell_id),
+        payload,
+    }));
+}
+
+// =========================================================================
+// Authorization tour
+// =========================================================================
+
+fn emit_authorization_tour(em: &Emitter, turn_hash: &[u8; 32]) {
+    // 1. Signature
+    let auth_sig = Authorization::Signature([0xAB; 32], [0xCD; 32]);
+    emit_auth_event(em, turn_hash, &auth_sig);
+
+    // 2. Proof (synthetic — the proof bytes are opaque to the trace).
+    let auth_proof = Authorization::Proof {
+        proof_bytes: vec![0u8; 256],
+        bound_action: "transfer".to_string(),
+        bound_resource: "agent-cell".to_string(),
+    };
+    emit_auth_event(em, turn_hash, &auth_proof);
+
+    // 3. Breadstuff
+    let token: [u8; 32] = blake3::hash(b"observability-tour-breadstuff").into();
+    let auth_bs = Authorization::Breadstuff(token);
+    emit_auth_event(em, turn_hash, &auth_bs);
+
+    // 4. Bearer (signed delegation)
+    let mut target_bytes = [0u8; 32];
+    target_bytes[0] = 9;
+    let target_cell = pyana_cell::CellId(target_bytes);
+    let mut delegator_pk = [0u8; 32];
+    delegator_pk[0] = 7;
+    let mut bearer_pk = [0u8; 32];
+    bearer_pk[0] = 8;
+    let auth_bearer_signed = Authorization::Bearer(BearerCapProof {
+        target: target_cell,
+        permissions: AuthRequired::Signature,
+        delegation_proof: DelegationProofData::SignedDelegation {
+            delegator_pk,
+            signature: [0x44; 64],
+            bearer_pk,
+        },
+        expires_at: 1_000_000,
+        revocation_channel: Some([0x55; 32]),
+        allowed_effects: Some(EffectMask(0b1010)),
+    });
+    emit_auth_event(em, turn_hash, &auth_bearer_signed);
+
+    // 4b. Bearer (STARK delegation)
+    let auth_bearer_stark = Authorization::Bearer(BearerCapProof {
+        target: target_cell,
+        permissions: AuthRequired::Proof,
+        delegation_proof: DelegationProofData::StarkDelegation {
+            proof_bytes: vec![0u8; 512],
+            root_issuer_commitment: [0x66; 32],
+        },
+        expires_at: 2_000_000,
+        revocation_channel: None,
+        allowed_effects: None,
+    });
+    emit_auth_event(em, turn_hash, &auth_bearer_stark);
+
+    // 5. Unchecked
+    emit_auth_event(em, turn_hash, &Authorization::Unchecked);
+
+    // 6. CapTpDelivered — construct a real HandoffCertificate so the
+    //    payload reflects the on-wire shape Studio will see.
+    let auth_captp = build_captp_authorization();
+    emit_auth_event(em, turn_hash, &auth_captp);
+}
+
+fn emit_auth_event(em: &Emitter, turn_hash: &[u8; 32], auth: &Authorization) {
+    let (seq, ts) = em.next_envelope_seed();
+    em.emit(TraceEvent::Authorization(EventBody {
+        envelope: EventEnvelope::new(seq, ts).with_turn_hash(turn_hash),
+        payload: AuthorizationPayload::from_authorization(auth),
+    }));
+}
+
+fn build_captp_authorization() -> Authorization {
+    let (introducer_key, introducer_pubkey) = generate_keypair();
+    let (recipient_key, recipient_pubkey) = generate_keypair();
+
+    let introducer_fed = FederationId(introducer_pubkey.0);
+    let target_fed = FederationId(blake3::hash(b"target-federation").into());
+    let mut target_cell_bytes = [0u8; 32];
+    target_cell_bytes[0] = 0xAB;
+    let target_cell = pyana_cell::CellId(target_cell_bytes);
+    let swiss: [u8; 32] = blake3::hash(b"observability-tour-swiss").into();
+
+    let cert = HandoffCertificate::create(
+        &introducer_key,
+        introducer_fed,
+        target_fed,
+        target_cell,
+        recipient_pubkey.0,
+        AuthRequired::Signature,
+        Some(EffectMask(0b0011)),
+        Some(2_000_000),
+        Some(3),
+        swiss,
     );
 
-    // Render vm_effects for JSON.
-    let vm_effects_json: Vec<Value> = vm_effects
-        .iter()
-        .map(|e| match e {
-            effect_vm::Effect::Transfer { amount, direction } => json!({
-                "type": "Transfer",
-                "amount": amount,
-                "direction": direction,
-                "direction_meaning": if *direction == 0 { "incoming" } else { "outgoing" },
-            }),
-            other => json!({ "type": format!("{:?}", other) }),
-        })
-        .collect();
+    // The sender (= recipient) signs the `captp_delivered_signing_message`.
+    // For the trace we use a synthetic empty effect set + nonce 0; in
+    // production the wire layer fills these in.
+    let mut agent_bytes = [0u8; 32];
+    agent_bytes[0] = 0xCD;
+    let agent_cell = pyana_cell::CellId(agent_bytes);
+    let msg = Authorization::captp_delivered_signing_message(
+        &cert.nonce,
+        &agent_cell,
+        &target_cell,
+        0,
+        &[],
+    );
+    let sig = sign(&recipient_key, &msg);
 
-    // ------------------------------------------------------------------
-    // 5. Generate trace + STARK proof using the initial agent state.
-    //    Note: this is what a sovereign cell would prove; for hosted cells,
-    //    the executor doesn't actually generate this proof (it walks the
-    //    classical path). We're showing the *pathway*.
-    // ------------------------------------------------------------------
-    // initial_state seen by the AIR is the agent's PRE-execution state.
-    let initial_state = effect_vm::CellState::new(1_000, 0);
+    Authorization::CapTpDelivered {
+        handoff_cert: cert,
+        introducer_pk: introducer_pubkey.0,
+        sender_pk: recipient_pubkey.0,
+        sender_signature: sig.0,
+    }
+}
 
-    let (trace, public_inputs) = generate_effect_vm_trace(&initial_state, &vm_effects);
-    let trace_height = trace.len();
-    let trace_width = if trace_height > 0 { trace[0].len() } else { 0 };
+// =========================================================================
+// Sovereign witness tour
+// =========================================================================
 
-    use pyana_circuit::stark::StarkAir;
-    let air = EffectVmAir::new(trace_height);
-    let air_name = air.air_name();
-    let proof = stark::prove(&air, &trace, &public_inputs);
-    let verify_result = stark::verify(&air, &proof, &public_inputs);
-    let (verified, verify_error) = match &verify_result {
-        Ok(()) => (true, None),
-        Err(e) => (false, Some(e.clone())),
+fn emit_sovereign_witness_tour(em: &Emitter, turn_hash: &[u8; 32]) {
+    let mut sov_cell = make_cell(0x10, 1_000);
+    sov_cell.permissions = open_permissions();
+    let cell_id = sov_cell.id();
+    let old_commit = sov_cell.state_commitment();
+
+    // Witness 1: no STARK proof (the executor would re-execute).
+    let witness_no_stark = pyana_turn::SovereignCellWitness {
+        cell_id,
+        old_commitment: old_commit,
+        new_commitment: [0xAA; 32],
+        effects_hash: [0xBB; 32],
+        timestamp: 1_779_494_400, // 2026-05-24T00:00:00Z
+        sequence: 1,
+        signature: [0; 64],
+        cell_state: sov_cell.clone(),
+        transition_proof: None,
     };
+    emit_witness_event(em, turn_hash, &witness_no_stark);
 
-    // Trim the trace's first row for the JSON dump (full trace is large).
-    let trace_first_row: Vec<u32> = if trace_height > 0 {
-        bb_vec(&trace[0])
-    } else {
-        Vec::new()
+    // Witness 2: with STARK proof.
+    let witness_with_stark = pyana_turn::SovereignCellWitness {
+        cell_id,
+        old_commitment: [0xAA; 32],
+        new_commitment: [0xCC; 32],
+        effects_hash: [0xDD; 32],
+        timestamp: 1_779_494_401,
+        sequence: 2,
+        signature: [0; 64],
+        cell_state: sov_cell,
+        transition_proof: Some(vec![0u8; 4096]),
     };
+    emit_witness_event(em, turn_hash, &witness_with_stark);
+}
 
-    // Approximate proof size: serialize via serde_json (the wire format the
-    // explorer will see). For a "real" byte count, postcard would be tighter
-    // but this is what'll cross the wire to the browser.
-    let proof_size_bytes = serde_json::to_vec(&proof).map(|v| v.len()).unwrap_or(0);
+fn emit_witness_event(
+    em: &Emitter,
+    turn_hash: &[u8; 32],
+    witness: &pyana_turn::SovereignCellWitness,
+) {
+    let (seq, ts) = em.next_envelope_seed();
+    em.emit(TraceEvent::SovereignWitnessVerified(EventBody {
+        envelope: EventEnvelope::new(seq, ts)
+            .with_turn_hash(turn_hash)
+            .with_cell_id(&witness.cell_id),
+        payload: SovereignWitnessPayload::from_witness(witness),
+    }));
+}
 
-    // ------------------------------------------------------------------
-    // 6. Render the JSON document.
-    // ------------------------------------------------------------------
-    let doc = json!({
-        "schema_version": 1,
-        "schema_name": "pyana-observability-turn-trace-v1",
-        "description": "Single-transfer turn execution + Effect VM STARK proof pathway.",
-        "turn": {
-            "agent": hex32(agent_id.as_bytes()),
-            "nonce": turn.nonce,
-            "fee": turn.fee,
-            "memo": turn.memo,
-            "valid_until": turn.valid_until,
-            "action_count": turn.action_count(),
-            "effects": render_effects(&turn),
-            "turn_hash": hex32(&turn_hash_pre),
-        },
-        "pre_state": [pre_agent, pre_recipient],
-        "post_state": [post_agent, post_recipient],
-        "receipt": {
-            "turn_hash": hex32(&receipt.turn_hash),
-            "forest_hash": hex32(&receipt.forest_hash),
-            "pre_state_hash": hex32(&receipt.pre_state_hash),
-            "post_state_hash": hex32(&receipt.post_state_hash),
-            "effects_hash": hex32(&receipt.effects_hash),
-            "timestamp": receipt.timestamp,
-            "action_count": receipt.action_count,
-            "computrons_used": computrons_used,
-            "agent": hex32(receipt.agent.as_bytes()),
-            "federation_id": hex32(&receipt.federation_id),
-            "previous_receipt_hash": receipt.previous_receipt_hash.as_ref().map(hex32),
-            "finality": format!("{:?}", receipt.finality),
-            "receipt_hash": hex32(&receipt.receipt_hash()),
-        },
-        "vm_effects": vm_effects_json,
-        "air": {
-            "air_name": air_name,
-            "trace_width": trace_width,
-            "trace_height": trace_height,
-            "trace_first_row": trace_first_row,
-            "public_input_count": public_inputs.len(),
-            "public_inputs": bb_vec(&public_inputs),
-        },
-        "proof": {
-            "air_name": proof.air_name,
-            "trace_len": proof.trace_len,
-            "num_cols": proof.num_cols,
-            "fri_layers": proof.fri_commitments.len(),
-            "query_count": proof.query_proofs.len(),
-            "pow_bits": proof.pow_bits,
-            "size_bytes_json": proof_size_bytes,
-            "trace_commitment": hex32(&proof.trace_commitment),
-            "constraint_commitment": hex32(&proof.constraint_commitment),
-        },
-        "verification": {
-            "verified": verified,
-            "error": verify_error,
-            "trace_len": proof.trace_len,
-            "public_input_count": public_inputs.len(),
-        },
-        "notes": {
-            "scope": "Demo: hosted-cell turn whose Effect VM proof would be required if the agent cell were sovereign. The executor itself did NOT generate this proof — it took the classical path. We generate the proof out-of-band to demonstrate the pathway.",
-            "projection_source": "Duplicated from pyana_turn::executor::TurnExecutor::convert_turn_effects_to_vm (private). See README for follow-up.",
-        }
-    });
+// =========================================================================
+// Slot caveat tour
+// =========================================================================
 
-    let serialized = serde_json::to_string_pretty(&doc).expect("serialize");
-    println!("{}", serialized);
+fn emit_state_constraint_tour(em: &Emitter, turn_hash: &[u8; 32]) {
+    // Build a tiny CellState pair so we can really evaluate a constraint
+    // and surface a real reason.
+    let mut old_state = CellState::default();
+    old_state.fields[3] = field_from_u64_be(5);
+    let mut new_state_ok = old_state.clone();
+    new_state_ok.fields[3] = field_from_u64_be(10);
+    let mut new_state_bad = old_state.clone();
+    new_state_bad.fields[3] = field_from_u64_be(3); // decrease
+
+    // Constraint: Monotonic on slot 3.
+    let constraint = StateConstraint::Monotonic { index: 3 };
+    let program = CellProgram::Predicate(vec![constraint.clone()]);
+
+    let result_ok = program.evaluate_static(&new_state_ok, Some(&old_state));
+    let (seq, ts) = em.next_envelope_seed();
+    em.emit(TraceEvent::StateConstraintEvaluated(EventBody {
+        envelope: EventEnvelope::new(seq, ts).with_turn_hash(turn_hash),
+        payload: StateConstraintPayload::from_evaluation(&constraint, result_ok.is_ok(), None),
+    }));
+
+    let result_bad = program.evaluate_static(&new_state_bad, Some(&old_state));
+    let reason = match &result_bad {
+        Err(e) => Some(format!("{}", e)),
+        Ok(()) => None,
+    };
+    let (seq, ts) = em.next_envelope_seed();
+    em.emit(TraceEvent::StateConstraintEvaluated(EventBody {
+        envelope: EventEnvelope::new(seq, ts).with_turn_hash(turn_hash),
+        payload: StateConstraintPayload::from_evaluation(&constraint, result_bad.is_ok(), reason),
+    }));
+
+    // Also exercise a multi-slot constraint for shape coverage.
+    let sum_constraint = StateConstraint::SumEquals {
+        indices: vec![0, 1, 2],
+        value: field_from_u64_be(0),
+    };
+    let mut s = CellState::default();
+    s.fields[0] = FIELD_ZERO;
+    s.fields[1] = FIELD_ZERO;
+    s.fields[2] = FIELD_ZERO;
+    let program2 = CellProgram::Predicate(vec![sum_constraint.clone()]);
+    let result_sum = program2.evaluate_static(&s, None);
+    let (seq, ts) = em.next_envelope_seed();
+    em.emit(TraceEvent::StateConstraintEvaluated(EventBody {
+        envelope: EventEnvelope::new(seq, ts).with_turn_hash(turn_hash),
+        payload: StateConstraintPayload::from_evaluation(
+            &sum_constraint,
+            result_sum.is_ok(),
+            result_sum.err().map(|e| format!("{}", e)),
+        ),
+    }));
+}
+
+// =========================================================================
+// Helpers
+// =========================================================================
+
+fn hex32(bytes: &[u8; 32]) -> String {
+    let mut out = String::with_capacity(64);
+    for b in bytes {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
+
+// Silence unused-import warnings the IDE pulls in for the future-extension
+// types. These are intentionally re-exported even when this binary doesn't
+// reach them today.
+#[allow(dead_code)]
+fn _api_surface_anchor() {
+    let _ = HandoffPresentation::presentation_message;
+    let _ = LocalSeat {
+        index: 0,
+        signing_key: SigningKey::from_bytes(&[0u8; 32]),
+    };
+    let _: BabyBear = BabyBear::ZERO;
+    let _ = BilateralCounts::default();
+    let _ = BilateralRoots::default();
+    let _ = ReadSet {
+        new_slots: vec![],
+        old_slots: vec![],
+    };
+    let _ = BearerDelegationSummary::SignedDelegation {
+        delegator_pk: String::new(),
+        bearer_pk: String::new(),
+        signature_prefix: String::new(),
+    };
+    let _: FieldElement = FIELD_ZERO;
 }

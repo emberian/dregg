@@ -1306,6 +1306,7 @@ mod tests {
             quorum_signatures: vec![],
             threshold_qc: None,
             threshold: 0,
+            federation_id: pyana_types::FederationId::PLACEHOLDER,
         }
     }
 
@@ -1714,6 +1715,7 @@ mod tests {
             quorum_signatures: vec![],
             threshold_qc: None,
             threshold: 0,
+            federation_id: pyana_types::FederationId::PLACEHOLDER,
         };
 
         let proof = PortableNoteProof {

@@ -865,6 +865,7 @@ impl FederationNode {
                 .map(|q| pyana_types::ThresholdQC(q.to_bytes())),
             quorum_signatures,
             threshold: qc.threshold,
+            federation_id: pyana_types::FederationId::PLACEHOLDER,
         });
     }
 
@@ -978,6 +979,7 @@ impl Federation {
             threshold_qc: None,
             quorum_signatures: Vec::new(),
             threshold: 0,
+            federation_id: pyana_types::FederationId::PLACEHOLDER,
         };
         let message = probe.signing_message();
         self.nodes

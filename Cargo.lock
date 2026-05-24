@@ -1777,13 +1777,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cod"
-version = "0.1.0"
-dependencies = [
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3377,9 +3370,11 @@ version = "0.1.0"
 dependencies = [
  "axum 0.8.9",
  "blake3",
+ "postcard",
  "pyana-app-framework",
  "pyana-captp",
  "pyana-cell",
+ "pyana-dfa",
  "pyana-types",
  "serde",
  "serde_json",
@@ -6545,10 +6540,18 @@ dependencies = [
  "blake3",
  "ed25519-dalek",
  "getrandom 0.3.4",
+ "hex",
+ "postcard",
+ "pyana-captp",
+ "pyana-cell",
  "pyana-circuit",
  "pyana-commit",
  "pyana-federation",
+ "pyana-turn",
  "pyana-types",
+ "pyana-verifier",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -6581,6 +6584,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "postcard",
+ "pyana-federation",
  "serde",
  "serde_json",
 ]
@@ -6591,7 +6595,9 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "hex",
+ "pyana-app-framework",
  "pyana-captp",
+ "pyana-sdk",
  "pyana-storage",
  "reqwest",
  "serde",
@@ -6601,6 +6607,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.23",
+ "zeroize",
 ]
 
 [[package]]
@@ -6741,6 +6748,7 @@ dependencies = [
  "pyana-cell",
  "pyana-circuit",
  "pyana-commit",
+ "pyana-dfa",
  "pyana-federation",
  "pyana-trace",
  "pyana-turn",
@@ -6807,6 +6815,7 @@ dependencies = [
  "metrics-exporter-prometheus",
  "postcard",
  "pyana-blocklace",
+ "pyana-captp",
  "pyana-cell",
  "pyana-circuit",
  "pyana-commit",
@@ -6839,10 +6848,14 @@ dependencies = [
 name = "pyana-observability"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "hex",
+ "pyana-captp",
  "pyana-cell",
  "pyana-circuit",
+ "pyana-federation",
  "pyana-turn",
+ "pyana-types",
  "serde",
  "serde_json",
 ]
@@ -7135,6 +7148,7 @@ dependencies = [
  "pyana-captp",
  "pyana-cell",
  "pyana-circuit",
+ "pyana-commit",
  "pyana-federation",
  "pyana-turn",
  "pyana-types",
@@ -7193,6 +7207,7 @@ dependencies = [
  "pyana-commit",
  "pyana-dfa",
  "pyana-dsl-runtime",
+ "pyana-federation",
  "pyana-store",
  "pyana-turn",
  "pyana-types",

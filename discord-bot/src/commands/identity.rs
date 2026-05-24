@@ -8,7 +8,7 @@ use serenity::all::{
 
 use crate::BotState;
 use crate::embeds;
-use crate::wallet::DerivedWallet;
+use crate::wallet::{UserWallet, sign_legacy};
 
 /// Register the /credential command.
 pub fn register() -> CreateCommand {
@@ -121,8 +121,8 @@ async fn handle_issue(ctx: &Context, command: &CommandInteraction, state: &BotSt
         }
     };
 
-    let wallet = DerivedWallet::derive(&state.config.bot_secret, user_id);
-    let signature = sign_action(&wallet, &format!("issue:{schema}:{attributes}"));
+    let wallet = UserWallet::derive(&state.config.bot_secret, user_id, state.federation_id_bytes);
+    let signature = sign_credential_action(&wallet, &format!("issue:{schema}:{attributes}"));
 
     match state
         .devnet
@@ -327,13 +327,11 @@ async fn handle_list(ctx: &Context, command: &CommandInteraction, state: &BotSta
     }
 }
 
-/// Sign an action using BLAKE3.
-fn sign_action(wallet: &DerivedWallet, action: &str) -> String {
-    let mut msg = Vec::new();
-    msg.extend_from_slice(action.as_bytes());
-    msg.extend_from_slice(&wallet.private_key);
-    let sig = blake3::hash(&msg);
-    hex::encode(sig.as_bytes())
+/// Sign a credential-issue action via the legacy BLAKE3-MAC wire
+/// scheme the devnet `/api/identity/credentials/issue` endpoint
+/// expects. See `wallet::sign_legacy` for the transition gap.
+fn sign_credential_action(wallet: &UserWallet, action: &str) -> String {
+    sign_legacy(wallet, action.as_bytes())
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

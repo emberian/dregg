@@ -95,7 +95,17 @@ pub struct NodeStateInner {
     /// Prevents the same proof from satisfying multiple conditional turns.
     pub used_proof_hashes: HashSet<[u8; 32]>,
     /// Known federation public keys for attested root quorum verification.
+    ///
+    /// Per FEDERATION-UNIFICATION-DESIGN.md §5/§8 this is now a *derived*
+    /// view over [`Self::known_federations`]; for backward compat with the
+    /// ~30 call sites that read this Vec it stays as a real field, kept in
+    /// sync by [`Self::set_federation_keys`] / [`Self::register_federation`].
     pub known_federation_keys: Vec<pyana_types::PublicKey>,
+    /// Registry of federations the local node knows about (both the local
+    /// federation and any peer federations registered out-of-band).
+    /// Replaces the disjoint pair of (known_federation_keys, federation_id)
+    /// per the unification design §3.
+    pub known_federations: pyana_federation::KnownFederations,
     /// Whether federation keys have been configured. When `false`, the node operates
     /// in "discovery mode" and will not finalize attested roots (Issue 10).
     pub federation_configured: bool,
@@ -227,14 +237,11 @@ pub struct NodeStateInner {
     /// endpoint (`GET /api/events?since_height=N`). Capped at `MAX_EVENT_LOG` entries.
     pub event_log: VecDeque<CommittedEvent>,
 
-    // ─── Solo Federation Mode ─────────────────────────────────────────────────
-    /// The operating mode of this node (Solo or Full).
-    /// In Solo mode, turns are processed immediately without BFT quorum and receipts
-    /// carry `Tentative` finality. In Full mode, standard quorum requirements apply.
-    pub federation_mode: pyana_federation::solo::FederationMode,
-
     /// Solo consensus state: nullifier log, height tracking, auto-upgrade detection.
-    /// Only `Some` when `federation_mode == Solo`.
+    /// `Some(_)` when this node was configured as solo (committee of one)
+    /// at startup. Per FEDERATION-UNIFICATION-DESIGN.md §5, "solo" is no
+    /// longer a separate runtime mode enum — the presence of this state
+    /// (and the inner `is_solo` flag) is the operational signal.
     pub solo_consensus: Option<pyana_federation::solo::SoloConsensusState>,
 }
 
@@ -437,6 +444,7 @@ impl NodeState {
                 pending_turns: pyana_turn::PendingTurnRegistry::new(),
                 used_proof_hashes,
                 known_federation_keys: Vec::new(),
+                known_federations: pyana_federation::KnownFederations::new(),
                 federation_configured: false,
                 federation_id: [0u8; 32],
                 committee_epoch: 0,
@@ -472,7 +480,6 @@ impl NodeState {
                     pyana_intent::delay_pool::DelayPoolConfig::default(),
                 ),
                 event_log: VecDeque::new(),
-                federation_mode: pyana_federation::solo::FederationMode::default(),
                 solo_consensus: None,
             })),
             events_tx,
@@ -519,6 +526,7 @@ impl NodeState {
                 pending_turns: pyana_turn::PendingTurnRegistry::new(),
                 used_proof_hashes: HashSet::new(),
                 known_federation_keys: Vec::new(),
+                known_federations: pyana_federation::KnownFederations::new(),
                 federation_configured: false,
                 federation_id: [0u8; 32],
                 committee_epoch: 0,
@@ -554,7 +562,6 @@ impl NodeState {
                     pyana_intent::delay_pool::DelayPoolConfig::default(),
                 ),
                 event_log: VecDeque::new(),
-                federation_mode: pyana_federation::solo::FederationMode::default(),
                 solo_consensus: None,
             })),
             events_tx,
@@ -908,9 +915,124 @@ impl NodeStateInner {
             federation_id = %pyana_types::hex_encode(&id),
             "federation keys loaded — exiting discovery mode; federation_id derived",
         );
+        // Self-register the local federation in KnownFederations so receipt
+        // verification can route through one lookup path for both own and
+        // remote federations.
+        let local_pk = self.wallet.public_key();
+        let threshold = pyana_federation::quorum_threshold(keys.len()) as u32;
+        let local_seat = if keys.iter().any(|pk| pk.0 == local_pk.0) {
+            let signing_key_bytes = self.wallet.gossip_signing_key().to_bytes();
+            let signing_key = pyana_types::SigningKey::from_bytes(&signing_key_bytes);
+            Some(pyana_federation::LocalSeat {
+                index: 0, // re-indexed by Federation::from_committee
+                signing_key,
+                #[cfg(feature = "runtime")]
+                bls_secret: None,
+            })
+        } else {
+            None
+        };
+        let fed = pyana_federation::Federation::from_committee(
+            keys.clone(),
+            self.committee_epoch,
+            threshold,
+            None,
+            local_seat,
+        );
+        self.known_federations.register(std::sync::Arc::new(fed));
         self.known_federation_keys = keys;
         self.federation_id = id;
         self.federation_configured = true;
+    }
+
+    /// Register a peer federation in [`Self::known_federations`].
+    ///
+    /// This is the canonical entry point for cross-federation receipt
+    /// verification: once registered, `known_federations.verify_receipt(&r)`
+    /// will succeed for any receipt carrying this federation's id.
+    pub fn register_federation(&mut self, fed: std::sync::Arc<pyana_federation::Federation>) {
+        let id = fed.id();
+        tracing::info!(
+            federation_id = %id.hex(),
+            members = fed.members().len(),
+            threshold = fed.threshold(),
+            epoch = fed.epoch(),
+            "registered federation in KnownFederations",
+        );
+        self.known_federations.register(fed);
+    }
+
+    /// Persist the known federations registry to `$DATA_DIR/known_federations/`.
+    ///
+    /// One JSON file per federation, named by its hex id. Append-only by
+    /// convention.
+    pub fn persist_known_federations(&self, data_dir: &std::path::Path) -> std::io::Result<()> {
+        let dir = data_dir.join("known_federations");
+        std::fs::create_dir_all(&dir)?;
+        for (id, fed) in self.known_federations.iter() {
+            let descriptor = serde_json::json!({
+                "federation_id": id.hex(),
+                "epoch": fed.epoch(),
+                "threshold": fed.threshold(),
+                "members": fed.members().iter().map(|pk| pk.hex()).collect::<Vec<_>>(),
+                "is_local": fed.local_seat().is_some(),
+            });
+            let path = dir.join(format!("{}.json", id.hex()));
+            std::fs::write(&path, serde_json::to_string_pretty(&descriptor)?)?;
+        }
+        Ok(())
+    }
+
+    /// Load known federations from `$DATA_DIR/known_federations/`.
+    pub fn load_known_federations(&mut self, data_dir: &std::path::Path) -> std::io::Result<usize> {
+        let dir = data_dir.join("known_federations");
+        if !dir.exists() {
+            return Ok(0);
+        }
+        let mut loaded = 0usize;
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path)?;
+            let v: serde_json::Value = serde_json::from_str(&text)?;
+            let epoch = v["epoch"].as_u64().unwrap_or(0);
+            let threshold = v["threshold"].as_u64().unwrap_or(1) as u32;
+            let members_hex: Vec<String> = v["members"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let members: Vec<pyana_types::PublicKey> = members_hex
+                .iter()
+                .filter_map(|h| {
+                    if h.len() != 64 {
+                        return None;
+                    }
+                    let mut out = [0u8; 32];
+                    for (i, chunk) in h.as_bytes().chunks(2).enumerate() {
+                        let hi = (chunk[0] as char).to_digit(16)? as u8;
+                        let lo = (chunk[1] as char).to_digit(16)? as u8;
+                        out[i] = (hi << 4) | lo;
+                    }
+                    Some(pyana_types::PublicKey(out))
+                })
+                .collect();
+            if members.is_empty() {
+                tracing::warn!(path = %path.display(), "skipping malformed federation descriptor");
+                continue;
+            }
+            let fed = pyana_federation::Federation::verifier_only(members, epoch, threshold);
+            self.known_federations.register(std::sync::Arc::new(fed));
+            loaded += 1;
+        }
+        tracing::info!(count = loaded, "loaded known_federations from disk");
+        Ok(loaded)
     }
 
     /// Set the active committee epoch and recompute `federation_id`.

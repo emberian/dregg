@@ -8,7 +8,7 @@ use serenity::all::{
 
 use crate::BotState;
 use crate::embeds;
-use crate::wallet::DerivedWallet;
+use crate::wallet::{UserWallet, sign_legacy};
 
 /// Register the /gallery command.
 pub fn register() -> CreateCommand {
@@ -202,7 +202,7 @@ async fn handle_bid(ctx: &Context, command: &CommandInteraction, state: &BotStat
         }
     };
 
-    let wallet = DerivedWallet::derive(&state.config.bot_secret, user_id);
+    let wallet = UserWallet::derive(&state.config.bot_secret, user_id, state.federation_id_bytes);
     let signature = sign_bid(&wallet, &auction_id, amount);
 
     match state
@@ -291,16 +291,17 @@ async fn handle_mybids(ctx: &Context, command: &CommandInteraction, state: &BotS
     }
 }
 
-/// Sign a bid message.
-fn sign_bid(wallet: &DerivedWallet, auction_id: &str, amount: u64) -> String {
+/// Sign a bid message using the legacy BLAKE3-MAC wire scheme
+/// (`wallet::sign_legacy`); the devnet gallery endpoint expects this
+/// same hex MAC in its `signature` field. Body shape:
+/// `b"bid:" + auction_id + b":" + amount_le_bytes`.
+fn sign_bid(wallet: &UserWallet, auction_id: &str, amount: u64) -> String {
     let mut msg = Vec::new();
     msg.extend_from_slice(b"bid:");
     msg.extend_from_slice(auction_id.as_bytes());
     msg.extend_from_slice(b":");
     msg.extend_from_slice(&amount.to_le_bytes());
-    msg.extend_from_slice(&wallet.private_key);
-    let sig = blake3::hash(&msg);
-    hex::encode(sig.as_bytes())
+    sign_legacy(wallet, &msg)
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

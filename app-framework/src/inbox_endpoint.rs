@@ -9,6 +9,35 @@
 //! All spam-prevention and Merkle accounting lives in `pyana_storage::inbox::CapInbox`.
 //! This module is a thin HTTP skin.
 //!
+//! # Triage (storage→cell-program migration — 2026-05-24)
+//!
+//! `STORAGE-AS-CELL-PROGRAMS.md §3.1` lays out the migration plan for
+//! `CapInbox`: it becomes a cell-program pattern with a sovereign
+//! cell carrying `(queue_root, owner, min_deposit, capacity_per_user,
+//! head, tail)` slots, governed by `StateConstraint`s
+//! (`SenderAuthorized`, `MonotonicSequence(head)`,
+//! `MonotonicSequence(tail)`, `WriteOnce(owner)`,
+//! `FieldLte(deposit, balance)`). Vocabulary already exists; no new
+//! `WitnessedPredicate` kind is needed (per `STORAGE-AS-CELL-PROGRAMS.md`
+//! §1.2 table).
+//!
+//! Critically, the authorization-gap that subscription's CLAUDIT
+//! flagged as P0-5 — "`POST /send` accepts client-asserted
+//! `sender_hex`" — closes naturally in the migration: the executor
+//! will only accept `Effect::QueueEnqueue` (or its `SetField`
+//! equivalent) authorized by a real `Authorization::Signature` from
+//! the sender's wallet. The HTTP handler stops carrying a `sender_hex`
+//! request field and instead extracts the signing wallet from the
+//! `AppWallet` axum Extension.
+//!
+//! Verdict: **(c) needs updates post-migration**. Same shape as the
+//! `blinded_endpoint.rs` post-migration sketch: the endpoint stays
+//! as an HTTP-language entry point, but its implementation collapses
+//! to "produce signed `Action` carrying queue-state effects, submit
+//! through `StarbridgeAppContext::executor()`, surface the receipt as
+//! JSON." Blocks on the cell-program migration; in the interim this
+//! module continues to wrap `pyana_storage::inbox::CapInbox` directly.
+//!
 //! # Usage
 //!
 //! ```ignore

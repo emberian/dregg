@@ -603,6 +603,7 @@ fn differential_bridge_mint() {
             quorum_signatures: vec![],
             threshold_qc: None,
             threshold: 0,
+            federation_id: pyana_types::FederationId::PLACEHOLDER,
         },
         destination_federation: [0u8; 32],
         spending_proof: vec![],

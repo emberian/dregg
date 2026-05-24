@@ -68,7 +68,10 @@ pub enum ValidationError {
     /// Predicate type is not in the supported set.
     UnknownPredicateType(String),
     /// `in_range` predicate must have `upper_bound` set and `>= threshold`.
-    InvalidPredicateRange { threshold: u64, upper_bound: Option<u64> },
+    InvalidPredicateRange {
+        threshold: u64,
+        upper_bound: Option<u64>,
+    },
 }
 
 impl std::fmt::Display for ValidationError {
@@ -689,8 +692,7 @@ mod tests {
     fn test_in_range_without_upper_bound_rejected() {
         let mut intent = make_valid_intent();
         // in_range with no upper_bound is structurally invalid.
-        intent.matcher.predicate_requirements =
-            vec![pred("balance", "in_range", 100)];
+        intent.matcher.predicate_requirements = vec![pred("balance", "in_range", 100)];
         assert!(matches!(
             validate_intent(&intent),
             Err(ValidationError::InvalidPredicateRange { .. })

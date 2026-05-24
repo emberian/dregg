@@ -86,6 +86,15 @@ pub use checkpoint::{
 pub use cross_fed_bundle::CrossFedReceiptBundle;
 pub use federation::{Federation, KnownFederations, LocalSeat};
 pub use identity::{derive_federation_id, derive_federation_id_with_epoch};
+// NOTE (FEDERATION-UNIFICATION-DESIGN.md §6 step 6): the Morpheus BFT
+// simulator (`node.rs` + `transport.rs`) is legally dead — `pyana-blocklace`
+// is the live consensus path. The simulator survives as in-crate code only
+// because `teasting`, `wasm`, and `demo/sdk-consensus` still import it. As
+// each of those consumers migrates to drive a real blocklace, the relevant
+// `node.rs` symbols can be deleted; the unified `Federation` type
+// (`federation::Federation`) is the canonical replacement at the type-system
+// layer. The re-exports below are kept only so the existing simulator
+// consumers compile.
 pub use node::{
     ConsensusConfig, ConsensusError, ConsensusOrchestrator, ConsensusState,
     Federation as MorpheusFederation, FederationNode, PendingStateRoots, ReconfigurationProposal,
@@ -95,8 +104,7 @@ pub use pyana_types::FederationId;
 pub use receipt::{FederationReceipt, FederationReceiptBody, ReceiptQc};
 pub use revocation::{RevocationTree, RevocationVerification, RevocationVerifier};
 pub use solo::{
-    FederationMode, NullifierConflict, NullifierLog, NullifierLogEntry, SoloConsensusState,
-    effective_quorum_threshold,
+    NullifierConflict, NullifierLog, NullifierLogEntry, SoloConsensusState, is_solo_committee,
 };
 pub use threshold::{
     FederationCommittee, MemberSecret, ThresholdError, ThresholdQC, generate_test_committee,

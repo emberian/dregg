@@ -6,6 +6,19 @@
 //! a given paying asset, without any external primitive to wrap — this module
 //! is self-contained configuration logic.
 //!
+//! # Triage (2026-05-24)
+//!
+//! Load-bearing. The fee-pricing logic is pure configuration —
+//! no executor / ledger coupling — and the storage→cell-program
+//! migration does not touch this surface. Apps that price multiple
+//! payment assets (gallery's royalty splits, compute-exchange's
+//! buyer-pays-in-tier-token, subscription's per-tier pricing) all
+//! need exactly this shape. Kept as-is; install via
+//! `AppServer::with_fee_policy(FeePolicy)` so handlers extract it
+//! via `axum::Extension<FeePolicy>`.
+//!
+//! Verdict: **load-bearing, no updates needed**.
+//!
 //! # Usage
 //!
 //! ```ignore

@@ -25,6 +25,7 @@ token = { path = "../token", default-features = false, features = ["macaroon", "
 pyana-commit = { path = "../commit", optional = true }
 pyana-captp = { path = "../captp" }
 pyana-cell = { path = "../cell" }
+pyana-federation = { path = "../federation", default-features = false }
 pyana-store = { path = "../store" }
 pyana-turn = { path = "../turn" }
 pyana-types = { path = "../types" }

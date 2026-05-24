@@ -61,6 +61,7 @@ pub mod persistence;
 pub mod queue_endpoint;
 pub mod ring_trade;
 pub mod server;
+pub mod starbridge;
 pub mod store;
 pub mod wallet;
 
@@ -126,3 +127,22 @@ pub use discovery::{DiscoveryError, NameRegistration, NameserviceClient};
 pub use fee_policy::{AcceptedAsset, FeePolicy};
 pub use multi_group::MultiGroupConfig;
 pub use ring_trade::{LegId, RingTradeParticipant};
+
+// Starbridge mounting point. The canonical surface every
+// starbridge-app receives via `register(ctx)`.
+pub use starbridge::{
+    FactoryRegistry, InspectorDescriptor, InspectorRegistry, StarbridgeAppContext,
+};
+
+// Re-export the embedded executor at the framework root for the
+// common pattern: build a wallet, build an executor, hand them to a
+// StarbridgeAppContext.
+pub use wallet::{EmbeddedExecutor, ExecutorSubmitError};
+
+// Re-export FactoryDescriptor from pyana-cell at the framework root
+// so starbridge-apps only need pyana-app-framework in their Cargo.toml
+// to construct factory descriptors.
+pub use pyana_cell::{
+    AuthRequired, CapGrant, CapTarget, CapTemplate, CellMode, ChildVkStrategy, FactoryDescriptor,
+    FieldConstraint, StateConstraint,
+};

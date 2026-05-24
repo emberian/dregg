@@ -22,9 +22,15 @@ tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# Canonical pyana surface — the bot is a peer of node/sdk, not a
+# parallel implementation. AppWallet (from app-framework) wraps the
+# SDK's AgentWallet and gives us federation-bound action signing.
+pyana-app-framework = { path = "../app-framework" }
+pyana-sdk = { path = "../sdk" }
 # CapTP integration — the bot is a pyana capability peer.
 pyana-captp = { path = "../captp" }
 pyana-storage = { path = "../storage" }
+zeroize = { workspace = true }
 
 [lints]
 workspace = true

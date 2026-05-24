@@ -46,6 +46,10 @@ pub struct BotState {
     pub discord_caps: DiscordCapRegistry,
     /// Event bridge: Discord events → pyana turns.
     pub event_bridge: EventBridge,
+    /// The federation id this bot binds wallet signatures to. Threaded
+    /// through every per-user `UserWallet::derive(...)` call so the
+    /// AppWallet's action signatures are bound to the correct group.
+    pub federation_id_bytes: [u8; 32],
 }
 
 /// The main event handler for Discord gateway events.
@@ -59,20 +63,19 @@ impl EventHandler for Handler {
         info!("Bot connected as {}", ready.user.name);
 
         // Register global slash commands.
+        //
+        // Commands tied to apps deleted from the workspace (AMM `swap`/
+        // `pool`/`lend`, orderbook `order`/`book`/`trades`) were retired
+        // in the post-relocation cleanup; their slash-command names will
+        // disappear from Discord once this set is re-registered.
         let commands = vec![
-            // ─── Original 19 commands ───────────────────────────────────────
+            // ─── Bot core ───────────────────────────────────────────────────
             commands::explorer::register(),
             commands::presence::register(),
             commands::wallet::register(),
             commands::transfer::register_send(),
             commands::transfer::register_tip(),
             commands::gallery::register(),
-            commands::defi::register_swap(),
-            commands::defi::register_pool(),
-            commands::defi::register_lend(),
-            commands::orderbook::register_order(),
-            commands::orderbook::register_book(),
-            commands::orderbook::register_trades(),
             commands::identity::register(),
             commands::status::register_status(),
             commands::status::register_proof(),
@@ -121,18 +124,12 @@ impl EventHandler for Handler {
             let name = command.data.name.as_str();
 
             match name {
-                // ─── Original commands ──────────────────────────────────────
+                // ─── Bot core ───────────────────────────────────────────────
                 "explorer" => commands::explorer::handle(&ctx, &command, &self.state).await,
                 "presence" => commands::presence::handle(&ctx, &command, &self.state).await,
                 "wallet" => commands::wallet::handle(&ctx, &command, &self.state).await,
                 "send" | "tip" => commands::transfer::handle(&ctx, &command, &self.state).await,
                 "gallery" => commands::gallery::handle(&ctx, &command, &self.state).await,
-                "swap" => commands::defi::handle_swap(&ctx, &command, &self.state).await,
-                "pool" => commands::defi::handle_pool(&ctx, &command, &self.state).await,
-                "lend" => commands::defi::handle_lend(&ctx, &command, &self.state).await,
-                "order" => commands::orderbook::handle_order(&ctx, &command, &self.state).await,
-                "book" => commands::orderbook::handle_book(&ctx, &command, &self.state).await,
-                "trades" => commands::orderbook::handle_trades(&ctx, &command, &self.state).await,
                 "credential" => commands::identity::handle(&ctx, &command, &self.state).await,
                 "status" => commands::status::handle_status(&ctx, &command, &self.state).await,
                 "proof" => commands::status::handle_proof(&ctx, &command, &self.state).await,
@@ -262,11 +259,16 @@ async fn main() {
     info!("Presence tracker initialized");
 
     // Build CapTP client (the bot's own pyana identity).
+    //
+    // The bot's own wallet is the user_id == 0 derivation. We use the
+    // canonical AppWallet so the bot's identity (cell id, public key)
+    // is computed the same way as any other pyana agent.
+    let federation_id_bytes = [0u8; 32]; // Will be configured per-deployment.
     let bot_cell_id = {
-        let wallet = wallet::DerivedWallet::derive(&config.bot_secret, 0);
-        wallet.cell_id_hex()
+        let wallet = wallet::UserWallet::derive(&config.bot_secret, 0, federation_id_bytes);
+        wallet.cell_id_hex().to_string()
     };
-    let federation_id = pyana_captp::FederationId([0u8; 32]); // Will be configured per-deployment.
+    let federation_id = pyana_captp::FederationId(federation_id_bytes);
     let captp = CapTPClient::new(
         federation_id,
         bot_cell_id.clone(),
@@ -290,6 +292,7 @@ async fn main() {
         captp,
         discord_caps,
         event_bridge,
+        federation_id_bytes,
     });
 
     // Build Discord client (GUILD_PRESENCES + GUILD_MESSAGES for message bridging).

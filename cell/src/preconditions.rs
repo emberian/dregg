@@ -1,8 +1,17 @@
 use serde::{Deserialize, Serialize};
 
+use crate::predicate::WitnessedPredicate;
 use crate::state::{CellState, FieldElement};
 
 /// Preconditions that must hold for an action to be valid.
+///
+/// Per PREDICATE-INVENTORY §4.3 case 1, the duplicate-surface
+/// `turn::preconditions::Precondition` enum has been folded into this
+/// canonical struct via the [`Preconditions::builder`] entry-point and
+/// [`PreconditionsBuilder`]. The enum-shaped surface still exists at
+/// `pyana_turn::preconditions::Precondition` (re-exported from this
+/// builder) for app/userspace ergonomics, but lowers directly to
+/// these fields rather than running a parallel evaluator.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Preconditions {
     /// Assertions about the cell's current state.
@@ -11,6 +20,21 @@ pub struct Preconditions {
     pub network: Option<NetworkPrecondition>,
     /// Time range during which this action is valid.
     pub valid_while: Option<TimeRange>,
+    /// Witness-attached clauses (DFA-classified message, temporal
+    /// predicate over chain, blinded-membership against a slot root,
+    /// custom-AIR proof) per PREDICATE-INVENTORY §4.1. Each
+    /// declaration names a verifier kind, a commitment, an input
+    /// reference, and a witness-blob index. The executor resolves the
+    /// input and proof at evaluation time and dispatches through the
+    /// `WitnessedPredicateRegistry`.
+    ///
+    /// Empty by default — most actions today carry no witnessed
+    /// preconditions. Adding clauses here is purely additive: a
+    /// receiver that doesn't know the kind surfaces
+    /// `WitnessedPredicateError::KindNotRegistered`, which the
+    /// executor maps to a precondition rejection.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub witnessed: Vec<WitnessedPredicate>,
 }
 
 /// Assertions about a cell's state that must be true.
@@ -129,7 +153,104 @@ impl Default for EvalContext {
     }
 }
 
+/// A single ergonomic precondition clause.
+///
+/// Per PREDICATE-INVENTORY §4.3 case 1, this is the canonical home for
+/// what was previously a duplicate enum at
+/// `pyana_turn::preconditions::Precondition`. The turn-side module
+/// re-exports this directly so callers compile unchanged.
+///
+/// The clause lowers onto the underlying [`Preconditions`] fields via
+/// [`PreconditionClause::apply`]. The verifier-side check lives in
+/// [`Preconditions::evaluate`] / [`CellStatePrecondition::evaluate`]:
+/// there is **one** evaluator, not two parallel ones.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PreconditionClause {
+    /// The cell's storage slot at `index` must equal `value`.
+    SlotEquals { index: usize, value: FieldElement },
+    /// The cell's storage slot at `index` must be zero (the all-zero
+    /// `FieldElement`).
+    SlotZero { index: usize },
+    /// The cell's `nonce` must be at least `min`.
+    NonceAtLeast(u64),
+    /// A witness-attached predicate must verify against its registered
+    /// kind. Per PREDICATE-INVENTORY §3 + §4.1.
+    Witnessed(WitnessedPredicate),
+}
+
+impl PreconditionClause {
+    /// Apply this clause onto a mutable [`Preconditions`].
+    pub fn apply_to(&self, pre: &mut Preconditions) {
+        match self {
+            PreconditionClause::SlotEquals { index, value } => {
+                let cs = pre.cell_state.get_or_insert_with(Default::default);
+                cs.field_equals.push((*index, *value));
+            }
+            PreconditionClause::SlotZero { index } => {
+                let cs = pre.cell_state.get_or_insert_with(Default::default);
+                cs.field_equals.push((*index, [0u8; 32]));
+            }
+            PreconditionClause::NonceAtLeast(n) => {
+                let cs = pre.cell_state.get_or_insert_with(Default::default);
+                cs.min_nonce = Some(match cs.min_nonce {
+                    Some(prev) => prev.max(*n),
+                    None => *n,
+                });
+            }
+            PreconditionClause::Witnessed(wp) => {
+                pre.witnessed.push(wp.clone());
+            }
+        }
+    }
+}
+
+/// Builder for [`Preconditions`].
+#[derive(Default)]
+pub struct PreconditionsBuilder {
+    inner: Preconditions,
+}
+
+impl PreconditionsBuilder {
+    /// Start with an empty Preconditions.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add one clause.
+    pub fn push(mut self, clause: PreconditionClause) -> Self {
+        clause.apply_to(&mut self.inner);
+        self
+    }
+
+    /// Add many clauses.
+    pub fn extend(mut self, clauses: &[PreconditionClause]) -> Self {
+        for c in clauses {
+            c.apply_to(&mut self.inner);
+        }
+        self
+    }
+
+    /// Finalize.
+    pub fn build(self) -> Preconditions {
+        self.inner
+    }
+}
+
 impl Preconditions {
+    /// Entry-point for ergonomic clause-shaped construction. Replaces
+    /// the parallel `pyana_turn::preconditions::build` / `extend`
+    /// helpers; the turn-side wrappers now delegate here.
+    pub fn builder() -> PreconditionsBuilder {
+        PreconditionsBuilder::new()
+    }
+
+    /// Apply a slice of clauses to this `Preconditions` in place.
+    pub fn extend_clauses(&mut self, clauses: &[PreconditionClause]) {
+        for c in clauses {
+            c.apply_to(self);
+        }
+    }
+
     /// Compute a deterministic hash of these preconditions for inclusion in signing messages.
     ///
     /// Uses BLAKE3 over a canonical byte representation. Empty (default) preconditions
@@ -137,7 +258,11 @@ impl Preconditions {
     /// uninitialized data or hash collisions with other all-zero values.
     pub fn hash(&self) -> [u8; 32] {
         // Domain-separated constant for empty preconditions.
-        if self.cell_state.is_none() && self.network.is_none() && self.valid_while.is_none() {
+        if self.cell_state.is_none()
+            && self.network.is_none()
+            && self.valid_while.is_none()
+            && self.witnessed.is_empty()
+        {
             return blake3::derive_key("pyana-empty-preconditions-v1", b"");
         }
         let mut hasher = blake3::Hasher::new();
@@ -189,6 +314,21 @@ impl Preconditions {
             hasher.update(&tr.end.to_le_bytes());
         } else {
             hasher.update(b"\x00");
+        }
+        // Witnessed clauses: length-prefix the vector then domain-tag
+        // each entry by kind discriminant + commitment + serialized
+        // input_ref + proof_witness_index. Empty vec hashes the
+        // length prefix (0u64) and contributes nothing else, so the
+        // empty-witnessed shape is identical to the pre-§3 hash for
+        // backcompat with serialized actions that did not carry the
+        // field. (The all-empty fast path is taken above.)
+        hasher.update(&(self.witnessed.len() as u64).to_le_bytes());
+        for wp in &self.witnessed {
+            // Postcard-encoded WitnessedPredicate is canonical given
+            // the type's `Serialize` derive; length-prefix it.
+            let bytes = postcard::to_allocvec(wp).unwrap_or_default();
+            hasher.update(&(bytes.len() as u64).to_le_bytes());
+            hasher.update(&bytes);
         }
         *hasher.finalize().as_bytes()
     }
