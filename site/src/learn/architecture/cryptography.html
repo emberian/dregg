@@ -18,10 +18,12 @@
       Pyana's proof system is built on the Effect VM and the constraint DSL. The Effect VM
       proves arbitrary turns in a single STARK (24 effects per turn, Custom dispatch for
       application-defined logic). The constraint DSL compiles <code>CircuitDescriptor</code>
-      definitions to multiple proof systems from a single source. The primary proof path uses
-      BabyBear-field STARKs with Poseidon2 as the in-circuit hash function, achieving
-      post-quantum security (hash-based, no elliptic curve assumptions). Additional backends
-      include Plonky3, Kimchi (Mina/Pasta), SP1 (EVM via Groth16), and Midnight (ZKIR).
+      definitions to multiple proof systems from a single source. The base STARK path uses
+      BabyBear-field FRI with Poseidon2 as the in-circuit hash &mdash; hash-based, no
+      elliptic-curve assumptions at this layer. Recursion and EVM-verification paths use
+      Kimchi (Mina/Pasta) and SP1/Groth16 respectively, both of which depend on elliptic
+      curves; the end-to-end stack is therefore <em>not</em> post-quantum until those
+      composition layers are themselves migrated to a hash-based recursion scheme.
     </p>
 
     <h2 id="field">BabyBear Field</h2>
@@ -61,7 +63,7 @@
       <li><strong>Proof size:</strong> ~24 KiB (constant regardless of computation size)</li>
       <li><strong>Verification time:</strong> ~2ms</li>
       <li><strong>Generation time:</strong> 200ms-500ms depending on mode</li>
-      <li><strong>Security:</strong> Hash-based (post-quantum), 128-bit security level</li>
+      <li><strong>Security:</strong> Hash-based at this layer (FRI + Poseidon2), 128-bit security level. End-to-end stack is not post-quantum &mdash; see recursion notes above.</li>
       <li><strong>Transparency:</strong> No trusted setup required</li>
     </ul>
 

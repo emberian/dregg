@@ -23,12 +23,12 @@
     </p>
     <p class="paper-abstract">
       The system achieves sub-second proof generation (~38 KiB Effect VM STARK proofs),
-      ~2 ms verification, offline operation once an attested root is held, and post-quantum
-      security through hash-based verification. Agents carry their own state as receipt
-      chains that compress to constant size via IVC, enabling exit from any federation
-      without losing history. The Effect VM Shape A plan (in flight in the repository)
-      defines the path to full single-STARK coverage of all 41 runtime effect variants
-      under one trace.
+      ~2 ms verification, and offline operation once an attested root is held. The base
+      Effect VM is a BabyBear+FRI STARK; recursion paths (Kimchi/Pickles for sovereign-cell
+      composition, SP1/Groth16 for EVM verification) currently use elliptic-curve crypto, so
+      the system is not end-to-end post-quantum. Agents carry their own state as receipt
+      chains that compress via IVC, enabling exit from any federation without losing
+      history.
     </p>
   </section>
 
