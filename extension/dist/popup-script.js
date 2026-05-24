@@ -410,4 +410,3 @@
   refresh();
   loadLog();
 })();
-//# sourceMappingURL=popup-script.js.map

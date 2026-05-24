@@ -158,19 +158,56 @@
       notifySubscribers("ready", { locked: true });
     }, LOCK_TIMEOUT_MS);
   }
-  async function checkRateLimit(origin) {
-    const stored = await chrome.storage.session.get("_rateLimits");
-    const limits = stored._rateLimits || {};
+  var rateLimits = /* @__PURE__ */ new Map();
+  function checkRateLimit(tabId, origin) {
+    const key = `${tabId ?? -1}::${origin}`;
     const now = Date.now();
-    const entry = limits[origin] || { count: 0, windowStart: now };
-    if (now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
-      entry.count = 0;
-      entry.windowStart = now;
+    let entry = rateLimits.get(key);
+    if (!entry || now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
+      entry = { count: 0, windowStart: now };
     }
-    if (entry.count >= RATE_LIMIT_MAX_CALLS) return false;
+    if (entry.count >= RATE_LIMIT_MAX_CALLS) {
+      rateLimits.set(key, entry);
+      return false;
+    }
     entry.count++;
-    limits[origin] = entry;
-    await chrome.storage.session.set({ _rateLimits: limits });
+    rateLimits.set(key, entry);
+    return true;
+  }
+  var pendingDecisions = /* @__PURE__ */ new Map();
+  var PENDING_DECISION_TTL_MS = 10 * 60 * 1e3;
+  function generatePopupNonce() {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  function registerPendingDecision(popupPath, payload) {
+    const now = Date.now();
+    for (const [k, v] of pendingDecisions) {
+      if (now - v.createdAt > PENDING_DECISION_TTL_MS) {
+        pendingDecisions.delete(k);
+      }
+    }
+    const nonce = generatePopupNonce();
+    pendingDecisions.set(nonce, { popupPath, payload, createdAt: now });
+    return nonce;
+  }
+  function consumePendingDecision(nonce) {
+    const entry = pendingDecisions.get(nonce);
+    if (!entry) return null;
+    pendingDecisions.delete(nonce);
+    return entry;
+  }
+  function validatePopupSender(message, sender, expectedNonce, expectedPopupPath) {
+    if (sender?.tab != null) return false;
+    if (!sender?.url) return false;
+    const prefix = `chrome-extension://${chrome.runtime.id}/`;
+    if (!sender.url.startsWith(prefix)) return false;
+    const path = sender.url.slice(prefix.length).split(/[?#]/)[0];
+    if (path !== expectedPopupPath) return false;
+    const nonce = message.nonce;
+    if (!nonce || nonce !== expectedNonce) return false;
+    if (!pendingDecisions.has(nonce)) return false;
     return true;
   }
   async function getInternalEncryptionKey() {
@@ -556,14 +593,23 @@
     const stored = await chrome.storage.local.get(ALLOWED_ORIGINS_KEY);
     const raw = stored[ALLOWED_ORIGINS_KEY] || {};
     if (Array.isArray(raw)) {
-      const migrated = {};
-      for (const origin of raw) {
-        migrated[origin] = { methods: ["*"], expires: Date.now() + ORIGIN_PERMISSION_EXPIRY_MS };
-      }
-      await chrome.storage.local.set({ [ALLOWED_ORIGINS_KEY]: migrated });
-      return migrated;
+      const cleared = {};
+      await chrome.storage.local.set({ [ALLOWED_ORIGINS_KEY]: cleared });
+      return cleared;
     }
-    return raw;
+    const sanitized = {};
+    let dirty = false;
+    for (const [origin, entry] of Object.entries(raw)) {
+      if (Array.isArray(entry?.methods) && entry.methods.includes("*")) {
+        dirty = true;
+        continue;
+      }
+      sanitized[origin] = entry;
+    }
+    if (dirty) {
+      await chrome.storage.local.set({ [ALLOWED_ORIGINS_KEY]: sanitized });
+    }
+    return sanitized;
   }
   async function addOriginToAllowlist(origin, method) {
     const allowlist = await getOriginAllowlist();
@@ -811,7 +857,15 @@
     return new Promise((resolve) => {
       const requiredFacts = tokenFacts.filter((f) => f.key === "action" || f.key === "resource");
       const siteRequested = request.requestedDisclosure || [];
-      const popupUrl = chrome.runtime.getURL("disclosure-picker.html") + "?origin=" + encodeURIComponent(origin) + "&action=" + encodeURIComponent(request.action) + "&resource=" + encodeURIComponent(request.resource) + "&facts=" + encodeURIComponent(JSON.stringify(tokenFacts)) + "&required=" + encodeURIComponent(JSON.stringify(requiredFacts)) + "&siteRequested=" + encodeURIComponent(JSON.stringify(siteRequested));
+      const nonce = registerPendingDecision("disclosure-picker.html", {
+        origin,
+        action: request.action,
+        resource: request.resource,
+        tokenFacts,
+        requiredFacts,
+        siteRequestedFacts: siteRequested
+      });
+      const popupUrl = chrome.runtime.getURL("disclosure-picker.html") + "#nonce=" + nonce;
       chrome.windows.create({
         url: popupUrl,
         type: "popup",
@@ -819,8 +873,9 @@
         height: 620,
         focused: true
       }, (win) => {
-        const listener = (message) => {
+        const listener = (message, sender) => {
           if (message.type !== "pyana:disclosureDecision") return;
+          if (!validatePopupSender(message, sender, nonce, "disclosure-picker.html")) return;
           chrome.runtime.onMessage.removeListener(listener);
           resolve(message);
         };
@@ -830,6 +885,7 @@
             if (closedId === win.id) {
               chrome.windows.onRemoved.removeListener(onClose);
               chrome.runtime.onMessage.removeListener(listener);
+              consumePendingDecision(nonce);
               resolve({ authorized: false });
             }
           });
@@ -906,7 +962,8 @@
   }
   async function provisionToken(tokenData, _senderTabId) {
     return new Promise((resolve) => {
-      const popupUrl = chrome.runtime.getURL("provision.html") + "?data=" + encodeURIComponent(JSON.stringify(tokenData));
+      const nonce = registerPendingDecision("provision.html", { tokenData });
+      const popupUrl = chrome.runtime.getURL("provision.html") + "#nonce=" + nonce;
       chrome.windows.create({
         url: popupUrl,
         type: "popup",
@@ -914,8 +971,9 @@
         height: 480,
         focused: true
       }, (win) => {
-        const listener = async (message) => {
+        const listener = async (message, sender) => {
           if (message.type !== "pyana:provisionDecision") return;
+          if (!validatePopupSender(message, sender, nonce, "provision.html")) return;
           chrome.runtime.onMessage.removeListener(listener);
           if (message.accepted) {
             const wallet = await loadState();
@@ -935,13 +993,29 @@
           }
         };
         chrome.runtime.onMessage.addListener(listener);
+        if (win?.id) {
+          chrome.windows.onRemoved.addListener(function onClose(closedId) {
+            if (closedId === win.id) {
+              chrome.windows.onRemoved.removeListener(onClose);
+              chrome.runtime.onMessage.removeListener(listener);
+              consumePendingDecision(nonce);
+              resolve({ accepted: false });
+            }
+          });
+        }
       });
     });
   }
   var intentPool = /* @__PURE__ */ new Map();
-  function showIntentConfirmation(action, matchSpec, options) {
+  function showIntentConfirmation(action, matchSpec, options, origin) {
     return new Promise((resolve) => {
-      const popupUrl = chrome.runtime.getURL("confirm-intent.html") + "?action=" + encodeURIComponent(action) + "&spec=" + encodeURIComponent(JSON.stringify(matchSpec)) + "&options=" + encodeURIComponent(JSON.stringify(options || {}));
+      const nonce = registerPendingDecision("confirm-intent.html", {
+        action,
+        matchSpec,
+        options: options || {},
+        origin: origin || "unknown"
+      });
+      const popupUrl = chrome.runtime.getURL("confirm-intent.html") + "#nonce=" + nonce;
       chrome.windows.create({
         url: popupUrl,
         type: "popup",
@@ -949,8 +1023,9 @@
         height: 380,
         focused: true
       }, (win) => {
-        const listener = (message) => {
+        const listener = (message, sender) => {
           if (message.type !== "pyana:intentConfirmation") return;
+          if (!validatePopupSender(message, sender, nonce, "confirm-intent.html")) return;
           chrome.runtime.onMessage.removeListener(listener);
           resolve(message.confirmed === true);
         };
@@ -960,6 +1035,7 @@
             if (closedId === win.id) {
               chrome.windows.onRemoved.removeListener(onClose);
               chrome.runtime.onMessage.removeListener(listener);
+              consumePendingDecision(nonce);
               resolve(false);
             }
           });
@@ -1005,8 +1081,8 @@
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     return "js:" + hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
   }
-  async function postIntent(matchSpec, options) {
-    const confirmed = await showIntentConfirmation("postIntent", matchSpec, options);
+  async function postIntent(matchSpec, options, origin) {
+    const confirmed = await showIntentConfirmation("postIntent", matchSpec, options, origin);
     if (!confirmed) {
       return { error: "User denied intent broadcast" };
     }
@@ -1260,6 +1336,9 @@
     const w = wasm;
     const wallet = await loadState();
     if (wallet.locked) return { error: "Wallet is locked", submitted: false };
+    if (wallet.needsPassphraseSetup) {
+      return { error: "Set a wallet passphrase before signing turns.", submitted: false };
+    }
     if (!wallet.secretKey) return { error: "Wallet secret key not available", submitted: false };
     let turnData;
     if (w.build_turn) {
@@ -1364,7 +1443,8 @@
   }
   function handleOriginPermissionRequest(origin, method) {
     return new Promise((resolve) => {
-      const popupUrl = chrome.runtime.getURL("origin-permission.html") + "?origin=" + encodeURIComponent(origin) + "&method=" + encodeURIComponent(method);
+      const nonce = registerPendingDecision("origin-permission.html", { origin, method });
+      const popupUrl = chrome.runtime.getURL("origin-permission.html") + "#nonce=" + nonce;
       chrome.windows.create({
         url: popupUrl,
         type: "popup",
@@ -1372,8 +1452,9 @@
         height: 320,
         focused: true
       }, (win) => {
-        const listener = async (message) => {
+        const listener = async (message, sender) => {
           if (message.type !== "pyana:originPermissionDecision") return;
+          if (!validatePopupSender(message, sender, nonce, "origin-permission.html")) return;
           chrome.runtime.onMessage.removeListener(listener);
           if (message.granted) {
             await addOriginToAllowlist(origin, method);
@@ -1388,6 +1469,7 @@
             if (closedId === win.id) {
               chrome.windows.onRemoved.removeListener(onClose);
               chrome.runtime.onMessage.removeListener(listener);
+              consumePendingDecision(nonce);
               resolve({ granted: false });
             }
           });
@@ -1464,7 +1546,7 @@
       case "pyana:authorize": {
         if (isContentScript(sender) && !message.request?._skipDisclosure) {
           const origin = message._origin || sender?.tab?.url && new URL(sender.tab.url).origin || "unknown";
-          if (!await checkRateLimit(origin)) {
+          if (!checkRateLimit(sender?.tab?.id, origin)) {
             return { id: message.id, result: { allowed: false, error: "Rate limited. Too many authorize requests. Try again later." } };
           }
           const result = await authorizeWithDisclosure(message.request, origin);
@@ -1505,6 +1587,9 @@
         if (!isExtensionPopup(sender)) return { id: message.id, error: "Only available from extension popup." };
         const wallet = await loadState();
         if (wallet.locked) return { id: message.id, error: "Wallet is locked" };
+        if (wallet.needsPassphraseSetup) {
+          return { id: message.id, error: "Set a wallet passphrase before viewing the recovery phrase." };
+        }
         const mnemonic = await getMnemonic();
         if (state) state.mnemonicShown = true;
         await saveState();
@@ -1534,8 +1619,27 @@
       }
       case "pyana:provisionDecision":
       case "pyana:intentConfirmation":
-      case "pyana:disclosureDecision":
+      case "pyana:disclosureDecision": {
+        if (isContentScript(sender) || !isExtensionPopup(sender)) {
+          return { id: message.id, error: "Decision messages may only come from extension popups." };
+        }
         return { id: message.id, result: true };
+      }
+      case "pyana:getPendingDecision": {
+        if (isContentScript(sender) || !isExtensionPopup(sender)) {
+          return { id: message.id, error: "Only extension popups may fetch pending decisions." };
+        }
+        const nonce = message.nonce;
+        if (!nonce) return { id: message.id, error: "Missing nonce." };
+        const entry = pendingDecisions.get(nonce);
+        if (!entry) return { id: message.id, error: "No such pending decision." };
+        const prefix = `chrome-extension://${chrome.runtime.id}/`;
+        const path = (sender.url || "").startsWith(prefix) ? (sender.url || "").slice(prefix.length).split(/[?#]/)[0] : "";
+        if (path !== entry.popupPath) {
+          return { id: message.id, error: "Popup path mismatch for this nonce." };
+        }
+        return { id: message.id, result: { payload: entry.payload } };
+      }
       case "pyana:getDisclosurePrefs": {
         if (!isExtensionPopup(sender)) return { id: message.id, error: "Only available from extension popup." };
         return { id: message.id, result: await getDisclosurePrefs() };
@@ -1557,11 +1661,13 @@
         return { id: message.id, result: true };
       }
       case "pyana:postIntent": {
-        const result = await postIntent(message.matchSpec, message.options);
+        const origin = message._origin || sender?.tab?.url && new URL(sender.tab.url).origin || void 0;
+        const result = await postIntent(message.matchSpec, message.options, origin);
         return { id: message.id, result };
       }
       case "pyana:offerCapability": {
-        const confirmed = await showIntentConfirmation("offerCapability", message.matchSpec, message.options);
+        const origin = message._origin || sender?.tab?.url && new URL(sender.tab.url).origin || void 0;
+        const confirmed = await showIntentConfirmation("offerCapability", message.matchSpec, message.options, origin);
         if (!confirmed) return { id: message.id, result: { error: "User denied capability offer" } };
         const expiry = message.options?.expiry || Date.now() + DEFAULT_INTENT_EXPIRY_MS;
         const intentId = await computeIntentId("offer", message.matchSpec, expiry);
@@ -1608,8 +1714,12 @@
         const result = await handleOriginPermissionRequest(message.origin, message.method);
         return result;
       }
-      case "pyana:originPermissionDecision":
+      case "pyana:originPermissionDecision": {
+        if (isContentScript(sender) || !isExtensionPopup(sender)) {
+          return { id: message.id, error: "Decision messages may only come from extension popups." };
+        }
         return { id: message.id, result: true };
+      }
       case "pyana:shareCapability": {
         const result = await shareCapability(message.cellId);
         resetLockTimer();
@@ -1866,18 +1976,13 @@
       }
       if (msg.type === "auth_response") {
         const ws = nodeWs;
-        if (nodePublicKey && msg.signature && ws._authChallenge) {
-          if (validateNodeSignature(ws._authChallenge, msg.signature, nodePublicKey)) {
-            wsAuthenticated = true;
-            clearTimeout(ws._authTimer);
-            nodeWs.send(JSON.stringify({ type: "subscribe", topics: ["roots", "revocations", "receipts", "intents", "note_announcements"] }));
-          } else {
-            nodeWs.close();
-          }
-        } else if (!nodePublicKey) {
+        if (!nodePublicKey || !msg.signature || !ws._authChallenge) {
+          nodeWs.close();
+          return;
+        }
+        if (validateNodeSignature(ws._authChallenge, msg.signature, nodePublicKey)) {
           wsAuthenticated = true;
-          const ws2 = nodeWs;
-          clearTimeout(ws2._authTimer);
+          clearTimeout(ws._authTimer);
           nodeWs.send(JSON.stringify({ type: "subscribe", topics: ["roots", "revocations", "receipts", "intents", "note_announcements"] }));
         } else {
           nodeWs.close();
@@ -1985,8 +2090,12 @@
       if (cellId && /^[0-9a-fA-F]{64}$/.test(cellId)) {
         const result = await shareCapability(cellId);
         if (result.uri) {
+          const nonce = registerPendingDecision("share-capability.html", {
+            uri: result.uri,
+            cellId
+          });
           chrome.windows.create({
-            url: chrome.runtime.getURL("share-capability.html") + "?uri=" + encodeURIComponent(result.uri) + "&cellId=" + encodeURIComponent(cellId),
+            url: chrome.runtime.getURL("share-capability.html") + "#nonce=" + nonce,
             type: "popup",
             width: 420,
             height: 380,
@@ -1994,8 +2103,9 @@
           });
         }
       } else {
+        const nonce = registerPendingDecision("share-capability.html", {});
         chrome.windows.create({
-          url: chrome.runtime.getURL("share-capability.html"),
+          url: chrome.runtime.getURL("share-capability.html") + "#nonce=" + nonce,
           type: "popup",
           width: 420,
           height: 380,
@@ -2009,4 +2119,3 @@
   connectNodeWs();
   startDiscoveryPolling();
 })();
-//# sourceMappingURL=background.js.map

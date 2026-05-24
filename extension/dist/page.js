@@ -212,4 +212,3 @@
   });
   window.dispatchEvent(new Event("pyana:ready"));
 })();
-//# sourceMappingURL=page.js.map

@@ -433,7 +433,10 @@ async function getWordlist() {
 async function deriveKeypairFromMnemonic(mnemonic, passphrase) {
   if (wasm && wasm.derive_keypair_from_mnemonic) {
     try {
-      const result = wasm.derive_keypair_from_mnemonic(mnemonic, passphrase, 'pyana/0');
+      // Rust signature is 2-arg (mnemonic, passphrase); the third arg was
+      // silently ignored. The function now returns
+      // `{ public_key: Uint8Array(32), secret_key: Uint8Array(32) }`.
+      const result = wasm.derive_keypair_from_mnemonic(mnemonic, passphrase);
       return { publicKey: result.public_key, secretKey: result.secret_key };
     } catch (e) {
       console.warn('[pyana] WASM derive_keypair_from_mnemonic failed:', e.message);
@@ -697,9 +700,23 @@ async function postEncryptedIntent(matchSpec, options = {}) {
       'Encrypted intent posting requires the updated WASM module.'
     );
   }
-  const recipientPubkey = options.recipientPubkey
-    ? new Uint8Array(options.recipientPubkey)
-    : null;
+  // seal_intent_body now REQUIRES a 32-byte recipient X25519 pubkey. The old
+  // "broadcast mode" (recipient_pubkey === null) derived the recipient key as
+  // BLAKE3(plaintext), which provided no confidentiality and has been removed.
+  if (!options.recipientPubkey) {
+    throw new Error(
+      'seal_intent_body: encrypted-intent broadcast mode (null recipient) is ' +
+      'no longer supported. Pass a 32-byte recipient X25519 pubkey, or for a ' +
+      'publicly-decryptable envelope generate a fresh ephemeral X25519 keypair, ' +
+      'encrypt to it, and publish the corresponding private key out-of-band.'
+    );
+  }
+  const recipientPubkey = new Uint8Array(options.recipientPubkey);
+  if (recipientPubkey.length !== 32) {
+    throw new Error(
+      `seal_intent_body: recipientPubkey must be exactly 32 bytes, got ${recipientPubkey.length}`
+    );
+  }
   const sealed = wasm.seal_intent_body(
     JSON.stringify(matchSpec),
     recipientPubkey
@@ -3309,30 +3326,47 @@ async function handleMessage(message, sender) {
     // --- Bearer capabilities ---
 
     case 'pyana:createBearerCap': {
+      // WASM-side audit fix: bearer caps are now real Ed25519 signatures by
+      // the delegator. `create_bearer_cap` requires the wallet's *secret*
+      // signing seed (NOT the public key). Restricted to the extension popup
+      // and only while the wallet is unlocked.
+      if (!isExtensionPopup(sender)) {
+        return { id: message.id, error: 'Only available from extension popup.' };
+      }
       requireWasm('createBearerCap');
       const wallet = await loadState();
       if (wallet.locked) {
         return { id: message.id, error: 'Wallet is locked' };
       }
-      // Use wallet public key as delegator key.
-      const delegatorKeyHex = Array.from(wallet.publicKey)
+      if (!wallet.secretKey || wallet.secretKey.length !== 32) {
+        return { id: message.id, error: 'Wallet secret key unavailable; cannot sign bearer cap.' };
+      }
+      const delegatorSigningKeyHex = Array.from(wallet.secretKey)
         .map(b => b.toString(16).padStart(2, '0')).join('');
       const result = wasm.create_bearer_cap(
-        delegatorKeyHex,
+        delegatorSigningKeyHex,
         message.targetCellHex,
         message.action,
         message.expiry || 0
       );
       resetLockTimer();
+      // `result` now includes:
+      //   bearer_token_hex (64-byte Ed25519 signature)
+      //   delegator_pubkey_hex (32 bytes)
+      //   binding_hex (32 bytes)
+      // Callers should persist delegator_pubkey_hex and pass it to verify.
       return { id: message.id, result };
     }
 
     case 'pyana:verifyBearerCap': {
       requireWasm('verifyBearerCap');
       const currentTime = Math.floor(Date.now() / 1000);
+      // verify_bearer_cap now takes the delegator PUBLIC key (not the
+      // previous "delegator key" which the old API conflated).
+      const delegatorPubkeyHex = message.delegatorPubkeyHex || message.delegatorKeyHex;
       const result = wasm.verify_bearer_cap(
         message.bearerTokenHex,
-        message.delegatorKeyHex,
+        delegatorPubkeyHex,
         message.targetCellHex,
         message.action,
         message.expiry || 0,

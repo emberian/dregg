@@ -1,5 +1,6 @@
 import * as esbuild from 'esbuild';
 const watch = process.argv.includes('--watch');
+const dev = process.argv.includes('--dev');
 
 const config = {
   entryPoints: [
@@ -12,7 +13,9 @@ const config = {
   outdir: 'dist',
   format: 'iife',  // Chrome extension scripts need IIFE, not ESM
   target: ['chrome120'],
-  sourcemap: true,
+  // P2-2: sourcemaps only in dev / watch. Production builds expose internal
+  // symbol names to devtools observers; never ship to users.
+  sourcemap: watch || dev,
 };
 
 if (watch) {

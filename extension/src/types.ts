@@ -185,7 +185,9 @@ export type MessageType =
   // Internal decision messages
   | "pyana:provisionDecision"
   | "pyana:intentConfirmation"
-  | "pyana:disclosureDecision";
+  | "pyana:disclosureDecision"
+  // Popup-to-background: fetch the display payload registered when the popup was opened.
+  | "pyana:getPendingDecision";
 
 // ---------------------------------------------------------------------------
 // Queue types

@@ -50,13 +50,13 @@ async function isOriginAllowed(origin: string, method: string): Promise<boolean>
   try {
     const stored = await chrome.storage.local.get("pyana_allowed_origins");
     const allowlist = stored.pyana_allowed_origins || {};
-    if (Array.isArray(allowlist)) {
-      return allowlist.includes(origin);
-    }
+    // P1-2: legacy array form is treated as no permission; user must re-prompt.
+    if (Array.isArray(allowlist)) return false;
     const entry = allowlist[origin] as { methods: string[]; expires: number } | undefined;
     if (!entry) return false;
     if (entry.expires && entry.expires < Date.now()) return false;
-    return entry.methods.includes("*") || entry.methods.includes(method);
+    // No wildcard semantic — exact method match only.
+    return entry.methods.includes(method);
   } catch {
     return false;
   }

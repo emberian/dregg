@@ -185,7 +185,9 @@ function resetLockTimer(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Rate limiter
+// Rate limiter — atomic, in-memory, keyed by (tabId, origin).
+// P1-5: previous implementation stored counters in chrome.storage.session
+// (async get→check→set race) and keyed off attacker-controllable URL strings.
 // ---------------------------------------------------------------------------
 
 interface RateLimitEntry {
@@ -193,22 +195,111 @@ interface RateLimitEntry {
   windowStart: number;
 }
 
-async function checkRateLimit(origin: string): Promise<boolean> {
-  const stored = await chrome.storage.session.get("_rateLimits");
-  const limits: Record<string, RateLimitEntry> = stored._rateLimits || {};
+const rateLimits = new Map<string, RateLimitEntry>();
+
+function checkRateLimit(tabId: number | undefined, origin: string): boolean {
+  // Use tabId as the primary key (process-isolated; attacker can't forge);
+  // origin is appended only for sub-keying within a tab.
+  const key = `${tabId ?? -1}::${origin}`;
   const now = Date.now();
-  const entry = limits[origin] || { count: 0, windowStart: now };
-
-  if (now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
-    entry.count = 0;
-    entry.windowStart = now;
+  let entry = rateLimits.get(key);
+  if (!entry || now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
+    entry = { count: 0, windowStart: now };
   }
-
-  if (entry.count >= RATE_LIMIT_MAX_CALLS) return false;
-
+  if (entry.count >= RATE_LIMIT_MAX_CALLS) {
+    rateLimits.set(key, entry);
+    return false;
+  }
   entry.count++;
-  limits[origin] = entry;
-  await chrome.storage.session.set({ _rateLimits: limits });
+  rateLimits.set(key, entry);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Popup decision framework — P0-1 / P0-2.
+//
+// Each user-approval popup is opened with a unique random nonce passed in the
+// URL hash (so it doesn't appear in `document.referrer` or `URLSearchParams`).
+// The popup retrieves its display payload via `pyana:getPendingDecision`
+// (which validates the caller is the popup we opened, by extension URL +
+// matching nonce) and sends decision messages including the nonce. Background
+// `validatePopupSender()` confirms:
+//   1. sender is an extension page (not a content script / tab),
+//   2. the nonce matches a registered pending decision,
+//   3. the sender.url path matches the expected popup HTML for that decision.
+// Forged decisions from any web page's content script are dropped on (1);
+// forged decisions from another extension page are dropped on (2)/(3).
+// ---------------------------------------------------------------------------
+
+interface PendingDecision {
+  /** Which popup HTML this decision belongs to. */
+  popupPath: string;
+  /** The chrome.windows id, if known (used to clean up on close). */
+  windowId?: number;
+  /** Opaque display payload the popup will fetch via getPendingDecision. */
+  payload: Record<string, unknown>;
+  /** When this pending decision was created. */
+  createdAt: number;
+}
+
+const pendingDecisions = new Map<string, PendingDecision>();
+const PENDING_DECISION_TTL_MS = 10 * 60 * 1000;
+
+function generatePopupNonce(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+function registerPendingDecision(popupPath: string, payload: Record<string, unknown>): string {
+  // GC stale entries.
+  const now = Date.now();
+  for (const [k, v] of pendingDecisions) {
+    if (now - v.createdAt > PENDING_DECISION_TTL_MS) {
+      pendingDecisions.delete(k);
+    }
+  }
+  const nonce = generatePopupNonce();
+  pendingDecisions.set(nonce, { popupPath, payload, createdAt: now });
+  return nonce;
+}
+
+function consumePendingDecision(nonce: string): PendingDecision | null {
+  const entry = pendingDecisions.get(nonce);
+  if (!entry) return null;
+  pendingDecisions.delete(nonce);
+  return entry;
+}
+
+/**
+ * Validate that the inbound message came from the popup we opened with this nonce.
+ * Returns true iff:
+ *   - sender is an extension page (url starts with chrome-extension://<our id>/)
+ *   - sender is NOT a content script (sender.tab is undefined for popup windows)
+ *   - the message's `nonce` field matches a registered pending decision
+ *   - the popup's path matches the registered popupPath for that nonce
+ *
+ * On success the pending decision is consumed (one-shot).
+ *
+ * `expectedNonce` is the nonce we issued for this specific popup invocation;
+ * the message MUST match it. (Even if an attacker steals/guesses another
+ * extension page's nonce, it won't match this specific decision.)
+ */
+function validatePopupSender(
+  message: Record<string, unknown>,
+  sender: chrome.runtime.MessageSender,
+  expectedNonce: string,
+  expectedPopupPath: string,
+): boolean {
+  if (sender?.tab != null) return false;
+  if (!sender?.url) return false;
+  const prefix = `chrome-extension://${chrome.runtime.id}/`;
+  if (!sender.url.startsWith(prefix)) return false;
+  const path = sender.url.slice(prefix.length).split(/[?#]/)[0];
+  if (path !== expectedPopupPath) return false;
+  const nonce = message.nonce as string | undefined;
+  if (!nonce || nonce !== expectedNonce) return false;
+  if (!pendingDecisions.has(nonce)) return false;
   return true;
 }
 
@@ -665,15 +756,29 @@ async function recoverFromMnemonic(
 async function getOriginAllowlist(): Promise<Record<string, OriginPermission>> {
   const stored = await chrome.storage.local.get(ALLOWED_ORIGINS_KEY);
   const raw = stored[ALLOWED_ORIGINS_KEY] || {};
+  // P1-2: drop the legacy array form entirely; force re-prompt per method.
+  // Previous migration silently upgraded any prior approval to a wildcard
+  // "*" grant for every restricted method (including signTurn).
   if (Array.isArray(raw)) {
-    const migrated: Record<string, OriginPermission> = {};
-    for (const origin of raw as string[]) {
-      migrated[origin] = { methods: ["*"], expires: Date.now() + ORIGIN_PERMISSION_EXPIRY_MS };
-    }
-    await chrome.storage.local.set({ [ALLOWED_ORIGINS_KEY]: migrated });
-    return migrated;
+    const cleared: Record<string, OriginPermission> = {};
+    await chrome.storage.local.set({ [ALLOWED_ORIGINS_KEY]: cleared });
+    return cleared;
   }
-  return raw as Record<string, OriginPermission>;
+  // Additionally, sanitize any "*" wildcard methods that might exist from old data.
+  const sanitized: Record<string, OriginPermission> = {};
+  let dirty = false;
+  for (const [origin, entry] of Object.entries(raw as Record<string, OriginPermission>)) {
+    if (Array.isArray(entry?.methods) && entry.methods.includes("*")) {
+      // Drop the entry — user must re-prompt per method.
+      dirty = true;
+      continue;
+    }
+    sanitized[origin] = entry;
+  }
+  if (dirty) {
+    await chrome.storage.local.set({ [ALLOWED_ORIGINS_KEY]: sanitized });
+  }
+  return sanitized;
 }
 
 async function isOriginAllowedForMethod(origin: string, method: string): Promise<boolean> {
@@ -685,7 +790,8 @@ async function isOriginAllowedForMethod(origin: string, method: string): Promise
     await chrome.storage.local.set({ [ALLOWED_ORIGINS_KEY]: allowlist });
     return false;
   }
-  return entry.methods.includes("*") || entry.methods.includes(method);
+  // P1-2: no wildcard semantic — exact method match only.
+  return entry.methods.includes(method);
 }
 
 async function addOriginToAllowlist(origin: string, method: string): Promise<void> {
@@ -962,13 +1068,17 @@ function showDisclosurePicker(origin: string, request: AuthorizeRequest, tokenFa
   return new Promise((resolve) => {
     const requiredFacts = tokenFacts.filter(f => f.key === "action" || f.key === "resource");
     const siteRequested = request.requestedDisclosure || [];
-    const popupUrl = chrome.runtime.getURL("disclosure-picker.html") +
-      "?origin=" + encodeURIComponent(origin) +
-      "&action=" + encodeURIComponent(request.action) +
-      "&resource=" + encodeURIComponent(request.resource) +
-      "&facts=" + encodeURIComponent(JSON.stringify(tokenFacts)) +
-      "&required=" + encodeURIComponent(JSON.stringify(requiredFacts)) +
-      "&siteRequested=" + encodeURIComponent(JSON.stringify(siteRequested));
+    // P0-2: pass only opaque nonce in URL; PII (facts including email/userId/org)
+    // stays in background memory and is fetched via pyana:getPendingDecision.
+    const nonce = registerPendingDecision("disclosure-picker.html", {
+      origin,
+      action: request.action,
+      resource: request.resource,
+      tokenFacts,
+      requiredFacts,
+      siteRequestedFacts: siteRequested,
+    });
+    const popupUrl = chrome.runtime.getURL("disclosure-picker.html") + "#nonce=" + nonce;
 
     chrome.windows.create({
       url: popupUrl,
@@ -977,8 +1087,10 @@ function showDisclosurePicker(origin: string, request: AuthorizeRequest, tokenFa
       height: 620,
       focused: true,
     }, (win) => {
-      const listener = (message: Record<string, unknown>): void => {
+      const listener = (message: Record<string, unknown>, sender: chrome.runtime.MessageSender): void => {
         if (message.type !== "pyana:disclosureDecision") return;
+        // P0-1: validate the sender is the popup we opened.
+        if (!validatePopupSender(message, sender, nonce, "disclosure-picker.html")) return;
         chrome.runtime.onMessage.removeListener(listener);
         resolve(message as unknown as DisclosureDecision);
       };
@@ -988,6 +1100,7 @@ function showDisclosurePicker(origin: string, request: AuthorizeRequest, tokenFa
           if (closedId === win.id) {
             chrome.windows.onRemoved.removeListener(onClose);
             chrome.runtime.onMessage.removeListener(listener);
+            consumePendingDecision(nonce);
             resolve({ authorized: false });
           }
         });
@@ -1089,8 +1202,9 @@ async function saveDisclosurePref(origin: string, level: string): Promise<void> 
 
 async function provisionToken(tokenData: Record<string, unknown>, _senderTabId?: number): Promise<{ accepted: boolean; tokenId?: string }> {
   return new Promise((resolve) => {
-    const popupUrl = chrome.runtime.getURL("provision.html") +
-      "?data=" + encodeURIComponent(JSON.stringify(tokenData));
+    // P0-2: keep token payload (which may include email/userId/org) in background memory.
+    const nonce = registerPendingDecision("provision.html", { tokenData });
+    const popupUrl = chrome.runtime.getURL("provision.html") + "#nonce=" + nonce;
 
     chrome.windows.create({
       url: popupUrl,
@@ -1099,8 +1213,10 @@ async function provisionToken(tokenData: Record<string, unknown>, _senderTabId?:
       height: 480,
       focused: true,
     }, (win) => {
-      const listener = async (message: Record<string, unknown>): Promise<void> => {
+      const listener = async (message: Record<string, unknown>, sender: chrome.runtime.MessageSender): Promise<void> => {
         if (message.type !== "pyana:provisionDecision") return;
+        // P0-1: validate the sender is the provision popup we opened.
+        if (!validatePopupSender(message, sender, nonce, "provision.html")) return;
         chrome.runtime.onMessage.removeListener(listener);
         if (message.accepted) {
           const wallet = await loadState();
@@ -1120,6 +1236,16 @@ async function provisionToken(tokenData: Record<string, unknown>, _senderTabId?:
         }
       };
       chrome.runtime.onMessage.addListener(listener);
+      if (win?.id) {
+        chrome.windows.onRemoved.addListener(function onClose(closedId: number) {
+          if (closedId === win.id) {
+            chrome.windows.onRemoved.removeListener(onClose);
+            chrome.runtime.onMessage.removeListener(listener);
+            consumePendingDecision(nonce);
+            resolve({ accepted: false });
+          }
+        });
+      }
     });
   });
 }
@@ -1130,12 +1256,16 @@ async function provisionToken(tokenData: Record<string, unknown>, _senderTabId?:
 
 const intentPool = new Map<string, { intent: Intent; receivedAt: number }>();
 
-function showIntentConfirmation(action: string, matchSpec: MatchSpec | unknown, options: unknown): Promise<boolean> {
+function showIntentConfirmation(action: string, matchSpec: MatchSpec | unknown, options: unknown, origin?: string): Promise<boolean> {
   return new Promise((resolve) => {
-    const popupUrl = chrome.runtime.getURL("confirm-intent.html") +
-      "?action=" + encodeURIComponent(action) +
-      "&spec=" + encodeURIComponent(JSON.stringify(matchSpec)) +
-      "&options=" + encodeURIComponent(JSON.stringify(options || {}));
+    // P0-2 + P2-5: payload (including origin) fetched via getPendingDecision.
+    const nonce = registerPendingDecision("confirm-intent.html", {
+      action,
+      matchSpec,
+      options: options || {},
+      origin: origin || "unknown",
+    });
+    const popupUrl = chrome.runtime.getURL("confirm-intent.html") + "#nonce=" + nonce;
 
     chrome.windows.create({
       url: popupUrl,
@@ -1144,8 +1274,10 @@ function showIntentConfirmation(action: string, matchSpec: MatchSpec | unknown, 
       height: 380,
       focused: true,
     }, (win) => {
-      const listener = (message: Record<string, unknown>): void => {
+      const listener = (message: Record<string, unknown>, sender: chrome.runtime.MessageSender): void => {
         if (message.type !== "pyana:intentConfirmation") return;
+        // P0-1: validate the sender is the confirm-intent popup.
+        if (!validatePopupSender(message, sender, nonce, "confirm-intent.html")) return;
         chrome.runtime.onMessage.removeListener(listener);
         resolve(message.confirmed === true);
       };
@@ -1155,6 +1287,7 @@ function showIntentConfirmation(action: string, matchSpec: MatchSpec | unknown, 
           if (closedId === win.id) {
             chrome.windows.onRemoved.removeListener(onClose);
             chrome.runtime.onMessage.removeListener(listener);
+            consumePendingDecision(nonce);
             resolve(false);
           }
         });
@@ -1205,8 +1338,8 @@ async function computeIntentId(kind: string, matchSpec: MatchSpec, expiry: numbe
   return "js:" + hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
-async function postIntent(matchSpec: MatchSpec, options?: { expiry?: number }): Promise<{ intentId?: string; expiry?: number; error?: string }> {
-  const confirmed = await showIntentConfirmation("postIntent", matchSpec, options);
+async function postIntent(matchSpec: MatchSpec, options?: { expiry?: number }, origin?: string): Promise<{ intentId?: string; expiry?: number; error?: string }> {
+  const confirmed = await showIntentConfirmation("postIntent", matchSpec, options, origin);
   if (!confirmed) {
     return { error: "User denied intent broadcast" };
   }
@@ -1508,6 +1641,12 @@ async function signTurn(turnSpec: TurnSpec): Promise<SignTurnResult> {
   const w = wasm!;
   const wallet = await loadState();
   if (wallet.locked) return { error: "Wallet is locked", submitted: false };
+  // P1-1: refuse to sign turns until the user has set a real passphrase.
+  // While `needsPassphraseSetup === true` the wallet is encrypted under
+  // an internal ephemeral key that's not a user secret.
+  if (wallet.needsPassphraseSetup) {
+    return { error: "Set a wallet passphrase before signing turns.", submitted: false };
+  }
   if (!wallet.secretKey) return { error: "Wallet secret key not available", submitted: false };
 
   let turnData: { turn_id: string; turn_bytes: Uint8Array; signature?: Uint8Array };
@@ -1636,9 +1775,8 @@ function isContentScript(sender: chrome.runtime.MessageSender): boolean {
 
 function handleOriginPermissionRequest(origin: string, method: string): Promise<{ granted: boolean }> {
   return new Promise((resolve) => {
-    const popupUrl = chrome.runtime.getURL("origin-permission.html") +
-      "?origin=" + encodeURIComponent(origin) +
-      "&method=" + encodeURIComponent(method);
+    const nonce = registerPendingDecision("origin-permission.html", { origin, method });
+    const popupUrl = chrome.runtime.getURL("origin-permission.html") + "#nonce=" + nonce;
 
     chrome.windows.create({
       url: popupUrl,
@@ -1647,8 +1785,10 @@ function handleOriginPermissionRequest(origin: string, method: string): Promise<
       height: 320,
       focused: true,
     }, (win) => {
-      const listener = async (message: Record<string, unknown>): Promise<void> => {
+      const listener = async (message: Record<string, unknown>, sender: chrome.runtime.MessageSender): Promise<void> => {
         if (message.type !== "pyana:originPermissionDecision") return;
+        // P0-1: validate the sender is the origin-permission popup.
+        if (!validatePopupSender(message, sender, nonce, "origin-permission.html")) return;
         chrome.runtime.onMessage.removeListener(listener);
         if (message.granted) {
           await addOriginToAllowlist(origin, method);
@@ -1663,6 +1803,7 @@ function handleOriginPermissionRequest(origin: string, method: string): Promise<
           if (closedId === win.id) {
             chrome.windows.onRemoved.removeListener(onClose);
             chrome.runtime.onMessage.removeListener(listener);
+            consumePendingDecision(nonce);
             resolve({ granted: false });
           }
         });
@@ -1713,7 +1854,8 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
     case "pyana:authorize": {
       if (isContentScript(sender) && !(message.request as AuthorizeRequest)?._skipDisclosure) {
         const origin = (message._origin as string) || (sender?.tab?.url && new URL(sender.tab.url).origin) || "unknown";
-        if (!await checkRateLimit(origin)) {
+        // P1-5: rate-limit keyed off (tabId, origin) using in-memory map.
+        if (!checkRateLimit(sender?.tab?.id, origin)) {
           return { id: message.id, result: { allowed: false, error: "Rate limited. Too many authorize requests. Try again later." } };
         }
         const result = await authorizeWithDisclosure(message.request as AuthorizeRequest, origin);
@@ -1762,6 +1904,11 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
       if (!isExtensionPopup(sender)) return { id: message.id, error: "Only available from extension popup." };
       const wallet = await loadState();
       if (wallet.locked) return { id: message.id, error: "Wallet is locked" };
+      // P1-1: don't reveal the mnemonic while the wallet is encrypted under the
+      // ephemeral internal key.
+      if (wallet.needsPassphraseSetup) {
+        return { id: message.id, error: "Set a wallet passphrase before viewing the recovery phrase." };
+      }
       const mnemonic = await getMnemonic();
       if (state) state.mnemonicShown = true;
       await saveState();
@@ -1796,8 +1943,40 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
 
     case "pyana:provisionDecision":
     case "pyana:intentConfirmation":
-    case "pyana:disclosureDecision":
+    case "pyana:disclosureDecision": {
+      // P0-1: decision messages may only come from extension popup pages.
+      // The actual resolution is handled by the per-popup listener registered
+      // in show*() functions, which also validates the nonce. This main-router
+      // case just ACKs the popup; if a content script forges this message
+      // type, we explicitly refuse here (defense in depth).
+      if (isContentScript(sender) || !isExtensionPopup(sender)) {
+        return { id: message.id, error: "Decision messages may only come from extension popups." };
+      }
       return { id: message.id, result: true };
+    }
+
+    case "pyana:getPendingDecision": {
+      // P0-2: popups fetch their display payload via this message rather than
+      // receiving PII in the URL. Caller must be an extension page (not a tab
+      // / content script), the nonce must match a registered pending decision,
+      // and the caller's URL path must match the registered popup path.
+      if (isContentScript(sender) || !isExtensionPopup(sender)) {
+        return { id: message.id, error: "Only extension popups may fetch pending decisions." };
+      }
+      const nonce = message.nonce as string | undefined;
+      if (!nonce) return { id: message.id, error: "Missing nonce." };
+      const entry = pendingDecisions.get(nonce);
+      if (!entry) return { id: message.id, error: "No such pending decision." };
+      // Confirm caller is the right popup HTML.
+      const prefix = `chrome-extension://${chrome.runtime.id}/`;
+      const path = (sender.url || "").startsWith(prefix)
+        ? (sender.url || "").slice(prefix.length).split(/[?#]/)[0]
+        : "";
+      if (path !== entry.popupPath) {
+        return { id: message.id, error: "Popup path mismatch for this nonce." };
+      }
+      return { id: message.id, result: { payload: entry.payload } };
+    }
 
     case "pyana:getDisclosurePrefs": {
       if (!isExtensionPopup(sender)) return { id: message.id, error: "Only available from extension popup." };
@@ -1824,12 +2003,14 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
     }
 
     case "pyana:postIntent": {
-      const result = await postIntent(message.matchSpec as MatchSpec, message.options as { expiry?: number } | undefined);
+      const origin = (message._origin as string) || (sender?.tab?.url && new URL(sender.tab.url).origin) || undefined;
+      const result = await postIntent(message.matchSpec as MatchSpec, message.options as { expiry?: number } | undefined, origin);
       return { id: message.id, result };
     }
 
     case "pyana:offerCapability": {
-      const confirmed = await showIntentConfirmation("offerCapability", message.matchSpec, message.options);
+      const origin = (message._origin as string) || (sender?.tab?.url && new URL(sender.tab.url).origin) || undefined;
+      const confirmed = await showIntentConfirmation("offerCapability", message.matchSpec, message.options, origin);
       if (!confirmed) return { id: message.id, result: { error: "User denied capability offer" } };
       const expiry = (message.options as { expiry?: number })?.expiry || (Date.now() + DEFAULT_INTENT_EXPIRY_MS);
       const intentId = await computeIntentId("offer", message.matchSpec as MatchSpec, expiry);
@@ -1884,8 +2065,13 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
       return result;
     }
 
-    case "pyana:originPermissionDecision":
+    case "pyana:originPermissionDecision": {
+      // P0-1: same as above — only popups may send decision messages.
+      if (isContentScript(sender) || !isExtensionPopup(sender)) {
+        return { id: message.id, error: "Decision messages may only come from extension popups." };
+      }
       return { id: message.id, result: true };
+    }
 
     // CapTP
     case "pyana:shareCapability": {
@@ -2199,18 +2385,17 @@ function tryConnect(url: string, onFail: () => void): void {
 
     if (msg.type === "auth_response") {
       const ws = nodeWs as WebSocket & { _authChallenge?: string; _authTimer?: ReturnType<typeof setTimeout> };
-      if (nodePublicKey && msg.signature && ws._authChallenge) {
-        if (validateNodeSignature(ws._authChallenge, msg.signature as string, nodePublicKey)) {
-          wsAuthenticated = true;
-          clearTimeout(ws._authTimer!);
-          nodeWs!.send(JSON.stringify({ type: "subscribe", topics: ["roots", "revocations", "receipts", "intents", "note_announcements"] }));
-        } else {
-          nodeWs!.close();
-        }
-      } else if (!nodePublicKey) {
+      // P1-3: fail closed when nodePublicKey is unknown.
+      // Previously the extension marked the socket authenticated when
+      // /status had failed; a MITM could then send forged revocation/receipt
+      // messages. Now if we don't know the node pubkey, drop the connection.
+      if (!nodePublicKey || !msg.signature || !ws._authChallenge) {
+        nodeWs!.close();
+        return;
+      }
+      if (validateNodeSignature(ws._authChallenge, msg.signature as string, nodePublicKey)) {
         wsAuthenticated = true;
-        const ws2 = nodeWs as WebSocket & { _authTimer?: ReturnType<typeof setTimeout> };
-        clearTimeout(ws2._authTimer!);
+        clearTimeout(ws._authTimer!);
         nodeWs!.send(JSON.stringify({ type: "subscribe", topics: ["roots", "revocations", "receipts", "intents", "note_announcements"] }));
       } else {
         nodeWs!.close();
@@ -2337,10 +2522,13 @@ chrome.contextMenus.onClicked.addListener(async (info: chrome.contextMenus.OnCli
     if (cellId && /^[0-9a-fA-F]{64}$/.test(cellId)) {
       const result = await shareCapability(cellId);
       if (result.uri) {
+        // P0-2: keep bearer secret (URI contains node host + secret) out of the URL.
+        const nonce = registerPendingDecision("share-capability.html", {
+          uri: result.uri,
+          cellId,
+        });
         chrome.windows.create({
-          url: chrome.runtime.getURL("share-capability.html") +
-            "?uri=" + encodeURIComponent(result.uri) +
-            "&cellId=" + encodeURIComponent(cellId),
+          url: chrome.runtime.getURL("share-capability.html") + "#nonce=" + nonce,
           type: "popup",
           width: 420,
           height: 380,
@@ -2348,8 +2536,11 @@ chrome.contextMenus.onClicked.addListener(async (info: chrome.contextMenus.OnCli
         });
       }
     } else {
+      // No pre-generated URI; popup will let user paste a cellId and call
+      // pyana:shareCapability itself.
+      const nonce = registerPendingDecision("share-capability.html", {});
       chrome.windows.create({
-        url: chrome.runtime.getURL("share-capability.html"),
+        url: chrome.runtime.getURL("share-capability.html") + "#nonce=" + nonce,
         type: "popup",
         width: 420,
         height: 380,

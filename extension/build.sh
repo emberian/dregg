@@ -93,8 +93,10 @@ validate_manifest() {
   fi
 
   # Check all referenced files exist.
+  # P2-1: the manifest points to dist/* — validate those, not legacy root .js
+  # duplicates.
   local missing=0
-  for file in background.js content.js page.js popup.html popup-script.js settings.html settings-script.js; do
+  for file in dist/background.js dist/content.js dist/page.js popup.html dist/popup-script.js settings.html settings-script.js; do
     if [ ! -f "$SCRIPT_DIR/$file" ]; then
       echo "  WARNING: Referenced file missing: $file"
       missing=$((missing + 1))
@@ -118,13 +120,16 @@ package_extension() {
   mkdir -p "$DIST_DIR"
 
   # Files to include in the package.
+  # P2-1: ship only the TS-compiled dist/ scripts for background/content/page/popup,
+  # not the legacy root .js files. Static popup HTML + their dedicated JS still ship
+  # from the root (they're not TS-built today).
   local FILES=(
     manifest.json
-    background.js
-    content.js
-    page.js
+    dist/background.js
+    dist/content.js
+    dist/page.js
     popup.html
-    popup-script.js
+    dist/popup-script.js
     settings.html
     settings-script.js
     provision.html
@@ -137,6 +142,8 @@ package_extension() {
     disclosure-picker.js
     origin-permission.html
     origin-permission-script.js
+    share-capability.html
+    share-capability.js
     bip39_english.txt
   )
 

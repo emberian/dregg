@@ -53,6 +53,31 @@ saveBtn.addEventListener('click', async () => {
     return;
   }
 
+  // P1-4: confirm with the user if the node hostname is changing.
+  // The node URL is where every turn / balance / capability secret goes,
+  // so switching it without user consent is equivalent to wallet compromise.
+  try {
+    const stored = await chrome.storage.local.get(NODE_CONFIG_KEY);
+    const oldConfig = stored[NODE_CONFIG_KEY] || {};
+    const oldHost = oldConfig.nodeUrl ? new URL(oldConfig.nodeUrl).host : new URL(DEFAULT_NODE_URL).host;
+    const newHost = new URL(config.nodeUrl).host;
+    if (oldHost !== newHost) {
+      const proceed = window.confirm(
+        'Changing node host\n\n' +
+        'From: ' + oldHost + '\n' +
+        'To:   ' + newHost + '\n\n' +
+        'All capability secrets, turn submissions, and balance queries will be sent to the new host. ' +
+        'Only change this if you trust the new host. Continue?'
+      );
+      if (!proceed) {
+        showStatus('Save cancelled.', 'info');
+        return;
+      }
+    }
+  } catch (_e) {
+    // If we can't read the old config, fall through and let the user confirm via save.
+  }
+
   // Save via background message (triggers WebSocket reconnect).
   try {
     const response = await chrome.runtime.sendMessage({

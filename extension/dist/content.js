@@ -37,13 +37,11 @@
     try {
       const stored = await chrome.storage.local.get("pyana_allowed_origins");
       const allowlist = stored.pyana_allowed_origins || {};
-      if (Array.isArray(allowlist)) {
-        return allowlist.includes(origin);
-      }
+      if (Array.isArray(allowlist)) return false;
       const entry = allowlist[origin];
       if (!entry) return false;
       if (entry.expires && entry.expires < Date.now()) return false;
-      return entry.methods.includes("*") || entry.methods.includes(method);
+      return entry.methods.includes(method);
     } catch {
       return false;
     }
@@ -96,4 +94,3 @@
     return false;
   });
 })();
-//# sourceMappingURL=content.js.map

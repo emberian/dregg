@@ -75,7 +75,16 @@ wordInputs.forEach(input => {
 });
 
 // Paste button: paste from clipboard and distribute words.
+// P2-4: warn the user that the mnemonic is in the OS clipboard (visible to
+// other apps / clipboard managers), and wipe the clipboard after reading.
 pasteBtn.addEventListener('click', async () => {
+  const proceed = window.confirm(
+    'About to read your 24-word recovery phrase from the system clipboard.\n\n' +
+    'Other apps and clipboard managers may have already seen this phrase. ' +
+    'After reading, we will wipe the clipboard. Continue?'
+  );
+  if (!proceed) return;
+
   try {
     const text = await navigator.clipboard.readText();
     const words = text.trim().split(/\s+/);
@@ -83,6 +92,12 @@ pasteBtn.addEventListener('click', async () => {
       wordInputs[i].value = words[i].toLowerCase();
     }
     validateInputs();
+    // Wipe clipboard so the phrase isn't left available to other apps.
+    try {
+      await navigator.clipboard.writeText('');
+    } catch (_e) {
+      // Best effort; some browsers require focus.
+    }
   } catch (e) {
     // Clipboard API may not be available in extension context.
     resultDiv.textContent = 'Clipboard access denied. Please paste words manually.';
