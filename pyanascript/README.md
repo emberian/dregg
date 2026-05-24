@@ -66,22 +66,51 @@ SDK to make it expressible? The audit of "what's missing in the SDK
 to support this method-chain shape" is the prerequisite for any
 language work.
 
-### Q2. PureScript or CakeML as compile target?
+### Q2. PureCake or CakeML as compile target?
 
-Two concrete candidates the user has flagged for exploration:
+Two concrete candidates the user has flagged for exploration. The
+prior wording of this section named PureScript and called it "compiles
+to JavaScript" — that was wrong. `~/dev/pure` is **PureCake**, not
+PureScript. Corrected descriptions follow; see
+[`exploration-pure-and-cakeml.md`](exploration-pure-and-cakeml.md)
+for the full investigation.
 
-- **PureScript** (~/dev/pure) — ML-family, functional, pure, compiles
-  to JavaScript. Pragmatic tooling, easy to integrate web UIs. Harder
-  to verify formally.
-- **CakeML** (~/dev/CakeML) — verified ML implementation, HOL-derived
-  semantics, verified compiler chain. Genuinely compelling for the
-  svenvs (verified safety envelopes) integration story: svenvs's HOL
-  theorems can reach into CakeML-compiled pyanascript directly.
-  Verification ceiling is much higher. Tooling ceiling is much lower.
+- **PureCake / PureLang** (`~/dev/pure`) — a **HOL4-verified
+  compiler** for a small, **Haskell-like, lazy** functional language.
+  PureLang has Haskell-shaped syntax (`data`, `case ... of`,
+  do-notation, `[a]`, `:` cons) and is **lazy by default**, with
+  verified demand analysis. **It targets CakeML**, not JavaScript:
+  PureCake lowers PureLang through verified intermediate languages
+  (ThunkLang, StateLang, …) into CakeML source, which CakeML then
+  compiles to native machine code. Developed in HOL4 by the cakeml
+  organization. Status: active, modest pace (~200 commits/year).
+  Limitations: no type classes in the mainline compiler yet (an
+  in-progress `typeclass/` branch is wiring dictionary translation);
+  no import system; type signatures parsed but ignored.
 
-Neither commitment is necessary up front. Both worth understanding
-before deciding. Possible outcome: neither — the integration cost is
-too high — and pyanascript gets its own implementation.
+- **CakeML** (`~/dev/CakeML`) — verified ML implementation, HOL-derived
+  semantics, verified compiler chain **all the way down to machine
+  code** (x86-64, ARMv8, MIPS, RISC-V). **Strict / call-by-value**.
+  ML surface with Haskell-curried constructors and a few divergences
+  from SML (no let-polymorphism, no equality types, RTL evaluation).
+  FFI is C-shaped: programs compile to `.S` files exposing `cml_main`,
+  linked against a `basis_ffi.c` shim — Rust can speak to it via
+  `extern "C"`. Bonus payloads: **Candle** (a verified HOL Light
+  *inside* CakeML), **Pancake** (verified C-like systems language),
+  **`translator/`** (proof-producing HOL→CakeML), **`cv_translator/`**.
+  Status: very active (~3900 commits/year, last commit 2026-05-11).
+  Genuinely compelling for the svenvs integration story: svenvs's
+  HOL theorems can reach into CakeML-compiled pyanascript through
+  the verified compiler theorem.
+
+Neither commitment is necessary up front. Both are research-grade,
+not "drop-in 2026-Q3 backend." Leading verdict: **CakeML is the more
+credible target**; PureCake is interesting-but-speculative; the right
+near-term experiment is a 1-page proof-of-life (hand-write one cell
+behavior in CakeML, link to CapTP via FFI, measure pain). Possible
+outcome: neither — the FFI seam doesn't carry three-party CapTP
+handoffs cleanly — and pyanascript gets its own implementation,
+likely on Lean 4.
 
 ### Q3. What semantics?
 
