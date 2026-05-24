@@ -1,4 +1,4 @@
-<layout src="_layouts/default.html">
+<layout src="_layouts/viz.html">
 
 <div class="docs-layout">
   <aside class="docs-sidebar">
@@ -75,6 +75,15 @@
       <li><strong>Causal ordering:</strong> Parent references encode happened-before relationships.
           The DAG provides partial ordering without any consensus protocol.</li>
     </ul>
+
+    <pyana-vizzer data-vizzer="dag-graph"
+      data-dataset='{"nodes":[{"id":"a0","height":0,"creator":0},{"id":"b0","height":0,"creator":1},{"id":"c0","height":0,"creator":2},{"id":"a1","height":1,"creator":0},{"id":"b1","height":1,"creator":1},{"id":"c1","height":1,"creator":2,"isFinal":true}],"edges":[{"from":"a1","to":"a0"},{"from":"a1","to":"b0"},{"from":"b1","to":"a0"},{"from":"b1","to":"b0"},{"from":"b1","to":"c0"},{"from":"c1","to":"a0"},{"from":"c1","to":"b0"},{"from":"c1","to":"c0"}]}'>
+      <div class="vizzer-fallback">Blocklace DAG — 3 creators, 2 rounds, one finalized tip.</div>
+    </pyana-vizzer>
+    <script type="module" src="/playground/visualizers/dag-graph.js"></script>
+    <p class="viz-caption">A three-node federation after two rounds. Each round-1 block references
+      all known round-0 tips (its causal past). The highlighted ring marks the round-1 tip selected
+      as leader by lowest-hash; its causal history is appended to the total order.</p>
 
     <h2 id="cordial-miners">Cordial Miners (Total Ordering)</h2>
 

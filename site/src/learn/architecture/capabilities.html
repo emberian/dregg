@@ -1,4 +1,4 @@
-<layout src="_layouts/default.html">
+<layout src="_layouts/viz.html">
 
 <div class="docs-layout">
   <aside class="docs-sidebar">
@@ -55,6 +55,14 @@
       what makes &ldquo;present a capability&rdquo; equivalent to &ldquo;prove a STARK
       against an attested root&rdquo; &mdash; the verifier never sees the chain itself.
     </p>
+
+    <pyana-vizzer data-vizzer="delegation-envelope-v2" data-nonce="b3a2…">
+      <div class="vizzer-fallback">DelegatedToken v2 — issuer, subject, authority policy, caveats, nonce, signature.</div>
+    </pyana-vizzer>
+    <script type="module" src="/playground/visualizers/delegation-envelope-v2.js"></script>
+    <p class="viz-caption">A v2 delegation envelope. Every field marked &ldquo;checked&rdquo; is
+      re-verified on each authorize call; the nonce binds this specific delegation so a captured
+      signature can&rsquo;t be replayed in a different context.</p>
 
     <h2 id="introduction">Three-Party Introduction</h2>
     <p>

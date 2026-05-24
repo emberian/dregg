@@ -1,0 +1,189 @@
+/* ============================================================
+   Pyana vizzer chrome — minimal styles for <pyana-vizzer> hosts
+   embedded inside learn / docs / explorer pages.
+
+   Loaded by `_layouts/viz.html`. Variables come from the main
+   style.css palette (--bg-raised, --fg, --accent, etc.).
+   ============================================================ */
+
+/* Provide a few semantic tokens that the visualizer modules expect but
+   that the main style.css doesn't define yet. Variables on :root cascade
+   into [data-vizzer]; we only set fallbacks (`@supports`-friendly) so we
+   don't clobber design-tokens.css when it is also loaded. */
+:root {
+  --success:        var(--accent-bright, #7aab6f);
+  --success-soft:   rgba(122, 171, 111, 0.12);
+  --danger:         #d4685c;
+  --danger-soft:    rgba(212, 104, 92, 0.12);
+  --info:           #6ba3c7;
+  --info-soft:      rgba(107, 163, 199, 0.12);
+  --warm-bright:    #d99a3f;
+  --bg-elevated:    #182420;
+  --p-amber:        #d99a3f;
+  --p-tide:         #6ba3c7;
+  --p-fern:         #7aab6f;
+  --p-sage:         #9cc08a;
+  --p-ember:        #d4685c;
+  --font-mono:      var(--mono, 'SF Mono', ui-monospace, Menlo, monospace);
+}
+
+/* Container chrome for every <pyana-vizzer data-vizzer="..."> host. */
+[data-vizzer] {
+  display: block;
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+  margin: 24px 0;
+  container-type: inline-size;
+  position: relative;
+}
+
+/* Skeleton shimmer while waiting for the runtime to mount. */
+[data-vizzer][data-loading="true"] {
+  background-image: linear-gradient(90deg,
+    var(--bg-raised) 0%,
+    var(--bg-elevated, var(--undergrowth, var(--bg-raised))) 50%,
+    var(--bg-raised) 100%);
+  background-size: 200% 100%;
+  animation: pyana-vizzer-skeleton 1.4s linear infinite;
+}
+@keyframes pyana-vizzer-skeleton {
+  from { background-position: 100% 0; }
+  to   { background-position: -100% 0; }
+}
+
+/* Static fallback content that lives inside the host until JS takes over. */
+[data-vizzer] .vizzer-fallback {
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  padding: 12px 14px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 6px;
+  text-align: center;
+}
+
+/* Caption beneath a visualizer — used in learn-page embeds for context. */
+.viz-caption {
+  margin: -16px 0 24px;
+  padding: 8px 14px;
+  font-size: 0.82rem;
+  color: var(--fg-muted);
+  font-style: italic;
+  border-left: 2px solid var(--accent-soft);
+  background: color-mix(in srgb, var(--bg-raised) 70%, transparent);
+  border-radius: 0 4px 4px 0;
+}
+
+/* ---- SVG primitives shared by every Preact-rendered visualizer ---- */
+
+.viz-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  font-family: var(--font-mono);
+}
+
+.viz-svg .label {
+  font-size: 11px;
+  fill: var(--fg-dim);
+}
+
+.viz-svg .node {
+  fill: var(--bg-elevated, var(--bg-raised));
+  stroke: var(--line-strong);
+  stroke-width: 1;
+  transition: fill 200ms ease, stroke 200ms ease;
+}
+.viz-svg .node[data-state="active"] {
+  fill: color-mix(in srgb, var(--accent) 24%, var(--bg-raised));
+  stroke: var(--accent-bright);
+}
+.viz-svg .node[data-state="warm"] {
+  fill: color-mix(in srgb, var(--warm) 24%, var(--bg-raised));
+  stroke: var(--warm-bright, var(--warm));
+}
+.viz-svg .node[data-state="danger"] {
+  fill: color-mix(in srgb, var(--danger) 24%, var(--bg-raised));
+  stroke: var(--danger);
+}
+
+.viz-svg .edge {
+  fill: none;
+  stroke: var(--line-strong);
+  stroke-width: 1.5;
+  transition: stroke 200ms ease;
+}
+.viz-svg .edge[data-state="active"] {
+  stroke: var(--accent-bright);
+}
+
+.viz-empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
+
+/* ---- state-diff visualizer chrome ---- */
+
+.state-diff {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.state-diff__row {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr 0.6fr;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.state-diff__row:last-child { border-bottom: none; }
+.state-diff__row--head {
+  background: var(--bg-inset, var(--bg));
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+}
+.state-diff__field { color: var(--fg-dim); }
+.state-diff__before { opacity: 0.7; }
+.state-diff__after { color: var(--fg); }
+.state-diff__delta { font-weight: 600; text-align: right; }
+
+/* Pyana-toast host needs to be styled so the fail-soft banner looks
+   right when the CDN is unreachable. */
+.pyana-toast-host {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 80;
+  pointer-events: none;
+}
+.pyana-toast {
+  pointer-events: auto;
+  background: var(--bg-elevated, var(--undergrowth, var(--bg-raised)));
+  color: var(--fg);
+  border: 1px solid var(--line-strong);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 0.875rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  animation: pyana-toast-in 240ms ease-out;
+}
+.pyana-toast[data-kind="warn"] { border-left-color: var(--warm); }
+.pyana-toast[data-kind="err"]  { border-left-color: var(--danger); }
+.pyana-toast[data-kind="info"] { border-left-color: var(--info); }
+@keyframes pyana-toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}

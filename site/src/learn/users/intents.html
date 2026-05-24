@@ -1,4 +1,4 @@
-<layout src="_layouts/default.html">
+<layout src="_layouts/viz.html">
 
 <div class="docs-layout">
   <aside class="docs-sidebar">
@@ -73,6 +73,14 @@
       proves the legs add up. Pricing &mdash; if any &mdash; is in the offer/want shape, not
       in a global ledger.
     </p>
+
+    <pyana-vizzer data-vizzer="ring-trade" data-cycle="true" data-settled="committed">
+      <div class="vizzer-fallback">Three-party ring: A → B → C → A, settled atomically.</div>
+    </pyana-vizzer>
+    <script type="module" src="/playground/visualizers/ring-trade.js"></script>
+    <p class="viz-caption">Three parties, three legs, one cycle. Each arrow means
+      &ldquo;my offer covers your want.&rdquo; The trustless solver locates the cycle, locks every
+      leg in escrow, then reveals fulfillment proofs in one coordinated turn.</p>
 
     <h2 id="fulfillment">Fulfilling an Intent</h2>
 

@@ -1,4 +1,4 @@
-<layout src="_layouts/default.html">
+<layout src="_layouts/viz.html">
 
 <div class="docs-layout">
   <aside class="docs-sidebar">
@@ -120,6 +120,14 @@ bob.receive_signed_delegation(
       The sealed box reveals nothing to the federation or any observer -- only that
       a message of a certain size was deposited at a certain time.
     </p>
+
+    <pyana-vizzer data-vizzer="inbox-lifecycle" data-count="4">
+      <div class="vizzer-fallback">MerkleQueue inbox — four sealed messages awaiting decryption.</div>
+    </pyana-vizzer>
+    <script type="module" src="/playground/visualizers/inbox-lifecycle.js"></script>
+    <p class="viz-caption">Four sealed capabilities sit in the recipient&rsquo;s MerkleQueue.
+      The federation can see counts and ciphertext lengths; it cannot see senders, capability
+      contents, or which messages link to which prior interactions.</p>
 
     <h2 id="three-party">Three-Party Introduction</h2>
 

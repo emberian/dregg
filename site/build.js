@@ -16,7 +16,6 @@ const DIST = path.join(__dirname, 'dist');
 const COPY_DIRS = [
   'playground',
   'explorer',
-  'demo',
   'sandbox',
   'extension',
   'examples',
@@ -239,6 +238,7 @@ function build() {
     'design-tokens.css',
     'runtime-bootstrap.js',
     'visualizer-base.js',
+    'vizzer.css',
   ];
   for (const f of PUBLIC_INCLUDES) {
     const src = path.join(SRC, '_includes', f);

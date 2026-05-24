@@ -24,19 +24,19 @@
 
   <div class="demo-cards">
     <div class="demo-card">
-      <h2 class="demo-card__title">WASM Explorer</h2>
+      <h2 class="demo-card__title">Chain Explorer</h2>
       <p class="demo-card__desc">
-        The classic explorer with state tree, action builder, and proof viewer.
-        A compact view of core token and proof operations.
+        Browse federation state: blocks, turns, receipts, cells, capabilities, proofs,
+        intents, federation membership, notes, and apps. Connects to any pyana-node JSON-RPC
+        endpoint and renders live state with embedded visualizers.
       </p>
       <ul class="demo-card__features">
-        <li>Mint a root macaroon and attenuate it with caveats</li>
-        <li>Generate real STARK proofs (BabyBear field, FRI commitment)</li>
-        <li>Verify proofs, tamper with them to see verification fail</li>
-        <li>Build 4-ary BLAKE3 Merkle trees with membership proofs</li>
-        <li>Run the Datalog evaluator with standard policy rules</li>
+        <li>Block, turn, and receipt drill-down</li>
+        <li>Cell and capability inspection</li>
+        <li>Intent and queue views with embedded visualizers</li>
+        <li>Configurable node connection (defaults to localhost:8420)</li>
       </ul>
-      <a class="demo-card__link" href="/demo/">Launch Explorer &rarr;</a>
+      <a class="demo-card__link" href="/explorer/">Launch Explorer &rarr;</a>
     </div>
 
     <div class="demo-card">

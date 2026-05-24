@@ -39,7 +39,7 @@ async function loadWasm() {
   wasmStatus.className = 'status-badge loading';
 
   try {
-    const { default: init, ...exports } = await import('../demo/pkg/pyana_wasm.js');
+    const { default: init, ...exports } = await import('../pkg/pyana_wasm.js');
     await init();
     wasm = exports;
     wasmReady = true;
@@ -49,7 +49,7 @@ async function loadWasm() {
   } catch (e) {
     wasmStatus.textContent = 'wasm error';
     wasmStatus.className = 'status-badge error';
-    appendOutput('error', `Failed to load WASM: ${e.message}\n\nBuild with: cd wasm && wasm-pack build --target web --out-dir ../site/demo/pkg`);
+    appendOutput('error', `Failed to load WASM: ${e.message}\n\nBuild with: cd wasm && wasm-pack build --target web --out-dir ../site/pkg`);
   }
 }
 

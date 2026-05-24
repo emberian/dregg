@@ -170,7 +170,7 @@ let wasm = null;
 async function loadWasm() {
   const statusEl = document.getElementById('wasm-status');
   try {
-    const { default: init, ...exports } = await import('../demo/pkg/pyana_wasm.js');
+    const { default: init, ...exports } = await import('../pkg/pyana_wasm.js');
     await init();
     wasm = exports;
     statusEl.textContent = 'wasm ready';

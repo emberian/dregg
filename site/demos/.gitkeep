@@ -1,0 +1,3 @@
+# Reserved for CI-generated results.json (see .github/workflows/demos.yml).
+# The interactive viewer that used to live here was ported into
+# playground/sections/ci-results.js.

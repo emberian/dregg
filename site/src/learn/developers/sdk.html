@@ -1,4 +1,4 @@
-<layout src="_layouts/default.html">
+<layout src="_layouts/viz.html">
 
 <div class="docs-layout">
   <aside class="docs-sidebar">
@@ -181,6 +181,15 @@ let turn = TurnBuilder::new()
 
 let signed = wallet.sign_turn(&turn);
 // Submit signed.turn + signed.signature + signed.signer to the node</code></pre>
+
+    <pyana-vizzer data-vizzer="state-diff"
+      data-dataset='{"before":{"balance":1000,"nonce":12,"notes":3,"capabilities":5},"after":{"balance":880,"nonce":13,"notes":4,"capabilities":5}}'>
+      <div class="vizzer-fallback">State diff — balance, nonce, notes, capabilities before and after a turn.</div>
+    </pyana-vizzer>
+    <script type="module" src="/playground/visualizers/state-diff.js"></script>
+    <p class="viz-caption">One turn moves 120 units of value into a fresh note. Balance drops,
+      nonce advances, the note count climbs, the capability list is untouched. The conservation
+      constraint forces the deltas to sum to zero on the value side.</p>
 
     <h2 id="receipt-chain">Receipt Chains (Proof-Carrying State)</h2>
 

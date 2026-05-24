@@ -1,4 +1,4 @@
-<layout src="_layouts/default.html">
+<layout src="_layouts/viz.html">
 
 <div class="docs-layout">
   <aside class="docs-sidebar">
@@ -51,6 +51,14 @@
       <li><code>hash_2_to_1(left, right)</code> -- Binary Merkle node hash</li>
       <li><code>hash_many(inputs)</code> -- Variable-width sponge hash</li>
     </ul>
+
+    <pyana-vizzer data-vizzer="merkle-tree"
+      data-dataset='{"leaves":["alice","bob","carol","dave","eve","faythe","grace","heidi"],"depth":3,"proofPath":["l-2","n-2-1","n-1-0","n-0-0"]}'>
+      <div class="vizzer-fallback">Merkle tree — depth 3, 8 leaves, with a highlighted authentication path.</div>
+    </pyana-vizzer>
+    <script type="module" src="/playground/visualizers/merkle-tree.js"></script>
+    <p class="viz-caption">Eight Poseidon2-hashed leaves climb to a single root. The amber path is the
+      authentication proof for the third leaf — log2(8) = 3 sibling hashes plus the leaf itself.</p>
 
     <h2 id="stark">STARK Proof System</h2>
 
