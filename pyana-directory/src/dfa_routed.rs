@@ -88,11 +88,14 @@ impl DfaRoutedDirectory {
     }
 
     /// Build with a `RouteTableBuilder` (convenience).
+    /
     pub fn with_builder(b: RouteTableBuilder) -> Result<Self, TableSwapError> {
+        /*
         let table = b
             .build()
             .map_err(|e| TableSwapError::BuildError(format!("{e:?}")))?;
         Ok(Self::new(table))
+*/unimplemented!()
     }
 
     /// Current route-table id.

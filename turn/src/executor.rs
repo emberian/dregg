@@ -1393,22 +1393,25 @@ impl TurnExecutor {
 
         // Sovereign-witness AIR teeth (SOVEREIGN-WITNESS-AIR-DESIGN.md §3.2):
         //
-        // This path (verify_and_commit_proof) is the proof-carrying path
-        // where `turn.execution_proof` is `Some`. The cell IS the sovereign
-        // cell, but `turn.sovereign_witnesses` is empty for this branch
-        // (mutually exclusive at construction). We set IS_SOVEREIGN_CELL == 1
-        // here because the proof-carrying path is, semantically, a sovereign
-        // turn — it just doesn't carry a Phase-1 witness object. The
-        // WITNESS_KEY_COMMIT / WITNESS_SEQUENCE / transition-proof fields
-        // are populated from the cell's registered owning pubkey + the
-        // federation's stored witness-sequence + the execution_proof itself
-        // (which IS the transition proof in this path).
+        // This path (`verify_and_commit_proof`) is the proof-carrying path
+        // where `turn.execution_proof` is `Some`. The cell IS sovereign, so
+        // we set IS_SOVEREIGN_CELL == 1 and bind the cell's owning-pubkey
+        // hash + witness-sequence into PI. The PI-matching loop below
+        // catches any prover-side divergence. The prover (wallet's
+        // `execute_sovereign_turn_with_proof`) populates the same slots
+        // from the same source (cell.public_key); the boundary constraint
+        // in the AIR catches any in-trace deviation.
+        //
+        // Phase 2: the execution_proof itself IS the transition proof in
+        // this path. We bind its Poseidon2 hash + the Effect VM AIR's
+        // VK hash (sentinel zero today; populated when the recursive
+        // verifier ships a stable VK).
         Self::populate_sovereign_witness_pi(
             &mut public_inputs,
             cell_id,
-            turn,
             ledger,
-            /* execution_proof_carrying = */ true,
+            None,              // no witness object on the proof-carrying path
+            Some(proof_bytes), // execution_proof IS the transition proof
         );
 
         // Append custom proof entries (vk_hash + proof_commitment per custom effect).
@@ -2174,6 +2177,118 @@ impl TurnExecutor {
         let mut result = [0u8; 32];
         result[..4].copy_from_slice(&bb.0.to_le_bytes());
         result
+    }
+
+    /// Compute the AIR-bound 4-felt commitment to a 32-byte Ed25519 owner pubkey
+    /// (SOVEREIGN-WITNESS-AIR-DESIGN.md §3.2). Uses `canonical_32_to_felts_4`
+    /// so it matches the in-trace witness column. Domain separation from the
+    /// state-commitment encoding is provided by the surrounding PI slot
+    /// (different position in PI), not by a tag — both inputs are 32 bytes
+    /// of opaque commitment material.
+    pub fn pubkey_to_witness_key_commit(pubkey: &[u8; 32]) -> [pyana_circuit::field::BabyBear; 4] {
+        pyana_commit::typed::canonical_32_to_felts_4(pubkey)
+    }
+
+    /// Compute the AIR-bound 4-felt commitment to a transition_proof's
+    /// canonical bytes (SOVEREIGN-WITNESS-AIR-DESIGN.md §3.2 / §4.2). The
+    /// commitment is `canonical_32_to_felts_4(blake3(proof_bytes))`, picking
+    /// up blake3's preimage resistance + the Poseidon2-domain mapping the
+    /// AIR uses for everything else.
+    pub fn transition_proof_commitment(proof_bytes: &[u8]) -> [pyana_circuit::field::BabyBear; 4] {
+        let h = *blake3::hash(proof_bytes).as_bytes();
+        pyana_commit::typed::canonical_32_to_felts_4(&h)
+    }
+
+    /// Populate the sovereign-witness AIR-teeth PI slots on the verifier
+    /// side (SOVEREIGN-WITNESS-AIR-DESIGN.md §3.2).
+    ///
+    /// `witness` is `Some` when this cell is being verified via the
+    /// witness path (the witness object carries the cell's full state
+    /// including its public_key). `execution_proof_bytes` is `Some` when
+    /// the proof-carrying path is in effect (the bytes ARE the inner
+    /// transition proof for Phase 2).
+    ///
+    /// When neither is supplied, IS_SOVEREIGN_CELL is left as zero (the
+    /// hosted-cell path); the boundary constraint holds via sentinel
+    /// agreement.
+    pub fn populate_sovereign_witness_pi(
+        public_inputs: &mut [pyana_circuit::field::BabyBear],
+        cell_id: &CellId,
+        ledger: &Ledger,
+        witness: Option<&crate::turn::SovereignCellWitness>,
+        execution_proof_bytes: Option<&[u8]>,
+    ) {
+        use pyana_circuit::effect_vm::pi;
+        use pyana_circuit::field::BabyBear;
+
+        // Default sentinel values (hosted-cell path).
+        for i in 0..pi::SOVEREIGN_WITNESS_KEY_COMMIT_LEN {
+            public_inputs[pi::SOVEREIGN_WITNESS_KEY_COMMIT_BASE + i] = BabyBear::ZERO;
+        }
+        public_inputs[pi::SOVEREIGN_WITNESS_SEQUENCE] = BabyBear::ZERO;
+        public_inputs[pi::IS_SOVEREIGN_CELL] = BabyBear::ZERO;
+        for i in 0..pi::SOVEREIGN_TRANSITION_PROOF_VK_HASH_LEN {
+            public_inputs[pi::SOVEREIGN_TRANSITION_PROOF_VK_HASH_BASE + i] = BabyBear::ZERO;
+        }
+        for i in 0..pi::SOVEREIGN_TRANSITION_PROOF_COMMITMENT_LEN {
+            public_inputs[pi::SOVEREIGN_TRANSITION_PROOF_COMMITMENT_BASE + i] = BabyBear::ZERO;
+        }
+        public_inputs[pi::HAS_TRANSITION_PROOF] = BabyBear::ZERO;
+
+        // Phase 1: Bind the witness-identity slots when we have witness
+        // material. Source order:
+        //   1. Explicit witness object (witness-path turns)
+        //   2. Proof-carrying turn (execution_proof_bytes is Some) — bind
+        //      IS_SOVEREIGN_CELL=1 + the cell's owning pubkey from
+        //      SovereignRegistration::owner_public_key (if populated).
+        if let Some(w) = witness {
+            // Witness path: the witness carries the cell_state including pubkey.
+            let key_commit = Self::pubkey_to_witness_key_commit(w.cell_state.public_key());
+            for i in 0..pi::SOVEREIGN_WITNESS_KEY_COMMIT_LEN {
+                public_inputs[pi::SOVEREIGN_WITNESS_KEY_COMMIT_BASE + i] = key_commit[i];
+            }
+            public_inputs[pi::SOVEREIGN_WITNESS_SEQUENCE] =
+                BabyBear::new((w.sequence & 0x7FFF_FFFF) as u32);
+            public_inputs[pi::IS_SOVEREIGN_CELL] = BabyBear::ONE;
+
+            // Phase 2: if the witness includes a STARK transition_proof,
+            // bind its commitment + VK hash. The VK hash is zero sentinel
+            // today (the recursive verifier exposes a stable VK in a
+            // follow-up); the off-AIR verifier loop recursively verifies.
+            if let Some(proof_bytes) = &w.transition_proof {
+                let proof_commit = Self::transition_proof_commitment(proof_bytes);
+                for i in 0..pi::SOVEREIGN_TRANSITION_PROOF_COMMITMENT_LEN {
+                    public_inputs[pi::SOVEREIGN_TRANSITION_PROOF_COMMITMENT_BASE + i] =
+                        proof_commit[i];
+                }
+                public_inputs[pi::HAS_TRANSITION_PROOF] = BabyBear::ONE;
+            }
+        } else if let Some(proof_bytes) = execution_proof_bytes {
+            // Proof-carrying path: the execution_proof IS the transition proof.
+            // Owner pubkey is sourced from the sovereign registration if
+            // available, else left as sentinel zero (Phase 1.5: registration
+            // grows an owner_public_key field; for now we accept either
+            // form and the wallet matches what the federation knows).
+            if let Some(reg) = ledger.get_sovereign_registration(cell_id) {
+                if let Some(pk) = reg.owner_public_key {
+                    let key_commit = Self::pubkey_to_witness_key_commit(&pk);
+                    for i in 0..pi::SOVEREIGN_WITNESS_KEY_COMMIT_LEN {
+                        public_inputs[pi::SOVEREIGN_WITNESS_KEY_COMMIT_BASE + i] = key_commit[i];
+                    }
+                }
+            }
+            public_inputs[pi::SOVEREIGN_WITNESS_SEQUENCE] = BabyBear::new(
+                (ledger.last_sovereign_witness_sequence(cell_id) & 0x7FFF_FFFF) as u32,
+            );
+            public_inputs[pi::IS_SOVEREIGN_CELL] = BabyBear::ONE;
+
+            // Phase 2: bind the inner-proof commitment.
+            let proof_commit = Self::transition_proof_commitment(proof_bytes);
+            for i in 0..pi::SOVEREIGN_TRANSITION_PROOF_COMMITMENT_LEN {
+                public_inputs[pi::SOVEREIGN_TRANSITION_PROOF_COMMITMENT_BASE + i] = proof_commit[i];
+            }
+            public_inputs[pi::HAS_TRANSITION_PROOF] = BabyBear::ONE;
+        }
     }
 
     /// Encode two BabyBear elements as a [u8; 32] for error reporting.

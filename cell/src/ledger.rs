@@ -257,6 +257,16 @@ pub struct SovereignRegistration {
     /// (=64).
     #[serde(default)]
     pub max_custom_effects: Option<u8>,
+    /// Sovereign-witness AIR teeth (SOVEREIGN-WITNESS-AIR-DESIGN.md §3.2):
+    /// the Ed25519 public key that signs sovereign witnesses for this cell.
+    /// The federation stores this at registration time so the verifier can
+    /// recompute `PI[SOVEREIGN_WITNESS_KEY_COMMIT_BASE..+4]` independent of
+    /// the wallet's claim. `None` represents pre-AIR-teeth registrations;
+    /// those proofs verify with zero-sentinel PI, which the AIR boundary
+    /// accepts (sentinel agreement). Phase 1.5: existing call sites
+    /// populate this field; the option type goes away in Stage 10.
+    #[serde(default)]
+    pub owner_public_key: Option<[u8; 32]>,
 }
 
 /// Default TTL for sovereign cell registrations (in blocks).
@@ -1055,6 +1065,7 @@ impl Ledger {
                 last_activity: current_height,
                 verification_key_hash,
                 max_custom_effects: None,
+                owner_public_key: None,
             },
         );
         Ok(())

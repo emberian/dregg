@@ -14,12 +14,10 @@ use std::collections::HashMap;
 use serde::Serialize;
 use zeroize::Zeroizing;
 
+use pyana_cell::factory::{CellMode, FactoryCreationParams, FactoryDescriptor};
 use pyana_cell::{
     AuthRequired, Cell, CellId, Ledger, Note, NoteCommitment, Nullifier, NullifierSet,
     PeerExchange, RevocationChannel, RevocationChannelSet,
-};
-use pyana_cell::factory::{
-    CellMode, FactoryCreationParams, FactoryDescriptor,
 };
 use pyana_intent::matcher::{HeldCapability, MatchResult, Sensitivity, match_intent};
 use pyana_intent::{
@@ -40,11 +38,60 @@ use pyana_turn::{
 const WASM_SIM_DOMAIN: &str = "pyana-wasm-default-domain";
 
 /// Fee charged on the system turn that mints a new cell from the genesis
-/// agent. Must cover the computron cost of `Effect::CreateCell` (~850 with
-/// default costs) plus the optional `Effect::Transfer` to fund the new cell
-/// (~125 extra). 2000 leaves comfortable headroom and is debited from the
-/// genesis agent's balance.
+/// agent. Must cover the computron cost of `Effect::CreateCellFromFactory`
+/// (~850 with default costs — same as `CreateCell`) plus the optional
+/// `Effect::Transfer` to fund the new cell (~125 extra). 2000 leaves
+/// comfortable headroom and is debited from the genesis agent's balance.
 const GENESIS_MINT_FEE: u64 = 2000;
+
+/// Derive-key tag for the default test-wallet factory VK. The factory
+/// is a constructor-transparency anchor — every wasm-runtime agent
+/// (other than genesis) is born from this factory, so every cell's
+/// provenance points at the same VK. The VK string is part of the
+/// agent's identity surface; changing it changes the factory hash and
+/// invalidates any test fixtures that pin the factory VK.
+const WASM_DEFAULT_FACTORY_DOMAIN: &str = "pyana-wasm-default-test-wallet-factory-v1";
+
+/// Build the default "test wallet" `FactoryDescriptor` used by
+/// [`PyanaRuntime`] when an agent is created without an explicit factory.
+///
+/// The descriptor is intentionally permissive:
+/// - `child_program_vk = None` and `child_vk_strategy = None` —
+///   created cells have no installed program VK; the factory is a
+///   pure agent-cell mint, not a program-deploying factory.
+/// - `allowed_cap_templates = []` — created cells get no initial
+///   capabilities (the runtime's `grant_capability` does that
+///   separately, post-creation).
+/// - `field_constraints = []` — the descriptor does not constrain
+///   initial fields; the wasm runtime never sets initial fields.
+/// - `state_constraints = []` — no perpetual slot caveats.
+/// - `default_mode = Hosted` — matches the previous `Cell::new_hosted`
+///   shape used by the pre-factory `Effect::CreateCell` path.
+/// - `creation_budget = None` — unbounded mints (the wasm runtime is
+///   a sim; the budget would just be a denial-of-service knob for
+///   tests, not a useful invariant).
+///
+/// The `factory_vk` field is BLAKE3 derived from
+/// [`WASM_DEFAULT_FACTORY_DOMAIN`], so it is deterministic and
+/// reproducible across browser sessions. Apps that want their own
+/// factory can deploy one via [`PyanaRuntime::deploy_factory`] and
+/// pass its VK to [`PyanaRuntime::try_create_agent_with_factory`].
+pub fn default_wallet_factory_descriptor() -> FactoryDescriptor {
+    let factory_vk: [u8; 32] = *blake3::Hasher::new_derive_key(WASM_DEFAULT_FACTORY_DOMAIN)
+        .update(b"factory-vk")
+        .finalize()
+        .as_bytes();
+    FactoryDescriptor {
+        factory_vk,
+        child_program_vk: None,
+        child_vk_strategy: None,
+        allowed_cap_templates: Vec::new(),
+        field_constraints: Vec::new(),
+        state_constraints: Vec::new(),
+        default_mode: CellMode::Hosted,
+        creation_budget: None,
+    }
+}
 
 // ============================================================================
 // Internal state types
@@ -144,6 +191,13 @@ pub struct PyanaRuntime {
     /// hash, signature, and merkle root surfaced in the UI comes from the
     /// canonical types, not a JS-side simulation.
     pub federations: Vec<SimFederation>,
+    /// VK of the default test-wallet factory deployed at runtime
+    /// construction. See [`default_wallet_factory_descriptor`]. Subsequent
+    /// agents (post-genesis) and cells minted from genesis are born via
+    /// `Effect::CreateCellFromFactory` against this VK by default —
+    /// closing the previous "genesis-by-fiat" gap (see
+    /// `STUDIO-REFACTOR-PICKUP.md`).
+    pub default_factory_vk: [u8; 32],
 }
 
 impl PyanaRuntime {
@@ -152,6 +206,17 @@ impl PyanaRuntime {
         let mut executor = TurnExecutor::new(costs);
         executor.set_timestamp(1000);
         executor.set_block_height(0);
+
+        // Deploy the default "test wallet" factory so subsequent
+        // `try_create_agent` calls can mint cells via the canonical
+        // `Effect::CreateCellFromFactory` path. The factory's VK is
+        // recorded here so the runtime can default to it when no
+        // factory is specified by the caller — every cell minted by
+        // the wasm runtime (other than genesis) carries a `Provenance`
+        // record pointing at this VK, mirroring the
+        // constructor-transparency behavior of the native node.
+        let default_factory = default_wallet_factory_descriptor();
+        let default_factory_vk = executor.deploy_factory(default_factory);
 
         PyanaRuntime {
             ledger: Ledger::new(),
@@ -166,7 +231,27 @@ impl PyanaRuntime {
             current_timestamp: 1000,
             receipts: Vec::new(),
             federations: Vec::new(),
+            default_factory_vk,
         }
+    }
+
+    /// Deploy a factory descriptor into the runtime's executor. The
+    /// returned VK can be passed to
+    /// [`try_create_agent_with_factory`] /
+    /// [`mint_cell_from_genesis_with_factory`] to mint cells from this
+    /// factory. Exposed so apps (and tests) can register their own
+    /// factories alongside the runtime's default test-wallet factory.
+    pub fn deploy_factory(&mut self, descriptor: FactoryDescriptor) -> [u8; 32] {
+        self.executor.deploy_factory(descriptor)
+    }
+
+    /// The VK of the runtime's default "test wallet" factory — the
+    /// factory used by `create_agent` / `create_cell` when no explicit
+    /// factory is named. Exposed so the bindings can surface it to JS
+    /// (e.g. for `verifyProvenance` against the canonical wasm-runtime
+    /// factory set).
+    pub fn default_factory_vk(&self) -> [u8; 32] {
+        self.default_factory_vk
     }
 
     /// Create a new federation with `num_nodes` nodes named `<name>-<idx>`.
@@ -255,7 +340,36 @@ impl PyanaRuntime {
     /// Fallible cell-creation path. Same as [`create_agent`] but returns a
     /// String error rather than panicking, so wasm bindings can surface the
     /// error to JS rather than triggering an `unreachable` trap.
+    ///
+    /// Uses the runtime's default test-wallet factory. To mint from a
+    /// specific factory descriptor (e.g. an app-deployed one), use
+    /// [`Self::try_create_agent_with_factory`].
     pub fn try_create_agent(&mut self, name: &str, initial_balance: u64) -> Result<usize, String> {
+        let factory_vk = self.default_factory_vk;
+        self.try_create_agent_with_factory(name, initial_balance, &factory_vk)
+    }
+
+    /// Like [`try_create_agent`] but mints the new cell from an explicit
+    /// `factory_vk`. The factory must have been deployed previously via
+    /// [`Self::deploy_factory`].
+    ///
+    /// **Genesis (idx 0)** is still a cell birth-by-fiat: there is no
+    /// signer yet, so the executor cannot accept a turn. Genesis is the
+    /// canonical bootstrap; the factory binding only governs subsequent
+    /// agents. Genesis's provenance is `Provenance::genesis` per
+    /// `pyana_cell::factory`.
+    ///
+    /// **Subsequent agents** are minted via
+    /// `Effect::CreateCellFromFactory` — the canonical constructor
+    /// transparency path. The new cell's provenance points at the
+    /// factory VK, so a downstream `verify_provenance` against the
+    /// runtime's default factory set will return true.
+    pub fn try_create_agent_with_factory(
+        &mut self,
+        name: &str,
+        initial_balance: u64,
+        factory_vk: &[u8; 32],
+    ) -> Result<usize, String> {
         let idx = self.agents.len();
 
         // Deterministic Ed25519 seed.
@@ -277,21 +391,48 @@ impl PyanaRuntime {
         if idx == 0 {
             // Genesis: insert the root cell directly. This is the same pattern
             // pyana-node uses (see node/src/genesis.rs::initial_cells).
+            // Genesis cannot itself be born from a factory because no signer
+            // exists yet — this is the canonical "Provenance::genesis"
+            // bootstrap point.
             let cell = Cell::with_balance(public_key, token_id, initial_balance);
             self.ledger.insert_cell(cell).unwrap();
         } else {
             // Subsequent agents: mint the cell via a real turn issued by the
-            // genesis agent (agent 0). This goes through the canonical
-            // Effect::CreateCell + Effect::Transfer path.
+            // genesis agent (agent 0), through the canonical
+            // `Effect::CreateCellFromFactory` path. The factory descriptor's
+            // `default_mode` determines whether the new cell is Hosted or
+            // Sovereign; the runtime's default factory uses Hosted.
             //
-            // Register the SimAgent first so its CellId/wallet are visible to
-            // the executor (the new cell must exist before Transfer targets
-            // it — but `Effect::CreateCell` runs before `Effect::Transfer`
-            // within the same action's effect list, so we're fine).
-            let mut effects = vec![Effect::CreateCell {
-                public_key,
+            // We look up the factory's required mode from the registry so
+            // the params match what `validate_creation` expects — passing
+            // a mismatched mode would trip `FactoryError::ModeMismatch`.
+            let factory_mode = self
+                .executor
+                .factory_registry
+                .borrow()
+                .get(factory_vk)
+                .ok_or_else(|| {
+                    format!(
+                        "unknown factory VK {} — call deploy_factory first",
+                        hex_encode_bytes(factory_vk)
+                    )
+                })?
+                .default_mode
+                .clone();
+
+            let params = FactoryCreationParams {
+                mode: factory_mode,
+                program_vk: None,
+                initial_fields: Vec::new(),
+                initial_caps: Vec::new(),
+                owner_pubkey: public_key,
+            };
+
+            let mut effects = vec![Effect::CreateCellFromFactory {
+                factory_vk: *factory_vk,
+                owner_pubkey: public_key,
                 token_id,
-                balance: 0,
+                params,
             }];
             if initial_balance > 0 {
                 effects.push(Effect::Transfer {
@@ -301,19 +442,15 @@ impl PyanaRuntime {
                 });
             }
 
-            // Execute the turn signed by genesis. We must pay a fee large
-            // enough to cover the turn's computrons: with default costs,
-            // action_base(100) + signature_verify(200) + effect_base(50) +
-            // create_cell(500) ≈ 850 for CreateCell alone, plus another
-            // effect_base(50) + transfer(75) when funding. We round up to
-            // GENESIS_MINT_FEE for headroom. The fee is debited from the
-            // genesis cell's balance, which is why genesis should be seeded
-            // with enough to cover all subsequent agent mints.
+            // Execute the turn signed by genesis. Fees match
+            // `Effect::CreateCell` (the executor's cost table maps both
+            // variants to `EFFECT_CREATE_CELL`), so `GENESIS_MINT_FEE`
+            // covers either path.
             match self.execute_turn_for_agent(0, effects, GENESIS_MINT_FEE) {
                 TurnResult::Committed { .. } => {}
                 other => {
                     return Err(format!(
-                        "minting cell for '{name}' via Effect::CreateCell failed: {:?}",
+                        "minting cell for '{name}' via Effect::CreateCellFromFactory failed: {:?}",
                         other
                     ));
                 }
@@ -343,9 +480,10 @@ impl PyanaRuntime {
     }
 
     /// Mint a cell from a raw public key (used by the wasm `create_cell` JS
-    /// binding). Uses the same factory-turn mechanism as subsequent
-    /// `create_agent` calls: a turn signed by the genesis agent that emits
-    /// `Effect::CreateCell` + (optional) `Effect::Transfer`.
+    /// binding). Uses the canonical factory-turn path: a turn signed by the
+    /// genesis agent that emits `Effect::CreateCellFromFactory` against the
+    /// runtime's default test-wallet factory (plus an optional
+    /// `Effect::Transfer` to fund the new cell).
     ///
     /// Returns the new cell's `CellId`. Requires at least one prior agent
     /// (the genesis agent, idx 0) to exist as the signer.
@@ -353,6 +491,19 @@ impl PyanaRuntime {
         &mut self,
         owner_public_key: [u8; 32],
         initial_balance: u64,
+    ) -> Result<CellId, String> {
+        let factory_vk = self.default_factory_vk;
+        self.mint_cell_from_genesis_with_factory(owner_public_key, initial_balance, &factory_vk)
+    }
+
+    /// Like [`Self::mint_cell_from_genesis`] but allows specifying an
+    /// explicit factory VK (which must have been deployed via
+    /// [`Self::deploy_factory`]).
+    pub fn mint_cell_from_genesis_with_factory(
+        &mut self,
+        owner_public_key: [u8; 32],
+        initial_balance: u64,
+        factory_vk: &[u8; 32],
     ) -> Result<CellId, String> {
         if self.agents.is_empty() {
             return Err(
@@ -363,10 +514,33 @@ impl PyanaRuntime {
         let token_id: [u8; 32] = *blake3::hash(WASM_SIM_DOMAIN.as_bytes()).as_bytes();
         let new_cell_id = CellId::derive_raw(&owner_public_key, &token_id);
 
-        let mut effects = vec![Effect::CreateCell {
-            public_key: owner_public_key,
+        let factory_mode = self
+            .executor
+            .factory_registry
+            .borrow()
+            .get(factory_vk)
+            .ok_or_else(|| {
+                format!(
+                    "unknown factory VK {} — call deploy_factory first",
+                    hex_encode_bytes(factory_vk)
+                )
+            })?
+            .default_mode
+            .clone();
+
+        let params = FactoryCreationParams {
+            mode: factory_mode,
+            program_vk: None,
+            initial_fields: Vec::new(),
+            initial_caps: Vec::new(),
+            owner_pubkey: owner_public_key,
+        };
+
+        let mut effects = vec![Effect::CreateCellFromFactory {
+            factory_vk: *factory_vk,
+            owner_pubkey: owner_public_key,
             token_id,
-            balance: 0,
+            params,
         }];
         if initial_balance > 0 {
             effects.push(Effect::Transfer {
@@ -379,7 +553,7 @@ impl PyanaRuntime {
         match self.execute_turn_for_agent(0, effects, GENESIS_MINT_FEE) {
             TurnResult::Committed { .. } => Ok(new_cell_id),
             other => Err(format!(
-                "wasm runtime: mint_cell_from_genesis failed: {:?}",
+                "wasm runtime: mint_cell_from_genesis_with_factory failed: {:?}",
                 other
             )),
         }

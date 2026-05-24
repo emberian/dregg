@@ -30,7 +30,6 @@ use pyana_circuit::bilateral_aggregation_air::{
 };
 use pyana_circuit::effect_vm::pi as inner_pi;
 use pyana_circuit::field::BabyBear;
-use pyana_commit::typed::canonical_32_to_felts_4;
 use pyana_types::CellId;
 use serde::{Deserialize, Serialize};
 
@@ -676,34 +675,35 @@ fn replay_aggregation_air(trace: &[Vec<BabyBear>], pi: &[BabyBear]) -> Result<()
         )));
     }
 
-    // Transitions.
+    // Transitions: `cum[i+1] = cum[i] + thing[i+1]` (next-row contribution
+    // pattern, matching the AIR's `when_transition` constraint).
     for i in 0..(n - 1) {
         let cum_local = trace[i][ag::IS_AGENT_CUMULATIVE_COL];
         let cum_next = trace[i + 1][ag::IS_AGENT_CUMULATIVE_COL];
-        let is_agent_local = trace[i][ag::PI_BUFFER_BASE + inner_pi::IS_AGENT_CELL];
-        let expected_cum_next = BabyBear::new(cum_local.as_u32() + is_agent_local.as_u32());
+        let is_agent_next = trace[i + 1][ag::PI_BUFFER_BASE + inner_pi::IS_AGENT_CELL];
+        let expected_cum_next = BabyBear::new(cum_local.as_u32() + is_agent_next.as_u32());
         if cum_next != expected_cum_next {
             return Err(TurnError::InvalidExecutionProof(format!(
-                "aggregate_bilateral row {} transition: is_agent_cumulative {} -> {} but +IS_AGENT_CELL ({}) = {}",
+                "aggregate_bilateral row {} transition: is_agent_cumulative {} -> {} but +IS_AGENT_CELL_next ({}) = {}",
                 i,
                 cum_local.as_u32(),
                 cum_next.as_u32(),
-                is_agent_local.as_u32(),
+                is_agent_next.as_u32(),
                 expected_cum_next.as_u32()
             )));
         }
 
         let n_local = trace[i][ag::N_CELLS_ACTIVE_COL];
         let n_next = trace[i + 1][ag::N_CELLS_ACTIVE_COL];
-        let ind_local = trace[i][ag::CONSISTENT_INDICATOR_COL];
-        let expected_n_next = BabyBear::new(n_local.as_u32() + ind_local.as_u32());
+        let ind_next = trace[i + 1][ag::CONSISTENT_INDICATOR_COL];
+        let expected_n_next = BabyBear::new(n_local.as_u32() + ind_next.as_u32());
         if n_next != expected_n_next {
             return Err(TurnError::InvalidExecutionProof(format!(
-                "aggregate_bilateral row {} transition: n_cells_active {} -> {} but +consistent_indicator ({}) = {}",
+                "aggregate_bilateral row {} transition: n_cells_active {} -> {} but +consistent_indicator_next ({}) = {}",
                 i,
                 n_local.as_u32(),
                 n_next.as_u32(),
-                ind_local.as_u32(),
+                ind_next.as_u32(),
                 expected_n_next.as_u32()
             )));
         }

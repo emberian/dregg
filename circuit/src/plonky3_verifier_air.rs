@@ -110,13 +110,24 @@ pub fn build_recursive_ivc_chain(
         }
     }
 
+    // p3_uni_stark::Proof does not implement `Clone`, so to land owned
+    // RecursionInput.proof values from `&PyanaProof` borrows we roundtrip
+    // through postcard. This is the same path proof_from_bytes /
+    // proof_to_bytes use for the on-wire shape; the (de)serialization cost
+    // is negligible vs. the recursion work that follows.
     let inputs: Vec<RecursionInput> = fold_proofs
         .iter()
-        .map(|(proof, pi)| RecursionInput {
-            proof: (*proof).clone(),
-            public_inputs: pi[..2].to_vec(),
+        .map(|(proof, pi)| -> Result<RecursionInput, String> {
+            let bytes = postcard::to_allocvec(*proof)
+                .map_err(|e| format!("PyanaProof postcard serialize: {e}"))?;
+            let owned: PyanaProof = postcard::from_bytes(&bytes)
+                .map_err(|e| format!("PyanaProof postcard deserialize: {e}"))?;
+            Ok(RecursionInput {
+                proof: owned,
+                public_inputs: pi[..2].to_vec(),
+            })
         })
-        .collect();
+        .collect::<Result<_, String>>()?;
 
     let recursive_proof = prove_recursive(inputs)?;
 

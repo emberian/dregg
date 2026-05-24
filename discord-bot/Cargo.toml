@@ -2,7 +2,7 @@
 name = "pyana-discord-bot"
 version = "0.1.0"
 edition = "2024"
-description = "Discord bot for the pyana devnet — custodial wallet, gallery, DeFi, identity, presence attestation"
+description = "Discord bot for the pyana devnet — custodial AppWallet handles, gallery, identity, presence attestation, CapTP, queues, governance, names"
 
 [dependencies]
 blake3 = "1"

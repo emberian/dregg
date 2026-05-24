@@ -1,10 +1,17 @@
-//! pyana Discord Bot — custodial wallet and interactive devnet demo.
+//! pyana Discord Bot — custodial-wallet front-end to the pyana devnet.
 //!
-//! Connects to the pyana devnet federation and provides slash commands for
-//! wallet management, token transfers, an explorer for browsing devnet state,
-//! a presence attestation system for proof-of-presence capability tokens,
-//! CapTP integration (the bot as a capability peer), programmable queues,
-//! governance, name service, and bidirectional pyana<->Discord integration.
+//! Lives at the workspace toplevel `/discord-bot` (peer of `node`, `sdk`,
+//! `app-framework`) rather than under `apps/`. Per-user wallets are
+//! handles to `pyana_app_framework::AppWallet` — the canonical narrow
+//! SDK surface — derived deterministically from the bot's secret and
+//! Discord user id.
+//!
+//! Slash commands cover: wallet management, transfers, gallery
+//! (apps/gallery), credentials (apps/identity), block-explorer browsing,
+//! presence attestation (proof-of-online dischargeable caveats), CapTP
+//! (bot as a capability peer), programmable queues, governance
+//! (apps/governed-namespace), name service (apps/nameservice), and
+//! Discord<->pyana federation linking.
 
 mod activity_feed;
 pub mod captp_client;

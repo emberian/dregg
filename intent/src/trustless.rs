@@ -716,12 +716,35 @@ impl TrustlessIntentEngine {
             return Err(EngineError::TooManySubmissions);
         }
 
+        // Verify the proof FIRST — a malformed submission never holds
+        // any bond. The bond is locked only after proof verification
+        // succeeds, so failed-proof submissions don't pollute the
+        // escrow state (and don't `AlreadyPosted` on retry).
+        let decrypted = self
+            .current_batch
+            .decrypted
+            .as_ref()
+            .ok_or(EngineError::WrongState {
+                expected: BatchState::Solving,
+                actual: self.current_batch.state,
+            })?;
+
+        self.verifier
+            .verify(
+                &submission.validity_proof,
+                &submission.solution,
+                submission.total_score,
+                decrypted,
+            )
+            .map_err(|reason| EngineError::InvalidProof { reason })?;
+
         // Lock the bond in escrow. The bond stays locked until either
         // finalize (release) or a successful challenge (slash). If the
         // solver hasn't pre-deposited enough, the lock fails with
-        // InsufficientBond. Note: a duplicate submission from the same
-        // solver for the same batch would hit `AlreadyPosted`, which
-        // we map to `TooManySubmissions` for the protocol layer.
+        // InsufficientBond. A solver who is rebidding (same solver,
+        // same batch) is already locked — we map `AlreadyPosted` to a
+        // gentle no-op (the lock from the first submission still
+        // suffices; the new submission inherits the same locked bond).
         let bond_key = BondKey {
             solver_id: submission.solver_id,
             batch_id: self.current_batch.batch_id,
@@ -733,7 +756,8 @@ impl TrustlessIntentEngine {
         ) {
             Ok(()) => {}
             Err(crate::bond::BondError::AlreadyPosted) => {
-                return Err(EngineError::TooManySubmissions);
+                // Rebid by same solver — the original lock remains
+                // active; this submission piggybacks on it.
             }
             Err(crate::bond::BondError::InsufficientBalance { available, .. }) => {
                 return Err(EngineError::InsufficientBond {
@@ -754,25 +778,6 @@ impl TrustlessIntentEngine {
                 self.bond_escrow.bind_intent(*intent_id, bond_key);
             }
         }
-
-        // Verify the proof
-        let decrypted = self
-            .current_batch
-            .decrypted
-            .as_ref()
-            .ok_or(EngineError::WrongState {
-                expected: BatchState::Solving,
-                actual: self.current_batch.state,
-            })?;
-
-        self.verifier
-            .verify(
-                &submission.validity_proof,
-                &submission.solution,
-                submission.total_score,
-                decrypted,
-            )
-            .map_err(|reason| EngineError::InvalidProof { reason })?;
 
         // Check if this beats the current winner
         let is_new_winner = match &self.current_batch.winning_solution {

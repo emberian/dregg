@@ -197,10 +197,12 @@ impl<F: PrimeCharacteristicRing + Sync> BaseAir<F> for BilateralAggregationAir {
     }
 
     /// We touch the running-cumulative columns on the next row to enforce
-    /// the transition. The PI buffer is row-local (no next-row dependency)
-    /// because each row carries its own inner proof's PI.
+    /// the transition. We also touch the next row's IS_AGENT_CELL and
+    /// CONSISTENT_INDICATOR because the cumulative transitions add the
+    /// next row's contribution (cum[i+1] = cum[i] + thing[i+1]).
     fn main_next_row_columns(&self) -> Vec<usize> {
         vec![
+            PI_BUFFER_BASE + inner_pi::IS_AGENT_CELL,
             IS_AGENT_CUMULATIVE_COL,
             CONSISTENT_INDICATOR_COL,
             N_CELLS_ACTIVE_COL,
@@ -315,19 +317,25 @@ impl<AB: AirBuilder> Air<AB> for BilateralAggregationAir {
         // (1 - ind) * is_agent == 0  -- padding rows force IS_AGENT_CELL=0
         builder.assert_zero((one.clone() - ind.clone()) * is_agent.clone());
 
-        // Cumulative transition.
+        // Cumulative transition. We add the *next row's* IS_AGENT_CELL
+        // because the boundary already seeds row 0's cumulative to its own
+        // IS_AGENT_CELL. With this pattern, `cum[i] = sum(is_agent[0..=i])`,
+        // i.e. the cumulative at row `i` includes that row's contribution.
         let cum_local: AB::Expr = local[IS_AGENT_CUMULATIVE_COL].into();
         let cum_next: AB::Expr = next[IS_AGENT_CUMULATIVE_COL].into();
+        let is_agent_next: AB::Expr = next[PI_BUFFER_BASE + inner_pi::IS_AGENT_CELL].into();
         builder
             .when_transition()
-            .assert_zero(cum_next - (cum_local.clone() + is_agent.clone()));
+            .assert_zero(cum_next - (cum_local.clone() + is_agent_next));
 
-        // n_cells_active transition.
+        // n_cells_active transition (symmetric: seed at row 0 to ind[0], add
+        // ind_next on each transition).
         let n_local: AB::Expr = local[N_CELLS_ACTIVE_COL].into();
         let n_next: AB::Expr = next[N_CELLS_ACTIVE_COL].into();
+        let ind_next: AB::Expr = next[CONSISTENT_INDICATOR_COL].into();
         builder
             .when_transition()
-            .assert_zero(n_next - (n_local.clone() + ind.clone()));
+            .assert_zero(n_next - (n_local.clone() + ind_next));
 
         // ---- Boundary: row-0 cumulative seeds to IS_AGENT_CELL[0] ----
         // and row-0 n_cells_active seeds to consistent_indicator[0].

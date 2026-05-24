@@ -9883,6 +9883,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "starbridge-identity"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "pyana-app-framework",
+ "pyana-credentials",
+ "pyana-types",
+ "serde",
+ "serde_json",
+ "token",
+]
+
+[[package]]
 name = "starbridge-nameservice"
 version = "0.1.0"
 dependencies = [

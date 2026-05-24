@@ -1,0 +1,26 @@
+[package]
+name = "starbridge-identity"
+version = "0.1.0"
+edition = "2024"
+description = "Starbridge userspace identity app — composes pyana-credentials for issuance, presentation, and verification of verifiable credentials."
+
+# Greenfield identity app composed on top of `pyana-credentials` (G31).
+# The original `apps/identity/` invented `Credential { ..., /* no signature */ }`
+# and 'verified: bool' as the verification surface — both correctly called
+# out as P0s in the apps audit. This starbridge-app uses the
+# `pyana-credentials` primitive (which wraps `bridge::present` correctly)
+# and exposes turn-builders for the credential lifecycle without
+# inventing new effect variants.
+
+[dependencies]
+pyana-credentials = { path = "../../pyana-credentials" }
+pyana-app-framework = { path = "../../app-framework" }
+pyana-types = { path = "../../types" }
+token = { path = "../../token", default-features = false, features = ["macaroon", "rand-deps"] }
+
+blake3 = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
