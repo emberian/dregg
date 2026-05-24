@@ -257,6 +257,13 @@ impl<T: CommitmentSchema> From<[u8; 32]> for Commitment4<T> {
     }
 }
 
+/// See `Commitment4`'s From<[u8; 32]> impl. Same trust-boundary semantics.
+impl<T: CommitmentSchema> From<[u8; 32]> for MerkleRoot<T> {
+    fn from(root: [u8; 32]) -> Self {
+        Self::from_blake3_root(root)
+    }
+}
+
 // =============================================================================
 // Accumulator (streaming hash-chain over a sequence of values)
 // =============================================================================
@@ -370,6 +377,13 @@ impl<T: CommitmentSchema> MerkleRoot<T> {
 
     pub fn from_parts(blake3_root: [u8; 32], poseidon2_root: [BabyBear; 4]) -> Self {
         Self { blake3_root, poseidon2_root, _phantom: PhantomData }
+    }
+
+    /// Trust-boundary conversion: lift a wire-side 32-byte BLAKE3 root to
+    /// a dual-form MerkleRoot by deriving its Poseidon2 form via the fixed
+    /// canonical_32_to_felts_4 bijection. Used by HTTP/gossip decoders.
+    pub fn from_blake3_root(root: [u8; 32]) -> Self {
+        Self::from_parts(root, canonical_32_to_felts_4(&root))
     }
 
     /// Build a dual-rooted Merkle tree from a list of 32-byte BLAKE3 leaves

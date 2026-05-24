@@ -202,8 +202,12 @@ async fn handle_commit(
     State(state): State<EndpointState>,
     Json(req): Json<CommitRequest>,
 ) -> Result<Json<CommitResponse>, (StatusCode, Json<crate::server::ErrorResponse>)> {
-    let commitment = parse_hex32(&req.commitment_hex)
+    let commitment_bytes = parse_hex32(&req.commitment_hex)
         .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "invalid commitment_hex"))?;
+    // Trust-boundary conversion: derive the typed Commitment4 (BLAKE3 +
+    // Poseidon2) from the wire-side 32-byte hash via the fixed
+    // canonical_32_to_felts_4 bijection (DESIGN-commitment-framework §4.1).
+    let commitment = commitment_bytes.into();
 
     let mut q = state.queue.lock().await;
     q.commit(commitment)
@@ -218,21 +222,24 @@ async fn handle_consume_public(
     State(state): State<EndpointState>,
     Json(req): Json<ConsumePublicRequest>,
 ) -> Result<Json<ConsumeResponse>, (StatusCode, Json<crate::server::ErrorResponse>)> {
-    let nullifier = parse_hex32(&req.nullifier_hex)
+    // Trust-boundary conversions: wire-side BLAKE3 32-byte hashes are
+    // lifted to dual-form typed commitments via canonical_32_to_felts_4
+    // (DESIGN-commitment-framework §4.1).
+    let nullifier_bytes = parse_hex32(&req.nullifier_hex)
         .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "invalid nullifier_hex"))?;
-    let commitment = parse_hex32(&req.commitment_hex)
+    let commitment_bytes = parse_hex32(&req.commitment_hex)
         .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "invalid commitment_hex"))?;
 
     let mut membership_proof = Vec::with_capacity(req.membership_proof.len());
     for s in &req.membership_proof {
         let h = parse_hex32(s)
             .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "invalid membership_proof entry"))?;
-        membership_proof.push(h);
+        membership_proof.push(h.into());
     }
 
     let proof = ConsumptionProof {
-        nullifier,
-        commitment,
+        nullifier: nullifier_bytes.into(),
+        commitment: commitment_bytes.into(),
         position: req.position,
         membership_proof,
     };
@@ -246,9 +253,9 @@ async fn handle_consume_private(
     State(state): State<EndpointState>,
     Json(req): Json<ConsumePrivateRequest>,
 ) -> Result<Json<ConsumeResponse>, (StatusCode, Json<crate::server::ErrorResponse>)> {
-    let nullifier = parse_hex32(&req.nullifier_hex)
+    let nullifier_bytes = parse_hex32(&req.nullifier_hex)
         .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "invalid nullifier_hex"))?;
-    let tree_root = parse_hex32(&req.tree_root_hex)
+    let tree_root_bytes = parse_hex32(&req.tree_root_hex)
         .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "invalid tree_root_hex"))?;
 
     // Decode the spending proof from hex.
@@ -262,9 +269,11 @@ async fn handle_consume_private(
             .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid spending_proof_hex"))?
     };
 
+    // Lift wire-side 32-byte hashes to typed dual-form via the bytes→felts
+    // bijection at this trust boundary.
     let proof = PrivateConsumptionProof {
-        nullifier,
-        tree_root,
+        nullifier: nullifier_bytes.into(),
+        tree_root: tree_root_bytes.into(),
         spending_proof,
     };
 
