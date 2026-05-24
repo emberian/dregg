@@ -204,10 +204,50 @@ fn build_derivation_proof() -> ProofStatement {
 }
 
 /// Effect VM Proof: proves a sequence of effects executed correctly.
+///
+/// # Post-Stage-3 shape (2026-05-24)
+///
+/// The Effect VM AIR now has 46 selectors (was 24), covering 22 new variants:
+/// RevokeCapability, EmitEvent, SetPermissions, SetVerificationKey,
+/// CreateSealPair, RefreshDelegation, RevokeDelegation, CreateCell,
+/// SpawnWithDelegation, BridgeCancel, ExerciseViaCapability, Introduce,
+/// PipelinedSend, CreateEscrow, BridgeLock, CreateCommittedEscrow,
+/// BridgeMint, BridgeFinalize, ReleaseEscrow, RefundEscrow,
+/// ReleaseCommittedEscrow, RefundCommittedEscrow.
+///
+/// Public input shape is UNCHANGED (still 5 inputs). The composition graph
+/// therefore needs no new edges — Stage 3 lives entirely "inside" the AIR.
+/// What DOES change is the assumption set:
+///
+/// - 17 of 22 are **passthrough**: AIR enforces full state passthrough
+///   (balance/fields/cap_root unchanged) and binds a variant-specific hash
+///   into `effects_hash`. ValidTransition + Conservation still hold trivially
+///   (delta = 0).
+///
+/// - 3 affect balance via real constraints (mirror NoteSpend/NoteCreate):
+///   * CreateEscrow — debit
+///   * BridgeLock — debit
+///   * BridgeMint — credit
+///   These are properly covered by the existing Conservation guarantee.
+///
+/// - 1 has a cap_root transition (RevokeCapability mirrors GrantCapability):
+///   ValidTransition covers it as a state transition. **Note:** the AIR does
+///   NOT enforce "this cap was previously granted" — like GrantCapability, it
+///   only enforces the Merkle-hash update is consistent. Capability honesty
+///   is a fold-chain / executor responsibility.
+///
+/// - 6 (CreateCommittedEscrow, BridgeFinalize, ReleaseEscrow, RefundEscrow,
+///   ReleaseCommittedEscrow, RefundCommittedEscrow) are passthrough in the
+///   AIR but represent **real off-trace balance movement**. The AIR proves
+///   state passthrough; the executor is trusted to reconcile the actual
+///   balance change (escrow/bridge ledgers live off-trace).
+///   This is a NEW trust requirement Stage 3 introduces.
 fn build_effect_vm_proof() -> ProofStatement {
     let mut proof = ProofStatement::new("EffectVmProof");
 
     // Public inputs (from effect_vm.rs: old_commitment, new_commitment, net_delta, effects_hash, etc.)
+    // NOTE: post-Stage-3 the public input layout is UNCHANGED. Only the
+    // internal selector count + per-row constraints changed.
     let old_commitment = proof.add_input("old_state_commitment", SemanticType::StateCommitment);
     let new_commitment = proof.add_input("new_state_commitment", SemanticType::StateCommitment);
     let _net_delta = proof.add_input("net_delta", SemanticType::NetDelta);
@@ -223,6 +263,17 @@ fn build_effect_vm_proof() -> ProofStatement {
         inputs_sum: InputRef::new(2),
         outputs_sum: InputRef::new(2),
     });
+    // Stage 3: every variant binds a variant-specific hash into effects_hash
+    // (event_hash, vk_hash, escrow_id, cap_slot_hash, etc.). This ensures
+    // the prover cannot equivocate about WHICH variants ran — the verifier
+    // can reconstruct the expected effects_hash from the claimed trace.
+    proof.add_guarantee(Property::Custom(
+        "EffectsHashBindingCompleteness: every effect row binds its \
+         variant-specific witness into effects_hash, so the verifier can \
+         detect any mismatch between the claimed effect sequence and the \
+         prover's actual trace (covers all 46 selectors post-Stage-3)"
+            .to_string(),
+    ));
 
     // Assumptions
     proof.add_assumption(Assumption::TrustedExecution {
@@ -231,6 +282,43 @@ fn build_effect_vm_proof() -> ProofStatement {
     proof.add_assumption(Assumption::AtomicExecution {
         effects_hash: effects_hash,
     });
+    // Stage 3 trust gap: 6 passthrough variants record off-trace balance
+    // movements (escrow / bridge ledgers). The AIR proves state passthrough
+    // — it does NOT prove the executor's escrow_root or bridge_ledger
+    // updates are consistent with the recorded escrow_id / nullifier hash.
+    proof.add_assumption(Assumption::Custom(
+        "OffTraceBalanceReconciliation: escrow/bridge passthrough variants \
+         (CreateCommittedEscrow, BridgeFinalize, Release/RefundEscrow, \
+         Release/RefundCommittedEscrow) bind escrow_id / receipt hashes \
+         into effects_hash but leave the actual balance reconciliation \
+         (e.g., releasing escrowed funds to the recipient) to the executor's \
+         off-trace bookkeeping. A malicious executor could replay or skip \
+         these reconciliations without the AIR detecting it."
+            .to_string(),
+    ));
+    // Stage 3 trust gap: CreateCommittedEscrow hides value in a Pedersen
+    // commitment. The AIR cannot enforce the debit amount without opening
+    // the commitment; range-proof + opening proof are external concerns.
+    proof.add_assumption(Assumption::Custom(
+        "CommittedValueRangeProof: CreateCommittedEscrow's value is hidden \
+         in a Pedersen commitment. The Effect VM AIR treats this variant as \
+         passthrough (cannot enforce a debit on a hidden value). A separate \
+         range-proof + Pedersen-opening proof is required outside the \
+         Effect VM scope to bind the commitment to a real balance debit."
+            .to_string(),
+    ));
+    // Stage 3 observation: RevokeCapability AIR enforces the Merkle update
+    // shape (new_root = hash(old_root, slot_hash)) but does NOT prove the
+    // revoked slot was previously present in the c-list. This mirrors
+    // GrantCapability's symmetric weakness — capability-set honesty depends
+    // on the executor maintaining a consistent c-list snapshot.
+    proof.add_assumption(Assumption::Custom(
+        "CapabilitySlotPresence: RevokeCapability (like GrantCapability) \
+         enforces the cap_root Merkle-hash update but does not prove the \
+         revoked slot was actually present in the old c-list. The executor \
+         is trusted to only emit revoke effects for currently-held slots."
+            .to_string(),
+    ));
 
     // Discharge 0: old state computed by executor
     proof.set_discharge(
@@ -251,6 +339,50 @@ fn build_effect_vm_proof() -> ProofStatement {
             rationale: "atomicity (all-or-nothing) of the effect sequence is enforced \
                         by the executor's journal-based rollback, not by the STARK proof. \
                         A malicious executor could apply partial effects."
+                .to_string(),
+        },
+    );
+    // Discharge 2: off-trace balance reconciliation (Stage 3)
+    proof.set_discharge(
+        2,
+        Discharge::RequiresTrust {
+            component: "cell executor + escrow/bridge ledger".to_string(),
+            rationale: "escrow_root and bridge_ledger live outside the VM trace; \
+                        the executor is trusted to honestly reconcile balance \
+                        movements that the AIR records only as passthrough + \
+                        escrow_id/receipt hash bindings. Mitigation: a separate \
+                        EscrowLedgerProof / BridgeLedgerProof would close this gap \
+                        by proving the off-trace ledger transitions are consistent \
+                        with the effects_hash bindings."
+                .to_string(),
+        },
+    );
+    // Discharge 3: committed value range proof (Stage 3)
+    proof.set_discharge(
+        3,
+        Discharge::RequiresTrust {
+            component: "external Pedersen range proof".to_string(),
+            rationale: "CreateCommittedEscrow's hidden value requires a separate \
+                        range proof + Pedersen opening to bind to a real debit; \
+                        the Effect VM AIR alone cannot enforce conservation for \
+                        commitment-hidden values. Until a CommittedValueProof is \
+                        added to the composition graph, conservation is \
+                        only enforced for the cleartext (cell balance) ledger, \
+                        not for committed-value escrow ledgers."
+                .to_string(),
+        },
+    );
+    // Discharge 4: capability slot presence (Stage 3, symmetric with pre-Stage-3 GrantCap)
+    proof.set_discharge(
+        4,
+        Discharge::RequiresTrust {
+            component: "cell executor (c-list snapshot)".to_string(),
+            rationale: "RevokeCapability binds slot_hash into the cap_root \
+                        Merkle update but does not prove slot membership in \
+                        the pre-state c-list. The executor must only emit \
+                        revoke effects for slots it actually holds; otherwise \
+                        cap_root drifts from the executor's c-list snapshot \
+                        and downstream membership checks become unsound."
                 .to_string(),
         },
     );
