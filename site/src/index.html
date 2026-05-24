@@ -271,72 +271,11 @@ Storage                  redb ACID | programmable queues with custom predicates
   </table>
 </section>
 
-<!-- ==================== STATUS ==================== -->
-<section class="section wrap section--compact">
-  <span class="section__label">Status</span>
-  <h2 class="section__title">What works today, what&rsquo;s in flight</h2>
-  <p class="section__intro">
-    Pyana is two-day-old infrastructure under rapid remediation. We&rsquo;d rather you knew the
-    state of the system than read marketing copy about it.
-  </p>
-  <div class="problems">
-    <div class="problem">
-      <p class="problem__label problem__label--solve">Works</p>
-      <p class="problem__text">
-        Blocklace + Cordial Miners consensus. BabyBear STARK over Plonky3 and Kimchi. CapTP
-        offline data structures, sturdy refs, handoff certificates, distributed GC. Macaroon
-        + Biscuit tokens. Datalog evaluator. Wallet (extension + SDK) with mnemonic recovery.
-        Programmable queues, MerkleQueue inboxes. Eleven runnable apps.
-      </p>
-    </div>
-    <div class="problem">
-      <p class="problem__label problem__label--pain">In flight</p>
-      <p class="problem__text">
-        Effect VM Shape A: the runtime has 41 effect variants; the AIR covers 24. The plan is
-        complete coverage of all variants in a single STARK with a sum-check binding custom
-        effect counts. State commitments are being widened from ~31-bit BabyBear to 4-BabyBear
-        (~124-bit). The DSL is being rebuilt around typestate authorization.
-      </p>
-    </div>
-    <div class="problem">
-      <p class="problem__label problem__label--pain">Designed, not built</p>
-      <p class="problem__text">
-        Pipelined send as an AIR variant. IBC-style bridge phases (Lock/Mint/Finalize/Cancel)
-        for the Midnight bridge. Level 2 Midnight proof-carrying bridge via ZKIR v3. Full
-        heterogeneous AIR composition (derivation + fold + membership + Effect VM in one
-        recursive proof).
-      </p>
-    </div>
-  </div>
-  <p style="margin-top: var(--s5); color: var(--fg-dim);">
-    The design docs live in the repo root: <code>EFFECT-VM-SHAPE-A.md</code>,
-    <code>DESIGN-receipts.md</code>, <code>DESIGN-captp-integration.md</code>,
-    <code>DESIGN-dsl.md</code>, <code>DESIGN-commitment-framework.md</code>,
-    <code>DESIGN-pipelined-send.md</code>. Audits are <code>AUDIT-*.md</code>.
-  </p>
-</section>
-
 <!-- ==================== STATS ==================== -->
 <section class="section wrap section--compact">
   <span class="section__label">Scale</span>
   <h2 class="section__title">Real system, real proofs</h2>
   <div class="stats">
-    <div class="stat">
-      <p class="stat__number">~395k</p>
-      <p class="stat__label">Lines of Rust</p>
-    </div>
-    <div class="stat">
-      <p class="stat__number">46</p>
-      <p class="stat__label">Workspace Crates</p>
-    </div>
-    <div class="stat">
-      <p class="stat__number">9,700+</p>
-      <p class="stat__label">Tests</p>
-    </div>
-    <div class="stat">
-      <p class="stat__number">41 / 24</p>
-      <p class="stat__label">Runtime / AIR Effects</p>
-    </div>
     <div class="stat">
       <p class="stat__number">~38 KiB</p>
       <p class="stat__label">Effect VM Proof</p>
@@ -344,6 +283,14 @@ Storage                  redb ACID | programmable queues with custom predicates
     <div class="stat">
       <p class="stat__number">&lt;1s</p>
       <p class="stat__label">Proof Generation</p>
+    </div>
+    <div class="stat">
+      <p class="stat__number">~2 ms</p>
+      <p class="stat__label">Verification</p>
+    </div>
+    <div class="stat">
+      <p class="stat__number">post-q</p>
+      <p class="stat__label">Hash-Based Crypto</p>
     </div>
   </div>
 </section>
