@@ -15,10 +15,12 @@ description = "Protocol-invariant property tests for pyana — generators + prop
 
 [dependencies]
 pyana-cell = { path = "../cell" }
+pyana-circuit = { path = "../circuit" }
 pyana-turn = { path = "../turn" }
 pyana-types = { path = "../types" }
 proptest = { workspace = true }
 blake3 = "1"
+postcard = { version = "1", features = ["alloc"] }
 serde = { workspace = true }
 ed25519-dalek = { version = "2", features = ["hazmat"] }
 

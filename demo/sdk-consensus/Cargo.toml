@@ -1,0 +1,24 @@
+[package]
+name = "pyana-sdk-consensus-demo"
+version.workspace = true
+edition.workspace = true
+description = "SDK-level end-to-end demo that bypasses MCP: federation consensus, attested roots, CapTP wire, direct turn execution, and HandoffCertificate-based cross-cell capability transfer."
+
+[dependencies]
+pyana-sdk = { path = "../../sdk" }
+pyana-turn = { path = "../../turn" }
+pyana-cell = { path = "../../cell" }
+pyana-captp = { path = "../../captp" }
+pyana-wire = { path = "../../wire" }
+pyana-federation = { path = "../../federation" }
+pyana-types = { path = "../../types" }
+token = { path = "../../token", default-features = false, features = ["macaroon", "rand-deps"] }
+blake3 = "1"
+postcard = { version = "1", features = ["use-std"] }
+
+[[bin]]
+name = "pyana-sdk-consensus-demo"
+path = "src/main.rs"
+
+[lints]
+workspace = true

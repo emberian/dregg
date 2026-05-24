@@ -18,6 +18,7 @@
 
 pub mod balance_conservation;
 pub mod capability_attenuation;
+pub mod effect_vm_differential;
 pub mod facet_attenuation;
 pub mod nonce_monotonicity;
 pub mod permission_enforcement;

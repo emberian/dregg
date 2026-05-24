@@ -6853,6 +6853,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pyana-observability"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "pyana-cell",
+ "pyana-circuit",
+ "pyana-turn",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "pyana-orderbook"
 version = "0.1.0"
 dependencies = [
@@ -6953,8 +6965,10 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "ed25519-dalek",
+ "postcard",
  "proptest",
  "pyana-cell",
+ "pyana-circuit",
  "pyana-turn",
  "pyana-types",
  "serde",
@@ -6996,6 +7010,22 @@ dependencies = [
  "tokio",
  "tracing",
  "zeroize",
+]
+
+[[package]]
+name = "pyana-sdk-consensus-demo"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "postcard",
+ "pyana-captp",
+ "pyana-cell",
+ "pyana-federation",
+ "pyana-sdk",
+ "pyana-turn",
+ "pyana-types",
+ "pyana-wire",
+ "token",
 ]
 
 [[package]]
