@@ -141,6 +141,20 @@
 //!     pyana_turn::action::Authorization::Bearer(_)
 //! ));
 //! ```
+//!
+//! # Escape hatch (tests only)
+//!
+//! [`ActionBuilder::new_unchecked_for_tests`] is the **sole** path that
+//! produces `Authorization::Unchecked`. It is loudly named on purpose: any
+//! call site is grep-visible (`new_unchecked_for_tests`) and the resulting
+//! builder enters the [`UncheckedOptIn`] typestate — distinct from any of
+//! the four production modes above, so reviewers spot it immediately.
+//!
+//! The CI guard `scripts/no-unchecked-auth.sh` (P2.F) enforces that
+//! `Authorization::Unchecked` does **not** appear outside test code,
+//! `new_unchecked_for_tests` call sites, and the [`UncheckedOptIn`] marker
+//! variant itself. Production code paths in `app-framework/` and the apps
+//! must construct one of the four authorized variants above.
 
 use std::marker::PhantomData;
 
