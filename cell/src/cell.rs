@@ -47,12 +47,21 @@ impl VerificationKey {
 
 /// A Cell is an isolated agent execution context.
 /// This is the agent-model analog of a Mina zkApp account.
+///
+/// Audit P0-1 sealing: the identity-bearing fields `id`, `public_key`, and
+/// `token_id` are `pub(crate)` rather than `pub` — external code must use the
+/// accessors [`Cell::id`], [`Cell::public_key`], [`Cell::token_id`] for reads
+/// and go through `Ledger::update_with` for mutations. This preserves the
+/// content-address invariant `id == derive_raw(public_key, token_id)` (P2-3).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cell {
     /// Content-addressed identity: BLAKE3(public_key || token_id).
-    pub id: CellId,
-    /// The cell's public key (Ed25519).
-    pub public_key: [u8; 32],
+    ///
+    /// `pub(crate)`: external code must read via `Cell::id()` and cannot mutate
+    /// without going through `Ledger::update_with` (which re-checks integrity).
+    pub(crate) id: CellId,
+    /// The cell's public key (Ed25519). See `id` for sealing rationale.
+    pub(crate) public_key: [u8; 32],
     /// Mutable state: 8 fields + nonce + balance.
     pub state: CellState,
     /// Authorization requirements for each action type.
@@ -66,8 +75,8 @@ pub struct Cell {
     /// Used for snapshot+refresh E-style delegation. The child acts using this
     /// snapshot; acceptors check freshness via `max_staleness`.
     pub delegation: Option<DelegatedRef>,
-    /// Which token domain this cell belongs to.
-    pub token_id: [u8; 32],
+    /// Which token domain this cell belongs to. See `id` for sealing rationale.
+    pub(crate) token_id: [u8; 32],
     /// The c-list: what other cells this cell can reference.
     pub capabilities: CapabilitySet,
     /// The cell's program: defines valid state transitions.
@@ -231,60 +240,67 @@ impl Cell {
         }
     }
 
-    /// Compute the BLAKE3 commitment to this cell's current state.
+    /// Read accessor for the content-addressed cell ID. Sealed for P0-1.
     ///
-    /// This is the 32-byte value stored by the federation for sovereign cells.
-    /// It commits to the cell's identity, nonce, balance, fields, capabilities,
-    /// and permissions — everything needed to verify a state transition.
+    /// External code cannot mutate this field directly — the following must
+    /// not compile:
+    /// ```compile_fail
+    /// # use pyana_cell::Cell;
+    /// let mut cell = Cell::new([0u8; 32], [0u8; 32]);
+    /// cell.id = pyana_cell::CellId::derive_raw(&[1u8; 32], &[2u8; 32]);
+    /// ```
+    #[inline]
+    pub fn id(&self) -> CellId {
+        self.id
+    }
+
+    /// Read accessor for the cell's Ed25519 public key. Sealed for P0-1.
+    ///
+    /// External code cannot mutate this field directly:
+    /// ```compile_fail
+    /// # use pyana_cell::Cell;
+    /// let mut cell = Cell::new([0u8; 32], [0u8; 32]);
+    /// cell.public_key = [1u8; 32];
+    /// ```
+    #[inline]
+    pub fn public_key(&self) -> &[u8; 32] {
+        &self.public_key
+    }
+
+    /// Read accessor for the cell's token-domain ID. Sealed for P0-1.
+    ///
+    /// External code cannot mutate this field directly:
+    /// ```compile_fail
+    /// # use pyana_cell::Cell;
+    /// let mut cell = Cell::new([0u8; 32], [0u8; 32]);
+    /// cell.token_id = [1u8; 32];
+    /// ```
+    #[inline]
+    pub fn token_id(&self) -> &[u8; 32] {
+        &self.token_id
+    }
+
+    /// Compute the canonical commitment to this cell's current state.
+    ///
+    /// This is a thin wrapper around
+    /// [`crate::commitment::compute_canonical_state_commitment`], the single
+    /// source of truth for "what bytes commit to this cell." `Ledger::hash_cell`
+    /// is also routed through the same function so the sovereign-witness check
+    /// (which uses `state_commitment`) and the federation Merkle leaf (which
+    /// uses `hash_cell`) agree byte-for-byte. See `cell/src/commitment.rs` for
+    /// the full hash shape and the audit context (P0-2).
     pub fn state_commitment(&self) -> [u8; 32] {
-        let mut hasher = blake3::Hasher::new_derive_key("pyana-cell-state-v1");
-        hasher.update(&self.id.0);
-        hasher.update(&self.public_key);
-        hasher.update(&self.token_id);
-        hasher.update(&self.state.nonce.to_le_bytes());
-        hasher.update(&self.state.balance.to_le_bytes());
-        for field in &self.state.fields {
-            hasher.update(field);
-        }
-        // Include capabilities count and content.
-        let cap_count = self.capabilities.len() as u64;
-        hasher.update(&cap_count.to_le_bytes());
-        for cap in self.capabilities.iter() {
-            hasher.update(cap.target.as_bytes());
-            hasher.update(&cap.slot.to_le_bytes());
-        }
-        // Include permissions.
-        let perm_fields = [
-            &self.permissions.send,
-            &self.permissions.receive,
-            &self.permissions.set_state,
-            &self.permissions.set_permissions,
-            &self.permissions.set_verification_key,
-            &self.permissions.increment_nonce,
-            &self.permissions.delegate,
-            &self.permissions.access,
-        ];
-        for perm in perm_fields {
-            let perm_byte = match perm {
-                crate::permissions::AuthRequired::None => 0u8,
-                crate::permissions::AuthRequired::Signature => 1u8,
-                crate::permissions::AuthRequired::Proof => 2u8,
-                crate::permissions::AuthRequired::Either => 3u8,
-                crate::permissions::AuthRequired::Impossible => 4u8,
-            };
-            hasher.update(&[perm_byte]);
-        }
-        // Include verification key hash if present.
-        match &self.verification_key {
-            Some(vk) => {
-                hasher.update(&[1u8]);
-                hasher.update(&vk.hash);
-            }
-            None => {
-                hasher.update(&[0u8]);
-            }
-        }
-        *hasher.finalize().as_bytes()
+        crate::commitment::compute_canonical_state_commitment(self)
+    }
+
+    /// Verify that `self.id` matches `derive_raw(public_key, token_id)`.
+    ///
+    /// Audit P2-3: the `id` field is content-addressed at construction but
+    /// nothing in the type system maintains the invariant after construction.
+    /// Authoritative call sites (sovereign-witness ingest, peer-exchange ingest,
+    /// post-deserialization) should call this and reject cells that fail.
+    pub fn verify_id_integrity(&self) -> bool {
+        self.id == CellId::derive_raw(&self.public_key, &self.token_id)
     }
 
     /// Create a child cell delegated to this cell.
@@ -309,7 +325,16 @@ impl Cell {
     ///
     /// The child inherits a point-in-time snapshot of the parent's c-list.
     /// The snapshot epoch and refresh timestamp are set by the caller.
-    pub fn spawn_child_with_delegation(
+    ///
+    /// Audit P1-5: This constructor produces a `DelegatedRef` with a
+    /// placeholder all-zero signature, which `verify_parent_signature` will
+    /// reject. To prevent external code from minting forged delegations by
+    /// calling this and then skipping verification, the function is now
+    /// `pub(crate)` — only the cell crate (and downstream callers that
+    /// re-export it deliberately) can invoke it. External orchestration
+    /// should go through a signature-required constructor or
+    /// `DelegatedRef::new` with a real signature.
+    pub(crate) fn spawn_child_with_delegation(
         &self,
         child_public_key: [u8; 32],
         child_token_id: [u8; 32],

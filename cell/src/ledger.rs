@@ -164,6 +164,8 @@ pub enum LedgerError {
     SovereignAlreadyExists(CellId),
     /// The cell is not sovereign.
     NotSovereign(CellId),
+    /// A ledger delta could not be applied (e.g. nonce overflow).
+    InvalidDelta(String),
 }
 
 impl core::fmt::Display for LedgerError {
@@ -213,6 +215,7 @@ impl core::fmt::Display for LedgerError {
             LedgerError::NotSovereign(id) => {
                 write!(f, "cell is not sovereign: {id}")
             }
+            LedgerError::InvalidDelta(msg) => write!(f, "invalid delta: {msg}"),
         }
     }
 }
@@ -307,12 +310,52 @@ impl Ledger {
     ///
     /// Marks the tree as dirty since the cell's state may change. The Merkle
     /// tree will be lazily rebuilt on the next call to `root()`.
+    ///
+    /// Audit P1-6: prefer [`Ledger::update_with`] — `get_mut` hands out a raw
+    /// `&mut Cell` and the caller can forget to maintain invariants (e.g. set
+    /// dirty before returning, re-derive `id` if pubkey changed). The closure
+    /// form scopes the mutation and runs an integrity check on exit.
     pub fn get_mut(&mut self, id: &CellId) -> Option<&mut Cell> {
         let result = self.cells.get_mut(id);
         if result.is_some() {
             self.dirty = true;
         }
         result
+    }
+
+    /// Apply a closure to a cell with automatic dirty-marking and identity-
+    /// integrity checking.
+    ///
+    /// This is the preferred mutation API over `get_mut` (audit P1-6). After
+    /// the closure runs, `verify_id_integrity` (P2-3) is asserted: if the
+    /// closure changed `public_key` or `token_id` without updating `id`, the
+    /// mutation is rejected and the cell is restored from a pre-mutation
+    /// snapshot. Returns `Ok(R)` with the closure's return value, or
+    /// `Err(LedgerError::InvalidDelta)` if integrity was broken.
+    ///
+    /// The cell is also restored on closure panic — callers that need to
+    /// mutate must not panic for control flow.
+    pub fn update_with<F, R>(&mut self, id: &CellId, f: F) -> Result<R, LedgerError>
+    where
+        F: FnOnce(&mut Cell) -> R,
+    {
+        // Snapshot for integrity rollback.
+        let snapshot = match self.cells.get(id) {
+            Some(c) => c.clone(),
+            None => return Err(LedgerError::CellNotFound(*id)),
+        };
+        let cell = self.cells.get_mut(id).expect("cell present");
+        let result = f(cell);
+        if !cell.verify_id_integrity() {
+            // Restore and reject.
+            *cell = snapshot;
+            return Err(LedgerError::InvalidDelta(format!(
+                "cell id integrity broken for {:?}: id must match derive_raw(public_key, token_id)",
+                id
+            )));
+        }
+        self.dirty = true;
+        Ok(result)
     }
 
     /// Number of cells in the ledger.
@@ -543,7 +586,14 @@ impl Ledger {
 
         // Nonce.
         if delta.nonce_increment {
-            cell.state.increment_nonce();
+            // Audit P2-2: checked_add returns false on overflow. Refuse to
+            // apply the delta rather than silently wrapping.
+            if !cell.state.increment_nonce() {
+                return Err(LedgerError::InvalidDelta(format!(
+                    "nonce overflow for cell {:?}",
+                    cell_id
+                )));
+            }
         }
 
         // Balance.
@@ -808,169 +858,22 @@ impl Ledger {
 
     /// Hash a cell for Merkle tree inclusion.
     ///
-    /// ALL security-relevant fields are included in the hash to ensure the Merkle
-    /// tree commits to the complete cell state. Omitting any field would allow an
-    /// attacker to present a valid Merkle proof for a cell with tampered fields.
+    /// Routes through `crate::commitment::compute_canonical_state_commitment`
+    /// — the single source of truth for "what bytes commit to this cell." This
+    /// closes audit P0-2 (three disjoint commitment schemes) and P2-4 (lossy
+    /// delegation snapshot hashing): the canonical function hashes ALL
+    /// security-relevant fields including full per-capability data inside
+    /// `delegation.snapshot`.
     fn hash_cell(cell: &Cell) -> [u8; 32] {
-        let mut hasher = blake3::Hasher::new_derive_key("pyana-cell:merkle-leaf v2");
+        crate::commitment::compute_canonical_state_commitment(cell)
+    }
 
-        // Identity fields
-        hasher.update(cell.id.as_bytes());
-        hasher.update(&cell.public_key);
-        hasher.update(&cell.token_id);
-
-        // Core state: nonce, balance, fields
-        hasher.update(&cell.state.nonce.to_le_bytes());
-        hasher.update(&cell.state.balance.to_le_bytes());
-        for field in &cell.state.fields {
-            hasher.update(field);
-        }
-
-        // Field visibility and commitments
-        for vis in &cell.state.field_visibility {
-            let vis_byte = match vis {
-                crate::state::FieldVisibility::Public => 0u8,
-                crate::state::FieldVisibility::Committed => 1u8,
-                crate::state::FieldVisibility::SelectivelyDisclosable => 2u8,
-            };
-            hasher.update(&[vis_byte]);
-        }
-        for commitment in &cell.state.commitments {
-            match commitment {
-                Some(hash) => {
-                    hasher.update(&[1u8]);
-                    hasher.update(hash);
-                }
-                None => {
-                    hasher.update(&[0u8]);
-                }
-            }
-        }
-
-        // proved_state flag
-        hasher.update(&[cell.state.proved_state as u8]);
-
-        // delegation_epoch
-        hasher.update(&cell.state.delegation_epoch.to_le_bytes());
-
-        // Permissions (hash each field's AuthRequired variant)
-        let perms = &cell.permissions;
-        let perm_fields = [
-            &perms.send,
-            &perms.receive,
-            &perms.set_state,
-            &perms.set_permissions,
-            &perms.set_verification_key,
-            &perms.increment_nonce,
-            &perms.delegate,
-            &perms.access,
-        ];
-        for perm in perm_fields {
-            let perm_byte = match perm {
-                crate::permissions::AuthRequired::None => 0u8,
-                crate::permissions::AuthRequired::Signature => 1u8,
-                crate::permissions::AuthRequired::Proof => 2u8,
-                crate::permissions::AuthRequired::Either => 3u8,
-                crate::permissions::AuthRequired::Impossible => 4u8,
-            };
-            hasher.update(&[perm_byte]);
-        }
-
-        // Capabilities (c-list)
-        // ALL security-relevant capability fields are included: target, slot,
-        // permissions, breadstuff, and expires_at. Omitting any field would allow
-        // two capabilities with different security properties to hash identically.
-        let cap_count = cell.capabilities.len() as u64;
-        hasher.update(&cap_count.to_le_bytes());
-        for cap in cell.capabilities.iter() {
-            hasher.update(cap.target.as_bytes());
-            hasher.update(&cap.slot.to_le_bytes());
-            let perm_byte = match &cap.permissions {
-                crate::permissions::AuthRequired::None => 0u8,
-                crate::permissions::AuthRequired::Signature => 1u8,
-                crate::permissions::AuthRequired::Proof => 2u8,
-                crate::permissions::AuthRequired::Either => 3u8,
-                crate::permissions::AuthRequired::Impossible => 4u8,
-            };
-            hasher.update(&[perm_byte]);
-            if let Some(ref bs) = cap.breadstuff {
-                hasher.update(&[1u8]);
-                hasher.update(bs);
-            } else {
-                hasher.update(&[0u8]);
-            }
-            match cap.expires_at {
-                Some(h) => {
-                    hasher.update(&[1u8]);
-                    hasher.update(&h.to_le_bytes());
-                }
-                None => {
-                    hasher.update(&[0u8]);
-                }
-            }
-        }
-
-        // Program
-        match &cell.program {
-            crate::program::CellProgram::None => {
-                hasher.update(&[0u8]);
-            }
-            crate::program::CellProgram::Predicate(constraints) => {
-                hasher.update(&[1u8]);
-                // Hash serialized constraints for determinism
-                let serialized = postcard::to_allocvec(constraints).unwrap_or_default();
-                hasher.update(&(serialized.len() as u64).to_le_bytes());
-                hasher.update(&serialized);
-            }
-            crate::program::CellProgram::Circuit { circuit_hash } => {
-                hasher.update(&[2u8]);
-                hasher.update(circuit_hash);
-            }
-        }
-
-        // Verification key
-        match &cell.verification_key {
-            Some(vk) => {
-                hasher.update(&[1u8]);
-                hasher.update(&vk.hash);
-            }
-            None => {
-                hasher.update(&[0u8]);
-            }
-        }
-
-        // Delegate
-        match &cell.delegate {
-            Some(delegate_id) => {
-                hasher.update(&[1u8]);
-                hasher.update(delegate_id.as_bytes());
-            }
-            None => {
-                hasher.update(&[0u8]);
-            }
-        }
-
-        // Delegation (snapshot+refresh)
-        match &cell.delegation {
-            Some(deleg) => {
-                hasher.update(&[1u8]);
-                hasher.update(deleg.source.as_bytes());
-                hasher.update(&deleg.delegation_epoch.to_le_bytes());
-                hasher.update(&deleg.refreshed_at.to_le_bytes());
-                hasher.update(&deleg.max_staleness.to_le_bytes());
-                let snap_count = deleg.snapshot.len() as u64;
-                hasher.update(&snap_count.to_le_bytes());
-                for cap in &deleg.snapshot {
-                    hasher.update(cap.target.as_bytes());
-                    hasher.update(&cap.slot.to_le_bytes());
-                }
-            }
-            None => {
-                hasher.update(&[0u8]);
-            }
-        }
-
-        *hasher.finalize().as_bytes()
+    /// Public wrapper for `hash_cell` used by tests that need to verify the
+    /// canonical commitment is identical between `Cell::state_commitment` and
+    /// `Ledger::hash_cell`. See `cell/src/commitment.rs::tests`.
+    #[doc(hidden)]
+    pub fn hash_cell_canonical(cell: &Cell) -> [u8; 32] {
+        Self::hash_cell(cell)
     }
 
     /// Hash a single state constraint into the hasher for deterministic program hashing.

@@ -87,11 +87,20 @@ pub fn is_facet_attenuation(parent_mask: EffectMask, child_mask: EffectMask) -> 
 
 /// Check whether a specific effect kind bit is permitted by a mask.
 ///
-/// If `mask` is `None` or `EFFECT_ALL`, all effects are permitted.
+/// If `mask` is `None`, the capability is unrestricted (all effects
+/// permitted). If `mask` is `Some(m)`, only effects whose bit is set in `m`
+/// are permitted.
+///
+/// Audit P2-1: previously, `Some(0)` (zero mask) was interpreted as
+/// "unrestricted" for backward compatibility. The intuitive reading is
+/// "deny all" — and an attacker who could construct a faceted capability
+/// with `allowed_effects: Some(0)` got an unrestricted capability that
+/// *looked* heavily faceted. Now `Some(0)` denies all effects. Callers that
+/// want "unrestricted" must use `None`.
 pub fn is_effect_permitted(mask: Option<EffectMask>, effect_bit: EffectMask) -> bool {
     match mask {
         None => true,
-        Some(0) => true, // zero mask = unrestricted (backward compat)
+        Some(0) => false, // zero mask = deny all (P2-1 fix)
         Some(m) => effect_bit & m != 0,
     }
 }

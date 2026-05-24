@@ -14,6 +14,7 @@ pub mod capability;
 #[cfg(feature = "crypto")]
 pub mod capability_proof;
 pub mod cell;
+pub mod commitment;
 pub mod delegation;
 pub mod derivation;
 pub mod facet;
@@ -51,6 +52,10 @@ pub use capability_proof::{
     CapabilityProofError, PeerEffect, VerificationContext, sign_capability_proof,
 };
 pub use cell::{Cell, CellConfig, CellMode, VerificationKey};
+pub use commitment::{
+    CANONICAL_CAP_ROOT_CONTEXT, CANONICAL_COMMITMENT_CONTEXT, canonical_to_babybear_pi,
+    compute_canonical_capability_root, compute_canonical_state_commitment,
+};
 pub use delegation::DelegatedRef;
 pub use derivation::{
     DerivationEdge, DerivationNode, DerivationRecord, DerivationTree, DerivationType,

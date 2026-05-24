@@ -32,6 +32,15 @@ impl Default for FieldVisibility {
 }
 
 /// The mutable state of an agent cell.
+///
+/// Audit P0-1 sealing: `nonce`, `balance`, `proved_state`, and
+/// `delegation_epoch` are `pub(crate)` — external code reads them via
+/// accessors ([`CellState::nonce`], [`CellState::balance`],
+/// [`CellState::proved_state`], [`CellState::delegation_epoch`]) and mutates
+/// them only through `apply_balance_change`, `increment_nonce`,
+/// `bump_delegation_epoch`, and `set_proved_state`. `fields[]`,
+/// `field_visibility[]`, and `commitments[]` remain public arrays because the
+/// executor mutates them by index in tight loops.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CellState {
     /// 8 user-defined state fields (like Mina's app_state).
@@ -41,19 +50,24 @@ pub struct CellState {
     /// Hash commitments for non-public fields (BLAKE3 hash of value || nonce).
     /// `None` for Public fields, `Some(hash)` for Committed/SelectivelyDisclosable.
     pub commitments: [Option<[u8; 32]>; STATE_SLOTS],
-    /// Monotonically increasing action counter.
-    pub nonce: u64,
-    /// Computron balance (execution budget).
-    pub balance: u64,
+    /// Monotonically increasing action counter. Sealed (P0-1); mutate via
+    /// `increment_nonce`, read via `nonce()`.
+    pub(crate) nonce: u64,
+    /// Computron balance (execution budget). Sealed (P0-1); mutate via
+    /// `apply_balance_change`, read via `balance()`.
+    pub(crate) balance: u64,
     /// Whether all 8 state fields were last set by a verified proof.
     /// Becomes `true` only when ALL 8 fields are set by a single proof-authorized action.
     /// Becomes `false` if any field is modified by a non-proof authorization.
-    pub proved_state: bool,
+    /// Sealed (P0-1); mutate via `set_proved_state`, read via `proved_state()`.
+    pub(crate) proved_state: bool,
     /// Delegation epoch counter. Parent cells bump this to signal their children
     /// should refresh their capability snapshots. Children whose snapshot epoch is
     /// behind the parent's current epoch are considered stale.
+    /// Sealed (P0-1); mutate via `bump_delegation_epoch`, read via
+    /// `delegation_epoch()`.
     #[serde(default)]
-    pub delegation_epoch: u64,
+    pub(crate) delegation_epoch: u64,
 }
 
 /// The public view of a field — either the actual value (if public) or its commitment hash.
@@ -66,6 +80,68 @@ pub enum PublicFieldView {
 }
 
 impl CellState {
+    /// Read accessor for `nonce`. Sealed for P0-1.
+    ///
+    /// External code cannot mutate this field directly:
+    /// ```compile_fail
+    /// # use pyana_cell::CellState;
+    /// let mut s = CellState::new(0);
+    /// s.nonce = 42;
+    /// ```
+    #[inline]
+    pub fn nonce(&self) -> u64 {
+        self.nonce
+    }
+
+    /// Read accessor for `balance`. Sealed for P0-1.
+    ///
+    /// External code cannot mutate this field directly:
+    /// ```compile_fail
+    /// # use pyana_cell::CellState;
+    /// let mut s = CellState::new(0);
+    /// s.balance = u64::MAX;
+    /// ```
+    #[inline]
+    pub fn balance(&self) -> u64 {
+        self.balance
+    }
+
+    /// Read accessor for `proved_state`. Sealed for P0-1.
+    ///
+    /// External code cannot mutate this field directly:
+    /// ```compile_fail
+    /// # use pyana_cell::CellState;
+    /// let mut s = CellState::new(0);
+    /// s.proved_state = true;
+    /// ```
+    #[inline]
+    pub fn proved_state(&self) -> bool {
+        self.proved_state
+    }
+
+    /// Read accessor for `delegation_epoch`. Sealed for P0-1.
+    ///
+    /// External code cannot mutate this field directly:
+    /// ```compile_fail
+    /// # use pyana_cell::CellState;
+    /// let mut s = CellState::new(0);
+    /// s.delegation_epoch = 7;
+    /// ```
+    #[inline]
+    pub fn delegation_epoch(&self) -> u64 {
+        self.delegation_epoch
+    }
+
+    /// Set the `proved_state` flag. Sealed-write accessor (P0-1).
+    ///
+    /// The executor calls this after applying a proof-authorized action: it
+    /// passes `true` only when all 8 fields were set by a single proof, and
+    /// `false` when any non-proof authorization touched the cell.
+    #[inline]
+    pub fn set_proved_state(&mut self, value: bool) {
+        self.proved_state = value;
+    }
+
     /// Create a fresh cell state with zero fields and the given balance.
     pub fn new(balance: u64) -> Self {
         CellState {
@@ -116,6 +192,15 @@ impl CellState {
 
     /// Get the public view of a field: returns the value if Public, or the
     /// commitment hash if Committed/SelectivelyDisclosable.
+    ///
+    /// Audit P1-2: previously, if the visibility was `Committed` or
+    /// `SelectivelyDisclosable` but the stored `commitments[index]` was `None`
+    /// (because `set_field` invalidated the stale hash), this function fell
+    /// through to `PublicFieldView::Revealed(self.fields[index])` and silently
+    /// leaked the supposedly-private value. We now return a sentinel
+    /// `PublicFieldView::Committed([0u8; 32])` instead — callers MUST treat
+    /// the zero-hash as "commitment is stale; ask the holder to re-commit
+    /// with `set_field_visibility`," not as a free plaintext disclosure.
     pub fn get_field_public(&self, index: usize) -> Option<PublicFieldView> {
         if index >= STATE_SLOTS {
             return None;
@@ -125,7 +210,10 @@ impl CellState {
             FieldVisibility::Committed | FieldVisibility::SelectivelyDisclosable => {
                 match self.commitments[index] {
                     Some(hash) => Some(PublicFieldView::Committed(hash)),
-                    None => Some(PublicFieldView::Revealed(self.fields[index])),
+                    // Stale commitment after `set_field`: refuse to reveal the
+                    // plaintext. Return the all-zero sentinel so the public
+                    // view is non-informative until the holder re-commits.
+                    None => Some(PublicFieldView::Committed([0u8; 32])),
                 }
             }
         }
@@ -154,9 +242,21 @@ impl CellState {
         }
     }
 
-    /// Increment the nonce by 1.
-    pub fn increment_nonce(&mut self) {
-        self.nonce = self.nonce.wrapping_add(1);
+    /// Increment the nonce by 1, returning `true` on success and `false` on
+    /// overflow.
+    ///
+    /// Audit P2-2: previously used `wrapping_add`, which would silently wrap
+    /// after 2^64 increments and re-enable replay of historical actions.
+    /// Callers must check the return value and refuse to proceed on `false`.
+    #[must_use = "nonce overflow must be handled; ignoring the return value re-introduces P2-2"]
+    pub fn increment_nonce(&mut self) -> bool {
+        match self.nonce.checked_add(1) {
+            Some(n) => {
+                self.nonce = n;
+                true
+            }
+            None => false,
+        }
     }
 
     /// Apply a balance change (positive or negative). Returns false on underflow.
@@ -181,8 +281,19 @@ impl CellState {
     }
 
     /// Bump the delegation epoch (signals children to refresh).
-    pub fn bump_delegation_epoch(&mut self) {
-        self.delegation_epoch = self.delegation_epoch.wrapping_add(1);
+    ///
+    /// Audit P2-2: previously used `wrapping_add`. Returns `false` on overflow;
+    /// in practice 2^64 epoch bumps is unreachable but a wrap would let stale
+    /// delegations regain freshness.
+    #[must_use = "delegation epoch overflow must be handled"]
+    pub fn bump_delegation_epoch(&mut self) -> bool {
+        match self.delegation_epoch.checked_add(1) {
+            Some(e) => {
+                self.delegation_epoch = e;
+                true
+            }
+            None => false,
+        }
     }
 }
 

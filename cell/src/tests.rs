@@ -123,9 +123,9 @@ fn cell_state_get_field_out_of_bounds() {
 fn cell_state_increment_nonce() {
     let mut state = CellState::new(0);
     assert_eq!(state.nonce, 0);
-    state.increment_nonce();
+    assert!(state.increment_nonce());
     assert_eq!(state.nonce, 1);
-    state.increment_nonce();
+    assert!(state.increment_nonce());
     assert_eq!(state.nonce, 2);
 }
 
@@ -1673,4 +1673,242 @@ fn test_visibility_transition_to_public_clears_commitment() {
         state.get_field_public(0).unwrap(),
         PublicFieldView::Revealed(field_from_u64(42))
     );
+}
+
+// ============================================================
+// Audit AUDIT-cell.md — adversarial tests (P0-1, P1-2, P1-5,
+// P1-6, P2-1, P2-2, P2-3)
+// ============================================================
+
+use crate::facet::{
+    EFFECT_TRANSFER, FACET_TRANSFER_ONLY, is_effect_permitted,
+};
+
+/// P0-1 adversarial: sealed `Cell` identity fields cannot be mutated
+/// from outside the cell crate.
+///
+/// Inside the crate (this test module) the `pub(crate)` fields ARE
+/// accessible — that's the point. The compile-fail check that external
+/// code cannot mutate them lives in
+/// `cell/tests/compile_fail_sealing.rs` and is exercised via the
+/// trybuild harness as a separate file.
+///
+/// Here we verify the **accessor** surface that external code is
+/// expected to use is read-only.
+#[test]
+fn p0_1_cell_accessors_are_read_only() {
+    let cell = Cell::new(test_key(1), test_token(1));
+
+    // Read accessors return values, not mutable references.
+    let _id: CellId = cell.id();
+    let _pk: &[u8; 32] = cell.public_key();
+    let _tok: &[u8; 32] = cell.token_id();
+
+    // No `set_id`/`set_public_key`/`set_token_id` method exists; identity
+    // is content-addressed and immutable after construction.
+}
+
+/// P0-1 adversarial: sealed `CellState` numeric fields are read-only
+/// from outside; mutations must go through the explicit mutator API.
+#[test]
+fn p0_1_cell_state_accessors_are_read_only() {
+    let state = CellState::new(100);
+    let _bal: u64 = state.balance();
+    let _nonce: u64 = state.nonce();
+    let _ps: bool = state.proved_state();
+    let _de: u64 = state.delegation_epoch();
+}
+
+/// P1-2 adversarial: writing a field via `set_field` no longer leaks
+/// the plaintext through `get_field_public`. Previously, if the
+/// visibility was `Committed`/`SelectivelyDisclosable` but the stored
+/// commitment had been invalidated by `set_field`, the function
+/// returned `PublicFieldView::Revealed(plaintext)`. Now it returns the
+/// non-informative zero-hash sentinel.
+#[test]
+fn p1_2_set_field_does_not_leak_committed_plaintext() {
+    let mut state = CellState::new(0);
+    let secret = field_from_u64(0xDEADBEEF);
+    state.set_field(3, secret);
+    state.set_field_visibility(3, FieldVisibility::Committed, 42);
+    // A holder later overwrites the field — the stale commitment is
+    // invalidated.
+    let new_secret = field_from_u64(0xCAFEBABE);
+    state.set_field(3, new_secret);
+
+    // The public view MUST NOT reveal `new_secret`.
+    let view = state.get_field_public(3).expect("index in range");
+    match view {
+        PublicFieldView::Revealed(_) => panic!(
+            "P1-2 regression: committed-field plaintext leaked after set_field"
+        ),
+        PublicFieldView::Committed(hash) => {
+            // Sentinel: all-zero hash signals "stale commitment, ask the
+            // holder to re-commit." Non-informative.
+            assert_eq!(hash, [0u8; 32]);
+        }
+    }
+}
+
+/// P1-5 adversarial: `Cell::spawn_child_with_delegation` is not
+/// callable from outside the cell crate (now `pub(crate)`).
+///
+/// Compile-time enforcement is the real win; here we just verify the
+/// in-crate path still works, since the executor needs to be able to
+/// reach it from the cell crate's downstream callers via a controlled
+/// adapter.
+#[test]
+fn p1_5_spawn_child_with_delegation_in_crate() {
+    let parent = Cell::new(test_key(1), test_token(1));
+    let child =
+        parent.spawn_child_with_delegation(test_key(2), test_token(2), 1, 100, 1000);
+    let delegation = child.delegation.expect("delegation present");
+    // The placeholder signature is all-zero — the audit's point is that
+    // such delegations must always run signature verification. Now that
+    // the function is `pub(crate)`, only the cell crate (and downstream
+    // re-exports it deliberately exposes) can produce them.
+    assert_eq!(delegation.parent_signature, [0u8; 64]);
+}
+
+/// P1-6 adversarial: `Ledger::update_with` rejects mutations that
+/// break the content-address invariant `id == derive_raw(pk, tok)`.
+///
+/// Without this guard, a closure could rewrite `public_key` while
+/// leaving `id` unchanged, leaving the cell at a HashMap key
+/// inconsistent with its content.
+#[test]
+fn p1_6_update_with_rejects_pubkey_drift() {
+    let mut ledger = Ledger::new();
+    let id = ledger.create_cell(test_key(1), test_token(1));
+
+    // Honest mutation: change a permission. Integrity preserved.
+    let ok = ledger.update_with(&id, |cell| {
+        cell.permissions = Permissions::default();
+    });
+    assert!(ok.is_ok());
+
+    // Adversarial mutation: rewrite the inner public_key field to point
+    // at a different key (via the `pub(crate)` access this test has).
+    // This breaks the content-address invariant and update_with must
+    // reject and restore.
+    let adversarial = ledger.update_with(&id, |cell| {
+        cell.public_key = test_key(99);
+    });
+    assert!(matches!(adversarial, Err(LedgerError::InvalidDelta(_))));
+
+    // The cell must have been restored to its pre-mutation state.
+    let restored = ledger.get(&id).expect("cell present");
+    assert_eq!(*restored.public_key(), test_key(1));
+    assert!(restored.verify_id_integrity());
+}
+
+/// P2-1 adversarial: `is_effect_permitted(Some(0), _)` now denies.
+/// Previously, `Some(0)` was a backward-compat alias for "unrestricted"
+/// — an attacker who got a faceted capability with `allowed_effects:
+/// Some(0)` had unrestricted access while appearing heavily faceted.
+#[test]
+fn p2_1_zero_mask_denies_all() {
+    // No mask = unrestricted.
+    assert!(is_effect_permitted(None, EFFECT_TRANSFER));
+    // Zero mask = deny all (new semantics).
+    assert!(!is_effect_permitted(Some(0), EFFECT_TRANSFER));
+    // Specific mask still works.
+    assert!(is_effect_permitted(Some(FACET_TRANSFER_ONLY), EFFECT_TRANSFER));
+}
+
+/// P2-2 adversarial: `increment_nonce` returns `false` at u64::MAX
+/// rather than wrapping. This prevents replay of historical actions
+/// after 2^64 increments.
+#[test]
+fn p2_2_increment_nonce_overflow_rejected() {
+    let mut state = CellState::new(0);
+    // Force the boundary condition via the pub(crate) field (in-crate).
+    state.nonce = u64::MAX;
+    assert!(!state.increment_nonce());
+    // Nonce must NOT have wrapped to zero.
+    assert_eq!(state.nonce(), u64::MAX);
+}
+
+/// P2-2 adversarial: `bump_delegation_epoch` also refuses to wrap.
+#[test]
+fn p2_2_bump_delegation_epoch_overflow_rejected() {
+    let mut state = CellState::new(0);
+    state.delegation_epoch = u64::MAX;
+    assert!(!state.bump_delegation_epoch());
+    assert_eq!(state.delegation_epoch(), u64::MAX);
+}
+
+/// P2-2 adversarial: ledger `apply_delta` returns `InvalidDelta` on
+/// nonce overflow rather than silently wrapping.
+#[test]
+fn p2_2_apply_delta_rejects_nonce_overflow() {
+    let mut ledger = Ledger::new();
+    let id = ledger.create_cell(test_key(1), test_token(1));
+    // Set nonce to the boundary in-crate.
+    ledger
+        .update_with(&id, |c| {
+            c.state.nonce = u64::MAX;
+        })
+        .unwrap();
+
+    let delta = LedgerDelta {
+        created: Vec::new(),
+        updated: vec![(
+            id,
+            CellStateDelta {
+                field_updates: Vec::new(),
+                nonce_increment: true,
+                balance_change: 0,
+                permission_changes: None,
+                capability_grants: Vec::new(),
+                capability_revocations: Vec::new(),
+            },
+        )],
+        computron_transfers: Vec::new(),
+    };
+
+    let result = ledger.apply_delta(&delta);
+    assert!(matches!(result, Err(LedgerError::InvalidDelta(_))));
+    // Nonce must not have wrapped.
+    assert_eq!(ledger.get(&id).unwrap().state.nonce(), u64::MAX);
+}
+
+/// P2-3 adversarial: a freshly-constructed cell satisfies
+/// `verify_id_integrity`, and breaking the invariant (only possible
+/// in-crate now) is detectable.
+#[test]
+fn p2_3_verify_id_integrity_catches_drift() {
+    let mut cell = Cell::new(test_key(1), test_token(1));
+    assert!(cell.verify_id_integrity());
+
+    // Drift the public_key in-crate (this is what external code can no
+    // longer do; we simulate the attack from inside).
+    cell.public_key = test_key(99);
+    assert!(
+        !cell.verify_id_integrity(),
+        "verify_id_integrity must detect public_key drift"
+    );
+}
+
+/// P0-2 cross-binding: the three commitment derivations all agree
+/// byte-for-byte after the canonical-commitment refactor.
+#[test]
+fn p0_2_three_commitments_agree() {
+    let cell = Cell::new(test_key(7), test_token(11));
+    let canonical = crate::commitment::compute_canonical_state_commitment(&cell);
+    let from_cell = cell.state_commitment();
+    let from_ledger = Ledger::hash_cell_canonical(&cell);
+    assert_eq!(canonical, from_cell);
+    assert_eq!(canonical, from_ledger);
+}
+
+/// P0-2 adversarial: changing `permissions` propagates into all three
+/// commitments (previously a circuit-side gap).
+#[test]
+fn p0_2_permission_change_propagates_to_state_commitment() {
+    let mut cell = Cell::new(test_key(7), test_token(11));
+    let before = cell.state_commitment();
+    cell.permissions = Permissions::zkapp();
+    let after = cell.state_commitment();
+    assert_ne!(before, after);
 }
