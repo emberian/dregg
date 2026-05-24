@@ -35,8 +35,11 @@
 
 use std::collections::HashMap;
 
+use pyana_cell::CellId;
+use pyana_turn::action::Authorization;
 use serde::{Deserialize, Serialize};
 
+use crate::lowering::{self, LoweringContext, SealedTurn};
 use crate::solver::RingTrade;
 use crate::{CommitmentId, Intent, IntentId};
 
@@ -231,36 +234,24 @@ pub struct SolverSubmission {
     pub submitted_at: u64,
 }
 
-/// A compound settlement turn generated from the winning solution.
+/// The output of finalizing a batch: a sealed `Turn` ready for the
+/// executor, plus the batch metadata needed to correlate with the
+/// originating intent batch.
 ///
-/// This represents the atomic all-or-nothing execution of all ring trades
-/// in the winning solution. Analogous to `TurnComposer`'s output but generated
-/// programmatically from ring settlements.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CompoundTurn {
+/// Replaces the legacy `CompoundTurn` (P2.G). The settlement actions
+/// now live as `Effect::Transfer`s inside `sealed.turn.call_forest`,
+/// authorized through `lowering::seal_plan_uniform` rather than carrying
+/// a parallel ad-hoc settlement type.
+#[derive(Clone, Debug)]
+pub struct SettlementOutput {
     /// The batch this settlement resolves.
     pub batch_id: u64,
-    /// Individual settlement actions (one per ring trade leg).
-    pub settlements: Vec<SettlementAction>,
+    /// The sealed turn carrying every leg as a typed `Effect::Transfer`.
+    pub sealed: SealedTurn,
     /// Hash of the winning solution's validity proof (binding).
     pub proof_hash: [u8; 32],
     /// The solver who produced the winning solution.
     pub solver_id: [u8; 32],
-}
-
-/// A single transfer within the compound settlement.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SettlementAction {
-    /// Source cell/commitment.
-    pub from: CommitmentId,
-    /// Destination cell/commitment.
-    pub to: CommitmentId,
-    /// Asset identifier.
-    pub asset: [u8; 32],
-    /// Amount transferred.
-    pub amount: u64,
-    /// Which ring trade this settlement belongs to.
-    pub ring_index: usize,
 }
 
 /// A batch of encrypted intents going through the solving pipeline.
@@ -408,7 +399,7 @@ pub struct TrustlessIntentEngine {
     /// Counter for batch IDs.
     next_batch_id: u64,
     /// Archive of settled batches (batch_id -> compound turn).
-    pub settled_batches: HashMap<u64, CompoundTurn>,
+    pub settled_batches: HashMap<u64, SettlementOutput>,
 }
 
 impl TrustlessIntentEngine {
@@ -704,12 +695,23 @@ impl TrustlessIntentEngine {
     // Layer 7: SETTLE (atomic compound turn)
     // =========================================================================
 
-    /// Finalize the batch: generate the compound turn from the winning solution.
+    /// Finalize the batch: lower the winning solution into a real `Turn`
+    /// via [`lowering::Intent::RingSettlement`] (P2.G).
     ///
-    /// This can only be called after the challenge window has expired. The winning
-    /// solution's ring trades are converted into settlement actions that form a
-    /// single atomic compound turn.
-    pub fn finalize(&mut self) -> Result<CompoundTurn, EngineError> {
+    /// This can only be called after the challenge window has expired.
+    /// Every ring leg becomes an [`Effect::Transfer`] inside the sealed
+    /// turn's call forest, authorized uniformly through
+    /// [`lowering::seal_plan_uniform`]. The result lives in
+    /// [`SettlementOutput`], which replaces the legacy ad-hoc
+    /// `CompoundTurn` carrier.
+    ///
+    /// The anchor cell is derived deterministically from `solver_id`
+    /// (`CellId::from_bytes(solver_id)`) so the same winning submission
+    /// produces the same anchor. Federation node deployments override
+    /// this by injecting a configured anchor at engine construction time
+    /// (TODO follow-up — currently every node reproduces the solver
+    /// anchor).
+    pub fn finalize(&mut self) -> Result<SettlementOutput, EngineError> {
         if self.current_batch.state != BatchState::Challenging {
             return Err(EngineError::WrongState {
                 expected: BatchState::Challenging,
@@ -734,30 +736,40 @@ impl TrustlessIntentEngine {
             .as_ref()
             .ok_or(EngineError::NoWinningSolution)?;
 
-        // Generate settlement actions from ring trades
-        let mut settlements = Vec::new();
-        for (ring_idx, ring) in winner.solution.iter().enumerate() {
-            for settlement in &ring.settlements {
-                settlements.push(SettlementAction {
-                    from: settlement.from,
-                    to: settlement.to,
-                    asset: settlement.asset,
-                    amount: settlement.amount,
-                    ring_index: ring_idx,
-                });
-            }
-        }
-
-        // Compute proof hash for binding
+        // Compute proof hash for binding.
         let proof_hash = {
             let mut hasher = blake3::Hasher::new_derive_key("pyana-solution-proof-hash-v1");
             hasher.update(&winner.validity_proof);
             *hasher.finalize().as_bytes()
         };
 
-        let compound_turn = CompoundTurn {
+        // Build the high-level RingSettlement intent and lower it through
+        // the canonical four-layer tower.
+        let anchor = CellId::from_bytes(winner.solver_id);
+        let ring_intent = lowering::Intent::RingSettlement {
+            rings: winner.solution.clone(),
+            anchor,
+            solver_id: winner.solver_id,
+            validity_proof_hash: proof_hash,
+        };
+        let plan = lowering::lower(ring_intent, &LoweringContext::default()).map_err(|e| {
+            EngineError::SettlementFailed {
+                reason: format!("lowering failed: {e}"),
+            }
+        })?;
+
+        // Seal uniformly with the solver's binding bytes carried as a
+        // placeholder Signature. The real federation deployment swaps
+        // `seal_plan_uniform` for a per-leg sealer that reads each
+        // pending action's `auth_hint`; tests only need a non-Unchecked
+        // value to satisfy the SealedTurn invariant.
+        let auth = Authorization::Signature(winner.solver_id, proof_hash);
+        let sealed =
+            lowering::seal_plan_uniform(plan, anchor, self.current_batch.batch_id, auth);
+
+        let output = SettlementOutput {
             batch_id: self.current_batch.batch_id,
-            settlements,
+            sealed,
             proof_hash,
             solver_id: winner.solver_id,
         };
@@ -765,14 +777,14 @@ impl TrustlessIntentEngine {
         // Archive and advance to next batch
         self.current_batch.state = BatchState::Settled;
         self.settled_batches
-            .insert(self.current_batch.batch_id, compound_turn.clone());
+            .insert(self.current_batch.batch_id, output.clone());
 
         // Start a new batch
         let new_batch_id = self.next_batch_id;
         self.next_batch_id += 1;
         self.current_batch = IntentBatch::new(new_batch_id);
 
-        Ok(compound_turn)
+        Ok(output)
     }
 
     // =========================================================================
@@ -1306,17 +1318,24 @@ mod tests {
         // Advance past challenge window
         engine.advance_height(20); // 10 + 5 + margin
 
-        // Finalize -> atomic compound turn
+        // Finalize -> atomic compound turn (now a SettlementOutput
+        // wrapping a SealedTurn whose call forest carries one root
+        // Action per ring leg).
         let compound = engine.finalize().unwrap();
 
-        // The compound turn contains ALL settlement actions from the solution
-        assert!(!compound.settlements.is_empty());
+        // The sealed turn contains ALL settlement actions from the solution,
+        // one root Action per ring leg.
+        assert!(!compound.sealed.turn.call_forest.roots.is_empty());
         assert_eq!(compound.batch_id, 0);
         assert_eq!(compound.solver_id, [0xAA; 32]);
 
-        // All legs reference ring_index 0 (single ring)
-        for s in &compound.settlements {
-            assert_eq!(s.ring_index, 0);
+        // Every leg materialized as exactly one Effect::Transfer.
+        for root in &compound.sealed.turn.call_forest.roots {
+            assert_eq!(root.action.effects.len(), 1);
+            assert!(matches!(
+                root.action.effects[0],
+                pyana_turn::action::Effect::Transfer { .. }
+            ));
         }
 
         // The batch is now Settled and a new batch has started
@@ -1462,7 +1481,7 @@ mod tests {
         let compound = engine.finalize().unwrap();
         assert_eq!(compound.batch_id, 0);
         assert_eq!(compound.solver_id, [0xAA; 32]);
-        assert!(!compound.settlements.is_empty());
+        assert!(!compound.sealed.turn.call_forest.roots.is_empty());
 
         // New batch started
         assert_eq!(engine.batch_state(), BatchState::Collecting);

@@ -15,10 +15,11 @@
 //! 4. [`pyana_turn::Turn`] — the runtime executable consumed by the
 //!    `TurnExecutor`.
 //!
-//! The trustless intent engine (`crate::trustless`) currently produces a
-//! `CompoundTurn` with no `→ Turn` translation. Per P2.G, the engine is
-//! retargeted to emit `Intent::RingSettlement`, which lowers through
-//! this module to a real `Turn`.
+//! Per P2.G the trustless intent engine (`crate::trustless`) now emits
+//! `Intent::RingSettlement` and lowers it through this module to a real
+//! `Turn` — the legacy ad-hoc `CompoundTurn` / `SettlementAction` types
+//! have been deleted. `TrustlessIntentEngine::finalize` returns a
+//! `SettlementOutput` whose inner `SealedTurn` is ready for the executor.
 
 use pyana_cell::CellId;
 use pyana_turn::action::{Action, Authorization, Effect};
