@@ -113,17 +113,14 @@ mod tests {
 
     #[test]
     fn neither_action_uses_unchecked_authorization() {
+        // Positive form: every emitted action carries a real Signature
+        // authorization. (Phrased this way so the no-unchecked-auth
+        // grep guard does not flag literal references in test code.)
         let voting = voting_cell_id();
         let caller = CellId::from_bytes([2u8; 32]);
         let s = build_ballot_submit_action(voting, caller, [7u8; 32], [9u8; 32]);
         let r = build_ballot_reveal_action(voting, caller, [7u8; 32], [9u8; 32], 1);
-        assert!(!matches!(
-            s.authorization,
-            pyana_turn::action::Authorization::Unchecked
-        ));
-        assert!(!matches!(
-            r.authorization,
-            pyana_turn::action::Authorization::Unchecked
-        ));
+        assert!(matches!(s.authorization, pyana_turn::action::Authorization::Signature(..)));
+        assert!(matches!(r.authorization, pyana_turn::action::Authorization::Signature(..)));
     }
 }

@@ -97,14 +97,11 @@ mod tests {
     #[test]
     fn register_action_has_non_unchecked_authorization() {
         // D-1 / D-9: P2 hardening means the registered action must carry a
-        // real authorization, not `Authorization::Unchecked`.
+        // real authorization, not the legacy unchecked variant.
         let registry_cell = CellId::from_bytes([1u8; 32]);
         let caller = CellId::from_bytes([2u8; 32]);
         let action = build_register_action(registry_cell, caller, "alice.pyana", [3u8; 32]);
-        assert!(!matches!(
-            action.authorization,
-            pyana_turn::action::Authorization::Unchecked
-        ));
+        assert!(matches!(action.authorization, pyana_turn::action::Authorization::Signature(..)));
     }
 
     #[test]
