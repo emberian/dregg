@@ -1,0 +1,23 @@
+[package]
+name = "pyana-observability"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Trace and proof inspection for pyana turn execution (seed crate for the browser explorer)"
+
+[dependencies]
+pyana-cell = { path = "../cell" }
+pyana-circuit = { path = "../circuit" }
+pyana-turn = { path = "../turn" }
+hex = "0.4"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[[bin]]
+name = "pyana-observability"
+path = "src/main.rs"
+
+[lints]
+workspace = true
