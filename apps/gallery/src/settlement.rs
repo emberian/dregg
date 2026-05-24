@@ -15,6 +15,7 @@
 
 use pyana_app_framework::{CellId, PyanaEngine};
 use pyana_turn::action::{Action, Authorization, CommitmentMode, DelegationMode, Effect, symbol};
+use pyana_turn::builder::ActionBuilder;
 use pyana_turn::forest::{CallForest, CallTree};
 use pyana_turn::turn::Turn;
 
@@ -69,46 +70,37 @@ impl AtomicSettlement {
     ///
     /// Returns the receipt hash on success.
     pub fn execute(&self, engine: &mut PyanaEngine) -> Result<[u8; 32], SettlementError> {
-        // Fragment 1: Release escrow (winner's funds → artist).
-        let payment_action = Action {
-            target: self.winner,
-            method: symbol("settle_payment"),
-            args: vec![],
-            authorization: Authorization::Unchecked,
-            preconditions: Default::default(),
-            effects: vec![
-                Effect::ReleaseEscrow {
-                    escrow_id: self.winner_escrow_id,
-                    proof: Some(self.artwork_id.to_vec()),
-                },
-                Effect::Transfer {
-                    from: self.winner,
-                    to: self.artist,
-                    amount: self.winning_bid,
-                },
-            ],
-            may_delegate: DelegationMode::None,
-            commitment_mode: CommitmentMode::Partial,
-            balance_change: Some(-(self.winning_bid as i64)),
-        };
+        // P2.D: balance_change is now derived from emitted effects by the
+        // typestate ActionBuilder, not declared by the caller. The prior
+        // code declared `Some(-winning_bid)` on the payment fragment and
+        // `Some(+winning_bid)` on the transfer fragment — the latter was
+        // wrong (the artist's actual delta is the 1-unit NFT outflow plus
+        // whatever cash they receive in the escrow release on their cell).
+        //
+        // Authorization is `UncheckedOptIn` for now because gallery settlement
+        // composes signed fragments via TurnComposer in production; this
+        // helper is exercised in tests with an unchecked path until the
+        // composer migration lands (follow-up).
+        let payment_action: Action = ActionBuilder::new_unchecked_for_tests(
+            self.winner,
+            "settle_payment",
+            self.winner,
+        )
+        .effect_release_escrow(self.winner_escrow_id, Some(self.artwork_id.to_vec()))
+        .effect_transfer(self.winner, self.artist, self.winning_bid)
+        .commitment_mode(CommitmentMode::Partial)
+        .delegation(DelegationMode::None)
+        .build();
 
-        // Fragment 2: Transfer ownership (artist → winner).
-        // Transfer the artwork ownership token from artist to winner.
-        let transfer_action = Action {
-            target: self.artist,
-            method: symbol("transfer_ownership"),
-            args: vec![],
-            authorization: Authorization::Unchecked,
-            preconditions: Default::default(),
-            effects: vec![Effect::Transfer {
-                from: self.artist,
-                to: self.winner,
-                amount: 1, // NFT: ownership token
-            }],
-            may_delegate: DelegationMode::Inherit,
-            commitment_mode: CommitmentMode::Partial,
-            balance_change: Some(self.winning_bid as i64),
-        };
+        let transfer_action: Action = ActionBuilder::new_unchecked_for_tests(
+            self.artist,
+            "transfer_ownership",
+            self.artist,
+        )
+        .effect_transfer(self.artist, self.winner, 1) // NFT: ownership token
+        .commitment_mode(CommitmentMode::Partial)
+        .delegation(DelegationMode::Inherit)
+        .build();
 
         // Compose into a single atomic turn.
         let composed_turn = Turn {
