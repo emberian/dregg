@@ -1651,9 +1651,18 @@ impl StarkAir for EffectVmAir {
             alpha_pow = alpha_pow * alpha;
         }
 
-        // -- CreateObligation: balance debit (locks stake) --
+        // -- CreateObligation: balance debit + cap_root extended --
+        // Stage 2 honesty: previously cap_root was constrained UNCHANGED,
+        // which meant the obligation wasn't actually committed to the
+        // cell's authority graph — slash/fulfill had no algebraic way to
+        // verify that this obligation existed or who the beneficiary was.
+        // Fix: cap_root advances to
+        //   new_cap_root == hash_2_to_1(old_cap_root, hash_2_to_1(obligation_id, beneficiary))
+        // The 2-of-2 nested hash binds both obligation identity AND the
+        // beneficiary so a later slash/fulfill must reference the same
+        // beneficiary that the create committed to.
+        //
         // param0 = stake_lo, param1 = stake_hi (unused for single-limb), param2 = obligation_id
-        // new_bal_lo = old_bal_lo - stake_lo (stake locked from balance)
         let stake_lo = p0;
         let c_co_bal = s_create_obligation * (new_bal_lo - old_bal_lo + stake_lo);
         combined = combined + alpha_pow * c_co_bal;
@@ -1661,8 +1670,12 @@ impl StarkAir for EffectVmAir {
         let c_co_hi = s_create_obligation * (new_bal_hi - old_bal_hi);
         combined = combined + alpha_pow * c_co_hi;
         alpha_pow = alpha_pow * alpha;
-        // CreateObligation: fields and cap unchanged.
-        let c_co_cap = s_create_obligation * (new_cap_root - old_cap_root);
+        // Cap_root advance: encodes obligation_id + beneficiary.
+        let obligation_id = local[PARAM_BASE + param::OBLIGATION_ID];
+        let obligation_beneficiary = local[PARAM_BASE + param::OBLIGATION_BENEFICIARY];
+        let obligation_leaf = hash_2_to_1(obligation_id, obligation_beneficiary);
+        let expected_co_cap = hash_2_to_1(old_cap_root, obligation_leaf);
+        let c_co_cap = s_create_obligation * (new_cap_root - expected_co_cap);
         combined = combined + alpha_pow * c_co_cap;
         alpha_pow = alpha_pow * alpha;
         for i in 0..8 {
@@ -3293,6 +3306,10 @@ pub fn generate_effect_vm_trace_ext(
 
                 new_state.balance = new_state.balance.saturating_sub(*stake_amount);
                 net_delta -= *stake_amount as i64;
+                // Stage 2: cap_root advances to bind both obligation_id and beneficiary.
+                let obligation_leaf = hash_2_to_1(*obligation_id, *beneficiary_hash);
+                new_state.capability_root =
+                    hash_2_to_1(new_state.capability_root, obligation_leaf);
                 new_state.nonce += 1;
             }
             Effect::FulfillObligation {
@@ -4645,6 +4662,14 @@ mod tests {
         expected_state.refresh_commitment();
 
         expected_state.balance -= 500; // CreateObligation locks stake
+        // Stage 2: CreateObligation advances cap_root with the
+        // obligation_id + beneficiary leaf.
+        {
+            let obligation_leaf =
+                hash_2_to_1(BabyBear::new(0xDEAD01), BabyBear::new(0xBEEF01));
+            expected_state.capability_root =
+                hash_2_to_1(expected_state.capability_root, obligation_leaf);
+        }
         expected_state.nonce += 1;
         expected_state.refresh_commitment();
 
@@ -7060,6 +7085,33 @@ mod tests {
             result.is_err(),
             "Stage 2: shifted acc chain must fail at either row-0 or last-row boundary. Got: {:?}",
             result
+        );
+    }
+
+    /// Stage 2 adversarial: CreateObligation binds beneficiary into cap_root.
+    /// Tampering the beneficiary witness so the cap_root advance no longer
+    /// matches the (obligation_id, beneficiary) pair must trigger the AIR.
+    #[test]
+    fn test_stage2_create_obligation_beneficiary_tamper_rejected() {
+        let state = CellState::new(5000, 0);
+        let effects = vec![Effect::CreateObligation {
+            stake_amount: 1000,
+            obligation_id: BabyBear::new(0x1234),
+            beneficiary_hash: BabyBear::new(0xBEEF),
+        }];
+        let (mut trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
+        // Tamper: change the OBLIGATION_BENEFICIARY param on row 0.
+        // The cap_root in state_after was computed with 0xBEEF; this
+        // tamper makes the constraint expect hash(0xCAFE) but the
+        // trace has hash(0xBEEF) — constraint fires.
+        trace[0][PARAM_BASE + param::OBLIGATION_BENEFICIARY] = BabyBear::new(0xCAFE);
+        let air = EffectVmAir::new(trace.len());
+        let alpha = BabyBear::new(7);
+        let c0 = air.eval_constraints(&trace[0], &trace[1 % trace.len()], &public_inputs, alpha);
+        assert_ne!(
+            c0,
+            BabyBear::ZERO,
+            "Stage 2: tampering CreateObligation beneficiary must violate cap_root binding",
         );
     }
 
