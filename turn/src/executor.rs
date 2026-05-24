@@ -2059,38 +2059,10 @@ impl TurnExecutor {
             }
         }
 
-        /// Stage 1 (D): emit a tagged "pending" custom-effect shim.
-        ///
-        /// The shim contributes to `effects_hash` (so the prover commits to
-        /// which runtime variant was intended) but does not exercise any
-        /// per-effect AIR arithmetic — the verifier accepts only if the cell
-        /// declares a custom-program VK; otherwise the proof rejects.
-        ///
-        /// Production builds (without `effect-vm-pending-shim`) emit a NoOp
-        /// instead, which an audit-conscious deployment can detect by
-        /// inspecting the trace; without the feature flag, sound proofs
-        /// cannot be constructed for these variants until Stages 3–6 add
-        /// proper AIRs.
-        #[allow(unused_variables)]
-        fn push_pending_shim(
-            vm_effects: &mut Vec<pyana_circuit::effect_vm::Effect>,
-            discriminant: u32,
-        ) {
-            #[cfg(feature = "effect-vm-pending-shim")]
-            {
-                use pyana_circuit::field::BabyBear;
-                let d = BabyBear::new(discriminant);
-                vm_effects.push(pyana_circuit::effect_vm::Effect::Custom {
-                    program_vk_hash: [d, BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO],
-                    proof_commitment: [d, BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO],
-                });
-            }
-            #[cfg(not(feature = "effect-vm-pending-shim"))]
-            {
-                let _ = discriminant;
-                vm_effects.push(pyana_circuit::effect_vm::Effect::NoOp);
-            }
-        }
+        // Stage 3 complete: push_pending_shim was the temporary scaffolding
+        // for the 22 variants without dedicated AIR coverage. All 22 now
+        // have real per-variant AIR variants, so the shim is removed.
+        // The `effect-vm-pending-shim` feature flag is no longer used.
 
         let mut vm_effects = Vec::new();
         for root in &turn.call_forest.roots {

@@ -4979,6 +4979,66 @@ mod tests {
         }
     }
 
+    /// Stage 3 finale check: a single trace mixing many of the new AIR
+    /// variants — passthrough, balance-debit, balance-credit, cap-root
+    /// transitions — composes and verifies end-to-end.
+    #[test]
+    fn test_stage3_multi_variant_compose() {
+        let state = make_initial_state(10_000);
+        let effects = vec![
+            // Cap-root transition variants:
+            Effect::GrantCapability { cap_entry: BabyBear::new(1) },
+            Effect::RevokeCapability { slot_hash: BabyBear::new(2) },
+            // Stateless side-effects (passthrough):
+            Effect::EmitEvent { event_hash: BabyBear::new(0xE1) },
+            Effect::SetPermissions { permissions_hash: BabyBear::new(0xE2) },
+            Effect::SetVerificationKey { vk_hash: BabyBear::new(0xE3) },
+            Effect::CreateSealPair { pair_hash: BabyBear::new(0xE4) },
+            Effect::RefreshDelegation,
+            Effect::RevokeDelegation { child_hash: BabyBear::new(0xE5) },
+            Effect::CreateCell { create_hash: BabyBear::new(0xE6) },
+            Effect::SpawnWithDelegation { spawn_hash: BabyBear::new(0xE7) },
+            Effect::BridgeCancel { nullifier_hash: BabyBear::new(0xE8) },
+            Effect::ExerciseViaCapability { exercise_hash: BabyBear::new(0xE9) },
+            Effect::Introduce { intro_hash: BabyBear::new(0xEA) },
+            Effect::PipelinedSend { send_hash: BabyBear::new(0xEB) },
+            Effect::BridgeFinalize { finalize_hash: BabyBear::new(0xEC) },
+            Effect::ReleaseEscrow { escrow_id_hash: BabyBear::new(0xED) },
+            Effect::RefundEscrow { escrow_id_hash: BabyBear::new(0xEE) },
+            Effect::CreateCommittedEscrow { commit_hash: BabyBear::new(0xEF) },
+            Effect::ReleaseCommittedEscrow { commit_hash: BabyBear::new(0xF0) },
+            Effect::RefundCommittedEscrow { commit_hash: BabyBear::new(0xF1) },
+            // Balance arithmetic:
+            Effect::CreateEscrow {
+                amount_lo: BabyBear::new(100),
+                escrow_hash: BabyBear::new(0xF2),
+            },
+            Effect::BridgeLock {
+                value_lo: BabyBear::new(50),
+                lock_hash: BabyBear::new(0xF3),
+            },
+            Effect::BridgeMint {
+                value_lo: BabyBear::new(200),
+                mint_hash: BabyBear::new(0xF4),
+            },
+        ];
+        let (trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
+        let air = EffectVmAir::new(trace.len());
+        let proof = prove(&air, &trace, &public_inputs);
+        let result = verify(&air, &proof, &public_inputs);
+        assert!(
+            result.is_ok(),
+            "Stage 3 multi-variant compose: proof should verify across {} effects: {:?}",
+            effects.len(),
+            result.err()
+        );
+
+        // Sanity: net delta should be -100 (CreateEscrow) - 50 (BridgeLock)
+        // + 200 (BridgeMint) = +50.
+        let delta = extract_net_delta(&public_inputs).unwrap();
+        assert_eq!(delta, 50, "net delta should be +50 (mint 200 - lock 50 - escrow 100)");
+    }
+
     #[test]
     fn test_balance_debit_variants_verify() {
         // CreateEscrow and BridgeLock both debit balance by amount_lo.
