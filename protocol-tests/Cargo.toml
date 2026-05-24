@@ -1,0 +1,25 @@
+[package]
+name = "pyana-protocol-tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Protocol-invariant property tests for pyana — generators + proptest harnesses."
+
+# This crate is a library of generators + invariants; the actual proptest
+# blocks live as `#[test]` functions inside `src/invariants/*` and are run
+# via the library's own `cargo test` target.
+
+[dependencies]
+pyana-cell = { path = "../cell" }
+pyana-turn = { path = "../turn" }
+pyana-types = { path = "../types" }
+proptest = { workspace = true }
+blake3 = "1"
+serde = { workspace = true }
+
+[lints]
+workspace = true
