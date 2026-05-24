@@ -67,6 +67,7 @@ pub mod exchange;
 pub mod fulfillment;
 pub mod generalized;
 pub mod gossip;
+pub mod lowering;
 pub mod matcher;
 pub mod partial_fill;
 pub mod pir;
