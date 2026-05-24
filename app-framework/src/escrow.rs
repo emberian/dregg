@@ -3,13 +3,26 @@
 //! Wraps the low-level `Effect::CreateEscrow`, `Effect::ReleaseEscrow`, and
 //! `Effect::RefundEscrow` into a managed workflow that submits turns to a
 //! `PyanaEngine`.
+//!
+//! # Authentication
+//!
+//! Every action this manager emits is authenticated through an
+//! [`Authorizer`](crate::authorizer::Authorizer) that the caller supplies at
+//! construction. Earlier versions of this module shipped every turn with
+//! `Authorization::Unchecked`, which the DSL audit (P0 #1) flagged as a
+//! structural authentication gap: any caller of `EscrowManager` was implicitly
+//! submitting unsigned turns. The current shape forces the caller to make an
+//! explicit choice (Ed25519 sign, capability token, bearer cap) and produces a
+//! loud error if the authorizer rejects.
 
 use pyana_cell::CellId;
 use pyana_sdk::embed::PyanaEngine;
-use pyana_turn::action::{Action, Authorization, CommitmentMode, DelegationMode, Effect, symbol};
+use pyana_turn::action::{Action, CommitmentMode, DelegationMode, Effect, Symbol, symbol};
 use pyana_turn::escrow::EscrowCondition;
 use pyana_turn::turn::Turn;
 use pyana_turn::{CallForest, CallTree};
+
+use crate::authorizer::{AuthContext, AuthError, Authorizer};
 
 /// Errors from escrow lifecycle operations.
 #[derive(Debug)]
@@ -23,6 +36,8 @@ pub enum EscrowError {
         timeout_height: u64,
         current_height: u64,
     },
+    /// The configured `Authorizer` declined to authorize the action.
+    AuthorizationFailed(AuthError),
 }
 
 impl std::fmt::Display for EscrowError {
@@ -37,11 +52,18 @@ impl std::fmt::Display for EscrowError {
                 f,
                 "escrow not expired: timeout at height {timeout_height}, current {current_height}"
             ),
+            Self::AuthorizationFailed(err) => write!(f, "authorization failed: {err}"),
         }
     }
 }
 
 impl std::error::Error for EscrowError {}
+
+impl From<AuthError> for EscrowError {
+    fn from(err: AuthError) -> Self {
+        EscrowError::AuthorizationFailed(err)
+    }
+}
 
 /// Manages escrow creation, release, and refund via a `PyanaEngine`.
 ///
@@ -49,11 +71,13 @@ impl std::error::Error for EscrowError {}
 ///
 /// ```ignore
 /// use pyana_app_framework::escrow::EscrowManager;
+/// use pyana_app_framework::authorizer::SignedAuthorizer;
 /// use pyana_sdk::embed::{PyanaEngine, EngineConfig};
 /// use pyana_turn::escrow::EscrowCondition;
 ///
 /// let mut engine = PyanaEngine::new(EngineConfig::for_testing());
-/// let mut mgr = EscrowManager::new(&mut engine);
+/// let authorizer = SignedAuthorizer::from_secret_bytes([7u8; 32]);
+/// let mut mgr = EscrowManager::new(&mut engine, Box::new(authorizer));
 ///
 /// let escrow_id = mgr.create_payment_escrow(
 ///     from_cell, to_cell, 1000,
@@ -63,12 +87,108 @@ impl std::error::Error for EscrowError {}
 /// ```
 pub struct EscrowManager<'a> {
     engine: &'a mut PyanaEngine,
+    authorizer: Box<dyn Authorizer>,
+}
+
+/// The parts of an `Action` that this manager needs to fill in before asking
+/// the authorizer to produce an `Authorization`. The `authorization` field of
+/// `Action` is intentionally absent here — it is set by the authorizer at
+/// `submit_action` time, never with a `Unchecked` placeholder.
+struct UnauthorizedAction {
+    target: CellId,
+    method: Symbol,
+    effects: Vec<Effect>,
 }
 
 impl<'a> EscrowManager<'a> {
     /// Create a new escrow manager wrapping an engine.
-    pub fn new(engine: &'a mut PyanaEngine) -> Self {
-        Self { engine }
+    ///
+    /// The `authorizer` is used to authenticate every turn this manager emits.
+    /// Callers must supply a real authorizer (typically a [`SignedAuthorizer`]
+    /// wrapping the caller's Ed25519 key). There is no `Unchecked` default:
+    /// the audit found that the previous default was an authentication gap.
+    ///
+    /// [`SignedAuthorizer`]: crate::authorizer::SignedAuthorizer
+    pub fn new(engine: &'a mut PyanaEngine, authorizer: Box<dyn Authorizer>) -> Self {
+        Self { engine, authorizer }
+    }
+
+    /// Build a fully-authorized `Action` from an `UnauthorizedAction` by running
+    /// it through this manager's `Authorizer`.
+    ///
+    /// The authorizer is given a probe `Action` to inspect; the probe carries a
+    /// zero-byte `Signature` placeholder solely so the `Authorization` enum has
+    /// a value (the signing-message computation deliberately does not hash the
+    /// `authorization` field — see `TurnExecutor::compute_signing_message`).
+    /// `Authorization::Unchecked` is intentionally not used as a placeholder so
+    /// that the framework's CI grep-guard against `Unchecked` in production
+    /// code remains effective.
+    fn authorize_action(
+        &self,
+        unsigned: UnauthorizedAction,
+        nonce: u64,
+    ) -> Result<Action, EscrowError> {
+        let federation_id = self.engine.executor().local_federation_id;
+        let placeholder_authorization =
+            pyana_turn::action::Authorization::Signature([0u8; 32], [0u8; 32]);
+        let probe = Action {
+            target: unsigned.target,
+            method: unsigned.method,
+            args: vec![],
+            authorization: placeholder_authorization,
+            preconditions: Default::default(),
+            effects: unsigned.effects,
+            may_delegate: DelegationMode::None,
+            commitment_mode: CommitmentMode::Full,
+            balance_change: None,
+        };
+        let ctx = AuthContext {
+            action: &probe,
+            federation_id,
+            forest_position: 0,
+            turn_nonce: nonce,
+        };
+        let authorization = self.authorizer.authorize(ctx)?;
+        let mut action = probe;
+        action.authorization = authorization;
+        Ok(action)
+    }
+
+    /// Submit a single-action turn after authorizing its action.
+    fn submit_unauthorized(
+        &mut self,
+        agent: CellId,
+        nonce: u64,
+        unsigned: UnauthorizedAction,
+        memo: String,
+    ) -> Result<(), EscrowError> {
+        let action = self.authorize_action(unsigned, nonce)?;
+
+        let turn = Turn {
+            agent,
+            nonce,
+            call_forest: CallForest {
+                roots: vec![CallTree::new(action)],
+                forest_hash: [0u8; 32],
+            },
+            fee: 0,
+            memo: Some(memo),
+            valid_until: None,
+            previous_receipt_hash: None,
+            depends_on: vec![],
+            conservation_proof: None,
+            sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
+            custom_program_proofs: None,
+        };
+
+        self.engine
+            .execute_turn(&turn)
+            .map_err(|e| EscrowError::TurnRejected(e.to_string()))?;
+
+        Ok(())
     }
 
     /// Create a payment escrow that locks `amount` from `from` for `to`.
@@ -88,12 +208,9 @@ impl<'a> EscrowManager<'a> {
         // Derive a deterministic escrow ID from parameters.
         let escrow_id = compute_escrow_id(&from, &to, amount, timeout);
 
-        let action = Action {
+        let unsigned = UnauthorizedAction {
             target: from,
             method: symbol("create_escrow"),
-            args: vec![],
-            authorization: Authorization::Unchecked,
-            preconditions: Default::default(),
             effects: vec![Effect::CreateEscrow {
                 cell: from,
                 recipient: to,
@@ -102,37 +219,10 @@ impl<'a> EscrowManager<'a> {
                 timeout_height: timeout,
                 escrow_id,
             }],
-            may_delegate: DelegationMode::None,
-            commitment_mode: CommitmentMode::Full,
-            balance_change: None,
         };
 
-        let turn = Turn {
-            agent: from,
-            nonce: timeout,
-            call_forest: CallForest {
-                roots: vec![CallTree::new(action)],
-                forest_hash: [0u8; 32],
-            },
-            fee: 0,
-            memo: Some(format!(
-                "create escrow: {amount} locked until height {timeout}"
-            )),
-            valid_until: None,
-            previous_receipt_hash: None,
-            depends_on: vec![],
-            conservation_proof: None,
-            sovereign_witnesses: std::collections::HashMap::new(),
-            execution_proof: None,
-            execution_proof_cell: None,
-            execution_proof_new_commitment: None,
-            custom_program_proofs: None,
-        };
-
-        self.engine
-            .execute_turn(&turn)
-            .map_err(|e| EscrowError::TurnRejected(e.to_string()))?;
-
+        let memo = format!("create escrow: {amount} locked until height {timeout}");
+        self.submit_unauthorized(from, timeout, unsigned, memo)?;
         Ok(escrow_id)
     }
 
@@ -148,46 +238,16 @@ impl<'a> EscrowManager<'a> {
         // the proof against the escrow condition, not the agent identity).
         let agent = CellId::from_bytes(escrow_id);
 
-        let action = Action {
+        let unsigned = UnauthorizedAction {
             target: agent,
             method: symbol("release_escrow"),
-            args: vec![],
-            authorization: Authorization::Unchecked,
-            preconditions: Default::default(),
             effects: vec![Effect::ReleaseEscrow {
                 escrow_id,
                 proof: Some(proof.to_vec()),
             }],
-            may_delegate: DelegationMode::None,
-            commitment_mode: CommitmentMode::Full,
-            balance_change: None,
         };
 
-        let turn = Turn {
-            agent,
-            nonce: 0,
-            call_forest: CallForest {
-                roots: vec![CallTree::new(action)],
-                forest_hash: [0u8; 32],
-            },
-            fee: 0,
-            memo: Some("release escrow with proof".to_string()),
-            valid_until: None,
-            previous_receipt_hash: None,
-            depends_on: vec![],
-            conservation_proof: None,
-            sovereign_witnesses: std::collections::HashMap::new(),
-            execution_proof: None,
-            execution_proof_cell: None,
-            execution_proof_new_commitment: None,
-            custom_program_proofs: None,
-        };
-
-        self.engine
-            .execute_turn(&turn)
-            .map_err(|e| EscrowError::TurnRejected(e.to_string()))?;
-
-        Ok(())
+        self.submit_unauthorized(agent, 0, unsigned, "release escrow with proof".to_string())
     }
 
     /// Refund an escrow after its timeout height has passed.
@@ -200,43 +260,14 @@ impl<'a> EscrowManager<'a> {
     ) -> Result<(), EscrowError> {
         let agent = CellId::from_bytes(escrow_id);
 
-        let action = Action {
+        let unsigned = UnauthorizedAction {
             target: agent,
             method: symbol("refund_escrow"),
-            args: vec![],
-            authorization: Authorization::Unchecked,
-            preconditions: Default::default(),
             effects: vec![Effect::RefundEscrow { escrow_id }],
-            may_delegate: DelegationMode::None,
-            commitment_mode: CommitmentMode::Full,
-            balance_change: None,
         };
 
-        let turn = Turn {
-            agent,
-            nonce: current_height,
-            call_forest: CallForest {
-                roots: vec![CallTree::new(action)],
-                forest_hash: [0u8; 32],
-            },
-            fee: 0,
-            memo: Some(format!("refund expired escrow at height {current_height}")),
-            valid_until: None,
-            previous_receipt_hash: None,
-            depends_on: vec![],
-            conservation_proof: None,
-            sovereign_witnesses: std::collections::HashMap::new(),
-            execution_proof: None,
-            execution_proof_cell: None,
-            execution_proof_new_commitment: None,
-            custom_program_proofs: None,
-        };
-
-        self.engine
-            .execute_turn(&turn)
-            .map_err(|e| EscrowError::TurnRejected(e.to_string()))?;
-
-        Ok(())
+        let memo = format!("refund expired escrow at height {current_height}");
+        self.submit_unauthorized(agent, current_height, unsigned, memo)
     }
 }
 

@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use tokio::sync::{Mutex, RwLock};
 
+use pyana_app_framework::authorizer::{Authorizer, SignedAuthorizer};
 use pyana_app_framework::escrow::EscrowManager;
 use pyana_app_framework::store::ContentStore;
 use pyana_app_framework::{EngineConfig, EscrowRecord, FulfillmentRegistry, PyanaEngine};
@@ -314,7 +315,7 @@ impl AppState {
     pub async fn release_escrow(&self, id: &[u8; 32], proof: &[u8]) -> bool {
         // Submit a real ReleaseEscrow turn via the engine.
         let mut engine = self.engine.lock().await;
-        let mut mgr = EscrowManager::new(&mut engine);
+        let mut mgr = EscrowManager::new(&mut engine, make_escrow_authorizer());
         let result = mgr.release_with_proof(*id, proof);
         drop(engine);
 
@@ -341,7 +342,7 @@ impl AppState {
     pub async fn refund_escrow(&self, id: &[u8; 32], current_height: u64) -> bool {
         // Submit a real RefundEscrow turn via the engine.
         let mut engine = self.engine.lock().await;
-        let mut mgr = EscrowManager::new(&mut engine);
+        let mut mgr = EscrowManager::new(&mut engine, make_escrow_authorizer());
         let result = mgr.refund_expired(*id, current_height);
         drop(engine);
 
@@ -397,4 +398,44 @@ impl AppState {
     pub async fn engine_read(&self) -> tokio::sync::MutexGuard<'_, PyanaEngine> {
         self.engine.lock().await
     }
+}
+
+/// Build the default `Authorizer` used by the compute-exchange's escrow turns.
+///
+/// Reads `PYANA_COMPUTE_ESCROW_KEY` (32-byte hex) from the environment when set;
+/// otherwise falls back to a deterministic dev-only key and emits a warning.
+/// Production deployments MUST set `PYANA_COMPUTE_ESCROW_KEY`.
+fn make_escrow_authorizer() -> Box<dyn Authorizer> {
+    let secret = match std::env::var("PYANA_COMPUTE_ESCROW_KEY") {
+        Ok(hex) => parse_hex_32(&hex).unwrap_or_else(|| {
+            eprintln!(
+                "WARNING: PYANA_COMPUTE_ESCROW_KEY is not valid 32-byte hex; using dev key"
+            );
+            dev_key_bytes()
+        }),
+        Err(_) => {
+            eprintln!(
+                "WARNING: PYANA_COMPUTE_ESCROW_KEY not set; using deterministic dev key. \
+                 DO NOT use this in production."
+            );
+            dev_key_bytes()
+        }
+    };
+    Box::new(SignedAuthorizer::from_secret_bytes(secret))
+}
+
+fn dev_key_bytes() -> [u8; 32] {
+    *blake3::hash(b"pyana-compute-exchange-dev-escrow-key-v1").as_bytes()
+}
+
+fn parse_hex_32(s: &str) -> Option<[u8; 32]> {
+    let s = s.trim().trim_start_matches("0x");
+    if s.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for i in 0..32 {
+        out[i] = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(out)
 }

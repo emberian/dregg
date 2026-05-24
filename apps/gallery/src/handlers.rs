@@ -13,6 +13,7 @@ use serde_json::json;
 use tracing::{info, warn};
 
 use pyana_app_framework::auth::AdminAuth;
+use pyana_app_framework::authorizer::{Authorizer, SignedAuthorizer};
 use pyana_app_framework::hex::hex_to_bytes32;
 use pyana_app_framework::{CellId, EscrowCondition};
 
@@ -382,7 +383,8 @@ pub async fn submit_bid(
     };
 
     let mut engine = state.engine.lock().await;
-    let mut mgr = pyana_app_framework::escrow::EscrowManager::new(&mut engine);
+    let mut mgr =
+        pyana_app_framework::escrow::EscrowManager::new(&mut engine, make_escrow_authorizer());
     let escrow_id = match mgr.create_payment_escrow(
         bidder,
         auction.artist,
@@ -739,4 +741,44 @@ async fn do_persist(state: &AppState) -> Result<String, String> {
 
     persist.save(&snapshot).map_err(|e| e.to_string())?;
     Ok(persist.path().display().to_string())
+}
+
+/// Build the default `Authorizer` used by the gallery's escrow turns.
+///
+/// Reads `PYANA_GALLERY_ESCROW_KEY` (32-byte hex) from the environment when set;
+/// otherwise falls back to a deterministic dev-only key and emits a warning.
+/// Production deployments MUST set `PYANA_GALLERY_ESCROW_KEY`.
+fn make_escrow_authorizer() -> Box<dyn Authorizer> {
+    let secret = match std::env::var("PYANA_GALLERY_ESCROW_KEY") {
+        Ok(hex) => parse_hex_32(&hex).unwrap_or_else(|| {
+            eprintln!(
+                "WARNING: PYANA_GALLERY_ESCROW_KEY is not valid 32-byte hex; using dev key"
+            );
+            dev_key_bytes()
+        }),
+        Err(_) => {
+            eprintln!(
+                "WARNING: PYANA_GALLERY_ESCROW_KEY not set; using deterministic dev key. \
+                 DO NOT use this in production."
+            );
+            dev_key_bytes()
+        }
+    };
+    Box::new(SignedAuthorizer::from_secret_bytes(secret))
+}
+
+fn dev_key_bytes() -> [u8; 32] {
+    *blake3::hash(b"pyana-gallery-dev-escrow-key-v1").as_bytes()
+}
+
+fn parse_hex_32(s: &str) -> Option<[u8; 32]> {
+    let s = s.trim().trim_start_matches("0x");
+    if s.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for i in 0..32 {
+        out[i] = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(out)
 }

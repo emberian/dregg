@@ -409,6 +409,7 @@ async fn create_bounty(
     let mut engine = state.engine.lock().await;
     let escrow_result = payment::create_escrow(
         &mut engine,
+        payment::make_default_authorizer(),
         issuer_cell,
         worker_placeholder,
         req.reward_amount,
@@ -709,7 +710,12 @@ async fn approve_bounty(
     let receipt_hash = match escrow {
         Some(ref esc) => {
             let mut engine = state.engine.lock().await;
-            match payment::release_reward(&mut engine, esc, &completion_proof_hash) {
+            match payment::release_reward(
+                &mut engine,
+                payment::make_default_authorizer(),
+                esc,
+                &completion_proof_hash,
+            ) {
                 Ok(escrow_id) => {
                     info!(bounty_id = %id, escrow_id = %bounty_id_hex(&escrow_id), "escrow released");
                     escrow_id
@@ -865,7 +871,12 @@ async fn expire_bounties(_auth: AdminAuth, State(state): State<AppState>) -> imp
 
         for bid in expired_ids {
             if let Some(esc) = escrows.remove(&bid) {
-                match payment::refund_escrow(&mut engine, &esc, current_height) {
+                match payment::refund_escrow(
+                    &mut engine,
+                    payment::make_default_authorizer(),
+                    &esc,
+                    current_height,
+                ) {
                     Ok(_) => info!(bounty_id = %bounty_id_hex(&bid), "escrow refunded"),
                     Err(e) => {
                         warn!(bounty_id = %bounty_id_hex(&bid), error = %e, "escrow refund failed")

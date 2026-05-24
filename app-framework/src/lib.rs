@@ -45,6 +45,7 @@
 //! a single dependency instead of reaching into `pyana-intent`, `pyana-turn`, etc.
 
 pub mod auth;
+pub mod authorizer;
 pub mod batch_executor;
 pub mod blinded_endpoint;
 pub mod captp_server;
@@ -89,6 +90,10 @@ pub use pyana_types::CellId;
 
 // Re-export server and auth types at crate root for ergonomics.
 pub use auth::{AdminAuth, AdminMode, AdminToken, HasAdminToken};
+pub use authorizer::{
+    AuthContext, AuthError, Authorizer, BearerAuthorizer, CapabilityAuthorizer,
+    RejectingAuthorizer, SignedAuthorizer,
+};
 pub use persistence::JsonPersistence;
 pub use server::{AppConfig, AppServer, ErrorResponse, api_error};
 
