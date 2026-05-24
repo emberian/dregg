@@ -207,6 +207,16 @@ pub struct NodeStateInner {
     /// privacy-preserving matching (body hidden until a fulfiller matches tokens).
     pub encrypted_intent_pool: HashMap<[u8; 32], pyana_intent::sse::EncryptedIntent>,
 
+    /// Trustless intent engine: the production-wired path for
+    /// threshold-encrypted intent submission, t-of-n decryption,
+    /// solver auction, challenge window, and atomic settlement.
+    ///
+    /// Replaces the unhardened `encrypted_intent_pool` for the federation-
+    /// keyed trustless flow. The SSE pool above remains the
+    /// single-recipient sealed-box pool (used by direct fulfiller match,
+    /// not the batched auction).
+    pub trustless_intent_engine: pyana_intent::trustless::TrustlessIntentEngine,
+
     /// Delay pool for timing decorrelation of fulfillment reveals.
     /// Items are accumulated and released in batches at fixed intervals to prevent
     /// timing correlation between intent matching and fulfillment publication.
@@ -453,6 +463,11 @@ impl NodeState {
                 revocation_accumulator: None,
                 note_tree: Poseidon2NoteTree::with_depth(16),
                 encrypted_intent_pool: HashMap::new(),
+                trustless_intent_engine: pyana_intent::trustless::TrustlessIntentEngine::new(
+                    // Defaults: 1-of-1 (solo); upgraded when threshold_key_share
+                    // is configured via the federation epoch ceremony.
+                    1, 1,
+                ),
                 delay_pool: pyana_intent::delay_pool::DelayPool::new(
                     pyana_intent::delay_pool::DelayPoolConfig::default(),
                 ),
@@ -530,6 +545,11 @@ impl NodeState {
                 revocation_accumulator: None,
                 note_tree: Poseidon2NoteTree::with_depth(16),
                 encrypted_intent_pool: HashMap::new(),
+                trustless_intent_engine: pyana_intent::trustless::TrustlessIntentEngine::new(
+                    // Defaults: 1-of-1 (solo); upgraded when threshold_key_share
+                    // is configured via the federation epoch ceremony.
+                    1, 1,
+                ),
                 delay_pool: pyana_intent::delay_pool::DelayPool::new(
                     pyana_intent::delay_pool::DelayPoolConfig::default(),
                 ),

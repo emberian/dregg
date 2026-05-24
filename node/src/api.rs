@@ -885,6 +885,15 @@ pub fn router(
         .route("/wallet/receipts", get(get_receipts))
         .route("/intents", get(get_intents).post(post_intent))
         .route("/intents/encrypted", post(post_encrypted_intent))
+        .route("/intents/trustless", post(post_trustless_intent))
+        .route(
+            "/intents/trustless/share",
+            post(post_trustless_decrypt_share),
+        )
+        .route(
+            "/intents/trustless/status",
+            get(get_trustless_engine_status),
+        )
         .route("/intents/fulfill", post(post_fulfill_intent))
         .route(
             "/turn/submit",
@@ -1605,6 +1614,85 @@ async fn post_encrypted_intent(
         intent_id: intent_id_hex,
         stored: true,
     }))
+}
+
+/// POST /intents/trustless — submit a threshold-encrypted intent into the
+/// trustless intent engine's current batch.
+///
+/// Unlike `/intents/encrypted` (single-recipient SSE sealed-box), this
+/// path routes through [`pyana_intent::trustless::TrustlessIntentEngine`]:
+/// validators collaboratively decrypt the batch via Shamir-over-GF(256)
+/// + ChaCha20-Poly1305, solvers compete with STARK validity proofs, and
+/// the winning solution settles atomically through the lowering tower.
+async fn post_trustless_intent(
+    State(state): State<NodeState>,
+    Json(encrypted): Json<pyana_intent::trustless::EncryptedIntent>,
+) -> Result<Json<EncryptedIntentSubmitResponse>, StatusCode> {
+    let content_id = encrypted.content_id();
+    let mut s = state.write().await;
+    s.trustless_intent_engine
+        .submit_encrypted(encrypted)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    Ok(Json(EncryptedIntentSubmitResponse {
+        intent_id: hex_encode(&content_id),
+        stored: true,
+    }))
+}
+
+/// POST /intents/trustless/share — contribute a decryption share for a
+/// ciphertext in the current batch. Once t-of-n shares are accumulated
+/// for every submitted ciphertext, the engine reconstructs plaintexts
+/// and advances to the Solving phase.
+async fn post_trustless_decrypt_share(
+    State(state): State<NodeState>,
+    Json(share): Json<pyana_intent::trustless::DecryptionShare>,
+) -> Result<Json<TrustlessEngineStatus>, StatusCode> {
+    let mut s = state.write().await;
+    s.trustless_intent_engine
+        .contribute_decrypt_share(share)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    Ok(Json(TrustlessEngineStatus::from_engine(
+        &s.trustless_intent_engine,
+    )))
+}
+
+/// GET /intents/trustless/status — current batch lifecycle state for
+/// the trustless intent engine.
+async fn get_trustless_engine_status(
+    State(state): State<NodeState>,
+) -> Json<TrustlessEngineStatus> {
+    let s = state.read().await;
+    Json(TrustlessEngineStatus::from_engine(
+        &s.trustless_intent_engine,
+    ))
+}
+
+/// Public-facing snapshot of the trustless engine state.
+#[derive(serde::Serialize)]
+struct TrustlessEngineStatus {
+    batch_id: u64,
+    batch_state: String,
+    intent_count: usize,
+    decrypt_share_count: usize,
+    decrypt_threshold: usize,
+    num_validators: usize,
+    winning_score: Option<f64>,
+    current_height: u64,
+}
+
+impl TrustlessEngineStatus {
+    fn from_engine(engine: &pyana_intent::trustless::TrustlessIntentEngine) -> Self {
+        Self {
+            batch_id: engine.current_batch.batch_id,
+            batch_state: format!("{:?}", engine.batch_state()),
+            intent_count: engine.intent_count(),
+            decrypt_share_count: engine.decrypt_share_count(),
+            decrypt_threshold: engine.decrypt_threshold,
+            num_validators: engine.num_validators,
+            winning_score: engine.winning_score(),
+            current_height: engine.current_height,
+        }
+    }
 }
 
 async fn get_intents(State(state): State<NodeState>) -> Json<Vec<IntentListEntry>> {
