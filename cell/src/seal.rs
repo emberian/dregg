@@ -282,9 +282,10 @@ impl SealPair {
     }
 
     fn serialize_capability(cap: &CapabilityRef) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(80);
-        // Version 2: includes expires_at field.
-        buf.push(2u8);
+        let mut buf = Vec::with_capacity(85);
+        // Version 3: includes allowed_effects facet mask.
+        // Version 2 added expires_at. Version 1 was the original layout.
+        buf.push(3u8);
         buf.extend_from_slice(cap.target.as_bytes());
         buf.extend_from_slice(&cap.slot.to_le_bytes());
         let perm_byte = match &cap.permissions {
@@ -311,6 +312,17 @@ impl SealPair {
                 buf.push(0);
             }
         }
+        // Version 3: allowed_effects facet mask. Authority-amplification
+        // hardening: sealing a faceted cap must round-trip the facet, not
+        // silently widen it back to "all effects" (which `None` means in
+        // CapabilitySet::has_access lookups).
+        match cap.allowed_effects {
+            Some(mask) => {
+                buf.push(1);
+                buf.extend_from_slice(&mask.to_le_bytes());
+            }
+            None => buf.push(0),
+        }
         buf
     }
 
@@ -321,13 +333,12 @@ impl SealPair {
             });
         }
 
-        // Check version byte. Version 2 includes expires_at.
-        // Version 1 (implicit): no version prefix, starts directly with target bytes.
-        let (version, payload) = if data[0] == 2 {
-            (2u8, &data[1..])
-        } else {
-            // Legacy format (version 1): no version prefix.
-            (1u8, data)
+        // Version dispatch. Version 3 adds `allowed_effects`; version 2
+        // added `expires_at`; version 1 (implicit) had neither.
+        let (version, payload) = match data[0] {
+            3 => (3u8, &data[1..]),
+            2 => (2u8, &data[1..]),
+            _ => (1u8, data),
         };
 
         if payload.len() < 38 {
@@ -376,10 +387,13 @@ impl SealPair {
             }
         };
 
-        // Parse expires_at (version 2 only).
+        // Parse expires_at (version 2+).
         let expires_at = if version >= 2 && offset < payload.len() {
             match payload[offset] {
-                0 => None,
+                0 => {
+                    offset += 1;
+                    None
+                }
                 1 => {
                     offset += 1;
                     if payload.len() < offset + 8 {
@@ -400,6 +414,7 @@ impl SealPair {
                         payload[offset + 6],
                         payload[offset + 7],
                     ]);
+                    offset += 8;
                     Some(h)
                 }
                 other => {
@@ -412,13 +427,51 @@ impl SealPair {
             None
         };
 
+        // Parse allowed_effects (version 3+). Silently absent in v1/v2
+        // payloads — those existed before the facet field was added.
+        let allowed_effects = if version >= 3 && offset < payload.len() {
+            match payload[offset] {
+                0 => {
+                    offset += 1;
+                    None
+                }
+                1 => {
+                    offset += 1;
+                    if payload.len() < offset + 4 {
+                        return Err(SealError::DeserializationFailed {
+                            reason: format!(
+                                "data too short for allowed_effects: {} bytes",
+                                payload.len()
+                            ),
+                        });
+                    }
+                    let mask = u32::from_le_bytes([
+                        payload[offset],
+                        payload[offset + 1],
+                        payload[offset + 2],
+                        payload[offset + 3],
+                    ]);
+                    offset += 4;
+                    Some(mask)
+                }
+                other => {
+                    return Err(SealError::DeserializationFailed {
+                        reason: format!("invalid allowed_effects discriminant: {other}"),
+                    });
+                }
+            }
+        } else {
+            None
+        };
+        let _ = offset; // silence dead-store warning at trailing parse
+
         Ok(CapabilityRef {
             target,
             slot,
             permissions,
             breadstuff,
             expires_at,
-            allowed_effects: None,
+            allowed_effects,
         })
     }
 
@@ -652,6 +705,61 @@ mod tests {
             Err(SealError::DecryptionFailed)
         ));
     }
+    /// Authority-amplification hardening: sealing a faceted capability and
+    /// unsealing it must preserve `allowed_effects`. Previously the v2
+    /// serialization format dropped this field, silently widening a
+    /// `FACET_TRANSFER_ONLY` cap back to "all effects" on round-trip.
+    #[test]
+    fn allowed_effects_round_trips_through_seal_unseal() {
+        use crate::facet::{EFFECT_EMIT_EVENT, EFFECT_TRANSFER};
+        let pair = test_seal_pair(20);
+        let target_bytes = {
+            let mut t = [0u8; 32];
+            t[0] = 0x42;
+            t
+        };
+        let cap = CapabilityRef {
+            target: CellId::from_bytes(target_bytes),
+            slot: 9,
+            permissions: AuthRequired::Signature,
+            breadstuff: None,
+            expires_at: Some(12345),
+            allowed_effects: Some(EFFECT_TRANSFER | EFFECT_EMIT_EVENT),
+        };
+        let sealed = pair.seal(&cap);
+        let unsealed = pair.unseal(&sealed).unwrap();
+        assert_eq!(
+            unsealed.allowed_effects,
+            Some(EFFECT_TRANSFER | EFFECT_EMIT_EVENT),
+            "allowed_effects must round-trip through seal/unseal"
+        );
+        assert_eq!(unsealed, cap, "full capability must round-trip");
+    }
+
+    /// Round-trip `allowed_effects = None` (unfaceted cap) — must remain
+    /// `None`, never accidentally become `Some(0)` or `Some(EFFECT_ALL)`.
+    #[test]
+    fn allowed_effects_none_round_trips() {
+        let pair = test_seal_pair(21);
+        let cap = make_test_cap(33);
+        assert_eq!(cap.allowed_effects, None);
+        let sealed = pair.seal(&cap);
+        let unsealed = pair.unseal(&sealed).unwrap();
+        assert_eq!(unsealed.allowed_effects, None);
+    }
+
+    /// Edge case: a `Some(0)` (deny-all facet, per P2-1) must round-trip
+    /// as `Some(0)`, not silently widen to `None`.
+    #[test]
+    fn allowed_effects_some_zero_round_trips_as_deny_all() {
+        let pair = test_seal_pair(22);
+        let mut cap = make_test_cap(44);
+        cap.allowed_effects = Some(0);
+        let sealed = pair.seal(&cap);
+        let unsealed = pair.unseal(&sealed).unwrap();
+        assert_eq!(unsealed.allowed_effects, Some(0));
+    }
+
     #[test]
     fn sealer_only_pair_can_seal_but_not_unseal() {
         let full = test_seal_pair(14);

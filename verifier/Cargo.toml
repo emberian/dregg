@@ -16,6 +16,12 @@ path = "src/main.rs"
 [dependencies]
 pyana-circuit = { path = "../circuit" }
 pyana-types = { path = "../types" }
+# Federation primitives (cross-fed bundle, FederationReceipt verify path).
+# `default-features = false` so we do NOT pull tokio / crossbeam-channel — the
+# verifier binary stays a non-async, no-runtime, ledger-free process.
+pyana-federation = { path = "../federation", default-features = false }
+pyana-turn = { path = "../turn" }
+pyana-captp = { path = "../captp" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 hex = "0.4"

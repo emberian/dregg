@@ -16,6 +16,7 @@
 
 use pyana_cell::{AuthRequired, Permissions};
 use pyana_turn::ProofVerifier;
+use pyana_turn::builder::ActionBuilder;
 
 // =============================================================================
 // Helpers
@@ -396,15 +397,15 @@ fn adversarial_cross_cell_unauthorized_access() {
     // --- Attack 1: Bob tries to modify Alice's cell without ANY capability ---
     let mut builder = TurnBuilder::new(bob_id, 0);
     builder.set_fee(1000);
-    {
-        let action = builder.action(alice_id, "steal");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new_unchecked_for_tests(alice_id, "steal", bob_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: alice_id,
             index: 0,
             value: *blake3::hash(b"hacked-by-bob").as_bytes(),
-        });
-    }
+        })
+        .build();
+    builder.add_action(action);
     let turn = builder.build();
     let result = executor.execute(&turn, &mut ledger);
     assert!(
@@ -436,15 +437,15 @@ fn adversarial_cross_cell_unauthorized_access() {
     // Bob tries to SetField (requires Proof auth on Alice's cell) without providing proof
     let mut builder2 = TurnBuilder::new(bob_id, bob_nonce_after_reject);
     builder2.set_fee(1000);
-    {
-        let action = builder2.action(alice_id, "write-attempt");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new_unchecked_for_tests(alice_id, "write-attempt", bob_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: alice_id,
             index: 0,
             value: *blake3::hash(b"bob-unauthorized-write").as_bytes(),
-        });
-    }
+        })
+        .build();
+    builder2.add_action(action);
     let turn2 = builder2.build();
     let result2 = executor.execute(&turn2, &mut ledger);
     assert!(
@@ -469,15 +470,15 @@ fn adversarial_cross_cell_unauthorized_access() {
 
     let mut builder3 = TurnBuilder::new(bob_id, bob_nonce_after_reject2);
     builder3.set_fee(1000);
-    {
-        let action = builder3.action(alice_id, "authorized-write");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new_unchecked_for_tests(alice_id, "authorized-write", bob_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: alice_id,
             index: 0,
             value: *blake3::hash(b"bob-authorized-write").as_bytes(),
-        });
-    }
+        })
+        .build();
+    builder3.add_action(action);
     let turn3 = builder3.build();
     let result3 = executor.execute(&turn3, &mut ledger);
     assert!(
@@ -579,15 +580,15 @@ fn adversarial_turn_replay() {
     // --- Step 1: Execute turn with nonce=0 -> SUCCESS ---
     let mut builder = TurnBuilder::new(agent_id, 0);
     builder.set_fee(1000);
-    {
-        let action = builder.action(target_id, "first");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new_unchecked_for_tests(target_id, "first", agent_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: target_id,
             index: 0,
             value: *blake3::hash(b"turn-zero").as_bytes(),
-        });
-    }
+        })
+        .build();
+    builder.add_action(action);
     let turn_0 = builder.build();
     let result = executor.execute(&turn_0, &mut ledger);
     assert!(result.is_committed(), "First turn (nonce=0) should commit");
@@ -612,15 +613,15 @@ fn adversarial_turn_replay() {
     // --- Step 3: Try nonce=5 (gap) -> REJECTED ---
     let mut builder_gap = TurnBuilder::new(agent_id, 5);
     builder_gap.set_fee(1000);
-    {
-        let action = builder_gap.action(target_id, "gap");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new_unchecked_for_tests(target_id, "gap", agent_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: target_id,
             index: 0,
             value: *blake3::hash(b"turn-gap").as_bytes(),
-        });
-    }
+        })
+        .build();
+    builder_gap.add_action(action);
     let turn_gap = builder_gap.build();
     let gap_result = executor.execute(&turn_gap, &mut ledger);
     assert!(
@@ -631,15 +632,15 @@ fn adversarial_turn_replay() {
     // --- Step 4: Execute nonce=1 -> SUCCESS (proves sequential enforcement) ---
     let mut builder_1 = TurnBuilder::new(agent_id, 1);
     builder_1.set_fee(1000);
-    {
-        let action = builder_1.action(target_id, "second");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new_unchecked_for_tests(target_id, "second", agent_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: target_id,
             index: 1,
             value: *blake3::hash(b"turn-one").as_bytes(),
-        });
-    }
+        })
+        .build();
+    builder_1.add_action(action);
     let turn_1 = builder_1.build();
     let result_1 = executor.execute(&turn_1, &mut ledger);
     assert!(
@@ -695,16 +696,16 @@ fn adversarial_conservation_violation() {
     // This violates excess conservation (excess must be zero at turn end).
     let mut builder = TurnBuilder::new(agent_id, agent_nonce);
     builder.set_fee(0);
-    {
-        let action = builder.action(target_id, "inflate");
-        action.delegation(DelegationMode::None);
-        action.balance_change(1000);
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new_unchecked_for_tests(target_id, "inflate", agent_id)
+        .delegation(DelegationMode::None)
+        .with_declared_excess(1000)
+        .effect(Effect::SetField {
             cell: target_id,
             index: 0,
             value: [0x01; 32],
-        });
-    }
+        })
+        .build();
+    builder.add_action(action);
     let turn = builder.build();
     let result = executor.execute(&turn, &mut ledger);
     assert!(
@@ -722,25 +723,29 @@ fn adversarial_conservation_violation() {
     builder2.set_fee(0);
     {
         // Withdraw 1000 from target
-        let action = builder2.action(target_id, "drain");
-        action.delegation(DelegationMode::None);
-        action.balance_change(-1000);
-        action.effect(Effect::SetField {
-            cell: target_id,
-            index: 0,
-            value: [0x02; 32],
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "drain", agent_id)
+            .delegation(DelegationMode::None)
+            .with_declared_excess(-1000)
+            .effect(Effect::SetField {
+                cell: target_id,
+                index: 0,
+                value: [0x02; 32],
+            })
+            .build();
+        builder2.add_action(action);
     }
     {
         // Deposit only 500 into target2 (doesn't match the 1000 withdrawn)
-        let action = builder2.action(target2_id, "partial");
-        action.delegation(DelegationMode::None);
-        action.balance_change(500);
-        action.effect(Effect::SetField {
-            cell: target2_id,
-            index: 0,
-            value: [0x03; 32],
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(target2_id, "partial", agent_id)
+            .delegation(DelegationMode::None)
+            .with_declared_excess(500)
+            .effect(Effect::SetField {
+                cell: target2_id,
+                index: 0,
+                value: [0x03; 32],
+            })
+            .build();
+        builder2.add_action(action);
     }
     let turn2 = builder2.build();
     let result2 = executor.execute(&turn2, &mut ledger);
@@ -755,25 +760,29 @@ fn adversarial_conservation_violation() {
     builder3.set_fee(0);
     {
         // Withdraw 1000 from target
-        let action = builder3.action(target_id, "send");
-        action.delegation(DelegationMode::None);
-        action.balance_change(-1000);
-        action.effect(Effect::SetField {
-            cell: target_id,
-            index: 0,
-            value: [0x04; 32],
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "send", agent_id)
+            .delegation(DelegationMode::None)
+            .with_declared_excess(-1000)
+            .effect(Effect::SetField {
+                cell: target_id,
+                index: 0,
+                value: [0x04; 32],
+            })
+            .build();
+        builder3.add_action(action);
     }
     {
         // Deposit exactly 1000 into target2
-        let action = builder3.action(target2_id, "recv");
-        action.delegation(DelegationMode::None);
-        action.balance_change(1000);
-        action.effect(Effect::SetField {
-            cell: target2_id,
-            index: 0,
-            value: [0x05; 32],
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(target2_id, "recv", agent_id)
+            .delegation(DelegationMode::None)
+            .with_declared_excess(1000)
+            .effect(Effect::SetField {
+                cell: target2_id,
+                index: 0,
+                value: [0x05; 32],
+            })
+            .build();
+        builder3.add_action(action);
     }
     let turn3 = builder3.build();
     let result3 = executor.execute(&turn3, &mut ledger);
@@ -840,16 +849,16 @@ fn adversarial_proof_wrong_statement() {
     // --- Step 2: Present the valid proof with CORRECT binding -> SUCCESS ---
     let mut builder = TurnBuilder::new(agent_id, 0);
     builder.set_fee(2000);
-    {
-        let action = builder.action(target_id, "read");
-        action.delegation(DelegationMode::None);
-        action.authorize_proof(valid_proof.clone(), "read", "target-resource");
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new(target_id, "read", agent_id)
+        .with_proof(valid_proof.clone(), "read", "target-resource")
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: target_id,
             index: 0,
             value: *blake3::hash(b"valid-proof-read").as_bytes(),
-        });
-    }
+        })
+        .build();
+    builder.add_action(action);
     let turn = builder.build();
     let result = executor.execute(&turn, &mut ledger);
     assert!(
@@ -861,16 +870,16 @@ fn adversarial_proof_wrong_statement() {
     // The attacker takes a valid proof for "read" and claims it's for "write"
     let mut builder2 = TurnBuilder::new(agent_id, 1);
     builder2.set_fee(2000);
-    {
-        let action = builder2.action(target_id, "write");
-        action.delegation(DelegationMode::None);
-        action.authorize_proof(valid_proof.clone(), "write", "target-resource");
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new(target_id, "write", agent_id)
+        .with_proof(valid_proof.clone(), "write", "target-resource")
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: target_id,
             index: 1,
             value: *blake3::hash(b"wrong-binding-write").as_bytes(),
-        });
-    }
+        })
+        .build();
+    builder2.add_action(action);
     let turn2 = builder2.build();
     let result2 = executor.execute(&turn2, &mut ledger);
     assert!(
@@ -882,16 +891,16 @@ fn adversarial_proof_wrong_statement() {
     let wrong_resource_proof = make_binding_proof("read", "other-resource", &vk_data);
     let mut builder3 = TurnBuilder::new(agent_id, 1);
     builder3.set_fee(2000);
-    {
-        let action = builder3.action(target_id, "read");
-        action.delegation(DelegationMode::None);
-        action.authorize_proof(wrong_resource_proof, "read", "target-resource");
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new(target_id, "read", agent_id)
+        .with_proof(wrong_resource_proof, "read", "target-resource")
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: target_id,
             index: 1,
             value: *blake3::hash(b"wrong-resource").as_bytes(),
-        });
-    }
+        })
+        .build();
+    builder3.add_action(action);
     let turn3 = builder3.build();
     let result3 = executor.execute(&turn3, &mut ledger);
     assert!(
@@ -902,16 +911,16 @@ fn adversarial_proof_wrong_statement() {
     // --- Step 5: Empty proof bytes -> REJECTED ---
     let mut builder4 = TurnBuilder::new(agent_id, 1);
     builder4.set_fee(2000);
-    {
-        let action = builder4.action(target_id, "read");
-        action.delegation(DelegationMode::None);
-        action.authorize_proof(vec![], "read", "target-resource");
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new(target_id, "read", agent_id)
+        .with_proof(vec![], "read", "target-resource")
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: target_id,
             index: 1,
             value: *blake3::hash(b"empty-proof").as_bytes(),
-        });
-    }
+        })
+        .build();
+    builder4.add_action(action);
     let turn4 = builder4.build();
     let result4 = executor.execute(&turn4, &mut ledger);
     assert!(result4.is_rejected(), "Empty proof bytes MUST be rejected");
@@ -921,16 +930,16 @@ fn adversarial_proof_wrong_statement() {
     let correct_proof = make_binding_proof("read", "target-resource", &vk_data);
     let mut builder5 = TurnBuilder::new(agent_id, 1);
     builder5.set_fee(2000);
-    {
-        let action = builder5.action(target_id, "read");
-        action.delegation(DelegationMode::None);
-        action.authorize_proof(correct_proof, "read", "target-resource");
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new(target_id, "read", agent_id)
+        .with_proof(correct_proof, "read", "target-resource")
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: target_id,
             index: 1,
             value: *blake3::hash(b"no-verifier").as_bytes(),
-        });
-    }
+        })
+        .build();
+    builder5.add_action(action);
     let turn5 = builder5.build();
     let result5 = executor_no_verifier.execute(&turn5, &mut ledger);
     assert!(
@@ -1043,15 +1052,15 @@ fn adversarial_transfer_no_value_creation() {
     let alice_nonce = ledger.get(&alice_id).unwrap().state.nonce;
     let mut builder = TurnBuilder::new(alice_id, alice_nonce);
     builder.set_fee(0);
-    {
-        let action = builder.action(alice_id, "overdraft");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::Transfer {
+    let action = ActionBuilder::new_unchecked_for_tests(alice_id, "overdraft", alice_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::Transfer {
             from: alice_id,
             to: bob_id,
             amount: 5000, // Alice only has 1000
-        });
-    }
+        })
+        .build();
+    builder.add_action(action);
     let turn = builder.build();
     let result = executor.execute(&turn, &mut ledger);
     assert!(
@@ -1071,15 +1080,15 @@ fn adversarial_transfer_no_value_creation() {
     let alice_nonce = ledger.get(&alice_id).unwrap().state.nonce;
     let mut builder2 = TurnBuilder::new(alice_id, alice_nonce);
     builder2.set_fee(0);
-    {
-        let action = builder2.action(alice_id, "send");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::Transfer {
+    let action = ActionBuilder::new_unchecked_for_tests(alice_id, "send", alice_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::Transfer {
             from: alice_id,
             to: bob_id,
             amount: 500,
-        });
-    }
+        })
+        .build();
+    builder2.add_action(action);
     let turn2 = builder2.build();
     let result2 = executor.execute(&turn2, &mut ledger);
     assert!(result2.is_committed(), "Valid transfer should succeed");

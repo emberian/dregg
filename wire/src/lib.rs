@@ -113,9 +113,9 @@ pub mod prelude {
         PROTOCOL_VERSION, PublicKey, Signature, ThresholdQC, WireMessage, error_codes,
     };
     pub use crate::server::{
-        CapTpState, ConnectionAuth, MinSizeVerifier, NonceCache, NoopVerifier, ParticipantSource,
-        PeerRole, ProofVerifier, RejectAllVerifier, SiloConfig, SiloServer, SiloState,
-        StarkVerifier, StaticParticipants, TlsConfig, VerificationMode, peer_auth_signing_message,
-        revocation_signing_message,
+        CapTpState, CapTpTurnDispatcher, ConnectionAuth, MinSizeVerifier, NonceCache, NoopVerifier,
+        ParticipantSource, PeerRole, ProofVerifier, RejectAllVerifier, SiloConfig, SiloServer,
+        SiloState, StarkVerifier, StaticParticipants, TlsConfig, VerificationMode,
+        peer_auth_signing_message, revocation_signing_message,
     };
 }

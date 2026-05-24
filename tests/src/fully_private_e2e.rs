@@ -24,6 +24,7 @@ use pyana_circuit::BabyBear;
 use pyana_sdk::wallet::{AgentWallet, AuthorizationPresentation, VerificationMode};
 use pyana_sdk::verify::verify_authorization_proof;
 use pyana_token::{Attenuation, AuthRequest, AuthToken, MacaroonToken};
+use pyana_turn::builder::ActionBuilder;
 use pyana_turn::{
     ComputronCosts, DelegationMode, Effect, TurnBuilder, TurnExecutor, TurnResult,
 };
@@ -272,16 +273,16 @@ fn test_fully_private_end_to_end() {
     // The proof must be bound to this exact message for the executor to accept it.
     let mut turn_builder = TurnBuilder::new(agent_id, 0);
     turn_builder.set_fee(50000);
-    {
-        let action = turn_builder.action(target_id, "store");
-        action.delegation(DelegationMode::None);
-        action.authorize_proof(vec![0u8], "test_action", "test_resource"); // placeholder
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new(target_id, "store", agent_id)
+        .with_proof(vec![0u8], "test_action", "test_resource") // placeholder
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: target_id,
             index: 0,
             value: *blake3::hash(b"e2e-verified-state").as_bytes(),
-        });
-    }
+        })
+        .build();
+    turn_builder.add_action(action);
     let temp_turn = turn_builder.build();
     let action_signing_msg =
         TurnExecutor::compute_signing_message(&temp_turn.call_forest.roots[0].action, &[0u8; 32]);
@@ -315,16 +316,16 @@ fn test_fully_private_end_to_end() {
     // Build the real turn with the properly-bound proof
     let mut turn_builder2 = TurnBuilder::new(agent_id, 0);
     turn_builder2.set_fee(50000);
-    {
-        let action = turn_builder2.action(target_id, "store");
-        action.delegation(DelegationMode::None);
-        action.authorize_proof(action_bound_proof_bytes.clone(), "test_action", "test_resource");
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new(target_id, "store", agent_id)
+        .with_proof(action_bound_proof_bytes.clone(), "test_action", "test_resource")
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: target_id,
             index: 0,
             value: *blake3::hash(b"e2e-verified-state").as_bytes(),
-        });
-    }
+        })
+        .build();
+    turn_builder2.add_action(action);
     let real_turn = turn_builder2.build();
 
     // Execute the turn -- should succeed with valid STARK proof
@@ -411,16 +412,16 @@ fn test_fully_private_end_to_end() {
 
     let mut bad_turn_builder = TurnBuilder::new(agent_id, 1); // nonce=1 since 0 was used
     bad_turn_builder.set_fee(50000);
-    {
-        let action = bad_turn_builder.action(target_id, "evil");
-        action.delegation(DelegationMode::None);
-        action.authorize_proof(tampered_action_proof, "test_action", "test_resource");
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new(target_id, "evil", agent_id)
+        .with_proof(tampered_action_proof, "test_action", "test_resource")
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: target_id,
             index: 1,
             value: [0xEE; 32],
-        });
-    }
+        })
+        .build();
+    bad_turn_builder.add_action(action);
     let bad_turn = bad_turn_builder.build();
     let bad_result = executor.execute(&bad_turn, &mut ledger);
     assert!(

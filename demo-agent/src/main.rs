@@ -22,6 +22,7 @@ use pyana_cell::{AuthRequired, CellId, Ledger, Permissions, VerificationKey, cel
 use pyana_circuit::BabyBear;
 use pyana_circuit::merkle_air::MerkleAir;
 use pyana_token::{Attenuation, AuthRequest, AuthToken, MacaroonToken};
+use pyana_turn::builder::ActionBuilder;
 use pyana_turn::{ComputronCosts, DelegationMode, Effect, TurnBuilder, TurnExecutor, TurnResult};
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -332,17 +333,19 @@ fn main() {
     turn_builder.set_fee(50000); // generous budget
 
     {
-        let action = turn_builder.action(target_id, "execute_computation");
-        action.delegation(DelegationMode::None);
-        // The proof bytes become the authorization
-        action.authorize_proof(proof_bytes.clone(), "execute_computation", "");
-        // The effect: write a result to the target cell's state
         let result_hash = *blake3::hash(b"computation_result:success:42").as_bytes();
-        action.effect(Effect::SetField {
-            cell: target_id,
-            index: 0,
-            value: result_hash,
-        });
+        let action = ActionBuilder::new(target_id, "execute_computation", agent_id)
+            // The proof bytes become the authorization
+            .with_proof(proof_bytes.clone(), "execute_computation", "")
+            .delegation(DelegationMode::None)
+            // The effect: write a result to the target cell's state
+            .effect(Effect::SetField {
+                cell: target_id,
+                index: 0,
+                value: result_hash,
+            })
+            .build();
+        turn_builder.add_action(action);
     }
 
     let turn = turn_builder.build();
@@ -417,14 +420,16 @@ fn main() {
     let mut bad_turn_builder = TurnBuilder::new(agent_id, 1); // nonce=1 after first turn
     bad_turn_builder.set_fee(50000);
     {
-        let action = bad_turn_builder.action(target_id, "evil_computation");
-        action.delegation(DelegationMode::None);
-        action.authorize_proof(bad_proof, "evil_computation", "");
-        action.effect(Effect::SetField {
-            cell: target_id,
-            index: 1,
-            value: *blake3::hash(b"evil_result").as_bytes(),
-        });
+        let action = ActionBuilder::new(target_id, "evil_computation", agent_id)
+            .with_proof(bad_proof, "evil_computation", "")
+            .delegation(DelegationMode::None)
+            .effect(Effect::SetField {
+                cell: target_id,
+                index: 1,
+                value: *blake3::hash(b"evil_result").as_bytes(),
+            })
+            .build();
+        bad_turn_builder.add_action(action);
     }
 
     let bad_turn = bad_turn_builder.build();

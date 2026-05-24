@@ -26,8 +26,8 @@
 //! dependencies on shared context are the bytes it reads from disk / stdin.
 
 use pyana_verifier::{
-    JsonRequest, ReplayEntry, VerifierOutput, exit_code, parse_public_inputs_json, replay_chain,
-    verify_effect_vm_proof,
+    CommitteeDescriptor, JsonRequest, ReplayEntry, VerifierOutput, exit_code,
+    parse_public_inputs_json, replay_chain, verify_cross_fed_bundle, verify_effect_vm_proof,
 };
 use std::{
     env,
@@ -41,6 +41,9 @@ fn main() {
     // Subcommand dispatch.
     if args.len() >= 2 && args[1] == "replay-chain" {
         run_replay_chain(&args[2..]);
+    }
+    if args.len() >= 2 && (args[1] == "verify-cross-fed-bundle" || args[1] == "cross-fed") {
+        run_verify_cross_fed_bundle(&args[2..]);
     }
 
     // Detect JSON-stdin mode: no args, or stdin is not a tty.
@@ -175,6 +178,117 @@ fn run_replay_chain(args: &[String]) -> ! {
     println!("{}", json);
 
     let code = if output.overall_verified {
+        exit_code::VERIFIED
+    } else {
+        exit_code::REJECTED
+    };
+    process::exit(code);
+}
+
+// ---------------------------------------------------------------------------
+// verify-cross-fed-bundle subcommand
+// ---------------------------------------------------------------------------
+
+/// `pyana-verifier verify-cross-fed-bundle --bundle <path> --known-issuer <path> --known-recipient <path>`
+///
+/// Reads a JSON-encoded `pyana_federation::CrossFedReceiptBundle` and two
+/// committee descriptors (issuing + receiving federation), runs the 8-step
+/// cross-federation verification from `SILVER-VISION-E2E-VERIFICATION.md`
+/// §1 Step 6, and prints a `CrossFedVerdict` JSON to stdout. Exit code
+/// matches the verdict (0 = overall_verified, 1 = at least one check
+/// failed, 2 = parse / IO error).
+fn run_verify_cross_fed_bundle(args: &[String]) -> ! {
+    let mut bundle_path: Option<String> = None;
+    let mut issuer_path: Option<String> = None;
+    let mut recipient_path: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--bundle" => {
+                i += 1;
+                bundle_path = args.get(i).cloned();
+            }
+            "--known-issuer" | "--known-F1" => {
+                i += 1;
+                issuer_path = args.get(i).cloned();
+            }
+            "--known-recipient" | "--known-F2" => {
+                i += 1;
+                recipient_path = args.get(i).cloned();
+            }
+            other => {
+                eprintln!("unknown flag: {other}");
+                eprintln!(
+                    "Usage: pyana-verifier verify-cross-fed-bundle --bundle <path> \
+                     --known-issuer <path> --known-recipient <path>"
+                );
+                process::exit(exit_code::ERROR);
+            }
+        }
+        i += 1;
+    }
+    let bundle_path = match bundle_path {
+        Some(p) => p,
+        None => {
+            eprintln!("--bundle is required");
+            process::exit(exit_code::ERROR);
+        }
+    };
+    let issuer_path = match issuer_path {
+        Some(p) => p,
+        None => {
+            eprintln!("--known-issuer is required");
+            process::exit(exit_code::ERROR);
+        }
+    };
+    let recipient_path = match recipient_path {
+        Some(p) => p,
+        None => {
+            eprintln!("--known-recipient is required");
+            process::exit(exit_code::ERROR);
+        }
+    };
+
+    let bundle_text = match std::fs::read_to_string(&bundle_path) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("cannot read bundle file {bundle_path}: {e}");
+            process::exit(exit_code::ERROR);
+        }
+    };
+    let bundle: pyana_federation::CrossFedReceiptBundle = match serde_json::from_str(&bundle_text) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("cannot parse bundle JSON ({bundle_path}): {e}");
+            process::exit(exit_code::ERROR);
+        }
+    };
+    let issuer: CommitteeDescriptor = match std::fs::read_to_string(&issuer_path).and_then(|t| {
+        serde_json::from_str(&t).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    }) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("cannot read issuer descriptor {issuer_path}: {e}");
+            process::exit(exit_code::ERROR);
+        }
+    };
+    let recipient: CommitteeDescriptor =
+        match std::fs::read_to_string(&recipient_path).and_then(|t| {
+            serde_json::from_str(&t).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        }) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("cannot read recipient descriptor {recipient_path}: {e}");
+                process::exit(exit_code::ERROR);
+            }
+        };
+
+    let verdict = verify_cross_fed_bundle(&bundle, &issuer, &recipient);
+    let json = serde_json::to_string_pretty(&verdict).unwrap_or_else(|_| {
+        r#"{"overall_verified":false,"summary":"serialisation error"}"#.to_string()
+    });
+    println!("{}", json);
+    let code = if verdict.overall_verified {
         exit_code::VERIFIED
     } else {
         exit_code::REJECTED

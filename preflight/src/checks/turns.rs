@@ -1,6 +1,7 @@
 //! Turn execution checks: transfer, set_field, grant, multi-effect, nonce, conservation.
 
 use pyana_cell::{AuthRequired, CapabilityRef, Cell, Ledger, Permissions};
+use pyana_turn::builder::ActionBuilder;
 use pyana_turn::{
     BudgetGate, BudgetSlice, ComputronCosts, DelegationMode, Effect, TurnBuilder, TurnExecutor,
     TurnResult,
@@ -62,15 +63,15 @@ fn check_transfer() -> Result<(), String> {
     let executor = TurnExecutor::new(ComputronCosts::zero());
     let mut tb = TurnBuilder::new(alice_id, 0);
     tb.set_fee(100);
-    {
-        let action = tb.action(bob_id, "transfer");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::Transfer {
+    let action = ActionBuilder::new_unchecked_for_tests(bob_id, "transfer", alice_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::Transfer {
             from: alice_id,
             to: bob_id,
             amount: 200,
-        });
-    }
+        })
+        .build();
+    tb.add_action(action);
     let turn = tb.build();
     let result = executor.execute(&turn, &mut ledger);
     match result {
@@ -105,15 +106,15 @@ fn check_set_field() -> Result<(), String> {
     let executor = TurnExecutor::new(ComputronCosts::zero());
     let mut tb = TurnBuilder::new(cell_id, 0);
     tb.set_fee(100);
-    {
-        let action = tb.action(cell_id, "setfield");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new_unchecked_for_tests(cell_id, "setfield", cell_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: cell_id,
             index: 3,
             value: *blake3::hash(b"my-data").as_bytes(),
-        });
-    }
+        })
+        .build();
+    tb.add_action(action);
     let turn = tb.build();
     let result = executor.execute(&turn, &mut ledger);
     match result {
@@ -157,11 +158,10 @@ fn check_grant_capability() -> Result<(), String> {
     let executor = TurnExecutor::new(ComputronCosts::zero());
     let mut tb = TurnBuilder::new(granter_id, 0);
     tb.set_fee(100);
-    {
-        // Action targets granter's own cell (granting a capability to itself).
-        let action = tb.action(granter_id, "grant");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::GrantCapability {
+    // Action targets granter's own cell (granting a capability to itself).
+    let action = ActionBuilder::new_unchecked_for_tests(granter_id, "grant", granter_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::GrantCapability {
             from: granter_id,
             to: granter_id,
             cap: CapabilityRef {
@@ -172,8 +172,9 @@ fn check_grant_capability() -> Result<(), String> {
                 expires_at: None,
                 allowed_effects: None,
             },
-        });
-    }
+        })
+        .build();
+    tb.add_action(action);
     let turn = tb.build();
     let result = executor.execute(&turn, &mut ledger);
     match result {
@@ -218,26 +219,26 @@ fn check_multi_effect() -> Result<(), String> {
     let executor = TurnExecutor::new(ComputronCosts::zero());
     let mut tb = TurnBuilder::new(owner_id, 0);
     tb.set_fee(1000);
-    {
-        let action = tb.action(target_id, "multi");
-        action.delegation(DelegationMode::None);
-        // Multiple effects in one action
-        action.effect(Effect::Transfer {
+    // Multiple effects in one action
+    let action = ActionBuilder::new_unchecked_for_tests(target_id, "multi", owner_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::Transfer {
             from: owner_id,
             to: target_id,
             amount: 100,
-        });
-        action.effect(Effect::SetField {
+        })
+        .effect(Effect::SetField {
             cell: target_id,
             index: 0,
             value: *blake3::hash(b"multi-effect-1").as_bytes(),
-        });
-        action.effect(Effect::SetField {
+        })
+        .effect(Effect::SetField {
             cell: target_id,
             index: 1,
             value: *blake3::hash(b"multi-effect-2").as_bytes(),
-        });
-    }
+        })
+        .build();
+    tb.add_action(action);
     let turn = tb.build();
     let result = executor.execute(&turn, &mut ledger);
     match result {
@@ -280,11 +281,11 @@ fn check_nonce_increments() -> Result<(), String> {
     // Execute turn with nonce=0
     let mut tb = TurnBuilder::new(owner_id, 0);
     tb.set_fee(100);
-    {
-        let action = tb.action(owner_id, "noop");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::IncrementNonce { cell: owner_id });
-    }
+    let action = ActionBuilder::new_unchecked_for_tests(owner_id, "noop", owner_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::IncrementNonce { cell: owner_id })
+        .build();
+    tb.add_action(action);
     let turn = tb.build();
     let result = executor.execute(&turn, &mut ledger);
     if !matches!(result, TurnResult::Committed { .. }) {
@@ -330,15 +331,15 @@ fn check_conservation_law() -> Result<(), String> {
     // Attempt to transfer more than balance (should be rejected)
     let mut tb = TurnBuilder::new(alice_id, 0);
     tb.set_fee(100);
-    {
-        let action = tb.action(bob_id, "transfer");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::Transfer {
+    let action = ActionBuilder::new_unchecked_for_tests(bob_id, "transfer", alice_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::Transfer {
             from: alice_id,
             to: bob_id,
             amount: 100_000, // more than alice has
-        });
-    }
+        })
+        .build();
+    tb.add_action(action);
     let turn = tb.build();
     let result = executor.execute(&turn, &mut ledger);
     match result {
@@ -394,15 +395,15 @@ fn check_budget_gate() -> Result<(), String> {
     // Phase 1 always increments nonce by 1, so after turn 1 nonce = 1.
     let mut tb1 = TurnBuilder::new(owner_id, 0);
     tb1.set_fee(300);
-    {
-        let action = tb1.action(owner_id, "budget-test-1");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new_unchecked_for_tests(owner_id, "budget-test-1", owner_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: owner_id,
             index: 0,
             value: *blake3::hash(b"budget-1").as_bytes(),
-        });
-    }
+        })
+        .build();
+    tb1.add_action(action);
     let turn1 = tb1.build();
     let result1 = executor.execute(&turn1, &mut ledger);
     match result1 {
@@ -417,15 +418,15 @@ fn check_budget_gate() -> Result<(), String> {
     // Second turn with fee=300: should succeed (600 total == ceiling).
     let mut tb2 = TurnBuilder::new(owner_id, 1);
     tb2.set_fee(300);
-    {
-        let action = tb2.action(owner_id, "budget-test-2");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new_unchecked_for_tests(owner_id, "budget-test-2", owner_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: owner_id,
             index: 1,
             value: *blake3::hash(b"budget-2").as_bytes(),
-        });
-    }
+        })
+        .build();
+    tb2.add_action(action);
     let turn2 = tb2.build();
     let result2 = executor.execute(&turn2, &mut ledger);
     match result2 {
@@ -440,15 +441,15 @@ fn check_budget_gate() -> Result<(), String> {
     // Third turn with fee=300: should be REJECTED (900 > ceiling 600).
     let mut tb3 = TurnBuilder::new(owner_id, 2);
     tb3.set_fee(300);
-    {
-        let action = tb3.action(owner_id, "budget-test-3");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new_unchecked_for_tests(owner_id, "budget-test-3", owner_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: owner_id,
             index: 2,
             value: *blake3::hash(b"budget-3").as_bytes(),
-        });
-    }
+        })
+        .build();
+    tb3.add_action(action);
     let turn3 = tb3.build();
     let result3 = executor.execute(&turn3, &mut ledger);
     match result3 {

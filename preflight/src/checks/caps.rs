@@ -7,6 +7,7 @@ use pyana_cell::{
         is_facet_attenuation,
     },
 };
+use pyana_turn::builder::ActionBuilder;
 use pyana_turn::{ComputronCosts, DelegationMode, Effect, TurnBuilder, TurnExecutor, TurnResult};
 
 use crate::report::{CheckResult, run_check};
@@ -65,15 +66,15 @@ fn check_clist_grant_exercise() -> Result<(), String> {
     let executor = TurnExecutor::new(ComputronCosts::default_costs());
     let mut tb = TurnBuilder::new(owner_id, 0);
     tb.set_fee(1000);
-    {
-        let action = tb.action(target_id, "write");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new_unchecked_for_tests(target_id, "write", owner_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: target_id,
             index: 0,
             value: *blake3::hash(b"clist-exercise").as_bytes(),
-        });
-    }
+        })
+        .build();
+    tb.add_action(action);
     let turn = tb.build();
     let result = executor.execute(&turn, &mut ledger);
     match result {
@@ -178,14 +179,14 @@ fn check_revocation() -> Result<(), String> {
     let executor = TurnExecutor::new(ComputronCosts::default_costs());
     let mut tb = TurnBuilder::new(granter_id, 0);
     tb.set_fee(1000);
-    {
-        let action = tb.action(granter_id, "revoke");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::RevokeCapability {
+    let action = ActionBuilder::new_unchecked_for_tests(granter_id, "revoke", granter_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::RevokeCapability {
             cell: granter_id,
             slot: 0,
-        });
-    }
+        })
+        .build();
+    tb.add_action(action);
     let turn = tb.build();
     let result = executor.execute(&turn, &mut ledger);
     match result {
@@ -232,15 +233,15 @@ fn check_bearer_cap_through_executor() -> Result<(), String> {
     let executor = TurnExecutor::new(ComputronCosts::default_costs());
     let mut tb = TurnBuilder::new(sender_id, 0);
     tb.set_fee(1000);
-    {
-        let action = tb.action(target_id, "bearer-transfer");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::Transfer {
+    let action = ActionBuilder::new_unchecked_for_tests(target_id, "bearer-transfer", sender_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::Transfer {
             from: sender_id,
             to: target_id,
             amount: 500,
-        });
-    }
+        })
+        .build();
+    tb.add_action(action);
     let turn = tb.build();
     let result = executor.execute(&turn, &mut ledger);
     match result {
@@ -284,15 +285,15 @@ fn check_unauthorized_rejected() -> Result<(), String> {
     let executor = TurnExecutor::new(ComputronCosts::default_costs());
     let mut tb = TurnBuilder::new(attacker_id, 0);
     tb.set_fee(1000);
-    {
-        let action = tb.action(victim_id, "steal");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new_unchecked_for_tests(victim_id, "steal", attacker_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: victim_id,
             index: 0,
             value: *blake3::hash(b"hacked").as_bytes(),
-        });
-    }
+        })
+        .build();
+    tb.add_action(action);
     let turn = tb.build();
     let result = executor.execute(&turn, &mut ledger);
     match result {

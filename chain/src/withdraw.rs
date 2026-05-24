@@ -175,17 +175,45 @@ pub async fn generate_withdrawal_proof(
     }
 }
 
-/// Derive a nullifier from the nullifier key and note commitment.
+/// Derive a withdrawal nullifier from the nullifier key and note commitment.
 ///
-/// `nullifier = blake3("pyana-nullifier-v1", nullifier_key || note_commitment)`
+/// `nullifier = blake3("pyana-withdrawal-nullifier-v1", nullifier_key || note_commitment)`
 ///
-/// This matches the derivation used inside the STARK circuit, so the on-chain
-/// nullifier will match what the proof commits to.
+/// # Why this is a separate domain from `pyana_cell::note::Note::nullifier`
+///
+/// The protocol-internal nullifier (`cell/src/note.rs`) is
+///
+/// ```text
+/// nullifier = blake3("pyana-note nullifier v1", commitment || spending_key || creation_nonce)
+/// ```
+///
+/// and includes `creation_nonce` so two notes that happen to share an owner +
+/// fields + randomness collision-resistantly resolve to distinct nullifiers
+/// inside the in-protocol AIR.
+///
+/// This crate (`pyana-chain`) is the **SP1 / EVM withdrawal** boundary. Its
+/// nullifier matches what the SP1 guest commits as a public output for the
+/// `PyanaVault` contract on EVM — a different circuit with a different
+/// public-input layout. Reconciling these into a single derivation would
+/// require:
+///
+///   1. Changing the SP1 guest's PI layout (touches the SP1 circuit, which
+///      lives outside this workspace) and re-deploying the EVM verifier.
+///   2. Routing `creation_nonce` through `WithdrawalRequest` (currently it
+///      only carries the post-hashed `note_commitment` because that's what
+///      the EVM contract sees).
+///
+/// AUDIT-nullifiers.md §6: this is the **intentionally distinct** EVM-side
+/// nullifier domain. The domain separator string `"pyana-withdrawal-nullifier-v1"`
+/// makes the separation explicit at the hash-domain level so no proof from one
+/// scheme can be replayed as the other. Callers operating on
+/// `pyana_cell::Note` values MUST use `Note::nullifier`, not this function.
 pub fn derive_nullifier(nullifier_key: &[u8; 32], note_commitment: &[u8; 32]) -> [u8; 32] {
     let mut input = Vec::with_capacity(64);
     input.extend_from_slice(nullifier_key);
     input.extend_from_slice(note_commitment);
-    blake3::derive_key("pyana-nullifier-v1", &input)
+    // Domain-separated from `pyana-note nullifier v1` (see doc-comment above).
+    blake3::derive_key("pyana-withdrawal-nullifier-v1", &input)
 }
 
 /// Mock implementation of withdrawal proof generation.
@@ -385,6 +413,55 @@ mod tests {
         let n1 = derive_nullifier(&key, &c1);
         let n2 = derive_nullifier(&key, &c2);
         assert_ne!(n1, n2);
+    }
+
+    /// Adversarial: the EVM-side withdrawal nullifier MUST be in a different
+    /// hash domain than the in-protocol `Note::nullifier`. Recompute the
+    /// in-protocol form locally (the chain crate is a standalone workspace and
+    /// cannot depend on `pyana-cell`, so we replay the formula by hand) and
+    /// assert it produces a different output even when the input bytes
+    /// nominally match.
+    ///
+    /// This guards against an attacker reusing a withdrawal proof's revealed
+    /// nullifier to fake an in-protocol spend (or vice-versa).
+    /// See `pyana_cell::note::Note::nullifier` for the canonical scheme.
+    #[test]
+    fn test_withdrawal_nullifier_domain_separated_from_in_protocol() {
+        let key = [0x42; 32];
+        let commitment = [0xAA; 32];
+        let creation_nonce = [0xBB; 32];
+
+        // EVM-side withdrawal nullifier (this module).
+        let evm_nullifier = derive_nullifier(&key, &commitment);
+
+        // In-protocol nullifier (cell/src/note.rs), replayed here:
+        //   blake3::derive_key("pyana-note nullifier v1",
+        //                      commitment || spending_key || creation_nonce)
+        let mut input = Vec::with_capacity(96);
+        input.extend_from_slice(&commitment);
+        input.extend_from_slice(&key);
+        input.extend_from_slice(&creation_nonce);
+        let in_protocol_nullifier = blake3::derive_key("pyana-note nullifier v1", &input);
+
+        assert_ne!(
+            evm_nullifier, in_protocol_nullifier,
+            "EVM withdrawal nullifier must NOT collide with in-protocol Note::nullifier — \
+             cross-domain replay protection"
+        );
+
+        // Even with zero creation_nonce (i.e. the input order-difference being
+        // the only distinguisher), the domain separator string differs, so the
+        // outputs must still differ.
+        let mut input_zero_nonce = Vec::with_capacity(96);
+        input_zero_nonce.extend_from_slice(&commitment);
+        input_zero_nonce.extend_from_slice(&key);
+        input_zero_nonce.extend_from_slice(&[0u8; 32]);
+        let in_protocol_zero =
+            blake3::derive_key("pyana-note nullifier v1", &input_zero_nonce);
+        assert_ne!(
+            evm_nullifier, in_protocol_zero,
+            "domain separator alone must prevent cross-domain collision"
+        );
     }
 
     #[tokio::test]

@@ -453,6 +453,7 @@ fn bench_federation_ops(c: &mut Criterion) {
     // --- Turn execution: simple transfer ---
     {
         use pyana_cell::{AuthRequired, Cell, Ledger, Permissions};
+        use pyana_turn::builder::ActionBuilder;
         use pyana_turn::{ComputronCosts, TurnBuilder, TurnExecutor};
 
         let costs = ComputronCosts::zero();
@@ -498,10 +499,10 @@ fn bench_federation_ops(c: &mut Criterion) {
 
         // Build a simple transfer turn
         let mut tb = TurnBuilder::new(sender_id, 0);
-        {
-            let action = tb.action(sender_id, "transfer");
-            action.transfer(sender_id, receiver_id, 100);
-        }
+        let action = ActionBuilder::new_unchecked_for_tests(sender_id, "transfer", sender_id)
+            .effect_transfer(sender_id, receiver_id, 100)
+            .build();
+        tb.add_action(action);
         let turn = tb.build();
 
         group.bench_function("turn_execute_transfer", |b| {

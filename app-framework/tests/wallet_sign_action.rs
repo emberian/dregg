@@ -7,7 +7,7 @@
 //! replaces the authorization with a real signature.
 
 use pyana_app_framework::{
-    AgentWallet, Action, AppWallet, Authorization, CellId, DelegationMode, symbol,
+    Action, AgentWallet, AppWallet, Authorization, CellId, DelegationMode, symbol,
 };
 
 #[test]

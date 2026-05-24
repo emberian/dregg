@@ -73,6 +73,28 @@
         <h2 style="margin-top:var(--s4);">Last turn result</h2>
         <pre id="turn-result" class="pyana-inspector pyana-inspector--cell" style="margin:0;padding:var(--s3);white-space:pre-wrap;font-size:0.85rem;color:var(--fg-dim);">no turn submitted yet</pre>
 
+        <h2 style="margin-top:var(--s4);">Peer exchange (Discord-paste UX)</h2>
+        <p style="color:var(--fg-dim);font-size:0.85rem;">
+          Drives <code>pyana_cell::PeerExchange</code> directly. Use two browser
+          tabs (or two Studios in one tab) — copy a transition from one side,
+          paste into the other. The bytes are postcard-encoded
+          <code>PeerStateTransition</code>s, base64-wrapped for paste safety.
+        </p>
+        <div class="studio__controls" style="max-width:none;">
+          <label>my latest transition</label>
+          <button id="btn-px-copy" disabled>Copy my latest transition (Alice → bytes)</button>
+          <textarea id="px-mine" rows="3" readonly style="font-family:var(--mono,monospace);font-size:0.75rem;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:6px;word-break:break-all;"></textarea>
+
+          <hr>
+          <label>paste peer transition</label>
+          <textarea id="px-paste" rows="3" placeholder="paste base64 here" style="font-family:var(--mono,monospace);font-size:0.75rem;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:6px;word-break:break-all;"></textarea>
+          <button id="btn-px-paste" disabled>Bob: register Alice + verify pasted transition</button>
+
+          <hr>
+          <label>peer-view (Bob's view of Alice)</label>
+          <pre id="px-view" class="pyana-inspector pyana-inspector--cell" style="margin:0;padding:var(--s3);white-space:pre-wrap;font-size:0.8rem;color:var(--fg-dim);">no peer registered yet</pre>
+        </div>
+
         <h2 style="margin-top:var(--s4);">Spike findings</h2>
         <ul style="font-size:0.9rem;color:var(--fg-dim);line-height:1.6;">
           <li><strong>Runtime substrate works.</strong> wasm <code>PyanaRuntime</code> creates cells, accepts turns, reports state. Signals propagate mutations to <code>&lt;pyana-cell&gt;</code> live.</li>
@@ -183,6 +205,118 @@
         console.log('version:', runtime.version.value);
         console.log('cursor:', runtime.cursor.value);
         console.groupEnd();
+      });
+
+      // --- Peer exchange UX --------------------------------------------------
+      // The "Discord paste" surface: Alice exports a signed transition; Bob
+      // pastes the base64 and verifies it through `pyana_cell::PeerExchange`.
+      // Single-tab demo: Alice and Bob are both in this runtime — for real
+      // two-tab cooperation they'd be in distinct PyanaRuntime handles.
+      const pxCopyBtn = document.getElementById('btn-px-copy');
+      const pxPasteBtn = document.getElementById('btn-px-paste');
+      const pxMine = document.getElementById('px-mine');
+      const pxPaste = document.getElementById('px-paste');
+      const pxView = document.getElementById('px-view');
+
+      function b64encode(bytes) {
+        let s = '';
+        for (const b of bytes) s += String.fromCharCode(b);
+        return btoa(s);
+      }
+      function b64decode(str) {
+        const bin = atob(str.trim());
+        const out = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+        return out;
+      }
+
+      // Enable px buttons once we have both Alice and Bob.
+      function maybeEnablePx() {
+        if (alice && bob) {
+          pxCopyBtn.disabled = false;
+          pxPasteBtn.disabled = false;
+        }
+      }
+      // Hook in to the existing create-agent paths.
+      document.getElementById('btn-create-alice').addEventListener('click', maybeEnablePx);
+      document.getElementById('btn-create-bob').addEventListener('click', maybeEnablePx);
+
+      // Track Alice's last-known commitment locally so the next transition's
+      // old_commitment matches her current state. This is a JS-side cursor,
+      // not protocol state — PeerExchange itself doesn't track the sender's
+      // own commitment (it tracks the receiver's view of the sender).
+      let aliceLastCommit = null;
+      let bobRegisteredAlice = false;
+
+      pxCopyBtn.addEventListener('click', () => {
+        try {
+          // Alice's current commitment is the cell's post-state.
+          const aliceCellState = runtime.getCell(alice.cell_id).value;
+          const currentCommit = aliceCellState?.state_commitment;
+          if (!currentCommit) throw new Error('alice cell has no state_commitment');
+          // If we've never sent before, the "old" commitment is the current
+          // commitment (no state change since the last paste). For a real
+          // transition the caller would run a turn that changes Alice's
+          // state and produce a new commitment; for the spike we use the
+          // current commitment for both old + new and use a synthetic
+          // effects hash so the demo can round-trip without a state diff.
+          const oldCommit = aliceLastCommit || currentCommit;
+          const newCommit = currentCommit;
+          // Deterministic synthetic effects hash so repeated clicks produce
+          // different signatures (the sequence counter inside PeerExchange
+          // already increments).
+          const seq = Date.now().toString(16).padStart(16, '0');
+          const effectsHash = ('a'.repeat(48) + seq).slice(0, 64);
+
+          const bytes = runtime.createPeerTransition(
+            alice.agent_index, oldCommit, newCommit, effectsHash,
+          );
+          aliceLastCommit = newCommit;
+          const b64 = b64encode(bytes);
+          pxMine.value = b64;
+          api.toast(`signed transition (${bytes.length} B → ${b64.length} chars b64)`);
+        } catch (e) {
+          api.toast('createPeerTransition failed: ' + (e?.message || e), 'err');
+          console.error(e);
+        }
+      });
+
+      pxPasteBtn.addEventListener('click', () => {
+        try {
+          const b64 = pxPaste.value.trim();
+          if (!b64) throw new Error('paste box is empty');
+          const bytes = b64decode(b64);
+          // Lazy-register Alice as Bob's peer on first paste. Initial
+          // commitment is Alice's current state commitment (the
+          // "introduction" the two parties agree on out-of-band).
+          if (!bobRegisteredAlice) {
+            const aliceCellState = runtime.getCell(alice.cell_id).value;
+            const aliceCommit = aliceCellState?.state_commitment;
+            const alicePubkey = runtime.getPeerPubkey(alice.agent_index).public_key;
+            // The initial commitment must match the FIRST transition's
+            // old_commitment — that's `aliceLastCommit` minus one step,
+            // i.e. the commitment at the moment Alice signed the first
+            // transition. We track it as `aliceLastCommit`'s initial value
+            // (current commitment before any send).
+            const initialCommit = aliceLastCommit && aliceLastCommit !== aliceCommit
+              ? aliceLastCommit
+              : aliceCommit;
+            // For our spike Alice always signs (old=current, new=current)
+            // so the initial commitment is just current.
+            runtime.registerPeer(
+              bob.agent_index, alice.cell_id, alicePubkey, aliceCommit,
+            );
+            bobRegisteredAlice = true;
+          }
+          const alicePubkey = runtime.getPeerPubkey(alice.agent_index).public_key;
+          const view = runtime.verifyPeerTransition(bob.agent_index, bytes, alicePubkey);
+          pxView.textContent = JSON.stringify(view, null, 2);
+          api.toast(`verified — seq=${view.last_sequence}`);
+        } catch (e) {
+          pxView.textContent = 'verify failed: ' + (e?.message || e);
+          api.toast('verifyPeerTransition failed: ' + (e?.message || e), 'err');
+          console.error(e);
+        }
       });
     } catch (e) {
       setStatus('boot failed: ' + (e?.message || e), 'err');

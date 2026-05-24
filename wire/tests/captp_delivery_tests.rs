@@ -24,6 +24,7 @@ use pyana_captp::{
 };
 use pyana_cell::AuthRequired;
 use pyana_types::{CellId, generate_keypair};
+use pyana_wire::captp_routing;
 use pyana_wire::message::WireMessage;
 use pyana_wire::prelude::CapTpState;
 
@@ -281,7 +282,9 @@ fn make_delivery_setup(
     let mut swiss = SwissTable::new();
     let swiss_num = swiss.export(target_cell, AuthRequired::None, 100, None);
     let _ = target_fed; // captured by the cert below
-    (alice_sk, alice_pk, alice_fed, bob_sk, bob_pk, swiss, swiss_num)
+    (
+        alice_sk, alice_pk, alice_fed, bob_sk, bob_pk, swiss, swiss_num,
+    )
 }
 
 /// End-to-end: a PresentHandoff with `delivery_signature` produces a Turn
@@ -320,14 +323,8 @@ fn captp_delivered_loop_closes_executor_accepts_and_commits() {
 
     // Carol validates the presentation (must succeed before building the Turn).
     let known = vec![alice_fed];
-    let _acceptance = validate_handoff(
-        &presentation,
-        &alice_pk,
-        &mut carol_swiss,
-        &known,
-        150,
-    )
-    .expect("validate_handoff must succeed for the delivery test");
+    let _acceptance = validate_handoff(&presentation, &alice_pk, &mut carol_swiss, &known, 150)
+        .expect("validate_handoff must succeed for the delivery test");
 
     // The cert_hash is BLAKE3 over the presentation bytes (the wire handler
     // uses this exact convention; see server.rs PresentHandoff handler).
@@ -621,5 +618,8 @@ async fn spawn_captp_drain_forwards_to_dispatcher() {
     assert_eq!(received.nonce, 7);
     assert_eq!(received.memo.as_deref(), Some("drain-test"));
     // Silence unused imports
-    let _ = (Effect::DropRef { ref_id: [0u8; 32] }, Authorization::Unchecked);
+    let _ = (
+        Effect::DropRef { ref_id: [0u8; 32] },
+        Authorization::Unchecked,
+    );
 }

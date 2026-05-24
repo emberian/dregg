@@ -189,6 +189,82 @@ pub fn hex_encode(bytes: &[u8]) -> String {
 pub struct ThresholdQC(pub Vec<u8>);
 
 // =============================================================================
+// FederationId
+// =============================================================================
+
+/// Identifies a federation in the unified model.
+///
+/// **Canonical home.** Previously, two disjoint definitions lived in
+/// `pyana-captp` and `pyana-blocklace`; both now re-export this single type
+/// (see `FEDERATION-UNIFICATION-DESIGN.md` step 2). The id is a commitment to
+/// the federation's committee — `H(sorted(members) || epoch)` — derived via
+/// `pyana_federation::derive_federation_id_with_epoch`.
+///
+/// In the unified lace model, a `FederationId` is semantically equivalent to a
+/// `GroupId` (the content-hash of a reference group's strands). Routing layers
+/// treat them interchangeably.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct FederationId(pub [u8; 32]);
+
+impl FederationId {
+    /// All-zeros placeholder. Used during boot before the local federation's
+    /// members are known. Real federations always have a non-zero id (the
+    /// hash of a non-empty committee).
+    pub const PLACEHOLDER: FederationId = FederationId([0u8; 32]);
+
+    /// Construct from raw bytes.
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        FederationId(bytes)
+    }
+
+    /// Borrow the underlying bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    /// Short hex representation for logging (first 4 bytes).
+    pub fn short_hex(&self) -> String {
+        self.0[..4].iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// Full hex representation.
+    pub fn hex(&self) -> String {
+        self.0.iter().map(|b| format!("{b:02x}")).collect()
+    }
+}
+
+impl fmt::Debug for FederationId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "FedId({})", self.short_hex())
+    }
+}
+
+impl fmt::Display for FederationId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            self.0[..8]
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        )
+    }
+}
+
+impl From<[u8; 32]> for FederationId {
+    fn from(bytes: [u8; 32]) -> Self {
+        FederationId(bytes)
+    }
+}
+
+impl From<FederationId> for [u8; 32] {
+    fn from(id: FederationId) -> Self {
+        id.0
+    }
+}
+
+// =============================================================================
 // Consensus / Federation Types
 // =============================================================================
 

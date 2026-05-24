@@ -10,8 +10,14 @@
 //! 3. Bob verifies: proof shows Alice holds a valid cap, effect is within permissions
 //! 4. Bob executes the effect on his own cell
 //!
-//! The `SignedAttestation` variant is the initial implementation (both parties online).
-//! The `StarkMembership` variant is for full ZK (Phase 2: holder doesn't reveal slot).
+//! The `SignedAttestation` variant is the initial implementation (both parties
+//! online). A future ZK variant (where the holder doesn't reveal the slot) is
+//! tracked in the slot-caveats design; it is intentionally **not** carried as
+//! a typed placeholder here, because the prior `StarkMembership` variant had
+//! no real verification path — `verify(...)` accepted it on signature alone,
+//! which is an authority-amplification hazard. The variant has been removed.
+//! When the swiss-table membership gadget lands, reintroduce the variant
+//! alongside a working verification path in the same patch.
 
 use serde::{Deserialize, Serialize};
 
@@ -70,14 +76,11 @@ pub enum CapabilityProofData {
         /// Optional expiry height of the capability itself.
         expires_at: Option<u64>,
     },
-    /// STARK proof of Merkle membership of the capability in the holder's state.
-    /// (Future: full ZK -- verifier doesn't learn the holder's full c-list)
-    StarkMembership {
-        /// Serialized STARK proof bytes.
-        proof_bytes: Vec<u8>,
-        /// Merkle root of the holder's capability tree.
-        merkle_root: [u8; 32],
-    },
+    // Note: a `StarkMembership` variant previously existed here as a typed
+    // placeholder, but `verify(...)` had no path to actually check it,
+    // which meant any caller using `StarkMembership` was admitted on
+    // signature alone — an authority-amplification hazard. Removed
+    // pending a real swiss-table-membership gadget; see module doc.
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -169,8 +172,6 @@ pub enum CapabilityProofError {
     },
     /// The target_cell in the proof doesn't match our cell ID.
     WrongTarget { expected: CellId, got: CellId },
-    /// STARK proof verification failed (for StarkMembership variant).
-    StarkVerificationFailed,
 }
 
 impl std::fmt::Display for CapabilityProofError {

@@ -1292,6 +1292,61 @@ mod tests {
         assert!(result.is_err(), "Should reject wrong asset type");
     }
 
+    /// Adversarial (AUDIT-nullifiers.md §5): a proof generated with
+    /// destination_federation D must FAIL verification under destination
+    /// D' != D. This proves the AIR's pi[4] boundary constraint actually
+    /// enforces cross-federation replay protection.
+    #[test]
+    fn tampered_destination_federation_rejected() {
+        let key = test_spending_key(0xFEED_BEEF);
+        let original_dest = BabyBear::new(0xDEAD);
+        let mut witness = create_test_witness(
+            BabyBear::new(42),
+            BabyBear::new(100),
+            BabyBear::new(1),
+            key,
+            4,
+        );
+        witness.destination_federation = original_dest;
+
+        // Prover commits to destination D in the trace and proof PI.
+        let proof = prove_note_spend(&witness);
+        let nullifier = witness.nullifier();
+        let merkle_root = witness.merkle_root();
+
+        // Sanity: verification with the matching destination succeeds.
+        let ok = verify_note_spend_with_destination(
+            nullifier,
+            merkle_root,
+            witness.value,
+            witness.asset_type,
+            original_dest,
+            &proof,
+        );
+        assert!(
+            ok.is_ok(),
+            "proof with matching destination must verify; got {ok:?}"
+        );
+
+        // Adversarial: verifier passes a DIFFERENT destination. The boundary
+        // constraint at row 0 col 18 pins col::DESTINATION_FEDERATION to pi[4];
+        // a mismatched pi[4] makes the boundary check fail.
+        let tampered_dest = BabyBear::new(0xC0DE);
+        assert_ne!(original_dest, tampered_dest);
+        let err = verify_note_spend_with_destination(
+            nullifier,
+            merkle_root,
+            witness.value,
+            witness.asset_type,
+            tampered_dest,
+            &proof,
+        );
+        assert!(
+            err.is_err(),
+            "proof with mismatched destination_federation MUST be rejected (cross-federation replay protection)"
+        );
+    }
+
     #[test]
     fn flipping_single_key_limb_changes_nullifier() {
         // Verify that changing ANY single limb of the 8-limb key changes the nullifier.

@@ -26,7 +26,7 @@
 //! lane-agnostic factory; this crate exposes [`TurnExecutor::wrap_witnessed`]
 //! as a convenience for callers that hold both a receipt and a fresh proof.
 
-use crate::turn::TurnReceipt;
+use crate::turn::{Turn, TurnReceipt};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -180,6 +180,44 @@ impl WitnessedReceipt {
             witness_hash,
             aggregate_membership: None,
         }
+    }
+
+    /// Stage 7-γ.2 Phase 1: verify bilateral cross-cell consistency for a
+    /// bundle of WitnessedReceipts sharing one Turn.
+    ///
+    /// Given the turn (which carries the canonical `call_forest`) and the
+    /// per-cell-id WRs that came out of executing it, this:
+    ///
+    /// 1. Confirms each WR's `public_inputs` carry the γ.2 layout
+    ///    (length ≥ BASE_COUNT).
+    /// 2. Reconstructs the expected bilateral schedule from the turn.
+    /// 3. For every (cell_id, WR) pair, recomputes the expected counts
+    ///    + accumulator roots and compares to the WR's PI.
+    /// 4. Enforces the IS_AGENT_CELL exactly-zero-or-one rule.
+    /// 5. Cross-side existence: every Transfer / Grant / Introduce in the
+    ///    schedule that names any covered cell must have all its peers
+    ///    covered.
+    ///
+    /// Returns `Ok(())` on success or a human-readable error on rejection.
+    /// This is the verifier-side gate from `STAGE-7-GAMMA-2-PI-DESIGN.md` §4.
+    pub fn verify_bilateral_chain(
+        wrs: &[(pyana_types::CellId, &WitnessedReceipt)],
+        turn: &Turn,
+    ) -> Result<(), crate::error::TurnError> {
+        use pyana_circuit::field::BabyBear;
+
+        let bundle: Vec<(pyana_types::CellId, Vec<BabyBear>)> = wrs
+            .iter()
+            .map(|(cid, wr)| {
+                let pi: Vec<BabyBear> = wr
+                    .public_inputs
+                    .iter()
+                    .map(|&v| BabyBear::new_canonical(v))
+                    .collect();
+                (cid.clone(), pi)
+            })
+            .collect();
+        crate::executor::TurnExecutor::verify_bilateral_bundle(&bundle, turn)
     }
 
     /// Convenience: serialize a chain (`Vec<WitnessedReceipt>`) as JSON.

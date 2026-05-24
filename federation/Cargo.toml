@@ -4,32 +4,43 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+pyana-captp = { path = "../captp" }
+pyana-cell = { path = "../cell" }
 pyana-commit = { path = "../commit" }
 pyana-turn = { path = "../turn" }
 pyana-types = { path = "../types" }
+serde_json = { workspace = true }
 hints = { path = "../hints" }
 blake3 = "1"
 ed25519-dalek = { version = "2", features = ["std"] }
 hex = "0.4"
 getrandom = { workspace = true }
-crossbeam-channel = "0.5"
 serde = { version = "1", features = ["derive"] }
 postcard = { version = "1", features = ["use-std"] }
-tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 ark-serialize = { version = "0.5.0", features = ["serde_with"] }
 ark-ff = "0.5.0"
 ark-std = "0.5.0"
+# `runtime` feature: gates async/TCP transport + the in-memory tokio mpsc
+# transport in `transport.rs`. Both pull tokio (mio, signal-hook on unix) and
+# crossbeam-channel, neither of which cross-compiles cleanly to wasm32 nor
+# is meaningful in the browser. Native consumers keep these via `default`.
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-util", "net", "sync", "time"], optional = true }
+crossbeam-channel = { version = "0.5", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
-pyana-cell = { path = "../cell" }
 
 [[bench]]
 name = "consensus_bench"
 harness = false
 
 [features]
+# Native default keeps full networking surface — backward-compatible. Wasm
+# consumers (and any embedded callers that only want the pure-state /
+# consensus-orchestration types) pass `default-features = false`.
+default = ["runtime"]
+runtime = ["dep:tokio", "dep:crossbeam-channel"]
 
 [lints]
 workspace = true

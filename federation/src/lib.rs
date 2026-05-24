@@ -60,7 +60,9 @@
 //! - [`node`]: Federation node implementation (includes BFT consensus simulation)
 
 pub mod checkpoint;
+pub mod cross_fed_bundle;
 pub mod epoch;
+pub mod federation;
 pub mod identity;
 pub mod node;
 pub mod receipt;
@@ -68,6 +70,7 @@ pub mod revocation;
 pub mod solo;
 pub mod threshold;
 pub mod threshold_decrypt;
+#[cfg(feature = "runtime")]
 pub mod transport;
 pub mod types;
 
@@ -76,11 +79,19 @@ pub use checkpoint::{
     Checkpoint, CheckpointError, DEFAULT_CHECKPOINT_INTERVAL, create_checkpoint,
     finalize_checkpoint, is_checkpoint_height, verify_checkpoint,
 };
+// The unified `Federation` type (FEDERATION-UNIFICATION-DESIGN.md §2).
+// Frees the bare name `Federation` for the canonical attestation context;
+// the Morpheus-era simulator type that previously held this name is now
+// re-exported as `MorpheusFederation` pending its deletion (design §6 step 7).
+pub use cross_fed_bundle::CrossFedReceiptBundle;
+pub use federation::{Federation, KnownFederations, LocalSeat};
 pub use identity::{derive_federation_id, derive_federation_id_with_epoch};
 pub use node::{
-    ConsensusConfig, ConsensusError, ConsensusOrchestrator, ConsensusState, Federation,
-    FederationNode, PendingStateRoots, ReconfigurationProposal, ReconfigurationVotes,
+    ConsensusConfig, ConsensusError, ConsensusOrchestrator, ConsensusState,
+    Federation as MorpheusFederation, FederationNode, PendingStateRoots, ReconfigurationProposal,
+    ReconfigurationVotes,
 };
+pub use pyana_types::FederationId;
 pub use receipt::{FederationReceipt, FederationReceiptBody, ReceiptQc};
 pub use revocation::{RevocationTree, RevocationVerification, RevocationVerifier};
 pub use solo::{
@@ -94,6 +105,7 @@ pub use threshold_decrypt::{
     DecryptionShare, KeyShare, ThresholdCiphertext, ThresholdDecryptError, ThresholdEncryptionKey,
     combine_shares, generate_epoch_key, produce_decryption_share, threshold_encrypt,
 };
+#[cfg(feature = "runtime")]
 pub use transport::{
     FederationEnvelope, FederationTransport, LocalTransport, NetworkConsensusNode,
     TcpFederationTransport, TransportError,

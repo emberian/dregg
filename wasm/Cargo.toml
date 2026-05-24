@@ -32,6 +32,9 @@ pyana-sdk = { path = "../sdk", default-features = false }
 # sdk pulls bulletproofs (via cell crypto) — already covered by the
 # clear_on_drop override below, but listing here for grep-ability.
 pyana-types = { path = "../types" }
+# Federation (pure types + consensus orchestration). The `runtime` feature
+# (tokio + crossbeam transport) is non-wasm32, hence default-features = false.
+pyana-federation = { path = "../federation", default-features = false }
 
 # Token crate without biscuit (biscuit-auth has complex deps)
 token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
@@ -50,6 +53,10 @@ ed25519-dalek = { version = "2", default-features = false, features = ["zeroize"
 # Rust implementation. Declaring it directly here unifies the feature across
 # the workspace so wasm-pack succeeds.
 clear_on_drop = { version = "0.2", features = ["no_cc"] }
+# Indirect dep via `hints` (pulled in by pyana-federation -> hints). Lockstitch
+# uses inline x86_64 / aarch64 AES intrinsics unless the `portable` feature is
+# enabled. The wasm32 target has neither, so we force `portable` here.
+lockstitch = { version = "0.29", features = ["portable"] }
 
 [dependencies.web-sys]
 version = "0.3"

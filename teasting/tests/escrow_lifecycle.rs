@@ -4,6 +4,7 @@
 //! refunding after timeout, and rejecting release with bad proofs.
 
 use pyana_cell::{Cell, CellId, Ledger, NoteCommitment};
+use pyana_turn::builder::ActionBuilder;
 use pyana_turn::executor::{ComputronCosts, ProofVerifier, TurnExecutor};
 use pyana_turn::{Effect, EscrowCondition, TurnBuilder, TurnResult};
 
@@ -62,10 +63,11 @@ fn exec_turn(
 ) -> TurnResult {
     let mut builder = TurnBuilder::new(agent, nonce);
     builder.set_fee(fee);
-    let action = builder.action(agent, "escrow-op");
+    let mut ab = ActionBuilder::new_unchecked_for_tests(agent, "escrow-op", agent);
     for e in effects {
-        action.effect(e);
+        ab = ab.effect(e);
     }
+    builder.add_action(ab.build());
     let turn = builder.build();
     executor.execute(&turn, ledger)
 }

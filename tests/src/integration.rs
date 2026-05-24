@@ -9,6 +9,7 @@ use pyana_cell::{AuthRequired, Ledger, Permissions, VerificationKey, cell::Cell}
 use pyana_circuit::BabyBear;
 use pyana_circuit::stark::{self, MerkleStarkAir, generate_merkle_trace, proof_to_bytes};
 use pyana_token::{Attenuation, AuthRequest, AuthToken, MacaroonToken};
+use pyana_turn::builder::ActionBuilder;
 use pyana_turn::{ComputronCosts, DelegationMode, Effect, TurnBuilder, TurnExecutor, TurnResult};
 
 fn test_key(name: &str) -> [u8; 32] {
@@ -137,16 +138,16 @@ fn test_mint_attenuate_prove_execute_verify() {
 
     let mut turn_builder = TurnBuilder::new(agent_id, 0);
     turn_builder.set_fee(50000);
-    {
-        let action = turn_builder.action(target_id, "compute");
-        action.delegation(DelegationMode::None);
-        action.authorize_proof(proof_bytes.clone(), "", "");
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new(target_id, "compute", agent_id)
+        .with_proof(proof_bytes.clone(), "", "")
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: target_id,
             index: 0,
             value: *blake3::hash(b"result:42").as_bytes(),
-        });
-    }
+        })
+        .build();
+    turn_builder.add_action(action);
     let turn = turn_builder.build();
 
     let result = executor.execute(&turn, &mut ledger);
@@ -178,16 +179,16 @@ fn test_mint_attenuate_prove_execute_verify() {
 
     let mut bad_turn_builder = TurnBuilder::new(agent_id, 1);
     bad_turn_builder.set_fee(50000);
-    {
-        let action = bad_turn_builder.action(target_id, "evil");
-        action.delegation(DelegationMode::None);
-        action.authorize_proof(bad_proof, "", "");
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new(target_id, "evil", agent_id)
+        .with_proof(bad_proof, "", "")
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: target_id,
             index: 1,
             value: [0xEE; 32],
-        });
-    }
+        })
+        .build();
+    bad_turn_builder.add_action(action);
     let bad_turn = bad_turn_builder.build();
     let bad_result = executor.execute(&bad_turn, &mut ledger);
     assert!(
@@ -258,16 +259,16 @@ fn test_fail_closed_no_verifier() {
 
     let mut turn_builder = TurnBuilder::new(agent_id, 0);
     turn_builder.set_fee(50000);
-    {
-        let action = turn_builder.action(target_id, "compute");
-        action.delegation(DelegationMode::None);
-        action.authorize_proof(proof_bytes, "", "");
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new(target_id, "compute", agent_id)
+        .with_proof(proof_bytes, "", "")
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: target_id,
             index: 0,
             value: [0xAA; 32],
-        });
-    }
+        })
+        .build();
+    turn_builder.add_action(action);
     let turn = turn_builder.build();
     let result = executor.execute(&turn, &mut ledger);
     assert!(
@@ -333,16 +334,16 @@ fn test_wrong_federation_root_rejected() {
 
     let mut turn_builder = TurnBuilder::new(agent_id, 0);
     turn_builder.set_fee(50000);
-    {
-        let action = turn_builder.action(target_id, "compute");
-        action.delegation(DelegationMode::None);
-        action.authorize_proof(proof_bytes, "", "");
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new(target_id, "compute", agent_id)
+        .with_proof(proof_bytes, "", "")
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: target_id,
             index: 0,
             value: [0xBB; 32],
-        });
-    }
+        })
+        .build();
+    turn_builder.add_action(action);
     let turn = turn_builder.build();
     let result = executor.execute(&turn, &mut ledger);
     assert!(

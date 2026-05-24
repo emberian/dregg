@@ -176,6 +176,14 @@ impl Note {
     /// Derived from note-intrinsic data only. No tree position is used, so the same
     /// note produces the same nullifier regardless of which tree (or federation) it
     /// lives in. This makes double-spend detection global by construction.
+    ///
+    /// This is the **canonical in-protocol nullifier** consumed by the
+    /// note-spending STARK AIR (`circuit/src/note_spending_air.rs`) and the
+    /// production `NullifierSet` in the turn executor. The separate EVM
+    /// withdrawal path (`pyana_chain::withdraw::derive_nullifier`) uses a
+    /// different, domain-separated scheme (`pyana-withdrawal-nullifier-v1`)
+    /// because it commits to a different SP1 circuit; see that function's
+    /// doc-comment for why the schemes are intentionally distinct.
     pub fn nullifier(&self, spending_key: &[u8; 32]) -> Nullifier {
         let commitment = self.commitment();
         let mut hasher = blake3::Hasher::new_derive_key("pyana-note nullifier v1");

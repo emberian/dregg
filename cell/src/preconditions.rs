@@ -18,6 +18,13 @@ pub struct Preconditions {
 pub struct CellStatePrecondition {
     /// The exact nonce that must be current.
     pub nonce: Option<u64>,
+    /// Minimum cell nonce — the cell's nonce must be at least this value.
+    ///
+    /// Use this for "see-then-set" patterns that need monotonic nonce
+    /// progression without pinning to an exact value (which would race
+    /// against concurrent submitters).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_nonce: Option<u64>,
     /// Minimum computron balance required.
     pub min_balance: Option<u64>,
     /// Fields that must equal specific values: (slot_index, expected_value).
@@ -56,13 +63,70 @@ impl TimeRange {
     }
 }
 
-/// Context for evaluating network/time preconditions.
+/// Context for evaluating network/time preconditions **and** cell-program
+/// state constraints.
+///
+/// This is the **shared contextual-evaluation surface** between
+/// [`Preconditions`] (per-Action, see-then-set guards) and
+/// [`crate::program::StateConstraint`] (per-CellProgram-slot, perpetual
+/// invariants). The two enforcement loops differ in scope and lifetime
+/// (see `StateConstraint` rustdoc for the precise split), but they
+/// **share** this context type so an executor builds it once per turn
+/// step and passes it to both surfaces.
+///
+/// ### Lane G `EvalContext` consolidation
+///
+/// Slot caveats (Lane G in `SLOT-CAVEATS-DESIGN.md` / `-EVALUATION.md`)
+/// originally proposed a separate `EvalContext` with
+/// `{ current_height, current_epoch, sender, sender_epoch_count,
+/// revealed_preimage }`. Per `SLOT-CAVEATS-EVALUATION.md` §7.3 open
+/// question 1, those fields were folded into the **existing**
+/// `pyana_cell::preconditions::EvalContext` instead of creating a
+/// parallel `StateConstraintCtx`. The original
+/// `{ block_height, timestamp }` fields are preserved; the additions
+/// default to safe sentinels so older callers compile unchanged.
 #[derive(Clone, Debug)]
 pub struct EvalContext {
-    /// Current block height.
+    /// Current block height (used by `NetworkPrecondition` and by
+    /// `FieldGteHeight` / `FieldLteHeight` / `TemporalGate` /
+    /// `RateLimit` slot caveats).
     pub block_height: u64,
-    /// Current timestamp (unix seconds).
+    /// Current timestamp (unix seconds, used by `Preconditions::valid_while`).
     pub timestamp: i64,
+    /// Current epoch number (used by `RateLimit` slot caveat).
+    /// Defaults to `0` when callers do not supply one.
+    pub current_epoch: u64,
+    /// The acting party's public-key/identity. `None` for system turns
+    /// (genesis, scheduled effects). Used by `SenderAuthorized` /
+    /// `RateLimit` slot caveats.
+    pub sender: Option<[u8; 32]>,
+    /// Sender's mutation count this epoch (for `RateLimit`). Defaults
+    /// to `0`.
+    pub sender_epoch_count: u32,
+    /// Preimage revealed by the action (for `PreimageGate`). `None`
+    /// when the action carries no preimage.
+    pub revealed_preimage: Option<[u8; 32]>,
+}
+
+impl EvalContext {
+    /// Construct a minimal context with just `block_height` and `timestamp`.
+    /// All other fields default to sentinel/empty values.
+    pub fn minimal(block_height: u64, timestamp: i64) -> Self {
+        Self {
+            block_height,
+            timestamp,
+            current_epoch: 0,
+            sender: None,
+            sender_epoch_count: 0,
+            revealed_preimage: None,
+        }
+    }
+}
+
+impl Default for EvalContext {
+    fn default() -> Self {
+        Self::minimal(0, 0)
+    }
 }
 
 impl Preconditions {
@@ -84,6 +148,12 @@ impl Preconditions {
             if let Some(nonce) = cs.nonce {
                 hasher.update(b"\x01");
                 hasher.update(&nonce.to_le_bytes());
+            } else {
+                hasher.update(b"\x00");
+            }
+            if let Some(min_n) = cs.min_nonce {
+                hasher.update(b"\x01");
+                hasher.update(&min_n.to_le_bytes());
             } else {
                 hasher.update(b"\x00");
             }
@@ -156,6 +226,14 @@ impl CellStatePrecondition {
                 actual: state.nonce,
             });
         }
+        if let Some(min_n) = self.min_nonce
+            && state.nonce < min_n
+        {
+            return Err(PreconditionError::NonceTooLow {
+                required: min_n,
+                actual: state.nonce,
+            });
+        }
         if let Some(min_bal) = self.min_balance
             && state.balance < min_bal
         {
@@ -219,6 +297,10 @@ impl NetworkPrecondition {
 pub enum PreconditionError {
     NonceMismatch {
         expected: u64,
+        actual: u64,
+    },
+    NonceTooLow {
+        required: u64,
         actual: u64,
     },
     InsufficientBalance {

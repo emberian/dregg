@@ -42,34 +42,10 @@ pub type GroupId = [u8; 32];
 
 /// A federation ID (backward compat re-export from the addressing layer).
 /// In the unified model, a FederationId IS just a GroupId with legacy semantics.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct FederationId(pub [u8; 32]);
-
-impl std::fmt::Debug for FederationId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "FedId({})",
-            self.0[..4]
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>()
-        )
-    }
-}
-
-impl std::fmt::Display for FederationId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            self.0[..8]
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>()
-        )
-    }
-}
+///
+/// Re-exported from `pyana-types`, the canonical home (see
+/// `FEDERATION-UNIFICATION-DESIGN.md` step 2).
+pub use pyana_types::FederationId;
 
 // =============================================================================
 // Fabric Address

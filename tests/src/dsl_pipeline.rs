@@ -20,6 +20,7 @@ use pyana_circuit::stark::{self, StarkAir};
 use pyana_dsl_runtime::circuit::{
     BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, PolyTerm,
 };
+use pyana_turn::builder::ActionBuilder;
 use pyana_turn::{ComputronCosts, DelegationMode, Effect, TurnBuilder, TurnExecutor, TurnResult};
 
 // ============================================================================
@@ -441,13 +442,16 @@ fn test_dsl_pipeline_full_proof_carrying_turn() {
     turn_builder.set_fee(0);
     {
         // Add a dummy action so the call forest is non-empty.
-        let action = turn_builder.action(sovereign_cell_id, "temporal_check");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::SetField {
-            cell: sovereign_cell_id,
-            index: 0,
-            value: new_commitment,
-        });
+        let action =
+            ActionBuilder::new_unchecked_for_tests(sovereign_cell_id, "temporal_check", agent_id)
+                .delegation(DelegationMode::None)
+                .effect(Effect::SetField {
+                    cell: sovereign_cell_id,
+                    index: 0,
+                    value: new_commitment,
+                })
+                .build();
+        turn_builder.add_action(action);
     }
     let mut turn = turn_builder.build();
 
@@ -601,13 +605,16 @@ fn test_dsl_pipeline_wrong_proof_rejected() {
     let mut turn_builder = TurnBuilder::new(agent_id, 0);
     turn_builder.set_fee(0);
     {
-        let action = turn_builder.action(sovereign_cell_id, "temporal_check");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::SetField {
-            cell: sovereign_cell_id,
-            index: 0,
-            value: new_commitment,
-        });
+        let action =
+            ActionBuilder::new_unchecked_for_tests(sovereign_cell_id, "temporal_check", agent_id)
+                .delegation(DelegationMode::None)
+                .effect(Effect::SetField {
+                    cell: sovereign_cell_id,
+                    index: 0,
+                    value: new_commitment,
+                })
+                .build();
+        turn_builder.add_action(action);
     }
     let mut turn = turn_builder.build();
 
@@ -725,13 +732,16 @@ fn test_dsl_pipeline_wrong_vk_rejected() {
     let mut turn_builder = TurnBuilder::new(agent_id, 0);
     turn_builder.set_fee(0);
     {
-        let action = turn_builder.action(sovereign_cell_id, "temporal_check");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::SetField {
-            cell: sovereign_cell_id,
-            index: 0,
-            value: new_commitment,
-        });
+        let action =
+            ActionBuilder::new_unchecked_for_tests(sovereign_cell_id, "temporal_check", agent_id)
+                .delegation(DelegationMode::None)
+                .effect(Effect::SetField {
+                    cell: sovereign_cell_id,
+                    index: 0,
+                    value: new_commitment,
+                })
+                .build();
+        turn_builder.add_action(action);
     }
     let mut turn = turn_builder.build();
 

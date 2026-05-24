@@ -22,6 +22,7 @@ use pyana_circuit::{
     field::BabyBear,
     stark,
 };
+use pyana_turn::builder::ActionBuilder;
 use pyana_turn::{ComputronCosts, DelegationMode, Effect, TurnBuilder, TurnExecutor, TurnResult};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -206,12 +207,12 @@ fn main() {
     let fee: u64 = 50;
 
     let mut builder = TurnBuilder::new(agent_id, 0);
-    {
-        let action = builder.action(agent_id, "transfer");
-        action.transfer(agent_id, recipient_id, transfer_amount);
+    let action = ActionBuilder::new_unchecked_for_tests(agent_id, "transfer", agent_id)
+        .effect_transfer(agent_id, recipient_id, transfer_amount)
         // ParentsOwn keeps the action's authority within the agent.
-        action.delegation(DelegationMode::ParentsOwn);
-    }
+        .delegation(DelegationMode::ParentsOwn)
+        .build();
+    builder.add_action(action);
     let turn = builder.fee(fee).build();
 
     let turn_hash_pre = turn.hash();

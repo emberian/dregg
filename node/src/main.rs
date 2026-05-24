@@ -146,6 +146,29 @@ enum Command {
         federation_peers: Vec<String>,
     },
 
+    /// Register a peer federation's committee descriptor in this node's
+    /// `known_federations/` directory.
+    ///
+    /// This is the out-of-band cross-federation trust setup step from
+    /// `SILVER-VISION-E2E-VERIFICATION.md` §0.2. The operator copies the
+    /// peer federation's `genesis.json` (or `federation_descriptor.json`)
+    /// into a known path and runs this command so the local node accepts
+    /// the peer's signed attestations / federation receipts.
+    ///
+    /// On success the descriptor is canonicalised and written to
+    /// `<data-dir>/known_federations/<federation_id>.json`.
+    RegisterFederation {
+        /// Local data directory.
+        #[arg(long, default_value = "~/.pyana")]
+        data_dir: String,
+        /// Path to the peer federation's descriptor JSON. The file must
+        /// have the same shape as `genesis.json` (federation_id +
+        /// committee_epoch + threshold + validators[].public_key) — i.e.
+        /// what `pyana-node genesis` already produces.
+        #[arg(long)]
+        descriptor: PathBuf,
+    },
+
     /// Generate devnet genesis configuration (keys, genesis.json, env files).
     Genesis {
         /// Number of validator nodes to generate keys for.
@@ -289,6 +312,10 @@ async fn main() {
             checkpoint_interval,
             output,
         } => genesis::run_genesis(validators, epoch_length, checkpoint_interval, &output),
+        Command::RegisterFederation {
+            data_dir,
+            descriptor,
+        } => run_register_federation(&data_dir, &descriptor),
         Command::Relay {
             port,
             bond,
@@ -756,6 +783,118 @@ fn hex_decode_32(s: &str) -> Option<[u8; 32]> {
         *byte = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
     }
     Some(bytes)
+}
+
+/// Register a peer federation in this node's `known_federations/`
+/// directory. Reads the descriptor JSON, sanity-checks that
+/// `federation_id == H(sorted_committee_pubkeys || committee_epoch)`,
+/// and writes the descriptor verbatim to
+/// `<data-dir>/known_federations/<federation_id>.json` so the running
+/// node can pick it up.
+///
+/// This is the out-of-band cross-federation trust setup step from
+/// `SILVER-VISION-E2E-VERIFICATION.md` §0.2 / §4.2. Production deployments
+/// will replace this with a more sophisticated "federation discovery"
+/// flow (out of scope for Silver).
+fn run_register_federation(data_dir: &str, descriptor: &std::path::Path) {
+    let data_path = expand_path(data_dir);
+    if !data_path.exists() {
+        eprintln!(
+            "error: data directory does not exist: {}. Run `pyana-node init` first.",
+            data_path.display()
+        );
+        std::process::exit(1);
+    }
+
+    let text = match std::fs::read_to_string(descriptor) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!(
+                "error: cannot read descriptor {}: {e}",
+                descriptor.display()
+            );
+            std::process::exit(1);
+        }
+    };
+    let parsed: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: cannot parse descriptor JSON: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    // Extract federation_id and validators.
+    let declared_fed_id = parsed["federation_id"].as_str().unwrap_or("").to_string();
+    if declared_fed_id.len() != 64 {
+        eprintln!(
+            "error: descriptor missing or malformed `federation_id` (got: {declared_fed_id:?}); expected 64-char hex",
+        );
+        std::process::exit(1);
+    }
+    let committee_epoch = parsed["committee_epoch"].as_u64().unwrap_or(0);
+
+    let validators = match parsed["validators"].as_array() {
+        Some(v) => v,
+        None => {
+            eprintln!("error: descriptor missing `validators` array");
+            std::process::exit(1);
+        }
+    };
+    let mut pubkeys: Vec<pyana_types::PublicKey> = Vec::with_capacity(validators.len());
+    for v in validators {
+        let pk_hex = match v["public_key"].as_str() {
+            Some(s) => s,
+            None => {
+                eprintln!("error: validator entry missing `public_key`");
+                std::process::exit(1);
+            }
+        };
+        let bytes = match hex_decode_32(pk_hex) {
+            Some(b) => b,
+            None => {
+                eprintln!("error: validator public_key is not 64-char hex: {pk_hex:?}");
+                std::process::exit(1);
+            }
+        };
+        pubkeys.push(pyana_types::PublicKey(bytes));
+    }
+    if pubkeys.is_empty() {
+        eprintln!("error: descriptor has zero validators");
+        std::process::exit(1);
+    }
+
+    // Recompute the federation_id and reject a tampered descriptor.
+    let derived = pyana_federation::derive_federation_id_with_epoch(&pubkeys, committee_epoch);
+    let derived_hex: String = derived.iter().map(|b| format!("{b:02x}")).collect();
+    if derived_hex != declared_fed_id {
+        eprintln!(
+            "error: descriptor federation_id ({}) does not match committee-derived id ({}). \
+             Refusing to register a tampered descriptor (audit F1).",
+            declared_fed_id, derived_hex
+        );
+        std::process::exit(1);
+    }
+
+    // Write into `<data-dir>/known_federations/<federation_id>.json`.
+    let registry_dir = data_path.join("known_federations");
+    if let Err(e) = std::fs::create_dir_all(&registry_dir) {
+        eprintln!("error: cannot create {}: {e}", registry_dir.display());
+        std::process::exit(1);
+    }
+    let out_path = registry_dir.join(format!("{declared_fed_id}.json"));
+    if let Err(e) = std::fs::write(&out_path, &text) {
+        eprintln!("error: cannot write {}: {e}", out_path.display());
+        std::process::exit(1);
+    }
+
+    println!(
+        "Registered federation {} (epoch={}, n_validators={}) in {}",
+        declared_fed_id,
+        committee_epoch,
+        pubkeys.len(),
+        out_path.display()
+    );
 }
 
 /// P2 Fix 8: Wait for Ctrl-C (SIGINT) to trigger graceful shutdown.

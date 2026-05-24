@@ -56,6 +56,7 @@
 //! - [`builder`]: TurnBuilder, ActionBuilder
 
 pub mod action;
+pub mod bilateral_schedule;
 pub mod budget_gate;
 pub mod builder;
 pub mod composer;
@@ -74,6 +75,7 @@ pub mod forest;
 pub(crate) mod journal;
 pub mod obligation;
 pub mod pending;
+pub mod preconditions;
 pub mod presence_discharge;
 pub mod queue_programs;
 pub mod routing;
@@ -136,6 +138,9 @@ pub use obligation::{
 pub use pending::{
     BrokenReason, PendingEntry, PendingHandle, PendingStatus, PendingTurnRegistry,
     ResolutionCondition, ResolutionEvent, ResolutionOutcome,
+};
+pub use preconditions::{
+    Precondition, build as build_preconditions, extend as extend_preconditions,
 };
 pub use presence_discharge::{
     PresenceCaveat as PresenceCapCaveat, PresenceClaimRequirement, PresenceDischarge,

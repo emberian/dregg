@@ -86,7 +86,7 @@
 //!
 //! # Public Inputs
 //!
-//! Base layout (`pi::BASE_COUNT` felts, Stage 7-γ.0a widening):
+//! Base layout (`pi::BASE_COUNT` felts, Stage 7-γ.2 Phase 1 widening):
 //!
 //! ```text
 //!   [ 0.. 4]  OLD_COMMIT[4]                   cell pre-state commitment (Poseidon2)
@@ -106,7 +106,18 @@
 //!   [29..33]  EFFECTS_HASH_GLOBAL[4]          Poseidon2 over canonical-DFS call_forest effects (7-γ.0a)
 //!   [33]      ACTOR_NONCE                     outer Turn::nonce (7-γ.0a; closes W-1 nonce gap)
 //!   [34..38]  PREVIOUS_RECEIPT_HASH[4]        Poseidon2 of previous_receipt_hash (7-γ.0a)
-//!   [38..]    CUSTOM_PROOFS                   per-custom-effect (vk_hash[4], proof_commit[4])
+//!   [38..45]  bilateral counts (7-γ.2): outbound_transfer, inbound_transfer,
+//!                                       outbound_grant, inbound_grant,
+//!                                       intro_introducer, intro_recipient, intro_target
+//!   [45..49]  OUTGOING_TRANSFER_ROOT[4]       (7-γ.2)
+//!   [49..53]  INCOMING_TRANSFER_ROOT[4]       (7-γ.2)
+//!   [53..57]  OUTGOING_GRANT_ROOT[4]          (7-γ.2)
+//!   [57..61]  INCOMING_GRANT_ROOT[4]          (7-γ.2)
+//!   [61..65]  INTRO_AS_INTRODUCER_ROOT[4]     (7-γ.2)
+//!   [65..69]  INTRO_AS_RECIPIENT_ROOT[4]      (7-γ.2)
+//!   [69..73]  INTRO_AS_TARGET_ROOT[4]         (7-γ.2)
+//!   [73]      IS_AGENT_CELL                   (7-γ.2; 1 iff this proof is the actor's)
+//!   [74..]    CUSTOM_PROOFS                   per-custom-effect (vk_hash[4], proof_commit[4])
 //! ```
 //!
 //! The four 7-γ.0a additions (TURN_HASH, EFFECTS_HASH_GLOBAL, ACTOR_NONCE,
@@ -308,6 +319,33 @@ pub mod sel {
     pub const RELEASE_COMMITTED_ESCROW: usize = 44;
     /// RefundCommittedEscrow: same as REFUND_ESCROW but committed variant.
     pub const REFUND_COMMITTED_ESCROW: usize = 45;
+
+    // ---- Stage 7-γ.2 Phase 1.5 (planned): bilateral role selectors ----
+    //
+    // The PI-only Phase 1 binding (`STAGE-7-GAMMA-2-PI-DESIGN.md` §2-§4) is
+    // already enforced by the off-AIR verifier loop (see
+    // `turn::executor::TurnExecutor::verify_bilateral_bundle`). Phase 1.5
+    // lifts the bilateral binding INTO the AIR by adding:
+    //
+    //   * 3 new selectors for Introduce role routing:
+    //       INTRO_AS_INTRODUCER = 46
+    //       INTRO_AS_RECIPIENT  = 47
+    //       INTRO_AS_TARGET     = 48
+    //     (replacing today's single INTRODUCE row that passes through
+    //     `intro_hash` without role differentiation — see line 274).
+    //
+    //   * Per-row Poseidon2 absorb columns for transfer_id / grant_id /
+    //     intro_id recomputation. Estimated ~46 new aux columns growing
+    //     `EFFECT_VM_WIDTH` from 105 to ~151 (`STAGE-7-GAMMA-2-PI-DESIGN.md`
+    //     §6.4).
+    //
+    //   * Boundary constraint pinning the last row's accumulator state to
+    //     PI[OUTGOING_TRANSFER_ROOT_BASE..+4] etc. — the same shape as
+    //     today's `CUSTOM_COUNT_ACC → CUSTOM_EFFECT_COUNT` sum-check.
+    //
+    // Phase 1 (this commit) delivers: PI surface + executor projection +
+    // off-AIR verifier algorithm. The AIR widening is deferred until the
+    // verifier-side algorithm has soaked in production.
 }
 
 /// State column offsets (relative to state start).
@@ -653,21 +691,106 @@ pub mod pi {
     pub const PREVIOUS_RECEIPT_HASH_BASE: usize = 34;
     pub const PREVIOUS_RECEIPT_HASH_LEN: usize = 4;
 
+    // ---- Stage 7-γ.2 Phase 1: bilateral cross-cell algebraic binding ----
+    //
+    // These slots project each per-cell proof's bilateral-effect participation
+    // (Transfer, GrantCapability, Introduce) into shared PI fields that the
+    // off-AIR verifier reconstructs from the turn's call_forest + ACTOR_NONCE.
+    // The verifier rejects any per-cell PI that doesn't match the
+    // schedule-derived expectation, closing the executor-trust gap for cross-
+    // cell agreement (EXECUTOR-HONESTY-AUDIT.md T1, T3, T15 multi-cell tails).
+    //
+    // All bilateral fields default to the zero sentinel
+    // (`Commitment4::empty()` for the 4-felt roots; 0 for the scalar counts)
+    // when this cell has no bilateral effects of that kind. The verifier
+    // short-circuits matching against sentinel entries.
+    //
+    // Sub-stage status:
+    //   γ.2.0  PI surface + sentinels                  ✅ (this commit)
+    //   γ.2.1  AIR aux columns + boundary binding      pending (TODO[γ.2.1])
+    //   γ.2.2  Verifier cross-cell match loop          ✅ (this commit)
+    //   γ.2.3  IS_AGENT_CELL gate                      ✅ (this commit)
+
+    /// Count of Transfer rows in this cell's projection where direction == 1
+    /// (outflow). The verifier's expected-schedule reconstruction must agree.
+    pub const OUTBOUND_TRANSFER_COUNT: usize = 38;
+    /// Count of Transfer rows where direction == 0 (inflow).
+    pub const INBOUND_TRANSFER_COUNT: usize = 39;
+    /// Count of GrantCapability rows where this cell is the grantor.
+    pub const OUTBOUND_GRANT_COUNT: usize = 40;
+    /// Count of GrantCapability rows where this cell is the grantee.
+    pub const INBOUND_GRANT_COUNT: usize = 41;
+    /// Count of Introduce rows where this cell is the introducer.
+    pub const INTRO_AS_INTRODUCER_COUNT: usize = 42;
+    /// Count of Introduce rows where this cell is the recipient.
+    pub const INTRO_AS_RECIPIENT_COUNT: usize = 43;
+    /// Count of Introduce rows where this cell is the target.
+    pub const INTRO_AS_TARGET_COUNT: usize = 44;
+
+    /// 4-felt Poseidon2 accumulator over all outbound bilateral transfer_ids
+    /// in this turn, absorbed in trace-row-index order. Each step folds
+    /// `(transfer_id_4, peer_cell_id_4)` into the running state. Domain
+    /// separator distinguishes from inbound + grant + introduce roots.
+    /// Sentinel: `[BabyBear::ZERO; 4]` when count == 0.
+    pub const OUTGOING_TRANSFER_ROOT_BASE: usize = 45;
+    pub const OUTGOING_TRANSFER_ROOT_LEN: usize = 4;
+    /// Mirror of OUTGOING_TRANSFER_ROOT for the inbound side.
+    pub const INCOMING_TRANSFER_ROOT_BASE: usize = 49;
+    pub const INCOMING_TRANSFER_ROOT_LEN: usize = 4;
+
+    /// 4-felt accumulator over outbound grant_ids (this cell as grantor).
+    pub const OUTGOING_GRANT_ROOT_BASE: usize = 53;
+    pub const OUTGOING_GRANT_ROOT_LEN: usize = 4;
+    /// 4-felt accumulator over inbound grant_ids (this cell as grantee).
+    pub const INCOMING_GRANT_ROOT_BASE: usize = 57;
+    pub const INCOMING_GRANT_ROOT_LEN: usize = 4;
+
+    /// 4-felt accumulator over intro_ids where this cell is the introducer.
+    pub const INTRO_AS_INTRODUCER_ROOT_BASE: usize = 61;
+    pub const INTRO_AS_INTRODUCER_ROOT_LEN: usize = 4;
+    /// 4-felt accumulator over intro_ids where this cell is the recipient.
+    pub const INTRO_AS_RECIPIENT_ROOT_BASE: usize = 65;
+    pub const INTRO_AS_RECIPIENT_ROOT_LEN: usize = 4;
+    /// 4-felt accumulator over intro_ids where this cell is the target.
+    pub const INTRO_AS_TARGET_ROOT_BASE: usize = 69;
+    pub const INTRO_AS_TARGET_ROOT_LEN: usize = 4;
+
+    /// Single-felt boolean: 1 iff this per-cell proof was the actor's
+    /// (signer's) cell for the turn. Exactly one proof in a bundle must
+    /// carry IS_AGENT_CELL == 1; all others must be 0. The agent-cell
+    /// proof's row-0 NONCE column is pinned to PI[ACTOR_NONCE] (γ.0a
+    /// constraint), and non-agent cells are exempt from that pin. The
+    /// verifier enforces the exactly-one-agent rule across the bundle.
+    pub const IS_AGENT_CELL: usize = 73;
+
     // ---- Custom proof commitments ----
     /// For each custom effect i (0..custom_count):
     ///   PI[CUSTOM_PROOFS_BASE + i*8 + 0..4] = custom_program_vk_hash (4 elements)
     ///   PI[CUSTOM_PROOFS_BASE + i*8 + 4..8] = custom_proof_commitment (4 elements)
-    pub const CUSTOM_PROOFS_BASE: usize = 38;
+    ///
+    /// Note: CUSTOM_PROOFS_BASE is computed from BASE_COUNT so that adding
+    /// new γ.2 PI fields shifts the custom-proof entries automatically. All
+    /// callers compute from `BASE_COUNT` rather than the literal constant.
+    pub const CUSTOM_PROOFS_BASE: usize = BASE_COUNT;
     /// Base public inputs (without custom proof data).
     ///
-    /// Layout (post Stage 7-γ.0a, BASE_COUNT bumped 25 -> 38):
-    ///   0..21  pre-γ.0a slots (commitments, balances, block height, etc.)
-    ///   21..25 APPROVED_HANDOFFS[4]
-    ///   25..29 TURN_HASH[4]              (γ.0a)
-    ///   29..33 EFFECTS_HASH_GLOBAL[4]    (γ.0a)
-    ///   33     ACTOR_NONCE               (γ.0a, single felt)
-    ///   34..38 PREVIOUS_RECEIPT_HASH[4]  (γ.0a)
-    pub const BASE_COUNT: usize = 38;
+    /// Layout (post Stage 7-γ.2 Phase 1, BASE_COUNT bumped 38 -> 74):
+    ///   0..21   pre-γ.0a slots (commitments, balances, block height, etc.)
+    ///   21..25  APPROVED_HANDOFFS[4]
+    ///   25..29  TURN_HASH[4]                       (γ.0a)
+    ///   29..33  EFFECTS_HASH_GLOBAL[4]             (γ.0a)
+    ///   33      ACTOR_NONCE                        (γ.0a)
+    ///   34..38  PREVIOUS_RECEIPT_HASH[4]           (γ.0a)
+    ///   38..45  bilateral counts (transfer/grant/intro per direction/role) (γ.2)
+    ///   45..49  OUTGOING_TRANSFER_ROOT[4]          (γ.2)
+    ///   49..53  INCOMING_TRANSFER_ROOT[4]          (γ.2)
+    ///   53..57  OUTGOING_GRANT_ROOT[4]             (γ.2)
+    ///   57..61  INCOMING_GRANT_ROOT[4]             (γ.2)
+    ///   61..65  INTRO_AS_INTRODUCER_ROOT[4]        (γ.2)
+    ///   65..69  INTRO_AS_RECIPIENT_ROOT[4]         (γ.2)
+    ///   69..73  INTRO_AS_TARGET_ROOT[4]            (γ.2)
+    ///   73      IS_AGENT_CELL                      (γ.2)
+    pub const BASE_COUNT: usize = 74;
     /// Elements per custom effect entry in PI (4 vk_hash + 4 proof_commit).
     pub const CUSTOM_ENTRY_SIZE: usize = 8;
 

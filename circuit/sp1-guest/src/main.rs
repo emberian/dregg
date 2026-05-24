@@ -266,9 +266,12 @@ fn wire_to_cell_state(wire: &CellStateWire) -> CellState {
 }
 
 fn wire_to_eval_context(wire: &EvalContextWire) -> EvalContext {
+    // Build the canonical context from the wire fields, defaulting the
+    // slot-caveat fields that the SP1 guest path does not currently surface.
     EvalContext {
         block_height: wire.block_height,
         timestamp: wire.timestamp,
+        ..Default::default()
     }
 }
 
@@ -377,7 +380,14 @@ fn main() {
             let program = wire_to_cell_program(prog_wire);
             let new_state = wire_to_cell_state(new_state_wire);
             let old_state = input.old_cell_state.as_ref().map(wire_to_cell_state);
-            program.evaluate(&new_state, old_state.as_ref()).is_ok()
+            // The SP1 guest only handles the static wire variants
+            // (`FieldEquals`/`FieldGte`/`FieldLte`/`SumEquals`/`Immutable`)
+            // so we pass `None` for the slot-caveat `EvalContext`;
+            // contextual variants are not yet plumbed through the wire
+            // format.
+            program
+                .evaluate(&new_state, old_state.as_ref(), None)
+                .is_ok()
         }
         _ => true, // No program to check
     };

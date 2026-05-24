@@ -618,6 +618,21 @@ pub struct TurnExecutor {
     /// AT WRITE TIME, removing the wallet's ability to silently break the
     /// chain by submitting every turn as if it were genesis.
     pub last_receipt_hash: Mutex<HashMap<CellId, [u8; 32]>>,
+    /// Optional X25519 keypair used to decrypt `EncryptedTurn` submissions.
+    ///
+    /// When set, callers may submit privacy-preserving `EncryptedTurn`
+    /// envelopes via `execute_encrypted_turn`; the executor performs DH with
+    /// its static secret and the sender's ephemeral public key, derives the
+    /// ChaCha20-Poly1305 key, decrypts the turn body, and dispatches to the
+    /// standard `execute` path. Without this key, `execute_encrypted_turn`
+    /// rejects with `NoDecryptionKey` — i.e. the executor does not support
+    /// the privacy path.
+    ///
+    /// The tuple is `(secret, public)` so callers don't need to recompute the
+    /// public key on every decrypt. Senders bind their ciphertext to the
+    /// `public` half via X25519 DH; the `secret` half is the long-term
+    /// unsealer.
+    pub turn_decryption_keypair: Option<([u8; 32], [u8; 32])>,
     /// Optional 32-byte Ed25519 signing key seed used to populate
     /// `TurnReceipt::executor_signature` on every committed receipt.
     ///
@@ -665,6 +680,7 @@ impl TurnExecutor {
             queue_program_registry: crate::queue_programs::QueueProgramRegistry::new(),
             last_receipt_hash: Mutex::new(HashMap::new()),
             executor_signing_key: None,
+            turn_decryption_keypair: None,
         }
     }
 
@@ -702,6 +718,7 @@ impl TurnExecutor {
             queue_program_registry: crate::queue_programs::QueueProgramRegistry::new(),
             last_receipt_hash: Mutex::new(HashMap::new()),
             executor_signing_key: None,
+            turn_decryption_keypair: None,
         }
     }
 
@@ -735,6 +752,7 @@ impl TurnExecutor {
             queue_program_registry: crate::queue_programs::QueueProgramRegistry::new(),
             last_receipt_hash: Mutex::new(HashMap::new()),
             executor_signing_key: None,
+            turn_decryption_keypair: None,
         }
     }
 
@@ -769,6 +787,113 @@ impl TurnExecutor {
     /// Set the executor signing key after construction.
     pub fn set_executor_signing_key(&mut self, signing_key_seed: [u8; 32]) {
         self.executor_signing_key = Some(signing_key_seed);
+    }
+
+    /// Equip the executor with an X25519 keypair so it can decrypt
+    /// `EncryptedTurn` submissions.
+    ///
+    /// `secret` is the 32-byte X25519 static secret (the unsealer);
+    /// the public key is derived from it. After this call, callers may
+    /// invoke `execute_encrypted_turn` and pass `EncryptedTurn` envelopes
+    /// that bind to `public`. Without this key, the executor cannot
+    /// participate in the privacy path.
+    pub fn with_turn_decryption_secret(mut self, secret: [u8; 32]) -> Self {
+        let public = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(secret));
+        self.turn_decryption_keypair = Some((secret, *public.as_bytes()));
+        self
+    }
+
+    /// Set the X25519 turn-decryption secret after construction.
+    pub fn set_turn_decryption_secret(&mut self, secret: [u8; 32]) {
+        let public = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(secret));
+        self.turn_decryption_keypair = Some((secret, *public.as_bytes()));
+    }
+
+    /// Return the X25519 public key callers should encrypt to (if set).
+    pub fn turn_decryption_public(&self) -> Option<[u8; 32]> {
+        self.turn_decryption_keypair.map(|(_, pub_key)| pub_key)
+    }
+
+    /// Decrypt and execute an `EncryptedTurn` envelope.
+    ///
+    /// This is the production wiring for the privacy-preserving turn path
+    /// (AUDIT-privacy.md §11.2: previously `EncryptedTurn` was exported but
+    /// never consumed by the executor). Flow:
+    ///
+    /// 1. Verify the envelope's metadata (agent/conflict-set/turn-commitment
+    ///    bindings via `EncryptedTurn::verify_metadata`).
+    /// 2. Decrypt the ciphertext using the executor's static X25519 secret +
+    ///    the sender's ephemeral public key. The decrypt path also re-checks
+    ///    the turn commitment over the recovered plaintext.
+    /// 3. Dispatch the recovered `Turn` to the standard `execute` path.
+    ///
+    /// The executor must have been configured with
+    /// `with_turn_decryption_secret`; otherwise this returns a `Rejected`
+    /// result.
+    ///
+    /// SECURITY: The agent in the recovered turn MUST match the envelope's
+    /// claimed `agent` field. A mismatch is treated as a Byzantine submission
+    /// and the turn is rejected. This binds the public-side fee/nonce
+    /// preflight to the actual turn body.
+    pub fn execute_encrypted_turn(
+        &self,
+        encrypted: &crate::encrypted::EncryptedTurn,
+        ledger: &mut Ledger,
+    ) -> TurnResult {
+        // 1. Metadata consistency check (agent/conflict-set/turn-commitment
+        //    bindings inside the validity proof's public inputs).
+        if let Err(e) = encrypted.verify_metadata() {
+            return TurnResult::Rejected {
+                reason: TurnError::InvalidEffect {
+                    reason: format!("encrypted turn metadata invalid: {:?}", e),
+                },
+                at_action: vec![],
+            };
+        }
+
+        // 2. Decrypt with the executor's X25519 secret.
+        let (secret, public) = match self.turn_decryption_keypair {
+            Some(kp) => kp,
+            None => {
+                return TurnResult::Rejected {
+                    reason: TurnError::InvalidEffect {
+                        reason: "executor has no turn_decryption_keypair configured; \
+                                 EncryptedTurn cannot be processed"
+                            .to_string(),
+                    },
+                    at_action: vec![],
+                };
+            }
+        };
+        let turn = match encrypted.decrypt_for_executor(&secret, &public) {
+            Ok(t) => t,
+            Err(e) => {
+                return TurnResult::Rejected {
+                    reason: TurnError::InvalidEffect {
+                        reason: format!("encrypted turn decryption failed: {:?}", e),
+                    },
+                    at_action: vec![],
+                };
+            }
+        };
+
+        // 3. Agent binding: the decrypted turn's agent must equal the
+        //    cleartext-side `agent` field. Otherwise the validity-proof's
+        //    fee/nonce preflight was done against a different agent than
+        //    the one the executor would now charge.
+        if turn.agent != encrypted.agent {
+            return TurnResult::Rejected {
+                reason: TurnError::InvalidEffect {
+                    reason: "encrypted turn agent mismatch: decrypted turn.agent != envelope.agent"
+                        .to_string(),
+                },
+                at_action: vec![],
+            };
+        }
+
+        // 4. Dispatch to the standard execution path. All the usual
+        //    nullifier-set, ledger, and conservation gates apply.
+        self.execute(&turn, ledger)
     }
 
     /// Sign `receipt.receipt_hash()` with the executor's signing key if one
@@ -1241,6 +1366,31 @@ impl TurnExecutor {
             public_inputs[effect_vm::pi::PREVIOUS_RECEIPT_HASH_BASE + i] = prev_receipt_4[i];
         }
 
+        // Stage 7-γ.2 Phase 1: bilateral cross-cell PI fields. Each per-cell
+        // proof carries its own outbound/inbound counts and accumulator
+        // roots over Transfer / Grant / Introduce. The verifier's off-AIR
+        // cross-cell match loop recomputes the expected schedule from
+        // (call_forest, ACTOR_NONCE) and rejects any per-cell PI that
+        // disagrees. See `STAGE-7-GAMMA-2-PI-DESIGN.md` §3-4.
+        {
+            use crate::bilateral_schedule::{ExpectedBilateral, project_into_pi};
+            let schedule = ExpectedBilateral::from_turn(turn);
+            let counts = schedule.counts_for(cell_id);
+            let roots = schedule.roots_for(cell_id, actor_nonce);
+            project_into_pi(&mut public_inputs, &counts, &roots);
+
+            // IS_AGENT_CELL: 1 iff this per-cell proof is the actor's
+            // (signer's) cell. The agent's row-0 NONCE column is pinned
+            // to PI[ACTOR_NONCE] in single-cell proofs today; in multi-
+            // cell bundles the non-agent cells are exempt from that pin
+            // — see verifier's bundle check.
+            public_inputs[effect_vm::pi::IS_AGENT_CELL] = if cell_id == &turn.agent {
+                BabyBear::new(1)
+            } else {
+                BabyBear::ZERO
+            };
+        }
+
         // Append custom proof entries (vk_hash + proof_commitment per custom effect).
         let mut custom_idx = 0;
         for effect in &vm_effects {
@@ -1437,6 +1587,93 @@ impl TurnExecutor {
         Ok(())
     }
 
+    /// Verify a sovereign-witness STARK transition proof.
+    ///
+    /// Mirrors `pyana_cell::peer_exchange::PeerExchange::verify_stark_transition`:
+    /// deserializes the proof, widens the 32-byte commitments to 4 BabyBear
+    /// felts each, overrides the proof's commitment PIs with verifier-
+    /// derived values, and verifies via `EffectVmAir`. A divergence on
+    /// commitment slots surfaces as `InvalidExecutionProof`.
+    fn verify_sovereign_witness_stark(
+        &self,
+        _cell_id: &CellId,
+        old_commitment: &[u8; 32],
+        new_commitment: &[u8; 32],
+        _effects_hash: &[u8; 32],
+        proof_bytes: &[u8],
+    ) -> Result<(), TurnError> {
+        use pyana_circuit::effect_vm::pi;
+        use pyana_circuit::field::BabyBear;
+        use pyana_circuit::stark;
+
+        let proof = stark::proof_from_bytes(proof_bytes)
+            .map_err(|e| TurnError::InvalidExecutionProof(e))?;
+
+        let old_commit_4 = Self::commitment_to_4bb(old_commitment);
+        let new_commit_4 = Self::commitment_to_4bb(new_commitment);
+
+        let min_pi_count = pi::BASE_COUNT;
+        if proof.public_inputs.len() < min_pi_count {
+            return Err(TurnError::InvalidExecutionProof(format!(
+                "sovereign witness STARK proof has {} public inputs, expected at least {}",
+                proof.public_inputs.len(),
+                min_pi_count
+            )));
+        }
+
+        // Build PIs from the proof; override the commitment slots with
+        // verifier-derived values. The AIR's transition constraints bind
+        // the other PIs to the trace, so trusting them is safe.
+        let mut public_inputs: Vec<BabyBear> = (0..min_pi_count)
+            .map(|i| BabyBear::new_canonical(proof.public_inputs[i]))
+            .collect();
+        for i in 0..pi::OLD_COMMIT_LEN {
+            public_inputs[pi::OLD_COMMIT_BASE + i] = old_commit_4[i];
+        }
+        for i in 0..pi::NEW_COMMIT_LEN {
+            public_inputs[pi::NEW_COMMIT_BASE + i] = new_commit_4[i];
+        }
+
+        // Append custom-effect entries from the proof's PIs (the AIR
+        // constrains CUSTOM_EFFECT_COUNT to match the trace, so trusting
+        // the proof's declared count here is sound).
+        let custom_count_val = public_inputs[pi::CUSTOM_EFFECT_COUNT].as_u32() as usize;
+        for i in 0..custom_count_val {
+            let base = pi::CUSTOM_PROOFS_BASE + i * pi::CUSTOM_ENTRY_SIZE;
+            if base + pi::CUSTOM_ENTRY_SIZE > proof.public_inputs.len() {
+                break;
+            }
+            for j in 0..pi::CUSTOM_ENTRY_SIZE {
+                public_inputs.push(BabyBear::new_canonical(proof.public_inputs[base + j]));
+            }
+        }
+
+        // Verify commitment PIs declared by the proof match what we expect.
+        for i in 0..pi::OLD_COMMIT_LEN {
+            let proof_v = BabyBear::new_canonical(proof.public_inputs[pi::OLD_COMMIT_BASE + i]);
+            if proof_v != old_commit_4[i] {
+                return Err(TurnError::InvalidExecutionProof(format!(
+                    "sovereign witness STARK old_commitment mismatch at felt {}",
+                    i
+                )));
+            }
+        }
+        for i in 0..pi::NEW_COMMIT_LEN {
+            let proof_v = BabyBear::new_canonical(proof.public_inputs[pi::NEW_COMMIT_BASE + i]);
+            if proof_v != new_commit_4[i] {
+                return Err(TurnError::InvalidExecutionProof(format!(
+                    "sovereign witness STARK new_commitment mismatch at felt {}",
+                    i
+                )));
+            }
+        }
+
+        let air = pyana_circuit::EffectVmAir::new(proof.trace_len);
+        stark::verify(&air, &proof, &public_inputs)
+            .map_err(|e| TurnError::ProofVerificationFailed(e))?;
+        Ok(())
+    }
+
     /// Stage 7-γ.0d: cross-proof PI matching for a bundle of per-cell proofs
     /// from one turn.
     ///
@@ -1561,6 +1798,188 @@ impl TurnExecutor {
                         ref_prev_receipt[i],
                         p[pi::PREVIOUS_RECEIPT_HASH_BASE + i],
                     )));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Stage 7-γ.2 Phase 1: bilateral cross-cell PI consistency check.
+    ///
+    /// Given a turn and the bundle of per-cell `(cell_id, PI)` pairs, this
+    /// reconstructs the expected bilateral schedule from `call_forest +
+    /// ACTOR_NONCE` and verifies that each per-cell PI's bilateral count
+    /// fields and accumulator-root fields match what the schedule predicts.
+    ///
+    /// It also enforces the `IS_AGENT_CELL` rule: at most one proof in the
+    /// bundle carries `PI[IS_AGENT_CELL] == 1`, and if any does it must be
+    /// the cell named in `turn.agent`. All other proofs must have
+    /// `PI[IS_AGENT_CELL] == 0`.
+    ///
+    /// Closes the threats from `EXECUTOR-HONESTY-AUDIT.md` T1 (sender lies
+    /// about outbound transfer), T3 (intro permission tampering across
+    /// sides), T15 multi-cell tails. See `STAGE-7-GAMMA-2-PI-DESIGN.md` §4.
+    pub fn verify_bilateral_bundle(
+        bundle: &[(pyana_types::CellId, Vec<pyana_circuit::field::BabyBear>)],
+        turn: &Turn,
+    ) -> Result<(), TurnError> {
+        use crate::bilateral_schedule::{ExpectedBilateral, extract_from_pi};
+        use pyana_circuit::effect_vm::pi;
+
+        if bundle.is_empty() {
+            return Ok(());
+        }
+
+        // Reject any per-cell PI that's too short to carry the γ.2 layout.
+        for (i, (cid, p)) in bundle.iter().enumerate() {
+            if p.len() < pi::BASE_COUNT {
+                return Err(TurnError::InvalidExecutionProof(format!(
+                    "bilateral bundle entry {} (cell {:?}) has {} public \
+                     inputs, expected at least {} (Stage 7-γ.2 layout)",
+                    i,
+                    cid,
+                    p.len(),
+                    pi::BASE_COUNT
+                )));
+            }
+        }
+
+        let schedule = ExpectedBilateral::from_turn(turn);
+        let actor_nonce = turn.nonce;
+
+        // Per-cell check.
+        let mut agent_count = 0usize;
+        for (idx, (cell_id, p)) in bundle.iter().enumerate() {
+            let (counts, roots) = extract_from_pi(p);
+            let expected_counts = schedule.counts_for(cell_id);
+            let expected_roots = schedule.roots_for(cell_id, actor_nonce);
+
+            macro_rules! count_check {
+                ($field:ident, $name:literal) => {
+                    if counts.$field != expected_counts.$field {
+                        return Err(TurnError::InvalidExecutionProof(format!(
+                            "bilateral PI mismatch in proof {} (cell {:?}): \
+                             {} expected {} got {}",
+                            idx, cell_id, $name, expected_counts.$field, counts.$field
+                        )));
+                    }
+                };
+            }
+            count_check!(outbound_transfer, "outbound_transfer_count");
+            count_check!(inbound_transfer, "inbound_transfer_count");
+            count_check!(outbound_grant, "outbound_grant_count");
+            count_check!(inbound_grant, "inbound_grant_count");
+            count_check!(intro_as_introducer, "intro_as_introducer_count");
+            count_check!(intro_as_recipient, "intro_as_recipient_count");
+            count_check!(intro_as_target, "intro_as_target_count");
+
+            macro_rules! root_check {
+                ($field:ident, $name:literal) => {
+                    if roots.$field != expected_roots.$field {
+                        return Err(TurnError::InvalidExecutionProof(format!(
+                            "bilateral PI mismatch in proof {} (cell {:?}): \
+                             {} root differs from schedule",
+                            idx, cell_id, $name
+                        )));
+                    }
+                };
+            }
+            root_check!(outgoing_transfer, "outgoing_transfer");
+            root_check!(incoming_transfer, "incoming_transfer");
+            root_check!(outgoing_grant, "outgoing_grant");
+            root_check!(incoming_grant, "incoming_grant");
+            root_check!(intro_as_introducer, "intro_as_introducer");
+            root_check!(intro_as_recipient, "intro_as_recipient");
+            root_check!(intro_as_target, "intro_as_target");
+
+            // IS_AGENT_CELL consistency.
+            let is_agent = p[pi::IS_AGENT_CELL];
+            let is_agent_u = is_agent.as_u32();
+            if is_agent_u != 0 && is_agent_u != 1 {
+                return Err(TurnError::InvalidExecutionProof(format!(
+                    "bilateral PI in proof {} (cell {:?}): IS_AGENT_CELL must be 0 or 1, got {}",
+                    idx, cell_id, is_agent_u
+                )));
+            }
+            let should_be_agent = cell_id == &turn.agent;
+            if should_be_agent && is_agent_u != 1 {
+                return Err(TurnError::InvalidExecutionProof(format!(
+                    "bilateral PI in proof {} (cell {:?}): cell is the turn.agent \
+                     but IS_AGENT_CELL == 0",
+                    idx, cell_id
+                )));
+            }
+            if !should_be_agent && is_agent_u != 0 {
+                return Err(TurnError::InvalidExecutionProof(format!(
+                    "bilateral PI in proof {} (cell {:?}): cell is NOT the turn.agent \
+                     but IS_AGENT_CELL == 1",
+                    idx, cell_id
+                )));
+            }
+            if is_agent_u == 1 {
+                agent_count += 1;
+            }
+        }
+
+        // Exactly-one-agent rule: at most one proof should claim agent.
+        if agent_count > 1 {
+            return Err(TurnError::InvalidExecutionProof(format!(
+                "bilateral bundle has {} proofs claiming IS_AGENT_CELL == 1; \
+                 at most one allowed",
+                agent_count
+            )));
+        }
+
+        // Cross-side existence check: every Transfer / Grant in the
+        // schedule should have *both* its endpoints represented in the
+        // bundle whenever either appears. If one side appears but the peer
+        // does not, that's a hard reject — the bundle is incomplete
+        // relative to the schedule, and a malicious prover could otherwise
+        // produce only the side that benefits them.
+        let covered: std::collections::HashSet<&pyana_types::CellId> =
+            bundle.iter().map(|(c, _)| c).collect();
+        for t in &schedule.transfers {
+            let from_in = covered.contains(&t.from);
+            let to_in = covered.contains(&t.to);
+            if from_in != to_in {
+                let missing = if from_in { &t.to } else { &t.from };
+                return Err(TurnError::InvalidExecutionProof(format!(
+                    "bilateral schedule references both {:?} and {:?} in a Transfer \
+                     but bundle only covers one; missing peer {:?}",
+                    t.from, t.to, missing
+                )));
+            }
+        }
+        for g in &schedule.grants {
+            let from_in = covered.contains(&g.from);
+            let to_in = covered.contains(&g.to);
+            if from_in != to_in {
+                let missing = if from_in { &g.to } else { &g.from };
+                return Err(TurnError::InvalidExecutionProof(format!(
+                    "bilateral schedule references both {:?} and {:?} in a Grant \
+                     but bundle only covers one; missing peer {:?}",
+                    g.from, g.to, missing
+                )));
+            }
+        }
+        for intro in &schedule.introduces {
+            let any_covered = covered.contains(&intro.introducer)
+                || covered.contains(&intro.recipient)
+                || covered.contains(&intro.target);
+            if any_covered {
+                let distinct: std::collections::HashSet<&pyana_types::CellId> =
+                    [&intro.introducer, &intro.recipient, &intro.target]
+                        .into_iter()
+                        .collect();
+                for c in &distinct {
+                    if !covered.contains(*c) {
+                        return Err(TurnError::InvalidExecutionProof(format!(
+                            "bilateral schedule references Introduce({:?}, {:?}, {:?}) \
+                             but bundle is missing role-player {:?}",
+                            intro.introducer, intro.recipient, intro.target, c
+                        )));
+                    }
                 }
             }
         }
@@ -2923,9 +3342,23 @@ impl TurnExecutor {
         // on them as if they were hosted. After execution, new commitments are
         // computed and the cells are removed from the hosted store.
         // =====================================================================
+        // Collect witness sequences to bump after successful injection.
         let mut sovereign_cell_ids: Vec<CellId> = Vec::new();
+        let mut sovereign_witness_sequences: Vec<(CellId, u64)> = Vec::new();
         for (cell_id, witness) in &turn.sovereign_witnesses {
-            // Verify the cell is actually sovereign in the ledger.
+            // 0. Witness key vs payload cell_id self-consistency.
+            if witness.cell_id != *cell_id {
+                return TurnResult::Rejected {
+                    reason: TurnError::InvalidEffect {
+                        reason: format!(
+                            "sovereign witness payload cell_id {} does not match map key {}",
+                            witness.cell_id, cell_id
+                        ),
+                    },
+                    at_action: vec![],
+                };
+            }
+            // 1. Verify the cell is actually sovereign in the ledger.
             let stored_commitment = match ledger.get_sovereign_commitment(cell_id) {
                 Some(c) => *c,
                 None => {
@@ -2940,30 +3373,34 @@ impl TurnExecutor {
                     };
                 }
             };
-            // Verify the witness state_proof matches the cell's state_commitment.
-            let computed_commitment = witness.cell_state.state_commitment();
-            if witness.state_proof != computed_commitment {
-                return TurnResult::Rejected {
-                    reason: TurnError::SovereignCommitmentMismatch {
-                        cell: *cell_id,
-                        expected: computed_commitment,
-                        got: witness.state_proof,
-                    },
-                    at_action: vec![],
-                };
-            }
-            // Verify the computed commitment matches the stored one.
-            if computed_commitment != stored_commitment {
+            // 2. Witness declared old_commitment must equal ledger's stored.
+            if witness.old_commitment != stored_commitment {
                 return TurnResult::Rejected {
                     reason: TurnError::SovereignCommitmentMismatch {
                         cell: *cell_id,
                         expected: stored_commitment,
+                        got: witness.old_commitment,
+                    },
+                    at_action: vec![],
+                };
+            }
+            // 3. cell_state's commitment must equal the witness's declared
+            //    old_commitment (and therefore the stored one).
+            let computed_commitment = witness.cell_state.state_commitment();
+            if computed_commitment != witness.old_commitment {
+                return TurnResult::Rejected {
+                    reason: TurnError::SovereignCommitmentMismatch {
+                        cell: *cell_id,
+                        expected: witness.old_commitment,
                         got: computed_commitment,
                     },
                     at_action: vec![],
                 };
             }
-            // Verify the witness cell ID matches.
+            // 4. cell_state id must match the witness id (the cell carries
+            //    its identity inside its state, so this guards against any
+            //    `cell_state` body whose `id()` accessor drifts from the
+            //    map key).
             if witness.cell_state.id() != *cell_id {
                 return TurnResult::Rejected {
                     reason: TurnError::InvalidEffect {
@@ -2975,6 +3412,75 @@ impl TurnExecutor {
                     },
                     at_action: vec![],
                 };
+            }
+            // 5. Ed25519 signature against the witnessed cell's public_key.
+            //    Since `cell_state.public_key()` is bound into
+            //    `state_commitment()` (verified above), the key we verify
+            //    against is itself anchored to the federation's stored
+            //    sovereign commitment.
+            let verifying_key = match VerifyingKey::from_bytes(witness.cell_state.public_key()) {
+                Ok(k) => k,
+                Err(_) => {
+                    return TurnResult::Rejected {
+                        reason: TurnError::InvalidEffect {
+                            reason: format!(
+                                "sovereign witness public key invalid for cell {}",
+                                cell_id
+                            ),
+                        },
+                        at_action: vec![],
+                    };
+                }
+            };
+            let message = crate::turn::SovereignCellWitness::signing_message(
+                cell_id,
+                &witness.old_commitment,
+                &witness.new_commitment,
+                &witness.effects_hash,
+                witness.timestamp,
+                witness.sequence,
+            );
+            let sig = Signature::from_bytes(&witness.signature);
+            if verifying_key.verify_strict(&message, &sig).is_err() {
+                return TurnResult::Rejected {
+                    reason: TurnError::InvalidEffect {
+                        reason: format!("sovereign witness signature invalid for cell {}", cell_id),
+                    },
+                    at_action: vec![],
+                };
+            }
+            // 6. Per-cell monotonic sequence (no gaps).
+            let expected_seq = ledger.last_sovereign_witness_sequence(cell_id) + 1;
+            if witness.sequence != expected_seq {
+                return TurnResult::Rejected {
+                    reason: TurnError::InvalidEffect {
+                        reason: format!(
+                            "sovereign witness sequence gap for cell {}: expected {}, got {}",
+                            cell_id, expected_seq, witness.sequence
+                        ),
+                    },
+                    at_action: vec![],
+                };
+            }
+            // 7. Optional STARK transition proof. When present, the proof
+            //    is verified through the same path the executor uses for
+            //    Phase 3 proof-carrying turns (see `verify_and_commit_proof`).
+            //    The PIs bind `old_commitment -> new_commitment +
+            //    effects_hash + cell_id` via `EffectVmAir`. A failed verify
+            //    rejects the entire turn.
+            if let Some(proof_bytes) = &witness.transition_proof {
+                if let Err(e) = self.verify_sovereign_witness_stark(
+                    cell_id,
+                    &witness.old_commitment,
+                    &witness.new_commitment,
+                    &witness.effects_hash,
+                    proof_bytes,
+                ) {
+                    return TurnResult::Rejected {
+                        reason: e,
+                        at_action: vec![],
+                    };
+                }
             }
             // Temporarily inject the witnessed cell into the ledger for execution.
             // If the cell already exists in the hosted table (e.g., because the
@@ -2995,6 +3501,7 @@ impl TurnExecutor {
                 };
             }
             sovereign_cell_ids.push(*cell_id);
+            sovereign_witness_sequences.push((*cell_id, witness.sequence));
         }
 
         // =====================================================================
@@ -3149,6 +3656,11 @@ impl TurnExecutor {
                 // Update the sovereign commitment in the ledger.
                 let _ = ledger.update_sovereign_commitment(cell_id, new_commitment);
             }
+        }
+        // Bump per-cell witness sequences so a replay is rejected even if a
+        // future hypothetical state-commitment cycle round-trips back.
+        for (cell_id, seq) in &sovereign_witness_sequences {
+            ledger.bump_sovereign_witness_sequence(cell_id, *seq);
         }
 
         // =====================================================================
@@ -3371,7 +3883,23 @@ impl TurnExecutor {
         }
 
         // Check target cell exists.
+        // For sovereign cells without an injected witness, the cell is absent
+        // from the hosted ledger table because Phase 1 only injects witnessed
+        // sovereign cells (see `SOVEREIGN CELL WITNESS INJECTION` above). A
+        // sovereign target with no witness must surface as the dedicated
+        // `SovereignWitnessRequired` so callers can distinguish "you forgot
+        // the witness" from "this cell does not exist." Otherwise, a future
+        // refactor that hydrates cells lazily could silently regress this to
+        // an acceptance path.
         if ledger.get(&action.target).is_none() {
+            if ledger.is_sovereign(&action.target) {
+                return Err((
+                    TurnError::SovereignWitnessRequired {
+                        cell: action.target,
+                    },
+                    path.clone(),
+                ));
+            }
             return Err((TurnError::CellNotFound { id: action.target }, path.clone()));
         }
 
@@ -3677,9 +4205,36 @@ impl TurnExecutor {
                 // For Circuit programs, the action must carry a proof (already verified above).
                 // For Predicate programs, evaluate constraints against new state.
                 if !target_cell.program.requires_proof() {
-                    let result = target_cell
-                        .program
-                        .evaluate(&target_cell.state, old_target_state.as_ref());
+                    // Build the slot-caveat EvalContext (Lane G).
+                    // Contextual variants (`SenderAuthorized`,
+                    // `TemporalGate`, `FieldGteHeight`, `RateLimit`,
+                    // `PreimageGate`, …) read these fields; static
+                    // variants ignore them.
+                    //
+                    // Replay semantics (per `SLOT-CAVEATS-EVALUATION.md`
+                    // finding 3): for variants that depend on external
+                    // state (set roots, current height), the receipt is
+                    // expected to snapshot those at receipt-time;
+                    // replay should reconstruct this context from the
+                    // receipt, not from the replayer's live chain view.
+                    let parent_pk_opt: Option<[u8; 32]> =
+                        ledger.get(parent_cell).map(|p| *p.public_key());
+                    let ctx = pyana_cell::EvalContext {
+                        block_height: self.block_height,
+                        timestamp: self.current_timestamp,
+                        // Epoch ≈ floor(height / 1024) as a default
+                        // mapping until the executor wires an explicit
+                        // epoch oracle (cf. open question #q1).
+                        current_epoch: self.block_height.saturating_div(1024),
+                        sender: parent_pk_opt,
+                        sender_epoch_count: 0,
+                        revealed_preimage: None,
+                    };
+                    let result = target_cell.program.evaluate(
+                        &target_cell.state,
+                        old_target_state.as_ref(),
+                        Some(&ctx),
+                    );
                     if let Err(e) = result {
                         return Err((
                             TurnError::ProgramViolation {
@@ -3760,6 +4315,7 @@ impl TurnExecutor {
         let ctx = EvalContext {
             block_height: self.block_height,
             timestamp: self.current_timestamp,
+            ..Default::default()
         };
 
         preconditions

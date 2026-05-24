@@ -144,20 +144,71 @@ export async function createInMemoryRuntime({ wasm, signals }) {
   }
 
   // --- Federations + Blocks -------------------------------------------------
-  // Removed from the wasm runtime: `SimFederation` was a wasm-fictional model
-  // that didn't reflect `pyana_federation::{Federation, FederationNode,
-  // FederationReceipt}`. Inspectors get a null signal here; they should
-  // render an "awaiting pyana-federation wasm32 support" placeholder.
-  // Re-light this surface when pyana-federation gains a wasm32 feature gate.
-  function getFederation(_fedIdx) {
-    return computed(() => null);
+  // Now wired. The wasm runtime constructs real `pyana_federation::Federation`
+  // instances; the inspector reads through `get_federation_state` /
+  // `get_federation_block` / `list_federation_blocks`, all of which return
+  // shapes derived directly from the canonical RevocationBlock /
+  // QuorumCertificate / NodeIdentity types. Blocks are addressed by
+  // (fed_index, height); height 1 = first finalized block.
+  const fedCache = new Map();
+  function getFederation(fedIdx) {
+    const key = String(fedIdx);
+    if (!fedCache.has(key)) {
+      fedCache.set(key, computed(() => {
+        version.value;
+        try { return wasm.get_federation_state(handle, Number(fedIdx)); }
+        catch { return null; }
+      }));
+    }
+    return fedCache.get(key);
   }
-  function getBlock(_height) {
-    return computed(() => null);
+  // Blocks are addressed as `pyana://block/<fedIdx>/<height>` upstream, but
+  // existing inspectors pass just the height-portion. To keep block lookup
+  // self-contained, we default to fed_index=0 when callers pass a bare height;
+  // callers that want a specific federation pass an object { fedIndex, height }.
+  const blockCache = new Map();
+  function getBlock(idOrSpec) {
+    let fedIdx = 0;
+    let height = 0;
+    if (typeof idOrSpec === 'object' && idOrSpec !== null) {
+      fedIdx = Number(idOrSpec.fedIndex || idOrSpec.fed_index || 0);
+      height = Number(idOrSpec.height || 0);
+    } else {
+      height = Number(idOrSpec);
+    }
+    const key = `${fedIdx}/${height}`;
+    if (!blockCache.has(key)) {
+      blockCache.set(key, computed(() => {
+        version.value;
+        try {
+          const block = wasm.get_federation_block(handle, fedIdx, BigInt(height));
+          // Normalize null vs {}.
+          if (!block || block === null) return null;
+          return { ...block, fed_index: fedIdx };
+        } catch { return null; }
+      }));
+    }
+    return blockCache.get(key);
   }
-  function listBlocks() {
-    return computed(() => []);
-  }
+  // Track federations created through this runtime so listBlocks() knows
+  // which indices to scan. The wasm side has no `count_federations` getter
+  // (federation handles are opaque indices into an internal Vec); we mirror
+  // the count here. Other surfaces that create federations out-of-band
+  // (none today) would need to bump this signal.
+  const fedCountSignal = signal(0);
+  const blocksListSignal = computed(() => {
+    version.value;
+    const count = fedCountSignal.value;
+    const all = [];
+    for (let i = 0; i < count; i++) {
+      try {
+        const list = wasm.list_federation_blocks(handle, i) || [];
+        for (const b of list) all.push(b);
+      } catch { /* skip federations the wasm side rejects */ }
+    }
+    return all;
+  });
+  function listBlocks() { return blocksListSignal; }
 
   // --- Mutations ---
   function createAgent(name, initialBalance = 0) {
@@ -202,10 +253,12 @@ export async function createInMemoryRuntime({ wasm, signals }) {
     fire('height-advanced', { blocks, result });
     return result;
   }
-  function createFederation(_name, _numNodes) {
-    throw new Error(
-      'NotSupported: federation surface removed from wasm runtime — awaiting pyana-federation wasm32 support',
-    );
+  function createFederation(name, numNodes = 4) {
+    const result = wasm.create_federation(handle, String(name), Number(numNodes) >>> 0);
+    fedCountSignal.value = fedCountSignal.value + 1;
+    bump();
+    fire('federation-created', result);
+    return result;
   }
   function createIntent(agentIndex, kind, actions, constraints, resourcePattern, expiry = 0) {
     const result = wasm.create_intent(
@@ -231,10 +284,106 @@ export async function createInMemoryRuntime({ wasm, signals }) {
     fire('intent-created', result);
     return result;
   }
-  function proposeBlock(_fedIndex, _events) {
-    throw new Error(
-      'NotSupported: federation/block surface removed from wasm runtime — awaiting pyana-federation wasm32 support',
+  // `propose_block(fed_index, events)` accepts an array of token-id strings
+  // (each becomes a real `pyana_federation::RevocationEvent` signed by node 0).
+  // Returns `{ block_hash, height, finalized }`; `finalized: false` means the
+  // round didn't reach quorum (the canonical Federation enforces n - floor(n/3)
+  // online votes — not any-N like the deleted sim).
+  function proposeBlock(fedIndex, events) {
+    const eventsJson = JSON.stringify(events || []);
+    const result = wasm.propose_block(handle, Number(fedIndex), eventsJson);
+    bump();
+    fire('block-proposed', { fedIndex, events, result });
+    return result;
+  }
+  // Drive one extra consensus round on an existing federation (consumes any
+  // pending events). Returns the consensus round summary, or null if the
+  // round didn't finalize.
+  function simulateConsensusRound(fedIndex) {
+    const result = wasm.simulate_consensus_round(handle, Number(fedIndex));
+    bump();
+    fire('consensus-round', { fedIndex, result });
+    return result;
+  }
+
+  // --- Peer exchange (sovereign-cell P2P) ---------------------------------
+  // Thin signal-cached facade over the canonical `pyana_cell::PeerExchange`
+  // surface exposed by the wasm crate. Mutations bump `version`; reads come
+  // through cached computeds keyed on (agentIdx, peerCellId).
+  const peerViewCache = new Map();
+  function getPeerView(agentIdx, peerCellIdHex) {
+    const key = `${agentIdx}/${peerCellIdHex}`;
+    if (!peerViewCache.has(key)) {
+      peerViewCache.set(key, computed(() => {
+        version.value;
+        try {
+          return wasm.get_peer_view(handle, Number(agentIdx), String(peerCellIdHex));
+        } catch (e) {
+          return { error: String(e?.message || e) };
+        }
+      }));
+    }
+    return peerViewCache.get(key);
+  }
+  const peerListCache = new Map();
+  function listPeers(agentIdx) {
+    const key = String(agentIdx);
+    if (!peerListCache.has(key)) {
+      peerListCache.set(key, computed(() => {
+        version.value;
+        try { return wasm.list_peers(handle, Number(agentIdx)) || []; }
+        catch { return []; }
+      }));
+    }
+    return peerListCache.get(key);
+  }
+  function getPeerPubkey(agentIdx) {
+    // One-shot read (no signal — the pubkey is immutable for the lifetime
+    // of the agent; recompute on each call is fine and avoids stale caches).
+    return wasm.get_peer_pubkey(handle, Number(agentIdx));
+  }
+  function getCellStateCommitment(cellIdHex) {
+    try { return wasm.get_cell_state_commitment(handle, String(cellIdHex)); }
+    catch { return null; }
+  }
+  function registerPeer(agentIdx, peerCellIdHex, peerPubkeyHex, initialCommitmentHex) {
+    const result = wasm.register_peer(
+      handle,
+      Number(agentIdx),
+      String(peerCellIdHex),
+      String(peerPubkeyHex),
+      String(initialCommitmentHex),
     );
+    bump();
+    fire('peer-registered', { agentIdx, peerCellIdHex, result });
+    return result;
+  }
+  function createPeerTransition(agentIdx, oldCommitHex, newCommitHex, effectsHashHex) {
+    // Returns Vec<u8> (postcard bytes) — the compact signed blob the JS
+    // layer can base64-encode for paste UX.
+    const bytes = wasm.create_peer_transition(
+      handle,
+      Number(agentIdx),
+      String(oldCommitHex),
+      String(newCommitHex),
+      String(effectsHashHex),
+    );
+    bump();
+    fire('peer-transition-created', { agentIdx, bytesLen: bytes?.length || 0 });
+    return bytes;
+  }
+  function verifyPeerTransition(agentIdx, transitionBytes, peerPubkeyHex) {
+    // Returns the updated PeerCellView shape on success; throws with a
+    // typed-variant prefix (e.g. "CommitmentMismatch: ...") on failure.
+    const view = wasm.verify_peer_transition(
+      handle,
+      Number(agentIdx),
+      transitionBytes,
+      String(peerPubkeyHex),
+    );
+    bump();
+    fire('peer-transition-verified', { agentIdx, view });
+    return view;
   }
 
   function destroy() {
@@ -262,6 +411,15 @@ export async function createInMemoryRuntime({ wasm, signals }) {
     getBlock,
     listBlocks,
 
+    // Peer exchange
+    getPeerView,
+    listPeers,
+    getPeerPubkey,
+    getCellStateCommitment,
+    registerPeer,
+    createPeerTransition,
+    verifyPeerTransition,
+
     createAgent,
     createCell,
     executeTurn,
@@ -270,6 +428,7 @@ export async function createInMemoryRuntime({ wasm, signals }) {
     createFederation,
     createIntent,
     proposeBlock,
+    simulateConsensusRound,
 
     destroy,
 

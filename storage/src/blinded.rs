@@ -29,6 +29,10 @@
 
 use std::collections::HashSet;
 
+use pyana_circuit::dsl::note_spending::verify_note_spend_dsl_with_destination;
+use pyana_circuit::field::BabyBear;
+use pyana_circuit::stark::proof_from_bytes;
+
 use crate::commitment::{
     BlindedItemCommitment, BlindedItemSetRoot, BlindedNullifierCommitment, Commitment4, MerkleRoot,
 };
@@ -180,6 +184,27 @@ impl BlindedQueue {
     }
 
     /// Consume with full privacy (ZK proof, hides which commitment).
+    ///
+    /// This path is the privacy-preserving alternative to `consume`: the
+    /// caller publishes only a nullifier + tree root + STARK proof, never
+    /// revealing which commitment is being consumed.
+    ///
+    /// The STARK proof is verified via
+    /// `pyana_circuit::dsl::note_spending::verify_note_spend_dsl_with_destination`
+    /// using the DSL note-spending AIR — the same AIR that backs production
+    /// `Effect::NoteSpend`. The verifier pins:
+    /// - `pi[0] = nullifier` (Poseidon2 form, single felt)
+    /// - `pi[1] = merkle_root` (Poseidon2 form, first limb)
+    /// - `pi[2] = 0` (value — unused for blinded items)
+    /// - `pi[3] = 0` (asset_type — unused for blinded items)
+    /// - `pi[4] = 0` (destination_federation — local consumption, never
+    ///   cross-federation)
+    ///
+    /// The 4-limb Poseidon2 form of the nullifier and tree root is reduced
+    /// to a single BabyBear by taking the first limb — this matches the
+    /// AIR's single-felt PI slot. The other limbs participate in the
+    /// commitment-tree hashing but are not part of the AIR's PI (which is
+    /// already collision-resistant at ~31 bits per slot × tree depth).
     pub fn consume_private(&mut self, proof: &PrivateConsumptionProof) -> ConsumeResult {
         // Check for double-consumption (BLAKE3-keyed)
         if self.nullifiers.contains(&proof.nullifier.blake3) {
@@ -192,12 +217,51 @@ impl BlindedQueue {
             return ConsumeResult::InvalidProof;
         }
 
-        // In a real system, we would verify the STARK proof here against
-        // the Poseidon2 form of the tree root and the Poseidon2 form of the
-        // nullifier. For this implementation, we trust the spending_proof
-        // bytes if the tree root matches (the real verification happens in
-        // the circuit crate).
+        // Reject empty proofs eagerly (the deserializer will also fail, but
+        // this gives a faster path for the obviously-wrong case).
         if proof.spending_proof.is_empty() {
+            return ConsumeResult::InvalidProof;
+        }
+
+        // Deserialize the STARK proof.
+        let stark_proof = match proof_from_bytes(&proof.spending_proof) {
+            Ok(p) => p,
+            Err(_) => return ConsumeResult::InvalidProof,
+        };
+
+        // Map the dual-form nullifier + tree root into the AIR's PI shape.
+        // The AIR expects a single BabyBear felt per PI slot; we take the
+        // Poseidon2 leading limb. Collision resistance for the full nullifier
+        // is provided by the BLAKE3 form check above (set-membership rejection
+        // on duplicate). The STARK only needs to prove derivation correctness
+        // and Merkle membership; the single-felt nullifier slot is sufficient
+        // for the AIR's commitment-binding constraint.
+        let nullifier_pi = proof.nullifier.poseidon2[0];
+        let root_pi = proof.tree_root.poseidon2_root[0];
+
+        // Blinded items are value/asset-agnostic from the AIR's perspective
+        // (the privacy property is "you consumed *some* item"; the AIR doesn't
+        // need a value/asset binding for blinded queues). The prover sets
+        // value = asset_type = ZERO when generating the proof; the verifier
+        // requires the same.
+        let value_pi = BabyBear::ZERO;
+        let asset_type_pi = BabyBear::ZERO;
+        // Blinded queue consumption is always local — no cross-federation
+        // bridge replay is possible against a blinded queue. We pin pi[4] to
+        // ZERO and reject any proof whose prover put a non-zero destination
+        // in the trace.
+        let dest_fed_pi = BabyBear::ZERO;
+
+        if verify_note_spend_dsl_with_destination(
+            nullifier_pi,
+            root_pi,
+            value_pi,
+            asset_type_pi,
+            dest_fed_pi,
+            &stark_proof,
+        )
+        .is_err()
+        {
             return ConsumeResult::InvalidProof;
         }
 
@@ -854,27 +918,29 @@ mod tests {
         assert!(queue.is_consumed(&nullifier_key));
     }
 
-    // --- Test 16: Private consumption with valid proof ---
+    // --- Test 16: Private consumption with bogus proof bytes is REJECTED ---
+    //
+    // Adversarial test: previously the consume_private path accepted ANY
+    // non-empty bytes as a valid STARK proof (AUDIT-privacy.md §11.1). After
+    // wiring the real `verify_note_spend_dsl_with_destination` verifier, a
+    // proof that is just random bytes must fail verification.
     #[test]
-    fn private_consumption_valid_proof() {
+    fn private_consumption_bogus_proof_rejected() {
         let (mut queue, _commitments, _secrets) = setup_queue_with_items(3);
 
-        // A test "nullifier" can be any dual-form commitment; we synthesize
-        // one for the sake of exercising the path.
         let null_blake3 = [0xFFu8; 32];
         let null_poseidon2 = [pyana_circuit::field::BabyBear::new(99); 4];
         let proof = PrivateConsumptionProof {
             nullifier: BlindedNullifierCommitment::from_parts(null_blake3, null_poseidon2),
             tree_root: queue.commitment_root_dual(),
-            spending_proof: vec![0x01, 0x02, 0x03], // non-empty = "valid"
+            spending_proof: vec![0x01, 0x02, 0x03], // bogus non-empty bytes
         };
 
         let result = queue.consume_private(&proof);
         assert_eq!(
             result,
-            ConsumeResult::Consumed {
-                nullifier: null_blake3
-            }
+            ConsumeResult::InvalidProof,
+            "consume_private must reject non-STARK random bytes; previously this trapdoor accepted any non-empty proof"
         );
     }
 

@@ -13,6 +13,7 @@ description = "Blocklace: a DAG-based structure for BFT consensus with cordial d
 blake3 = "1"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 postcard = { version = "1", features = ["use-std"] }
+pyana-types = { path = "../types" }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

@@ -4338,6 +4338,7 @@ version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3afd548cf105bb701ee7fa9da25f01ec3a6dca158b832b1019429c87213bbc4a"
 dependencies = [
+ "aes 0.8.4",
  "hmac 0.13.0-pre.5",
  "sha2 0.11.0-pre.5",
  "subtle",
@@ -6301,25 +6302,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pyana-amm"
-version = "0.1.0"
-dependencies = [
- "axum 0.8.9",
- "blake3",
- "pyana-app-framework",
- "pyana-cell",
- "pyana-circuit",
- "pyana-dsl-runtime",
- "pyana-intent",
- "pyana-storage",
- "pyana-turn",
- "pyana-types",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "pyana-app-framework"
 version = "0.1.0"
 dependencies = [
@@ -6362,6 +6344,7 @@ dependencies = [
  "ed25519-dalek",
  "postcard",
  "proptest",
+ "pyana-types",
  "rand 0.8.6",
  "serde",
  "thiserror 2.0.18",
@@ -6556,23 +6539,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pyana-dao-treasury"
-version = "0.1.0"
-dependencies = [
- "axum 0.8.9",
- "blake3",
- "http-body-util",
- "pyana-app-framework",
- "pyana-storage",
- "pyana-types",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tower 0.5.3",
-]
-
-[[package]]
 name = "pyana-demo"
 version = "0.1.0"
 dependencies = [
@@ -6610,6 +6576,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pyana-dfa"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "postcard",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "pyana-discord-bot"
 version = "0.1.0"
 dependencies = [
@@ -6634,6 +6610,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "pyana-dsl-differential"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "pyana-circuit",
+ "pyana-dsl",
+ "pyana-dsl-runtime",
+ "serde_json",
 ]
 
 [[package]]
@@ -6684,11 +6671,13 @@ dependencies = [
  "hex",
  "hints",
  "postcard",
+ "pyana-captp",
  "pyana-cell",
  "pyana-commit",
  "pyana-turn",
  "pyana-types",
  "serde",
+ "serde_json",
  "tokio",
  "tracing",
 ]
@@ -6758,22 +6747,6 @@ dependencies = [
  "serde_json",
  "token",
  "x25519-dalek",
-]
-
-[[package]]
-name = "pyana-lending"
-version = "0.1.0"
-dependencies = [
- "axum 0.8.9",
- "blake3",
- "pyana-app-framework",
- "pyana-circuit",
- "pyana-dsl-runtime",
- "pyana-storage",
- "pyana-types",
- "serde",
- "serde_json",
- "tokio",
 ]
 
 [[package]]
@@ -6874,47 +6847,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pyana-orderbook"
-version = "0.1.0"
-dependencies = [
- "axum 0.8.9",
- "blake3",
- "postcard",
- "pyana-app-framework",
- "pyana-circuit",
- "pyana-dsl-runtime",
- "pyana-intent",
- "pyana-storage",
- "pyana-turn",
- "pyana-types",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "pyana-prediction-market"
-version = "0.1.0"
-dependencies = [
- "axum 0.8.9",
- "blake3",
- "ed25519-dalek",
- "http-body-util",
- "pyana-app-framework",
- "pyana-cell",
- "pyana-circuit",
- "pyana-intent",
- "pyana-storage",
- "pyana-turn",
- "pyana-types",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tower 0.5.3",
-]
-
-[[package]]
 name = "pyana-preflight"
 version = "0.1.0"
 dependencies = [
@@ -6923,7 +6855,6 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.3.4",
  "postcard",
- "pyana-amm",
  "pyana-blocklace",
  "pyana-bridge",
  "pyana-captp",
@@ -6934,10 +6865,7 @@ dependencies = [
  "pyana-gallery",
  "pyana-identity",
  "pyana-intent",
- "pyana-lending",
- "pyana-orderbook",
  "pyana-sdk",
- "pyana-stablecoin",
  "pyana-storage",
  "pyana-turn",
  "pyana-types",
@@ -7040,27 +6968,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pyana-stablecoin"
-version = "0.1.0"
-dependencies = [
- "axum 0.8.9",
- "blake3",
- "ed25519-dalek",
- "postcard",
- "pyana-app-framework",
- "pyana-cell",
- "pyana-circuit",
- "pyana-dsl-runtime",
- "pyana-storage",
- "pyana-turn",
- "pyana-types",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
 name = "pyana-storage"
 version = "0.1.0"
 dependencies = [
@@ -7072,6 +6979,7 @@ dependencies = [
  "ark-std 0.5.0",
  "blake3",
  "poly-commitment",
+ "pyana-cell",
  "pyana-circuit",
  "serde",
 ]
@@ -7186,8 +7094,10 @@ name = "pyana-turn"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "chacha20poly1305",
  "curve25519-dalek",
  "ed25519-dalek",
+ "getrandom 0.3.4",
  "hex",
  "postcard",
  "proptest",
@@ -7199,6 +7109,7 @@ dependencies = [
  "pyana-types",
  "serde",
  "serde_json",
+ "x25519-dalek",
 ]
 
 [[package]]
@@ -7220,7 +7131,10 @@ dependencies = [
  "blake3",
  "hex",
  "postcard",
+ "pyana-captp",
  "pyana-circuit",
+ "pyana-federation",
+ "pyana-turn",
  "pyana-types",
  "serde",
  "serde_json",
@@ -7238,12 +7152,14 @@ dependencies = [
  "getrandom 0.3.4",
  "getrandom 0.4.2",
  "js-sys",
+ "lockstitch",
  "macaroon",
  "postcard",
  "pyana-cell",
  "pyana-circuit",
  "pyana-commit",
  "pyana-coord",
+ "pyana-federation",
  "pyana-intent",
  "pyana-sdk",
  "pyana-trace",
@@ -9907,6 +9823,18 @@ checksum = "00b5b7088084b7f78305a42468c9a3693918620f0b8ec86260f1132dc0521e78"
 dependencies = [
  "cc",
  "rustc_version 0.2.3",
+]
+
+[[package]]
+name = "starbridge-nameservice"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "pyana-app-framework",
+ "pyana-cell",
+ "pyana-types",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

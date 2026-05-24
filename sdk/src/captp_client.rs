@@ -123,6 +123,9 @@ pub struct LiveRef {
     gc_manager: Arc<Mutex<ImportGcManager>>,
     /// Shared pipeline registry for sending pipelined actions.
     pipeline_registry: Arc<Mutex<PipelineRegistry>>,
+    /// Sender-side disambiguator (shared with the parent `CapTpClient`).
+    /// See [`CapTpClient::import_table`].
+    import_table: Arc<Mutex<std::collections::HashMap<u64, CellId>>>,
     /// Shared wire outbox — pushed to on send/pipeline/drop.
     outbox: WireOutbox,
     /// The federation identity that the local node speaks as. Stamped onto
@@ -167,16 +170,25 @@ impl LiveRef {
     /// Closes audit GAP-4 (PipelinedMsg never dispatched) and the SDK side of
     /// C-2 (LiveRef::send dropped its action).
     pub fn send(&self, action: PipelinedAction) -> EventualRef {
-        let result_promise_id = {
+        // Allocate a fresh `target_promise_id` from the pipeline registry
+        // and immediately resolve it to this LiveRef's cell. The receiving
+        // server treats `target_promise_id` as opaque, so the only
+        // requirement is that the sender pick distinct ids for distinct
+        // bearer cells; using a counter-allocated promise eliminates the
+        // 32→8 byte truncation collision class flagged by audit B
+        // (`bytes_to_promise_id` truncation). The reverse map in
+        // `import_table` lets later wire replies disambiguate.
+        let (target_promise_id, result_promise_id) = {
             let mut registry = self.pipeline_registry.lock().expect("pipeline lock");
-            registry.create_promise()
+            let target = registry.create_promise();
+            let _ = registry.resolve_promise(target, self.cell_id);
+            let result = registry.create_promise();
+            (target, result)
         };
-
-        // Use the remote cell_id bytes as the implicit target_promise_id.
-        // The receiving server resolves `target_promise_id` against the
-        // local cell_id space when the promise is the bearer cell itself.
-        // This is the "fire-and-forget to a known cell" shape.
-        let target_promise_id = bytes_to_promise_id(&self.cell_id.0);
+        self.import_table
+            .lock()
+            .expect("import_table lock")
+            .insert(target_promise_id, self.cell_id);
 
         let msg = WireMessage::PipelinedMsg {
             target_promise_id,
@@ -225,6 +237,10 @@ impl LiveRef {
             let _ = registry.pipeline_message(msg);
             (bearer_promise, result_promise)
         };
+        self.import_table
+            .lock()
+            .expect("import_table lock")
+            .insert(target_promise_id, self.cell_id);
 
         let wire = WireMessage::PipelinedMsg {
             target_promise_id,
@@ -294,18 +310,6 @@ impl Drop for LiveRef {
     }
 }
 
-/// Map a 32-byte cell id to a 64-bit promise identifier used as the
-/// `target_promise_id` field on `WireMessage::PipelinedMsg`. The receiving
-/// server uses the same mapping to look up the bearer cell in its local
-/// registry / bridge. (Higher 24 bytes are discarded; this is acceptable
-/// because the server cross-references against its session's import table
-/// to disambiguate.)
-fn bytes_to_promise_id(bytes: &[u8; 32]) -> u64 {
-    let mut buf = [0u8; 8];
-    buf.copy_from_slice(&bytes[..8]);
-    u64::from_le_bytes(buf)
-}
-
 impl std::fmt::Debug for LiveRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LiveRef")
@@ -338,6 +342,12 @@ pub struct CapTpClient {
     import_gc: Arc<Mutex<ImportGcManager>>,
     /// Pipeline registry (shared with LiveRefs via Arc).
     pipeline_registry: Arc<Mutex<PipelineRegistry>>,
+    /// Sender-side disambiguator: `target_promise_id` → `CellId`. Populated
+    /// every time `LiveRef::send` / `LiveRef::pipeline` allocates a fresh
+    /// promise id for a wire `PipelinedMsg`. Replaces the previous 32→8 byte
+    /// truncation in `bytes_to_promise_id`, which could collide across cells
+    /// whose ids shared their first 8 bytes (audit lane B).
+    import_table: Arc<Mutex<std::collections::HashMap<u64, CellId>>>,
     /// Active CapTP sessions with peers.
     sessions: std::collections::HashMap<GroupId, CapSession>,
     /// Shared wire outbox. Every CapTP operation that crosses the trust
@@ -359,10 +369,22 @@ impl CapTpClient {
             swiss_table: SwissTable::new(),
             import_gc: Arc::new(Mutex::new(ImportGcManager::new())),
             pipeline_registry: Arc::new(Mutex::new(PipelineRegistry::new())),
+            import_table: Arc::new(Mutex::new(std::collections::HashMap::new())),
             sessions: std::collections::HashMap::new(),
             outbox: Arc::new(Mutex::new(Vec::new())),
             session_epochs: std::collections::HashMap::new(),
         }
+    }
+
+    /// Look up the cell a previously-allocated `target_promise_id`
+    /// represents on this client side. Returns `None` if the id is unknown
+    /// (the receiver allocated it, the entry was reaped, or it predates
+    /// the import-table wiring).
+    pub fn import_table_lookup(&self, target_promise_id: u64) -> Option<CellId> {
+        self.import_table
+            .lock()
+            .ok()
+            .and_then(|t| t.get(&target_promise_id).copied())
     }
 
     /// Drain pending wire messages.
@@ -587,6 +609,7 @@ impl CapTpClient {
             permissions,
             gc_manager: Arc::clone(&self.import_gc),
             pipeline_registry: Arc::clone(&self.pipeline_registry),
+            import_table: Arc::clone(&self.import_table),
             outbox: Arc::clone(&self.outbox),
             local_federation: self.config.federation_id,
             session_epoch: epoch,

@@ -1,0 +1,15 @@
+[package]
+name = "pyana-dsl-differential"
+version = "0.1.0"
+edition = "2024"
+description = "Cross-backend differential testing for pyana-dsl: emit a caveat predicate via all backends, run every verifier we can run in-process, assert they agree on accept/reject."
+
+[dependencies]
+pyana-dsl = { path = "../pyana-dsl" }
+pyana-dsl-runtime = { path = "../pyana-dsl-runtime", features = ["plonky3"] }
+pyana-circuit = { path = "../circuit", features = ["plonky3"] }
+serde_json = { workspace = true }
+blake3 = "1"
+
+[lints]
+workspace = true

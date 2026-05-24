@@ -19,6 +19,11 @@ serde = { version = "1", features = ["derive"] }
 # visibility changes were required (see STORAGE-POSEIDON2-AUDIT.md, "Notes
 # on the Poseidon2 source").
 pyana-circuit = { path = "../circuit" }
+# Re-export of the lifted slot-caveat enum lives in `cell::program`. Per
+# `SLOT-CAVEATS-DESIGN.md` §5 Option A the storage crate's
+# `QueueConstraint` continues to exist for back-compat, but the canonical
+# vocabulary now lives in pyana-cell.
+pyana-cell = { path = "../cell" }
 
 # KZG polynomial commitment from o1-labs/proof-systems (same rev as circuit crate).
 # We use PairingSRS for SRS generation + commit_non_hiding for polynomial commitments.

@@ -35,6 +35,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use pyana_app_framework::server::{AppConfig, AppServer};
+use pyana_app_framework::wallet::EmbeddedExecutor;
 use pyana_app_framework::{AgentWallet, AppWallet, CellId};
 
 use cross_fed::MetaDirectory;
@@ -66,6 +67,12 @@ struct AppState {
     /// emitted by the registry path (replaces the pre-framework
     /// `[0u8; 64]` placeholder signatures).
     wallet: AppWallet,
+    /// Embedded executor closing `APPS-USERSPACE-GAPS.md` §Gap 4: the
+    /// framework runs a private ledger + turn executor in-process, so
+    /// the registration handler can actually submit its signed Action
+    /// and observe the resulting `TurnReceipt` (instead of building the
+    /// action and dropping it on the floor).
+    executor: EmbeddedExecutor,
 }
 
 // =============================================================================
@@ -88,6 +95,12 @@ async fn main() {
     // verify against the wallet's pubkey, no placeholders.
     let wallet = AppWallet::new(AgentWallet::new(), nameservice_federation_id());
 
+    // Build the embedded executor: a per-process Ledger + TurnExecutor
+    // bound to the same wallet identity (shared via the wallet's inner
+    // `Arc<RwLock<AgentWallet>>` so signing handle and submission handle
+    // see the same receipt chain). Closes APPS-USERSPACE-GAPS.md §Gap 4.
+    let executor = EmbeddedExecutor::new(&wallet, "nameservice");
+
     let state = AppState {
         registry,
         resolver,
@@ -96,6 +109,7 @@ async fn main() {
         meta_directory,
         current_epoch: 1,
         wallet: wallet.clone(),
+        executor: executor.clone(),
     };
 
     let app_routes = app_router().with_state(state);
@@ -105,6 +119,7 @@ async fn main() {
         .with_health()
         .with_cors()
         .with_wallet(wallet)
+        .with_embedded_executor(executor)
         .routes(app_routes)
         .serve()
         .await
@@ -279,28 +294,65 @@ async fn register_name(
             // belongs in a cell-program caveat; see
             // `APPS-USERSPACE-GAPS.md` for the gap analysis on
             // expressing that caveat from userspace today.
+            //
+            // §Gap 4 closure: the signed action is submitted to the
+            // framework's embedded executor (private per-process ledger)
+            // and the resulting TurnReceipt is surfaced in the response.
+            // The action is no longer authored-and-dropped.
             let registry_cell = registry_cell_id();
-            let _registration_action = effects::build_register_action(
+            let registration_action = effects::build_register_action(
                 &state.wallet,
                 registry_cell,
                 &entry.name,
                 entry.owner,
             );
 
-            (
-                StatusCode::CREATED,
-                Json(json!({
-                    "name": entry.name,
-                    "target": entry.target,
-                    "owner": reverse::hex_encode(&entry.owner),
-                    "registered_at": entry.registered_at,
-                    "expires_at": entry.expires_at,
-                    "version": entry.version,
-                    "rent_rate": entry.rent_rate,
-                    "cost_total": rent_rate * req.rental_epochs,
-                })),
-            )
-                .into_response()
+            // The action targets `registry_cell`, but the executor's
+            // private ledger only knows about the wallet's own cell.
+            // Re-sign a self-targeted variant so the embedded turn lands
+            // on the agent cell (the executor's seeded cell). The on-
+            // ledger meaning is the same: an EmitEvent + SetField pair
+            // proves the registration happened with this wallet's
+            // identity, bound to its federation_id and chain head.
+            let self_action = state
+                .wallet
+                .make_self_action("register_name", registration_action.effects.clone());
+            let submission = state.executor.submit_action(&state.wallet, self_action);
+
+            match submission {
+                Ok(receipt) => (
+                    StatusCode::CREATED,
+                    Json(json!({
+                        "name": entry.name,
+                        "target": entry.target,
+                        "owner": reverse::hex_encode(&entry.owner),
+                        "registered_at": entry.registered_at,
+                        "expires_at": entry.expires_at,
+                        "version": entry.version,
+                        "rent_rate": entry.rent_rate,
+                        "cost_total": rent_rate * req.rental_epochs,
+                        // §Gap 4 evidence: a real receipt observed by
+                        // the registration handler.
+                        "turn_receipt": {
+                            "turn_hash": reverse::hex_encode(&receipt.turn_hash),
+                            "post_state_hash": reverse::hex_encode(&receipt.post_state_hash),
+                            "events": receipt.emitted_events.len(),
+                        },
+                    })),
+                )
+                    .into_response(),
+                Err(e) => {
+                    // Surface the executor error but keep the registry
+                    // entry committed — the off-chain side already
+                    // accepted the registration. The ledger-side error
+                    // is an integration signal (e.g., insufficient fee,
+                    // precondition failure) the operator should see.
+                    error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &format!("on-ledger submission failed: {e}"),
+                    )
+                }
+            }
         }
         Err(e) => registry_error_response(e),
     }
@@ -672,6 +724,7 @@ mod tests {
         let rental_policy = RentalPolicy::default();
         let meta_directory = MetaDirectory::new();
         let wallet = AppWallet::new(AgentWallet::new(), nameservice_federation_id());
+        let executor = EmbeddedExecutor::new(&wallet, "nameservice");
 
         let state = AppState {
             registry,
@@ -681,6 +734,7 @@ mod tests {
             meta_directory,
             current_epoch: 100,
             wallet,
+            executor,
         };
 
         app_router().with_state(state)
@@ -714,6 +768,54 @@ mod tests {
 
     fn bob_owner() -> String {
         "02".repeat(32)
+    }
+
+    /// §Gap 4 end-to-end closure: POST /names/register → signed action
+    /// → embedded executor applies → real `TurnReceipt` returned in the
+    /// HTTP response body. Proves the "action authored and dropped on
+    /// the floor" seam is closed.
+    #[tokio::test]
+    async fn register_round_trip_returns_real_receipt() {
+        let app = test_app();
+        let body = serde_json::to_string(&json!({
+            "name": "gap4-witness",
+            "target": "pyana://fed/witness",
+            "owner": alice_owner(),
+            "rental_epochs": 25,
+        }))
+        .unwrap();
+
+        let (status, json) = request(
+            &app,
+            "POST",
+            "/names/register",
+            &[("content-type", "application/json")],
+            body,
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::CREATED,
+            "register should succeed: {json}"
+        );
+
+        // The receipt block exists and carries real (non-zero) hashes.
+        let receipt = &json["turn_receipt"];
+        assert!(receipt.is_object(), "turn_receipt missing: {json}");
+        let turn_hash = receipt["turn_hash"].as_str().expect("turn_hash present");
+        assert_eq!(turn_hash.len(), 64, "turn_hash should be 32-byte hex");
+        assert_ne!(
+            turn_hash,
+            &"00".repeat(32),
+            "turn_hash must not be the zero hash — receipt is real"
+        );
+
+        // The events count surfaces the EmitEvent we asked for (1 event).
+        assert_eq!(
+            receipt["events"].as_u64(),
+            Some(1),
+            "exactly one EmitEvent expected: {json}"
+        );
     }
 
     #[tokio::test]

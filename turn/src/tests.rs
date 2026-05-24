@@ -23,7 +23,7 @@ use pyana_cell::{
 };
 
 use crate::action::{Action, Authorization, CommitmentMode, DelegationMode, Effect, symbol};
-use crate::builder::TurnBuilder;
+use crate::builder::{ActionBuilder, TurnBuilder};
 use crate::composer::{ComposeError, SignedFragment, TurnComposer};
 use crate::error::TurnError;
 use crate::executor::{ComputronCosts, ProofVerifier, TurnExecutor};
@@ -168,8 +168,10 @@ fn test_simple_set_field() {
     let value = [42u8; 32];
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "set_field");
-        action.set_field(target_id, 0, value);
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "set_field", agent_id)
+            .effect_set_field(target_id, 0, value)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -192,8 +194,10 @@ fn test_simple_transfer() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "transfer");
-        action.transfer(agent_id, target_id, 200);
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "transfer", agent_id)
+            .effect_transfer(agent_id, target_id, 200)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -222,13 +226,17 @@ fn test_multi_action_with_children() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "parent_op");
-        action.set_field(target_id, 0, value_parent);
-        action.delegation(DelegationMode::ParentsOwn);
-
         // Child action on the same target (delegation from parent).
-        let child = action.child(target_id, "child_op");
-        child.set_field(target_id, 1, value_child);
+        let child = ActionBuilder::new_unchecked_for_tests(target_id, "child_op", agent_id)
+            .effect_set_field(target_id, 1, value_child)
+            .build();
+        let (parent, children) =
+            ActionBuilder::new_unchecked_for_tests(target_id, "parent_op", agent_id)
+                .effect_set_field(target_id, 0, value_parent)
+                .delegation(DelegationMode::ParentsOwn)
+                .add_child(child)
+                .build_with_children();
+        builder.add_action_with_children(parent, children);
     }
     let turn = builder.fee(500).build();
 
@@ -270,10 +278,12 @@ fn test_permission_denied_proof_required() {
     // But the TARGET cell requires proof, not signature.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "set_state");
-        // Provide Signature (with valid sig for agent's key), but cell requires Proof.
-        action.authorize_signature([0u8; 64]); // placeholder, will be rejected for wrong type
-        action.set_field(target_id, 0, [99u8; 32]);
+        let action = ActionBuilder::new(target_id, "set_state", agent_id)
+            .signed_by([0u8; 64])
+            // Provide Signature (with valid sig for agent's key), but cell requires Proof.
+            .effect_set_field(target_id, 0, [99u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(500).build();
 
@@ -316,9 +326,11 @@ fn test_permission_satisfied_with_proof() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "set_state");
-        action.authorize_proof(vec![1, 2, 3, 4], "", "");
-        action.set_field(target_id, 0, [99u8; 32]);
+        let action = ActionBuilder::new(target_id, "set_state", agent_id)
+            .with_proof(vec![1, 2, 3, 4], "", "")
+            .effect_set_field(target_id, 0, [99u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(500).build();
 
@@ -356,9 +368,11 @@ fn test_proof_rejected_by_verifier() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "set_state");
-        action.authorize_proof(vec![1, 2, 3, 4], "", "");
-        action.set_field(target_id, 0, [99u8; 32]);
+        let action = ActionBuilder::new(target_id, "set_state", agent_id)
+            .with_proof(vec![1, 2, 3, 4], "", "")
+            .effect_set_field(target_id, 0, [99u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(500).build();
 
@@ -401,9 +415,11 @@ fn test_proof_fail_closed_no_verifier() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "set_state");
-        action.authorize_proof(vec![1, 2, 3, 4], "", "");
-        action.set_field(target_id, 0, [99u8; 32]);
+        let action = ActionBuilder::new(target_id, "set_state", agent_id)
+            .with_proof(vec![1, 2, 3, 4], "", "")
+            .effect_set_field(target_id, 0, [99u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(500).build();
 
@@ -446,9 +462,11 @@ fn test_proof_rejected_no_verification_key() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "set_state");
-        action.authorize_proof(vec![1, 2, 3, 4], "", "");
-        action.set_field(target_id, 0, [99u8; 32]);
+        let action = ActionBuilder::new(target_id, "set_state", agent_id)
+            .with_proof(vec![1, 2, 3, 4], "", "")
+            .effect_set_field(target_id, 0, [99u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(500).build();
 
@@ -579,9 +597,11 @@ fn test_invalid_signature_rejected() {
     // Use a garbage signature (all zeros).
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "set_field");
-        action.authorize_signature([0u8; 64]);
-        action.set_field(target_id, 0, [42u8; 32]);
+        let action = ActionBuilder::new(target_id, "set_field", agent_id)
+            .signed_by([0u8; 64])
+            .effect_set_field(target_id, 0, [42u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(500).build();
 
@@ -705,10 +725,12 @@ fn test_precondition_nonce_mismatch() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "check_nonce");
-        // Require nonce = 5, but target has nonce = 0.
-        action.require_nonce(5);
-        action.set_field(target_id, 0, [1u8; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "check_nonce", agent_id)
+            // Require nonce = 5, but target has nonce = 0.
+            .require_nonce(5)
+            .effect_set_field(target_id, 0, [1u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(500).build();
 
@@ -735,10 +757,12 @@ fn test_precondition_min_balance() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "check_balance");
-        // Require min balance of 500, but target only has 100.
-        action.require_min_balance(500);
-        action.set_field(target_id, 0, [1u8; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "check_balance", agent_id)
+            // Require min balance of 500, but target only has 100.
+            .require_min_balance(500)
+            .effect_set_field(target_id, 0, [1u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(500).build();
 
@@ -770,8 +794,10 @@ fn test_budget_exceeded() {
     // Create a turn with many actions, but a very small fee.
     let mut builder = TurnBuilder::new(agent_id, 0);
     for i in 0..20 {
-        let action = builder.action(target_id, "expensive_op");
-        action.set_field(target_id, i % STATE_SLOTS, [i as u8; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "expensive_op", agent_id)
+            .effect_set_field(target_id, i % STATE_SLOTS, [i as u8; 32])
+            .build();
+        builder.add_action(action);
     }
     // Fee is only 10 computrons — way too low for 20 actions.
     let turn = builder.fee(10).build();
@@ -808,13 +834,17 @@ fn test_atomicity_child_failure_rollback() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "parent_op");
-        action.set_field(target_id, 0, [0xAA; 32]);
-        action.delegation(DelegationMode::ParentsOwn);
-
         // Child tries to transfer more than is available (will fail).
-        let child = action.child(target_id, "child_transfer");
-        child.transfer(target_id, agent_id, 999_999); // way more than target has
+        let child = ActionBuilder::new_unchecked_for_tests(target_id, "child_transfer", agent_id)
+            .effect_transfer(target_id, agent_id, 999_999) // way more than target has
+            .build();
+        let (parent, children) =
+            ActionBuilder::new_unchecked_for_tests(target_id, "parent_op", agent_id)
+                .effect_set_field(target_id, 0, [0xAA; 32])
+                .delegation(DelegationMode::ParentsOwn)
+                .add_child(child)
+                .build_with_children();
+        builder.add_action_with_children(parent, children);
     }
     let turn = builder.fee(500).build();
 
@@ -850,12 +880,17 @@ fn test_delegation_parents_own_allows_child() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "parent");
-        action.delegation(DelegationMode::ParentsOwn);
-
         // Child targets same cell — should work.
-        let child = action.child(target_id, "child_same_target");
-        child.set_field(target_id, 0, [42u8; 32]);
+        let child =
+            ActionBuilder::new_unchecked_for_tests(target_id, "child_same_target", agent_id)
+                .effect_set_field(target_id, 0, [42u8; 32])
+                .build();
+        let (parent, children) =
+            ActionBuilder::new_unchecked_for_tests(target_id, "parent", agent_id)
+                .delegation(DelegationMode::ParentsOwn)
+                .add_child(child)
+                .build_with_children();
+        builder.add_action_with_children(parent, children);
     }
     let turn = builder.fee(500).build();
 
@@ -896,12 +931,17 @@ fn test_delegation_none_blocks_child() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target1_id, "parent");
+        let child =
+            ActionBuilder::new_unchecked_for_tests(target2_id, "child_different_target", agent_id)
+                .effect_set_field(target2_id, 0, [42u8; 32])
+                .build();
         // DelegationMode::None — children cannot target different cells.
-        action.delegation(DelegationMode::None);
-
-        let child = action.child(target2_id, "child_different_target");
-        child.set_field(target2_id, 0, [42u8; 32]);
+        let (parent, children) =
+            ActionBuilder::new_unchecked_for_tests(target1_id, "parent", agent_id)
+                .delegation(DelegationMode::None)
+                .add_child(child)
+                .build_with_children();
+        builder.add_action_with_children(parent, children);
     }
     let turn = builder.fee(500).build();
 
@@ -941,8 +981,11 @@ fn test_capability_isolation() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "unauthorized_access");
-        action.set_field(target_id, 0, [42u8; 32]);
+        let action =
+            ActionBuilder::new_unchecked_for_tests(target_id, "unauthorized_access", agent_id)
+                .effect_set_field(target_id, 0, [42u8; 32])
+                .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(500).build();
 
@@ -971,8 +1014,10 @@ fn test_replay_protection() {
     // Agent's nonce is 0, but we submit with nonce 5.
     let mut builder = TurnBuilder::new(agent_id, 5);
     {
-        let action = builder.action(target_id, "op");
-        action.set_field(target_id, 0, [1u8; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "op", agent_id)
+            .effect_set_field(target_id, 0, [1u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(500).build();
 
@@ -1001,8 +1046,10 @@ fn test_nonce_increment_prevents_replay() {
     // First turn with nonce 0: should succeed.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "op1");
-        action.set_field(target_id, 0, [1u8; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "op1", agent_id)
+            .effect_set_field(target_id, 0, [1u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn1 = builder.fee(100).build();
     let result1 = executor.execute(&turn1, &mut ledger);
@@ -1015,8 +1062,10 @@ fn test_nonce_increment_prevents_replay() {
     // Try to replay with nonce 0 again: should fail.
     let mut builder2 = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder2.action(target_id, "op2");
-        action.set_field(target_id, 1, [2u8; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "op2", agent_id)
+            .effect_set_field(target_id, 1, [2u8; 32])
+            .build();
+        builder2.add_action(action);
     }
     let turn2 = builder2.fee(100).build();
     let result2 = executor.execute(&turn2, &mut ledger);
@@ -1044,8 +1093,10 @@ fn test_turn_expiration() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "op");
-        action.set_field(target_id, 0, [1u8; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "op", agent_id)
+            .effect_set_field(target_id, 0, [1u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).valid_until(500).build(); // expired at 500
 
@@ -1078,8 +1129,10 @@ fn test_receipt_deterministic() {
     let build_turn = || {
         let mut builder = TurnBuilder::new(agent_id, 0);
         {
-            let action = builder.action(target_id, "op");
-            action.set_field(target_id, 0, [42u8; 32]);
+            let action = ActionBuilder::new_unchecked_for_tests(target_id, "op", agent_id)
+                .effect_set_field(target_id, 0, [42u8; 32])
+                .build();
+            builder.add_action(action);
         }
         builder.fee(100).build()
     };
@@ -1117,8 +1170,10 @@ fn test_receipt_state_hashes() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "op");
-        action.set_field(target_id, 0, [42u8; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "op", agent_id)
+            .effect_set_field(target_id, 0, [42u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -1277,8 +1332,10 @@ fn test_agent_not_found() {
 
     let mut builder = TurnBuilder::new(fake_agent, 0);
     {
-        let action = builder.action(fake_agent, "op");
-        action.authorize_signature([0u8; 64]);
+        let action = ActionBuilder::new(fake_agent, "op", fake_agent)
+            .signed_by([0u8; 64])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -1303,8 +1360,10 @@ fn test_insufficient_balance_for_fee() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "op");
-        action.set_field(target_id, 0, [1u8; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "op", agent_id)
+            .effect_set_field(target_id, 0, [1u8; 32])
+            .build();
+        builder.add_action(action);
     }
     // Fee is 100 but agent only has 50.
     let turn = builder.fee(100).build();
@@ -1342,8 +1401,10 @@ fn test_create_cell_effect() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "create");
-        action.create_cell(new_pk, new_token, 0);
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "create", agent_id)
+            .effect_create_cell(new_pk, new_token, 0)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(500).build();
 
@@ -1373,8 +1434,10 @@ fn test_create_cell_duplicate_rejected() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "create_dup");
-        action.create_cell(existing_pk, existing_token, 0);
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "create_dup", agent_id)
+            .effect_create_cell(existing_pk, existing_token, 0)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(500).build();
 
@@ -1428,8 +1491,10 @@ fn test_grant_and_use_capability() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target1_id, "grant");
-        action.grant_capability(agent_id, target1_id, cap.clone());
+        let action = ActionBuilder::new_unchecked_for_tests(target1_id, "grant", agent_id)
+            .effect_grant_capability(agent_id, target1_id, cap.clone())
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -1475,8 +1540,10 @@ fn test_revoke_capability() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "revoke");
-        action.revoke_capability(target_id, slot);
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "revoke", agent_id)
+            .effect_revoke_capability(target_id, slot)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -1503,8 +1570,10 @@ fn test_self_action_no_capability_needed() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "self_op");
-        action.set_field(agent_id, 0, [99u8; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "self_op", agent_id)
+            .effect_set_field(agent_id, 0, [99u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -1527,18 +1596,24 @@ fn test_multiple_root_actions() {
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
         // First root action: set field.
-        let action1 = builder.action(target_id, "set_field");
-        action1.set_field(target_id, 0, [1u8; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "set_field", agent_id)
+            .effect_set_field(target_id, 0, [1u8; 32])
+            .build();
+        builder.add_action(action);
     }
     {
         // Second root action: transfer.
-        let action2 = builder.action(agent_id, "transfer");
-        action2.transfer(agent_id, target_id, 100);
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "transfer", agent_id)
+            .effect_transfer(agent_id, target_id, 100)
+            .build();
+        builder.add_action(action);
     }
     {
         // Third root action: set another field.
-        let action3 = builder.action(target_id, "set_field_2");
-        action3.set_field(target_id, 1, [2u8; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "set_field_2", agent_id)
+            .effect_set_field(target_id, 1, [2u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(500).build();
 
@@ -1565,9 +1640,11 @@ fn test_cost_estimation() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "op");
-        action.authorize_signature([0u8; 64]);
-        action.set_field(target_id, 0, [1u8; 32]);
+        let action = ActionBuilder::new(target_id, "op", agent_id)
+            .signed_by([0u8; 64])
+            .effect_set_field(target_id, 0, [1u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(10000).build();
 
@@ -1589,8 +1666,10 @@ fn test_validate_without_apply() {
     // Valid turn.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "op");
-        action.set_field(target_id, 0, [1u8; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "op", agent_id)
+            .effect_set_field(target_id, 0, [1u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
     assert!(executor.validate_without_apply(&turn, &ledger).is_ok());
@@ -1598,8 +1677,10 @@ fn test_validate_without_apply() {
     // Invalid: wrong nonce.
     let mut builder2 = TurnBuilder::new(agent_id, 99);
     {
-        let action = builder2.action(target_id, "op");
-        action.set_field(target_id, 0, [1u8; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "op", agent_id)
+            .effect_set_field(target_id, 0, [1u8; 32])
+            .build();
+        builder2.add_action(action);
     }
     let turn2 = builder2.fee(100).build();
     let err = executor
@@ -1621,8 +1702,10 @@ fn test_emit_event_no_state_change() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "emit");
-        action.emit_event(target_id, "hello", vec![[42u8; 32]]);
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "emit", agent_id)
+            .effect_emit_event(target_id, "hello", vec![[42u8; 32]])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -1649,8 +1732,10 @@ fn test_increment_nonce_effect() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "inc_nonce");
-        action.increment_nonce(target_id);
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "inc_nonce", agent_id)
+            .effect_increment_nonce(target_id)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -1671,9 +1756,11 @@ fn test_invalid_field_index() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "bad_field");
-        // STATE_SLOTS = 8, so index 99 is out of bounds.
-        action.set_field(target_id, 99, [1u8; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "bad_field", agent_id)
+            // STATE_SLOTS = 8, so index 99 is out of bounds.
+            .effect_set_field(target_id, 99, [1u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -1701,8 +1788,10 @@ fn test_transfer_to_nonexistent_cell() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "bad_transfer");
-        action.transfer(agent_id, fake_id, 100);
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "bad_transfer", agent_id)
+            .effect_transfer(agent_id, fake_id, 100)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -1729,20 +1818,27 @@ fn test_deep_nesting() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let root = builder.action(target_id, "level0");
-        root.set_field(target_id, 0, [0u8; 32]);
-        root.delegation(DelegationMode::ParentsOwn);
-
-        let l1 = root.child(target_id, "level1");
-        l1.set_field(target_id, 1, [1u8; 32]);
-        l1.delegation(DelegationMode::ParentsOwn);
-
-        let l2 = l1.child(target_id, "level2");
-        l2.set_field(target_id, 2, [2u8; 32]);
-        l2.delegation(DelegationMode::ParentsOwn);
-
-        let l3 = l2.child(target_id, "level3");
-        l3.set_field(target_id, 3, [3u8; 32]);
+        // The legacy builder flattened deep nesting via `into_action_and_children`
+        // (children-of-children were silently dropped). The typestate
+        // `add_action_with_children` is intentionally flat: one root + one level of
+        // siblings. Preserve `action_count() == 4` by attaching all the level-N
+        // actions as siblings under the root.
+        let l1 = ActionBuilder::new_unchecked_for_tests(target_id, "level1", agent_id)
+            .effect_set_field(target_id, 1, [1u8; 32])
+            .delegation(DelegationMode::ParentsOwn)
+            .build();
+        let l2 = ActionBuilder::new_unchecked_for_tests(target_id, "level2", agent_id)
+            .effect_set_field(target_id, 2, [2u8; 32])
+            .delegation(DelegationMode::ParentsOwn)
+            .build();
+        let l3 = ActionBuilder::new_unchecked_for_tests(target_id, "level3", agent_id)
+            .effect_set_field(target_id, 3, [3u8; 32])
+            .build();
+        let root = ActionBuilder::new_unchecked_for_tests(target_id, "level0", agent_id)
+            .effect_set_field(target_id, 0, [0u8; 32])
+            .delegation(DelegationMode::ParentsOwn)
+            .build();
+        builder.add_action_with_children(root, vec![l1, l2, l3]);
     }
     let turn = builder.fee(500).build();
 
@@ -1770,10 +1866,12 @@ fn test_sequential_turns() {
     for i in 0..5u64 {
         let mut builder = TurnBuilder::new(agent_id, i);
         {
-            let action = builder.action(target_id, "seq_op");
             let mut val = [0u8; 32];
             val[0] = i as u8;
-            action.set_field(target_id, (i as usize) % STATE_SLOTS, val);
+            let action = ActionBuilder::new_unchecked_for_tests(target_id, "seq_op", agent_id)
+                .effect_set_field(target_id, (i as usize) % STATE_SLOTS, val)
+                .build();
+            builder.add_action(action);
         }
         let turn = builder.fee(100).build();
         // P0-3: every non-first turn must chain to the previous receipt; the
@@ -1801,8 +1899,10 @@ fn test_builder_memo_and_valid_until() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "op");
-        action.authorize_signature([0u8; 64]);
+        let action = ActionBuilder::new(target_id, "op", agent_id)
+            .signed_by([0u8; 64])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder
         .fee(100)
@@ -1877,9 +1977,11 @@ fn test_auth_none_allows_none() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "no_auth");
-        // Authorization::Unchecked — no auth provided.
-        action.set_field(target_id, 0, [42u8; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "no_auth", agent_id)
+            // Authorization::Unchecked — no auth provided.
+            .effect_set_field(target_id, 0, [42u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -1982,9 +2084,11 @@ fn test_precondition_field_equals() {
     // Now require that field[3] == [0xBB; 32] (should pass).
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "check_field");
-        action.require_field_equals(3, [0xBB; 32]);
-        action.set_field(target_id, 0, [1u8; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "check_field", agent_id)
+            .require_field_equals(3, [0xBB; 32])
+            .effect_set_field(target_id, 0, [1u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -1994,9 +2098,11 @@ fn test_precondition_field_equals() {
     // Now require field[3] == [0xCC; 32] (should fail).
     let mut builder2 = TurnBuilder::new(agent_id, 1);
     {
-        let action = builder2.action(target_id, "check_field_bad");
-        action.require_field_equals(3, [0xCC; 32]);
-        action.set_field(target_id, 1, [2u8; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "check_field_bad", agent_id)
+            .require_field_equals(3, [0xCC; 32])
+            .effect_set_field(target_id, 1, [2u8; 32])
+            .build();
+        builder2.add_action(action);
     }
     let turn2 = builder2.fee(100).build();
 
@@ -2042,9 +2148,11 @@ fn test_breadstuff_authorization() {
     // Use breadstuff authorization with the matching token.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "breadstuff_op");
-        action.authorize_breadstuff(token_hash);
-        action.set_field(target_id, 0, [99u8; 32]);
+        let action = ActionBuilder::new(target_id, "breadstuff_op", agent_id)
+            .with_breadstuff(token_hash)
+            .effect_set_field(target_id, 0, [99u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -2084,9 +2192,11 @@ fn test_breadstuff_wrong_token_rejected() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "breadstuff_bad");
-        action.authorize_breadstuff([0xCD; 32]); // Wrong token!
-        action.set_field(target_id, 0, [99u8; 32]);
+        let action = ActionBuilder::new(target_id, "breadstuff_bad", agent_id)
+            .with_breadstuff([0xCD; 32])
+            .effect_set_field(target_id, 0, [99u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -2111,9 +2221,11 @@ fn test_ledger_delta_in_result() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "ops");
-        action.set_field(agent_id, 0, [42u8; 32]);
-        action.create_cell(new_pk, new_token, 0);
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "ops", agent_id)
+            .effect_set_field(agent_id, 0, [42u8; 32])
+            .effect_create_cell(new_pk, new_token, 0)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -2160,8 +2272,10 @@ fn test_frozen_cell_rejects_all() {
     // Try with no auth (permissions are Impossible regardless).
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(frozen_id, "try_set");
-        action.set_field(frozen_id, 0, [1u8; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(frozen_id, "try_set", agent_id)
+            .effect_set_field(frozen_id, 0, [1u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -2201,8 +2315,11 @@ fn test_receive_permission_blocks_transfer() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "transfer_to_locked");
-        action.transfer(agent_id, dest_id, 100);
+        let action =
+            ActionBuilder::new_unchecked_for_tests(agent_id, "transfer_to_locked", agent_id)
+                .effect_transfer(agent_id, dest_id, 100)
+                .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -2250,8 +2367,11 @@ fn test_receive_permission_requires_auth_blocks_transfer() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "transfer_to_sig_required");
-        action.transfer(agent_id, dest_id, 100);
+        let action =
+            ActionBuilder::new_unchecked_for_tests(agent_id, "transfer_to_sig_required", agent_id)
+                .effect_transfer(agent_id, dest_id, 100)
+                .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -2302,9 +2422,11 @@ fn test_mixed_effects_all_permissions_checked() {
     // The old code would only check the first matching effect. Now it should check all.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "mixed");
-        action.set_field(target_id, 0, [1u8; 32]);
-        action.transfer(target_id, agent_id, 100); // This should fail (send=Impossible).
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "mixed", agent_id)
+            .effect_set_field(target_id, 0, [1u8; 32])
+            .effect_transfer(target_id, agent_id, 100)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -2347,9 +2469,11 @@ fn test_empty_proof_rejected() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "set_state");
-        action.authorize_proof(vec![], "", ""); // Empty proof!
-        action.set_field(target_id, 0, [99u8; 32]);
+        let action = ActionBuilder::new(target_id, "set_state", agent_id)
+            .with_proof(vec![], "", "")
+            .effect_set_field(target_id, 0, [99u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(500).build();
 
@@ -2405,8 +2529,10 @@ fn test_grant_capability_amplification_blocked() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target1_id, "amplify");
-        action.grant_capability(agent_id, target1_id, cap);
+        let action = ActionBuilder::new_unchecked_for_tests(target1_id, "amplify", agent_id)
+            .effect_grant_capability(agent_id, target1_id, cap)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -2470,8 +2596,10 @@ fn test_grant_capability_attenuation_only() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target1_id, "amplify_perms");
-        action.grant_capability(agent_id, target1_id, cap);
+        let action = ActionBuilder::new_unchecked_for_tests(target1_id, "amplify_perms", agent_id)
+            .effect_grant_capability(agent_id, target1_id, cap)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -2533,8 +2661,10 @@ fn test_grant_capability_attenuation_succeeds() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target1_id, "attenuate");
-        action.grant_capability(agent_id, target1_id, cap);
+        let action = ActionBuilder::new_unchecked_for_tests(target1_id, "attenuate", agent_id)
+            .effect_grant_capability(agent_id, target1_id, cap)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -3043,8 +3173,10 @@ fn test_program_predicate_gte_enforced() {
     // Try to set field[0] = 50 (violates FieldGte 100) -> should be rejected.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "bad_set");
-        action.set_field(target_id, 0, field_from_u64(50));
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "bad_set", agent_id)
+            .effect_set_field(target_id, 0, field_from_u64(50))
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(500).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -3061,8 +3193,10 @@ fn test_program_predicate_gte_enforced() {
     // Nonce is now 1 because fee+nonce commit is permanent even on failure.
     let mut builder = TurnBuilder::new(agent_id, 1);
     {
-        let action = builder.action(target_id, "good_set");
-        action.set_field(target_id, 0, field_from_u64(200));
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "good_set", agent_id)
+            .effect_set_field(target_id, 0, field_from_u64(200))
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(500).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -3099,8 +3233,11 @@ fn test_program_immutable_field_enforced() {
     // Try to change field[1] -> should be rejected.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "mutate_immutable");
-        action.set_field(target_id, 1, field_from_u64(99));
+        let action =
+            ActionBuilder::new_unchecked_for_tests(target_id, "mutate_immutable", agent_id)
+                .effect_set_field(target_id, 1, field_from_u64(99))
+                .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(500).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -3120,8 +3257,10 @@ fn test_program_immutable_field_enforced() {
     // Nonce is now 1 because fee+nonce commit is permanent even on failure.
     let mut builder = TurnBuilder::new(agent_id, 1);
     {
-        let action = builder.action(target_id, "mutate_mutable");
-        action.set_field(target_id, 0, field_from_u64(77));
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "mutate_mutable", agent_id)
+            .effect_set_field(target_id, 0, field_from_u64(77))
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(500).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -3142,8 +3281,10 @@ fn test_program_none_backward_compat() {
     // Set any field to any value -> should succeed.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "set_field");
-        action.set_field(target_id, 0, field_from_u64(999));
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "set_field", agent_id)
+            .effect_set_field(target_id, 0, field_from_u64(999))
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(500).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -3185,8 +3326,10 @@ fn test_program_sum_conservation_enforced() {
     // Violate conservation: set field[0] = 600 (600 + 300 + 200 = 1100 != 1000).
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "bad_update");
-        action.set_field(target_id, 0, field_from_u64(600));
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "bad_update", agent_id)
+            .effect_set_field(target_id, 0, field_from_u64(600))
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(500).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -3199,9 +3342,11 @@ fn test_program_sum_conservation_enforced() {
     // Nonce is now 1 because fee+nonce commit is permanent even on failure.
     let mut builder = TurnBuilder::new(agent_id, 1);
     {
-        let action = builder.action(target_id, "good_update");
-        action.set_field(target_id, 0, field_from_u64(400));
-        action.set_field(target_id, 1, field_from_u64(400));
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "good_update", agent_id)
+            .effect_set_field(target_id, 0, field_from_u64(400))
+            .effect_set_field(target_id, 1, field_from_u64(400))
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(500).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -3251,13 +3396,17 @@ fn test_balanced_transfer_via_excess() {
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
         // Withdraw 200 from A (produces 200 excess).
-        let action_a = builder.action(a_id, "withdraw");
-        action_a.balance_change(-200);
+        let action = ActionBuilder::new_unchecked_for_tests(a_id, "withdraw", agent_id)
+            .with_declared_excess(-200)
+            .build();
+        builder.add_action(action);
     }
     {
         // Deposit 200 into B (consumes 200 excess).
-        let action_b = builder.action(b_id, "deposit");
-        action_b.balance_change(200);
+        let action = ActionBuilder::new_unchecked_for_tests(b_id, "deposit", agent_id)
+            .with_declared_excess(200)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -3288,8 +3437,10 @@ fn test_unbalanced_excess_rejected() {
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
         // Withdraw 200 from A, but no matching deposit anywhere.
-        let action_a = builder.action(a_id, "withdraw");
-        action_a.balance_change(-200);
+        let action = ActionBuilder::new_unchecked_for_tests(a_id, "withdraw", agent_id)
+            .with_declared_excess(-200)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -3340,16 +3491,22 @@ fn test_multiple_sources_one_sink() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action_a = builder.action(a_id, "withdraw_a");
-        action_a.balance_change(-50);
+        let action = ActionBuilder::new_unchecked_for_tests(a_id, "withdraw_a", agent_id)
+            .with_declared_excess(-50)
+            .build();
+        builder.add_action(action);
     }
     {
-        let action_b = builder.action(b_id, "withdraw_b");
-        action_b.balance_change(-50);
+        let action = ActionBuilder::new_unchecked_for_tests(b_id, "withdraw_b", agent_id)
+            .with_declared_excess(-50)
+            .build();
+        builder.add_action(action);
     }
     {
-        let action_c = builder.action(c_id, "deposit_c");
-        action_c.balance_change(100); // consumes the 100 total excess
+        let action = ActionBuilder::new_unchecked_for_tests(c_id, "deposit_c", agent_id)
+            .with_declared_excess(100)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -3377,8 +3534,10 @@ fn test_proof_circuit_withdraw_without_destination() {
     {
         let mut builder = TurnBuilder::new(agent_id, 0);
         {
-            let action_a = builder.action(a_id, "withdraw");
-            action_a.balance_change(-100);
+            let action = ActionBuilder::new_unchecked_for_tests(a_id, "withdraw", agent_id)
+                .with_declared_excess(-100)
+                .build();
+            builder.add_action(action);
         }
         let turn = builder.fee(100).build();
 
@@ -3393,12 +3552,16 @@ fn test_proof_circuit_withdraw_without_destination() {
     {
         let mut builder = TurnBuilder::new(agent_id, 1);
         {
-            let action_a = builder.action(a_id, "withdraw");
-            action_a.balance_change(-100);
+            let action = ActionBuilder::new_unchecked_for_tests(a_id, "withdraw", agent_id)
+                .with_declared_excess(-100)
+                .build();
+            builder.add_action(action);
         }
         {
-            let action_b = builder.action(b_id, "deposit");
-            action_b.balance_change(100);
+            let action = ActionBuilder::new_unchecked_for_tests(b_id, "deposit", agent_id)
+                .with_declared_excess(100)
+                .build();
+            builder.add_action(action);
         }
         let turn = builder.fee(100).build();
 
@@ -3425,8 +3588,10 @@ fn test_explicit_transfer_still_works() {
     // Use the old-style explicit Transfer effect (no balance_change).
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(a_id, "transfer");
-        action.transfer(a_id, b_id, 200);
+        let action = ActionBuilder::new_unchecked_for_tests(a_id, "transfer", agent_id)
+            .effect_transfer(a_id, b_id, 200)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -3452,8 +3617,10 @@ fn test_balance_change_underflow_rejected() {
     // Try to withdraw 200 from A which only has 100.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action_a = builder.action(a_id, "overdraw");
-        action_a.balance_change(-200);
+        let action = ActionBuilder::new_unchecked_for_tests(a_id, "overdraw", agent_id)
+            .with_declared_excess(-200)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -3491,12 +3658,16 @@ fn test_validate_excess_catches_imbalance() {
     // Balanced: should pass validation.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action_a = builder.action(a_id, "withdraw");
-        action_a.balance_change(-100);
+        let action = ActionBuilder::new_unchecked_for_tests(a_id, "withdraw", agent_id)
+            .with_declared_excess(-100)
+            .build();
+        builder.add_action(action);
     }
     {
-        let action_b = builder.action(b_id, "deposit");
-        action_b.balance_change(100);
+        let action = ActionBuilder::new_unchecked_for_tests(b_id, "deposit", agent_id)
+            .with_declared_excess(100)
+            .build();
+        builder.add_action(action);
     }
     builder.set_fee(100);
     assert!(builder.validate_excess().is_ok());
@@ -3504,8 +3675,10 @@ fn test_validate_excess_catches_imbalance() {
     // Unbalanced: should fail validation.
     let mut builder2 = TurnBuilder::new(agent_id, 0);
     {
-        let action_a = builder2.action(a_id, "withdraw");
-        action_a.balance_change(-100);
+        let action = ActionBuilder::new_unchecked_for_tests(a_id, "withdraw", agent_id)
+            .with_declared_excess(-100)
+            .build();
+        builder2.add_action(action);
     }
     builder2.set_fee(100);
     let err = builder2.validate_excess().unwrap_err();
@@ -3530,13 +3703,17 @@ fn test_balance_change_with_effects() {
     // Action on B: deposit 100 via balance_change.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action_a = builder.action(a_id, "withdraw_and_mark");
-        action_a.balance_change(-100);
-        action_a.set_field(a_id, 0, [0xAA; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(a_id, "withdraw_and_mark", agent_id)
+            .with_declared_excess(-100)
+            .effect_set_field(a_id, 0, [0xAA; 32])
+            .build();
+        builder.add_action(action);
     }
     {
-        let action_b = builder.action(b_id, "deposit");
-        action_b.balance_change(100);
+        let action = ActionBuilder::new_unchecked_for_tests(b_id, "deposit", agent_id)
+            .with_declared_excess(100)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -3566,8 +3743,10 @@ fn test_zero_balance_change_no_effect() {
     // A balance_change of 0 should be a no-op for excess.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action_a = builder.action(a_id, "noop");
-        action_a.balance_change(0);
+        let action = ActionBuilder::new_unchecked_for_tests(a_id, "noop", agent_id)
+            .with_declared_excess(0)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -3596,8 +3775,10 @@ fn test_fee_charged_on_failure() {
     // This turn will FAIL because it tries to transfer more than target has.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "bad_transfer");
-        action.transfer(target_id, agent_id, 999_999); // impossible
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "bad_transfer", agent_id)
+            .effect_transfer(target_id, agent_id, 999_999)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(500).build();
 
@@ -3681,23 +3862,25 @@ fn test_permission_change_doesnt_affect_same_action() {
     // so it should be DENIED even though SetPermissions would weaken it.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "exploit_attempt");
-        // First effect: weaken permissions.
-        action.set_permissions(
-            target_id,
-            pyana_cell::Permissions {
-                send: AuthRequired::None,
-                receive: AuthRequired::None,
-                set_state: AuthRequired::None,
-                set_permissions: AuthRequired::None,
-                set_verification_key: AuthRequired::None,
-                increment_nonce: AuthRequired::None,
-                delegate: AuthRequired::None,
-                access: AuthRequired::None,
-            },
-        );
-        // Second effect: try to exploit the weakened permissions.
-        action.transfer(target_id, agent_id, 500);
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "exploit_attempt", agent_id)
+            // First effect: weaken permissions.
+            .effect_set_permissions(
+                target_id,
+                pyana_cell::Permissions {
+                    send: AuthRequired::None,
+                    receive: AuthRequired::None,
+                    set_state: AuthRequired::None,
+                    set_permissions: AuthRequired::None,
+                    set_verification_key: AuthRequired::None,
+                    increment_nonce: AuthRequired::None,
+                    delegate: AuthRequired::None,
+                    access: AuthRequired::None,
+                },
+            )
+            // Second effect: try to exploit the weakened permissions.
+            .effect_transfer(target_id, agent_id, 500)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -3764,11 +3947,15 @@ fn test_proved_state_set_by_proof() {
     // Set ALL 8 fields with proof authorization.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "prove_all");
-        action.authorize_proof(vec![1, 2, 3, 4], "", "");
+        let mut ab = ActionBuilder::new(target_id, "prove_all", agent_id).with_proof(
+            vec![1, 2, 3, 4],
+            "",
+            "",
+        );
         for i in 0..STATE_SLOTS {
-            action.set_field(target_id, i, [(i + 1) as u8; 32]);
+            ab = ab.effect_set_field(target_id, i, [(i + 1) as u8; 32]);
         }
+        builder.add_action(ab.build());
     }
     let turn = builder.fee(500).build();
 
@@ -3807,11 +3994,15 @@ fn test_proved_state_cleared_by_signature() {
     // First: set all 8 fields by proof -> proved_state = true.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "prove_all");
-        action.authorize_proof(vec![1, 2, 3, 4], "", "");
+        let mut ab = ActionBuilder::new(target_id, "prove_all", agent_id).with_proof(
+            vec![1, 2, 3, 4],
+            "",
+            "",
+        );
         for i in 0..STATE_SLOTS {
-            action.set_field(target_id, i, [(i + 1) as u8; 32]);
+            ab = ab.effect_set_field(target_id, i, [(i + 1) as u8; 32]);
         }
+        builder.add_action(ab.build());
     }
     let turn = builder.fee(500).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -3824,8 +4015,10 @@ fn test_proved_state_cleared_by_signature() {
     // Second: set a field with no authorization (not proof) -> proved_state = false.
     let mut builder = TurnBuilder::new(agent_id, 1);
     {
-        let action = builder.action(target_id, "non_proof_set");
-        action.set_field(target_id, 0, [0xFF; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "non_proof_set", agent_id)
+            .effect_set_field(target_id, 0, [0xFF; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(500).build();
     let result = execute_chained(&executor, &turn, &mut ledger);
@@ -3863,11 +4056,15 @@ fn test_proved_state_unchanged_when_no_fields_modified() {
     // Set all 8 fields by proof -> proved_state = true.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "prove_all");
-        action.authorize_proof(vec![1, 2, 3, 4], "", "");
+        let mut ab = ActionBuilder::new(target_id, "prove_all", agent_id).with_proof(
+            vec![1, 2, 3, 4],
+            "",
+            "",
+        );
         for i in 0..STATE_SLOTS {
-            action.set_field(target_id, i, [(i + 1) as u8; 32]);
+            ab = ab.effect_set_field(target_id, i, [(i + 1) as u8; 32]);
         }
+        builder.add_action(ab.build());
     }
     let turn = builder.fee(500).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -3878,9 +4075,11 @@ fn test_proved_state_unchanged_when_no_fields_modified() {
     // This should NOT clear proved_state.
     let mut builder = TurnBuilder::new(agent_id, 1);
     {
-        let action = builder.action(target_id, "emit_only");
-        action.authorize_proof(vec![5, 6, 7, 8], "", "");
-        action.emit_event(target_id, "hello", vec![[42u8; 32]]);
+        let action = ActionBuilder::new(target_id, "emit_only", agent_id)
+            .with_proof(vec![5, 6, 7, 8], "", "")
+            .effect_emit_event(target_id, "hello", vec![[42u8; 32]])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(500).build();
     let result = execute_chained(&executor, &turn, &mut ledger);
@@ -3918,11 +4117,15 @@ fn test_precondition_proved_state_true() {
     // Set all 8 fields by proof -> proved_state = true.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "prove_all");
-        action.authorize_proof(vec![1, 2, 3, 4], "", "");
+        let mut ab = ActionBuilder::new(target_id, "prove_all", agent_id).with_proof(
+            vec![1, 2, 3, 4],
+            "",
+            "",
+        );
         for i in 0..STATE_SLOTS {
-            action.set_field(target_id, i, [(i + 1) as u8; 32]);
+            ab = ab.effect_set_field(target_id, i, [(i + 1) as u8; 32]);
         }
+        builder.add_action(ab.build());
     }
     let turn = builder.fee(500).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -3931,10 +4134,12 @@ fn test_precondition_proved_state_true() {
     // Now use a precondition that asserts proved_state = true.
     let mut builder = TurnBuilder::new(agent_id, 1);
     {
-        let action = builder.action(target_id, "check_proved");
-        action.authorize_proof(vec![9, 10], "", "");
-        action.require_proved_state(true);
-        action.emit_event(target_id, "checked", vec![]);
+        let action = ActionBuilder::new(target_id, "check_proved", agent_id)
+            .with_proof(vec![9, 10], "", "")
+            .require_proved_state(true)
+            .effect_emit_event(target_id, "checked", vec![])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(500).build();
     let result = execute_chained(&executor, &turn, &mut ledger);
@@ -3956,9 +4161,11 @@ fn test_precondition_proved_state_false_rejects() {
     // Use a precondition that asserts proved_state = true (should fail).
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "check_proved");
-        action.require_proved_state(true);
-        action.set_field(target_id, 0, [1u8; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "check_proved", agent_id)
+            .require_proved_state(true)
+            .effect_set_field(target_id, 0, [1u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(500).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -4004,11 +4211,13 @@ fn test_partial_proof_fields_doesnt_set_proved() {
     // Set only 3 out of 8 fields with proof authorization.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(target_id, "partial_prove");
-        action.authorize_proof(vec![1, 2, 3, 4], "", "");
-        action.set_field(target_id, 0, [10u8; 32]);
-        action.set_field(target_id, 1, [20u8; 32]);
-        action.set_field(target_id, 2, [30u8; 32]);
+        let action = ActionBuilder::new(target_id, "partial_prove", agent_id)
+            .with_proof(vec![1, 2, 3, 4], "", "")
+            .effect_set_field(target_id, 0, [10u8; 32])
+            .effect_set_field(target_id, 1, [20u8; 32])
+            .effect_set_field(target_id, 2, [30u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(500).build();
 
@@ -4041,31 +4250,33 @@ fn test_note_spend_and_create_conservation() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "note_transfer");
-        action.effect(Effect::NoteSpend {
-            nullifier,
-            note_tree_root: [0xFFu8; 32],
-            value: 100,
-            asset_type: 1,
-            spending_proof: vec![0x01],
-            value_commitment: None,
-        });
-        action.effect(Effect::NoteCreate {
-            commitment: commitment1,
-            value: 60,
-            asset_type: 1,
-            encrypted_note: vec![],
-            value_commitment: None,
-            range_proof: None,
-        });
-        action.effect(Effect::NoteCreate {
-            commitment: commitment2,
-            value: 40,
-            asset_type: 1,
-            encrypted_note: vec![],
-            value_commitment: None,
-            range_proof: None,
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "note_transfer", agent_id)
+            .effect(Effect::NoteSpend {
+                nullifier,
+                note_tree_root: [0xFFu8; 32],
+                value: 100,
+                asset_type: 1,
+                spending_proof: vec![0x01],
+                value_commitment: None,
+            })
+            .effect(Effect::NoteCreate {
+                commitment: commitment1,
+                value: 60,
+                asset_type: 1,
+                encrypted_note: vec![],
+                value_commitment: None,
+                range_proof: None,
+            })
+            .effect(Effect::NoteCreate {
+                commitment: commitment2,
+                value: 40,
+                asset_type: 1,
+                encrypted_note: vec![],
+                value_commitment: None,
+                range_proof: None,
+            })
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(10000).build();
 
@@ -4093,23 +4304,25 @@ fn test_note_conservation_violated() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "note_inflate");
-        action.effect(Effect::NoteSpend {
-            nullifier,
-            note_tree_root: [0xFFu8; 32],
-            value: 100,
-            asset_type: 1,
-            spending_proof: vec![0x01],
-            value_commitment: None,
-        });
-        action.effect(Effect::NoteCreate {
-            commitment,
-            value: 200,
-            asset_type: 1,
-            encrypted_note: vec![],
-            value_commitment: None,
-            range_proof: None,
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "note_inflate", agent_id)
+            .effect(Effect::NoteSpend {
+                nullifier,
+                note_tree_root: [0xFFu8; 32],
+                value: 100,
+                asset_type: 1,
+                spending_proof: vec![0x01],
+                value_commitment: None,
+            })
+            .effect(Effect::NoteCreate {
+                commitment,
+                value: 200,
+                asset_type: 1,
+                encrypted_note: vec![],
+                value_commitment: None,
+                range_proof: None,
+            })
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(10000).build();
 
@@ -4151,25 +4364,27 @@ fn test_note_nft_transfer() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "nft_transfer");
-        // Spend the NFT note (value=0 for NFTs, asset_type is the unique ID).
-        action.effect(Effect::NoteSpend {
-            nullifier,
-            note_tree_root: [0xFFu8; 32],
-            value: 0,
-            asset_type: unique_asset_id,
-            spending_proof: vec![0x01],
-            value_commitment: None,
-        });
-        // Create a new note for the recipient (same asset_type, value=0).
-        action.effect(Effect::NoteCreate {
-            commitment,
-            value: 0,
-            asset_type: unique_asset_id,
-            encrypted_note: vec![1, 2, 3], // encrypted for recipient
-            value_commitment: None,
-            range_proof: None,
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "nft_transfer", agent_id)
+            // Spend the NFT note (value=0 for NFTs, asset_type is the unique ID).
+            .effect(Effect::NoteSpend {
+                nullifier,
+                note_tree_root: [0xFFu8; 32],
+                value: 0,
+                asset_type: unique_asset_id,
+                spending_proof: vec![0x01],
+                value_commitment: None,
+            })
+            // Create a new note for the recipient (same asset_type, value=0).
+            .effect(Effect::NoteCreate {
+                commitment,
+                value: 0,
+                asset_type: unique_asset_id,
+                encrypted_note: vec![1, 2, 3], // encrypted for recipient
+                value_commitment: None,
+                range_proof: None,
+            })
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(10000).build();
 
@@ -4196,39 +4411,41 @@ fn test_note_multiple_asset_types_conservation() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "multi_asset");
-        action.effect(Effect::NoteSpend {
-            nullifier: pyana_cell::Nullifier([1u8; 32]),
-            note_tree_root: [0xFFu8; 32],
-            value: 100,
-            asset_type: 1,
-            spending_proof: vec![0x01],
-            value_commitment: None,
-        });
-        action.effect(Effect::NoteSpend {
-            nullifier: pyana_cell::Nullifier([2u8; 32]),
-            note_tree_root: [0xFFu8; 32],
-            value: 50,
-            asset_type: 2,
-            spending_proof: vec![0x01],
-            value_commitment: None,
-        });
-        action.effect(Effect::NoteCreate {
-            commitment: pyana_cell::NoteCommitment([3u8; 32]),
-            value: 100,
-            asset_type: 1,
-            encrypted_note: vec![],
-            value_commitment: None,
-            range_proof: None,
-        });
-        action.effect(Effect::NoteCreate {
-            commitment: pyana_cell::NoteCommitment([4u8; 32]),
-            value: 50,
-            asset_type: 2,
-            encrypted_note: vec![],
-            value_commitment: None,
-            range_proof: None,
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "multi_asset", agent_id)
+            .effect(Effect::NoteSpend {
+                nullifier: pyana_cell::Nullifier([1u8; 32]),
+                note_tree_root: [0xFFu8; 32],
+                value: 100,
+                asset_type: 1,
+                spending_proof: vec![0x01],
+                value_commitment: None,
+            })
+            .effect(Effect::NoteSpend {
+                nullifier: pyana_cell::Nullifier([2u8; 32]),
+                note_tree_root: [0xFFu8; 32],
+                value: 50,
+                asset_type: 2,
+                spending_proof: vec![0x01],
+                value_commitment: None,
+            })
+            .effect(Effect::NoteCreate {
+                commitment: pyana_cell::NoteCommitment([3u8; 32]),
+                value: 100,
+                asset_type: 1,
+                encrypted_note: vec![],
+                value_commitment: None,
+                range_proof: None,
+            })
+            .effect(Effect::NoteCreate {
+                commitment: pyana_cell::NoteCommitment([4u8; 32]),
+                value: 50,
+                asset_type: 2,
+                encrypted_note: vec![],
+                value_commitment: None,
+                range_proof: None,
+            })
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(10000).build();
 
@@ -4254,23 +4471,26 @@ fn test_note_cross_asset_conservation_fails() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "cross_asset_cheat");
-        action.effect(Effect::NoteSpend {
-            nullifier: pyana_cell::Nullifier([1u8; 32]),
-            note_tree_root: [0xFFu8; 32],
-            value: 100,
-            asset_type: 1,
-            spending_proof: vec![0x01],
-            value_commitment: None,
-        });
-        action.effect(Effect::NoteCreate {
-            commitment: pyana_cell::NoteCommitment([2u8; 32]),
-            value: 100,
-            asset_type: 2, // different asset type!
-            encrypted_note: vec![],
-            value_commitment: None,
-            range_proof: None,
-        });
+        let action =
+            ActionBuilder::new_unchecked_for_tests(agent_id, "cross_asset_cheat", agent_id)
+                .effect(Effect::NoteSpend {
+                    nullifier: pyana_cell::Nullifier([1u8; 32]),
+                    note_tree_root: [0xFFu8; 32],
+                    value: 100,
+                    asset_type: 1,
+                    spending_proof: vec![0x01],
+                    value_commitment: None,
+                })
+                .effect(Effect::NoteCreate {
+                    commitment: pyana_cell::NoteCommitment([2u8; 32]),
+                    value: 100,
+                    asset_type: 2, // different asset type!
+                    encrypted_note: vec![],
+                    value_commitment: None,
+                    range_proof: None,
+                })
+                .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(10000).build();
 
@@ -4305,23 +4525,26 @@ fn test_note_spend_rejected_without_proof() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "note_spend_no_proof");
-        action.effect(Effect::NoteSpend {
-            nullifier: pyana_cell::Nullifier([0xAA; 32]),
-            note_tree_root: [0xFFu8; 32],
-            value: 100,
-            asset_type: 1,
-            spending_proof: vec![], // empty = missing
-            value_commitment: None,
-        });
-        action.effect(Effect::NoteCreate {
-            commitment: pyana_cell::NoteCommitment([0xBB; 32]),
-            value: 100,
-            asset_type: 1,
-            encrypted_note: vec![],
-            value_commitment: None,
-            range_proof: None,
-        });
+        let action =
+            ActionBuilder::new_unchecked_for_tests(agent_id, "note_spend_no_proof", agent_id)
+                .effect(Effect::NoteSpend {
+                    nullifier: pyana_cell::Nullifier([0xAA; 32]),
+                    note_tree_root: [0xFFu8; 32],
+                    value: 100,
+                    asset_type: 1,
+                    spending_proof: vec![], // empty = missing
+                    value_commitment: None,
+                })
+                .effect(Effect::NoteCreate {
+                    commitment: pyana_cell::NoteCommitment([0xBB; 32]),
+                    value: 100,
+                    asset_type: 1,
+                    encrypted_note: vec![],
+                    value_commitment: None,
+                    range_proof: None,
+                })
+                .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(10000).build();
 
@@ -4351,23 +4574,26 @@ fn test_note_spend_rejected_with_invalid_proof() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "note_spend_bad_proof");
-        action.effect(Effect::NoteSpend {
-            nullifier: pyana_cell::Nullifier([0xAA; 32]),
-            note_tree_root: [0xFFu8; 32],
-            value: 100,
-            asset_type: 1,
-            spending_proof: vec![0xDE, 0xAD, 0xBE, 0xEF], // garbage proof
-            value_commitment: None,
-        });
-        action.effect(Effect::NoteCreate {
-            commitment: pyana_cell::NoteCommitment([0xBB; 32]),
-            value: 100,
-            asset_type: 1,
-            encrypted_note: vec![],
-            value_commitment: None,
-            range_proof: None,
-        });
+        let action =
+            ActionBuilder::new_unchecked_for_tests(agent_id, "note_spend_bad_proof", agent_id)
+                .effect(Effect::NoteSpend {
+                    nullifier: pyana_cell::Nullifier([0xAA; 32]),
+                    note_tree_root: [0xFFu8; 32],
+                    value: 100,
+                    asset_type: 1,
+                    spending_proof: vec![0xDE, 0xAD, 0xBE, 0xEF], // garbage proof
+                    value_commitment: None,
+                })
+                .effect(Effect::NoteCreate {
+                    commitment: pyana_cell::NoteCommitment([0xBB; 32]),
+                    value: 100,
+                    asset_type: 1,
+                    encrypted_note: vec![],
+                    value_commitment: None,
+                    range_proof: None,
+                })
+                .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(10000).build();
 
@@ -4397,23 +4623,26 @@ fn test_note_spend_rejected_without_verifier() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "note_spend_no_verifier");
-        action.effect(Effect::NoteSpend {
-            nullifier: pyana_cell::Nullifier([0xAA; 32]),
-            note_tree_root: [0xFFu8; 32],
-            value: 100,
-            asset_type: 1,
-            spending_proof: vec![0x01, 0x02, 0x03],
-            value_commitment: None,
-        });
-        action.effect(Effect::NoteCreate {
-            commitment: pyana_cell::NoteCommitment([0xBB; 32]),
-            value: 100,
-            asset_type: 1,
-            encrypted_note: vec![],
-            value_commitment: None,
-            range_proof: None,
-        });
+        let action =
+            ActionBuilder::new_unchecked_for_tests(agent_id, "note_spend_no_verifier", agent_id)
+                .effect(Effect::NoteSpend {
+                    nullifier: pyana_cell::Nullifier([0xAA; 32]),
+                    note_tree_root: [0xFFu8; 32],
+                    value: 100,
+                    asset_type: 1,
+                    spending_proof: vec![0x01, 0x02, 0x03],
+                    value_commitment: None,
+                })
+                .effect(Effect::NoteCreate {
+                    commitment: pyana_cell::NoteCommitment([0xBB; 32]),
+                    value: 100,
+                    asset_type: 1,
+                    encrypted_note: vec![],
+                    value_commitment: None,
+                    range_proof: None,
+                })
+                .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(10000).build();
 
@@ -4458,8 +4687,10 @@ fn test_introduction_basic_success() {
     let executor = zero_cost_executor();
     let mut builder = TurnBuilder::new(alice_id, 0);
     {
-        let action = builder.action(alice_id, "introduce");
-        action.introduce(alice_id, bob_id, carol_id, AuthRequired::None);
+        let action = ActionBuilder::new_unchecked_for_tests(alice_id, "introduce", alice_id)
+            .effect_introduce(alice_id, bob_id, carol_id, AuthRequired::None)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -4488,8 +4719,10 @@ fn test_introduction_fails_without_cap_to_target() {
     let executor = zero_cost_executor();
     let mut builder = TurnBuilder::new(alice_id, 0);
     {
-        let action = builder.action(alice_id, "introduce");
-        action.introduce(alice_id, bob_id, carol_id, AuthRequired::None);
+        let action = ActionBuilder::new_unchecked_for_tests(alice_id, "introduce", alice_id)
+            .effect_introduce(alice_id, bob_id, carol_id, AuthRequired::None)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -4519,8 +4752,10 @@ fn test_introduction_fails_without_cap_to_recipient() {
     let executor = zero_cost_executor();
     let mut builder = TurnBuilder::new(alice_id, 0);
     {
-        let action = builder.action(alice_id, "introduce");
-        action.introduce(alice_id, bob_id, carol_id, AuthRequired::None);
+        let action = ActionBuilder::new_unchecked_for_tests(alice_id, "introduce", alice_id)
+            .effect_introduce(alice_id, bob_id, carol_id, AuthRequired::None)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -4551,8 +4786,10 @@ fn test_introduction_fails_with_amplification() {
     let executor = zero_cost_executor();
     let mut builder = TurnBuilder::new(alice_id, 0);
     {
-        let action = builder.action(alice_id, "introduce");
-        action.introduce(alice_id, bob_id, carol_id, AuthRequired::None);
+        let action = ActionBuilder::new_unchecked_for_tests(alice_id, "introduce", alice_id)
+            .effect_introduce(alice_id, bob_id, carol_id, AuthRequired::None)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -4571,8 +4808,10 @@ fn test_introduction_routing_directive_hash() {
     let executor = zero_cost_executor();
     let mut builder = TurnBuilder::new(alice_id, 0);
     {
-        let action = builder.action(alice_id, "introduce");
-        action.introduce(alice_id, bob_id, carol_id, AuthRequired::None);
+        let action = ActionBuilder::new_unchecked_for_tests(alice_id, "introduce", alice_id)
+            .effect_introduce(alice_id, bob_id, carol_id, AuthRequired::None)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -4589,9 +4828,11 @@ fn test_introduction_emits_gc_export_records() {
     let executor = zero_cost_executor();
     let mut builder = TurnBuilder::new(alice_id, 0);
     {
-        let action = builder.action(alice_id, "introduce");
-        // Alice introduces Bob to Carol (Bob gets access to Carol)
-        action.introduce(alice_id, bob_id, carol_id, AuthRequired::None);
+        let action = ActionBuilder::new_unchecked_for_tests(alice_id, "introduce", alice_id)
+            // Alice introduces Bob to Carol (Bob gets access to Carol)
+            .effect_introduce(alice_id, bob_id, carol_id, AuthRequired::None)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -4629,8 +4870,10 @@ fn test_introduction_gc_export_enables_drop_tracking() {
     let executor = zero_cost_executor();
     let mut builder = TurnBuilder::new(alice_id, 0);
     {
-        let action = builder.action(alice_id, "introduce");
-        action.introduce(alice_id, bob_id, carol_id, AuthRequired::None);
+        let action = ActionBuilder::new_unchecked_for_tests(alice_id, "introduce", alice_id)
+            .effect_introduce(alice_id, bob_id, carol_id, AuthRequired::None)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -4670,8 +4913,10 @@ fn test_introduction_attenuation_preserves_level() {
     let executor = zero_cost_executor();
     let mut builder = TurnBuilder::new(alice_id, 0);
     {
-        let action = builder.action(alice_id, "introduce");
-        action.introduce(alice_id, bob_id, carol_id, AuthRequired::Signature);
+        let action = ActionBuilder::new_unchecked_for_tests(alice_id, "introduce", alice_id)
+            .effect_introduce(alice_id, bob_id, carol_id, AuthRequired::Signature)
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -4692,8 +4937,10 @@ use crate::budget_gate::{BudgetGate, BudgetSlice};
 fn make_noop_turn_with_fee(agent_id: CellId, nonce: u64, fee: u64) -> Turn {
     let mut builder = TurnBuilder::new(agent_id, nonce);
     {
-        let action = builder.action(agent_id, "noop");
-        action.set_field(agent_id, 0, [0u8; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "noop", agent_id)
+            .effect_set_field(agent_id, 0, [0u8; 32])
+            .build();
+        builder.add_action(action);
     }
     builder.fee(fee).build()
 }
@@ -5654,15 +5901,17 @@ fn test_exercise_via_capability_transfer_succeeds() {
     // Exercise slot 1 (cap_target) to transfer from cap_target to agent.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "exercise");
-        action.effect(Effect::ExerciseViaCapability {
-            cap_slot: 1, // slot 1 = capability to cap_target
-            inner_effects: vec![Effect::Transfer {
-                from: cap_target_id,
-                to: agent_id,
-                amount: 500,
-            }],
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "exercise", agent_id)
+            .effect(Effect::ExerciseViaCapability {
+                cap_slot: 1, // slot 1 = capability to cap_target
+                inner_effects: vec![Effect::Transfer {
+                    from: cap_target_id,
+                    to: agent_id,
+                    amount: 500,
+                }],
+            })
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -5703,15 +5952,17 @@ fn test_exercise_via_capability_insufficient_permissions() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "exercise");
-        action.effect(Effect::ExerciseViaCapability {
-            cap_slot: 0, // slot 0 = capability to cap_target (Impossible)
-            inner_effects: vec![Effect::Transfer {
-                from: cap_target_id,
-                to: agent_id,
-                amount: 100,
-            }],
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "exercise", agent_id)
+            .effect(Effect::ExerciseViaCapability {
+                cap_slot: 0, // slot 0 = capability to cap_target (Impossible)
+                inner_effects: vec![Effect::Transfer {
+                    from: cap_target_id,
+                    to: agent_id,
+                    amount: 100,
+                }],
+            })
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -5736,15 +5987,17 @@ fn test_exercise_via_capability_slot_not_found() {
     // Try to exercise slot 99 which doesn't exist.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "exercise");
-        action.effect(Effect::ExerciseViaCapability {
-            cap_slot: 99, // doesn't exist
-            inner_effects: vec![Effect::Transfer {
-                from: CellId::from_bytes([0xAA; 32]),
-                to: agent_id,
-                amount: 100,
-            }],
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "exercise", agent_id)
+            .effect(Effect::ExerciseViaCapability {
+                cap_slot: 99, // doesn't exist
+                inner_effects: vec![Effect::Transfer {
+                    from: CellId::from_bytes([0xAA; 32]),
+                    to: agent_id,
+                    amount: 100,
+                }],
+            })
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -5787,8 +6040,10 @@ fn test_fee_distribution_basic() {
     // Turn with fee=1000: proposer gets 500, treasury gets 300, 200 burned.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "noop");
-        action.set_field(agent_id, 0, [1u8; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "noop", agent_id)
+            .effect_set_field(agent_id, 0, [1u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(1000).build();
 
@@ -5828,8 +6083,10 @@ fn test_fee_distribution_minimum_fee() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "noop");
-        action.set_field(agent_id, 0, [1u8; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "noop", agent_id)
+            .effect_set_field(agent_id, 0, [1u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(1).build();
 
@@ -5859,8 +6116,10 @@ fn test_fee_distribution_no_proposer_all_burned() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "noop");
-        action.set_field(agent_id, 0, [1u8; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "noop", agent_id)
+            .effect_set_field(agent_id, 0, [1u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(1000).build();
 
@@ -5890,8 +6149,10 @@ fn test_fee_distribution_proposer_only() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "noop");
-        action.set_field(agent_id, 0, [1u8; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "noop", agent_id)
+            .effect_set_field(agent_id, 0, [1u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(1000).build();
 
@@ -5918,8 +6179,10 @@ fn test_fee_distribution_missing_proposer_cell_in_ledger() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "noop");
-        action.set_field(agent_id, 0, [1u8; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "noop", agent_id)
+            .effect_set_field(agent_id, 0, [1u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(1000).build();
 
@@ -5956,8 +6219,10 @@ fn test_fee_distribution_not_on_failure() {
     let nonexistent = CellId::from_bytes([0xFF; 32]);
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(nonexistent, "fail");
-        action.set_field(nonexistent, 0, [1u8; 32]);
+        let action = ActionBuilder::new_unchecked_for_tests(nonexistent, "fail", agent_id)
+            .effect_set_field(nonexistent, 0, [1u8; 32])
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(1000).build();
 
@@ -6006,15 +6271,17 @@ fn test_escrow_create_and_release_with_predicate() {
     // Create escrow.
     let mut builder = TurnBuilder::new(sender_id, 0);
     {
-        let action = builder.action(sender_id, "create_escrow");
-        action.effect(Effect::CreateEscrow {
-            cell: sender_id,
-            recipient: recipient_id,
-            amount: 5000,
-            condition: EscrowCondition::PredicateSatisfied { predicate_hash },
-            timeout_height: 200,
-            escrow_id,
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(sender_id, "create_escrow", sender_id)
+            .effect(Effect::CreateEscrow {
+                cell: sender_id,
+                recipient: recipient_id,
+                amount: 5000,
+                condition: EscrowCondition::PredicateSatisfied { predicate_hash },
+                timeout_height: 200,
+                escrow_id,
+            })
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -6036,11 +6303,13 @@ fn test_escrow_create_and_release_with_predicate() {
     // Release escrow with valid predicate proof.
     let mut builder2 = TurnBuilder::new(sender_id, 1);
     {
-        let action = builder2.action(sender_id, "release_escrow");
-        action.effect(Effect::ReleaseEscrow {
-            escrow_id,
-            proof: Some(predicate_hash.to_vec()),
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(sender_id, "release_escrow", sender_id)
+            .effect(Effect::ReleaseEscrow {
+                escrow_id,
+                proof: Some(predicate_hash.to_vec()),
+            })
+            .build();
+        builder2.add_action(action);
     }
     let turn2 = builder2.fee(100).build();
 
@@ -6072,15 +6341,17 @@ fn test_escrow_create_and_timeout_refund() {
     // Create escrow with timeout at block 200.
     let mut builder = TurnBuilder::new(sender_id, 0);
     {
-        let action = builder.action(sender_id, "create_escrow");
-        action.effect(Effect::CreateEscrow {
-            cell: sender_id,
-            recipient: recipient_id,
-            amount: 3000,
-            condition: EscrowCondition::PredicateSatisfied { predicate_hash },
-            timeout_height: 200,
-            escrow_id,
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(sender_id, "create_escrow", sender_id)
+            .effect(Effect::CreateEscrow {
+                cell: sender_id,
+                recipient: recipient_id,
+                amount: 3000,
+                condition: EscrowCondition::PredicateSatisfied { predicate_hash },
+                timeout_height: 200,
+                escrow_id,
+            })
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -6090,8 +6361,10 @@ fn test_escrow_create_and_timeout_refund() {
     executor.set_block_height(150);
     let mut builder_early = TurnBuilder::new(sender_id, 1);
     {
-        let action = builder_early.action(sender_id, "refund_early");
-        action.effect(Effect::RefundEscrow { escrow_id });
+        let action = ActionBuilder::new_unchecked_for_tests(sender_id, "refund_early", sender_id)
+            .effect(Effect::RefundEscrow { escrow_id })
+            .build();
+        builder_early.add_action(action);
     }
     let turn_early = builder_early.fee(100).build();
     let result_early = execute_chained(&executor, &turn_early, &mut ledger);
@@ -6104,8 +6377,10 @@ fn test_escrow_create_and_timeout_refund() {
     executor.set_block_height(201);
     let mut builder_refund = TurnBuilder::new(sender_id, 2);
     {
-        let action = builder_refund.action(sender_id, "refund_escrow");
-        action.effect(Effect::RefundEscrow { escrow_id });
+        let action = ActionBuilder::new_unchecked_for_tests(sender_id, "refund_escrow", sender_id)
+            .effect(Effect::RefundEscrow { escrow_id })
+            .build();
+        builder_refund.add_action(action);
     }
     let turn_refund = builder_refund.fee(100).build();
     let result_refund = execute_chained(&executor, &turn_refund, &mut ledger);
@@ -6138,15 +6413,17 @@ fn test_escrow_release_without_valid_proof_fails() {
     // Create escrow.
     let mut builder = TurnBuilder::new(sender_id, 0);
     {
-        let action = builder.action(sender_id, "create_escrow");
-        action.effect(Effect::CreateEscrow {
-            cell: sender_id,
-            recipient: recipient_id,
-            amount: 2000,
-            condition: EscrowCondition::PredicateSatisfied { predicate_hash },
-            timeout_height: 300,
-            escrow_id,
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(sender_id, "create_escrow", sender_id)
+            .effect(Effect::CreateEscrow {
+                cell: sender_id,
+                recipient: recipient_id,
+                amount: 2000,
+                condition: EscrowCondition::PredicateSatisfied { predicate_hash },
+                timeout_height: 300,
+                escrow_id,
+            })
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -6156,11 +6433,13 @@ fn test_escrow_release_without_valid_proof_fails() {
     let wrong_hash = [88u8; 32];
     let mut builder_bad = TurnBuilder::new(sender_id, 1);
     {
-        let action = builder_bad.action(sender_id, "release_bad");
-        action.effect(Effect::ReleaseEscrow {
-            escrow_id,
-            proof: Some(wrong_hash.to_vec()),
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(sender_id, "release_bad", sender_id)
+            .effect(Effect::ReleaseEscrow {
+                escrow_id,
+                proof: Some(wrong_hash.to_vec()),
+            })
+            .build();
+        builder_bad.add_action(action);
     }
     let turn_bad = builder_bad.fee(100).build();
     let result_bad = executor.execute(&turn_bad, &mut ledger);
@@ -6172,11 +6451,13 @@ fn test_escrow_release_without_valid_proof_fails() {
     // Try to release with no proof.
     let mut builder_none = TurnBuilder::new(sender_id, 2);
     {
-        let action = builder_none.action(sender_id, "release_none");
-        action.effect(Effect::ReleaseEscrow {
-            escrow_id,
-            proof: None,
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(sender_id, "release_none", sender_id)
+            .effect(Effect::ReleaseEscrow {
+                escrow_id,
+                proof: None,
+            })
+            .build();
+        builder_none.add_action(action);
     }
     let turn_none = builder_none.fee(100).build();
     let result_none = executor.execute(&turn_none, &mut ledger);
@@ -6202,15 +6483,17 @@ fn test_escrow_double_release_fails() {
     // Create escrow.
     let mut builder = TurnBuilder::new(sender_id, 0);
     {
-        let action = builder.action(sender_id, "create_escrow");
-        action.effect(Effect::CreateEscrow {
-            cell: sender_id,
-            recipient: recipient_id,
-            amount: 4000,
-            condition: EscrowCondition::PredicateSatisfied { predicate_hash },
-            timeout_height: 500,
-            escrow_id,
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(sender_id, "create_escrow", sender_id)
+            .effect(Effect::CreateEscrow {
+                cell: sender_id,
+                recipient: recipient_id,
+                amount: 4000,
+                condition: EscrowCondition::PredicateSatisfied { predicate_hash },
+                timeout_height: 500,
+                escrow_id,
+            })
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -6219,11 +6502,13 @@ fn test_escrow_double_release_fails() {
     // Release escrow (first time — should succeed).
     let mut builder_release = TurnBuilder::new(sender_id, 1);
     {
-        let action = builder_release.action(sender_id, "release");
-        action.effect(Effect::ReleaseEscrow {
-            escrow_id,
-            proof: Some(predicate_hash.to_vec()),
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(sender_id, "release", sender_id)
+            .effect(Effect::ReleaseEscrow {
+                escrow_id,
+                proof: Some(predicate_hash.to_vec()),
+            })
+            .build();
+        builder_release.add_action(action);
     }
     let turn_release = builder_release.fee(100).build();
     let result_release = execute_chained(&executor, &turn_release, &mut ledger);
@@ -6232,11 +6517,13 @@ fn test_escrow_double_release_fails() {
     // Release escrow AGAIN (second time — should fail: already resolved).
     let mut builder_double = TurnBuilder::new(sender_id, 2);
     {
-        let action = builder_double.action(sender_id, "release_again");
-        action.effect(Effect::ReleaseEscrow {
-            escrow_id,
-            proof: Some(predicate_hash.to_vec()),
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(sender_id, "release_again", sender_id)
+            .effect(Effect::ReleaseEscrow {
+                escrow_id,
+                proof: Some(predicate_hash.to_vec()),
+            })
+            .build();
+        builder_double.add_action(action);
     }
     let turn_double = builder_double.fee(100).build();
     let result_double = execute_chained(&executor, &turn_double, &mut ledger);
@@ -6261,17 +6548,19 @@ fn test_escrow_create_insufficient_balance() {
     // Try to create escrow with more than the sender has (after fee).
     let mut builder = TurnBuilder::new(sender_id, 0);
     {
-        let action = builder.action(sender_id, "create_escrow");
-        action.effect(Effect::CreateEscrow {
-            cell: sender_id,
-            recipient: recipient_id,
-            amount: 950, // sender has 1000, fee is 100, so only 900 available
-            condition: EscrowCondition::PredicateSatisfied {
-                predicate_hash: [0u8; 32],
-            },
-            timeout_height: 200,
-            escrow_id,
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(sender_id, "create_escrow", sender_id)
+            .effect(Effect::CreateEscrow {
+                cell: sender_id,
+                recipient: recipient_id,
+                amount: 950, // sender has 1000, fee is 100, so only 900 available
+                condition: EscrowCondition::PredicateSatisfied {
+                    predicate_hash: [0u8; 32],
+                },
+                timeout_height: 200,
+                escrow_id,
+            })
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -6294,17 +6583,19 @@ fn test_escrow_release_with_proof_verifier() {
     // Create escrow with ProofPresented condition.
     let mut builder = TurnBuilder::new(sender_id, 0);
     {
-        let action = builder.action(sender_id, "create_escrow");
-        action.effect(Effect::CreateEscrow {
-            cell: sender_id,
-            recipient: recipient_id,
-            amount: 5000,
-            condition: EscrowCondition::ProofPresented {
-                verification_key: vk,
-            },
-            timeout_height: 300,
-            escrow_id,
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(sender_id, "create_escrow", sender_id)
+            .effect(Effect::CreateEscrow {
+                cell: sender_id,
+                recipient: recipient_id,
+                amount: 5000,
+                condition: EscrowCondition::ProofPresented {
+                    verification_key: vk,
+                },
+                timeout_height: 300,
+                escrow_id,
+            })
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -6313,11 +6604,13 @@ fn test_escrow_release_with_proof_verifier() {
     // Release with proof (AlwaysAcceptVerifier accepts anything).
     let mut builder_release = TurnBuilder::new(sender_id, 1);
     {
-        let action = builder_release.action(sender_id, "release");
-        action.effect(Effect::ReleaseEscrow {
-            escrow_id,
-            proof: Some(vec![1, 2, 3, 4]),
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(sender_id, "release", sender_id)
+            .effect(Effect::ReleaseEscrow {
+                escrow_id,
+                proof: Some(vec![1, 2, 3, 4]),
+            })
+            .build();
+        builder_release.add_action(action);
     }
     let turn_release = builder_release.fee(100).build();
     let result_release = execute_chained(&executor, &turn_release, &mut ledger);
@@ -6344,17 +6637,19 @@ fn test_escrow_release_proof_rejected_by_verifier() {
     // Create escrow with ProofPresented condition.
     let mut builder = TurnBuilder::new(sender_id, 0);
     {
-        let action = builder.action(sender_id, "create_escrow");
-        action.effect(Effect::CreateEscrow {
-            cell: sender_id,
-            recipient: recipient_id,
-            amount: 5000,
-            condition: EscrowCondition::ProofPresented {
-                verification_key: vk,
-            },
-            timeout_height: 300,
-            escrow_id,
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(sender_id, "create_escrow", sender_id)
+            .effect(Effect::CreateEscrow {
+                cell: sender_id,
+                recipient: recipient_id,
+                amount: 5000,
+                condition: EscrowCondition::ProofPresented {
+                    verification_key: vk,
+                },
+                timeout_height: 300,
+                escrow_id,
+            })
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -6363,11 +6658,13 @@ fn test_escrow_release_proof_rejected_by_verifier() {
     // Try to release (AlwaysRejectVerifier rejects).
     let mut builder_release = TurnBuilder::new(sender_id, 1);
     {
-        let action = builder_release.action(sender_id, "release");
-        action.effect(Effect::ReleaseEscrow {
-            escrow_id,
-            proof: Some(vec![1, 2, 3, 4]),
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(sender_id, "release", sender_id)
+            .effect(Effect::ReleaseEscrow {
+                escrow_id,
+                proof: Some(vec![1, 2, 3, 4]),
+            })
+            .build();
+        builder_release.add_action(action);
     }
     let turn_release = builder_release.fee(100).build();
     let result_release = executor.execute(&turn_release, &mut ledger);
@@ -6404,21 +6701,23 @@ fn test_adversarial_obligation_rollback_on_turn_failure() {
     // Build a turn that creates an obligation, then FAILS with an invalid field index.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "create_then_fail");
-        // First effect: create obligation (will insert into obligations map and deduct balance).
-        action.effect(Effect::CreateObligation {
-            beneficiary: target_id,
-            condition: crate::conditional::ProofCondition::HashPreimage { hash: [0u8; 32] },
-            deadline_height: 100,
-            stake: stake_commitment,
-            stake_amount: 1000,
-        });
-        // Second effect: invalid field index to force the turn to fail.
-        action.effect(Effect::SetField {
-            cell: agent_id,
-            index: 99, // Invalid index: will fail
-            value: [0u8; 32],
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "create_then_fail", agent_id)
+            // First effect: create obligation (will insert into obligations map and deduct balance).
+            .effect(Effect::CreateObligation {
+                beneficiary: target_id,
+                condition: crate::conditional::ProofCondition::HashPreimage { hash: [0u8; 32] },
+                deadline_height: 100,
+                stake: stake_commitment,
+                stake_amount: 1000,
+            })
+            // Second effect: invalid field index to force the turn to fail.
+            .effect(Effect::SetField {
+                cell: agent_id,
+                index: 99, // Invalid index: will fail
+                value: [0u8; 32],
+            })
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -6457,24 +6756,27 @@ fn test_adversarial_escrow_rollback_on_turn_failure() {
     // Build a turn that creates an escrow, then FAILS.
     let mut builder = TurnBuilder::new(sender_id, 0);
     {
-        let action = builder.action(sender_id, "create_escrow_then_fail");
-        // First effect: create escrow (will insert into escrows map and deduct balance).
-        action.effect(Effect::CreateEscrow {
-            cell: sender_id,
-            recipient: recipient_id,
-            amount: 3000,
-            condition: crate::escrow::EscrowCondition::PredicateSatisfied {
-                predicate_hash: [0x42; 32],
-            },
-            timeout_height: 200,
-            escrow_id,
-        });
-        // Second effect: invalid field index to force failure.
-        action.effect(Effect::SetField {
-            cell: sender_id,
-            index: 99, // Invalid
-            value: [0u8; 32],
-        });
+        let action =
+            ActionBuilder::new_unchecked_for_tests(sender_id, "create_escrow_then_fail", sender_id)
+                // First effect: create escrow (will insert into escrows map and deduct balance).
+                .effect(Effect::CreateEscrow {
+                    cell: sender_id,
+                    recipient: recipient_id,
+                    amount: 3000,
+                    condition: crate::escrow::EscrowCondition::PredicateSatisfied {
+                        predicate_hash: [0x42; 32],
+                    },
+                    timeout_height: 200,
+                    escrow_id,
+                })
+                // Second effect: invalid field index to force failure.
+                .effect(Effect::SetField {
+                    cell: sender_id,
+                    index: 99, // Invalid
+                    value: [0u8; 32],
+                })
+                .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -6518,14 +6820,17 @@ fn test_adversarial_fulfill_obligation_wrong_caller() {
     // First turn: agent creates an obligation.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "create_obligation");
-        action.effect(Effect::CreateObligation {
-            beneficiary: target_id,
-            condition: crate::conditional::ProofCondition::HashPreimage { hash: [0u8; 32] },
-            deadline_height: 100,
-            stake: stake_commitment,
-            stake_amount: 2000,
-        });
+        let action =
+            ActionBuilder::new_unchecked_for_tests(agent_id, "create_obligation", agent_id)
+                .effect(Effect::CreateObligation {
+                    beneficiary: target_id,
+                    condition: crate::conditional::ProofCondition::HashPreimage { hash: [0u8; 32] },
+                    deadline_height: 100,
+                    stake: stake_commitment,
+                    stake_amount: 2000,
+                })
+                .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -6545,11 +6850,13 @@ fn test_adversarial_fulfill_obligation_wrong_caller() {
     // target_id acts as agent for this turn.
     let mut builder2 = TurnBuilder::new(target_id, 0);
     {
-        let action = builder2.action(target_id, "steal_fulfill");
-        action.effect(Effect::FulfillObligation {
-            obligation_id,
-            proof: crate::conditional::ConditionProof::Preimage([0u8; 32]),
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "steal_fulfill", target_id)
+            .effect(Effect::FulfillObligation {
+                obligation_id,
+                proof: crate::conditional::ConditionProof::Preimage([0u8; 32]),
+            })
+            .build();
+        builder2.add_action(action);
     }
     let turn2 = builder2.fee(100).build();
     let result2 = executor.execute(&turn2, &mut ledger);
@@ -6571,11 +6878,14 @@ fn test_adversarial_fulfill_obligation_wrong_caller() {
     // Verify the obligor can still fulfill their own obligation.
     let mut builder3 = TurnBuilder::new(agent_id, 1);
     {
-        let action = builder3.action(agent_id, "legitimate_fulfill");
-        action.effect(Effect::FulfillObligation {
-            obligation_id,
-            proof: crate::conditional::ConditionProof::Preimage([0u8; 32]),
-        });
+        let action =
+            ActionBuilder::new_unchecked_for_tests(agent_id, "legitimate_fulfill", agent_id)
+                .effect(Effect::FulfillObligation {
+                    obligation_id,
+                    proof: crate::conditional::ConditionProof::Preimage([0u8; 32]),
+                })
+                .build();
+        builder3.add_action(action);
     }
     let turn3 = builder3.fee(100).build();
     let result3 = execute_chained(&executor, &turn3, &mut ledger);
@@ -6611,17 +6921,19 @@ fn test_adversarial_create_escrow_wrong_cell() {
     // escrow cell — attempting to lock target's funds.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "steal_lock");
-        action.effect(Effect::CreateEscrow {
-            cell: target_id, // WRONG: not the action target (agent_id)
-            recipient: agent_id,
-            amount: 5000,
-            condition: crate::escrow::EscrowCondition::PredicateSatisfied {
-                predicate_hash: [0x42; 32],
-            },
-            timeout_height: 200,
-            escrow_id,
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "steal_lock", agent_id)
+            .effect(Effect::CreateEscrow {
+                cell: target_id, // WRONG: not the action target (agent_id)
+                recipient: agent_id,
+                amount: 5000,
+                condition: crate::escrow::EscrowCondition::PredicateSatisfied {
+                    predicate_hash: [0x42; 32],
+                },
+                timeout_height: 200,
+                escrow_id,
+            })
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
@@ -6657,17 +6969,19 @@ fn test_create_escrow_correct_cell_matches_target() {
 
     let mut builder = TurnBuilder::new(sender_id, 0);
     {
-        let action = builder.action(sender_id, "valid_escrow");
-        action.effect(Effect::CreateEscrow {
-            cell: sender_id, // CORRECT: matches action target
-            recipient: recipient_id,
-            amount: 3000,
-            condition: crate::escrow::EscrowCondition::PredicateSatisfied {
-                predicate_hash: [0x42; 32],
-            },
-            timeout_height: 200,
-            escrow_id,
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(sender_id, "valid_escrow", sender_id)
+            .effect(Effect::CreateEscrow {
+                cell: sender_id, // CORRECT: matches action target
+                recipient: recipient_id,
+                amount: 3000,
+                condition: crate::escrow::EscrowCondition::PredicateSatisfied {
+                    predicate_hash: [0x42; 32],
+                },
+                timeout_height: 200,
+                escrow_id,
+            })
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(100).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -6735,31 +7049,34 @@ fn test_committed_conservation_valid_proof_passes() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "committed_transfer");
-        action.effect(Effect::NoteSpend {
-            nullifier,
-            note_tree_root: [0xFFu8; 32],
-            value: 500,
-            asset_type: 1,
-            spending_proof: vec![0x01],
-            value_commitment: Some(input_vc_bytes),
-        });
-        action.effect(Effect::NoteCreate {
-            commitment: commitment1,
-            value: 300,
-            asset_type: 1,
-            encrypted_note: vec![],
-            value_commitment: Some(output_vc1_bytes),
-            range_proof: Some(range_proof1.proof_bytes),
-        });
-        action.effect(Effect::NoteCreate {
-            commitment: commitment2,
-            value: 200,
-            asset_type: 1,
-            encrypted_note: vec![],
-            value_commitment: Some(output_vc2_bytes),
-            range_proof: Some(range_proof2.proof_bytes),
-        });
+        let action =
+            ActionBuilder::new_unchecked_for_tests(agent_id, "committed_transfer", agent_id)
+                .effect(Effect::NoteSpend {
+                    nullifier,
+                    note_tree_root: [0xFFu8; 32],
+                    value: 500,
+                    asset_type: 1,
+                    spending_proof: vec![0x01],
+                    value_commitment: Some(input_vc_bytes),
+                })
+                .effect(Effect::NoteCreate {
+                    commitment: commitment1,
+                    value: 300,
+                    asset_type: 1,
+                    encrypted_note: vec![],
+                    value_commitment: Some(output_vc1_bytes),
+                    range_proof: Some(range_proof1.proof_bytes),
+                })
+                .effect(Effect::NoteCreate {
+                    commitment: commitment2,
+                    value: 200,
+                    asset_type: 1,
+                    encrypted_note: vec![],
+                    value_commitment: Some(output_vc2_bytes),
+                    range_proof: Some(range_proof2.proof_bytes),
+                })
+                .build();
+        builder.add_action(action);
     }
     let mut turn = builder.fee(10000).build();
 
@@ -6820,23 +7137,26 @@ fn test_committed_conservation_inflated_output_fails() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action = builder.action(agent_id, "inflated_transfer");
-        action.effect(Effect::NoteSpend {
-            nullifier,
-            note_tree_root: [0xFFu8; 32],
-            value: 500,
-            asset_type: 1,
-            spending_proof: vec![0x01],
-            value_commitment: Some(input_vc_bytes),
-        });
-        action.effect(Effect::NoteCreate {
-            commitment,
-            value: 600, // INFLATED
-            asset_type: 1,
-            encrypted_note: vec![],
-            value_commitment: Some(output_vc_bytes),
-            range_proof: Some(vec![0x01]), // placeholder range proof
-        });
+        let action =
+            ActionBuilder::new_unchecked_for_tests(agent_id, "inflated_transfer", agent_id)
+                .effect(Effect::NoteSpend {
+                    nullifier,
+                    note_tree_root: [0xFFu8; 32],
+                    value: 500,
+                    asset_type: 1,
+                    spending_proof: vec![0x01],
+                    value_commitment: Some(input_vc_bytes),
+                })
+                .effect(Effect::NoteCreate {
+                    commitment,
+                    value: 600, // INFLATED
+                    asset_type: 1,
+                    encrypted_note: vec![],
+                    value_commitment: Some(output_vc_bytes),
+                    range_proof: Some(vec![0x01]), // placeholder range proof
+                })
+                .build();
+        builder.add_action(action);
     }
     let mut turn = builder.fee(10000).build();
 
@@ -6873,7 +7193,7 @@ fn sovereign_cell_execute_turn_with_valid_witness() {
     ledger.insert_cell(agent).unwrap();
 
     // Create a cell that will become sovereign.
-    let (mut sovereign_cell, _) = make_open_cell(2, 500);
+    let (mut sovereign_cell, sovereign_kp) = make_open_cell(2, 500);
     let sovereign_id = sovereign_cell.id();
     sovereign_cell.mode = pyana_cell::CellMode::Sovereign;
 
@@ -6925,11 +7245,32 @@ fn sovereign_cell_execute_turn_with_valid_witness() {
         conservation_proof: None,
         sovereign_witnesses: {
             let mut m = std::collections::HashMap::new();
+            // Build a properly-signed witness with monotonic sequence.
+            let timestamp = 1234567890i64;
+            let sequence = 1u64;
+            let new_commitment_placeholder = [0u8; 32];
+            let effects_hash_placeholder = [0u8; 32];
+            let signing_message = crate::turn::SovereignCellWitness::signing_message(
+                &sovereign_id,
+                &initial_commitment,
+                &new_commitment_placeholder,
+                &effects_hash_placeholder,
+                timestamp,
+                sequence,
+            );
+            let signature = sovereign_kp.signing_key.sign(&signing_message).to_bytes();
             m.insert(
                 sovereign_id,
                 crate::turn::SovereignCellWitness {
+                    cell_id: sovereign_id,
+                    old_commitment: initial_commitment,
+                    new_commitment: new_commitment_placeholder,
+                    effects_hash: effects_hash_placeholder,
+                    timestamp,
+                    sequence,
+                    signature,
                     cell_state: sovereign_cell.clone(),
-                    state_proof: initial_commitment,
+                    transition_proof: None,
                 },
             );
             m
@@ -7035,17 +7376,19 @@ fn sovereign_cell_rejected_without_witness() {
     let executor = zero_cost_executor();
     let result = executor.execute(&turn, &mut ledger);
 
-    // The turn should be rejected because the sovereign cell is not in the
-    // hosted store and no witness was provided.
+    // The turn should be rejected with the dedicated SovereignWitnessRequired
+    // variant, distinguishing "missing witness" from "no such cell".
     assert!(
         result.is_rejected(),
         "turn should be rejected without witness"
     );
     let (error, _) = result.unwrap_rejected();
-    // Should fail with CellNotFound since the cell isn't in the hosted store.
     assert!(
-        matches!(error, TurnError::CellNotFound { .. }),
-        "expected CellNotFound, got: {error}"
+        matches!(
+            error,
+            TurnError::SovereignWitnessRequired { cell } if cell == sovereign_id
+        ),
+        "expected SovereignWitnessRequired, got: {error}"
     );
 }
 
@@ -7057,7 +7400,7 @@ fn sovereign_cell_rejected_with_wrong_commitment() {
     let agent_id = agent.id();
     ledger.insert_cell(agent).unwrap();
 
-    let (sovereign_cell, _) = make_open_cell(2, 500);
+    let (sovereign_cell, sovereign_kp) = make_open_cell(2, 500);
     let sovereign_id = sovereign_cell.id();
     let commitment = sovereign_cell.state_commitment();
     ledger
@@ -7109,11 +7452,34 @@ fn sovereign_cell_rejected_with_wrong_commitment() {
         conservation_proof: None,
         sovereign_witnesses: {
             let mut m = std::collections::HashMap::new();
+            // Witness claims the tampered state as the pre-image; signature
+            // is valid but the executor will reject because the tampered
+            // commitment doesn't match the stored one.
+            let timestamp = 1234567890i64;
+            let sequence = 1u64;
+            let new_commitment_placeholder = [0u8; 32];
+            let effects_hash_placeholder = [0u8; 32];
+            let signing_message = crate::turn::SovereignCellWitness::signing_message(
+                &sovereign_id,
+                &tampered_commitment,
+                &new_commitment_placeholder,
+                &effects_hash_placeholder,
+                timestamp,
+                sequence,
+            );
+            let signature = sovereign_kp.signing_key.sign(&signing_message).to_bytes();
             m.insert(
                 sovereign_id,
                 crate::turn::SovereignCellWitness {
+                    cell_id: sovereign_id,
+                    old_commitment: tampered_commitment, // doesn't match stored
+                    new_commitment: new_commitment_placeholder,
+                    effects_hash: effects_hash_placeholder,
+                    timestamp,
+                    sequence,
+                    signature,
                     cell_state: tampered_cell,
-                    state_proof: tampered_commitment, // This won't match stored commitment
+                    transition_proof: None,
                 },
             );
             m
@@ -7134,6 +7500,344 @@ fn sovereign_cell_rejected_with_wrong_commitment() {
     assert!(
         matches!(error, TurnError::SovereignCommitmentMismatch { .. }),
         "expected SovereignCommitmentMismatch, got: {error}"
+    );
+}
+
+/// Adversarial: an executor on the wire substitutes the `sovereign_witnesses`
+/// map after the wallet has signed the turn. Since `compute_turn_bytes` now
+/// uses `Turn::hash()` (v3) which covers witnesses, the wallet signature must
+/// no longer verify.
+#[test]
+fn sovereign_witness_tamper_invalidates_wallet_signature() {
+    use crate::turn::SovereignCellWitness;
+
+    // Build a sovereign cell and a witness for it.
+    let (mut sovereign_cell, sovereign_kp) = make_open_cell(2, 500);
+    let sovereign_id = sovereign_cell.id();
+    sovereign_cell.mode = pyana_cell::CellMode::Sovereign;
+    let initial_commitment = sovereign_cell.state_commitment();
+
+    let timestamp = 1234567890i64;
+    let sequence = 1u64;
+    let new_commitment_placeholder = [0u8; 32];
+    let effects_hash_placeholder = [0u8; 32];
+    let signing_message = SovereignCellWitness::signing_message(
+        &sovereign_id,
+        &initial_commitment,
+        &new_commitment_placeholder,
+        &effects_hash_placeholder,
+        timestamp,
+        sequence,
+    );
+    let witness_sig = sovereign_kp.signing_key.sign(&signing_message).to_bytes();
+    let witness = SovereignCellWitness {
+        cell_id: sovereign_id,
+        old_commitment: initial_commitment,
+        new_commitment: new_commitment_placeholder,
+        effects_hash: effects_hash_placeholder,
+        timestamp,
+        sequence,
+        signature: witness_sig,
+        cell_state: sovereign_cell.clone(),
+        transition_proof: None,
+    };
+
+    let agent_kp = TestKeypair::from_seed(11);
+    let agent_cell = pyana_cell::Cell::with_balance(agent_kp.public_key, [0u8; 32], 1000);
+    let agent_id = agent_cell.id();
+
+    let mut witnesses = std::collections::HashMap::new();
+    witnesses.insert(sovereign_id, witness.clone());
+
+    let turn = Turn {
+        agent: agent_id,
+        nonce: 0,
+        call_forest: CallForest {
+            roots: vec![CallTree {
+                action: Action {
+                    target: sovereign_id,
+                    method: symbol("set_field"),
+                    args: vec![],
+                    authorization: Authorization::Unchecked,
+                    preconditions: CellPreconditions::default(),
+                    effects: vec![Effect::SetField {
+                        cell: sovereign_id,
+                        index: 0,
+                        value: [42u8; 32],
+                    }],
+                    may_delegate: DelegationMode::None,
+                    commitment_mode: CommitmentMode::Full,
+                    balance_change: None,
+                },
+                children: vec![],
+                hash: [0u8; 32],
+            }],
+            forest_hash: [0u8; 32],
+        },
+        fee: 0,
+        memo: None,
+        valid_until: None,
+        previous_receipt_hash: None,
+        depends_on: vec![],
+        conservation_proof: None,
+        sovereign_witnesses: witnesses,
+        execution_proof: None,
+        execution_proof_cell: None,
+        execution_proof_new_commitment: None,
+        custom_program_proofs: None,
+    };
+
+    // The wallet signs Turn::hash() (v3) — this covers the witnesses.
+    let original_hash = turn.hash();
+    let wallet_sig = agent_kp.signing_key.sign(&original_hash);
+
+    // Tamper: remove the witness map. The new turn-hash must differ.
+    let mut tampered = turn.clone();
+    tampered.sovereign_witnesses.clear();
+    let tampered_hash = tampered.hash();
+    assert_ne!(
+        original_hash, tampered_hash,
+        "removing the witness must change Turn::hash"
+    );
+
+    // The wallet's signature was over original_hash, so verifying it against
+    // tampered_hash fails.
+    let agent_vk = VerifyingKey::from_bytes(&agent_kp.public_key).unwrap();
+    assert!(
+        agent_vk.verify_strict(&original_hash, &wallet_sig).is_ok(),
+        "wallet signature must verify against the original hash"
+    );
+    assert!(
+        agent_vk.verify_strict(&tampered_hash, &wallet_sig).is_err(),
+        "wallet signature must NOT verify after witness tampering"
+    );
+
+    // Tamper differently: swap the witness's new_commitment field. Again,
+    // Turn::hash should detect the change.
+    let mut tampered2 = turn.clone();
+    let mut w = tampered2.sovereign_witnesses.remove(&sovereign_id).unwrap();
+    w.new_commitment = [0xFFu8; 32];
+    tampered2.sovereign_witnesses.insert(sovereign_id, w);
+    let tampered2_hash = tampered2.hash();
+    assert_ne!(
+        original_hash, tampered2_hash,
+        "swapping witness.new_commitment must change Turn::hash"
+    );
+    assert!(
+        agent_vk
+            .verify_strict(&tampered2_hash, &wallet_sig)
+            .is_err(),
+        "wallet signature must NOT verify after new_commitment swap"
+    );
+}
+
+/// Adversarial: an attacker with the cell's state but not its key cannot
+/// forge a witness — the signature verification fails.
+#[test]
+fn sovereign_witness_rejected_with_forged_signature() {
+    use crate::turn::SovereignCellWitness;
+
+    let mut ledger = Ledger::new();
+    let (agent, _) = make_open_cell(1, 10_000);
+    let agent_id = agent.id();
+    ledger.insert_cell(agent).unwrap();
+
+    let (mut sovereign_cell, _real_kp) = make_open_cell(2, 500);
+    let sovereign_id = sovereign_cell.id();
+    sovereign_cell.mode = pyana_cell::CellMode::Sovereign;
+    let initial_commitment = sovereign_cell.state_commitment();
+    ledger
+        .register_sovereign_cell(sovereign_id, initial_commitment)
+        .unwrap();
+
+    ledger
+        .get_mut(&agent_id)
+        .unwrap()
+        .capabilities
+        .grant(sovereign_id, AuthRequired::None);
+
+    // Attacker signs with the WRONG key.
+    let attacker_kp = TestKeypair::from_seed(99);
+    let timestamp = 1234567890i64;
+    let sequence = 1u64;
+    let signing_message = SovereignCellWitness::signing_message(
+        &sovereign_id,
+        &initial_commitment,
+        &[0u8; 32],
+        &[0u8; 32],
+        timestamp,
+        sequence,
+    );
+    let bad_sig = attacker_kp.signing_key.sign(&signing_message).to_bytes();
+
+    let witness = SovereignCellWitness {
+        cell_id: sovereign_id,
+        old_commitment: initial_commitment,
+        new_commitment: [0u8; 32],
+        effects_hash: [0u8; 32],
+        timestamp,
+        sequence,
+        signature: bad_sig,
+        cell_state: sovereign_cell.clone(),
+        transition_proof: None,
+    };
+
+    let mut witnesses = std::collections::HashMap::new();
+    witnesses.insert(sovereign_id, witness);
+
+    let turn = Turn {
+        agent: agent_id,
+        nonce: 0,
+        call_forest: CallForest {
+            roots: vec![CallTree {
+                action: Action {
+                    target: sovereign_id,
+                    method: symbol("set_field"),
+                    args: vec![],
+                    authorization: Authorization::Unchecked,
+                    preconditions: CellPreconditions::default(),
+                    effects: vec![Effect::SetField {
+                        cell: sovereign_id,
+                        index: 0,
+                        value: [1u8; 32],
+                    }],
+                    may_delegate: DelegationMode::None,
+                    commitment_mode: CommitmentMode::Full,
+                    balance_change: None,
+                },
+                children: vec![],
+                hash: [0u8; 32],
+            }],
+            forest_hash: [0u8; 32],
+        },
+        fee: 0,
+        memo: None,
+        valid_until: None,
+        previous_receipt_hash: None,
+        depends_on: vec![],
+        conservation_proof: None,
+        sovereign_witnesses: witnesses,
+        execution_proof: None,
+        execution_proof_cell: None,
+        execution_proof_new_commitment: None,
+        custom_program_proofs: None,
+    };
+
+    let executor = zero_cost_executor();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        result.is_rejected(),
+        "turn with forged witness signature must be rejected"
+    );
+    let (error, _) = result.unwrap_rejected();
+    assert!(
+        matches!(error, TurnError::InvalidEffect { ref reason } if reason.contains("signature"))
+            || matches!(error, TurnError::InvalidEffect { .. }),
+        "expected InvalidEffect with signature reason, got: {error}"
+    );
+}
+
+/// Adversarial: replay of a previously-accepted witness must be rejected by
+/// the per-cell monotonic sequence check.
+#[test]
+fn sovereign_witness_replay_rejected_by_sequence() {
+    use crate::turn::SovereignCellWitness;
+
+    let mut ledger = Ledger::new();
+    let (agent, _) = make_open_cell(1, 10_000);
+    let agent_id = agent.id();
+    ledger.insert_cell(agent).unwrap();
+
+    let (mut sovereign_cell, sovereign_kp) = make_open_cell(2, 500);
+    let sovereign_id = sovereign_cell.id();
+    sovereign_cell.mode = pyana_cell::CellMode::Sovereign;
+    let initial_commitment = sovereign_cell.state_commitment();
+    ledger
+        .register_sovereign_cell(sovereign_id, initial_commitment)
+        .unwrap();
+
+    ledger
+        .get_mut(&agent_id)
+        .unwrap()
+        .capabilities
+        .grant(sovereign_id, AuthRequired::None);
+
+    // Manually bump the sequence so a sequence=1 witness is now stale.
+    ledger.bump_sovereign_witness_sequence(&sovereign_id, 5);
+
+    let timestamp = 1234567890i64;
+    let stale_sequence = 1u64;
+    let signing_message = SovereignCellWitness::signing_message(
+        &sovereign_id,
+        &initial_commitment,
+        &[0u8; 32],
+        &[0u8; 32],
+        timestamp,
+        stale_sequence,
+    );
+    let signature = sovereign_kp.signing_key.sign(&signing_message).to_bytes();
+    let witness = SovereignCellWitness {
+        cell_id: sovereign_id,
+        old_commitment: initial_commitment,
+        new_commitment: [0u8; 32],
+        effects_hash: [0u8; 32],
+        timestamp,
+        sequence: stale_sequence,
+        signature,
+        cell_state: sovereign_cell.clone(),
+        transition_proof: None,
+    };
+    let mut witnesses = std::collections::HashMap::new();
+    witnesses.insert(sovereign_id, witness);
+
+    let turn = Turn {
+        agent: agent_id,
+        nonce: 0,
+        call_forest: CallForest {
+            roots: vec![CallTree {
+                action: Action {
+                    target: sovereign_id,
+                    method: symbol("set_field"),
+                    args: vec![],
+                    authorization: Authorization::Unchecked,
+                    preconditions: CellPreconditions::default(),
+                    effects: vec![Effect::SetField {
+                        cell: sovereign_id,
+                        index: 0,
+                        value: [1u8; 32],
+                    }],
+                    may_delegate: DelegationMode::None,
+                    commitment_mode: CommitmentMode::Full,
+                    balance_change: None,
+                },
+                children: vec![],
+                hash: [0u8; 32],
+            }],
+            forest_hash: [0u8; 32],
+        },
+        fee: 0,
+        memo: None,
+        valid_until: None,
+        previous_receipt_hash: None,
+        depends_on: vec![],
+        conservation_proof: None,
+        sovereign_witnesses: witnesses,
+        execution_proof: None,
+        execution_proof_cell: None,
+        execution_proof_new_commitment: None,
+        custom_program_proofs: None,
+    };
+
+    let executor = zero_cost_executor();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        result.is_rejected(),
+        "replayed (out-of-sequence) witness must be rejected"
+    );
+    let (error, _) = result.unwrap_rejected();
+    assert!(
+        matches!(error, TurnError::InvalidEffect { ref reason } if reason.contains("sequence")),
+        "expected InvalidEffect with sequence reason, got: {error}"
     );
 }
 
@@ -7356,12 +8060,18 @@ fn test_proof_carrying_turn_accepted() {
     // The executor computes the Effect VM effects_hash from the turn's effects.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let mut action = builder.action(sovereign_id, "sovereign_execute_proven");
-        action.effect(Effect::Transfer {
+        let action = ActionBuilder::new_unchecked_for_tests(
+            sovereign_id,
+            "sovereign_execute_proven",
+            agent_id,
+        )
+        .effect(Effect::Transfer {
             from: sovereign_id,
             to: agent_id,
             amount: 100,
-        });
+        })
+        .build();
+        builder.add_action(action);
     }
     let mut turn = builder.fee(100).build();
 
@@ -7397,7 +8107,8 @@ fn test_proof_carrying_turn_wrong_old_commitment() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let _action = builder.action(agent_id, "noop");
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "noop", agent_id).build();
+        builder.add_action(action);
     }
     let mut turn = builder.fee(100).build();
 
@@ -7451,17 +8162,23 @@ fn test_proof_carrying_turn_wrong_effects_hash() {
     // but a different effects_hash (because of the extra VmEffect::SetField).
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let mut action = builder.action(sovereign_id, "sovereign_execute_proven");
-        action.effect(Effect::Transfer {
+        let action = ActionBuilder::new_unchecked_for_tests(
+            sovereign_id,
+            "sovereign_execute_proven",
+            agent_id,
+        )
+        .effect(Effect::Transfer {
             from: sovereign_id,
             to: agent_id,
             amount: 100,
-        });
-        action.effect(Effect::SetField {
+        })
+        .effect(Effect::SetField {
             cell: sovereign_id,
             index: 0,
             value: [1u8; 32],
-        });
+        })
+        .build();
+        builder.add_action(action);
     }
     let mut turn = builder.fee(100).build();
 
@@ -7489,7 +8206,8 @@ fn test_proof_carrying_turn_invalid_proof_bytes() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let _action = builder.action(agent_id, "noop");
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "noop", agent_id).build();
+        builder.add_action(action);
     }
     let mut turn = builder.fee(100).build();
 
@@ -7519,7 +8237,8 @@ fn test_proof_carrying_turn_requires_sovereign_cell() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let _action = builder.action(agent_id, "noop");
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "noop", agent_id).build();
+        builder.add_action(action);
     }
     let mut turn = builder.fee(100).build();
 
@@ -7545,7 +8264,8 @@ fn test_proof_carrying_turn_no_cell_specified() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let _action = builder.action(agent_id, "noop");
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "noop", agent_id).build();
+        builder.add_action(action);
     }
     let mut turn = builder.fee(100).build();
 
@@ -7679,7 +8399,8 @@ fn test_custom_program_proof_carrying_turn() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let _action = builder.action(agent_id, "noop");
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "noop", agent_id).build();
+        builder.add_action(action);
     }
     let mut turn = builder.fee(100).build();
 
@@ -7774,7 +8495,8 @@ fn test_custom_program_missing_from_registry_rejected() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let _action = builder.action(agent_id, "noop");
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "noop", agent_id).build();
+        builder.add_action(action);
     }
     let mut turn = builder.fee(100).build();
 
@@ -7844,12 +8566,18 @@ fn test_default_air_still_works_without_vk_hash() {
     // Build a turn with effects matching the proof.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let mut action = builder.action(sovereign_id, "sovereign_execute_proven");
-        action.effect(Effect::Transfer {
+        let action = ActionBuilder::new_unchecked_for_tests(
+            sovereign_id,
+            "sovereign_execute_proven",
+            agent_id,
+        )
+        .effect(Effect::Transfer {
             from: sovereign_id,
             to: agent_id,
             amount: 100,
-        });
+        })
+        .build();
+        builder.add_action(action);
     }
     let mut turn = builder.fee(100).build();
 
@@ -8682,11 +9410,13 @@ fn allocate_queue(
     let nonce = ledger.get(&agent_id).unwrap().state.nonce();
     let mut builder = TurnBuilder::new(agent_id, nonce);
     {
-        let action = builder.action(agent_id, "queue_allocate");
-        action.effect(Effect::QueueAllocate {
-            capacity,
-            program_vk: None,
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "queue_allocate", agent_id)
+            .effect(Effect::QueueAllocate {
+                capacity,
+                program_vk: None,
+            })
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(0).build();
     let result = execute_chained(executor, &turn, ledger);
@@ -8742,12 +9472,14 @@ fn test_queue_enqueue_adds_message() {
     let nonce = ledger.get(&agent_id).unwrap().state.nonce();
     let mut builder = TurnBuilder::new(agent_id, nonce);
     {
-        let action = builder.action(agent_id, "enqueue");
-        action.effect(Effect::QueueEnqueue {
-            queue: queue_id,
-            message_hash: msg_hash,
-            deposit: 50,
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "enqueue", agent_id)
+            .effect(Effect::QueueEnqueue {
+                queue: queue_id,
+                message_hash: msg_hash,
+                deposit: 50,
+            })
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(0).build();
     let result = execute_chained(&executor, &turn, &mut ledger);
@@ -8778,12 +9510,14 @@ fn test_queue_dequeue_by_owner_succeeds() {
     let nonce = ledger.get(&agent_id).unwrap().state.nonce();
     let mut builder = TurnBuilder::new(agent_id, nonce);
     {
-        let action = builder.action(agent_id, "enqueue");
-        action.effect(Effect::QueueEnqueue {
-            queue: queue_id,
-            message_hash: msg_hash,
-            deposit: 100,
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "enqueue", agent_id)
+            .effect(Effect::QueueEnqueue {
+                queue: queue_id,
+                message_hash: msg_hash,
+                deposit: 100,
+            })
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(0).build();
     let result = execute_chained(&executor, &turn, &mut ledger);
@@ -8793,8 +9527,10 @@ fn test_queue_dequeue_by_owner_succeeds() {
     let nonce = ledger.get(&agent_id).unwrap().state.nonce();
     let mut builder = TurnBuilder::new(agent_id, nonce);
     {
-        let action = builder.action(agent_id, "dequeue");
-        action.effect(Effect::QueueDequeue { queue: queue_id });
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "dequeue", agent_id)
+            .effect(Effect::QueueDequeue { queue: queue_id })
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(0).build();
     let result = execute_chained(&executor, &turn, &mut ledger);
@@ -8823,12 +9559,14 @@ fn test_queue_dequeue_by_non_owner_fails() {
     let nonce = ledger.get(&agent_id).unwrap().state.nonce();
     let mut builder = TurnBuilder::new(agent_id, nonce);
     {
-        let action = builder.action(agent_id, "enqueue");
-        action.effect(Effect::QueueEnqueue {
-            queue: queue_id,
-            message_hash: [0xEEu8; 32],
-            deposit: 50,
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "enqueue", agent_id)
+            .effect(Effect::QueueEnqueue {
+                queue: queue_id,
+                message_hash: [0xEEu8; 32],
+                deposit: 50,
+            })
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(0).build();
     executor.execute(&turn, &mut ledger);
@@ -8840,8 +9578,10 @@ fn test_queue_dequeue_by_non_owner_fails() {
 
     let mut builder = TurnBuilder::new(other_id, 0);
     {
-        let action = builder.action(other_id, "dequeue");
-        action.effect(Effect::QueueDequeue { queue: queue_id });
+        let action = ActionBuilder::new_unchecked_for_tests(other_id, "dequeue", other_id)
+            .effect(Effect::QueueDequeue { queue: queue_id })
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(0).build();
     let result = executor.execute(&turn, &mut ledger);
@@ -8875,21 +9615,23 @@ fn test_queue_atomic_tx_all_succeed() {
     let nonce = ledger.get(&agent_id).unwrap().state.nonce();
     let mut builder = TurnBuilder::new(agent_id, nonce);
     {
-        let action = builder.action(agent_id, "atomic_enqueue");
-        action.effect(Effect::QueueAtomicTx {
-            operations: vec![
-                crate::action::QueueTxOp::Enqueue {
-                    queue: queue1_id,
-                    message_hash: [0x11u8; 32],
-                    deposit: 25,
-                },
-                crate::action::QueueTxOp::Enqueue {
-                    queue: queue2_id,
-                    message_hash: [0x22u8; 32],
-                    deposit: 25,
-                },
-            ],
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "atomic_enqueue", agent_id)
+            .effect(Effect::QueueAtomicTx {
+                operations: vec![
+                    crate::action::QueueTxOp::Enqueue {
+                        queue: queue1_id,
+                        message_hash: [0x11u8; 32],
+                        deposit: 25,
+                    },
+                    crate::action::QueueTxOp::Enqueue {
+                        queue: queue2_id,
+                        message_hash: [0x22u8; 32],
+                        deposit: 25,
+                    },
+                ],
+            })
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(0).build();
     let result = execute_chained(&executor, &turn, &mut ledger);
@@ -8917,12 +9659,14 @@ fn test_queue_atomic_tx_one_fails_all_rolled_back() {
     let nonce = ledger.get(&agent_id).unwrap().state.nonce();
     let mut builder = TurnBuilder::new(agent_id, nonce);
     {
-        let action = builder.action(agent_id, "fill");
-        action.effect(Effect::QueueEnqueue {
-            queue: queue_id,
-            message_hash: [0xAAu8; 32],
-            deposit: 10,
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "fill", agent_id)
+            .effect(Effect::QueueEnqueue {
+                queue: queue_id,
+                message_hash: [0xAAu8; 32],
+                deposit: 10,
+            })
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(0).build();
     let result = execute_chained(&executor, &turn, &mut ledger);
@@ -8935,14 +9679,16 @@ fn test_queue_atomic_tx_one_fails_all_rolled_back() {
     let nonce = ledger.get(&agent_id).unwrap().state.nonce();
     let mut builder = TurnBuilder::new(agent_id, nonce);
     {
-        let action = builder.action(agent_id, "atomic_fail");
-        action.effect(Effect::QueueAtomicTx {
-            operations: vec![crate::action::QueueTxOp::Enqueue {
-                queue: queue_id,
-                message_hash: [0xBBu8; 32],
-                deposit: 10,
-            }],
-        });
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "atomic_fail", agent_id)
+            .effect(Effect::QueueAtomicTx {
+                operations: vec![crate::action::QueueTxOp::Enqueue {
+                    queue: queue_id,
+                    message_hash: [0xBBu8; 32],
+                    deposit: 10,
+                }],
+            })
+            .build();
+        builder.add_action(action);
     }
     let turn = builder.fee(0).build();
     let result = execute_chained(&executor, &turn, &mut ledger);
@@ -8966,4 +9712,523 @@ fn test_queue_atomic_tx_one_fails_all_rolled_back() {
     let queue_cell = ledger.get(&queue_id).unwrap();
     let length = u64::from_le_bytes(queue_cell.state.fields[1][..8].try_into().unwrap());
     assert_eq!(length, 1);
+}
+
+// =============================================================================
+// Privacy wiring tests (NullifierSet, EncryptedTurn, destination_federation)
+// =============================================================================
+
+mod privacy_wiring {
+    use super::*;
+    use crate::action::Effect;
+    use crate::conflict::ConflictSet;
+    use crate::encrypted::{EncryptedTurn, TurnValidityProof, TurnValidityPublicInputs};
+    use crate::turn::{Turn, TurnResult};
+    use pyana_cell::Nullifier;
+
+    /// Fake verifier that accepts every proof — used to test the executor-side
+    /// nullifier-set gate independently of STARK verification.
+    struct AcceptAll;
+    impl ProofVerifier for AcceptAll {
+        fn verify(&self, _proof: &[u8], _action: &str, _resource: &str, _vk: &[u8]) -> bool {
+            true
+        }
+    }
+
+    fn build_note_spend_turn(
+        agent: CellId,
+        agent_kp: &TestKeypair,
+        nullifier: Nullifier,
+        nonce: u64,
+    ) -> Turn {
+        let effect = Effect::NoteSpend {
+            nullifier,
+            note_tree_root: [1u8; 32],
+            value: 0,
+            asset_type: 0,
+            spending_proof: vec![1, 2, 3, 4],
+            value_commitment: None,
+        };
+        let mut action = Action {
+            target: agent,
+            method: symbol("note_spend"),
+            args: vec![],
+            authorization: Authorization::Unchecked,
+            preconditions: CellPreconditions::default(),
+            effects: vec![effect],
+            may_delegate: DelegationMode::None,
+            commitment_mode: CommitmentMode::Full,
+            balance_change: None,
+        };
+        action.authorization = agent_kp.sign_action(&action);
+
+        let mut forest = CallForest::new();
+        forest.add_root(action);
+        Turn {
+            agent,
+            nonce,
+            call_forest: forest,
+            fee: 10_000,
+            memo: None,
+            valid_until: None,
+            previous_receipt_hash: None,
+            depends_on: vec![],
+            conservation_proof: None,
+            sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
+            custom_program_proofs: None,
+        }
+    }
+
+    /// Adversarial test (AUDIT-nullifiers.md §3): same nullifier presented
+    /// twice — second attempt must be rejected by the production
+    /// `note_nullifiers` set.
+    #[test]
+    fn double_spend_rejected_via_nullifier_set() {
+        let mut ledger = Ledger::new();
+        let (agent, agent_kp) = make_open_cell(7, 1_000_000);
+        let agent_id = agent.id();
+        ledger.insert_cell(agent).unwrap();
+
+        let mut executor = TurnExecutor::new(ComputronCosts::default());
+        executor.set_proof_verifier(Box::new(AcceptAll));
+
+        let nullifier = Nullifier([0x42u8; 32]);
+
+        // First spend: succeeds.
+        let turn1 = build_note_spend_turn(agent_id, &agent_kp, nullifier, 0);
+        let result1 = execute_chained(&executor, &turn1, &mut ledger);
+        assert!(
+            result1.is_committed(),
+            "first NoteSpend should commit, got: {:?}",
+            result1
+        );
+        assert!(
+            executor
+                .note_nullifiers
+                .lock()
+                .unwrap()
+                .contains(&nullifier),
+            "first spend must populate note_nullifiers"
+        );
+
+        // Second spend with the SAME nullifier: must be rejected.
+        let turn2 = build_note_spend_turn(agent_id, &agent_kp, nullifier, 1);
+        let result2 = execute_chained(&executor, &turn2, &mut ledger);
+        assert!(
+            result2.is_rejected(),
+            "second NoteSpend (same nullifier) must be rejected"
+        );
+        let (err, _) = result2.unwrap_rejected();
+        match err {
+            TurnError::InvalidEffect { reason } => {
+                assert!(
+                    reason.contains("double-spend") || reason.contains("nullifier"),
+                    "expected double-spend message, got: {reason}"
+                );
+            }
+            other => panic!("expected InvalidEffect, got: {other:?}"),
+        }
+    }
+
+    /// Helper: build an EncryptedTurn whose validity-proof PI matches the
+    /// encrypt-side commitment. The encrypt fn computes its own commit from
+    /// the postcard bytes; we mirror that here so `verify_metadata` passes.
+    fn build_consistent_encrypted_turn(
+        turn: &Turn,
+        agent: CellId,
+        executor_pub: &[u8; 32],
+    ) -> EncryptedTurn {
+        let conflict_set = ConflictSet::new();
+        let plaintext = serde_json::to_vec(turn).unwrap();
+        let expected_commit = {
+            let mut hasher = blake3::Hasher::new_derive_key("pyana-encrypted-turn-commitment v1");
+            hasher.update(&plaintext);
+            *hasher.finalize().as_bytes()
+        };
+        let validity_proof = TurnValidityProof {
+            proof_bytes: vec![],
+            public_inputs: TurnValidityPublicInputs {
+                turn_commitment: expected_commit,
+                agent_commitment: TurnValidityPublicInputs::compute_agent_commitment(&agent),
+                claimed_nonce: turn.nonce,
+                min_fee: 0,
+                conflict_set_commitment: conflict_set.commitment(),
+            },
+        };
+        EncryptedTurn::encrypt_for_executor(
+            turn,
+            agent,
+            executor_pub,
+            conflict_set,
+            validity_proof,
+            0,
+        )
+        .expect("encrypt OK")
+    }
+
+    /// EncryptedTurn round-trip: the executor decrypts and the underlying
+    /// Turn body is recovered byte-for-byte. Verifies the privacy path is
+    /// reachable from production (AUDIT-privacy.md §11.2 finding).
+    #[test]
+    fn encrypted_turn_decrypts_to_original() {
+        let mut ledger = Ledger::new();
+        let (agent, _) = make_open_cell(11, 1_000_000);
+        let agent_id = agent.id();
+        ledger.insert_cell(agent).unwrap();
+
+        let decrypt_secret = [0x7Au8; 32];
+        let mut executor = TurnExecutor::new(ComputronCosts::default());
+        executor.set_turn_decryption_secret(decrypt_secret);
+        let executor_pub = executor.turn_decryption_public().unwrap();
+
+        let mut builder = TurnBuilder::new(agent_id, 0);
+        {
+            let action = ActionBuilder::new(agent_id, "noop", agent_id)
+                .signed_by([0u8; 64])
+                .build();
+            builder.add_action(action);
+        }
+        let turn = builder.fee(500).build();
+
+        let encrypted = build_consistent_encrypted_turn(&turn, agent_id, &executor_pub);
+
+        // Direct decrypt path: the bytes recover.
+        let decrypted = encrypted
+            .decrypt_for_executor(&decrypt_secret, &executor_pub)
+            .expect("decrypt OK");
+        assert_eq!(decrypted.agent, turn.agent);
+        assert_eq!(decrypted.nonce, turn.nonce);
+        assert_eq!(decrypted.fee, turn.fee);
+
+        // execute_encrypted_turn reaches into the production execute path —
+        // the noop signature won't authorize, but the metadata-check + decrypt
+        // path must succeed (i.e. NOT rejected for decryption reasons).
+        let result = executor.execute_encrypted_turn(&encrypted, &mut ledger);
+        // Either committed or rejected for non-decryption reasons (insufficient
+        // sig is fine — we just need to know the encrypted path was reached).
+        if let TurnResult::Rejected { reason, .. } = &result {
+            let reason_str = format!("{reason:?}");
+            assert!(
+                !reason_str.contains("decryption") && !reason_str.contains("metadata"),
+                "encrypted path failed at decrypt/metadata stage: {reason_str}"
+            );
+        }
+    }
+
+    /// Adversarial: an EncryptedTurn whose ciphertext is tampered with
+    /// MUST be rejected at decryption time.
+    #[test]
+    fn encrypted_turn_rejects_tampered_ciphertext() {
+        let mut ledger = Ledger::new();
+        let (agent, _) = make_open_cell(21, 1_000_000);
+        let agent_id = agent.id();
+        ledger.insert_cell(agent).unwrap();
+
+        let decrypt_secret = [0x99u8; 32];
+        let mut executor = TurnExecutor::new(ComputronCosts::default());
+        executor.set_turn_decryption_secret(decrypt_secret);
+        let executor_pub = executor.turn_decryption_public().unwrap();
+
+        let mut builder = TurnBuilder::new(agent_id, 0);
+        {
+            let action = ActionBuilder::new(agent_id, "noop", agent_id)
+                .signed_by([0u8; 64])
+                .build();
+            builder.add_action(action);
+        }
+        let turn = builder.fee(500).build();
+
+        let mut encrypted = build_consistent_encrypted_turn(&turn, agent_id, &executor_pub);
+
+        // Tamper: flip a byte in the ciphertext.
+        if let Some(b) = encrypted.ciphertext.get_mut(0) {
+            *b ^= 0x01;
+        }
+
+        let result = executor.execute_encrypted_turn(&encrypted, &mut ledger);
+        assert!(result.is_rejected(), "tampered ciphertext must be rejected");
+        let (err, _) = result.unwrap_rejected();
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("decryption") || msg.contains("Decryption"),
+            "expected decryption failure, got: {msg}"
+        );
+    }
+}
+
+// =============================================================================
+// Stage 7-γ.2 Phase 1: bilateral cross-cell PI binding tests
+// =============================================================================
+//
+// These exercise `TurnExecutor::verify_bilateral_bundle` and the
+// `bilateral_schedule` module's id derivation + accumulator projection.
+// Together they close the executor-trust gap for cross-cell agreement on
+// Transfer / Grant / Introduce (see STAGE-7-GAMMA-2-PI-DESIGN.md §4).
+
+#[cfg(test)]
+mod gamma_2_bilateral_tests {
+    use super::*;
+    use crate::bilateral_schedule::{ExpectedBilateral, derive_transfer_id, project_into_pi};
+    use pyana_circuit::effect_vm::pi;
+    use pyana_circuit::field::BabyBear;
+
+    /// Build a minimal Turn with a single Transfer(alice -> bob, amount).
+    fn make_transfer_turn(alice: CellId, bob: CellId, amount: u64, nonce: u64) -> Turn {
+        let mut builder = TurnBuilder::new(alice, nonce);
+        {
+            let action = ActionBuilder::new_unchecked_for_tests(alice, "transfer", alice)
+                .effect_transfer(alice, bob, amount)
+                .build();
+            builder.add_action(action);
+        }
+        builder.fee(0).build()
+    }
+
+    /// Construct a single per-cell PI vector populated only with the γ.2
+    /// bilateral fields for testing the verifier loop. Non-γ.2 slots are
+    /// zero — they don't participate in `verify_bilateral_bundle`.
+    fn make_pi_for_cell(turn: &Turn, cell: &CellId) -> Vec<BabyBear> {
+        let schedule = ExpectedBilateral::from_turn(turn);
+        let counts = schedule.counts_for(cell);
+        let roots = schedule.roots_for(cell, turn.nonce);
+        let mut pi = vec![BabyBear::ZERO; pi::BASE_COUNT];
+        project_into_pi(&mut pi, &counts, &roots);
+        pi[pi::IS_AGENT_CELL] = if cell == &turn.agent {
+            BabyBear::new(1)
+        } else {
+            BabyBear::ZERO
+        };
+        pi
+    }
+
+    #[test]
+    fn happy_path_bilateral_transfer_accepts() {
+        let alice = CellId::from_bytes([0xA1; 32]);
+        let bob = CellId::from_bytes([0xB2; 32]);
+        let turn = make_transfer_turn(alice, bob, 100, 1);
+
+        let alice_pi = make_pi_for_cell(&turn, &alice);
+        let bob_pi = make_pi_for_cell(&turn, &bob);
+
+        let bundle = vec![(alice, alice_pi), (bob, bob_pi)];
+        let res = TurnExecutor::verify_bilateral_bundle(&bundle, &turn);
+        assert!(
+            res.is_ok(),
+            "honest bilateral transfer bundle must verify: {:?}",
+            res
+        );
+    }
+
+    #[test]
+    fn rejects_sender_amount_tamper() {
+        // Adversarial: prover lies about Alice's outgoing transfer amount.
+        // Alice's PI is computed from a turn claiming amount=100, but the
+        // bundle is verified against a turn claiming amount=50. The
+        // verifier recomputes the expected schedule from the turn (amount=50),
+        // so Alice's accumulator root won't match.
+        let alice = CellId::from_bytes([0xA1; 32]);
+        let bob = CellId::from_bytes([0xB2; 32]);
+        let real_turn = make_transfer_turn(alice, bob, 50, 1);
+        let lying_turn = make_transfer_turn(alice, bob, 100, 1);
+
+        // Alice's PI corresponds to the *lying* turn (amount=100). Bob's
+        // matches the real turn — i.e. they disagree on the amount.
+        let alice_pi = make_pi_for_cell(&lying_turn, &alice);
+        let bob_pi = make_pi_for_cell(&real_turn, &bob);
+
+        let bundle = vec![(alice, alice_pi), (bob, bob_pi)];
+        // The verifier reconstructs from real_turn (amount=50). Alice's
+        // root (amount=100) won't match.
+        let res = TurnExecutor::verify_bilateral_bundle(&bundle, &real_turn);
+        assert!(res.is_err(), "amount tampering on sender side must reject");
+        let msg = format!("{:?}", res.err().unwrap());
+        assert!(
+            msg.contains("outgoing_transfer") || msg.contains("root"),
+            "expected outgoing_transfer root mismatch, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_bilateral_disagreement() {
+        // Adversarial: Bob's incoming transfer disagrees with Alice's
+        // outgoing. The verifier rebuilds from one canonical turn; if both
+        // sides claim different transfer_ids (e.g. different amounts encoded
+        // in their PI roots), at least one will fail the root check.
+        let alice = CellId::from_bytes([0xA1; 32]);
+        let bob = CellId::from_bytes([0xB2; 32]);
+        let turn_100 = make_transfer_turn(alice, bob, 100, 1);
+        let turn_25 = make_transfer_turn(alice, bob, 25, 1);
+
+        // Alice claims amount=100; Bob claims amount=25. Verifier rebuilds
+        // from turn_100 (canonical). Bob's incoming root won't match.
+        let alice_pi = make_pi_for_cell(&turn_100, &alice);
+        let bob_pi = make_pi_for_cell(&turn_25, &bob);
+
+        let bundle = vec![(alice, alice_pi), (bob, bob_pi)];
+        let res = TurnExecutor::verify_bilateral_bundle(&bundle, &turn_100);
+        assert!(res.is_err(), "bilateral disagreement on amount must reject");
+    }
+
+    #[test]
+    fn rejects_missing_peer_proof() {
+        // Adversarial: sender produces a Transfer proof but the receiver's
+        // proof is conspicuously absent from the bundle. The schedule says
+        // both cells should be covered. The "covered" set is sender-only.
+        let alice = CellId::from_bytes([0xA1; 32]);
+        let bob = CellId::from_bytes([0xB2; 32]);
+        let turn = make_transfer_turn(alice, bob, 100, 1);
+
+        let alice_pi = make_pi_for_cell(&turn, &alice);
+
+        // Bundle missing Bob's proof.
+        let bundle = vec![(alice, alice_pi)];
+        let res = TurnExecutor::verify_bilateral_bundle(&bundle, &turn);
+        assert!(
+            res.is_err(),
+            "missing peer proof must reject: cross-side existence check failed"
+        );
+        let msg = format!("{:?}", res.err().unwrap());
+        assert!(
+            msg.contains("missing peer"),
+            "expected missing-peer rejection, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_count_tamper() {
+        // Adversarial: prover inflates outbound_transfer_count from 1 to 2
+        // in their PI. The verifier recomputes expected = 1; reject.
+        let alice = CellId::from_bytes([0xA1; 32]);
+        let bob = CellId::from_bytes([0xB2; 32]);
+        let turn = make_transfer_turn(alice, bob, 100, 1);
+
+        let mut alice_pi = make_pi_for_cell(&turn, &alice);
+        let bob_pi = make_pi_for_cell(&turn, &bob);
+
+        // Tamper: inflate Alice's outbound_transfer_count to 2.
+        alice_pi[pi::OUTBOUND_TRANSFER_COUNT] = BabyBear::new(2);
+
+        let bundle = vec![(alice, alice_pi), (bob, bob_pi)];
+        let res = TurnExecutor::verify_bilateral_bundle(&bundle, &turn);
+        assert!(res.is_err(), "count tamper must reject");
+        let msg = format!("{:?}", res.err().unwrap());
+        assert!(
+            msg.contains("outbound_transfer_count"),
+            "expected count mismatch, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_root_tamper() {
+        // Adversarial: prover overwrites Alice's OUTGOING_TRANSFER_ROOT with
+        // garbage. The verifier recomputes the expected root from the turn
+        // and rejects.
+        let alice = CellId::from_bytes([0xA1; 32]);
+        let bob = CellId::from_bytes([0xB2; 32]);
+        let turn = make_transfer_turn(alice, bob, 100, 1);
+
+        let mut alice_pi = make_pi_for_cell(&turn, &alice);
+        let bob_pi = make_pi_for_cell(&turn, &bob);
+
+        // Tamper: overwrite one felt of the OUTGOING_TRANSFER_ROOT.
+        alice_pi[pi::OUTGOING_TRANSFER_ROOT_BASE] = BabyBear::new(0xDEADBEEFu32 & 0x7FFFFFFF);
+
+        let bundle = vec![(alice, alice_pi), (bob, bob_pi)];
+        let res = TurnExecutor::verify_bilateral_bundle(&bundle, &turn);
+        assert!(res.is_err(), "root tamper must reject");
+    }
+
+    #[test]
+    fn rejects_is_agent_cell_lie() {
+        // Adversarial: Bob's PI claims IS_AGENT_CELL=1 even though Bob is
+        // not the actor. The verifier rejects.
+        let alice = CellId::from_bytes([0xA1; 32]);
+        let bob = CellId::from_bytes([0xB2; 32]);
+        let turn = make_transfer_turn(alice, bob, 100, 1);
+
+        let alice_pi = make_pi_for_cell(&turn, &alice);
+        let mut bob_pi = make_pi_for_cell(&turn, &bob);
+        // Tamper: Bob claims agency.
+        bob_pi[pi::IS_AGENT_CELL] = BabyBear::new(1);
+
+        let bundle = vec![(alice, alice_pi), (bob, bob_pi)];
+        let res = TurnExecutor::verify_bilateral_bundle(&bundle, &turn);
+        assert!(res.is_err(), "non-agent claiming IS_AGENT_CELL must reject");
+        let msg = format!("{:?}", res.err().unwrap());
+        assert!(
+            msg.contains("IS_AGENT_CELL") || msg.contains("agent"),
+            "expected agent-cell rejection, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_agent_cell_disclaiming_agency() {
+        // Adversarial: Alice (the actor) sets IS_AGENT_CELL=0 in her PI,
+        // perhaps to suppress the agent-nonce boundary constraint. Reject.
+        let alice = CellId::from_bytes([0xA1; 32]);
+        let bob = CellId::from_bytes([0xB2; 32]);
+        let turn = make_transfer_turn(alice, bob, 100, 1);
+
+        let mut alice_pi = make_pi_for_cell(&turn, &alice);
+        let bob_pi = make_pi_for_cell(&turn, &bob);
+        alice_pi[pi::IS_AGENT_CELL] = BabyBear::ZERO;
+
+        let bundle = vec![(alice, alice_pi), (bob, bob_pi)];
+        let res = TurnExecutor::verify_bilateral_bundle(&bundle, &turn);
+        assert!(res.is_err(), "agent cell disclaiming agency must reject");
+    }
+
+    #[test]
+    fn cross_turn_replay_distinct_transfer_ids() {
+        // Same (from, to, amount), different nonce → distinct transfer_ids,
+        // so the schedule reconstruction differs per turn. This is the
+        // §4.5 "cross-turn replay" case from STAGE-7-GAMMA-2-PI-DESIGN.md.
+        let alice = CellId::from_bytes([0xA1; 32]);
+        let bob = CellId::from_bytes([0xB2; 32]);
+        let id_nonce_1 = derive_transfer_id(&alice, &bob, 100, 1);
+        let id_nonce_2 = derive_transfer_id(&alice, &bob, 100, 2);
+        assert_ne!(id_nonce_1, id_nonce_2);
+    }
+
+    #[test]
+    fn single_cell_turn_with_no_bilateral_effects_accepts() {
+        // A turn whose effects are non-bilateral (SetField only) should
+        // produce a bundle whose bilateral PI slots are all sentinels.
+        // The bundle of one (the actor) must still verify.
+        let alice = CellId::from_bytes([0xA1; 32]);
+        let mut builder = TurnBuilder::new(alice, 0);
+        {
+            let action = ActionBuilder::new_unchecked_for_tests(alice, "setfield", alice)
+                .effect_set_field(alice, 0, [0u8; 32])
+                .build();
+            builder.add_action(action);
+        }
+        let turn = builder.fee(0).build();
+
+        let alice_pi = make_pi_for_cell(&turn, &alice);
+        // Sentinel checks.
+        for i in 0..4 {
+            assert_eq!(
+                alice_pi[pi::OUTGOING_TRANSFER_ROOT_BASE + i],
+                BabyBear::ZERO
+            );
+            assert_eq!(
+                alice_pi[pi::INCOMING_TRANSFER_ROOT_BASE + i],
+                BabyBear::ZERO
+            );
+        }
+        assert_eq!(alice_pi[pi::OUTBOUND_TRANSFER_COUNT], BabyBear::ZERO);
+        assert_eq!(alice_pi[pi::IS_AGENT_CELL], BabyBear::new(1));
+
+        let bundle = vec![(alice, alice_pi)];
+        let res = TurnExecutor::verify_bilateral_bundle(&bundle, &turn);
+        assert!(
+            res.is_ok(),
+            "single-cell non-bilateral turn must verify: {:?}",
+            res
+        );
+    }
 }

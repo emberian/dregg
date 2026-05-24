@@ -88,7 +88,9 @@ pub fn destroy_runtime(handle: usize) -> bool {
     })
 }
 
-/// Create a cell directly in the runtime's ledger.
+/// Create a cell in the runtime via a real `Effect::CreateCell` turn issued
+/// by the genesis agent (agent 0). Requires at least one agent to exist as
+/// the signer — if there are none, returns an error.
 ///
 /// `owner_pk` is a 32-byte public key (hex string).
 /// Returns JSON with the cell_id.
@@ -100,10 +102,7 @@ pub fn create_cell(
 ) -> Result<JsValue, JsError> {
     with_runtime(handle, |rt| {
         let pk = hex_decode_32(owner_pk_hex)?;
-        let token_id = *blake3::hash(b"pyana-wasm-default-domain").as_bytes();
-        let cell = pyana_cell::Cell::with_balance(pk, token_id, initial_balance);
-        let cell_id = cell.id();
-        rt.ledger.insert_cell(cell).map_err(|e| format!("{e}"))?;
+        let cell_id = rt.mint_cell_from_genesis(pk, initial_balance)?;
 
         #[derive(Serialize)]
         struct CreateCellResult {
@@ -137,6 +136,10 @@ pub fn get_cell_state(handle: usize, cell_id_hex: &str) -> Result<JsValue, JsErr
             permissions: PermissionsView,
             proved_state: bool,
             delegation_epoch: u64,
+            /// Canonical `Cell::state_commitment()` — what `PeerExchange`
+            /// signs over. Exposed so the JS layer can drive the peer-exchange
+            /// flow without recomputing.
+            state_commitment: String,
         }
 
         #[derive(Serialize)]
@@ -166,6 +169,7 @@ pub fn get_cell_state(handle: usize, cell_id_hex: &str) -> Result<JsValue, JsErr
             },
             proved_state: cell.state.proved_state(),
             delegation_epoch: cell.state.delegation_epoch(),
+            state_commitment: hex_encode(&cell.state_commitment()),
         };
         serde_wasm_bindgen::to_value(&result).map_err(|e| e.to_string())
     })
@@ -207,7 +211,7 @@ pub fn get_all_cells(handle: usize) -> Result<JsValue, JsError> {
 #[wasm_bindgen]
 pub fn create_agent(handle: usize, name: &str, initial_balance: u64) -> Result<JsValue, JsError> {
     with_runtime(handle, |rt| {
-        let idx = rt.create_agent(name, initial_balance);
+        let idx = rt.try_create_agent(name, initial_balance)?;
         let agent = &rt.agents[idx];
 
         #[derive(Serialize)]
@@ -629,21 +633,265 @@ pub fn spend_note(
 // Federation
 // ============================================================================
 
-// Federation bindings removed. The wasm runtime no longer holds a parallel
-// `SimFederation` set of types — the canonical home is `pyana_federation`,
-// which doesn't yet cross-compile to wasm32 (pulls tokio + crossbeam-channel).
-// Once `pyana-federation` gains the same feature surgery `pyana-sdk` got,
-// thin bindings will be re-added here that expose the real
-// `Federation` / `FederationNode` / `FederationReceipt` types.
-//
-// Removed exports:
-//   - create_federation(handle, name, num_nodes)
-//   - propose_block(handle, fed_index, events_json)
-//   - get_federation_state(handle, fed_index)
-//   - simulate_consensus_round(handle, fed_index)
-//
-// Studio inspectors that referenced these now show a "awaiting wasm32
-// federation support" placeholder.
+// Federation bindings: surface the real `pyana_federation::Federation` to
+// the Studio. All hashes / signatures / merkle roots returned to JS come
+// from the canonical crate's types; no JS-side simulation lives in
+// runtime-in-memory.js for these paths.
+
+/// Create a federation with `num_nodes` real federation nodes. Each node has
+/// a freshly generated Ed25519 keypair and an empty `RevocationTree`. The
+/// federation index is its handle for subsequent calls.
+#[wasm_bindgen]
+pub fn create_federation(handle: usize, name: &str, num_nodes: usize) -> Result<JsValue, JsError> {
+    with_runtime(handle, |rt| {
+        let idx = rt.create_federation(name, num_nodes);
+        let fed = &rt.federations[idx];
+
+        #[derive(Serialize)]
+        struct FedResult {
+            fed_index: usize,
+            name: String,
+            num_nodes: usize,
+            threshold: usize,
+            max_faults: usize,
+        }
+        let result = FedResult {
+            fed_index: idx,
+            name: fed.name.clone(),
+            num_nodes: fed.federation.nodes.len(),
+            threshold: fed.federation.config.threshold,
+            max_faults: fed.federation.config.max_faults,
+        };
+        serde_wasm_bindgen::to_value(&result).map_err(|e| e.to_string())
+    })
+}
+
+/// Submit a batch of revocation events from node 0 and immediately drive
+/// a consensus round. `events_json` is a JSON array of token-id strings;
+/// each becomes a `RevocationEvent` signed by node 0's signing key.
+///
+/// Behavioral note vs. the deleted SimFederation: real `run_consensus_round`
+/// requires the leader's `pending_events` to be non-empty AND a quorum of
+/// online nodes (n - floor(n/3)) to vote — proposing with no events or with
+/// too few online nodes will return `block_hash: null`.
+#[wasm_bindgen]
+pub fn propose_block(
+    handle: usize,
+    fed_index: usize,
+    events_json: &str,
+) -> Result<JsValue, JsError> {
+    with_runtime(handle, |rt| {
+        if fed_index >= rt.federations.len() {
+            return Err("invalid federation index".to_string());
+        }
+        let events: Vec<String> = serde_json::from_str(events_json).map_err(|e| e.to_string())?;
+        let block_hash = rt.propose_block(fed_index, events);
+        let height = rt.federations[fed_index].federation.finalized_history.len() as u64;
+
+        #[derive(Serialize)]
+        struct BlockResult {
+            block_hash: Option<String>,
+            height: u64,
+            finalized: bool,
+        }
+        let result = BlockResult {
+            block_hash: block_hash.map(|h| hex_encode(&h)),
+            height,
+            finalized: block_hash.is_some(),
+        };
+        serde_wasm_bindgen::to_value(&result).map_err(|e| e.to_string())
+    })
+}
+
+/// Get a snapshot of federation state — node count, finalized history depth,
+/// latest attested root, etc. All values derived from the canonical
+/// `Federation` instance.
+#[wasm_bindgen]
+pub fn get_federation_state(handle: usize, fed_index: usize) -> Result<JsValue, JsError> {
+    with_runtime_ref(handle, |rt| {
+        if fed_index >= rt.federations.len() {
+            return Err("invalid federation index".to_string());
+        }
+        let fed = &rt.federations[fed_index];
+        let canonical = &fed.federation;
+
+        let num_finalized = canonical.finalized_history.len();
+        let latest_root = canonical
+            .finalized_history
+            .last()
+            .map(|(b, _)| hex_encode(&b.block_hash));
+
+        // Total event count across all finalized blocks.
+        let num_events: usize = canonical
+            .finalized_history
+            .iter()
+            .map(|(b, _)| b.events.len())
+            .sum();
+
+        let online: usize = canonical.online_count();
+
+        // Per-node view (real NodeIdentity + tree size).
+        #[derive(Serialize)]
+        struct NodeView {
+            node_id: usize,
+            name: String,
+            public_key: String,
+            is_online: bool,
+            revoked_count: usize,
+        }
+        let nodes: Vec<NodeView> = canonical
+            .nodes
+            .iter()
+            .map(|n| NodeView {
+                node_id: n.identity.id,
+                name: n.identity.name.clone(),
+                public_key: hex_encode(&n.identity.public_key.0),
+                is_online: n.is_online,
+                revoked_count: n.revocation_tree.len(),
+            })
+            .collect();
+
+        #[derive(Serialize)]
+        struct FedState {
+            fed_index: usize,
+            name: String,
+            height: u64,
+            num_nodes: usize,
+            online_nodes: usize,
+            threshold: usize,
+            epoch: u64,
+            num_events: usize,
+            num_finalized_roots: usize,
+            latest_root: Option<String>,
+            nodes: Vec<NodeView>,
+        }
+        let result = FedState {
+            fed_index,
+            name: fed.name.clone(),
+            height: num_finalized as u64,
+            num_nodes: canonical.nodes.len(),
+            online_nodes: online,
+            threshold: canonical.config.threshold,
+            epoch: canonical.config.epoch,
+            num_events,
+            num_finalized_roots: num_finalized,
+            latest_root,
+            nodes,
+        };
+        serde_wasm_bindgen::to_value(&result).map_err(|e| e.to_string())
+    })
+}
+
+/// Drive a single consensus round on the federation without submitting new
+/// events (events already in `pending_events` will be picked up). Returns
+/// the finalized block summary or null if the round did not finalize.
+#[wasm_bindgen]
+pub fn simulate_consensus_round(handle: usize, fed_index: usize) -> Result<JsValue, JsError> {
+    with_runtime(handle, |rt| {
+        if fed_index >= rt.federations.len() {
+            return Err("invalid federation index".to_string());
+        }
+        let outcome = rt.simulate_consensus_round(fed_index);
+        serde_wasm_bindgen::to_value(&outcome).map_err(|e| e.to_string())
+    })
+}
+
+/// Get a finalized block by height (1-indexed; height 1 = first finalized
+/// block). Returns `null` if the height has not been finalized. The shape
+/// mirrors the canonical `RevocationBlock` + `QuorumCertificate`.
+#[wasm_bindgen]
+pub fn get_federation_block(
+    handle: usize,
+    fed_index: usize,
+    height: u64,
+) -> Result<JsValue, JsError> {
+    with_runtime_ref(handle, |rt| {
+        if fed_index >= rt.federations.len() {
+            return Err("invalid federation index".to_string());
+        }
+        let fed = &rt.federations[fed_index];
+        if height == 0 {
+            return serde_wasm_bindgen::to_value(&serde_json::Value::Null)
+                .map_err(|e| e.to_string());
+        }
+        let entry = fed
+            .federation
+            .finalized_history
+            .iter()
+            .find(|(b, _)| b.height == height);
+        let (block, qc) = match entry {
+            Some(e) => e,
+            None => {
+                return serde_wasm_bindgen::to_value(&serde_json::Value::Null)
+                    .map_err(|e| e.to_string());
+            }
+        };
+
+        #[derive(Serialize)]
+        struct BlockView {
+            fed_index: usize,
+            height: u64,
+            view: u64,
+            proposer: usize,
+            block_hash: String,
+            prev_hash: String,
+            pre_state_root: String,
+            post_state_root: String,
+            events: Vec<String>,
+            num_votes: usize,
+            qc_threshold: usize,
+        }
+        let result = BlockView {
+            fed_index,
+            height: block.height,
+            view: block.view,
+            proposer: block.proposer,
+            block_hash: hex_encode(&block.block_hash),
+            prev_hash: hex_encode(&block.prev_hash),
+            pre_state_root: hex_encode(&block.pre_state_root),
+            post_state_root: hex_encode(&block.post_state_root),
+            events: block.events.iter().map(|e| e.token_id.clone()).collect(),
+            num_votes: qc.votes.len(),
+            qc_threshold: qc.threshold,
+        };
+        serde_wasm_bindgen::to_value(&result).map_err(|e| e.to_string())
+    })
+}
+
+/// List all finalized block headers for a federation. Each entry is a
+/// compact summary; call `get_federation_block(fed_idx, height)` for the
+/// full view. Returns an empty list if nothing has been finalized.
+#[wasm_bindgen]
+pub fn list_federation_blocks(handle: usize, fed_index: usize) -> Result<JsValue, JsError> {
+    with_runtime_ref(handle, |rt| {
+        if fed_index >= rt.federations.len() {
+            return Err("invalid federation index".to_string());
+        }
+        let fed = &rt.federations[fed_index];
+
+        #[derive(Serialize)]
+        struct BlockSummary {
+            fed_index: usize,
+            height: u64,
+            view: u64,
+            block_hash: String,
+            num_events: usize,
+        }
+        let blocks: Vec<BlockSummary> = fed
+            .federation
+            .finalized_history
+            .iter()
+            .map(|(b, _)| BlockSummary {
+                fed_index,
+                height: b.height,
+                view: b.view,
+                block_hash: hex_encode(&b.block_hash),
+                num_events: b.events.len(),
+            })
+            .collect();
+        serde_wasm_bindgen::to_value(&blocks).map_err(|e| e.to_string())
+    })
+}
 
 // ============================================================================
 // Intents
@@ -894,6 +1142,197 @@ pub fn trip_revocation_channel(
         };
         serde_wasm_bindgen::to_value(&result).map_err(|e| e.to_string())
     })
+}
+
+// ============================================================================
+// Peer Exchange (sovereign-cell P2P)
+//
+// Direct facade over `pyana_cell::PeerExchange` (canonical sovereign-cell
+// peer protocol). Each agent owns one `PeerExchange` constructed with the
+// wallet's real Ed25519 signing key. These bindings carry no cryptographic
+// logic — they just marshal arguments into / out of the canonical type.
+// ============================================================================
+
+/// Register a peer cell on the named agent's exchange session, anchoring it
+/// to an initial commitment that the two parties agreed on out-of-band.
+/// Must be called before `verify_peer_transition` will accept transitions
+/// from that peer.
+#[wasm_bindgen]
+pub fn register_peer(
+    handle: usize,
+    agent_idx: usize,
+    peer_cell_id_hex: &str,
+    peer_pubkey_hex: &str,
+    initial_commitment_hex: &str,
+) -> Result<JsValue, JsError> {
+    with_runtime(handle, |rt| {
+        let peer_cell_id = parse_cell_id(peer_cell_id_hex)?;
+        let peer_pubkey = hex_decode_32(peer_pubkey_hex)?;
+        let initial_commitment = hex_decode_32(initial_commitment_hex)?;
+        rt.agent_register_peer(agent_idx, peer_cell_id, initial_commitment)?;
+
+        #[derive(Serialize)]
+        struct Registered {
+            agent_index: usize,
+            peer_cell_id: String,
+            peer_pubkey: String,
+            initial_commitment: String,
+        }
+        serde_wasm_bindgen::to_value(&Registered {
+            agent_index: agent_idx,
+            peer_cell_id: hex_encode(&peer_cell_id.0),
+            peer_pubkey: hex_encode(&peer_pubkey),
+            initial_commitment: hex_encode(&initial_commitment),
+        })
+        .map_err(|e| e.to_string())
+    })
+}
+
+/// Sign a state-transition for the named agent's exchange session and
+/// return the postcard-encoded `PeerStateTransition` bytes. Bytes — not
+/// JSON — because the whole point is a compact signed blob that can be
+/// base64-encoded for paste UX.
+#[wasm_bindgen]
+pub fn create_peer_transition(
+    handle: usize,
+    agent_idx: usize,
+    old_commit_hex: &str,
+    new_commit_hex: &str,
+    effects_hash_hex: &str,
+) -> Result<Vec<u8>, JsError> {
+    with_runtime(handle, |rt| {
+        let old_c = hex_decode_32(old_commit_hex)?;
+        let new_c = hex_decode_32(new_commit_hex)?;
+        let eh = hex_decode_32(effects_hash_hex)?;
+        rt.agent_create_peer_transition(agent_idx, old_c, new_c, eh)
+    })
+}
+
+/// Postcard-decode a peer transition's bytes and verify it against the
+/// named agent's exchange session. On success returns the updated
+/// `PeerCellView` shape (with hex-encoded commitment + sequence +
+/// last-updated). On rejection returns a `JsError` whose message includes
+/// the typed variant name (e.g. `"InvalidSignature: invalid Ed25519
+/// signature"`) so the UI can switch on the code.
+#[wasm_bindgen]
+pub fn verify_peer_transition(
+    handle: usize,
+    agent_idx: usize,
+    transition_bytes: &[u8],
+    peer_pubkey_hex: &str,
+) -> Result<JsValue, JsError> {
+    let peer_pubkey = hex_decode_32(peer_pubkey_hex).map_err(|e| JsError::new(&e))?;
+    RUNTIMES.with(|runtimes| {
+        let mut runtimes = runtimes.borrow_mut();
+        let rt = runtimes
+            .get_mut(handle)
+            .and_then(|slot| slot.as_mut())
+            .ok_or_else(|| JsError::new("invalid runtime handle"))?;
+        match rt.agent_verify_peer_transition(agent_idx, transition_bytes, peer_pubkey) {
+            Ok(view) => {
+                let serializable = peer_cell_view_to_serializable(&view);
+                serde_wasm_bindgen::to_value(&serializable)
+                    .map_err(|e| JsError::new(&e.to_string()))
+            }
+            Err((variant, msg)) => Err(JsError::new(&format!("{variant}: {msg}"))),
+        }
+    })
+}
+
+/// Read the agent's current view of a peer cell — commitment, sequence,
+/// timestamp. Returns `null` if the peer has not been registered.
+#[wasm_bindgen]
+pub fn get_peer_view(
+    handle: usize,
+    agent_idx: usize,
+    peer_cell_id_hex: &str,
+) -> Result<JsValue, JsError> {
+    with_runtime_ref(handle, |rt| {
+        let peer_cell_id = parse_cell_id(peer_cell_id_hex)?;
+        let view = rt.agent_get_peer_view(agent_idx, peer_cell_id)?;
+        match view {
+            Some(v) => serde_wasm_bindgen::to_value(&peer_cell_view_to_serializable(&v))
+                .map_err(|e| e.to_string()),
+            None => {
+                serde_wasm_bindgen::to_value(&serde_json::Value::Null).map_err(|e| e.to_string())
+            }
+        }
+    })
+}
+
+/// List all peer cell ids the agent has registered (hex strings).
+#[wasm_bindgen]
+pub fn list_peers(handle: usize, agent_idx: usize) -> Result<JsValue, JsError> {
+    with_runtime_ref(handle, |rt| {
+        let peers = rt.agent_list_peers(agent_idx)?;
+        let hexes: Vec<String> = peers.iter().map(|c| hex_encode(&c.0)).collect();
+        serde_wasm_bindgen::to_value(&hexes).map_err(|e| e.to_string())
+    })
+}
+
+/// Convenience: get the agent's PeerExchange public key. Useful for the
+/// paste-UX where one side needs to share the verifying key with the
+/// other up-front.
+#[wasm_bindgen]
+pub fn get_peer_pubkey(handle: usize, agent_idx: usize) -> Result<JsValue, JsError> {
+    with_runtime_ref(handle, |rt| {
+        let pk = rt.agent_peer_pubkey(agent_idx)?;
+
+        #[derive(Serialize)]
+        struct PubkeyView {
+            agent_index: usize,
+            public_key: String,
+        }
+        serde_wasm_bindgen::to_value(&PubkeyView {
+            agent_index: agent_idx,
+            public_key: hex_encode(&pk),
+        })
+        .map_err(|e| e.to_string())
+    })
+}
+
+/// Read the current canonical state-commitment of a cell — what the agent
+/// signs over when emitting a `PeerStateTransition`. Returns `null` if the
+/// cell isn't in the ledger.
+#[wasm_bindgen]
+pub fn get_cell_state_commitment(handle: usize, cell_id_hex: &str) -> Result<JsValue, JsError> {
+    with_runtime_ref(handle, |rt| {
+        let cell_id = parse_cell_id(cell_id_hex)?;
+        match rt.cell_state_commitment(&cell_id) {
+            Some(commit) => {
+                #[derive(Serialize)]
+                struct CommitView {
+                    cell_id: String,
+                    state_commitment: String,
+                }
+                serde_wasm_bindgen::to_value(&CommitView {
+                    cell_id: hex_encode(&cell_id.0),
+                    state_commitment: hex_encode(&commit),
+                })
+                .map_err(|e| e.to_string())
+            }
+            None => {
+                serde_wasm_bindgen::to_value(&serde_json::Value::Null).map_err(|e| e.to_string())
+            }
+        }
+    })
+}
+
+#[derive(Serialize)]
+struct PeerCellViewSerializable {
+    cell_id: String,
+    last_known_commitment: String,
+    last_sequence: u64,
+    last_updated: i64,
+}
+
+fn peer_cell_view_to_serializable(view: &pyana_cell::PeerCellView) -> PeerCellViewSerializable {
+    PeerCellViewSerializable {
+        cell_id: hex_encode(&view.cell_id.0),
+        last_known_commitment: hex_encode(&view.last_known_commitment),
+        last_sequence: view.last_sequence,
+        last_updated: view.last_updated,
+    }
 }
 
 /// Check if a revocation channel is active.

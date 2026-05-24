@@ -296,6 +296,15 @@ pub struct Ledger {
     /// When the Merkle root changes, subscribers receive `WitnessDiff` updates
     /// containing the new path for their subscribed cell.
     witness_subscribers: HashMap<CellId, Vec<mpsc::Sender<WitnessDiff>>>,
+    /// Monotonic per-cell sovereign-witness sequence.
+    ///
+    /// Each accepted `SovereignCellWitness` for a cell must carry
+    /// `sequence == last_accepted_sequence + 1`. After execution, this map
+    /// is bumped so a replay of the same witness is rejected even if the
+    /// underlying state_commitment happens to round-trip back to its
+    /// previous value (paranoia against any future commitment-collision
+    /// path). Persisted alongside the sovereign commitment for the cell.
+    sovereign_witness_sequence: HashMap<CellId, u64>,
 }
 
 impl Ledger {
@@ -310,6 +319,7 @@ impl Ledger {
             root: Self::compute_empty_root(),
             dirty: false,
             witness_subscribers: HashMap::new(),
+            sovereign_witness_sequence: HashMap::new(),
         }
     }
 
@@ -889,41 +899,16 @@ impl Ledger {
     }
 
     /// Hash a single state constraint into the hasher for deterministic program hashing.
+    ///
+    /// Uses postcard canonical serialization rather than hand-rolled tag-and-fields
+    /// matching, so the function is exhaustive-by-construction over the (now 21+
+    /// variant) `StateConstraint` surface and doesn't need to be touched whenever
+    /// new variants land.
+    #[allow(dead_code)]
     fn hash_constraint(hasher: &mut blake3::Hasher, constraint: &crate::program::StateConstraint) {
-        use crate::program::StateConstraint;
-        match constraint {
-            StateConstraint::FieldEquals { index, value } => {
-                hasher.update(&[0u8]);
-                hasher.update(&[*index]);
-                hasher.update(value);
-            }
-            StateConstraint::FieldGte { index, value } => {
-                hasher.update(&[1u8]);
-                hasher.update(&[*index]);
-                hasher.update(value);
-            }
-            StateConstraint::FieldLte { index, value } => {
-                hasher.update(&[2u8]);
-                hasher.update(&[*index]);
-                hasher.update(value);
-            }
-            StateConstraint::SumEquals { indices, value } => {
-                hasher.update(&[3u8]);
-                hasher.update(&(indices.len() as u64).to_le_bytes());
-                for &idx in indices {
-                    hasher.update(&[idx]);
-                }
-                hasher.update(value);
-            }
-            StateConstraint::Immutable { index } => {
-                hasher.update(&[4u8]);
-                hasher.update(&[*index]);
-            }
-            StateConstraint::Custom { constraint_hash } => {
-                hasher.update(&[5u8]);
-                hasher.update(constraint_hash);
-            }
-        }
+        let encoded = postcard::to_allocvec(constraint).unwrap_or_default();
+        hasher.update(&(encoded.len() as u64).to_le_bytes());
+        hasher.update(&encoded);
     }
 
     /// The root of an empty tree.
@@ -993,6 +978,23 @@ impl Ledger {
     /// Check whether a cell ID refers to a sovereign cell.
     pub fn is_sovereign(&self, id: &CellId) -> bool {
         self.sovereign_commitments.contains_key(id)
+    }
+
+    /// Last accepted sovereign-witness sequence for a cell.
+    ///
+    /// Returns 0 when no witness has ever been accepted for this cell. The
+    /// next valid witness sequence is `last_accepted + 1`.
+    pub fn last_sovereign_witness_sequence(&self, id: &CellId) -> u64 {
+        self.sovereign_witness_sequence
+            .get(id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Record that a witness with `sequence` was accepted for `id`. Callers
+    /// must validate monotonicity (`sequence == last + 1`) before calling.
+    pub fn bump_sovereign_witness_sequence(&mut self, id: &CellId, sequence: u64) {
+        self.sovereign_witness_sequence.insert(*id, sequence);
     }
 
     /// Move a hosted cell to sovereign mode. Stores only the state commitment

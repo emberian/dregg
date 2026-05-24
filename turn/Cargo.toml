@@ -17,11 +17,14 @@ pyana-commit = { path = "../commit" }
 pyana-dsl-runtime = { path = "../pyana-dsl-runtime" }
 pyana-types = { path = "../types" }
 blake3 = "1"
+chacha20poly1305 = { workspace = true }
 ed25519-dalek = { version = "2", features = ["hazmat"] }
+getrandom = { workspace = true }
 hex = "0.4"
 postcard = { version = "1", features = ["alloc"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+x25519-dalek = { workspace = true }
 
 [dev-dependencies]
 curve25519-dalek = { version = "4", features = ["alloc"] }

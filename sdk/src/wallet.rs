@@ -897,6 +897,15 @@ pub struct AgentWallet {
     /// a 32-byte commitment. The agent maintains the full cell state here and
     /// provides it as a witness in each turn targeting the cell.
     sovereign_cells: HashMap<CellId, Cell>,
+    /// Per-cell sovereign-witness sequence counter (last issued).
+    ///
+    /// Mirrors the executor-side `Ledger::last_sovereign_witness_sequence`.
+    /// The next witness for `cell_id` carries
+    /// `sovereign_witness_sequences[cell_id] + 1`; the wallet bumps this
+    /// after each successful submission. Greenfield: persistence across
+    /// process restarts is out of scope here — the wallet recovers state
+    /// from the federation's stored sequence on resume.
+    sovereign_witness_sequences: HashMap<CellId, u64>,
     /// Optional CapTP client for capability sharing, enlivening, and pipelining.
     ///
     /// Must be set via [`set_captp_client`](Self::set_captp_client) before using
@@ -911,9 +920,6 @@ impl AgentWallet {
     /// Prevents cross-protocol signature reuse (e.g., a signed message being
     /// replayed as a turn signature or vice versa).
     const DOMAIN_PREFIX: &'static [u8] = b"pyana-v1:";
-
-    /// Domain separation prefix for turn signing specifically.
-    const TURN_DOMAIN_PREFIX: &'static [u8] = b"pyana-turn-v1:";
 
     /// Create a new wallet with a randomly generated Ed25519 identity.
     ///
@@ -961,6 +967,7 @@ impl AgentWallet {
             derivation_path: None,
             stealth_keys,
             sovereign_cells: HashMap::new(),
+            sovereign_witness_sequences: HashMap::new(),
             #[cfg(feature = "captp")]
             captp_client: None,
         }
@@ -1012,6 +1019,7 @@ impl AgentWallet {
             derivation_path: Some(path.to_string()),
             stealth_keys,
             sovereign_cells: HashMap::new(),
+            sovereign_witness_sequences: HashMap::new(),
             #[cfg(feature = "captp")]
             captp_client: None,
         }
@@ -2481,18 +2489,49 @@ impl AgentWallet {
 
     /// Like [`make_turn`](Self::make_turn) but with an explicit agent domain.
     pub fn make_turn_for(&self, domain: &str, action: pyana_turn::action::Action) -> Turn {
+        self.make_turn_with_actions_for(domain, vec![action])
+    }
+
+    /// Wrap multiple already-signed [`Action`](pyana_turn::action::Action)s in
+    /// one [`Turn`] (an atomic group). All actions appear as roots in the
+    /// same call forest — they commit or roll back together.
+    ///
+    /// Use this when an app needs to settle multiple operations atomically:
+    /// e.g. orderbook settlement (release one escrow + create the counterparty
+    /// escrow), or escrow-swap (two atomic releases). Each action carries its
+    /// own signature; the per-action signing covers each action's canonical
+    /// bytes, so signers do not have to coordinate on the same turn-level
+    /// message.
+    ///
+    /// Defaults match [`make_turn`](Self::make_turn): agent =
+    /// `cell_id("default")`, fee = 0, `previous_receipt_hash` taken from the
+    /// wallet's chain head.
+    pub fn make_turn_with_actions(&self, actions: Vec<pyana_turn::action::Action>) -> Turn {
+        self.make_turn_with_actions_for("default", actions)
+    }
+
+    /// Like [`make_turn_with_actions`](Self::make_turn_with_actions) but with
+    /// an explicit agent domain.
+    pub fn make_turn_with_actions_for(
+        &self,
+        domain: &str,
+        actions: Vec<pyana_turn::action::Action>,
+    ) -> Turn {
         use pyana_turn::forest::{CallForest, CallTree};
-        let tree = CallTree {
-            action,
-            children: vec![],
-            hash: [0u8; 32],
-        };
+        let roots = actions
+            .into_iter()
+            .map(|action| CallTree {
+                action,
+                children: vec![],
+                hash: [0u8; 32],
+            })
+            .collect();
         Turn {
             agent: self.cell_id(domain),
             nonce: 0,
             fee: 0,
             call_forest: CallForest {
-                roots: vec![tree],
+                roots,
                 forest_hash: [0u8; 32],
             },
             memo: None,
@@ -3819,61 +3858,18 @@ impl AgentWallet {
     /// if the field boundaries are not explicit. Fixed-size fields (u64, [u8; 32])
     /// do not need length prefixes since their boundaries are unambiguous.
     fn compute_turn_bytes(&self, turn: &Turn) -> [u8; 32] {
-        let mut hasher = blake3::Hasher::new();
-        // Domain separation: prevent reuse of turn signatures in other contexts.
-        hasher.update(Self::TURN_DOMAIN_PREFIX);
-        hasher.update(turn.agent.as_bytes());
-        hasher.update(&turn.nonce.to_le_bytes());
-        // CRITICAL: include the call_forest hash -- this is the actual payload of
-        // actions being authorized. Without this, an attacker could substitute
-        // arbitrary actions under an existing signature.
-        let forest_hash = turn.call_forest.compute_hash();
-        hasher.update(&forest_hash);
-        hasher.update(&turn.fee.to_le_bytes());
-        if let Some(ref memo) = turn.memo {
-            hasher.update(b"\x01");
-            // Length-prefix the memo to prevent boundary ambiguity with subsequent fields.
-            let memo_bytes = memo.as_bytes();
-            hasher.update(&(memo_bytes.len() as u64).to_le_bytes());
-            hasher.update(memo_bytes);
-        } else {
-            hasher.update(b"\x00");
-        }
-        if let Some(valid_until) = turn.valid_until {
-            hasher.update(b"\x01");
-            hasher.update(&valid_until.to_le_bytes());
-        } else {
-            hasher.update(b"\x00");
-        }
-        // Include previous_receipt_hash to bind this turn to a specific chain position.
-        match &turn.previous_receipt_hash {
-            Some(h) => {
-                hasher.update(b"\x01");
-                hasher.update(h);
-            }
-            None => {
-                hasher.update(b"\x00");
-            }
-        }
-        // Include dependency hashes to prevent reordering attacks in pipelines.
-        // Length prefix prevents confusion between no-deps and empty-deps-followed-by-data.
-        hasher.update(&(turn.depends_on.len() as u64).to_le_bytes());
-        for dep in &turn.depends_on {
-            hasher.update(dep);
-        }
-        // AUDIT[P2-10]: this signing message does NOT yet cover
-        // `turn.conservation_proof`, `turn.sovereign_witnesses`,
-        // `turn.execution_proof`, `turn.execution_proof_cell`,
-        // `turn.execution_proof_new_commitment`, or `turn.custom_program_proofs`.
-        // The current threat model treats these as executor-attested side
-        // payloads, but a holder of write access to a SignedTurn struct in
-        // flight can swap any of them without invalidating the wallet's
-        // signature. Closing this gap requires bumping the turn-hash version
-        // (v2→v3) and sub-hashing each optional field with a presence tag
-        // (mirroring the memo/valid_until pattern above). Tracked under
-        // EFFECT-VM-SHAPE-A.md Stage 9 (Receipts overhaul); deferred here to
-        // keep this fix self-contained.
-        *hasher.finalize().as_bytes()
+        // P2-10 closure (v1 → v3): the wallet's signing message is now the
+        // canonical `Turn::hash()` (domain `pyana-turn-v3:`), which covers
+        // every semantically load-bearing field on the Turn: agent, nonce,
+        // call_forest, fee, memo, valid_until, depends_on,
+        // previous_receipt_hash, execution_proof,
+        // execution_proof_cell, execution_proof_new_commitment,
+        // conservation_proof, sovereign_witnesses, and
+        // custom_program_proofs. This closes the wire-malleability gap where
+        // an executor between wallet and ledger could swap
+        // `sovereign_witnesses` (and other side payloads) without
+        // invalidating the signature.
+        turn.hash()
     }
 
     /// Compute the federation root as a BabyBear field element.
@@ -4334,14 +4330,63 @@ impl AgentWallet {
             })?
             .clone();
 
-        // 2. Compute state_commitment.
-        let state_commitment = cell_state.state_commitment();
+        // 2. Compute the pre-state commitment from the local cell.
+        let old_commitment = cell_state.state_commitment();
 
-        // 3. Build SovereignCellWitness.
+        // 3. Build the SovereignCellWitness with full peer-state-transition
+        //    shape: signed by the cell's owning key over the canonical
+        //    transition message, with a per-cell monotonic sequence.
+        //
+        //    Greenfield assumption: the cell's owning key is the wallet's
+        //    signing key (the common agent==sovereign-cell case). If the
+        //    cell's public_key drifts from the wallet's verifying key, we
+        //    cannot sign; surface as a missing-key error.
+        if cell_state.public_key() != &self.public_key.0 {
+            return Err(SdkError::MissingKey(format!(
+                "cannot sign sovereign witness for cell {}: cell's public_key does not match wallet's key",
+                cell_id
+            )));
+        }
+        // For the witness path the wallet does not pre-execute effects, so
+        // it cannot pre-compute new_commitment/effects_hash. Both are
+        // declared by the signer as the intended post-state and verified
+        // by the executor *after* it re-executes. In the witness path
+        // (no STARK), the executor recomputes both from journal output;
+        // a mismatch surfaces as `SovereignCommitmentMismatch` /
+        // `EffectsHashMismatch`. We emit zeroed declared values here.
+        let new_commitment: [u8; 32] = [0u8; 32];
+        let effects_hash: [u8; 32] = [0u8; 32];
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let sequence = self
+            .sovereign_witness_sequences
+            .get(cell_id)
+            .copied()
+            .unwrap_or(0)
+            + 1;
+        let signing_message = SovereignCellWitness::signing_message(
+            cell_id,
+            &old_commitment,
+            &new_commitment,
+            &effects_hash,
+            timestamp,
+            sequence,
+        );
+        let signature = self.signing_key.sign(&signing_message).to_bytes();
         let witness = SovereignCellWitness {
+            cell_id: *cell_id,
+            old_commitment,
+            new_commitment,
+            effects_hash,
+            timestamp,
+            sequence,
+            signature,
             cell_state,
-            state_proof: state_commitment,
+            transition_proof: None,
         };
+        self.sovereign_witness_sequences.insert(*cell_id, sequence);
 
         // 4. Build the turn with sovereign_witnesses populated.
         let agent_cell = *cell_id;

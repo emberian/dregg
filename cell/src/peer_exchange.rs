@@ -50,7 +50,15 @@ pub struct PeerStateTransition {
     /// `EffectVmAir`, providing proof-carrying P2P exchange
     /// (not just signature-based). The proof binds old_commitment ->
     /// new_commitment + effects_hash + cell_id.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// NB: `skip_serializing_if` is intentionally NOT used here even though
+    /// the field is logically optional. Binary serde formats like postcard
+    /// require symmetric serialize/deserialize — skipping the option tag on
+    /// the wire would make round-tripping a `None` value fail with
+    /// "expected more data" on the receiver side. `#[serde(default)]` keeps
+    /// forward-compat for JSON callers that omit the field, but the postcard
+    /// path always emits the 1-byte option tag.
+    #[serde(default)]
     pub transition_proof: Option<Vec<u8>>,
 }
 
@@ -156,15 +164,43 @@ impl PeerExchange {
     /// Create a signed state transition after local execution.
     ///
     /// Increments the internal sequence counter and signs the canonical
-    /// representation of the transition fields.
+    /// representation of the transition fields. Timestamp is read from the
+    /// system clock — for environments without a system clock (e.g. browser
+    /// wasm), use [`create_transition_at`](Self::create_transition_at) and
+    /// supply your own monotonic-enough timestamp.
     pub fn create_transition(
         &mut self,
         old_commitment: [u8; 32],
         new_commitment: [u8; 32],
         effects_hash: [u8; 32],
     ) -> PeerStateTransition {
+        self.create_transition_at(
+            old_commitment,
+            new_commitment,
+            effects_hash,
+            current_timestamp(),
+        )
+    }
+
+    /// Same as [`create_transition`] but takes an explicit timestamp.
+    ///
+    /// Intended for two cases:
+    ///   1. Wasm / no-std environments where `SystemTime::now()` panics or
+    ///      is unavailable. The caller passes their own monotonic-ish clock.
+    ///   2. Deterministic tests / replay where the timestamp must be fixed.
+    ///
+    /// Receiver-side timestamp checking is unchanged: the peer's view's
+    /// `last_updated` is bumped on each accepted transition and any
+    /// regression (`timestamp < last_updated`) is rejected with
+    /// `TimestampRegression`.
+    pub fn create_transition_at(
+        &mut self,
+        old_commitment: [u8; 32],
+        new_commitment: [u8; 32],
+        effects_hash: [u8; 32],
+        timestamp: i64,
+    ) -> PeerStateTransition {
         self.my_sequence += 1;
-        let timestamp = current_timestamp();
 
         let message = canonical_message(
             &old_commitment,
@@ -371,6 +407,19 @@ impl PeerExchange {
     /// Get our current view of a peer's state commitment.
     pub fn peer_commitment(&self, peer: &CellId) -> Option<[u8; 32]> {
         self.peer_views.get(peer).map(|v| v.last_known_commitment)
+    }
+
+    /// Get our full current view of a peer cell — commitment, sequence,
+    /// last-updated timestamp. Returns `None` if the peer has never been
+    /// registered. Read-only accessor; used by callers that need the full
+    /// view (e.g. wasm bindings exposing peer state to JS).
+    pub fn peer_view(&self, peer: &CellId) -> Option<&PeerCellView> {
+        self.peer_views.get(peer)
+    }
+
+    /// Iterate over all peer cell ids we have a view for.
+    pub fn registered_peers(&self) -> impl Iterator<Item = CellId> + '_ {
+        self.peer_views.keys().copied()
     }
 
     /// Get this cell's ID.

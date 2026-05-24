@@ -113,13 +113,17 @@ crate, the inspector shows a placeholder until the wasm path lands — we'd
 rather have a visible gap than a fictional demonstration. This is what
 makes the Studio useful as a forcing function for wasm-side improvements.
 
-**Federation** is currently a hole: `pyana_federation` (the canonical home
-of `Federation` / `FederationNode` / `FederationReceipt`) pulls `tokio`
-(full) and `crossbeam-channel` and does not cross-compile to wasm32.
-The wasm runtime previously held a `SimFederation` type that was wasm-only
-fiction; it has been removed. Federation inspectors show "awaiting wasm32
-federation support" until `pyana-federation` gains the same feature surgery
-`pyana-sdk` got (see `[features] network`, `[features] captp` there).
+**Federation** is now wired. `pyana-federation` gained a `runtime` feature
+that gates its tokio + crossbeam-channel transport (the wasm-incompatible
+bits), and the wasm crate depends on it with `default-features = false`.
+The in-browser runtime constructs real `pyana_federation::Federation`
+instances; every block hash, quorum certificate, proposer signature, and
+merkle root surfaced in `<pyana-federation>` / `<pyana-block>` comes from
+the canonical types. Behavior differences vs. the deleted `SimFederation`
+are real — e.g. `propose_block` requires `n - floor(n/3)` online votes to
+finalize and rejects empty event lists. The native async TCP transport
+(`TcpFederationTransport`, `NetworkConsensusNode`) is unchanged but is not
+exposed to wasm.
 
 A fourth runtime eventually: `RelayedRuntime` — an in-browser node that
 joins a real blocklace via a relaying server (since browsers can't open

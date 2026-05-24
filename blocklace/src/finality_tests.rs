@@ -719,7 +719,7 @@ fn merge_removes_tip_on_equivocation_detection() {
     assert!(result.is_ok());
     assert!(lace.is_equivocator(&creator_b));
     assert!(
-        !lace.tips.contains_key(&creator_b),
+        !lace.tips().contains_key(&creator_b),
         "tip for equivocator must be removed by merge (audit gap C)"
     );
 }

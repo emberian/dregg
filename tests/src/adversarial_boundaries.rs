@@ -12,6 +12,7 @@
 use proptest::prelude::*;
 
 use pyana_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
+use pyana_turn::builder::ActionBuilder;
 
 // =============================================================================
 // Helpers
@@ -163,15 +164,15 @@ proptest! {
 
         let mut builder = TurnBuilder::new(agent_id, 0);
         builder.set_fee(fee);
-        {
-            let action = builder.action(target_id, "test");
-            action.delegation(DelegationMode::None);
-            action.effect(Effect::SetField {
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "test", agent_id)
+            .delegation(DelegationMode::None)
+            .effect(Effect::SetField {
                 cell: target_id,
                 index: 0,
                 value: [0xAA; 32],
-            });
-        }
+            })
+            .build();
+        builder.add_action(action);
         let turn = builder.build();
         // Must never panic — either commits or rejects gracefully.
         let result = executor.execute(&turn, &mut ledger);
@@ -188,15 +189,15 @@ proptest! {
 
         let mut builder = TurnBuilder::new(agent_id, nonce);
         builder.set_fee(1000);
-        {
-            let action = builder.action(target_id, "test");
-            action.delegation(DelegationMode::None);
-            action.effect(Effect::SetField {
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "test", agent_id)
+            .delegation(DelegationMode::None)
+            .effect(Effect::SetField {
                 cell: target_id,
                 index: 0,
                 value: [0xBB; 32],
-            });
-        }
+            })
+            .build();
+        builder.add_action(action);
         let turn = builder.build();
         let result = executor.execute(&turn, &mut ledger);
         // Only nonce=0 should succeed (fresh ledger). All others should fail
@@ -215,15 +216,15 @@ proptest! {
 
         let mut builder = TurnBuilder::new(agent_id, 0);
         builder.set_fee(1000);
-        {
-            let action = builder.action(target_id, "test");
-            action.delegation(DelegationMode::None);
-            action.effect(Effect::SetField {
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "test", agent_id)
+            .delegation(DelegationMode::None)
+            .effect(Effect::SetField {
                 cell: target_id,
                 index,
                 value: [0xCC; 32],
-            });
-        }
+            })
+            .build();
+        builder.add_action(action);
         let turn = builder.build();
         // Must not panic regardless of index. Out-of-range indices should be rejected.
         let _ = executor.execute(&turn, &mut ledger);
@@ -403,15 +404,15 @@ fn conservation_transfer_preserves_total_value() {
     let executor = TurnExecutor::new(ComputronCosts::zero());
     let mut builder = TurnBuilder::new(alice_id, 0);
     builder.set_fee(0);
-    {
-        let action = builder.action(bob_id, "poke");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new_unchecked_for_tests(bob_id, "poke", alice_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: bob_id,
             index: 0,
             value: [0x42; 32],
-        });
-    }
+        })
+        .build();
+    builder.add_action(action);
     let turn = builder.build();
     let result = executor.execute(&turn, &mut ledger);
     assert!(result.is_committed());
@@ -474,15 +475,15 @@ fn conservation_fee_is_not_destroyed() {
     let executor = TurnExecutor::new(ComputronCosts::default_costs());
     let mut builder = TurnBuilder::new(agent_id, 0);
     builder.set_fee(fee);
-    {
-        let action = builder.action(target_id, "work");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new_unchecked_for_tests(target_id, "work", agent_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: target_id,
             index: 0,
             value: [0xFF; 32],
-        });
-    }
+        })
+        .build();
+    builder.add_action(action);
     let turn = builder.build();
     let result = executor.execute(&turn, &mut ledger);
     assert!(result.is_committed());
@@ -506,15 +507,15 @@ fn replay_attack_same_turn_twice() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     builder.set_fee(1000);
-    {
-        let action = builder.action(target_id, "transfer");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new_unchecked_for_tests(target_id, "transfer", agent_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: target_id,
             index: 0,
             value: *blake3::hash(b"first-execution").as_bytes(),
-        });
-    }
+        })
+        .build();
+    builder.add_action(action);
     let turn = builder.build();
 
     // First submission succeeds
@@ -556,15 +557,15 @@ fn replay_attack_nonce_must_be_sequential() {
     // Try nonce=5 when agent is at nonce=0 — should fail
     let mut builder = TurnBuilder::new(agent_id, 5);
     builder.set_fee(1000);
-    {
-        let action = builder.action(target_id, "jump");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new_unchecked_for_tests(target_id, "jump", agent_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: target_id,
             index: 0,
             value: [0xAA; 32],
-        });
-    }
+        })
+        .build();
+    builder.add_action(action);
     let turn = builder.build();
     let result = executor.execute(&turn, &mut ledger);
     assert!(result.is_rejected(), "Future nonce (gap) must be rejected");
@@ -617,15 +618,15 @@ fn capability_escalation_no_capability_for_target() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     builder.set_fee(1000);
-    {
-        let action = builder.action(secret_id, "steal");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new_unchecked_for_tests(secret_id, "steal", agent_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: secret_id,
             index: 0,
             value: *blake3::hash(b"hacked").as_bytes(),
-        });
-    }
+        })
+        .build();
+    builder.add_action(action);
     let turn = builder.build();
     let result = executor.execute(&turn, &mut ledger);
 
@@ -687,16 +688,16 @@ fn capability_escalation_proof_required_but_none_given() {
     let executor = TurnExecutor::new(ComputronCosts::default_costs());
     let mut builder = TurnBuilder::new(agent_id, 0);
     builder.set_fee(1000);
-    {
-        let action = builder.action(target_id, "bypass");
-        action.delegation(DelegationMode::None);
-        // NO authorization proof provided!
-        action.effect(Effect::SetField {
+    // NO authorization proof provided!
+    let action = ActionBuilder::new_unchecked_for_tests(target_id, "bypass", agent_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: target_id,
             index: 0,
             value: [0xEE; 32],
-        });
-    }
+        })
+        .build();
+    builder.add_action(action);
     let turn = builder.build();
     let result = executor.execute(&turn, &mut ledger);
 
@@ -775,16 +776,16 @@ fn cross_cell_bypass_cannot_modify_other_cells_via_effect() {
     // tries to modify cell_b (which agent cannot access).
     let mut builder = TurnBuilder::new(agent_id, 0);
     builder.set_fee(1000);
-    {
-        let action = builder.action(cell_a_id, "legit");
-        action.delegation(DelegationMode::None);
-        // Try to sneak in an effect on cell_b
-        action.effect(Effect::SetField {
+    // Try to sneak in an effect on cell_b
+    let action = ActionBuilder::new_unchecked_for_tests(cell_a_id, "legit", agent_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: cell_b_id, // CROSS-CELL: targeting a different cell
             index: 0,
             value: *blake3::hash(b"cross-cell-attack").as_bytes(),
-        });
-    }
+        })
+        .build();
+    builder.add_action(action);
     let turn = builder.build();
     let result = executor.execute(&turn, &mut ledger);
 
@@ -807,15 +808,15 @@ fn cross_cell_bypass_cannot_access_nonexistent_cell() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     builder.set_fee(1000);
-    {
-        let action = builder.action(fake_cell_id, "ghost");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new_unchecked_for_tests(fake_cell_id, "ghost", agent_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: fake_cell_id,
             index: 0,
             value: [0xFF; 32],
-        });
-    }
+        })
+        .build();
+    builder.add_action(action);
     let turn = builder.build();
     let result = executor.execute(&turn, &mut ledger);
 
@@ -975,15 +976,15 @@ fn turn_from_nonexistent_agent_rejected() {
 
     let mut builder = TurnBuilder::new(fake_agent, 0);
     builder.set_fee(1000);
-    {
-        let action = builder.action(target_id, "ghost-agent");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new_unchecked_for_tests(target_id, "ghost-agent", fake_agent)
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: target_id,
             index: 0,
             value: [0x42; 32],
-        });
-    }
+        })
+        .build();
+    builder.add_action(action);
     let turn = builder.build();
     let result = executor.execute(&turn, &mut ledger);
 

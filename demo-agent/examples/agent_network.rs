@@ -36,6 +36,7 @@ use std::sync::Mutex;
 use pyana_cell::derivation::{DerivationEdge, DerivationNode, DerivationTree, DerivationType};
 use pyana_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
 use pyana_token::{Attenuation, AuthRequest, AuthToken, BudgetSpec, MacaroonToken};
+use pyana_turn::builder::ActionBuilder;
 use pyana_turn::verify::verify_receipt_chain;
 use pyana_turn::{
     Action, Authorization, BudgetGate, BudgetSlice, CallForest, CommitmentMode, ComputronCosts,
@@ -201,14 +202,14 @@ fn main() {
 
     // Also explicitly introduce the agent to key cells via three-party introduction.
     let mut builder = TurnBuilder::new(dev_id, 1);
-    {
-        let action = builder.action(dev_id, "bootstrap_agent_caps");
-        action.introduce(dev_id, agent_id, gateway_id, AuthRequired::None);
-        action.introduce(dev_id, agent_id, registry_id, AuthRequired::None);
-        action.introduce(dev_id, agent_id, budget_id, AuthRequired::None);
-        action.introduce(dev_id, agent_id, audit_id, AuthRequired::None);
-        action.introduce(dev_id, agent_id, tool_id, AuthRequired::Signature);
-    }
+    let action = ActionBuilder::new_unchecked_for_tests(dev_id, "bootstrap_agent_caps", dev_id)
+        .effect_introduce(dev_id, agent_id, gateway_id, AuthRequired::None)
+        .effect_introduce(dev_id, agent_id, registry_id, AuthRequired::None)
+        .effect_introduce(dev_id, agent_id, budget_id, AuthRequired::None)
+        .effect_introduce(dev_id, agent_id, audit_id, AuthRequired::None)
+        .effect_introduce(dev_id, agent_id, tool_id, AuthRequired::Signature)
+        .build();
+    builder.add_action(action);
     let turn = builder.fee(0).build();
     let result = executor.execute(&turn, &mut ledger);
 
@@ -254,10 +255,14 @@ fn main() {
     }
 
     let mut builder = TurnBuilder::new(gateway_id, 0);
-    {
-        let action = builder.action(gateway_id, "introduce_agent_to_provider");
-        action.introduce(gateway_id, agent_id, provider_id, AuthRequired::None);
-    }
+    let action = ActionBuilder::new_unchecked_for_tests(
+        gateway_id,
+        "introduce_agent_to_provider",
+        gateway_id,
+    )
+    .effect_introduce(gateway_id, agent_id, provider_id, AuthRequired::None)
+    .build();
+    builder.add_action(action);
     let turn = builder.fee(0).build();
     let result = executor.execute(&turn, &mut ledger);
 
@@ -527,10 +532,10 @@ fn main() {
     // Turn with fee=100 exceeds the 50-computron budget.
     let mut builder = TurnBuilder::new(agent_id, 6);
     builder.set_fee(100); // exceeds budget ceiling of 50
-    {
-        let action = builder.action(agent_id, "expensive_operation");
-        action.set_field(agent_id, 1, *blake3::hash(b"expensive").as_bytes());
-    }
+    let action = ActionBuilder::new_unchecked_for_tests(agent_id, "expensive_operation", agent_id)
+        .effect_set_field(agent_id, 1, *blake3::hash(b"expensive").as_bytes())
+        .build();
+    builder.add_action(action);
     let expensive_turn = builder.build();
     let result = executor_with_budget.execute(&expensive_turn, &mut ledger);
     assert!(
@@ -543,10 +548,10 @@ fn main() {
     executor_with_budget.budget_gate = Some(Mutex::new(BudgetGate::new(1, BudgetSlice::new(50))));
     let mut builder = TurnBuilder::new(agent_id, 6);
     builder.set_fee(30);
-    {
-        let action = builder.action(agent_id, "cheap_operation");
-        action.set_field(agent_id, 1, *blake3::hash(b"cheap").as_bytes());
-    }
+    let action = ActionBuilder::new_unchecked_for_tests(agent_id, "cheap_operation", agent_id)
+        .effect_set_field(agent_id, 1, *blake3::hash(b"cheap").as_bytes())
+        .build();
+    builder.add_action(action);
     let cheap_turn = builder.build();
     let result = executor_with_budget.execute(&cheap_turn, &mut ledger);
     assert!(result.is_committed(), "Turn within budget must succeed");
@@ -855,10 +860,11 @@ fn main() {
         let field_val = *blake3::hash(format!("audit-step-{i}").as_bytes()).as_bytes();
         let mut builder = TurnBuilder::new(agent_id, 7 + i);
         builder.set_fee(10000);
-        {
-            let action = builder.action(agent_id, &format!("audit_step_{i}"));
-            action.set_field(agent_id, (i as usize) % 8, field_val);
-        }
+        let action =
+            ActionBuilder::new_unchecked_for_tests(agent_id, &format!("audit_step_{i}"), agent_id)
+                .effect_set_field(agent_id, (i as usize) % 8, field_val)
+                .build();
+        builder.add_action(action);
         let turn = builder.build();
         let result = audit_executor.execute(&turn, &mut ledger);
         match result {

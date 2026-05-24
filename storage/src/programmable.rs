@@ -20,6 +20,23 @@
 use crate::queue::{DequeueProof, MerkleQueue, QueueEntry, QueueError};
 
 // ============================================================================
+// Lifted slot-caveat enum re-export (Lane G).
+// ============================================================================
+//
+// Per `SLOT-CAVEATS-DESIGN.md` §5 Option A, the canonical
+// transition-aware constraint vocabulary lives in
+// `pyana_cell::program::StateConstraint`. The storage crate re-exports
+// it here under the alias `LiftedQueueConstraint` (alongside the legacy
+// `QueueConstraint` enum below, which remains for back-compat). New
+// constructions should reach for the lifted enum; downstream
+// consumers using `QueueConstraint` continue to compile unchanged.
+pub use pyana_cell::program::{
+    AuthorizedSet as LiftedAuthorizedSet, CustomDescriptor as LiftedCustomDescriptor,
+    DeltaRelation as LiftedDeltaRelation, HashKind as LiftedHashKind, ReadSet as LiftedReadSet,
+    SimpleStateConstraint as LiftedSimpleConstraint, StateConstraint as LiftedQueueConstraint,
+};
+
+// ============================================================================
 // Core types
 // ============================================================================
 

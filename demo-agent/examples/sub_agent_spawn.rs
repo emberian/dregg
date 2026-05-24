@@ -17,6 +17,7 @@ use pyana_cell::{AuthRequired, CellId, Ledger, Permissions};
 use pyana_circuit::BabyBear;
 use pyana_circuit::poseidon2;
 use pyana_token::{Attenuation, AuthRequest, AuthToken, BudgetSpec, MacaroonToken};
+use pyana_turn::builder::ActionBuilder;
 use pyana_turn::verify::verify_receipt_chain;
 use pyana_turn::{
     ComputronCosts, DelegationMode, Effect, TurnBuilder, TurnExecutor, TurnReceipt, TurnResult,
@@ -347,13 +348,19 @@ fn main() {
             agent.name, agent.service
         ));
         {
-            let action = turn_builder.action(target_id, &format!("{}_task", agent.service));
-            action.delegation(DelegationMode::None);
-            action.effect(Effect::SetField {
+            let action = ActionBuilder::new_unchecked_for_tests(
+                target_id,
+                &format!("{}_task", agent.service),
+                parent_cell_id,
+            )
+            .delegation(DelegationMode::None)
+            .effect(Effect::SetField {
                 cell: target_id,
                 index: i,
                 value: result_hash,
-            });
+            })
+            .build();
+            turn_builder.add_action(action);
         }
 
         let turn = turn_builder.build();

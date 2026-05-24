@@ -34,7 +34,7 @@ use pyana_cell::program::{CellProgram, StateConstraint, field_from_u64};
 use pyana_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
 use pyana_turn::action::{DelegationMode, Effect};
 use pyana_turn::budget_gate::{BudgetGate, BudgetSlice};
-use pyana_turn::builder::TurnBuilder;
+use pyana_turn::builder::{ActionBuilder, TurnBuilder};
 use pyana_turn::executor::{ComputronCosts, TurnExecutor};
 use pyana_turn::turn::TurnResult;
 
@@ -337,22 +337,22 @@ fn main() {
     // Build a turn that locks funds: client deposits to escrow
     let mut turn_builder = TurnBuilder::new(client_id, 0);
     turn_builder.set_fee(0);
-    {
-        let action = turn_builder.action(client_id, "escrow_lock");
+    let action = ActionBuilder::new_unchecked_for_tests(client_id, "escrow_lock", client_id)
         // Transfer from client to escrow
-        action.effect(Effect::Transfer {
+        .effect(Effect::Transfer {
             from: client_id,
             to: escrow_id,
             amount: job_price,
-        });
+        })
         // Set escrow state fields
-        action.set_field(escrow_id, 0, field_from_u64(job_price)); // locked_amount
-        action.set_field(escrow_id, 2, *blake3::hash(client_id.as_bytes()).as_bytes()); // client_hash
-        action.set_field(escrow_id, 3, *blake3::hash(winner_id.as_bytes()).as_bytes()); // provider_hash
-        action.set_field(escrow_id, 4, job_hash); // job_hash
-        action.set_field(escrow_id, 5, field_from_u64(1)); // status = locked
-        action.delegation(DelegationMode::ParentsOwn);
-    }
+        .effect_set_field(escrow_id, 0, field_from_u64(job_price)) // locked_amount
+        .effect_set_field(escrow_id, 2, *blake3::hash(client_id.as_bytes()).as_bytes()) // client_hash
+        .effect_set_field(escrow_id, 3, *blake3::hash(winner_id.as_bytes()).as_bytes()) // provider_hash
+        .effect_set_field(escrow_id, 4, job_hash) // job_hash
+        .effect_set_field(escrow_id, 5, field_from_u64(1)) // status = locked
+        .delegation(DelegationMode::ParentsOwn)
+        .build();
+    turn_builder.add_action(action);
     let lock_turn = turn_builder.build();
     let lock_result = executor.execute(&lock_turn, &mut ledger);
     if lock_result.is_rejected() {
@@ -458,21 +458,6 @@ fn main() {
     settle_builder.set_fee(0);
     settle_builder.set_memo("atomic-settlement-job-001");
     {
-        let action = settle_builder.action(marketplace_id, "settle");
-        action.delegation(DelegationMode::ParentsOwn);
-
-        // 1. Release escrow: transfer funds from escrow to provider
-        action.effect(Effect::Transfer {
-            from: escrow_id,
-            to: winner_id,
-            amount: job_price,
-        });
-
-        // 2. Update escrow state: locked=0, released=job_price, status=released
-        action.set_field(escrow_id, 0, field_from_u64(0)); // locked = 0
-        action.set_field(escrow_id, 1, field_from_u64(job_price)); // released = job_price
-        action.set_field(escrow_id, 5, field_from_u64(2)); // status = released
-
         // 3. Update reputation: increment total_jobs, successful, score
         let quality_score: u64 = 95;
         let rep_state = &ledger.get(&reputation_id).unwrap().state;
@@ -495,11 +480,6 @@ fn main() {
             *h.finalize().as_bytes()
         };
 
-        action.set_field(reputation_id, 0, field_from_u64(new_total));
-        action.set_field(reputation_id, 1, field_from_u64(new_successful));
-        action.set_field(reputation_id, 2, field_from_u64(new_score_sum));
-        action.set_field(reputation_id, 3, new_chain);
-
         // 4. Update receipt log: increment count, store hash
         let receipt_hash = {
             let mut h = blake3::Hasher::new();
@@ -509,8 +489,28 @@ fn main() {
             h.update(winner_id.as_bytes());
             *h.finalize().as_bytes()
         };
-        action.set_field(receipt_log_id, 0, field_from_u64(1)); // count = 1
-        action.set_field(receipt_log_id, 1, receipt_hash); // last receipt hash
+
+        let action =
+            ActionBuilder::new_unchecked_for_tests(marketplace_id, "settle", marketplace_id)
+                .delegation(DelegationMode::ParentsOwn)
+                // 1. Release escrow: transfer funds from escrow to provider
+                .effect(Effect::Transfer {
+                    from: escrow_id,
+                    to: winner_id,
+                    amount: job_price,
+                })
+                // 2. Update escrow state: locked=0, released=job_price, status=released
+                .effect_set_field(escrow_id, 0, field_from_u64(0)) // locked = 0
+                .effect_set_field(escrow_id, 1, field_from_u64(job_price)) // released = job_price
+                .effect_set_field(escrow_id, 5, field_from_u64(2)) // status = released
+                .effect_set_field(reputation_id, 0, field_from_u64(new_total))
+                .effect_set_field(reputation_id, 1, field_from_u64(new_successful))
+                .effect_set_field(reputation_id, 2, field_from_u64(new_score_sum))
+                .effect_set_field(reputation_id, 3, new_chain)
+                .effect_set_field(receipt_log_id, 0, field_from_u64(1)) // count = 1
+                .effect_set_field(receipt_log_id, 1, receipt_hash) // last receipt hash
+                .build();
+        settle_builder.add_action(action);
     }
 
     let settle_turn = settle_builder.build();
@@ -643,10 +643,11 @@ fn main() {
     let mkt_nonce = ledger.get(&marketplace_id).unwrap().state.nonce();
     let mut expensive_builder = TurnBuilder::new(marketplace_id, mkt_nonce);
     expensive_builder.set_fee(500); // Cell can afford 500, but slice ceiling is only 100
-    {
-        let action = expensive_builder.action(marketplace_id, "expensive_op");
-        action.set_field(marketplace_id, 7, field_from_u64(999));
-    }
+    let action =
+        ActionBuilder::new_unchecked_for_tests(marketplace_id, "expensive_op", marketplace_id)
+            .effect_set_field(marketplace_id, 7, field_from_u64(999))
+            .build();
+    expensive_builder.add_action(action);
     let expensive_turn = expensive_builder.build();
     let budget_result = gated_executor.execute(&expensive_turn, &mut ledger);
 
@@ -681,18 +682,19 @@ fn main() {
 
     let mut bad_settle = TurnBuilder::new(marketplace_id, dispute_nonce);
     bad_settle.set_fee(0);
-    {
-        let action = bad_settle.action(marketplace_id, "bad_settle");
-        action.delegation(DelegationMode::ParentsOwn);
-        // Try to transfer to a non-existent cell
-        action.effect(Effect::Transfer {
-            from: escrow_id,
-            to: fake_provider_id,
-            amount: 10_000,
-        });
-        // Also try to update reputation (this should also roll back)
-        action.set_field(reputation_id, 0, field_from_u64(999));
-    }
+    let action =
+        ActionBuilder::new_unchecked_for_tests(marketplace_id, "bad_settle", marketplace_id)
+            .delegation(DelegationMode::ParentsOwn)
+            // Try to transfer to a non-existent cell
+            .effect(Effect::Transfer {
+                from: escrow_id,
+                to: fake_provider_id,
+                amount: 10_000,
+            })
+            // Also try to update reputation (this should also roll back)
+            .effect_set_field(reputation_id, 0, field_from_u64(999))
+            .build();
+    bad_settle.add_action(action);
     let bad_turn = bad_settle.build();
     let bad_result = executor.execute(&bad_turn, &mut ledger);
 
@@ -729,10 +731,11 @@ fn main() {
     let (_, settle_receipt, _) = {
         let mut chain_builder = TurnBuilder::new(marketplace_id, mkt_nonce_now);
         chain_builder.set_fee(0);
-        {
-            let action = chain_builder.action(marketplace_id, "finalize");
-            action.set_field(marketplace_id, 0, field_from_u64(1)); // mark as finalized
-        }
+        let action =
+            ActionBuilder::new_unchecked_for_tests(marketplace_id, "finalize", marketplace_id)
+                .effect_set_field(marketplace_id, 0, field_from_u64(1)) // mark as finalized
+                .build();
+        chain_builder.add_action(action);
         let chain_turn = chain_builder.build();
         let chain_result = executor.execute(&chain_turn, &mut ledger);
         chain_result.unwrap_committed()

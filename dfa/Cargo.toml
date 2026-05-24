@@ -1,0 +1,16 @@
+[package]
+name = "pyana-dfa"
+version.workspace = true
+edition.workspace = true
+description = "Canonical DFA routing engine and userspace dispatch primitive for pyana"
+
+[dependencies]
+blake3 = "1"
+serde = { workspace = true, features = ["derive", "alloc"] }
+postcard = { version = "1", features = ["use-std"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

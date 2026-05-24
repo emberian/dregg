@@ -14,6 +14,7 @@
 //! someone who already holds both ends of the relationship.
 
 use pyana_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
+use pyana_turn::builder::ActionBuilder;
 use pyana_turn::{ComputronCosts, TurnBuilder, TurnExecutor, TurnResult};
 
 /// Create a cell with open permissions and a given balance.
@@ -122,10 +123,11 @@ fn main() {
     println!();
 
     let mut builder = TurnBuilder::new(alice_id, 0);
-    {
-        let action = builder.action(alice_id, "introduce_bob_to_carol");
-        action.introduce(alice_id, bob_id, carol_id, AuthRequired::None);
-    }
+    let action =
+        ActionBuilder::new_unchecked_for_tests(alice_id, "introduce_bob_to_carol", alice_id)
+            .effect_introduce(alice_id, bob_id, carol_id, AuthRequired::None)
+            .build();
+    builder.add_action(action);
     let turn = builder.fee(0).build();
 
     let result = executor.execute(&turn, &mut ledger);
@@ -168,10 +170,10 @@ fn main() {
 
     // Eve tries to introduce herself to Carol (she has no cap to Carol or Bob).
     let mut builder = TurnBuilder::new(eve_id, 0);
-    {
-        let action = builder.action(eve_id, "self_introduce");
-        action.introduce(eve_id, eve_id, carol_id, AuthRequired::None);
-    }
+    let action = ActionBuilder::new_unchecked_for_tests(eve_id, "self_introduce", eve_id)
+        .effect_introduce(eve_id, eve_id, carol_id, AuthRequired::None)
+        .build();
+    builder.add_action(action);
     let turn = builder.fee(0).build();
 
     let result = executor.execute(&turn, &mut ledger);
@@ -204,10 +206,11 @@ fn main() {
 
     // First, give Bob a cap to Dave (Alice does this).
     let mut builder = TurnBuilder::new(alice_id, 1);
-    {
-        let action = builder.action(alice_id, "introduce_bob_to_dave");
-        action.introduce(alice_id, bob_id, dave_id, AuthRequired::None);
-    }
+    let action =
+        ActionBuilder::new_unchecked_for_tests(alice_id, "introduce_bob_to_dave", alice_id)
+            .effect_introduce(alice_id, bob_id, dave_id, AuthRequired::None)
+            .build();
+    builder.add_action(action);
     let turn = builder.fee(0).build();
     let result = executor.execute(&turn, &mut ledger);
     assert!(
@@ -218,10 +221,10 @@ fn main() {
 
     // Now Bob introduces Dave to Carol.
     let mut builder = TurnBuilder::new(bob_id, 0);
-    {
-        let action = builder.action(bob_id, "introduce_dave_to_carol");
-        action.introduce(bob_id, dave_id, carol_id, AuthRequired::None);
-    }
+    let action = ActionBuilder::new_unchecked_for_tests(bob_id, "introduce_dave_to_carol", bob_id)
+        .effect_introduce(bob_id, dave_id, carol_id, AuthRequired::None)
+        .build();
+    builder.add_action(action);
     let turn = builder.fee(0).build();
 
     let result = executor.execute(&turn, &mut ledger);
@@ -269,11 +272,12 @@ fn main() {
     alice_cell.capabilities.grant(frank_id, AuthRequired::None);
 
     let mut builder = TurnBuilder::new(alice_id, 2);
-    {
-        let action = builder.action(alice_id, "introduce_frank_attenuated");
-        // Grant Frank access to Carol, but only with Signature-level permissions.
-        action.introduce(alice_id, frank_id, carol_id, AuthRequired::Signature);
-    }
+    // Grant Frank access to Carol, but only with Signature-level permissions.
+    let action =
+        ActionBuilder::new_unchecked_for_tests(alice_id, "introduce_frank_attenuated", alice_id)
+            .effect_introduce(alice_id, frank_id, carol_id, AuthRequired::Signature)
+            .build();
+    builder.add_action(action);
     let turn = builder.fee(0).build();
 
     let result = executor.execute(&turn, &mut ledger);
@@ -305,12 +309,13 @@ fn main() {
     frank_cell.capabilities.grant(eve_id, AuthRequired::None);
 
     let mut builder = TurnBuilder::new(frank_id, 0);
-    {
-        let action = builder.action(frank_id, "amplification_attempt");
-        // Frank tries to grant Eve unrestricted access to Carol,
-        // but Frank only has Signature-level access.
-        action.introduce(frank_id, eve_id, carol_id, AuthRequired::None);
-    }
+    // Frank tries to grant Eve unrestricted access to Carol,
+    // but Frank only has Signature-level access.
+    let action =
+        ActionBuilder::new_unchecked_for_tests(frank_id, "amplification_attempt", frank_id)
+            .effect_introduce(frank_id, eve_id, carol_id, AuthRequired::None)
+            .build();
+    builder.add_action(action);
     let turn = builder.fee(0).build();
 
     let result = executor.execute(&turn, &mut ledger);

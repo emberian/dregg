@@ -7,6 +7,7 @@ use pyana_cell::{
 use pyana_circuit::BabyBear;
 use pyana_circuit::fold_air::{FoldWitness, compute_test_checks_commitment};
 use pyana_circuit::ivc::{FoldDelta, IvcVerification, prove_ivc, verify_ivc};
+use pyana_turn::builder::ActionBuilder;
 use pyana_turn::{ComputronCosts, DelegationMode, Effect, TurnBuilder, TurnExecutor, TurnResult};
 
 use crate::report::{CheckResult, run_check};
@@ -171,15 +172,15 @@ fn check_multi_party_atomic() -> Result<(), String> {
     // Atomic turn: alice sends 100 to bob
     let mut tb = TurnBuilder::new(alice_id, 0);
     tb.set_fee(1000);
-    {
-        let action = tb.action(bob_id, "atomic-swap");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::Transfer {
+    let action = ActionBuilder::new_unchecked_for_tests(bob_id, "atomic-swap", alice_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::Transfer {
             from: alice_id,
             to: bob_id,
             amount: 100,
-        });
-    }
+        })
+        .build();
+    tb.add_action(action);
     let turn = tb.build();
 
     let total_before = {

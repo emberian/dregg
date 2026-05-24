@@ -14,19 +14,106 @@ use crate::error::TurnError;
 use crate::forest::CallForest;
 use crate::routing::{IntroductionExport, RoutingDirective};
 
+/// Serde helper for `[u8; 64]` (Ed25519 signatures).
+mod sw_sig_serde {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(bytes: &[u8; 64], ser: S) -> Result<S::Ok, S::Error> {
+        bytes.as_slice().serialize(ser)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(de: D) -> Result<[u8; 64], D::Error> {
+        let v: Vec<u8> = Vec::deserialize(de)?;
+        v.try_into()
+            .map_err(|_| serde::de::Error::custom("expected 64 bytes for signature"))
+    }
+}
+
 /// Witness data for a sovereign cell in a turn.
 ///
-/// When a turn targets a sovereign cell, the submitter must provide the full
-/// cell state and prove it matches the stored commitment. The federation does
-/// not store sovereign cell state, so the agent must supply it.
+/// When a turn targets a sovereign cell the federation has stored only a
+/// 32-byte state commitment for, the submitter must supply enough material
+/// for the executor to (1) reconstruct the cell so per-cell execution can
+/// proceed and (2) authenticate the transition as coming from the cell's
+/// owning key. The shape mirrors
+/// [`pyana_cell::peer_exchange::PeerStateTransition`] one-shot: the cell key
+/// signs over `(cell_id, old_commitment, new_commitment, effects_hash,
+/// timestamp, sequence)` and an optional STARK proof carries the same
+/// transition through `EffectVmAir`.
+///
+/// The executor verifies:
+///
+///  1. `cell_id == cell_state.id()` and `old_commitment ==
+///     cell_state.state_commitment() == ledger's stored sovereign
+///     commitment for cell_id` (anchors the pre-state).
+///  2. Ed25519 `signature` over the canonical signing message verifies
+///     against `cell_state.public_key()` (binds the transition to the
+///     cell's owning key — closes the "any-snooper-can-resubmit" gap).
+///  3. `sequence == ledger.last_sovereign_witness_sequence(cell_id) + 1`
+///     (per-cell monotonic, no gaps; closes the replay gap even if a
+///     future hypothetical commitment collision were ever found).
+///  4. If `transition_proof` is `Some`, the STARK is verified via
+///     `EffectVmAir` with PIs binding `old_commitment -> new_commitment +
+///     effects_hash + cell_id`.
+///
+/// The `new_commitment` and `effects_hash` declared here are treated as
+/// the signer's promise about the post-state; the executor still
+/// recomputes both during forest execution. Mismatches surface as
+/// `TurnError::EffectsHashMismatch` / `SovereignCommitmentMismatch`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SovereignCellWitness {
-    /// The full cell state (agent provides this).
+    /// The cell ID this witness opens. Must equal `cell_state.id()`.
+    pub cell_id: CellId,
+    /// The federation's stored pre-state commitment for this cell.
+    pub old_commitment: [u8; 32],
+    /// The claimed post-state commitment after the witnessed transition.
+    pub new_commitment: [u8; 32],
+    /// BLAKE3 hash of the effects applied to this cell in the turn.
+    pub effects_hash: [u8; 32],
+    /// Timestamp the witness was issued at (informational; bound by signature).
+    pub timestamp: i64,
+    /// Per-cell monotonic counter. Replay protection: must be
+    /// `ledger.last_sovereign_witness_sequence(cell_id) + 1`.
+    pub sequence: u64,
+    /// Ed25519 signature over the canonical signing message produced by
+    /// [`SovereignCellWitness::signing_message`], verified against
+    /// `cell_state.public_key()`.
+    #[serde(with = "sw_sig_serde")]
+    pub signature: [u8; 64],
+    /// The full cell pre-state (agent-supplied; commitment must match
+    /// `old_commitment`).
     pub cell_state: Cell,
-    /// Proof that this state matches the stored commitment.
-    /// For Phase 1a: BLAKE3 hash must equal `cell_state.state_commitment()`.
-    /// Later phases may use Merkle proofs from a state tree.
-    pub state_proof: [u8; 32],
+    /// Optional STARK proof binding old -> new + effects_hash via
+    /// `EffectVmAir`. When present, the executor may verify in lieu of
+    /// re-executing — see `PeerStateTransition` for the analogous path.
+    #[serde(default)]
+    pub transition_proof: Option<Vec<u8>>,
+}
+
+impl SovereignCellWitness {
+    /// Canonical signing message layout:
+    ///   "pyana-sovereign-witness-v1:" ||
+    ///   cell_id || old_commitment || new_commitment || effects_hash ||
+    ///   timestamp (8 LE) || sequence (8 LE)
+    pub fn signing_message(
+        cell_id: &CellId,
+        old_commitment: &[u8; 32],
+        new_commitment: &[u8; 32],
+        effects_hash: &[u8; 32],
+        timestamp: i64,
+        sequence: u64,
+    ) -> Vec<u8> {
+        const DOMAIN: &[u8] = b"pyana-sovereign-witness-v1:";
+        let mut msg = Vec::with_capacity(DOMAIN.len() + 32 + 32 + 32 + 32 + 8 + 8);
+        msg.extend_from_slice(DOMAIN);
+        msg.extend_from_slice(cell_id.as_bytes());
+        msg.extend_from_slice(old_commitment);
+        msg.extend_from_slice(new_commitment);
+        msg.extend_from_slice(effects_hash);
+        msg.extend_from_slice(&timestamp.to_le_bytes());
+        msg.extend_from_slice(&sequence.to_le_bytes());
+        msg
+    }
 }
 
 /// An event emitted during turn execution, recorded in the receipt for audit/indexing.
@@ -237,20 +324,35 @@ impl Turn {
             }
         }
         // sovereign_witnesses: map of (CellId -> SovereignCellWitness).
-        // Sort entries by cell ID for canonical ordering. We bind each
-        // witness via its (state_proof, cell-state-commitment) tuple
-        // rather than re-serialising the full Cell — both are the
-        // load-bearing 32-byte commitments the executor checks anyway,
-        // and this keeps the hash insensitive to serde representation
-        // drift inside `Cell`.
+        // Sort entries by cell ID for canonical ordering. Bind every
+        // soundness-load-bearing field: the (old, new, effects_hash,
+        // timestamp, sequence) signing message inputs plus the
+        // signature and the cell_state commitment. The transition_proof
+        // (if any) is length-prefixed.
         let mut sw_entries: Vec<(&CellId, &SovereignCellWitness)> =
             self.sovereign_witnesses.iter().collect();
         sw_entries.sort_by_key(|(cell, _)| *cell.as_bytes());
         hasher.update(&(sw_entries.len() as u64).to_le_bytes());
         for (cell, witness) in sw_entries {
             hasher.update(cell.as_bytes());
-            hasher.update(&witness.state_proof);
+            hasher.update(witness.cell_id.as_bytes());
+            hasher.update(&witness.old_commitment);
+            hasher.update(&witness.new_commitment);
+            hasher.update(&witness.effects_hash);
+            hasher.update(&witness.timestamp.to_le_bytes());
+            hasher.update(&witness.sequence.to_le_bytes());
+            hasher.update(&witness.signature);
             hasher.update(&witness.cell_state.state_commitment());
+            match &witness.transition_proof {
+                Some(bytes) => {
+                    hasher.update(&[1u8]);
+                    hasher.update(&(bytes.len() as u64).to_le_bytes());
+                    hasher.update(bytes);
+                }
+                None => {
+                    hasher.update(&[0u8]);
+                }
+            };
         }
         // custom_program_proofs: ordered Vec; bind each proof's bytes and
         // its public-inputs vector.

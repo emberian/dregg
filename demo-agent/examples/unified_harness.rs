@@ -29,6 +29,7 @@ use pyana_trace::{
     AuthorizationRequest, Conclusion, Evaluator, Fact, Rule, Term, standard_policy,
     symbol_from_str, verify_trace,
 };
+use pyana_turn::builder::ActionBuilder;
 use pyana_turn::{
     ComputronCosts, DelegationMode, Effect, Pipeline, TurnBuilder, TurnExecutor, TurnResult,
     execute_pipeline,
@@ -667,10 +668,11 @@ fn run_three_party_introduction(
 ) -> Result<(), Box<dyn Error>> {
     let executor = TurnExecutor::new(ComputronCosts::zero());
     let mut builder = TurnBuilder::new(alice_id, 0);
-    {
-        let action = builder.action(alice_id, "introduce_bob_to_carol");
-        action.introduce(alice_id, bob_id, carol_id, AuthRequired::None);
-    }
+    let action =
+        ActionBuilder::new_unchecked_for_tests(alice_id, "introduce_bob_to_carol", alice_id)
+            .effect_introduce(alice_id, bob_id, carol_id, AuthRequired::None)
+            .build();
+    builder.add_action(action);
     let turn = builder.fee(0).build();
     let result = executor.execute(&turn, ledger);
     assert!(result.is_committed(), "Introduction should succeed");

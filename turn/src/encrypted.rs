@@ -13,11 +13,37 @@
 //!
 //! After ordering is finalized, the turn is revealed (either by the agent publishing
 //! the decryption key, or via threshold decryption by the validator set).
+//!
+//! # Cryptography
+//!
+//! `EncryptedTurn::encrypt_for_executor(turn, recipient_pub)`:
+//! - generates a fresh X25519 ephemeral keypair,
+//! - performs X25519 DH with the executor's public key,
+//! - derives a 32-byte ChaCha20-Poly1305 key via BLAKE3-derive_key,
+//! - encrypts `serde_json::to_vec(turn)` with a fresh 12-byte nonce,
+//! - records both `ephemeral_public` and `nonce` in the struct so the
+//!   executor can later DH + decrypt with its static unsealer key.
+//!
+//! The `turn_commitment` is computed over the plaintext bytes so the
+//! validator can also bind the proof to the same commit pre-encryption, and
+//! the executor can verify post-decryption that the decrypted bytes hash to
+//! the same commitment.
+//!
+//! # Why JSON, not postcard?
+//!
+//! `Turn` carries many `#[serde(default, skip_serializing_if = "…")]` fields.
+//! Self-describing formats (JSON) tolerate field omission via the named-field
+//! map; positional formats (postcard, bincode) read fields one-by-one and
+//! error with "expected more data" when a skipped field is missing on
+//! deserialize. JSON is slightly larger on the wire but is the only format
+//! that round-trips the current `Turn` schema. (See
+//! `tests::privacy_wiring::encrypted_turn_decrypts_to_original`.)
 
 use pyana_cell::CellId;
 use serde::{Deserialize, Serialize};
 
 use crate::conflict::ConflictSet;
+use crate::turn::Turn;
 
 /// An encrypted turn submission for privacy-preserving federation ordering.
 ///
@@ -29,8 +55,15 @@ pub struct EncryptedTurn {
     /// This is the ONE piece of metadata that remains visible.
     pub agent: CellId,
 
-    /// Encrypted turn body (ChaCha20-Poly1305).
-    /// The ciphertext includes a 12-byte nonce prefix and 16-byte authentication tag.
+    /// Sender's ephemeral X25519 public key (32 bytes).
+    /// Combined with the executor's static X25519 secret, this gives the
+    /// ChaCha20-Poly1305 key via X25519 DH + BLAKE3-derive_key.
+    pub ephemeral_public: [u8; 32],
+
+    /// ChaCha20-Poly1305 nonce (12 bytes).
+    pub nonce: [u8; 12],
+
+    /// Encrypted turn body (ChaCha20-Poly1305 ciphertext + 16-byte authentication tag).
     pub ciphertext: Vec<u8>,
 
     /// BLAKE3 hash of the plaintext turn (for binding the proof to specific content).
@@ -120,7 +153,132 @@ impl TurnValidityPublicInputs {
     }
 }
 
+/// Derive the symmetric ChaCha20-Poly1305 key from an X25519 DH shared secret.
+///
+/// Both encrypt and decrypt sides MUST compute the same key. We use BLAKE3 in
+/// derive_key mode with the domain string `"pyana-encrypted-turn-key v1"`,
+/// hashing `shared_secret || ephemeral_public || recipient_public`. Mixing all
+/// three values gives:
+/// - shared_secret: the actual DH output (mutual knowledge of secret)
+/// - ephemeral_public: binds the key to this specific ephemeral
+/// - recipient_public: binds the key to this specific executor (no key reuse
+///   across deployments)
+fn derive_turn_key(
+    shared_secret: &[u8; 32],
+    ephemeral_public: &[u8; 32],
+    recipient_public: &[u8; 32],
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key("pyana-encrypted-turn-key v1");
+    hasher.update(shared_secret);
+    hasher.update(ephemeral_public);
+    hasher.update(recipient_public);
+    *hasher.finalize().as_bytes()
+}
+
 impl EncryptedTurn {
+    /// Encrypt a `Turn` for a specific executor (identified by their X25519 public key).
+    ///
+    /// Generates a fresh X25519 ephemeral keypair, performs DH with the
+    /// executor's public key, derives the symmetric key, and encrypts the
+    /// `postcard`-serialized turn under ChaCha20-Poly1305.
+    ///
+    /// The caller is responsible for supplying a well-formed `validity_proof`
+    /// (or a placeholder for testing) and a `conflict_set` that the validity
+    /// proof's public inputs bind to.
+    pub fn encrypt_for_executor(
+        turn: &Turn,
+        agent: CellId,
+        recipient_public: &[u8; 32],
+        conflict_set: ConflictSet,
+        validity_proof: TurnValidityProof,
+        submitted_at: i64,
+    ) -> Result<Self, EncryptedTurnError> {
+        use chacha20poly1305::aead::{Aead, KeyInit};
+        use chacha20poly1305::{ChaCha20Poly1305, Nonce};
+        use x25519_dalek::{PublicKey, StaticSecret};
+
+        let plaintext = serde_json::to_vec(turn)
+            .map_err(|e| EncryptedTurnError::SerializationFailed(e.to_string()))?;
+        let turn_commitment = {
+            let mut hasher = blake3::Hasher::new_derive_key("pyana-encrypted-turn-commitment v1");
+            hasher.update(&plaintext);
+            *hasher.finalize().as_bytes()
+        };
+
+        let mut eph_secret_bytes = [0u8; 32];
+        getrandom::fill(&mut eph_secret_bytes)
+            .map_err(|e| EncryptedTurnError::RandomFailed(e.to_string()))?;
+        let eph_secret = StaticSecret::from(eph_secret_bytes);
+        let eph_public = PublicKey::from(&eph_secret);
+
+        let recipient = PublicKey::from(*recipient_public);
+        let shared = eph_secret.diffie_hellman(&recipient);
+        let key = derive_turn_key(shared.as_bytes(), eph_public.as_bytes(), recipient_public);
+
+        let mut nonce_bytes = [0u8; 12];
+        getrandom::fill(&mut nonce_bytes)
+            .map_err(|e| EncryptedTurnError::RandomFailed(e.to_string()))?;
+        let cipher = ChaCha20Poly1305::new((&key).into());
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let ciphertext = cipher
+            .encrypt(nonce, plaintext.as_slice())
+            .map_err(|_| EncryptedTurnError::EncryptionFailed)?;
+
+        Ok(EncryptedTurn {
+            agent,
+            ephemeral_public: *eph_public.as_bytes(),
+            nonce: nonce_bytes,
+            ciphertext,
+            turn_commitment,
+            conflict_set,
+            validity_proof,
+            submitted_at,
+        })
+    }
+
+    /// Decrypt this encrypted turn using the executor's static X25519 secret.
+    ///
+    /// Returns the recovered `Turn`. After decryption, the BLAKE3 commitment
+    /// of the plaintext is recomputed and compared against `self.turn_commitment`;
+    /// a mismatch indicates a corrupted ciphertext or a wrong recipient key.
+    ///
+    /// This is the executor-side counterpart of `encrypt_for_executor`. Both
+    /// sides MUST use the same recipient public key — passing a stale or
+    /// mismatched public key here will produce `DecryptionFailed`.
+    pub fn decrypt_for_executor(
+        &self,
+        recipient_secret: &[u8; 32],
+        recipient_public: &[u8; 32],
+    ) -> Result<Turn, EncryptedTurnError> {
+        use chacha20poly1305::aead::{Aead, KeyInit};
+        use chacha20poly1305::{ChaCha20Poly1305, Nonce};
+        use x25519_dalek::{PublicKey, StaticSecret};
+
+        let secret = StaticSecret::from(*recipient_secret);
+        let eph_public = PublicKey::from(self.ephemeral_public);
+        let shared = secret.diffie_hellman(&eph_public);
+        let key = derive_turn_key(shared.as_bytes(), &self.ephemeral_public, recipient_public);
+
+        let cipher = ChaCha20Poly1305::new((&key).into());
+        let nonce = Nonce::from_slice(&self.nonce);
+        let plaintext = cipher
+            .decrypt(nonce, self.ciphertext.as_slice())
+            .map_err(|_| EncryptedTurnError::DecryptionFailed)?;
+
+        let expected_commitment = {
+            let mut hasher = blake3::Hasher::new_derive_key("pyana-encrypted-turn-commitment v1");
+            hasher.update(&plaintext);
+            *hasher.finalize().as_bytes()
+        };
+        if expected_commitment != self.turn_commitment {
+            return Err(EncryptedTurnError::CommitmentVerificationFailed);
+        }
+
+        let turn: Turn = serde_json::from_slice(&plaintext)
+            .map_err(|e| EncryptedTurnError::SerializationFailed(e.to_string()))?;
+        Ok(turn)
+    }
+
     /// Verify the encrypted turn's metadata consistency (without decryption).
     ///
     /// This checks:
@@ -176,6 +334,14 @@ pub enum EncryptedTurnError {
     DecryptionFailed,
     /// Decrypted turn doesn't match the commitment.
     CommitmentVerificationFailed,
+    /// AEAD encryption failed.
+    EncryptionFailed,
+    /// Postcard serialize/deserialize failed.
+    SerializationFailed(String),
+    /// `getrandom` failed (extremely rare; OS entropy source unavailable).
+    RandomFailed(String),
+    /// Executor has no decryption key configured.
+    NoDecryptionKey,
 }
 
 /// Result of ordering a batch of encrypted turns.
@@ -276,7 +442,9 @@ mod tests {
 
         EncryptedTurn {
             agent,
-            ciphertext: vec![0u8; 64], // dummy
+            ephemeral_public: [0u8; 32], // dummy
+            nonce: [0u8; 12],            // dummy
+            ciphertext: vec![0u8; 64],   // dummy
             turn_commitment,
             conflict_set,
             validity_proof: TurnValidityProof {

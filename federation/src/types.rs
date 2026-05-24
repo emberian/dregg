@@ -553,6 +553,7 @@ pub struct Token {
 // =============================================================================
 
 /// Get current timestamp in seconds (simplified, uses a counter for determinism in demo).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn current_timestamp() -> i64 {
     // In production, this would be real wall-clock time.
     // For the demo, we use an incrementing value based on block height.
@@ -560,4 +561,13 @@ pub fn current_timestamp() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(1700000000)
+}
+
+/// Wasm fallback: `SystemTime::now()` panics on wasm32-unknown-unknown
+/// (no host wall-clock). Callers in the browser drive deterministic time
+/// via `Federation` ticks instead; this function returns a fixed sentinel
+/// so wasm-side construction of an `AttestedRoot` is at least sensible.
+#[cfg(target_arch = "wasm32")]
+pub fn current_timestamp() -> i64 {
+    1_700_000_000
 }

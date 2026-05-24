@@ -16,7 +16,7 @@ use zeroize::Zeroizing;
 
 use pyana_cell::{
     AuthRequired, Cell, CellId, Ledger, Note, NoteCommitment, Nullifier, NullifierSet,
-    RevocationChannel, RevocationChannelSet,
+    PeerExchange, RevocationChannel, RevocationChannelSet,
 };
 use pyana_intent::matcher::{HeldCapability, MatchResult, Sensitivity, match_intent};
 use pyana_intent::{
@@ -24,6 +24,7 @@ use pyana_intent::{
 };
 use pyana_sdk::AgentWallet;
 use pyana_turn::action::Authorization;
+use pyana_turn::builder::ActionBuilder;
 use pyana_turn::conditional::{ConditionalTurn, ProofCondition};
 use pyana_turn::forest::CallTree;
 use pyana_turn::{
@@ -34,6 +35,13 @@ use pyana_turn::{
 /// CellId deterministically as `f(public_key, domain)` so this string is part
 /// of the agent's identity surface.
 const WASM_SIM_DOMAIN: &str = "pyana-wasm-default-domain";
+
+/// Fee charged on the system turn that mints a new cell from the genesis
+/// agent. Must cover the computron cost of `Effect::CreateCell` (~850 with
+/// default costs) plus the optional `Effect::Transfer` to fund the new cell
+/// (~125 extra). 2000 leaves comfortable headroom and is debited from the
+/// genesis agent's balance.
+const GENESIS_MINT_FEE: u64 = 2000;
 
 // ============================================================================
 // Internal state types
@@ -47,7 +55,6 @@ const WASM_SIM_DOMAIN: &str = "pyana-wasm-default-domain";
 /// `held_tokens` here is the `pyana_intent::matcher::HeldCapability` shape
 /// used by the intent matcher — distinct from `wallet.tokens()` which is
 /// the SDK's macaroon-backed `HeldToken`. Both legitimately coexist.
-#[derive(Debug)]
 pub struct SimAgent {
     pub name: String,
     pub wallet: AgentWallet,
@@ -56,17 +63,41 @@ pub struct SimAgent {
     pub held_tokens: Vec<HeldCapability>,
     pub commitment_id: CommitmentId,
     pub token_counter: u64,
+    /// Canonical `PeerExchange` session for this agent. Built once at agent
+    /// creation via `AgentWallet::peer_exchange(WASM_SIM_DOMAIN)`, so the
+    /// signing key used by the exchange is the wallet's real Ed25519 key —
+    /// no JS-side or wasm-side reimplementation. Mutated by `register_peer`,
+    /// `create_transition`, and `verify_transition`.
+    pub peer_exchange: PeerExchange,
 }
 
-// Federation types intentionally removed from the wasm runtime.
+// Federation is now wired via the real `pyana_federation::Federation`.
 //
-// The canonical implementation lives in `pyana_federation` (Federation,
-// FederationNode, FederationReceipt). That crate currently pulls `tokio`
-// (full) and `crossbeam-channel` and so does not cross-compile to wasm32.
-// Rather than reintroduce a parallel "Sim*" set of types that drift from
-// the canonical behavior, the runtime has no federation surface until
-// `pyana_federation` gains a wasm32-compatible feature gate. Federation
-// inspectors in the Studio show a "coming soon" state until then.
+// Previously the wasm runtime held a parallel `SimFederation` / `SimFedNode` /
+// `FedEvent` set of types that didn't reflect canonical behavior. After the
+// pyana-federation crate gained a `runtime` feature gate (which gates the
+// tokio + crossbeam transport — the wasm-incompatible bit), the in-browser
+// runtime constructs and drives the *real* `Federation` / `FederationNode`
+// / `ConsensusOrchestrator` types via their sync API. The async TCP
+// transport remains native-only and is not exposed here.
+//
+// Surface exposed to wasm: `create_federation`, `propose_block` (queue +
+// run_consensus_round), `get_federation_state`, `simulate_consensus_round`.
+// These delegate to the canonical types — no JS-side simulation lives here.
+
+/// A named in-browser federation. The handle the JS UI uses to address a
+/// federation is its index in `PyanaRuntime::federations`; the friendly name
+/// is informational only (used by `<pyana-federation>` for display).
+pub struct SimFederation {
+    pub name: String,
+    pub federation: pyana_federation::Federation,
+    /// History of `propose_block` calls: one entry per call, each a list of
+    /// token IDs that were *submitted* (not necessarily finalized — the
+    /// `Federation::finalized_history` is the source of truth for what
+    /// actually committed). Used by `<pyana-block>` so the inspector can
+    /// surface input intent alongside the canonical `RevocationBlock`.
+    pub submitted_token_ids: Vec<Vec<String>>,
+}
 
 /// A pending conditional turn.
 #[derive(Clone, Debug)]
@@ -105,6 +136,11 @@ pub struct PyanaRuntime {
     pub current_height: u64,
     pub current_timestamp: i64,
     pub receipts: Vec<TurnReceipt>,
+    /// Real `pyana_federation::Federation` instances, addressed by index.
+    /// The Studio's federation/block inspectors read through these — every
+    /// hash, signature, and merkle root surfaced in the UI comes from the
+    /// canonical types, not a JS-side simulation.
+    pub federations: Vec<SimFederation>,
 }
 
 impl PyanaRuntime {
@@ -126,7 +162,65 @@ impl PyanaRuntime {
             current_height: 0,
             current_timestamp: 1000,
             receipts: Vec::new(),
+            federations: Vec::new(),
         }
+    }
+
+    /// Create a new federation with `num_nodes` nodes named `<name>-<idx>`.
+    /// Delegates to `pyana_federation::Federation::new` — the nodes have real
+    /// Ed25519 keypairs, a real Merkle revocation tree, and a real consensus
+    /// state machine. Returns the new federation's index.
+    pub fn create_federation(&mut self, name: &str, num_nodes: usize) -> usize {
+        let node_names: Vec<String> = (0..num_nodes).map(|i| format!("{name}-{i}")).collect();
+        let name_refs: Vec<&str> = node_names.iter().map(|s| s.as_str()).collect();
+        let federation = pyana_federation::Federation::new(&name_refs);
+        let idx = self.federations.len();
+        self.federations.push(SimFederation {
+            name: name.to_string(),
+            federation,
+            submitted_token_ids: Vec::new(),
+        });
+        idx
+    }
+
+    /// Submit a batch of revocation events from node 0 and immediately run a
+    /// consensus round. Returns the finalized block hash and height; `None`
+    /// if consensus didn't finalize (insufficient online nodes, divergence,
+    /// etc.).
+    ///
+    /// Behavioral divergence from the deleted `SimFederation::propose_block`:
+    /// the canonical `Federation::run_consensus_round` requires the leader's
+    /// `pending_events` to be non-empty AND a quorum (n - floor(n/3)) of
+    /// online nodes' votes — not any-N like the sim. With a single submission
+    /// here (all events submitted to node 0 then drained to the leader), a
+    /// freshly created federation of N >= 1 nodes will normally finalize on
+    /// the first call.
+    pub fn propose_block(&mut self, fed_index: usize, token_ids: Vec<String>) -> Option<[u8; 32]> {
+        let fed = self.federations.get_mut(fed_index)?;
+        // Submit each token-id revocation from node 0 (the initial leader).
+        for tid in &token_ids {
+            fed.federation.submit_revocation(0, tid);
+        }
+        fed.submitted_token_ids.push(token_ids);
+        let (block, _qc) = fed.federation.run_consensus_round()?;
+        Some(block.block_hash)
+    }
+
+    /// Run an additional consensus round (e.g. to flush any pending events
+    /// submitted out-of-band). Returns the finalized block hash + height +
+    /// view + event count, or `None` if the round didn't finalize.
+    pub fn simulate_consensus_round(&mut self, fed_index: usize) -> Option<ConsensusRoundResult> {
+        let fed = self.federations.get_mut(fed_index)?;
+        let (block, qc) = fed.federation.run_consensus_round()?;
+        Some(ConsensusRoundResult {
+            block_hash: hex_encode_bytes(&block.block_hash),
+            height: block.height,
+            view: block.view,
+            num_events: block.events.len(),
+            proposer: block.proposer,
+            qc_threshold: qc.threshold,
+            qc_votes: qc.votes.len(),
+        })
     }
 
     /// Create an agent with a name. The Ed25519 key is derived deterministically
@@ -137,7 +231,28 @@ impl PyanaRuntime {
     /// This is not a sim-shaped reimplementation; the wallet IS the canonical
     /// implementation, just constructed with a deterministic seed for
     /// reproducibility.
+    ///
+    /// # Cell birth
+    ///
+    /// The **first** agent (idx 0) is the genesis agent: its cell is inserted
+    /// directly into the ledger. This mirrors `pyana_node::genesis`'s
+    /// `initial_cells` field — there must be at least one cell before any turn
+    /// can run, because a turn is always issued by some existing cell.
+    ///
+    /// **Subsequent** agents are minted from genesis via a real turn that emits
+    /// `Effect::CreateCell` (and, if `initial_balance > 0`, `Effect::Transfer`
+    /// from genesis). The executor requires `CreateCell` to have `balance: 0`
+    /// (see `turn::executor::Effect::CreateCell` arm), so we always pass 0 and
+    /// fund the new cell with a follow-up Transfer effect within the same turn.
     pub fn create_agent(&mut self, name: &str, initial_balance: u64) -> usize {
+        self.try_create_agent(name, initial_balance)
+            .unwrap_or_else(|e| panic!("create_agent failed: {e}"))
+    }
+
+    /// Fallible cell-creation path. Same as [`create_agent`] but returns a
+    /// String error rather than panicking, so wasm bindings can surface the
+    /// error to JS rather than triggering an `unreachable` trap.
+    pub fn try_create_agent(&mut self, name: &str, initial_balance: u64) -> Result<usize, String> {
         let idx = self.agents.len();
 
         // Deterministic Ed25519 seed.
@@ -154,12 +269,59 @@ impl PyanaRuntime {
         let wallet = AgentWallet::from_key_bytes(Zeroizing::new(seed_bytes));
         let public_key = wallet.public_key().0;
         let cell_id = wallet.cell_id(WASM_SIM_DOMAIN);
-
-        // Create the cell in the ledger. (Genesis-by-fiat for now; eventual
-        // refactor is to mint cells via Effect::CreateCell. See task #15.)
         let token_id: [u8; 32] = *blake3::hash(WASM_SIM_DOMAIN.as_bytes()).as_bytes();
-        let cell = Cell::with_balance(public_key, token_id, initial_balance);
-        self.ledger.insert_cell(cell).unwrap();
+
+        if idx == 0 {
+            // Genesis: insert the root cell directly. This is the same pattern
+            // pyana-node uses (see node/src/genesis.rs::initial_cells).
+            let cell = Cell::with_balance(public_key, token_id, initial_balance);
+            self.ledger.insert_cell(cell).unwrap();
+        } else {
+            // Subsequent agents: mint the cell via a real turn issued by the
+            // genesis agent (agent 0). This goes through the canonical
+            // Effect::CreateCell + Effect::Transfer path.
+            //
+            // Register the SimAgent first so its CellId/wallet are visible to
+            // the executor (the new cell must exist before Transfer targets
+            // it — but `Effect::CreateCell` runs before `Effect::Transfer`
+            // within the same action's effect list, so we're fine).
+            let mut effects = vec![Effect::CreateCell {
+                public_key,
+                token_id,
+                balance: 0,
+            }];
+            if initial_balance > 0 {
+                effects.push(Effect::Transfer {
+                    from: self.agents[0].cell_id,
+                    to: cell_id,
+                    amount: initial_balance,
+                });
+            }
+
+            // Execute the turn signed by genesis. We must pay a fee large
+            // enough to cover the turn's computrons: with default costs,
+            // action_base(100) + signature_verify(200) + effect_base(50) +
+            // create_cell(500) ≈ 850 for CreateCell alone, plus another
+            // effect_base(50) + transfer(75) when funding. We round up to
+            // GENESIS_MINT_FEE for headroom. The fee is debited from the
+            // genesis cell's balance, which is why genesis should be seeded
+            // with enough to cover all subsequent agent mints.
+            match self.execute_turn_for_agent(0, effects, GENESIS_MINT_FEE) {
+                TurnResult::Committed { .. } => {}
+                other => {
+                    return Err(format!(
+                        "minting cell for '{name}' via Effect::CreateCell failed: {:?}",
+                        other
+                    ));
+                }
+            }
+        }
+
+        // Build the canonical `PeerExchange` for this agent using the wallet's
+        // real Ed25519 signing key. `AgentWallet::peer_exchange(domain)` is
+        // the SDK's factory — same code path the native API uses — so we do
+        // not need a public signing-key accessor on the wallet.
+        let peer_exchange = wallet.peer_exchange(WASM_SIM_DOMAIN);
 
         let agent = SimAgent {
             name: name.to_string(),
@@ -169,11 +331,55 @@ impl PyanaRuntime {
             held_tokens: Vec::new(),
             commitment_id,
             token_counter: 0,
+            peer_exchange,
         };
 
         self.agent_names.insert(name.to_string(), idx);
         self.agents.push(agent);
-        idx
+        Ok(idx)
+    }
+
+    /// Mint a cell from a raw public key (used by the wasm `create_cell` JS
+    /// binding). Uses the same factory-turn mechanism as subsequent
+    /// `create_agent` calls: a turn signed by the genesis agent that emits
+    /// `Effect::CreateCell` + (optional) `Effect::Transfer`.
+    ///
+    /// Returns the new cell's `CellId`. Requires at least one prior agent
+    /// (the genesis agent, idx 0) to exist as the signer.
+    pub fn mint_cell_from_genesis(
+        &mut self,
+        owner_public_key: [u8; 32],
+        initial_balance: u64,
+    ) -> Result<CellId, String> {
+        if self.agents.is_empty() {
+            return Err(
+                "wasm runtime: cannot mint cell — no genesis agent yet (call create_agent first)"
+                    .to_string(),
+            );
+        }
+        let token_id: [u8; 32] = *blake3::hash(WASM_SIM_DOMAIN.as_bytes()).as_bytes();
+        let new_cell_id = CellId::derive_raw(&owner_public_key, &token_id);
+
+        let mut effects = vec![Effect::CreateCell {
+            public_key: owner_public_key,
+            token_id,
+            balance: 0,
+        }];
+        if initial_balance > 0 {
+            effects.push(Effect::Transfer {
+                from: self.agents[0].cell_id,
+                to: new_cell_id,
+                amount: initial_balance,
+            });
+        }
+
+        match self.execute_turn_for_agent(0, effects, GENESIS_MINT_FEE) {
+            TurnResult::Committed { .. } => Ok(new_cell_id),
+            other => Err(format!(
+                "wasm runtime: mint_cell_from_genesis failed: {:?}",
+                other
+            )),
+        }
     }
 
     /// Mint a token for an agent (adds to their held_tokens for intent matching).
@@ -250,10 +456,11 @@ impl PyanaRuntime {
         builder.set_fee(fee);
 
         {
-            let action = builder.action(cell_id, "execute");
+            let mut ab = ActionBuilder::new_unchecked_for_tests(cell_id, "execute", cell_id);
             for effect in effects {
-                action.effect(effect);
+                ab = ab.effect(effect);
             }
+            builder.add_action(ab.build());
         }
 
         let mut turn = builder.build();
@@ -325,11 +532,9 @@ impl PyanaRuntime {
         Ok(nullifier)
     }
 
-    // create_federation / propose_block / simulate_consensus_round removed:
-    // they backed wasm-fictional federation/consensus that didn't reflect
-    // pyana_federation::{Federation, FederationNode, FederationReceipt}.
-    // Federation views in the Studio show "awaiting pyana-federation wasm32
-    // support" until that crate gains the same feature surgery pyana-sdk got.
+    // create_federation / propose_block / simulate_consensus_round are
+    // defined above (alongside the federations field initializer) and
+    // delegate to the real `pyana_federation::Federation` API.
 
     /// Create an intent.
     pub fn create_intent(
@@ -390,10 +595,11 @@ impl PyanaRuntime {
         let mut builder = TurnBuilder::new(cell_id, nonce);
         builder.set_fee(fee);
         {
-            let action = builder.action(cell_id, "conditional");
+            let mut ab = ActionBuilder::new_unchecked_for_tests(cell_id, "conditional", cell_id);
             for effect in effects {
-                action.effect(effect);
+                ab = ab.effect(effect);
             }
+            builder.add_action(ab.build());
         }
         let turn = builder.build();
         let turn_hash = turn.hash();
@@ -457,9 +663,179 @@ impl PyanaRuntime {
             .map(|ch| ch.state.is_active())
             .unwrap_or(false)
     }
+
+    // =========================================================================
+    // PeerExchange (canonical sovereign-cell peer protocol)
+    //
+    // These methods are thin facades over `pyana_cell::PeerExchange` stored on
+    // each `SimAgent`. The bindings layer doesn't reach into the agent's
+    // `peer_exchange` field directly — it goes through these. All cryptography
+    // and protocol logic lives inside the canonical `PeerExchange` type, no
+    // reimplementation here.
+    // =========================================================================
+
+    /// Register a peer cell with an initial commitment from the agent's POV.
+    /// Required before `verify_peer_transition` will accept transitions from
+    /// that peer (canonical `PeerExchange::register_peer` semantics — the
+    /// initial commitment is the "introduction" the two peers must agree on
+    /// out-of-band).
+    pub fn agent_register_peer(
+        &mut self,
+        agent_idx: usize,
+        peer_cell_id: CellId,
+        initial_commitment: [u8; 32],
+    ) -> Result<(), String> {
+        let agent = self
+            .agents
+            .get_mut(agent_idx)
+            .ok_or_else(|| format!("invalid agent index: {agent_idx}"))?;
+        agent
+            .peer_exchange
+            .register_peer(peer_cell_id, initial_commitment);
+        Ok(())
+    }
+
+    /// Sign and package a state transition from this agent's exchange session.
+    /// Returns the postcard-encoded `PeerStateTransition` bytes — the compact
+    /// signed blob meant for the "Discord paste" UX. Mutates the agent's
+    /// internal sequence counter.
+    pub fn agent_create_peer_transition(
+        &mut self,
+        agent_idx: usize,
+        old_commitment: [u8; 32],
+        new_commitment: [u8; 32],
+        effects_hash: [u8; 32],
+    ) -> Result<Vec<u8>, String> {
+        // PeerExchange's `create_transition` reads the system clock via
+        // `SystemTime::now()`, which panics on wasm32-unknown-unknown. We
+        // use the explicit-timestamp variant and feed it the runtime's
+        // canonical clock (`current_timestamp`, in seconds — matching the
+        // `i64` shape PeerExchange already uses).
+        let ts = self.current_timestamp;
+        let agent = self
+            .agents
+            .get_mut(agent_idx)
+            .ok_or_else(|| format!("invalid agent index: {agent_idx}"))?;
+        let transition = agent.peer_exchange.create_transition_at(
+            old_commitment,
+            new_commitment,
+            effects_hash,
+            ts,
+        );
+        postcard::to_stdvec(&transition)
+            .map_err(|e| format!("failed to encode peer transition: {e}"))
+    }
+
+    /// Verify a transition from a peer (postcard-decoded inside). On success
+    /// the agent's `peer_views` is updated to the new commitment + sequence
+    /// and the updated view is returned. On failure returns the typed
+    /// variant name (e.g. `"InvalidSignature"`) alongside the human-readable
+    /// display so JS can switch on the variant for UX.
+    pub fn agent_verify_peer_transition(
+        &mut self,
+        agent_idx: usize,
+        transition_bytes: &[u8],
+        peer_pubkey: [u8; 32],
+    ) -> Result<pyana_cell::PeerCellView, (String, String)> {
+        let agent = self.agents.get_mut(agent_idx).ok_or_else(|| {
+            (
+                "InvalidAgent".to_string(),
+                format!("invalid agent index: {agent_idx}"),
+            )
+        })?;
+        let transition: pyana_cell::PeerStateTransition = postcard::from_bytes(transition_bytes)
+            .map_err(|e| {
+                (
+                    "DecodeError".to_string(),
+                    format!("failed to decode peer transition: {e}"),
+                )
+            })?;
+        let peer_cell_id = transition.cell_id;
+        agent
+            .peer_exchange
+            .verify_transition(&transition, &peer_pubkey)
+            .map_err(|e| (peer_exchange_error_variant(&e), e.to_string()))?;
+        Ok(agent
+            .peer_exchange
+            .peer_view(&peer_cell_id)
+            .cloned()
+            .expect("verify_transition succeeded; view must exist"))
+    }
+
+    /// Get the agent's current view of a peer cell (commitment + sequence +
+    /// last-updated). Returns `None` if not registered.
+    pub fn agent_get_peer_view(
+        &self,
+        agent_idx: usize,
+        peer_cell_id: CellId,
+    ) -> Result<Option<pyana_cell::PeerCellView>, String> {
+        let agent = self
+            .agents
+            .get(agent_idx)
+            .ok_or_else(|| format!("invalid agent index: {agent_idx}"))?;
+        Ok(agent.peer_exchange.peer_view(&peer_cell_id).cloned())
+    }
+
+    /// List all peer cell ids the agent has registered.
+    pub fn agent_list_peers(&self, agent_idx: usize) -> Result<Vec<CellId>, String> {
+        let agent = self
+            .agents
+            .get(agent_idx)
+            .ok_or_else(|| format!("invalid agent index: {agent_idx}"))?;
+        Ok(agent.peer_exchange.registered_peers().collect())
+    }
+
+    /// Get this agent's PeerExchange public key. Equivalent to the wallet's
+    /// Ed25519 verifying key — sourced from the exchange so the binding is
+    /// self-contained.
+    pub fn agent_peer_pubkey(&self, agent_idx: usize) -> Result<[u8; 32], String> {
+        let agent = self
+            .agents
+            .get(agent_idx)
+            .ok_or_else(|| format!("invalid agent index: {agent_idx}"))?;
+        Ok(agent.peer_exchange.public_key())
+    }
+
+    /// Read the current canonical state-commitment of a cell. Convenience
+    /// for the peer-exchange flow: a sender needs the post-state commitment
+    /// after running a turn, and the receiver needs an initial commitment
+    /// to register the peer with. Goes through `Cell::state_commitment()`,
+    /// the canonical sovereign-witness commitment function.
+    pub fn cell_state_commitment(&self, cell_id: &CellId) -> Option<[u8; 32]> {
+        self.ledger.get(cell_id).map(|c| c.state_commitment())
+    }
 }
 
-// ConsensusRoundResult removed alongside simulate_consensus_round.
+/// Map a `PeerExchangeError` to its variant name (without payload), used by
+/// the bindings to surface a typed error code to JS alongside the
+/// human-readable message.
+fn peer_exchange_error_variant(e: &pyana_cell::PeerExchangeError) -> String {
+    use pyana_cell::PeerExchangeError as E;
+    match e {
+        E::InvalidSignature => "InvalidSignature",
+        E::CommitmentMismatch { .. } => "CommitmentMismatch",
+        E::SequenceGap { .. } => "SequenceGap",
+        E::TimestampRegression => "TimestampRegression",
+        E::UnknownPeer(_) => "UnknownPeer",
+        E::InvalidTransitionProof(_) => "InvalidTransitionProof",
+    }
+    .to_string()
+}
+
+/// One-shot summary of a finalized consensus round, suitable for JS-side
+/// rendering. The fields surface what's actually on the
+/// `pyana_federation::RevocationBlock` + `QuorumCertificate` returned from
+/// `Federation::run_consensus_round` — no inferred values.
+#[derive(Clone, Debug, Serialize)]
+pub struct ConsensusRoundResult {
+    pub block_hash: String,
+    pub height: u64,
+    pub view: u64,
+    pub num_events: usize,
+    pub proposer: usize,
+    pub qc_threshold: usize,
+    pub qc_votes: usize,
+}
 
 /// Walk the turn's call forest and replace every `Authorization::Unchecked`
 /// with a real Ed25519 signature via `AgentWallet::sign_action`. Existing
@@ -484,4 +860,17 @@ fn sign_call_tree(tree: &mut CallTree, wallet: &AgentWallet, federation_id: &[u8
     for child in &mut tree.children {
         sign_call_tree(child, wallet, federation_id);
     }
+}
+
+/// Lowercase hex encode without pulling the `hex` crate (which isn't a
+/// direct wasm dep). The bindings module has its own copy; this one is
+/// internal to runtime so `ConsensusRoundResult` can hold a pre-encoded
+/// hash string.
+fn hex_encode_bytes(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push(char::from_digit((b >> 4) as u32, 16).unwrap());
+        out.push(char::from_digit((b & 0x0f) as u32, 16).unwrap());
+    }
+    out
 }

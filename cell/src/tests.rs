@@ -966,6 +966,7 @@ fn default_eval_ctx() -> EvalContext {
     EvalContext {
         block_height: 100,
         timestamp: 1700000000,
+        ..Default::default()
     }
 }
 
@@ -1113,6 +1114,7 @@ fn preconditions_network_min_height() {
     let ctx = EvalContext {
         block_height: 30,
         timestamp: 0,
+        ..Default::default()
     };
     let err = pre.evaluate(&state, &ctx).unwrap_err();
     assert_eq!(
@@ -1138,6 +1140,7 @@ fn preconditions_network_max_height() {
     let ctx = EvalContext {
         block_height: 100,
         timestamp: 0,
+        ..Default::default()
     };
     let err = pre.evaluate(&state, &ctx).unwrap_err();
     assert_eq!(
@@ -1159,6 +1162,7 @@ fn preconditions_time_range_valid() {
     let ctx = EvalContext {
         block_height: 100,
         timestamp: 1700000000,
+        ..Default::default()
     };
     assert!(pre.evaluate(&state, &ctx).is_ok());
 }
@@ -1173,6 +1177,7 @@ fn preconditions_time_range_expired() {
     let ctx = EvalContext {
         block_height: 100,
         timestamp: 1700000000,
+        ..Default::default()
     };
     let err = pre.evaluate(&state, &ctx).unwrap_err();
     assert_eq!(
@@ -1195,6 +1200,7 @@ fn preconditions_time_range_not_yet_valid() {
     let ctx = EvalContext {
         block_height: 100,
         timestamp: 1700000000,
+        ..Default::default()
     };
     let err = pre.evaluate(&state, &ctx).unwrap_err();
     matches!(err, PreconditionError::TimeOutOfRange { .. });
@@ -1221,6 +1227,7 @@ fn preconditions_combined_all_pass() {
     let ctx = EvalContext {
         block_height: 100,
         timestamp: 1700000000,
+        ..Default::default()
     };
     assert!(pre.evaluate(&state, &ctx).is_ok());
 }

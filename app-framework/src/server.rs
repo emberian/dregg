@@ -138,6 +138,10 @@ pub struct AppServer {
     /// `Extension<AppWallet>` so handlers can sign actions through the
     /// framework.
     wallet: Option<crate::wallet::AppWallet>,
+    /// Embedded executor handle. When set, it is installed as an axum
+    /// `Extension<EmbeddedExecutor>` so handlers can submit signed turns
+    /// to a private ledger and get back real `TurnReceipt`s.
+    executor: Option<crate::wallet::EmbeddedExecutor>,
 }
 
 impl AppServer {
@@ -149,6 +153,7 @@ impl AppServer {
             service_name: "pyana-app".into(),
             pending_registration: None,
             wallet: None,
+            executor: None,
         }
     }
 
@@ -169,6 +174,37 @@ impl AppServer {
     /// builder (e.g. for shared state construction).
     pub fn wallet(&self) -> Option<&crate::wallet::AppWallet> {
         self.wallet.as_ref()
+    }
+
+    /// Install an embedded [`EmbeddedExecutor`](crate::wallet::EmbeddedExecutor)
+    /// as an axum `Extension<EmbeddedExecutor>` layer.
+    ///
+    /// Handlers can then extract it via
+    /// `axum::Extension<EmbeddedExecutor>` and submit signed actions/turns
+    /// through it, getting back real `TurnReceipt`s — no more "action
+    /// authored and dropped on the floor" pattern (closing
+    /// `APPS-USERSPACE-GAPS.md` §Gap 4, the load-bearing one).
+    ///
+    /// Typical wiring in an app's `main.rs`:
+    /// ```ignore
+    /// let wallet = AppWallet::new(AgentWallet::new(), federation_id);
+    /// let executor = EmbeddedExecutor::new(wallet.clone(), "my-domain");
+    /// AppServer::new(config)
+    ///     .with_wallet(wallet)
+    ///     .with_embedded_executor(executor)
+    ///     .routes(my_routes)
+    ///     .serve()
+    ///     .await
+    /// ```
+    pub fn with_embedded_executor(mut self, executor: crate::wallet::EmbeddedExecutor) -> Self {
+        self.router = self.router.layer(axum::Extension(executor.clone()));
+        self.executor = Some(executor);
+        self
+    }
+
+    /// Get a reference to the installed embedded executor, if any.
+    pub fn embedded_executor(&self) -> Option<&crate::wallet::EmbeddedExecutor> {
+        self.executor.as_ref()
     }
 
     /// Set the service name (used in health responses and startup logging).

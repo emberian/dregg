@@ -74,7 +74,9 @@
 //! 4. Recipient presents the certificate to the target.
 //! 5. Target validates and creates a routing entry.
 
-use serde::{Deserialize, Serialize};
+// Re-export the canonical FederationId from pyana-types so all crates agree
+// on the identifier (see FEDERATION-UNIFICATION-DESIGN.md §2).
+pub use pyana_types::FederationId;
 
 pub mod gc;
 pub mod handoff;
@@ -104,24 +106,9 @@ pub use uri::{PyanaUri, UriError};
 // Shared types
 // =============================================================================
 
-/// Identifies a federation (or reference group) in the CapTP protocol.
-///
-/// Currently a 32-byte value (typically derived from the federation's public key
-/// or a BLAKE3 hash of its identity material).
-///
-/// # Unified Lace Model
-///
-/// In the unified blocklace model, a "federation" is simply a *reference group*
-/// (a set of strands with shared ordering over a single DAG). This type is
-/// semantically equivalent to `blocklace::addressing::GroupId`. CapTP sessions
-/// are ultimately between strands (bilateral), but `FederationId` remains as
-/// the routing-level group identifier for backward compatibility.
-///
-/// See `blocklace::addressing::FabricAddress` for the full addressing taxonomy.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct FederationId(pub [u8; 32]);
-
 /// Type alias: in the unified lace model, a FederationId is equivalent to a GroupId.
+///
+/// See `pyana_types::FederationId` for the canonical definition.
 pub type GroupId = FederationId;
 
 /// Identifies a strand (a single participant's append-only log) in the blocklace.
@@ -133,29 +120,3 @@ pub type GroupId = FederationId;
 /// This is used as the key for GC tracking (who holds a reference) and session
 /// addressing (which strand we are talking to).
 pub type StrandId = [u8; 32];
-
-impl std::fmt::Debug for FederationId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "FedId({})",
-            self.0[..4]
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>()
-        )
-    }
-}
-
-impl std::fmt::Display for FederationId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            self.0[..8]
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>()
-        )
-    }
-}

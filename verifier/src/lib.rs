@@ -2,15 +2,20 @@
 //!
 //! # Design intent
 //!
-//! This crate deliberately imports ONLY from `pyana-circuit` (for cryptographic
-//! verification) and `pyana-types` (for CellId / PublicKey primitives).
-//! It MUST NOT import from `pyana-turn`, `pyana-node`, or any crate that
-//! carries prover state (ledger, executor, program registry).
+//! This crate imports `pyana-circuit` + `pyana-types` (the v1 minimum), plus
+//! `pyana-turn` + `pyana-federation` + `pyana-captp` so the
+//! `verify-cross-fed-bundle` subcommand can deserialize and verify a
+//! [`pyana_federation::CrossFedReceiptBundle`] end-to-end. It MUST NOT
+//! import from `pyana-node`, `pyana-wire`, or any crate that carries
+//! ledger / executor / program-registry state.
 //!
 //! The invariant: a verifier process can run in a completely separate OS process
 //! with no shared memory, no shared mutable state, and no callbacks into a
 //! prover. It reads bytes from disk (or stdin), runs cryptographic verification,
-//! and exits. This is the "Charlie" role described in `06-the-real-demo.md`.
+//! and exits. `pyana-federation` is depended on with
+//! `default-features = false` so no tokio runtime is pulled — the verifier
+//! stays single-threaded and synchronous. This is the "Charlie" role
+//! described in `06-the-real-demo.md`.
 //!
 //! # Verification key registry (v1)
 //!
@@ -21,6 +26,11 @@
 use pyana_circuit::stark::StarkAir;
 use pyana_circuit::{EffectVmAir, field::BabyBear, stark};
 use serde::{Deserialize, Serialize};
+
+pub mod cross_fed;
+pub use cross_fed::{
+    CommitteeDescriptor, CrossFedVerdict, ValidatorDescriptor, verify_cross_fed_bundle,
+};
 
 // ---------------------------------------------------------------------------
 // Public types

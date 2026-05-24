@@ -31,6 +31,11 @@ pub use pyana_circuit::dsl::temporal_absence;
 // beyond what pyana_circuit::dsl already provides).
 pub mod composition;
 
+/// Algebraic witness-construction helpers used by `gen_diff_test`-emitted
+/// proptests and by the cross-backend differential harness in
+/// `pyana-dsl-differential`.
+pub mod diff_witness;
+
 // Re-export composition primitives.
 #[allow(deprecated)]
 pub use composition::{

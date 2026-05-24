@@ -34,6 +34,7 @@ use pyana_commit::poseidon2_tree::{Poseidon2MerkleTree, commitment_to_field};
 use pyana_dsl_runtime::note_spending::{prove_note_spend, verify_note_spend};
 use pyana_sdk::wallet::{AgentWallet, AuthorizationPresentation, VerificationMode};
 use pyana_token::{Attenuation, AuthRequest, AuthToken, MacaroonToken};
+use pyana_turn::builder::ActionBuilder;
 use pyana_turn::{
     ComputronCosts, ConditionProof, ConditionalResult, ConditionalTurn, DelegationMode, Effect,
     ProofCondition, TrustedRoot, TurnBuilder, TurnExecutor, TurnReceipt, TurnResult,
@@ -673,15 +674,15 @@ fn test_full_cross_federation_conditional_swap() {
     let executor_b = TurnExecutor::new(ComputronCosts::default_costs());
     let mut bob_turn_builder = TurnBuilder::new(bob_id, 0);
     bob_turn_builder.set_fee(1000);
-    {
-        let action = bob_turn_builder.action(target_b_id, "transfer");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new_unchecked_for_tests(target_b_id, "transfer", bob_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: target_b_id,
             index: 0,
             value: *blake3::hash(b"bob-sent-100-to-alice").as_bytes(),
-        });
-    }
+        })
+        .build();
+    bob_turn_builder.add_action(action);
     let bob_turn = bob_turn_builder.build();
     let bob_turn_hash = bob_turn.hash();
 
@@ -703,15 +704,15 @@ fn test_full_cross_federation_conditional_swap() {
     // Alice's transfer executes IFF Bob's turn receipt is presented
     let mut alice_turn_builder = TurnBuilder::new(alice_id, 0);
     alice_turn_builder.set_fee(1000);
-    {
-        let action = alice_turn_builder.action(target_a_id, "transfer");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new_unchecked_for_tests(target_a_id, "transfer", alice_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: target_a_id,
             index: 0,
             value: *blake3::hash(b"alice-sent-50-to-bob").as_bytes(),
-        });
-    }
+        })
+        .build();
+    alice_turn_builder.add_action(action);
     let alice_turn = alice_turn_builder.build();
 
     let conditional = ConditionalTurn {
@@ -874,15 +875,15 @@ fn test_full_delegation_and_revocation() {
     let child_key = test_key("child");
     let mut spawn_turn_builder = TurnBuilder::new(parent_id, 0);
     spawn_turn_builder.set_fee(1000);
-    {
-        let action = spawn_turn_builder.action(parent_id, "spawn");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::SpawnWithDelegation {
+    let action = ActionBuilder::new_unchecked_for_tests(parent_id, "spawn", parent_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::SpawnWithDelegation {
             child_public_key: child_key,
             child_token_id: token_id,
             max_staleness: 3600, // 1 hour
-        });
-    }
+        })
+        .build();
+    spawn_turn_builder.add_action(action);
     let spawn_turn = spawn_turn_builder.build();
     let spawn_result = executor.execute(&spawn_turn, &mut ledger);
 
@@ -929,15 +930,15 @@ fn test_full_delegation_and_revocation() {
 
     let mut child_turn_builder = TurnBuilder::new(child_id, 0);
     child_turn_builder.set_fee(1000);
-    {
-        let action = child_turn_builder.action(target_id, "write");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new_unchecked_for_tests(target_id, "write", child_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: target_id,
             index: 0,
             value: *blake3::hash(b"child-wrote-this").as_bytes(),
-        });
-    }
+        })
+        .build();
+    child_turn_builder.add_action(action);
     let child_turn = child_turn_builder.build();
     let child_result = executor.execute(&child_turn, &mut ledger);
     match &child_result {
@@ -998,15 +999,15 @@ fn test_full_delegation_and_revocation() {
     // Child exercises the newly-refreshed cap
     let mut child_turn2_builder = TurnBuilder::new(child_id, 1);
     child_turn2_builder.set_fee(1000);
-    {
-        let action = child_turn2_builder.action(new_target_id, "write");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::SetField {
+    let action = ActionBuilder::new_unchecked_for_tests(new_target_id, "write", child_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::SetField {
             cell: new_target_id,
             index: 0,
             value: *blake3::hash(b"child-used-new-cap").as_bytes(),
-        });
-    }
+        })
+        .build();
+    child_turn2_builder.add_action(action);
     let child_turn2 = child_turn2_builder.build();
     let child_result2 = executor.execute(&child_turn2, &mut ledger);
     assert!(
@@ -1018,11 +1019,11 @@ fn test_full_delegation_and_revocation() {
     // Simulate revocation: parent bumps its delegation epoch
     let mut revoke_turn_builder = TurnBuilder::new(parent_id, 1);
     revoke_turn_builder.set_fee(1000);
-    {
-        let action = revoke_turn_builder.action(parent_id, "revoke");
-        action.delegation(DelegationMode::None);
-        action.effect(Effect::RevokeDelegation { child: child_id });
-    }
+    let action = ActionBuilder::new_unchecked_for_tests(parent_id, "revoke", parent_id)
+        .delegation(DelegationMode::None)
+        .effect(Effect::RevokeDelegation { child: child_id })
+        .build();
+    revoke_turn_builder.add_action(action);
     let revoke_turn = revoke_turn_builder.build();
     let revoke_result = executor.execute(&revoke_turn, &mut ledger);
     assert!(
