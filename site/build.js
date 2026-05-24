@@ -102,7 +102,22 @@ function processLayouts(content, currentFile) {
   }
   let layout = fs.readFileSync(p, 'utf-8');
   layout = processIncludes(layout, path.relative(SRC, p));
-  return layout.replace('{{ content }}', inner.trim());
+
+  // Extract a per-page <title> from the page body so the layout can hoist it
+  // into <head>. Pages declare it as `<title>Foo — Pyana</title>` anywhere
+  // inside the layout slot; the build strips it out and substitutes it into
+  // `{{ title }}` in the layout. Pages without a title fall back to "Pyana".
+  let pageTitle = 'Pyana';
+  let innerWithoutTitle = inner;
+  const titleMatch = inner.match(/<title>([\s\S]*?)<\/title>/);
+  if (titleMatch) {
+    pageTitle = titleMatch[1].trim();
+    innerWithoutTitle = inner.replace(titleMatch[0], '');
+  }
+
+  return layout
+    .replace('{{ title }}', pageTitle)
+    .replace('{{ content }}', innerWithoutTitle.trim());
 }
 
 function highlightCode(content) {
