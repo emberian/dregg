@@ -118,16 +118,21 @@ def run_exercise(args) -> int:
         # the standalone artifact for charlie.py / pyana-verifier.
         exercise_proof_hex = exercise.get("effect_vm_proof_hex")
         exercise_proof_pi = exercise.get("effect_vm_public_inputs") or []
+        exercise_trace_rows = exercise.get("effect_vm_trace_rows") or []
+        exercise_witness_hash = exercise.get("effect_vm_witness_hash_hex") or ""
         if exercise_proof_hex:
             (state_dir / "exercise.proof.json").write_text(json.dumps({
                 "proof_hex":     exercise_proof_hex,
                 "public_inputs": exercise_proof_pi,
+                "trace_rows":    exercise_trace_rows,
+                "witness_hash_hex": exercise_witness_hash,
                 "vk_hash":       "auto",
                 "source":        "pyana_exercise_bearer_cap",
             }, indent=2))
             print(f"[bob] wrote exercise proof artifact "
                   f"({len(exercise_proof_hex) // 2} proof bytes, "
-                  f"{len(exercise_proof_pi)} public inputs)", file=sys.stderr)
+                  f"{len(exercise_proof_pi)} public inputs, "
+                  f"{len(exercise_trace_rows)} trace rows)", file=sys.stderr)
         else:
             print("[bob] WARNING: exercise turn returned no effect_vm_proof_hex",
                   file=sys.stderr)

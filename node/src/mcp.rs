@@ -162,19 +162,29 @@ fn build_signed_forest(
 /// Builds a fresh `CellState` from `(initial_balance, initial_nonce)`, runs the
 /// effect VM trace generator, constructs the `EffectVmAir` sized to the effect
 /// count, and produces a STARK proof. Returns the hex-encoded postcard-serialized
-/// proof bytes and the public inputs converted to `u64` (BabyBear canonical
+/// proof bytes, the public inputs converted to `u64` (BabyBear canonical
 /// values fit in u32, so the JSON array is friendly to the independent verifier
-/// which parses public inputs as u32).
+/// which parses public inputs as u32), the trace as a `Vec<Vec<u32>>` for
+/// scope-(2) WitnessedReceipt capture, and the BLAKE3 witness_hash of the
+/// postcard-serialised `WitnessBundle::Inline` (hex-encoded) so demo scripts
+/// can forward it verbatim into the on-disk replay chain.
 ///
-/// If `vm_effects` is empty, returns `(String::new(), vec![])` — the caller
-/// decides whether to omit the proof field or signal a warning.
+/// Stage 7 / §C: returning the trace + witness_hash lets the MCP tool emit
+/// scope-(2) WitnessedReceipts. The MCP layer ships these to the demo
+/// scripts; the verifier-side `replay_chain` reconstructs `BabyBear` cells
+/// via `BabyBear::new_canonical` and re-derives the witness_hash to check
+/// the binding.
+///
+/// If `vm_effects` is empty, returns
+/// `(String::new(), vec![], vec![], String::new())` — the caller decides
+/// whether to omit the proof field or signal a warning.
 fn generate_effect_vm_proof(
     initial_balance: u64,
     initial_nonce: u64,
     vm_effects: &[pyana_circuit::effect_vm::Effect],
-) -> (String, Vec<u64>) {
+) -> (String, Vec<u64>, Vec<Vec<u32>>, String) {
     if vm_effects.is_empty() {
-        return (String::new(), Vec::new());
+        return (String::new(), Vec::new(), Vec::new(), String::new());
     }
 
     let initial_state =
@@ -194,7 +204,14 @@ fn generate_effect_vm_proof(
     let proof_hex = hex_encode(&proof_bytes);
     let public_inputs_u64: Vec<u64> =
         public_inputs.iter().map(|f| f.as_u32() as u64).collect();
-    (proof_hex, public_inputs_u64)
+    // Build the canonical WitnessBundle::Inline so we can both ship the
+    // trace shape and compute its BLAKE3 hash via the canonical
+    // postcard-serialised form. The demo writes both to disk; the verifier
+    // re-derives the hash to enforce binding.
+    let bundle = pyana_turn::WitnessBundle::inline_from_trace(&trace);
+    let trace_rows = bundle.trace_rows.clone();
+    let witness_hash_hex = hex_encode(&bundle.witness_hash());
+    (proof_hex, public_inputs_u64, trace_rows, witness_hash_hex)
 }
 
 // =============================================================================
@@ -1320,14 +1337,14 @@ async fn tool_grant_capability(params: &Value, state: &NodeState) -> McpToolResu
                 cap_entry: pyana_circuit::BabyBear::new(cap_slot.wrapping_add(1)),
             }];
 
-            let (proof_hex, public_inputs) = match pre_state {
+            let (proof_hex, public_inputs, trace_rows, witness_hash_hex) = match pre_state {
                 Some((bal, nonce)) => generate_effect_vm_proof(bal, nonce, &vm_effects),
                 None => {
                     eprintln!(
                         "tool_grant_capability: agent cell {} not in ledger; skipping Effect VM proof",
                         hex_encode(&agent_cell_id.0)
                     );
-                    (String::new(), Vec::new())
+                    (String::new(), Vec::new(), Vec::new(), String::new())
                 }
             };
 
@@ -1335,6 +1352,20 @@ async fn tool_grant_capability(params: &Value, state: &NodeState) -> McpToolResu
                 serde_json::Value::Null
             } else {
                 serde_json::Value::String(proof_hex)
+            };
+            // Scope-(2) WitnessedReceipt material: ship the trace rows so
+            // alice.py can include them in the on-disk artifact and
+            // charlie.py's replay-chain assembly can attach an Inline
+            // WitnessBundle instead of a scope-1 zero-witness stub.
+            let trace_field: serde_json::Value = if trace_rows.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::to_value(&trace_rows).unwrap_or(serde_json::Value::Null)
+            };
+            let witness_hash_field: serde_json::Value = if witness_hash_hex.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::Value::String(witness_hash_hex)
             };
 
             McpToolResult::json(&serde_json::json!({
@@ -1345,6 +1376,8 @@ async fn tool_grant_capability(params: &Value, state: &NodeState) -> McpToolResu
                 "turn_hash": turn_hash,
                 "effect_vm_proof_hex": proof_field,
                 "effect_vm_public_inputs": public_inputs,
+                "effect_vm_trace_rows": trace_field,
+                "effect_vm_witness_hash_hex": witness_hash_field,
             }))
         }
         pyana_turn::TurnResult::Rejected { reason, .. } => {
@@ -2669,17 +2702,17 @@ async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) -> McpToolR
                 }
             }
 
-            let (proof_hex, public_inputs) = match pre_state {
+            let (proof_hex, public_inputs, trace_rows, witness_hash_hex) = match pre_state {
                 Some((bal, n)) if !vm_effects.is_empty() => {
                     generate_effect_vm_proof(bal, n, &vm_effects)
                 }
-                Some(_) => (String::new(), Vec::new()),
+                Some(_) => (String::new(), Vec::new(), Vec::new(), String::new()),
                 None => {
                     eprintln!(
                         "tool_exercise_bearer_cap: agent cell {} not in ledger; skipping Effect VM proof",
                         hex_encode(&agent_cell_id.0)
                     );
-                    (String::new(), Vec::new())
+                    (String::new(), Vec::new(), Vec::new(), String::new())
                 }
             };
 
@@ -2687,6 +2720,17 @@ async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) -> McpToolR
                 serde_json::Value::Null
             } else {
                 serde_json::Value::String(proof_hex)
+            };
+            // Scope-(2) WitnessedReceipt material (see grant path).
+            let trace_field: serde_json::Value = if trace_rows.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::to_value(&trace_rows).unwrap_or(serde_json::Value::Null)
+            };
+            let witness_hash_field: serde_json::Value = if witness_hash_hex.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::Value::String(witness_hash_hex)
             };
 
             McpToolResult::json(&serde_json::json!({
@@ -2696,6 +2740,8 @@ async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) -> McpToolR
                 "turn_hash": turn_hash,
                 "effect_vm_proof_hex": proof_field,
                 "effect_vm_public_inputs": public_inputs,
+                "effect_vm_trace_rows": trace_field,
+                "effect_vm_witness_hash_hex": witness_hash_field,
             }))
         }
         pyana_turn::TurnResult::Rejected { reason, .. } => {

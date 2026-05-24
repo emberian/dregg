@@ -162,9 +162,10 @@ GRANT_VERIFIED=$(echo "$CHARLIE_OUT" | "$PY" -c 'import json,sys;print(json.load
 EXERCISE_VERIFIED=$(echo "$CHARLIE_OUT" | "$PY" -c 'import json,sys;print(json.load(sys.stdin).get("exercise_verified", False))' 2>/dev/null || echo False)
 REPLAY_CHAIN_VERIFIED=$(echo "$CHARLIE_OUT" | "$PY" -c 'import json,sys;print(json.load(sys.stdin).get("replay_chain_verified", False))' 2>/dev/null || echo False)
 REPLAY_CHAIN_SUMMARY=$(echo "$CHARLIE_OUT" | "$PY" -c 'import json,sys;print(json.load(sys.stdin).get("replay_chain_summary", ""))' 2>/dev/null || echo "")
+REPLAY_CHAIN_SCOPE=$(echo "$CHARLIE_OUT" | "$PY" -c 'import json,sys;print(",".join(json.load(sys.stdin).get("replay_chain_scope", [])))' 2>/dev/null || echo "")
 [ "$GRANT_VERIFIED" = "True" ]    && ok "grant proof verified by charlie"    || warn "grant proof NOT verified (see blockers)"
 [ "$EXERCISE_VERIFIED" = "True" ] && ok "exercise proof verified by charlie" || warn "exercise proof NOT verified (see blockers)"
-[ "$REPLAY_CHAIN_VERIFIED" = "True" ] && ok "replay-chain (WitnessedReceipt v1) verified: $REPLAY_CHAIN_SUMMARY" \
+[ "$REPLAY_CHAIN_VERIFIED" = "True" ] && ok "replay-chain (WitnessedReceipt v1) verified [scope: ${REPLAY_CHAIN_SCOPE:-unknown}]: $REPLAY_CHAIN_SUMMARY" \
                                      || warn "replay-chain NOT verified: $REPLAY_CHAIN_SUMMARY"
 
 # ── Step 9: receipt chain links grant -> exercise ──────────────────────────

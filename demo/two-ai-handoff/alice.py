@@ -78,16 +78,21 @@ def main() -> int:
         # it as a standalone artifact so charlie.py can hand it to pyana-verifier.
         grant_proof_hex = grant.get("effect_vm_proof_hex")
         grant_proof_pi = grant.get("effect_vm_public_inputs") or []
+        grant_trace_rows = grant.get("effect_vm_trace_rows") or []
+        grant_witness_hash = grant.get("effect_vm_witness_hash_hex") or ""
         if grant_proof_hex:
             (state_dir / "grant.proof.json").write_text(json.dumps({
                 "proof_hex": grant_proof_hex,
                 "public_inputs": grant_proof_pi,
+                "trace_rows": grant_trace_rows,
+                "witness_hash_hex": grant_witness_hash,
                 "vk_hash": "auto",
                 "source": "pyana_grant_capability",
             }, indent=2))
             print(f"[alice] wrote grant proof artifact "
                   f"({len(grant_proof_hex) // 2} proof bytes, "
-                  f"{len(grant_proof_pi)} public inputs)", file=sys.stderr)
+                  f"{len(grant_proof_pi)} public inputs, "
+                  f"{len(grant_trace_rows)} trace rows)", file=sys.stderr)
         else:
             print("[alice] WARNING: grant turn returned no effect_vm_proof_hex",
                   file=sys.stderr)

@@ -44,11 +44,16 @@ def build_witnessed_chain(state_dir: Path) -> list[dict]:
     """Assemble a v1 WitnessedReceipt chain JSON from the per-turn proof
     artifacts emitted by alice.py / bob.py.
 
-    v1 ships scope-(1) entries (proof + public_inputs, no inline witness
-    bundle) because the MCP tool layer does not yet expose the raw trace.
-    The replay-chain verifier treats this as a "verified" verdict — proof
-    is sound, scope-(2) replay is deferred to the lane that plumbs the
-    trace through generate_effect_vm_proof.
+    Stage 7 §C upgrade: the MCP tool layer now exposes the raw trace +
+    BLAKE3 witness_hash, so each entry can ship an Inline WitnessBundle.
+    The replay-chain verifier reconstructs `BabyBear` cells via
+    `BabyBear::new_canonical`, recomputes the witness_hash, and walks
+    the AIR's `eval_constraints` across every consecutive row pair —
+    the scope-(2) verdict.
+
+    When the trace is missing (older artifacts, or pre-state lookup
+    failed), we fall back to the scope-(1) zero-witness stub so the
+    verifier still reports the proof itself as verified.
 
     The on-disk shape mirrors `pyana_turn::WitnessedReceipt` exactly so
     the verifier-side `ReplayEntry` deserialises it byte-for-byte.
@@ -64,14 +69,34 @@ def build_witnessed_chain(state_dir: Path) -> list[dict]:
         if not proof_hex:
             continue
         proof_bytes = list(bytes.fromhex(proof_hex))
-        chain.append({
-            # Minimal `receipt` placeholder — preserved as opaque JSON by
-            # the verifier (it's `serde_json::Value` on the Rust side).
-            "receipt": {"source": artifact.get("source", name)},
-            "proof_bytes": proof_bytes,
-            "public_inputs": [int(v) for v in pi],
-            "witness_hash": _zeros32(),
-        })
+        trace_rows = artifact.get("trace_rows") or []
+        witness_hash_hex = artifact.get("witness_hash_hex") or ""
+
+        if trace_rows and witness_hash_hex:
+            # Scope-(2): ship the inline WitnessBundle. The verifier
+            # recomputes BLAKE3(postcard(bundle)) and checks it equals
+            # the witness_hash field byte-for-byte.
+            witness_bundle = {
+                "trace_rows": [[int(c) for c in row] for row in trace_rows],
+                "availability": "Inline",
+            }
+            witness_hash = list(bytes.fromhex(witness_hash_hex))
+            chain.append({
+                "receipt": {"source": artifact.get("source", name)},
+                "proof_bytes": proof_bytes,
+                "public_inputs": [int(v) for v in pi],
+                "witness_bundle": witness_bundle,
+                "witness_hash": witness_hash,
+            })
+        else:
+            # Scope-(1) fallback: no bundle, witness_hash must be zero
+            # per WitnessedReceipt invariant.
+            chain.append({
+                "receipt": {"source": artifact.get("source", name)},
+                "proof_bytes": proof_bytes,
+                "public_inputs": [int(v) for v in pi],
+                "witness_hash": _zeros32(),
+            })
     return chain
 
 
@@ -214,6 +239,13 @@ def main() -> int:
     chain = build_witnessed_chain(state_dir)
     chain_path = state_dir / "witnessed-chain.json"
     chain_path.write_text(json.dumps(chain, indent=2))
+    # Per-entry scope tag: scope-2 when we shipped a witness_bundle,
+    # scope-1 when we fell back to the zero-witness stub. This is the
+    # demo's observable signal that §C plumbed trace capture through.
+    scope_per_entry = [
+        "scope-2" if entry.get("witness_bundle") is not None else "scope-1"
+        for entry in chain
+    ]
     if chain:
         replay_verified, replay_summary, replay_pid = verify_chain_with_binary(
             args.verifier_bin, chain_path
@@ -234,6 +266,7 @@ def main() -> int:
         "replay_chain_verified": replay_verified,
         "replay_chain_summary":  replay_summary,
         "replay_chain_entries":  len(chain),
+        "replay_chain_scope":    scope_per_entry,
         "replay_chain_pid":      replay_pid,
         "pid":                os.getpid(),
         "independent_node":   True,
