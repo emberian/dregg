@@ -750,9 +750,16 @@ impl TurnExecutor {
     fn maybe_sign_receipt(&self, receipt: &TurnReceipt) -> Option<Vec<u8>> {
         let seed = self.executor_signing_key.as_ref()?;
         let sk = ed25519_dalek::SigningKey::from_bytes(seed);
-        let receipt_hash = receipt.receipt_hash();
+        // Stage 9 R-4: sign the canonical narrow message
+        // (`executor-receipt-sig-v1:` || turn_hash || pre_state || post_state ||
+        // timestamp), not the broader `receipt_hash()`. This keeps the
+        // executor's claim recoverable by downstream verifiers that do not yet
+        // understand the v2 receipt's auxiliary fields (routing directives,
+        // derivation records, emitted events, finality). See
+        // `TurnReceipt::canonical_executor_signed_message`.
+        let msg = receipt.canonical_executor_signed_message();
         use ed25519_dalek::Signer;
-        let sig = sk.sign(&receipt_hash);
+        let sig = sk.sign(&msg);
         Some(sig.to_bytes().to_vec())
     }
 
@@ -2893,6 +2900,39 @@ impl TurnExecutor {
             receipt,
             computrons_used,
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // WitnessedReceipt v1 capture hook
+    // -----------------------------------------------------------------------
+    //
+    // The canonical Effect-VM prove site today lives outside this crate
+    // (`node/src/mcp.rs::generate_effect_vm_proof`). That site holds the
+    // trace + public_inputs + proof_bytes together — exactly the inputs
+    // a WitnessedReceipt needs. This helper is the lane-agnostic factory:
+    // any caller that already has those inputs plus a committed
+    // TurnReceipt can lift them into a scope-(2) replay artifact in one
+    // call.
+    //
+    // We intentionally do NOT prove inside `execute` (the executor remains
+    // proof-agnostic on the classical path); we just expose the wrapper
+    // so the prove site can call into us without taking a turn-crate
+    // refactor as a dependency. See WITNESSED-RECEIPT-CHAIN-DESIGN.md §8.
+
+    /// Wrap a committed receipt with the prove-site's trace + proof bytes
+    /// into a [`crate::WitnessedReceipt`].
+    ///
+    /// Pass `trace = Some(&trace)` to produce a scope-(2) replay artifact
+    /// (the trace becomes an inline witness bundle, witness_hash committed).
+    /// Pass `trace = None` to produce a scope-(1) artifact (proof + PI
+    /// only; witness_hash is all-zeros).
+    pub fn wrap_witnessed(
+        receipt: crate::turn::TurnReceipt,
+        proof_bytes: Vec<u8>,
+        public_inputs: Vec<u32>,
+        trace: Option<&[Vec<pyana_circuit::field::BabyBear>]>,
+    ) -> crate::WitnessedReceipt {
+        crate::WitnessedReceipt::from_components(receipt, proof_bytes, public_inputs, trace)
     }
 
     /// Estimate the computron cost of a turn without applying it.
