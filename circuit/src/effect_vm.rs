@@ -99,17 +99,17 @@ use crate::stark::{BoundaryConstraint, StarkAir};
 // ============================================================================
 
 /// Total trace width.
-/// Layout: 35 selectors + 14 state_before + 8 params + 14 state_after + 23 aux = 94.
+/// Layout: 37 selectors + 14 state_before + 8 params + 14 state_after + 23 aux = 96.
 /// (aux[8..10] = state commitment intermediates;
 ///  aux[11] = cumulative custom-effect count (sum-check, Stage 1);
 ///  aux[12..20] = old_reserved bit-decomposition for sealing honesty (Stage 2);
 ///  aux[20] = mode_flag bit;
 ///  aux[21] = ResizeQueue delta sign (Stage 2: 0=grow, 1=shrink);
 ///  aux[22] = ResizeQueue |delta| magnitude (Stage 2))
-pub const EFFECT_VM_WIDTH: usize = 94;
+pub const EFFECT_VM_WIDTH: usize = 96;
 
 /// Number of effect types (selectors).
-pub const NUM_EFFECTS: usize = 35;
+pub const NUM_EFFECTS: usize = 37;
 
 /// Selector column indices.
 pub mod sel {
@@ -200,6 +200,15 @@ pub mod sel {
     /// perspective this is a passthrough that records (cap_slot,
     /// hash(inner_effects)).
     pub const EXERCISE_VIA_CAPABILITY: usize = 34;
+    /// Introduce: 3-party introduction; introducer's state doesn't change.
+    /// Passthrough from the introducer's POV (recipient c-list updates are
+    /// projected separately when this turn is replayed against the
+    /// recipient cell).
+    pub const INTRODUCE: usize = 35;
+    /// PipelinedSend: dispatch a future action against an EventualRef. The
+    /// dispatching cell's state doesn't change (the dispatch is deferred);
+    /// passthrough with hash(target ‖ action_hash).
+    pub const PIPELINED_SEND: usize = 36;
 }
 
 /// State column offsets (relative to state start).
@@ -605,6 +614,12 @@ pub enum Effect {
     /// target cell. From the actor's perspective the actor's own state
     /// doesn't change; `exercise_hash` = BLAKE3(cap_slot ‖ inner_effects_hash).
     ExerciseViaCapability { exercise_hash: BabyBear },
+    /// Introduce: 3-party introduction. Passthrough from the introducer's
+    /// POV; `intro_hash` = BLAKE3(introducer ‖ recipient ‖ target ‖ perm).
+    Introduce { intro_hash: BabyBear },
+    /// PipelinedSend: dispatch a future action against an EventualRef.
+    /// Passthrough; `send_hash` = BLAKE3(target.source_turn ‖ target.output_slot ‖ action.hash()).
+    PipelinedSend { send_hash: BabyBear },
     /// Spend a note (reveal nullifier, credit balance).
     NoteSpend { nullifier: BabyBear, value: u64 },
     /// Create a note (create commitment, debit balance).
@@ -1054,6 +1069,14 @@ pub fn compute_effects_hash(effects: &[Effect]) -> (BabyBear, BabyBear) {
             Effect::ExerciseViaCapability { exercise_hash } => {
                 hasher_inputs.push(BabyBear::new(34));
                 hasher_inputs.push(*exercise_hash);
+            }
+            Effect::Introduce { intro_hash } => {
+                hasher_inputs.push(BabyBear::new(35));
+                hasher_inputs.push(*intro_hash);
+            }
+            Effect::PipelinedSend { send_hash } => {
+                hasher_inputs.push(BabyBear::new(36));
+                hasher_inputs.push(*send_hash);
             }
             Effect::NoteSpend { nullifier, value } => {
                 hasher_inputs.push(BabyBear::new(4));
@@ -1812,6 +1835,8 @@ impl StarkAir for EffectVmAir {
             sel::SPAWN_WITH_DELEGATION,
             sel::BRIDGE_CANCEL,
             sel::EXERCISE_VIA_CAPABILITY,
+            sel::INTRODUCE,
+            sel::PIPELINED_SEND,
         ] {
             let s_v = local[s_sel_idx];
             let c_bal_lo = s_v * (new_bal_lo - old_bal_lo);
@@ -3487,6 +3512,8 @@ pub fn generate_effect_vm_trace_ext(
             Effect::SpawnWithDelegation { .. } => sel::SPAWN_WITH_DELEGATION,
             Effect::BridgeCancel { .. } => sel::BRIDGE_CANCEL,
             Effect::ExerciseViaCapability { .. } => sel::EXERCISE_VIA_CAPABILITY,
+            Effect::Introduce { .. } => sel::INTRODUCE,
+            Effect::PipelinedSend { .. } => sel::PIPELINED_SEND,
         };
         row[sel_idx] = BabyBear::ONE;
 
@@ -3589,6 +3616,14 @@ pub fn generate_effect_vm_trace_ext(
             }
             Effect::ExerciseViaCapability { exercise_hash } => {
                 row[PARAM_BASE + 0] = *exercise_hash;
+                new_state.nonce += 1;
+            }
+            Effect::Introduce { intro_hash } => {
+                row[PARAM_BASE + 0] = *intro_hash;
+                new_state.nonce += 1;
+            }
+            Effect::PipelinedSend { send_hash } => {
+                row[PARAM_BASE + 0] = *send_hash;
                 new_state.nonce += 1;
             }
             Effect::NoteSpend { nullifier, value } => {

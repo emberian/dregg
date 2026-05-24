@@ -1881,11 +1881,40 @@ impl TurnExecutor {
                             nullifier_hash: hash_to_bb(nullifier),
                         });
                     }
-                    Effect::Introduce { .. } => {
-                        push_pending_shim(vm_effects, 0x301u32);
+                    Effect::Introduce { introducer, recipient, target, permissions } => {
+                        // Stage 3: real AIR coverage. Passthrough from the
+                        // introducer's POV; recipient-side cap_root update
+                        // happens when this turn is replayed against the
+                        // recipient cell (separate projection).
+                        let mut hasher = blake3::Hasher::new();
+                        hasher.update(introducer.as_bytes());
+                        hasher.update(recipient.as_bytes());
+                        hasher.update(target.as_bytes());
+                        let perm_byte: u8 = match permissions {
+                            pyana_cell::AuthRequired::None => 0,
+                            pyana_cell::AuthRequired::Signature => 1,
+                            pyana_cell::AuthRequired::Proof => 2,
+                            pyana_cell::AuthRequired::Either => 3,
+                            pyana_cell::AuthRequired::Impossible => 4,
+                        };
+                        hasher.update(&[perm_byte]);
+                        let intro_hash_bytes = hasher.finalize();
+                        vm_effects.push(VmEffect::Introduce {
+                            intro_hash: hash_to_bb(intro_hash_bytes.as_bytes()),
+                        });
                     }
-                    Effect::PipelinedSend { .. } => {
-                        push_pending_shim(vm_effects, 0x302u32);
+                    Effect::PipelinedSend { target, action } => {
+                        // Stage 3: real AIR coverage. The dispatching cell
+                        // doesn't change state; bind the deferred
+                        // dispatch into effects_hash.
+                        let mut hasher = blake3::Hasher::new();
+                        hasher.update(&target.source_turn);
+                        hasher.update(&target.output_slot.to_le_bytes());
+                        hasher.update(&action.hash());
+                        let send_hash_bytes = hasher.finalize();
+                        vm_effects.push(VmEffect::PipelinedSend {
+                            send_hash: hash_to_bb(send_hash_bytes.as_bytes()),
+                        });
                     }
                     Effect::CreateEscrow { .. } => {
                         push_pending_shim(vm_effects, 0x401u32);
