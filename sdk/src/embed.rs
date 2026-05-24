@@ -445,9 +445,23 @@ impl PyanaEngine {
     // failures into telemetry and prevent silent acceptance windows during
     // partial federation rotations.
     pub fn verify_membership_proof(&self, proof_bytes: &[u8], federation_root: &[u8; 32]) -> bool {
+        self.verify_membership_proof_outcome(proof_bytes, federation_root)
+            .is_ok()
+    }
+
+    /// P2-3: categorised outcome version of [`verify_membership_proof`].
+    ///
+    /// Surfaces the specific failure category (decode error, STARK rejected,
+    /// root mismatch, etc.) so callers can log or alert appropriately.
+    pub fn verify_membership_proof_outcome(
+        &self,
+        proof_bytes: &[u8],
+        federation_root: &[u8; 32],
+    ) -> crate::verify::VerifyOutcome {
+        use crate::verify::VerifyOutcome;
         let wire_proof: WirePresentationProof = match postcard::from_bytes(proof_bytes) {
             Ok(p) => p,
-            Err(_) => return false,
+            Err(e) => return VerifyOutcome::DecodeError(format!("postcard: {e}")),
         };
 
         // For membership-only verification, we call verify_proof_complete with
@@ -463,8 +477,21 @@ impl PyanaEngine {
             0,
             0, // no freshness check for membership-only
         ) {
-            Ok(_) => true,
-            Err(_) => false,
+            Ok(_) => VerifyOutcome::Ok,
+            Err(e) => {
+                // verify_proof_complete returns a single error type without a
+                // category discriminator we can pattern-match on; surface the
+                // message under StarkInvalid (the most common cause). Decode /
+                // root-mismatch cases short-circuit above.
+                let msg = format!("{e:?}");
+                if msg.contains("root") {
+                    VerifyOutcome::RootMismatch
+                } else if msg.contains("freshness") || msg.contains("expired") {
+                    VerifyOutcome::FreshnessExpired
+                } else {
+                    VerifyOutcome::StarkInvalid
+                }
+            }
         }
     }
 

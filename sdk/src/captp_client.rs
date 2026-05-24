@@ -287,23 +287,110 @@ impl CapTpClient {
 
     /// Enliven a sturdy reference URI, returning a live reference to the remote cell.
     ///
-    /// This registers the import in the GC manager (so a DropRef is sent when
-    /// the LiveRef is dropped) and creates a tracked import entry.
+    /// # Safety / Trust
+    ///
+    /// **The `permissions` argument is a caller-supplied claim, not a fact**.
+    /// This constructor performs no remote attestation: a holder of this URI
+    /// can fabricate any [`AuthRequired`] value and the resulting `LiveRef`
+    /// will *appear* to carry those permissions for downstream `send` /
+    /// `pipeline` calls (which do not re-check). Earlier doc strings said
+    /// "obtained from the remote's response to our enliven request" — that
+    /// was misleading; no such request happens here. (AUDIT-sdk-rest.md P2-1.)
+    ///
+    /// This API only handles the LOCAL bookkeeping (GC tracking, session
+    /// import). For permission claims that travel across a trust boundary,
+    /// use [`Self::enliven_with_proof`] which verifies a signed
+    /// [`HandoffCertificate`].
     ///
     /// # Arguments
     ///
     /// * `uri` - The parsed `PyanaUri` to enliven.
-    /// * `permissions` - The permissions obtained from the remote's swiss table
-    ///   validation. In a real deployment, this comes from the remote's response
-    ///   to our enliven request.
-    ///
-    /// # Note
-    ///
-    /// In a full implementation, enlivening requires network communication with
-    /// the target federation. This method handles the LOCAL bookkeeping; the
-    /// caller is responsible for the network round-trip to present the swiss
-    /// number and obtain confirmation.
+    /// * `permissions` - The caller's claim about what authority the import
+    ///   carries. Trust class: same-process.
     pub fn enliven(&mut self, uri: &PyanaUri, permissions: AuthRequired) -> LiveRef {
+        self.enliven_internal(uri, permissions)
+    }
+
+    /// Same as [`Self::enliven`] but explicitly named for the local-only use case.
+    ///
+    /// Identical semantics; the rename communicates the trust assumption to
+    /// future readers.
+    #[doc(hidden)]
+    pub fn enliven_local(&mut self, uri: &PyanaUri, permissions: AuthRequired) -> LiveRef {
+        self.enliven_internal(uri, permissions)
+    }
+
+    /// Enliven a sturdy reference URI by verifying a [`HandoffCertificate`].
+    ///
+    /// Unlike [`Self::enliven`], the permissions come from the certificate
+    /// (which was signed by the introducer) rather than from a caller claim.
+    /// The certificate is verified end-to-end:
+    /// 1. The introducer's signature over the certificate must verify under
+    ///    `introducer_pk`.
+    /// 2. The certificate's `target_federation` / `target_cell` must match the
+    ///    URI's `federation_id` / `cell_id`.
+    /// 3. The certificate's `recipient_pk` must equal the supplied
+    ///    `recipient_pk` (binds the certificate to us).
+    /// 4. If `expires_at` is set on the certificate, the configured
+    ///    `current_height` must be strictly less than it.
+    ///
+    /// On success the returned `LiveRef` carries the permissions named in the
+    /// certificate, not a caller claim.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SdkError::Wire`] if any of the four checks above fails.
+    pub fn enliven_with_proof(
+        &mut self,
+        uri: &PyanaUri,
+        handoff_cert: &HandoffCertificate,
+        introducer_pk: &pyana_types::PublicKey,
+        recipient_pk: &[u8; 32],
+    ) -> Result<LiveRef, SdkError> {
+        // (1) Signature verification.
+        if !handoff_cert.verify_signature(introducer_pk) {
+            return Err(SdkError::Wire(
+                "handoff certificate signature verification failed".into(),
+            ));
+        }
+
+        // (2) URI ↔ certificate target match.
+        if handoff_cert.target_federation.0 != uri.federation_id {
+            return Err(SdkError::Wire(format!(
+                "handoff certificate target_federation {:?} does not match URI federation {:?}",
+                handoff_cert.target_federation.0, uri.federation_id,
+            )));
+        }
+        if handoff_cert.target_cell.0 != uri.cell_id {
+            return Err(SdkError::Wire(format!(
+                "handoff certificate target_cell {:?} does not match URI cell {:?}",
+                handoff_cert.target_cell.0, uri.cell_id,
+            )));
+        }
+
+        // (3) Recipient binding.
+        if &handoff_cert.recipient_pk != recipient_pk {
+            return Err(SdkError::Wire(
+                "handoff certificate recipient does not match the wallet enlivening it".into(),
+            ));
+        }
+
+        // (4) Expiry (if set, current_height must be strictly less).
+        if let Some(expires_at) = handoff_cert.expires_at {
+            if self.config.current_height >= expires_at {
+                return Err(SdkError::Wire(format!(
+                    "handoff certificate expired at height {expires_at} \
+                     (current height {})",
+                    self.config.current_height,
+                )));
+            }
+        }
+
+        Ok(self.enliven_internal(uri, handoff_cert.permissions.clone()))
+    }
+
+    /// Internal helper: shared bookkeeping for all enliven entrypoints.
+    fn enliven_internal(&mut self, uri: &PyanaUri, permissions: AuthRequired) -> LiveRef {
         let federation_id = GroupId(uri.federation_id);
         let cell_id = CellId(uri.cell_id);
 
@@ -714,6 +801,186 @@ mod tests {
         assert_eq!(cert.max_uses, Some(3));
         // Swiss should be registered in our table
         assert!(client.swiss_table().contains(&cert.swiss));
+    }
+
+    /// P2-1: `enliven_with_proof` accepts a valid handoff cert and binds the
+    /// LiveRef's permissions to the cert (not to a caller claim).
+    #[test]
+    fn enliven_with_proof_accepts_valid_cert() {
+        let mut introducer = CapTpClient::new(test_config());
+        let cell = test_cell();
+        let (signing_key, intro_pk) = pyana_types::generate_keypair();
+        let (_recipient_sk, recipient_pk) = pyana_types::generate_keypair();
+
+        // Introducer creates a cert for the recipient.
+        let cert = introducer.create_handoff(
+            &signing_key,
+            cell,
+            recipient_pk.0,
+            AuthRequired::Signature,
+            Some(500),
+            Some(3),
+        );
+
+        // Recipient holds their own client (different config).
+        let mut recipient = CapTpClient::new(CapTpConfig {
+            federation_id: GroupId([0x11; 32]),
+            current_height: 100,
+        });
+        let uri = PyanaUri {
+            federation_id: introducer.config.federation_id.0,
+            cell_id: cell.0,
+            swiss: cert.swiss,
+        };
+
+        let live_ref = recipient
+            .enliven_with_proof(&uri, &cert, &intro_pk, &recipient_pk.0)
+            .expect("valid cert must enliven");
+        assert_eq!(live_ref.cell_id(), cell);
+        assert_eq!(live_ref.permissions(), &AuthRequired::Signature);
+    }
+
+    /// P2-1: tampered cert (mutated permissions after signing) must be rejected.
+    #[test]
+    fn enliven_with_proof_rejects_tampered_cert() {
+        let mut introducer = CapTpClient::new(test_config());
+        let cell = test_cell();
+        let (signing_key, intro_pk) = pyana_types::generate_keypair();
+        let (_recipient_sk, recipient_pk) = pyana_types::generate_keypair();
+
+        let mut cert = introducer.create_handoff(
+            &signing_key,
+            cell,
+            recipient_pk.0,
+            AuthRequired::Signature,
+            None,
+            None,
+        );
+        // Tamper: try to escalate permissions to `None` (more permissive).
+        cert.permissions = AuthRequired::None;
+
+        let mut recipient = CapTpClient::new(CapTpConfig {
+            federation_id: GroupId([0x11; 32]),
+            current_height: 100,
+        });
+        let uri = PyanaUri {
+            federation_id: introducer.config.federation_id.0,
+            cell_id: cell.0,
+            swiss: cert.swiss,
+        };
+
+        let result = recipient.enliven_with_proof(&uri, &cert, &intro_pk, &recipient_pk.0);
+        assert!(result.is_err(), "tampered cert must be rejected");
+        let msg = format!("{}", result.err().unwrap());
+        assert!(
+            msg.contains("signature"),
+            "expected signature failure, got: {msg}"
+        );
+    }
+
+    /// P2-1: cert with non-matching `recipient_pk` must be rejected.
+    #[test]
+    fn enliven_with_proof_rejects_wrong_recipient() {
+        let mut introducer = CapTpClient::new(test_config());
+        let cell = test_cell();
+        let (signing_key, intro_pk) = pyana_types::generate_keypair();
+        let (_alice_sk, alice_pk) = pyana_types::generate_keypair();
+        let (_mallory_sk, mallory_pk) = pyana_types::generate_keypair();
+
+        // Cert is for Alice.
+        let cert = introducer.create_handoff(
+            &signing_key,
+            cell,
+            alice_pk.0,
+            AuthRequired::Signature,
+            None,
+            None,
+        );
+
+        // Mallory tries to enliven against it.
+        let mut mallory = CapTpClient::new(CapTpConfig {
+            federation_id: GroupId([0x22; 32]),
+            current_height: 100,
+        });
+        let uri = PyanaUri {
+            federation_id: introducer.config.federation_id.0,
+            cell_id: cell.0,
+            swiss: cert.swiss,
+        };
+
+        let result = mallory.enliven_with_proof(&uri, &cert, &intro_pk, &mallory_pk.0);
+        assert!(result.is_err(), "wrong recipient must be rejected");
+        let msg = format!("{}", result.err().unwrap());
+        assert!(msg.contains("recipient"), "expected recipient mismatch, got: {msg}");
+    }
+
+    /// P2-1: cert whose target_cell does not match the URI must be rejected.
+    #[test]
+    fn enliven_with_proof_rejects_uri_mismatch() {
+        let mut introducer = CapTpClient::new(test_config());
+        let cell = test_cell();
+        let (signing_key, intro_pk) = pyana_types::generate_keypair();
+        let (_recipient_sk, recipient_pk) = pyana_types::generate_keypair();
+
+        let cert = introducer.create_handoff(
+            &signing_key,
+            cell,
+            recipient_pk.0,
+            AuthRequired::Signature,
+            None,
+            None,
+        );
+
+        let mut recipient = CapTpClient::new(CapTpConfig {
+            federation_id: GroupId([0x11; 32]),
+            current_height: 100,
+        });
+        // URI with a different cell_id.
+        let uri = PyanaUri {
+            federation_id: introducer.config.federation_id.0,
+            cell_id: [0x99; 32],
+            swiss: cert.swiss,
+        };
+
+        let result = recipient.enliven_with_proof(&uri, &cert, &intro_pk, &recipient_pk.0);
+        assert!(result.is_err(), "URI/cert target mismatch must be rejected");
+        let msg = format!("{}", result.err().unwrap());
+        assert!(msg.contains("target_cell"), "expected URI mismatch error, got: {msg}");
+    }
+
+    /// P2-1: expired cert must be rejected.
+    #[test]
+    fn enliven_with_proof_rejects_expired() {
+        let mut introducer = CapTpClient::new(test_config());
+        let cell = test_cell();
+        let (signing_key, intro_pk) = pyana_types::generate_keypair();
+        let (_recipient_sk, recipient_pk) = pyana_types::generate_keypair();
+
+        // Cert that expires at height 50.
+        let cert = introducer.create_handoff(
+            &signing_key,
+            cell,
+            recipient_pk.0,
+            AuthRequired::Signature,
+            Some(50),
+            None,
+        );
+
+        // Recipient at current_height = 100 > 50.
+        let mut recipient = CapTpClient::new(CapTpConfig {
+            federation_id: GroupId([0x11; 32]),
+            current_height: 100,
+        });
+        let uri = PyanaUri {
+            federation_id: introducer.config.federation_id.0,
+            cell_id: cell.0,
+            swiss: cert.swiss,
+        };
+
+        let result = recipient.enliven_with_proof(&uri, &cert, &intro_pk, &recipient_pk.0);
+        assert!(result.is_err(), "expired cert must be rejected");
+        let msg = format!("{}", result.err().unwrap());
+        assert!(msg.contains("expired"), "expected expiry error, got: {msg}");
     }
 
     #[test]

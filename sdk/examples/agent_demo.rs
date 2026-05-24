@@ -96,8 +96,8 @@ fn main() {
         .unwrap();
     println!("    Spawned sub-agent");
     println!("    Sub-agent public key: {}", sub_agent.public_key());
-    println!("    Sub-agent cell ID: {}", sub_agent.cell_id);
-    println!("    Sub-agent token: {}\n", sub_agent.token.label());
+    println!("    Sub-agent cell ID: {}", sub_agent.cell_id());
+    println!("    Sub-agent token: {}\n", sub_agent.token().label());
 
     // -------------------------------------------------------------------------
     // Step 5: Sub-agent verifies its authorization.
@@ -117,7 +117,7 @@ fn main() {
     // -------------------------------------------------------------------------
     println!("[6] Sub-agent executing turn...");
     let effects = vec![Effect::IncrementNonce {
-        cell: sub_agent.cell_id,
+        cell: sub_agent.cell_id(),
     }];
 
     match sub_agent.execute(effects) {
@@ -168,7 +168,7 @@ fn main() {
     println!(
         "  Delegated:    {} -> {}",
         root_token.id(),
-        sub_agent.token.id()
+        sub_agent.token().id()
     );
     println!("  Restrictions: apps=[monitoring:r], sub-apps=[monitoring-sub:r]");
     println!("  Turns executed: 2 (1 parent, 1 sub-agent)");

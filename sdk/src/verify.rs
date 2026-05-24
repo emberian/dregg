@@ -6,6 +6,53 @@
 
 use crate::error::SdkError;
 
+/// Categorised outcome of a verification call.
+///
+/// Several SDK verification helpers historically returned `bool` and silently
+/// swallowed the underlying failure category (decode error, STARK rejection,
+/// wrong federation root, expired freshness, …). Callers that wrote
+/// `if !verify(...) { reject }` could not distinguish a structural decode
+/// failure from a valid proof against the wrong root. This enum surfaces those
+/// distinctions for operational logging and alerting (P2-3 from
+/// `AUDIT-sdk-rest.md`).
+///
+/// Use [`VerifyOutcome::is_ok`] when callers only need a boolean answer.
+#[derive(Debug, Clone)]
+pub enum VerifyOutcome {
+    /// The proof verified successfully.
+    Ok,
+    /// The proof bytes could not be deserialized.
+    DecodeError(String),
+    /// The STARK verifier rejected the proof.
+    StarkInvalid,
+    /// The proof was structurally valid but bound to a different federation root.
+    RootMismatch,
+    /// The proof's freshness window has elapsed.
+    FreshnessExpired,
+    /// The proof carries an AIR name that does not match what the verifier expected.
+    WrongAir {
+        /// Expected AIR identifier.
+        expected: &'static str,
+        /// AIR identifier carried by the proof.
+        got: String,
+    },
+    /// A STARK proof was required but not present.
+    NoStarkProof,
+    /// The presentation kind (e.g., `Selective` vs `Trusted`) did not match the verifier.
+    WrongPresentationKind,
+    /// The revealed-facts commitment does not match the revealed plaintext.
+    RevealedFactsMismatch,
+    /// A predicate-proof variant failed verification.
+    PredicateProofInvalid,
+}
+
+impl VerifyOutcome {
+    /// Returns `true` only for [`VerifyOutcome::Ok`].
+    pub fn is_ok(&self) -> bool {
+        matches!(self, VerifyOutcome::Ok)
+    }
+}
+
 /// Verify a serialized authorization proof against a federation root.
 ///
 /// This is the verifier-side entry point: given proof bytes (produced by
@@ -846,5 +893,44 @@ mod tests {
             Ok(false) => { /* Correct: rejected because PI too short or STARK failed */ }
             Err(_) => { /* Also acceptable */ }
         }
+    }
+
+    /// P2-3: `VerifyOutcome` exposes failure categories so callers can
+    /// distinguish decode failure from STARK rejection. This test pins the
+    /// shape so future migrations to bool-shim wrappers keep the variants.
+    #[test]
+    fn verify_outcome_shape_smoke() {
+        let ok = VerifyOutcome::Ok;
+        assert!(ok.is_ok());
+
+        let decode = VerifyOutcome::DecodeError("bad bytes".into());
+        assert!(!decode.is_ok());
+
+        let stark = VerifyOutcome::StarkInvalid;
+        assert!(!stark.is_ok());
+
+        let root = VerifyOutcome::RootMismatch;
+        assert!(!root.is_ok());
+
+        let stale = VerifyOutcome::FreshnessExpired;
+        assert!(!stale.is_ok());
+
+        let wrong_air = VerifyOutcome::WrongAir {
+            expected: "merkle-v1",
+            got: "merkle-v0".into(),
+        };
+        assert!(!wrong_air.is_ok());
+
+        let nostark = VerifyOutcome::NoStarkProof;
+        assert!(!nostark.is_ok());
+
+        let wrong_kind = VerifyOutcome::WrongPresentationKind;
+        assert!(!wrong_kind.is_ok());
+
+        let mismatch = VerifyOutcome::RevealedFactsMismatch;
+        assert!(!mismatch.is_ok());
+
+        let pred = VerifyOutcome::PredicateProofInvalid;
+        assert!(!pred.is_ok());
     }
 }

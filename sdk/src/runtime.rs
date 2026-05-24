@@ -479,23 +479,28 @@ impl std::fmt::Debug for AgentRuntime {
 // read-only accessors (`pub fn federation_id(&self) -> [u8; 32]`).
 #[derive(Debug)]
 pub struct SubAgent {
+    // P1-1, P1-2 (AUDIT-wallet.md / AUDIT-sdk-rest.md): every field is now
+    // `pub(crate)` so external callers can no longer rewrite `federation_id`
+    // (the signing-message domain separator) or swap `wallet` / `token`
+    // post-construct. Access from outside the crate is via the read-only
+    // accessor methods below.
     /// The sub-agent's wallet.
-    pub wallet: Arc<AgentWallet>,
+    pub(crate) wallet: Arc<AgentWallet>,
     /// The sub-agent's cell ID.
-    pub cell_id: CellId,
+    pub(crate) cell_id: CellId,
     /// The attenuated token this sub-agent holds.
-    pub token: HeldToken,
+    pub(crate) token: HeldToken,
     /// The parent agent's public key.
-    pub parent: PublicKey,
+    pub(crate) parent: PublicKey,
     /// The domain this sub-agent operates in.
-    pub domain: String,
+    pub(crate) domain: String,
     /// The federation/group ID inherited from the parent runtime.
     ///
     /// In the unified lace model, this is equivalent to a `GroupId` (the
     /// reference group this agent belongs to). Used for signing messages
     /// with the correct group context. The field name is preserved for
     /// backward compatibility; semantically it is a group identifier.
-    pub federation_id: [u8; 32],
+    pub(crate) federation_id: [u8; 32],
     /// Shared ledger with the parent.
     ledger: Arc<Mutex<Ledger>>,
     /// Nonce counter for turn submission (incremented on each execute call).
@@ -512,9 +517,65 @@ impl SubAgent {
         self.wallet.public_key()
     }
 
-    /// Verify that the sub-agent's token authorizes a request.
+    /// Read-only access to the sub-agent's wallet.
+    pub fn wallet(&self) -> &Arc<AgentWallet> {
+        &self.wallet
+    }
+
+    /// Get the sub-agent's cell ID.
+    pub fn cell_id(&self) -> CellId {
+        self.cell_id
+    }
+
+    /// Get a reference to the sub-agent's held token.
+    pub fn token(&self) -> &HeldToken {
+        &self.token
+    }
+
+    /// Get the parent agent's public key.
+    pub fn parent(&self) -> PublicKey {
+        self.parent
+    }
+
+    /// Get the domain this sub-agent operates in.
+    pub fn domain(&self) -> &str {
+        &self.domain
+    }
+
+    /// Get the federation (group) id this sub-agent inherited.
+    pub fn federation_id(&self) -> [u8; 32] {
+        self.federation_id
+    }
+
+    /// Check whether the sub-agent's token authorizes a request.
+    ///
+    /// P1-4: previously delegated to [`AgentWallet::verify_token`], which
+    /// requires the token's `root_key` to be set (HMAC verification). Sub-agent
+    /// tokens are delegated and carry a zeroed `root_key`, so `verify_token`
+    /// always returned `false` — the method had no useful semantics.
+    ///
+    /// This implementation runs the Datalog evaluator on the structural
+    /// caveat set (the same evaluator used by trusted-mode authorization),
+    /// returning `true` if the request is `Allow`ed by the token's caveats and
+    /// `false` for `Deny` / `Inconclusive` / parse failure. The durable
+    /// binding is re-verified first so a post-receive tampering returns
+    /// `false`.
     pub fn can_authorize(&self, request: &pyana_token::AuthRequest) -> bool {
-        self.wallet.verify_token(&self.token, request)
+        if self.token.reverify_delegation_binding().is_err() {
+            return false;
+        }
+        match self
+            .wallet
+            .authorize(&self.token, request, crate::VerificationMode::Trusted)
+        {
+            Ok(crate::AuthorizationPresentation::Trusted { trace, .. }) => {
+                matches!(trace.conclusion, pyana_trace::Conclusion::Allow { .. })
+            }
+            // Any other presentation kind shouldn't occur from Trusted mode;
+            // be conservative.
+            Ok(_) => false,
+            Err(_) => false,
+        }
     }
 
     /// Execute effects on the shared ledger using this sub-agent's cell.

@@ -1264,7 +1264,7 @@ impl AgentWallet {
         // will use this commitment to detect any post-delegation caveat tampering.
         let caveat_chain_hash = {
             let decoded = attenuated.decode()?;
-            Some(Self::compute_caveat_chain_hash(&decoded))
+            Some(Self::compute_caveat_chain_hash(&decoded)?)
         };
 
         // SECURITY: Sign the entire delegation envelope (v2 payload) so neither
@@ -1363,7 +1363,7 @@ impl AgentWallet {
         // Compute the caveat chain hash from the HMAC-verified attenuated token.
         let caveat_chain_hash = {
             let decoded = attenuated.decode()?;
-            Some(Self::compute_caveat_chain_hash(&decoded))
+            Some(Self::compute_caveat_chain_hash(&decoded)?)
         };
 
         // SECURITY: Sign the entire delegation envelope (v2 payload).
@@ -1467,6 +1467,20 @@ impl AgentWallet {
                 delegated.token_bytes.len(),
                 Self::MAX_DELEGATED_TOKEN_SIZE,
             )));
+        }
+
+        // (a.1) P1-6: depth bound on membership proof to prevent DoS via
+        // maliciously-deserialized proofs with `usize::MAX`-sized paths.
+        if let Some(ref mp) = delegated.membership_proof {
+            if mp.siblings.len() > Self::MAX_MEMBERSHIP_PROOF_DEPTH
+                || mp.path_indices.len() > Self::MAX_MEMBERSHIP_PROOF_DEPTH
+            {
+                return Err(SdkError::InvalidDelegation(format!(
+                    "membership proof depth exceeds maximum ({} > {})",
+                    mp.siblings.len().max(mp.path_indices.len()),
+                    Self::MAX_MEMBERSHIP_PROOF_DEPTH,
+                )));
+            }
         }
 
         // (b) Structural validity (parse only; HMAC chain not verifiable without root key).
@@ -1577,6 +1591,19 @@ impl AgentWallet {
                 local.token_bytes.len(),
                 Self::MAX_DELEGATED_TOKEN_SIZE,
             )));
+        }
+
+        // P1-6: membership-proof depth bound (mirror of receive_signed_delegation).
+        if let Some(ref mp) = local.membership_proof {
+            if mp.siblings.len() > Self::MAX_MEMBERSHIP_PROOF_DEPTH
+                || mp.path_indices.len() > Self::MAX_MEMBERSHIP_PROOF_DEPTH
+            {
+                return Err(SdkError::InvalidDelegation(format!(
+                    "membership proof depth exceeds maximum ({} > {})",
+                    mp.siblings.len().max(mp.path_indices.len()),
+                    Self::MAX_MEMBERSHIP_PROOF_DEPTH,
+                )));
+            }
         }
 
         let _decoded =
@@ -1925,6 +1952,13 @@ impl AgentWallet {
         token: &HeldToken,
         request: &AuthRequest,
     ) -> Result<AuthorizationPresentation, SdkError> {
+        // P1-7: Defensive durable-binding reverification at every authorization
+        // entry. For locally-minted root tokens this is a no-op (no binding
+        // attached); for delegation-bound tokens that somehow reach the
+        // trusted path it ensures post-receive tampering of `encoded`,
+        // `caveat_chain_hash`, or membership leaf is detected.
+        token.reverify_delegation_binding()?;
+
         let caveat_set = Self::extract_caveat_set(token)?;
         let result = pyana_token::datalog_verify::verify_token_datalog(&caveat_set, request)?;
 
@@ -2438,6 +2472,10 @@ impl AgentWallet {
 
         let turn = Turn {
             agent: self.cell_id("default"),
+            // AUDIT[P3-6]: nonce hardcoded to 0; documented as caller's
+            // responsibility. `previous_receipt_hash` is now plumbed through
+            // from the wallet's receipt chain to bind this turn to the
+            // executor-enforced receipt chain.
             nonce: 0, // Caller should set appropriately or use a TurnBuilder
             fee,
             call_forest: CallForest {
@@ -2446,7 +2484,7 @@ impl AgentWallet {
             },
             memo: None,
             valid_until: None,
-            previous_receipt_hash: None,
+            previous_receipt_hash: self.receipt_chain.last().map(|r| r.receipt_hash()),
             depends_on: Vec::new(),
             conservation_proof: None,
             sovereign_witnesses: Default::default(),
@@ -2813,7 +2851,7 @@ impl AgentWallet {
         // caveats and generating proofs over fabricated authorization facts.
         let actual_token = MacaroonToken::from_encoded(&token.encoded, *issuer_key)?;
         if let Some(expected_hash) = token.caveat_chain_hash {
-            let computed_hash = Self::compute_caveat_chain_hash(&actual_token);
+            let computed_hash = Self::compute_caveat_chain_hash(&actual_token)?;
             if computed_hash != expected_hash {
                 return Err(SdkError::CaveatIntegrityViolation);
             }
@@ -2825,7 +2863,7 @@ impl AgentWallet {
         // compute_federation_root_bb(issuer_key) would produce a synthetic root that
         // does not match the proof's path.
         let federation_root_bb = if let Some(ref mp) = token.membership_proof {
-            Self::compute_root_from_membership_proof(mp)
+            Self::compute_root_from_membership_proof(mp)?
         } else {
             Self::compute_federation_root_bb(issuer_key)
         };
@@ -2874,6 +2912,11 @@ impl AgentWallet {
             ));
         }
 
+        // P2-1: Defensive durable-binding reverification. Root tokens never
+        // carry a delegation binding by construction (no-op), but kept for
+        // symmetry with `prove_authorization_with_issuer_key`.
+        token.reverify_delegation_binding()?;
+
         let proof_key = Self::derive_proof_key(token.root_key());
         let federation_root_bb = Self::compute_federation_root_bb(&proof_key);
         let federation_root = Self::bb_to_bytes(federation_root_bb);
@@ -2920,7 +2963,7 @@ impl AgentWallet {
         // P0-1: Verify caveat chain integrity before proof generation.
         let actual_token = MacaroonToken::from_encoded(&token.encoded, *issuer_key)?;
         if let Some(expected_hash) = token.caveat_chain_hash {
-            let computed_hash = Self::compute_caveat_chain_hash(&actual_token);
+            let computed_hash = Self::compute_caveat_chain_hash(&actual_token)?;
             if computed_hash != expected_hash {
                 return Err(SdkError::CaveatIntegrityViolation);
             }
@@ -2929,7 +2972,7 @@ impl AgentWallet {
         // P0-2: Use the federation root from the pre-generated membership proof when
         // available, rather than the synthetic root derived from the proof_key.
         let federation_root_bb = if let Some(ref mp) = token.membership_proof {
-            Self::compute_root_from_membership_proof(mp)
+            Self::compute_root_from_membership_proof(mp)?
         } else {
             Self::compute_federation_root_bb(issuer_key)
         };
@@ -3691,6 +3734,18 @@ impl AgentWallet {
         for dep in &turn.depends_on {
             hasher.update(dep);
         }
+        // AUDIT[P2-10]: this signing message does NOT yet cover
+        // `turn.conservation_proof`, `turn.sovereign_witnesses`,
+        // `turn.execution_proof`, `turn.execution_proof_cell`,
+        // `turn.execution_proof_new_commitment`, or `turn.custom_program_proofs`.
+        // The current threat model treats these as executor-attested side
+        // payloads, but a holder of write access to a SignedTurn struct in
+        // flight can swap any of them without invalidating the wallet's
+        // signature. Closing this gap requires bumping the turn-hash version
+        // (v2→v3) and sub-hashing each optional field with a presence tag
+        // (mirroring the memo/valid_until pattern above). Tracked under
+        // EFFECT-VM-SHAPE-A.md Stage 9 (Receipts overhaul); deferred here to
+        // keep this fix self-contained.
         *hasher.finalize().as_bytes()
     }
 
@@ -3700,6 +3755,21 @@ impl AgentWallet {
     /// a deterministic root. In production, this would come from the federation
     /// registry; here we compute it so the proof verifies self-consistently.
     fn compute_federation_root_bb(issuer_key: &[u8; 32]) -> BabyBear {
+        // P2-7: This produces a SYNTHETIC root (no real federation tree
+        // lookup). Membership proofs against the synthetic root are only
+        // interoperable with verifiers that derive the same synthetic root,
+        // i.e. with this SDK in a single-tenant test deployment. Production
+        // callers should rely on `compute_root_from_membership_proof` against
+        // a pre-generated `MerkleProof` whose root anchors to a real
+        // federation registry. Emit a warning in non-test builds to surface
+        // accidental production reliance on the synthetic path.
+        #[cfg(not(test))]
+        tracing::warn!(
+            "compute_federation_root_bb: using synthetic federation root; \
+             production deployments should supply a pre-generated membership \
+             proof rooted at the real federation registry (P2-7)."
+        );
+
         let issuer_hash = Self::bytes_to_babybear(issuer_key);
         let depth = 8;
         let mut current = issuer_hash;
@@ -3761,18 +3831,57 @@ impl AgentWallet {
     ///
     /// Uses deterministic serialization (rmp-serde) to ensure both sides compute
     /// the same hash regardless of in-memory representation differences.
-    fn compute_caveat_chain_hash(token: &MacaroonToken) -> [u8; 32] {
+    fn compute_caveat_chain_hash(token: &MacaroonToken) -> Result<[u8; 32], SdkError> {
+        // P1-3: Caveats may include attacker-influenced data (the macaroon was
+        // decoded from an external `encoded` string). Propagate serialization
+        // failure as `SdkError::Wire` rather than panicking inside `delegate*`
+        // / authorization paths.
         let caveats = token.inner().caveats.as_slice();
-        let serialized = rmp_serde::to_vec(caveats).expect("caveat serialization should not fail");
-        *blake3::hash(&serialized).as_bytes()
+        let serialized = rmp_serde::to_vec(caveats)
+            .map_err(|e| SdkError::Wire(format!("caveat serialization failed: {e}")))?;
+        Ok(*blake3::hash(&serialized).as_bytes())
     }
+
+    /// Maximum acceptable depth for a Merkle membership proof.
+    ///
+    /// P1-6: A maliciously-deserialized `MerkleProof` carrying enormous
+    /// `siblings` / `path_indices` lengths would otherwise cause an unbounded
+    /// loop in [`Self::compute_root_from_membership_proof`]. The federation
+    /// tree in practice has at most ~8 levels; we cap at 64 to accommodate
+    /// future expansion while preserving a strict bound.
+    pub(crate) const MAX_MEMBERSHIP_PROOF_DEPTH: usize = 64;
 
     /// Compute the Poseidon2 Merkle root from a pre-generated membership proof.
     ///
     /// Re-walks the proof path using Poseidon2 hashing (same algorithm as
     /// `build_issuer_membership_poseidon2_from_proof` in the bridge) to recover
     /// the federation root that the proof was generated against.
-    fn compute_root_from_membership_proof(proof: &pyana_commit::merkle::MerkleProof) -> BabyBear {
+    ///
+    /// # Errors
+    ///
+    /// Returns `SdkError::Wire` if the proof exceeds
+    /// [`Self::MAX_MEMBERSHIP_PROOF_DEPTH`] or carries mismatched
+    /// `siblings.len()` / `path_indices.len()` (P1-6).
+    pub(crate) fn compute_root_from_membership_proof(
+        proof: &pyana_commit::merkle::MerkleProof,
+    ) -> Result<BabyBear, SdkError> {
+        if proof.siblings.len() > Self::MAX_MEMBERSHIP_PROOF_DEPTH
+            || proof.path_indices.len() > Self::MAX_MEMBERSHIP_PROOF_DEPTH
+        {
+            return Err(SdkError::Wire(format!(
+                "membership proof depth exceeds maximum ({} > {})",
+                proof.siblings.len().max(proof.path_indices.len()),
+                Self::MAX_MEMBERSHIP_PROOF_DEPTH,
+            )));
+        }
+        if proof.siblings.len() != proof.path_indices.len() {
+            return Err(SdkError::Wire(format!(
+                "membership proof mismatched: {} siblings vs {} path_indices",
+                proof.siblings.len(),
+                proof.path_indices.len(),
+            )));
+        }
+
         let real_leaf_hash = Self::bytes_to_babybear(&proof.leaf_hash);
         let mut current = real_leaf_hash;
 
@@ -3787,7 +3896,7 @@ impl AgentWallet {
             current = MerkleAir::compute_parent(current, position, &siblings);
         }
 
-        current
+        Ok(current)
     }
 
     /// Derive a deterministic sibling hash for Merkle path construction.
@@ -4740,7 +4849,7 @@ impl AgentWallet {
             execution_proof_cell: None,
             execution_proof_new_commitment: None,
             custom_program_proofs: None,
-            previous_receipt_hash: None,
+            previous_receipt_hash: self.receipt_chain.last().map(|r| r.receipt_hash()),
             depends_on: vec![],
         }
     }
@@ -5118,7 +5227,7 @@ impl AgentWallet {
             custom_program_proofs: None,
             sovereign_witnesses: HashMap::new(),
             memo: None,
-            previous_receipt_hash: None,
+            previous_receipt_hash: self.receipt_chain.last().map(|r| r.receipt_hash()),
             depends_on: vec![],
             conservation_proof: None,
         };
@@ -5285,7 +5394,7 @@ impl AgentWallet {
             },
             memo: None,
             valid_until: None,
-            previous_receipt_hash: None,
+            previous_receipt_hash: self.receipt_chain.last().map(|r| r.receipt_hash()),
             depends_on: Vec::new(),
             conservation_proof: None,
             sovereign_witnesses: Default::default(),
@@ -5353,7 +5462,7 @@ impl AgentWallet {
             },
             memo: None,
             valid_until: None,
-            previous_receipt_hash: None,
+            previous_receipt_hash: self.receipt_chain.last().map(|r| r.receipt_hash()),
             depends_on: Vec::new(),
             conservation_proof: None,
             sovereign_witnesses: Default::default(),
@@ -5410,7 +5519,7 @@ impl AgentWallet {
             },
             memo: None,
             valid_until: None,
-            previous_receipt_hash: None,
+            previous_receipt_hash: self.receipt_chain.last().map(|r| r.receipt_hash()),
             depends_on: Vec::new(),
             conservation_proof: None,
             sovereign_witnesses: Default::default(),
@@ -5476,7 +5585,7 @@ impl AgentWallet {
             },
             memo: None,
             valid_until: None,
-            previous_receipt_hash: None,
+            previous_receipt_hash: self.receipt_chain.last().map(|r| r.receipt_hash()),
             depends_on: Vec::new(),
             conservation_proof: None,
             sovereign_witnesses: Default::default(),
@@ -5523,7 +5632,17 @@ impl Default for AgentWallet {
 
 impl Drop for AgentWallet {
     fn drop(&mut self) {
-        // Zeroize sensitive key material on drop.
+        // P2-2 / SAFETY: We explicitly zeroize the externally-shaped key
+        // material (`seed`, `mnemonic_phrase`) that we own. The Ed25519
+        // `signing_key` is NOT zeroized here because `ed25519_dalek::SigningKey`
+        // upstream implements `ZeroizeOnDrop`, so dropping `self.signing_key`
+        // already zeroizes its backing bytes. Adding a duplicate zeroize call
+        // here would (a) be a no-op after the upstream Drop runs, and (b) be a
+        // soundness landmine if upstream ever changes its drop semantics: the
+        // safer policy is to inherit the upstream contract.
+        //
+        // If this assumption ever breaks (e.g. an upstream API change), this
+        // doc block is the place to look first.
         if let Some(ref mut seed) = self.seed {
             seed.zeroize();
         }
@@ -6875,6 +6994,101 @@ mod tests {
         // cannot reach this branch. Verified at compile time by the
         // `#[cfg(any(test, feature = "unsafe-test-utils"))]` gate on the
         // variant — see DelegationAuthority::Open.
+    }
+
+    /// P1-6: `compute_root_from_membership_proof` must reject proofs whose
+    /// depth exceeds [`AgentWallet::MAX_MEMBERSHIP_PROOF_DEPTH`].
+    #[test]
+    fn test_membership_proof_depth_bound() {
+        use pyana_commit::merkle::MerkleProof;
+        let depth = AgentWallet::MAX_MEMBERSHIP_PROOF_DEPTH + 1;
+        let proof = MerkleProof {
+            siblings: vec![[[0u8; 32]; 3]; depth],
+            path_indices: vec![0; depth],
+            leaf_hash: [0u8; 32],
+        };
+        let result = AgentWallet::compute_root_from_membership_proof(&proof);
+        assert!(result.is_err(), "depth-exceeding proof must be rejected");
+        let err_msg = format!("{:?}", result.err().unwrap());
+        assert!(
+            err_msg.contains("depth exceeds maximum"),
+            "expected depth-exceeded wire error, got: {err_msg}"
+        );
+    }
+
+    /// P1-6: `compute_root_from_membership_proof` must reject proofs whose
+    /// `siblings` / `path_indices` arrays have mismatched lengths.
+    #[test]
+    fn test_membership_proof_mismatched_lengths() {
+        use pyana_commit::merkle::MerkleProof;
+        let proof = MerkleProof {
+            siblings: vec![[[0u8; 32]; 3]; 4],
+            path_indices: vec![0; 3], // shorter on purpose
+            leaf_hash: [0u8; 32],
+        };
+        let result = AgentWallet::compute_root_from_membership_proof(&proof);
+        assert!(result.is_err(), "mismatched lengths must be rejected");
+        let err_msg = format!("{:?}", result.err().unwrap());
+        assert!(
+            err_msg.contains("mismatched"),
+            "expected mismatch wire error, got: {err_msg}"
+        );
+    }
+
+    /// P1-6: `receive_signed_delegation` rejects oversized membership proofs
+    /// at the receive boundary so a malicious sender cannot park a DoS-shaped
+    /// proof inside our wallet for later detonation.
+    #[test]
+    fn test_receive_rejects_oversized_membership_proof() {
+        use pyana_commit::merkle::MerkleProof;
+        use pyana_token::Attenuation;
+
+        // Build a small token using a generated wallet.
+        let mut alice = AgentWallet::new();
+        let bob = AgentWallet::new();
+        let root_token = alice.mint_token(&[42u8; 32], "test-svc");
+
+        // Forge a v2 delegation envelope with an enormous membership proof.
+        let oversized_depth = AgentWallet::MAX_MEMBERSHIP_PROOF_DEPTH + 5;
+        let mp = MerkleProof {
+            siblings: vec![[[0u8; 32]; 3]; oversized_depth],
+            path_indices: vec![0; oversized_depth],
+            leaf_hash: [7u8; 32],
+        };
+
+        let restrictions = Attenuation {
+            applications: Some(vec![pyana_token::AppRestriction {
+                id: "x".into(),
+                actions: vec![],
+            }]),
+            ..Default::default()
+        };
+
+        let env = alice
+            .delegate(&root_token, &bob.public_key(), &restrictions)
+            .expect("delegate produces a v2 envelope");
+
+        // Override the membership_proof field through `mut env`. `delegator_signature`
+        // will now be stale (it covers the original empty proof), but the depth
+        // check fires BEFORE the signature is checked, so the test still
+        // exercises the boundary.
+        let mut tampered = env;
+        tampered.membership_proof = Some(mp);
+
+        let mut bob_mut = bob;
+        let result = bob_mut.receive_signed_delegation(
+            tampered,
+            &DelegationAuthority::TrustedKey(alice.public_key()),
+        );
+        assert!(
+            result.is_err(),
+            "receive_signed_delegation must reject oversized membership proof"
+        );
+        let msg = format!("{}", result.err().unwrap());
+        assert!(
+            msg.contains("depth exceeds maximum") || msg.contains("membership"),
+            "expected depth/membership rejection, got: {msg}"
+        );
     }
 }
 
