@@ -113,7 +113,7 @@ mod tests {
     use pyana_captp::FederationId;
     use pyana_cell::AuthRequired;
     use pyana_turn::turn::TurnReceipt;
-    use pyana_types::{AttestedRoot, CellId, PublicKey, Signature, generate_keypair};
+    use pyana_types::{AttestedRoot, CellId, PublicKey, generate_keypair};
 
     fn dummy_receipt() -> TurnReceipt {
         TurnReceipt {
@@ -131,7 +131,9 @@ mod tests {
             routing_directives: Vec::new(),
             introduction_exports: Vec::new(),
             derivation_records: Vec::new(),
-            executor_signature: Signature([0u8; 64]),
+            emitted_events: Vec::new(),
+            executor_signature: None,
+            finality: Default::default(),
         }
     }
 

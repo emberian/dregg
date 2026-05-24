@@ -1141,16 +1141,14 @@ impl<S: Authorized> ActionBuilder<S> {
             .authorization
             .expect("authorization guaranteed by Authorized typestate");
 
-        // Derive balance_change from effects unless the caller declared an
-        // explicit excess.
-        let balance_change = if let Some(d) = self.declared_excess {
-            Some(d)
-        } else {
-            Some(crate::dsl::conservation::derive_balance_change(
-                self.caller,
-                &self.effects,
-            ))
-        };
+        // `balance_change` is an opt-in sovereign-cell excess declaration. The
+        // executor applies it directly to `action.target`'s balance (P0-7
+        // Mina-style excess tracking), which is meaningful only when the
+        // caller has explicit cross-cell-conservation accounting to do — not
+        // for ordinary `Transfer` effects (those move balance themselves; an
+        // auto-derived `balance_change` would double-debit). Callers that need
+        // the excess slot opt in via `with_declared_excess(delta)`.
+        let balance_change = self.declared_excess;
 
         Action {
             target: self.target,

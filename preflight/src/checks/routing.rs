@@ -3,7 +3,8 @@
 use pyana_captp::FederationId as GroupId;
 use pyana_types::CellId;
 use pyana_wire::dfa_router::{
-    GovernanceProof, GovernedRouter, RouteTarget, Router, compile_routes,
+    GovernanceProof, GovernedRouter, RouteTarget, Router, cell_target, compile_routes,
+    federation_target, target_as_cell,
 };
 
 use crate::report::{CheckResult, run_check};
@@ -23,11 +24,11 @@ fn make_test_routes() -> Vec<(&'static str, RouteTarget)> {
     let remote_fed = GroupId(*blake3::hash(b"remote-federation").as_bytes());
 
     vec![
-        ("/cells/stablecoin/*", RouteTarget::Cell(stablecoin_cell)),
-        ("/cells/amm/*", RouteTarget::Cell(amm_cell)),
-        ("/intents/*", RouteTarget::Handler("intent_pool".into())),
-        ("/admin", RouteTarget::Handler("admin".into())),
-        ("/federation/remote/*", RouteTarget::Federation(remote_fed)),
+        ("/cells/stablecoin/*", cell_target(stablecoin_cell)),
+        ("/cells/amm/*", cell_target(amm_cell)),
+        ("/intents/*", RouteTarget::handler("intent_pool")),
+        ("/admin", RouteTarget::handler("admin")),
+        ("/federation/remote/*", federation_target(remote_fed)),
         ("/blocked/*", RouteTarget::Drop),
     ]
 }
@@ -36,7 +37,6 @@ fn check_compile_routes() -> Result<(), String> {
     let routes = make_test_routes();
     let table = compile_routes(&routes);
 
-    // Verify the table was constructed with valid state count.
     if table.num_states < 2 {
         return Err(format!(
             "expected at least 2 states, got {}",
@@ -44,13 +44,11 @@ fn check_compile_routes() -> Result<(), String> {
         ));
     }
 
-    // Verify commitment is non-zero.
     if table.commitment == [0u8; 32] {
         return Err("route table commitment should not be all zeros".into());
     }
 
-    // Verify transitions table has the right size.
-    let expected_size = table.num_states * 256;
+    let expected_size = (table.num_states as usize) * 256;
     if table.transitions.len() != expected_size {
         return Err(format!(
             "transitions table size: expected {expected_size}, got {}",
@@ -66,39 +64,32 @@ fn check_classify_messages() -> Result<(), String> {
     let table = compile_routes(&routes);
     let router = Router::new(table);
 
-    // Test cell routing.
-    let result = router.classify(b"/cells/stablecoin/transfer");
-    match result {
-        Some(RouteTarget::Cell(cell_id)) => {
-            let expected = CellId(*blake3::hash(b"stablecoin").as_bytes());
-            if *cell_id != expected {
-                return Err("stablecoin route classified to wrong cell".into());
-            }
-        }
-        other => return Err(format!("expected Cell target, got {:?}", other)),
+    let stablecoin = CellId(*blake3::hash(b"stablecoin").as_bytes());
+    let c = router
+        .classify(b"/cells/stablecoin/transfer")
+        .ok_or_else(|| "stablecoin route did not classify".to_string())?;
+    match target_as_cell(c.target) {
+        Some(id) if id == stablecoin => {}
+        Some(id) => return Err(format!("stablecoin route classified to wrong cell: {id:?}")),
+        None => return Err(format!("expected Cell target, got {:?}", c.target)),
     }
 
-    // Test handler routing.
-    let result = router.classify(b"/intents/broadcast");
-    match result {
-        Some(RouteTarget::Handler(name)) => {
-            if name != "intent_pool" {
-                return Err(format!("expected 'intent_pool' handler, got '{name}'"));
-            }
-        }
-        other => return Err(format!("expected Handler target, got {:?}", other)),
+    let c = router
+        .classify(b"/intents/broadcast")
+        .ok_or_else(|| "intent route did not classify".to_string())?;
+    match c.target {
+        RouteTarget::Handler(name) if name == "intent_pool" => {}
+        other => return Err(format!("expected Handler('intent_pool'), got {other:?}")),
     }
 
-    // Test drop routing.
-    let result = router.classify(b"/blocked/spam");
-    match result {
-        Some(RouteTarget::Drop) => {}
-        other => return Err(format!("expected Drop target, got {:?}", other)),
+    let c = router
+        .classify(b"/blocked/spam")
+        .ok_or_else(|| "blocked route did not classify".to_string())?;
+    if c.target != &RouteTarget::Drop {
+        return Err(format!("expected Drop target, got {:?}", c.target));
     }
 
-    // Test unmatched path goes to None (dead state).
-    let result = router.classify(b"/unknown/path");
-    if result.is_some() {
+    if router.classify(b"/unknown/path").is_some() {
         return Err("unknown path should not match any route".into());
     }
 
@@ -111,41 +102,36 @@ fn check_governance_update() -> Result<(), String> {
     let old_commitment = table.commitment;
     let mut governed = GovernedRouter::new(table);
 
-    // Verify initial commitment.
     if *governed.commitment() != old_commitment {
         return Err("governed router commitment should match table commitment".into());
     }
 
-    // Build a new route table (add a route).
     let new_cell = CellId(*blake3::hash(b"new-service").as_bytes());
     let mut new_routes = make_test_routes();
-    new_routes.push(("/services/compute/*", RouteTarget::Cell(new_cell)));
+    new_routes.push(("/services/compute/*", cell_target(new_cell)));
     let new_table = compile_routes(&new_routes);
     let new_commitment = new_table.commitment;
 
-    // Attempt update with correct old commitment (should succeed).
     let proof = GovernanceProof {
         expected_old_commitment: old_commitment,
-        proof_data: vec![],
+        // Stub verifier needs non-empty data; production wires real threshold sigs.
+        proof_data: vec![0xAA, 0xBB],
     };
 
     governed
         .update_routes(new_table, &proof)
         .map_err(|e| format!("governance update failed: {e}"))?;
 
-    // Verify commitment changed.
     if *governed.commitment() != new_commitment {
         return Err("commitment should be updated after successful route update".into());
     }
 
-    // Attempt update with stale commitment (should fail).
     let stale_proof = GovernanceProof {
-        expected_old_commitment: old_commitment, // stale
-        proof_data: vec![],
+        expected_old_commitment: old_commitment,
+        proof_data: vec![0xAA, 0xBB],
     };
     let stale_routes = compile_routes(&make_test_routes());
-    let result = governed.update_routes(stale_routes, &stale_proof);
-    if result.is_ok() {
+    if governed.update_routes(stale_routes, &stale_proof).is_ok() {
         return Err("update with stale commitment should fail".into());
     }
 
@@ -157,23 +143,19 @@ fn check_commitment_matches() -> Result<(), String> {
     let table = compile_routes(&routes);
     let governed = GovernedRouter::new(table);
 
-    // The commitment from the governed router should match what we'd compute
-    // from the same route set.
     let table2 = compile_routes(&make_test_routes());
     if *governed.commitment() != table2.commitment {
         return Err("deterministic route compilation should produce same commitment".into());
     }
 
-    // Verify classification still works through the governed router.
-    let result = governed.classify(b"/cells/amm/swap");
-    match result {
-        Some(RouteTarget::Cell(cell_id)) => {
-            let expected = CellId(*blake3::hash(b"amm").as_bytes());
-            if *cell_id != expected {
-                return Err("governed router amm route classified to wrong cell".into());
-            }
-        }
-        other => return Err(format!("expected Cell target, got {:?}", other)),
+    let amm = CellId(*blake3::hash(b"amm").as_bytes());
+    let c = governed
+        .classify(b"/cells/amm/swap")
+        .ok_or_else(|| "amm route did not classify".to_string())?;
+    match target_as_cell(c.target) {
+        Some(id) if id == amm => {}
+        Some(id) => return Err(format!("amm classified to wrong cell: {id:?}")),
+        None => return Err(format!("expected Cell target, got {:?}", c.target)),
     }
 
     Ok(())

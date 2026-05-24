@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use pyana_captp::FederationId as GroupId;
 use pyana_types::CellId;
-use pyana_wire::dfa_router::RouteTarget;
+use pyana_wire::dfa_router::{RouteTarget, cell_target, target_as_cell};
 
 use crate::router_sim::SimRouter;
 
@@ -152,40 +152,33 @@ impl SimServiceMesh {
     /// Uses the DFA router to classify the path, then looks up the matching
     /// service entry to return its sturdy ref.
     pub fn resolve(&self, path: &str) -> Option<&str> {
-        // Use the router to classify
         let target = self.router.classify(path)?;
-
-        // Find the matching service by cell ID
-        match target {
-            RouteTarget::Cell(cell_id) => {
-                // Find the service entry that has this cell_id
-                self.registry
-                    .values()
-                    .find(|entry| entry.cell_id == *cell_id)
-                    .map(|entry| entry.sturdy_ref.as_str())
-            }
-            RouteTarget::Handler(name) => {
-                // Look up by handler name matching service name
-                self.registry
-                    .values()
-                    .find(|entry| entry.name == *name)
-                    .map(|entry| entry.sturdy_ref.as_str())
-            }
-            _ => None,
+        if let Some(cell_id) = target_as_cell(&target) {
+            self.registry
+                .values()
+                .find(|entry| entry.cell_id == cell_id)
+                .map(|entry| entry.sturdy_ref.as_str())
+        } else if let RouteTarget::Handler(name) = &target {
+            self.registry
+                .values()
+                .find(|entry| entry.name == *name)
+                .map(|entry| entry.sturdy_ref.as_str())
+        } else {
+            None
         }
     }
 
     /// Resolve a path to the full service entry.
     pub fn resolve_entry(&self, path: &str) -> Option<&ServiceEntry> {
         let target = self.router.classify(path)?;
-
-        match target {
-            RouteTarget::Cell(cell_id) => self
-                .registry
+        if let Some(cell_id) = target_as_cell(&target) {
+            self.registry
                 .values()
-                .find(|entry| entry.cell_id == *cell_id),
-            RouteTarget::Handler(name) => self.registry.values().find(|entry| entry.name == *name),
-            _ => None,
+                .find(|entry| entry.cell_id == cell_id)
+        } else if let RouteTarget::Handler(name) = &target {
+            self.registry.values().find(|entry| entry.name == *name)
+        } else {
+            None
         }
     }
 
@@ -206,8 +199,7 @@ impl SimServiceMesh {
             .values()
             .map(|entry| {
                 let pattern = format!("{}/*", entry.path);
-                let target = RouteTarget::Cell(entry.cell_id);
-                (pattern, target)
+                (pattern, cell_target(entry.cell_id))
             })
             .collect();
 

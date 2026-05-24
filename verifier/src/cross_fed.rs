@@ -430,7 +430,7 @@ mod tests {
         use pyana_cell::AuthRequired;
         use pyana_turn::WitnessedReceipt;
         use pyana_turn::turn::TurnReceipt;
-        use pyana_types::{AttestedRoot, CellId, Signature, generate_keypair};
+        use pyana_types::{AttestedRoot, CellId, generate_keypair};
 
         let (sk, _pk) = generate_keypair();
         let cert = pyana_captp::handoff::HandoffCertificate::create(
@@ -461,7 +461,9 @@ mod tests {
             routing_directives: Vec::new(),
             introduction_exports: Vec::new(),
             derivation_records: Vec::new(),
-            executor_signature: Signature([0u8; 64]),
+            emitted_events: Vec::new(),
+            executor_signature: None,
+            finality: Default::default(),
         };
         let wr = WitnessedReceipt::from_components(receipt, vec![0u8; 8], vec![1, 2, 3], None);
         CrossFedReceiptBundle::new(

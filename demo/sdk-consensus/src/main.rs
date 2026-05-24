@@ -34,7 +34,7 @@ use pyana_captp::handoff::{HandoffCertificate, HandoffPresentation, validate_han
 use pyana_captp::sturdy::SwissTable;
 use pyana_cell::permissions::Permissions;
 use pyana_cell::{AuthRequired, Cell, CellId, Ledger};
-use pyana_federation::Federation;
+use pyana_federation::MorpheusFederation as Federation;
 use pyana_federation::types::PublicKey as FedPublicKey;
 use pyana_sdk::AgentWallet;
 use pyana_turn::action::{Action, Authorization, DelegationMode};

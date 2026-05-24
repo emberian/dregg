@@ -57,6 +57,7 @@ fn check_factory_deploy() -> Result<(), String> {
                 max: 100,
             },
         ],
+        state_constraints: vec![],
         default_mode: CellMode::Hosted,
         creation_budget: Some(1000),
     };

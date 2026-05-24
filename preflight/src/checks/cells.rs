@@ -87,6 +87,7 @@ fn check_factory_cell() -> Result<(), String> {
             min: 0,
             max: 1000,
         }],
+        state_constraints: vec![],
         default_mode: CellMode::Hosted,
         creation_budget: Some(100),
     };

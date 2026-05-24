@@ -172,8 +172,24 @@ pub struct FactoryDescriptor {
     pub child_vk_strategy: Option<ChildVkStrategy>,
     /// Maximum capabilities the factory can grant to created cells.
     pub allowed_cap_templates: Vec<CapTemplate>,
-    /// Initial field constraints (which fields are set, value ranges).
+    /// Initial field constraints (which fields are set at creation, value ranges).
+    /// **Creation-time only** — these run once when `validate_creation` is
+    /// called against the constructor parameters. They do not govern subsequent
+    /// state transitions; for that, use [`state_constraints`] (slot caveats).
     pub field_constraints: Vec<FieldConstraint>,
+    /// **Perpetual** slot caveats baked into the child cell's `CellProgram`.
+    ///
+    /// Per `SLOT-CAVEATS-DESIGN.md` (Lane G), these are the
+    /// `StateConstraint` set installed on every cell produced by this
+    /// factory. They are evaluated by the executor on *every*
+    /// state-modifying turn (not just creation), giving lifetime
+    /// invariants like `WriteOnce`, `Monotonic`, `FieldDelta`, etc.
+    ///
+    /// Defaults to empty so existing factory descriptors keep validating
+    /// unchanged. Apps that want lifetime invariants bake them in here at
+    /// the same time the factory's `field_constraints` are declared.
+    #[serde(default)]
+    pub state_constraints: Vec<crate::program::StateConstraint>,
     /// Whether created cells are sovereign or hosted.
     pub default_mode: CellMode,
     /// Resource budget: max cells this factory can create per epoch.
@@ -212,6 +228,14 @@ impl FactoryDescriptor {
         for fc in &self.field_constraints {
             hasher.update(&fc.hash());
         }
+        // Slot caveats (StateConstraint set) are part of the constructor
+        // transparency: a child cell carries them on `program`, and the
+        // descriptor's hash binds the factory to the same set so anyone
+        // can audit what invariants new cells inherit.
+        let constraints_encoded =
+            postcard::to_allocvec(&self.state_constraints).unwrap_or_default();
+        hasher.update(&(constraints_encoded.len() as u64).to_le_bytes());
+        hasher.update(&constraints_encoded);
         let mode_byte = match self.default_mode {
             CellMode::Hosted => 0u8,
             CellMode::Sovereign => 1u8,
@@ -752,6 +776,7 @@ mod tests {
                     max: 100,
                 },
             ],
+            state_constraints: vec![],
             default_mode: CellMode::Hosted,
             creation_budget: Some(10),
         }
@@ -960,6 +985,7 @@ mod tests {
                 attenuatable: true,
             }],
             field_constraints: vec![],
+            state_constraints: vec![],
             default_mode: CellMode::Sovereign,
             creation_budget: None,
         };
@@ -991,6 +1017,7 @@ mod tests {
                 attenuatable: true,
             }],
             field_constraints: vec![],
+            state_constraints: vec![],
             default_mode: CellMode::Hosted,
             creation_budget: None,
         };
@@ -1026,6 +1053,7 @@ mod tests {
             }),
             allowed_cap_templates: vec![],
             field_constraints: vec![],
+            state_constraints: vec![],
             default_mode: CellMode::Hosted,
             creation_budget: None,
         };
@@ -1100,6 +1128,7 @@ mod tests {
             }),
             allowed_cap_templates: vec![],
             field_constraints: vec![],
+            state_constraints: vec![],
             default_mode: CellMode::Hosted,
             creation_budget: None,
         };
@@ -1136,6 +1165,7 @@ mod tests {
             }),
             allowed_cap_templates: vec![],
             field_constraints: vec![],
+            state_constraints: vec![],
             default_mode: CellMode::Hosted,
             creation_budget: None,
         };

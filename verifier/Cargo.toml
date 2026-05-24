@@ -30,6 +30,7 @@ postcard = { version = "1", features = ["alloc"] }
 
 [dev-dependencies]
 pyana-circuit = { path = "../circuit" }
+pyana-cell = { path = "../cell" }
 tempfile = { workspace = true }
 serde_json = { workspace = true }
 hex = "0.4"

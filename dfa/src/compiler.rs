@@ -458,7 +458,7 @@ fn pattern_to_nfa(p: &Pattern) -> Nfa {
         Pattern::Range(low, high) => Nfa::byte_range(*low, *high),
         Pattern::AnyByte => Nfa::byte_range(0, 255),
         Pattern::Bit(offset_byte, bit_pos, value) => {
-            let mut nfa = if *offset_byte > 0 {
+            let nfa = if *offset_byte > 0 {
                 let mut chain = Nfa::byte_range(0, 255);
                 for _ in 1..*offset_byte {
                     chain = chain.concat(Nfa::byte_range(0, 255));
@@ -540,7 +540,7 @@ fn pattern_to_nfa(p: &Pattern) -> Nfa {
             dfa_to_nfa(&result)
         }
         Pattern::Offset(skip, inner) => {
-            let mut nfa = if *skip > 0 {
+            let nfa = if *skip > 0 {
                 let mut chain = Nfa::byte_range(0, 255);
                 for _ in 1..*skip {
                     chain = chain.concat(Nfa::byte_range(0, 255));

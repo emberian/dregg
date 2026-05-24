@@ -90,7 +90,7 @@ pub struct SimAgent {
 /// is informational only (used by `<pyana-federation>` for display).
 pub struct SimFederation {
     pub name: String,
-    pub federation: pyana_federation::Federation,
+    pub federation: pyana_federation::MorpheusFederation,
     /// History of `propose_block` calls: one entry per call, each a list of
     /// token IDs that were *submitted* (not necessarily finalized — the
     /// `Federation::finalized_history` is the source of truth for what
@@ -167,13 +167,13 @@ impl PyanaRuntime {
     }
 
     /// Create a new federation with `num_nodes` nodes named `<name>-<idx>`.
-    /// Delegates to `pyana_federation::Federation::new` — the nodes have real
+    /// Delegates to `pyana_federation::MorpheusFederation::new` — the nodes have real
     /// Ed25519 keypairs, a real Merkle revocation tree, and a real consensus
     /// state machine. Returns the new federation's index.
     pub fn create_federation(&mut self, name: &str, num_nodes: usize) -> usize {
         let node_names: Vec<String> = (0..num_nodes).map(|i| format!("{name}-{i}")).collect();
         let name_refs: Vec<&str> = node_names.iter().map(|s| s.as_str()).collect();
-        let federation = pyana_federation::Federation::new(&name_refs);
+        let federation = pyana_federation::MorpheusFederation::new(&name_refs);
         let idx = self.federations.len();
         self.federations.push(SimFederation {
             name: name.to_string(),

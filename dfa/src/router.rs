@@ -1,7 +1,7 @@
 //! Routing surface: `RouteTarget`, `RouteTable`, `Router`, `GovernedRouter`,
 //! and the userspace kind registry.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -127,7 +127,8 @@ impl KindRegistry {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RouteTable {
     /// BLAKE3 commitment of the canonical serialization (transitions ‖
-    /// accept-map). This is what's bound into a federation constitution.
+    /// accept-map ‖ prefix-lens). This is what's bound into a federation
+    /// constitution.
     pub commitment: [u8; 32],
     /// Number of states (including the dead state).
     pub num_states: u32,
@@ -135,6 +136,11 @@ pub struct RouteTable {
     pub transitions: Vec<StateId>,
     /// Maps accepting state IDs to their route targets.
     pub accept_map: BTreeMap<StateId, RouteTarget>,
+    /// For URL-style routes, the declared-prefix byte length per accepting
+    /// state. `Classification::matched_prefix` honors this entry when set,
+    /// otherwise falls back to the longest-match span the DFA consumed.
+    #[serde(default)]
+    pub prefix_lens: BTreeMap<StateId, usize>,
     /// Start state (always 1 for freshly compiled tables).
     pub start: StateId,
 }
@@ -144,37 +150,41 @@ impl RouteTable {
     /// The accept-map's keys must be a subset of `dfa.accepting`; any
     /// non-accepting state in the map is ignored.
     pub fn from_dfa(dfa: Dfa, accept_map: BTreeMap<StateId, RouteTarget>) -> Self {
-        let commitment = compute_commitment(&dfa.transitions, &accept_map);
+        let prefix_lens = BTreeMap::new();
+        let commitment = compute_commitment(&dfa.transitions, &accept_map, &prefix_lens);
         RouteTable {
             commitment,
             num_states: dfa.num_states,
             transitions: dfa.transitions,
             accept_map,
+            prefix_lens,
             start: dfa.start,
         }
     }
 
     /// Recompute the commitment (useful after manual mutation).
     pub fn recompute_commitment(&mut self) {
-        self.commitment = compute_commitment(&self.transitions, &self.accept_map);
+        self.commitment =
+            compute_commitment(&self.transitions, &self.accept_map, &self.prefix_lens);
     }
 }
 
 fn compute_commitment(
     transitions: &[StateId],
     accept_map: &BTreeMap<StateId, RouteTarget>,
+    prefix_lens: &BTreeMap<StateId, usize>,
 ) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new_derive_key("pyana-dfa-route-table-v1");
-    // Hash transitions as little-endian u32s.
     for t in transitions {
         hasher.update(&t.to_le_bytes());
     }
-    // Hash accept map using a canonical postcard encoding (BTreeMap iterates
-    // in key order so the byte sequence is deterministic).
     let encoded =
         postcard::to_allocvec(accept_map).expect("RouteTarget postcard encoding cannot fail");
     hasher.update(&(encoded.len() as u64).to_le_bytes());
     hasher.update(&encoded);
+    let plens = postcard::to_allocvec(prefix_lens).expect("prefix_lens encoding cannot fail");
+    hasher.update(&(plens.len() as u64).to_le_bytes());
+    hasher.update(&plens);
     *hasher.finalize().as_bytes()
 }
 
@@ -193,9 +203,25 @@ fn compute_commitment(
 /// the builder routes them to per-pattern accept tags via product
 /// construction).
 pub struct RouteTableBuilder {
-    /// Pairs of (compiled DFA, target). Compiled separately so each route's
-    /// accept set is identifiable.
-    items: Vec<(Dfa, RouteTarget)>,
+    /// Compiled per-route components. Each component DFA accepts only on its
+    /// designated boundary (literal end for exact routes, prefix end for
+    /// `prefix/*` routes); the keep-alive role for `prefix/*` is built into
+    /// the same DFA by using `prefix_of(literal)` as the transition skeleton
+    /// while restricting `accepting` to the boundary state.
+    items: Vec<RouteItem>,
+}
+
+#[derive(Clone, Debug)]
+struct RouteItem {
+    /// Component DFA whose `accepting` is the singleton boundary state (or
+    /// however the user-supplied pattern accepts, for `route_pattern`).
+    dfa: Dfa,
+    /// The target to attribute when this component accepts.
+    target: RouteTarget,
+    /// If this is a URL-style route, the byte length of the declared prefix
+    /// (the literal piece, excluding the `*`). Used to populate
+    /// [`Classification::matched_prefix`] / `remainder`.
+    declared_prefix_len: Option<usize>,
 }
 
 impl RouteTableBuilder {
@@ -203,17 +229,54 @@ impl RouteTableBuilder {
         Self { items: Vec::new() }
     }
 
-    /// Add a URL-style path route. Equivalent to `route_pattern(Pattern::path_prefix(prefix), target)`
-    /// when `prefix` ends with `/*`, or to `Pattern::literal(prefix)` otherwise.
+    /// Add a URL-style path route. The pattern language is intentionally
+    /// minimal:
+    ///
+    /// - `"/cells/stablecoin/*"` matches `/cells/stablecoin/` followed by
+    ///   anything. The declared prefix (`/cells/stablecoin/`) is the bytes
+    ///   that will be reported as `matched_prefix`; whatever follows is the
+    ///   `remainder`.
+    /// - `"/health"` is an exact-match literal route.
+    /// - For richer patterns (alternation, byte ranges, intersection), use
+    ///   [`RouteTableBuilder::route_pattern`].
     pub fn route(mut self, pattern: &str, target: RouteTarget) -> Self {
-        let pat = url_style_pattern(pattern);
-        self.items.push((pat.compile(), target));
+        let (literal_bytes, is_prefix) = parse_url_style(pattern);
+        let dfa = if is_prefix {
+            // For "/prefix/*": compile `prefix_of(literal)` so the DFA stays
+            // alive past the boundary (allowing deeper sibling routes to
+            // match), but restrict `accepting` to the state at the boundary
+            // so the route fires exactly once.
+            let mut dfa = Pattern::prefix_of(Pattern::word(literal_bytes)).compile();
+            let boundary = dfa.run(literal_bytes);
+            let mut acc = BTreeSet::new();
+            if boundary != DEAD_STATE {
+                acc.insert(boundary);
+            }
+            dfa.accepting = acc;
+            dfa
+        } else {
+            Pattern::word(literal_bytes).compile()
+        };
+        self.items.push(RouteItem {
+            dfa,
+            target,
+            declared_prefix_len: Some(literal_bytes.len()),
+        });
         self
     }
 
     /// Add a route specified by an explicit [`Pattern`].
+    ///
+    /// The pattern's accept set is honored as-is: the matched prefix in the
+    /// resulting [`Classification`] will be the entire span the DFA consumed
+    /// before fixing on its longest accept (longest-match semantics).
     pub fn route_pattern(mut self, pattern: Pattern, target: RouteTarget) -> Self {
-        self.items.push((pattern.compile(), target));
+        let dfa = pattern.compile();
+        self.items.push(RouteItem {
+            dfa,
+            target,
+            declared_prefix_len: None,
+        });
         self
     }
 
@@ -244,8 +307,10 @@ impl RouteTableBuilder {
             return RouteTable::from_dfa(dfa, BTreeMap::new());
         }
 
-        let (combined_dfa, accept_map) = compose_tagged_union(&self.items);
-        RouteTable::from_dfa(combined_dfa, accept_map)
+        let (combined_dfa, accept_map, prefix_lens) = compose_tagged_union(&self.items);
+        let mut table = RouteTable::from_dfa(combined_dfa, accept_map);
+        table.prefix_lens = prefix_lens;
+        table
     }
 }
 
@@ -255,51 +320,54 @@ impl Default for RouteTableBuilder {
     }
 }
 
-/// Interpret a string in the URL-style mini-language used by the legacy
-/// `wire::dfa_router::compile_routes` API. Trailing `/*` becomes a
-/// [`Pattern::path_prefix`]; an explicit trailing `*` becomes a prefix
-/// (without the slash); otherwise the whole string is a literal.
-fn url_style_pattern(s: &str) -> Pattern {
+/// Parse a URL-style route string. Returns `(literal_bytes, is_prefix)`.
+/// A trailing `*` (with or without a preceding `/`) marks a prefix route;
+/// the literal part is everything before the `*`.
+fn parse_url_style(s: &str) -> (&[u8], bool) {
     let bytes = s.as_bytes();
-    if bytes.len() >= 2 && bytes[bytes.len() - 2] == b'/' && bytes[bytes.len() - 1] == b'*' {
-        // "/foo/*" — match the prefix `/foo/` followed by anything.
-        Pattern::path_prefix(&s[..s.len() - 1])
-    } else if !bytes.is_empty() && bytes[bytes.len() - 1] == b'*' {
-        Pattern::path_prefix(&s[..s.len() - 1])
+    if !bytes.is_empty() && bytes[bytes.len() - 1] == b'*' {
+        (&bytes[..bytes.len() - 1], true)
     } else {
-        Pattern::literal(s)
+        (bytes, false)
     }
 }
 
-/// Build a combined DFA from `(component_dfa, target)` pairs, tagging each
-/// composite accept state with the *earliest-added* component that accepts.
+/// Build a combined DFA from per-route components.
 ///
-/// State construction: composite states are tuples `(s_0, ..., s_{n-1})` of
-/// component-DFA states. Start = the tuple of component-start states.
-/// Transitions transition each component independently.
-fn compose_tagged_union(items: &[(Dfa, RouteTarget)]) -> (Dfa, BTreeMap<StateId, RouteTarget>) {
+/// Composite state = tuple of component-DFA states. Composite accepts when at
+/// least one component is in its accept set; the accept tag is the component
+/// with the longest declared prefix (the longest-match winner) and on tie,
+/// the earliest-added.
+fn compose_tagged_union(
+    items: &[RouteItem],
+) -> (
+    Dfa,
+    BTreeMap<StateId, RouteTarget>,
+    BTreeMap<StateId, usize>,
+) {
     use std::collections::VecDeque;
 
     let n = items.len();
-    // Encode composite state as `Vec<StateId>`.
     let mut state_map: BTreeMap<Vec<StateId>, StateId> = BTreeMap::new();
     let mut transitions: Vec<StateId> = Vec::new();
     let mut accept_map: BTreeMap<StateId, RouteTarget> = BTreeMap::new();
+    let mut prefix_lens: BTreeMap<StateId, usize> = BTreeMap::new();
     let mut accepting: BTreeSet<StateId> = BTreeSet::new();
 
-    // Dead state at index 0.
     let dead_key: Vec<StateId> = vec![DEAD_STATE; n];
     state_map.insert(dead_key.clone(), DEAD_STATE);
     transitions.extend(std::iter::repeat(DEAD_STATE).take(256));
 
-    // Start state.
-    let start_key: Vec<StateId> = items.iter().map(|(d, _)| d.start).collect();
+    let start_key: Vec<StateId> = items.iter().map(|r| r.dfa.start).collect();
     let start_id: StateId = 1;
     state_map.insert(start_key.clone(), start_id);
     transitions.extend(std::iter::repeat(DEAD_STATE).take(256));
-    if let Some(idx) = first_accepting_component(items, &start_key) {
+    if let Some(idx) = winning_component(items, &start_key) {
         accepting.insert(start_id);
-        accept_map.insert(start_id, items[idx].1.clone());
+        accept_map.insert(start_id, items[idx].target.clone());
+        if let Some(len) = items[idx].declared_prefix_len {
+            prefix_lens.insert(start_id, len);
+        }
     }
 
     let mut worklist: VecDeque<Vec<StateId>> = VecDeque::new();
@@ -310,7 +378,6 @@ fn compose_tagged_union(items: &[(Dfa, RouteTarget)]) -> (Dfa, BTreeMap<StateId,
         let cur_id = state_map[&key];
         for byte in 0u16..=255u16 {
             let b = byte as u8;
-            // Compute the next composite state.
             let next_key: Vec<StateId> = key
                 .iter()
                 .enumerate()
@@ -318,12 +385,11 @@ fn compose_tagged_union(items: &[(Dfa, RouteTarget)]) -> (Dfa, BTreeMap<StateId,
                     if s == DEAD_STATE {
                         DEAD_STATE
                     } else {
-                        items[i].0.transitions[(s as usize) * 256 + (b as usize)]
+                        items[i].dfa.transitions[(s as usize) * 256 + (b as usize)]
                     }
                 })
                 .collect();
 
-            // If all components are dead, the composite is dead.
             if next_key.iter().all(|&s| s == DEAD_STATE) {
                 transitions[(cur_id as usize) * 256 + (b as usize)] = DEAD_STATE;
                 continue;
@@ -336,9 +402,12 @@ fn compose_tagged_union(items: &[(Dfa, RouteTarget)]) -> (Dfa, BTreeMap<StateId,
                 next_id += 1;
                 state_map.insert(next_key.clone(), id);
                 transitions.extend(std::iter::repeat(DEAD_STATE).take(256));
-                if let Some(idx) = first_accepting_component(items, &next_key) {
+                if let Some(idx) = winning_component(items, &next_key) {
                     accepting.insert(id);
-                    accept_map.insert(id, items[idx].1.clone());
+                    accept_map.insert(id, items[idx].target.clone());
+                    if let Some(len) = items[idx].declared_prefix_len {
+                        prefix_lens.insert(id, len);
+                    }
                 }
                 worklist.push_back(next_key);
                 id
@@ -355,16 +424,30 @@ fn compose_tagged_union(items: &[(Dfa, RouteTarget)]) -> (Dfa, BTreeMap<StateId,
             accepting,
         },
         accept_map,
+        prefix_lens,
     )
 }
 
-fn first_accepting_component(items: &[(Dfa, RouteTarget)], key: &[StateId]) -> Option<usize> {
-    for (i, ((dfa, _), &s)) in items.iter().zip(key.iter()).enumerate() {
-        if s != DEAD_STATE && dfa.accepting.contains(&s) {
-            return Some(i);
+/// Pick the winning component at a composite state.
+///
+/// Selection rule: among accepting components, prefer the one with the
+/// longest declared prefix length. On ties (or both unspecified), the
+/// earliest-added route wins. This gives URL-style routes the
+/// longest-prefix-match behavior consumers expect.
+fn winning_component(items: &[RouteItem], key: &[StateId]) -> Option<usize> {
+    let mut best: Option<(usize, isize)> = None;
+    for (i, (item, &s)) in items.iter().zip(key.iter()).enumerate() {
+        if s == DEAD_STATE || !item.dfa.accepting.contains(&s) {
+            continue;
+        }
+        let len = item.declared_prefix_len.map(|l| l as isize).unwrap_or(-1);
+        match best {
+            None => best = Some((i, len)),
+            Some((_, prev_len)) if len > prev_len => best = Some((i, len)),
+            _ => {}
         }
     }
-    None
+    best.map(|(i, _)| i)
 }
 
 // ---------------------------------------------------------------------------
@@ -405,12 +488,13 @@ impl Router {
     }
 
     fn classify_inner<'a>(&'a self, input: &'a [u8]) -> Option<Classification<'a>> {
-        let dfa = self.as_dfa_view();
-        let (_final, longest) = dfa.run_with_longest_match(input);
-        let len = longest?;
-        // Re-walk to the longest-match position to find the accepting state.
+        // Walk the DFA, recording the *deepest* (last visited) accept state
+        // along with the byte index at which it was reached.
         let mut state: StateId = self.table.start;
-        let mut last_state: StateId = state;
+        let mut last_accept: Option<(StateId, usize)> = None;
+        if self.table.accept_map.contains_key(&state) {
+            last_accept = Some((state, 0));
+        }
         for (i, &byte) in input.iter().enumerate() {
             let idx = (state as usize) * 256 + (byte as usize);
             if idx >= self.table.transitions.len() {
@@ -421,25 +505,33 @@ impl Router {
                 break;
             }
             state = next;
-            if i + 1 == len {
-                last_state = state;
-                break;
+            if self.table.accept_map.contains_key(&state) {
+                last_accept = Some((state, i + 1));
             }
         }
-        // Edge case: empty match (len == 0 means start was accepting).
-        if len == 0 {
-            last_state = self.table.start;
-        }
-        let target = self.table.accept_map.get(&last_state)?;
+        let (accept_state, walked_len) = last_accept?;
+        let target = self.table.accept_map.get(&accept_state)?;
+        // For URL-style routes the declared prefix length governs the
+        // matched_prefix / remainder split. For pattern routes we fall back
+        // to the longest-accept walk length.
+        let prefix_len = self
+            .table
+            .prefix_lens
+            .get(&accept_state)
+            .copied()
+            .unwrap_or(walked_len)
+            .min(input.len());
         Some(Classification {
             target,
-            matched_prefix: &input[..len],
-            remainder: &input[len..],
+            matched_prefix: &input[..prefix_len],
+            remainder: &input[prefix_len..],
         })
     }
 
-    /// Underlying DFA (transitions / start / accepting reconstructed).
-    fn as_dfa_view(&self) -> Dfa {
+    /// Reconstruct the underlying DFA (for AIR trace generation or
+    /// inspection). The DFA's `accepting` set equals the route table's
+    /// `accept_map` keys.
+    pub fn as_dfa(&self) -> Dfa {
         Dfa {
             num_states: self.table.num_states,
             transitions: self.table.transitions.clone(),

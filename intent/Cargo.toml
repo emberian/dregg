@@ -17,6 +17,7 @@ postcard = { version = "1", features = ["alloc"] }
 pyana-cell = { path = "../cell" }
 pyana-circuit = { path = "../circuit" }
 pyana-commit = { path = "../commit" }
+pyana-federation = { path = "../federation", default-features = false }  # pure threshold_decrypt; no tokio
 pyana-trace = { path = "../trace" }
 pyana-turn = { path = "../turn" }
 token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }

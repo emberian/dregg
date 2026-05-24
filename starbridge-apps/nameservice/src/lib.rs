@@ -81,7 +81,7 @@
 use pyana_app_framework::{Action, AppWallet, CellId, Effect, Event, FieldElement, symbol};
 use pyana_cell::{
     AuthRequired, CapTarget, CapTemplate, CellMode, ChildVkStrategy, FactoryDescriptor,
-    FieldConstraint,
+    FieldConstraint, StateConstraint,
 };
 
 // =============================================================================
@@ -161,13 +161,20 @@ pub const NAME_CHILD_PROGRAM_VK: [u8; 32] = *b"starbridge-nameservice-childprog"
 ///   all derived from the owner cap via attenuation
 ///   (`Caveat::ResourcePrefix`, etc.); the factory itself does not
 ///   mint those separately.
-/// - `field_constraints`:
-///   - `NonZero(NAME_HASH_SLOT)` — every created name cell *must*
-///     initialize its name-hash slot. Combined with the (TODO)
-///     `WriteOnce` caveat on the cell program, this gives the
-///     "immutable identity" guarantee called out in
-///     `STARBRIDGE-APPS-PLAN.md` §3.1.
-///   - `NonZero(EXPIRY_SLOT)` — every name has an expiry.
+/// - `field_constraints` (creation-time): every created name cell *must*
+///     initialize its `NAME_HASH_SLOT` and `EXPIRY_SLOT` to non-zero
+///     values. These run once at constructor invocation.
+/// - `state_constraints` (perpetual / Lane G slot caveats):
+///   - `StateConstraint::WriteOnce { index: NAME_HASH_SLOT }` — the
+///     name-hash slot may only be written from `FIELD_ZERO`. After the
+///     first registration the slot is frozen for the cell's lifetime.
+///     This closes `APPS-USERSPACE-GAPS.md` Gap 1 ("name-hash slot may
+///     only be written once") — the gap that the
+///     `SLOT-CAVEATS-DESIGN.md` TODO above pointed at.
+///   - `StateConstraint::Monotonic { index: EXPIRY_SLOT }` — rent
+///     extensions may only push the expiry *forward*; an attacker
+///     cannot shorten a rental they've already sold by writing a
+///     smaller expiry value.
 pub fn name_factory_descriptor() -> FactoryDescriptor {
     FactoryDescriptor {
         factory_vk: NAME_FACTORY_VK,
@@ -184,6 +191,14 @@ pub fn name_factory_descriptor() -> FactoryDescriptor {
             },
             FieldConstraint::NonZero {
                 field_index: EXPIRY_SLOT as u32,
+            },
+        ],
+        state_constraints: vec![
+            StateConstraint::WriteOnce {
+                index: NAME_HASH_SLOT as u8,
+            },
+            StateConstraint::Monotonic {
+                index: EXPIRY_SLOT as u8,
             },
         ],
         default_mode: CellMode::Sovereign,
@@ -231,23 +246,18 @@ pub fn factory_descriptors() -> Vec<FactoryDescriptor> {
 /// The action is signed by the framework's [`AppWallet`]; the
 /// signature binds to the wallet's `federation_id`.
 ///
-/// # Slot-caveat gap (TODO)
+/// # Slot-caveat enforcement
 ///
-/// The "name-hash slot may only be written once" guarantee is
-/// currently **not enforced** at the executor level — the SetField on
-/// `NAME_HASH_SLOT` will silently overwrite an existing value. The
-/// missing primitive is a `WriteOnce`-style state-constraint caveat
-/// that the cell program would check in-circuit before admitting the
-/// transition.
-///
-/// See `../../../SLOT-CAVEATS-DESIGN.md` (Lane G) for the design
-/// being landed in parallel; once that lands, the
-/// [`name_factory_descriptor`] above grows a
-/// `StateConstraint::WriteOnce { field_index: NAME_HASH_SLOT as u32 }`
-/// entry and this TODO closes. Until then, userspace must check the
-/// slot is currently zero *before* calling this helper. The Starbridge
-/// UI surface (`pages/index.html` + `shared/inspectors/name.js`) does
-/// that check before exposing the "Register" button.
+/// The "name-hash slot may only be written once" guarantee is now
+/// enforced by [`name_factory_descriptor`]'s
+/// `StateConstraint::WriteOnce { index: NAME_HASH_SLOT }` — every name
+/// cell carries this caveat on its `CellProgram`, and the executor
+/// rejects any subsequent `SetField(NAME_HASH_SLOT, ..)` that would
+/// overwrite a non-zero slot. Likewise,
+/// `StateConstraint::Monotonic { index: EXPIRY_SLOT }` prevents
+/// expiry decreases. See `SLOT-CAVEATS-DESIGN.md` and
+/// `SLOT-CAVEATS-EVALUATION.md` for the Lane G design that landed
+/// these.
 pub fn build_register_action(
     wallet: &AppWallet,
     registry_cell: CellId,
@@ -432,6 +442,118 @@ mod tests {
                 .any(|c| matches!(c, FieldConstraint::NonZero { field_index } if *field_index == EXPIRY_SLOT as u32)),
             "name factory must constrain EXPIRY_SLOT to be non-zero"
         );
+    }
+
+    #[test]
+    fn factory_descriptor_bakes_slot_caveats() {
+        // Lane G slot caveats are baked into the descriptor's
+        // `state_constraints` — every produced cell inherits them.
+        let d = name_factory_descriptor();
+        assert!(
+            d.state_constraints.iter().any(|c| matches!(
+                c,
+                StateConstraint::WriteOnce { index } if *index == NAME_HASH_SLOT as u8
+            )),
+            "name factory must install WriteOnce on NAME_HASH_SLOT"
+        );
+        assert!(
+            d.state_constraints.iter().any(|c| matches!(
+                c,
+                StateConstraint::Monotonic { index } if *index == EXPIRY_SLOT as u8
+            )),
+            "name factory must install Monotonic on EXPIRY_SLOT"
+        );
+    }
+
+    // ── Slot-caveat enforcement (positive + negative). ───────────────────
+    //
+    // These exercise the `StateConstraint` evaluator directly against the
+    // descriptor's slot caveats. They are the executor-side regression for
+    // the Lane G migration: a legal registration succeeds; a second
+    // registration on the same cell is rejected with `WriteOnceViolation`
+    // and an expiry decrement is rejected with `MonotonicViolation`.
+
+    fn build_name_program() -> pyana_cell::CellProgram {
+        pyana_cell::CellProgram::Predicate(name_factory_descriptor().state_constraints.clone())
+    }
+
+    fn empty_state() -> pyana_cell::state::CellState {
+        pyana_cell::state::CellState::new(0)
+    }
+
+    fn state_with(name_hash: FieldElement, expiry: u64) -> pyana_cell::state::CellState {
+        let mut s = empty_state();
+        s.fields[NAME_HASH_SLOT] = name_hash;
+        s.fields[EXPIRY_SLOT] = u64_field(expiry);
+        s
+    }
+
+    #[test]
+    fn slot_caveats_legal_registration_succeeds() {
+        // Initial registration: old slot is FIELD_ZERO (fresh cell), new
+        // slot is `blake3("alice.pyana")`. WriteOnce permits this because
+        // the prior value is zero; Monotonic permits any expiry on init.
+        let program = build_name_program();
+        let old = empty_state();
+        let new = state_with(blake3_field(b"alice.pyana"), 1_000);
+        let result = program.evaluate(&new, Some(&old), None);
+        assert!(
+            result.is_ok(),
+            "legal registration must succeed: {result:?}"
+        );
+    }
+
+    #[test]
+    fn slot_caveats_reregister_taken_name_is_write_once_violation() {
+        let program = build_name_program();
+        let alice_hash = blake3_field(b"alice.pyana");
+        let bob_hash = blake3_field(b"bob.pyana");
+        let mut old = state_with(alice_hash, 1_000);
+        old.set_nonce(1); // not a fresh cell
+        // Attempt: overwrite NAME_HASH_SLOT with a different value.
+        let new = state_with(bob_hash, 1_000);
+        let err = program
+            .evaluate(&new, Some(&old), None)
+            .expect_err("re-registration must be rejected");
+        match err {
+            pyana_cell::ProgramError::ConstraintViolated {
+                constraint: StateConstraint::WriteOnce { index },
+                ..
+            } => assert_eq!(index, NAME_HASH_SLOT as u8),
+            other => panic!("expected WriteOnce violation, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn slot_caveats_expiry_decrease_is_monotonic_violation() {
+        let program = build_name_program();
+        let alice_hash = blake3_field(b"alice.pyana");
+        let mut old = state_with(alice_hash, 5_000);
+        old.set_nonce(1);
+        // Attempt: shorten expiry from 5000 → 4000.
+        let new = state_with(alice_hash, 4_000);
+        let err = program
+            .evaluate(&new, Some(&old), None)
+            .expect_err("expiry decrement must be rejected");
+        match err {
+            pyana_cell::ProgramError::ConstraintViolated {
+                constraint: StateConstraint::Monotonic { index },
+                ..
+            } => assert_eq!(index, EXPIRY_SLOT as u8),
+            other => panic!("expected Monotonic violation, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn slot_caveats_legal_renewal_succeeds() {
+        // Renewal extends expiry — Monotonic permits new >= old.
+        let program = build_name_program();
+        let alice_hash = blake3_field(b"alice.pyana");
+        let mut old = state_with(alice_hash, 5_000);
+        old.set_nonce(1);
+        let new = state_with(alice_hash, 10_000);
+        let result = program.evaluate(&new, Some(&old), None);
+        assert!(result.is_ok(), "legal renewal must succeed: {result:?}");
     }
 
     #[test]

@@ -24,7 +24,6 @@ pub fn run_case(
     predicate_name: &'static str,
     case: &PredicateCase,
     handles: &BackendHandles,
-    datalog_param_names: &[&str],
 ) -> RowReport {
     let mut row = RowReport::new(predicate_name, case.label.clone());
 
@@ -35,17 +34,14 @@ pub fn run_case(
     };
     row.record(BK_RUST, rust_verdict);
 
-    // gen_datalog: re-evaluate the emitted rule.
-    let datalog_verdict =
-        match datalog_eval::bindings_for_requirements(&case.body.requirements, datalog_param_names)
-        {
-            Err(msg) => BackendVerdict::Error(msg),
-            Ok(bindings) => match datalog_eval::evaluate(handles.datalog_rule, &bindings) {
-                Ok(true) => BackendVerdict::Accept,
-                Ok(false) => BackendVerdict::Reject,
-                Err(msg) => BackendVerdict::Error(msg),
-            },
-        };
+    // gen_datalog: re-evaluate the emitted rule with bindings drawn
+    // directly from the case's named inputs.
+    let datalog_bindings = datalog_eval::bindings_from_inputs(&case.inputs);
+    let datalog_verdict = match datalog_eval::evaluate(handles.datalog_rule, &datalog_bindings) {
+        Ok(true) => BackendVerdict::Accept,
+        Ok(false) => BackendVerdict::Reject,
+        Err(msg) => BackendVerdict::Error(msg),
+    };
     row.record(BK_DATALOG, datalog_verdict);
 
     // gen_air: re-derive from descriptor + diff_witness.
@@ -73,8 +69,19 @@ pub fn run_case(
     };
     row.record(BK_PLONKY3, plonky3_verdict);
 
+    // Param names for the lint passes — every named input gets a wire in
+    // ZKIR and an `sp1_zkvm::io::read` site in the SP1 guest.
+    let param_names: Vec<&str> = case
+        .inputs
+        .u64s
+        .iter()
+        .map(|(n, _)| *n)
+        .chain(case.inputs.bytes.iter().map(|(n, _)| *n))
+        .chain(case.inputs.sets.iter().map(|(n, _)| *n))
+        .collect();
+
     // gen_midnight: lint only.
-    let midnight_verdict = match midnight_lint::lint(handles.midnight_zkir, datalog_param_names) {
+    let midnight_verdict = match midnight_lint::lint(handles.midnight_zkir, &param_names) {
         Ok(()) => BackendVerdict::Skip {
             reason: "Midnight ZKIR v3 requires off-chain proof server; emitted JSON linted only",
         },
@@ -83,7 +90,7 @@ pub fn run_case(
     row.record(BK_MIDNIGHT, midnight_verdict);
 
     // gen_sp1: lint only.
-    let sp1_verdict = match sp1_lint::lint(handles.sp1_guest, datalog_param_names) {
+    let sp1_verdict = match sp1_lint::lint(handles.sp1_guest, &param_names) {
         Ok(()) => BackendVerdict::Skip {
             reason: "SP1 guest requires sp1-prove / RISC-V toolchain; emitted source linted only",
         },

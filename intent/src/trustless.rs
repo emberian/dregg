@@ -36,12 +36,26 @@
 use std::collections::HashMap;
 
 use pyana_cell::CellId;
+use pyana_federation::threshold_decrypt::{
+    ThresholdCiphertext, ThresholdDecryptError, combine_shares,
+};
 use pyana_turn::action::Authorization;
 use serde::{Deserialize, Serialize};
 
 use crate::lowering::{self, LoweringContext, SealedTurn};
 use crate::solver::RingTrade;
 use crate::{CommitmentId, Intent, IntentId};
+
+/// Canonical decryption share type, re-exported from
+/// `pyana_federation::threshold_decrypt`. The intent engine no longer
+/// carries its own opaque-bytes placeholder; shares are real Shamir-
+/// over-GF(256) values whose MACs are verified at combine time.
+///
+/// The federation type is keyed by `ciphertext_id` (BLAKE3 of the
+/// `ThresholdCiphertext`), not by `batch_id`. The engine validates
+/// that every contributed share's `ciphertext_id` matches one of the
+/// submitted encrypted intents in the current batch.
+pub use pyana_federation::threshold_decrypt::DecryptionShare;
 
 // =============================================================================
 // Configuration constants
@@ -182,10 +196,17 @@ pub enum BatchState {
 }
 
 /// An encrypted intent submitted before decryption.
+///
+/// The `ciphertext` carries the federation's real
+/// [`ThresholdCiphertext`] — a ChaCha20-Poly1305-style sealed payload
+/// keyed to the epoch's threshold encryption key. Validators each
+/// hold a Shamir share of the decryption key; t-of-n contributed
+/// shares reconstruct the key, after which the ciphertext decrypts
+/// to a postcard-serialized [`Intent`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EncryptedIntent {
-    /// The encrypted payload (threshold-encrypted serialized Intent).
-    pub ciphertext: Vec<u8>,
+    /// The threshold-encrypted serialized [`Intent`].
+    pub ciphertext: ThresholdCiphertext,
     /// Anonymous creator commitment (visible even before decryption for dedup).
     pub creator_commitment: CommitmentId,
     /// Blocklace height at which this was submitted.
@@ -193,27 +214,25 @@ pub struct EncryptedIntent {
 }
 
 impl EncryptedIntent {
-    /// Compute a content-addressed ID for deduplication.
+    /// Compute a content-addressed ID for deduplication. Includes the
+    /// ciphertext's own id (epoch + nonce + ciphertext bytes) so two
+    /// different encryptions of the same intent get distinct content
+    /// ids — the inner [`ThresholdCiphertext::ciphertext_id`] alone
+    /// is sufficient but we also bind the creator + submission height
+    /// for additional uniqueness when the same ciphertext is replayed.
     pub fn content_id(&self) -> [u8; 32] {
-        let mut hasher = blake3::Hasher::new_derive_key("pyana-encrypted-intent-id-v1");
-        hasher.update(&self.ciphertext);
+        let mut hasher = blake3::Hasher::new_derive_key("pyana-encrypted-intent-id-v2");
+        hasher.update(&self.ciphertext.ciphertext_id());
         hasher.update(&self.creator_commitment.0);
         hasher.update(&self.submitted_at.to_le_bytes());
         *hasher.finalize().as_bytes()
     }
-}
 
-/// A decryption share contributed by a validator during the threshold ceremony.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct DecryptionShare {
-    /// Which validator contributed this share.
-    pub validator_index: u8,
-    /// The key share data (32 bytes).
-    pub share: [u8; 32],
-    /// Binding: hash of the batch being decrypted.
-    pub batch_id: u64,
-    /// MAC for integrity verification.
-    pub share_mac: [u8; 32],
+    /// Convenience: the ciphertext id used by decryption shares to
+    /// bind to a specific encrypted payload.
+    pub fn ciphertext_id(&self) -> [u8; 32] {
+        self.ciphertext.ciphertext_id()
+    }
 }
 
 /// A solver's proposed solution to the batch.
@@ -271,12 +290,16 @@ pub struct IntentBatch {
     pub winning_solution: Option<SolverSubmission>,
     /// Current lifecycle state.
     pub state: BatchState,
-    /// Decryption shares collected so far.
-    pub decrypt_shares: Vec<DecryptionShare>,
+    /// Decryption shares collected so far, indexed by `ciphertext_id`.
+    /// Each ciphertext is independently decryptable once t-of-n shares
+    /// referencing it have arrived.
+    pub decrypt_shares: HashMap<[u8; 32], Vec<DecryptionShare>>,
     /// Height at which the challenge window opened.
     pub challenge_start_height: Option<u64>,
     /// Content IDs of submitted intents (for deduplication).
     seen_intent_ids: HashMap<[u8; 32], ()>,
+    /// Ciphertext IDs of submitted intents (for share-binding validation).
+    seen_ciphertext_ids: HashMap<[u8; 32], ()>,
 }
 
 impl IntentBatch {
@@ -290,9 +313,10 @@ impl IntentBatch {
             solutions: Vec::new(),
             winning_solution: None,
             state: BatchState::Collecting,
-            decrypt_shares: Vec::new(),
+            decrypt_shares: HashMap::new(),
             challenge_start_height: None,
             seen_intent_ids: HashMap::new(),
+            seen_ciphertext_ids: HashMap::new(),
         }
     }
 }
@@ -465,8 +489,10 @@ impl TrustlessIntentEngine {
         if self.current_batch.seen_intent_ids.contains_key(&content_id) {
             return Err(EngineError::DuplicateIntent);
         }
+        let cipher_id = intent.ciphertext_id();
 
         self.current_batch.seen_intent_ids.insert(content_id, ());
+        self.current_batch.seen_ciphertext_ids.insert(cipher_id, ());
         self.current_batch.encrypted_intents.push(intent);
         Ok(())
     }
@@ -500,8 +526,17 @@ impl TrustlessIntentEngine {
 
     /// Contribute a decryption share from a validator.
     ///
-    /// Once `decrypt_threshold` shares are collected, the batch transitions to
-    /// Solving and all intents are decrypted simultaneously.
+    /// Shares are bound to a specific [`ThresholdCiphertext`] via
+    /// `ciphertext_id` (BLAKE3 over the ciphertext bytes). The engine
+    /// accumulates shares per ciphertext; once **every** submitted
+    /// ciphertext has at least `decrypt_threshold` shares, the engine
+    /// reconstructs the decryption key and decrypts each ciphertext
+    /// via [`combine_shares`], deserializes the plaintexts as
+    /// [`Intent`]s, and transitions the batch to `Solving`.
+    ///
+    /// Share-MAC verification is performed inside `combine_shares` —
+    /// corrupted shares are caught with an `InvalidShareMac` error
+    /// surfaced as [`EngineError::InvalidDecryptionShare`].
     pub fn contribute_decrypt_share(&mut self, share: DecryptionShare) -> Result<(), EngineError> {
         if self.current_batch.state != BatchState::AwaitingDecrypt {
             return Err(EngineError::WrongState {
@@ -510,25 +545,17 @@ impl TrustlessIntentEngine {
             });
         }
 
-        // Validate the share references this batch
-        if share.batch_id != self.current_batch.batch_id {
-            return Err(EngineError::InvalidDecryptionShare {
-                reason: format!(
-                    "share batch_id {} != current batch_id {}",
-                    share.batch_id, self.current_batch.batch_id
-                ),
-            });
-        }
-
-        // Check for duplicate validator index
-        if self
+        // Validate the share references a ciphertext in this batch.
+        if !self
             .current_batch
-            .decrypt_shares
-            .iter()
-            .any(|s| s.validator_index == share.validator_index)
+            .seen_ciphertext_ids
+            .contains_key(&share.ciphertext_id)
         {
             return Err(EngineError::InvalidDecryptionShare {
-                reason: format!("duplicate share from validator {}", share.validator_index),
+                reason: format!(
+                    "share ciphertext_id {:02x}{:02x}... does not match any submitted ciphertext",
+                    share.ciphertext_id[0], share.ciphertext_id[1]
+                ),
             });
         }
 
@@ -542,34 +569,92 @@ impl TrustlessIntentEngine {
             });
         }
 
-        self.current_batch.decrypt_shares.push(share);
+        // Check for duplicate validator index for this ciphertext.
+        let shares_for_ct = self
+            .current_batch
+            .decrypt_shares
+            .entry(share.ciphertext_id)
+            .or_default();
+        if shares_for_ct
+            .iter()
+            .any(|s| s.validator_index == share.validator_index)
+        {
+            return Err(EngineError::InvalidDecryptionShare {
+                reason: format!(
+                    "duplicate share from validator {} for ciphertext {:02x}{:02x}...",
+                    share.validator_index, share.ciphertext_id[0], share.ciphertext_id[1]
+                ),
+            });
+        }
 
-        // Check if we have enough shares to decrypt
-        if self.current_batch.decrypt_shares.len() >= self.decrypt_threshold {
-            // In a real implementation, we would call into
-            // federation::threshold_decrypt::combine_shares here.
-            // For the protocol layer, we mark the batch as ready for solving.
-            // The actual decryption is handled by `set_decrypted_intents`.
-            self.current_batch.state = BatchState::Solving;
+        shares_for_ct.push(share);
+
+        // Check if every submitted ciphertext has >= threshold shares; if
+        // so, run the threshold decryption ceremony.
+        let all_ready = !self.current_batch.encrypted_intents.is_empty()
+            && self.current_batch.encrypted_intents.iter().all(|ct| {
+                self.current_batch
+                    .decrypt_shares
+                    .get(&ct.ciphertext_id())
+                    .map(|v| v.len() >= self.decrypt_threshold)
+                    .unwrap_or(false)
+            });
+
+        if all_ready {
+            self.run_threshold_decryption()?;
         }
 
         Ok(())
     }
 
-    /// Set the decrypted intents after the threshold ceremony completes.
+    /// Reconstruct the decryption key and decrypt every encrypted
+    /// intent in the current batch. Called by
+    /// [`Self::contribute_decrypt_share`] once threshold shares for
+    /// every ciphertext are available.
     ///
-    /// In production, this is called after `combine_shares` successfully
-    /// reconstructs the key and decrypts all encrypted intents in the batch.
-    /// The decrypted intents become the PUBLIC INPUT to the solving phase.
-    pub fn set_decrypted_intents(&mut self, intents: Vec<Intent>) -> Result<(), EngineError> {
-        if self.current_batch.state != BatchState::Solving {
-            return Err(EngineError::WrongState {
-                expected: BatchState::Solving,
-                actual: self.current_batch.state,
-            });
+    /// On success, transitions the batch to `Solving` and populates
+    /// `decrypted` with the postcard-deserialized [`Intent`]s in the
+    /// same order as `encrypted_intents`. Ciphertexts whose plaintext
+    /// fails to deserialize as an `Intent` are dropped (malformed
+    /// submissions cannot enter the solving phase).
+    fn run_threshold_decryption(&mut self) -> Result<(), EngineError> {
+        let mut decrypted: Vec<Intent> = Vec::new();
+        for ct in self.current_batch.encrypted_intents.iter() {
+            let shares = self
+                .current_batch
+                .decrypt_shares
+                .get(&ct.ciphertext_id())
+                .ok_or_else(|| EngineError::InsufficientDecryptionShares {
+                    have: 0,
+                    need: self.decrypt_threshold,
+                })?;
+
+            let plaintext = combine_shares(&ct.ciphertext, shares, self.decrypt_threshold)
+                .map_err(|e| match e {
+                    ThresholdDecryptError::InvalidShareMac(idx) => {
+                        EngineError::InvalidDecryptionShare {
+                            reason: format!("share MAC verification failed for validator {idx}"),
+                        }
+                    }
+                    ThresholdDecryptError::InsufficientShares { have, need } => {
+                        EngineError::InsufficientDecryptionShares { have, need }
+                    }
+                    other => EngineError::InvalidDecryptionShare {
+                        reason: format!("threshold decrypt failed: {other}"),
+                    },
+                })?;
+
+            // Deserialize the plaintext as an Intent. Malformed
+            // ciphertexts are skipped silently — they can never
+            // enter the solving phase because no solver can
+            // reference an absent IntentId.
+            if let Ok(intent) = postcard::from_bytes::<Intent>(&plaintext) {
+                decrypted.push(intent);
+            }
         }
 
-        self.current_batch.decrypted = Some(intents);
+        self.current_batch.decrypted = Some(decrypted);
+        self.current_batch.state = BatchState::Solving;
         Ok(())
     }
 
@@ -816,9 +901,24 @@ impl TrustlessIntentEngine {
         self.current_batch.encrypted_intents.len()
     }
 
-    /// Get the number of decryption shares collected.
+    /// Get the total number of decryption shares collected across
+    /// all ciphertexts in the current batch.
     pub fn decrypt_share_count(&self) -> usize {
-        self.current_batch.decrypt_shares.len()
+        self.current_batch
+            .decrypt_shares
+            .values()
+            .map(|v| v.len())
+            .sum()
+    }
+
+    /// Get the number of decryption shares collected for a specific
+    /// ciphertext (looked up by its `ciphertext_id`).
+    pub fn decrypt_share_count_for(&self, ciphertext_id: &[u8; 32]) -> usize {
+        self.current_batch
+            .decrypt_shares
+            .get(ciphertext_id)
+            .map(|v| v.len())
+            .unwrap_or(0)
     }
 
     /// Get the current winning score, if any.
@@ -839,6 +939,21 @@ mod tests {
     use super::*;
     use crate::solver::{RingTrade, Settlement};
     use crate::{ActionPattern, CommitmentId, Intent, IntentKind, MatchSpec};
+    use pyana_federation::threshold_decrypt::{
+        KeyShare, ThresholdEncryptionKey, generate_epoch_key, produce_decryption_share,
+        threshold_encrypt,
+    };
+
+    /// Stable test fixture: a single keypair shared across all tests in
+    /// this module, generated once so each `TrustlessIntentEngine` test
+    /// can encrypt with the same epoch key.
+    fn make_test_keys(
+        threshold: u8,
+        num_validators: u8,
+    ) -> (ThresholdEncryptionKey, Vec<KeyShare>) {
+        let epoch_id = [0xEEu8; 32];
+        generate_epoch_key(epoch_id, threshold, num_validators)
+    }
 
     /// Helper: create a test intent with a deterministic ID.
     fn make_intent(id_seed: u8) -> Intent {
@@ -863,23 +978,28 @@ mod tests {
         )
     }
 
-    /// Helper: create an encrypted intent (simulated ciphertext).
-    fn make_encrypted(id_seed: u8, height: u64) -> EncryptedIntent {
+    /// Helper: encrypt an intent under the given threshold key, producing
+    /// an [`EncryptedIntent`] ready for submission. Returns the encrypted
+    /// intent (caller submits) alongside the intent's content id so tests
+    /// can correlate decrypted output with submissions.
+    fn encrypt_intent(
+        intent: &Intent,
+        key: &ThresholdEncryptionKey,
+        height: u64,
+    ) -> EncryptedIntent {
+        let plaintext = postcard::to_allocvec(intent).expect("intent serializes");
+        let ciphertext = threshold_encrypt(&plaintext, key).expect("encrypt succeeds");
         EncryptedIntent {
-            ciphertext: vec![id_seed; 64], // simulated ciphertext
-            creator_commitment: CommitmentId([id_seed; 32]),
+            ciphertext,
+            creator_commitment: intent.creator,
             submitted_at: height,
         }
     }
 
-    /// Helper: create a valid decryption share.
-    fn make_share(validator: u8, batch_id: u64) -> DecryptionShare {
-        DecryptionShare {
-            validator_index: validator,
-            share: [validator; 32],
-            batch_id,
-            share_mac: [0xAA; 32],
-        }
+    /// Helper: produce a decryption share for a given encrypted intent
+    /// from a specific validator's key share.
+    fn make_share_for(enc: &EncryptedIntent, key_share: &KeyShare) -> DecryptionShare {
+        produce_decryption_share(&enc.ciphertext, key_share)
     }
 
     /// Helper: create a solver submission for given intents.
@@ -923,17 +1043,23 @@ mod tests {
     // =========================================================================
     #[test]
     fn test_encrypted_intents_opaque_before_decrypt() {
+        let (key, _shares) = make_test_keys(3, 5);
         let mut engine = TrustlessIntentEngine::new(3, 5);
 
-        let enc = make_encrypted(0x42, 1);
-        engine.submit_encrypted(enc.clone()).unwrap();
+        let intent = make_intent(0x42);
+        let enc = encrypt_intent(&intent, &key, 1);
+        engine.submit_encrypted(enc).unwrap();
 
         // The batch has encrypted intents but no decrypted intents
         assert_eq!(engine.current_batch.encrypted_intents.len(), 1);
         assert!(engine.current_batch.decrypted.is_none());
 
-        // The ciphertext is just opaque bytes - cannot be deserialized as Intent
-        let raw = &engine.current_batch.encrypted_intents[0].ciphertext;
+        // The ciphertext payload bytes do not deserialize as a plaintext
+        // Intent. (The ChaCha20 keystream randomization plus the
+        // Poly1305-style tag at the end ensures it can't masquerade.)
+        let raw = &engine.current_batch.encrypted_intents[0]
+            .ciphertext
+            .ciphertext;
         let attempt: Result<Intent, _> = postcard::from_bytes(raw);
         assert!(
             attempt.is_err(),
@@ -946,12 +1072,19 @@ mod tests {
     // =========================================================================
     #[test]
     fn test_batch_boundary_deterministic() {
+        let (key, _shares) = make_test_keys(3, 5);
         let mut engine = TrustlessIntentEngine::new(3, 5);
 
         // Submit some intents
-        engine.submit_encrypted(make_encrypted(1, 1)).unwrap();
-        engine.submit_encrypted(make_encrypted(2, 2)).unwrap();
-        engine.submit_encrypted(make_encrypted(3, 3)).unwrap();
+        engine
+            .submit_encrypted(encrypt_intent(&make_intent(1), &key, 1))
+            .unwrap();
+        engine
+            .submit_encrypted(encrypt_intent(&make_intent(2), &key, 2))
+            .unwrap();
+        engine
+            .submit_encrypted(encrypt_intent(&make_intent(3), &key, 3))
+            .unwrap();
 
         // Close at a specific height
         engine.close_batch(100).unwrap();
@@ -962,7 +1095,7 @@ mod tests {
         assert_eq!(engine.current_batch.state, BatchState::AwaitingDecrypt);
 
         // Cannot submit more intents after close
-        let result = engine.submit_encrypted(make_encrypted(4, 4));
+        let result = engine.submit_encrypted(encrypt_intent(&make_intent(4), &key, 4));
         assert_eq!(
             result.unwrap_err(),
             EngineError::WrongState {
@@ -972,27 +1105,61 @@ mod tests {
         );
     }
 
+    /// Internal helper: drive the engine through Collecting → Solving
+    /// with the given intents, encrypting each under `key` and feeding
+    /// `threshold` shares per ciphertext from `key_shares`.
+    fn drive_to_solving(
+        engine: &mut TrustlessIntentEngine,
+        key: &ThresholdEncryptionKey,
+        key_shares: &[KeyShare],
+        intents: &[Intent],
+        close_height: u64,
+    ) -> Vec<EncryptedIntent> {
+        let mut enc_intents = Vec::new();
+        for (i, intent) in intents.iter().enumerate() {
+            let enc = encrypt_intent(intent, key, (i as u64) + 1);
+            engine.submit_encrypted(enc.clone()).unwrap();
+            enc_intents.push(enc);
+        }
+        engine.close_batch(close_height).unwrap();
+        for enc in enc_intents.iter() {
+            for ks in key_shares.iter().take(engine.decrypt_threshold) {
+                engine
+                    .contribute_decrypt_share(make_share_for(enc, ks))
+                    .unwrap();
+            }
+        }
+        assert_eq!(engine.current_batch.state, BatchState::Solving);
+        enc_intents
+    }
+
     // =========================================================================
     // Test: Solution with higher score wins
     // =========================================================================
     #[test]
     fn test_higher_score_wins() {
+        let (key, key_shares) = make_test_keys(2, 3);
         let mut engine = TrustlessIntentEngine::new(2, 3);
 
-        // Setup: submit, close, decrypt
-        engine.submit_encrypted(make_encrypted(1, 1)).unwrap();
-        engine.submit_encrypted(make_encrypted(2, 2)).unwrap();
-        engine.close_batch(10).unwrap();
-
-        // Provide threshold shares
-        engine.contribute_decrypt_share(make_share(1, 0)).unwrap();
-        engine.contribute_decrypt_share(make_share(2, 0)).unwrap();
-
-        assert_eq!(engine.current_batch.state, BatchState::Solving);
-
-        // Provide decrypted intents
         let intents = vec![make_intent(1), make_intent(2)];
-        engine.set_decrypted_intents(intents.clone()).unwrap();
+        drive_to_solving(&mut engine, &key, &key_shares, &intents, 10);
+
+        // The engine decrypted the submitted ciphertexts into real intents.
+        let decrypted_ids: std::collections::HashSet<IntentId> = engine
+            .current_batch
+            .decrypted
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|i| i.id)
+            .collect();
+        for intent in &intents {
+            assert!(
+                decrypted_ids.contains(&intent.id),
+                "decrypted set must include intent {:?}",
+                intent.id[0]
+            );
+        }
 
         // Solver A submits with score 5.0
         let sub_a = make_submission(0xAA, &intents, 5.0, 11);
@@ -1001,7 +1168,6 @@ mod tests {
         assert_eq!(engine.winning_score(), Some(5.0));
 
         // Solver B submits with score 8.0 (higher)
-        // Need different intents to avoid duplicate usage in proof verification
         let sub_b = SolverSubmission {
             solver_id: [0xBB; 32],
             solution: vec![RingTrade {
@@ -1046,18 +1212,12 @@ mod tests {
     // =========================================================================
     #[test]
     fn test_challenge_replaces_winner() {
+        let (key, key_shares) = make_test_keys(2, 3);
         let mut engine = TrustlessIntentEngine::new(2, 3);
         engine.advance_height(10);
 
-        // Setup batch through to Challenging state
-        engine.submit_encrypted(make_encrypted(1, 1)).unwrap();
-        engine.submit_encrypted(make_encrypted(2, 2)).unwrap();
-        engine.close_batch(10).unwrap();
-        engine.contribute_decrypt_share(make_share(1, 0)).unwrap();
-        engine.contribute_decrypt_share(make_share(2, 0)).unwrap();
-
         let intents = vec![make_intent(1), make_intent(2)];
-        engine.set_decrypted_intents(intents.clone()).unwrap();
+        drive_to_solving(&mut engine, &key, &key_shares, &intents, 10);
 
         // First solution: score 5.0
         let sub_a = make_submission(0xAA, &intents, 5.0, 11);
@@ -1066,7 +1226,7 @@ mod tests {
         assert_eq!(engine.winning_score(), Some(5.0));
 
         // Challenge with score 10.0 (within window)
-        engine.advance_height(12); // still within window (start=10, window=5)
+        engine.advance_height(12);
         let challenge = SolverSubmission {
             solver_id: [0xCC; 32],
             solution: vec![RingTrade {
@@ -1111,16 +1271,12 @@ mod tests {
     // =========================================================================
     #[test]
     fn test_challenge_lower_score_rejected() {
+        let (key, key_shares) = make_test_keys(2, 3);
         let mut engine = TrustlessIntentEngine::new(2, 3);
         engine.advance_height(10);
 
-        engine.submit_encrypted(make_encrypted(1, 1)).unwrap();
-        engine.close_batch(10).unwrap();
-        engine.contribute_decrypt_share(make_share(1, 0)).unwrap();
-        engine.contribute_decrypt_share(make_share(2, 0)).unwrap();
-
         let intents = vec![make_intent(1)];
-        engine.set_decrypted_intents(intents.clone()).unwrap();
+        drive_to_solving(&mut engine, &key, &key_shares, &intents, 10);
 
         // Winner with score 10.0
         let sub = SolverSubmission {
@@ -1165,22 +1321,17 @@ mod tests {
     // =========================================================================
     #[test]
     fn test_invalid_proof_rejected() {
+        let (key, key_shares) = make_test_keys(2, 3);
         let mut engine = TrustlessIntentEngine::new(2, 3);
-
-        engine.submit_encrypted(make_encrypted(1, 1)).unwrap();
-        engine.close_batch(10).unwrap();
-        engine.contribute_decrypt_share(make_share(1, 0)).unwrap();
-        engine.contribute_decrypt_share(make_share(2, 0)).unwrap();
-
         let intents = vec![make_intent(1)];
-        engine.set_decrypted_intents(intents.clone()).unwrap();
+        drive_to_solving(&mut engine, &key, &key_shares, &intents, 10);
 
         // Empty proof -> rejected
         let bad_sub = SolverSubmission {
             solver_id: [0xAA; 32],
             solution: vec![],
             total_score: 5.0,
-            validity_proof: vec![], // empty proof!
+            validity_proof: vec![],
             bond: DEFAULT_MIN_SOLVER_BOND,
             submitted_at: 11,
         };
@@ -1193,17 +1344,11 @@ mod tests {
     // =========================================================================
     #[test]
     fn test_score_mismatch_rejected() {
+        let (key, key_shares) = make_test_keys(2, 3);
         let mut engine = TrustlessIntentEngine::new(2, 3);
-
-        engine.submit_encrypted(make_encrypted(1, 1)).unwrap();
-        engine.close_batch(10).unwrap();
-        engine.contribute_decrypt_share(make_share(1, 0)).unwrap();
-        engine.contribute_decrypt_share(make_share(2, 0)).unwrap();
-
         let intents = vec![make_intent(1)];
-        engine.set_decrypted_intents(intents.clone()).unwrap();
+        drive_to_solving(&mut engine, &key, &key_shares, &intents, 10);
 
-        // Claim score 100.0 but ring score is 5.0 -> verification fails
         let bad_sub = SolverSubmission {
             solver_id: [0xAA; 32],
             solution: vec![RingTrade {
@@ -1211,7 +1356,7 @@ mod tests {
                 settlements: vec![],
                 score: 5.0,
             }],
-            total_score: 100.0, // lies about score!
+            total_score: 100.0,
             validity_proof: vec![0x01],
             bond: DEFAULT_MIN_SOLVER_BOND,
             submitted_at: 11,
@@ -1225,22 +1370,16 @@ mod tests {
     // =========================================================================
     #[test]
     fn test_intent_not_in_batch_rejected() {
+        let (key, key_shares) = make_test_keys(2, 3);
         let mut engine = TrustlessIntentEngine::new(2, 3);
-
-        engine.submit_encrypted(make_encrypted(1, 1)).unwrap();
-        engine.close_batch(10).unwrap();
-        engine.contribute_decrypt_share(make_share(1, 0)).unwrap();
-        engine.contribute_decrypt_share(make_share(2, 0)).unwrap();
-
         let intents = vec![make_intent(1)];
-        engine.set_decrypted_intents(intents.clone()).unwrap();
+        drive_to_solving(&mut engine, &key, &key_shares, &intents, 10);
 
-        // Reference an intent NOT in the batch
         let phantom_intent = make_intent(99);
         let bad_sub = SolverSubmission {
             solver_id: [0xAA; 32],
             solution: vec![RingTrade {
-                participants: vec![phantom_intent.id], // not in batch!
+                participants: vec![phantom_intent.id],
                 settlements: vec![],
                 score: 5.0,
             }],
@@ -1258,17 +1397,11 @@ mod tests {
     // =========================================================================
     #[test]
     fn test_duplicate_intent_usage_rejected() {
+        let (key, key_shares) = make_test_keys(2, 3);
         let mut engine = TrustlessIntentEngine::new(2, 3);
-
-        engine.submit_encrypted(make_encrypted(1, 1)).unwrap();
-        engine.close_batch(10).unwrap();
-        engine.contribute_decrypt_share(make_share(1, 0)).unwrap();
-        engine.contribute_decrypt_share(make_share(2, 0)).unwrap();
-
         let intents = vec![make_intent(1)];
-        engine.set_decrypted_intents(intents.clone()).unwrap();
+        drive_to_solving(&mut engine, &key, &key_shares, &intents, 10);
 
-        // Use the same intent in two rings
         let bad_sub = SolverSubmission {
             solver_id: [0xAA; 32],
             solution: vec![
@@ -1278,7 +1411,7 @@ mod tests {
                     score: 3.0,
                 },
                 RingTrade {
-                    participants: vec![intents[0].id], // same intent again!
+                    participants: vec![intents[0].id],
                     settlements: vec![],
                     score: 3.0,
                 },
@@ -1297,38 +1430,25 @@ mod tests {
     // =========================================================================
     #[test]
     fn test_settlement_atomic() {
+        let (key, key_shares) = make_test_keys(2, 3);
         let mut engine = TrustlessIntentEngine::new(2, 3);
         engine.advance_height(10);
 
-        engine.submit_encrypted(make_encrypted(1, 1)).unwrap();
-        engine.submit_encrypted(make_encrypted(2, 2)).unwrap();
-        engine.close_batch(10).unwrap();
-        engine.contribute_decrypt_share(make_share(1, 0)).unwrap();
-        engine.contribute_decrypt_share(make_share(2, 0)).unwrap();
-
         let intents = vec![make_intent(1), make_intent(2)];
-        engine.set_decrypted_intents(intents.clone()).unwrap();
+        drive_to_solving(&mut engine, &key, &key_shares, &intents, 10);
 
-        // Submit a valid solution
         let sub = make_submission(0xAA, &intents, 7.0, 11);
         engine.submit_solution(sub).unwrap();
         assert_eq!(engine.current_batch.state, BatchState::Challenging);
 
-        // Advance past challenge window
-        engine.advance_height(20); // 10 + 5 + margin
+        engine.advance_height(20);
 
-        // Finalize -> atomic compound turn (now a SettlementOutput
-        // wrapping a SealedTurn whose call forest carries one root
-        // Action per ring leg).
         let compound = engine.finalize().unwrap();
 
-        // The sealed turn contains ALL settlement actions from the solution,
-        // one root Action per ring leg.
         assert!(!compound.sealed.turn.call_forest.roots.is_empty());
         assert_eq!(compound.batch_id, 0);
         assert_eq!(compound.solver_id, [0xAA; 32]);
 
-        // Every leg materialized as exactly one Effect::Transfer.
         for root in &compound.sealed.turn.call_forest.roots {
             assert_eq!(root.action.effects.len(), 1);
             assert!(matches!(
@@ -1337,11 +1457,8 @@ mod tests {
             ));
         }
 
-        // The batch is now Settled and a new batch has started
         assert_eq!(engine.current_batch.state, BatchState::Collecting);
         assert_eq!(engine.current_batch.batch_id, 1);
-
-        // The settled batch is archived
         assert!(engine.settled_batches.contains_key(&0));
     }
 
@@ -1350,16 +1467,12 @@ mod tests {
     // =========================================================================
     #[test]
     fn test_cannot_finalize_during_challenge() {
+        let (key, key_shares) = make_test_keys(2, 3);
         let mut engine = TrustlessIntentEngine::new(2, 3);
         engine.advance_height(10);
 
-        engine.submit_encrypted(make_encrypted(1, 1)).unwrap();
-        engine.close_batch(10).unwrap();
-        engine.contribute_decrypt_share(make_share(1, 0)).unwrap();
-        engine.contribute_decrypt_share(make_share(2, 0)).unwrap();
-
         let intents = vec![make_intent(1)];
-        engine.set_decrypted_intents(intents.clone()).unwrap();
+        drive_to_solving(&mut engine, &key, &key_shares, &intents, 10);
 
         let sub = SolverSubmission {
             solver_id: [0xAA; 32],
@@ -1376,8 +1489,6 @@ mod tests {
         engine.submit_solution(sub).unwrap();
         assert_eq!(engine.current_batch.state, BatchState::Challenging);
 
-        // Try to finalize while challenge window is still open (height=10, start=10, window=5)
-        // height 10 <= 10 + 5, so window not expired
         let result = engine.finalize();
         assert!(result.is_err());
     }
@@ -1387,15 +1498,10 @@ mod tests {
     // =========================================================================
     #[test]
     fn test_insufficient_bond_rejected() {
+        let (key, key_shares) = make_test_keys(2, 3);
         let mut engine = TrustlessIntentEngine::new(2, 3);
-
-        engine.submit_encrypted(make_encrypted(1, 1)).unwrap();
-        engine.close_batch(10).unwrap();
-        engine.contribute_decrypt_share(make_share(1, 0)).unwrap();
-        engine.contribute_decrypt_share(make_share(2, 0)).unwrap();
-
         let intents = vec![make_intent(1)];
-        engine.set_decrypted_intents(intents.clone()).unwrap();
+        drive_to_solving(&mut engine, &key, &key_shares, &intents, 10);
 
         let bad_sub = SolverSubmission {
             solver_id: [0xAA; 32],
@@ -1406,7 +1512,7 @@ mod tests {
             }],
             total_score: 5.0,
             validity_proof: vec![0x01],
-            bond: 1, // way below minimum!
+            bond: 1,
             submitted_at: 11,
         };
         let result = engine.submit_solution(bad_sub);
@@ -1424,28 +1530,34 @@ mod tests {
     // =========================================================================
     #[test]
     fn test_duplicate_encrypted_intent_rejected() {
+        let (key, _shares) = make_test_keys(3, 5);
         let mut engine = TrustlessIntentEngine::new(3, 5);
 
-        let enc = make_encrypted(0x42, 1);
+        let enc = encrypt_intent(&make_intent(0x42), &key, 1);
         engine.submit_encrypted(enc.clone()).unwrap();
 
-        // Same intent again -> duplicate
+        // Same ciphertext again -> duplicate
         let result = engine.submit_encrypted(enc);
         assert_eq!(result.unwrap_err(), EngineError::DuplicateIntent);
     }
 
     // =========================================================================
-    // Test: Full protocol flow (happy path)
+    // Test: Full protocol flow (happy path) — full threshold decryption
     // =========================================================================
     #[test]
     fn test_full_protocol_flow() {
+        let (key, key_shares) = make_test_keys(2, 3);
         let mut engine = TrustlessIntentEngine::new(2, 3);
         engine.advance_height(1);
 
         // Layer 1: Submit encrypted intents
-        engine.submit_encrypted(make_encrypted(1, 1)).unwrap();
-        engine.submit_encrypted(make_encrypted(2, 1)).unwrap();
-        engine.submit_encrypted(make_encrypted(3, 1)).unwrap();
+        let intents = vec![make_intent(1), make_intent(2), make_intent(3)];
+        let mut enc_intents = Vec::new();
+        for (i, intent) in intents.iter().enumerate() {
+            let enc = encrypt_intent(intent, &key, (i as u64) + 1);
+            enc_intents.push(enc.clone());
+            engine.submit_encrypted(enc).unwrap();
+        }
         assert_eq!(engine.batch_state(), BatchState::Collecting);
         assert_eq!(engine.intent_count(), 3);
 
@@ -1453,17 +1565,33 @@ mod tests {
         engine.close_batch(5).unwrap();
         assert_eq!(engine.batch_state(), BatchState::AwaitingDecrypt);
 
-        // Layer 3: Threshold decryption
-        engine.contribute_decrypt_share(make_share(1, 0)).unwrap();
-        assert_eq!(engine.decrypt_share_count(), 1);
+        // Layer 3: Threshold decryption — partial shares first.
+        // Provide one share per ciphertext from validator 1; not enough
+        // to reach threshold on any individual ciphertext.
+        for enc in enc_intents.iter() {
+            engine
+                .contribute_decrypt_share(make_share_for(enc, &key_shares[0]))
+                .unwrap();
+        }
         assert_eq!(engine.batch_state(), BatchState::AwaitingDecrypt);
 
-        engine.contribute_decrypt_share(make_share(2, 0)).unwrap();
+        // Add the second share per ciphertext — threshold reached.
+        for enc in enc_intents.iter() {
+            engine
+                .contribute_decrypt_share(make_share_for(enc, &key_shares[1]))
+                .unwrap();
+        }
         assert_eq!(engine.batch_state(), BatchState::Solving);
 
-        // Set decrypted intents (simulating real decryption)
-        let intents = vec![make_intent(1), make_intent(2), make_intent(3)];
-        engine.set_decrypted_intents(intents.clone()).unwrap();
+        // The engine populated `decrypted` itself; the cleartext side-
+        // channel `set_decrypted_intents` is no longer reachable.
+        let decrypted = engine.current_batch.decrypted.as_ref().unwrap();
+        assert_eq!(decrypted.len(), 3);
+        let decrypted_ids: std::collections::HashSet<IntentId> =
+            decrypted.iter().map(|i| i.id).collect();
+        for intent in &intents {
+            assert!(decrypted_ids.contains(&intent.id));
+        }
 
         // Layer 4+5: Solve + Prove
         engine.advance_height(10);
@@ -1471,7 +1599,7 @@ mod tests {
         engine.submit_solution(sub).unwrap();
         assert_eq!(engine.batch_state(), BatchState::Challenging);
 
-        // Layer 6: Challenge window (no challenge submitted)
+        // Layer 6: Challenge window
         assert!(!engine.is_challenge_window_expired());
         engine.advance_height(20);
         assert!(engine.is_challenge_window_expired());
@@ -1482,7 +1610,6 @@ mod tests {
         assert_eq!(compound.solver_id, [0xAA; 32]);
         assert!(!compound.sealed.turn.call_forest.roots.is_empty());
 
-        // New batch started
         assert_eq!(engine.batch_state(), BatchState::Collecting);
         assert_eq!(engine.current_batch.batch_id, 1);
     }
@@ -1492,14 +1619,21 @@ mod tests {
     // =========================================================================
     #[test]
     fn test_threshold_not_reached() {
-        let mut engine = TrustlessIntentEngine::new(3, 5); // need 3 shares
+        let (key, key_shares) = make_test_keys(3, 5);
+        let mut engine = TrustlessIntentEngine::new(3, 5);
 
-        engine.submit_encrypted(make_encrypted(1, 1)).unwrap();
+        let intent = make_intent(1);
+        let enc = encrypt_intent(&intent, &key, 1);
+        engine.submit_encrypted(enc.clone()).unwrap();
         engine.close_batch(10).unwrap();
 
         // Only 2 shares (need 3)
-        engine.contribute_decrypt_share(make_share(1, 0)).unwrap();
-        engine.contribute_decrypt_share(make_share(2, 0)).unwrap();
+        engine
+            .contribute_decrypt_share(make_share_for(&enc, &key_shares[0]))
+            .unwrap();
+        engine
+            .contribute_decrypt_share(make_share_for(&enc, &key_shares[1]))
+            .unwrap();
 
         // Still awaiting decrypt
         assert_eq!(engine.batch_state(), BatchState::AwaitingDecrypt);
@@ -1511,16 +1645,12 @@ mod tests {
     // =========================================================================
     #[test]
     fn test_challenge_window_expiry() {
+        let (key, key_shares) = make_test_keys(2, 3);
         let mut engine = TrustlessIntentEngine::new(2, 3);
         engine.advance_height(10);
 
-        engine.submit_encrypted(make_encrypted(1, 1)).unwrap();
-        engine.close_batch(10).unwrap();
-        engine.contribute_decrypt_share(make_share(1, 0)).unwrap();
-        engine.contribute_decrypt_share(make_share(2, 0)).unwrap();
-
         let intents = vec![make_intent(1)];
-        engine.set_decrypted_intents(intents.clone()).unwrap();
+        drive_to_solving(&mut engine, &key, &key_shares, &intents, 10);
 
         let sub = SolverSubmission {
             solver_id: [0xAA; 32],
@@ -1536,12 +1666,9 @@ mod tests {
         };
         engine.submit_solution(sub).unwrap();
 
-        // Challenge window starts at height 10, duration 5
-        // At height 16 (> 10 + 5), window is expired
         engine.advance_height(16);
         assert!(engine.is_challenge_window_expired());
 
-        // Challenge after window expired should fail
         let late_challenge = SolverSubmission {
             solver_id: [0xBB; 32],
             solution: vec![RingTrade {
@@ -1563,15 +1690,82 @@ mod tests {
     // =========================================================================
     #[test]
     fn test_duplicate_validator_share_rejected() {
+        let (key, key_shares) = make_test_keys(3, 5);
         let mut engine = TrustlessIntentEngine::new(3, 5);
 
-        engine.submit_encrypted(make_encrypted(1, 1)).unwrap();
+        let intent = make_intent(1);
+        let enc = encrypt_intent(&intent, &key, 1);
+        engine.submit_encrypted(enc.clone()).unwrap();
         engine.close_batch(10).unwrap();
 
-        engine.contribute_decrypt_share(make_share(1, 0)).unwrap();
+        engine
+            .contribute_decrypt_share(make_share_for(&enc, &key_shares[0]))
+            .unwrap();
 
-        // Same validator again
-        let result = engine.contribute_decrypt_share(make_share(1, 0));
+        // Same validator again — same ciphertext, same validator
+        let result = engine.contribute_decrypt_share(make_share_for(&enc, &key_shares[0]));
+        assert!(matches!(
+            result,
+            Err(EngineError::InvalidDecryptionShare { .. })
+        ));
+    }
+
+    // =========================================================================
+    // Test: Tampered share is detected via MAC verification
+    // =========================================================================
+    #[test]
+    fn test_tampered_share_rejected() {
+        let (key, key_shares) = make_test_keys(2, 3);
+        let mut engine = TrustlessIntentEngine::new(2, 3);
+
+        let intent = make_intent(1);
+        let enc = encrypt_intent(&intent, &key, 1);
+        engine.submit_encrypted(enc.clone()).unwrap();
+        engine.close_batch(10).unwrap();
+
+        // Validator 1 contributes a HONEST share.
+        engine
+            .contribute_decrypt_share(make_share_for(&enc, &key_shares[0]))
+            .unwrap();
+        // Validator 2 contributes a CORRUPTED share — share bytes flipped.
+        let mut bad = make_share_for(&enc, &key_shares[1]);
+        bad.share = [0xFF; 32];
+
+        // contribute_decrypt_share stores it (it can't tell the share is
+        // bad in isolation), then once threshold is met,
+        // run_threshold_decryption invokes combine_shares which catches
+        // the MAC failure and returns an error.
+        let result = engine.contribute_decrypt_share(bad);
+        assert!(
+            matches!(result, Err(EngineError::InvalidDecryptionShare { .. })),
+            "expected InvalidDecryptionShare, got: {result:?}"
+        );
+        // Batch should not have advanced to Solving on a corrupted share.
+        assert_eq!(engine.batch_state(), BatchState::AwaitingDecrypt);
+    }
+
+    // =========================================================================
+    // Test: Share for a ciphertext NOT in the batch is rejected
+    // =========================================================================
+    #[test]
+    fn test_share_for_unknown_ciphertext_rejected() {
+        let (key, key_shares) = make_test_keys(2, 3);
+        let mut engine = TrustlessIntentEngine::new(2, 3);
+
+        // Submit one intent.
+        let intent = make_intent(1);
+        let enc_in_batch = encrypt_intent(&intent, &key, 1);
+        engine.submit_encrypted(enc_in_batch).unwrap();
+        engine.close_batch(10).unwrap();
+
+        // Encrypt a DIFFERENT intent under the same key — not submitted
+        // to this batch.
+        let phantom = make_intent(99);
+        let phantom_enc = encrypt_intent(&phantom, &key, 1);
+
+        // A share bound to the phantom ciphertext_id must be rejected.
+        let bad = make_share_for(&phantom_enc, &key_shares[0]);
+        let result = engine.contribute_decrypt_share(bad);
         assert!(matches!(
             result,
             Err(EngineError::InvalidDecryptionShare { .. })

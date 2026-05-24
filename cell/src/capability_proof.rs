@@ -208,9 +208,6 @@ impl std::fmt::Display for CapabilityProofError {
             Self::WrongTarget { expected, got } => {
                 write!(f, "proof targets {:?} but we are {:?}", got, expected)
             }
-            Self::StarkVerificationFailed => {
-                write!(f, "STARK membership proof verification failed")
-            }
         }
     }
 }
@@ -249,31 +246,21 @@ impl CapabilityProof {
         msg.extend_from_slice(self.target_cell.as_bytes());
         // Encode permissions as discriminant byte.
         msg.push(auth_required_discriminant(&self.permissions));
-        // Encode proof_data.
-        match &self.proof_data {
-            CapabilityProofData::SignedAttestation {
-                capability_slot,
-                expires_at,
-            } => {
-                msg.push(0u8); // variant discriminant
-                msg.extend_from_slice(&capability_slot.to_le_bytes());
-                match expires_at {
-                    Some(exp) => {
-                        msg.push(1u8);
-                        msg.extend_from_slice(&exp.to_le_bytes());
-                    }
-                    None => msg.push(0u8),
-                }
+        // Encode proof_data. (StarkMembership variant was removed per
+        // module-doc note above; SignedAttestation is currently the only
+        // shape.)
+        let CapabilityProofData::SignedAttestation {
+            capability_slot,
+            expires_at,
+        } = &self.proof_data;
+        msg.push(0u8); // variant discriminant
+        msg.extend_from_slice(&capability_slot.to_le_bytes());
+        match expires_at {
+            Some(exp) => {
+                msg.push(1u8);
+                msg.extend_from_slice(&exp.to_le_bytes());
             }
-            CapabilityProofData::StarkMembership {
-                proof_bytes,
-                merkle_root,
-            } => {
-                msg.push(1u8); // variant discriminant
-                msg.extend_from_slice(&(proof_bytes.len() as u64).to_le_bytes());
-                msg.extend_from_slice(proof_bytes);
-                msg.extend_from_slice(merkle_root);
-            }
+            None => msg.push(0u8),
         }
         // Timestamp.
         msg.extend_from_slice(&self.timestamp.to_le_bytes());

@@ -2817,6 +2817,7 @@ async fn tool_deploy_factory(params: &Value, state: &NodeState) -> McpToolResult
         ))),
         allowed_cap_templates: vec![],
         field_constraints: vec![],
+        state_constraints: vec![],
         default_mode,
         creation_budget: if max_creations == 0 {
             None

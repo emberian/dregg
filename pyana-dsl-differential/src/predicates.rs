@@ -163,6 +163,38 @@ pub struct PredicateCase {
     /// Direct invocation of the `gen_rust` evaluator for this predicate's
     /// inputs. Returning `Ok(())` means "accept", `Err(_)` means "reject".
     pub rust_eval: Box<dyn Fn() -> Result<(), ConstraintError>>,
+    /// Concrete parameter values keyed by parameter name. The Datalog
+    /// evaluator binds variables from this map; the lint passes consult
+    /// the keys to confirm the emitted artefacts reference every parameter.
+    pub inputs: CaseInputs,
+}
+
+/// Concrete inputs to a predicate, keyed by parameter name. The names
+/// here MUST match the parameter names declared on the `#[pyana_caveat]`
+/// function that produced the emitted artefacts.
+#[derive(Default, Clone)]
+pub struct CaseInputs {
+    pub u64s: Vec<(&'static str, u64)>,
+    pub bytes: Vec<(&'static str, [u8; 32])>,
+    pub sets: Vec<(&'static str, HashSet<u64>)>,
+}
+
+impl CaseInputs {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn u64(mut self, name: &'static str, v: u64) -> Self {
+        self.u64s.push((name, v));
+        self
+    }
+    pub fn bytes(mut self, name: &'static str, v: [u8; 32]) -> Self {
+        self.bytes.push((name, v));
+        self
+    }
+    pub fn set(mut self, name: &'static str, v: HashSet<u64>) -> Self {
+        self.sets.push((name, v));
+        self
+    }
 }
 
 /// One predicate definition: its canonical name, the IR-shape catalog of
@@ -179,142 +211,98 @@ pub struct PredicateSpec {
 // ============================================================================
 
 fn cases_not_after() -> Vec<PredicateCase> {
-    vec![
-        PredicateCase {
-            label: "expiry-in-future".into(),
+    // pyana-caveat signature: diff_not_after(token_expiry, current_time);
+    // requirement: current_time <= token_expiry.
+    let mk = |expiry: u64, now: u64| {
+        let inputs = CaseInputs::new()
+            .u64("token_expiry", expiry)
+            .u64("current_time", now);
+        let req = Requirement::LessEqualU64(now, expiry);
+        (req, inputs)
+    };
+    let mut out = Vec::new();
+    let scenarios = [
+        ("expiry-in-future", 100u64, 50u64),
+        ("expiry-equal", 100, 100),
+        ("expiry-past", 100, 101),
+        ("boundary-zero", 0, 0),
+        ("boundary-max", u64::MAX, u64::MAX),
+        ("near-overflow-reject", u64::MAX - 1, u64::MAX),
+    ];
+    for (label, expiry, now) in scenarios {
+        let (req, inputs) = mk(expiry, now);
+        out.push(PredicateCase {
+            label: label.into(),
             body: PredicateBody {
-                requirements: vec![Requirement::LessEqualU64(50, 100)],
+                requirements: vec![req],
             },
-            rust_eval: Box::new(|| diff_not_after_check(100, 50)),
-        },
-        PredicateCase {
-            label: "expiry-equal".into(),
-            body: PredicateBody {
-                requirements: vec![Requirement::LessEqualU64(100, 100)],
-            },
-            rust_eval: Box::new(|| diff_not_after_check(100, 100)),
-        },
-        PredicateCase {
-            label: "expiry-past".into(),
-            body: PredicateBody {
-                requirements: vec![Requirement::LessEqualU64(101, 100)],
-            },
-            rust_eval: Box::new(|| diff_not_after_check(100, 101)),
-        },
-        PredicateCase {
-            label: "boundary-zero".into(),
-            body: PredicateBody {
-                requirements: vec![Requirement::LessEqualU64(0, 0)],
-            },
-            rust_eval: Box::new(|| diff_not_after_check(0, 0)),
-        },
-        PredicateCase {
-            label: "boundary-max".into(),
-            body: PredicateBody {
-                requirements: vec![Requirement::LessEqualU64(u64::MAX, u64::MAX)],
-            },
-            rust_eval: Box::new(|| diff_not_after_check(u64::MAX, u64::MAX)),
-        },
-        PredicateCase {
-            label: "near-overflow-reject".into(),
-            body: PredicateBody {
-                requirements: vec![Requirement::LessEqualU64(u64::MAX, u64::MAX - 1)],
-            },
-            rust_eval: Box::new(|| diff_not_after_check(u64::MAX - 1, u64::MAX)),
-        },
-    ]
+            rust_eval: Box::new(move || diff_not_after_check(expiry, now)),
+            inputs,
+        });
+    }
+    out
 }
 
 fn cases_minimum_balance() -> Vec<PredicateCase> {
-    vec![
-        PredicateCase {
-            label: "above-threshold".into(),
+    // signature: (balance, threshold); requirement: balance >= threshold.
+    let scenarios = [
+        ("above-threshold", 500u64, 100u64),
+        ("equal-threshold", 100, 100),
+        ("below-threshold", 50, 100),
+        ("zero-floor", 0, 0),
+    ];
+    scenarios
+        .into_iter()
+        .map(|(label, bal, thr)| PredicateCase {
+            label: label.into(),
             body: PredicateBody {
-                requirements: vec![Requirement::GreaterEqualU64(500, 100)],
+                requirements: vec![Requirement::GreaterEqualU64(bal, thr)],
             },
-            rust_eval: Box::new(|| diff_minimum_balance_check(500, 100)),
-        },
-        PredicateCase {
-            label: "equal-threshold".into(),
-            body: PredicateBody {
-                requirements: vec![Requirement::GreaterEqualU64(100, 100)],
-            },
-            rust_eval: Box::new(|| diff_minimum_balance_check(100, 100)),
-        },
-        PredicateCase {
-            label: "below-threshold".into(),
-            body: PredicateBody {
-                requirements: vec![Requirement::GreaterEqualU64(50, 100)],
-            },
-            rust_eval: Box::new(|| diff_minimum_balance_check(50, 100)),
-        },
-        PredicateCase {
-            label: "zero-floor".into(),
-            body: PredicateBody {
-                requirements: vec![Requirement::GreaterEqualU64(0, 0)],
-            },
-            rust_eval: Box::new(|| diff_minimum_balance_check(0, 0)),
-        },
-    ]
+            rust_eval: Box::new(move || diff_minimum_balance_check(bal, thr)),
+            inputs: CaseInputs::new().u64("balance", bal).u64("threshold", thr),
+        })
+        .collect()
 }
 
 fn cases_exact_equal_u64() -> Vec<PredicateCase> {
-    vec![
-        PredicateCase {
-            label: "matching".into(),
+    // signature: (expected, actual); requirement: expected == actual.
+    let scenarios = [
+        ("matching", 42u64, 42u64),
+        ("differ-by-one", 42, 43),
+        ("zero-zero", 0, 0),
+        ("max-zero", u64::MAX, 0),
+    ];
+    scenarios
+        .into_iter()
+        .map(|(label, exp, act)| PredicateCase {
+            label: label.into(),
             body: PredicateBody {
-                requirements: vec![Requirement::EqualU64(42, 42)],
+                requirements: vec![Requirement::EqualU64(exp, act)],
             },
-            rust_eval: Box::new(|| diff_exact_equal_u64_check(42, 42)),
-        },
-        PredicateCase {
-            label: "differ-by-one".into(),
-            body: PredicateBody {
-                requirements: vec![Requirement::EqualU64(42, 43)],
-            },
-            rust_eval: Box::new(|| diff_exact_equal_u64_check(42, 43)),
-        },
-        PredicateCase {
-            label: "zero-zero".into(),
-            body: PredicateBody {
-                requirements: vec![Requirement::EqualU64(0, 0)],
-            },
-            rust_eval: Box::new(|| diff_exact_equal_u64_check(0, 0)),
-        },
-        PredicateCase {
-            label: "max-zero".into(),
-            body: PredicateBody {
-                requirements: vec![Requirement::EqualU64(u64::MAX, 0)],
-            },
-            rust_eval: Box::new(|| diff_exact_equal_u64_check(u64::MAX, 0)),
-        },
-    ]
+            rust_eval: Box::new(move || diff_exact_equal_u64_check(exp, act)),
+            inputs: CaseInputs::new().u64("expected", exp).u64("actual", act),
+        })
+        .collect()
 }
 
 fn cases_distinct_u64() -> Vec<PredicateCase> {
-    vec![
-        PredicateCase {
-            label: "distinct".into(),
+    // signature: (a, b); requirement: a != b.
+    let scenarios = [
+        ("distinct", 1u64, 2u64),
+        ("identical", 7, 7),
+        ("zero-zero", 0, 0),
+    ];
+    scenarios
+        .into_iter()
+        .map(|(label, a, b)| PredicateCase {
+            label: label.into(),
             body: PredicateBody {
-                requirements: vec![Requirement::NotEqualU64(1, 2)],
+                requirements: vec![Requirement::NotEqualU64(a, b)],
             },
-            rust_eval: Box::new(|| diff_distinct_u64_check(1, 2)),
-        },
-        PredicateCase {
-            label: "identical".into(),
-            body: PredicateBody {
-                requirements: vec![Requirement::NotEqualU64(7, 7)],
-            },
-            rust_eval: Box::new(|| diff_distinct_u64_check(7, 7)),
-        },
-        PredicateCase {
-            label: "zero-zero".into(),
-            body: PredicateBody {
-                requirements: vec![Requirement::NotEqualU64(0, 0)],
-            },
-            rust_eval: Box::new(|| diff_distinct_u64_check(0, 0)),
-        },
-    ]
+            rust_eval: Box::new(move || diff_distinct_u64_check(a, b)),
+            inputs: CaseInputs::new().u64("a", a).u64("b", b),
+        })
+        .collect()
 }
 
 fn bytes_a() -> [u8; 32] {
@@ -331,265 +319,196 @@ fn bytes_b() -> [u8; 32] {
 }
 
 fn cases_exact_equal_bytes() -> Vec<PredicateCase> {
-    vec![
-        PredicateCase {
-            label: "matching".into(),
+    // signature: (expected, actual); requirement: expected == actual.
+    let scenarios: [(&'static str, [u8; 32], [u8; 32]); 4] = [
+        ("matching", bytes_a(), bytes_a()),
+        ("differ-last-byte", bytes_a(), bytes_b()),
+        ("all-zero", [0u8; 32], [0u8; 32]),
+        ("all-ones", [0xFFu8; 32], [0xFFu8; 32]),
+    ];
+    scenarios
+        .into_iter()
+        .map(|(label, exp, act)| PredicateCase {
+            label: label.into(),
             body: PredicateBody {
-                requirements: vec![Requirement::EqualBytes32(bytes_a(), bytes_a())],
+                requirements: vec![Requirement::EqualBytes32(exp, act)],
             },
-            rust_eval: Box::new(|| diff_exact_equal_bytes_check(bytes_a(), bytes_a())),
-        },
-        PredicateCase {
-            label: "differ-last-byte".into(),
-            body: PredicateBody {
-                requirements: vec![Requirement::EqualBytes32(bytes_a(), bytes_b())],
-            },
-            rust_eval: Box::new(|| diff_exact_equal_bytes_check(bytes_a(), bytes_b())),
-        },
-        PredicateCase {
-            label: "all-zero".into(),
-            body: PredicateBody {
-                requirements: vec![Requirement::EqualBytes32([0u8; 32], [0u8; 32])],
-            },
-            rust_eval: Box::new(|| diff_exact_equal_bytes_check([0u8; 32], [0u8; 32])),
-        },
-        PredicateCase {
-            label: "all-ones".into(),
-            body: PredicateBody {
-                requirements: vec![Requirement::EqualBytes32([0xFFu8; 32], [0xFFu8; 32])],
-            },
-            rust_eval: Box::new(|| diff_exact_equal_bytes_check([0xFFu8; 32], [0xFFu8; 32])),
-        },
-    ]
+            rust_eval: Box::new(move || diff_exact_equal_bytes_check(exp, act)),
+            inputs: CaseInputs::new()
+                .bytes("expected", exp)
+                .bytes("actual", act),
+        })
+        .collect()
 }
 
 fn cases_distinct_bytes() -> Vec<PredicateCase> {
-    vec![
-        PredicateCase {
-            label: "distinct".into(),
+    // signature: (a, b); requirement: a != b.
+    let scenarios: [(&'static str, [u8; 32], [u8; 32]); 2] = [
+        ("distinct", bytes_a(), bytes_b()),
+        ("identical", bytes_a(), bytes_a()),
+    ];
+    scenarios
+        .into_iter()
+        .map(|(label, a, b)| PredicateCase {
+            label: label.into(),
             body: PredicateBody {
-                requirements: vec![Requirement::NotEqualBytes32(bytes_a(), bytes_b())],
+                requirements: vec![Requirement::NotEqualBytes32(a, b)],
             },
-            rust_eval: Box::new(|| diff_distinct_bytes_check(bytes_a(), bytes_b())),
-        },
-        PredicateCase {
-            label: "identical".into(),
-            body: PredicateBody {
-                requirements: vec![Requirement::NotEqualBytes32(bytes_a(), bytes_a())],
-            },
-            rust_eval: Box::new(|| diff_distinct_bytes_check(bytes_a(), bytes_a())),
-        },
-    ]
+            rust_eval: Box::new(move || diff_distinct_bytes_check(a, b)),
+            inputs: CaseInputs::new().bytes("a", a).bytes("b", b),
+        })
+        .collect()
 }
 
 fn cases_conjunction() -> Vec<PredicateCase> {
-    vec![
-        PredicateCase {
-            label: "both-ok".into(),
+    // signature: (balance, threshold, sender, receiver); two requirements:
+    // balance >= threshold AND sender != receiver.
+    let scenarios = [
+        ("both-ok", 500u64, 100u64, 1u64, 2u64),
+        ("balance-too-low", 50, 100, 1, 2),
+        ("same-party", 500, 100, 1, 1),
+        ("both-fail", 50, 100, 1, 1),
+    ];
+    scenarios
+        .into_iter()
+        .map(|(label, bal, thr, snd, rcv)| PredicateCase {
+            label: label.into(),
             body: PredicateBody {
                 requirements: vec![
-                    Requirement::GreaterEqualU64(500, 100),
-                    Requirement::NotEqualU64(1, 2),
+                    Requirement::GreaterEqualU64(bal, thr),
+                    Requirement::NotEqualU64(snd, rcv),
                 ],
             },
-            rust_eval: Box::new(|| diff_conjunction_check(500, 100, 1, 2)),
-        },
-        PredicateCase {
-            label: "balance-too-low".into(),
-            body: PredicateBody {
-                requirements: vec![
-                    Requirement::GreaterEqualU64(50, 100),
-                    Requirement::NotEqualU64(1, 2),
-                ],
-            },
-            rust_eval: Box::new(|| diff_conjunction_check(50, 100, 1, 2)),
-        },
-        PredicateCase {
-            label: "same-party".into(),
-            body: PredicateBody {
-                requirements: vec![
-                    Requirement::GreaterEqualU64(500, 100),
-                    Requirement::NotEqualU64(1, 1),
-                ],
-            },
-            rust_eval: Box::new(|| diff_conjunction_check(500, 100, 1, 1)),
-        },
-        PredicateCase {
-            label: "both-fail".into(),
-            body: PredicateBody {
-                requirements: vec![
-                    Requirement::GreaterEqualU64(50, 100),
-                    Requirement::NotEqualU64(1, 1),
-                ],
-            },
-            rust_eval: Box::new(|| diff_conjunction_check(50, 100, 1, 1)),
-        },
-    ]
+            rust_eval: Box::new(move || diff_conjunction_check(bal, thr, snd, rcv)),
+            inputs: CaseInputs::new()
+                .u64("balance", bal)
+                .u64("threshold", thr)
+                .u64("sender", snd)
+                .u64("receiver", rcv),
+        })
+        .collect()
 }
 
 fn cases_window() -> Vec<PredicateCase> {
-    vec![
-        PredicateCase {
-            label: "in-window".into(),
+    // signature: (low, mid, high); two requirements: low <= mid AND mid <= high.
+    let scenarios = [
+        ("in-window", 0u64, 50u64, 100u64),
+        ("tight-window", 10, 10, 10),
+        ("below-window", 50, 25, 100),
+        ("above-window", 0, 200, 100),
+    ];
+    scenarios
+        .into_iter()
+        .map(|(label, lo, mid, hi)| PredicateCase {
+            label: label.into(),
             body: PredicateBody {
                 requirements: vec![
-                    Requirement::LessEqualU64(0, 50),
-                    Requirement::LessEqualU64(50, 100),
+                    Requirement::LessEqualU64(lo, mid),
+                    Requirement::LessEqualU64(mid, hi),
                 ],
             },
-            rust_eval: Box::new(|| diff_window_check(0, 50, 100)),
-        },
-        PredicateCase {
-            label: "tight-window".into(),
-            body: PredicateBody {
-                requirements: vec![
-                    Requirement::LessEqualU64(10, 10),
-                    Requirement::LessEqualU64(10, 10),
-                ],
-            },
-            rust_eval: Box::new(|| diff_window_check(10, 10, 10)),
-        },
-        PredicateCase {
-            label: "below-window".into(),
-            body: PredicateBody {
-                requirements: vec![
-                    Requirement::LessEqualU64(50, 25),
-                    Requirement::LessEqualU64(25, 100),
-                ],
-            },
-            rust_eval: Box::new(|| diff_window_check(50, 25, 100)),
-        },
-        PredicateCase {
-            label: "above-window".into(),
-            body: PredicateBody {
-                requirements: vec![
-                    Requirement::LessEqualU64(0, 200),
-                    Requirement::LessEqualU64(200, 100),
-                ],
-            },
-            rust_eval: Box::new(|| diff_window_check(0, 200, 100)),
-        },
-    ]
+            rust_eval: Box::new(move || diff_window_check(lo, mid, hi)),
+            inputs: CaseInputs::new()
+                .u64("low", lo)
+                .u64("mid", mid)
+                .u64("high", hi),
+        })
+        .collect()
 }
 
 fn cases_set_member() -> Vec<PredicateCase> {
-    let mut s = HashSet::new();
+    // signature: (allowed, candidate); requirement: allowed.contains(candidate).
+    let mut s: HashSet<u64> = HashSet::new();
     for v in [1u64, 5, 17, 42] {
         s.insert(v);
     }
-    let s2 = s.clone();
-    let s3 = s.clone();
-    let s_empty: HashSet<u64> = HashSet::new();
-    let s_empty2 = s_empty.clone();
-    vec![
-        PredicateCase {
-            label: "member".into(),
-            body: PredicateBody {
-                requirements: vec![Requirement::Membership {
-                    set: s.clone(),
-                    element: 5,
-                }],
-            },
-            rust_eval: Box::new(move || diff_set_member_check(&s2, 5)),
-        },
-        PredicateCase {
-            label: "nonmember".into(),
-            body: PredicateBody {
-                requirements: vec![Requirement::Membership {
-                    set: s.clone(),
-                    element: 99,
-                }],
-            },
-            rust_eval: Box::new(move || diff_set_member_check(&s3, 99)),
-        },
-        PredicateCase {
-            label: "empty-set".into(),
-            body: PredicateBody {
-                requirements: vec![Requirement::Membership {
-                    set: s_empty.clone(),
-                    element: 5,
-                }],
-            },
-            rust_eval: Box::new(move || diff_set_member_check(&s_empty2, 5)),
-        },
-    ]
+    let empty: HashSet<u64> = HashSet::new();
+    let cases = vec![
+        ("member", s.clone(), 5u64),
+        ("nonmember", s.clone(), 99),
+        ("empty-set", empty, 5),
+    ];
+    cases
+        .into_iter()
+        .map(|(label, set_val, candidate)| {
+            let set_for_rust = set_val.clone();
+            let set_for_req = set_val.clone();
+            PredicateCase {
+                label: label.into(),
+                body: PredicateBody {
+                    requirements: vec![Requirement::Membership {
+                        set: set_for_req,
+                        element: candidate,
+                    }],
+                },
+                rust_eval: Box::new(move || diff_set_member_check(&set_for_rust, candidate)),
+                inputs: CaseInputs::new()
+                    .set("allowed", set_val)
+                    .u64("candidate", candidate),
+            }
+        })
+        .collect()
 }
 
 fn cases_set_member_and_floor() -> Vec<PredicateCase> {
-    let mut s = HashSet::new();
+    // signature: (allowed, candidate, floor); two requirements:
+    // allowed.contains(candidate) AND candidate >= floor.
+    let mut s: HashSet<u64> = HashSet::new();
     for v in [10u64, 20, 30] {
         s.insert(v);
     }
-    let s2 = s.clone();
-    let s3 = s.clone();
-    let s4 = s.clone();
-    vec![
-        PredicateCase {
-            label: "member-above-floor".into(),
-            body: PredicateBody {
-                requirements: vec![
-                    Requirement::Membership {
-                        set: s.clone(),
-                        element: 20,
-                    },
-                    Requirement::GreaterEqualU64(20, 15),
-                ],
-            },
-            rust_eval: Box::new(move || diff_set_member_and_floor_check(&s2, 20, 15)),
-        },
-        PredicateCase {
-            label: "member-below-floor".into(),
-            body: PredicateBody {
-                requirements: vec![
-                    Requirement::Membership {
-                        set: s.clone(),
-                        element: 10,
-                    },
-                    Requirement::GreaterEqualU64(10, 15),
-                ],
-            },
-            rust_eval: Box::new(move || diff_set_member_and_floor_check(&s3, 10, 15)),
-        },
-        PredicateCase {
-            label: "nonmember-above-floor".into(),
-            body: PredicateBody {
-                requirements: vec![
-                    Requirement::Membership {
-                        set: s.clone(),
-                        element: 99,
-                    },
-                    Requirement::GreaterEqualU64(99, 15),
-                ],
-            },
-            rust_eval: Box::new(move || diff_set_member_and_floor_check(&s4, 99, 15)),
-        },
-    ]
+    let scenarios = [
+        ("member-above-floor", 20u64, 15u64),
+        ("member-below-floor", 10, 15),
+        ("nonmember-above-floor", 99, 15),
+    ];
+    scenarios
+        .into_iter()
+        .map(|(label, candidate, floor)| {
+            let set_val = s.clone();
+            let set_for_rust = set_val.clone();
+            let set_for_req = set_val.clone();
+            PredicateCase {
+                label: label.into(),
+                body: PredicateBody {
+                    requirements: vec![
+                        Requirement::Membership {
+                            set: set_for_req,
+                            element: candidate,
+                        },
+                        Requirement::GreaterEqualU64(candidate, floor),
+                    ],
+                },
+                rust_eval: Box::new(move || {
+                    diff_set_member_and_floor_check(&set_for_rust, candidate, floor)
+                }),
+                inputs: CaseInputs::new()
+                    .set("allowed", set_val)
+                    .u64("candidate", candidate)
+                    .u64("floor", floor),
+            }
+        })
+        .collect()
 }
 
 fn cases_triple_equal() -> Vec<PredicateCase> {
-    vec![
-        PredicateCase {
-            label: "all-equal".into(),
+    // signature: (a, b, c); two requirements: a == b AND b == c.
+    let scenarios = [
+        ("all-equal", 7u64, 7u64, 7u64),
+        ("first-mismatch", 7, 8, 8),
+        ("second-mismatch", 5, 5, 9),
+    ];
+    scenarios
+        .into_iter()
+        .map(|(label, a, b, c)| PredicateCase {
+            label: label.into(),
             body: PredicateBody {
-                requirements: vec![Requirement::EqualU64(7, 7), Requirement::EqualU64(7, 7)],
+                requirements: vec![Requirement::EqualU64(a, b), Requirement::EqualU64(b, c)],
             },
-            rust_eval: Box::new(|| diff_triple_equal_check(7, 7, 7)),
-        },
-        PredicateCase {
-            label: "first-mismatch".into(),
-            body: PredicateBody {
-                requirements: vec![Requirement::EqualU64(7, 8), Requirement::EqualU64(8, 8)],
-            },
-            rust_eval: Box::new(|| diff_triple_equal_check(7, 8, 8)),
-        },
-        PredicateCase {
-            label: "second-mismatch".into(),
-            body: PredicateBody {
-                requirements: vec![Requirement::EqualU64(5, 5), Requirement::EqualU64(5, 9)],
-            },
-            rust_eval: Box::new(|| diff_triple_equal_check(5, 5, 9)),
-        },
-    ]
+            rust_eval: Box::new(move || diff_triple_equal_check(a, b, c)),
+            inputs: CaseInputs::new().u64("a", a).u64("b", b).u64("c", c),
+        })
+        .collect()
 }
 
 // ============================================================================

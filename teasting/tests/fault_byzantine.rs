@@ -341,12 +341,12 @@ fn test_byzantine_certificate_replay_rejected() {
 #[test]
 fn test_byzantine_routing_deterministic() {
     use pyana_teasting::router_sim::SimRouter;
-    use pyana_wire::dfa_router::RouteTarget;
+    use pyana_wire::dfa_router::{RouteTarget, cell_target};
 
     // Create a router with known routes
     let router = SimRouter::with_routes(&[
-        ("/cells/alpha/*", RouteTarget::Cell(test_cell(1))),
-        ("/cells/beta/*", RouteTarget::Cell(test_cell(2))),
+        ("/cells/alpha/*", cell_target(test_cell(1))),
+        ("/cells/beta/*", cell_target(test_cell(2))),
         ("/blocked/*", RouteTarget::Drop),
     ]);
 
@@ -355,10 +355,10 @@ fn test_byzantine_routing_deterministic() {
 
     // Honest classification
     let honest_result = router.classify(path);
-    assert_eq!(honest_result, Some(&RouteTarget::Cell(test_cell(1))));
+    assert_eq!(honest_result, Some(cell_target(test_cell(1))));
 
     // Byzantine claim: "this path classifies as /cells/beta/*"
-    let byzantine_claim = RouteTarget::Cell(test_cell(2));
+    let byzantine_claim = cell_target(test_cell(2));
 
     // Verification: deterministic DFA always gives the same result for same input
     // Run classification 100 times — must always match honest result
@@ -370,7 +370,7 @@ fn test_byzantine_routing_deterministic() {
         );
         assert_ne!(
             verification,
-            Some(&byzantine_claim),
+            Some(byzantine_claim.clone()),
             "Byzantine classification must differ from honest result"
         );
     }
@@ -379,19 +379,16 @@ fn test_byzantine_routing_deterministic() {
     let byte_result = router.classify_bytes(path.as_bytes());
     assert_eq!(byte_result, honest_result);
 
-    // Commitment-based verification: the router has a commitment hash that
-    // both parties agreed on. If the DFA was tampered with, the commitment
-    // won't match.
+    // Commitment-based verification.
     let commitment = router.commitment();
     assert_ne!(
         commitment, [0; 32],
         "Router should have a non-zero commitment"
     );
 
-    // A second router with the same routes must produce the same commitment
     let router2 = SimRouter::with_routes(&[
-        ("/cells/alpha/*", RouteTarget::Cell(test_cell(1))),
-        ("/cells/beta/*", RouteTarget::Cell(test_cell(2))),
+        ("/cells/alpha/*", cell_target(test_cell(1))),
+        ("/cells/beta/*", cell_target(test_cell(2))),
         ("/blocked/*", RouteTarget::Drop),
     ]);
     assert_eq!(

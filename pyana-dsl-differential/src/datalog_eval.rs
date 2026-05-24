@@ -275,60 +275,26 @@ fn resolve(name: &str, bindings: &Bindings) -> Result<Value, String> {
     Err(format!("unbound Datalog variable `{name}`"))
 }
 
-/// Build bindings from the IR-level `Requirement` list. The DSL emits each
-/// `require!()` with positional placeholders, so we synthesize names that
-/// match what `gen_datalog` produced (which mirrors the original Rust
-/// parameter names). The harness in `tests/differential.rs` is responsible
-/// for providing the exact name mapping per predicate.
-pub fn bindings_for_requirements(
-    requirements: &[Requirement],
-    param_names: &[&str],
-) -> Result<Bindings, String> {
+/// Build bindings directly from a [`crate::predicates::CaseInputs`] map.
+/// Each `(name, value)` entry becomes a bound Datalog variable. Parameter
+/// names must match those declared on the `#[pyana_caveat]` function so
+/// the rule emitted by `gen_datalog` resolves cleanly against them.
+pub fn bindings_from_inputs(inputs: &crate::predicates::CaseInputs) -> Bindings {
     let mut b = Bindings::new();
-    let mut u64_idx = 0usize;
-    let mut bytes_idx = 0usize;
-    let mut set_idx = 0usize;
-    for req in requirements {
-        match req {
-            Requirement::LessEqualU64(l, r)
-            | Requirement::GreaterEqualU64(l, r)
-            | Requirement::EqualU64(l, r)
-            | Requirement::NotEqualU64(l, r) => {
-                if u64_idx + 1 >= param_names.len() {
-                    return Err(format!(
-                        "not enough param names for u64 pair; have {}, need at least {}",
-                        param_names.len(),
-                        u64_idx + 2,
-                    ));
-                }
-                b = b.with_u64(param_names[u64_idx], *l);
-                b = b.with_u64(param_names[u64_idx + 1], *r);
-                u64_idx += 2;
-            }
-            Requirement::EqualBytes32(l, r) | Requirement::NotEqualBytes32(l, r) => {
-                if bytes_idx + 1 >= param_names.len() {
-                    return Err(format!(
-                        "not enough param names for bytes pair; have {}, need at least {}",
-                        param_names.len(),
-                        bytes_idx + 2,
-                    ));
-                }
-                b = b.with_bytes(param_names[bytes_idx], *l);
-                b = b.with_bytes(param_names[bytes_idx + 1], *r);
-                bytes_idx += 2;
-            }
-            Requirement::Membership { set, element } => {
-                if set_idx + u64_idx + 1 >= param_names.len() {
-                    return Err(format!(
-                        "not enough param names for membership; have {}",
-                        param_names.len()
-                    ));
-                }
-                b = b.with_set(param_names[set_idx], set.clone());
-                b = b.with_u64(param_names[set_idx + 1], *element);
-                set_idx += 2;
-            }
-        }
+    for (name, v) in &inputs.u64s {
+        b = b.with_u64(name, *v);
     }
-    Ok(b)
+    for (name, v) in &inputs.bytes {
+        b = b.with_bytes(name, *v);
+    }
+    for (name, v) in &inputs.sets {
+        b = b.with_set(name, v.clone());
+    }
+    b
 }
+
+// `Requirement` is no longer needed by the binder, but keep the import
+// behind an unused-import allowance so future shapes can be added inline
+// without touching the import block.
+#[allow(dead_code)]
+fn _requirement_import_anchor(_: &Requirement) {}
