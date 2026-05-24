@@ -14,7 +14,8 @@ use std::collections::HashMap;
 use serde::Serialize;
 use zeroize::Zeroizing;
 
-use pyana_cell::factory::{CellMode, FactoryCreationParams, FactoryDescriptor};
+use pyana_cell::factory::{FactoryCreationParams, FactoryDescriptor};
+use pyana_cell::CellMode;
 use pyana_cell::{
     AuthRequired, Cell, CellId, Ledger, Note, NoteCommitment, Nullifier, NullifierSet,
     PeerExchange, RevocationChannel, RevocationChannelSet,
