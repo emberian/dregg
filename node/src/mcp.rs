@@ -119,6 +119,39 @@ fn build_forest_with_effects(target: CellId, effects: Vec<pyana_turn::Effect>) -
     forest
 }
 
+/// Generate an Effect VM STARK proof for a sequence of VM-domain effects.
+///
+/// Builds a fresh `CellState` from `(initial_balance, initial_nonce)`, runs the
+/// effect VM trace generator, constructs the `EffectVmAir` sized to the effect
+/// count, and produces a STARK proof. Returns the hex-encoded postcard-serialized
+/// proof bytes and the public inputs converted to `u64` (BabyBear canonical
+/// values fit in u32, so the JSON array is friendly to the independent verifier
+/// which parses public inputs as u32).
+///
+/// If `vm_effects` is empty, returns `(String::new(), vec![])` — the caller
+/// decides whether to omit the proof field or signal a warning.
+fn generate_effect_vm_proof(
+    initial_balance: u64,
+    initial_nonce: u64,
+    vm_effects: &[pyana_circuit::effect_vm::Effect],
+) -> (String, Vec<u64>) {
+    if vm_effects.is_empty() {
+        return (String::new(), Vec::new());
+    }
+
+    let initial_state =
+        pyana_circuit::effect_vm::CellState::new(initial_balance, initial_nonce as u32);
+    let (trace, public_inputs) =
+        pyana_circuit::effect_vm::generate_effect_vm_trace(&initial_state, vm_effects);
+    let air = pyana_circuit::effect_vm::EffectVmAir::new(vm_effects.len());
+    let proof = pyana_circuit::stark::prove(&air, &trace, &public_inputs);
+    let proof_bytes = postcard::to_stdvec(&proof).unwrap_or_default();
+    let proof_hex = hex_encode(&proof_bytes);
+    let public_inputs_u64: Vec<u64> =
+        public_inputs.iter().map(|f| f.as_u32() as u64).collect();
+    (proof_hex, public_inputs_u64)
+}
+
 // =============================================================================
 // JSON-RPC types
 // =============================================================================
@@ -1156,6 +1189,7 @@ async fn tool_grant_capability(params: &Value, state: &NodeState) -> McpToolResu
         expires_at: None,
         allowed_effects: None,
     };
+    let cap_slot = cap.slot;
 
     let effect = pyana_turn::Effect::GrantCapability {
         from: agent_cell_id,
@@ -1184,6 +1218,15 @@ async fn tool_grant_capability(params: &Value, state: &NodeState) -> McpToolResu
     let signed = s.wallet.sign_turn(&turn);
     let turn_hash = hex_encode(&turn.hash());
 
+    // Snapshot the agent's pre-state so a post-execution Effect VM proof can be
+    // generated over the (balance, nonce) the GrantCapability turn started from.
+    // If the agent cell isn't in the ledger (it should be, but defensively),
+    // skip proof generation rather than fail the tool.
+    let pre_state: Option<(u64, u64)> = s
+        .ledger
+        .get(&agent_cell_id)
+        .map(|c| (c.state.balance(), c.state.nonce()));
+
     // Execute locally.
     let executor = pyana_turn::TurnExecutor::new(pyana_turn::ComputronCosts::default());
     let exec_result = executor.execute(&turn, &mut s.ledger);
@@ -1206,12 +1249,40 @@ async fn tool_grant_capability(params: &Value, state: &NodeState) -> McpToolResu
                 });
             }
 
+            // Project the GrantCapability effect into the Effect VM domain.
+            // The AIR variant is what matters for soundness here; cap_entry is a
+            // deterministic projection from (target, slot) — the AIR doesn't
+            // examine its semantic contents. Slot is fixed at 0 in the turn
+            // construction above; we still encode it for forward-compatibility.
+            let vm_effects = vec![pyana_circuit::effect_vm::Effect::GrantCapability {
+                cap_entry: pyana_circuit::BabyBear::new(cap_slot.wrapping_add(1)),
+            }];
+
+            let (proof_hex, public_inputs) = match pre_state {
+                Some((bal, nonce)) => generate_effect_vm_proof(bal, nonce, &vm_effects),
+                None => {
+                    eprintln!(
+                        "tool_grant_capability: agent cell {} not in ledger; skipping Effect VM proof",
+                        hex_encode(&agent_cell_id.0)
+                    );
+                    (String::new(), Vec::new())
+                }
+            };
+
+            let proof_field: serde_json::Value = if proof_hex.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::Value::String(proof_hex)
+            };
+
             McpToolResult::json(&serde_json::json!({
                 "granted": true,
                 "to_agent": to_agent_hex,
                 "target_cell": target_cell_hex,
                 "permissions": permissions,
                 "turn_hash": turn_hash,
+                "effect_vm_proof_hex": proof_field,
+                "effect_vm_public_inputs": public_inputs,
             }))
         }
         pyana_turn::TurnResult::Rejected { reason, .. } => {
@@ -2309,6 +2380,24 @@ async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) -> McpToolR
         Err(_) => return McpToolResult::error("invalid hex for delegation_chain"),
     };
 
+    // Parse optional effects array. The brief specifies the bearer-cap turn
+    // should be able to carry effects so the bearer can actually act through
+    // the delegation. Empty / missing falls back to the prior empty-effects
+    // behavior so existing callers aren't broken.
+    let parsed_effects: Vec<pyana_turn::Effect> = match params.get("effects").and_then(|v| v.as_array()) {
+        Some(arr) => {
+            let mut out = Vec::with_capacity(arr.len());
+            for ev in arr {
+                match parse_effect_json(ev) {
+                    Ok(e) => out.push(e),
+                    Err(msg) => return McpToolResult::error(format!("invalid effect: {msg}")),
+                }
+            }
+            out
+        }
+        None => Vec::new(),
+    };
+
     let mut s = state.write().await;
     if !s.unlocked {
         return McpToolResult::error("wallet is locked; unlock first");
@@ -2362,7 +2451,7 @@ async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) -> McpToolR
         args: vec![],
         authorization: pyana_turn::Authorization::Bearer(bearer_proof),
         preconditions: pyana_cell::Preconditions::default(),
-        effects: vec![],
+        effects: parsed_effects.clone(),
         may_delegate: pyana_turn::DelegationMode::None,
         commitment_mode: pyana_turn::CommitmentMode::Full,
         balance_change: None,
@@ -2390,6 +2479,14 @@ async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) -> McpToolR
 
     let turn_hash = hex_encode(&turn.hash());
 
+    // Snapshot the agent cell's pre-state so we can attach an Effect VM proof
+    // over (pre-balance, pre-nonce) → effects. The "agent" view is the one the
+    // bearer operates as on this node (the exerciser of the cap).
+    let pre_state: Option<(u64, u64)> = s
+        .ledger
+        .get(&agent_cell_id)
+        .map(|c| (c.state.balance(), c.state.nonce()));
+
     // Execute locally.
     let executor = pyana_turn::TurnExecutor::new(pyana_turn::ComputronCosts::default());
     let exec_result = executor.execute(&turn, &mut s.ledger);
@@ -2401,11 +2498,67 @@ async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) -> McpToolR
             state.emit(crate::state::NodeEvent::Receipt {
                 hash: turn_hash.clone(),
             });
+
+            // Project executed effects into the Effect VM domain.
+            // - turn::Effect::Transfer (any from/to) → VM Effect::Transfer with
+            //   direction=1 (outgoing from agent's perspective).
+            // - turn::Effect::IncrementNonce → no VM analogue (nonce is already
+            //   tracked by the AIR); emit a NoOp so the trace length matches.
+            // - turn::Effect::SetField → VM Effect::SetField with the first 4
+            //   value-bytes interpreted as a little-endian u32 → BabyBear.
+            // Other turn effects (capability grants, notes, etc.) are skipped:
+            // the demo's two flows (grant + transfer/setfield) don't need them.
+            let mut vm_effects: Vec<pyana_circuit::effect_vm::Effect> = Vec::new();
+            for e in &parsed_effects {
+                match e {
+                    pyana_turn::Effect::Transfer { amount, .. } => {
+                        vm_effects.push(pyana_circuit::effect_vm::Effect::Transfer {
+                            amount: *amount,
+                            direction: 1,
+                        });
+                    }
+                    pyana_turn::Effect::SetField { index, value, .. } => {
+                        let mut le4 = [0u8; 4];
+                        le4.copy_from_slice(&value[..4]);
+                        vm_effects.push(pyana_circuit::effect_vm::Effect::SetField {
+                            field_idx: *index as u32,
+                            value: pyana_circuit::BabyBear::new(u32::from_le_bytes(le4)),
+                        });
+                    }
+                    pyana_turn::Effect::IncrementNonce { .. } => {
+                        vm_effects.push(pyana_circuit::effect_vm::Effect::NoOp);
+                    }
+                    _ => {}
+                }
+            }
+
+            let (proof_hex, public_inputs) = match pre_state {
+                Some((bal, n)) if !vm_effects.is_empty() => {
+                    generate_effect_vm_proof(bal, n, &vm_effects)
+                }
+                Some(_) => (String::new(), Vec::new()),
+                None => {
+                    eprintln!(
+                        "tool_exercise_bearer_cap: agent cell {} not in ledger; skipping Effect VM proof",
+                        hex_encode(&agent_cell_id.0)
+                    );
+                    (String::new(), Vec::new())
+                }
+            };
+
+            let proof_field: serde_json::Value = if proof_hex.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::Value::String(proof_hex)
+            };
+
             McpToolResult::json(&serde_json::json!({
                 "exercised": true,
                 "target_cell": target_cell_hex,
                 "method": method,
                 "turn_hash": turn_hash,
+                "effect_vm_proof_hex": proof_field,
+                "effect_vm_public_inputs": public_inputs,
             }))
         }
         pyana_turn::TurnResult::Rejected { reason, .. } => {
