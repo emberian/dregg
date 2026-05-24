@@ -17,6 +17,10 @@ env:
   STATE_DIR: /tmp/pyana-state
   GATEWAY_PEER: "pyana.commonquant.com:9420"
 
+permissions:
+  contents: write
+  actions: read
+
 jobs:
   run-node:
     name: "Node 3 — Federation"

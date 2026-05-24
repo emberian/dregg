@@ -15,6 +15,10 @@ env:
   CARGO_INCREMENTAL: 0
   STATE_DIR: /tmp/pyana-intent-state
 
+permissions:
+  contents: write
+  actions: read
+
 jobs:
   run-intent-service:
     name: "Intent Pool Service"
