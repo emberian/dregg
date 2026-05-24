@@ -142,6 +142,67 @@ impl CellState {
         self.proved_state = value;
     }
 
+    /// Raw write of `balance`. Sealed-write accessor (P0-1).
+    ///
+    /// **Low-level**: callers are expected to be the executor's effect-apply
+    /// pipeline or the journal-rollback path. Application code should never
+    /// touch this — go through `Effect::Transfer`/`NoteSpend`/`NoteCreate` via
+    /// the executor so authorization and conservation are enforced. Provided
+    /// because journal restoration needs to put balance back to an exact prior
+    /// value on rollback.
+    #[inline]
+    pub fn set_balance(&mut self, value: u64) {
+        self.balance = value;
+    }
+
+    /// Raw write of `nonce`. Sealed-write accessor (P0-1).
+    ///
+    /// **Low-level**: same caveats as `set_balance`. Use `increment_nonce()`
+    /// for the common +1 path; this exists for journal-rollback restoration
+    /// to an exact prior value.
+    #[inline]
+    pub fn set_nonce(&mut self, value: u64) {
+        self.nonce = value;
+    }
+
+    /// Raw write of `delegation_epoch`. Sealed-write accessor (P0-1).
+    ///
+    /// **Low-level**: same caveats as `set_balance`. Use
+    /// `bump_delegation_epoch()` for the common +1 path; this exists for
+    /// journal-rollback restoration.
+    #[inline]
+    pub fn set_delegation_epoch(&mut self, value: u64) {
+        self.delegation_epoch = value;
+    }
+
+    /// Credit balance by `amount`. Returns `false` on overflow (caller must
+    /// check). Sealed-write semantic accessor.
+    #[inline]
+    #[must_use = "balance credit may overflow; the caller must handle the false return"]
+    pub fn credit_balance(&mut self, amount: u64) -> bool {
+        match self.balance.checked_add(amount) {
+            Some(new) => {
+                self.balance = new;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Debit balance by `amount`. Returns `false` on underflow (caller must
+    /// check). Sealed-write semantic accessor.
+    #[inline]
+    #[must_use = "balance debit may underflow; the caller must handle the false return"]
+    pub fn debit_balance(&mut self, amount: u64) -> bool {
+        match self.balance.checked_sub(amount) {
+            Some(new) => {
+                self.balance = new;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Create a fresh cell state with zero fields and the given balance.
     pub fn new(balance: u64) -> Self {
         CellState {
