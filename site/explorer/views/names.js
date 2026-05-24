@@ -4,8 +4,7 @@
  * Anonymous: list/search/sort by prefix, tag, expiry.
  * Click a row → resolve to pyana:// URI + status pill.
  * Embeds <pyana-vizzer data-vizzer="nameservice-registration"> in the detail
- * panel (Builder A wires the visualizer; until then the fallback content
- * renders).
+ * panel; the module is loaded by explorer/index.html and self-registers.
  */
 
 import { bus, state } from '../app.js';
@@ -126,13 +125,11 @@ async function openDetail(row) {
     </dl>
 
     <h4>Registration lifecycle</h4>
-    <!-- VIZZER_TODO: nameservice-registration — playground registers this. -->
     <pyana-vizzer data-vizzer="nameservice-registration"
                   data-name="${escapeAttr(row.name)}"
                   data-status="${escapeAttr(st)}">
       <div class="vizzer-fallback">
-        nameservice-registration visualizer pending — would animate
-        register → resolve → renew → expire for "${escapeHtml(row.name)}".
+        register → resolve → renew → expire timeline for "${escapeHtml(row.name)}".
       </div>
     </pyana-vizzer>
   `;

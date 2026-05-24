@@ -555,6 +555,16 @@
     </form>
   </dialog>
 
+  <!-- Visualizer modules used by queues / names / delegations views. Each
+       module self-registers via defineVisualizer once runtime-bootstrap fires
+       pyana:ready, so order doesn't matter and missing modules degrade to
+       per-element fallback content. -->
+  <script type="module" src="../playground/visualizers/programmable-queue.js"></script>
+  <script type="module" src="../playground/visualizers/blinded-queue.js"></script>
+  <script type="module" src="../playground/visualizers/inbox-lifecycle.js"></script>
+  <script type="module" src="../playground/visualizers/nameservice-registration.js"></script>
+  <script type="module" src="../playground/visualizers/delegation-envelope-v2.js"></script>
+
   <script type="module">
     // Boot the modular explorer app
     import { boot } from './app.js';

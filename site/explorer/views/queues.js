@@ -4,12 +4,10 @@
  * Anonymous reads: summary rows only (name, depth, root, vk_hash).
  * Admin reads: full entries (gated by api.runWithAuth → auth-dialog).
  *
- * Visualizer reuse:
- *   - Programmable rows drill-down embeds <pyana-vizzer data-vizzer="programmable-queue">
- *     which Builder A's site/playground/visualizers/programmable-queue.js will
- *     mount into via window.pyana.register. Until that ships, the <pyana-vizzer>
- *     element renders its static fallback content (see VIZZER_TODO).
- *   - Blinded rows reuse the blinded-queue vizzer the same way.
+ * Visualizer reuse: the detail panel embeds a `<pyana-vizzer>` element per
+ * family (`programmable-queue`, `blinded-queue`, `inbox-lifecycle`); the
+ * matching modules are loaded as <script type="module"> from explorer
+ * index.html and self-register via runtime-bootstrap's `pyana:ready` event.
  */
 
 import { bus, state } from '../app.js';
@@ -158,15 +156,11 @@ function openDetail(row) {
     </dl>
 
     <h4>Visualization</h4>
-    <!-- VIZZER_TODO: ${vizName} — Builder A registers this in
-         site/playground/visualizers/${vizName}.js. Until then this element
-         shows its fallback content. -->
     <pyana-vizzer data-vizzer="${vizName}"
                   data-service="${escapeAttr(row.service)}"
                   data-name="${escapeAttr(row.name || '')}"
                   data-root="${escapeAttr(row.root || '')}">
       <div class="vizzer-fallback">
-        ${vizName} visualizer not yet loaded — Builder A is wiring it up.
         Static summary: depth ${row.depth ?? row.leaves_count ?? 0},
         root ${api.shortHash(row.root)}.
       </div>

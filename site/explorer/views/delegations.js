@@ -116,14 +116,12 @@ async function openDetail(row) {
       : '<p class="ex-hint">No caveats — delegation passes the full authority through.</p>'}
 
     <h4>Signed payload tree</h4>
-    <!-- VIZZER_TODO: delegation-envelope-v2 — Builder A registers this. -->
     <pyana-vizzer data-vizzer="delegation-envelope-v2"
                   data-envelope-hash="${escapeAttr(env.envelope_hash || '')}"
                   data-cap-id="${escapeAttr(env.cap_id || '')}">
       <div class="vizzer-fallback">
-        delegation-envelope-v2 visualizer pending — would render the signed
-        payload tree, show which fields are signature-bound, and overlay
-        the v2 authority-policy decision graph.
+        Static envelope summary: cap_id ${api.shortHash(env.cap_id || '')},
+        envelope ${api.shortHash(env.envelope_hash || '')}.
       </div>
     </pyana-vizzer>
   `;
