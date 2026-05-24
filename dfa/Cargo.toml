@@ -4,10 +4,19 @@ version.workspace = true
 edition.workspace = true
 description = "Canonical DFA routing engine and userspace dispatch primitive for pyana"
 
+[features]
+default = []
+# Wires a `ThresholdVerifier` implementation backed by
+# `pyana-federation::FederationCommittee::verify(ThresholdQC, message)`. Adds
+# the full federation KZG/BLS stack; only enable in deployments that need
+# governance-bound DFA table swaps.
+federation-verifier = ["dep:pyana-federation"]
+
 [dependencies]
 blake3 = "1"
 serde = { workspace = true, features = ["derive", "alloc"] }
 postcard = { version = "1", features = ["use-std"] }
+pyana-federation = { path = "../federation", optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

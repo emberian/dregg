@@ -58,12 +58,19 @@
 
 pub mod air;
 pub mod compiler;
+#[cfg(feature = "federation-verifier")]
+pub mod federation_verifier;
 pub mod filter;
 pub mod router;
 
+pub use air::{
+    AirTrace, AirTraceRow, DfaError, compile_to_air, compile_to_air_from_table,
+    generate_air_trace, verify_acceptance, verify_air_trace,
+};
 pub use compiler::{DEAD_STATE, Dfa, Pattern, StateId, Transition};
 pub use filter::{FilterTree, TopicFilter};
 pub use router::{
     Classification, DispatchDecision, GovernanceProof, GovernedRouter, KindRegistry, RouteTable,
-    RouteTableBuilder, RouteTarget, RouteUpdateError, Router, ThresholdVerifier, UserspaceTarget,
+    RouteTableBuilder, RouteTarget, RouteUpdateError, Router, StubVerifier, ThresholdVerifier,
+    UserspaceTarget,
 };
