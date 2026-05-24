@@ -42,7 +42,7 @@ use pyana_federation::threshold::{
     generate_test_committee, FederationCommittee, MemberSecret, ThresholdQC,
 };
 
-/// Sign `body_hash` with `threshold` out of the committee's members.
+/// Sign `body_hash` with `threshold` of the committee's members.
 /// Helper that wraps the BLS aggregation boilerplate.
 fn quorum_sign(
     committee: &FederationCommittee,
@@ -50,11 +50,11 @@ fn quorum_sign(
     threshold: usize,
     body_hash: &[u8; 32],
 ) -> ThresholdQC {
-    let shares: Vec<(usize, _)> = members
+    let shares = members
         .iter()
         .take(threshold)
         .map(|m| (m.index, committee.sign_share(m, body_hash)))
-        .collect();
+        .collect::<Vec<_>>();
     committee
         .aggregate(&shares, body_hash)
         .expect("aggregation must succeed at threshold")
@@ -66,11 +66,12 @@ fn cross_federation_lock_witness_finalize_roundtrip() {
     // (The hints crate's threshold scheme works fine with threshold == n; we
     // use 4-of-4 here for a deterministic test, threshold soundness is
     // exercised in `federation::receipt` unit tests.)
-    let threshold = 4usize;
+    let threshold_u64 = 4u64;
+    let threshold = threshold_u64 as usize;
     let (committee_a, members_a) =
-        generate_test_committee(4, threshold).expect("federation A committee");
+        generate_test_committee(4, threshold_u64).expect("federation A committee");
     let (committee_b, members_b) =
-        generate_test_committee(4, threshold).expect("federation B committee");
+        generate_test_committee(4, threshold_u64).expect("federation B committee");
 
     let fed_a_id: [u8; 32] = [0xAA; 32];
     let fed_b_id: [u8; 32] = [0xBB; 32];
@@ -184,9 +185,10 @@ fn cross_federation_lock_witness_finalize_roundtrip() {
 /// other re-advancement) even if it carries a valid (but stale) QC.
 #[test]
 fn cross_federation_replay_rejected_after_finalize() {
-    let threshold = 4usize;
-    let (committee_a, members_a) = generate_test_committee(4, threshold).unwrap();
-    let (committee_b, members_b) = generate_test_committee(4, threshold).unwrap();
+    let threshold_u64 = 4u64;
+    let threshold = threshold_u64 as usize;
+    let (committee_a, members_a) = generate_test_committee(4, threshold_u64).unwrap();
+    let (committee_b, members_b) = generate_test_committee(4, threshold_u64).unwrap();
 
     let fed_a_id: [u8; 32] = [0xAA; 32];
     let fed_b_id: [u8; 32] = [0xBB; 32];
