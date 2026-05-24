@@ -760,9 +760,9 @@ async fn dispatch_tool(name: &str, params: Value, state: &NodeState) -> McpToolR
 async fn tool_get_status(state: &NodeState) -> McpToolResult {
     let s = state.read().await;
 
-    if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
-    }
+    // F-P2-7: status is informational; the HTTP /status endpoint does not require
+    // the wallet to be unlocked, and neither should the MCP analog. (Health
+    // checks need to work while locked.)
 
     let latest_height = s
         .store
@@ -2071,7 +2071,7 @@ async fn tool_create_bearer_cap(params: &Value, state: &NodeState) -> McpToolRes
         return McpToolResult::error("wallet is locked; unlock first");
     }
 
-    let _perm_level = match permissions_str {
+    let perm_level = match permissions_str {
         "none" | "None" => pyana_cell::AuthRequired::None,
         "signature" | "Signature" => pyana_cell::AuthRequired::Signature,
         "proof" | "Proof" => pyana_cell::AuthRequired::Proof,
@@ -2084,13 +2084,28 @@ async fn tool_create_bearer_cap(params: &Value, state: &NodeState) -> McpToolRes
         }
     };
 
+    // F-P1-8: bind `perm_level` into the signed message. Prior code computed
+    // `perm_level` but discarded it (the variable was named `_perm_level`), so
+    // the resulting signature did not commit to which permission level was
+    // delegated — a downstream exerciser could claim any permission level.
+    let perm_tag: u8 = match perm_level {
+        pyana_cell::AuthRequired::None => 0,
+        pyana_cell::AuthRequired::Signature => 1,
+        pyana_cell::AuthRequired::Proof => 2,
+        pyana_cell::AuthRequired::Either => 3,
+        // Future-proof: any other variant is rejected with a tag the verifier
+        // will not accept.
+        _ => 0xff,
+    };
+
     // Sign the bearer cap delegation chain: delegator signs
     // "I grant {permissions} on {target} to {bearer_pk} until {expires_at}".
     let signing_key = s.wallet.gossip_signing_key();
-    let mut msg = Vec::with_capacity(32 + 32 + 8);
+    let mut msg = Vec::with_capacity(32 + 32 + 8 + 1);
     msg.extend_from_slice(&target_cell_bytes);
     msg.extend_from_slice(&bearer_pk_bytes);
     msg.extend_from_slice(&expires_at.to_le_bytes());
+    msg.push(perm_tag);
     let signature = pyana_types::sign(&signing_key, &msg);
 
     let bearer_cap_id = blake3::hash(&signature.0);
@@ -2127,6 +2142,25 @@ async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) -> McpToolR
     let expires_at = match params.get("expires_at").and_then(|v| v.as_u64()) {
         Some(e) => e,
         None => return McpToolResult::error("missing required parameter: expires_at"),
+    };
+    // F-P1-8: accept caller-supplied permissions. Default to Signature for
+    // backward compat. The signed delegation message commits to this tag in
+    // `tool_create_bearer_cap`, so a downstream verifier checks the binding.
+    let permissions_str = params
+        .get("permissions")
+        .and_then(|v| v.as_str())
+        .unwrap_or("signature");
+    let permissions = match permissions_str {
+        "none" | "None" => pyana_cell::AuthRequired::None,
+        "signature" | "Signature" => pyana_cell::AuthRequired::Signature,
+        "proof" | "Proof" => pyana_cell::AuthRequired::Proof,
+        "either" | "Either" => pyana_cell::AuthRequired::Either,
+        other => {
+            return McpToolResult::error(format!(
+                "invalid permission type: '{}'. Valid: none, signature, proof, either",
+                other
+            ));
+        }
     };
 
     let target_cell_bytes = match hex_decode(target_cell_hex) {
@@ -2177,7 +2211,8 @@ async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) -> McpToolR
 
     let bearer_proof = pyana_turn::BearerCapProof {
         target: target_cell_id,
-        permissions: pyana_cell::AuthRequired::Signature,
+        // F-P1-8: use the caller-supplied permission level (or Signature default).
+        permissions,
         delegation_proof: pyana_turn::DelegationProofData::SignedDelegation {
             delegator_pk,
             signature: sig_array,

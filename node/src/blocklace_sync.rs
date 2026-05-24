@@ -433,7 +433,11 @@ fn build_ordering_blocklace(
 ///
 /// Key difference from Morpheus: QUIESCENT operation. No periodic timers for
 /// consensus. Activity only when a turn is submitted or blocks arrive from peers.
-pub async fn run_blocklace_sync(state: NodeState, gossip_port: u16) -> Option<BlocklaceHandle> {
+pub async fn run_blocklace_sync(
+    state: NodeState,
+    gossip_port: u16,
+    auto_approve_joins: bool,
+) -> Option<BlocklaceHandle> {
     let peers = {
         let s = state.read().await;
         s.peers.clone()
@@ -656,7 +660,7 @@ pub async fn run_blocklace_sync(state: NodeState, gossip_port: u16) -> Option<Bl
         self_key,
         executed_up_to,
         finality_notify: finality_notify.clone(),
-        auto_approve_joins: true, // TODO(production): gate on .devnet marker or CLI flag
+        auto_approve_joins, // F-CRIT-2: gated by main.rs on --auto-approve-joins CLI flag OR .devnet marker
         node_state: state.clone(),
     };
 

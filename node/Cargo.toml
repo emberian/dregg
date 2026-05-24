@@ -52,6 +52,15 @@ chacha20poly1305 = { workspace = true }
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
 
+# Dev-deps for future router-level adversarial tests (Stage 0c followup once
+# pyana-turn/pyana-cell rebuild lands from Stages 0a/0b). Currently the
+# unit-style tests in api.rs / relay_service.rs do not need them, but keeping
+# them declared keeps the followup PR trivial.
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+tempfile = "3"
+http-body-util = "0.1"
+
 [[bin]]
 name = "pyana-node"
 path = "src/main.rs"

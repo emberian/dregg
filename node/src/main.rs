@@ -107,6 +107,15 @@ enum Command {
         /// bridge relay pattern. Each group ID is a 64-character hex string.
         #[arg(long, value_delimiter = ',')]
         groups: Vec<String>,
+
+        /// (Dangerous) Auto-approve all federation join proposals received via
+        /// gossip. F-CRIT-2: if true, ANY peer that publishes a
+        /// `MembershipAction::Join` block causes this node to cast an Approve
+        /// vote, which combined with the (n*2/3)+1 BFT threshold can flip the
+        /// federation. Default: false. Devnet (`.devnet` marker file) implicitly
+        /// enables this.
+        #[arg(long)]
+        auto_approve_joins: bool,
     },
 
     /// Initialize the data directory and generate a node keypair.
@@ -245,6 +254,7 @@ async fn main() {
             federation_mode,
             consensus,
             groups,
+            auto_approve_joins,
         } => {
             run_node(
                 port,
@@ -261,6 +271,7 @@ async fn main() {
                 &federation_mode,
                 &consensus,
                 groups,
+                auto_approve_joins,
             )
             .await
         }
@@ -326,6 +337,7 @@ async fn run_node(
     federation_mode_str: &str,
     consensus_engine: &str,
     groups: Vec<String>,
+    auto_approve_joins_flag: bool,
 ) {
     let data_path = expand_path(data_dir);
 
@@ -467,6 +479,18 @@ async fn run_node(
         "starting pyana-node"
     );
 
+    // F-CRIT-2: gate auto-approval of federation join proposals on CLI flag or
+    // `.devnet` marker. Defaults to false otherwise — any peer publishing a
+    // MembershipAction::Join used to be enough to flip the federation.
+    let auto_approve_joins =
+        auto_approve_joins_flag || data_path.join(".devnet").exists();
+    if auto_approve_joins {
+        tracing::warn!(
+            "auto-approve-joins is ENABLED — any peer publishing a join proposal \
+             will receive our approval vote. Disable in production."
+        );
+    }
+
     // Spawn federation sync background task based on the chosen consensus engine.
     // In solo mode with no peers, skip gossip entirely regardless of engine.
     match consensus_engine {
@@ -480,7 +504,12 @@ async fn run_node(
                 let sync_state = node_state.clone();
                 let gossip_port_copy = gossip_port;
                 tokio::spawn(async move {
-                    blocklace_sync::run_blocklace_sync(sync_state, gossip_port_copy).await;
+                    blocklace_sync::run_blocklace_sync(
+                        sync_state,
+                        gossip_port_copy,
+                        auto_approve_joins,
+                    )
+                    .await;
                 });
             } else {
                 info!("solo mode with no peers configured — blocklace sync skipped");
