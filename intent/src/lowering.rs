@@ -244,16 +244,34 @@ pub fn lower(intent: Intent, ctx: &LoweringContext) -> Result<EffectPlan, Loweri
     }
 }
 
-/// Lower one settlement leg into a `PendingAction`. The anchor is the
-/// turn's agent — the federation node submitting the compound
-/// settlement on behalf of the participants.
+/// Lower one settlement leg into a `PendingAction`.
+///
+/// Each leg is emitted as a bare `Effect::Transfer` from the sender's
+/// cell to the recipient's, using the same `"pay"` method symbol as
+/// the `Intent::Pay` lowering. This keeps ring settlement composed
+/// out of the existing γ.2 bilateral primitive (`Effect::Transfer`)
+/// rather than dispatching a `"settle_ring_leg"` method that no cell
+/// implements.
+///
+/// Authorization is `AuthHint::Signed`: the lowering layer leaves
+/// auth attachment to the seal layer. In the trustless engine's
+/// path, `seal_plan_uniform` applies a single solver-bound
+/// signature derived from the validity proof hash — every leg
+/// inherits the same authorization, with per-leg auth being a
+/// future per-action sealer extension (see `auth_hint`).
+///
+/// The `caller` is set to the anchor (the solver / federation
+/// settlement cell) so the executor treats this as a federation-
+/// driven transfer rather than a sender-initiated one; the
+/// settlement is "I, the anchor, move value on behalf of the
+/// auctioned matching".
 fn lower_settlement_leg(leg: &RingSettlement, anchor: CellId) -> PendingAction {
     let from_cell = CellId::from_bytes(leg.from.0);
     let to_cell = CellId::from_bytes(leg.to.0);
     PendingAction {
         target: from_cell,
         caller: anchor,
-        method: "settle_ring_leg".to_string(),
+        method: "pay".to_string(),
         effects: vec![Effect::Transfer {
             from: from_cell,
             to: to_cell,

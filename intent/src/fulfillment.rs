@@ -780,11 +780,25 @@ pub fn create_fulfillment_turn(
     let hash = *blake3::hash(&preimage).as_bytes();
 
     // Build the payment transfer action.
+    //
+    // The action's authorization is `Breadstuff(hash)` — a capability-
+    // token authorization whose token id is the same hash carried by
+    // the `ProofCondition::HashPreimage` gate. Concretely: "whoever
+    // presents the preimage that resolves this conditional has the
+    // capability to dispatch this payment." The `ConditionalTurn`
+    // resolver consults the preimage, the executor consults the
+    // token id; both reduce to the same secret.
+    //
+    // Previously this used `Authorization::Unchecked`, which would
+    // fail `SealedTurn::from_turn`'s debug_assert if the turn ever
+    // flowed through the lowering tower. Using `Breadstuff(hash)`
+    // keeps the action seal-compatible without altering the
+    // conditional gating semantics.
     let action = Action {
         target: payer_cell,
         method: pyana_turn::action::symbol("fulfillment_payment"),
         args: Vec::new(),
-        authorization: Authorization::Unchecked,
+        authorization: Authorization::Breadstuff(hash),
         preconditions: Default::default(),
         effects: vec![Effect::Transfer {
             from: payer_cell,
