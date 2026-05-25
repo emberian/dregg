@@ -47,6 +47,10 @@
     "introduce_schedule_has_one_introduce",
     "introduce_bilateral_bundle_verifies",
 
+    "recursive_compression_attached",
+    "strict_recursive_built",
+    "recursive_scope_chain_verified",
+
     "charlie_grant_proof_verified",
     "charlie_exercise_proof_verified",
     "charlie_replay_chain_verified",
@@ -68,7 +72,8 @@
     "slot_caveat_suite_bounded_by_negative_accepted",
     "slot_caveat_suite_field_delta_negative_accepted",
     "slot_caveat_suite_field_delta_in_range_negative_accepted",
-    "introduce_bilateral_tampered_bundle_accepted"
+    "introduce_bilateral_tampered_bundle_accepted",
+    "recursive_scope_tampered_vk_hash_accepted"
   ],
 
   "verifier_independence": {

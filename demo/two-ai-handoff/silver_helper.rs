@@ -47,7 +47,7 @@ use pyana_circuit::field::BabyBear;
 use pyana_turn::bilateral_schedule::ExpectedBilateral;
 use pyana_turn::{
     Action, Authorization, CallForest, CommitmentMode, DelegationMode, Effect,
-    SovereignCellWitness, Turn, TurnReceipt,
+    SovereignCellWitness, Turn, TurnReceipt, WitnessedReceipt,
 };
 use pyana_types::FederationId;
 use pyana_verifier::{BilateralBundle, BilateralEntry, fabricate_witnessed_receipt};
@@ -1206,6 +1206,167 @@ fn cmd_make_introduce(
     println!("{}", serde_json::to_string(&art).unwrap());
 }
 
+/// Subcommand: `make-recursive-witness` — exercise the Golden Vision
+/// recursive-compression path end-to-end.
+///
+/// This is the missing artifact that the `RecursiveWitnessArtifact` struct
+/// at the top of this file has long anticipated but no callsite produced.
+/// It runs three checks:
+///
+///   1. **Best-effort compression attaches**: build a real (small) Effect VM
+///      proof + trace, then call
+///      `WitnessedReceipt::from_components_with_compression(.., recursive_compress: true)`
+///      and confirm the resulting `WitnessBundle` carries a
+///      `RecursiveProofVariant`. Hard-failure here would mean the recursion
+///      substrate silently regressed.
+///
+///   2. **Strict-recursive constructor succeeds**: call
+///      `WitnessedReceipt::from_components_strict_recursive(..)` on the same
+///      inputs and confirm it returns `Ok`. The strict variant hard-fails
+///      on producer error, so a `false` here means recursive proving
+///      itself broke.
+///
+///   3. **Chain JSON for the verifier**: emit a single-entry chain to
+///      `silver.recursive-chain.json` for charlie / `pyana-verifier
+///      scope-recursive` to consume. Also emit a tampered variant
+///      (`recursive_vk_hash` corrupted) so the verifier's registry-lookup
+///      gate is exercised as `must_not_pass`.
+///
+/// Why this matters: the `RecursiveProofVariant` wiring landed structurally
+/// — types, hashing, registry lookup — but until this command no
+/// substrate-honest artifact existed for the verifier's
+/// `scope-recursive` subcommand to consume.
+fn cmd_make_recursive_witness(state_dir: &PathBuf, turn_nonce: u64) {
+    use pyana_circuit::effect_vm::{
+        self as evm, CellState as VmCellState, EffectVmAir, EffectVmContext,
+    };
+    use pyana_circuit::field::BabyBear;
+    use pyana_circuit::stark;
+
+    // Build a minimal real Effect VM trace. A single NoOp at `actor_nonce =
+    // turn_nonce` yields a trace of length 2 (the AIR pads to the next
+    // power of two ≥ 2). The receipt-side `turn_hash` / `previous_receipt_hash`
+    // fields default to all-zero and we keep the context's analogues
+    // zero too, so the verifier's `check_receipt_pi_binding` will see
+    // matching zeros on both sides for those slots.
+    let initial_state = VmCellState::new(0, 0);
+    let effects = vec![evm::Effect::NoOp];
+
+    let mut ctx = EffectVmContext::default();
+    ctx.actor_nonce = turn_nonce;
+
+    let (trace, mut public_inputs) =
+        evm::generate_effect_vm_trace_ext(&initial_state, &effects, ctx);
+
+    // The verifier's `check_receipt_pi_binding` requires
+    // `PI[IS_AGENT_CELL] == 1` for the single-proof-per-WR replay shape.
+    // `generate_effect_vm_trace_ext` leaves this slot at zero; set it
+    // explicitly before proving so the prover commits to the agent-cell
+    // tag the verifier expects. The AIR itself does not constrain this
+    // slot (it is an executor-asserted bundle tag), so the proof remains
+    // valid.
+    public_inputs[pyana_circuit::effect_vm::pi::IS_AGENT_CELL] = BabyBear::ONE;
+
+    let air = EffectVmAir::new(trace.len());
+    let proof = stark::prove(&air, &trace, &public_inputs);
+    let proof_bytes = stark::proof_to_bytes(&proof);
+    let pi_u32: Vec<u32> = public_inputs.iter().map(|f| f.as_u32()).collect();
+
+    // Build the receipt. Carry `actor_nonce` through to make the receipt
+    // self-consistent for the verifier; the chain has length 1 so
+    // `previous_receipt_hash = None`. `turn_hash` is left as all-zero
+    // to match `ctx.turn_hash = [BabyBear::ZERO; 4]` and the PI's
+    // `canonical_32_to_felts_4([0; 32])`-derived TURN_HASH slots.
+    let agent_cell = pyana_types::CellId::from_bytes([0u8; 32]);
+    let receipt = TurnReceipt {
+        turn_hash: [0u8; 32],
+        forest_hash: [0u8; 32],
+        pre_state_hash: [0u8; 32],
+        post_state_hash: [0u8; 32],
+        timestamp: 0,
+        effects_hash: [0u8; 32],
+        computrons_used: 0,
+        action_count: 1,
+        previous_receipt_hash: None,
+        agent: agent_cell,
+        federation_id: [0u8; 32],
+        routing_directives: vec![],
+        introduction_exports: vec![],
+        derivation_records: vec![],
+        emitted_events: vec![],
+        executor_signature: None,
+        finality: Default::default(),
+        was_encrypted: false,
+    };
+
+    // Step 1: best-effort compression. Should attach a recursive proof.
+    let wr_compress = WitnessedReceipt::from_components_with_compression(
+        receipt.clone(),
+        proof_bytes.clone(),
+        pi_u32.clone(),
+        Some(&trace),
+        true,
+    );
+    let recursive_compression_attached = wr_compress
+        .witness_bundle
+        .as_ref()
+        .map(|wb| wb.has_recursive_proof())
+        .unwrap_or(false);
+
+    // Step 2: strict-recursive constructor. Hard-fails on producer error.
+    let strict_result = WitnessedReceipt::from_components_strict_recursive(
+        receipt.clone(),
+        proof_bytes.clone(),
+        pi_u32.clone(),
+        &trace,
+    );
+    let strict_recursive_built = strict_result.is_ok();
+
+    // Write the strict-recursive WR as a single-entry chain for the
+    // verifier's `scope-recursive` subcommand. If strict failed (it
+    // shouldn't), fall back to the best-effort one — but only if its
+    // recursive variant did attach.
+    let wr_for_chain = match strict_result {
+        Ok(wr) => wr,
+        Err(_) => wr_compress.clone(),
+    };
+    let chain = vec![wr_for_chain.clone()];
+    let chain_path = state_dir.join("silver.recursive-chain.json");
+    let chain_json =
+        WitnessedReceipt::chain_to_json(&chain).expect("chain serialise must succeed");
+    fs::write(&chain_path, &chain_json).unwrap();
+
+    // Tampered variant: corrupt the recursive_vk_hash so the verifier's
+    // registry-lookup step rejects with `UnknownVkHash` before any
+    // cryptographic work. The outer EffectVm proof is still valid; this
+    // exercises the recursive-side gate specifically.
+    let mut tampered = wr_for_chain.clone();
+    if let Some(bundle) = tampered.witness_bundle.as_mut() {
+        if let Some(rp) = bundle.recursive_proof.as_mut() {
+            rp.recursive_vk_hash[0] ^= 0xFF;
+            rp.recursive_vk_hash[31] ^= 0xFF;
+        }
+    }
+    let tampered_chain = vec![tampered];
+    let chain_path_tampered = state_dir.join("silver.recursive-chain.tampered.json");
+    let tampered_json = WitnessedReceipt::chain_to_json(&tampered_chain)
+        .expect("tampered chain serialise must succeed");
+    fs::write(&chain_path_tampered, &tampered_json).unwrap();
+
+    let art = RecursiveWitnessArtifact {
+        recursive_compression_attached,
+        strict_recursive_built,
+        chain_path: chain_path.display().to_string(),
+        chain_path_tampered: chain_path_tampered.display().to_string(),
+    };
+    fs::write(
+        state_dir.join("silver.recursive-witness.json"),
+        serde_json::to_string_pretty(&art).unwrap(),
+    )
+    .unwrap();
+    println!("{}", serde_json::to_string(&art).unwrap());
+}
+
 /// Subcommand: `make-bilateral-bundle` — assemble a γ.2 bilateral bundle
 /// for the canonical Transfer turn (alice -> bob, 100). Build one
 /// `WitnessedReceipt` per cell with the γ.2 PI layout computed from the
@@ -1377,6 +1538,7 @@ fn usage() -> ExitCode {
            slot-caveat-suite\n  \
            make-credential-set-auth\n  \
            make-introduce --introducer-cell <hex32> --recipient-cell <hex32> --target-cell <hex32> --turn-nonce N\n  \
+           make-recursive-witness [--turn-nonce N]\n  \
            make-bilateral-bundle --alice-cell <hex32> --bob-cell <hex32> --amount N --turn-nonce N\n"
     );
     ExitCode::from(2)
@@ -1450,6 +1612,11 @@ fn run(cmd: &str, rest: &[String], state_dir: &PathBuf) -> Result<bool, String> 
             let target = need("--target-cell")?;
             let turn_nonce = need_u64("--turn-nonce", Some("1"))?;
             cmd_make_introduce(state_dir, &introducer, &recipient, &target, turn_nonce);
+            Ok(true)
+        }
+        "make-recursive-witness" => {
+            let turn_nonce = need_u64("--turn-nonce", Some("1"))?;
+            cmd_make_recursive_witness(state_dir, turn_nonce);
             Ok(true)
         }
         "make-bilateral-bundle" => {

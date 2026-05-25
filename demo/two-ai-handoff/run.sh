@@ -226,6 +226,22 @@ INTRO_RC=$?
 [ $INTRO_RC -eq 0 ] && ok "Effect::Introduce γ.2 bundle assembled (introducer + recipient + target WRs)" \
                   || fail "silver-helper make-introduce failed ($INTRO_RC)"
 
+# ── Step 4c: Golden Vision recursive-witness exercise ────────────────────
+# Builds a real (minimal) Effect VM proof + trace, attaches a
+# RecursiveProofVariant via WitnessedReceipt::from_components_with_compression
+# AND via the strict-recursive constructor, and emits a chain.json the
+# verifier's `scope-recursive` subcommand can consume. A tampered variant
+# (recursive_vk_hash corrupted) is also written for the must_not_pass
+# registry-lookup rejection.
+step 4c "silver-helper: Golden Vision recursive witness (scope-2 compression)"
+
+"$HELPER_BIN" make-recursive-witness \
+    --state-dir "$STATE_DIR" \
+    --turn-nonce 1 > "$LOG_DIR/silver.recursive-witness.stdout" 2> "$LOG_DIR/silver.recursive-witness.stderr"
+RECW_RC=$?
+[ $RECW_RC -eq 0 ] && ok "RecursiveProofVariant attached (best-effort + strict) and chain.json emitted" \
+                 || fail "silver-helper make-recursive-witness failed ($RECW_RC)"
+
 # ── Step 5/6/7: bob exercises (existing MCP path; Authorization::Bearer) ──
 # GAP: today's MCP tool `pyana_exercise_bearer_cap` uses Authorization::Bearer,
 # not CapTpDelivered. silver-helper above produces a canonical CapTpDelivered
@@ -282,6 +298,10 @@ CSET_ISSUER_DISTINCT=$(get_bool credential_set_distinct_issuers)
 INTRO_SCHED_OK=$(get_bool introduce_schedule_has_one_introduce)
 INTRO_VERIFIED=$(get_bool introduce_bilateral_verified)
 INTRO_TAMPER_REJECTED=$(get_bool introduce_bilateral_tampered_rejected)
+RECW_ATTACHED=$(get_bool recursive_compression_attached)
+RECW_STRICT=$(get_bool strict_recursive_built)
+RECW_SCOPE_VERIFIED=$(get_bool recursive_scope_verified)
+RECW_TAMPER_REJECTED=$(get_bool recursive_tampered_rejected)
 # slot_caveat_suite is a nested dict; extract per-variant via python.
 suite_case() {
     echo "$CHARLIE_OUT" | "$PY" -c "
@@ -329,6 +349,10 @@ done
 [ "$INTRO_SCHED_OK" = "True" ]         && ok "Effect::Introduce schedule reconstructs (1 entry, correct introducer/recipient/target)" || warn "Effect::Introduce schedule reconstruction failed"
 [ "$INTRO_VERIFIED" = "True" ]         && ok "Effect::Introduce γ.2 bilateral bundle pair-verifies (3 cells)" || warn "Effect::Introduce γ.2 bundle NOT verified"
 [ "$INTRO_TAMPER_REJECTED" = "True" ]  && ok "Effect::Introduce γ.2 tampered bundle rejected (must_not_pass)" || warn "Effect::Introduce tampered bundle WRONGLY accepted"
+[ "$RECW_ATTACHED" = "True" ]          && ok "Golden Vision: RecursiveProofVariant attached (best-effort compression)" || warn "recursive compression did NOT attach"
+[ "$RECW_STRICT" = "True" ]            && ok "Golden Vision: strict-recursive constructor returned Ok" || warn "strict-recursive constructor FAILED"
+[ "$RECW_SCOPE_VERIFIED" = "True" ]    && ok "pyana-verifier scope-recursive verified the chain" || warn "scope-recursive chain NOT verified"
+[ "$RECW_TAMPER_REJECTED" = "True" ]   && ok "scope-recursive rejected tampered recursive_vk_hash (must_not_pass)" || warn "scope-recursive WRONGLY accepted tampered vk_hash"
 
 # ─── balance checks ───
 BOB_DELTA=$(echo "$BOB_OUT" | "$PY" -c 'import json,sys;print(json.load(sys.stdin).get("bob_balance_delta", 0))' 2>/dev/null || echo 0)
@@ -384,6 +408,9 @@ add_check "AuthorizedSet::CredentialSet: distinct schemas distinct commitments" 
 add_check "AuthorizedSet::CredentialSet: distinct issuers distinct commitments" $(b2i "$CSET_ISSUER_DISTINCT")
 add_check "Effect::Introduce schedule reconstructs as expected"                 $(b2i "$INTRO_SCHED_OK")
 add_check "Effect::Introduce γ.2 bundle pair-verifies (3 cells)"                $(b2i "$INTRO_VERIFIED")
+add_check "Golden Vision: RecursiveProofVariant attached (best-effort)"          $(b2i "$RECW_ATTACHED")
+add_check "Golden Vision: strict-recursive constructor returned Ok"             $(b2i "$RECW_STRICT")
+add_check "Golden Vision: scope-recursive verifier accepts the chain"           $(b2i "$RECW_SCOPE_VERIFIED")
 add_check "charlie: grant proof verified"                                      $(b2i "$GRANT_VERIFIED")
 add_check "charlie: exercise proof verified"                                   $(b2i "$EXERCISE_VERIFIED")
 add_check "charlie: WitnessedReceipt v1 replay-chain verified"                 $(b2i "$REPLAY_CHAIN_VERIFIED")
@@ -404,6 +431,7 @@ add_check "must_not_pass: slot-caveat-suite[BoundedBy] negative REJECTED"       
 add_check "must_not_pass: slot-caveat-suite[FieldDelta] negative REJECTED"      $(b2i "$SUITE_FD_NEG")
 add_check "must_not_pass: slot-caveat-suite[FieldDeltaInRange] negative REJECTED" $(b2i "$SUITE_FDR_NEG")
 add_check "must_not_pass: Effect::Introduce γ.2 tampered bundle is REJECTED"    $(b2i "$INTRO_TAMPER_REJECTED")
+add_check "must_not_pass: scope-recursive tampered recursive_vk_hash REJECTED"   $(b2i "$RECW_TAMPER_REJECTED")
 
 PASS=1
 for i in "${!CHECKS_LABEL[@]}"; do

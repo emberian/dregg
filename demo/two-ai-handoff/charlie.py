@@ -140,6 +140,18 @@ def verify_bilateral(verifier_bin: str, bundle_path: Path) -> tuple[bool, str]:
     return bool(parsed.get("verified", False)) and rc == 0, str(parsed.get("reason", ""))
 
 
+def verify_scope_recursive(verifier_bin: str, chain_path: Path) -> tuple[bool, str]:
+    """Run `pyana-verifier scope-recursive <chain.json>` and parse verdict."""
+    rc, stdout, stderr = run_proc(
+        [verifier_bin, "scope-recursive", str(chain_path)], timeout=180
+    )
+    try:
+        parsed = json.loads(stdout)
+    except json.JSONDecodeError:
+        parsed = {"summary": f"unparseable: {stdout!r} {stderr!r}", "overall_verified": False}
+    return bool(parsed.get("overall_verified", False)) and rc == 0, str(parsed.get("summary", ""))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--state-dir", required=True)
@@ -318,6 +330,42 @@ def main() -> int:
         introduce_bilateral_tampered_rejected = False
         blocker_notes.append("no silver.introduce.json (imatrix lane gap)")
 
+    # ─── interaction-matrix lane: Golden Vision recursive witness ────────
+    recw_path = state_dir / "silver.recursive-witness.json"
+    if recw_path.exists():
+        recw = json.loads(recw_path.read_text())
+        recursive_compression_attached = bool(recw.get("recursive_compression_attached", False))
+        strict_recursive_built = bool(recw.get("strict_recursive_built", False))
+        recursive_chain = Path(recw["chain_path"])
+        recursive_chain_t = Path(recw["chain_path_tampered"])
+        if not recursive_compression_attached:
+            blocker_notes.append("recursive compression did NOT attach (best-effort path silently regressed)")
+        if not strict_recursive_built:
+            blocker_notes.append("strict-recursive constructor failed; recursion substrate is broken")
+        if recursive_chain.exists():
+            recursive_scope_verified, recursive_scope_reason = verify_scope_recursive(
+                args.verifier_bin, recursive_chain
+            )
+            if not recursive_scope_verified:
+                blocker_notes.append(f"scope-recursive on chain rejected: {recursive_scope_reason}")
+        else:
+            recursive_scope_verified = False
+            blocker_notes.append(f"no recursive chain at {recursive_chain}")
+        if recursive_chain_t.exists():
+            tamper_accepted, _ = verify_scope_recursive(args.verifier_bin, recursive_chain_t)
+            recursive_tampered_rejected = not tamper_accepted
+            if tamper_accepted:
+                blocker_notes.append("scope-recursive WRONGLY accepted tampered recursive_vk_hash")
+        else:
+            recursive_tampered_rejected = False
+            blocker_notes.append(f"no tampered recursive chain at {recursive_chain_t}")
+    else:
+        recursive_compression_attached = False
+        strict_recursive_built = False
+        recursive_scope_verified = False
+        recursive_tampered_rejected = False
+        blocker_notes.append("no silver.recursive-witness.json (recursive-witness lane gap)")
+
     # ─── Assemble verdict ─────────────────────────────────────────────────
     result = {
         "grant_verified": grant_verified,
@@ -345,6 +393,10 @@ def main() -> int:
         "introduce_schedule_has_one_introduce": introduce_schedule_has_one,
         "introduce_bilateral_verified": introduce_bilateral_verified,
         "introduce_bilateral_tampered_rejected": introduce_bilateral_tampered_rejected,
+        "recursive_compression_attached": recursive_compression_attached,
+        "strict_recursive_built": strict_recursive_built,
+        "recursive_scope_verified": recursive_scope_verified,
+        "recursive_tampered_rejected": recursive_tampered_rejected,
         "pid": os.getpid(),
         "independent_node": True,
         "independent_binary": True,
