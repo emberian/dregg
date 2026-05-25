@@ -65,7 +65,7 @@ pub struct AnonymousPresentation {
 pub struct NoteSecret {
     /// The full note (owner, value, asset_type, randomness, creation_nonce).
     pub note: Note,
-    /// The spending key (derived from the wallet's signing key).
+    /// The spending key (derived from the cipherclerk's signing key).
     pub spending_key: [u8; 32],
 }
 
@@ -235,10 +235,10 @@ impl AgentCipherclerk {
         value: u64,
         asset_type: u64,
     ) -> Result<(NoteCommitment, NoteSecret), SdkError> {
-        // Derive a spending key from the wallet's signing key material.
+        // Derive a spending key from the cipherclerk's signing key material.
         let spending_key = self.derive_symmetric_key("pyana-note-spending-key-v1");
 
-        // Create the note with this wallet's public key as owner.
+        // Create the note with this cipherclerk's public key as owner.
         let owner = self.public_key().0;
         let mut fields = [0u64; 8];
         fields[0] = asset_type;
@@ -788,8 +788,8 @@ mod tests {
 
     #[test]
     fn test_create_private_note_produces_valid_commitment() {
-        let wallet = AgentCipherclerk::new();
-        let (commitment, secret) = wallet.create_private_note(1000, 1).unwrap();
+        let cclerk = AgentCipherclerk::new();
+        let (commitment, secret) = cclerk.create_private_note(1000, 1).unwrap();
 
         // The commitment should match what Note::commitment() produces.
         assert_eq!(commitment, secret.note.commitment());
@@ -798,15 +798,15 @@ mod tests {
         assert_eq!(secret.note.value(), 1000);
         assert_eq!(secret.note.asset_type(), 1);
 
-        // The owner should be the wallet's public key.
-        assert_eq!(secret.note.owner, wallet.public_key().0);
+        // The owner should be the cipherclerk's public key.
+        assert_eq!(secret.note.owner, cclerk.public_key().0);
     }
 
     #[test]
     fn test_create_private_note_unique_commitments() {
-        let wallet = AgentCipherclerk::new();
-        let (c1, _) = wallet.create_private_note(1000, 1).unwrap();
-        let (c2, _) = wallet.create_private_note(1000, 1).unwrap();
+        let cclerk = AgentCipherclerk::new();
+        let (c1, _) = cclerk.create_private_note(1000, 1).unwrap();
+        let (c2, _) = cclerk.create_private_note(1000, 1).unwrap();
 
         // Even with same value/asset, commitments differ (fresh randomness).
         assert_ne!(c1, c2);
@@ -814,22 +814,22 @@ mod tests {
 
     #[test]
     fn test_create_private_note_spending_key_derives_correctly() {
-        let wallet = AgentCipherclerk::new();
-        let (_, secret) = wallet.create_private_note(500, 2).unwrap();
+        let cclerk = AgentCipherclerk::new();
+        let (_, secret) = cclerk.create_private_note(500, 2).unwrap();
 
-        // The spending key should be deterministic for the same wallet.
-        let expected_key = wallet.derive_symmetric_key("pyana-note-spending-key-v1");
+        // The spending key should be deterministic for the same cipherclerk.
+        let expected_key = cclerk.derive_symmetric_key("pyana-note-spending-key-v1");
         assert_eq!(secret.spending_key, expected_key);
     }
 
     #[test]
     fn test_prove_predicate_unlinkable_produces_fresh_commitment() {
-        let mut wallet = AgentCipherclerk::new();
+        let mut cclerk = AgentCipherclerk::new();
         let root_key = [0xAB; 32];
-        let token = wallet.mint_token(&root_key, "test-service");
+        let token = cclerk.mint_token(&root_key, "test-service");
 
         // Generate two proofs for the same predicate.
-        let proof1 = wallet
+        let proof1 = cclerk
             .prove_predicate_unlinkable(
                 &token,
                 "balance",
@@ -839,7 +839,7 @@ mod tests {
             )
             .unwrap();
 
-        let proof2 = wallet
+        let proof2 = cclerk
             .prove_predicate_unlinkable(
                 &token,
                 "balance",
@@ -861,12 +861,12 @@ mod tests {
 
     #[test]
     fn test_prove_predicate_unlinkable_fails_on_false_statement() {
-        let mut wallet = AgentCipherclerk::new();
+        let mut cclerk = AgentCipherclerk::new();
         let root_key = [0xCD; 32];
-        let token = wallet.mint_token(&root_key, "test-service");
+        let token = cclerk.mint_token(&root_key, "test-service");
 
         // Try to prove balance >= 1000 when balance is only 500 (false statement).
-        let result = wallet.prove_predicate_unlinkable(
+        let result = cclerk.prove_predicate_unlinkable(
             &token,
             "balance",
             500,
@@ -879,9 +879,9 @@ mod tests {
 
     #[test]
     fn test_prove_not_revoked_succeeds_for_non_revoked_token() {
-        let mut wallet = AgentCipherclerk::new();
+        let mut cclerk = AgentCipherclerk::new();
         let root_key = [0xEF; 32];
-        let token = wallet.mint_token(&root_key, "service");
+        let token = cclerk.mint_token(&root_key, "service");
 
         // Build a revocation tree with some revoked entries (not our token).
         let revoked_hashes: Vec<BabyBear> = (1..=5u32)
@@ -895,7 +895,7 @@ mod tests {
         let tree = DslRevocationTree::new(revoked_hashes, 4);
 
         // Our token is not in the revocation set.
-        let proof = wallet.prove_not_revoked(&token, &tree);
+        let proof = cclerk.prove_not_revoked(&token, &tree);
         assert!(
             proof.is_ok(),
             "non-revoked token should produce valid proof: {:?}",
@@ -915,9 +915,9 @@ mod tests {
 
     #[test]
     fn test_authorize_anonymously_produces_unlinkable_proofs() {
-        let mut wallet = AgentCipherclerk::new();
+        let mut cclerk = AgentCipherclerk::new();
         let root_key = [0x42; 32];
-        let token = wallet.mint_token(&root_key, "dns");
+        let token = cclerk.mint_token(&root_key, "dns");
 
         let request = AuthRequest {
             service: Some("dns".into()),
@@ -929,7 +929,7 @@ mod tests {
         // NOTE: This requires the bridge crate to have synthetic federation membership
         // enabled (cfg(test) or feature="test-utils"). When running in isolation without
         // that feature, prove_authorization returns IssuerNotInFederation.
-        let pres1 = match wallet.authorize_anonymously(&token, &request) {
+        let pres1 = match cclerk.authorize_anonymously(&token, &request) {
             Ok(p) => p,
             Err(SdkError::Auth(pyana_bridge::AuthError::IssuerNotInFederation)) => {
                 // Bridge crate compiled without test-utils feature; skip this test.
@@ -937,7 +937,7 @@ mod tests {
             }
             Err(e) => panic!("unexpected error: {e:?}"),
         };
-        let pres2 = wallet.authorize_anonymously(&token, &request).unwrap();
+        let pres2 = cclerk.authorize_anonymously(&token, &request).unwrap();
 
         // Presentation tags MUST differ (fresh randomness per presentation).
         assert_ne!(
@@ -948,8 +948,8 @@ mod tests {
 
     #[test]
     fn test_transfer_note_privately() {
-        let wallet = AgentCipherclerk::new();
-        let (_, secret) = wallet.create_private_note(1000, 1).unwrap();
+        let cclerk = AgentCipherclerk::new();
+        let (_, secret) = cclerk.create_private_note(1000, 1).unwrap();
 
         // Create a minimal Merkle path (depth 2 as required by the circuit).
         let merkle_siblings = vec![
@@ -960,7 +960,7 @@ mod tests {
 
         let recipient_key = [0xBB; 32];
 
-        let transfer = wallet
+        let transfer = cclerk
             .transfer_note_privately(&secret, &recipient_key, merkle_siblings, merkle_positions)
             .unwrap();
 

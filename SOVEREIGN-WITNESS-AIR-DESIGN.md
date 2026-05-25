@@ -278,11 +278,11 @@ Sovereign cells today come in two flavours (per
   `execution_proof` absent). The default; ~dozens of sites construct
   these.
 - **Phase 3 proof-carrying path** (`execution_proof` populated,
-  `sovereign_witnesses` empty). Algebraically sound; wallet API is
+  `sovereign_witnesses` empty). Algebraically sound; cclerk API is
   `execute_sovereign_turn_with_proof`.
 
 These paths are mutually exclusive at construction
-(`sdk/src/wallet.rs:4442-4554`). The witness path is the
+(`sdk/src/cipherclerk.rs:4442-4554`). The witness path is the
 weak-by-design fallback; the proof path is the algebraically-sound
 target.
 
@@ -474,14 +474,14 @@ to answer:
    is rejected outright? Suggested window: one minor version
    (Stage 9), then hard-removal in Stage 10.
 
-7. **Wallet signing-message coverage (P2-10).** The wallet's v1
-   signing message (`sdk/src/wallet.rs:3895-3906`) does not yet
+7. **Cipherclerk signing-message coverage (P2-10).** The cipherclerk's v1
+   signing message (`sdk/src/cipherclerk.rs:3895-3906`) does not yet
    cover `sovereign_witnesses`. The audit at
    `AUDIT-sovereign-witness-teeth.md §6` flags this as a precondition
-   for closing T9 fully. Coordinate with the wallet-signature-v3
+   for closing T9 fully. Coordinate with the cclerk-signature-v3
    migration: AIR teeth are necessary but not sufficient — the wire
-   layer still needs the wallet to sign over the witness payload.
-   Phase 1 lands the AIR teeth; the wallet migration is a sibling
+   layer still needs the cclerk to sign over the witness payload.
+   Phase 1 lands the AIR teeth; the cclerk migration is a sibling
    lane.
 
 ## 8. Cross-references
@@ -507,7 +507,7 @@ to answer:
   injection, which Phase 1's AIR boundary backstops.
 - `turn/src/turn.rs:22-30` — current `SovereignCellWitness`
   definition (pre-soundness-sweep).
-- `sdk/src/wallet.rs:3895-3906` — wallet signing-message gap P2-10
+- `sdk/src/cipherclerk.rs:3895-3906` — cclerk signing-message gap P2-10
   (sibling lane).
 - Lane Golden-Edge's recursive verifier work — Phase 2 dependency.
 - `STAGE-7-GAMMA-2-PI-DESIGN.md` — the precedent for adding PI

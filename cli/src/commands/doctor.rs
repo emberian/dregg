@@ -21,8 +21,8 @@ pub async fn run(cfg: &Config, ctx: &Context) -> Result<(), Box<dyn std::error::
     // 1. Node reachable.
     checks.push(check_node(cfg).await);
 
-    // 2. Wallet configured.
-    checks.push(check_wallet(cfg));
+    // 2. Cipherclerk configured.
+    checks.push(check_cclerk(cfg));
 
     // 3. Federation connected.
     checks.push(check_federation(cfg).await);
@@ -87,21 +87,21 @@ async fn check_node(cfg: &Config) -> Check {
     }
 }
 
-fn check_wallet(cfg: &Config) -> Check {
-    let keyfile = shellexpand::tilde(&cfg.wallet.keyfile).to_string();
+fn check_cclerk(cfg: &Config) -> Check {
+    let keyfile = shellexpand::tilde(&cfg.cclerk.keyfile).to_string();
     let path = std::path::Path::new(&keyfile);
 
     if path.exists() {
         Check {
-            name: "wallet".to_string(),
+            name: "cclerk".to_string(),
             passed: true,
-            detail: format!("Wallet configured ({} exists)", cfg.wallet.keyfile),
+            detail: format!("Cipherclerk configured ({} exists)", cfg.cclerk.keyfile),
         }
     } else {
         Check {
-            name: "wallet".to_string(),
+            name: "cclerk".to_string(),
             passed: false,
-            detail: format!("Wallet not found ({} missing)", cfg.wallet.keyfile),
+            detail: format!("Cipherclerk not found ({} missing)", cfg.cclerk.keyfile),
         }
     }
 }

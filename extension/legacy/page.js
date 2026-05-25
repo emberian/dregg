@@ -112,7 +112,7 @@ function base64ToArrayBuffer(base64) {
 const pyana = {
   /**
    * Request authorization for an action on a resource.
-   * The wallet evaluates internally and produces a ZK proof if allowed.
+   * The cipherclerk evaluates internally and produces a ZK proof if allowed.
    *
    * The user will be shown a disclosure picker to choose their privacy level:
    * - "full" (trusted): The verifier sees the full token.
@@ -130,7 +130,7 @@ const pyana = {
   },
 
   /**
-   * Check if the pyana wallet extension is connected and available.
+   * Check if the pyana cipherclerk extension is connected and available.
    * @returns {Promise<boolean>}
    */
   isConnected() {
@@ -138,9 +138,9 @@ const pyana = {
   },
 
   /**
-   * Check whether the wallet CAN authorize a given action/resource, without
+   * Check whether the cipherclerk CAN authorize a given action/resource, without
    * producing a proof. Returns only a boolean — does NOT reveal what capabilities
-   * the wallet holds or how many tokens match.
+   * the cipherclerk holds or how many tokens match.
    *
    * @param {{action: string, resource: string}} request
    * @returns {Promise<boolean>}
@@ -150,7 +150,7 @@ const pyana = {
   },
 
   /**
-   * Provision a capability token into the wallet.
+   * Provision a capability token into the cipherclerk.
    * The extension will show a confirmation dialog to the user.
    * Requires origin to be in the user-approved allowlist (prompted on first use).
    *
@@ -186,7 +186,7 @@ const pyana = {
   },
 
   /**
-   * Get this wallet's stealth meta-address for receiving private notes.
+   * Get this cipherclerk's stealth meta-address for receiving private notes.
    * Returns { spendPubkey: number[], viewPubkey: number[] } or error if unavailable.
    * @returns {Promise<{spendPubkey: number[], viewPubkey: number[]}>}
    */
@@ -310,7 +310,7 @@ const pyana = {
 
   /**
    * Build, sign, and submit a turn to the pyana node.
-   * The turn is constructed locally (via WASM), signed with the wallet's key,
+   * The turn is constructed locally (via WASM), signed with the cipherclerk's key,
    * and then POSTed to the configured node endpoint.
    *
    * @param {{action: string, resource?: string, amount?: number, recipient?: string, metadata?: object}} turnSpec
@@ -321,7 +321,7 @@ const pyana = {
   },
 
   /**
-   * Query the wallet's balance from the pyana node.
+   * Query the cipherclerk's balance from the pyana node.
    *
    * @returns {Promise<{balance?: number, error?: string}>}
    */
@@ -481,7 +481,7 @@ const pyana = {
   },
 
   /**
-   * Register an event listener for non-sensitive wallet events.
+   * Register an event listener for non-sensitive cipherclerk events.
    *
    * @param {'ready'|'authorization'|'revoked'|'stealthNoteReceived'|'privateTransfer'|'intentFulfilled'} event
    * @param {function} callback

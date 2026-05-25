@@ -1,8 +1,8 @@
-//! Browser Extension Wallet Flow Simulation
+//! Browser Extension Cipherclerk Flow Simulation
 //!
 //! Simulates the complete browser extension authorization round-trip in pure Rust:
 //! 1. Page requests authorization: { action: "read", resource: "/api/data" }
-//! 2. Wallet evaluates: find matching token, run Datalog, pick mode
+//! 2. Cipherclerk evaluates: find matching token, run Datalog, pick mode
 //! 3. Generate proof (real STARK for private mode)
 //! 4. Server verifies: check proof against attested root
 //! 5. Show the full round-trip with timing
@@ -73,7 +73,7 @@ fn main() {
     println!();
     println!("  {}", "=".repeat(60));
     println!("  PYANA WEB AUTH FLOW SIMULATION");
-    println!("  Browser Extension Wallet <-> Page <-> Server");
+    println!("  Browser Extension Cipherclerk <-> Page <-> Server");
     println!("  {}", "=".repeat(60));
 
     let total_steps = 6;
@@ -90,7 +90,7 @@ fn main() {
     let federation_root_bb = compute_federation_root_bb(&issuer_key);
     let federation_root = bb_to_bytes(federation_root_bb);
 
-    // The wallet holds a token attenuated for this user's permissions.
+    // The cclerk holds a token attenuated for this user's permissions.
     let root_token = MacaroonToken::mint(issuer_key, b"user-session-001", "api.example.com");
     let user_attenuation = Attenuation {
         services: vec![("api".into(), "r".into())],
@@ -133,13 +133,13 @@ fn main() {
     item(&format!("Time: {:?}", step1_time));
 
     // =========================================================================
-    // STEP 2: Wallet evaluates the request
+    // STEP 2: Cipherclerk evaluates the request
     // =========================================================================
 
     section(2, total_steps, "WALLET: Evaluates request (local Datalog)");
     let step2_start = Instant::now();
 
-    // The wallet finds the matching token and runs verification.
+    // The cclerk finds the matching token and runs verification.
     let clearance = user_token.verify(&page_request).unwrap();
 
     party("WALLET", "Found matching token for service 'api'");
@@ -155,11 +155,11 @@ fn main() {
     println!();
     party(
         "WALLET",
-        "The wallet sees: full token chain, all capabilities, all caveats.",
+        "The cclerk sees: full token chain, all capabilities, all caveats.",
     );
     party(
         "WALLET",
-        "The wallet decides: which token, which mode, what to reveal.",
+        "The cclerk decides: which token, which mode, what to reveal.",
     );
 
     let step2_time = step2_start.elapsed();
@@ -389,7 +389,7 @@ fn main() {
     println!("    Party        | Knows                    | Does NOT know");
     println!("    ─────────────┼──────────────────────────┼────────────────────────────");
     println!("    Page         | authorized: yes/no       | Token, capabilities, issuer");
-    println!("    Wallet       | Everything (local)       | Server's internal state");
+    println!("    Cipherclerk       | Everything (local)       | Server's internal state");
     println!("    Server       | Valid federation member   | User identity, token chain");
     println!("    Federation   | Membership roster        | Individual requests/proofs");
     println!();

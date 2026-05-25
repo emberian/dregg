@@ -4,25 +4,25 @@
 
 ## Summary
 
-The "DSL framework" of pyana — comprising `turn::builder::{TurnBuilder, ActionBuilder}`, the `intent/` crate's intent expression + solver surface, the `app-framework/` crate's lifecycle helpers, and `sdk::wallet::AgentWallet`'s authoring methods — is a thin, untyped envelope around the runtime `turn::action::Effect` enum. Compared to the 41 runtime `Effect` variants, the user-facing surface is broken in three structural ways: (1) **coverage is sparse and inconsistent** — fewer than 25% of effect variants are reachable through any typed helper; the rest require apps to hand-construct `Effect::*` literals, defeating the purpose of having a framework; (2) **authorization defaults to `Authorization::Unchecked` everywhere** — every helper in `app-framework/src/escrow.rs`, every `Action` constructed in `apps/gallery/`, and every helper in `intent/src/fulfillment.rs` that builds a payment turn ships with `Unchecked` auth, so the framework's "secure-by-default" claim does not hold; (3) **lowering is silently lossy and not injective** — `AgentWallet::convert_effects_to_vm` (sdk/src/wallet.rs:4322) truncates 32-byte field elements to 4 bytes mod the BabyBear prime and maps roughly half of all `Effect` variants to `VmEffect::NoOp`, so the STARK proof that allegedly attests to a turn's execution does not, in fact, attest to its `Effect` content. There are additional smaller hazards: the two unstaged files (`intent/src/solver.rs`, `intent/src/trustless.rs`) cohere with the rest of `intent/` but the solver's settlement-amount computation has a bug (`min(x).max(x)` collapse), `apps/gallery/src/settlement.rs:92,110` declares conservation-law `balance_change` values that violate the documented invariant, and several `nonce: 0` placeholders in turn-building helpers ship without a way to be overridden by callers. The `ActionBuilder` itself is largely clean but does not validate that mutually exclusive fields (e.g. `Authorization::Proof.bound_action` vs `method`) agree, and `effect()` accepts arbitrary `Effect` literals so it inherits all the runtime invariants without enforcing any of them.
+The "DSL framework" of pyana — comprising `turn::builder::{TurnBuilder, ActionBuilder}`, the `intent/` crate's intent expression + solver surface, the `app-framework/` crate's lifecycle helpers, and `sdk::cclerk::AgentCipherclerk`'s authoring methods — is a thin, untyped envelope around the runtime `turn::action::Effect` enum. Compared to the 41 runtime `Effect` variants, the user-facing surface is broken in three structural ways: (1) **coverage is sparse and inconsistent** — fewer than 25% of effect variants are reachable through any typed helper; the rest require apps to hand-construct `Effect::*` literals, defeating the purpose of having a framework; (2) **authorization defaults to `Authorization::Unchecked` everywhere** — every helper in `app-framework/src/escrow.rs`, every `Action` constructed in `apps/gallery/`, and every helper in `intent/src/fulfillment.rs` that builds a payment turn ships with `Unchecked` auth, so the framework's "secure-by-default" claim does not hold; (3) **lowering is silently lossy and not injective** — `AgentCipherclerk::convert_effects_to_vm` (sdk/src/cipherclerk.rs:4322) truncates 32-byte field elements to 4 bytes mod the BabyBear prime and maps roughly half of all `Effect` variants to `VmEffect::NoOp`, so the STARK proof that allegedly attests to a turn's execution does not, in fact, attest to its `Effect` content. There are additional smaller hazards: the two unstaged files (`intent/src/solver.rs`, `intent/src/trustless.rs`) cohere with the rest of `intent/` but the solver's settlement-amount computation has a bug (`min(x).max(x)` collapse), `apps/gallery/src/settlement.rs:92,110` declares conservation-law `balance_change` values that violate the documented invariant, and several `nonce: 0` placeholders in turn-building helpers ship without a way to be overridden by callers. The `ActionBuilder` itself is largely clean but does not validate that mutually exclusive fields (e.g. `Authorization::Proof.bound_action` vs `method`) agree, and `effect()` accepts arbitrary `Effect` literals so it inherits all the runtime invariants without enforcing any of them.
 
 ## Findings table
 
 | # | Sev | File:Line | Description |
 |---|-----|-----------|-------------|
 | 1 | P0 | `app-framework/src/escrow.rs:95,155,207` | `EscrowManager` ships every escrow lifecycle turn with `Authorization::Unchecked`; the framework's "managed escrow" is unauthenticated |
-| 2 | P0 | `sdk/src/wallet.rs:4322-4448` | `convert_effects_to_vm` truncates 32-byte field elements to 4 bytes mod p and maps EmitEvent / CreateCell / SetPermissions / SetVerificationKey / Bridge* / RegisterName / Introduce / PipelinedSend / Queue* / Escrow* / SpawnWithDelegation / Refresh / Revoke / SealPair to `VmEffect::NoOp` — the proof cannot distinguish those effects |
+| 2 | P0 | `sdk/src/cipherclerk.rs:4322-4448` | `convert_effects_to_vm` truncates 32-byte field elements to 4 bytes mod p and maps EmitEvent / CreateCell / SetPermissions / SetVerificationKey / Bridge* / RegisterName / Introduce / PipelinedSend / Queue* / Escrow* / SpawnWithDelegation / Refresh / Revoke / SealPair to `VmEffect::NoOp` — the proof cannot distinguish those effects |
 | 3 | P1 | `turn/src/builder.rs:152` | `ActionBuilder::new` defaults `authorization: Authorization::Unchecked`; no compile-time path forces the builder to be authorized before `build_action()` |
 | 4 | P1 | `apps/gallery/src/settlement.rs:92,110` | Two-action atomic settlement uses `balance_change: Some(-(winning_bid as i64))` on the payment and `Some(winning_bid as i64)` on the transfer, but neither side performs the conservation-required note motion (no `NoteSpend`/`NoteCreate` pair); the documented "conservation law" is hand-waved |
 | 5 | P1 | `intent/src/solver.rs:328-332` | `validate_ring` settlement amount is `min(receiver.want_min).max(receiver.want_min)` which collapses to just `want_min`; min-takes-the-smaller is the obvious intent but the code as written silently throws away the `.min` clamp |
 | 6 | P1 | `turn/src/builder.rs:38,257` | `TurnBuilder::action` / `ActionBuilder::child` returns `&mut ActionBuilder` for chaining but the lifetime of the parent borrow forbids any further `&mut self` call on the outer builder — apps cannot interleave actions; documented "fluent" API is single-use |
-| 7 | P1 | `sdk/src/wallet.rs:2441,2807` | `build_authorized_turn` hardcodes `nonce: 0` with a comment "Caller should set appropriately or use a TurnBuilder", but returns `SignedTurn` already signed — caller has no way to set the nonce after signing |
+| 7 | P1 | `sdk/src/cipherclerk.rs:2441,2807` | `build_authorized_turn` hardcodes `nonce: 0` with a comment "Caller should set appropriately or use a TurnBuilder", but returns `SignedTurn` already signed — caller has no way to set the nonce after signing |
 | 8 | P1 | `intent/src/lib.rs:535-536` | `compute_stake_nullifier` shifts epoch by 31 bits (`epoch >> 31`), producing overlapping `epoch_lo`/`epoch_hi` decomposition: bit 31 appears in both halves and bits 62+ are silently dropped |
 | 9 | P1 | `turn/src/builder.rs` (entire file) | The builder does not expose helpers for ~31 of the 41 `Effect` variants (Bridge*, PipelinedSend, Spawn/Refresh/Revoke delegation, ExerciseViaCapability, CreateSealPair/Seal/Unseal, CreateCommittedEscrow*, Queue*, NoteSpend/NoteCreate, CreateObligation/Fulfill/Slash, MakeSovereign, CreateCellFromFactory) — apps must use the typeless `.effect(Effect::…)` escape hatch |
 | 10 | P2 | `app-framework/src/batch_executor.rs:24-31` | `ClientTurnRequest.turn_bytes: Vec<u8>` is opaque — the framework's batch executor doesn't enforce that those bytes are a serialized `Turn`; deserialization happens (or not) inside the app |
 | 11 | P2 | `app-framework/src/escrow.rs:149,201` | `release_with_proof` and `refund_expired` use `CellId::from_bytes(escrow_id)` as the agent identity — a sentinel-CellId pattern that has no key, no balance, no entry in any ledger; this is a footgun if anyone tries to look up the agent |
 | 12 | P2 | `intent/src/fulfillment.rs:787,807,1186,1200` | `create_fulfillment_turn` and `execute_committed_fulfillment_flow` build turns with `nonce: 0` and `Authorization::Unchecked` — the comments say "Caller should set the real nonce before submission" but the caller has no API to do so |
-| 13 | P2 | `sdk/src/wallet.rs:4365` | `convert_effects_to_vm` for `GrantCapability` hashes only `cap.slot.to_le_bytes()`, dropping the `cap.target` field — two grants to different targets but the same slot hash identically into the VM |
+| 13 | P2 | `sdk/src/cipherclerk.rs:4365` | `convert_effects_to_vm` for `GrantCapability` hashes only `cap.slot.to_le_bytes()`, dropping the `cap.target` field — two grants to different targets but the same slot hash identically into the VM |
 | 14 | P2 | `app-framework/src/escrow.rs:244-251` | `compute_escrow_id` derives the ID from `(from, to, amount, timeout)` only — two escrows with the same parameters share the same ID and collide |
 | 15 | P2 | `turn/src/builder.rs:122-128` | `compute_excess` uses `saturating_add` over `i64` — a malicious caller can craft balance_change values that saturate to `i64::MAX/MIN` without the validator noticing |
 | 16 | P2 | `turn/src/action.rs:88-118` | `Authorization::Unchecked` is `#[serde(alias = "None")]` — wire compatibility with old `"None"` JSON tag is silent; reviewers grepping for `None` in JSON wire formats may miss it |
@@ -62,7 +62,7 @@ let action = Action {
 
 ### Finding 2 — VM effect lowering loses information
 
-**Files:** `/Users/ember/dev/breadstuffs/sdk/src/wallet.rs:4322-4448`
+**Files:** `/Users/ember/dev/breadstuffs/sdk/src/cipherclerk.rs:4322-4448`
 
 ```rust
 fn field_element_to_bb(value: &[u8; 32]) -> BabyBear {
@@ -99,7 +99,7 @@ for effect in effects {
 - For `GrantCapability`, hashes only `cap.slot.to_le_bytes()` (4 bytes), dropping `cap.target` entirely: granting cap-slot-7-on-X is indistinguishable from cap-slot-7-on-Y in the proof.
 - For `Seal { pair_id }`, derives `field_idx = pair_id[0] % 8` — collisions every 256 pair IDs.
 
-**Fix:** Either (a) widen `VmEffect` to carry full field-element-width data (likely required because BabyBear is 31-bit and `FieldElement` is 256-bit, so requires multiple BabyBear limbs), (b) hash with a domain-separated Poseidon2 to a *single* BabyBear (irreversible but at least covers the full preimage), or (c) emit a separate non-VM "auxiliary" digest as a public input alongside the VM proof. Until then, the wallet's STARK proof should not be marketed as "proving turn execution" — it proves a digest of the turn's `Transfer` deltas and `SetField` low-4-bytes only.
+**Fix:** Either (a) widen `VmEffect` to carry full field-element-width data (likely required because BabyBear is 31-bit and `FieldElement` is 256-bit, so requires multiple BabyBear limbs), (b) hash with a domain-separated Poseidon2 to a *single* BabyBear (irreversible but at least covers the full preimage), or (c) emit a separate non-VM "auxiliary" digest as a public input alongside the VM proof. Until then, the cipherclerk's STARK proof should not be marketed as "proving turn execution" — it proves a digest of the turn's `Transfer` deltas and `SetField` low-4-bytes only.
 
 ### Finding 3 — Builder defaults to unauthenticated
 
@@ -210,7 +210,7 @@ The returned `&mut ActionBuilder` borrows the `TurnBuilder` mutably; while the u
 
 ### Finding 7 — `build_authorized_turn` signs with `nonce: 0`
 
-**Files:** `/Users/ember/dev/breadstuffs/sdk/src/wallet.rs:2385-2461`
+**Files:** `/Users/ember/dev/breadstuffs/sdk/src/cipherclerk.rs:2385-2461`
 
 ```rust
 pub fn build_authorized_turn(…) -> Result<SignedTurn, SdkError> {
@@ -228,7 +228,7 @@ pub fn build_authorized_turn(…) -> Result<SignedTurn, SdkError> {
 
 The signature is over the turn body including the `nonce`. The caller cannot mutate the nonce post-signing without invalidating the signature, and the method exposes no parameter for nonce.
 
-**Impact:** Replay protection at the executor level depends on a monotonic nonce. The first turn the wallet produces and submits is the only nonce-0 turn it can ever submit using this API; subsequent calls all sign the same (agent=default, nonce=0) prefix and produce identical replayable turns.
+**Impact:** Replay protection at the executor level depends on a monotonic nonce. The first turn the cclerk produces and submits is the only nonce-0 turn it can ever submit using this API; subsequent calls all sign the same (agent=default, nonce=0) prefix and produce identical replayable turns.
 
 **Fix:** Add `nonce: u64` parameter; remove the misleading comment.
 
@@ -288,7 +288,7 @@ pub struct ClientTurnRequest {
 }
 ```
 
-Apps implementing `BatchExecutor::execute_batch` are responsible for deserializing the bytes. If the app uses a different `Turn` schema than the wallet, requests silently fail to deserialize; if the schema matches but the wire format isn't versioned (it isn't), version drift between client and executor causes silent rejection.
+Apps implementing `BatchExecutor::execute_batch` are responsible for deserializing the bytes. If the app uses a different `Turn` schema than the cclerk, requests silently fail to deserialize; if the schema matches but the wire format isn't versioned (it isn't), version drift between client and executor causes silent rejection.
 
 **Impact:** Cross-app compatibility issues; no central place to validate the wire format before dispatching.
 
@@ -338,7 +338,7 @@ The comment says caller will set nonce, but `ConditionalTurn` exposes `pub turn:
 
 ### Finding 13 — `convert_effects_to_vm` drops cap target
 
-**Files:** `/Users/ember/dev/breadstuffs/sdk/src/wallet.rs:4363-4369`
+**Files:** `/Users/ember/dev/breadstuffs/sdk/src/cipherclerk.rs:4363-4369`
 
 ```rust
 Effect::GrantCapability { to, cap, .. } if to == cell_id => {

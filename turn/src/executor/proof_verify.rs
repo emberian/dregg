@@ -174,7 +174,7 @@ impl TurnExecutor {
         // where `turn.execution_proof` is `Some`. The cell IS sovereign, so
         // we set IS_SOVEREIGN_CELL == 1 and bind the cell's owning-pubkey
         // hash + witness-sequence into PI. The PI-matching loop below
-        // catches any prover-side divergence. The prover (wallet's
+        // catches any prover-side divergence. The prover (cipherclerk's
         // `execute_sovereign_turn_with_proof`) populates the same slots
         // from the same source (cell.public_key); the boundary constraint
         // in the AIR catches any in-trace deviation.
@@ -1512,7 +1512,7 @@ impl TurnExecutor {
             // Owner pubkey is sourced from the sovereign registration if
             // available, else left as sentinel zero (Phase 1.5: registration
             // grows an owner_public_key field; for now we accept either
-            // form and the wallet matches what the federation knows).
+            // form and the cclerk matches what the federation knows).
             if let Some(reg) = ledger.get_sovereign_registration(cell_id) {
                 if let Some(pk) = reg.owner_public_key {
                     let key_commit = Self::pubkey_to_witness_key_commit(&pk);

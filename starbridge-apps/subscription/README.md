@@ -11,7 +11,7 @@ A **subscription cell** is a publisher/consumer message queue whose
 slot layout, slot caveats, and per-method operation-scoping live in a
 [`subscription_factory_descriptor`][1] anyone can audit by hashing.
 Publish, consume, and the two grant operations are
-[`AppWallet`][2]-signed `Action`s composed entirely of existing
+[`AppCipherclerk`][2]-signed `Action`s composed entirely of existing
 `Effect::SetField` and `Effect::EmitEvent` variants. There is no new
 `Effect` variant; there is no operator-side enforcement loop.
 
@@ -28,7 +28,7 @@ succeeds:
 | **How "head advances by exactly +1" is enforced** | A `MonotonicSequence` variant in the storage evaluator | A `StateConstraint::MonotonicSequence { seq_index: 0 }` in the cell-program |
 | **Where operation-scoping lives** | Implicit in which HTTP endpoint the request hit | Explicit `CellProgram::Cases(_)` with `TransitionGuard::MethodIs { method: symbol("publish") }` — *one* program, four cases, default-deny on unknown methods |
 | **New `Effect` variants introduced** | `Effect::QueueAllocate / Enqueue / Dequeue / Resize / AtomicTx / PipelineStep` (six) | Zero |
-| **AppWallet signature surface** | An ad-hoc `sender_hex` field on the HTTP request body | A real `Authorization::Signature(..)` produced by `AppWallet::make_action` |
+| **AppCipherclerk signature surface** | An ad-hoc `sender_hex` field on the HTTP request body | A real `Authorization::Signature(..)` produced by `AppCipherclerk::make_action` |
 
 The "two enforcement loops" failure mode named in
 `STORAGE-AS-CELL-PROGRAMS.md` §1 — `QueueConstraint` evaluating in
@@ -77,14 +77,14 @@ follow-on; the root-commitment shape is the canonical pattern.
 
 ## Operations
 
-Each operation is a turn-builder that produces an `AppWallet`-signed
+Each operation is a turn-builder that produces an `AppCipherclerk`-signed
 `Action` whose method symbol the cell-program dispatches against.
 
 ### `publish` — [`build_publish_action`][3]
 
 ```rust
 let action = build_publish_action(
-    &wallet,
+    &cclerk,
     subscription_cell,
     /* new_head        */ u64_field(old_head + 1),
     /* new_message_root */ poseidon2(&[&old_root, &(new_head, payload_hash)]),
@@ -104,7 +104,7 @@ publish-case constraints enforce:
 
 ```rust
 let action = build_consume_action(
-    &wallet,
+    &cclerk,
     subscription_cell,
     /* new_tail              */ u64_field(old_tail + 1),
     /* consumed_payload_hash */ payload_hash,
@@ -122,7 +122,7 @@ constraints enforce:
 
 ```rust
 let action = build_grant_publisher_action(
-    &wallet, // owner
+    &cclerk, // owner
     subscription_cell,
     /* new_publishers_root */ poseidon2(&[&old_root, &new_publisher_pk]),
     /* new_publisher_pk    */ new_publisher_pk,
@@ -188,7 +188,7 @@ host bootstrap once both apps are registered on the same
 `StarbridgeAppContext`:
 
 ```rust
-let ctx = StarbridgeAppContext::new(wallet, executor);
+let ctx = StarbridgeAppContext::new(cclerk, executor);
 starbridge_nameservice::register(&ctx);
 starbridge_subscription::register(&ctx);
 // host serves both factory descriptors + inspector descriptors
@@ -231,7 +231,7 @@ Per `STORAGE-AS-CELL-PROGRAMS.md` §3.1's "what it replaces":
 
 - **`storage/src/inbox.rs`** (588 LOC) → mostly thin re-exports or
   deletions:
-  - `CapInbox::new` → wallet `createFromFactory(SUBSCRIPTION_FACTORY_VK, ..)`.
+  - `CapInbox::new` → cclerk `createFromFactory(SUBSCRIPTION_FACTORY_VK, ..)`.
   - `CapInbox::receive` / `receive_at` →
     [`build_publish_action`][3].
   - `CapInbox::dequeue` / `read_next` →
@@ -243,7 +243,7 @@ Per `STORAGE-AS-CELL-PROGRAMS.md` §3.1's "what it replaces":
   `POST /subscription/publish` into a signed `Action` and posts to
   the executor; no enforcement lives there).
 - **`apps/subscription/src/delivery.rs:138`** — the `receive_at` call
-  in the legacy subscription app — collapses into the same wallet
+  in the legacy subscription app — collapses into the same cclerk
   `make_action` call shown in the operations section above.
 
 Net LOC delta per `STORAGE-AS-CELL-PROGRAMS.md` §3.1: **~−400 in
@@ -258,7 +258,7 @@ inspector kinds this crate registers:
 - `<pyana-subscription uri="...">` — display a subscription's state
   (head, tail, capacity, latest payload, plus the membership roots).
 - `<pyana-subscription-publish-form>` — publisher's compose-and-send
-  UI; uses the `publish` turn-builder via the extension wallet's
+  UI; uses the `publish` turn-builder via the extension cipherclerk's
   `signTurn` bridge.
 - `<pyana-subscription-feed>` — consumer's live feed; subscribes to
   `subscription-published` events from a target cell and (on consume)
@@ -283,7 +283,7 @@ produce), and dispatches through `window.pyana.signTurn(..)`. Policy
 stays in Rust — the JS shim only encodes shape.
 
 [1]: src/lib.rs#L235
-[2]: ../../app-framework/src/wallet.rs
+[2]: ../../app-framework/src/cipherclerk.rs
 [3]: src/lib.rs#L375
 [4]: src/lib.rs#L417
 [5]: src/lib.rs#L463

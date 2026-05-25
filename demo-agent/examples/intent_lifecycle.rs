@@ -3,7 +3,7 @@
 //! Demonstrates the FULL intent protocol lifecycle:
 //!
 //! 1. Service posts intent: "I need someone who can sign_treasury for up to 10k"
-//! 2. Agent's wallet matches locally (revealing NOTHING about other capabilities)
+//! 2. Agent's cclerk matches locally (revealing NOTHING about other capabilities)
 //! 3. Agent commits to fulfillment (anti-frontrunning, blinded)
 //! 4. Agent reveals fulfillment (attenuated token, narrowed scope)
 //! 5. Service verifies the fulfillment
@@ -115,14 +115,14 @@ fn main() {
     println!("    Expiry: {} (1 hour from now)", expiry);
     println!("    Creator: [anonymous commitment]");
     println!("    Stake: [valid note commitment]\n");
-    println!("  This intent propagates via gossip to all connected wallets.");
+    println!("  This intent propagates via gossip to all connected cipherclerks.");
     println!("  Everyone sees WHAT is needed, but not WHO needs it.\n");
 
     // =========================================================================
-    // STEP 2: Agent's wallet matches locally
+    // STEP 2: Agent's cclerk matches locally
     // =========================================================================
     println!("=========================================================================");
-    println!("  STEP 2: Agent's Wallet Matches Locally (PRIVATE)");
+    println!("  STEP 2: Agent's Cipherclerk Matches Locally (PRIVATE)");
     println!("=========================================================================\n");
     println!("  The agent holds a token with:");
     println!("    actions = [\"sign_treasury\", \"view_treasury\"]");
@@ -130,9 +130,9 @@ fn main() {
     println!("    resource = treasury/*\n");
 
     // The agent's anonymous identity
-    let agent_commitment = CommitmentId::derive(b"agent-wallet-secret-key", "agent-identity");
+    let agent_commitment = CommitmentId::derive(b"agent-cclerk-secret-key", "agent-identity");
 
-    // The agent's held capabilities (what's actually in the wallet)
+    // The agent's held capabilities (what's actually in the cclerk)
     let agent_token = HeldCapability {
         token_id: "tok_treasury_signer_001".into(),
         actions: vec!["sign_treasury".into(), "view_treasury".into()],
@@ -182,7 +182,7 @@ fn main() {
             println!("    - Token ID: NOT revealed");
             println!("    - Delegation chain: NOT revealed");
             println!("    - multi_sig feature: NOT revealed");
-            println!("    - Other wallet contents: NOT revealed\n");
+            println!("    - Other cclerk contents: NOT revealed\n");
             println!("  Privacy guarantee: the matcher reveals NOTHING about the agent's");
             println!(
                 "  other capabilities. The service learns only that SOMEONE can satisfy it.\n"
@@ -490,7 +490,7 @@ fn main() {
     // --- Attack B: Eve tries to probe (posts a Query intent)
     println!("  --- Attack B: Capability Probing (Query intent) ---\n");
     println!("  Eve broadcasts a Query intent to discover what capabilities exist");
-    println!("  in nearby wallets. Query intents try to trigger matching.\n");
+    println!("  in nearby cipherclerks. Query intents try to trigger matching.\n");
 
     let probe_spec = MatchSpec {
         actions: vec![ActionPattern {
@@ -514,7 +514,7 @@ fn main() {
         None, // no stake (Eve doesn't have a real note)
     );
 
-    // Agent's wallet tries to match against it
+    // Agent's cclerk tries to match against it
     let probe_result = matcher::match_intent(
         &probe_intent,
         &[agent_token.clone()],
@@ -527,7 +527,7 @@ fn main() {
         MatchResult::WrongKind => {
             println!("  REJECTED: Query intents NEVER trigger automatic matching.");
             println!("  The matcher returns WrongKind for Query and Offer intents.");
-            println!("  Eve cannot discover wallet contents via probe intents.\n");
+            println!("  Eve cannot discover cclerk contents via probe intents.\n");
         }
         other => {
             println!("  Unexpected: {:?}\n", other);
@@ -599,7 +599,7 @@ fn main() {
     println!("    - Agent's full budget (50k hidden, only >= 10k proven)");
     println!("    - Agent's identity (only anonymous commitment)");
     println!("    - Token ID or delegation chain");
-    println!("    - Other wallet contents");
+    println!("    - Other cclerk contents");
     println!();
     println!("  Attack resistance:");
     println!("    - Frontrunning: commit-reveal with 5s window");

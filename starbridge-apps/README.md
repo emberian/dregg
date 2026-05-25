@@ -7,7 +7,7 @@ A **starbridge-app** is a web surface that:
 
 1. Loads `/pkg/pyana_wasm.js` (the in-browser node, see `../wasm/`) for
    local simulation / preview / time-travel.
-2. Talks to `window.pyana` (the browser extension wallet, see
+2. Talks to `window.pyana` (the browser extension cclerk, see
    `../extension/`) for real identity, signing, capability brokerage,
    intent posting.
 3. Optionally talks to a live federation node via the Studio's
@@ -63,7 +63,7 @@ Each Rust crate exports two things:
   needs. The wasm runtime preloads these at startup so
   `window.pyana.createFromFactory(factory_vk, ...)` can resolve the
   string into a real descriptor.
-- Turn-builder helpers that take an `AppWallet` (from
+- Turn-builder helpers that take an `AppCipherclerk` (from
   `pyana-app-framework`) and produce signed `Action`s. No
   `Authorization::Unchecked`. No `[0u8; 64]` placeholder signatures.
   No reaching past the framework into `pyana_turn::builder::*`.
@@ -85,7 +85,7 @@ shape if there's a concrete reason to (e.g. trimmer wasm-only deps).
 ## Dual-existence transition
 
 The existing `apps/nameservice/`, `apps/identity/`, etc. crates stay
-for now — Lane C just migrated them to use `AppWallet` and they still
+for now — Lane C just migrated them to use `AppCipherclerk` and they still
 ship. `starbridge-apps/nameservice/` is the *new* canonical
 implementation; the `apps/` ones will be retired once the
 starbridge-apps version reaches parity. The dual-existence is

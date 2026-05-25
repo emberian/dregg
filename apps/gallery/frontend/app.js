@@ -46,8 +46,8 @@ const App = (() => {
         loadArtworks();
         loadAuctions();
 
-        // Auto-connect wallet.
-        Wallet.connect();
+        // Auto-connect cclerk.
+        Cipherclerk.connect();
     }
 
     // =========================================================================
@@ -77,17 +77,17 @@ const App = (() => {
     }
 
     // =========================================================================
-    // Wallet
+    // Cipherclerk
     // =========================================================================
 
     function setupWalletButton() {
-        const statusEl = document.getElementById('wallet-status');
+        const statusEl = document.getElementById('cclerk-status');
         if (statusEl) {
             statusEl.addEventListener('click', async () => {
-                if (Wallet.isConnected()) {
-                    Wallet.disconnect();
+                if (Cipherclerk.isConnected()) {
+                    Cipherclerk.disconnect();
                 } else {
-                    await Wallet.connect();
+                    await Cipherclerk.connect();
                 }
             });
         }
@@ -366,12 +366,12 @@ const App = (() => {
     async function handleRegister(e) {
         e.preventDefault();
 
-        if (!Wallet.isConnected()) {
-            alert('Please connect your wallet first.');
+        if (!Cipherclerk.isConnected()) {
+            alert('Please connect your cclerk first.');
             return;
         }
 
-        const identity = Wallet.getIdentity();
+        const identity = Cipherclerk.getIdentity();
         const title = document.getElementById('reg-title').value;
         const description = document.getElementById('reg-description').value;
         const reserve = parseInt(document.getElementById('reg-reserve').value, 10);
@@ -425,12 +425,12 @@ const App = (() => {
     async function handleBid(e) {
         e.preventDefault();
 
-        if (!Wallet.isConnected()) {
-            alert('Please connect your wallet first.');
+        if (!Cipherclerk.isConnected()) {
+            alert('Please connect your cclerk first.');
             return;
         }
 
-        const identity = Wallet.getIdentity();
+        const identity = Cipherclerk.getIdentity();
         const amount = parseInt(document.getElementById('bid-amount').value, 10);
         const auctionId = getAuctionIdFromUrl();
 
@@ -461,12 +461,12 @@ const App = (() => {
     }
 
     async function handleReveal() {
-        if (!Wallet.isConnected()) {
-            alert('Please connect your wallet first.');
+        if (!Cipherclerk.isConnected()) {
+            alert('Please connect your cclerk first.');
             return;
         }
 
-        const identity = Wallet.getIdentity();
+        const identity = Cipherclerk.getIdentity();
         const auctionId = getAuctionIdFromUrl();
 
         if (!auctionId) {

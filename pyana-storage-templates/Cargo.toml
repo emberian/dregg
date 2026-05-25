@@ -18,7 +18,7 @@ description = "Cell-program reference templates for the storage primitives migra
 #   - turn-builder helpers composing only existing Effect variants
 #   - slot-layout pub const SLOT indices
 #
-# No new Effect variants. No new wallet APIs. No storage-side
+# No new Effect variants. No new cclerk APIs. No storage-side
 # enforcement loops. The executor's `evaluate_with_meta` is the single
 # enforcement venue.
 

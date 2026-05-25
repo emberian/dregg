@@ -70,7 +70,7 @@ Agents find each other through two mechanisms:
 
 **Three-party introduction.** Alice holds capabilities to both Bob and Carol. Alice introduces them by emitting an `Effect::Introduce` during a turn, producing a `RoutingDirective`. Bob gains a capability to Carol, bounded by what Alice herself holds. This is how seL4 processes gain access to new endpoints -- via a mediating process that holds both capabilities.
 
-**Intent marketplace.** An agent broadcasts "I need X done" as a public intent. Wallets privately evaluate whether they can satisfy it using local Datalog. No capability information leaves the wallet. If a match exists, the satisfier generates a STARK proof of capability satisfaction without revealing which token or delegation chain. This is pyana's answer to service discovery without a global directory -- a privacy-preserving market where needs meet capabilities.
+**Intent marketplace.** An agent broadcasts "I need X done" as a public intent. Wallets privately evaluate whether they can satisfy it using local Datalog. No capability information leaves the cclerk. If a match exists, the satisfier generates a STARK proof of capability satisfaction without revealing which token or delegation chain. This is pyana's answer to service discovery without a global directory -- a privacy-preserving market where needs meet capabilities.
 
 The combination means: direct peer relationships form through introduction (high-trust, targeted), while marketplace relationships form through intents (low-trust, emergent). An agent swarm might have a coordinator that introduces specialists to each other, while simultaneously posting open intents for capabilities outside the swarm's expertise.
 
@@ -148,7 +148,7 @@ The intent engine implements a market for AI labor:
 
 ```
 1. NEED: Agent A broadcasts "I need image classification at 95%+ accuracy, budget 500 computrons"
-2. MATCH: Agent B's wallet evaluates locally: "I hold a compute capability with classifier model access"
+2. MATCH: Agent B's cclerk evaluates locally: "I hold a compute capability with classifier model access"
 3. COMMIT: Agent B publishes C = H(intent_id || secret) -- staking claim without revealing identity
 4. REVEAL: Agent B reveals the commitment opening + STARK proof of capability satisfaction
 5. EXECUTE: Conditional turn: Agent B delivers classified results IFF Agent A's payment clears
@@ -187,7 +187,7 @@ How does the economy start?
 
 When two agents have never interacted:
 
-1. **Receipt-based reputation.** Agent B presents a receipt chain suffix showing N successful intent fulfillments of similar type. Agent A's wallet verifies the STARKs proving those receipts are legitimate.
+1. **Receipt-based reputation.** Agent B presents a receipt chain suffix showing N successful intent fulfillments of similar type. Agent A's cclerk verifies the STARKs proving those receipts are legitimate.
 
 2. **Three-party introduction.** Agent C (known to both) introduces A to B, vouching for B's capability. The introduction is bounded -- C's reputation is at stake.
 

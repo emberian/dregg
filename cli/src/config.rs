@@ -9,7 +9,7 @@ pub struct Config {
     #[serde(default = "NodeConfig::default")]
     pub node: NodeConfig,
     #[serde(default = "WalletConfig::default")]
-    pub wallet: WalletConfig,
+    pub cclerk: WalletConfig,
     #[serde(default = "OutputConfig::default")]
     pub output: OutputConfig,
 }
@@ -37,7 +37,7 @@ fn default_node_url() -> String {
 }
 
 fn default_keyfile() -> String {
-    "~/.pyana/wallet.key".to_string()
+    "~/.pyana/cipherclerk.key".to_string()
 }
 
 fn default_format() -> String {
@@ -72,7 +72,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             node: NodeConfig::default(),
-            wallet: WalletConfig::default(),
+            cclerk: WalletConfig::default(),
             output: OutputConfig::default(),
         }
     }
@@ -126,7 +126,7 @@ pub fn set_value(key: &str, value: &str) -> Result<(), Box<dyn std::error::Error
 
     match key {
         "node.url" => cfg.node.url = value.to_string(),
-        "wallet.keyfile" => cfg.wallet.keyfile = value.to_string(),
+        "cclerk.keyfile" => cfg.cclerk.keyfile = value.to_string(),
         "output.format" => {
             if !["color", "plain", "json"].contains(&value) {
                 return Err(format!("Invalid format '{}'. Use: color, plain, json", value).into());
@@ -135,7 +135,7 @@ pub fn set_value(key: &str, value: &str) -> Result<(), Box<dyn std::error::Error
         }
         _ => {
             return Err(format!(
-                "Unknown config key '{}'. Valid keys: node.url, wallet.keyfile, output.format",
+                "Unknown config key '{}'. Valid keys: node.url, cclerk.keyfile, output.format",
                 key
             )
             .into());

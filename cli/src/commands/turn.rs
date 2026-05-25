@@ -70,7 +70,7 @@ async fn status(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let spinner = ctx.spinner("Checking turn status...");
     // Try to get from receipts endpoint.
-    let data = get_json(cfg, "/wallet/receipts").await?;
+    let data = get_json(cfg, "/cipherclerk/receipts").await?;
     spinner.finish_and_clear();
 
     if cfg.is_json() {

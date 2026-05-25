@@ -122,13 +122,13 @@ fn build_forest_with_effects(target: CellId, effects: Vec<pyana_turn::Effect>) -
 
 /// Build a CallForest with a single root action authorized by an Ed25519
 /// signature over the canonical action-signing message. The signature is
-/// produced by `wallet.sign_bytes` against `TurnExecutor::compute_signing_message`
+/// produced by `cipherclerk.sign_bytes` against `TurnExecutor::compute_signing_message`
 /// in Full commitment mode using the executor's default federation id
 /// (`[0u8; 32]`) — which matches `TurnExecutor::new(...).local_federation_id`.
 fn build_signed_forest(
     target: CellId,
     effects: Vec<pyana_turn::Effect>,
-    wallet: &pyana_sdk::AgentWallet,
+    cclerk: &pyana_sdk::AgentCipherclerk,
 ) -> CallForest {
     let mut action = pyana_turn::Action {
         target,
@@ -147,7 +147,7 @@ fn build_signed_forest(
     // the action.
     let federation_id = [0u8; 32];
     let msg = pyana_turn::TurnExecutor::compute_signing_message(&action, &federation_id);
-    let sig = wallet.sign_bytes(&msg);
+    let sig = cclerk.sign_bytes(&msg);
     let mut r = [0u8; 32];
     let mut s = [0u8; 32];
     r.copy_from_slice(&sig.0[..32]);
@@ -382,11 +382,11 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "pyana_create_agent",
-            description: "Register this node's wallet as a cell in the local ledger (idempotent). Returns the content-addressed cell_id.",
+            description: "Register this node's cipherclerk as a cell in the local ledger (idempotent). Returns the content-addressed cell_id.",
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "name": { "type": "string", "description": "Human-readable label for the agent (informational only; identity is content-addressed from the wallet pubkey)" },
+                    "name": { "type": "string", "description": "Human-readable label for the agent (informational only; identity is content-addressed from the cipherclerk pubkey)" },
                     "initial_balance": { "type": "integer", "description": "Initial computron balance for the cell when first created. Ignored on subsequent calls." }
                 },
                 "required": ["name"]
@@ -875,7 +875,7 @@ fn tool_definitions() -> Vec<McpToolDef> {
         // ─── CapTP Delivery (γ.1 / Seam 3) ─────────────────────────────────────────
         McpToolDef {
             name: "pyana_captp_deliver",
-            description: "Construct and submit a Turn whose root action is authorized by `Authorization::CapTpDelivered` (introducer-signed HandoffCertificate + sender Ed25519 sig over the canonical delivery message). The node wallet plays the recipient/sender; the introducer key is constructed in-process for testing. Returns the turn hash and the cert nonce.",
+            description: "Construct and submit a Turn whose root action is authorized by `Authorization::CapTpDelivered` (introducer-signed HandoffCertificate + sender Ed25519 sig over the canonical delivery message). The node cipherclerk plays the recipient/sender; the introducer key is constructed in-process for testing. Returns the turn hash and the cert nonce.",
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -898,7 +898,7 @@ fn tool_definitions() -> Vec<McpToolDef> {
         // ─── Sovereign Cell Witness (reshaped) ─────────────────────────────────────
         McpToolDef {
             name: "pyana_sign_sovereign_witness",
-            description: "Build a properly-signed `SovereignCellWitness` for a sovereign cell currently in the local ledger. Signs the canonical message (cell_id || old_commitment || new_commitment || effects_hash || timestamp || sequence) with the node wallet's Ed25519 key. Pass `attach_proof=true` to also generate an Effect-VM STARK proof binding the transition. Returns the witness postcard-encoded as hex plus structured fields.",
+            description: "Build a properly-signed `SovereignCellWitness` for a sovereign cell currently in the local ledger. Signs the canonical message (cell_id || old_commitment || new_commitment || effects_hash || timestamp || sequence) with the node cipherclerk's Ed25519 key. Pass `attach_proof=true` to also generate an Effect-VM STARK proof binding the transition. Returns the witness postcard-encoded as hex plus structured fields.",
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -941,7 +941,7 @@ fn tool_definitions() -> Vec<McpToolDef> {
                 "type": "object",
                 "properties": {
                     "factory_vk": { "type": "string", "description": "Hex-encoded 32-byte factory VK." },
-                    "owner_pubkey": { "type": "string", "description": "Hex-encoded 32-byte owner pubkey for the new cell. Defaults to this node's wallet pubkey." },
+                    "owner_pubkey": { "type": "string", "description": "Hex-encoded 32-byte owner pubkey for the new cell. Defaults to this node's cipherclerk pubkey." },
                     "token_id": { "type": "string", "description": "Hex-encoded 32-byte token-domain id (default: BLAKE3(\"pyana-mcp-factory-token\"))." },
                     "sovereign": { "type": "boolean", "description": "Whether the new cell is sovereign (default: false)." },
                     "program_vk": { "type": "string", "description": "Hex-encoded 32-byte child program VK (must match the factory's Fixed strategy when set)." },
@@ -1038,7 +1038,7 @@ async fn tool_get_status(state: &NodeState) -> McpToolResult {
     let s = state.read().await;
 
     // F-P2-7: status is informational; the HTTP /status endpoint does not require
-    // the wallet to be unlocked, and neither should the MCP analog. (Health
+    // the cipherclerk to be unlocked, and neither should the MCP analog. (Health
     // checks need to work while locked.)
 
     let latest_height = s
@@ -1052,10 +1052,10 @@ async fn tool_get_status(state: &NodeState) -> McpToolResult {
     let note_count = s.store.note_count().unwrap_or(0);
     let peer_count = s.peers.len();
     let store_ok = s.store.latest_attested_root().is_ok();
-    let wallet_ok = s.unlocked || s.passphrase_hash.is_some();
+    let cclerk_ok = s.unlocked || s.passphrase_hash.is_some();
 
     McpToolResult::json(&serde_json::json!({
-        "healthy": store_ok && wallet_ok,
+        "healthy": store_ok && cclerk_ok,
         "peer_count": peer_count,
         "latest_height": latest_height,
         "revocation_count": revocation_count,
@@ -1077,22 +1077,22 @@ async fn tool_create_agent(params: &Value, state: &NodeState) -> McpToolResult {
 
     let mut s = state.write().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     // MCP-first identity: the calling AI process IS this node, so
-    // "create agent" means "register this node's wallet identity as a
+    // "create agent" means "register this node's cipherclerk identity as a
     // cell in the ledger so it can be granted/received capabilities and
-    // hold balance." The cell ID is content-addressed from the wallet's
+    // hold balance." The cell ID is content-addressed from the cipherclerk's
     // public key plus the zero token domain (matching how
     // `submit_turn`, `grant_capability`, etc. derive it).
     //
     // Per 06-the-real-demo.md step 2 ("Alice becomes a cell"), this is
     // what makes downstream grant/transfer/handoff actually have a
     // target cell to land on. Previously this tool generated an
-    // ephemeral wallet and discarded it; grants against the resulting
+    // ephemeral cipherclerk and discarded it; grants against the resulting
     // pubkey failed because no Cell existed in the ledger.
-    let pk = s.wallet.public_key();
+    let pk = s.cclerk.public_key();
     let pk_bytes = pk.0;
     let cell_id = pyana_cell::CellId::derive_raw(&pk_bytes, &[0u8; 32]);
     let pk_hex: String = pk_bytes.iter().map(|b| format!("{b:02x}")).collect();
@@ -1123,7 +1123,7 @@ async fn tool_create_agent(params: &Value, state: &NodeState) -> McpToolResult {
         "capability_count": cap_count,
         "created": !already_existed,
         "already_existed": already_existed,
-        "note": "Agent cell registered in the local ledger. cell_id is content-addressed from the wallet's public key + zero token domain.",
+        "note": "Agent cell registered in the local ledger. cell_id is content-addressed from the cipherclerk's public key + zero token domain.",
     }))
 }
 
@@ -1144,7 +1144,7 @@ async fn tool_authorize(params: &Value, state: &NodeState) -> McpToolResult {
     let s = state.read().await;
 
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     // Find a token that grants the requested action on the resource.
@@ -1157,8 +1157,8 @@ async fn tool_authorize(params: &Value, state: &NodeState) -> McpToolResult {
     // Try each held token.
     let mut authorized = false;
     let mut matching_token_id = None;
-    for token in s.wallet.tokens() {
-        if s.wallet.verify_token(token, &auth_req) {
+    for token in s.cclerk.tokens() {
+        if s.cclerk.verify_token(token, &auth_req) {
             authorized = true;
             matching_token_id = Some(token.id().to_string());
             break;
@@ -1198,12 +1198,12 @@ async fn tool_submit_turn(params: &Value, state: &NodeState) -> McpToolResult {
 
     let mut s = state.write().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
-    // SECURITY: Use the wallet's own cell ID as the turn agent (not caller-supplied).
+    // SECURITY: Use the cipherclerk's own cell ID as the turn agent (not caller-supplied).
     // The target_cell identifies which cell the action targets, not who is submitting.
-    let agent_cell_id = pyana_cell::CellId::derive_raw(&s.wallet.public_key().0, &[0u8; 32]);
+    let agent_cell_id = pyana_cell::CellId::derive_raw(&s.cclerk.public_key().0, &[0u8; 32]);
     let target_cell_id = pyana_cell::CellId(target_cell_bytes);
 
     // Build an action targeting the specified cell with the given method.
@@ -1222,7 +1222,7 @@ async fn tool_submit_turn(params: &Value, state: &NodeState) -> McpToolResult {
     let mut forest = CallForest::new();
     forest.add_root(action);
 
-    let nonce = s.wallet.receipt_chain_length() as u64;
+    let nonce = s.cclerk.receipt_chain_length() as u64;
     let turn = Turn {
         agent: agent_cell_id,
         nonce,
@@ -1231,7 +1231,7 @@ async fn tool_submit_turn(params: &Value, state: &NodeState) -> McpToolResult {
         valid_until: None,
         call_forest: forest,
         depends_on: vec![],
-        previous_receipt_hash: s.wallet.receipt_chain().last().map(|r| r.receipt_hash()),
+        previous_receipt_hash: s.cclerk.receipt_chain().last().map(|r| r.receipt_hash()),
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
         execution_proof: None,
@@ -1243,7 +1243,7 @@ async fn tool_submit_turn(params: &Value, state: &NodeState) -> McpToolResult {
         effect_witness_index_map: Vec::new(),
     };
 
-    let signed = s.wallet.sign_turn(&turn);
+    let signed = s.cclerk.sign_turn(&turn);
     let turn_hash_bytes = turn.hash();
     let turn_hash = hex_encode(&turn_hash_bytes);
 
@@ -1253,7 +1253,7 @@ async fn tool_submit_turn(params: &Value, state: &NodeState) -> McpToolResult {
 
     match exec_result {
         pyana_turn::TurnResult::Committed { receipt, .. } => {
-            s.wallet.append_receipt(receipt);
+            s.cclerk.append_receipt(receipt);
 
             // Serialize the full SignedTurn for gossip (postcard format).
             let turn_data = postcard::to_stdvec(&signed).expect("SignedTurn serialization");
@@ -1325,11 +1325,11 @@ async fn tool_grant_capability(params: &Value, state: &NodeState) -> McpToolResu
 
     let mut s = state.write().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     // Build a turn with Effect::GrantCapability.
-    let agent_cell_id = pyana_cell::CellId::derive_raw(&s.wallet.public_key().0, &[0u8; 32]);
+    let agent_cell_id = pyana_cell::CellId::derive_raw(&s.cclerk.public_key().0, &[0u8; 32]);
     let to_cell_id = pyana_cell::CellId(to_agent_bytes);
     let target_cell_id = pyana_cell::CellId(target_cell_bytes);
 
@@ -1376,7 +1376,7 @@ async fn tool_grant_capability(params: &Value, state: &NodeState) -> McpToolResu
         cap,
     };
 
-    let nonce = s.wallet.receipt_chain_length() as u64;
+    let nonce = s.cclerk.receipt_chain_length() as u64;
     let turn = Turn {
         agent: agent_cell_id,
         nonce,
@@ -1387,9 +1387,9 @@ async fn tool_grant_capability(params: &Value, state: &NodeState) -> McpToolResu
         valid_until: None,
         // Use a signed action so the cell's `delegate: Signature` permission
         // accepts it. (Hosted-cell grants require the cell owner's signature.)
-        call_forest: build_signed_forest(agent_cell_id, vec![effect], &s.wallet),
+        call_forest: build_signed_forest(agent_cell_id, vec![effect], &s.cclerk),
         depends_on: vec![],
-        previous_receipt_hash: s.wallet.receipt_chain().last().map(|r| r.receipt_hash()),
+        previous_receipt_hash: s.cclerk.receipt_chain().last().map(|r| r.receipt_hash()),
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
         execution_proof: None,
@@ -1401,7 +1401,7 @@ async fn tool_grant_capability(params: &Value, state: &NodeState) -> McpToolResu
         effect_witness_index_map: Vec::new(),
     };
 
-    let signed = s.wallet.sign_turn(&turn);
+    let signed = s.cclerk.sign_turn(&turn);
     let turn_hash = hex_encode(&turn.hash());
 
     // Snapshot the agent's pre-state so a post-execution Effect VM proof can be
@@ -1419,7 +1419,7 @@ async fn tool_grant_capability(params: &Value, state: &NodeState) -> McpToolResu
 
     match exec_result {
         pyana_turn::TurnResult::Committed { receipt, .. } => {
-            s.wallet.append_receipt(receipt);
+            s.cclerk.append_receipt(receipt);
 
             let turn_data = postcard::to_stdvec(&signed).expect("SignedTurn serialization");
             drop(s);
@@ -1509,18 +1509,18 @@ async fn tool_revoke_capability(params: &Value, state: &NodeState) -> McpToolRes
 
     let mut s = state.write().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     // Build a turn with Effect::RevokeCapability targeting the agent's own cell.
-    let agent_cell_id = pyana_cell::CellId::derive_raw(&s.wallet.public_key().0, &[0u8; 32]);
+    let agent_cell_id = pyana_cell::CellId::derive_raw(&s.cclerk.public_key().0, &[0u8; 32]);
 
     let effect = pyana_turn::Effect::RevokeCapability {
         cell: agent_cell_id,
         slot: cap_slot,
     };
 
-    let nonce = s.wallet.receipt_chain_length() as u64;
+    let nonce = s.cclerk.receipt_chain_length() as u64;
     let turn = Turn {
         agent: agent_cell_id,
         nonce,
@@ -1529,7 +1529,7 @@ async fn tool_revoke_capability(params: &Value, state: &NodeState) -> McpToolRes
         valid_until: None,
         call_forest: build_forest_with_effects(agent_cell_id, vec![effect]),
         depends_on: vec![],
-        previous_receipt_hash: s.wallet.receipt_chain().last().map(|r| r.receipt_hash()),
+        previous_receipt_hash: s.cclerk.receipt_chain().last().map(|r| r.receipt_hash()),
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
         execution_proof: None,
@@ -1541,7 +1541,7 @@ async fn tool_revoke_capability(params: &Value, state: &NodeState) -> McpToolRes
         effect_witness_index_map: Vec::new(),
     };
 
-    let signed = s.wallet.sign_turn(&turn);
+    let signed = s.cclerk.sign_turn(&turn);
     let turn_hash = hex_encode(&turn.hash());
 
     // Execute locally.
@@ -1550,7 +1550,7 @@ async fn tool_revoke_capability(params: &Value, state: &NodeState) -> McpToolRes
 
     match exec_result {
         pyana_turn::TurnResult::Committed { receipt, .. } => {
-            s.wallet.append_receipt(receipt);
+            s.cclerk.append_receipt(receipt);
 
             let turn_data = postcard::to_stdvec(&signed).expect("SignedTurn serialization");
             drop(s);
@@ -1605,7 +1605,7 @@ async fn tool_post_intent(params: &Value, state: &NodeState) -> McpToolResult {
     let s = state.read().await;
 
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     let current_height = s
@@ -1679,7 +1679,7 @@ async fn tool_fulfill_intent(params: &Value, state: &NodeState) -> McpToolResult
 
     let mut s = state.write().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     let intent = match s.intent_pool.get(&intent_id) {
@@ -1689,7 +1689,7 @@ async fn tool_fulfill_intent(params: &Value, state: &NodeState) -> McpToolResult
 
     // Derive payer (intent creator) and recipient (this agent) cell IDs.
     let payer_cell = pyana_sdk::CellId(intent.creator.0);
-    let recipient_cell = pyana_sdk::CellId::derive_raw(&s.wallet.public_key().0, &[0u8; 32]);
+    let recipient_cell = pyana_sdk::CellId::derive_raw(&s.cclerk.public_key().0, &[0u8; 32]);
 
     // Get current height.
     let current_height = s
@@ -1767,7 +1767,7 @@ async fn tool_fulfill_intent(params: &Value, state: &NodeState) -> McpToolResult
     match result {
         Ok(receipt) => {
             let turn_hash = hex_encode(&receipt.turn_hash);
-            s.wallet.append_receipt(receipt);
+            s.cclerk.append_receipt(receipt);
             drop(s);
             state.emit(crate::state::NodeEvent::Receipt {
                 hash: turn_hash.clone(),
@@ -1817,10 +1817,10 @@ async fn tool_delegate(params: &Value, state: &NodeState) -> McpToolResult {
 
     let mut s = state.write().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
-    let tokens = s.wallet.tokens();
+    let tokens = s.cclerk.tokens();
     if capability >= tokens.len() {
         return McpToolResult::error(format!(
             "capability slot {} out of range (have {} tokens)",
@@ -1832,13 +1832,13 @@ async fn tool_delegate(params: &Value, state: &NodeState) -> McpToolResult {
     // Perform the token-level delegation (attenuate + produce DelegatedToken).
     let token = tokens[capability].clone();
     let to_pubkey = PublicKey(to_agent_bytes);
-    let delegated = match s.wallet.delegate(&token, &to_pubkey, &restrictions) {
+    let delegated = match s.cclerk.delegate(&token, &to_pubkey, &restrictions) {
         Ok(d) => d,
         Err(e) => return McpToolResult::error(format!("delegation failed: {e}")),
     };
 
     // Build a turn with Effect::GrantCapability to record the delegation on-ledger.
-    let agent_cell_id = pyana_cell::CellId::derive_raw(&s.wallet.public_key().0, &[0u8; 32]);
+    let agent_cell_id = pyana_cell::CellId::derive_raw(&s.cclerk.public_key().0, &[0u8; 32]);
     let to_cell_id = pyana_cell::CellId(to_agent_bytes);
 
     let cap = pyana_cell::CapabilityRef {
@@ -1856,7 +1856,7 @@ async fn tool_delegate(params: &Value, state: &NodeState) -> McpToolResult {
         cap,
     };
 
-    let nonce = s.wallet.receipt_chain_length() as u64;
+    let nonce = s.cclerk.receipt_chain_length() as u64;
     let turn = Turn {
         agent: agent_cell_id,
         nonce,
@@ -1868,7 +1868,7 @@ async fn tool_delegate(params: &Value, state: &NodeState) -> McpToolResult {
         valid_until: None,
         call_forest: build_forest_with_effects(agent_cell_id, vec![effect]),
         depends_on: vec![],
-        previous_receipt_hash: s.wallet.receipt_chain().last().map(|r| r.receipt_hash()),
+        previous_receipt_hash: s.cclerk.receipt_chain().last().map(|r| r.receipt_hash()),
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
         execution_proof: None,
@@ -1880,7 +1880,7 @@ async fn tool_delegate(params: &Value, state: &NodeState) -> McpToolResult {
         effect_witness_index_map: Vec::new(),
     };
 
-    let signed = s.wallet.sign_turn(&turn);
+    let signed = s.cclerk.sign_turn(&turn);
     let turn_hash = hex_encode(&turn.hash());
 
     // Execute locally.
@@ -1889,7 +1889,7 @@ async fn tool_delegate(params: &Value, state: &NodeState) -> McpToolResult {
 
     match exec_result {
         pyana_turn::TurnResult::Committed { receipt, .. } => {
-            s.wallet.append_receipt(receipt);
+            s.cclerk.append_receipt(receipt);
 
             let turn_data = postcard::to_stdvec(&signed).expect("SignedTurn serialization");
             drop(s);
@@ -1932,24 +1932,24 @@ async fn tool_check_capabilities(state: &NodeState) -> McpToolResult {
     let s = state.read().await;
 
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
-    let ws = crate::state::WalletStatus {
+    let ws = crate::state::CipherclerkStatus {
         unlocked: s.unlocked,
         public_key: s
-            .wallet
+            .cclerk
             .public_key()
             .0
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect(),
-        token_count: s.wallet.tokens().len(),
-        receipt_chain_length: s.wallet.receipt_chain_length(),
+        token_count: s.cclerk.tokens().len(),
+        receipt_chain_length: s.cclerk.receipt_chain_length(),
     };
 
     let tokens: Vec<Value> = s
-        .wallet
+        .cclerk
         .tokens()
         .iter()
         .enumerate()
@@ -1987,7 +1987,7 @@ async fn tool_read_cell(params: &Value, state: &NodeState) -> McpToolResult {
     let s = state.read().await;
 
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     let cell_id = pyana_cell::CellId(cell_id_bytes);
@@ -2074,10 +2074,10 @@ async fn tool_get_receipt_chain(params: &Value, state: &NodeState) -> McpToolRes
     let s = state.read().await;
 
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
-    let chain = s.wallet.receipt_chain();
+    let chain = s.cclerk.receipt_chain();
     let receipts: Vec<Value> = chain
         .iter()
         .rev()
@@ -2095,7 +2095,7 @@ async fn tool_get_receipt_chain(params: &Value, state: &NodeState) -> McpToolRes
         .collect();
 
     McpToolResult::json(&serde_json::json!({
-        "chain_length": s.wallet.receipt_chain_length(),
+        "chain_length": s.cclerk.receipt_chain_length(),
         "receipts": receipts,
     }))
 }
@@ -2119,7 +2119,7 @@ async fn tool_seal_data(params: &Value, state: &NodeState) -> McpToolResult {
 
     let s = state.read().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     // Use X25519 + ChaCha20-Poly1305 sealed-box encryption.
@@ -2188,20 +2188,20 @@ async fn tool_unseal_data(params: &Value, state: &NodeState) -> McpToolResult {
 
     let s = state.read().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     let ephemeral_public_bytes: [u8; 32] = sealed_bytes[..32].try_into().unwrap();
     let nonce_bytes: [u8; 12] = sealed_bytes[32..44].try_into().unwrap();
     let ciphertext = &sealed_bytes[44..];
 
-    // Derive the wallet's X25519 secret from its Ed25519 signing key (private material).
+    // Derive the cipherclerk's X25519 secret from its Ed25519 signing key (private material).
     // SECURITY: Must use private key material here — deriving from the public key would
     // allow anyone to compute the same secret and decrypt sealed data.
-    let wallet_secret_bytes = s.wallet.derive_symmetric_key("pyana-mcp-seal-x25519-v1");
-    let wallet_secret = x25519_dalek::StaticSecret::from(wallet_secret_bytes);
+    let cclerk_secret_bytes = s.cclerk.derive_symmetric_key("pyana-mcp-seal-x25519-v1");
+    let cclerk_secret = x25519_dalek::StaticSecret::from(cclerk_secret_bytes);
     let ephemeral_public = x25519_dalek::PublicKey::from(ephemeral_public_bytes);
-    let shared = wallet_secret.diffie_hellman(&ephemeral_public);
+    let shared = cclerk_secret.diffie_hellman(&ephemeral_public);
 
     // Derive decryption key the same way as sealing.
     let dec_key = blake3::derive_key("pyana-mcp-seal-data-v1", shared.as_bytes());
@@ -2220,7 +2220,7 @@ async fn tool_unseal_data(params: &Value, state: &NodeState) -> McpToolResult {
         }
         Err(_) => McpToolResult::json(&serde_json::json!({
             "unsealed": false,
-            "error": "decryption failed — this sealed box was not addressed to this wallet, or is corrupted",
+            "error": "decryption failed — this sealed box was not addressed to this cipherclerk, or is corrupted",
         })),
     }
 }
@@ -2255,7 +2255,7 @@ async fn tool_bridge_note(params: &Value, state: &NodeState) -> McpToolResult {
 
     let mut s = state.write().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     // Use the note commitment as the nullifier for the bridge lock.
@@ -2273,7 +2273,7 @@ async fn tool_bridge_note(params: &Value, state: &NodeState) -> McpToolResult {
         .unwrap_or(0);
 
     // Build a turn with Effect::BridgeLock to initiate the two-phase bridge protocol.
-    let agent_cell_id = pyana_cell::CellId::derive_raw(&s.wallet.public_key().0, &[0u8; 32]);
+    let agent_cell_id = pyana_cell::CellId::derive_raw(&s.cclerk.public_key().0, &[0u8; 32]);
 
     let effect = pyana_turn::Effect::BridgeLock {
         nullifier,
@@ -2284,7 +2284,7 @@ async fn tool_bridge_note(params: &Value, state: &NodeState) -> McpToolResult {
         spending_proof: vec![], // Spending proof placeholder (would be STARK proof in production).
     };
 
-    let nonce = s.wallet.receipt_chain_length() as u64;
+    let nonce = s.cclerk.receipt_chain_length() as u64;
     let turn = Turn {
         agent: agent_cell_id,
         nonce,
@@ -2293,7 +2293,7 @@ async fn tool_bridge_note(params: &Value, state: &NodeState) -> McpToolResult {
         valid_until: None,
         call_forest: build_forest_with_effects(agent_cell_id, vec![effect]),
         depends_on: vec![],
-        previous_receipt_hash: s.wallet.receipt_chain().last().map(|r| r.receipt_hash()),
+        previous_receipt_hash: s.cclerk.receipt_chain().last().map(|r| r.receipt_hash()),
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
         execution_proof: None,
@@ -2305,7 +2305,7 @@ async fn tool_bridge_note(params: &Value, state: &NodeState) -> McpToolResult {
         effect_witness_index_map: Vec::new(),
     };
 
-    let signed = s.wallet.sign_turn(&turn);
+    let signed = s.cclerk.sign_turn(&turn);
     let turn_hash = hex_encode(&turn.hash());
 
     // Execute locally.
@@ -2314,7 +2314,7 @@ async fn tool_bridge_note(params: &Value, state: &NodeState) -> McpToolResult {
 
     match exec_result {
         pyana_turn::TurnResult::Committed { receipt, .. } => {
-            s.wallet.append_receipt(receipt);
+            s.cclerk.append_receipt(receipt);
 
             let turn_data = postcard::to_stdvec(&signed).expect("SignedTurn serialization");
             drop(s);
@@ -2369,7 +2369,7 @@ async fn tool_make_sovereign(params: &Value, state: &NodeState) -> McpToolResult
 
     let mut s = state.write().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     let cell_id = pyana_cell::CellId(cell_id_bytes);
@@ -2423,14 +2423,14 @@ async fn tool_peer_exchange(params: &Value, state: &NodeState) -> McpToolResult 
 
     let s = state.read().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     let cell_id = pyana_cell::CellId(cell_id_bytes);
     let peer_cell_id = pyana_cell::CellId(peer_cell_id_bytes);
 
     // Create a peer exchange instance and generate a state transition.
-    let signing_key = s.wallet.gossip_signing_key().to_bytes();
+    let signing_key = s.cclerk.gossip_signing_key().to_bytes();
     let mut exchange = pyana_cell::PeerExchange::new(cell_id, signing_key);
     exchange.register_peer(peer_cell_id, [0u8; 32]); // Initial peer commitment.
 
@@ -2469,11 +2469,11 @@ async fn tool_compress_history(params: &Value, state: &NodeState) -> McpToolResu
 
     let s = state.read().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     // Gather the receipt chain (turn roots) for IVC compression.
-    let chain = s.wallet.receipt_chain();
+    let chain = s.cclerk.receipt_chain();
     let limit = turn_count.map(|c| c as usize).unwrap_or(chain.len());
     let receipts_to_compress: Vec<_> = chain.iter().rev().take(limit).collect();
 
@@ -2538,7 +2538,7 @@ async fn tool_create_bearer_cap(params: &Value, state: &NodeState) -> McpToolRes
 
     let s = state.read().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     let perm_level = match permissions_str {
@@ -2592,7 +2592,7 @@ async fn tool_create_bearer_cap(params: &Value, state: &NodeState) -> McpToolRes
         expires_at,
         &federation_id,
     );
-    let signing_key = s.wallet.gossip_signing_key();
+    let signing_key = s.cclerk.gossip_signing_key();
     let signature = pyana_types::sign(&signing_key, &msg);
 
     let bearer_cap_id = blake3::hash(&signature.0);
@@ -2684,7 +2684,7 @@ async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) -> McpToolR
 
     let mut s = state.write().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     // Check expiry against current height.
@@ -2705,11 +2705,11 @@ async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) -> McpToolR
 
     // Build a turn using Bearer authorization.
     let target_cell_id = pyana_cell::CellId(target_cell_bytes);
-    let agent_cell_id = pyana_cell::CellId::derive_raw(&s.wallet.public_key().0, &[0u8; 32]);
+    let agent_cell_id = pyana_cell::CellId::derive_raw(&s.cclerk.public_key().0, &[0u8; 32]);
 
     // The delegator_pk is the introducer (the cell owner who signed the
-    // bearer cap), NOT this node's wallet. Accept it as a parameter; fall
-    // back to this wallet's pk for the (rare) self-delegation case.
+    // bearer cap), NOT this node's cipherclerk. Accept it as a parameter; fall
+    // back to this cipherclerk's pk for the (rare) self-delegation case.
     // (Parsed early so the stub-insertion below can pair the delegator's pk
     // with the target cell stub — without that pairing, the executor's
     // bearer-cap verify walks the ledger by pk and finds nothing.)
@@ -2722,7 +2722,7 @@ async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) -> McpToolR
                 );
             }
         },
-        None => s.wallet.public_key().0,
+        None => s.cclerk.public_key().0,
     };
 
     // Auto-insert stubs for any cells referenced by the parsed effects that
@@ -2808,7 +2808,7 @@ async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) -> McpToolR
     let mut forest = CallForest::new();
     forest.add_root(action);
 
-    let nonce = s.wallet.receipt_chain_length() as u64;
+    let nonce = s.cclerk.receipt_chain_length() as u64;
     let turn = Turn {
         agent: agent_cell_id,
         nonce,
@@ -2818,7 +2818,7 @@ async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) -> McpToolR
         valid_until: None,
         call_forest: forest,
         depends_on: vec![],
-        previous_receipt_hash: s.wallet.receipt_chain().last().map(|r| r.receipt_hash()),
+        previous_receipt_hash: s.cclerk.receipt_chain().last().map(|r| r.receipt_hash()),
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
         execution_proof: None,
@@ -2846,7 +2846,7 @@ async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) -> McpToolR
 
     match exec_result {
         pyana_turn::TurnResult::Committed { receipt, .. } => {
-            s.wallet.append_receipt(receipt);
+            s.cclerk.append_receipt(receipt);
             drop(s);
             state.emit(crate::state::NodeEvent::Receipt {
                 hash: turn_hash.clone(),
@@ -2974,7 +2974,7 @@ async fn tool_deploy_factory(params: &Value, state: &NodeState) -> McpToolResult
 
     let s = state.read().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
     drop(s);
 
@@ -3039,14 +3039,14 @@ async fn tool_create_from_factory(params: &Value, state: &NodeState) -> McpToolR
 
     let mut s = state.write().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     // Derive child cell ID from factory VK + name + nonce.
     let mut derive_input = Vec::new();
     derive_input.extend_from_slice(&factory_vk);
     derive_input.extend_from_slice(cell_name.as_bytes());
-    derive_input.extend_from_slice(&(s.wallet.receipt_chain_length() as u64).to_le_bytes());
+    derive_input.extend_from_slice(&(s.cclerk.receipt_chain_length() as u64).to_le_bytes());
     let child_cell_id_bytes: [u8; 32] =
         blake3::derive_key("pyana-factory-child-cell-v1", &derive_input);
     let child_cell_id = pyana_cell::CellId(child_cell_id_bytes);
@@ -3096,7 +3096,7 @@ async fn tool_verify_provenance(params: &Value, state: &NodeState) -> McpToolRes
 
     let s = state.read().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     let cell_id = pyana_cell::CellId(cell_id_bytes);
@@ -3167,7 +3167,7 @@ async fn tool_prove_sovereign_turn(params: &Value, state: &NodeState) -> McpTool
 
     let s = state.read().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     // Parse effects into the Effect VM representation.
@@ -3246,7 +3246,7 @@ async fn tool_verify_sovereign_proof(params: &Value, state: &NodeState) -> McpTo
 
     let s = state.read().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
     drop(s);
 
@@ -3302,7 +3302,7 @@ async fn tool_create_stealth_address(params: &Value, state: &NodeState) -> McpTo
 
     let s = state.read().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
     drop(s);
 
@@ -3359,7 +3359,7 @@ async fn tool_private_transfer(params: &Value, state: &NodeState) -> McpToolResu
 
     let mut s = state.write().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     // Generate or use provided blinding factor.
@@ -3386,7 +3386,7 @@ async fn tool_private_transfer(params: &Value, state: &NodeState) -> McpToolResu
     // Build a turn with committed note effects.
     let from_cell_id = pyana_cell::CellId(from_cell_bytes);
     let _to_cell_id = pyana_cell::CellId(to_cell_bytes);
-    let agent_cell_id = pyana_cell::CellId::derive_raw(&s.wallet.public_key().0, &[0u8; 32]);
+    let agent_cell_id = pyana_cell::CellId::derive_raw(&s.cclerk.public_key().0, &[0u8; 32]);
 
     // Build a note commitment from the Pedersen commitment.
     let note_commitment = pyana_cell::NoteCommitment(commitment);
@@ -3400,7 +3400,7 @@ async fn tool_private_transfer(params: &Value, state: &NodeState) -> McpToolResu
         range_proof: None,
     }];
 
-    let nonce = s.wallet.receipt_chain_length() as u64;
+    let nonce = s.cclerk.receipt_chain_length() as u64;
     let turn = Turn {
         agent: agent_cell_id,
         nonce,
@@ -3409,7 +3409,7 @@ async fn tool_private_transfer(params: &Value, state: &NodeState) -> McpToolResu
         valid_until: None,
         call_forest: build_forest_with_effects(from_cell_id, effects),
         depends_on: vec![],
-        previous_receipt_hash: s.wallet.receipt_chain().last().map(|r| r.receipt_hash()),
+        previous_receipt_hash: s.cclerk.receipt_chain().last().map(|r| r.receipt_hash()),
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
         execution_proof: None,
@@ -3428,7 +3428,7 @@ async fn tool_private_transfer(params: &Value, state: &NodeState) -> McpToolResu
 
     match exec_result {
         pyana_turn::TurnResult::Committed { receipt, .. } => {
-            s.wallet.append_receipt(receipt);
+            s.cclerk.append_receipt(receipt);
             drop(s);
             state.emit(crate::state::NodeEvent::Receipt {
                 hash: turn_hash.clone(),
@@ -3475,7 +3475,7 @@ async fn tool_encrypt_intent(params: &Value, state: &NodeState) -> McpToolResult
 
     let mut s = state.write().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     let current_height = s
@@ -3550,7 +3550,7 @@ async fn tool_prove_predicate(params: &Value, state: &NodeState) -> McpToolResul
 
     let s = state.read().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
     drop(s);
 
@@ -3625,7 +3625,7 @@ async fn tool_compose_proofs(params: &Value, state: &NodeState) -> McpToolResult
 
     let s = state.read().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
     drop(s);
 
@@ -3680,7 +3680,7 @@ async fn tool_compose_proofs(params: &Value, state: &NodeState) -> McpToolResult
 async fn tool_get_blocklace_status(state: &NodeState) -> McpToolResult {
     let s = state.read().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     let latest_height = s
@@ -3714,7 +3714,7 @@ async fn tool_get_blocklace_status(state: &NodeState) -> McpToolResult {
 async fn tool_get_constitution(state: &NodeState) -> McpToolResult {
     let s = state.read().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     let participants: Vec<String> = s
@@ -3757,7 +3757,7 @@ async fn tool_propose_membership(params: &Value, state: &NodeState) -> McpToolRe
 
     let s = state.read().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     if !s.federation_configured {
@@ -3815,7 +3815,7 @@ async fn tool_check_resource_budget(params: &Value, state: &NodeState) -> McpToo
 
     let s = state.read().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     let cell_id = pyana_cell::CellId(cell_id_bytes);
@@ -3865,7 +3865,7 @@ async fn tool_debit_shared_resource(params: &Value, state: &NodeState) -> McpToo
 
     let mut s = state.write().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     let cell_id = pyana_cell::CellId(cell_id_bytes);
@@ -3897,7 +3897,7 @@ async fn tool_debit_shared_resource(params: &Value, state: &NodeState) -> McpToo
 async fn tool_list_auctions(_params: &Value, state: &NodeState) -> McpToolResult {
     let s = state.read().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     // The gallery is an app-layer concern. Report what we can see from the intent pool
@@ -3947,7 +3947,7 @@ async fn tool_place_bid(params: &Value, state: &NodeState) -> McpToolResult {
 
     let mut s = state.write().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     // Generate or use provided nonce.
@@ -3966,7 +3966,7 @@ async fn tool_place_bid(params: &Value, state: &NodeState) -> McpToolResult {
     };
 
     // Compute bid commitment: BLAKE3(bidder || amount || nonce)
-    let bidder_pk = s.wallet.public_key().0;
+    let bidder_pk = s.cclerk.public_key().0;
     let mut input = Vec::with_capacity(32 + 8 + 32);
     input.extend_from_slice(&bidder_pk);
     input.extend_from_slice(&amount.to_le_bytes());
@@ -4027,7 +4027,7 @@ async fn tool_place_bid(params: &Value, state: &NodeState) -> McpToolResult {
 /// (`wire::captp_routing::build_captp_turn_delivered`). Because the node crate
 /// does not depend on `wire`, this tool re-implements the small construction
 /// directly against `pyana-turn` + `pyana-captp` primitives. The introducer
-/// signs the `HandoffCertificate`, the wallet (acting as recipient) signs the
+/// signs the `HandoffCertificate`, the cipherclerk (acting as recipient) signs the
 /// canonical `captp_delivered_signing_message`, and the resulting Turn carries
 /// both signatures inside the authorization.
 async fn tool_captp_deliver(params: &Value, state: &NodeState) -> McpToolResult {
@@ -4124,10 +4124,10 @@ async fn tool_captp_deliver(params: &Value, state: &NodeState) -> McpToolResult 
 
     let mut s = state.write().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
-    let recipient_pk = s.wallet.public_key().0;
+    let recipient_pk = s.cclerk.public_key().0;
     let target_cell_id = pyana_cell::CellId(target_cell_bytes);
     let target_cell_captp = pyana_types::CellId(target_cell_bytes);
 
@@ -4146,7 +4146,7 @@ async fn tool_captp_deliver(params: &Value, state: &NodeState) -> McpToolResult 
 
     let agent_cell_id = target_cell_id;
 
-    let turn_nonce = s.wallet.receipt_chain_length() as u64;
+    let turn_nonce = s.cclerk.receipt_chain_length() as u64;
     let signing_msg = pyana_turn::Authorization::captp_delivered_signing_message(
         &cert.nonce,
         &agent_cell_id,
@@ -4154,7 +4154,7 @@ async fn tool_captp_deliver(params: &Value, state: &NodeState) -> McpToolResult 
         turn_nonce,
         &parsed_effects,
     );
-    let recipient_signature = pyana_types::sign(&s.wallet.gossip_signing_key(), &signing_msg);
+    let recipient_signature = pyana_types::sign(&s.cclerk.gossip_signing_key(), &signing_msg);
 
     if s.ledger.get(&target_cell_id).is_none() {
         let stub = pyana_cell::Cell::remote_stub_with_id_pk_balance(
@@ -4194,7 +4194,7 @@ async fn tool_captp_deliver(params: &Value, state: &NodeState) -> McpToolResult 
         valid_until: None,
         call_forest: forest,
         depends_on: vec![],
-        previous_receipt_hash: s.wallet.receipt_chain().last().map(|r| r.receipt_hash()),
+        previous_receipt_hash: s.cclerk.receipt_chain().last().map(|r| r.receipt_hash()),
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
         execution_proof: None,
@@ -4212,7 +4212,7 @@ async fn tool_captp_deliver(params: &Value, state: &NodeState) -> McpToolResult 
 
     match exec_result {
         pyana_turn::TurnResult::Committed { receipt, .. } => {
-            s.wallet.append_receipt(receipt);
+            s.cclerk.append_receipt(receipt);
             drop(s);
             state.emit(crate::state::NodeEvent::Receipt {
                 hash: turn_hash.clone(),
@@ -4253,7 +4253,7 @@ async fn tool_captp_deliver(params: &Value, state: &NodeState) -> McpToolResult 
 // =============================================================================
 
 /// Build a `SovereignCellWitness` for a sovereign cell currently in the
-/// local ledger, signed with the node wallet's Ed25519 key.
+/// local ledger, signed with the node cipherclerk's Ed25519 key.
 ///
 /// The canonical signing message includes (cell_id, old_commitment,
 /// new_commitment, effects_hash, timestamp, sequence) — see
@@ -4291,7 +4291,7 @@ async fn tool_sign_sovereign_witness(params: &Value, state: &NodeState) -> McpTo
 
     let s = state.read().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     let cell = match s.ledger.get(&cell_id) {
@@ -4339,7 +4339,7 @@ async fn tool_sign_sovereign_witness(params: &Value, state: &NodeState) -> McpTo
         timestamp,
         sequence,
     );
-    let sig = pyana_types::sign(&s.wallet.gossip_signing_key(), &signing_msg);
+    let sig = pyana_types::sign(&s.cclerk.gossip_signing_key(), &signing_msg);
 
     let transition_proof_hex = if attach_proof {
         let vm_effects = vec![pyana_circuit::effect_vm::Effect::Transfer {
@@ -4496,13 +4496,13 @@ async fn tool_bilateral_action(params: &Value, state: &NodeState) -> McpToolResu
 
     let mut s = state.write().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     if s.ledger.get(&from_cell).is_none() {
         let stub = pyana_cell::Cell::remote_stub_with_id_pk_balance(
             from_cell,
-            s.wallet.public_key().0,
+            s.cclerk.public_key().0,
             10_000_000,
         );
         let _ = s.ledger.insert_cell(stub);
@@ -4529,7 +4529,7 @@ async fn tool_bilateral_action(params: &Value, state: &NodeState) -> McpToolResu
     let mut forest = CallForest::new();
     forest.add_root(action);
 
-    let turn_nonce = s.wallet.receipt_chain_length() as u64;
+    let turn_nonce = s.cclerk.receipt_chain_length() as u64;
     let turn = Turn {
         agent: agent_cell_id,
         nonce: turn_nonce,
@@ -4538,7 +4538,7 @@ async fn tool_bilateral_action(params: &Value, state: &NodeState) -> McpToolResu
         valid_until: None,
         call_forest: forest,
         depends_on: vec![],
-        previous_receipt_hash: s.wallet.receipt_chain().last().map(|r| r.receipt_hash()),
+        previous_receipt_hash: s.cclerk.receipt_chain().last().map(|r| r.receipt_hash()),
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
         execution_proof: None,
@@ -4565,7 +4565,7 @@ async fn tool_bilateral_action(params: &Value, state: &NodeState) -> McpToolResu
 
     let (committed_receipt_opt, error_str) = match exec_result {
         pyana_turn::TurnResult::Committed { receipt, .. } => {
-            s.wallet.append_receipt(receipt.clone());
+            s.cclerk.append_receipt(receipt.clone());
             (Some(receipt), None)
         }
         pyana_turn::TurnResult::Rejected { reason, .. } => {
@@ -4747,7 +4747,7 @@ async fn tool_create_cell_from_factory_effect(params: &Value, state: &NodeState)
 
     let mut s = state.write().await;
     if !s.unlocked {
-        return McpToolResult::error("wallet is locked; unlock first");
+        return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
     let owner_pubkey: [u8; 32] = match params.get("owner_pubkey").and_then(|v| v.as_str()) {
@@ -4755,7 +4755,7 @@ async fn tool_create_cell_from_factory_effect(params: &Value, state: &NodeState)
             Ok(b) => b,
             Err(_) => return McpToolResult::error("invalid hex for owner_pubkey"),
         },
-        None => s.wallet.public_key().0,
+        None => s.cclerk.public_key().0,
     };
     let token_id: [u8; 32] = match params.get("token_id").and_then(|v| v.as_str()) {
         Some(h) => match hex_decode(h) {
@@ -4786,17 +4786,17 @@ async fn tool_create_cell_from_factory_effect(params: &Value, state: &NodeState)
         params: params_struct,
     };
 
-    let agent_cell_id = pyana_cell::CellId::derive_raw(&s.wallet.public_key().0, &[0u8; 32]);
-    let nonce = s.wallet.receipt_chain_length() as u64;
+    let agent_cell_id = pyana_cell::CellId::derive_raw(&s.cclerk.public_key().0, &[0u8; 32]);
+    let nonce = s.cclerk.receipt_chain_length() as u64;
     let turn = Turn {
         agent: agent_cell_id,
         nonce,
         fee: 10_000,
         memo: Some("create cell from factory (mcp)".to_string()),
         valid_until: None,
-        call_forest: build_signed_forest(agent_cell_id, vec![effect], &s.wallet),
+        call_forest: build_signed_forest(agent_cell_id, vec![effect], &s.cclerk),
         depends_on: vec![],
-        previous_receipt_hash: s.wallet.receipt_chain().last().map(|r| r.receipt_hash()),
+        previous_receipt_hash: s.cclerk.receipt_chain().last().map(|r| r.receipt_hash()),
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
         execution_proof: None,
@@ -4817,7 +4817,7 @@ async fn tool_create_cell_from_factory_effect(params: &Value, state: &NodeState)
 
     match exec_result {
         pyana_turn::TurnResult::Committed { receipt, .. } => {
-            s.wallet.append_receipt(receipt);
+            s.cclerk.append_receipt(receipt);
             drop(s);
             state.emit(crate::state::NodeEvent::Receipt {
                 hash: turn_hash.clone(),

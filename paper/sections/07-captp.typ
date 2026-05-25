@@ -106,7 +106,7 @@ The handoff protocol enables offline capability transfer to a third party withou
 
 When Alice on federation $F_1$ introduces Bob on federation $F_2$ to a capability at $F_2$:
 
-+ Alice (or her wallet's SDK) constructs a `HandoffCertificate` over `{target_federation: F_2, target_cell, recipient_pk: pk_B, permissions, allowed_effects, expires_at, max_uses, nonce, swiss}` and signs with $"pk"_A$.
++ Alice (or her cipherclerk's SDK) constructs a `HandoffCertificate` over `{target_federation: F_2, target_cell, recipient_pk: pk_B, permissions, allowed_effects, expires_at, max_uses, nonce, swiss}` and signs with $"pk"_A$.
 + The certificate travels out-of-band (any channel).
 + Bob presents the certificate to $F_2$ via a `PresentHandoff` CapTP message, signing a `HandoffPresentation` binding (nonce, target_cell, target_federation).
 + $F_2$ verifies:

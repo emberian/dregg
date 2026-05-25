@@ -67,7 +67,7 @@ blake3 = "1"</code></pre>
       <code>"api"</code> service. This root token has full permissions -- it is the master key.
     </p>
 
-    <pre><code class="language-rust">use pyana_sdk::{AgentWallet, Attenuation, AuthRequest};
+    <pre><code class="language-rust">use pyana_sdk::{AgentCipherclerk, Attenuation, AuthRequest};
 use pyana_token::{BudgetSpec, RevocationFilter};
 
 fn main() {
@@ -76,7 +76,7 @@ fn main() {
     let root_key: [u8; 32] = *blake3::hash(b"my-api-service-root-secret").as_bytes();
 
     // Create the admin's cipherclerk and mint a root token.
-    let mut admin_cclerk = AgentWallet::new();
+    let mut admin_cclerk = AgentCipherclerk::new();
     let root_token = admin_cclerk.mint_token(&amp;root_key, "api");
 
     println!("Root token minted:");
@@ -264,13 +264,13 @@ Other customer (not revoked):        true
 
     <p>Here is the full <code>main.rs</code> in one copy-pasteable block:</p>
 
-    <pre><code class="language-rust">use pyana_sdk::{AgentWallet, Attenuation, AuthRequest};
+    <pre><code class="language-rust">use pyana_sdk::{AgentCipherclerk, Attenuation, AuthRequest};
 use pyana_token::{BudgetSpec, RevocationFilter};
 
 fn main() {
     let root_key: [u8; 32] = *blake3::hash(b"my-api-service-root-secret").as_bytes();
 
-    let mut admin_cclerk = AgentWallet::new();
+    let mut admin_cclerk = AgentCipherclerk::new();
     let root_token = admin_cclerk.mint_token(&amp;root_key, "api");
 
     println!("Root token minted:");
@@ -384,7 +384,7 @@ fn main() {
       <tbody>
         <tr>
           <td><strong>Key issuance</strong></td>
-          <td><code>AgentWallet::mint_token()</code> -- one line, one HMAC key</td>
+          <td><code>AgentCipherclerk::mint_token()</code> -- one line, one HMAC key</td>
         </tr>
         <tr>
           <td><strong>Scope restriction</strong></td>

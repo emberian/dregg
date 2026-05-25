@@ -123,7 +123,7 @@ impl From<SdkError> for EmbedError {
 /// Configuration for the no-I/O engine.
 ///
 /// This struct intentionally does NOT implement `Default`. The `timestamp` field
-/// is critical for proof verification: a zero timestamp causes wallet-generated
+/// is critical for proof verification: a zero timestamp causes cipherclerk-generated
 /// proofs to appear "from the future" and engine-generated proofs to be rejected
 /// as expired. Callers MUST provide a real wall-clock timestamp.
 ///
@@ -318,9 +318,9 @@ impl PyanaEngine {
         let token = MacaroonToken::from_encoded(encoded_token, *root_key)
             .map_err(|e| EmbedError::ProofGen(format!("token decode: {e}")))?;
 
-        // Derive the proof key from root_key using the same KDF as the wallet.
+        // Derive the proof key from root_key using the same KDF as the cipherclerk.
         // Federation tree leaves are hash(derived_proof_key), so both engine and
-        // wallet proofs must target the same leaf.
+        // cipherclerk proofs must target the same leaf.
         let proof_key = blake3::derive_key("pyana-proof-key-v1", root_key);
 
         let mut builder = BridgePresentationBuilder::new(proof_key, self.federation_root);

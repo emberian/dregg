@@ -92,7 +92,7 @@ nav {
     background: rgba(139, 124, 247, 0.1);
 }
 
-.wallet-status {
+.cclerk-status {
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -104,7 +104,7 @@ nav {
     transition: border-color 0.2s;
 }
 
-.wallet-status:hover {
+.cclerk-status:hover {
     border-color: var(--accent);
 }
 

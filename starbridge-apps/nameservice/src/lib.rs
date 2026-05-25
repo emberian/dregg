@@ -67,11 +67,11 @@
 //! zero"), that's a **cell program caveat** (`WriteOnce`), not a new
 //! `Effect` variant — see the TODO on [`build_register_action`].
 //!
-//! ## Compatibility with the in-browser PyanaRuntime + extension wallet
+//! ## Compatibility with the in-browser PyanaRuntime + extension cclerk
 //!
 //! `build_register_action` returns an [`Action`] carrying a real
-//! `Authorization::Signature(..)` produced by the wallet. That action
-//! is what `wallet::signTurn(turnSpec)` (the extension API
+//! `Authorization::Signature(..)` produced by the cclerk. That action
+//! is what `cclerk::signTurn(turnSpec)` (the extension API
 //! surface — see `../../../extension/src/page.ts`) expects to wrap in
 //! a `Turn` for submission. The in-browser `PyanaRuntime`
 //! (`../../../wasm/src/runtime.rs`) executes the resulting turn

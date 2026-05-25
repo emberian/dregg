@@ -121,7 +121,7 @@ export async function mockExplorerApi(page: Page) {
     return route.fulfill({ json: { backend: 'spiral', entries: 100 } });
   });
 
-  await page.route('**/wallet', route => {
+  await page.route('**/cipherclerk', route => {
     return route.fulfill({ json: { balance: 1000, tokens: 2 } });
   });
 }

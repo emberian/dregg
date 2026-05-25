@@ -1,12 +1,12 @@
-//! Simulated agent: wallet + actions + proof generation for integration tests.
+//! Simulated agent: cclerk + actions + proof generation for integration tests.
 //!
-//! A `SimAgent` wraps an [`AgentWallet`] with a human-readable name and provides
+//! A `SimAgent` wraps an [`AgentCipherclerk`] with a human-readable name and provides
 //! ergonomic methods for the common test scenarios: minting, attenuating, delegating,
 //! proving, and presenting tokens.
 
 use pyana_bridge::{BridgePredicateProof, BridgePresentationProof, Predicate};
 use pyana_sdk::{
-    AgentWallet, Attenuation, AuthRequest, DelegatedToken, DelegationAuthority, HeldToken,
+    AgentCipherclerk, Attenuation, AuthRequest, DelegatedToken, DelegationAuthority, HeldToken,
 };
 use pyana_types::PublicKey;
 
@@ -14,8 +14,8 @@ use pyana_types::PublicKey;
 pub struct SimAgent {
     /// Human-readable agent name (e.g., "Alice", "Bob", "Carol").
     pub name: String,
-    /// The agent's wallet (identity + tokens + signing).
-    pub wallet: AgentWallet,
+    /// The agent's cclerk (identity + tokens + signing).
+    pub cclerk: AgentCipherclerk,
 }
 
 impl SimAgent {
@@ -23,25 +23,25 @@ impl SimAgent {
     pub fn new(name: &str) -> Self {
         Self {
             name: name.to_string(),
-            wallet: AgentWallet::new(),
+            cclerk: AgentCipherclerk::new(),
         }
     }
 
     /// Get this agent's public key.
     pub fn public_key(&self) -> PublicKey {
-        self.wallet.public_key()
+        self.cclerk.public_key()
     }
 
     /// Mint a root token for the given service with a deterministic root key
     /// derived from the agent's name + service name.
     pub fn mint_token(&mut self, service: &str) -> HeldToken {
         let root_key = self.derive_root_key(service);
-        self.wallet.mint_token(&root_key, service)
+        self.cclerk.mint_token(&root_key, service)
     }
 
     /// Mint a token with an explicit root key.
     pub fn mint_token_with_key(&mut self, root_key: &[u8; 32], service: &str) -> HeldToken {
-        self.wallet.mint_token(root_key, service)
+        self.cclerk.mint_token(root_key, service)
     }
 
     /// Attenuate a held token with restrictions.
@@ -50,7 +50,7 @@ impl SimAgent {
         token: &HeldToken,
         restrictions: &Attenuation,
     ) -> Result<HeldToken, pyana_sdk::SdkError> {
-        self.wallet.attenuate(token, restrictions)
+        self.cclerk.attenuate(token, restrictions)
     }
 
     /// Delegate a token to another agent.
@@ -60,10 +60,10 @@ impl SimAgent {
         to: &SimAgent,
         restrictions: &Attenuation,
     ) -> Result<DelegatedToken, pyana_sdk::SdkError> {
-        self.wallet.delegate(token, &to.public_key(), restrictions)
+        self.cclerk.delegate(token, &to.public_key(), restrictions)
     }
 
-    /// Receive a delegated token into this agent's wallet.
+    /// Receive a delegated token into this agent's cclerk.
     ///
     /// Test-only helper: the SimAgent trusts whatever delegator the envelope
     /// declares, because the integration tests use SimAgents that already know
@@ -74,13 +74,13 @@ impl SimAgent {
         delegated: DelegatedToken,
     ) -> Result<(), pyana_sdk::SdkError> {
         let expected = delegated.delegator_public_key;
-        self.wallet
+        self.cclerk
             .receive_signed_delegation(delegated, &DelegationAuthority::TrustedKey(expected))
     }
 
     /// Verify that a token authorizes a request (plaintext Datalog evaluation).
     pub fn verify_token(&self, token: &HeldToken, request: &AuthRequest) -> bool {
-        self.wallet.verify_token(token, request)
+        self.cclerk.verify_token(token, request)
     }
 
     /// Generate a full STARK presentation proof for a held token.
@@ -89,7 +89,7 @@ impl SimAgent {
         token: &HeldToken,
         request: &AuthRequest,
     ) -> Result<BridgePresentationProof, pyana_sdk::SdkError> {
-        self.wallet.prove_authorization(token, request)
+        self.cclerk.prove_authorization(token, request)
     }
 
     /// Generate a STARK presentation proof for a token chain (root + attenuations).
@@ -99,7 +99,7 @@ impl SimAgent {
         attenuations: &[Attenuation],
         request: &AuthRequest,
     ) -> Result<BridgePresentationProof, pyana_sdk::SdkError> {
-        self.wallet
+        self.cclerk
             .prove_with_chain(root_token, attenuations, request)
     }
 
@@ -111,7 +111,7 @@ impl SimAgent {
         attribute_value: u32,
         predicate: Predicate,
     ) -> Result<BridgePredicateProof, pyana_sdk::SdkError> {
-        self.wallet
+        self.cclerk
             .prove_predicate(token, attribute, attribute_value, predicate)
     }
 

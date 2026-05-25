@@ -1,4 +1,4 @@
-# Pyana Wallet Extension
+# Pyana Cipherclerk Extension
 
 Chrome browser extension for capability-based authorization with ZK proofs.
 
@@ -9,7 +9,7 @@ No build step. No npm. Plain JS loaded directly by Chrome.
 ```
 Page Context               Content Script            Background SW
 +-----------------+       +----------------+       +------------------+
-| window.pyana    |       |                |       | Wallet State     |
+| window.pyana    |       |                |       | Cipherclerk State     |
 |   .authorize()  | ====> | CustomEvent    | ====> | - Ed25519 keys   |
 |   .isConnected()|       | bridge         |       | - Cap tokens     |
 |   .getCapabili  | <==== |                | <==== | - Receipt chain  |
@@ -24,12 +24,12 @@ Page Context               Content Script            Background SW
 1. Open `chrome://extensions/`
 2. Enable "Developer mode" (top right)
 3. Click "Load unpacked" and select this `extension/` directory
-4. The Pyana Wallet icon appears in the toolbar
+4. The Pyana Cipherclerk icon appears in the toolbar
 
 ## Files
 
 - `manifest.json` — Manifest V3, no special permissions beyond storage
-- `background.js` — Service worker: wallet state, token evaluation, proof generation
+- `background.js` — Service worker: cipherclerk state, token evaluation, proof generation
 - `content.js` — Bridges page events to background via chrome.runtime
 - `page.js` — Defines `window.pyana` API in page context
 - `popup.html` + `popup-script.js` — Extension popup UI
@@ -37,7 +37,7 @@ Page Context               Content Script            Background SW
 ## Page API
 
 ```js
-// Check if pyana wallet is available
+// Check if pyana cipherclerk is available
 const connected = await window.pyana.isConnected();
 
 // Request authorization

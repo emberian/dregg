@@ -6,11 +6,11 @@
 **Companion docs:** `AUDIT-turn-executor.md`, `AUDIT-circuit.md`, `REVIEW-effect-vm.md`, `PYANA_DESIGN.md`.
 
 Receipts are the lingua franca of trust boundaries. A pyana receipt is the
-artifact that lets one principal — wallet, federation, bridge endpoint,
+artifact that lets one principal — cclerk, federation, bridge endpoint,
 verifier — say to another, *"This state transition really happened, and here
 is the cryptographic evidence."* They are the only object that crosses every
 boundary in the system: in-circuit ↔ out-of-circuit, federation A ↔ federation
-B, executor ↔ wallet, and (via the bridge) pyana ↔ Midnight/Cardano.
+B, executor ↔ cclerk, and (via the bridge) pyana ↔ Midnight/Cardano.
 
 This document inventories the receipt shapes currently scattered through the
 codebase, lists the gaps the audits have surfaced, and proposes a single
@@ -119,9 +119,9 @@ acknowledgements consumed inside cells. Out of scope for this document.
 
 | Receipt | Issuer | Trust boundary it crosses | Signed by | Verified against |
 |---|---|---|---|---|
-| `TurnReceipt` (classical) | executor (1 node) | wallet ↔ federation | optionally Ed25519 (P3-4: usually `None`) | none enforced on-chain; off-chain `verify_receipt_chain` |
+| `TurnReceipt` (classical) | executor (1 node) | cclerk ↔ federation | optionally Ed25519 (P3-4: usually `None`) | none enforced on-chain; off-chain `verify_receipt_chain` |
 | `TurnReceipt` (sovereign / proof-carrying) | executor | trustless | STARK proof attests state transition; `executor_signature` should attest finality | STARK verifier + receipt-chain |
-| `TurnReceipt` (fast-path) | executor on quorum cert | wallet ↔ federation quorum | should chain to `TurnCertificate` 2f+1 Ed25519 | `assemble_certificate` |
+| `TurnReceipt` (fast-path) | executor on quorum cert | cclerk ↔ federation quorum | should chain to `TurnCertificate` 2f+1 Ed25519 | `assemble_certificate` |
 | `BridgeReceipt` | destination federation | source ↔ destination | single Ed25519 over (nullifier, dest, height) | `verify_bridge_receipt` against caller-supplied keys |
 | `QuorumCertificate` | block proposer + voters | federation node ↔ federation node | BLS aggregate or per-voter Ed25519 | committee key |
 | `BlocklaceTurnReceipt` | local bridge | none (intra-process) | — | — |
@@ -140,7 +140,7 @@ into the emitted receipt but never compares it to the agent's last receipt
 hash (which it does not store) ... The receipt-chain 'self-bound history'
 property in the rustdoc is therefore unenforced at write time."* Confirmed:
 `turn/src/composer.rs:337`, `turn/src/execution_path.rs:113/169/198`, and the
-wallet's `build_authorized_turn` (per AUDIT-wallet) all hardcode
+cipherclerk's `build_authorized_turn` (per AUDIT-cclerk) all hardcode
 `previous_receipt_hash: None`. The chain *can* be reconstructed by an honest
 verifier (and `verify_receipt_chain` works), but the executor accepts a turn
 that claims to be genesis when it isn't.
@@ -993,11 +993,11 @@ any order, but the dependencies below are real.
 `turn/src/turn.rs:133`. Bump version tag to `pyana-turn-v3:` and include
 `execution_proof`, `execution_proof_cell`, `execution_proof_new_commitment`,
 `conservation_proof`, `sovereign_witnesses`, and `custom_program_proofs`
-in `Turn::hash()`. The wallet's `compute_turn_bytes` (AUDIT-wallet P2-10)
+in `Turn::hash()`. The cipherclerk's `compute_turn_bytes` (AUDIT-cclerk P2-10)
 must match.
 
 **Estimated impact:** ~50 LOC change in `turn::Turn::hash()`, ~20 LOC in
-wallet, ~all tests need new turn-hashes recorded, version-tag check
+cclerk, ~all tests need new turn-hashes recorded, version-tag check
 prevents v2/v3 confusion at signing time.
 
 ### 8.2 Block 2 — Receipt-chain enforcement (P0-3)
@@ -1022,7 +1022,7 @@ if let Some(declared_prev) = turn.previous_receipt_hash {
 
 On commit, set `cell.state.last_receipt_hash = Some(receipt.receipt_hash())`.
 
-Wallet changes (per AUDIT-wallet P3-6): `build_authorized_turn`,
+Cipherclerk changes (per AUDIT-cclerk P3-6): `build_authorized_turn`,
 `allocate_queue`, `enqueue_message`, `dequeue_message`, `atomic_queue_tx`
 must thread the current head through instead of hardcoding `None`.
 
@@ -1143,7 +1143,7 @@ For every receipt type, produce committed test vectors:
 
 Stored under `tests/vectors/receipts/`. Used by both Rust and the
 TypeScript SDK to detect drift. The TS SDK (`ts-sdk/`, `sdk-ts/`) should
-implement at least the BLAKE3 form so wallets can verify receipts they
+implement at least the BLAKE3 form so cipherclerks can verify receipts they
 receive.
 
 ---

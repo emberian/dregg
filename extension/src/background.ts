@@ -42,12 +42,12 @@ import type {
 // Constants
 // ---------------------------------------------------------------------------
 
-// Storage keys — "pyana_wallet*" keys are the legacy names kept for migration.
+// Storage keys — "pyana_cipherclerk*" keys are the legacy names kept for migration.
 const STORAGE_KEY = "pyana_cipherclerk";
 const ENCRYPTED_STATE_KEY = "pyana_cipherclerk_encrypted";
 const MNEMONIC_KEY = "pyana_mnemonic_encrypted";
 // Legacy key names; read-once migration copies them to the new keys on startup.
-const LEGACY_STORAGE_KEY = "pyana_wallet";
+const LEGACY_STORAGE_KEY = "pyana_cipherclerk";
 const LEGACY_ENCRYPTED_STATE_KEY = "pyana_wallet_encrypted";
 const STEALTH_KEYS_KEY = "pyana_stealth_keys_encrypted";
 const ALLOWED_ORIGINS_KEY = "pyana_allowed_origins";
@@ -507,7 +507,7 @@ let state: InternalCipherclerkState | null = null;
 let cclerkPassphrase: string | null = null;
 
 /**
- * One-time migration: copy legacy "pyana_wallet*" storage keys to the new
+ * One-time migration: copy legacy "pyana_cipherclerk*" storage keys to the new
  * "pyana_cipherclerk*" names.  Runs at most once per installation (guarded by
  * presence of the new key).  The old keys are removed after copying so the
  * migration is idempotent.
@@ -535,8 +535,8 @@ async function migrateLegacyStorageKeys(): Promise<void> {
 async function loadState(): Promise<InternalCipherclerkState> {
   if (state) return state;
 
-  // One-time storage key migration: copy pyana_wallet* → pyana_cipherclerk* on first run.
-  // This preserves data for users upgrading from the old "wallet" naming.
+  // One-time storage key migration: copy pyana_cipherclerk* → pyana_cipherclerk* on first run.
+  // This preserves data for users upgrading from the old "cclerk" naming.
   await migrateLegacyStorageKeys();
 
   // Try loading legacy unencrypted state and migrate.

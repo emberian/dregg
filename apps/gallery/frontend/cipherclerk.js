@@ -1,11 +1,11 @@
 /**
- * wallet.js — Extension bridge for the pyana browser extension.
+ * cipherclerk.js — Extension bridge for the pyana browser extension.
  *
  * Connects to the pyana browser extension via window.pyana interface.
  * Provides identity management and turn signing for the gallery UI.
  */
 
-const Wallet = (() => {
+const Cipherclerk = (() => {
     let _identity = null;
     let _connected = false;
 
@@ -41,7 +41,7 @@ const Wallet = (() => {
     }
 
     /**
-     * Disconnect wallet.
+     * Disconnect cclerk.
      */
     function disconnect() {
         _identity = null;
@@ -126,11 +126,11 @@ const Wallet = (() => {
     }
 
     /**
-     * Update the wallet UI elements.
+     * Update the cclerk UI elements.
      */
     function updateUI(connected, cellId) {
-        const statusEl = document.getElementById('wallet-status');
-        const labelEl = document.getElementById('wallet-label');
+        const statusEl = document.getElementById('cclerk-status');
+        const labelEl = document.getElementById('cclerk-label');
         const dotEl = statusEl ? statusEl.querySelector('.dot') : null;
 
         if (dotEl) {
@@ -139,7 +139,7 @@ const Wallet = (() => {
         if (labelEl) {
             labelEl.textContent = connected
                 ? (cellId ? cellId.slice(0, 8) + '...' : 'Connected')
-                : 'Connect Wallet';
+                : 'Connect Cipherclerk';
         }
     }
 

@@ -4,7 +4,7 @@
 //! - **PetnameDb**: local storage of petnames, edge names, and proposed name cache
 //! - **Resolution algorithm**: strict priority petname > edge > proposed > hierarchical
 //! - **Hierarchical resolution**: dotted names split right-to-left, traverse directories via CapTP
-//! - **Serialization**: PetnameDb persisted with wallet state (JSON)
+//! - **Serialization**: PetnameDb persisted with cipherclerk state (JSON)
 //!
 //! # Security Properties
 //!
@@ -207,7 +207,7 @@ pub fn validate_name_segment(segment: &str) -> Result<(), NameError> {
 
 /// Local petname database: stores petnames, edge names, and proposed name cache.
 ///
-/// This is the wallet-local naming state. It never leaves the device (except
+/// This is the cipherclerk-local naming state. It never leaves the device (except
 /// via explicit export). Resolution checks this DB first before any network calls.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct PetnameDb {
@@ -573,17 +573,17 @@ pub struct WhoisResult {
 }
 
 // =============================================================================
-// Wallet Integration
+// Cipherclerk Integration
 // =============================================================================
 
 /// Extension trait for AgentCipherclerk to add name resolution capabilities.
 ///
-/// This provides the wallet-level API surface for name operations.
-/// The actual PetnameDb is stored in the wallet state and persisted with it.
+/// This provides the cipherclerk-level API surface for name operations.
+/// The actual PetnameDb is stored in the cipherclerk state and persisted with it.
 pub struct CipherclerkNames {
     /// The petname database.
     pub db: PetnameDb,
-    /// Current epoch (updated by the wallet on each block).
+    /// Current epoch (updated by the cipherclerk on each block).
     pub current_epoch: u64,
 }
 
@@ -998,25 +998,25 @@ mod tests {
 
     #[tokio::test]
     async fn whois_reverse_lookup() {
-        let mut wallet_names = CipherclerkNames::new();
-        wallet_names.set_epoch(100);
+        let mut cclerk_names = CipherclerkNames::new();
+        cclerk_names.set_epoch(100);
         let client = test_client();
 
         let target = test_uri(5);
         let cell_id = CellId(target.cell_id);
 
         // Set a petname pointing to this cell.
-        wallet_names.db.set_petname("alice", target, 100);
+        cclerk_names.db.set_petname("alice", target, 100);
 
         // Set an edge name also pointing to this cell.
-        wallet_names.db.set_edge_name(EdgeNameEntry {
+        cclerk_names.db.set_edge_name(EdgeNameEntry {
             label: "alice-contact".to_string(),
             target,
             source: test_uri(10),
             last_refreshed: 90,
         });
 
-        let results = wallet_names.whois(cell_id, &client).await.unwrap();
+        let results = cclerk_names.whois(cell_id, &client).await.unwrap();
         assert_eq!(results.len(), 2);
 
         let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
@@ -1090,7 +1090,7 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn wallet_names_validates_on_set() {
+    fn cclerk_names_validates_on_set() {
         let mut wn = CipherclerkNames::new();
         let target = test_uri(1);
 
@@ -1110,11 +1110,11 @@ mod tests {
 
     #[tokio::test]
     async fn whois_empty_db() {
-        let wallet_names = CipherclerkNames::new();
+        let cclerk_names = CipherclerkNames::new();
         let client = test_client();
         let cell_id = CellId([0xFF; 32]);
 
-        let result = wallet_names.whois(cell_id, &client).await;
+        let result = cclerk_names.whois(cell_id, &client).await;
         assert!(matches!(result, Err(NameError::NotFound(_))));
     }
 }

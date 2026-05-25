@@ -18,7 +18,7 @@ Based on code review of midnightntwrk repos (midnight-zk, midnight-ledger, midni
 ## What Midnight Does That Pyana Doesn't
 
 - **Native shielded value transfer.** Zswap is a full Zerocash implementation with commitment trees, nullifier sets, encrypted coin ciphertexts, and atomic swaps. Production-grade fungible token privacy for arbitrary user-defined token types.
-- **Cardano UTXO integration.** System transactions observe Cardano state (cNIGHT holdings, wallet registrations) and mirror them into the Midnight ledger. Enables cross-chain DUST generation from staked NIGHT on Cardano.
+- **Cardano UTXO integration.** System transactions observe Cardano state (cNIGHT holdings, cclerk registrations) and mirror them into the Midnight ledger. Enables cross-chain DUST generation from staked NIGHT on Cardano.
 - **General-purpose programmable shielded contracts.** Compact compiles to a ZKIR that runs in a custom onchain VM. Contract calls produce ZK proofs that verify state transitions without revealing private inputs. This is "private smart contracts" in the Ethereum sense.
 - **Proof aggregation.** The midnight-zk repo has a dedicated `aggregation` crate for batching multiple proofs.
 - **Regulatory compliance angle.** Midnight markets itself as "rational privacy" -- selective disclosure by design. The contract model lets DApps enforce compliance rules (KYC gating, audit trails) while still using shielded state underneath.

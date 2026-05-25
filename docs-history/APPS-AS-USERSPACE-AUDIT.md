@@ -71,7 +71,7 @@ Effectively *nothing*. From `apps/nameservice/CLAUDIT.md` and a fresh grep:
   in `main.rs:36`.
 - `main.rs:85` — `current_epoch: 1` hardcoded; no clock source.
 - No `Effect::*`, no `Turn`, no `Authorization::*`, no `SwissTable`,
-  no `Sovereign`, no `Wallet`.
+  no `Sovereign`, no `Cipherclerk`.
 
 The "Pyana app" is an in-memory `tokio::sync::RwLock<BTreeMap<String,
 NameEntry>>` (`registry.rs`) plus an HTTP layer. Authentication is
@@ -94,8 +94,8 @@ owner*. Concretely:
   `Effect::RevokeCapability` (on old owner) + `Effect::GrantCapability`
   (to new owner). Sub-delegation is *attenuated delegation*: alice
   delegates a narrowed `name_owner_cap` (scope = `metrics.alice`
-  prefix) to a child via the existing `wallet.delegate` machinery
-  (`sdk/src/wallet.rs:682`).
+  prefix) to a child via the existing `cclerk.delegate` machinery
+  (`sdk/src/cipherclerk.rs:682`).
 - **Rent as `Effect::Transfer` + cell-program predicate.** The
   per-name cell has a `CellProgram::Predicate` constraint:
   `field[expiry_height] >= current_block_height` (an `Immutable`
@@ -169,8 +169,8 @@ reusable `pyana-storage::CommittedMap<K, V>` with Merkle root and
 the same AIR plumbing.
 
 **(e) Sub-delegation as a userspace pattern.**
-Today `wallet.delegate` works for *capability tokens* (DelegatedToken
-in `sdk/src/wallet.rs:682`); it does Ed25519-signed envelope chains.
+Today `cclerk.delegate` works for *capability tokens* (DelegatedToken
+in `sdk/src/cipherclerk.rs:682`); it does Ed25519-signed envelope chains.
 For a *name-owner cap*, attenuation needs: "the delegated cap only
 controls names under prefix P." The `Attenuation.services`
 (`token/src/traits.rs:97-133`) is a generic vocabulary; needs a
@@ -688,7 +688,7 @@ That is the brief's hard rule applied to the escrow primitive itself.
 From `apps/privacy-voting/CLAUDIT.md`:
 
 - `apps/privacy-voting/src/eligibility.rs:75-103` — uses
-  `wallet::DelegatedToken` for credentials (bearer; replayable).
+  `cclerk::DelegatedToken` for credentials (bearer; replayable).
 - `apps/privacy-voting/src/ballot.rs:39-49` — uses
   `blake3-derive("pyana-ballot-v1" || pid || opt || randomness)`
   for commitments (not Poseidon2, not in-circuit-able).
@@ -734,7 +734,7 @@ From `apps/privacy-voting/CLAUDIT.md`:
 ### 6.4 What's missing
 
 **(a) `Presented<P>` extractor (G30).** Today's
-`AgentWallet::DelegatedToken` is a bearer credential. For voting,
+`AgentCipherclerk::DelegatedToken` is a bearer credential. For voting,
 the credential should be *presented* as a ZK proof, not handed over.
 The framework needs an axum extractor that consumes a
 `BridgePresentationProof` and verifies it, exposing only the

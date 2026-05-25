@@ -42,7 +42,7 @@
 //   - @midnight-ntwrk/midnight-js-contracts: deployContract, findDeployedContract
 //   - @midnight-ntwrk/compact-runtime: Contract class, witnesses
 //   - @midnight-ntwrk/midnight-js-indexer-public-data-provider: watch state changes
-//   - @midnight-ntwrk/wallet-sdk-facade: WalletFacade for tx signing
+//   - @midnight-ntwrk/cipherclerk-sdk-facade: WalletFacade for tx signing
 //   - @midnight-ntwrk/midnight-js-http-client-proof-provider: proof generation
 //
 // =============================================================================

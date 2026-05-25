@@ -220,7 +220,7 @@ Tier 3: History compression (for cross-federation sync / light clients)
 - **Extremely bandwidth-constrained channels:** If proof must be <5 KiB and PQ is not
   required, Pickles is better than STARKs.
 - **Client-side verification in browsers:** Pickles verification is faster than STARK
-  verification for the same security level (IPA vs FRI), which matters for web wallets.
+  verification for the same security level (IPA vs FRI), which matters for web cipherclerks.
 
 ### Keep the Mina backend as:
 

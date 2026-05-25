@@ -62,7 +62,7 @@ Five methods, default-deny on anything else (Cav-Codex Block 4):
 
 ```rust
 let action = build_propose_table_update_action(
-    &wallet,
+    &cclerk,
     namespace_cell,
     &proposed_route_table,
     /* dispute_window_height */ current_height + 1000,
@@ -81,7 +81,7 @@ Effects: two `SetField` (slots 5, 4) + one `EmitEvent`. Constraints:
 
 ```rust
 let action = build_vote_on_proposal_action(
-    &wallet,
+    &cclerk,
     namespace_cell,
     /* prior pending root */ prior_proposal_root,
     VoteKind::Approve,
@@ -108,7 +108,7 @@ nullifier the governance verifier consumes.
 
 ```rust
 let action = build_commit_table_update_action(
-    &wallet,
+    &cclerk,
     namespace_cell,
     &committed_route_table,
     /* new_version */ old_version + 1,
@@ -161,7 +161,7 @@ Cell-program constraints under commit:
 
 ```rust
 let action = build_register_service_action(
-    &wallet,
+    &cclerk,
     namespace_cell,
     "/treasury/main",
     treasury_cell_id,
@@ -242,12 +242,12 @@ not in this crate.
    the shared inspector registry and this app's four web components
    (`<pyana-namespace>`, `<pyana-namespace-route-table>`,
    `<pyana-namespace-proposal>`, `<pyana-namespace-dispatch>`).
-3. The extension wallet (`extension/src/page.ts`) signs the `Action`
+3. The extension cclerk (`extension/src/page.ts`) signs the `Action`
    produced by `build_propose_table_update_action` /
    `build_vote_on_proposal_action` / `build_register_service_action`
    via `signTurn`. The `commit_table_update` action's authorization
    is `Custom`, not `Signature` — the threshold-sig comes from the
-   committee's off-cell signing flow, not the submitter's wallet.
+   committee's off-cell signing flow, not the submitter's cclerk.
 
 ## Coexistence with `apps/governed-namespace/`
 

@@ -30,7 +30,7 @@ Three layers are involved when a sovereign cell takes a turn today:
 
 ```
                        +-----------------------------------+
-   wallet / DSL  --->  | Turn (turn::turn::Turn)           |
+   cclerk / DSL  --->  | Turn (turn::turn::Turn)           |
                        |  agent, nonce, call_forest,       |
                        |  previous_receipt_hash,           |
                        |  execution_proof: Option<Vec<u8>> |
@@ -534,7 +534,7 @@ later stage builds on quicksand.
 
 - Define the struct (§5.1).
 - Plumb the witness trace through the executor and prover.
-- Add an optional `--export-witness` mode to the wallet/executor.
+- Add an optional `--export-witness` mode to the cclerk/executor.
 - Define the encrypted-to-recovery variant in
   `DESIGN-receipts.md` follow-up; not required for Stage 7.
 
@@ -679,7 +679,7 @@ crate); custom-program-proof composition (already exists per-cell via
    turns touch ≤4 cells.
 4. **`cap_table_root` migration cost.** Migrate HashMap→Merkle now while
    small, or after first deployment? Recommendation: now.
-5. **`Turn::hash` v3.** Coordinated landing across `wallet/`, `sdk/`,
+5. **`Turn::hash` v3.** Coordinated landing across `cclerk/`, `sdk/`,
    executor, `protocol-tests/` (R-1 pain redux).
 
 ---

@@ -39,7 +39,7 @@ pub fn derive_stealth_keys(mnemonic: &str, passphrase: &str) -> Result<JsValue, 
         entropy,
     ));
 
-    // Derive stealth keys using same context strings as SDK wallet.
+    // Derive stealth keys using same context strings as SDK cclerk.
     // P2 audit fix: hold intermediate private-key material in Zeroizing so the
     // linear-memory residue is scrubbed on drop. The final Vec<u8> copies that
     // serde-wasm-bindgen hands to JS are unavoidable but at least the stack

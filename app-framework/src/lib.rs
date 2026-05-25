@@ -66,15 +66,15 @@ pub mod starbridge;
 pub mod store;
 pub mod vk;
 
-/// Legacy module alias — `wallet` was renamed to `cipherclerk`. This
-/// alias keeps `pyana_app_framework::wallet::...` callers compiling
+/// Legacy module alias — `cipherclerk` was renamed to `cipherclerk`. This
+/// alias keeps `pyana_app_framework::cipherclerk::...` callers compiling
 /// during the migration. New code should reach for `cipherclerk`.
 #[doc(hidden)]
-pub mod wallet {
+pub mod cclerk {
     //! Legacy module: forwards to `cipherclerk` and re-exports
-    //! `AppWallet` (renamed to `AppCipherclerk`) so pre-rename callers
+    //! `AppCipherclerk` (renamed to `AppCipherclerk`) so pre-rename callers
     //! keep building. New code should reach for `cipherclerk`.
-    pub use crate::cipherclerk::AppCipherclerk as AppWallet;
+    pub use crate::cipherclerk::AppCipherclerk;
     pub use crate::cipherclerk::*;
 }
 
@@ -120,7 +120,7 @@ pub use cipherclerk::AppCipherclerk as AppCClerk;
 ///
 /// Preserved while downstream apps migrate to the new name. New code
 /// should reach for [`AppCipherclerk`] (or the short [`AppCClerk`]).
-pub use cipherclerk::AppCipherclerk as AppWallet;
+// pub use cipherclerk::AppCipherclerk as AppCipherclerk; // already re-exported above
 
 // Re-export common action / effect types so apps build effects through
 // the framework rather than reaching into `pyana_turn` directly.
@@ -136,7 +136,7 @@ pub use pyana_turn::action::{Action, Authorization, DelegationMode, Effect, Even
 pub use pyana_sdk::AgentCipherclerk;
 
 /// Legacy alias for [`AgentCipherclerk`], re-exported from the SDK.
-pub use pyana_sdk::AgentCipherclerk as AgentWallet;
+// pub use pyana_sdk::AgentCipherclerk as AgentCipherclerk; // already re-exported above
 
 // Re-export dispute framework types for apps implementing optimistic settlement.
 pub use dispute::BlindedDisputable;

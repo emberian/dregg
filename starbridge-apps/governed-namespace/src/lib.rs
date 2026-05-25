@@ -1953,13 +1953,13 @@ mod tests {
 
     #[test]
     fn register_nameservice_route_action_carries_resolve_target() {
-        let wallet = test_cipherclerk();
+        let cclerk = test_cipherclerk();
         let cell = test_cell();
         let target_cell = CellId::from_bytes([77u8; 32]);
         let ns_resolve = blake3_field(b"pyana://cell/bob.dev-actual-target");
 
         let action =
-            register_nameservice_route_action(&wallet, cell, "/bob.dev", target_cell, ns_resolve);
+            register_nameservice_route_action(&cclerk, cell, "/bob.dev", target_cell, ns_resolve);
 
         assert_eq!(action.method, symbol("register_service"));
         assert_eq!(action.effects.len(), 1);

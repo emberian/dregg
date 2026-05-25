@@ -10,7 +10,7 @@ file what isn't, push back on §6/§7 where the framing is wrong.
 The document has seven sections:
 
 - §1 — what Studio is today (the actual surface)
-- §2 — the extension-wallet contract (`window.pyana`)
+- §2 — the extension-cclerk contract (`window.pyana`)
 - §3 — the wasm runtime contract (`PyanaRuntime`)
 - §4 — refactor-by-refactor pickup table (the working surface)
 - §5 — prioritized resume tasks
@@ -67,7 +67,7 @@ Discord-paste UX (`site/src/studio.html`).
 - `site/src/studio.html` — Phase-0 spike page (controls + cell list + peer
   exchange textareas)
 - `site/src/_includes/runtime-bootstrap.js` — loads Preact + signals +
-  htm, exposes them via `window.pyana` (NOT the wallet — colliding name;
+  htm, exposes them via `window.pyana` (NOT the cclerk — colliding name;
   see §2 note)
 
 **Wasm shim (Studio depends on it):**
@@ -134,7 +134,7 @@ Discord-paste UX (`site/src/studio.html`).
 
 ---
 
-## §2. The extension wallet contract
+## §2. The extension cclerk contract
 
 ### 2.1 Where it lives
 
@@ -147,7 +147,7 @@ Discord-paste UX (`site/src/studio.html`).
   the extension; Studio doesn't talk to them directly
 
 **Naming collision warning:** `window.pyana` is overloaded.
-- The *extension* defines it as the **wallet** (the `PyanaAPI`
+- The *extension* defines it as the **cclerk** (the `PyanaAPI`
   interface in `page.ts`, frozen).
 - The Studio's `site/src/_includes/runtime-bootstrap.js` ALSO sets
   `window.pyana` to a Preact-and-signals namespace (`h`, `html`,
@@ -171,7 +171,7 @@ Grouped by concern. All return Promises.
 - `authorize(request)` → `AuthorizeResult`
 - `isConnected()` → `boolean`
 - `canAuthorize(request)` → `boolean`
-- `provision(tokenBytes)` — accept a capability into the wallet
+- `provision(tokenBytes)` — accept a capability into the cclerk
 
 **Intents:**
 - `postIntent(matchSpec, options?)`
@@ -226,29 +226,29 @@ Grouped by concern. All return Promises.
   `authorization`, `revoked`, `stealthNoteReceived`,
   `privateTransfer`, `intentFulfilled`, `privacyModeChanged`
 
-### 2.3 What Studio uses today from `window.pyana` (the wallet)
+### 2.3 What Studio uses today from `window.pyana` (the cclerk)
 
 **Approximately nothing.** The Studio's `runtime-in-memory.js` drives
-the wasm `PyanaRuntime` directly — it does not call wallet methods.
+the wasm `PyanaRuntime` directly — it does not call cclerk methods.
 The `runtime-remote.js` similarly speaks raw HTTP to the node.
 
-The only place the wallet contract enters Studio code today is the
+The only place the cclerk contract enters Studio code today is the
 *expectation* in `starbridge-apps/shared/turn-builders/index.js`:
 those builders WILL call `window.pyana.signTurn(...)` once written.
 None are written yet.
 
 This is the cleanest pickup point: **a starbridge-app's mutating UX
-goes through the extension wallet; its viewing UX goes through the
+goes through the extension cclerk; its viewing UX goes through the
 Studio inspectors.** The two surfaces have not yet met in code.
 
-### 2.4 What the wallet does NOT yet expose
+### 2.4 What the cclerk does NOT yet expose
 
 Anticipated by the refactor list:
 - No `registerFederation(federation_id, name, committee_pubkeys, ...)` — needed by Lane M; CLI is being built by Lane N.
 - No `listKnownFederations()`.
 - No `signTurn` overload that takes a pre-built `Turn` (current shape is `TurnSpec` — `{ action, resource?, amount?, recipient?, metadata? }`, very thin).
 - No `signTurnV3(turnBytes)` — required to absorb the v3 signed-message change (soundness sweep).
-- No `Authorization::CapTpDelivered` constructor on the wallet side.
+- No `Authorization::CapTpDelivered` constructor on the cclerk side.
 - No slot-caveat picker / disclosure shim.
 
 ---
@@ -263,12 +263,12 @@ Per `site/STUDIO.md` § 3 and verified in `wasm/src/runtime.rs`:
 - **Executor:** real `pyana_turn::TurnExecutor` with default
   `ComputronCosts`. Timestamp + block height managed by the runtime
   (`set_timestamp`, `set_block_height`).
-- **AgentWallet:** real `pyana_sdk::AgentWallet`. Constructed from a
+- **AgentCipherclerk:** real `pyana_sdk::AgentCipherclerk`. Constructed from a
   deterministic blake3-derived 32-byte seed (`pyana-wasm-agent-key`
   derive-key + name + idx). Signing goes through
-  `wallet.sign_action(...)`. No JS-side cryptography.
+  `cclerk.sign_action(...)`. No JS-side cryptography.
 - **PeerExchange:** real `pyana_cell::PeerExchange`, one per agent,
-  constructed via `wallet.peer_exchange(WASM_SIM_DOMAIN)`. Uses
+  constructed via `cclerk.peer_exchange(WASM_SIM_DOMAIN)`. Uses
   `create_transition_at(...)` to thread the runtime's logical clock
   into the signed message (the default `create_transition` calls
   `SystemTime::now()` which panics on wasm32-unknown-unknown).
@@ -354,7 +354,7 @@ stealth addresses, range proofs, encrypted intents.
 ### 3.4 Trust model in the browser
 
 Every cryptographic primitive surfaced in the Studio is the canonical
-Rust implementation: Ed25519 from `pyana_sdk::AgentWallet`,
+Rust implementation: Ed25519 from `pyana_sdk::AgentCipherclerk`,
 Poseidon2/STARK from `pyana_circuit`, federation consensus from
 `pyana_federation`, peer transitions from `pyana_cell::PeerExchange`,
 nullifiers from `pyana_cell::NullifierSet`. **No JS-side
@@ -370,15 +370,15 @@ For each row: which Studio files reference (or will reference) the
 soon-to-change surface; what the change looks like; rough LOC delta;
 prerequisites.
 
-### Refactor 1 — `AppWallet` (Lane C, landed in `app-framework/src/wallet.rs`)
+### Refactor 1 — `AppCipherclerk` (Lane C, landed in `app-framework/src/cipherclerk.rs`)
 
 | Field | Value |
 |---|---|
-| **Studio surface affected** | None today — Studio drives `AgentWallet` directly via `runtime.rs::SimAgent`. Starbridge-apps surface IS affected once the JS turn-builders land. |
-| **Where it lands** | `starbridge-apps/shared/turn-builders/index.js` is the JS analog: each builder constructs a turn-spec that the wallet signs via `window.pyana.signTurn`. The Rust `AppWallet` is the *server* / *node* side; the Studio is a thin viewer + signer, NOT an `AppWallet` consumer in Rust. |
+| **Studio surface affected** | None today — Studio drives `AgentCipherclerk` directly via `runtime.rs::SimAgent`. Starbridge-apps surface IS affected once the JS turn-builders land. |
+| **Where it lands** | `starbridge-apps/shared/turn-builders/index.js` is the JS analog: each builder constructs a turn-spec that the cclerk signs via `window.pyana.signTurn`. The Rust `AppCipherclerk` is the *server* / *node* side; the Studio is a thin viewer + signer, NOT an `AppCipherclerk` consumer in Rust. |
 | **Change to Studio** | Nothing structural in the inspectors. The doc `starbridge-apps/README.md` correctly frames the JS turn-builders as `window.pyana.signTurn` wrappers — that's the right pattern; the studio agent should write the first one (`nameservice.js` per the README example). |
 | **LOC delta** | ~60 (one nameservice turn-builder + its inspector hookup). |
-| **Prereqs** | None. `AppWallet` is landed in Rust; the JS side is independent. |
+| **Prereqs** | None. `AppCipherclerk` is landed in Rust; the JS side is independent. |
 
 ### Refactor 2 — `StarbridgeAppContext` (Lane C/I)
 
@@ -407,8 +407,8 @@ prerequisites.
 | **Studio surface affected** | `inspectors/federation.js`, `runtime-in-memory.js::createFederation`, `runtime-remote.js::pickHeight` (status payload changes). |
 | **Where it lands** | The new `Federation` type subsumes `SimFederation`, `Federation`, `FederationNode`, `FederationState` (the latter two live in `extension/src/types.ts`). The studio agent owns the JS-side unification: collapse `SimFederation` (in `runtime.rs`) and the federation summaries returned by `get_federation_state` into one shape that matches the unified Rust type. The `KnownFederations` registry needs a Studio UX: a "Federations" pane listing the federations this runtime knows, with add/remove. |
 | **Change to Studio** | (a) new `<pyana-federation-list>` inspector that reads `runtime.listKnownFederations()` — new method. (b) new `<pyana-federation-add>` form (Lane N CLI will exist; this is the GUI sibling) talking to `window.pyana` via a new `registerFederation` method (see §2.4). (c) extend `runtime-remote.js` to discover via `GET /api/federations`. |
-| **LOC delta** | ~180 JS. Lane M Rust + Lane N CLI + extension wallet additions are dependencies. |
-| **Prereqs** | Lane M (Federation type unification) must land; Lane N CLI shape should be stable so the GUI doesn't drift; extension wallet needs `registerFederation` / `listKnownFederations` methods. |
+| **LOC delta** | ~180 JS. Lane M Rust + Lane N CLI + extension cclerk additions are dependencies. |
+| **Prereqs** | Lane M (Federation type unification) must land; Lane N CLI shape should be stable so the GUI doesn't drift; extension cclerk needs `registerFederation` / `listKnownFederations` methods. |
 
 ### Refactor 5 — `federation_id = H(committee_pubkeys)` (Lane D, landed)
 
@@ -449,14 +449,14 @@ prerequisites.
 | **LOC delta** | ~140 JS + ~40 Rust binding. |
 | **Prereqs** | Soundness sweep — Sovereign witness redesign must land. |
 
-### Refactor 9 — Wallet `compute_turn_bytes` v1 → v3 (soundness sweep)
+### Refactor 9 — Cipherclerk `compute_turn_bytes` v1 → v3 (soundness sweep)
 
 | Field | Value |
 |---|---|
-| **Studio surface affected** | The wasm runtime signs via `wallet.sign_action(...)` and the executor verifies — if both sides upgrade together, the runtime is fine. But the *extension* wallet has its own `signTurn` path that must also upgrade, AND the receipt now must surface `sovereign_witnesses` so the user can see what was bound. |
+| **Studio surface affected** | The wasm runtime signs via `cclerk.sign_action(...)` and the executor verifies — if both sides upgrade together, the runtime is fine. But the *extension* cclerk has its own `signTurn` path that must also upgrade, AND the receipt now must surface `sovereign_witnesses` so the user can see what was bound. |
 | **Where it lands** | (a) `extension/src/page.ts::signTurn` may need to accept a `sovereign_witnesses?: Witness[]` field in `turnSpec`. (b) `<pyana-receipt>` shows a "sovereign witnesses" section if non-empty. (c) `<pyana-turn>` likewise. |
-| **LOC delta** | ~80 JS (UI) + ~30 extension wallet (types + envelope). |
-| **Prereqs** | The v3 message format must be locked; the extension wallet author must agree on the new `signTurn` shape. |
+| **LOC delta** | ~80 JS (UI) + ~30 extension cclerk (types + envelope). |
+| **Prereqs** | The v3 message format must be locked; the extension cclerk author must agree on the new `signTurn` shape. |
 
 ### Refactor 10 — DFA rationalization (userspace primitive surface)
 
@@ -487,7 +487,7 @@ prerequisites.
 | **Studio surface affected** | The "app browser" surface. There is no app browser today; `starbridge-apps/nameservice/pages/index.html` exists but is a standalone page, not surfaced from the Studio top-bar. |
 | **Where it lands** | (a) New "Apps" tab in Starbridge: read `starbridge-apps/*/manifest.json` (a file that doesn't exist yet; needs design) and render an app card grid linking to each app's `pages/index.html`. (b) Write the first turn-builder (`starbridge-apps/shared/turn-builders/nameservice.js`) per the README example. (c) Write the first inspectors (`shared/inspectors/name.js` exporting `NameInspector`, `NameRegistryInspector`). (d) Hook them into `nameservice/pages/index.html` (today references `<pyana-name-registry>` / `<pyana-name-inspector>` which are undefined custom elements — would log a "no inspector registered" message). |
 | **LOC delta** | ~400 (~200 JS for inspectors, ~80 for turn-builders, ~100 for the app browser, ~20 for manifest plumbing). |
-| **Prereqs** | (a) `FactoryDescriptor` preload contract from refactor 2; (b) `window.pyana.createFromFactory(NAME_FACTORY_VK, ...)` resolution must work — needs the descriptor to be in scope on the wallet side; (c) app-manifest format design. |
+| **Prereqs** | (a) `FactoryDescriptor` preload contract from refactor 2; (b) `window.pyana.createFromFactory(NAME_FACTORY_VK, ...)` resolution must work — needs the descriptor to be in scope on the cclerk side; (c) app-manifest format design. |
 
 ### Refactor 13 — Discord-bot moved to top-level
 
@@ -561,7 +561,7 @@ Ordered by (a) prereqs satisfied, (b) blast radius, (c) value to other lanes.
 15. Resolve the `window.pyana` naming collision (see §6.1). Either
     rename the Preact bootstrap namespace to `window.pyanaUi` /
     `window.pyanaRt`, or wrap them both behind a `window.pyana = {
-    wallet: ..., runtime: ... }` indirection. **Either path is a
+    cclerk: ..., runtime: ... }` indirection. **Either path is a
     breaking change for whichever side moves; coordinate with the
     extension author.**
 16. Real time-travel cursor on `InMemoryRuntime` (caps.timeTravel =
@@ -581,13 +581,13 @@ talk. Options:
 
 - **(a) Rename bootstrap.** `window.pyanaUi = { h, html, render, ... }`.
   Cheapest. Forces every inspector and starbridge-app page to update.
-- **(b) Namespace both.** `window.pyana = { wallet: <api>, ui: <api>,
+- **(b) Namespace both.** `window.pyana = { cclerk: <api>, ui: <api>,
   runtime: <studio rt registry> }`. Requires the extension to define
-  `pyana.wallet` instead of `pyana.<flat methods>`. Breaking change
-  for every dapp consuming the wallet today.
+  `pyana.cclerk` instead of `pyana.<flat methods>`. Breaking change
+  for every dapp consuming the cclerk today.
 - **(c) Detection + merge.** Bootstrap checks for an existing
-  `window.pyana`; if it's the wallet, attach UI fields to a sibling
-  rather than overwriting. The `Object.freeze` on the wallet side
+  `window.pyana`; if it's the cclerk, attach UI fields to a sibling
+  rather than overwriting. The `Object.freeze` on the cclerk side
   makes this awkward.
 
 The studio agent should NOT pick this unilaterally; surface as §7 Q1.
@@ -648,9 +648,9 @@ deserves its own design pass.
 These need a human/designer call. Decisions here gate sections of §5.
 
 **Q1.** `window.pyana` collision — see §6.1. Rename, namespace, or
-merge? Whichever path, BOTH the extension wallet team and the studio
+merge? Whichever path, BOTH the extension cclerk team and the studio
 team must agree before either changes. **Blocking** for any
-starbridge-app that needs both extension wallet AND Studio inspectors.
+starbridge-app that needs both extension cclerk AND Studio inspectors.
 
 **Q2.** URI scheme stability for things-without-global-IDs.
 `pyana://capability/<agent_idx>/<slot>` is sim-specific. Real
@@ -721,11 +721,11 @@ starbridge-apps/nameservice/{Cargo.toml,README.md,src/lib.rs,
 starbridge-apps/shared/inspectors/index.js
 starbridge-apps/shared/turn-builders/index.js
 starbridge-apps/shared/factories/README.md
-app-framework/src/wallet.rs              (the AppWallet — Rust-side)
+app-framework/src/cipherclerk.rs              (the AppCipherclerk — Rust-side)
 turn/src/action.rs                       (Authorization::CapTpDelivered)
 ```
 
-## Appendix B — counted methods on `window.pyana` (wallet)
+## Appendix B — counted methods on `window.pyana` (cclerk)
 
 43 methods total. 6 are the canonical ones called out in the brief
 (`signTurn`, `createFromFactory`, `verifyProvenance` named explicitly;
@@ -739,7 +739,7 @@ queue ops). Studio uses zero of them today.
 - Federation is wired (not "removed for wasm" as memory suggested);
   `wasm/src/runtime.rs::SimFederation` wraps `pyana_federation::Federation`.
 - `Authorization::CapTpDelivered` is landed in `turn/src/action.rs`.
-- `AppWallet` is landed in `app-framework/src/wallet.rs`.
+- `AppCipherclerk` is landed in `app-framework/src/cipherclerk.rs`.
 - `starbridge-apps/nameservice/` exists with the README example
   matching the code; the JS turn-builders and inspectors are stubs.
 - `discord-bot/` is at the toplevel.

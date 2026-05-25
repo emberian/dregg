@@ -338,7 +338,7 @@ impl DevnetClient {
         "https://devnet.pyana.fg-goose.online/explorer"
     }
 
-    // ─── Wallet / transfer endpoints ───────────────────────────────────────────
+    // ─── Cipherclerk / transfer endpoints ───────────────────────────────────────────
 
     /// Register a cell on devnet.
     pub async fn register_cell(&self, cell_id: &str, public_key: &str) -> Result<(), DevnetError> {

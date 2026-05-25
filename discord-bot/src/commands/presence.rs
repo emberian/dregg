@@ -6,9 +6,9 @@ use serenity::all::{
 };
 
 use crate::BotState;
+use crate::cipherclerk::UserCipherclerk;
 use crate::embeds;
 use crate::presence::{PresenceAttestation, PresenceClaim};
-use crate::wallet::UserWallet;
 
 /// Register the /presence command.
 pub fn register() -> CreateCommand {
@@ -112,7 +112,8 @@ async fn handle_attest(ctx: &Context, command: &CommandInteraction, state: &BotS
     let claim = parse_claim_from_options(command).unwrap_or(PresenceClaim::CurrentlyOnline);
 
     // Get the user's cell ID via the canonical AppCipherclerk.
-    let wallet = UserWallet::derive(&state.config.bot_secret, user_id, state.federation_id_bytes);
+    let cclerk =
+        UserCipherclerk::derive(&state.config.bot_secret, user_id, state.federation_id_bytes);
 
     let _ = command
         .create_response(
@@ -125,7 +126,7 @@ async fn handle_attest(ctx: &Context, command: &CommandInteraction, state: &BotS
 
     let result = {
         let mut tracker = state.presence.lock().await;
-        tracker.attest(user_id, wallet.cell_id_bytes(), claim.clone())
+        tracker.attest(user_id, cclerk.cell_id_bytes(), claim.clone())
     };
 
     match result {

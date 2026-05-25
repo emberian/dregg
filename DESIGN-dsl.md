@@ -15,7 +15,7 @@ There is exactly one runtime executable, the `Turn` (`turn/src/turn.rs:71`). The
 DSL is the entire path from *what the user wants* to that `Turn`. Today that
 path has three competing exits (`Turn` / `CompoundTurn` / `Settlement`), a
 silently-defaulting authorization, ten typed effect builders out of 41 variants,
-and a `convert_effects_to_vm` (sdk/src/wallet.rs:4322) that lies to the prover
+and a `convert_effects_to_vm` (sdk/src/cipherclerk.rs:4322) that lies to the prover
 by no-op'ing 22 variants.
 
 The redesign collapses this into a single layered tower:
@@ -32,7 +32,7 @@ The redesign collapses this into a single layered tower:
  +--------------------------------------------------------------+
  |  SealedTurn   — Turn whose every Action carries proven auth  |  pyana_turn::SealedTurn
  +--------------------------------------------------------------+
-                       Wallet::submit (signs, attaches witnesses)
+                       Cipherclerk::submit (signs, attaches witnesses)
  +--------------------------------------------------------------+
  |  Turn         — runtime executable (unchanged shape)         |  pyana_turn::turn::Turn
  +--------------------------------------------------------------+
@@ -75,7 +75,7 @@ pub struct RingSettlementIntent {
 ```
 
 The federation node calls `pyana_intent::lowering::lower(intent)` to get an
-`EffectPlan`, then `wallet.seal_and_submit(plan)`. The federation node is the
+`EffectPlan`, then `cclerk.seal_and_submit(plan)`. The federation node is the
 agent of record on the settlement; the solver_id is a witness on the action,
 not a turn-level field.
 
@@ -213,7 +213,7 @@ impl Authorized for UncheckedOptIn {}
 ### Migration
 
 `turn/src/builder.rs` becomes thin: the existing `TurnBuilder` stays (renamed
-`Wallet::turn(...)` to be reachable by the wallet idiom, see §6), but takes
+`Cipherclerk::turn(...)` to be reachable by the cclerk idiom, see §6), but takes
 fully-built `Action`s rather than internal `ActionBuilder`s. This also fixes
 finding 6 (the borrow-checker forbids sibling interleaving): callers build
 each `ActionBuilder` to completion, then `turn.add(action)`.
@@ -631,7 +631,7 @@ impl Lowering for Intent { /* one match arm per variant */ }
 pub struct LoweringContext {
     pub current_height: BlockHeight,
     pub network_params: NetworkParams,
-    // Resolves abstract CellIds (e.g. "my wallet") to concrete ones.
+    // Resolves abstract CellIds (e.g. "my cclerk") to concrete ones.
     pub address_book: AddressBook,
 }
 
@@ -801,7 +801,7 @@ let turn = TurnBuilder::new(agent, nonce)
 ```
 
 Each action's `commitment_mode` is set to `CommitmentMode::Full` automatically.
-The signature covers the turn hash. This is the path the wallet uses for its
+The signature covers the turn hash. This is the path the cclerk uses for its
 own turns.
 
 ### 6.3 Capability-based (the c-list lookup)
@@ -844,7 +844,7 @@ revocation_channel, allowed_effects)`.
 
 ### `AuthHint` (intent-to-action transition)
 
-The lowering layer doesn't know which key signs an action — that's a wallet
+The lowering layer doesn't know which key signs an action — that's a cclerk
 concern. So `PendingAction.auth_hint` is one of:
 
 ```rust
@@ -857,7 +857,7 @@ pub enum AuthHint {
 }
 ```
 
-`Wallet::seal(plan: EffectPlan) -> SealedTurn` walks each `PendingAction`,
+`Cipherclerk::seal(plan: EffectPlan) -> SealedTurn` walks each `PendingAction`,
 follows the hint, produces a fully-authorized `Action`, and assembles the
 `SealedTurn` (which is just a `Turn` plus an attestation that every action
 is in an `Authorized` state).
@@ -883,7 +883,7 @@ pub trait Authorizer {
     fn authorize(&self, unsigned: UnsignedAction) -> Result<Action, AuthError>;
 }
 
-pub struct WalletAuthorizer<'a> { wallet: &'a AgentWallet, identity: KeyHandle }
+pub struct WalletAuthorizer<'a> { cclerk: &'a AgentCipherclerk, identity: KeyHandle }
 pub struct ProofAuthorizer    { binding: AuthBinding, prover: Box<dyn Prover> }
 pub struct ThresholdAuthorizer{ partials: Vec<KeyHandle>, policy: ThresholdPolicy }
 pub struct CapabilityAuthorizer { slot: CapabilitySlot }
@@ -932,7 +932,7 @@ under the caller's key. Escrow release no longer invents an identity.
 
 Finding 14: `compute_escrow_id` collides on duplicate (from, to, amount,
 timeout) tuples. The redesign adds a salt sourced from the *caller-supplied*
-fields (a nonce in the caller's wallet state, plus the current block height):
+fields (a nonce in the caller's cclerk state, plus the current block height):
 
 ```rust
 fn compute_escrow_id(from: &CellId, to: &CellId, amount: u64,
@@ -950,7 +950,7 @@ under the new DSL.
 
 | App | Status | Notes |
 |-----|--------|-------|
-| `apps/identity` | clean | no `Effect::*` literal calls; uses higher-level wallet API |
+| `apps/identity` | clean | no `Effect::*` literal calls; uses higher-level cclerk API |
 | `discord-bot` (toplevel) | clean | bot framework only; no DSL surface |
 | `apps/privacy-voting` | clean | uses sealed-pair API; will get `effect_create_seal_pair` etc. as a bonus |
 
@@ -1023,7 +1023,7 @@ the design):
 | 4 | `gallery` lies about `balance_change` | §5 framework derives, not user-written |
 | 5 | `solver.rs:328-332` `.min(x).max(x)` collapse | §5 lowering test for ring settlement amounts; the lowering uses the correct `min` (mirrors `find_rings` at solver.rs:202-211) and the buggy code is deleted along with `validate_ring`'s independent settlement-builder |
 | 6 | builder borrow forbids sibling actions | §2 `ActionBuilder` is owned, attached via `turn.add(action)` |
-| 7 | `build_authorized_turn` hardcodes `nonce: 0` (sdk/src/wallet.rs:2441) | §4 lowering takes nonce from `LoweringContext.address_book` (which knows the wallet's current nonce); `Wallet::seal()` increments before submission |
+| 7 | `build_authorized_turn` hardcodes `nonce: 0` (sdk/src/cipherclerk.rs:2441) | §4 lowering takes nonce from `LoweringContext.address_book` (which knows the cipherclerk's current nonce); `Cipherclerk::seal()` increments before submission |
 | 8 | epoch bit-overlap (intent/src/lib.rs:535-536) | new `compute_stake_nullifier` uses 3 field elements covering bits [0,22), [22,44), [44,64); BLAKE3 backstop unchanged |
 | 9 | only 10/41 variants in DSL | §3 covers all 42 (now incl. `RegisterName`) |
 | 12 | `create_fulfillment_turn` nonce/auth (finding 12) | §4 fulfillment lowering takes nonce; auth via `AuthHint::Signed` |
@@ -1069,7 +1069,7 @@ Audit's question 10: integrate or remove?
   `Intent::RingSettlement` (§4). Both types are removed.
 - `finalize()` returns `RingSettlementIntent`; the federation calls
   `intent.lower(&ctx)` to obtain an `EffectPlan` and submits it via the
-  standard `Wallet::seal_and_submit` path.
+  standard `Cipherclerk::seal_and_submit` path.
 - `MockProofVerifier` becomes `#[cfg(test)] pub` and is removed from the
   `TrustlessIntentEngine::new` default. The non-test constructor requires
   `with_verifier(verifier: Box<dyn ProofVerifier>)`.
@@ -1142,10 +1142,10 @@ trustless engine's output remains theoretical.
 - [ ] `apps/gallery` switches to `Intent::EscrowedPay` (closes finding 4).
 - [ ] `apps/privacy-voting` uses seal-pair effects (was hand-rolling).
 
-### Phase G — Wallet alignment (week 4)
+### Phase G — Cipherclerk alignment (week 4)
 
-- [ ] `Wallet::seal(plan: EffectPlan) -> SealedTurn`.
-- [ ] `Wallet::submit(sealed: SealedTurn) -> TurnReceipt`.
+- [ ] `Cipherclerk::seal(plan: EffectPlan) -> SealedTurn`.
+- [ ] `Cipherclerk::submit(sealed: SealedTurn) -> TurnReceipt`.
 - [ ] Delete `build_authorized_turn` (replaced by `seal_and_submit(plan)`).
 - [ ] `convert_effects_to_vm` is total per Shape A Stage 1.
 
@@ -1168,7 +1168,7 @@ guarantees:
 5. **One canonical executable type.** `Turn` is the only thing the executor
    accepts; the rest of the surface is layered on top.
 6. **No nonce-0 footguns.** Nonces are taken from the lowering context, not
-   hardcoded. The wallet's nonce-management lives in one place.
+   hardcoded. The cipherclerk's nonce-management lives in one place.
 7. **CI grep-guards** prevent regression of (a) `Authorization::Unchecked` in
    `app-framework/src/`, (b) `nonce: 0` in any constructor, (c) hand-rolled
    `Action { ... }` literals outside `turn/src/dsl/` and tests.

@@ -4,7 +4,7 @@
 exemplar future apps build from. It implements a federation name
 directory entirely from pyana-native primitives — `FactoryDescriptor`,
 `StateConstraint`, `Effect::SetField` / `Effect::EmitEvent`,
-`Authorization::Signature` produced by `AppWallet::make_action`. No
+`Authorization::Signature` produced by `AppCipherclerk::make_action`. No
 `Effect::RegisterName`, no `Authorization::Unchecked`, no `[0u8; 64]`
 placeholder signatures, no reaching past the framework into
 `pyana_turn::builder::*`.
@@ -24,8 +24,8 @@ follows. The pattern is:
      is well-formed (e.g. `NonZero(NAME_HASH_SLOT)`);
    - capability templates the factory is permitted to mint;
    - a per-epoch creation budget to rate-limit Sybil spam.
-3. **Write turn-builders** that take an `AppWallet` and produce a
-   real signed `Action` via `AppWallet::make_action`. The wallet's
+3. **Write turn-builders** that take an `AppCipherclerk` and produce a
+   real signed `Action` via `AppCipherclerk::make_action`. The cipherclerk's
    `federation_id` binds into the signature; the executor sees real
    Ed25519, never a placeholder.
 4. **Define web components** (`pages/inspectors.js`) that render the
@@ -75,10 +75,10 @@ re-point the name. The binding `name → cell` is permanent
 ### Owner authorization
 
 The lifecycle helpers — `renew`, `transfer`, `revoke`, `set_target` —
-all carry a real `Authorization::Signature` from the wallet, bound to
-the wallet's `federation_id` and the action's canonical hash. Two
-different wallets produce two different signatures for the same logical
-action (see the `auth_different_wallets_produce_different_signatures_on_same_logical_action`
+all carry a real `Authorization::Signature` from the cclerk, bound to
+the cipherclerk's `federation_id` and the action's canonical hash. Two
+different cipherclerks produce two different signatures for the same logical
+action (see the `auth_different_cclerks_produce_different_signatures_on_same_logical_action`
 test in `tests/lifecycle.rs`).
 
 The factory descriptor does **not** currently install a
@@ -89,7 +89,7 @@ The slot layout already supports it — `OWNER_HASH_SLOT` would just be
 reinterpreted as a single-element Merkle root over the owner's pubkey
 — but the witness-side plumbing (`SenderAuthorized` requires a
 `Merkle-membership` witness in the action's `auth_witness` blob) is not
-yet wired through `AppWallet::make_action`. The current authorization
+yet wired through `AppCipherclerk::make_action`. The current authorization
 story is: actions carry a real signature, so the executor *can* tell
 who signed, but the cell program does not yet refuse transfers from
 non-owners. Tracked in this README and in the comment on
@@ -125,15 +125,15 @@ slice this app contributes (today: one entry).
 ### Turn-builders (every action carries a real Ed25519 signature)
 
 ```rust
-build_register_action(wallet,   registry_cell, name, owner, expiry_height)
-build_renew_action(wallet,      registry_cell, name, new_expiry_height)
-build_transfer_action(wallet,   registry_cell, name, old_owner, new_owner)
-build_revoke_action(wallet,     registry_cell, name)
-build_set_target_action(wallet, registry_cell, name, target_field)
+build_register_action(cclerk,   registry_cell, name, owner, expiry_height)
+build_renew_action(cclerk,      registry_cell, name, new_expiry_height)
+build_transfer_action(cclerk,   registry_cell, name, old_owner, new_owner)
+build_revoke_action(cclerk,     registry_cell, name)
+build_set_target_action(cclerk, registry_cell, name, target_field)
 ```
 
-Each builds an `Action` via `AppWallet::make_action(target, method,
-effects)` — the wallet signs with its Ed25519 key bound to its
+Each builds an `Action` via `AppCipherclerk::make_action(target, method,
+effects)` — the cclerk signs with its Ed25519 key bound to its
 `federation_id`. No `Authorization::Unchecked`, no `[0u8; 64]`.
 
 Convenience helpers exposed for off-chain indexers / cross-app code:
@@ -185,7 +185,7 @@ window.pyana.builders.nameservice = {
 ```
 
 Every builder calls `window.pyana.signTurn(turnSpec)` — the extension
-wallet API (`extension/src/page.ts`). The page never holds raw private
+cclerk API (`extension/src/page.ts`). The page never holds raw private
 keys.
 
 `pages/index.html` is the site fragment, mounted under
@@ -274,16 +274,16 @@ the *lookup convenience*; the cell program + slot caveats supply the
 
 ```rust
 use pyana_app_framework::{
-    AgentWallet, AppServer, AppConfig, AppWallet, EmbeddedExecutor,
+    AgentCipherclerk, AppServer, AppConfig, AppCipherclerk, EmbeddedExecutor,
     StarbridgeAppContext,
 };
 
 #[tokio::main]
 async fn main() {
     let federation_id = [42u8; 32];
-    let wallet = AppWallet::new(AgentWallet::new(), federation_id);
-    let executor = EmbeddedExecutor::new(&wallet, "default");
-    let ctx = StarbridgeAppContext::new(wallet.clone(), executor.clone());
+    let cclerk = AppCipherclerk::new(AgentCipherclerk::new(), federation_id);
+    let executor = EmbeddedExecutor::new(&cclerk, "default");
+    let ctx = StarbridgeAppContext::new(cclerk.clone(), executor.clone());
 
     // Each starbridge-app contributes its factories + inspectors.
     starbridge_nameservice::register(&ctx);
@@ -294,7 +294,7 @@ async fn main() {
         .service_name("starbridge-host")
         .with_health()
         .with_cors()
-        .with_wallet(wallet)
+        .with_cclerk(cclerk)
         .with_embedded_executor(executor)
         .with_starbridge(ctx)
         .serve()
@@ -326,7 +326,7 @@ After this call:
 | `adversarial_double_revoke_rejected_by_write_once_on_revoked_slot`| second tombstone write is rejected |
 | `auth_register_action_carries_real_signature`                     | no `[0u8; 64]` placeholders |
 | `auth_all_lifecycle_actions_carry_real_signatures`                | every entry point emits `Authorization::Signature` |
-| `auth_different_wallets_produce_different_signatures_on_same_logical_action` | the wallet's identity is bound into the signature |
+| `auth_different_cclerks_produce_different_signatures_on_same_logical_action` | the cipherclerk's identity is bound into the signature |
 | `factory_descriptors_publishes_exactly_one_factory_today`         | the slice has exactly the expected one entry (forces deliberate updates) |
 | `factory_descriptor_hash_is_deterministic_across_builds`          | constructor transparency: two builds yield the same hash |
 | `factory_descriptor_hash_changes_with_state_constraints`          | dropping a slot caveat must change the descriptor hash |

@@ -1,7 +1,7 @@
 // starbridge-apps/shared/turn-builders/index.js
 //
 // Per-app turn-builder presets. Each module wraps
-// `window.pyana.signTurn(turnSpec)` (the extension wallet API — see
+// `window.pyana.signTurn(turnSpec)` (the extension cclerk API — see
 // extension/src/page.ts) with app-domain conveniences like
 // `register_name(name, owner, expiry)` that produce the right
 // `turnSpec` shape.

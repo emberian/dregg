@@ -7,7 +7,7 @@
 [`AUDIT-federation.md`](AUDIT-federation.md),
 [`AUDIT-nullifiers.md`](AUDIT-nullifiers.md),
 [`AUDIT-protocol-composition.md`](AUDIT-protocol-composition.md),
-[`AUDIT-wallet.md`](AUDIT-wallet.md),
+[`AUDIT-cclerk.md`](AUDIT-cclerk.md),
 [`AUDIT-node.md`](AUDIT-node.md),
 [`KIMCHI-SURVEY.md`](KIMCHI-SURVEY.md),
 [`STARBRIDGE-APPS-PLAN.md`](STARBRIDGE-APPS-PLAN.md),
@@ -49,9 +49,9 @@ between Node A and Node B.
 
 - `federation_id_F1 = BLAKE3("pyana-fed-id-v1" || sorted_pubkeys || epoch=0)` (from `node/src/genesis.rs:133`, lane D output).
 - `federation_id_F2` derived the same way over F2's committee.
-- Alice's `alice_cell` is created on F1 by the genesis path; her wallet's
+- Alice's `alice_cell` is created on F1 by the genesis path; her cipherclerk's
   `signing_key` (Ed25519) is `pk_A`.
-- Bob's `bob_cell` is created on F2 by F2's genesis; his wallet key is
+- Bob's `bob_cell` is created on F2 by F2's genesis; his cclerk key is
   `pk_B`.
 - The two committees register each other's pubkeys out-of-band before
   the demo starts (the "bilateral by design" trust root from the
@@ -89,11 +89,11 @@ this via a shared file-system step, not a network handshake — the
 
 ### Step 1 — Alice creates the bearer cap on F1
 
-1.0 — Alice's wallet (running in process inside Node A, owned by the
+1.0 — Alice's cclerk (running in process inside Node A, owned by the
 operator) constructs a `Turn`:
 - `agent = alice_cell`
 - `effects = [Effect::CreateBearerCap { ... }]` — but actually, in the
-  current shape, this is implicit: the wallet calls
+  current shape, this is implicit: the cclerk calls
   `SwissTable::export(swiss, recipient=bob_pk_anchor)` to register a
   swiss entry on Node A's local `CapTpState`, *then* builds a
   `HandoffCertificate` (`captp/src/handoff.rs:104-134`) over
@@ -107,9 +107,9 @@ operator) constructs a `Turn`:
     Lane **A** + a small SDK addition (per audit's open question 2)
     add an SDK builder for it.
 - `authorization = Authorization::Signature(pk_A, sig over the
-  Action)`. No `Unchecked` anywhere. [lane **C** ensures wallet-based
+  Action)`. No `Unchecked` anywhere. [lane **C** ensures cclerk-based
   signature shows up; per `AUDIT-protocol-composition.md` §Seam 1.]
-- Wallet signs the SignedTurn. Alice's executor runs it; ledger writes
+- Cipherclerk signs the SignedTurn. Alice's executor runs it; ledger writes
   `alice_cell.state.fields[7] += 1` (export counter, per
   `turn/src/executor.rs:7247-7325`) and journals `ExportSturdyRef`.
 - Receipt R1 is emitted: `turn_hash=t1, federation_id=F1,
@@ -166,11 +166,11 @@ No code change required.
 
 ### Step 3 — Bob enlivens, then exercises
 
-3.0 — Bob's wallet (running in Node B) reads
+3.0 — Bob's cclerk (running in Node B) reads
 `state/bob-inbox/handoff.uri`, parses the compact form into
 `(HandoffCertificate, PyanaUri{federation_id: F2, ...})`. **The
 URI's federation_id is F2** — Bob's local federation. The swiss
-number's home, however, is on Node A. Bob's wallet:
+number's home, however, is on Node A. Bob's cclerk:
 
   a. Builds a `HandoffPresentation` (`captp/src/handoff.rs:295-336`) by
      signing the `presentation_message` (`pyana-handoff-present-v1` ||
@@ -208,7 +208,7 @@ number's home, however, is on Node A. Bob's wallet:
   builds the F2-side Turn carrying the cert as
   `Authorization::CapTpDelivered`.
 
-3.2 — Bob's wallet, holding `Authorization::CapTpDelivered { handoff_cert,
+3.2 — Bob's cclerk, holding `Authorization::CapTpDelivered { handoff_cert,
 introducer_pk: pk_A, sender_pk: pk_B, sender_signature: sig over
 captp_delivered_signing_message(cert.nonce, agent=bob_cell,
 target=bob_cell, turn_nonce=1, effects=[Effect::Transfer { from:
@@ -219,8 +219,8 @@ alice_cell, to: bob_cell, amount: 100 }]) }`, builds Turn t2_B:
 - `authorization = Authorization::CapTpDelivered { ... }` (the
   variant in-flight at `turn/src/action.rs:141-153`)
 - `nonce = 1`, `previous_receipt_hash = R_genesis_F2` (Bob's chain
-  head, threaded via the wallet's `last_receipt_hash`, closing P0-3
-  from `AUDIT-turn-executor.md` — depends on lane C wallet
+  head, threaded via the cipherclerk's `last_receipt_hash`, closing P0-3
+  from `AUDIT-turn-executor.md` — depends on lane C cclerk
   threading the receipt hash).
 - Signs the SignedTurn under `pk_B`.
 
@@ -302,7 +302,7 @@ delivery — but in steady state both sides exchange.)
 
 ### Step 5 — Bob's WitnessedReceipt chain export
 
-5.0 — Bob's wallet exports a `Vec<WitnessedReceipt>` of length 1 (or
+5.0 — Bob's cclerk exports a `Vec<WitnessedReceipt>` of length 1 (or
 more, if seeded with genesis): each entry pairs R2 with the
 EffectVm STARK proof + public inputs + `WitnessBundle { pre_state,
 effects, context, secrets: [] }` per
@@ -363,7 +363,7 @@ Silver Vision holds end-to-end.**
 |---|---|---|---|---|
 | **A** (CapTP→Turn drainer) | `pending_captp_turns` drained into executor; `Authorization::CapTpDelivered` honored. | 3.1, 3.3, 3.4 | No code drained `pending_captp_turns` (`AUDIT-distributed-semantics.md` GAP-12); even drained, `Unchecked` was rejected by executor (GAP-13). | Drainer wired; `Authorization::CapTpDelivered` verified by executor at `executor.rs:4138`. |
 | **B** (CapTP wire delivery, **LANDED**) | TLS+QUIC frames; `PresentHandoff`, `EnlivenSturdyRef`, `DropRemoteRef`, `AttestedRoot` request/response carried between nodes. | 3.0, 3.1, 4.0, 4.1 | `WireMessage` variants existed but server handlers were partial or noops. | Wire hardening (`wire/src/hardening.rs`) + handlers in `wire/src/server.rs:2288-2960` deliver these in both directions; rate-limited, heartbeat-watched, graceful shutdown emits `CapGoodbye`. |
-| **C** (app-framework wallet, **LANDED**) | App code holds a real `AgentWallet` instead of `[0u8; 64]` placeholder signatures. | 1.0, 1.1, 3.2 | Apps reach past SDK with placeholder sigs (`AUDIT-protocol-composition.md` Seam 1; `AUDIT-wallet.md` P1-1). | App-framework integrates `AgentWallet`; `Authorization::Signature(pk, sig)` is real; SDK `wallet.make_turn`, `make_action` are used. |
+| **C** (app-framework cclerk, **LANDED**) | App code holds a real `AgentCipherclerk` instead of `[0u8; 64]` placeholder signatures. | 1.0, 1.1, 3.2 | Apps reach past SDK with placeholder sigs (`AUDIT-protocol-composition.md` Seam 1; `AUDIT-cclerk.md` P1-1). | App-framework integrates `AgentCipherclerk`; `Authorization::Signature(pk, sig)` is real; SDK `cclerk.make_turn`, `make_action` are used. |
 | **D** (federation + blocklace) | `federation_id = H(committee_pubkeys || epoch)`; `AttestedRoot` carries `blocklace_finality`; `FederationReceipt` lift on commit; F2 fix (federation_id in executor signing message). | 0.0, 0.1, 1.3, 1.4, 3.5, 3.8, 3.9 | `federation_id` was 16 random bytes (`AUDIT-federation.md` F1); `AttestedRoot` had no blocklace binding (F3); `FederationReceipt` had no production producer (F7); executor signature was federation-agnostic (F2). | All four closures land; `node/src/genesis.rs:133` already does the H-derivation; the lift seam 6 from `AUDIT-protocol-composition.md` is the remaining call site. |
 | **F redux** (nullifier production + privacy) | Consumed-cert nullifier set populated; `Authorization::CapTpDelivered.handoff_cert.nonce` recorded in F2's `NullifierSet`; `nullifier_set_root` non-empty in `AttestedRoot_F2`. | 3.3 (replay check), 3.4 (journal), 3.9 (root). | `NullifierSet` populated only in wasm sim (`AUDIT-nullifiers.md` §3); `JournalEntry::NoteSpend` discarded on commit; certs had no replay defense (`AUDIT-distributed-semantics.md` GAP-2). | `store/src/lib.rs:578` (`spend_note_atomic`) is the redb path; lane wires it from `journal.rs:440-451` on commit; cert nonces use the same primitive. |
 | **γ.2** (bilateral binding) | Cross-cell algebraic binding: `bob_cell`'s `+100` row is proof-system-equal to `alice_cell_stub`'s `-100` row. | 3.6 (per-cell), 6.0.iii–iv | Today's per-cell proofs are independent; cross-cell coherence is executor-trusted (`AUDIT-protocol-composition.md` Seam 9; `STAGE-7-GAMMA-AGGREGATION-DESIGN.md`). | Aggregator AIR proves the two rows project from one shared `Effect::Transfer`; `aggregate_membership` on `WitnessedReceipt` populated. **For the Silver demo, γ.2 is *optional* (Silver is trust-based and accepts executor glue), but having it land closes the bridge-boundary gap from Step 3.4's note.** Without γ.2, Step 6.0.viii's `R2.federation_id == F2` + `R2.executor_signature` is the only binding that says alice_cell_stub really lost 100; that's the executor-trust assumption Silver is willing to make. |
@@ -390,10 +390,10 @@ preserve.
   accepts the introducer_pk from the wire message without checking it
   matches the registered committee key for `cert.introducer`. Lane D's
   committee-binding work needs to expose a lookup. ~20 LOC.
-- **Receipt-chain `previous_receipt_hash` threading in the wallet**
-  (`AUDIT-turn-executor.md` P0-3; `AUDIT-wallet.md` P3-6;
+- **Receipt-chain `previous_receipt_hash` threading in the cclerk**
+  (`AUDIT-turn-executor.md` P0-3; `AUDIT-cclerk.md` P3-6;
   `demo/two-ai-handoff/README.md` Blocker 7). Lane C ought to thread
-  this; if it didn't, it's ~50 LOC in the wallet's turn-builder path.
+  this; if it didn't, it's ~50 LOC in the cipherclerk's turn-builder path.
 
 ---
 
@@ -790,13 +790,13 @@ Delta from `demo/two-ai-handoff/` (today) to `demo/silver-vision-e2e/`
   `types/src/lib.rs::AttestedRoot` (F3 from `AUDIT-federation.md`).
 
 - **`FederationReceipt` production** lands as part of lane D (seam 6
-  from `AUDIT-protocol-composition.md`). The wallet's
+  from `AUDIT-protocol-composition.md`). The cipherclerk's
   `append_receipt` path or the executor's commit path triggers
   `FederationReceipt::with_threshold_qc(...)`.
 
 - **Receipt-chain `previous_receipt_hash`** lands as part of lane C
-  (wallet threads it through every turn-builder method, closing
-  `AUDIT-wallet.md` P3-6 and `AUDIT-turn-executor.md` P0-3).
+  (cclerk threads it through every turn-builder method, closing
+  `AUDIT-cclerk.md` P3-6 and `AUDIT-turn-executor.md` P0-3).
 
 - **App-framework signed actions** land as part of lane C
   (`[0u8; 64]` placeholders are gone; `Authorization::Signature(pk,
@@ -914,8 +914,8 @@ plan.
 ### 6.3 — How does the SDK know which federation_id to bind on the
 *exercise* side?
 
-Bob's wallet at Step 3.2 builds a turn with
-`Authorization::CapTpDelivered`. The wallet's `compute_signing_message`
+Bob's cclerk at Step 3.2 builds a turn with
+`Authorization::CapTpDelivered`. The cipherclerk's `compute_signing_message`
 includes `local_federation_id` — which is F2 (Bob's home). Good. But
 the **action signing** also binds federation_id (per
 `turn/src/executor.rs:4445`'s `compute_signing_message`). Is the
@@ -1040,7 +1040,7 @@ Total: **~410 LOC Rust + ~750 LOC Python/bash + docs.**
 - Lane F redux gates Step 3.3 replay defense and 3.9 nullifier_set_root.
   Could ship demo without it by accepting cert-replay as a known gap;
   not recommended. **Soft prerequisite — recommended.**
-- Lane B (wire) and C (wallet) already landed per the user's note;
+- Lane B (wire) and C (cclerk) already landed per the user's note;
   green.
 - γ.2 is **not** on the critical path. Silver is trust-based; the
   cross-cell algebraic binding is a Golden Vision concern. The

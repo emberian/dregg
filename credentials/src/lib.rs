@@ -40,7 +40,7 @@
 //! - It is not a new circuit. All ZK heavy lifting routes through
 //!   `pyana-bridge` and `pyana-circuit` exactly as before. This crate is
 //!   the ergonomic surface, not a parallel cryptosystem.
-//! - It is not a wallet. Key custody is the caller's problem; this crate
+//! - It is not a cclerk. Key custody is the caller's problem; this crate
 //!   accepts already-minted `MacaroonToken`s or root keys.
 //! - It does not enumerate identity-domain schemas (KYC, employment,
 //!   government ID). Schemas are caller-defined; this crate provides the

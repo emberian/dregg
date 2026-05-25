@@ -27,7 +27,7 @@
 use std::collections::HashSet;
 
 use ed25519_dalek::Verifier;
-use pyana_sdk::wallet::DelegatedToken;
+use pyana_sdk::cipherclerk::DelegatedToken;
 use pyana_types::PublicKey;
 use thiserror::Error;
 
@@ -102,7 +102,7 @@ pub fn verify_eligibility(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyana_sdk::wallet::AgentCipherclerk;
+    use pyana_sdk::cipherclerk::AgentCipherclerk;
     use pyana_token::Attenuation;
 
     /// Helper: issuer mints a token, then delegates it to `voter_pk`.

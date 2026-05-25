@@ -40,7 +40,7 @@ word is overloaded across at least four disjoint definitions.
 | `pyana_federation::node::Federation`              | `federation/src/node.rs:900–`                    | Morpheus simulator harness. Dead path (see prior audit) |
 | `pyana_federation::threshold::FederationCommittee`| `federation/src/threshold.rs:37`                 | Live BLS threshold context (members + KZG universe)     |
 | `pyana_federation::FederationMode { Full, Solo }` | `federation/src/solo.rs:34`                      | Runtime mode flag                                       |
-| `federation_id: [u8; 32]`                         | `turn::TurnReceipt`, `federation::FederationReceipt`, `wallet`, `executor` | Opaque tag identifying *which* federation |
+| `federation_id: [u8; 32]`                         | `turn::TurnReceipt`, `federation::FederationReceipt`, `cclerk`, `executor` | Opaque tag identifying *which* federation |
 
 The closest thing to a canonical "this is a federation" is the **pair**
 `(federation_id: [u8;32], FederationCommittee)`. But — and this is the
@@ -365,8 +365,8 @@ hasher.update(federation_id);
 ```
 
 and `compute_partial_signing_message` (line 4499) symmetrically binds
-`federation_id` for multi-signer partial-sig flows. The wallet at
-`sdk/src/wallet.rs:2406, 2445` takes `federation_id` and calls these. So an
+`federation_id` for multi-signer partial-sig flows. The cclerk at
+`sdk/src/cipherclerk.rs:2406, 2445` takes `federation_id` and calls these. So an
 action signed for federation A cannot be replayed inside federation B's
 executor — assuming both executors have correct `local_federation_id`s.
 

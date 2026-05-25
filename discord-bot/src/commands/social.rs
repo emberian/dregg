@@ -30,13 +30,13 @@ pub async fn handle_faucet(ctx: &Context, command: &CommandInteraction, state: &
 
     defer_ephemeral(ctx, command).await;
 
-    // Check wallet exists.
+    // Check cclerk exists.
     let cell_id = match state.db.get_cell_id(&discord_id).await {
         Ok(Some(id)) => id,
         Ok(None) => {
             let embed = embeds::warning_embed(
-                "No Wallet",
-                "You need a wallet to use the faucet. Use `/wallet create` first.",
+                "No Cipherclerk",
+                "You need a cclerk to use the faucet. Use `/cipherclerk create` first.",
             );
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
@@ -177,11 +177,11 @@ pub async fn handle_history(ctx: &Context, command: &CommandInteraction, state: 
 
     defer_ephemeral(ctx, command).await;
 
-    // Ensure user has a wallet.
+    // Ensure user has a cclerk.
     if !state.db.user_exists(&discord_id).await.unwrap_or(false) {
         let embed = embeds::warning_embed(
-            "No Wallet",
-            "You need a wallet to view history. Use `/wallet create` first.",
+            "No Cipherclerk",
+            "You need a cclerk to view history. Use `/cipherclerk create` first.",
         );
         let _ = command
             .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))

@@ -7594,11 +7594,11 @@ fn sovereign_cell_rejected_with_wrong_commitment() {
 }
 
 /// Adversarial: an executor on the wire substitutes the `sovereign_witnesses`
-/// map after the wallet has signed the turn. Since `compute_turn_bytes` now
-/// uses `Turn::hash()` (v3) which covers witnesses, the wallet signature must
+/// map after the cclerk has signed the turn. Since `compute_turn_bytes` now
+/// uses `Turn::hash()` (v3) which covers witnesses, the cclerk signature must
 /// no longer verify.
 #[test]
-fn sovereign_witness_tamper_invalidates_wallet_signature() {
+fn sovereign_witness_tamper_invalidates_cclerk_signature() {
     use crate::turn::SovereignCellWitness;
 
     // Build a sovereign cell and a witness for it.
@@ -7681,9 +7681,9 @@ fn sovereign_witness_tamper_invalidates_wallet_signature() {
         effect_witness_index_map: Vec::new(),
     };
 
-    // The wallet signs Turn::hash() (v3) — this covers the witnesses.
+    // The cclerk signs Turn::hash() (v3) — this covers the witnesses.
     let original_hash = turn.hash();
-    let wallet_sig = agent_kp.signing_key.sign(&original_hash);
+    let cclerk_sig = agent_kp.signing_key.sign(&original_hash);
 
     // Tamper: remove the witness map. The new turn-hash must differ.
     let mut tampered = turn.clone();
@@ -7694,16 +7694,16 @@ fn sovereign_witness_tamper_invalidates_wallet_signature() {
         "removing the witness must change Turn::hash"
     );
 
-    // The wallet's signature was over original_hash, so verifying it against
+    // The cipherclerk's signature was over original_hash, so verifying it against
     // tampered_hash fails.
     let agent_vk = VerifyingKey::from_bytes(&agent_kp.public_key).unwrap();
     assert!(
-        agent_vk.verify_strict(&original_hash, &wallet_sig).is_ok(),
-        "wallet signature must verify against the original hash"
+        agent_vk.verify_strict(&original_hash, &cclerk_sig).is_ok(),
+        "cclerk signature must verify against the original hash"
     );
     assert!(
-        agent_vk.verify_strict(&tampered_hash, &wallet_sig).is_err(),
-        "wallet signature must NOT verify after witness tampering"
+        agent_vk.verify_strict(&tampered_hash, &cclerk_sig).is_err(),
+        "cclerk signature must NOT verify after witness tampering"
     );
 
     // Tamper differently: swap the witness's new_commitment field. Again,
@@ -7719,9 +7719,9 @@ fn sovereign_witness_tamper_invalidates_wallet_signature() {
     );
     assert!(
         agent_vk
-            .verify_strict(&tampered2_hash, &wallet_sig)
+            .verify_strict(&tampered2_hash, &cclerk_sig)
             .is_err(),
-        "wallet signature must NOT verify after new_commitment swap"
+        "cclerk signature must NOT verify after new_commitment swap"
     );
 }
 

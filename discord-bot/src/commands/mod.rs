@@ -7,8 +7,9 @@
 //! retired rather than degraded to placeholders. The remaining commands
 //! either route to apps still in the workspace (gallery, identity,
 //! governed-namespace, nameservice) or to bot-local features (presence,
-//! captp, queue, federation, wallet, transfer, status, social).
+//! captp, queue, federation, cclerk, transfer, status, social).
 
+pub mod cipherclerk;
 pub mod explorer;
 pub mod gallery;
 pub mod identity;
@@ -16,7 +17,6 @@ pub mod presence;
 pub mod social;
 pub mod status;
 pub mod transfer;
-pub mod wallet;
 
 // ─── CapTP integration commands ─────────────────────────────────────────────
 pub mod captp;

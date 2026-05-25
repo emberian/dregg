@@ -1,8 +1,8 @@
-# Wallet Security Audit — `sdk/src/wallet.rs`
+# Cipherclerk Security Audit — `sdk/src/cipherclerk.rs`
 
 **Auditor model:** Claude Opus 4.7
 **Date:** 2026-05-23
-**Scope:** `sdk/src/wallet.rs` (6911 lines), cross-referenced with `sdk/src/runtime.rs`, `bridge/src/present.rs`, and `apps/{lending,subscription,privacy-voting}`.
+**Scope:** `sdk/src/cipherclerk.rs` (6911 lines), cross-referenced with `sdk/src/runtime.rs`, `bridge/src/present.rs`, and `apps/{lending,subscription,privacy-voting}`.
 **Sibling-agent note:** `verify_delegation_envelope_v2` was already `pub` at audit time; `verify_envelope_signature` is a public wrapper. No conflict.
 
 ## Verdict: **OK-WITH-FOLLOWUPS**
@@ -11,11 +11,11 @@ No CRITICAL break of the documented authority/binding model was found. The two r
 
 ## Summary
 
-The wallet draws three trust boundaries: (1) **wallet ↔ same-process app code** — same address space, but the wallet sealing pattern protects authority-bearing fields from being mutated except through approved constructors; (2) **wallet ↔ peer over wire** (`DelegatedToken`, signed turns) — every authority-affecting field is in the signed v2 payload, plus a separate authority policy decides which delegator keys are admissible; (3) **wallet ↔ STARK verifier** — the wallet emits proofs whose public inputs commit to revealed facts via Poseidon2. The most important invariant is **durable signature binding**: any HeldToken whose origin is `receive_*_delegation` carries a private `DelegationBinding` that is re-verified on every `prove_authorization_*`/`authorize_private`/`extract_caveat_set_for_proof` call against the *current* field values, so post-receive tampering of `encoded`, `caveat_chain_hash`, or membership leaf is detected.
+The cclerk draws three trust boundaries: (1) **cclerk ↔ same-process app code** — same address space, but the cclerk sealing pattern protects authority-bearing fields from being mutated except through approved constructors; (2) **cclerk ↔ peer over wire** (`DelegatedToken`, signed turns) — every authority-affecting field is in the signed v2 payload, plus a separate authority policy decides which delegator keys are admissible; (3) **cclerk ↔ STARK verifier** — the cclerk emits proofs whose public inputs commit to revealed facts via Poseidon2. The most important invariant is **durable signature binding**: any HeldToken whose origin is `receive_*_delegation` carries a private `DelegationBinding` that is re-verified on every `prove_authorization_*`/`authorize_private`/`extract_caveat_set_for_proof` call against the *current* field values, so post-receive tampering of `encoded`, `caveat_chain_hash`, or membership leaf is detected.
 
 The v2 signing-message construction (`compute_delegation_signing_message_v2`) is well-formed: it uses `blake3::derive_key` for domain separation, length-prefixes variable-length fields, uses presence tags for `Option<[u8;32]>` to disambiguate `Some([0;32])` from `None`, and binds `delegator_public_key` into the payload (so a malicious holder can't swap signer identity). Local delegations use a distinct context tag (`pyana-delegation-local-v1`), preventing cross-confusion. Authority policy variants are sensible; `Open` is correctly gated behind `cfg(any(test, feature = "unsafe-test-utils"))`.
 
-The biggest residual concerns are: (a) the `SubAgent` shadow-token in `runtime.rs:378` bypasses durable binding because `HeldToken::new_attenuated` produces a token with no `delegation_binding`, while the *actual* delegated token sits in `sub_wallet.tokens[0]`; (b) DoS surfaces from `.expect()` calls on `postcard` and `rmp-serde` serializations of attacker-influenced types; (c) several public fields on `SubAgent` (already documented in an `AUDIT[P2]` comment); (d) a number of authority-bearing operations are reachable through `pub` methods that probably want `pub(crate)`.
+The biggest residual concerns are: (a) the `SubAgent` shadow-token in `runtime.rs:378` bypasses durable binding because `HeldToken::new_attenuated` produces a token with no `delegation_binding`, while the *actual* delegated token sits in `sub_cclerk.tokens[0]`; (b) DoS surfaces from `.expect()` calls on `postcard` and `rmp-serde` serializations of attacker-influenced types; (c) several public fields on `SubAgent` (already documented in an `AUDIT[P2]` comment); (d) a number of authority-bearing operations are reachable through `pub` methods that probably want `pub(crate)`.
 
 ---
 
@@ -28,15 +28,15 @@ The biggest residual concerns are: (a) the `SubAgent` shadow-token in `runtime.r
 ### P1 — should fix
 
 **P1-1. `SubAgent.token` shadow copy bypasses `DelegationBinding`.**
-`sdk/src/runtime.rs:378-384` constructs `delegated_token = HeldToken::new_attenuated(...)` with no `delegation_binding` field, then *separately* drives `sub_wallet.receive_local_delegation(local, &parent_pubkey)` at line 418. Result: `SubAgent.token` (a `pub` field on `SubAgent`, exposed widely) is a HeldToken whose `delegation_binding` is `None`, so `reverify_delegation_binding` is a no-op for it. Any code path that passes `&sub_agent.token` to `wallet.authorize` or `prove_authorization_with_issuer_key` will skip the durable-binding check that the sibling token in `sub_wallet.tokens[0]` has. The token still has the issuer_key, so it CAN generate proofs — meaning a same-process attacker who can mutate `SubAgent.token.encoded` (via the test-only helper or by reconstructing the struct) gets free authorization. Mitigation: have `spawn_sub_agent` clone `sub_wallet.tokens[0]` into `SubAgent.token` so the binding travels with it, OR remove `SubAgent.token` and require callers to go through `sub_wallet.tokens()`.
+`sdk/src/runtime.rs:378-384` constructs `delegated_token = HeldToken::new_attenuated(...)` with no `delegation_binding` field, then *separately* drives `sub_cclerk.receive_local_delegation(local, &parent_pubkey)` at line 418. Result: `SubAgent.token` (a `pub` field on `SubAgent`, exposed widely) is a HeldToken whose `delegation_binding` is `None`, so `reverify_delegation_binding` is a no-op for it. Any code path that passes `&sub_agent.token` to `cclerk.authorize` or `prove_authorization_with_issuer_key` will skip the durable-binding check that the sibling token in `sub_cclerk.tokens[0]` has. The token still has the issuer_key, so it CAN generate proofs — meaning a same-process attacker who can mutate `SubAgent.token.encoded` (via the test-only helper or by reconstructing the struct) gets free authorization. Mitigation: have `spawn_sub_agent` clone `sub_cclerk.tokens[0]` into `SubAgent.token` so the binding travels with it, OR remove `SubAgent.token` and require callers to go through `sub_cclerk.tokens()`.
 
-**P1-2. `SubAgent` fields are all `pub`.** `sdk/src/runtime.rs:480-507`. Already flagged in an `AUDIT[P2]` comment in the file. The `pub federation_id: [u8; 32]` is used as the domain separator in `SubAgent::execute`'s `compute_signing_message` (`runtime.rs:553`). An external `&mut SubAgent` holder can rewrite it post-construct, inducing cross-federation signature replay vectors. Also `pub wallet: Arc<AgentWallet>` and `pub token: HeldToken` are needlessly broad. Fix: make all fields private with read-only accessors.
+**P1-2. `SubAgent` fields are all `pub`.** `sdk/src/runtime.rs:480-507`. Already flagged in an `AUDIT[P2]` comment in the file. The `pub federation_id: [u8; 32]` is used as the domain separator in `SubAgent::execute`'s `compute_signing_message` (`runtime.rs:553`). An external `&mut SubAgent` holder can rewrite it post-construct, inducing cross-federation signature replay vectors. Also `pub cclerk: Arc<AgentCipherclerk>` and `pub token: HeldToken` are needlessly broad. Fix: make all fields private with read-only accessors.
 
 **P1-3. `expect()` on adversary-influenced `rmp-serde` serialization in `compute_caveat_chain_hash` (line 3795).** The caveats slice comes from `MacaroonToken::from_encoded(&token.encoded, [0u8;32])` — i.e. an attacker-controlled string passed through receive_signed_delegation. Although postcard/rmp-serde of a typed `Vec<Caveat>` "should not fail" under normal Rust expectations, a malformed `Caveat` (e.g. with non-UTF8 String content fabricated through internal mutation) could trigger a panic at this site, which is reachable inside `delegate*` and the delegator's pre-delegation path. Fix: propagate as `SdkError::Wire` instead of panic.
 
 **P1-4. `compute_delegation_signing_message_v2` and `compute_local_delegation_signing_message` both `.expect()` postcard serialization of `Attenuation`** (lines 2555 and 2670). Same shape as P1-3; if a delegator constructed an `Attenuation` containing non-serializable nested data (today there is none, but the type is open to future field additions), this panics at signing time on attacker-influenced input. Fix: return Result and bubble the error.
 
-**P1-5. `verify_token` returns `false` on decode error (line 1406-1410).** Decode-error → `false` is semantically "not authorized," which is safe, but masks a structural error from the caller. More importantly, `SubAgent::can_authorize` uses this method on a token whose root_key is zeroed → `decode()` will work but `verify()` requires the real root key, which is always absent for delegated tokens. So `can_authorize` *always returns false* for any sub-agent's delegated token. This is a correctness-rather-than-security bug, but it's load-bearing in the public API. Fix: document the limitation, or make `can_authorize` go through `wallet.authorize(...)` instead.
+**P1-5. `verify_token` returns `false` on decode error (line 1406-1410).** Decode-error → `false` is semantically "not authorized," which is safe, but masks a structural error from the caller. More importantly, `SubAgent::can_authorize` uses this method on a token whose root_key is zeroed → `decode()` will work but `verify()` requires the real root key, which is always absent for delegated tokens. So `can_authorize` *always returns false* for any sub-agent's delegated token. This is a correctness-rather-than-security bug, but it's load-bearing in the public API. Fix: document the limitation, or make `can_authorize` go through `cclerk.authorize(...)` instead.
 
 **P1-6. `compute_root_from_membership_proof` (line 3804) trusts the proof's path length without bounds checking.** If a maliciously-deserialized `MerkleProof` contained, e.g., a `path_indices.len() = usize::MAX`, the loop would spin. There's a memory bound elsewhere (64 KiB on token bytes), but the membership proof is a separate field with no explicit length cap. Combined with `MAX_DELEGATED_TOKEN_SIZE` only covering `token_bytes`, this is a moderate DoS vector. Fix: bound proof depth (e.g. <= 64) at receive time.
 
@@ -46,11 +46,11 @@ The biggest residual concerns are: (a) the `SubAgent` shadow-token in `runtime.r
 
 **P2-1. `authorize_selective` does not invoke `extract_caveat_set_for_proof` for the can_mint() branch.** Line 1943-1997. When `token.can_mint()`, it calls `extract_caveat_set_for_proof` (which DOES call reverify), but the subsequent `prove_authorization_selective` (line 2891) does NOT call reverify itself. Symmetry break with `prove_authorization_with_issuer_key`. Today this is fine because can_mint() => no binding, but again fragile. Fix: defensive reverify at every `prove_authorization_*` entry, even on the no-binding branch.
 
-**P2-2. `Drop` for `AgentWallet` does not zeroize `signing_key`** (line 5553-5563). It zeroizes `seed` and `mnemonic_phrase` but the in-memory `ed25519_dalek::SigningKey` is dropped without zeroization. `SigningKey` does implement `ZeroizeOnDrop` upstream, so this is *probably* safe in practice, but the code does not document the reliance.
+**P2-2. `Drop` for `AgentCipherclerk` does not zeroize `signing_key`** (line 5553-5563). It zeroizes `seed` and `mnemonic_phrase` but the in-memory `ed25519_dalek::SigningKey` is dropped without zeroization. `SigningKey` does implement `ZeroizeOnDrop` upstream, so this is *probably* safe in practice, but the code does not document the reliance.
 
-**P2-3. `set_captp_client` is `pub` and takes `&mut self`** (line 5244). Lets any holder of `&mut wallet` swap the CapTP client. Fine for now (single-tenant wallet), but in any multi-component setting this is a foot-gun.
+**P2-3. `set_captp_client` is `pub` and takes `&mut self`** (line 5244). Lets any holder of `&mut cclerk` swap the CapTP client. Fine for now (single-tenant cclerk), but in any multi-component setting this is a foot-gun.
 
-**P2-4. `export_seed` and `export_mnemonic` return references with `&mut self`** (line 1049, 1069). The `&mut self` requirement is documented as preventing extraction via shared refs, but a `&mut wallet` callsite can still log/copy/transmit the returned `&str`/`&[u8]`. The `must_use` attribute helps. Consider returning `Zeroizing` wrappers.
+**P2-4. `export_seed` and `export_mnemonic` return references with `&mut self`** (line 1049, 1069). The `&mut self` requirement is documented as preventing extraction via shared refs, but a `&mut cclerk` callsite can still log/copy/transmit the returned `&str`/`&[u8]`. The `must_use` attribute helps. Consider returning `Zeroizing` wrappers.
 
 **P2-5. `convert_effects_to_vm` truncates 32-byte values to 4 bytes** (lines 4359-4368). Collisions in `field_element_to_bb` and `hash_to_bb` are inevitable for any non-trivial value space. This is in the sovereign-cell proof generation path. If the executor side does the same truncation it's consistent, but the truncation loses domain separation between distinct hashes that happen to share the first 4 bytes. Fix: at least document; ideally migrate to `Self::bytes_to_babybear` which does Poseidon2-based compression.
 
@@ -60,9 +60,9 @@ The biggest residual concerns are: (a) the `SubAgent` shadow-token in `runtime.r
 
 **P2-8. `find_token` / `find_token_by_id` linear scan** (line 1122-1129). Fine for small token sets; trivial DoS if a caller holds many tokens and queries hot-path. Low priority.
 
-**P2-9. `import_sovereign_state` overwrites existing keys silently** (line 4552). Merge semantics not documented; an adversary who can hand the wallet a serialized blob can overwrite local sovereign state.
+**P2-9. `import_sovereign_state` overwrites existing keys silently** (line 4552). Merge semantics not documented; an adversary who can hand the cclerk a serialized blob can overwrite local sovereign state.
 
-**P2-10. `compute_turn_bytes` does not include `turn.conservation_proof` / `sovereign_witnesses` / `execution_proof` / `custom_program_proofs`** (line 3680-3724). Documented as covering "all semantically-relevant fields," but executor-side fields like `execution_proof_new_commitment` are missing from the signing message. If an attacker can swap a different `execution_proof_new_commitment` after the wallet signs, the signature still verifies. This requires write access to the SignedTurn struct in flight (which is `pub` by design), but it's an implicit trust assumption worth documenting OR closing.
+**P2-10. `compute_turn_bytes` does not include `turn.conservation_proof` / `sovereign_witnesses` / `execution_proof` / `custom_program_proofs`** (line 3680-3724). Documented as covering "all semantically-relevant fields," but executor-side fields like `execution_proof_new_commitment` are missing from the signing message. If an attacker can swap a different `execution_proof_new_commitment` after the cclerk signs, the signature still verifies. This requires write access to the SignedTurn struct in flight (which is `pub` by design), but it's an implicit trust assumption worth documenting OR closing.
 
 ### P3 — notes / future direction
 
@@ -84,22 +84,22 @@ The biggest residual concerns are: (a) the `SubAgent` shadow-token in `runtime.r
 
 | Invariant | Test (file:line) | Real or tautological? |
 |---|---|---|
-| Envelope rejects attacker-forged signature | `wallet.rs:6393` `test_envelope_rejects_attacker_forged_signature` | Real (ed25519 verification under wrong key). |
-| Envelope rejects unauthorized delegator | `wallet.rs:6439` `test_envelope_rejects_unauthorized_delegator` | Real (authority policy). |
-| Envelope rejects replay to wrong recipient | `wallet.rs:6470` `test_envelope_rejects_replay_to_wrong_recipient` | Real (binding check + signature). |
-| Tampered restrictions/service/id rejected | `wallet.rs:6509` `test_envelope_rejects_tampered_fields` | Real. |
-| Chain delegation rejects wrong parent hash | `wallet.rs:6559` `test_envelope_chain_rejects_wrong_parent_hash` | Real. |
-| No unsigned envelope constructor | `wallet.rs:6630` `test_envelope_has_no_unsigned_constructor` | **Tautological** (only round-trips serde, doesn't actually try to construct unsigned). The compile-fail guarantee is in the type, not in this test. |
-| Open policy still verifies signature | `wallet.rs:6654` `test_envelope_open_policy_still_verifies_signature` | Real. |
-| Local delegation requires signature | `wallet.rs:6684` `test_local_delegation_signature_required` | Real — tests the expected-parent-pubkey mismatch path. Could be stronger: doesn't test signature mutation independent of expected_parent. |
-| **Durable binding: tamper `encoded` after receive breaks authorize** | `wallet.rs:6769` `test_held_token_tamper_encoded_breaks_authorize` | **Real** — uses `test_only_tamper_encoded` + asserts `Err(InvalidDelegation)` from `authorize`. Load-bearing. |
-| Durable binding: tamper `caveat_chain_hash` after receive breaks authorize | `wallet.rs:6819` `test_held_token_tamper_chain_hash_breaks_authorize` | Real. |
-| HeldToken has no public field mutation | `wallet.rs:6859` `test_held_token_no_public_field_mutation` | **Tautological** — the comment acknowledges that the compile-fail is what enforces it; the test only verifies that the read-only accessor returns the right value. |
-| Open policy is feature-gated | `wallet.rs:6896` `test_open_authority_gated` | Tautological (runs inside cfg(test), where the variant trivially exists). The cfg gate is what enforces production exclusion. |
+| Envelope rejects attacker-forged signature | `cipherclerk.rs:6393` `test_envelope_rejects_attacker_forged_signature` | Real (ed25519 verification under wrong key). |
+| Envelope rejects unauthorized delegator | `cipherclerk.rs:6439` `test_envelope_rejects_unauthorized_delegator` | Real (authority policy). |
+| Envelope rejects replay to wrong recipient | `cipherclerk.rs:6470` `test_envelope_rejects_replay_to_wrong_recipient` | Real (binding check + signature). |
+| Tampered restrictions/service/id rejected | `cipherclerk.rs:6509` `test_envelope_rejects_tampered_fields` | Real. |
+| Chain delegation rejects wrong parent hash | `cipherclerk.rs:6559` `test_envelope_chain_rejects_wrong_parent_hash` | Real. |
+| No unsigned envelope constructor | `cipherclerk.rs:6630` `test_envelope_has_no_unsigned_constructor` | **Tautological** (only round-trips serde, doesn't actually try to construct unsigned). The compile-fail guarantee is in the type, not in this test. |
+| Open policy still verifies signature | `cipherclerk.rs:6654` `test_envelope_open_policy_still_verifies_signature` | Real. |
+| Local delegation requires signature | `cipherclerk.rs:6684` `test_local_delegation_signature_required` | Real — tests the expected-parent-pubkey mismatch path. Could be stronger: doesn't test signature mutation independent of expected_parent. |
+| **Durable binding: tamper `encoded` after receive breaks authorize** | `cipherclerk.rs:6769` `test_held_token_tamper_encoded_breaks_authorize` | **Real** — uses `test_only_tamper_encoded` + asserts `Err(InvalidDelegation)` from `authorize`. Load-bearing. |
+| Durable binding: tamper `caveat_chain_hash` after receive breaks authorize | `cipherclerk.rs:6819` `test_held_token_tamper_chain_hash_breaks_authorize` | Real. |
+| HeldToken has no public field mutation | `cipherclerk.rs:6859` `test_held_token_no_public_field_mutation` | **Tautological** — the comment acknowledges that the compile-fail is what enforces it; the test only verifies that the read-only accessor returns the right value. |
+| Open policy is feature-gated | `cipherclerk.rs:6896` `test_open_authority_gated` | Tautological (runs inside cfg(test), where the variant trivially exists). The cfg gate is what enforces production exclusion. |
 | Membership-proof swap detected at reverify | (implicit in P0 tests above) | Real — line 597-601 checks `current_membership_leaf != binding.membership_leaf`. |
-| Attenuated tokens carry only derived issuer_key | `wallet.rs:5761` `test_attenuated_token_has_zeroed_root_key` | Real. |
-| Delegated tokens carry derived proof_key not root | `wallet.rs:6013` `test_delegated_token_can_prove_with_proof_key` | Real. |
-| Delegated tokens marked unverified | `wallet.rs:5855` `test_receive_delegation_marks_unverified` | Real. |
+| Attenuated tokens carry only derived issuer_key | `cipherclerk.rs:5761` `test_attenuated_token_has_zeroed_root_key` | Real. |
+| Delegated tokens carry derived proof_key not root | `cipherclerk.rs:6013` `test_delegated_token_can_prove_with_proof_key` | Real. |
+| Delegated tokens marked unverified | `cipherclerk.rs:5855` `test_receive_delegation_marks_unverified` | Real. |
 
 **Missing tests (P2-level coverage gaps):**
 - No test exercises `SubAgent.token` tampering (would catch P1-1).
@@ -109,7 +109,7 @@ The biggest residual concerns are: (a) the `SubAgent` shadow-token in `runtime.r
 
 ---
 
-## API surface review (selected `pub fn` on `AgentWallet`)
+## API surface review (selected `pub fn` on `AgentCipherclerk`)
 
 Trust classes: **A** = app-callable, **R** = runtime-internal, **P** = peer-wire entry-point, **K** = key-export sensitive, **C** = CapTP.
 
@@ -144,9 +144,9 @@ Trust classes: **A** = app-callable, **R** = runtime-internal, **P** = peer-wire
 
 ## Open questions for the user
 
-1. **`SubAgent.token` clone — kill or fix?** P1-1 is the most material finding. Do you want me to (a) remove the field entirely and require callers to go through `sub_wallet.tokens()`, or (b) clone the bound token in from `sub_wallet.tokens[0]` so the binding travels with it? Option (b) is less invasive but the token would have a binding signed by the parent wallet, which the same parent re-verifies when they call `authorize` on the sub-agent's wallet — that's the desired behavior. Recommend (b).
+1. **`SubAgent.token` clone — kill or fix?** P1-1 is the most material finding. Do you want me to (a) remove the field entirely and require callers to go through `sub_cclerk.tokens()`, or (b) clone the bound token in from `sub_cclerk.tokens[0]` so the binding travels with it? Option (b) is less invasive but the token would have a binding signed by the parent cclerk, which the same parent re-verifies when they call `authorize` on the sub-agent's cclerk — that's the desired behavior. Recommend (b).
 
-2. **`sign_bytes` general oracle — restrict?** Currently any caller with `&AgentWallet` can sign arbitrary bytes with the wallet's identity key. There's no domain prefix. Within a single process this is fine, but if `sign_bytes` is exposed via any RPC surface it's a cross-protocol replay vector. Want me to add a mandatory domain-tag parameter?
+2. **`sign_bytes` general oracle — restrict?** Currently any caller with `&AgentCipherclerk` can sign arbitrary bytes with the cipherclerk's identity key. There's no domain prefix. Within a single process this is fine, but if `sign_bytes` is exposed via any RPC surface it's a cross-protocol replay vector. Want me to add a mandatory domain-tag parameter?
 
 3. **Membership proof depth bound** (P1-6) — what's the right cap? Federation tree is currently 8 levels in `compute_federation_root_bb`. A cap of 64 would be generous.
 

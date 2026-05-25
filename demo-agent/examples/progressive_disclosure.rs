@@ -8,7 +8,7 @@
 //! 5. Present in Fully Private mode: verifier sees only allow/deny + STARK proof
 //! 6. For each mode, show exactly what the verifier learns and what remains hidden
 
-use pyana_sdk::{AgentWallet, AuthorizationPresentation, FactIndex, VerificationMode};
+use pyana_sdk::{AgentCipherclerk, AuthorizationPresentation, FactIndex, VerificationMode};
 use pyana_sdk::{Attenuation, AuthRequest};
 use pyana_trace::Conclusion;
 
@@ -18,12 +18,12 @@ fn main() {
     println!("with progressively less information revealed to the verifier.\n");
 
     // =========================================================================
-    // SETUP: Create an agent wallet and mint a richly-attenuated token
+    // SETUP: Create an agent cclerk and mint a richly-attenuated token
     // =========================================================================
     println!("--- Setup: Token with Multiple Facts ---\n");
 
-    let mut wallet = AgentWallet::new();
-    let pubkey = wallet.public_key();
+    let mut cclerk = AgentCipherclerk::new();
+    let pubkey = cclerk.public_key();
     println!(
         "  Agent identity: {:02x}{:02x}{:02x}{:02x}...",
         pubkey.0[0], pubkey.0[1], pubkey.0[2], pubkey.0[3]
@@ -31,13 +31,13 @@ fn main() {
 
     // Mint a root token for our organization's infrastructure service.
     let root_key: [u8; 32] = *blake3::hash(b"acme-corp-root-secret-key-2026!!").as_bytes();
-    let root_token = wallet.mint_token(&root_key, "infrastructure");
+    let root_token = cclerk.mint_token(&root_key, "infrastructure");
     println!("  Root token minted: service='infrastructure' (unrestricted)");
 
     // Attenuate with rich facts: app access, service access, features, user binding.
     // This simulates: "admin role on the 'deployments' app, read access to 'secrets' service,
     // with features 'top_secret_clearance' and 'budget_1000', confined to user 'agent-007'"
-    let attenuated = wallet
+    let attenuated = cclerk
         .attenuate(
             &root_token,
             &Attenuation {
@@ -85,7 +85,7 @@ fn main() {
     println!("  The verifier holds the root key and trusts the local evaluation.");
     println!("  Latency: ~8 microseconds. No cryptographic proof generated.\n");
 
-    let trusted_result = wallet.authorize(&attenuated, &request, VerificationMode::Trusted);
+    let trusted_result = cclerk.authorize(&attenuated, &request, VerificationMode::Trusted);
 
     match trusted_result {
         Ok(AuthorizationPresentation::Trusted { clearance, trace }) => {
@@ -163,7 +163,7 @@ fn main() {
 
     // Reveal only fact index 0 (the 'allow' derivation step that shows app+action).
     // Hide indices 1+ (user confinement, features, time checks, etc.)
-    let selective_result = wallet.authorize(
+    let selective_result = cclerk.authorize(
         &attenuated,
         &request,
         VerificationMode::SelectiveDisclosure {
@@ -252,7 +252,7 @@ fn main() {
     println!("  specific request.' No facts, no capabilities, no identity revealed.");
     println!("  Latency: ~500ms (full multi-step derivation proof).\n");
 
-    let private_result = wallet.authorize(&attenuated, &request, VerificationMode::FullyPrivate);
+    let private_result = cclerk.authorize(&attenuated, &request, VerificationMode::FullyPrivate);
 
     match private_result {
         Ok(AuthorizationPresentation::Private { proof, conclusion }) => {

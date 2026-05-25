@@ -1,13 +1,13 @@
 //! Integration test: Proof-carrying sovereign turns (Phase 2).
 //!
 //! Tests the full pipeline:
-//!   1. Wallet generates a STARK proof of valid state transition
+//!   1. Cipherclerk generates a STARK proof of valid state transition
 //!   2. Turn carries the proof (no sovereign_witnesses needed)
 //!   3. Executor verifies the proof and updates commitment (no re-execution)
 
 use pyana_cell::{Cell, CellId, CellMode, Ledger};
 use pyana_circuit::CellState as VmCellState;
-use pyana_sdk::AgentWallet;
+use pyana_sdk::AgentCipherclerk;
 use pyana_turn::{ComputronCosts, Effect, TurnExecutor, TurnResult};
 
 /// Create a sovereign cell in a ledger and return the cell + ledger.
@@ -16,9 +16,9 @@ use pyana_turn::{ComputronCosts, Effect, TurnExecutor, TurnResult};
 /// table for nonce/fee checks. For proof-carrying turns, the cell is registered as
 /// both sovereign (commitment) AND hosted (balance/nonce). The proof replaces
 /// re-execution, but the executor still needs balance/nonce for basic validation.
-fn setup_sovereign_cell(balance: u64) -> (AgentWallet, CellId, Ledger) {
-    let wallet = AgentWallet::new();
-    let pub_key = wallet.public_key().0;
+fn setup_sovereign_cell(balance: u64) -> (AgentCipherclerk, CellId, Ledger) {
+    let cclerk = AgentCipherclerk::new();
+    let pub_key = cclerk.public_key().0;
     let token_id = *blake3::hash(b"test-domain").as_bytes();
 
     let mut cell = Cell::with_balance(pub_key, token_id, balance);
@@ -31,9 +31,9 @@ fn setup_sovereign_cell(balance: u64) -> (AgentWallet, CellId, Ledger) {
     let vm_state = VmCellState::new(balance, cell.state.nonce() as u32);
     let commitment = TurnExecutor::babybear_to_commitment(vm_state.state_commitment);
 
-    // Store the cell state in the wallet.
-    let mut wallet = wallet;
-    wallet.store_sovereign_state(cell.clone());
+    // Store the cell state in the cclerk.
+    let mut cclerk = cclerk;
+    cclerk.store_sovereign_state(cell.clone());
 
     // Create a ledger with both:
     // 1. Sovereign commitment registration (for proof verification)
@@ -42,12 +42,12 @@ fn setup_sovereign_cell(balance: u64) -> (AgentWallet, CellId, Ledger) {
     ledger.register_sovereign_cell(cell_id, commitment).unwrap();
     let _ = ledger.insert_cell(cell);
 
-    (wallet, cell_id, ledger)
+    (cclerk, cell_id, ledger)
 }
 
 #[test]
 fn test_proof_carrying_sovereign_turn_accepted() {
-    let (mut wallet, cell_id, mut ledger) = setup_sovereign_cell(1000);
+    let (mut cclerk, cell_id, mut ledger) = setup_sovereign_cell(1000);
 
     // Create a destination cell for the transfer.
     let dest_key = [42u8; 32];
@@ -63,7 +63,7 @@ fn test_proof_carrying_sovereign_turn_accepted() {
         amount: 100,
     }];
 
-    let turn = wallet
+    let turn = cclerk
         .execute_sovereign_turn_with_proof(&cell_id, effects, 500)
         .expect("should generate proof-carrying turn");
 
@@ -101,7 +101,7 @@ fn test_proof_carrying_sovereign_turn_accepted() {
 
 #[test]
 fn test_proof_carrying_turn_tampered_commitment_rejected() {
-    let (mut wallet, cell_id, mut ledger) = setup_sovereign_cell(1000);
+    let (mut cclerk, cell_id, mut ledger) = setup_sovereign_cell(1000);
 
     let dest_key = [43u8; 32];
     let dest_token_id = *blake3::hash(b"test-domain").as_bytes();
@@ -115,7 +115,7 @@ fn test_proof_carrying_turn_tampered_commitment_rejected() {
         amount: 50,
     }];
 
-    let mut turn = wallet
+    let mut turn = cclerk
         .execute_sovereign_turn_with_proof(&cell_id, effects, 500)
         .expect("should generate proof-carrying turn");
 
@@ -149,8 +149,8 @@ fn test_proof_carrying_turn_tampered_commitment_rejected() {
 #[test]
 fn test_backward_compat_witness_path_still_works() {
     // Verify that turns WITHOUT execution_proof still work (Phase 1 witness path).
-    let wallet = AgentWallet::new();
-    let pub_key = wallet.public_key().0;
+    let cclerk = AgentCipherclerk::new();
+    let pub_key = cclerk.public_key().0;
     let token_id = *blake3::hash(b"test-domain").as_bytes();
 
     let mut cell = Cell::with_balance(pub_key, token_id, 5000);
@@ -162,8 +162,8 @@ fn test_backward_compat_witness_path_still_works() {
     let cell_id = cell.id();
     let commitment = cell.state_commitment();
 
-    let mut wallet = wallet;
-    wallet.store_sovereign_state(cell.clone());
+    let mut cclerk = cclerk;
+    cclerk.store_sovereign_state(cell.clone());
 
     let mut ledger = Ledger::new();
     ledger.register_sovereign_cell(cell_id, commitment).unwrap();
@@ -185,7 +185,7 @@ fn test_backward_compat_witness_path_still_works() {
         amount: 200,
     }];
 
-    let turn = wallet
+    let turn = cclerk
         .execute_sovereign_turn(&cell_id, effects, 500)
         .expect("should build witness-based turn");
 

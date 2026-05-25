@@ -122,7 +122,7 @@ export function initPrivateTransfers(wasm) {
     showExplainer(explainerDiv, {
       prover: `Derived from mnemonic: "${mnemonic.slice(0, 20)}..."\nPassphrase: "${passphrase}"\n\nView pubkey (shareable): ${bytesToHex(recipientKeys.viewPub).slice(0, 24)}...\nSpend pubkey (shareable): ${bytesToHex(recipientKeys.spendPub).slice(0, 24)}...`,
       verifier: `The recipient publishes (view_pubkey, spend_pubkey).\n\nAnyone can send to them by deriving a one-time address.\n\nOnly the recipient can detect and claim incoming payments.`,
-      delta: `Stealth keys use X25519 Diffie-Hellman. The view key lets the recipient detect payments (scan). The spend key lets them claim. Separating scan from spend enables watch-only wallets and delegated scanning services.`,
+      delta: `Stealth keys use X25519 Diffie-Hellman. The view key lets the recipient detect payments (scan). The spend key lets them claim. Separating scan from spend enables watch-only cipherclerks and delegated scanning services.`,
       timing: elapsed,
     });
   });

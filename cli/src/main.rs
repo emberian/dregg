@@ -12,7 +12,8 @@ use clap::{Parser, Subcommand};
 use clap_complete::Shell;
 
 use commands::{
-    cap, cell, directory, doctor, federation, namespace, node, proof, route, storage, turn, wallet,
+    cap, cell, cipherclerk, directory, doctor, federation, namespace, node, proof, route, storage,
+    turn,
 };
 
 /// Pyana -- sovereign cell-based compute substrate.
@@ -68,10 +69,10 @@ enum Commands {
         command: cap::CapCommand,
     },
 
-    /// Wallet operations (balance, transfer, delegate).
-    Wallet {
+    /// Cipherclerk operations (balance, transfer, delegate).
+    Cipherclerk {
         #[command(subcommand)]
-        command: wallet::WalletCommand,
+        command: cipherclerk::CipherclerkCommand,
     },
 
     /// Node operations (status, connect, sync).
@@ -116,7 +117,7 @@ enum Commands {
         command: route::RouteCommand,
     },
 
-    /// Check system health (node, wallet, federation, storage).
+    /// Check system health (node, cclerk, federation, storage).
     Doctor,
 
     /// Print version information.
@@ -177,7 +178,7 @@ async fn main() {
         Commands::Cell { command } => cell::run(command, &cfg, &ctx).await,
         Commands::Turn { command } => turn::run(command, &cfg, &ctx).await,
         Commands::Cap { command } => cap::run(command, &cfg, &ctx).await,
-        Commands::Wallet { command } => wallet::run(command, &cfg, &ctx).await,
+        Commands::Cipherclerk { command } => cipherclerk::run(command, &cfg, &ctx).await,
         Commands::Node { command } => node::run(command, &cfg, &ctx).await,
         Commands::Federation { command } => federation::run(command, &cfg, &ctx).await,
         Commands::Namespace { command } => namespace::run(command, &cfg, &ctx).await,
@@ -240,7 +241,7 @@ fn run_config(
             ctx.header("Configuration");
             ctx.kv("Path", &path.display().to_string());
             ctx.kv("Node URL", &cfg.node.url);
-            ctx.kv("Keyfile", &cfg.wallet.keyfile);
+            ctx.kv("Keyfile", &cfg.cclerk.keyfile);
             ctx.kv("Output format", &cfg.output.format);
             Ok(())
         }

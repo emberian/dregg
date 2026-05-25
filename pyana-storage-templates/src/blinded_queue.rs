@@ -75,9 +75,9 @@
 //! - **out-of-band**: anyone without the cell's state.
 
 use pyana_app_framework::{
-    Action, AppWallet, AuthRequired, CapTarget, CapTemplate, CellId, CellMode, ChildVkStrategy,
-    Effect, Event, FactoryDescriptor, FieldConstraint, FieldElement, InspectorDescriptor,
-    StarbridgeAppContext, StateConstraint, canonical_program_vk, symbol,
+    Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellId, CellMode,
+    ChildVkStrategy, Effect, Event, FactoryDescriptor, FieldConstraint, FieldElement,
+    InspectorDescriptor, StarbridgeAppContext, StateConstraint, canonical_program_vk, symbol,
 };
 use pyana_cell::predicate::{InputRef, WitnessedPredicate};
 use pyana_cell::program::{CellProgram, TransitionCase, TransitionGuard};
@@ -345,7 +345,7 @@ pub fn blinded_queue_factory_descriptor_sovereign() -> FactoryDescriptor {
 /// The producer publishes the item's commitment; the body itself is
 /// out-of-band (typically sealed-box-encrypted to the consumer).
 pub fn build_add_action(
-    wallet: &AppWallet,
+    cclerk: &AppCipherclerk,
     queue_cell: CellId,
     new_commitments_root: FieldElement,
     new_commitment_count: FieldElement,
@@ -371,7 +371,7 @@ pub fn build_add_action(
         },
     ];
 
-    wallet.make_action(queue_cell, "add", effects)
+    cclerk.make_action(queue_cell, "add", effects)
 }
 
 /// Build the on-ledger [`Action`] recording a `consume`.
@@ -383,11 +383,11 @@ pub fn build_add_action(
 /// requirement.
 ///
 /// Adding the witnesses to the action is the caller's responsibility
-/// (`AppWallet::with_witness` after-the-fact composition). The
+/// (`AppCipherclerk::with_witness` after-the-fact composition). The
 /// returned [`Action`] carries the [`Effect`]s and the method symbol;
 /// see `pyana_app_framework::AppCipherclerk` for the witness-attach API.
 pub fn build_consume_action(
-    wallet: &AppWallet,
+    cclerk: &AppCipherclerk,
     queue_cell: CellId,
     new_nullifier_root: FieldElement,
     new_nullifier_count: FieldElement,
@@ -413,7 +413,7 @@ pub fn build_consume_action(
         },
     ];
 
-    wallet.make_action(queue_cell, "consume", effects)
+    cclerk.make_action(queue_cell, "consume", effects)
 }
 
 // =============================================================================
@@ -470,16 +470,16 @@ pub fn register(ctx: &StarbridgeAppContext) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyana_app_framework::{AgentWallet, EmbeddedExecutor};
+    use pyana_app_framework::{AgentCipherclerk, EmbeddedExecutor};
 
-    fn test_wallet() -> AppWallet {
-        AppWallet::new(AgentWallet::new(), [42u8; 32])
+    fn test_cclerk() -> AppCipherclerk {
+        AppCipherclerk::new(AgentCipherclerk::new(), [42u8; 32])
     }
 
     fn test_context() -> StarbridgeAppContext {
-        let wallet = test_wallet();
-        let executor = EmbeddedExecutor::new(&wallet, "default");
-        StarbridgeAppContext::new(wallet, executor)
+        let cclerk = test_cclerk();
+        let executor = EmbeddedExecutor::new(&cclerk, "default");
+        StarbridgeAppContext::new(cclerk, executor)
     }
 
     fn test_cell() -> CellId {
@@ -545,10 +545,10 @@ mod tests {
 
     #[test]
     fn add_action_shape() {
-        let wallet = test_wallet();
+        let cclerk = test_cclerk();
         let cell = test_cell();
         let action = build_add_action(
-            &wallet,
+            &cclerk,
             cell,
             blake3_field(b"c"),
             u64_field(1),
@@ -560,10 +560,10 @@ mod tests {
 
     #[test]
     fn consume_action_shape() {
-        let wallet = test_wallet();
+        let cclerk = test_cclerk();
         let cell = test_cell();
         let action = build_consume_action(
-            &wallet,
+            &cclerk,
             cell,
             blake3_field(b"n"),
             u64_field(1),

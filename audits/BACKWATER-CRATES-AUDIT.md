@@ -4,7 +4,7 @@
 > Scope: every member of the root `Cargo.toml` `[workspace] members` list that
 > is not already covered by an existing `AUDIT-<name>.md` (i.e. not
 > `cell`, `turn`, `captp`, `federation`, `blocklace`, `circuit`, `intent`,
-> `node`, `sdk`, `wallet`, `wasm`, `dsl`, `extension`, etc.). One read-only
+> `node`, `sdk`, `cclerk`, `wasm`, `dsl`, `extension`, etc.). One read-only
 > pass; no source modifications.
 >
 > Generated 2026-05-24 against `main` @ commit `8a66164` (working tree has
@@ -845,7 +845,7 @@
 |------|-----|------|
 | `lib.rs` | 44 | Module wiring |
 | `harness.rs` | 348 | `SimulationHarness`, `SimFederation`, `SimNode`, `SimClock` |
-| `agent.rs` | 131 | `SimAgent` — name + `AgentWallet` + ergonomic test helpers |
+| `agent.rs` | 131 | `SimAgent` — name + `AgentCipherclerk` + ergonomic test helpers |
 | `assertions.rs` | 263 | Domain-specific assertions (proof valid / verifies / forges fail) |
 | `captp_sim.rs` | 400 | `SimCapTpSession` — VecDeque-channel CapTP exercising real sessions/GC |
 | `fault.rs` | 760 | `FaultyNetwork` + `CrashableNode` + `Partition` (seeded RNG) |

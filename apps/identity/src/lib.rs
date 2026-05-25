@@ -2,7 +2,7 @@
 //!
 //! Demonstrates the full credential lifecycle:
 //! - Issue: Issuer creates a signed credential attesting facts about the holder
-//! - Hold: Holder stores credentials in a wallet
+//! - Hold: Holder stores credentials in a cclerk
 //! - Present: Holder proves specific attributes via selective disclosure or predicates
 //! - Verify: Verifier checks presentations without learning private data
 //! - Revoke: Issuer revokes credentials; revoked credentials cannot produce valid proofs

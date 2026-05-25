@@ -231,7 +231,7 @@ Queued as task #61.
 ├─────────────────────────────────────────────────────────────────┤
 │ pyana-dsl                 — caveat predicates (sparse, stays)   │
 ├─────────────────────────────────────────────────────────────────┤
-│ pyana-sdk                 — AgentWallet, turn submission        │
+│ pyana-sdk                 — AgentCipherclerk, turn submission        │
 │ pyana-turn                — Turn, Effect, TurnReceipt,          │
 │                              WitnessedReceipt, TurnExecutor     │
 │ pyana-cell                — Cell, CellState, CellProgram,       │

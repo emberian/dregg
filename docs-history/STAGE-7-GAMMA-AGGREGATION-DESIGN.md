@@ -625,7 +625,7 @@ shared fields." Everything else is algebra.
 Pure engineering. Independent crate-slice (`pyana-turn` + `pyana-node`
 for storage). Lands the replay piece. Crate ownership:
 `pyana-turn::witnessed_receipt` (the struct, serialization); `pyana-
-node` for the storage layer; `pyana-wallet` / `pyana-sdk` for the
+node` for the storage layer; `pyana-cipherclerk` / `pyana-sdk` for the
 export interface; `pyana-storage` for the encrypted-witness blob
 table.
 

@@ -726,7 +726,7 @@ Concrete consumer code pointers, from the dep graph:
 | `bridge` | `bridge/src/present.rs:30, 178, 1661, 2142` | embeds `AuthorizationTrace` in `BridgePresentationProof`; recomputes the evaluator's fact set for STARK input; computes `revealed_facts_commitment` (Poseidon2 hash of `pyana_trace::Fact`s) for selective disclosure |
 | `circuit` | `circuit/Cargo.toml:108` declares the dep but `circuit/src` doesn't `use pyana_trace`. The comment at `circuit/sp1-guest/src/main.rs:353` says the SP1 guest uses a "self-contained evaluator that doesn't need pyana-trace/pyana-commit" — the declared dep is therefore vestigial in current code | dead dep (?) |
 | `intent` | `intent/Cargo.toml:22` declares dep but `intent/src` doesn't use it. Probably for future trustless intent paths | dead dep (?) |
-| `sdk` | `sdk/src/runtime.rs:572`, `sdk/src/wallet.rs:28, 2001-2258`, `sdk/src/verify.rs:219, 647-660, 854-856` | wallet emits trace facts, builds revealed-facts commitments, checks `Conclusion::Allow` on auth results |
+| `sdk` | `sdk/src/runtime.rs:572`, `sdk/src/cipherclerk.rs:28, 2001-2258`, `sdk/src/verify.rs:219, 647-660, 854-856` | cclerk emits trace facts, builds revealed-facts commitments, checks `Conclusion::Allow` on auth results |
 | `wasm` | `wasm/src/lib.rs:634-635` | wasm binding for the evaluator + standard policy |
 | `demo-agent` | `demo-agent/examples/*.rs` | examples showing Datalog auth, token revocation, RBAC, progressive disclosure |
 | `tests` (workspace integration tests) | `tests/src/trace_attacks.rs`, `tests/src/fuzz.rs` | adversarial trace tampering, fuzzing the verifier |
@@ -756,7 +756,7 @@ executor was ever consulted.
 but the implied contract follows from the surrounding
 credential-presentation boundary (`BOUNDARIES.md §2.11`):
 
-- **Inside (prover-side).** The wallet / token holder builds the
+- **Inside (prover-side).** The cclerk / token holder builds the
   `AuthorizationTrace` locally. They see the full derivation tree:
   every `DerivationStep`'s `substitution`, `body_fact_indices`,
   `derived_fact`, plus the entire committed `FactSet` (caveats in

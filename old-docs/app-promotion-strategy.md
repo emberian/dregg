@@ -5,7 +5,7 @@
 **Tier 1 (ready to promote):**
 - `compute_marketplace` (817 LOC) — Full multi-party workflow with escrow, sealed-bid auction, atomic settlement. Has a clear user story and multiple distinct roles.
 - `private_hiring` (662 LOC) — Complete cross-party predicate flow with intent posting, fulfillment, and conditional turn. Models a real marketplace interaction.
-- `ai_agent_mcp_workflow` (503 LOC) — JSON-RPC MCP protocol simulation with wallet, delegation, and selective disclosure. Closest to a real integration surface.
+- `ai_agent_mcp_workflow` (503 LOC) — JSON-RPC MCP protocol simulation with cclerk, delegation, and selective disclosure. Closest to a real integration surface.
 
 **Tier 2 (need structure but logic exists):**
 - `rbac_datalog` (625 LOC) — Policy engine with STARK-proven decisions. Needs a request/response layer.
@@ -47,7 +47,7 @@ An HTTP policy decision point. Services POST authorization requests; the gateway
 
 An MCP-compatible server that provisions capability tokens to AI agents, tracks delegation chains, enforces budget gates, and handles sub-agent spawning with attenuated authority.
 
-- **LOC:** ~1500 (MCP JSON-RPC handler + wallet registry + delegation tracker)
+- **LOC:** ~1500 (MCP JSON-RPC handler + cclerk registry + delegation tracker)
 - **Crates:** `pyana-sdk`, `pyana-turn`, `pyana-cell`, `token`, `pyana-bridge`
 - **ZK:** No (delegation + budget enforcement works with just token attenuation)
 - **Demo:** Both (CLI agent driver + web UI showing live delegation tree)

@@ -6,7 +6,7 @@
 //! - A NullifierSet (note double-spend tracking)
 //! - An IntentPool (simplified)
 //! - A RevocationChannelSet
-//! - Multiple AgentWallet instances (for multi-party simulation)
+//! - Multiple AgentCipherclerk instances (for multi-party simulation)
 //! - Federation simulation (in-memory, no networking)
 
 use std::collections::HashMap;
@@ -24,7 +24,7 @@ use pyana_intent::matcher::{HeldCapability, MatchResult, Sensitivity, match_inte
 use pyana_intent::{
     ActionPattern, CommitmentId, Constraint, Intent, IntentKind, MatchSpec, VerificationMode,
 };
-use pyana_sdk::AgentWallet;
+use pyana_sdk::AgentCipherclerk;
 use pyana_turn::action::Authorization;
 use pyana_turn::builder::ActionBuilder;
 use pyana_turn::conditional::{ConditionalTurn, ProofCondition};
@@ -33,7 +33,7 @@ use pyana_turn::{
     ComputronCosts, Effect, Turn, TurnBuilder, TurnExecutor, TurnReceipt, TurnResult,
 };
 
-/// Cell-ID domain shared by every wasm-sim agent. AgentWallet derives the
+/// Cell-ID domain shared by every wasm-sim agent. AgentCipherclerk derives the
 /// CellId deterministically as `f(public_key, domain)` so this string is part
 /// of the agent's identity surface.
 const WASM_SIM_DOMAIN: &str = "pyana-wasm-default-domain";
@@ -51,7 +51,7 @@ const GENESIS_MINT_FEE: u64 = 2000;
 /// provenance points at the same VK. The VK string is part of the
 /// agent's identity surface; changing it changes the factory hash and
 /// invalidates any test fixtures that pin the factory VK.
-const WASM_DEFAULT_FACTORY_DOMAIN: &str = "pyana-wasm-default-test-wallet-factory-v1";
+const WASM_DEFAULT_FACTORY_DOMAIN: &str = "pyana-wasm-default-test-cclerk-factory-v1";
 
 /// Build the default "test cipherclerk" `FactoryDescriptor` used by
 /// [`PyanaRuntime`] when an agent is created without an explicit factory.
@@ -98,24 +98,24 @@ pub fn default_cipherclerk_factory_descriptor() -> FactoryDescriptor {
 // Internal state types
 // ============================================================================
 
-/// An agent in the wasm runtime: a real `pyana_sdk::AgentWallet` plus the
+/// An agent in the wasm runtime: a real `pyana_sdk::AgentCipherclerk` plus the
 /// auxiliary state we need for in-browser scenarios (cached cell_id, an
 /// intent-matcher-shaped token list, a commitment id, a counter for token-id
 /// generation, and a friendly name).
 ///
 /// `held_tokens` here is the `pyana_intent::matcher::HeldCapability` shape
-/// used by the intent matcher — distinct from `wallet.tokens()` which is
+/// used by the intent matcher — distinct from `cclerk.tokens()` which is
 /// the SDK's macaroon-backed `HeldToken`. Both legitimately coexist.
 pub struct SimAgent {
     pub name: String,
-    pub wallet: AgentWallet,
+    pub cclerk: AgentCipherclerk,
     pub public_key: [u8; 32],
     pub cell_id: CellId,
     pub held_tokens: Vec<HeldCapability>,
     pub commitment_id: CommitmentId,
     pub token_counter: u64,
     /// Canonical `PeerExchange` session for this agent. Built once at agent
-    /// creation via `AgentWallet::peer_exchange(WASM_SIM_DOMAIN)`, so the
+    /// creation via `AgentCipherclerk::peer_exchange(WASM_SIM_DOMAIN)`, so the
     /// signing key used by the exchange is the cipherclerk's real Ed25519 key —
     /// no JS-side or wasm-side reimplementation. Mutated by `register_peer`,
     /// `create_transition`, and `verify_transition`.
@@ -428,7 +428,7 @@ impl PyanaRuntime {
     /// from (name, idx) so a reproducible browser session can replay an
     /// identical history. The derivation is BLAKE3-of-name-and-index for the
     /// seed; the rest of the agent — public key, cell id, signing — comes
-    /// from `pyana_sdk::AgentWallet`, the same cipherclerk implementation used by native callers.
+    /// from `pyana_sdk::AgentCipherclerk`, the same cipherclerk implementation used by native callers.
     /// This is not a sim-shaped reimplementation; the cipherclerk IS the canonical
     /// implementation, just constructed with a deterministic seed for
     /// reproducibility.
@@ -496,9 +496,9 @@ impl PyanaRuntime {
         // seed is moved into the cipherclerk (where it's zeroized).
         let commitment_id = CommitmentId::derive(&seed_bytes, "pyana-wasm-commitment");
 
-        let wallet = AgentWallet::from_key_bytes(Zeroizing::new(seed_bytes));
-        let public_key = wallet.public_key().0;
-        let cell_id = wallet.cell_id(WASM_SIM_DOMAIN);
+        let cclerk = AgentCipherclerk::from_key_bytes(Zeroizing::new(seed_bytes));
+        let public_key = cclerk.public_key().0;
+        let cell_id = cclerk.cell_id(WASM_SIM_DOMAIN);
         let token_id: [u8; 32] = *blake3::hash(WASM_SIM_DOMAIN.as_bytes()).as_bytes();
 
         if idx == 0 {
@@ -571,14 +571,14 @@ impl PyanaRuntime {
         }
 
         // Build the canonical `PeerExchange` for this agent using the cipherclerk's
-        // real Ed25519 signing key. `AgentWallet::peer_exchange(domain)` is
+        // real Ed25519 signing key. `AgentCipherclerk::peer_exchange(domain)` is
         // the SDK's factory — same code path the native API uses — so we do
         // not need a public signing-key accessor on the cipherclerk.
-        let peer_exchange = wallet.peer_exchange(WASM_SIM_DOMAIN);
+        let peer_exchange = cclerk.peer_exchange(WASM_SIM_DOMAIN);
 
         let agent = SimAgent {
             name: name.to_string(),
-            wallet,
+            cclerk,
             public_key,
             cell_id,
             held_tokens: Vec::new(),
@@ -726,7 +726,7 @@ impl PyanaRuntime {
     /// walking the call forest and replacing every `Unchecked` authorization
     /// with a real Ed25519 signature from the agent's signing key. The
     /// TurnExecutor verifies these signatures against the cell's stored
-    /// public key — the same code path real wallets exercise.
+    /// public key — the same code path real cipherclerks exercise.
     pub fn execute_turn_for_agent(
         &mut self,
         agent_idx: usize,
@@ -765,10 +765,10 @@ impl PyanaRuntime {
         }
 
         // Sign every Unchecked action with the agent's cipherclerk — same code
-        // path native callers exercise via `AgentWallet::sign_action`.
+        // path native callers exercise via `AgentCipherclerk::sign_action`.
         let federation_id = self.executor.local_federation_id;
-        let wallet = &self.agents[agent_idx].wallet;
-        sign_call_forest(&mut turn, wallet, &federation_id);
+        let cclerk = &self.agents[agent_idx].cclerk;
+        sign_call_forest(&mut turn, cclerk, &federation_id);
 
         let result = self.executor.execute(&turn, &mut self.ledger);
 
@@ -781,7 +781,7 @@ impl PyanaRuntime {
 
     /// Create a note for an agent. Randomness derives deterministically from
     /// the cipherclerk (so the same agent + same value yields the same commitment
-    /// for reproducibility), via `AgentWallet::derive_symmetric_key` rather
+    /// for reproducibility), via `AgentCipherclerk::derive_symmetric_key` rather
     /// than exposing raw signing material.
     pub fn create_note(&mut self, agent_idx: usize, value: u64, asset_type: u64) -> NoteCommitment {
         let agent = &self.agents[agent_idx];
@@ -789,7 +789,7 @@ impl PyanaRuntime {
         fields[0] = asset_type;
         fields[1] = value;
         let randomness = agent
-            .wallet
+            .cclerk
             .derive_symmetric_key("pyana-wasm-note-randomness");
         let note = Note::with_randomness(agent.public_key, fields, randomness);
         note.commitment()
@@ -809,10 +809,10 @@ impl PyanaRuntime {
         fields[0] = asset_type;
         fields[1] = value;
         let randomness = agent
-            .wallet
+            .cclerk
             .derive_symmetric_key("pyana-wasm-note-randomness");
         let spending = agent
-            .wallet
+            .cclerk
             .derive_symmetric_key("pyana-wasm-note-spending");
         let note = Note::with_randomness(agent.public_key, fields, randomness);
         let nullifier = note.nullifier(&spending);
@@ -1128,27 +1128,27 @@ pub struct ConsensusRoundResult {
 }
 
 /// Walk the turn's call forest and replace every `Authorization::Unchecked`
-/// with a real Ed25519 signature via `AgentWallet::sign_action`. Existing
+/// with a real Ed25519 signature via `AgentCipherclerk::sign_action`. Existing
 /// non-Unchecked authorizations are left intact so callers can pre-sign or
 /// pre-prove specific actions. Uses the SDK's canonical signing path — no
 /// hand-rolled cryptography.
-fn sign_call_forest(turn: &mut Turn, wallet: &AgentWallet, federation_id: &[u8; 32]) {
+fn sign_call_forest(turn: &mut Turn, cclerk: &AgentCipherclerk, federation_id: &[u8; 32]) {
     for tree in &mut turn.call_forest.roots {
-        sign_call_tree(tree, wallet, federation_id);
+        sign_call_tree(tree, cclerk, federation_id);
     }
     // Mutating actions invalidates any cached forest hash; clear so the
     // executor recomputes from the now-signed actions.
     turn.call_forest.forest_hash = [0u8; 32];
 }
 
-fn sign_call_tree(tree: &mut CallTree, wallet: &AgentWallet, federation_id: &[u8; 32]) {
+fn sign_call_tree(tree: &mut CallTree, cclerk: &AgentCipherclerk, federation_id: &[u8; 32]) {
     if matches!(tree.action.authorization, Authorization::Unchecked) {
         // Clone the action because sign_action returns a fresh one; replace in place.
-        tree.action = wallet.sign_action(tree.action.clone(), federation_id);
+        tree.action = cclerk.sign_action(tree.action.clone(), federation_id);
     }
     tree.hash = [0u8; 32]; // invalidate cached action hash
     for child in &mut tree.children {
-        sign_call_tree(child, wallet, federation_id);
+        sign_call_tree(child, cclerk, federation_id);
     }
 }
 

@@ -88,7 +88,7 @@ A naked predicate would already work mechanically (executor reads
 `kind`, dispatches, calls verifier with input = signing message); the
 descriptor lifts the *human-readable* and *governance-attested*
 metadata out of the registry into the on-wire authorization so
-wallets, audit tools, and verifier replay can render and reason about
+cipherclerks, audit tools, and verifier replay can render and reason about
 the mode without a registry lookup.
 
 ---
@@ -251,7 +251,7 @@ state)."
 This lets time-locks be authorization, not just constraint: a vault
 cell could declare "any action against this cell requires
 `Authorization::Custom` with a temporal predicate proving height ≥
-unlock_height" — and the wallet generates the proof at the time the
+unlock_height" — and the cclerk generates the proof at the time the
 unlock comes due, with no executor-side scheduling needed.
 
 The single existing user is `compute-exchange`'s ticket-release
@@ -338,9 +338,9 @@ descriptor must say which.
 | Compute-attested (§3.5) | the computation runner (knows the trace) |
 | Credential-attested (§3.6) | the credential holder + the credential issuer |
 
-This matters because *the wallet that constructs the action* must
-be cleartext-inside the auth predicate. If the wallet is
-out-of-band, it cannot generate the proof; if the wallet is only
+This matters because *the cclerk that constructs the action* must
+be cleartext-inside the auth predicate. If the cclerk is
+out-of-band, it cannot generate the proof; if the cclerk is only
 commitment-inside, it can witness but not generate the proof. The
 descriptor's `boundary_contract.cleartext_inside` field tells
 audit tools which population can use this mode.
@@ -462,7 +462,7 @@ no `proof_witness_index` (the signature *is* the proof, and it
 lives in the variant, not in `witness_blobs`), there is no
 `InputRef` (the input is always the canonical signing message).
 Wrapping it in `WitnessedPredicate` adds three pieces of
-zero-information metadata to every signed turn — every wallet pays
+zero-information metadata to every signed turn — every cclerk pays
 that bandwidth and audit-noise tax for no benefit. Same argument
 for `Breadstuff` (a single 32-byte token hash).
 
@@ -483,7 +483,7 @@ facet" — the verifier accretes policy that's better factored as
 explicit code paths.
 
 **(c) The closed enum gives audit tools structural visibility per
-`PREDICATE-INVENTORY.md §6.2`.** Today a wallet rendering "this
+`PREDICATE-INVENTORY.md §6.2`.** Today a cclerk rendering "this
 turn is authorized by Signature" can decide UI based on a single
 match arm. Under full subsumption it would render "this turn is
 authorized by Custom { vk_hash: 0xabc… }" and require a registry
@@ -855,7 +855,7 @@ Each requires:
 4. App-side tooling to construct `Authorization::Custom` with the
    right predicate.
 
-The two apps validate the registry / governance / wallet-construction
+The two apps validate the registry / governance / cclerk-construction
 path end-to-end. No platform-level commitment to deprecating
 existing variants yet.
 
@@ -913,12 +913,12 @@ contract strings). Three options:
   one indirection per turn rendering; receipts lose self-describability.
 - **(c) Descriptor in registry only.** The wire carries only
   `vk_hash`; the descriptor is in the registry. Costs: descriptor is
-  not on the receipt, so wallets must consult the federation to
+  not on the receipt, so cipherclerks must consult the federation to
   render the auth mode.
 
 Recommendation: **(c) for wire, (a) for receipt-display tooling.**
 The wire carries `vk_hash` only (we already pay 32 bytes); the
-wallet's UI fetches the descriptor from the registry to render.
+cipherclerk's UI fetches the descriptor from the registry to render.
 Receipts are dense; rendering is a UI concern.
 
 This contradicts §1's strawman. Revise: `Authorization::Custom {

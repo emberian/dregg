@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build, validate, and package the Pyana Wallet extension.
+# Build, validate, and package the Pyana Cipherclerk extension.
 #
 # Usage:
 #   ./build.sh          — Build WASM + validate + package
@@ -164,14 +164,14 @@ package_extension() {
   done
 
   # Chrome: .zip
-  local ZIP_NAME="pyana-wallet-chrome.zip"
+  local ZIP_NAME="pyana-cipherclerk-chrome.zip"
   (cd "$SCRIPT_DIR" && zip -q -r "$DIST_DIR/$ZIP_NAME" "${EXISTING_FILES[@]}")
   local ZIP_SIZE
   ZIP_SIZE=$(wc -c < "$DIST_DIR/$ZIP_NAME" | tr -d ' ')
   echo "  Chrome package: $DIST_DIR/$ZIP_NAME ($ZIP_SIZE bytes)"
 
   # Firefox: .xpi (same format as zip, different extension)
-  local XPI_NAME="pyana-wallet-firefox.xpi"
+  local XPI_NAME="pyana-cipherclerk-firefox.xpi"
   cp "$DIST_DIR/$ZIP_NAME" "$DIST_DIR/$XPI_NAME"
   echo "  Firefox package: $DIST_DIR/$XPI_NAME ($ZIP_SIZE bytes)"
 

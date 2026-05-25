@@ -287,7 +287,7 @@ The single-line `id.rs` (just `pub use pyana_types::CellId;`) is the only mostly
   - **`derive_child_vk(factory_vk, param_hash) = BLAKE3_derive_key("pyana-derived-child-vk-v1", factory_vk || param_hash)`** — the off-circuit version. The doc-comment says "the circuit version uses Poseidon2 over BabyBear elements," but the on-circuit binding isn't here.
   - **`creation_budget`** is per-epoch; `advance_epoch` clears prior-epoch counters (retain only current epoch).
   - **`FactoryError` variants** include `DerivedVkMismatch`, `VkNotInApprovedSet`, `ProgramMismatch`, `CapabilityOutsideTemplate`, `FieldConstraintViolation`, `BudgetExceeded`, `FactoryVkMismatch` — strong error-typed gating.
-- **Integration status.** `pyana-cell::factory::*` is consumed by `wasm::privacy`, `turn::action`, `turn::executor`, `starbridge-apps::nameservice`, `sdk::wallet`, `node::mcp`, `node::api`, `preflight::checks::cells`, `preflight::checks::sovereign`. It's wired in.
+- **Integration status.** `pyana-cell::factory::*` is consumed by `wasm::privacy`, `turn::action`, `turn::executor`, `starbridge-apps::nameservice`, `sdk::cclerk`, `node::mcp`, `node::api`, `preflight::checks::cells`, `preflight::checks::sovereign`. It's wired in.
 - **What's surprising / non-obvious.**
   - This is one of the few cell modules with **a real test suite that exercises every variant**: `test_derived_vk_strategy_creates_correct_vk`, `test_from_set_strategy_allows_approved_vk`, `test_budget_resets_on_epoch_advance`, `test_provenance_derivation_verification`. Compared to, say, capability_proof's stub StarkMembership path, factories are battle-ready.
   - **`is_in_approved_set` is linear (`Vec::contains`)** — not Merkle membership as the doc-comment ("order-independent Merkle tree") suggests. For small approved-set sizes this is fine; if a factory ever ships with hundreds of approved VKs, linear scan would be the bottleneck.
@@ -437,7 +437,7 @@ The single-line `id.rs` (just `pub use pyana_types::CellId;`) is the only mostly
   - **`from_bytes_mod_order`** — the shared scalar is reduced mod l for Ed25519 safety. The shared scalar is derived via BLAKE3 keyed derivation ("pyana-stealth scalar v1") for domain separation.
   - **Constant-time equality** for ownership check (`constant_time_eq`).
   - **View key delegation pattern**: the recipient can give a scanning service the `view_private_key` without granting spending authority (view ≠ spend).
-- **Integration status.** `StealthKeys`, `StealthMetaAddress`, `StealthAddress`, `StealthAnnouncement` are consumed by `wasm::privacy`, `apps/gallery/src/private_vickrey.rs`, `preflight::checks::privacy`, `sdk::wallet`. The marketplace / gallery integration is real.
+- **Integration status.** `StealthKeys`, `StealthMetaAddress`, `StealthAddress`, `StealthAnnouncement` are consumed by `wasm::privacy`, `apps/gallery/src/private_vickrey.rs`, `preflight::checks::privacy`, `sdk::cclerk`. The marketplace / gallery integration is real.
 - **What's surprising / non-obvious.**
   - The same `getrandom::fill` panics on failure with `.expect("getrandom failed")` — six times in the file. This is consistent with the rest of the crate, which treats `getrandom` failure as a hard error.
   - **No tracking of view_tag false positives**: the ~255/256 pre-filter is documented but the implementation just hashes the DH and compares one byte. A scanning service still has to do the full ownership check for every match — view_tag is purely an optimization hint.
@@ -507,7 +507,7 @@ The single-line `id.rs` (just `pub use pyana_types::CellId;`) is the only mostly
   - **Five-check verification**: signature → commitment match → sequence gap → timestamp regression → STARK proof (if present).
   - **Commitment widening.** Previously a 4-byte truncation of the 32-byte commitment gave only ~31 bits of binding. The new path uses `pyana_commit::typed::canonical_32_to_felts_4` for a 4-felt encoding (~124-bit binding). This is the Stage-1 EFFECT-VM-SHAPE-A.md uplift.
   - **`create_transition_at` exposes the timestamp** for wasm environments (no SystemTime) and deterministic replay tests. Receiver-side `TimestampRegression` check is unchanged.
-- **Integration status.** `PeerExchange` is consumed by `wasm::bindings`, `wasm::runtime`, `sdk::wallet`, `node::mcp`. This is the API JS/wasm wallets see.
+- **Integration status.** `PeerExchange` is consumed by `wasm::bindings`, `wasm::runtime`, `sdk::cclerk`, `node::mcp`. This is the API JS/wasm cipherclerks see.
 - **What's surprising / non-obvious.**
   - **The STARK verification path is feature-gated `#[cfg(feature = "zkvm")]`.** Without `zkvm`, the proof bytes are stored but never checked — the field is `Option<Vec<u8>>` and only the signature/commitment/sequence/timestamp checks run. This is a deliberate "signature-only" fallback.
   - **PI layout is documented inline**: `[old_commit(1), new_commit(1), net_delta_mag(1), net_delta_sign(1), effects_hash_lo(1), effects_hash_hi(1), custom_count(1), ...custom_entries(8 per)]`. The verifier *overrides* the commitment slots with verifier-derived values to catch divergence, then matches the proof's own PIs against these felts.

@@ -318,7 +318,7 @@ maturity is auditable from one place.
 - Persistent state across reboots — devnet resets cleanly by design
 - TLS / WAN deployment — loopback only
 - Multi-host topology — single-machine only
-- Wallet / app-framework demos — see `demo/two-ai-handoff/` and
+- Cipherclerk / app-framework demos — see `demo/two-ai-handoff/` and
   `demo/silver-vision-e2e/`
 
 ## Pointers

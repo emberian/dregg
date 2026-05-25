@@ -70,8 +70,8 @@ pub async fn handle_register(ctx: &Context, command: &CommandInteraction, state:
         Ok(Some(id)) => id,
         Ok(None) => {
             let embed = embeds::warning_embed(
-                "No Wallet",
-                "You need a linked pyana identity to register names. Use `/link-wallet` first.",
+                "No Cipherclerk",
+                "You need a linked pyana identity to register names. Use `/link-cclerk` first.",
             );
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))

@@ -33,7 +33,7 @@ Silver makes Golden meaningful: there is nothing to constrain algebraically unti
 - **Capability** — a reference to a cell-method composition, attenuable. Faceted caps narrow permissions; sealed caps gate visibility; bearer caps grant exercise without identity.
 - **CapTP wire transport** — sturdy refs (durable; bearer-shaped), swiss-table fast routing (per-session promise IDs), `HandoffCertificate` (Alice→Bob→Carol three-party handoff, cross-federation), `PipelinedMsg` (promise pipelining over the wire).
 - **`Authorization::CapTpDelivered`** — the new authorization variant proving a turn arrived via a verified CapTP handoff. Carries `{handoff_cert, introducer_pk, sender_pk, sender_signature}`. The executor's `verify_captp_delivered` checks introducer-sig + sender-sig + cert freshness; the turn applies as if signed.
-- **Cipherclerk** (`AgentCipherclerk` in the SDK; `AppCipherclerk` is the narrow framework handle) — the agent-side *cryptographic clerk*. It holds signing keys, authorization tokens, the receipt chain, the stealth keypair, and presents credentials/proofs on the Principal's behalf. The name borrows from Greg Egan's *Polis* and its descendants (Diaspora, Schild's Ladder), where a citizen's cipherclerk is the autonomous component that manages their cryptographic identity and capability handles. The legacy term was "wallet"; that connoted value storage, but a pyana cipherclerk's authority is mostly *capabilities*, not balances — so the rename is permanent and the old name remains as a deprecation-free alias during the migration window.
+- **Cipherclerk** (`AgentCipherclerk` in the SDK; `AppCipherclerk` is the narrow framework handle) — the agent-side *cryptographic clerk*. It holds signing keys, authorization tokens, the receipt chain, the stealth keypair, and presents credentials/proofs on the Principal's behalf. The name borrows from Greg Egan's *Polis* and its descendants (Diaspora, Schild's Ladder), where a citizen's cipherclerk is the autonomous component that manages their cryptographic identity and capability handles. The legacy term was "cclerk"; that connoted value storage, but a pyana cipherclerk's authority is mostly *capabilities*, not balances — so the rename is permanent and the old name remains as a deprecation-free alias during the migration window.
 
 ### Turns, effects, the Effect VM
 
@@ -76,7 +76,7 @@ Six modes (after this season):
 
 ### Cross-cell algebra (γ.2 — bilateral binding)
 
-Single-cell proofs say "Alice's wallet correctly applied N effects to Alice's state." They say nothing about whether Bob's state updated consistently. **γ.2 fixes this** for three primitive cross-cell effect families:
+Single-cell proofs say "Alice's cclerk correctly applied N effects to Alice's state." They say nothing about whether Bob's state updated consistently. **γ.2 fixes this** for three primitive cross-cell effect families:
 
 - **Transfer** (symmetric: A debits = B credits): `transfer_id = Poseidon2("γ-transfer", from_cell, to_cell, amount, sender_nonce)`.
 - **Grant** (asymmetric: A grants cap to B): `grant_id = Poseidon2("γ-grant", from_cell, to_cell, cap_target, permissions, expiry)`.
@@ -163,15 +163,15 @@ Per `KIMCHI-SURVEY.md` + `STAGE-7-GAMMA-2-PI-DESIGN.md`:
 
 ## Userspace surface
 
-- **`AppWallet`** (`app-framework/src/wallet.rs`) — narrow 6-method handle wrapping `Arc<RwLock<AgentWallet>>`: `make_action`, `sign_action`, `make_turn`, `cell_id`, `public_key`, `federation_id`. Apps don't see the 107-method `AgentWallet`.
-- **`AppServer`** — axum server with `.with_wallet(...)` and `.with_embedded_executor(...)` extension hooks. `EmbeddedExecutor` is the submission path: the app authors a signed action and `EmbeddedExecutor` actually applies it to a ledger + returns the receipt. (Pre-this-season, apps authored actions and dropped them on the floor.)
-- **`StarbridgeAppContext`** — the canonical mounting point for starbridge-apps: wallet handle, embedded executor, KnownFederations reference, factory registry, inspector registry for Studio integration.
+- **`AppCipherclerk`** (`app-framework/src/cipherclerk.rs`) — narrow 6-method handle wrapping `Arc<RwLock<AgentCipherclerk>>`: `make_action`, `sign_action`, `make_turn`, `cell_id`, `public_key`, `federation_id`. Apps don't see the 107-method `AgentCipherclerk`.
+- **`AppServer`** — axum server with `.with_cclerk(...)` and `.with_embedded_executor(...)` extension hooks. `EmbeddedExecutor` is the submission path: the app authors a signed action and `EmbeddedExecutor` actually applies it to a ledger + returns the receipt. (Pre-this-season, apps authored actions and dropped them on the floor.)
+- **`StarbridgeAppContext`** — the canonical mounting point for starbridge-apps: cclerk handle, embedded executor, KnownFederations reference, factory registry, inspector registry for Studio integration.
 - **`FactoryDescriptor`** — `cell::factory::FactoryDescriptor` bakes program VK + state constraints + capability templates. `Effect::CreateCellFromFactory` creates cells via this canonical path. Apps register descriptors; users create instances.
 - **DSL** — `pyana-dsl` is the *caveat predicate language* (descended from macaroons/biscuits). It compiles to 7 backends (`gen_air`, `gen_kimchi`, `gen_plonky3`, `gen_sp1`, `gen_midnight`, `gen_datalog`, `gen_rust`); cross-backend differential testing (40 cases × 5 voting backends; 2 lint-only) confirms agreement. The DSL stays at the caveat layer; it does not author Effect VM transitions.
 
 ## Starbridge — pyana's IDE/runtime
 
-`starbridge` is the in-browser pyana IDE. The wasm runtime drives real `AgentWallet` + `Ledger` + `TurnExecutor` (not a JS simulation — wasm-bindgen routes to the canonical crates). The Chrome extension exposes `window.pyana` with `signTurn`, `createFromFactory`, `verifyProvenance`, `shareCapability`, etc.
+`starbridge` is the in-browser pyana IDE. The wasm runtime drives real `AgentCipherclerk` + `Ledger` + `TurnExecutor` (not a JS simulation — wasm-bindgen routes to the canonical crates). The Chrome extension exposes `window.pyana` with `signTurn`, `createFromFactory`, `verifyProvenance`, `shareCapability`, etc.
 
 **Starbridge-apps** (`starbridge-apps/`) are the new userspace. Each is a Rust crate exporting `FactoryDescriptor[]` arrays + turn builders, plus a `pages/` directory with web components. The pattern: cell-program patterns + slot caveats + DSL caveats. **No new Effect variants.** The order (per `STARBRIDGE-APPS-PLAN.md`): nameservice → identity → subscription → governed-namespace → bounty-board → gallery → privacy-voting → compute-exchange. The legacy `apps/` retires as starbridge-apps replace each one.
 
@@ -188,7 +188,7 @@ The slop-list (`amm`, `lending`, `orderbook`, `stablecoin`, `dao-treasury`, `pre
 - γ.2 bilateral binding Phase 1 (PI exposure + off-AIR verifier subcommand)
 - Sovereign-witness Phase 1 design (AIR teeth gated by `IS_SOVEREIGN_CELL`)
 - Real Shamir + ChaCha20-Poly1305 threshold decryption wired into `TrustlessIntentEngine` in production
-- Wallet v1→v3 signing migration (closes the witness wire-malleability bug)
+- Cipherclerk v1→v3 signing migration (closes the witness wire-malleability bug)
 - Verifier PI completeness pass (closes T8 + T11)
 - Bridge `destination_federation` AIR enforcement (closes a part of T6)
 - `Cell::seal` `allowed_effects` round-trip fix (closes the unseal authority-amplification bug)
@@ -197,7 +197,7 @@ The slop-list (`amm`, `lending`, `orderbook`, `stablecoin`, `dao-treasury`, `pre
 - `plonky3_recursion_impl` generalized past `P3MerklePoseidon2Air` (Golden-Edge Block 1)
 
 **Userspace:**
-- `AppWallet` + `EmbeddedExecutor` + `StarbridgeAppContext`
+- `AppCipherclerk` + `EmbeddedExecutor` + `StarbridgeAppContext`
 - `pyana-credentials` crate (G31 from PYANA-FLAWS-FROM-APPS: promotes `bridge::present`)
 - `pyana-directory` crate (G32/G33: promotes nameservice/governed-namespace directory pattern)
 - `pyana-dfa` crate (canonical DFA + AIR + governance)
@@ -206,7 +206,7 @@ The slop-list (`amm`, `lending`, `orderbook`, `stablecoin`, `dao-treasury`, `pre
 
 **Cleanup / retirement:**
 - 6 slop apps deleted (amm, lending, orderbook, stablecoin, dao-treasury, prediction-market)
-- discord-bot promoted to toplevel; migrated to AppWallet
+- discord-bot promoted to toplevel; migrated to AppCipherclerk
 - `cod/` deleted
 - `store/` renamed `persist/`
 - Crate name normalization (`pyana-` prefix everywhere: `pyana-token`, `pyana-macaroon`, `pyana-tokenizer`, `pyana-secrets`, `pyana-hints`, `pyana-discharge-gateway`)

@@ -325,10 +325,10 @@ fn compute_committed_note_commitment(
 }
 
 // =============================================================================
-// Owned note helper (for wallet integration)
+// Owned note helper (for cipherclerk integration)
 // =============================================================================
 
-/// A note owned by this wallet with full opening data.
+/// A note owned by this cipherclerk with full opening data.
 ///
 /// This is the minimum information needed to spend a committed note.
 #[derive(Clone, Debug)]

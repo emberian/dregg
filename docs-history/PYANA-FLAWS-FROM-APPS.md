@@ -7,11 +7,11 @@
 
 Per-app detail is in `apps/<name>/CLAUDIT.md` (6298 LOC across 10 files). Verdicts: **all 10 BROKEN**. Cumulative P0 count ≥ 60. Spot-verified P0 cites at end of document.
 
-**Method:** Cross-cutting synthesis across the ten CLAUDIT.md files; corroborated against `AUDIT-cell.md`, `AUDIT-circuit.md`, `AUDIT-turn-executor.md`, `AUDIT-wallet.md`, `AUDIT-dsl.md`, `AUDIT-sdk-rest.md`, `AUDIT-node.md`, `AUDIT-extension.md`, `AUDIT-wasm.md`.
+**Method:** Cross-cutting synthesis across the ten CLAUDIT.md files; corroborated against `AUDIT-cell.md`, `AUDIT-circuit.md`, `AUDIT-turn-executor.md`, `AUDIT-cclerk.md`, `AUDIT-dsl.md`, `AUDIT-sdk-rest.md`, `AUDIT-node.md`, `AUDIT-extension.md`, `AUDIT-wasm.md`.
 
 ## The punchline
 
-> **None of the 10 audited apps actually use the Effect VM, TurnExecutor, or wallet sealed-value notes as the primary execution path.** They are aspirational facades. Where they touch primitives at all, they reproduce the same witness-without-constraint anti-pattern documented in `AUDIT-circuit.md`. The most damning finding is *not* a primitive flaw — it's that **Pyana provides no paved path that an app developer could plausibly follow**. Each app reinvents auth, identity binding, proof verification, escrow, supply conservation, time, and nullifier management from scratch. Each one does it badly.
+> **None of the 10 audited apps actually use the Effect VM, TurnExecutor, or cclerk sealed-value notes as the primary execution path.** They are aspirational facades. Where they touch primitives at all, they reproduce the same witness-without-constraint anti-pattern documented in `AUDIT-circuit.md`. The most damning finding is *not* a primitive flaw — it's that **Pyana provides no paved path that an app developer could plausibly follow**. Each app reinvents auth, identity binding, proof verification, escrow, supply conservation, time, and nullifier management from scratch. Each one does it badly.
 
 The bad news: the apps are broken. The good news: they are broken *consistently*, in ways that point to a finite set of missing primitives + framework scaffolding. The cell/turn/EffectVM model is sound; the layer above it (`pyana-app-framework`, opinionated defaults, well-paved patterns, reusable extractors) is thin or absent.
 
@@ -38,7 +38,7 @@ Every app does the same things, badly:
 2. **Decorative ZK proof pipeline.** Proofs generated and discarded (stablecoin mint/repay drops proof bytes; identity verify is server-to-self lookup; bounty-board never wires a `ProofVerifier`; compute-exchange `release_escrow` returns `bool` that's discarded; gallery's settlement aborts in `ReleaseEscrow`).
 3. **Roll-your-own auth that doesn't work** (bounty-board: string-compare against publicly-readable cell hex; nameservice: `owner` in request body, leaked in whois; identity: no signature on credentials; compute-exchange: `signature` field parsed and discarded; subscription: `sender_hex` self-declared).
 4. **Pseudo-escrow.** "Escrow" is a `HashMap` keyed by ID; balances never debited. The bookkeeping flag transitions to "Paid"/"Finalized"/"Released" but no value moves.
-5. **Cross-cell value accounting is purely additive Rust.** No app uses the wallet's sealed-value `HeldToken` discipline; supply drifts silently (stablecoin's `total_supply: u64 +=` desyncs from per-position `debt_amount`).
+5. **Cross-cell value accounting is purely additive Rust.** No app uses the cipherclerk's sealed-value `HeldToken` discipline; supply drifts silently (stablecoin's `total_supply: u64 +=` desyncs from per-position `debt_amount`).
 6. **Time is whatever the request body says it is.** Subscription's epoch, nameservice's clock (hardcoded to 1, so rent is decorative), stablecoin's oracle timestamp, lending's collateral price — all caller-supplied with no federation-attested clock.
 7. **Frontend calls endpoints that don't exist.** Stablecoin, identity, gallery — the JS surface is independent of the Rust surface.
 
@@ -241,7 +241,7 @@ Stablecoin, identity, gallery all surfaced "frontend calls endpoints that don't 
 
 ## What's *not* broken (calibration)
 
-- Wallet sealed-value `HeldToken` is correct; apps simply ignore it.
+- Cipherclerk sealed-value `HeldToken` is correct; apps simply ignore it.
 - Effect VM AIR state-commitment chain *is* correctly bound (per `AUDIT-circuit.md` summary). The 24-effect set covers the right surface; gaps above are *additions*.
 - `BlindedQueue`, `IvcBuilder`, `EscrowManager`, `Authorizer`, `ProgrammableQueue` exist and mostly work.
 - `pyana-dsl` produces real circuits for real backends. The flaw is constraint vocabulary (G4) + the apps' tendency to write the same witness-vs-constraint bug it doesn't help them avoid.

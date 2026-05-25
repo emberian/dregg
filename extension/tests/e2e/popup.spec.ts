@@ -11,10 +11,10 @@ test.describe('Tab navigation', () => {
 
   test('cipherclerk tab is active by default', async ({ popup }) => {
     const cclerkTab = popup.locator('.tab-btn[data-tab="cipherclerk"]');
-    await expect(walletTab).toHaveClass(/active/);
+    await expect(cclerkTab).toHaveClass(/active/);
 
     const cclerkContent = popup.locator('#tab-cipherclerk');
-    await expect(walletContent).toHaveClass(/active/);
+    await expect(cclerkContent).toHaveClass(/active/);
   });
 
   test('clicking Caps tab switches content', async ({ popup }) => {
@@ -24,13 +24,13 @@ test.describe('Tab navigation', () => {
     await expect(capsTab).toHaveClass(/active/);
 
     const cclerkTab = popup.locator('.tab-btn[data-tab="cipherclerk"]');
-    await expect(walletTab).not.toHaveClass(/active/);
+    await expect(cclerkTab).not.toHaveClass(/active/);
 
     const capsContent = popup.locator('#tab-capabilities');
     await expect(capsContent).toHaveClass(/active/);
 
     const cclerkContent = popup.locator('#tab-cipherclerk');
-    await expect(walletContent).not.toHaveClass(/active/);
+    await expect(cclerkContent).not.toHaveClass(/active/);
   });
 
   test('clicking Directory tab switches content', async ({ popup }) => {

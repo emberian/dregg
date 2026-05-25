@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use pyana_app_framework::BatchExecutor;
-use pyana_sdk::wallet::DelegatedToken;
+use pyana_sdk::cipherclerk::DelegatedToken;
 use pyana_sdk::{AgentCipherclerk, Attenuation};
 use pyana_token::BudgetSpec;
 use tokio::sync::Mutex;
@@ -16,13 +16,13 @@ use crate::creator::{Creator, Tier};
 use crate::crypto::{decrypt_with, pubkey_from_privkey};
 use crate::delivery::{self, DeliveryLog, new_subscriber_inbox};
 use crate::payments::{DebitTurn, PaymentExecutor};
-use crate::subscriber::{SubscriberRegistry, deterministic_wallet};
+use crate::subscriber::{SubscriberRegistry, deterministic_cclerk};
 
-fn wallet(seed: u8) -> AgentCipherclerk {
+fn cclerk(seed: u8) -> AgentCipherclerk {
     let mut s = [0u8; 32];
     s[0] = seed;
     s[31] = seed.wrapping_mul(13);
-    deterministic_wallet(s)
+    deterministic_cclerk(s)
 }
 
 fn install_debit_auth(
@@ -59,8 +59,8 @@ fn install_debit_auth(
 #[tokio::test]
 async fn happy_path_free_tier_delivery() {
     let mut reg = SubscriberRegistry::new();
-    let alice = wallet(1);
-    let creator_w = wallet(2);
+    let alice = cclerk(1);
+    let creator_w = cclerk(2);
 
     // Alice's X25519 receive keypair.
     let alice_recv_priv = {
@@ -108,10 +108,10 @@ async fn happy_path_free_tier_delivery() {
 #[tokio::test]
 async fn happy_path_premium_tier_with_debit() {
     let mut reg = SubscriberRegistry::new();
-    let mut alice = wallet(3);
-    let creator_w = wallet(4);
-    let mut issuer_w = wallet(5);
-    let mut executor_w = wallet(6);
+    let mut alice = cclerk(3);
+    let creator_w = cclerk(4);
+    let mut issuer_w = cclerk(5);
+    let mut executor_w = cclerk(6);
 
     reg.register_subscriber(alice.public_key(), [0xAAu8; 32]);
 
@@ -165,9 +165,9 @@ async fn happy_path_premium_tier_with_debit() {
 #[tokio::test]
 async fn premium_tier_requires_credential() {
     let mut reg = SubscriberRegistry::new();
-    let alice = wallet(7);
-    let creator_w = wallet(8);
-    let issuer_w = wallet(9);
+    let alice = cclerk(7);
+    let creator_w = cclerk(8);
+    let issuer_w = cclerk(9);
 
     reg.register_subscriber(alice.public_key(), [0xAAu8; 32]);
     let mut creator = Creator::new(creator_w.public_key());
@@ -190,8 +190,8 @@ async fn premium_tier_requires_credential() {
 #[tokio::test]
 async fn inbox_never_contains_plaintext() {
     let mut reg = SubscriberRegistry::new();
-    let alice = wallet(10);
-    let creator_w = wallet(11);
+    let alice = cclerk(10);
+    let creator_w = cclerk(11);
 
     let alice_recv_priv = [0xC1u8; 32];
     reg.register_subscriber(alice.public_key(), pubkey_from_privkey(&alice_recv_priv));
@@ -230,9 +230,9 @@ async fn inbox_never_contains_plaintext() {
 #[tokio::test]
 async fn auto_debit_pinned_to_authorized_asset() {
     let mut reg = SubscriberRegistry::new();
-    let mut alice = wallet(12);
-    let bob = wallet(13);
-    let mut executor_w = wallet(14);
+    let mut alice = cclerk(12);
+    let bob = cclerk(13);
+    let mut executor_w = cclerk(14);
 
     install_debit_auth(&mut reg, &mut alice, &mut executor_w, 1, 1000);
 
@@ -263,9 +263,9 @@ async fn auto_debit_pinned_to_authorized_asset() {
 #[tokio::test]
 async fn auto_debit_max_per_epoch_enforced() {
     let mut reg = SubscriberRegistry::new();
-    let mut alice = wallet(15);
-    let bob = wallet(16);
-    let mut executor_w = wallet(17);
+    let mut alice = cclerk(15);
+    let bob = cclerk(16);
+    let mut executor_w = cclerk(17);
 
     install_debit_auth(&mut reg, &mut alice, &mut executor_w, 1, 50);
 
@@ -297,8 +297,8 @@ async fn auto_debit_max_per_epoch_enforced() {
 #[tokio::test]
 async fn auto_debit_without_authorization_rejected() {
     let reg = SubscriberRegistry::new();
-    let alice = wallet(18);
-    let bob = wallet(19);
+    let alice = cclerk(18);
+    let bob = cclerk(19);
     let mut exec = PaymentExecutor::new();
     exec.ledger.set(alice.public_key(), 1, 500);
     let r = exec.debit(
@@ -323,8 +323,8 @@ async fn auto_debit_without_authorization_rejected() {
 #[tokio::test]
 async fn tampered_delegation_envelope_rejected() {
     let mut reg = SubscriberRegistry::new();
-    let mut alice = wallet(20);
-    let mut executor_w = wallet(21);
+    let mut alice = cclerk(20);
+    let mut executor_w = cclerk(21);
 
     let token = alice.mint_token(&[7u8; 32], "subscription-debit");
     let restrictions = Attenuation {

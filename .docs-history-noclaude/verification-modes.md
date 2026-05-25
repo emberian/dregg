@@ -30,9 +30,9 @@ and can run Datalog locally.
 ### API
 
 ```rust
-use pyana_sdk::{AgentWallet, VerificationMode, AuthorizationPresentation};
+use pyana_sdk::{AgentCipherclerk, VerificationMode, AuthorizationPresentation};
 
-let presentation = wallet.authorize(&token, &request, VerificationMode::Trusted)?;
+let presentation = cclerk.authorize(&token, &request, VerificationMode::Trusted)?;
 
 // The caller receives everything:
 match presentation {
@@ -87,10 +87,10 @@ internal delegation structure, or user identity).
 ### API
 
 ```rust
-use pyana_sdk::{AgentWallet, VerificationMode, AuthorizationPresentation, FactIndex};
+use pyana_sdk::{AgentCipherclerk, VerificationMode, AuthorizationPresentation, FactIndex};
 
 // Reveal facts at indices 0 and 2 from the evaluated fact set
-let presentation = wallet.authorize(
+let presentation = cclerk.authorize(
     &token,
     &request,
     VerificationMode::SelectiveDisclosure {
@@ -151,9 +151,9 @@ scenarios where the verifier should learn absolutely nothing beyond "yes" or "no
 ### API
 
 ```rust
-use pyana_sdk::{AgentWallet, VerificationMode, AuthorizationPresentation};
+use pyana_sdk::{AgentCipherclerk, VerificationMode, AuthorizationPresentation};
 
-let presentation = wallet.authorize(&token, &request, VerificationMode::FullyPrivate)?;
+let presentation = cclerk.authorize(&token, &request, VerificationMode::FullyPrivate)?;
 
 match presentation {
     AuthorizationPresentation::Private { proof, conclusion } => {

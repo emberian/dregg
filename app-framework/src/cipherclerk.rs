@@ -15,7 +15,7 @@
 //!
 //! - [`AppCipherclerk::cell_id`] — the agent's canonical CellId in its default
 //!   federation domain (no string-threading every call).
-//! - [`AppCipherclerk::public_key`] — the wallet's identity (32-byte public key).
+//! - [`AppCipherclerk::public_key`] — the cipherclerk's identity (32-byte public key).
 //! - [`AppCipherclerk::make_action`] — build a single-method action with
 //!   multiple effects, signed for the framework's federation_id binding.
 //! - [`AppCipherclerk::make_turn`] — wrap a signed action in a Turn with
@@ -25,16 +25,16 @@
 //! ## What apps cannot do through this handle
 //!
 //! - Extract the underlying signing key (only the framework holds the SDK
-//!   wallet; apps see [`AppCipherclerk`] which deliberately exposes no
+//!   cipherclerk; apps see [`AppCipherclerk`] which deliberately exposes no
 //!   key-export methods).
-//! - Mutate the wallet's receipt chain or token list.
+//! - Mutate the cipherclerk's receipt chain or token list.
 //! - Reach into `AgentCipherclerk`'s 107-method surface — that's an SDK
 //!   concern, not an app concern.
 //!
 //! ## Why a wrapper and not `&AgentCipherclerk`?
 //!
 //! Exposing `AgentCipherclerk` directly to apps couples the userspace surface
-//! to every method we add to the SDK. The framework wallet handle is the
+//! to every method we add to the SDK. The framework cipherclerk handle is the
 //! intentional narrow waist — when an app needs a new primitive, it's
 //! either a *new framework method* (small, reviewed) or a *missing SDK
 //! method* (we add it once, the framework method delegates).
@@ -54,12 +54,12 @@ use pyana_turn::action::{Action, Effect};
 use pyana_turn::{Turn, TurnReceipt};
 use pyana_types::{CellId, PublicKey};
 
-/// A wallet handle suitable for app-level userspace.
+/// A cipherclerk handle suitable for app-level userspace.
 ///
 /// Wraps an [`AgentCipherclerk`] and a `federation_id`, exposing only the
 /// methods apps need to build signed actions and turns. Cheap to clone
 /// (internally `Arc<RwLock<AgentCipherclerk>>` — same shared cell as the
-/// embedded executor's runtime, so signing the wallet sees the same
+/// embedded executor's runtime, so signing the cipherclerk sees the same
 /// receipt chain head as turn submission).
 #[derive(Clone)]
 pub struct AppCipherclerk {
@@ -69,7 +69,7 @@ pub struct AppCipherclerk {
 }
 
 impl AppCipherclerk {
-    /// Construct an app wallet from an SDK wallet and the federation
+    /// Construct an app cipherclerk from an SDK cipherclerk and the federation
     /// identifier this app operates in.
     ///
     /// The default domain is `"default"` — matches `AgentCipherclerk::cell_id("default")`.
@@ -82,13 +82,13 @@ impl AppCipherclerk {
         }
     }
 
-    /// Construct an app wallet from an already-shared SDK wallet handle.
+    /// Construct an app cipherclerk from an already-shared SDK cipherclerk handle.
     ///
-    /// Use this when the wallet is *also* owned by an
+    /// Use this when the cipherclerk is *also* owned by an
     /// [`EmbeddedExecutor`]'s runtime — both this handle and the
     /// runtime's lock guard share the same underlying agent identity
     /// and receipt chain. The framework constructs the shared handle
-    /// itself in [`EmbeddedExecutor::app_wallet`]; apps rarely need to
+    /// itself in [`EmbeddedExecutor::app_cipherclerk`]; apps rarely need to
     /// call this directly.
     pub fn from_shared(
         cipherclerk: Arc<RwLock<AgentCipherclerk>>,
@@ -108,23 +108,23 @@ impl AppCipherclerk {
         self
     }
 
-    /// This wallet's public key (the agent identity).
+    /// This cipherclerk's public key (the agent identity).
     pub fn public_key(&self) -> PublicKey {
         self.read().public_key()
     }
 
-    /// This wallet's CellId in the framework's default domain.
+    /// This cipherclerk's CellId in the framework's default domain.
     pub fn cell_id(&self) -> CellId {
         self.read().cell_id(&self.domain)
     }
 
-    /// This wallet's CellId in an explicit domain (rarely needed; prefer
+    /// This cipherclerk's CellId in an explicit domain (rarely needed; prefer
     /// [`Self::cell_id`]).
     pub fn cell_id_for(&self, domain: &str) -> CellId {
         self.read().cell_id(domain)
     }
 
-    /// The federation_id this wallet signs against.
+    /// The federation_id this cipherclerk signs against.
     pub fn federation_id(&self) -> &[u8; 32] {
         &self.federation_id
     }
@@ -133,7 +133,7 @@ impl AppCipherclerk {
     /// effects.
     ///
     /// The action carries a real `Authorization::Signature(..)` — no
-    /// `[0u8; 64]` placeholders. The signature binds to this wallet's
+    /// `[0u8; 64]` placeholders. The signature binds to this cipherclerk's
     /// public key, the action's canonical bytes, and the framework's
     /// federation_id.
     pub fn make_action(&self, target: CellId, method: &str, effects: Vec<Effect>) -> Action {
@@ -141,7 +141,7 @@ impl AppCipherclerk {
             .make_action(target, method, effects, &self.federation_id)
     }
 
-    /// Build a self-signed [`Action`] targeting this wallet's own cell.
+    /// Build a self-signed [`Action`] targeting this cipherclerk's own cell.
     ///
     /// Equivalent to `cclerk.make_action(cclerk.cell_id(), method, effects)`.
     /// Use this for app-internal actions where the target is the agent's
@@ -154,7 +154,7 @@ impl AppCipherclerk {
         self.make_action(self.cell_id(), method, effects)
     }
 
-    /// Re-sign an already-built [`Action`] with this wallet, overwriting
+    /// Re-sign an already-built [`Action`] with this cipherclerk, overwriting
     /// its existing authorization.
     ///
     /// Use this when an action needs to be assembled by lower-level
@@ -168,7 +168,7 @@ impl AppCipherclerk {
     /// Wrap a signed [`Action`] in a [`Turn`] ready for submission.
     ///
     /// The Turn's `agent` is `self.cell_id()`, `previous_receipt_hash` is
-    /// pulled from the wallet's chain head, `nonce` defaults to 0 (the
+    /// pulled from the cipherclerk's chain head, `nonce` defaults to 0 (the
     /// caller's submission path is expected to set the real nonce; see
     /// `pyana_sdk::AgentRuntime::execute`), and forest/tree hashes are
     /// zeroed and filled in by `compute_turn_bytes` at signing time.
@@ -196,7 +196,7 @@ impl AppCipherclerk {
     /// path.
     ///
     /// This is the *userspace* entry to constructor-transparency cell
-    /// birth: the extension wallet's `window.pyana.createFromFactory`,
+    /// birth: the extension cipherclerk's `window.pyana.createFromFactory`,
     /// the wasm runtime's `create_agent`, and any in-process app that
     /// mints cells go through here. No callers should reach past the
     /// `AppCipherclerk` for `Effect::CreateCellFromFactory` — when they do, a
@@ -213,8 +213,8 @@ impl AppCipherclerk {
     /// * `params` — additional creation parameters (program VK, initial
     ///   fields/caps, mode).
     ///
-    /// The issuing cell is this wallet's `cell_id()`; the federation_id
-    /// is the wallet's bound `federation_id`.
+    /// The issuing cell is this cipherclerk's `cell_id()`; the federation_id
+    /// is the cipherclerk's bound `federation_id`.
     ///
     /// The returned `Turn` is fully signed (real
     /// `Authorization::Signature(..)`); pair with
@@ -251,11 +251,11 @@ impl AppCipherclerk {
 
     /// Legacy alias for [`Self::shared_cipherclerk`].
     #[doc(hidden)]
-    pub fn shared_wallet(&self) -> Arc<RwLock<AgentCipherclerk>> {
+    pub fn shared_cclerk(&self) -> Arc<RwLock<AgentCipherclerk>> {
         self.shared_cipherclerk()
     }
 
-    /// Take a read lock on the underlying SDK wallet (panic-safe).
+    /// Take a read lock on the underlying SDK cipherclerk (panic-safe).
     ///
     /// Lock poisoning is recovered by surfacing the (possibly stale)
     /// inner value — matches the convention `pyana_sdk::AgentRuntime`
@@ -279,7 +279,7 @@ impl std::fmt::Debug for AppCipherclerk {
 /// submission.
 ///
 /// This is the "load-bearing" closure of `APPS-USERSPACE-GAPS.md` §Gap 4:
-/// the framework owns a private [`AgentRuntime`] (wallet + local ledger +
+/// the framework owns a private [`AgentRuntime`] (cipherclerk + local ledger +
 /// turn executor) that handlers can reach through an axum
 /// `Extension<EmbeddedExecutor>`. When a handler builds a signed
 /// [`Action`] via the [`AppCipherclerk`], it can immediately submit the
@@ -316,11 +316,11 @@ pub struct EmbeddedExecutor {
 
 impl EmbeddedExecutor {
     /// Construct an executor that shares the given [`AppCipherclerk`]'s
-    /// underlying SDK wallet — so the action-signing handle and the
+    /// underlying SDK cipherclerk — so the action-signing handle and the
     /// turn-submission handle both see the same receipt chain head and
     /// signing key.
     ///
-    /// The framework wraps the shared wallet in an [`AgentRuntime`] —
+    /// The framework wraps the shared cipherclerk in an [`AgentRuntime`] —
     /// which constructs a local [`pyana_cell::Ledger`] seeded with the
     /// agent's cell (1M computrons default balance, see
     /// `AgentRuntime::new_simple`).
@@ -362,7 +362,7 @@ impl EmbeddedExecutor {
     ///
     /// The submitted turn is executed against the framework's private
     /// ledger. On success the agent's receipt chain is extended (in the
-    /// runtime's owned wallet copy). This is the path that closes
+    /// runtime's owned cipherclerk copy). This is the path that closes
     /// `APPS-USERSPACE-GAPS.md` §Gap 4 — handlers can now actually
     /// observe a receipt instead of building an action and dropping it.
     pub fn submit_turn(&self, turn: &Turn) -> Result<TurnReceipt, ExecutorSubmitError> {
@@ -433,7 +433,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn wallet_signs_action_with_real_signature() {
+    fn cclerk_signs_action_with_real_signature() {
         let sdk_cclerk = AgentCipherclerk::new();
         let fed = [7u8; 32];
         let cclerk = AppCipherclerk::new(sdk_cclerk, fed);
@@ -454,7 +454,7 @@ mod tests {
     }
 
     #[test]
-    fn wallet_make_turn_binds_to_default_domain() {
+    fn cclerk_make_turn_binds_to_default_domain() {
         let sdk_cclerk = AgentCipherclerk::new();
         let cclerk = AppCipherclerk::new(sdk_cclerk, [0u8; 32]);
         let cell = cclerk.cell_id();
@@ -473,14 +473,14 @@ mod tests {
     }
 
     // NOTE: the "sign_action overwrites Unchecked" test lives in
-    // `app-framework/tests/wallet_sign_action.rs` (an integration test
+    // `app-framework/tests/cipherclerk_sign_action.rs` (an integration test
     // directory) — the in-`src/` grep guard
     // (`tests/no_unchecked.rs`) refuses to allow the literal
     // `Authorization::Unchecked` anywhere under `src/`, including in
     // `#[cfg(test)]` blocks. That is by design.
 
     #[test]
-    fn make_self_action_targets_wallet_cell() {
+    fn make_self_action_targets_cclerk_cell() {
         // Gap 3: ergonomic wrapper for app-internal actions.
         let sdk_cclerk = AgentCipherclerk::new();
         let cclerk = AppCipherclerk::new(sdk_cclerk, [11u8; 32]);
@@ -518,7 +518,7 @@ mod tests {
 
         let turn = cclerk.create_from_factory(factory_vk, owner, token, params);
 
-        // Issuer is the wallet's own cell.
+        // Issuer is the cipherclerk's own cell.
         assert_eq!(turn.agent, cclerk.cell_id());
         // Exactly one root action, carrying the factory effect.
         assert_eq!(turn.call_forest.roots.len(), 1);
@@ -566,7 +566,7 @@ mod tests {
         // Per-action signatures preserved (not re-signed at turn level).
         assert_eq!(turn.call_forest.roots[0].action.hash(), a1.hash());
         assert_eq!(turn.call_forest.roots[1].action.hash(), a2.hash());
-        // Turn agent is the wallet's default cell.
+        // Turn agent is the cipherclerk's default cell.
         assert_eq!(turn.agent, cclerk.cell_id());
     }
 }

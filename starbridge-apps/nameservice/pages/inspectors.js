@@ -14,7 +14,7 @@
 //     Mutation surface — register / renew / transfer / revoke /
 //     set-target — wired to window.pyana.builders.nameservice.* (the
 //     "cipherclerk-named" Action presets in ./turn-builders.js, all of
-//     which terminate in window.pyana.signTurn for wallet-side signing).
+//     which terminate in window.pyana.signTurn for cclerk-side signing).
 //
 // All policy lives in Rust (starbridge-apps/nameservice/src/lib.rs); the
 // JS is the thinnest possible UX layer.

@@ -29,13 +29,13 @@ pub enum Sensitivity {
     Sensitive,
 }
 
-/// A held capability token in the wallet's simplified representation.
+/// A held capability token in the cipherclerk's simplified representation.
 ///
-/// This is the wallet-side view of a token -- enough information to evaluate
+/// This is the cclerk-side view of a token -- enough information to evaluate
 /// whether it satisfies a MatchSpec without needing the full serialized token.
 #[derive(Clone, Debug)]
 pub struct HeldCapability {
-    /// Unique identifier for this token in the wallet.
+    /// Unique identifier for this token in the cclerk.
     pub token_id: String,
     /// Actions this token grants (e.g., "read", "write").
     pub actions: Vec<String>,
@@ -72,7 +72,7 @@ pub enum MatchResult {
         matched: Match,
     },
     /// A compound match was found. Multiple sub-specs were each satisfied
-    /// (possibly by different tokens in the same wallet).
+    /// (possibly by different tokens in the same cclerk).
     CompoundMatched {
         /// For each sub-spec in the compound list, the index of the token that satisfied it.
         token_indices: Vec<usize>,
@@ -96,7 +96,7 @@ pub enum MatchResult {
 /// 3. Returns the first match found (or NoMatch)
 ///
 /// For compound intents (MatchSpec with a `compound` list), ALL sub-specs must be
-/// satisfiable by some token in the wallet. Different sub-specs may be satisfied by
+/// satisfiable by some token in the cclerk. Different sub-specs may be satisfied by
 /// different tokens. The fulfillment produces multiple attenuated tokens (one per sub-spec).
 ///
 /// All evaluation is LOCAL -- no network calls, no side effects.
@@ -162,7 +162,7 @@ pub fn match_intent(
     MatchResult::NoMatch
 }
 
-/// Match a compound intent: every sub-spec must be satisfiable by some token in the wallet.
+/// Match a compound intent: every sub-spec must be satisfiable by some token in the cclerk.
 /// Different sub-specs can be satisfied by different tokens.
 fn match_compound(
     intent: &Intent,
@@ -565,10 +565,10 @@ fn generate_proof(
         VerificationMode::Private => {
             // In private mode, we would generate a full STARK proof via
             // pyana-circuit's prove_authorization_stark. The proof demonstrates:
-            // - There exists a token T in the wallet
+            // - There exists a token T in the cclerk
             // - T's Datalog evaluation produces ALLOW for the intent's MatchSpec
             // - T is not expired
-            // Without revealing T or anything else about the wallet contents.
+            // Without revealing T or anything else about the cclerk contents.
             //
             // For now, produce a commitment (the real circuit integration comes
             // when the multi_step_air is wired up to this matcher).
@@ -931,8 +931,8 @@ mod tests {
     }
 
     #[test]
-    fn test_offer_intent_matches_when_wallet_empty() {
-        // Empty wallet -- any offer is useful.
+    fn test_offer_intent_matches_when_cclerk_empty() {
+        // Empty cclerk -- any offer is useful.
         let spec = MatchSpec {
             actions: vec![ActionPattern {
                 action: Some("read".into()),
@@ -1160,7 +1160,7 @@ mod tests {
 
     #[test]
     fn test_compound_intent_both_satisfied() {
-        // Wallet has a read token for documents and an execute token for compute
+        // Cipherclerk has a read token for documents and an execute token for compute
         let read_token = make_token(&["read"], "documents/*");
         let mut compute_token = make_token(&["execute"], "compute/*");
         compute_token.token_id = "tok_compute".into();
@@ -1232,7 +1232,7 @@ mod tests {
 
     #[test]
     fn test_compound_intent_missing_one_capability() {
-        // Wallet has only the read token, no compute token
+        // Cipherclerk has only the read token, no compute token
         let read_token = make_token(&["read"], "documents/*");
 
         // Compound intent: need read on documents AND execute on compute
@@ -1288,7 +1288,7 @@ mod tests {
         );
         assert!(
             matches!(result, MatchResult::NoMatch),
-            "expected NoMatch when wallet is missing a required capability"
+            "expected NoMatch when cclerk is missing a required capability"
         );
     }
 

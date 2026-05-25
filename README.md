@@ -73,8 +73,8 @@ cd docker && docker compose up
 | `intent` | Gossip broadcast, local Datalog matching, commit-reveal, IT-PIR discovery |
 | `storage` | Programmable queues, relay operators, inboxes, erasure-coded availability |
 | `bridge` | Token-to-circuit pipeline, blinded membership, predicate proofs |
-| `cli` | User-facing CLI: cell, turn, cap, namespace, route, storage, wallet commands |
-| `sdk` | AgentWallet, AgentRuntime, HD keys, verification modes, IT-PIR client |
+| `cli` | User-facing CLI: cell, turn, cap, namespace, route, storage, cclerk commands |
+| `sdk` | AgentCipherclerk, AgentRuntime, HD keys, verification modes, IT-PIR client |
 | `node` | Federation daemon: HTTP API, MCP server (15+ tools), gossip sync |
 | `net` | Quinn QUIC, Plumtree gossip, topic-based dissemination |
 | `commit` | 4-ary Merkle trees (BLAKE3 fast / Poseidon2 ZK), fold deltas |

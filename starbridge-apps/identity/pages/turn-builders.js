@@ -1,7 +1,7 @@
 // starbridge-apps/identity/pages/turn-builders.js
 //
 // JS shim wrapping `window.pyana.signTurn(turnSpec)` (the extension
-// wallet API — see extension/src/page.ts) with credential-domain
+// cclerk API — see extension/src/page.ts) with credential-domain
 // conveniences that mirror the Rust turn-builders in src/lib.rs.
 //
 // Pattern matches starbridge-apps/nameservice/pages/turn-builders.js:

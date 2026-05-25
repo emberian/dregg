@@ -143,7 +143,7 @@ export async function getPirInfo() {
 
 /** Get cipherclerk status. */
 export async function getCipherclerk() {
-  return get('/wallet');
+  return get('/cipherclerk');
 }
 
 /** Get federation status (combines status + roots + checkpoint). */

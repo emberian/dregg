@@ -98,7 +98,7 @@ through the node:
    existing `pyana_exercise_bearer_cap` uses `Authorization::Bearer`.
 
 2. **`pyana_submit_sovereign_turn`** — would let an MCP client submit
-   a Turn whose `sovereign_witnesses` map carries a wallet-signed
+   a Turn whose `sovereign_witnesses` map carries a cclerk-signed
    `SovereignCellWitness`. Today, `pyana_make_sovereign` only registers
    the cell as sovereign — there's no MCP path to land a witness-carrying
    turn.

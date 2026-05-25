@@ -1,4 +1,4 @@
-//! Credential wallet: store, select, and compose credential presentations.
+//! Credential cclerk: store, select, and compose credential presentations.
 //!
 //! The holder stores their credentials and can:
 //! - Select which credentials to use in a presentation
@@ -10,7 +10,7 @@ use crate::presentation::PresentationRequest;
 use crate::{CredentialId, HolderId};
 use std::collections::BTreeMap;
 
-/// A credential wallet held by an identity holder.
+/// A credential cclerk held by an identity holder.
 pub struct CredentialWallet {
     /// The holder's identifier.
     pub holder_id: HolderId,
@@ -19,7 +19,7 @@ pub struct CredentialWallet {
 }
 
 impl CredentialWallet {
-    /// Create a new empty wallet for a holder.
+    /// Create a new empty cclerk for a holder.
     pub fn new(holder_id: HolderId) -> Self {
         Self {
             holder_id,
@@ -27,12 +27,12 @@ impl CredentialWallet {
         }
     }
 
-    /// Store a credential in the wallet.
+    /// Store a credential in the cclerk.
     pub fn store(&mut self, credential: Credential) {
         self.credentials.insert(credential.id, credential);
     }
 
-    /// Remove a credential from the wallet.
+    /// Remove a credential from the cclerk.
     pub fn remove(&mut self, id: &CredentialId) -> Option<Credential> {
         self.credentials.remove(id)
     }
@@ -66,7 +66,7 @@ impl CredentialWallet {
     /// Select credentials that can satisfy a presentation request.
     ///
     /// Returns the selected credentials that together can fulfill all requirements
-    /// in the request. Returns None if the wallet cannot satisfy the request.
+    /// in the request. Returns None if the cclerk cannot satisfy the request.
     pub fn select_for_request(&self, request: &PresentationRequest) -> Option<Vec<&Credential>> {
         let mut selected = Vec::new();
 
@@ -90,12 +90,12 @@ impl CredentialWallet {
         Some(selected)
     }
 
-    /// Number of credentials in the wallet.
+    /// Number of credentials in the cclerk.
     pub fn len(&self) -> usize {
         self.credentials.len()
     }
 
-    /// Whether the wallet is empty.
+    /// Whether the cclerk is empty.
     pub fn is_empty(&self) -> bool {
         self.credentials.is_empty()
     }

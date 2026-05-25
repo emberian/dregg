@@ -12,7 +12,7 @@ This document proposes the `starbridge-apps/` directory as the
 successor to `apps/`, and lays out:
 
 - what the in-browser **Starbridge** environment actually is today
-  (site, wasm, extension wallet);
+  (site, wasm, extension cclerk);
 - which apps survive the transition;
 - what each surviving app looks like when rebuilt from
   **pyana-native primitives only** — Effects, CellPrograms,
@@ -67,7 +67,7 @@ at `/pkg/`. Source layout (4886 LoC):
 | File | LoC | Role |
 |---|---|---|
 | `wasm/src/lib.rs` | 1914 | `#[wasm_bindgen]` exports for crypto primitives: token mint/attenuate/verify, STARK prove/verify, predicate proofs, Merkle membership/non-membership, Datalog, Poseidon, Schnorr, committed thresholds, intent hashing, `blake3_hash`. |
-| `wasm/src/runtime.rs` | 487 | `PyanaRuntime` — full in-browser distributed-system simulation. Real `pyana_sdk::AgentWallet`, real `pyana_cell::Ledger`, real `pyana_turn::TurnExecutor`, `NullifierSet`, `IntentPool`, `RevocationChannelSet`, `ConditionalTurn`s, multi-agent. **No mocks.** All cryptographic paths exercise the canonical sdk implementations. (Federation is **not** in wasm — `pyana_federation` pulls tokio/crossbeam and doesn't cross-compile; inspectors show "awaiting wasm32 federation support".) |
+| `wasm/src/runtime.rs` | 487 | `PyanaRuntime` — full in-browser distributed-system simulation. Real `pyana_sdk::AgentCipherclerk`, real `pyana_cell::Ledger`, real `pyana_turn::TurnExecutor`, `NullifierSet`, `IntentPool`, `RevocationChannelSet`, `ConditionalTurn`s, multi-agent. **No mocks.** All cryptographic paths exercise the canonical sdk implementations. (Federation is **not** in wasm — `pyana_federation` pulls tokio/crossbeam and doesn't cross-compile; inspectors show "awaiting wasm32 federation support".) |
 | `wasm/src/bindings.rs` | 1260 | Index-based wasm handles around `PyanaRuntime` (so JS can hold opaque `runtime_id` handles instead of crossing the wasm boundary with rich types). |
 | `wasm/src/privacy.rs` | 1225 | Stealth-meta-address / private-transfer / anonymous-presentation bindings. |
 
@@ -90,7 +90,7 @@ live federation interaction must go through a *relayed* runtime —
 proposed in STUDIO.md as a future `RelayedRuntime` (out of scope of
 this plan).
 
-### 1.3 The extension wallet surface
+### 1.3 The extension cclerk surface
 
 `extension/` is the Pyana browser extension. Public API surface
 (`extension/src/page.ts`, the `window.pyana` object frozen in the
@@ -146,20 +146,20 @@ Events: `ready`, `authorization`, `revoked`, `stealthNoteReceived`,
 **This is the integration surface starbridge-apps consume.** Three
 things to notice:
 
-1. **`createFromFactory` is *already* a first-class wallet method.**
+1. **`createFromFactory` is *already* a first-class cclerk method.**
    The extension already speaks the factory vocabulary
    (`factoryVk`, `paramHash`, `verifyProvenance`). Starbridge-apps
    should lean on it — see §5.
-2. **`signTurn` takes a `turnSpec`, not a `Turn`.** The wallet
+2. **`signTurn` takes a `turnSpec`, not a `Turn`.** The cclerk
    *constructs* and signs; the page never holds raw private keys.
    This forces a clean separation: app code builds `turnSpec`
-   descriptors; wallet does authorization + signing + submission.
-3. **`postIntent` / `postEncryptedIntent` are wallet primitives, not
+   descriptors; cclerk does authorization + signing + submission.
+3. **`postIntent` / `postEncryptedIntent` are cclerk primitives, not
    app primitives.** Intent matching is part of the platform; apps
    produce intent shapes.
 
 The site also ships an extension-download page at
-`site/extension/index.html` (with `pyana-wallet.zip`) — installation
+`site/extension/index.html` (with `pyana-cipherclerk.zip`) — installation
 is one click for Starbridge users.
 
 ### 1.4 What "Starbridge for an app" means
@@ -168,7 +168,7 @@ Pulling it together — a starbridge-app is a web surface that:
 
 1. Loads `/pkg/pyana_wasm.js` (the in-browser node) for local
    simulation / preview / time-travel.
-2. Talks to `window.pyana` (the extension wallet) for real
+2. Talks to `window.pyana` (the extension cclerk) for real
    identity, signing, capability brokerage, intent posting.
 3. Optionally talks to a live federation node via the Studio's
    `RemoteRuntime` for production data.
@@ -198,11 +198,11 @@ blockers" reference the Tier rankings in
 | **gallery (= auction)** | `apps/gallery/` | NFT-style art auctions: commit-reveal bids, royalty splits, anti-sniping, provenance chain, private-Vickrey (4195 LoC dead). | Imports `Effect::Transfer / CreateEscrow / ReleaseEscrow / SetField`; constructs but doesn't always execute. STARK match-AIR is freestanding. | (a) Per-artwork sovereign cell, state = `(artist_commit, creation_height, owner_cap_id, provenance_root, blob_hash)`. (b) `Effect::BindBlob` for the image. (c) Per-auction cell from an **auction factory** (`FactoryDescriptor` fixes the program VK = "commit-reveal auction state machine"; param hash bakes in commit/reveal windows). (d) Bids are per-bid escrow cells with `EscrowCondition::PredicateSatisfied(auction.winner == me)`. (e) Settlement = single atomic multi-cell turn: `ReleaseEscrow + RevokeCapability + GrantCapability + SetField(provenance_root)`. (f) Royalty splits = `StateConstraint::SumEqualsAcross` over the settlement turn. (g) Anti-sniping = `StateConstraint::FieldDeltaInRange` on the deadline. | Tier 1 #1 (transition constraints — anti-sniping, royalty conservation); Tier 1 #2 (`PredicateSatisfied` impl); Tier 1 #3 (auth extractor); Tier 1 #5 (`Effect::ClaimSlot` for unique-ownership); Tier 2 #6 (paired escrow); Tier 3 #11 (subscription/streaming for live bid feed); Tier 3 #14 (coordinator key for private Vickrey). |
 | **bounty-board** | `apps/bounty-board/` | Privacy-preserving work marketplace; anonymous claim/deliver/pay; ZK qualification proofs; STARK delivery proof; sybil resistance via stake. | `app-framework::ConditionalTurn`, `EscrowManager`; `pyana_intent::matcher::HeldCapability`; `bridge::present` (qualification proofs). | (a) Per-bounty sovereign cell, state = `(reward_note_root, qualification_spec_hash, deadline, claim_commitment_root, status)`. (b) Claim = `Effect::CreateNote (bond)` + `Effect::QueueEnqueue (claim_queue, worker_commitment)`. (c) Delivery = STARK delivery proof presented in a `Effect::ReleaseEscrow { condition: ProofPresented { circuit_id, expected_pi } }` (G3 fix). (d) Payment = private note minted to worker's stealth address (`getStealthAddress`); spent via nullifier later. (e) Reputation = `bridge::present::BridgePresentationProof` over the worker's IVC receipt chain ("I have ≥N completed bounties"). | Tier 1 #2 (`PredicateSatisfied`); Tier 1 #4 (clock for deadlines); Tier 1 #5 (`Effect::ClaimSlot` for nullifier-based dedup); Tier 2 #7 (`pyana-credentials` for IVC standing); Tier 3 #13 (attester registry for qualification issuers). |
 | **nameservice** | `apps/nameservice/` | Hierarchical names, rent, sub-delegation, dispute, cross-fed resolution. **The most pyana-native-shaped of the retained apps; in `apps/` it is effectively decorative (uses zero real primitives).** | Effectively *nothing* real; HTTP server over `BTreeMap`. | (a) Per-name sovereign cell from a **name factory** (`FactoryDescriptor` constrains the program VK = rent state machine; param hash bakes the namespace prefix). (b) Rent = `Effect::Transfer + StateConstraint::FieldDelta(expiry, +epoch_len)`. (c) Sub-delegation = `Caveat::ResourcePrefix { name_prefix }` attenuation on the owner cap. (d) Dispute = paired escrow (challenger stake vs. owner stake), resolved by a `EscrowCondition::PredicateSatisfied` on a `dispute_resolution` cell. (e) Reverse-index = a federation-attested `CommittedMap<TargetUri, NameId>` cell. (f) Cross-fed = CapTP `EnlivenRef + Send(method="resolve", args=[name])` into the remote registry's sturdy ref. | Tier 1 #1 (FieldDelta for rent); Tier 1 #4 (clock for expiry); Tier 2 #6 (paired escrow for dispute); Tier 2 #10 (`CommittedMap<K,V>` for the reverse index); Tier 1 #5 (slot-set for unique-name registration). |
-| **privacy-voting** | `apps/privacy-voting/` | Anonymous voting: ZK eligibility, commit-reveal ballots, nullifier-based double-vote prevention, tally. | `wallet::DelegatedToken` (wrong — bearer where it should be ZK); local blake3 commitments (wrong — should be Poseidon2); `BlindedQueue` mounted but unconsumed. | (a) Per-proposal sovereign cell with state = `(phase, commit_root, reveal_root, tally_root, eligibility_root, coordinator_pk_commit)`. (b) Voter eligibility = `Presented<EligibilityProof>` axum extractor (G30) consuming a `BridgePresentationProof`. (c) Commit = `Effect::QueueEnqueue(commits_queue, Poseidon2(option ‖ randomness))` + `Effect::ClaimSlot(domain=proposal_id, key=nullifier)`. (d) Reveal = `Effect::QueueDequeue + Effect::SetField(tally[option] += 1)` gated by `Caveat::RevealWindow`. (e) Tally = STARK reference circuit (G28) over `reveal_root`. (f) Coercion-resistance = `Effect::EncryptedTo { coordinator_id, … }` (G29). | Tier 1 #5 (`Effect::ClaimSlot` — the headline primitive); Tier 1 #3 (`Presented<P>`); Tier 2 #7 (`pyana-credentials` lift); Tier 3 #14 (coordinator-key threshold-decrypt); Tier 3 #12 (`BlindedQueue` payload return G41). |
+| **privacy-voting** | `apps/privacy-voting/` | Anonymous voting: ZK eligibility, commit-reveal ballots, nullifier-based double-vote prevention, tally. | `cclerk::DelegatedToken` (wrong — bearer where it should be ZK); local blake3 commitments (wrong — should be Poseidon2); `BlindedQueue` mounted but unconsumed. | (a) Per-proposal sovereign cell with state = `(phase, commit_root, reveal_root, tally_root, eligibility_root, coordinator_pk_commit)`. (b) Voter eligibility = `Presented<EligibilityProof>` axum extractor (G30) consuming a `BridgePresentationProof`. (c) Commit = `Effect::QueueEnqueue(commits_queue, Poseidon2(option ‖ randomness))` + `Effect::ClaimSlot(domain=proposal_id, key=nullifier)`. (d) Reveal = `Effect::QueueDequeue + Effect::SetField(tally[option] += 1)` gated by `Caveat::RevealWindow`. (e) Tally = STARK reference circuit (G28) over `reveal_root`. (f) Coercion-resistance = `Effect::EncryptedTo { coordinator_id, … }` (G29). | Tier 1 #5 (`Effect::ClaimSlot` — the headline primitive); Tier 1 #3 (`Presented<P>`); Tier 2 #7 (`pyana-credentials` lift); Tier 3 #14 (coordinator-key threshold-decrypt); Tier 3 #12 (`BlindedQueue` payload return G41). |
 | **identity** | `apps/identity/` | Verifiable credentials: issue / present / revoke; selective disclosure; predicate proofs ("age ≥ 18"); non-revocation STARK; anonymous ring presentations. **Already the most pyana-native of the apps audited** — `bridge::present` is the canonical primitive. | Real use of `circuit/src/dsl/predicates`, `dsl/membership`, `dsl/revocation`, `poseidon2`. Doesn't use the macaroon system at all. | (a) Per-issuer sovereign cell from an **issuer factory** (`FactoryDescriptor` pins the credential schema). (b) Credential issuance = `Effect::QueueEnqueue` of a credential commitment onto the holder's inbox queue (encrypted). (c) Holder stores `Credential` locally; never publishes it. (d) Presentation = `BridgePresentationProof` (already correct shape) submitted through the `Presented<P>` extractor. (e) Revocation = sorted Merkle tree on the issuer cell; non-revocation = STARK proof of non-membership. (f) Anonymous ring = `prove_blinded_membership_dsl` (exists). | Tier 1 #3 (auth/extractor); Tier 2 #7 (lift `bridge::present` to `pyana-credentials`); Tier 3 #13 (issuer attester registry). The least gap-blocked app. |
 | **compute-exchange** | `apps/compute-exchange/` | "Advanced demo": temporal predicate proofs + intent matching for a GPU/agent-compute marketplace. Sealed-bid orders, dual escrow (payment + SLA bond), commit-reveal fulfillment, STARK delivery proof, optimistic dispute window. | Real `circuit::temporal_predicate_dsl::TemporalPredicateAir`, `intent::matcher`, `dispute::OptimisticSettlement`. | See §3.7 — gets its own design sketch. | Tier 1 #1, #2, #4, #5; Tier 2 #6 (paired escrow — payment+SLA); Tier 2 #9 (math gadget for SLA penalty pro-rata); Tier 3 #13 (oracle / attester for clock & delivery confirmation). The most ambitious. |
-| **discord-bot** | `apps/discord-bot/` → moves to **`./discord-bot/`** (toplevel) | 19 slash commands; custodial wallet; transfers; gallery bidding; DeFi (swap/lend/borrow — being deleted); orderbook trading (being deleted); credentials; federation status; block explorer; presence attestation (dischargeable caveat). | Reasonably real: `captp_client.rs`, `discord_caps.rs`, `presence.rs`, `devnet.rs`. Already the cleanest "non-decorative" pyana app (per `apps/README.md`: "we love pyana-discord-bot"). | Not a starbridge-app at all — it's a *long-running daemon*, not a web surface. Lives at toplevel. Pyana-native shape: same as today (CapTP client + wallet + intent posting). Once amm/lending/orderbook are removed from `apps/`, the discord-bot's command set shrinks; surviving commands target the remaining starbridge-apps (gallery, identity, governed-namespace, bounty-board, nameservice). | Tier 1 #3 (auth — for the bot's authorization-on-behalf-of-users flow); not much else. |
-| **subscription** (provisional) | `apps/subscription/` | Recurring debit of subscriber → creator; `wallet::DelegatedToken`-backed authorization envelope; epoch-keyed dedup. **The first audited app that *actually* used a real SDK primitive non-decoratively** (`receive_signed_delegation`). | Real `wallet::receive_signed_delegation`, `DelegatedToken`; in-process `HashMap<(PublicKey, u64), u64>` for epoch dedup; wall-clock as epoch source. | (a) Per-subscription sovereign cell from a **subscription factory** (`FactoryDescriptor` pins: program VK = "delegated-debit state machine"; constraint vocabulary includes `MonotoneIncreasing(epoch)`). (b) Debit = `Effect::Transfer` with `Authorization = DelegatedToken` (already works). (c) Epoch dedup = `Effect::ClaimSlot(domain=subscription_id, key=epoch_hash)`. (d) Cancellation = `Effect::RevokeCapability` on the delegated debit cap. (e) Delivery of subscriber-only content = `Caveat::SubscriptionActive` on a content-access cap. | Tier 1 #4 (federation clock — the load-bearing fix); Tier 1 #5 (slot-set for epoch dedup, replaces the in-process HashMap). Decision: **include as a starbridge-app** — it's a clean storage-layer + delegation example and exercises factories + capability attenuation well. |
+| **discord-bot** | `apps/discord-bot/` → moves to **`./discord-bot/`** (toplevel) | 19 slash commands; custodial cclerk; transfers; gallery bidding; DeFi (swap/lend/borrow — being deleted); orderbook trading (being deleted); credentials; federation status; block explorer; presence attestation (dischargeable caveat). | Reasonably real: `captp_client.rs`, `discord_caps.rs`, `presence.rs`, `devnet.rs`. Already the cleanest "non-decorative" pyana app (per `apps/README.md`: "we love pyana-discord-bot"). | Not a starbridge-app at all — it's a *long-running daemon*, not a web surface. Lives at toplevel. Pyana-native shape: same as today (CapTP client + cclerk + intent posting). Once amm/lending/orderbook are removed from `apps/`, the discord-bot's command set shrinks; surviving commands target the remaining starbridge-apps (gallery, identity, governed-namespace, bounty-board, nameservice). | Tier 1 #3 (auth — for the bot's authorization-on-behalf-of-users flow); not much else. |
+| **subscription** (provisional) | `apps/subscription/` | Recurring debit of subscriber → creator; `cclerk::DelegatedToken`-backed authorization envelope; epoch-keyed dedup. **The first audited app that *actually* used a real SDK primitive non-decoratively** (`receive_signed_delegation`). | Real `cclerk::receive_signed_delegation`, `DelegatedToken`; in-process `HashMap<(PublicKey, u64), u64>` for epoch dedup; wall-clock as epoch source. | (a) Per-subscription sovereign cell from a **subscription factory** (`FactoryDescriptor` pins: program VK = "delegated-debit state machine"; constraint vocabulary includes `MonotoneIncreasing(epoch)`). (b) Debit = `Effect::Transfer` with `Authorization = DelegatedToken` (already works). (c) Epoch dedup = `Effect::ClaimSlot(domain=subscription_id, key=epoch_hash)`. (d) Cancellation = `Effect::RevokeCapability` on the delegated debit cap. (e) Delivery of subscriber-only content = `Caveat::SubscriptionActive` on a content-access cap. | Tier 1 #4 (federation clock — the load-bearing fix); Tier 1 #5 (slot-set for epoch dedup, replaces the in-process HashMap). Decision: **include as a starbridge-app** — it's a clean storage-layer + delegation example and exercises factories + capability attenuation well. |
 
 Apps **dropped** (per the brief): `amm`, `lending`, `orderbook`,
 `stablecoin`, `dao-treasury`, `prediction-market`. See §4.
@@ -356,7 +356,7 @@ anonymous ring presentations across multiple issuers.
 
 - `<pyana-dao uri="...">` — route table, proposal list, members.
 - `<pyana-proposal uri="...">` — voting widget gated on caps.mutate
-  AND voter caveat being held in the wallet.
+  AND voter caveat being held in the cclerk.
 - `<pyana-route-table uri="...">` — DFA visualization (already a
   thing in the discord-bot's block-explorer; lift the rendering).
 - Debug view: route classification trace ("input path X → DFA states
@@ -489,14 +489,14 @@ proposal.
 
 - `<pyana-proposal uri="...">` — question, options, phase, tally
   (after reveal closes).
-- `<pyana-vote-builder>` — generates commitment, posts via wallet's
+- `<pyana-vote-builder>` — generates commitment, posts via cipherclerk's
   `postEncryptedIntent` or `signTurn`.
 - `<pyana-tally-proof uri="...">` — STARK verifier for the tally
   proof.
 - Debug view: nullifier set, commit/reveal/tally roots evolution.
 
 **Demo version**: single-issue, single-round, public eligibility
-(any wallet can vote), no coordinator-decrypt, hardcoded reveal
+(any cclerk can vote), no coordinator-decrypt, hardcoded reveal
 height.
 
 **Real version**: federated eligibility (issuer registry, Tier 3
@@ -520,7 +520,7 @@ buyer slashes the SLA bond.
 1. **Posting a job = posting an intent.**
 
    ```rust
-   wallet.post_encrypted_intent(MatchSpec {
+   cclerk.post_encrypted_intent(MatchSpec {
        action: "compute-job",
        predicates: vec![
            PredicateRequirement::Gte { field: "gpu_count", value: 4 },
@@ -717,7 +717,7 @@ Commit message: `move discord-bot to toplevel (it is a daemon, not a starbridge-
 
 Slash-command set should shrink in the same PR: drop `swap`,
 `lend`, `borrow`, `orderbook-buy`, `orderbook-sell` (they target
-the dropped apps). Surviving commands: wallet ops, gallery bid,
+the dropped apps). Surviving commands: cclerk ops, gallery bid,
 identity present/verify, governed-namespace mount/discover,
 bounty-board claim, nameservice register/resolve, federation
 status, block explorer, presence.
@@ -773,10 +773,10 @@ starbridge-apps/
 
 Each starbridge-app is a Rust crate that depends on:
 
-- `pyana-sdk` (the canonical wallet/identity/cell surface).
+- `pyana-sdk` (the canonical cclerk/identity/cell surface).
 - `pyana-app-framework` (the HTTP/server glue *when an app needs a
   back-end* — most starbridge-apps don't, because the in-browser
-  node + extension wallet handle the work).
+  node + extension cclerk handle the work).
 - `pyana-storage` (where storage-layer primitives are needed — e.g.,
   `BlobStore`, `CapInbox`, `BlindedQueue`).
 - `pyana-cell` (for `FactoryDescriptor` construction).
@@ -817,13 +817,13 @@ for wasm). Defer this decision until at least one app is built.
 
 ### 5.3 Composition with `app-framework`
 
-Lane C is currently wiring `app-framework` with a wallet handle —
+Lane C is currently wiring `app-framework` with a cclerk handle —
 this is the natural integration point. The shape:
 
 ```rust
 // pyana-app-framework now exposes:
 pub struct StarbridgeAppContext {
-    pub wallet: AgentWallet,                   // identity / signing
+    pub cclerk: AgentCipherclerk,                   // identity / signing
     pub ledger: Arc<RwLock<Ledger>>,           // shared in-process state (back-end mode)
     pub executor: Arc<RwLock<TurnExecutor>>,
     pub factories: FactoryRegistry,            // descriptors loaded at startup
@@ -1065,7 +1065,7 @@ Files read or grepped while writing this plan:
   `apps/compute-exchange/CLAUDIT.md`, `apps/gallery/CLAUDIT.md` (scope sections)
 - `apps/README.md`, `apps/DESIGN_NOTES.md` (in full)
 - `cell/src/factory.rs` (head + structure)
-- `sdk/src/wallet.rs` lines 4927-5050 (factory deploy/create methods)
+- `sdk/src/cipherclerk.rs` lines 4927-5050 (factory deploy/create methods)
 - `Cargo.toml` (workspace members)
 - `circuit/src/temporal_predicate_dsl.rs` (header)
 - `intent/src/fulfillment.rs` (matcher integration points)

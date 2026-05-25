@@ -20,7 +20,7 @@
 //! 5. Atomic settlement via compound turns
 //!
 //! ## Soundness
-//! - Privacy: Intent matching is local (wallet-side Datalog evaluation reveals nothing)
+//! - Privacy: Intent matching is local (cclerk-side Datalog evaluation reveals nothing)
 //! - Anti-censorship: Gossip propagation with stake proofs prevents suppression
 //! - Fair ordering: (trustless path) threshold encryption prevents front-running
 //!
@@ -35,12 +35,12 @@
 //!
 //! The intent engine inverts the capability discovery model. Instead of pages/services
 //! needing to know exactly what capability to request, they broadcast what they NEED
-//! or OFFER, and wallets privately match against held capabilities.
+//! or OFFER, and cipherclerks privately match against held capabilities.
 //!
 //! # Architecture
 //!
 //! ```text
-//! Page/Service                    Gossip Network                  Wallet
+//! Page/Service                    Gossip Network                  Cipherclerk
 //!     |                                |                            |
 //!     |--- postIntent(MatchSpec) ----->|--- broadcast(Intent) ----->|
 //!     |                                |                            | (local Datalog eval)
@@ -54,7 +54,7 @@
 //!
 //! - **Intents are public**: Everyone sees "someone needs capability X for resource Y".
 //!   The creator is anonymous (identified only by a commitment, not an identity).
-//! - **Matching is private**: The wallet evaluates "can I satisfy this?" using local
+//! - **Matching is private**: The cclerk evaluates "can I satisfy this?" using local
 //!   Datalog evaluation, without revealing what it holds.
 //! - **Fulfillment is private**: The proof reveals only "yes I can satisfy this intent"
 //!   -- not what token, what delegation chain, or what else you hold.
@@ -240,7 +240,7 @@ pub struct StakeProof {
 /// Stake requirement for intent propagation via gossip.
 ///
 /// Intents that wish to propagate over the gossip network must have a committed
-/// stake. Local-only intents (from the wallet's own page) may skip the stake
+/// stake. Local-only intents (from the cipherclerk's own page) may skip the stake
 /// requirement.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StakeRequirement {
@@ -359,7 +359,7 @@ pub struct MatchSpec {
     /// Glob or prefix pattern for resource matching.
     pub resource_pattern: Option<String>,
     /// Compound requirement: ALL of these sub-specs must be satisfiable
-    /// by the same wallet (possibly from different tokens).
+    /// by the same cclerk (possibly from different tokens).
     #[serde(default)]
     pub compound: Option<Vec<MatchSpec>>,
     /// Cross-party predicate requirements.

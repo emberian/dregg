@@ -170,7 +170,7 @@ async fn handoff(
 
 async fn list(cfg: &Config, ctx: &Context) -> Result<(), Box<dyn std::error::Error>> {
     let spinner = ctx.spinner("Fetching capabilities...");
-    let data = get_json(cfg, "/wallet/tokens").await?;
+    let data = get_json(cfg, "/cipherclerk/tokens").await?;
     spinner.finish_and_clear();
 
     if cfg.is_json() {
@@ -206,7 +206,7 @@ async fn revoke(cfg: &Config, ctx: &Context, id: &str) -> Result<(), Box<dyn std
     let body = serde_json::json!({
         "token_id": id,
     });
-    let data = post_json(cfg, "/wallet/attenuate", &body).await?;
+    let data = post_json(cfg, "/cipherclerk/attenuate", &body).await?;
     spinner.finish_and_clear();
 
     if cfg.is_json() {

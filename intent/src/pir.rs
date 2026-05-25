@@ -694,7 +694,7 @@ pub fn compute_blinding_contribution(
 /// Generate a fresh, unlinkable `CommitmentId` for each intent.
 ///
 /// Uses a monotonic nonce to derive unique commitment IDs from the same secret,
-/// ensuring that multiple intents from the same wallet are not linkable.
+/// ensuring that multiple intents from the same cclerk are not linkable.
 ///
 /// The derivation is: `BLAKE3-derive-key("pyana-intent-commitment-{nonce}", secret)`.
 pub fn derive_unlinkable_commitment(secret: &[u8], nonce: u64) -> CommitmentId {
@@ -1593,7 +1593,7 @@ mod tests {
 
     #[test]
     fn test_unlinkable_commitments_are_unique() {
-        let secret = b"my-wallet-secret";
+        let secret = b"my-cclerk-secret";
         let c0 = derive_unlinkable_commitment(secret, 0);
         let c1 = derive_unlinkable_commitment(secret, 1);
         let c2 = derive_unlinkable_commitment(secret, 2);
@@ -1605,7 +1605,7 @@ mod tests {
 
     #[test]
     fn test_unlinkable_commitments_are_deterministic() {
-        let secret = b"my-wallet-secret";
+        let secret = b"my-cclerk-secret";
         let c1a = derive_unlinkable_commitment(secret, 42);
         let c1b = derive_unlinkable_commitment(secret, 42);
         assert_eq!(c1a, c1b);

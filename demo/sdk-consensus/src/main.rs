@@ -14,10 +14,10 @@
 //! 3. CapTP wire — round-trips a `WireMessage::AttestedRoot` and a
 //!    `WireMessage::PresentHandoff` through `pyana_wire::codec::{encode, decode}`
 //!    (the framed protocol the silo server actually speaks).
-//! 4. SDK-direct turn submission — Alice creates an `AgentWallet`, builds a
+//! 4. SDK-direct turn submission — Alice creates an `AgentCipherclerk`, builds a
 //!    `Turn` carrying a `Transfer` effect, submits it directly to a local
 //!    `TurnExecutor` against a `Ledger`, and the resulting `TurnReceipt` is
-//!    appended to her wallet's receipt chain. Self-verification of the chain
+//!    appended to her cipherclerk's receipt chain. Self-verification of the chain
 //!    is performed via `verify_receipt_chain`.
 //! 5. Cross-cell capability handoff — Alice registers a swiss entry in a
 //!    `SwissTable`, creates a signed `HandoffCertificate` for Bob, Bob produces
@@ -40,7 +40,7 @@ use pyana_captp::sturdy::SwissTable;
 use pyana_cell::permissions::Permissions;
 use pyana_cell::{AuthRequired, Cell, CellId, Ledger};
 use pyana_federation::{Federation, LocalSeat};
-use pyana_sdk::AgentWallet;
+use pyana_sdk::AgentCipherclerk;
 use pyana_turn::action::{Action, Authorization, DelegationMode};
 use pyana_turn::{
     CallForest, CallTree, ComputronCosts, Effect, Turn, TurnExecutor, TurnResult,
@@ -356,10 +356,10 @@ fn main() {
     // =========================================================================
     // 4. SDK-DIRECT TURN SUBMISSION
     // =========================================================================
-    section("4. SDK-direct turn submission (AgentWallet + TurnExecutor)");
+    section("4. SDK-direct turn submission (AgentCipherclerk + TurnExecutor)");
 
-    let mut alice = AgentWallet::new();
-    let bob = AgentWallet::new();
+    let mut alice = AgentCipherclerk::new();
+    let bob = AgentCipherclerk::new();
     step(&format!(
         "Alice pk={}, Bob pk={}",
         short(&alice.public_key().0),
@@ -429,7 +429,7 @@ fn main() {
     };
 
     let _signed = alice.sign_turn(&turn);
-    step("Alice signed the turn via wallet.sign_turn() (Ed25519, domain-separated)");
+    step("Alice signed the turn via cclerk.sign_turn() (Ed25519, domain-separated)");
 
     let executor = TurnExecutor::new(ComputronCosts::zero());
     let result = executor.execute(&turn, &mut ledger);
@@ -564,8 +564,8 @@ fn main() {
     println!("  [x] Federation::build_attested_root bound an AttestedRoot to the finalized tip");
     println!("  [x] AttestedRoot persisted + reloaded; federation_id round-trip exact");
     println!("  [x] WireMessage::AttestedRoot round-tripped through encode/decode");
-    println!("  [x] AgentWallet signed a Turn; TurnExecutor committed it against a Ledger");
-    println!("  [x] Receipt landed in wallet.receipt_chain(); verify_receipt_chain passed");
+    println!("  [x] AgentCipherclerk signed a Turn; TurnExecutor committed it against a Ledger");
+    println!("  [x] Receipt landed in cclerk.receipt_chain(); verify_receipt_chain passed");
     println!("  [x] HandoffCertificate + HandoffPresentation + SwissTable handoff accepted");
     println!("  [x] WireMessage::PresentHandoff round-tripped through encode/decode");
     println!();

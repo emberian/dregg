@@ -447,8 +447,8 @@ pub async fn run_blocklace_sync(
     // Get our signing key and derive the blocklace identity.
     let (gossip_signing_key, signing_key_bytes, our_public_key) = {
         let s = state.read().await;
-        let sk = s.wallet.gossip_signing_key();
-        let pk = s.wallet.public_key();
+        let sk = s.cclerk.gossip_signing_key();
+        let pk = s.cclerk.public_key();
         (sk.clone(), sk.to_bytes(), pk)
     };
 
@@ -1157,7 +1157,7 @@ fn spawn_finality_executor(state: NodeState, handle: BlocklaceHandle) {
 ///
 /// On successful commit this function ALSO:
 /// 1. Produces a [`pyana_federation::FederationReceipt`] (audit F7) signed by
-///    the local wallet (Ed25519 vote-signature flavor; the BLS aggregate path
+///    the local cipherclerk (Ed25519 vote-signature flavor; the BLS aggregate path
 ///    requires a multi-node ceremony we don't run inline). The receipt is
 ///    emitted via [`crate::state::NodeEvent::FederationReceipt`].
 /// 2. Writes a fresh [`pyana_types::AttestedRoot`] anchored to the blocklace
@@ -1209,12 +1209,12 @@ async fn execute_finalized_turn(
     let mut executor = pyana_turn::TurnExecutor::new(pyana_turn::ComputronCosts::default());
 
     // Configure the executor with the canonical federation_id (audit F1).
-    // Falls back to discovery-mode (wallet-hash) only if no committee has
+    // Falls back to discovery-mode (cipherclerk-hash) only if no committee has
     // been loaded yet — solo devnet pre-genesis.
     let local_fed_id = if s.federation_configured {
         s.federation_id
     } else {
-        *blake3::hash(s.wallet.public_key().as_bytes()).as_bytes()
+        *blake3::hash(s.cclerk.public_key().as_bytes()).as_bytes()
     };
     executor.set_local_federation_id(local_fed_id);
 
@@ -1262,8 +1262,8 @@ async fn execute_finalized_turn(
                 }
             }
 
-            // Append receipt to wallet.
-            s.wallet.append_receipt(receipt.clone());
+            // Append receipt to cipherclerk.
+            s.cclerk.append_receipt(receipt.clone());
 
             // ── Lift TurnReceipt → FederationReceipt (audit F7) ──────────
             // We carry the committed turn into a federation-shaped receipt
@@ -1285,7 +1285,7 @@ async fn execute_finalized_turn(
             let timestamp_for_root = now;
             let federation_keys = s.known_federation_keys.clone();
             let federation_threshold = s.decryption_threshold.max(1);
-            let signing_key_bytes = s.wallet.gossip_signing_key().to_bytes();
+            let signing_key_bytes = s.cclerk.gossip_signing_key().to_bytes();
 
             // Build the attested root struct, then sign its canonical message.
             let mut attested = pyana_types::AttestedRoot {
@@ -1302,7 +1302,7 @@ async fn execute_finalized_turn(
                 federation_id: pyana_types::FederationId(s.federation_id),
             };
             let signing_msg = attested.signing_message();
-            let local_pk = s.wallet.public_key().clone();
+            let local_pk = s.cclerk.public_key().clone();
             let signing_key = pyana_types::SigningKey::from_bytes(&signing_key_bytes);
             let sig = pyana_types::sign(&signing_key, &signing_msg);
             // In solo / single-validator mode our signature alone meets the
@@ -2072,10 +2072,10 @@ fn build_federation_receipt(
     };
 
     let body_hash = body.body_hash();
-    let signing_key_bytes = state_guard.wallet.gossip_signing_key().to_bytes();
+    let signing_key_bytes = state_guard.cclerk.gossip_signing_key().to_bytes();
     let signing_key = pyana_types::SigningKey::from_bytes(&signing_key_bytes);
     let sig = pyana_types::sign(&signing_key, &body_hash);
-    let local_pk = state_guard.wallet.public_key().clone();
+    let local_pk = state_guard.cclerk.public_key().clone();
 
     Some(FederationReceipt::with_vote_signatures(
         federation_id,

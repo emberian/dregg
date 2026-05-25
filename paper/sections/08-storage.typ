@@ -6,14 +6,14 @@
 
 == Thesis: storage primitives are not new Effects
 
-Storage in a distributed capability system differs fundamentally from blockchain state: cells are sovereign (they own their data), storage is metered (ongoing cost, not one-time), and queues are the primary communication primitive (not shared memory). The historically natural framing made each storage primitive a new `Effect` variant: `Effect::QueueAllocate`, `Effect::Enqueue`, `Effect::Dequeue`, `Effect::TopicCreate`, and so on. Each new app proposed new effects; each new effect needed an AIR row, a cost-table entry, a wallet wrapper, an executor branch. The effect surface bloated; the AIR's column count climbed; the constitution that named effects became harder to govern.
+Storage in a distributed capability system differs fundamentally from blockchain state: cells are sovereign (they own their data), storage is metered (ongoing cost, not one-time), and queues are the primary communication primitive (not shared memory). The historically natural framing made each storage primitive a new `Effect` variant: `Effect::QueueAllocate`, `Effect::Enqueue`, `Effect::Dequeue`, `Effect::TopicCreate`, and so on. Each new app proposed new effects; each new effect needed an AIR row, a cost-table entry, a cclerk wrapper, an executor branch. The effect surface bloated; the AIR's column count climbed; the constitution that named effects became harder to govern.
 
 The corrected framing: *storage primitives are not new Effects. They are cell-program patterns.* Compositions of existing `Effect` variants (`SetField`, `EmitEvent`, `Transfer`, `Grant`/`Revoke`, `CreateCellFromFactory`) governed by `CellProgram`s whose `StateConstraint`s are drawn from the 21+ variant slot caveat vocabulary, plus---where genuinely needed---a `WitnessedPredicate` for the witness-attached cases.
 
 Three concrete consequences:
 
 + *One enforcement loop, not two*: the executor's per-turn evaluator that already runs for every state-modifying turn enforces queue invariants, inbox sequencing, blinded-spend correctness, relay quota. The legacy `QueueConstraint` vocabulary in `storage::programmable` aliases directly to `StateConstraint` post-Lane-G Phase 1.
-+ *New primitives plug in by declaring a composition*: no new Effects, no new AIR row, no new wallet wrapper. The `FactoryDescriptor` carries the slot layout and `state_constraints`; apps use the existing `createFromFactory` wallet method to instantiate.
++ *New primitives plug in by declaring a composition*: no new Effects, no new AIR row, no new cclerk wrapper. The `FactoryDescriptor` carries the slot layout and `state_constraints`; apps use the existing `createFromFactory` cclerk method to instantiate.
 + *Constructor transparency*: anyone with the `factory_vk` can read the descriptor and know exactly what invariants the cell will carry over its lifetime.
 
 == The migration framework
@@ -27,7 +27,7 @@ Every storage primitive's migration follows the same six-step pattern:
     table.header([*Step*], [*Action*]),
     [1. Factory], [Define a `FactoryDescriptor` declaring slot layout + `state_constraints`.],
     [2. Constraints], [Express invariants in `StateConstraint` vocabulary (and `WitnessedPredicate` for witness-attached).],
-    [3. App API], [Apps use existing `createFromFactory` + standard `Effect` variants. No new wallet wrappers.],
+    [3. App API], [Apps use existing `createFromFactory` + standard `Effect` variants. No new cclerk wrappers.],
     [4. Receipt], [Every modification produces a `TurnReceipt` through the standard executor path.],
     [5. Boundary], [Document the cell's boundary contract per BOUNDARIES.md vocabulary.],
     [6. Deprecate], [The legacy storage-crate enforcement loop becomes a thin re-export of `cell::program::StateConstraint`, or is deleted.],

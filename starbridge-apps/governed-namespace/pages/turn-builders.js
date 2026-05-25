@@ -2,9 +2,9 @@
 //
 // Cipherclerk-named turn-builder presets for the governed-namespace app.
 // Each builder produces the canonical turnSpec shape that
-// `window.pyana.signTurn(turnSpec)` (the extension wallet API — see
+// `window.pyana.signTurn(turnSpec)` (the extension cclerk API — see
 // extension/src/page.ts) consumes. The builders never touch raw private
-// keys; signing always crosses the wallet boundary.
+// keys; signing always crosses the cclerk boundary.
 //
 // Mirrors the four `build_*_action` helpers in
 // starbridge-apps/governed-namespace/src/lib.rs:

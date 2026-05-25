@@ -1,7 +1,7 @@
 //! BIP39 English word list (2048 words).
 //!
 //! Standard English mnemonic word list as defined in BIP-0039.
-//! Used for generating human-readable wallet backup phrases.
+//! Used for generating human-readable cipherclerk backup phrases.
 
 /// The 2048-word BIP39 English word list.
 pub const WORDLIST: [&str; 2048] = [

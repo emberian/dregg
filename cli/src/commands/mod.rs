@@ -1,5 +1,6 @@
 pub mod cap;
 pub mod cell;
+pub mod cipherclerk;
 pub mod directory;
 pub mod doctor;
 pub mod federation;
@@ -9,7 +10,6 @@ pub mod proof;
 pub mod route;
 pub mod storage;
 pub mod turn;
-pub mod wallet;
 
 use crate::config::Config;
 

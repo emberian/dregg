@@ -31,7 +31,7 @@ The system is implemented in approximately 400k lines of Rust across $tilde$45 w
     [`turn`], [Turn execution, journal, atomicity, v3 canonical signing, `WitnessedReceipt` scope-1/scope-2, `SovereignCellWitness` with sequence + signature + optional `transition_proof`, `EncryptedTurn`], [cell, circuit],
     [`coord`], [2PC atomic coordination, causal DAG], [turn, federation],
     [`types`], [Shared types (`CellId`, `CapabilityRef`, `FederationId`, ...)], [],
-    [`sdk`], [Client SDK, `AgentWallet`, `AppWallet` (six-method handle), presentation API, `captp_client`], [bridge, wire],
+    [`sdk`], [Client SDK, `AgentCipherclerk`, `AppCipherclerk` (six-method handle), presentation API, `captp_client`], [bridge, wire],
     [`wasm`], [WebAssembly bindings for Studio in-browser runtime], [sdk],
     [`node`], [Federation daemon (API + gossip sync), `node::state::trustless_intent_engine` (real threshold-decryption integration), `CapTpState::sync_known_federations`], [wire, federation],
     [`intent`], [Intent engine, `MatchSpec`, `trustless` 7-layer protocol (consumes real `federation::threshold_decrypt::combine_shares`), bond escrow, delay pool, gossip], [token, commit, federation],
@@ -40,7 +40,7 @@ The system is implemented in approximately 400k lines of Rust across $tilde$45 w
     [`pyana-dsl`], [Constraint DSL proc macros (multi-backend: AIR, Kimchi, Plonky3, ZKIR, SP1, Rust evaluator)], [syn, quote],
     [`pyana-dsl-runtime`], [DSL runtime: composition, verification, `WitnessedPredicateRegistry`], [circuit],
     [`pyana-dsl-tests`], [DSL integration tests and examples], [pyana-dsl],
-    [`app-framework`], [Shared framework for Pyana applications: `EmbeddedExecutor`, `StarbridgeAppContext`, `AppWallet` consumer], [sdk, node],
+    [`app-framework`], [Shared framework for Pyana applications: `EmbeddedExecutor`, `StarbridgeAppContext`, `AppCipherclerk` consumer], [sdk, node],
     [`discharge-gateway`], [Third-party caveat discharge service], [token, wire],
     [`verifier`], [Standalone `pyana-verifier` binary: per-cell STARK verify, `bilateral-pair` ($gamma$.2 cross-cell), `replay-chain` ($"WitnessedReceipt"$ chain), `verify-bundle` (scope-2)], [circuit, turn],
     [`teasting`], [Test assertions and property-based helpers], [proptest],
@@ -52,12 +52,12 @@ The system is implemented in approximately 400k lines of Rust across $tilde$45 w
   caption: [Core workspace crates. The newer entries (`predicate` module, `peer_exchange`, `EncryptedTurn`, `KnownFederations`, `verifier`, `EmbeddedExecutor`, `StarbridgeAppContext`) reflect the post-Silver-Vision integration work.],
 )
 
-== AppWallet and Userspace Applications
+== AppCipherclerk and Userspace Applications
 
 Apps run as *pure userspace* through a narrow handle:
 
 ```rust
-pub struct AppWallet {
+pub struct AppCipherclerk {
     /// The six methods that every app uses.
     pub fn submit_turn(&self, turn: Turn) -> Result<TurnReceipt, ...>;
     pub fn build_action(&self) -> ActionBuilder;
@@ -68,12 +68,12 @@ pub struct AppWallet {
 }
 ```
 
-`AppWallet` is the *only* surface most apps see. The framework also provides `EmbeddedExecutor` (a thin reactor running cells in-process) and `StarbridgeAppContext` (the in-browser equivalent backed by `wasm/src/runtime.rs`). The discipline that drove the design:
+`AppCipherclerk` is the *only* surface most apps see. The framework also provides `EmbeddedExecutor` (a thin reactor running cells in-process) and `StarbridgeAppContext` (the in-browser equivalent backed by `wasm/src/runtime.rs`). The discipline that drove the design:
 
 - No app-specific `Effect` variants (storage primitives are cell-program patterns).
 - No `Authorization::Unchecked` placeholder turns (CI guard via Stage 8 P2.F).
-- No `[0u8; 64]` stub signatures (the wallet always holds a real signing key).
-- No app-specific wallet wrappers (`createFromFactory` is the universal cell-construction verb).
+- No `[0u8; 64]` stub signatures (the cclerk always holds a real signing key).
+- No app-specific cclerk wrappers (`createFromFactory` is the universal cell-construction verb).
 
 In the in-browser Studio runtime (`wasm/src/runtime.rs`), the *browser is the host executor*. Anything cleartext-inside the host executor is cleartext-inside the browser process. The browser is *not* the federation: a wasm node does not hold BLS shares and cannot produce `ThresholdQC`s. `pyana_federation` does not cross-compile to wasm32; federation operations are remote-only. Browser-to-browser sealing and browser-as-prover both work.
 
@@ -94,9 +94,9 @@ Eight production-shaped applications drive the runtime. Several formerly-app-spe
     [`identity`], [Verifiable credentials], [Selective disclosure, anonymous presentation via blinded issuer ring],
     [`compute-exchange`], [Compute marketplace], [Capability-gated inference, sealed models, predicate matching],
     [`bounty-board`], [Task bounties], [Bond-backed quality assurance via escrow, adjudication via threshold],
-    [`discord-bot`], [Discord integration], [Custodial wallet, DeFi commands, presence attestation],
+    [`discord-bot`], [Discord integration], [Custodial cclerk, DeFi commands, presence attestation],
   ),
-  caption: [Production applications. Each runs as `AppWallet`-driven userspace; no app-specific `Effect` variants.],
+  caption: [Production applications. Each runs as `AppCipherclerk`-driven userspace; no app-specific `Effect` variants.],
 )
 
 A devnet deployment runs federation nodes with application services, Caddy TLS termination, and multi-architecture support (AMD64 + Graviton ARM64) via Docker Compose.
@@ -126,7 +126,7 @@ The test suite includes thousands of test functions covering:
 - Unit tests for each crate (token validation, Datalog evaluation, Poseidon2 correctness, BLS aggregation, DSL compilation, threshold decryption combination).
 - Integration tests spanning the full pipeline (token creation through STARK verification through turn execution through EVM wrapping).
 - Property-based tests via proptest (conservation invariant, attenuation monotonicity, nullifier uniqueness, EffectMask narrowing, federation_id derivation determinism).
-- End-to-end demo scenarios covering delegation, revocation, multi-party turns, intent fulfillment, pipeline execution, cross-federation swaps, wallet interactions, factory spawning, sovereign cell transitions, `peer_exchange` direct exchange, and `CapTpDelivered` Turn production.
+- End-to-end demo scenarios covering delegation, revocation, multi-party turns, intent fulfillment, pipeline execution, cross-federation swaps, cclerk interactions, factory spawning, sovereign cell transitions, `peer_exchange` direct exchange, and `CapTpDelivered` Turn production.
 - DSL code generation tests (all backends produce correct output for a common test suite).
 - Effect VM soundness tests (conservation violation detection, authority bypass attempts, state continuity breaks, sovereign-witness Phase 1 boundary).
 - Consensus correctness tests (Blocklace + Cordial Miners under simulated network conditions).
@@ -176,7 +176,7 @@ The `pyana` CLI provides full-citizen access to all runtime operations:
     [`cell`], [Create, inspect, sovereign/hosted transition, split, merge, migrate],
     [`turn`], [Build, sign, submit, inspect receipts, verify chains],
     [`cap`], [Mint, attenuate, delegate, revoke, present, verify proofs],
-    [`wallet`], [Create identity, import/export, backup mnemonic, balance],
+    [`cclerk`], [Create identity, import/export, backup mnemonic, balance],
     [`federation`], [Join, leave, status, peers, roots, epochs],
     [`register-federation`], [Add an entry to the local `KnownFederations` registry],
     [`namespace`], [Mount, resolve, list, register petname, rent, dispute],

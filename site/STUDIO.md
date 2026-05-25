@@ -95,7 +95,7 @@ interface Runtime {
 **Three implementations:**
 
 - `InMemoryRuntime` — wraps the `PyanaRuntime` exposed by `wasm/src/runtime.rs`,
-  which itself is a thin orchestrator over the **real** `pyana_sdk::AgentWallet`,
+  which itself is a thin orchestrator over the **real** `pyana_sdk::AgentCipherclerk`,
   `pyana_cell::Ledger`, and `pyana_turn::TurnExecutor`. All cryptographic
   paths (signing, key derivation, receipt chaining) are the canonical
   pyana-sdk implementations — not parallel reimplementations. The Studio

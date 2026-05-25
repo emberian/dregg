@@ -29,7 +29,7 @@ async fn main() {
     // A blinded-queue endpoint exposed at `/queue/ballots`. The voting flow
     // does NOT route ballots through this endpoint (we go via `/ballots/...`
     // so we can enforce eligibility on submit). This is here for cross-app
-    // wallets that talk to many blinded queues uniformly: they can read the
+    // cipherclerks that talk to many blinded queues uniformly: they can read the
     // commitment root, status, etc.
     let blinded = FairDistributionEndpoint::new(4096);
 

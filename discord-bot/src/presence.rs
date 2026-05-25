@@ -87,7 +87,7 @@ impl std::fmt::Display for PresenceClaim {
 pub struct PresenceAttestation {
     /// The Discord user ID this attests.
     pub user_id: u64,
-    /// The user's pyana cell ID (derived from their wallet).
+    /// The user's pyana cell ID (derived from their cclerk).
     pub cell_id: [u8; 32],
     /// What is being attested.
     pub claim: PresenceClaim,

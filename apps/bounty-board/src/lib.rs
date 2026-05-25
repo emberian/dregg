@@ -5,7 +5,7 @@
 //! ```text
 //! +-------------+     +--------------+     +-------------+
 //! |   Issuer    |---->| Bounty Board |<----|   Worker    |
-//! |  (wallet)   |     |   (node)     |     |  (wallet)   |
+//! |  (cclerk)   |     |   (node)     |     |  (cclerk)   |
 //! +-------------+     +--------------+     +-------------+
 //!        |                    |                     |
 //!   Post bounty         Store state          Claim + deliver

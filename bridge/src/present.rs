@@ -2080,7 +2080,7 @@ pub fn bytes_to_babybear(bytes: &[u8; 32]) -> BabyBear {
 /// Encode a BabyBear field element as a 32-byte array (canonical encoding).
 ///
 /// The u32 value is stored in bytes [0..4] as little-endian, with bytes [4..32]
-/// zeroed. This is the canonical wire encoding used by the wallet, engine, and
+/// zeroed. This is the canonical wire encoding used by the cipherclerk, engine, and
 /// verifier. Use [`bb_from_bytes`] to decode.
 pub fn bb_to_bytes(bb: BabyBear) -> [u8; 32] {
     let mut bytes = [0u8; 32];
@@ -4063,7 +4063,7 @@ mod tests {
 
     #[test]
     fn test_presentation_tag_unlinkable_multi_show() {
-        // Phase 2 unlinkability test: same wallet, same token, two presentations
+        // Phase 2 unlinkability test: same cipherclerk, same token, two presentations
         // must produce different presentation_tags. Both proofs must verify.
         let key = test_key();
         let issuer_hash = bytes_to_babybear(&key);
@@ -4088,7 +4088,7 @@ mod tests {
         let mut fed_root_bytes = [0u8; 32];
         fed_root_bytes[..4].copy_from_slice(&fed_root_bb.0.to_le_bytes());
 
-        // Generate two presentations from the SAME token (same wallet, same key).
+        // Generate two presentations from the SAME token (same cipherclerk, same key).
         let mut builder1 =
             BridgePresentationBuilder::new_with_root_bb(key, fed_root_bytes, fed_root_bb);
         let token1 = MacaroonToken::mint(key, b"kid-tag-test", "pyana.dev");

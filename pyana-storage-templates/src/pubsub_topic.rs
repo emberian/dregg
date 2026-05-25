@@ -46,9 +46,9 @@
 //! - **out-of-band**: the rest.
 
 use pyana_app_framework::{
-    Action, AppWallet, AuthRequired, CapTarget, CapTemplate, CellId, CellMode, ChildVkStrategy,
-    Effect, Event, FactoryDescriptor, FieldConstraint, FieldElement, InspectorDescriptor,
-    StarbridgeAppContext, StateConstraint, canonical_program_vk, symbol,
+    Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellId, CellMode,
+    ChildVkStrategy, Effect, Event, FactoryDescriptor, FieldConstraint, FieldElement,
+    InspectorDescriptor, StarbridgeAppContext, StateConstraint, canonical_program_vk, symbol,
 };
 use pyana_cell::program::{AuthorizedSet, CellProgram, TransitionCase, TransitionGuard};
 
@@ -284,7 +284,7 @@ pub fn pubsub_topic_factory_descriptor() -> FactoryDescriptor {
 
 /// Build the on-ledger [`Action`] recording a `publish`.
 pub fn build_publish_action(
-    wallet: &AppWallet,
+    cclerk: &AppCipherclerk,
     topic_cell: CellId,
     new_head: FieldElement,
     new_event_root: FieldElement,
@@ -316,13 +316,13 @@ pub fn build_publish_action(
         },
     ];
 
-    wallet.make_action(topic_cell, "publish", effects)
+    cclerk.make_action(topic_cell, "publish", effects)
 }
 
 /// Build the on-ledger [`Action`] recording a `subscribe` (cursor
 /// advance).
 pub fn build_subscribe_action(
-    wallet: &AppWallet,
+    cclerk: &AppCipherclerk,
     topic_cell: CellId,
     new_subscriber_cursors_root: FieldElement,
     subscriber_pk: [u8; 32],
@@ -343,13 +343,13 @@ pub fn build_subscribe_action(
         },
     ];
 
-    wallet.make_action(topic_cell, "subscribe", effects)
+    cclerk.make_action(topic_cell, "subscribe", effects)
 }
 
 /// Build the on-ledger [`Action`] adding a subscriber to the
 /// authorized-subscribers set.
 pub fn build_grant_subscriber_action(
-    wallet: &AppWallet,
+    cclerk: &AppCipherclerk,
     topic_cell: CellId,
     new_subscriber_set_root: FieldElement,
     new_subscriber_pk: [u8; 32],
@@ -369,7 +369,7 @@ pub fn build_grant_subscriber_action(
         },
     ];
 
-    wallet.make_action(topic_cell, "grant_subscriber", effects)
+    cclerk.make_action(topic_cell, "grant_subscriber", effects)
 }
 
 // =============================================================================
@@ -425,16 +425,16 @@ pub fn register(ctx: &StarbridgeAppContext) -> [u8; 32] {
 mod tests {
     use super::*;
     use crate::u64_field;
-    use pyana_app_framework::{AgentWallet, EmbeddedExecutor};
+    use pyana_app_framework::{AgentCipherclerk, EmbeddedExecutor};
 
-    fn test_wallet() -> AppWallet {
-        AppWallet::new(AgentWallet::new(), [42u8; 32])
+    fn test_cclerk() -> AppCipherclerk {
+        AppCipherclerk::new(AgentCipherclerk::new(), [42u8; 32])
     }
 
     fn test_context() -> StarbridgeAppContext {
-        let wallet = test_wallet();
-        let executor = EmbeddedExecutor::new(&wallet, "default");
-        StarbridgeAppContext::new(wallet, executor)
+        let cclerk = test_cclerk();
+        let executor = EmbeddedExecutor::new(&cclerk, "default");
+        StarbridgeAppContext::new(cclerk, executor)
     }
 
     fn test_cell() -> CellId {
@@ -477,10 +477,10 @@ mod tests {
 
     #[test]
     fn publish_action_shape() {
-        let wallet = test_wallet();
+        let cclerk = test_cclerk();
         let cell = test_cell();
         let action = build_publish_action(
-            &wallet,
+            &cclerk,
             cell,
             u64_field(1),
             blake3_field(b"e"),
@@ -493,19 +493,19 @@ mod tests {
 
     #[test]
     fn subscribe_action_shape() {
-        let wallet = test_wallet();
+        let cclerk = test_cclerk();
         let cell = test_cell();
         let action =
-            build_subscribe_action(&wallet, cell, blake3_field(b"c"), [9u8; 32], u64_field(1));
+            build_subscribe_action(&cclerk, cell, blake3_field(b"c"), [9u8; 32], u64_field(1));
         assert_eq!(action.method, symbol("subscribe"));
         assert_eq!(action.effects.len(), 2);
     }
 
     #[test]
     fn grant_subscriber_action_shape() {
-        let wallet = test_wallet();
+        let cclerk = test_cclerk();
         let cell = test_cell();
-        let action = build_grant_subscriber_action(&wallet, cell, blake3_field(b"s"), [11u8; 32]);
+        let action = build_grant_subscriber_action(&cclerk, cell, blake3_field(b"s"), [11u8; 32]);
         assert_eq!(action.method, symbol("grant_subscriber"));
         assert_eq!(action.effects.len(), 2);
     }

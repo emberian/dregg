@@ -1,7 +1,7 @@
 //! Cross-federation intent matching.
 //!
 //! Today the intent pool is single-federation: an intent posted to
-//! federation A's gossip is only visible to A's wallets. Audit §7
+//! federation A's gossip is only visible to A's cipherclerks. Audit §7
 //! flagged this — multi-federation rings (e.g., a swap between two
 //! tokens whose primary federations differ) cannot form because
 //! solvers only see one federation's pool at a time.

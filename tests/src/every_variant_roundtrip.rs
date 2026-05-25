@@ -15,7 +15,7 @@
 //!      panic. Variants that hit `unimplemented!` / `unreachable!` /
 //!      arithmetic-overflow surface as test failures.
 //!
-//!   2. Projection: `AgentWallet::convert_effects_to_vm(...)` (the public
+//!   2. Projection: `AgentCipherclerk::convert_effects_to_vm(...)` (the public
 //!      surface mirroring the executor's private `convert_turn_effects_to_vm`).
 //!      Required to produce at least one non-NoOp VM effect. Variants that
 //!      collapse to `vec![VmEffect::NoOp]` surface as test failures (today,
@@ -42,7 +42,7 @@ use pyana_cell::{
     Permissions, Preconditions, SealedBox, ValueCommitmentBytes, factory::FactoryCreationParams,
 };
 use pyana_circuit::{CellState as VmCellState, EffectVmAir, generate_effect_vm_trace, stark};
-use pyana_sdk::AgentWallet;
+use pyana_sdk::AgentCipherclerk;
 use pyana_turn::action::{BearerCapProof, DelegationProofData, QueueTxOp, symbol};
 use pyana_turn::conditional::ProofCondition;
 use pyana_turn::escrow::{EscrowClaimAuth, EscrowCondition};
@@ -857,7 +857,7 @@ fn every_effect_variant_round_trips_through_projection() {
     let agent = cell_id(b"variant-cell-a");
 
     for v in all_effect_variants() {
-        let projected = AgentWallet::convert_effects_to_vm(&agent, &[v.effect.clone()]);
+        let projected = AgentCipherclerk::convert_effects_to_vm(&agent, &[v.effect.clone()]);
         let all_noop = projected.iter().all(|e| matches!(e, VmEffect::NoOp));
         if all_noop {
             collapsed.push(v.label.to_string());
@@ -945,7 +945,7 @@ fn prove_and_verify_variant(
 ) -> Result<(), String> {
     use pyana_circuit::effect_vm::Effect as VmEffect;
 
-    let projected = AgentWallet::convert_effects_to_vm(cell_id, &[effect.clone()]);
+    let projected = AgentCipherclerk::convert_effects_to_vm(cell_id, &[effect.clone()]);
 
     // If the projection is all-NoOp, the AIR has nothing meaningful to
     // verify for this variant. Tag as KNOWN_PENDING.
@@ -1058,7 +1058,7 @@ fn every_variant_summary() {
             }
         };
 
-        let projected = AgentWallet::convert_effects_to_vm(&agent, &[v.effect.clone()]);
+        let projected = AgentCipherclerk::convert_effects_to_vm(&agent, &[v.effect.clone()]);
         let proj_label = if projected.iter().all(|e| matches!(e, VmEffect::NoOp)) {
             proj_collapsed += 1;
             "NoOp"

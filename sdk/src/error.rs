@@ -30,11 +30,11 @@ pub enum SdkError {
     #[error("CapTP client not configured; call set_captp_client() first")]
     CapTpNotConfigured,
 
-    /// The wallet has no token matching the requested operation.
+    /// The cipherclerk has no token matching the requested operation.
     #[error("no such token: {0}")]
     TokenNotFound(String),
 
-    /// The wallet does not have the required key material.
+    /// The cipherclerk does not have the required key material.
     #[error("missing key material: {0}")]
     MissingKey(String),
 

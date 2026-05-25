@@ -10,12 +10,12 @@ in (for example) the wire codec or the federation consensus loop shows up here
 
 | Pathway                              | MCP demo                          | This demo                                                                                          |
 |--------------------------------------|-----------------------------------|----------------------------------------------------------------------------------------------------|
-| Agent identity                       | `pyana_create_agent` MCP tool     | `pyana_sdk::AgentWallet::new()` directly                                                          |
+| Agent identity                       | `pyana_create_agent` MCP tool     | `pyana_sdk::AgentCipherclerk::new()` directly                                                          |
 | Federation                           | implicit (`pyana-node mcp`, solo) | `pyana_federation::Federation::new(&[3 nodes])` + a real `run_consensus_round`                    |
 | Attested root                        | not surfaced                      | `FederationNode::get_attested_root()` → postcard to disk → re-load → `is_valid(&fed_keys)`        |
 | Turn submission                      | `pyana_grant_capability` MCP tool | `pyana_turn::TurnExecutor::execute(&turn, &mut ledger)` against an in-memory `Ledger`             |
-| Turn signing                         | inside the node                   | `AgentWallet::sign_turn` on the caller side                                                       |
-| Receipt chain                        | `pyana_get_receipt_chain` MCP     | `AgentWallet::append_receipt` + `verify_receipt_chain(wallet.receipt_chain())`                    |
+| Turn signing                         | inside the node                   | `AgentCipherclerk::sign_turn` on the caller side                                                       |
+| Receipt chain                        | `pyana_get_receipt_chain` MCP     | `AgentCipherclerk::append_receipt` + `verify_receipt_chain(cclerk.receipt_chain())`                    |
 | Capability handoff                   | `pyana_create_bearer_cap` MCP     | `captp::handoff::{HandoffCertificate, HandoffPresentation, validate_handoff}` + `SwissTable`      |
 | Wire framing                         | never seen                        | `pyana_wire::codec::{encode, decode}` round-trips `WireMessage::AttestedRoot` + `PresentHandoff`  |
 
@@ -69,11 +69,11 @@ every other API correctly). To upgrade it to a strong assertion of correctness:
 1. **Real TCP transport.** Run two `pyana_wire::server::SiloServer` instances on
    loopback and have one present the `HandoffCertificate` to the other over a
    real socket (instead of the in-memory codec round-trip).
-2. **AgentWallet → captp::handoff bridge.** Today the demo derives a fresh
-   `ed25519_dalek::SigningKey` for the handoff introducer because `AgentWallet`
+2. **AgentCipherclerk → captp::handoff bridge.** Today the demo derives a fresh
+   `ed25519_dalek::SigningKey` for the handoff introducer because `AgentCipherclerk`
    does not expose its underlying signing key. A small accessor (or a
-   `wallet.create_handoff_certificate(...)` convenience) would let the same
-   wallet identity that signed the turn also sign the cert. Pushed to a
+   `cclerk.create_handoff_certificate(...)` convenience) would let the same
+   cclerk identity that signed the turn also sign the cert. Pushed to a
    follow-up per the task instructions (don't modify production crate APIs).
 3. **Effect VM proof.** Once `convert_turn_effects_to_vm` projects `Transfer`
    honestly, set `turn.execution_proof = Some(proof)` and verify it at the

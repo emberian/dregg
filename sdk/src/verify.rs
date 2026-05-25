@@ -1,7 +1,7 @@
 //! Standalone verification utilities for presentation proofs.
 //!
 //! This module provides convenience functions for verifying authorization proofs
-//! without needing to construct a full wallet or runtime. These are intended for
+//! without needing to construct a full cipherclerk or runtime. These are intended for
 //! the verifier side of a presentation exchange.
 
 use crate::error::SdkError;

@@ -432,7 +432,7 @@ The seam is `node/src/blocklace_sync.rs` (in particular
 So a turn becomes "consensus-committed" the moment
 `poll_finalized_blocks` emits a `FinalizedBlock::Turn` for its block ID,
 AND the executor produces `TurnResult::Committed`. The receipt itself
-is a `pyana_turn::TurnReceipt` which lives in the wallet and emits a
+is a `pyana_turn::TurnReceipt` which lives in the cclerk and emits a
 WebSocket event; **the receipt is not re-embedded as a new blocklace
 block** (no on-chain receipt feedback). Receipts may be signed by the
 executor (`maybe_sign_receipt` in `turn/src/executor.rs:762`), but the

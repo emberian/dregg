@@ -102,12 +102,12 @@ The federation never persistently stores the full cell state.
   signature. Any node — not just the cell's owner — that has at
   some point seen `cell_state` (e.g. via a peer-exchange handshake,
   via a prior witnessed turn, via a sibling federation, via a
-  privileged read of the wallet's sovereign cache) can package the
+  privileged read of the cipherclerk's sovereign cache) can package the
   same `cell_state` into a fresh witness. As long as the stored
   commitment hasn't moved, the witness is accepted.
 - **Mid-flight tampering of the witness by an executor.** Since
-  the wallet signature (`compute_turn_bytes`) does not cover
-  `sovereign_witnesses` (P2-10 open in `sdk/src/wallet.rs:3895-3906`),
+  the cclerk signature (`compute_turn_bytes`) does not cover
+  `sovereign_witnesses` (P2-10 open in `sdk/src/cipherclerk.rs:3895-3906`),
   an executor that holds the SignedTurn can swap the witness payload
   for any other valid-preimage cell (same id, same stored
   commitment) without invalidating the signature. There is exactly
@@ -115,11 +115,11 @@ The federation never persistently stores the full cell state.
   *provided* the commitment is collision-resistant, which it is —
   so this isn't a state-forgery attack, but it is a wire-malleability
   attack on the SignedTurn struct: the receipt's Turn::hash (v3,
-  which *does* cover the witness) will differ from the wallet's
+  which *does* cover the witness) will differ from the cipherclerk's
   signed turn-hash (v1, which doesn't). If any downstream verifier
-  checks "wallet signature covers Turn::hash" — and several places
+  checks "cclerk signature covers Turn::hash" — and several places
   do compute `turn.hash()` to look up the receipt by content
-  address — the mismatch is invisible because the wallet path
+  address — the mismatch is invisible because the cclerk path
   never authenticates the v3-hash form.
 
 ### 2.3 Failure-closed?
@@ -233,10 +233,10 @@ the surrounding lines, MakeSovereign at 2599-2630):
 - The STARK is verified via `EffectVmAir`.
 
 This is the path that has algebraic teeth. It is also the path
-that *does not use `sovereign_witnesses` at all* — the wallet
+that *does not use `sovereign_witnesses` at all* — the cclerk
 constructs it with `sovereign_witnesses: HashMap::new()` and the
 proof itself is the validation
-(`sdk/src/wallet.rs:4442-4554`).
+(`sdk/src/cipherclerk.rs:4442-4554`).
 
 So we have a fork:
 
@@ -350,7 +350,7 @@ entry and hashes `(cell_id, state_proof, state_commitment)` per
 witness. v3's domain tag is `"pyana-turn-v3:"`.
 
 But the *signature* on the SignedTurn is over
-`AgentWallet::compute_turn_bytes` (`sdk/src/wallet.rs:3852-3908`),
+`AgentCipherclerk::compute_turn_bytes` (`sdk/src/cipherclerk.rs:3852-3908`),
 which uses `TURN_DOMAIN_PREFIX = b"pyana-turn-v1:"` and **does not
 cover** `sovereign_witnesses`, `execution_proof`,
 `execution_proof_cell`, `execution_proof_new_commitment`,
@@ -361,17 +361,17 @@ body has a self-flagging comment (P2-10):
 > `turn.conservation_proof`, `turn.sovereign_witnesses`,
 > `turn.execution_proof`, ... a holder of write access to a
 > SignedTurn struct in flight can swap any of them without
-> invalidating the wallet's signature.
+> invalidating the cipherclerk's signature.
 
-So Turn::hash and the wallet signature disagree about the
+So Turn::hash and the cclerk signature disagree about the
 canonical form of a turn. The receipt chain (and any verifier that
 re-derives `turn.hash()` from a SignedTurn) will see one identity;
-the wallet thinks it signed a different one. In the sovereign
+the cclerk thinks it signed a different one. In the sovereign
 witness case, this means:
 
-- **Wire attacker swap:** A relayer/executor between the wallet and
+- **Wire attacker swap:** A relayer/executor between the cclerk and
   the final ledger can substitute the `sovereign_witnesses` field
-  on a SignedTurn without breaking the wallet signature. They
+  on a SignedTurn without breaking the cclerk signature. They
   cannot forge a state that doesn't open the stored commitment
   (the executor catches that at §2 step 3), but they *can* swap
   one valid witness for another — e.g. if the witness includes
@@ -388,8 +388,8 @@ witness case, this means:
   a malicious executor to *omit* the witness from the turn it
   records in the receipt chain (or substitute an empty map). The
   receipt's `turn_hash` (which uses v3) will differ from what
-  the wallet's signature attests to (v1). If a verifier checks
-  the signature against the wallet's v1 form, the omission is
+  the cipherclerk's signature attests to (v1). If a verifier checks
+  the signature against the cipherclerk's v1 form, the omission is
   silent at the signature layer. If the verifier rederives
   `turn.hash()` (v3) and compares it to the receipt's
   `turn_hash`, the mismatch is caught at the receipt-binding
@@ -410,7 +410,7 @@ at layer 2/3 (signature/replay), never at layer 1 (AIR).
 | Substitute a fabricated `cell_state` (any preimage) | `SovereignCommitmentMismatch` at step 3 (no preimage besides the real one collides) | Executor §2 (assumes commitment is CR) |
 | Submit witness for non-sovereign cell | `InvalidEffect { reason: "sovereign witness provided for non-sovereign cell ..." }` | Executor §2 |
 | Submit a witness whose cell_id ≠ key | `InvalidEffect { reason: "sovereign witness cell ID mismatch" }` | Executor §2 |
-| Swap witness on the wire (after wallet signature) | Wallet signature still verifies; Turn::hash v3 changes | **Open at the signature layer; partially caught at receipt-replay** |
+| Swap witness on the wire (after cclerk signature) | Cipherclerk signature still verifies; Turn::hash v3 changes | **Open at the signature layer; partially caught at receipt-replay** |
 | Omit witness from receipt but accept turn anyway | Hosted-table lookup fails, turn rejected | Executor (same accidental path as row 1) |
 | Replay a witness in a future turn after the cell's commitment moved | Step 3 fails: `state_commitment != stored_commitment` | Executor §2 |
 | Apply a Transfer on a sovereign cell with a witness but no cap | `verify_authorization` rejects via permission check | Executor §verify_authorization |
@@ -467,7 +467,7 @@ The proof-carrying path (Phase 3) closes this gap, but it is the
 *alternative* to the witness path, not an enhancement of it. The
 two paths are mutually exclusive at construction. The witness
 path remains the default for everything that hasn't been migrated
-to proof-carrying form (per `sdk/src/wallet.rs:4350-4416`).
+to proof-carrying form (per `sdk/src/cipherclerk.rs:4350-4416`).
 
 ## 9. Open questions for the designer
 
@@ -528,7 +528,7 @@ to proof-carrying form (per `sdk/src/wallet.rs:4350-4416`).
    domain-tag mismatch only.
 
 7. **Is the `pyana-turn-v1:` → `pyana-turn-v3:` migration on the
-   wallet signing message planned?** P2-10 flags it as deferred
+   cclerk signing message planned?** P2-10 flags it as deferred
    to "Stage 9 (Receipts overhaul)." Closing T9 properly probably
    requires closing P2-10 first; otherwise even a witness with a
    signature is still wire-malleable through the SignedTurn
@@ -567,11 +567,11 @@ to proof-carrying form (per `sdk/src/wallet.rs:4350-4416`).
   `PeerStateTransition` analogue.
 - `cell/src/ledger.rs:280, 963-1004` — sovereign commitment
   store.
-- `sdk/src/wallet.rs:4350-4554` — wallet's two construction paths
+- `sdk/src/cipherclerk.rs:4350-4554` — cipherclerk's two construction paths
   (`execute_sovereign_turn` vs `execute_sovereign_turn_with_proof`).
-- `sdk/src/wallet.rs:3852-3908` — `compute_turn_bytes` (the
+- `sdk/src/cipherclerk.rs:3852-3908` — `compute_turn_bytes` (the
   signed-message body that omits the witness; P2-10).
-- `sdk/src/wallet.rs:916` — `TURN_DOMAIN_PREFIX = b"pyana-turn-v1:"`.
+- `sdk/src/cipherclerk.rs:916` — `TURN_DOMAIN_PREFIX = b"pyana-turn-v1:"`.
 - `tests/src/sovereign_proof.rs` — Phase 1 vs Phase 3 backward-
   compat test, demonstrating the mutual exclusion of the two
   paths.

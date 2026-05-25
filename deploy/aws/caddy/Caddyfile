@@ -30,7 +30,7 @@ devnet.pyana.fg-goose.online {
     }
 
     # Wallet endpoints
-    handle /wallet {
+    handle /cipherclerk {
         reverse_proxy localhost:8420
     }
 

@@ -290,7 +290,7 @@ pub enum Authorization {
     /// this is the categorical coproduct in the `Authorization`
     /// category — the missing "alternation" primitive.
     ///
-    /// **App drivers.** *Multi-key wallets* ("authorized by any of
+    /// **App drivers.** *Multi-key cipherclerks* ("authorized by any of
     /// these 3 keys"); *recovery flows* ("primary OR backup OR
     /// social-recovery quorum"); *cross-mode bridge requests* ("signed
     /// by this federation OR proven by this STARK"); *hot/cold cap

@@ -148,7 +148,7 @@ The proof is generated client-side using the `pyana-circuit` crate's ring member
 ```
 +-------------+     +--------------+     +-------------+
 |   Issuer    |---->| Bounty Board |<----|   Worker    |
-|  (wallet)   |     |   (server)   |     |  (wallet)   |
+|  (cclerk)   |     |   (server)   |     |  (cclerk)   |
 +-------------+     +--------------+     +-------------+
        |                    |                     |
   Post bounty         Verify proofs         Claim + prove

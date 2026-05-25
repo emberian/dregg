@@ -172,7 +172,7 @@ When an intent is partially satisfied (e.g., a ring trade uses 60% of the offere
 The boundary contract (per BOUNDARIES.md §2.12 + §4.10):
 
 - *Cleartext-inside (intent body)*: whoever can decrypt the intent's seal, or after threshold ceremony, the entire federation committee.
-- *Cleartext-inside (intent match)*: the two wallets that locally evaluated the Datalog and matched.
+- *Cleartext-inside (intent match)*: the two cipherclerks that locally evaluated the Datalog and matched.
 - *Commitment-inside*: gossip network (sees intent bodies post-decrypt, SSE keyword tokens, stake nullifiers).
 - *Acceptance-inside*: STARK validity verifier; predicate-attestation verifier.
 

@@ -1,6 +1,6 @@
 //! Fulfillment protocol: creating attenuated tokens to satisfy matched intents.
 //!
-//! After matching locally, the wallet can fulfill an intent by creating an
+//! After matching locally, the cclerk can fulfill an intent by creating an
 //! attenuated capability token that meets the intent's requirements. The
 //! fulfillment is sent DIRECTLY to the intent creator (not broadcast).
 //!
@@ -554,7 +554,7 @@ fn produce_attenuated_token(
         FulfillmentError::AttenuationFailed("root_key required for Trusted mode fulfillment".into())
     })?;
 
-    // Mint a macaroon from the root key (the wallet holds the key for its own tokens)
+    // Mint a macaroon from the root key (the cclerk holds the key for its own tokens)
     let mac = MacaroonToken::mint(root_key, source_token.token_id.as_bytes(), "pyana.intent");
 
     // Build the attenuation restrictions
@@ -1032,7 +1032,7 @@ pub fn execute_fulfillment_flow_with_commitment(
 
 /// A committed note input for the fulfillment flow.
 ///
-/// The fulfiller provides these from their wallet's owned notes.
+/// The fulfiller provides these from their cipherclerk's owned notes.
 #[derive(Clone, Debug)]
 pub struct CommittedFulfillmentInput {
     /// The nullifier for this note.

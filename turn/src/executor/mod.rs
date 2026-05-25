@@ -487,7 +487,7 @@ pub struct TurnExecutor {
     ///
     /// Off-chain `verify::verify_receipt_chain` already enforces this when it
     /// has access to the full chain. This field enforces the same property
-    /// AT WRITE TIME, removing the wallet's ability to silently break the
+    /// AT WRITE TIME, removing the cipherclerk's ability to silently break the
     /// chain by submitting every turn as if it were genesis.
     pub last_receipt_hash: Mutex<HashMap<CellId, [u8; 32]>>,
     /// Optional X25519 keypair used to decrypt `EncryptedTurn` submissions.

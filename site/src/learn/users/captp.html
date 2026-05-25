@@ -67,10 +67,10 @@ pyana cap delegate \
 pyana cap accept --from $YOUR_PUBKEY</code></pre>
 
     <h3>Via the SDK (Programmatic)</h3>
-    <pre><code class="language-rust">use pyana_sdk::{AgentWallet, Attenuation};
+    <pre><code class="language-rust">use pyana_sdk::{AgentCipherclerk, Attenuation};
 
-let mut alice = AgentWallet::new();
-let mut bob = AgentWallet::new();
+let mut alice = AgentCipherclerk::new();
+let mut bob = AgentCipherclerk::new();
 
 let root = alice.mint_token(b"secret-key-here-32-bytes!!!!!!!!", "compute");
 

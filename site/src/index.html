@@ -206,7 +206,7 @@
   ────────────────────────────────────────────────────────────────────
 CLI                      pyana cell | turn | cap | namespace | route | storage | cclerk
   ────────────────────────────────────────────────────────────────────
-SDK                      AgentWallet | AgentRuntime | HD keys | IT-PIR discovery
+SDK                      AgentCipherclerk | AgentRuntime | HD keys | IT-PIR discovery
   ────────────────────────────────────────────────────────────────────
 CapTP                    Sessions | Sturdy refs | Handoff | Distributed GC | Store-forward
   ────────────────────────────────────────────────────────────────────
@@ -334,9 +334,9 @@ pyana intent post --spec '{"service": "compute", "action": "execute"}'</code></p
         <span class="quickstart__n">3</span>
         <div>
           <p>Or use the SDK directly:</p>
-          <pre><code class="language-rust">use pyana_sdk::{AgentWallet, Attenuation, VerificationMode, AuthRequest};
+          <pre><code class="language-rust">use pyana_sdk::{AgentCipherclerk, Attenuation, VerificationMode, AuthRequest};
 
-let mut cclerk = AgentWallet::new();
+let mut cclerk = AgentCipherclerk::new();
 let root = cclerk.mint_token(b"secret-key-material-32-bytes!!!!", "inventory");
 let child = cclerk.attenuate(&amp;root, &amp;Attenuation {
     services: vec![("inventory".into(), "read".into())],

@@ -573,7 +573,7 @@ TRANSFER_ID = Poseidon2(
 The `from`/`to` projections at the row come from existing transfer
 params columns (today truncated to 4 bytes — `circuit/src/effect_vm.rs:421
 DIRECTION`, neighboring columns). γ.2 requires lifting these to the
-full 8-felt cell-id decomposition (mirror of `wallet::bytes32_to_babybear`,
+full 8-felt cell-id decomposition (mirror of `cclerk::bytes32_to_babybear`,
 per AUDIT-circuit P1-2). This is the same column-widening the AUDIT-circuit
 fix recommends; γ.2 makes it load-bearing.
 
@@ -793,7 +793,7 @@ AND for each (sender, receiver) pair in the schedule:
 The Rust loop in §4 becomes a circuit. The aggregation AIR's PI is the
 *reduced* set: `TURN_HASH`, `EFFECTS_HASH_GLOBAL`, `ACTOR_NONCE`,
 `PREVIOUS_RECEIPT_HASH`, `BILATERAL_CONSISTENT` (a single felt: 1 iff
-all pair checks passed). The outer wallet/verifier never sees N inner
+all pair checks passed). The outer cclerk/verifier never sees N inner
 PIs; it sees the single aggregation proof and the shared turn-level PI.
 
 ### 8.3 Why Phase 1 first

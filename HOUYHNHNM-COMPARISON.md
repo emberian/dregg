@@ -200,7 +200,7 @@ fragmentary analysis below.
 | Branchable system state ("virtualization as branching") | Sovereign-cell peer-exchange + cell-program forking via factories; `bridge::burn-and-mint` for cross-federation egress | Pyana has the *protocols* for cross-federation movement but no first-class "branch this whole subsystem and play with it" operator. |
 | Build = meta-level development | Cargo + the pyana-dsl multi-backend differential testing harness + the 7 DSL backends + Studio's wasm runtime | Pyana lives in cargo's world; the only "build = meta" insight pyana adopts is *differential testing across backends* — the DSL emits to 7 backends and a single behavioral spec is checked against each. |
 | Persistence log = inputs, not bytes | `WitnessedReceipt { receipt, proof, public_inputs, witness_bundle? }` with scope-2 re-executable | Pyana's persistence log is the *witnessed transition stream*, replayable from inputs. This is **the strongest single point of convergence** in the entire study. |
-| "Determinism by construction" | The Effect VM AIR's ~151-column trace, BabyBear field, Plonky3 + FRI; the wallet-v3 canonical signing message; canonical encoders that VKs commit to | Direct. |
+| "Determinism by construction" | The Effect VM AIR's ~151-column trace, BabyBear field, Plonky3 + FRI; the cclerk-v3 canonical signing message; canonical encoders that VKs commit to | Direct. |
 | Time-preference choice of tools (Ch.11) | The *Silver → Golden* roadmap; the deliberate decision in `NEW-WORLD.md` to not chase Golden until Silver is integration-complete | Pyana's two-vision frame is explicitly low time-preference. This is genuinely Houyhnhnmoid. |
 | The "Yahoo / Horse" distinction (sentient vs. nonsentient quadrupeds; Human vs. Yahoo) | The (deleted) slop-apps list in `NEW-WORLD.md` vs. the surviving starbridge-apps | Both designs distinguish "the thing that looks right but isn't" from "the thing that is right but unfamiliar." The deletion of `amm`, `lending`, `orderbook`, `stablecoin`, `dao-treasury`, `prediction-market` is a Houyhnhnmoid act: refusing the surface-similar but architecturally-wrong things. |
 | No notion of "destroy" | …also no notion of `CellDestroy` (per `PROTOCOL-CATEGORICAL-ANALYSIS.md` §1) | **Both designs are weak at retirement.** This is a shared gap, not a divergence. See §5. |
@@ -316,7 +316,7 @@ Houyhnhnm (Ch.8):
 > abstraction, i.e. abstractions that don't leak."
 
 Pyana: `Cell::seal { allowed_effects }` + the AIR enforcement that no
-effect outside the allowed set can appear in a proof + the wallet's
+effect outside the allowed set can appear in a proof + the cipherclerk's
 inability to construct a turn that violates a slot caveat. The
 sandbox is *algebraic*. No hardware involvement.
 
@@ -357,7 +357,7 @@ Pyana: the Effect VM AIR is deterministic by construction. Effects
 within a turn have a defined ordering (encoded in the trace's row
 ordering); the bilateral schedule between cells is a CRDT-shaped
 deterministic accumulator; blocklace consensus is a deterministic
-function of the DAG. Wallet-v3 closed the witness-malleability bug
+function of the DAG. Cipherclerk-v3 closed the witness-malleability bug
 explicitly — the houyhnhnm framing for that fix is "we removed a
 source of non-determinism that wasn't being recorded."
 
@@ -558,7 +558,7 @@ of partial blames exceeds the total blame attributable.
 Pyana's `EXECUTOR-HONESTY-AUDIT.md` enumerates threats per-attacker.
 It doesn't model the *layered* responsibility — e.g., "the executor
 forged effects, AND the verifier failed to check the receipt's PI
-completeness, AND the wallet didn't include witness blobs."
+completeness, AND the cclerk didn't include witness blobs."
 
 **Small mod**: a column in the threat ledger for "what other layer
 could have caught this." This already exists informally in the prose
@@ -861,7 +861,7 @@ chains and let me try things in one of them."
 **Silver relevance: medium.** Pyana doesn't *need* general branching
 for Silver. But the lack of it means there's no clean way to
 *sandbox-test* a turn against live state without actually applying
-it. The closest is the wallet's dry-run path; that's not the same as
+it. The closest is the cipherclerk's dry-run path; that's not the same as
 a fork-tree.
 
 **Small move:** none for Silver. For Golden, the categorical-analysis
@@ -1067,7 +1067,7 @@ warning bell. Keep it polycentric.
 ### 7.4. "Determinism by construction" as a code-review heuristic
 
 When reviewing a new piece of pyana code, ask "what are the sources
-of non-determinism in this, and which are *recorded*?" The wallet-v3
+of non-determinism in this, and which are *recorded*?" The cclerk-v3
 fix was exactly this question applied to signing message
 construction. The houyhnhnm framing makes the question reusable.
 
@@ -1101,7 +1101,7 @@ pyana's hardest decisions have been made this way already. Keep it.
 ### 7.8. "The interaction is the unit, not the artifact"
 
 Repeated throughout. Pyana should resist artifact-thinking — "is the
-proof done?", "is the verifier done?", "is the wallet done?" — in
+proof done?", "is the verifier done?", "is the cclerk done?" — in
 favor of interaction-thinking — "can a user, holding only public
 information about a federation, verify a third party's claim about
 their cell's state?". The latter framing keeps the whole loop in

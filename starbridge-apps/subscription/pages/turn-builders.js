@@ -1,7 +1,7 @@
 // starbridge-apps/subscription/pages/turn-builders.js
 //
 // JS shim wrapping `window.pyana.signTurn(turnSpec)` (the extension
-// wallet API — see extension/src/page.ts) with subscription-domain
+// cclerk API — see extension/src/page.ts) with subscription-domain
 // conveniences that mirror the Rust turn-builders in src/lib.rs:
 //
 //   build_publish_action          → publish(...)

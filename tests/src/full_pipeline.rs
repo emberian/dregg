@@ -32,7 +32,7 @@ use pyana_circuit::{
 };
 use pyana_commit::poseidon2_tree::{Poseidon2MerkleTree, commitment_to_field};
 use pyana_dsl_runtime::note_spending::{prove_note_spend, verify_note_spend};
-use pyana_sdk::wallet::{AgentWallet, AuthorizationPresentation, VerificationMode};
+use pyana_sdk::cipherclerk::{AgentCipherclerk, AuthorizationPresentation, VerificationMode};
 use pyana_token::{Attenuation, AuthRequest, AuthToken, MacaroonToken};
 use pyana_turn::builder::ActionBuilder;
 use pyana_turn::{
@@ -50,7 +50,7 @@ fn test_key(name: &str) -> [u8; 32] {
 }
 
 /// Compute the synthetic Poseidon2 federation root for an issuer key.
-/// This mirrors the logic in AgentWallet::compute_federation_root_bb.
+/// This mirrors the logic in AgentCipherclerk::compute_federation_root_bb.
 fn compute_federation_root_poseidon2(issuer_key: &[u8; 32]) -> BabyBear {
     let issuer_hash = bytes_to_babybear(issuer_key);
     let depth = 8;

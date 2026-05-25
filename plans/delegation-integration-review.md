@@ -101,21 +101,21 @@ Additionally, `Challenge` and `ChallengeReason` need `Serialize`/`Deserialize` d
 
 ---
 
-## 3. Does the SDK/Wallet Need Changes?
+## 3. Does the SDK/Cipherclerk Need Changes?
 
-**Yes. The wallet needs a delegation-aware submission path.**
+**Yes. The cclerk needs a delegation-aware submission path.**
 
-**File:** `sdk/src/wallet.rs`
+**File:** `sdk/src/cipherclerk.rs`
 
-Currently `AgentWallet` has:
+Currently `AgentCipherclerk` has:
 - `sign_turn(&self, turn: &Turn) -> SignedTurn` (line 1742)
 - No concept of "my executor" or "delegated submission"
 
 ### Changes needed:
 
 ```rust
-// New fields on AgentWallet:
-/// The executor this wallet has delegated to (if any).
+// New fields on AgentCipherclerk:
+/// The executor this cclerk has delegated to (if any).
 executor_address: Option<String>,  // host:port of executor
 /// The active delegation (for scope checking before submission).
 active_delegation: Option<ExecutorDelegation>,
@@ -130,7 +130,7 @@ pub fn detect_censorship(&self, current_height: u64) -> bool
 
 The `build_delegated_request` method:
 1. Serializes the Turn to `turn_data: Vec<u8>`
-2. Signs it with the wallet's signing key
+2. Signs it with the cipherclerk's signing key
 3. Assigns a monotonic nonce
 4. Records `submitted_at` from current known height
 
@@ -184,7 +184,7 @@ The executor mode:
 4. Publishes the `BatchExecution` as a blocklace block
 5. Notifies clients of their results
 
-**Key difference from `Run`:** The executor does NOT process its own wallet's turns as the primary path. It processes OTHER agents' turns. It still needs federation connectivity to submit batch blocks and sync state.
+**Key difference from `Run`:** The executor does NOT process its own cipherclerk's turns as the primary path. It processes OTHER agents' turns. It still needs federation connectivity to submit batch blocks and sync state.
 
 ---
 
@@ -193,7 +193,7 @@ The executor mode:
 **This is the deepest architectural question. Answer: E manages Alice's capability namespace.**
 
 ### Current model (`captp/src/session.rs`, `sdk/src/captp_client.rs`):
-- Each wallet has a `CapTpClient` with its own `SwissTable` (exports) and `CapSession`s
+- Each cclerk has a `CapTpClient` with its own `SwissTable` (exports) and `CapSession`s
 - When Bob wants to enliven a sturdy ref to Alice's cell, he connects to Alice's node
 - Alice's node holds Alice's SwissTable (maps swiss numbers to cell + permissions)
 
@@ -288,14 +288,14 @@ This is NOT a conflict because governance operates at the blocklace level (who p
 | Wire message | `wire/src/message.rs` | Add `DelegatedTurn`, `BatchResult`, `DelegationChallenge` variants |
 | Wire message | `blocklace/src/delegation.rs` | Add `Serialize`/`Deserialize` to `Challenge`, `ChallengeReason` |
 | Node API | `node/src/api.rs` | Add `POST /api/submit-delegated` endpoint |
-| SDK | `sdk/src/wallet.rs` | Add `set_executor()`, `build_delegated_request()` |
+| SDK | `sdk/src/cipherclerk.rs` | Add `set_executor()`, `build_delegated_request()` |
 | Node | `node/src/main.rs` | Add `Command::Executor` subcommand (minimal: accept + batch + execute) |
 
 ### PHASE 5b: Verification and censorship protection (NEXT)
 
 | Component | File | Change |
 |-----------|------|--------|
-| SDK | `sdk/src/wallet.rs` | Add `verify_batch_result()`, `detect_censorship()` |
+| SDK | `sdk/src/cipherclerk.rs` | Add `verify_batch_result()`, `detect_censorship()` |
 | CapTP | `sdk/src/captp_client.rs` | Delegated swiss tables |
 | CapTP | `captp/src/session.rs` | Multi-owner exports |
 | Relay | `node/src/relay_service.rs` | `drain_on_behalf_of` endpoint |
@@ -318,7 +318,7 @@ This is NOT a conflict because governance operates at the blocklace level (who p
 `TurnExecutor::execute()` checks `agent_cell.state.nonce == turn.nonce`. In delegated mode, who manages Alice's nonce?
 
 - **Problem:** If Alice submits nonce 5, and E hasn't processed nonce 4 yet, nonce 5 is rejected.
-- **Solution:** E is the SOLE authority on Alice's nonce (because E is the sole executor). Alice's wallet queries E for current nonce before building a ClientTurnRequest. This means Alice cannot have two executors simultaneously (already enforced by `AlreadyDelegated`).
+- **Solution:** E is the SOLE authority on Alice's nonce (because E is the sole executor). Alice's cclerk queries E for current nonce before building a ClientTurnRequest. This means Alice cannot have two executors simultaneously (already enforced by `AlreadyDelegated`).
 
 ### Conflict 2: Fee accounting
 
@@ -340,4 +340,4 @@ If turn 3 in a batch fails, should turns 1-2 remain committed or should the whol
 
 With delegated execution, Alice's canonical state is whatever E last published. If Alice goes offline and comes back, she needs to sync from E's published batches. But `verify_turn_in_batch()` only checks result presence -- it does not verify state commitments against an independently maintained local copy.
 
-- **Resolution:** The wallet must maintain a shadow state commitment and compare against `TurnResult.new_commitment`. Any divergence triggers a challenge. This is Phase 5b.
+- **Resolution:** The cclerk must maintain a shadow state commitment and compare against `TurnResult.new_commitment`. Any divergence triggers a challenge. This is Phase 5b.

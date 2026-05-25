@@ -976,7 +976,7 @@ mod hardening_tests {
     }
 
     /// A turn that claims a prior receipt when the executor has none on file
-    /// MUST be rejected (a wallet can't fake an established chain).
+    /// MUST be rejected (a cclerk can't fake an established chain).
     #[test]
     fn previous_receipt_hash_genesis_with_some_rejected() {
         let mut ledger = Ledger::new();

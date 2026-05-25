@@ -50,7 +50,7 @@ The nullifier set (`cell/src/nullifier_set.rs`) is a sorted append-only list wit
 
 **Link "intent published" to "fulfillment completed":** Yes, a solver who fulfills an intent knows the `intent_id` and the `fulfiller` CommitmentId. The intent creator receives the fulfillment directly (not broadcast), but the commit-reveal protocol (gossip.rs:132-155) means the commitment is visible before the reveal. A passive observer sees: commitment published -> reveal after 5s -> intent removed. This links the timeline.
 
-**Break it:** The `CommitmentId` is reused across intents from the same wallet. Multiple intents from the same `CommitmentId` in one epoch are linkable (they share the same stake commitment). Rate limiting (10/min/creator) reveals activity patterns.
+**Break it:** The `CommitmentId` is reused across intents from the same cclerk. Multiple intents from the same `CommitmentId` in one epoch are linkable (they share the same stake commitment). Rate limiting (10/min/creator) reveals activity patterns.
 
 **Improve:** Per-intent ephemeral CommitmentIds (stealth addresses for intents), or blind the CommitmentId with epoch-specific randomness.
 

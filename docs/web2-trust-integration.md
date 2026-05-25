@@ -8,7 +8,7 @@ Pyana's token layer (`pyana-token`) is macaroon/biscuit-backed capability auth. 
 
 **Replace OAuth2/JWT with attenuable tokens. Ship this week.**
 
-Mint a root token with `AgentWallet::mint_token()`. The `Attenuation` struct lets any token holder narrow it further without contacting the issuer:
+Mint a root token with `AgentCipherclerk::mint_token()`. The `Attenuation` struct lets any token holder narrow it further without contacting the issuer:
 
 - Time-bound: `not_after` / `not_before` (session tokens that expire)
 - Scope-narrow: `apps`, `services`, `features` (principle of least privilege)
@@ -25,7 +25,7 @@ Mint a root token with `AgentWallet::mint_token()`. The `Attenuation` struct let
 
 The turn system (`pyana-turn`) already produces signed action forests with causal hash-pointers. Deploy this as an append-only audit log:
 
-1. Each service signs its actions with Ed25519 (the wallet identity key)
+1. Each service signs its actions with Ed25519 (the cclerk identity key)
 2. Each turn references its causal predecessors by hash (happened-before)
 3. The `TurnReceipt` chain (`verify_receipt_chain()`) gives tamper-evidence
 
@@ -88,7 +88,7 @@ Most real deployments live between "semi-trust" and "privacy." The code in `pyan
 ## What You Can Build This Month
 
 1. **API gateway middleware** that verifies `AuthToken` on every request, replacing JWT validation (~200 LOC, `pyana-token` + `pyana-sdk`)
-2. **Delegation service** that lets users attenuate their own tokens for third-party integrations (~150 LOC, `AgentWallet::attenuate()`)
+2. **Delegation service** that lets users attenuate their own tokens for third-party integrations (~150 LOC, `AgentCipherclerk::attenuate()`)
 3. **Audit log service** backed by signed turn receipts, serving a verifiable event stream (~400 LOC, `pyana-turn` + `pyana-wire`)
 4. **Revocation server** using a single `SiloServer` with `DefaultRevocationHandler` (~100 LOC config)
 5. **Third-party MFA gateway** that issues discharge macaroons after TOTP/WebAuthn verification (~300 LOC, `sdk/src/discharge.rs` pattern)

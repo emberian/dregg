@@ -279,7 +279,7 @@ strongest use-case and the one that justifies the
 
 ### 2.3 Intent matching: predicate-shaped dispatch to handlers
 
-**Shape:** the intent pool receives a `MatchSpec`; the wallet has
+**Shape:** the intent pool receives a `MatchSpec`; the cclerk has
 held capabilities; the matcher finds a satisfying token.
 
 **DFA fit:** **strong, but with caveats.** A `MatchSpec` *can*
@@ -288,8 +288,8 @@ token's `(action, resource, app_id, ...)` as a bytestring, build
 a pattern). Two questions:
 
 1. **Is compilation worth it?** Today's matcher iterates
-   capabilities and compares fields. For wallets with 10s of
-   tokens, compilation is overkill. For service-mesh wallets with
+   capabilities and compares fields. For cipherclerks with 10s of
+   tokens, compilation is overkill. For service-mesh cipherclerks with
    1000s of tokens (a hub that brokers caps), DFA dispatch with a
    single `O(n)` byte scan dominates.
 2. **What about the proof side?** The current matcher emits a
@@ -343,7 +343,7 @@ production wiring.
 ### 2.6 Discord-bot slash-command dispatch
 
 **Shape:** Discord sends a slash-command interaction with a
-`command_data.name` ("/transfer", "/wallet/balance"); the bot
+`command_data.name` ("/transfer", "/cipherclerk/balance"); the bot
 routes to a handler.
 
 **DFA fit:** **strong, low-stakes.** The slash-command set is

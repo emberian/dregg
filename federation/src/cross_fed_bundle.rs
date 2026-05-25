@@ -4,7 +4,7 @@
 //! everything an independent verifier needs to reconstruct the
 //! "Alice on F1 → Bob on F2 via CapTP bearer cap" story:
 //!
-//! 1. `recipient_chain` — the `Vec<WitnessedReceipt>` Bob's wallet exports
+//! 1. `recipient_chain` — the `Vec<WitnessedReceipt>` Bob's cclerk exports
 //!    (typically one entry: the F2-side `Effect::Transfer` exercise).
 //! 2. `issuer_attested_root` — F1's `AttestedRoot` at the height covering
 //!    the cert's issuance turn. Lets the verifier check "F1's committee
@@ -35,7 +35,7 @@ use crate::receipt::FederationReceipt;
 
 /// The Silver-Vision cross-federation evidence bundle.
 ///
-/// Constructed by the recipient's wallet (Bob's, in the canonical demo)
+/// Constructed by the recipient's cclerk (Bob's, in the canonical demo)
 /// at chain-export time. Consumed by `pyana-verifier verify-cross-fed-bundle`
 /// (or any compatible standalone verifier) to issue an end-to-end verdict.
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -203,7 +203,7 @@ pub fn get_all_cells(handle: usize) -> Result<JsValue, JsError> {
 }
 
 // ============================================================================
-// Agent / Wallet
+// Agent / Cipherclerk
 // ============================================================================
 
 /// Create an agent (cipherclerk + cell) in the runtime.

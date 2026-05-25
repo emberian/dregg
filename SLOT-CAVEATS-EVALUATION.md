@@ -387,7 +387,7 @@ single-cell, single-asset conservation primitive. Apps need more:
 
 - **Cross-cell conservation.** Gallery royalty: the winning bid on
   the auction cell must equal the sum of transfers from the
-  buyer's wallet cell to artist + platform + prior_owner cells.
+  buyer's cclerk cell to artist + platform + prior_owner cells.
   This is the **γ.2 cross-cell binding problem**. `SumEqualsAcross`
   doesn't span cells; γ.2 introduces per-cell PI fields that bind a
   shared `swap_id`. The lift could grow a sibling variant:
@@ -749,7 +749,7 @@ strict mono, capability uniqueness, temporal predicates) falls into
    `Custom` constraint is permanently executor-trusted. The more
    apps fall into `Custom`, the larger the trusted base.
 
-3. **Audit-tool blindness.** A wallet showing the user "this
+3. **Audit-tool blindness.** A cclerk showing the user "this
    cell has constraints: WriteOnce on slot 0, Monotonic on slot 1,
    Custom (escrow_release_predicate_v3)" gives the user no real
    information about what `escrow_release_predicate_v3` actually

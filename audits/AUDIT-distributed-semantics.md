@@ -253,7 +253,7 @@ Authorization::Unchecked => Err((
 
 - **The originating CapTP sender** signs nothing at the Turn layer. They signed the handoff cert (introducer) or hold the bearer swiss; that's it.
 - **The receiving federation's executor** *can* sign committed receipts (executor.rs:608–621, `executor_signing_key`), populating `TurnReceipt::executor_signature`. But this is on the receipt, not the Turn.
-- **The constructed CapTP Turn itself is unsigned.** It is not wrapped in a `SignedTurn` (sdk/src/wallet.rs:843–852). It has no signature field at all (turn.rs:69–130 — `Turn` has no signature; signatures live on `SignedTurn`).
+- **The constructed CapTP Turn itself is unsigned.** It is not wrapped in a `SignedTurn` (sdk/src/cipherclerk.rs:843–852). It has no signature field at all (turn.rs:69–130 — `Turn` has no signature; signatures live on `SignedTurn`).
 
 ### Gaps
 

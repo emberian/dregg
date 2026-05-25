@@ -496,7 +496,7 @@ The marketplace-privacy story is a layered set of components:
 | Intent content            | SSE keyword tokens (`intent/src/sse.rs`) — `BLAKE3_derive_key("pyana-sse-token-v1", keyword \|\| epoch_le_bytes)`            |
 | Intent body               | x25519 sealed box (designed; partially implemented in `intent/src/sse.rs`)                                                   |
 | Threshold-encrypted intents | Stubbed in `intent/src/trustless.rs` — cryptosystem not yet selected                                                       |
-| Matching                  | Wallet-local Datalog evaluation                                                                                              |
+| Matching                  | Cipherclerk-local Datalog evaluation                                                                                              |
 | Fulfillment commit-reveal | Implemented (`intent/src/commit_reveal_fulfillment.rs`); 60s expiry                                                          |
 | Payment hiding            | Pedersen value commitments designed (`cell/src/value_commitment.rs`), partially wired (executor consumes `ValueCommitment`)  |
 | Receipt chain             | Not hidden; receipt is BLAKE3-chained and the chain shape leaks turn count                                                   |
@@ -616,11 +616,11 @@ Places where code or docs claim more than the implementation delivers:
    `docs/intent-privacy-assessment.md`.** The latter document is, in my
    view, the correct framing. The README oversells.
 
-7. **Wallet REST/JSON APIs probably leak via the sdk-ts client.** The
-   commitment framework design (§7.4) flags this: *"the wallet's REST/JSON
+7. **Cipherclerk REST/JSON APIs probably leak via the sdk-ts client.** The
+   commitment framework design (§7.4) flags this: *"the cipherclerk's REST/JSON
    layer ... currently exposes BLAKE3 hashes as hex strings. Should it
    also expose Poseidon2 forms? Probably yes."* The leak shape is
-   wallet-server visibility into which credentials are being prepared for
+   cclerk-server visibility into which credentials are being prepared for
    presentation — out of scope for this audit but worth flagging.
 
 8. **`SealerPublic.id` (line 28-31 of `cell/src/seal.rs`) is the
@@ -673,7 +673,7 @@ explicitly absent. `N/A` = not claimed.
 | Privacy-voting: voter identity hidden              | No             | Double-vote set is pubkey-keyed (`lib.rs:22-23`)                                  |
 | Intent content hidden from gossip network          | No             | `intent/src/lib.rs:55-56` ("Intents are public")                                  |
 | Intent content hidden via threshold encryption     | Stub           | `intent/src/trustless.rs` skeleton; cryptosystem not selected                     |
-| Intent matching done locally (privacy of held caps)| Yes            | Wallet-local Datalog eval (`intent/src/lib.rs:53-62`)                              |
+| Intent matching done locally (privacy of held caps)| Yes            | Cipherclerk-local Datalog eval (`intent/src/lib.rs:53-62`)                              |
 | Fulfillment commit-reveal: hides fulfiller pre-reveal | Yes         | `intent/src/commit_reveal_fulfillment.rs`                                          |
 | Fulfillment timing unlinkability                   | No             | 5s commit window + immediate reveal exposes timing (`intent-privacy-assessment.md` §3) |
 | Multi-show unlinkability (presentation)            | Yes (small field) | `bridge/src/present.rs:1229`, blinded leaf STARK; BabyBear birthday at ~2^15.5  |
@@ -706,7 +706,7 @@ explicitly absent. `N/A` = not claimed.
    the credential-presentation proof system?** The doc reads as the former;
    the code only delivers the latter. Reframing the table to scope
    "verifier learnings during credential presentation, conditional on
-   network/executor/wallet honesty" would be more honest. I'd flag
+   network/executor/cipherclerk honesty" would be more honest. I'd flag
    `README.md:94-103` for a rewrite.
 
 2. **`blinded_endpoint::handle_consume_private` currently accepts any

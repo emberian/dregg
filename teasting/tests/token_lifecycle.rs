@@ -150,8 +150,8 @@ fn test_delegation_and_chain_proof() {
     // Bob receives the delegation.
     bob.receive_delegation(delegated).unwrap();
 
-    // Bob now has a token in his wallet (but can't locally verify — no root key).
-    let bob_token = bob.wallet.find_token("attenuated:storage");
+    // Bob now has a token in his cclerk (but can't locally verify — no root key).
+    let bob_token = bob.cclerk.find_token("attenuated:storage");
     assert!(bob_token.is_some(), "Bob should have the delegated token");
 
     // Alice can prove the chain is valid (she holds the root key).
@@ -186,7 +186,7 @@ fn test_multi_level_delegation() {
     bob.receive_delegation(delegated_to_bob).unwrap();
 
     // Bob → Carol: read only (further restriction).
-    let bob_token = bob.wallet.find_token("attenuated:api").unwrap().clone();
+    let bob_token = bob.cclerk.find_token("attenuated:api").unwrap().clone();
     let carol_att = Attenuation {
         services: vec![("api".into(), "r".into())],
         ..Default::default()
@@ -195,7 +195,7 @@ fn test_multi_level_delegation() {
     carol.receive_delegation(delegated_to_carol).unwrap();
 
     // Carol has a token but can't locally verify.
-    assert!(carol.wallet.find_token("attenuated:api").is_some());
+    assert!(carol.cclerk.find_token("attenuated:api").is_some());
 
     // Alice proves the full chain: root → rw → r for a read request.
     let request = AuthRequest {

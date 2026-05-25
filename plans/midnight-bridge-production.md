@@ -455,7 +455,7 @@ The watchtower:
 |                                                                    |
 |  User Cell                     Bridge Gateway Cell                 |
 |  +--------+   CapTP Session   +--------------------------+        |
-|  | wallet |<----------------->| relay_service            |        |
+|  | cclerk |<----------------->| relay_service            |        |
 |  | DApp   |   ExportSturdyRef | watchtower               |        |
 |  +--------+   (STARK proven)  | dispute_manager          |        |
 |                               | store_forward_buffer     |        |

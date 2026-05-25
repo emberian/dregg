@@ -51,7 +51,7 @@ use pyana_intent::{
     ActionPattern, CommitmentId, Intent, IntentKind, Match, MatchSpec, PredicateRequirement,
     VerificationMode,
 };
-use pyana_sdk::AgentWallet;
+use pyana_sdk::AgentCipherclerk;
 
 // =============================================================================
 // Helpers
@@ -99,29 +99,29 @@ fn main() {
     let total_start = Instant::now();
 
     // =========================================================================
-    // PHASE 1: Setup — Create wallets for both parties
+    // PHASE 1: Setup — Create cipherclerks for both parties
     // =========================================================================
     println!("--- Phase 1: WALLET SETUP ---");
     println!();
 
-    let mut company_wallet = AgentWallet::new();
-    let mut candidate_wallet = AgentWallet::new();
+    let mut company_cclerk = AgentCipherclerk::new();
+    let mut candidate_cclerk = AgentCipherclerk::new();
 
     // Company mints a "hiring" service token (root capability)
     let company_root_key = [0x42u8; 32];
-    let company_token = company_wallet.mint_token(&company_root_key, "hiring");
+    let company_token = company_cclerk.mint_token(&company_root_key, "hiring");
 
     // Candidate mints a "credentials" token (holds their private attributes)
     let candidate_root_key = [0x99u8; 32];
-    let candidate_token = candidate_wallet.mint_token(&candidate_root_key, "credentials");
+    let candidate_token = candidate_cclerk.mint_token(&candidate_root_key, "credentials");
 
     println!(
-        "  Company wallet:   pk = {}",
-        short_hex(&company_wallet.public_key().0)
+        "  Company cclerk:   pk = {}",
+        short_hex(&company_cclerk.public_key().0)
     );
     println!(
-        "  Candidate wallet: pk = {}",
-        short_hex(&candidate_wallet.public_key().0)
+        "  Candidate cclerk: pk = {}",
+        short_hex(&candidate_cclerk.public_key().0)
     );
     println!(
         "  Company token:    {} (can mint: {})",
@@ -258,7 +258,7 @@ fn main() {
 
     // Generate predicate proofs using the SDK's high-level API
     let proof_start = Instant::now();
-    let predicate_proofs = candidate_wallet
+    let predicate_proofs = candidate_cclerk
         .prove_for_intent_predicates(&intent, &my_values, state_root)
         .expect("predicate proofs should succeed");
     let proof_time = proof_start.elapsed();

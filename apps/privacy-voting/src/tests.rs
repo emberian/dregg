@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use pyana_app_framework::auth::AdminToken;
-use pyana_sdk::wallet::{AgentCipherclerk, DelegatedToken};
+use pyana_sdk::cipherclerk::{AgentCipherclerk, DelegatedToken};
 use pyana_token::Attenuation;
 use pyana_types::{PublicKey, Signature};
 

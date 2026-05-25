@@ -83,7 +83,7 @@ const EXAMPLES: &[&str] = &[
     "three_party_introduction",
     "token_revocation",
     "unified_harness",
-    "wallet_lifecycle",
+    "cipherclerk_lifecycle",
     "web_auth_flow",
 ];
 

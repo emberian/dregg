@@ -50,7 +50,7 @@ What do these look like as plain Rust method chains, written in
 `pyana-sdk` or a new `pyana-cell` crate?
 
 ```rust
-let cell = Cell::new(wallet)
+let cell = Cell::new(cclerk)
     .with_state(MyState::default())
     .with_behavior(handler);
 

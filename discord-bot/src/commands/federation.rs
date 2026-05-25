@@ -1,4 +1,4 @@
-//! Federation setup commands: `/setup-federation`, `/link-wallet`, `/unlink-wallet`.
+//! Federation setup commands: `/setup-federation`, `/link-cclerk`, `/unlink-cclerk`.
 //!
 //! Links a Discord guild to a pyana reference group and binds user identities.
 
@@ -19,9 +19,9 @@ pub fn register_setup() -> CreateCommand {
         .description("Register this guild as a pyana reference group (federation)")
 }
 
-/// Register `/link-wallet <pyana-address>`.
+/// Register `/link-cclerk <pyana-address>`.
 pub fn register_link() -> CreateCommand {
-    CreateCommand::new("link-wallet")
+    CreateCommand::new("link-cipherclerk")
         .description("Link your Discord account to your pyana identity")
         .add_option(
             CreateCommandOption::new(
@@ -33,9 +33,9 @@ pub fn register_link() -> CreateCommand {
         )
 }
 
-/// Register `/unlink-wallet`.
+/// Register `/unlink-cclerk`.
 pub fn register_unlink() -> CreateCommand {
-    CreateCommand::new("unlink-wallet")
+    CreateCommand::new("unlink-cipherclerk")
         .description("Unlink your Discord account from your pyana identity")
 }
 
@@ -144,7 +144,7 @@ pub async fn handle_setup(ctx: &Context, command: &CommandInteraction, state: &B
     }
 }
 
-/// Handle `/link-wallet`.
+/// Handle `/link-cclerk`.
 pub async fn handle_link(ctx: &Context, command: &CommandInteraction, state: &BotState) {
     let address = command
         .data
@@ -178,7 +178,7 @@ pub async fn handle_link(ctx: &Context, command: &CommandInteraction, state: &Bo
             let embed = embeds::warning_embed(
                 "Already Linked",
                 &format!(
-                    "Your account is already linked to `{}...`.\nUse `/unlink-wallet` first to change it.",
+                    "Your account is already linked to `{}...`.\nUse `/unlink-cclerk` first to change it.",
                     &existing[..16.min(existing.len())]
                 ),
             );
@@ -200,7 +200,7 @@ pub async fn handle_link(ctx: &Context, command: &CommandInteraction, state: &Bo
     // Store the link.
     match state.db.register_user(&discord_id, &address).await {
         Ok(()) => {
-            let embed = embeds::success_embed("Wallet Linked")
+            let embed = embeds::success_embed("Cipherclerk Linked")
                 .description("Your Discord account is now linked to your pyana identity.")
                 .field("Cell ID", format!("`{}...`", &address[..16]), true);
             let _ = command
@@ -216,7 +216,7 @@ pub async fn handle_link(ctx: &Context, command: &CommandInteraction, state: &Bo
     }
 }
 
-/// Handle `/unlink-wallet`.
+/// Handle `/unlink-cclerk`.
 pub async fn handle_unlink(ctx: &Context, command: &CommandInteraction, state: &BotState) {
     defer_ephemeral(ctx, command).await;
 
@@ -225,7 +225,7 @@ pub async fn handle_unlink(ctx: &Context, command: &CommandInteraction, state: &
     match state.db.get_cell_id(&discord_id).await {
         Ok(Some(_)) => match state.db.unlink_user(&discord_id).await {
             Ok(()) => {
-                let embed = embeds::success_embed("Wallet Unlinked").description(
+                let embed = embeds::success_embed("Cipherclerk Unlinked").description(
                     "Your Discord account has been unlinked from your pyana identity.",
                 );
                 let _ = command

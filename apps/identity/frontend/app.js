@@ -28,9 +28,9 @@ function apiHeaders(extra = {}) {
 const App = (() => {
     const API = '';
 
-    let currentView = 'wallet';
+    let currentView = 'cclerk';
     let credentials = [];
-    let walletConnected = false;
+    let cclerkConnected = false;
 
     // Schema -> default attributes
     const SCHEMA_ATTRS = {
@@ -78,18 +78,18 @@ const App = (() => {
     }
 
     // =========================================================================
-    // Wallet
+    // Cipherclerk
     // =========================================================================
 
     function setupWallet() {
-        const el = document.getElementById('wallet-status');
+        const el = document.getElementById('cclerk-status');
         if (el) el.addEventListener('click', toggleWallet);
         if (window.pyana) connectWalletBridge();
     }
 
     async function toggleWallet() {
-        if (walletConnected) {
-            walletConnected = false;
+        if (cclerkConnected) {
+            cclerkConnected = false;
             updateWalletUI();
         } else {
             await connectWalletBridge();
@@ -99,16 +99,16 @@ const App = (() => {
     async function connectWalletBridge() {
         try {
             if (window.pyana) await window.pyana.connect();
-            walletConnected = true;
+            cclerkConnected = true;
             updateWalletUI();
-        } catch (e) { console.warn('Wallet failed:', e); }
+        } catch (e) { console.warn('Cipherclerk failed:', e); }
     }
 
     function updateWalletUI() {
-        const dot = document.getElementById('wallet-dot');
-        const label = document.getElementById('wallet-label');
-        dot.className = walletConnected ? 'dot connected' : 'dot disconnected';
-        label.textContent = walletConnected ? 'Connected' : 'Connect Wallet';
+        const dot = document.getElementById('cclerk-dot');
+        const label = document.getElementById('cclerk-label');
+        dot.className = cclerkConnected ? 'dot connected' : 'dot disconnected';
+        label.textContent = cclerkConnected ? 'Connected' : 'Connect Cipherclerk';
     }
 
     // =========================================================================
@@ -138,7 +138,7 @@ const App = (() => {
         if (!grid) return;
 
         if (credentials.length === 0) {
-            grid.innerHTML = '<div class="empty-state">No credentials in wallet. Issue or receive credentials to get started.</div>';
+            grid.innerHTML = '<div class="empty-state">No credentials in cclerk. Issue or receive credentials to get started.</div>';
             return;
         }
 

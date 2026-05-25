@@ -62,16 +62,16 @@ pub struct PresentationResult {
 /// use std::sync::Arc;
 ///
 /// # async fn example() -> Result<(), pyana_sdk::SdkError> {
-/// let wallet = Arc::new(AgentCipherclerk::new());
-/// let client = SiloClient::connect("127.0.0.1:9100".parse().unwrap(), wallet).await?;
+/// let cipherclerk = Arc::new(AgentCipherclerk::new());
+/// let client = SiloClient::connect("127.0.0.1:9100".parse().unwrap(), cipherclerk).await?;
 /// # Ok(())
 /// # }
 /// ```
 pub struct SiloClient {
     /// Remote silo address.
     address: SocketAddr,
-    /// The agent's wallet (for signing and proof generation).
-    wallet: Arc<AgentCipherclerk>,
+    /// The agent's cipherclerk (for signing and proof generation).
+    cclerk: Arc<AgentCipherclerk>,
     /// The underlying TCP connection.
     connection: PeerConnection,
     /// The federation root obtained from the trusted handshake with the remote silo.
@@ -99,14 +99,14 @@ impl SiloClient {
     /// # Arguments
     ///
     /// * `addr` - The socket address of the remote silo.
-    /// * `wallet` - A shared reference to the agent's wallet.
+    /// * `cipherclerk` - A shared reference to the agent's cipherclerk.
     ///
     /// # Errors
     ///
     /// Returns [`SdkError::Wire`] if the connection cannot be established.
     pub async fn connect(
         addr: SocketAddr,
-        wallet: Arc<AgentCipherclerk>,
+        cclerk: Arc<AgentCipherclerk>,
     ) -> Result<Self, SdkError> {
         let conn = PeerConnection::connect(&addr.to_string())
             .await
@@ -114,7 +114,7 @@ impl SiloClient {
 
         Ok(SiloClient {
             address: addr,
-            wallet,
+            cclerk,
             connection: conn,
             trusted_federation_root: None,
             expected_federation_root: None,
@@ -130,12 +130,12 @@ impl SiloClient {
     /// # Arguments
     ///
     /// * `addr` - The socket address of the remote silo.
-    /// * `wallet` - A shared reference to the agent's wallet.
+    /// * `cipherclerk` - A shared reference to the agent's cipherclerk.
     /// * `expected_root` - The expected federation root (32 bytes). The handshake
     ///   will fail with [`SdkError::FederationRootMismatch`] if the remote root differs.
     pub async fn connect_pinned(
         addr: SocketAddr,
-        wallet: Arc<AgentCipherclerk>,
+        cclerk: Arc<AgentCipherclerk>,
         expected_root: [u8; 32],
     ) -> Result<Self, SdkError> {
         let conn = PeerConnection::connect(&addr.to_string())
@@ -144,7 +144,7 @@ impl SiloClient {
 
         Ok(SiloClient {
             address: addr,
-            wallet,
+            cclerk,
             connection: conn,
             trusted_federation_root: None,
             expected_federation_root: Some(expected_root),
@@ -154,7 +154,7 @@ impl SiloClient {
     /// Connect with a timeout.
     pub async fn connect_timeout(
         addr: SocketAddr,
-        wallet: Arc<AgentCipherclerk>,
+        cclerk: Arc<AgentCipherclerk>,
         timeout: Duration,
     ) -> Result<Self, SdkError> {
         let conn = PeerConnection::connect_timeout(&addr.to_string(), timeout)
@@ -163,7 +163,7 @@ impl SiloClient {
 
         Ok(SiloClient {
             address: addr,
-            wallet,
+            cclerk,
             connection: conn,
             trusted_federation_root: None,
             expected_federation_root: None,
@@ -190,8 +190,8 @@ impl SiloClient {
     /// The federation root from the remote silo's Welcome response.
     pub async fn handshake(&mut self) -> Result<[u8; 32], SdkError> {
         let hello = WireMessage::Hello {
-            node_id: self.wallet.public_key().0,
-            node_name: format!("agent-{}", self.wallet.public_key().short_hex()),
+            node_id: self.cclerk.public_key().0,
+            node_name: format!("agent-{}", self.cclerk.public_key().short_hex()),
             protocol_version: PROTOCOL_VERSION,
             capabilities: vec!["present".to_string(), "revoke-check".to_string()],
         };
@@ -261,7 +261,7 @@ impl SiloClient {
         })?;
 
         // Generate the ZK proof.
-        let proof = self.wallet.prove_authorization(token, request)?;
+        let proof = self.cclerk.prove_authorization(token, request)?;
 
         // Build the wire-level authorization request.
         // Resource = app_id OR service (whichever is present) — must match the
@@ -274,7 +274,7 @@ impl SiloClient {
         let wire_request = AuthorizationRequest::new(
             wire_resource,
             request.action.as_deref().unwrap_or(""),
-            &self.wallet.public_key().hex(),
+            &self.cclerk.public_key().hex(),
         );
 
         // Serialize the STARK proof for transmission using the canonical binary format
@@ -358,7 +358,7 @@ impl SiloClient {
 
         // Generate the ZK proof using the provided issuer key.
         let proof = self
-            .wallet
+            .cclerk
             .prove_authorization_with_issuer_key(token, issuer_key, request)?;
 
         let wire_resource = request
@@ -369,7 +369,7 @@ impl SiloClient {
         let wire_request = AuthorizationRequest::new(
             wire_resource,
             request.action.as_deref().unwrap_or(""),
-            &self.wallet.public_key().hex(),
+            &self.cclerk.public_key().hex(),
         );
 
         // No binding tag — wire-layer nonce/timestamp checks provide replay protection.
@@ -530,7 +530,7 @@ impl SiloClient {
 
     /// Submit a revocation to the remote silo.
     ///
-    /// Signs the token ID with this wallet's identity and sends a
+    /// Signs the token ID with this cipherclerk's identity and sends a
     /// `SubmitRevocation` message.
     ///
     /// # Arguments
@@ -547,13 +547,13 @@ impl SiloClient {
         let mut revoke_msg = Vec::with_capacity(b"pyana-revoke-v1:".len() + token_id.len());
         revoke_msg.extend_from_slice(b"pyana-revoke-v1:");
         revoke_msg.extend_from_slice(token_id.as_bytes());
-        let sig = self.wallet.sign_bytes(&revoke_msg);
+        let sig = self.cclerk.sign_bytes(&revoke_msg);
 
         let mut nonce = [0u8; 16];
         getrandom::fill(&mut nonce).expect("getrandom failed");
         let msg = WireMessage::SubmitRevocation {
             token_id: token_id.to_string(),
-            authority: PublicKey(self.wallet.public_key().0),
+            authority: PublicKey(self.cclerk.public_key().0),
             authority_sig: Signature(sig.0),
             nonce,
             timestamp: std::time::SystemTime::now()
@@ -585,7 +585,7 @@ impl std::fmt::Debug for SiloClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SiloClient")
             .field("address", &self.address)
-            .field("wallet", &self.wallet.public_key())
+            .field("cipherclerk", &self.cclerk.public_key())
             .finish()
     }
 }

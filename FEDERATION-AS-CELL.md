@@ -75,7 +75,7 @@ enum Authority {
 }
 ```
 The cell case is `SingleKey`; the federation case is `Threshold` with
-N≥2; multisig wallets / "small federations" are `Threshold` with
+N≥2; multisig cipherclerks / "small federations" are `Threshold` with
 2≤N≤~16. Custom encompasses everything else.
 
 This is *the* unification axis. It's already partially in tree:

@@ -66,13 +66,13 @@ The `NoteSpendingAir` currently takes `(value, asset_type)` as public inputs. Fo
 
 This replaces the cleartext value binding with a commitment binding. The conservation proof then operates on the commitment points without needing to know the values.
 
-## 5. SDK / Wallet Changes (`intent/src/fulfillment.rs`)
+## 5. SDK / Cipherclerk Changes (`intent/src/fulfillment.rs`)
 
 `execute_fulfillment_flow_with_key` currently builds cleartext `NoteSpend`/`NoteCreate` effects. Add a parallel path:
 
 ```rust
 pub fn execute_committed_fulfillment_flow(
-    wallet: &WalletState,  // holds openings for owned notes
+    cclerk: &CipherclerkState,  // holds openings for owned notes
     intent: &Intent,
     fulfillment: &Fulfillment,
     executor: &TurnExecutor,
@@ -87,7 +87,7 @@ pub fn execute_committed_fulfillment_flow(
 }
 ```
 
-The wallet must track `CommittedNoteOpening` for each owned note (stored encrypted locally). The SDK exposes `CommittedTurnBuilder` that handles blinding factor arithmetic and proof generation.
+The cclerk must track `CommittedNoteOpening` for each owned note (stored encrypted locally). The SDK exposes `CommittedTurnBuilder` that handles blinding factor arithmetic and proof generation.
 
 ## 6. Cross-Federation Bridging
 

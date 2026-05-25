@@ -39,21 +39,21 @@ import { levelPrivateStateProvider } from '@midnight-ntwrk/midnight-js-level-pri
 import { NodeZkConfigProvider } from '@midnight-ntwrk/midnight-js-node-zk-config-provider';
 import { setNetworkId, getNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import * as ledger from '@midnight-ntwrk/ledger-v8';
-import { WalletFacade } from '@midnight-ntwrk/wallet-sdk-facade';
-import { DustWallet } from '@midnight-ntwrk/wallet-sdk-dust-wallet';
-import { HDWallet, Roles } from '@midnight-ntwrk/wallet-sdk-hd';
-import { ShieldedWallet } from '@midnight-ntwrk/wallet-sdk-shielded';
+import { WalletFacade } from '@midnight-ntwrk/cipherclerk-sdk-facade';
+import { DustWallet } from '@midnight-ntwrk/cipherclerk-sdk-dust-cclerk';
+import { HDWallet, Roles } from '@midnight-ntwrk/cipherclerk-sdk-hd';
+import { ShieldedWallet } from '@midnight-ntwrk/cipherclerk-sdk-shielded';
 import {
   createKeystore,
   InMemoryTransactionHistoryStorage,
   PublicKey,
   UnshieldedWallet,
-} from '@midnight-ntwrk/wallet-sdk-unshielded-wallet';
+} from '@midnight-ntwrk/cipherclerk-sdk-unshielded-cclerk';
 import { CompiledContract } from '@midnight-ntwrk/compact-js';
 import { toHex } from '@midnight-ntwrk/midnight-js-utils';
 import { unshieldedToken } from '@midnight-ntwrk/ledger-v8';
 
-// @ts-expect-error Required for wallet sync in Node.js
+// @ts-expect-error Required for cipherclerk sync in Node.js
 globalThis.WebSocket = WebSocket;
 
 // =============================================================================
@@ -165,24 +165,24 @@ async function loadContract() {
 }
 
 // =============================================================================
-// Wallet Setup
+// Cipherclerk Setup
 // =============================================================================
 
 function deriveKeys(seed: string) {
-  const hdWallet = HDWallet.fromSeed(Buffer.from(seed, 'hex'));
-  if (hdWallet.type !== 'seedOk') throw new Error('Invalid seed');
+  const hdCclerk = HDWallet.fromSeed(Buffer.from(seed, 'hex'));
+  if (hdCclerk.type !== 'seedOk') throw new Error('Invalid seed');
 
-  const result = hdWallet.hdWallet
+  const result = hdCclerk.hdCclerk
     .selectAccount(0)
     .selectRoles([Roles.Zswap, Roles.NightExternal, Roles.Dust])
     .deriveKeysAt(0);
 
   if (result.type !== 'keysDerived') throw new Error('Key derivation failed');
-  hdWallet.hdWallet.clear();
+  hdCclerk.hdCclerk.clear();
   return result.keys;
 }
 
-async function createWallet(seed: string) {
+async function createCipherclerk(seed: string) {
   const keys = deriveKeys(seed);
   const networkId = getNetworkId();
 
@@ -190,7 +190,7 @@ async function createWallet(seed: string) {
   const dustSecretKey = ledger.DustSecretKey.fromSeed(keys[Roles.Dust]);
   const unshieldedKeystore = createKeystore(keys[Roles.NightExternal], networkId);
 
-  const walletConfig = {
+  const cclerkConfig = {
     networkId,
     indexerClientConnection: {
       indexerHttpUrl: CONFIG.indexer,
@@ -200,26 +200,26 @@ async function createWallet(seed: string) {
     relayURL: new URL(CONFIG.node.replace(/^http/, 'ws')),
   };
 
-  const shieldedWallet = ShieldedWallet(walletConfig).startWithSecretKeys(shieldedSecretKeys);
+  const shieldedCclerk = ShieldedWallet(cclerkConfig).startWithSecretKeys(shieldedSecretKeys);
 
-  const unshieldedWallet = UnshieldedWallet({
+  const unshieldedCclerk = UnshieldedWallet({
     networkId,
-    indexerClientConnection: walletConfig.indexerClientConnection,
+    indexerClientConnection: cclerkConfig.indexerClientConnection,
     txHistoryStorage: new InMemoryTransactionHistoryStorage(),
   }).startWithPublicKey(PublicKey.fromKeyStore(unshieldedKeystore));
 
-  const dustWallet = DustWallet({
-    ...walletConfig,
+  const dustCclerk = DustWallet({
+    ...cclerkConfig,
     costParameters: {
       additionalFeeOverhead: 300_000_000_000_000n,
       feeBlocksMargin: 5,
     },
   }).startWithSecretKey(dustSecretKey, ledger.LedgerParameters.initialParameters().dust);
 
-  const wallet = new WalletFacade(shieldedWallet, unshieldedWallet, dustWallet);
-  await wallet.start(shieldedSecretKeys, dustSecretKey);
+  const cclerk = new WalletFacade(shieldedCclerk, unshieldedCclerk, dustCclerk);
+  await cclerk.start(shieldedSecretKeys, dustSecretKey);
 
-  return { wallet, shieldedSecretKeys, dustSecretKey, unshieldedKeystore };
+  return { cclerk, shieldedSecretKeys, dustSecretKey, unshieldedKeystore };
 }
 
 // =============================================================================
@@ -264,34 +264,34 @@ function signTransactionIntents(
   }
 }
 
-async function createProviders(walletCtx: Awaited<ReturnType<typeof createWallet>>) {
+async function createProviders(cclerkCtx: Awaited<ReturnType<typeof createCipherclerk>>) {
   const state = await Rx.firstValueFrom(
-    walletCtx.wallet.state().pipe(Rx.filter((s) => s.isSynced)),
+    cclerkCtx.cclerk.state().pipe(Rx.filter((s) => s.isSynced)),
   );
 
-  const walletProvider = {
+  const cclerkProvider = {
     getCoinPublicKey: () => state.shielded.coinPublicKey.toHexString(),
     getEncryptionPublicKey: () => state.shielded.encryptionPublicKey.toHexString(),
     async balanceTx(tx: any, ttl?: Date) {
-      const recipe = await walletCtx.wallet.balanceUnboundTransaction(
+      const recipe = await cclerkCtx.cclerk.balanceUnboundTransaction(
         tx,
         {
-          shieldedSecretKeys: walletCtx.shieldedSecretKeys,
-          dustSecretKey: walletCtx.dustSecretKey,
+          shieldedSecretKeys: cclerkCtx.shieldedSecretKeys,
+          dustSecretKey: cclerkCtx.dustSecretKey,
         },
         { ttl: ttl ?? new Date(Date.now() + 30 * 60 * 1000) },
       );
 
-      const signFn = (payload: Uint8Array) => walletCtx.unshieldedKeystore.signData(payload);
+      const signFn = (payload: Uint8Array) => cclerkCtx.unshieldedKeystore.signData(payload);
 
       signTransactionIntents(recipe.baseTransaction, signFn, 'proof');
       if (recipe.balancingTransaction) {
         signTransactionIntents(recipe.balancingTransaction, signFn, 'pre-proof');
       }
 
-      return walletCtx.wallet.finalizeRecipe(recipe);
+      return cclerkCtx.cclerk.finalizeRecipe(recipe);
     },
-    submitTx: (tx: any) => walletCtx.wallet.submitTransaction(tx) as any,
+    submitTx: (tx: any) => cclerkCtx.cclerk.submitTransaction(tx) as any,
   };
 
   const zkConfigProvider = new NodeZkConfigProvider(zkConfigPath);
@@ -299,13 +299,13 @@ async function createProviders(walletCtx: Awaited<ReturnType<typeof createWallet
   return {
     privateStateProvider: levelPrivateStateProvider({
       privateStateStoreName: 'pyana-bridge-state',
-      walletProvider,
+      cclerkProvider,
     }),
     publicDataProvider: indexerPublicDataProvider(CONFIG.indexer, CONFIG.indexerWS),
     zkConfigProvider,
     proofProvider: httpClientProofProvider(CONFIG.proofServer, zkConfigProvider),
-    walletProvider,
-    midnightProvider: walletProvider,
+    cclerkProvider,
+    midnightProvider: cclerkProvider,
   };
 }
 
@@ -356,19 +356,19 @@ async function deployBridge(seed: string, governanceKey: Uint8Array, federationC
     CompiledContract.withCompiledFileAssets(zkConfigPath),
   );
 
-  console.log('Creating wallet...');
-  const walletCtx = await createWallet(seed);
+  console.log('Creating cipherclerk...');
+  const cclerkCtx = await createCipherclerk(seed);
 
-  console.log('Syncing wallet...');
+  console.log('Syncing cipherclerk...');
   await Rx.firstValueFrom(
-    walletCtx.wallet.state().pipe(
+    cclerkCtx.cclerk.state().pipe(
       Rx.throttleTime(5000),
       Rx.filter((s) => s.isSynced),
     ),
   );
 
   console.log('Setting up providers...');
-  const providers = await createProviders(walletCtx);
+  const providers = await createProviders(cclerkCtx);
 
   console.log('Deploying bridge contract...');
   const deployTxData = await deployContract(providers, {
@@ -425,15 +425,15 @@ async function lockForPyana(seed: string, amount: bigint, pyanaRecipient: Uint8A
     CompiledContract.withCompiledFileAssets(zkConfigPath),
   );
 
-  const walletCtx = await createWallet(seed);
+  const cclerkCtx = await createCipherclerk(seed);
   await Rx.firstValueFrom(
-    walletCtx.wallet.state().pipe(
+    cclerkCtx.cclerk.state().pipe(
       Rx.throttleTime(5000),
       Rx.filter((s) => s.isSynced),
     ),
   );
 
-  const providers = await createProviders(walletCtx);
+  const providers = await createProviders(cclerkCtx);
 
   console.log('Joining deployed contract...');
   const contract = await findDeployedContract(providers, {
@@ -481,15 +481,15 @@ async function unlockFromPyana(seed: string, attestationPath: string) {
     CompiledContract.withCompiledFileAssets(zkConfigPath),
   );
 
-  const walletCtx = await createWallet(seed);
+  const cclerkCtx = await createCipherclerk(seed);
   await Rx.firstValueFrom(
-    walletCtx.wallet.state().pipe(
+    cclerkCtx.cclerk.state().pipe(
       Rx.throttleTime(5000),
       Rx.filter((s) => s.isSynced),
     ),
   );
 
-  const providers = await createProviders(walletCtx);
+  const providers = await createProviders(cclerkCtx);
 
   const contract = await findDeployedContract(providers, {
     contractAddress: deployment.contractAddress,
@@ -541,15 +541,15 @@ async function queryBridgeStatus(seed: string) {
     CompiledContract.withCompiledFileAssets(zkConfigPath),
   );
 
-  const walletCtx = await createWallet(seed);
+  const cclerkCtx = await createCipherclerk(seed);
   await Rx.firstValueFrom(
-    walletCtx.wallet.state().pipe(
+    cclerkCtx.cclerk.state().pipe(
       Rx.throttleTime(5000),
       Rx.filter((s) => s.isSynced),
     ),
   );
 
-  const providers = await createProviders(walletCtx);
+  const providers = await createProviders(cclerkCtx);
 
   const contract = await findDeployedContract(providers, {
     contractAddress: deployment.contractAddress,
@@ -619,15 +619,15 @@ async function rotateFederationKey(seed: string, newKeyCommitment: Uint8Array) {
     CompiledContract.withCompiledFileAssets(zkConfigPath),
   );
 
-  const walletCtx = await createWallet(seed);
+  const cclerkCtx = await createCipherclerk(seed);
   await Rx.firstValueFrom(
-    walletCtx.wallet.state().pipe(
+    cclerkCtx.cclerk.state().pipe(
       Rx.throttleTime(5000),
       Rx.filter((s) => s.isSynced),
     ),
   );
 
-  const providers = await createProviders(walletCtx);
+  const providers = await createProviders(cclerkCtx);
 
   const contract = await findDeployedContract(providers, {
     contractAddress: deployment.contractAddress,
@@ -666,15 +666,15 @@ async function pauseBridge(seed: string) {
     CompiledContract.withCompiledFileAssets(zkConfigPath),
   );
 
-  const walletCtx = await createWallet(seed);
+  const cclerkCtx = await createCipherclerk(seed);
   await Rx.firstValueFrom(
-    walletCtx.wallet.state().pipe(
+    cclerkCtx.cclerk.state().pipe(
       Rx.throttleTime(5000),
       Rx.filter((s) => s.isSynced),
     ),
   );
 
-  const providers = await createProviders(walletCtx);
+  const providers = await createProviders(cclerkCtx);
 
   const contract = await findDeployedContract(providers, {
     contractAddress: deployment.contractAddress,
@@ -708,15 +708,15 @@ async function resumeBridge(seed: string) {
     CompiledContract.withCompiledFileAssets(zkConfigPath),
   );
 
-  const walletCtx = await createWallet(seed);
+  const cclerkCtx = await createCipherclerk(seed);
   await Rx.firstValueFrom(
-    walletCtx.wallet.state().pipe(
+    cclerkCtx.cclerk.state().pipe(
       Rx.throttleTime(5000),
       Rx.filter((s) => s.isSynced),
     ),
   );
 
-  const providers = await createProviders(walletCtx);
+  const providers = await createProviders(cclerkCtx);
 
   const contract = await findDeployedContract(providers, {
     contractAddress: deployment.contractAddress,
@@ -738,10 +738,10 @@ async function main() {
   const args = process.argv.slice(2);
   const command = args[0];
 
-  // Wallet seed from env (required for all operations)
-  const seed = process.env.PYANA_WALLET_SEED;
+  // Cipherclerk seed from env (required for all operations)
+  const seed = process.env.PYANA_CCLERK_SEED;
   if (!seed) {
-    console.error('Error: Set PYANA_WALLET_SEED env var (64 hex chars)');
+    console.error('Error: Set PYANA_CCLERK_SEED env var (64 hex chars)');
     process.exit(1);
   }
 
@@ -827,7 +827,7 @@ Commands:
   resume                          Resume bridge operations (governance)
 
 Environment Variables:
-  PYANA_WALLET_SEED              64-char hex wallet seed (required)
+  PYANA_CCLERK_SEED              64-char hex cipherclerk seed (required)
   PYANA_GOVERNANCE_KEY           32-byte governance secret key (hex, for gov ops)
   PYANA_FEDERATION_COMMITMENT    32-byte federation key commitment (hex, for deploy)
       `);

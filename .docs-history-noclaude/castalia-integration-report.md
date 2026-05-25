@@ -31,7 +31,7 @@ What Castalia does NOT need from pyana: federation consensus, cell execution, no
 Gabriel's paper describes a privacy-preserving ownership transfer protocol where:
 
 - Each object has an on-chain `objContract` with only three fields: `creator` (public key), `state` (dynamic public key representing current owner), and `counter` (strictly increasing timestamp).
-- Actual object data never touches the chain -- it travels encrypted between wallets off-chain.
+- Actual object data never touches the chain -- it travels encrypted between cipherclerks off-chain.
 - Transfers rotate the `state` key on-chain (proving ownership changed) while the object payload moves privately between clients.
 - The `counter` provides a monotonic ordering guarantee equivalent to a blockchain without broadcasting ownership.
 
@@ -136,17 +136,17 @@ The integration brief is explicit about these boundaries:
 
 The integration brief provides a clean three-layer mapping to pyana's current architecture:
 
-### secC = client/prover/wallet side
+### secC = client/prover/cclerk side
 
-**Pyana surface**: Browser extension (`window.pyana`), SDK (`AgentWallet`, `AgentRuntime`, `SiloClient`), HD wallet, proof generation, capability holding.
+**Pyana surface**: Browser extension (`window.pyana`), SDK (`AgentCipherclerk`, `AgentRuntime`, `SiloClient`), HD cclerk, proof generation, capability holding.
 
 **What it does for Castalia**: Holds credentials (soulbound reference) and capabilities (attenuated tokens). Chooses verification mode (trusted/selective/private). Generates presentations and proofs. Seals/unseals private data via tokenizer. Can authorize actions requested by a Hub portal or web page.
 
 **Current SDK APIs that map**:
-- `AgentWallet::authorize_anonymously()` -- anonymous credential presentation
-- `AgentWallet::prove_predicate_unlinkable()` -- prove role/standing without revealing identity
-- `AgentWallet::prove_not_revoked()` -- prove credential is still active
-- `AgentWallet::create_private_note()` / `transfer_note_privately()` -- private value (future treasury)
+- `AgentCipherclerk::authorize_anonymously()` -- anonymous credential presentation
+- `AgentCipherclerk::prove_predicate_unlinkable()` -- prove role/standing without revealing identity
+- `AgentCipherclerk::prove_not_revoked()` -- prove credential is still active
+- `AgentCipherclerk::create_private_note()` / `transfer_note_privately()` -- private value (future treasury)
 
 ### secS = local verifier/resource gatekeeper
 
@@ -187,7 +187,7 @@ Not by default, but optionally for specific use cases. Here is the analysis:
 - Internal federation operations (federation consensus already provides ordering).
 - Same-hub operations (Hub's database provides ordering locally).
 
-**Recommended design**: Pyana macaroon nonces remain off-chain by default. The `chain/` workspace (SP1/EVM settlement, `PyanaVault`, `PyanaCredentialGate`) provides an optional on-chain anchoring path for high-value or cross-trust-domain operations. The nonce goes on-chain only when the action crosses a trust boundary that neither party's local federation covers -- precisely Gabriel's original use case of "transfers between wallets that don't share a trusted third party."
+**Recommended design**: Pyana macaroon nonces remain off-chain by default. The `chain/` workspace (SP1/EVM settlement, `PyanaVault`, `PyanaCredentialGate`) provides an optional on-chain anchoring path for high-value or cross-trust-domain operations. The nonce goes on-chain only when the action crosses a trust boundary that neither party's local federation covers -- precisely Gabriel's original use case of "transfers between cipherclerks that don't share a trusted third party."
 
 This maps to the Base integration scaffolding already in pyana:
 - `PyanaVault.withdraw()` uses an on-chain nullifier for double-spend prevention

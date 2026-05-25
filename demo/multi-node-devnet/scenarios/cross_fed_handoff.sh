@@ -2,10 +2,10 @@
 # Scenario: cross-federation three-party bearer-cap handoff.
 #
 # Story (SILVER-VISION-E2E-VERIFICATION.md §1):
-#   1. Alice's wallet lives on F1 (any F1 node). She creates a bearer
+#   1. Alice's cclerk lives on F1 (any F1 node). She creates a bearer
 #      cap targeting F2 + bob_cell.
 #   2. The URI traverses an out-of-band channel (a file copy here).
-#   3. Bob's wallet on F2 enlivens the cap by sending PresentHandoff
+#   3. Bob's cclerk on F2 enlivens the cap by sending PresentHandoff
 #      over CapTP to F1's introducer node. F1 validates, returns
 #      HandoffAccepted with a delivery token.
 #   4. Bob builds a Turn at F2 with Authorization::CapTpDelivered and

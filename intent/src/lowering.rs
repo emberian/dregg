@@ -11,7 +11,7 @@
 //! 2. [`EffectPlan`] — a flat list of [`PendingAction`]s carrying typed
 //!    effects but no authorization yet.
 //! 3. [`SealedTurn`] — every action has acquired an [`Authorization`];
-//!    the wallet has signed/proved as needed.
+//!    the cclerk has signed/proved as needed.
 //! 4. [`pyana_turn::Turn`] — the runtime executable consumed by the
 //!    `TurnExecutor`.
 //!
@@ -79,7 +79,7 @@ pub struct EffectPlan {
     pub validity_witness: Option<ValidityWitness>,
 }
 
-/// An action waiting for authorization. The wallet (or seal layer) walks
+/// An action waiting for authorization. The cclerk (or seal layer) walks
 /// these and produces an [`Authorization`] for each.
 #[derive(Clone, Debug)]
 pub struct PendingAction {
@@ -283,7 +283,7 @@ fn lower_settlement_leg(leg: &RingSettlement, anchor: CellId) -> PendingAction {
 
 /// Seal an [`EffectPlan`] into a [`SealedTurn`] using a single uniform
 /// authorization for every action. This is the most basic sealer; real
-/// wallets will produce one authorization per action by walking the
+/// cipherclerks will produce one authorization per action by walking the
 /// `auth_hint` field.
 pub fn seal_plan_uniform(
     plan: EffectPlan,
@@ -336,7 +336,7 @@ pub fn seal_plan_uniform(
 /// settlements need per-leg auth so each cell sees the authorization
 /// kind it expects.
 ///
-/// The `sealer` callback is the wallet's per-leg authorization
+/// The `sealer` callback is the cipherclerk's per-leg authorization
 /// producer. For ring settlement, this is typically:
 ///
 /// - `Signed` → an Ed25519 signature by the anchor.

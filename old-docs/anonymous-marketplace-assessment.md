@@ -44,7 +44,7 @@ Assessment of pyana's infrastructure for a TRUE anonymous marketplace (buyer/sel
 
 **Presentation tags** give unlinkable multi-show for credentials (fresh randomness per presentation, blinded leaf). This is the strongest privacy property in the system.
 
-**Intent CommitmentIds are reused** across intents from the same wallet. Multiple orders from the same consumer in one epoch are linkable via shared CellId.
+**Intent CommitmentIds are reused** across intents from the same cclerk. Multiple orders from the same consumer in one epoch are linkable via shared CellId.
 
 **Nullifiers** are globally unique but positionally independent. Note spends are unlinkable across federations. However, the marketplace does not use the note system for orders.
 

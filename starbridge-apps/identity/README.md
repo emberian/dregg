@@ -39,10 +39,10 @@ a domain-specific `Effect::IssueCredential` or
   - `SenderAuthorized(PublicRoot { ISSUER_AUTH_ROOT_SLOT })` — only
     issuers in the published key-set can submit issuance turns.
 - **Turn builders:**
-  - `build_issue_credential_action(wallet, issuer_cell, &credential, new_counter, revocation_root)`
-  - `build_revoke_credential_action(wallet, issuer_cell, credential_id, new_root)`
-  - `build_present_credential_action(wallet, holder_cell, &presentation)`
-  - `build_verify_presentation_action(wallet, verifier_cell, &presentation, &options)`
+  - `build_issue_credential_action(cclerk, issuer_cell, &credential, new_counter, revocation_root)`
+  - `build_revoke_credential_action(cclerk, issuer_cell, credential_id, new_root)`
+  - `build_present_credential_action(cclerk, holder_cell, &presentation)`
+  - `build_verify_presentation_action(cclerk, verifier_cell, &presentation, &options)`
 - **Re-exports** of the `pyana-credentials` API surface (`issue`,
   `present`, `present_anonymous`, `verify`, `revoke`, `Credential`,
   `Presentation`, `CredentialSchema`, `IssuerKeys`,
@@ -124,11 +124,11 @@ turn, not just at construction. Together they enforce:
 - Only issuers in the published key-set can submit any state-modifying
   turn on the issuer cell.
 
-## Compatibility with the in-browser PyanaRuntime + extension wallet
+## Compatibility with the in-browser PyanaRuntime + extension cclerk
 
 `build_*_action` returns an `Action` carrying a real
-`Authorization::Signature(..)` produced by the wallet. That action is
-what `wallet.signTurn(turnSpec)` (the extension API surface — see
+`Authorization::Signature(..)` produced by the cclerk. That action is
+what `cclerk.signTurn(turnSpec)` (the extension API surface — see
 `../../extension/src/page.ts`) expects to wrap in a `Turn` for
 submission. The in-browser `PyanaRuntime`
 (`../../wasm/src/runtime.rs`) executes the resulting turn against the

@@ -79,7 +79,7 @@ Key insights from the Sui paper:
    writers while ensuring safety and liveness, require a full agreement protocol."
 
 3. **No multi-sig at the object level**. Sui uses a single authorization path per
-   owned object. Multi-sig is handled at the address/wallet layer (a multi-sig
+   owned object. Multi-sig is handled at the address/cclerk layer (a multi-sig
    address can own objects), not at the object type level.
 
 4. **Objects can be "child objects"** owned by other objects. The parent must be

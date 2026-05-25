@@ -84,7 +84,7 @@ fn create_bank_statement(issuer: &mut IssuerRegistry, holder_id: [u8; 32]) -> Cr
 fn test_issue_and_store() {
     let (issuer_id, holder_id) = test_ids();
     let mut issuer = IssuerRegistry::new(issuer_id);
-    let mut wallet = CredentialWallet::new(holder_id);
+    let mut cclerk = CredentialWallet::new(holder_id);
 
     let cred = create_government_id(&mut issuer, holder_id);
 
@@ -98,10 +98,10 @@ fn test_issue_and_store() {
         Some(&AttributeValue::Integer(34))
     );
 
-    // Store in wallet.
-    wallet.store(cred.clone());
-    assert_eq!(wallet.len(), 1);
-    assert!(wallet.get(&cred.id).is_some());
+    // Store in cclerk.
+    cclerk.store(cred.clone());
+    assert_eq!(cclerk.len(), 1);
+    assert!(cclerk.get(&cred.id).is_some());
 }
 
 // ============================================================================
@@ -513,38 +513,38 @@ fn test_revocation_manager() {
 }
 
 // ============================================================================
-// Test: Credential wallet operations
+// Test: Credential cclerk operations
 // ============================================================================
 
 #[test]
-fn test_wallet_operations() {
+fn test_cclerk_operations() {
     let (issuer_id, holder_id) = test_ids();
     let mut issuer = IssuerRegistry::new(issuer_id);
-    let mut wallet = CredentialWallet::new(holder_id);
+    let mut cclerk = CredentialWallet::new(holder_id);
 
-    assert!(wallet.is_empty());
+    assert!(cclerk.is_empty());
 
     let cred1 = create_government_id(&mut issuer, holder_id);
     let cred2 = create_employment_cert(&mut issuer, holder_id);
 
-    wallet.store(cred1.clone());
-    wallet.store(cred2.clone());
+    cclerk.store(cred1.clone());
+    cclerk.store(cred2.clone());
 
-    assert_eq!(wallet.len(), 2);
-    assert!(!wallet.is_empty());
+    assert_eq!(cclerk.len(), 2);
+    assert!(!cclerk.is_empty());
 
     // Find by schema.
-    let gov_creds = wallet.find_by_schema("GovernmentID");
+    let gov_creds = cclerk.find_by_schema("GovernmentID");
     assert_eq!(gov_creds.len(), 1);
 
     // Find by issuer.
-    let issuer_creds = wallet.find_by_issuer(&issuer_id);
+    let issuer_creds = cclerk.find_by_issuer(&issuer_id);
     assert_eq!(issuer_creds.len(), 2);
 
     // Remove.
-    wallet.remove(&cred1.id);
-    assert_eq!(wallet.len(), 1);
-    assert!(wallet.get(&cred1.id).is_none());
+    cclerk.remove(&cred1.id);
+    assert_eq!(cclerk.len(), 1);
+    assert!(cclerk.get(&cred1.id).is_none());
 }
 
 // ============================================================================

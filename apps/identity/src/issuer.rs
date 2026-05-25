@@ -50,7 +50,7 @@ impl IssuerRegistry {
 
     /// Issue a credential to a holder.
     ///
-    /// Returns the issued credential, which the holder can store in their wallet.
+    /// Returns the issued credential, which the holder can store in their cclerk.
     pub fn issue(
         &mut self,
         schema_name: &str,

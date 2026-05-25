@@ -68,9 +68,9 @@ impl Database {
         Ok(Self { pool })
     }
 
-    // ─── User / wallet methods ──────────────────────────────────────────────
+    // ─── User / cclerk methods ──────────────────────────────────────────────
 
-    /// Check if a user has a wallet.
+    /// Check if a user has a cclerk.
     pub async fn user_exists(&self, user_id: &str) -> Result<bool, sqlx::Error> {
         let row: Option<(String,)> =
             sqlx::query_as("SELECT cell_id FROM users WHERE discord_id = ?")
@@ -164,7 +164,7 @@ impl Database {
         Ok(rows.into_iter().map(|(id,)| id).collect())
     }
 
-    // ─── Wallet / user registration ────────────────────────────────────────────
+    // ─── Cipherclerk / user registration ────────────────────────────────────────────
 
     /// Register a user's cell_id.
     pub async fn register_user(&self, discord_id: &str, cell_id: &str) -> Result<(), sqlx::Error> {

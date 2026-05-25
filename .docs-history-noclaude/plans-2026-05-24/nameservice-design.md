@@ -16,7 +16,7 @@ The name service is **not** a new standalone system. It is a composition layer t
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    Agent Wallet (local)                  │
+│                    Agent Cipherclerk (local)                  │
 │                                                         │
 │   ┌─────────────┐   ┌───────────────┐   ┌──────────┐  │
 │   │  Petname DB │   │ Edge Name Cache│   │ Resolver │  │
@@ -45,8 +45,8 @@ The name service is **not** a new standalone system. It is a composition layer t
 
 | Component | Location | Persistence |
 |-----------|----------|-------------|
-| Petname DB | Wallet (local, never leaves device) | `sdk/src/wallet.rs` state |
-| Edge name cache | Wallet (local, populated from contacts) | Ephemeral, refreshed on connect |
+| Petname DB | Cipherclerk (local, never leaves device) | `sdk/src/cipherclerk.rs` state |
+| Edge name cache | Cipherclerk (local, populated from contacts) | Ephemeral, refreshed on connect |
 | Federation name directory | `apps/governed-namespace` Registry cell | On-chain (blocklace) |
 | Cross-federation meta-directory | `rbg/` MetaDirectory cell | On-chain (blocklace) |
 | Name resolution protocol | Turn effect (`Effect::ResolveName`) | N/A (protocol) |
@@ -65,7 +65,7 @@ The name service is **not** a new standalone system. It is a composition layer t
 ### 2.1 Name Categories
 
 ```rust
-/// A name entry in the wallet's local petname database.
+/// A name entry in the cipherclerk's local petname database.
 /// Corresponds to one of three Zooko-triangle categories.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum NameEntry {
@@ -149,7 +149,7 @@ pub enum NameProvenance {
     Direct,
 }
 
-impl AgentWallet {
+impl AgentCipherclerk {
     /// Resolve a human-readable name to a sturdy ref.
     ///
     /// Resolution order: petname > edge name > proposed name > hierarchical lookup.
@@ -190,7 +190,7 @@ impl AgentWallet {
 ### 3.1 Name Grammar
 
 ```
-<name>                            → local resolution (wallet petname DB)
+<name>                            → local resolution (cclerk petname DB)
 <name>.<federation>.pyana         → hierarchical (federation directory lookup)
 <name>.<sub>.<federation>.pyana   → nested hierarchy (sub-directory traversal)
 pyana://<fed>/<cell>/<swiss>      → direct addressing (no resolution)
@@ -662,10 +662,10 @@ impl ReverseNameIndex {
 }
 ```
 
-### 6.2 Wallet Integration
+### 6.2 Cipherclerk Integration
 
 ```rust
-impl AgentWallet {
+impl AgentCipherclerk {
     /// Reverse lookup: what names point to this cell?
     ///
     /// Checks local petnames first, then queries federation directory.
@@ -696,10 +696,10 @@ impl AgentWallet {
 
 ## 7. SDK Integration
 
-### 7.1 Wallet API Surface
+### 7.1 Cipherclerk API Surface
 
 ```rust
-impl AgentWallet {
+impl AgentCipherclerk {
     // =========================================================================
     // Petname Management (local, no network)
     // =========================================================================
@@ -757,7 +757,7 @@ impl AgentWallet {
     /// Register a name in the home federation's directory.
     ///
     /// This mounts an entry in the governed namespace. May require:
-    /// - Computron payment (from wallet's quota)
+    /// - Computron payment (from cipherclerk's quota)
     /// - Governance vote (if name is contested or premium)
     /// - Member-level authorization
     ///
@@ -773,7 +773,7 @@ impl AgentWallet {
         // Calculate rent cost.
         let cost = self.name_policy.calculate_rent(name, rental_epochs);
 
-        // Charge from wallet's quota.
+        // Charge from cipherclerk's quota.
         self.quota.charge(cost)?;
 
         // Mount in the federation's name directory.
@@ -929,12 +929,12 @@ Each federation registers its name directory in a shared meta-directory:
 ///
 /// Resolution of "bob.federation-b.pyana" from federation A:
 ///
-/// 1. A's wallet queries A's meta-directory for "federation-b"
+/// 1. A's cclerk queries A's meta-directory for "federation-b"
 /// 2. Meta-directory returns SturdyRef to B's name directory
-/// 3. Wallet enlivens B's directory ref (CapTP session to B)
-/// 4. Wallet queries B's directory for "bob"
+/// 3. Cipherclerk enlivens B's directory ref (CapTP session to B)
+/// 4. Cipherclerk queries B's directory for "bob"
 /// 5. B's directory returns SturdyRef to bob's cell
-/// 6. Wallet enlivens bob's sturdy ref (already has CapTP session to B)
+/// 6. Cipherclerk enlivens bob's sturdy ref (already has CapTP session to B)
 ```
 
 ### 8.2 Meta-Directory as Root
@@ -1111,7 +1111,7 @@ pub enum Effect {
 | Governance | `GovernanceEngine` (voting) | `apps/governed-namespace/src/governance.rs` |
 | Dispute resolution | `Disputable` trait | `app-framework/src/dispute.rs` |
 | Cross-federation comms | CapTP sessions + wire protocol | `captp/`, `wire/` |
-| Wallet state | `AgentWallet` | `sdk/src/wallet.rs` |
+| Cipherclerk state | `AgentCipherclerk` | `sdk/src/cipherclerk.rs` |
 | Discovery | `discover(tags)` + scoped intent pools | `registry.rs`, `rbg/src/directory.rs` |
 | GC/expiry | `gc_expired()` on DirectoryCell | `rbg/src/directory.rs` |
 
@@ -1144,36 +1144,36 @@ pub enum Effect {
 ### 11.1 Alice Registers a Name
 
 ```
-1. Alice calls wallet.register_name("alice", her_cell_uri, 100 /*epochs*/)
-2. Wallet calculates rent: 100 epochs * (100 base + 200*0 premium) = 10,000 computrons
-3. Wallet charges from Alice's QuotaCell
-4. Wallet submits Effect::RegisterName to federation
+1. Alice calls cclerk.register_name("alice", her_cell_uri, 100 /*epochs*/)
+2. Cipherclerk calculates rent: 100 epochs * (100 base + 200*0 premium) = 10,000 computrons
+3. Cipherclerk charges from Alice's QuotaCell
+4. Cipherclerk submits Effect::RegisterName to federation
 5. Federation executor mounts "/names/alice" in governed-namespace Registry
 6. Federation grants DelegationAuthority::SubPrefix { prefix: "/names/alice/" }
-7. Wallet stores management capability URI locally
+7. Cipherclerk stores management capability URI locally
 8. Alice can now be found as "alice.my-federation.pyana"
 ```
 
 ### 11.2 Bob Resolves "alice.my-federation.pyana"
 
 ```
-1. Bob's wallet checks petname DB for "alice.my-federation.pyana" — miss
-2. Bob's wallet checks edge name cache — miss
+1. Bob's cclerk checks petname DB for "alice.my-federation.pyana" — miss
+2. Bob's cclerk checks edge name cache — miss
 3. Name contains dots → hierarchical resolution
 4. Split: ["pyana", "my-federation", "alice"]
 5. Query meta-directory for "my-federation" → get SturdyRef to my-federation's name dir
 6. Enliven name dir (CapTP session, may already exist)
 7. Query name dir for "alice" → get alice's SturdyRef
 8. Return ResolvedName { target: alice_uri, provenance: FederationDirectory }
-9. Bob's wallet caches the result with TTL from the directory entry
+9. Bob's cclerk caches the result with TTL from the directory entry
 ```
 
 ### 11.3 Alice Creates Sub-Name
 
 ```
-1. Alice calls wallet.register_subname("alice", "oracle", oracle_service_uri)
-2. Wallet verifies Alice owns "alice" (has management cap)
-3. Wallet submits Effect::RegisterName for "alice/oracle" (sub-delegation path)
+1. Alice calls cclerk.register_subname("alice", "oracle", oracle_service_uri)
+2. Cipherclerk verifies Alice owns "alice" (has management cap)
+3. Cipherclerk submits Effect::RegisterName for "alice/oracle" (sub-delegation path)
 4. Federation verifies DelegationAuthority on parent — authorized without vote
 5. Mounts "/names/alice/oracle" in Registry
 6. Resolvable as "oracle.alice.my-federation.pyana"
@@ -1195,7 +1195,7 @@ pub enum Effect {
 
 ## 12. Security Properties
 
-1. **Petnames cannot be overridden remotely.** Your local name for something is YOURS. No governance vote, no community consensus, no protocol message can change what "alice" means in YOUR wallet.
+1. **Petnames cannot be overridden remotely.** Your local name for something is YOURS. No governance vote, no community consensus, no protocol message can change what "alice" means in YOUR cclerk.
 
 2. **Names are capabilities.** You cannot register a name you don't have authority for. The DFA router enforces path-based access control. Sub-delegation is explicit (must hold parent).
 

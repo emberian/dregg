@@ -6,9 +6,9 @@
 
 The extension's high-level architecture is reasonable: a nonce-bound page<->content event channel, an origin-gated method allowlist, a per-method origin permission system with expiry, and an encrypted-state model using PBKDF2-SHA256 (600k iterations) + AES-256-GCM. The page-side surface is largely correct: events are checked with `isTrusted`, `_origin` is overwritten with the trusted `window.location.origin` after spreading attacker `detail` (so origin spoofing from a page is blocked), and `window.pyana` is frozen with a non-configurable property.
 
-However, the user-approval popups (provision, intent-confirm, disclosure-picker, origin-permission) all use a pattern of `chrome.windows.create()` + a global `chrome.runtime.onMessage.addListener` that **does not validate the sender** of the decision message. Because `chrome.runtime.onMessage` dispatches to *every* registered listener, a malicious page's content script can forge any decision message (`pyana:provisionDecision`, `pyana:intentConfirmation`, `pyana:disclosureDecision`, `pyana:originPermissionDecision`) while a real popup is open — silently auto-approving the user's review and granting blanket capabilities. This is a clean approval-drift exploit equivalent to wallet compromise on any visited site.
+However, the user-approval popups (provision, intent-confirm, disclosure-picker, origin-permission) all use a pattern of `chrome.windows.create()` + a global `chrome.runtime.onMessage.addListener` that **does not validate the sender** of the decision message. Because `chrome.runtime.onMessage` dispatches to *every* registered listener, a malicious page's content script can forge any decision message (`pyana:provisionDecision`, `pyana:intentConfirmation`, `pyana:disclosureDecision`, `pyana:originPermissionDecision`) while a real popup is open — silently auto-approving the user's review and granting blanket capabilities. This is a clean approval-drift exploit equivalent to cclerk compromise on any visited site.
 
-Additional serious findings: passphrase-less first-run wallets are encrypted under an internal key stored in `chrome.storage.session` (i.e. effectively unencrypted at rest until the user sets a passphrase, with `needsPassphraseSetup` never enforced); user PII (token facts including email/userId/org) is passed in popup URLs (visible to extension-API observers and chrome:// internals); WASM has a JS fallback BIP-39 path; legacy `.js` files in the repo root are still referenced by `build.sh` packaging and `popup.html` style; CSP is reasonable but the manifest content_scripts use `<all_urls>` and WAR is also `<all_urls>` so any web page can frame extension HTML.
+Additional serious findings: passphrase-less first-run cipherclerks are encrypted under an internal key stored in `chrome.storage.session` (i.e. effectively unencrypted at rest until the user sets a passphrase, with `needsPassphraseSetup` never enforced); user PII (token facts including email/userId/org) is passed in popup URLs (visible to extension-API observers and chrome:// internals); WASM has a JS fallback BIP-39 path; legacy `.js` files in the repo root are still referenced by `build.sh` packaging and `popup.html` style; CSP is reasonable but the manifest content_scripts use `<all_urls>` and WAR is also `<all_urls>` so any web page can frame extension HTML.
 
 ## P0 — Critical
 
@@ -44,10 +44,10 @@ The check at line 2092 (`isContentScript(sender) && !PAGE_ALLOWED_METHODS.has(ms
 
 ## P1 — High
 
-### P1-1. Wallet ships with a default "internal key" that is not derived from any user secret
+### P1-1. Cipherclerk ships with a default "internal key" that is not derived from any user secret
 **File:** `src/background.ts:219-229, 413-488, 519-531, 533-574`
 
-On first run `loadState()` creates a mnemonic and a keypair, then encrypts state under `getInternalEncryptionKey()` — a 32-byte random value stored *in clear text* in `chrome.storage.session` (line 226 — `chrome.storage.session.set({ _internalKey: key })`). `chrome.storage.session` is **not** encrypted at rest in all browsers (Firefox in particular persists session storage; Chrome stores in unencrypted browser profile until restart). Until the user explicitly sets a passphrase the wallet is effectively unencrypted; `needsPassphraseSetup` is set but never *enforced* anywhere — the user is never blocked from signing turns or exporting capabilities while in this state. `getMnemonic()` and `signTurn()` work without a real passphrase.
+On first run `loadState()` creates a mnemonic and a keypair, then encrypts state under `getInternalEncryptionKey()` — a 32-byte random value stored *in clear text* in `chrome.storage.session` (line 226 — `chrome.storage.session.set({ _internalKey: key })`). `chrome.storage.session` is **not** encrypted at rest in all browsers (Firefox in particular persists session storage; Chrome stores in unencrypted browser profile until restart). Until the user explicitly sets a passphrase the cclerk is effectively unencrypted; `needsPassphraseSetup` is set but never *enforced* anywhere — the user is never blocked from signing turns or exporting capabilities while in this state. `getMnemonic()` and `signTurn()` work without a real passphrase.
 
 **Fix.** Block sensitive ops while `needsPassphraseSetup === true` (or require ephemeral re-derivation). Treat the internal key as a true ephemeral session secret stored only in JS memory, not in `chrome.storage.session`.
 
@@ -138,7 +138,7 @@ Page.js is injected into every page. WAR is also `<all_urls>` so any web page ca
 | `manifest_version` | 3 | Good. |
 | `permissions` | `storage`, `activeTab`, `contextMenus` | Minimal. |
 | `host_permissions` | (none) | Good — no `<all_urls>` host permission. |
-| `content_scripts.matches` | `<all_urls>` | Page.js injected everywhere. Defensible for a wallet. |
+| `content_scripts.matches` | `<all_urls>` | Page.js injected everywhere. Defensible for a cclerk. |
 | `web_accessible_resources.resources` | `dist/page.js`, `bip39_english.txt`, `pyana_wasm.js`, `pyana_wasm_bg.wasm` | `bip39_english.txt` exposed unnecessarily; can be fetched only by background. |
 | `web_accessible_resources.matches` | `<all_urls>` | Means any page can frame extension HTML (only HTML files are framable via direct nav, not WAR list, but extension pages are still openable). |
 | `content_security_policy.extension_pages` | `script-src 'self' 'wasm-unsafe-eval'; object-src 'self'` | No `unsafe-inline`. Good. Missing `frame-ancestors`. |
@@ -163,12 +163,12 @@ Page.js is injected into every page. WAR is also `<all_urls>` so any web page ca
 | `disclosure-picker` | origin, action, resource, fact picker | mode + disclosedFacts + predicateFacts | Yes. Decision forge-able. URL leaks PII (P0-2). |
 | `origin-permission` | origin + method | adds `{methods: [method], expires: +24h}` | Yes. Decision forge-able. |
 | `share-capability` (context-menu) | URI + QR placeholder | URI displayed for copy; no further action | Read-only — OK. |
-| `signTurn` (page-initiated) | **No popup** — directly signs and submits if origin allowed | turn payload signed with `wallet.secretKey` | **Asymmetry: signTurn requires only origin permission, no per-turn UI confirmation.** A site with one-time `pyana:signTurn` grant can sign arbitrary turns silently for 24h. |
+| `signTurn` (page-initiated) | **No popup** — directly signs and submits if origin allowed | turn payload signed with `cclerk.secretKey` | **Asymmetry: signTurn requires only origin permission, no per-turn UI confirmation.** A site with one-time `pyana:signTurn` grant can sign arbitrary turns silently for 24h. |
 
 ## Open questions
 
 1. Is `extension/legacy/` actively loaded anywhere, or is it just historical? Confirm `build.sh` should not be packaging it (it currently does because it loads root-level `.js` files which are duplicates of legacy).
-2. Should `pyana:signTurn` require per-call user confirmation? Currently it only requires the origin to be allowlisted — that's the highest-impact wallet operation with zero per-action UI.
+2. Should `pyana:signTurn` require per-call user confirmation? Currently it only requires the origin to be allowlisted — that's the highest-impact cclerk operation with zero per-action UI.
 3. Is the `chrome.storage.session._internalKey` design intentional (i.e. is the threat model "a thief who reads disk but not running memory")? If so, document it; if not, fix P1-1.
 4. What is the production node pubkey distribution strategy? Today the extension fetches `/status` to learn it — TOFU. A pinned key would close P1-3.
 5. The `pyana://<node>/<cell>/<secret>` URI exposes a bearer secret in cleartext. Is this intended? If so, how is it transported between users (clipboard / URL / QR)?

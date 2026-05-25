@@ -542,12 +542,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_wallet_discover_matching_intents() {
+    async fn test_cclerk_discover_matching_intents() {
         let (index, intents) = build_test_index();
         let transport = MockTransport::new(index);
 
-        let wallet = crate::cipherclerk::AgentCipherclerk::new();
-        let ids = wallet
+        let cclerk = crate::cipherclerk::AgentCipherclerk::new();
+        let ids = cclerk
             .discover_matching_intents(
                 "action:capability_3",
                 ("http://node-a:8080", "http://node-b:8080"),
@@ -559,7 +559,7 @@ mod tests {
         let expected_id = intents[3].id;
         assert!(
             ids.contains(&expected_id),
-            "wallet discovery should return intent for capability_3"
+            "cipherclerk discovery should return intent for capability_3"
         );
     }
 }

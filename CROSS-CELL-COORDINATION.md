@@ -273,7 +273,7 @@ kind is the binding shape; there is no algebraic gap.
 ### 2.5 M-of-N quorum — *custom authorization predicate*
 
 **Where:** `starbridge-apps/governed-namespace` (governance over a
-namespace cell), multisig wallets, threshold authorization on
+namespace cell), multisig cipherclerks, threshold authorization on
 sensitive caps.
 
 **Shape:** M of N designated signers must endorse an action before it

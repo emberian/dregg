@@ -58,17 +58,17 @@ AnonCreds (evolved from Idemix) is the deployed standard in Aries/Indy SSI ecosy
 
 **Pyana advantages:** Post-quantum. No credential schema rigidity — AnonCreds requires pre-defined schemas with fixed attribute slots; pyana's fact-based model is schema-free. Delegation (AnonCreds has no sub-credential mechanism). Private policy evaluation (AnonCreds verifiers must specify exactly which attributes they need; pyana verifiers just check the conclusion).
 
-**Pyana disadvantages:** No ecosystem (AnonCreds has Aries, wallets, production government deployments). No interoperability standards. Proof size and verification time.
+**Pyana disadvantages:** No ecosystem (AnonCreds has Aries, cipherclerks, production government deployments). No interoperability standards. Proof size and verification time.
 
 ### IRMA/Yivi — Production Attribute Credentials (Netherlands)
 
 IRMA uses Idemix internally, deployed for Dutch government services. Flow-based: user selects which attributes to disclose per interaction.
 
-**Feature parity:** Both achieve selective disclosure and unlinkability. IRMA has real user-facing wallet UX.
+**Feature parity:** Both achieve selective disclosure and unlinkability. IRMA has real user-facing cclerk UX.
 
 **Pyana advantages:** Delegation (IRMA credentials cannot be sub-attenuated and passed to agents). Post-quantum. Composable policy evaluation rather than per-attribute disclosure selection.
 
-**Pyana disadvantages:** No wallet. No government adoption. No user-facing UX story. IRMA is in production with millions of users.
+**Pyana disadvantages:** No cclerk. No government adoption. No user-facing UX story. IRMA is in production with millions of users.
 
 ## What Is Unique to Pyana
 

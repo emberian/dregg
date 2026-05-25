@@ -1,4 +1,4 @@
-//! Client-side CapTP operations for the wallet SDK.
+//! Client-side CapTP operations for the cipherclerk SDK.
 //!
 //! Provides high-level APIs wrapping the raw captp crate:
 //! - `export_sturdy_ref(cell_id) -> PyanaUri` — make a capability shareable
@@ -12,9 +12,9 @@
 //! use pyana_sdk::AgentCipherclerk;
 //! use pyana_sdk::captp_client::{CapTpConfig, EventualRef};
 //!
-//! let wallet = AgentCipherclerk::new();
+//! let cipherclerk = AgentCipherclerk::new();
 //! // ... share a cell as a sturdy reference:
-//! // let uri = wallet.share_capability(cell_id);
+//! // let uri = cipherclerk.share_capability(cell_id);
 //! ```
 
 use std::sync::{Arc, Mutex};
@@ -52,7 +52,7 @@ pub type WireOutbox = Arc<Mutex<Vec<WireMessage>>>;
 
 /// Configuration for the CapTP client layer.
 ///
-/// Specifies which group (formerly "federation") this wallet belongs to and the
+/// Specifies which group (formerly "federation") this cipherclerk belongs to and the
 /// current block height (needed for expiration checks on sturdy refs and handoff
 /// certificates).
 ///
@@ -60,7 +60,7 @@ pub type WireOutbox = Arc<Mutex<Vec<WireMessage>>>;
 /// Both types are accepted interchangeably (they are the same struct).
 #[derive(Clone, Debug)]
 pub struct CapTpConfig {
-    /// The group/federation ID this wallet operates within.
+    /// The group/federation ID this cipherclerk operates within.
     ///
     /// Accepts both `FederationId` and `GroupId` (they are the same type).
     pub federation_id: GroupId,
@@ -562,7 +562,7 @@ impl CapTpClient {
         // (3) Recipient binding.
         if &handoff_cert.recipient_pk != recipient_pk {
             return Err(SdkError::Wire(
-                "handoff certificate recipient does not match the wallet enlivening it".into(),
+                "handoff certificate recipient does not match the cipherclerk enlivening it".into(),
             ));
         }
 
@@ -648,7 +648,7 @@ impl CapTpClient {
     ///
     /// # Arguments
     ///
-    /// * `signing_key` - The wallet's signing key for the introducer signature.
+    /// * `signing_key` - The cipherclerk's signing key for the introducer signature.
     /// * `target_cell` - The cell being delegated.
     /// * `recipient_pk` - The recipient's Ed25519 public key.
     /// * `permissions` - What the recipient can do with the cell.

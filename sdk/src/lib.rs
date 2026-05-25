@@ -13,7 +13,7 @@
 //!   and turn signing. Network interactions are authenticated (TLS to silos).
 //! - **Verifiable by**: Only the user. The SDK's outputs (signed turns, proofs,
 //!   presentations) are verified by the federation, but the SDK's internal state
-//!   (held tokens, wallet contents) is private to the user.
+//!   (held tokens, cipherclerk contents) is private to the user.
 //!
 //! ## Security Properties
 //! - Key material never leaves the device (unless explicitly exported)
@@ -50,13 +50,13 @@
 //!
 //! # The cipherclerk
 //!
-//! `AgentCipherclerk` (alias `AgentCClerk`, legacy alias `AgentWallet`) is the
+//! `AgentCipherclerk` (alias `AgentCClerk`, legacy alias `AgentCipherclerk`) is the
 //! agent-side *cryptographic clerk*: it holds signing keys, authorization
 //! tokens, the receipt chain, and presents credentials/proofs on behalf of a
 //! Principal. The name borrows from Greg Egan's *Polis* (and its descendants),
 //! where a citizen's "cipherclerk" is the autonomous component that manages
-//! their cryptographic identity and capability handles. "Wallet" was a poor
-//! fit — wallets connote value storage, but a pyana cipherclerk's authority
+//! their cryptographic identity and capability handles. "Cipherclerk" was a poor
+//! fit — cipherclerks connote value storage, but a pyana cipherclerk's authority
 //! is mostly *capabilities*, not balances.
 //!
 //! # Quick Start
@@ -106,12 +106,12 @@ pub mod wordlist;
 /// Legacy module name for the cipherclerk surface.
 ///
 /// During the rename window this re-exports `cipherclerk` plus an
-/// `AgentWallet` alias so downstream `use pyana_sdk::wallet::...`
+/// `AgentCipherclerk` alias so downstream `use pyana_sdk::cipherclerk::...`
 /// paths keep compiling. New code should reach for
 /// `pyana_sdk::cipherclerk`.
 #[doc(hidden)]
-pub mod wallet {
-    pub use crate::cipherclerk::AgentCipherclerk as AgentWallet;
+pub mod cclerk {
+    pub use crate::cipherclerk::AgentCipherclerk;
     pub use crate::cipherclerk::*;
 }
 
@@ -137,9 +137,9 @@ pub use cipherclerk::AgentCipherclerk as AgentCClerk;
 /// Legacy alias for [`AgentCipherclerk`].
 ///
 /// Preserved while downstream consumers (apps, starbridge-apps, the
-/// discord bot, the extension wallet) migrate. New code should reach
+/// discord bot, the extension cipherclerk) migrate. New code should reach
 /// for [`AgentCipherclerk`] (or the short [`AgentCClerk`] alias).
-pub use cipherclerk::AgentCipherclerk as AgentWallet;
+// pub use cipherclerk::AgentCipherclerk as AgentCipherclerk; // already re-exported above
 
 // Re-export commonly needed types from dependencies so users don't need
 // to add them separately.
@@ -213,7 +213,7 @@ pub use names::{
 
 /// Legacy alias for [`CipherclerkNames`].
 #[cfg(feature = "captp")]
-pub use names::CipherclerkNames as WalletNames;
+// pub use names::CipherclerkNames as CipherclerkNames; // already re-exported above
 
 // Re-export CapTP client types for capability sharing and pipelining.
 #[cfg(feature = "captp")]

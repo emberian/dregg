@@ -1,4 +1,4 @@
-//! `/wallet` command — create, balance, address, export.
+//! `/cipherclerk` command — create, balance, address, export.
 
 use serenity::all::{
     CommandInteraction, CommandOptionType, Context, CreateCommand, CreateCommandOption,
@@ -6,22 +6,22 @@ use serenity::all::{
 };
 
 use crate::BotState;
+use crate::cipherclerk::UserCipherclerk;
 use crate::embeds;
-use crate::wallet::UserWallet;
 
-/// Register the /wallet command with all subcommands.
+/// Register the /cipherclerk command with all subcommands.
 pub fn register() -> CreateCommand {
-    CreateCommand::new("wallet")
-        .description("Manage your pyana wallet")
+    CreateCommand::new("cclerk")
+        .description("Manage your pyana cclerk")
         .add_option(CreateCommandOption::new(
             CommandOptionType::SubCommand,
             "create",
-            "Create a new pyana wallet",
+            "Create a new pyana cclerk",
         ))
         .add_option(CreateCommandOption::new(
             CommandOptionType::SubCommand,
             "balance",
-            "Check your wallet balance",
+            "Check your cclerk balance",
         ))
         .add_option(CreateCommandOption::new(
             CommandOptionType::SubCommand,
@@ -35,7 +35,7 @@ pub fn register() -> CreateCommand {
         ))
 }
 
-/// Handle /wallet interactions.
+/// Handle /cipherclerk interactions.
 pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotState) {
     let subcommand = &command.data.options[0].name;
 
@@ -53,12 +53,12 @@ async fn handle_create(ctx: &Context, command: &CommandInteraction, state: &BotS
 
     defer_ephemeral(ctx, command).await;
 
-    // Check if user already has a wallet.
+    // Check if user already has a cclerk.
     match state.db.user_exists(&discord_id).await {
         Ok(true) => {
             let embed = embeds::warning_embed(
-                "Wallet Exists",
-                "You already have a pyana wallet. Use `/wallet address` to see your cell ID.",
+                "Cipherclerk Exists",
+                "You already have a pyana cclerk. Use `/cipherclerk address` to see your cell ID.",
             );
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
@@ -76,17 +76,17 @@ async fn handle_create(ctx: &Context, command: &CommandInteraction, state: &BotS
     }
 
     // Derive keys.
-    let wallet = UserWallet::derive(
+    let cclerk = UserCipherclerk::derive(
         &state.config.bot_secret,
         command.user.id.get(),
         state.federation_id_bytes,
     );
-    let cell_id = wallet.cell_id_hex().to_string();
+    let cell_id = cclerk.cell_id_hex().to_string();
 
     // Register on devnet.
     if let Err(e) = state
         .devnet
-        .register_cell(&cell_id, wallet.public_key_hex())
+        .register_cell(&cell_id, cclerk.public_key_hex())
         .await
     {
         let embed = embeds::error_embed(
@@ -108,9 +108,9 @@ async fn handle_create(ctx: &Context, command: &CommandInteraction, state: &BotS
         return;
     }
 
-    let embed = embeds::success_embed("Wallet Created")
-        .description("Your pyana wallet is ready!")
-        .field("Cell ID", format!("`{}`", wallet.cell_id_short()), true)
+    let embed = embeds::success_embed("Cipherclerk Created")
+        .description("Your pyana cclerk is ready!")
+        .field("Cell ID", format!("`{}`", cclerk.cell_id_short()), true)
         .field("Mode", "Hosted (custodial)", true);
 
     let _ = command
@@ -127,8 +127,8 @@ async fn handle_balance(ctx: &Context, command: &CommandInteraction, state: &Bot
         Ok(Some(id)) => id,
         Ok(None) => {
             let embed = embeds::warning_embed(
-                "No Wallet",
-                "You don't have a wallet yet. Use `/wallet create` first.",
+                "No Cipherclerk",
+                "You don't have a cclerk yet. Use `/cipherclerk create` first.",
             );
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
@@ -146,7 +146,7 @@ async fn handle_balance(ctx: &Context, command: &CommandInteraction, state: &Bot
 
     match state.devnet.get_balance(&cell_id).await {
         Ok(balance) => {
-            let embed = embeds::pyana_embed("Wallet Balance")
+            let embed = embeds::pyana_embed("Cipherclerk Balance")
                 .field("Balance", format!("{balance} PYN"), true)
                 .field("Cell ID", format!("`{}...`", &cell_id[..16]), true);
             let _ = command
@@ -174,8 +174,8 @@ async fn handle_address(ctx: &Context, command: &CommandInteraction, state: &Bot
         Ok(Some(id)) => id,
         Ok(None) => {
             let embed = embeds::warning_embed(
-                "No Wallet",
-                "You don't have a wallet yet. Use `/wallet create` first.",
+                "No Cipherclerk",
+                "You don't have a cclerk yet. Use `/cipherclerk create` first.",
             );
             respond_ephemeral(ctx, command, embed).await;
             return;
@@ -206,8 +206,8 @@ async fn handle_export(ctx: &Context, command: &CommandInteraction, state: &BotS
         Ok(true) => {}
         Ok(false) => {
             let embed = embeds::warning_embed(
-                "No Wallet",
-                "You don't have a wallet yet. Use `/wallet create` first.",
+                "No Cipherclerk",
+                "You don't have a cclerk yet. Use `/cipherclerk create` first.",
             );
             respond_ephemeral(ctx, command, embed).await;
             return;
@@ -219,16 +219,17 @@ async fn handle_export(ctx: &Context, command: &CommandInteraction, state: &BotS
         }
     }
 
-    let wallet = UserWallet::derive(&state.config.bot_secret, user_id, state.federation_id_bytes);
+    let cclerk =
+        UserCipherclerk::derive(&state.config.bot_secret, user_id, state.federation_id_bytes);
 
     let embed = embeds::pyana_embed("Private Key Export")
         .description("**Keep this secret!** Anyone with this key controls your cell.")
         .field(
             "Private Key",
-            format!("```\n{}\n```", wallet.private_key_hex()),
+            format!("```\n{}\n```", cclerk.private_key_hex()),
             false,
         )
-        .field("Cell ID", format!("`{}`", wallet.cell_id_short()), true);
+        .field("Cell ID", format!("`{}`", cclerk.cell_id_short()), true);
 
     respond_ephemeral(ctx, command, embed).await;
 }

@@ -703,7 +703,7 @@ The **coordinator** initiates. In production:
 
 - The coordinator's `node_id` is the local node's `silo_id`
   (`state.rs:silo_id`, derived from the gossip pubkey).
-- The coordinator's signing key is `state.wallet.
+- The coordinator's signing key is `state.cclerk.
   gossip_signing_key()`.
 - A client sends `POST /turn/atomic` with the forest, participant
   list, threshold, and (optionally) per-participant pubkeys.

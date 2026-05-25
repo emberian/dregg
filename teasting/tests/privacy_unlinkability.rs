@@ -12,7 +12,7 @@ use pyana_circuit::poseidon2::hash_fact;
 use pyana_circuit::predicate_air::{
     PredicateType, PredicateWitness, compute_fact_commitment, prove_predicate,
 };
-use pyana_sdk::{AgentWallet, AuthRequest};
+use pyana_sdk::{AgentCipherclerk, AuthRequest};
 use pyana_teasting::agent::{SimAgent, shared_root_key};
 use pyana_teasting::assertions::assert_unlinkable;
 

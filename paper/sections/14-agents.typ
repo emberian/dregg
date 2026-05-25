@@ -99,7 +99,7 @@ For AI agents: an agent's track record is cryptographically verifiable. Not "the
 The intent engine implements a market for AI labor:
 
 + *Need*: Agent A broadcasts "I need image classification at 95%+ accuracy, budget 500 computrons"
-+ *Match*: Agent B's wallet evaluates locally: "I hold a compute capability with classifier access"
++ *Match*: Agent B's cclerk evaluates locally: "I hold a compute capability with classifier access"
 + *Commit*: Agent B publishes $C = H("intent_id" || "secret")$---staking claim without revealing identity
 + *Reveal*: Agent B reveals the commitment opening + STARK proof of capability satisfaction
 + *Execute*: Conditional turn: B delivers results IFF A's payment clears

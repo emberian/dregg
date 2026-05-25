@@ -34,8 +34,8 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
 
+use pyana_app_framework::cipherclerk::EmbeddedExecutor;
 use pyana_app_framework::server::{AppConfig, AppServer};
-use pyana_app_framework::wallet::EmbeddedExecutor;
 use pyana_app_framework::{AgentCipherclerk, AppCipherclerk, CellId};
 
 use cross_fed::MetaDirectory;
@@ -282,7 +282,7 @@ async fn register_name(
 
             // Emit a real, framework-signed on-ledger Action. The
             // action carries an EmitEvent + SetField pair. No
-            // placeholder signatures — the framework wallet binds the
+            // placeholder signatures — the framework cclerk binds the
             // signature to its federation_id.
             //
             // Userspace stance: name-registration policy lives here in

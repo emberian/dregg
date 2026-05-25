@@ -100,7 +100,7 @@ pub struct TurnProofComponents {
 
 /// Witnesses needed to generate each sub-proof.
 ///
-/// The caller assembles this from the wallet state, turn data, and cell state.
+/// The caller assembles this from the cipherclerk state, turn data, and cell state.
 /// Each field is `Option` because some aspects may not apply to a given turn.
 pub struct FullTurnWitness {
     // -- Effect VM witness --

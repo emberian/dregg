@@ -7,8 +7,8 @@ use serenity::all::{
 };
 
 use crate::BotState;
+use crate::cipherclerk::{UserCipherclerk, sign_legacy};
 use crate::embeds;
-use crate::wallet::{UserWallet, sign_legacy};
 
 /// Register the /gallery command.
 pub fn register() -> CreateCommand {
@@ -180,13 +180,13 @@ async fn handle_bid(ctx: &Context, command: &CommandInteraction, state: &BotStat
 
     defer_ephemeral(ctx, command).await;
 
-    // Ensure user has a wallet.
+    // Ensure user has a cclerk.
     let cell_id = match state.db.get_cell_id(&discord_id).await {
         Ok(Some(id)) => id,
         Ok(None) => {
             let embed = embeds::warning_embed(
-                "No Wallet",
-                "You need a wallet to bid. Use `/wallet create` first.",
+                "No Cipherclerk",
+                "You need a cclerk to bid. Use `/cipherclerk create` first.",
             );
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
@@ -202,8 +202,9 @@ async fn handle_bid(ctx: &Context, command: &CommandInteraction, state: &BotStat
         }
     };
 
-    let wallet = UserWallet::derive(&state.config.bot_secret, user_id, state.federation_id_bytes);
-    let signature = sign_bid(&wallet, &auction_id, amount);
+    let cclerk =
+        UserCipherclerk::derive(&state.config.bot_secret, user_id, state.federation_id_bytes);
+    let signature = sign_bid(&cclerk, &auction_id, amount);
 
     match state
         .devnet
@@ -236,8 +237,8 @@ async fn handle_mybids(ctx: &Context, command: &CommandInteraction, state: &BotS
         Ok(Some(id)) => id,
         Ok(None) => {
             let embed = embeds::warning_embed(
-                "No Wallet",
-                "You need a wallet to view bids. Use `/wallet create` first.",
+                "No Cipherclerk",
+                "You need a cclerk to view bids. Use `/cipherclerk create` first.",
             );
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
@@ -292,16 +293,16 @@ async fn handle_mybids(ctx: &Context, command: &CommandInteraction, state: &BotS
 }
 
 /// Sign a bid message using the legacy BLAKE3-MAC wire scheme
-/// (`wallet::sign_legacy`); the devnet gallery endpoint expects this
+/// (`cclerk::sign_legacy`); the devnet gallery endpoint expects this
 /// same hex MAC in its `signature` field. Body shape:
 /// `b"bid:" + auction_id + b":" + amount_le_bytes`.
-fn sign_bid(wallet: &UserWallet, auction_id: &str, amount: u64) -> String {
+fn sign_bid(cclerk: &UserCipherclerk, auction_id: &str, amount: u64) -> String {
     let mut msg = Vec::new();
     msg.extend_from_slice(b"bid:");
     msg.extend_from_slice(auction_id.as_bytes());
     msg.extend_from_slice(b":");
     msg.extend_from_slice(&amount.to_le_bytes());
-    sign_legacy(wallet, &msg)
+    sign_legacy(cclerk, &msg)
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

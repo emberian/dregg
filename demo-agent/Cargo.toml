@@ -55,7 +55,7 @@ name = "causal_ordering"
 name = "offline_verification"
 
 [[example]]
-name = "wallet_lifecycle"
+name = "cipherclerk_lifecycle"
 
 [[example]]
 name = "web_auth_flow"

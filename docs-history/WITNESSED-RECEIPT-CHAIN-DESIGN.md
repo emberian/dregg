@@ -280,7 +280,7 @@ inclusion proof of `receipt_N` under the root, then run scope-(2)
 replay against the witness blob.
 
 **Recommendation: hybrid.** Maintain Option α as the canonical wire
-shape (it's what the wallet's `receipt_chain` already produces) and
+shape (it's what the cipherclerk's `receipt_chain` already produces) and
 add Option γ as an optional accumulator commitment that the executor
 publishes alongside each receipt (the Merkle root over receipts so far).
 Option β remains the "compression" mode invoked by
@@ -290,7 +290,7 @@ long and internally consistent" without shipping all N receipts.
 **Interaction with capability revocation.** A revoked-cap exercise
 should appear in the chain as a `Rejected` action, not as a gap. The
 current executor emits no receipt for rejected turns — the rejection is
-visible only in mempool / wallet logs. For replayability we want
+visible only in mempool / cclerk logs. For replayability we want
 rejection-receipts: a `TurnReceipt`-like artifact that records "turn
 T attempted, failed at action i with reason R, no state change." This
 deserves its own enum variant on the chain:

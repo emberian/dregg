@@ -28,7 +28,7 @@ use axum::{
 use pyana_app_framework::BatchExecutor;
 use pyana_app_framework::server::api_error;
 use pyana_sdk::AgentCipherclerk;
-use pyana_sdk::wallet::DelegatedToken;
+use pyana_sdk::cipherclerk::DelegatedToken;
 use pyana_storage::inbox::CapInbox;
 use pyana_types::PublicKey;
 use serde::{Deserialize, Serialize};

@@ -7,8 +7,8 @@ use serenity::all::{
 };
 
 use crate::BotState;
+use crate::cipherclerk::{UserCipherclerk, sign_legacy};
 use crate::embeds;
-use crate::wallet::{UserWallet, sign_legacy};
 
 /// Register the /send command.
 pub fn register_send() -> CreateCommand {
@@ -91,13 +91,13 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
 
     let recipient_discord = recipient_id.to_string();
 
-    // Verify sender has a wallet.
+    // Verify sender has a cclerk.
     let sender_cell = match state.db.get_cell_id(&sender_discord).await {
         Ok(Some(id)) => id,
         Ok(None) => {
             let embed = embeds::warning_embed(
-                "No Wallet",
-                "You don't have a wallet yet. Use `/wallet create` first.",
+                "No Cipherclerk",
+                "You don't have a cclerk yet. Use `/cipherclerk create` first.",
             );
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
@@ -113,14 +113,14 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
         }
     };
 
-    // Verify recipient has a wallet.
+    // Verify recipient has a cclerk.
     let recipient_cell = match state.db.get_cell_id(&recipient_discord).await {
         Ok(Some(id)) => id,
         Ok(None) => {
             let embed = embeds::warning_embed(
-                "Recipient Has No Wallet",
+                "Recipient Has No Cipherclerk",
                 &format!(
-                    "<@{recipient_id}> does not have a pyana wallet yet. They need to run `/wallet create` first."
+                    "<@{recipient_id}> does not have a pyana cclerk yet. They need to run `/cipherclerk create` first."
                 ),
             );
             let _ = command
@@ -137,13 +137,13 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
         }
     };
 
-    // Derive sender's wallet to sign the transfer.
-    let wallet = UserWallet::derive(
+    // Derive sender's cclerk to sign the transfer.
+    let cclerk = UserCipherclerk::derive(
         &state.config.bot_secret,
         sender_id,
         state.federation_id_bytes,
     );
-    let signature = sign_transfer(&wallet, &recipient_cell, amount);
+    let signature = sign_transfer(&cclerk, &recipient_cell, amount);
 
     // Submit transfer to devnet.
     match state
@@ -187,17 +187,17 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
 /// Sign a transfer using the legacy BLAKE3-MAC wire scheme the current
 /// devnet `/api/turns/submit` endpoint expects. The body is
 /// `b"transfer:" + to_cell + b":" + amount_le_bytes` and the MAC is
-/// `blake3(body || raw_secret)` per `wallet::sign_legacy`.
+/// `blake3(body || raw_secret)` per `cclerk::sign_legacy`.
 ///
 /// When the devnet wire format moves to canonical signed Actions,
-/// replace with `wallet.app.make_action(...)` + post the action bytes.
-fn sign_transfer(wallet: &UserWallet, to_cell: &str, amount: u64) -> String {
+/// replace with `cclerk.app.make_action(...)` + post the action bytes.
+fn sign_transfer(cclerk: &UserCipherclerk, to_cell: &str, amount: u64) -> String {
     let mut msg = Vec::new();
     msg.extend_from_slice(b"transfer:");
     msg.extend_from_slice(to_cell.as_bytes());
     msg.extend_from_slice(b":");
     msg.extend_from_slice(&amount.to_le_bytes());
-    sign_legacy(wallet, &msg)
+    sign_legacy(cclerk, &msg)
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

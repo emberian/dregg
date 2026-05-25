@@ -71,7 +71,7 @@
     </div>
     <div class="problem">
       <p class="problem__label problem__label--solve">3</p>
-      <p class="problem__text"><strong>Trustless intent solving.</strong> Broadcast needs publicly. Evaluate matches privately (local Datalog, never leaves wallet). Fulfill with a STARK proof. Ring trades settle multi-party cycles atomically without a coordinator.</p>
+      <p class="problem__text"><strong>Trustless intent solving.</strong> Broadcast needs publicly. Evaluate matches privately (local Datalog, never leaves cclerk). Fulfill with a STARK proof. Ring trades settle multi-party cycles atomically without a coordinator.</p>
     </div>
     <div class="problem">
       <p class="problem__label problem__label--solve">4</p>
@@ -235,9 +235,9 @@
   <div class="arch">
     <pre><code>Applications             Stablecoin | AMM | Orderbook | Namespace | Identity | Compute
   ────────────────────────────────────────────────────────────────────
-CLI                      pyana cell | turn | cap | namespace | route | storage | wallet
+CLI                      pyana cell | turn | cap | namespace | route | storage | cclerk
   ────────────────────────────────────────────────────────────────────
-SDK                      AgentWallet | AgentRuntime | HD keys | IT-PIR discovery
+SDK                      AgentCipherclerk | AgentRuntime | HD keys | IT-PIR discovery
   ────────────────────────────────────────────────────────────────────
 CapTP                    Sessions | Sturdy refs | Handoff | Distributed GC | Store-forward
   ────────────────────────────────────────────────────────────────────
@@ -365,18 +365,18 @@ pyana intent post --spec '{"service": "compute", "action": "execute"}'</code></p
         <span class="quickstart__n">3</span>
         <div>
           <p>Or use the SDK directly:</p>
-          <pre><code>use pyana_sdk::{AgentWallet, AgentRuntime};
+          <pre><code>use pyana_sdk::{AgentCipherclerk, AgentRuntime};
 
-let wallet = AgentWallet::new();
-let root = wallet.mint_token(b"secret-key-material-32-bytes!!!!", "my-service");
-let child = wallet.attenuate(&root, &Attenuation {
+let cclerk = AgentCipherclerk::new();
+let root = cclerk.mint_token(b"secret-key-material-32-bytes!!!!", "my-service");
+let child = cclerk.attenuate(&root, &Attenuation {
     services: vec![("inventory".into(), "read".into())],
     max_ttl: Some(std::time::Duration::from_secs(3600)),
     ..Default::default()
 }).unwrap();
 
 // The verifier learns ONE BIT: authorized or not.
-let proof = wallet.present_private(&child, "inventory", "read").unwrap();</code></pre>
+let proof = cclerk.present_private(&child, "inventory", "read").unwrap();</code></pre>
         </div>
       </div>
       <div class="quickstart__step">

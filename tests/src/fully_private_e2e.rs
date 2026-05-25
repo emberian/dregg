@@ -1,12 +1,12 @@
-//! End-to-end integration test: wallet -> authorize(FullyPrivate) -> turn -> verify.
+//! End-to-end integration test: cclerk -> authorize(FullyPrivate) -> turn -> verify.
 //!
 //! This is the golden-path test proving the full private authorization pipeline
 //! works with REAL cryptographic verification (no mocks, no prove_fast).
 //!
 //! The test exercises:
-//! 1. AgentWallet creation from mnemonic
+//! 1. AgentCipherclerk creation from mnemonic
 //! 2. Token minting with specific capabilities
-//! 3. wallet.authorize() with VerificationMode::FullyPrivate (real STARK generation)
+//! 3. cclerk.authorize() with VerificationMode::FullyPrivate (real STARK generation)
 //! 4. Proof verification through the bridge verifier (verify_presentation_bb)
 //! 5. Proof verification through the SDK's standalone verifier (verify_authorization_proof)
 //! 6. Proof submission through the TurnExecutor with StarkProofVerifier
@@ -21,7 +21,7 @@ use pyana_cell::{AuthRequired, Cell, CellId, Ledger, Permissions, VerificationKe
 use pyana_circuit::poseidon2;
 use pyana_circuit::{self, proof_from_bytes, proof_to_bytes};
 use pyana_circuit::BabyBear;
-use pyana_sdk::wallet::{AgentWallet, AuthorizationPresentation, VerificationMode};
+use pyana_sdk::cipherclerk::{AgentCipherclerk, AuthorizationPresentation, VerificationMode};
 use pyana_sdk::verify::verify_authorization_proof;
 use pyana_token::{Attenuation, AuthRequest, AuthToken, MacaroonToken};
 use pyana_turn::builder::ActionBuilder;
@@ -38,7 +38,7 @@ fn test_key(name: &str) -> [u8; 32] {
 }
 
 /// Compute the synthetic Poseidon2 federation root for an issuer key.
-/// Mirrors AgentWallet::compute_federation_root_bb.
+/// Mirrors AgentCipherclerk::compute_federation_root_bb.
 fn compute_federation_root_poseidon2(issuer_key: &[u8; 32]) -> BabyBear {
     let issuer_hash = bytes_to_babybear(issuer_key);
     let depth = 8;
@@ -66,7 +66,7 @@ fn bb_to_bytes(bb: BabyBear) -> [u8; 32] {
 // Test: Full FullyPrivate End-to-End Pipeline
 // =============================================================================
 
-/// Golden-path integration test: wallet -> mint -> authorize(FullyPrivate) -> verify.
+/// Golden-path integration test: cclerk -> mint -> authorize(FullyPrivate) -> verify.
 ///
 /// This test proves the complete system works end-to-end with real cryptography:
 /// - Real Poseidon2 STARK proof generation (~500ms)
@@ -76,21 +76,21 @@ fn bb_to_bytes(bb: BabyBear) -> [u8; 32] {
 #[test]
 fn test_fully_private_end_to_end() {
     // =========================================================================
-    // Phase 1: Create wallet from mnemonic
+    // Phase 1: Create cclerk from mnemonic
     // =========================================================================
     let mnemonic = pyana_sdk::generate_mnemonic();
-    let mut wallet = AgentWallet::from_mnemonic(&mnemonic, "test-passphrase").unwrap();
-    assert!(wallet.export_mnemonic().is_some());
-    assert_eq!(wallet.derivation_path(), Some("pyana/0"));
+    let mut cclerk = AgentCipherclerk::from_mnemonic(&mnemonic, "test-passphrase").unwrap();
+    assert!(cclerk.export_mnemonic().is_some());
+    assert_eq!(cclerk.derivation_path(), Some("pyana/0"));
 
     // =========================================================================
     // Phase 2: Mint a token with specific capabilities
     // =========================================================================
     let root_key = test_key("issuer-root-key");
-    let root_token = wallet.mint_token(&root_key, "storage.pyana.dev");
+    let root_token = cclerk.mint_token(&root_key, "storage.pyana.dev");
 
-    // The root token should be held in the wallet
-    assert_eq!(wallet.tokens().len(), 1);
+    // The root token should be held in the cclerk
+    assert_eq!(cclerk.tokens().len(), 1);
     assert!(root_token.can_mint());
 
     // =========================================================================
@@ -104,7 +104,7 @@ fn test_fully_private_end_to_end() {
         ..Default::default()
     };
 
-    let presentation = wallet
+    let presentation = cclerk
         .authorize(&root_token, &request, VerificationMode::FullyPrivate)
         .expect("authorize(FullyPrivate) should succeed");
 
@@ -138,7 +138,7 @@ fn test_fully_private_end_to_end() {
     let federation_root_bytes = bb_to_bytes(federation_root_bb);
 
     // Also verify by generating the full bridge proof directly (for cross-check).
-    let bridge_proof = wallet
+    let bridge_proof = cclerk
         .prove_authorization(&root_token, &request)
         .expect("prove_authorization should succeed");
 
@@ -447,10 +447,10 @@ fn test_fully_private_end_to_end() {
 #[test]
 fn test_fully_private_attenuated_token() {
     let mnemonic = pyana_sdk::generate_mnemonic();
-    let mut wallet = AgentWallet::from_mnemonic(&mnemonic, "").unwrap();
+    let mut cclerk = AgentCipherclerk::from_mnemonic(&mnemonic, "").unwrap();
 
     let root_key = test_key("attenuated-issuer");
-    let root_token = wallet.mint_token(&root_key, "compute.pyana.dev");
+    let root_token = cclerk.mint_token(&root_key, "compute.pyana.dev");
 
     // The root token with unrestricted access should work for any request
     let any_request = AuthRequest {
@@ -460,7 +460,7 @@ fn test_fully_private_attenuated_token() {
         ..Default::default()
     };
 
-    let root_presentation = wallet
+    let root_presentation = cclerk
         .authorize(&root_token, &any_request, VerificationMode::FullyPrivate)
         .expect("root token should authorize any request in FullyPrivate mode");
 
@@ -474,7 +474,7 @@ fn test_fully_private_attenuated_token() {
 
     // Verify the root token's proof
     let federation_root_bb = compute_federation_root_poseidon2(&root_key);
-    let bridge_proof = wallet
+    let bridge_proof = cclerk
         .prove_authorization(&root_token, &any_request)
         .unwrap();
     assert!(verify_presentation_bb(&bridge_proof, federation_root_bb));
@@ -490,10 +490,10 @@ fn test_fully_private_attenuated_token() {
 #[test]
 fn test_fully_private_deterministic_conclusion() {
     let mnemonic = pyana_sdk::generate_mnemonic();
-    let mut wallet = AgentWallet::from_mnemonic(&mnemonic, "det-test").unwrap();
+    let mut cclerk = AgentCipherclerk::from_mnemonic(&mnemonic, "det-test").unwrap();
 
     let root_key = test_key("det-issuer");
-    let root_token = wallet.mint_token(&root_key, "dns.pyana.dev");
+    let root_token = cclerk.mint_token(&root_key, "dns.pyana.dev");
 
     let request = AuthRequest {
         service: Some("dns".into()),
@@ -503,10 +503,10 @@ fn test_fully_private_deterministic_conclusion() {
     };
 
     // Generate two proofs for the same request
-    let pres1 = wallet
+    let pres1 = cclerk
         .authorize(&root_token, &request, VerificationMode::FullyPrivate)
         .unwrap();
-    let pres2 = wallet
+    let pres2 = cclerk
         .authorize(&root_token, &request, VerificationMode::FullyPrivate)
         .unwrap();
 
@@ -537,26 +537,26 @@ fn test_fully_private_deterministic_conclusion() {
 }
 
 // =============================================================================
-// Test: FullyPrivate with sub-agent wallet derivation
+// Test: FullyPrivate with sub-agent cclerk derivation
 // =============================================================================
 
-/// Tests that a sub-agent derived from the main wallet can also generate
+/// Tests that a sub-agent derived from the main cclerk can also generate
 /// valid FullyPrivate proofs independently.
 #[test]
 fn test_fully_private_sub_agent() {
     let mnemonic = pyana_sdk::generate_mnemonic();
-    let mut main_wallet = AgentWallet::from_mnemonic(&mnemonic, "").unwrap();
-    let mut sub_wallet = main_wallet.derive_sub_agent(1).unwrap();
+    let mut main_cclerk = AgentCipherclerk::from_mnemonic(&mnemonic, "").unwrap();
+    let mut sub_cclerk = main_cclerk.derive_sub_agent(1).unwrap();
 
-    // Main wallet and sub-wallet have different identities
-    assert_ne!(main_wallet.public_key(), sub_wallet.public_key());
+    // Main cclerk and sub-cclerk have different identities
+    assert_ne!(main_cclerk.public_key(), sub_cclerk.public_key());
 
-    // Each wallet mints its own root token (different root keys)
+    // Each cclerk mints its own root token (different root keys)
     let main_root_key = test_key("main-issuer");
     let sub_root_key = test_key("sub-issuer");
 
-    let main_token = main_wallet.mint_token(&main_root_key, "api.pyana.dev");
-    let sub_token = sub_wallet.mint_token(&sub_root_key, "api.pyana.dev");
+    let main_token = main_cclerk.mint_token(&main_root_key, "api.pyana.dev");
+    let sub_token = sub_cclerk.mint_token(&sub_root_key, "api.pyana.dev");
 
     let request = AuthRequest {
         service: Some("api".into()),
@@ -565,23 +565,23 @@ fn test_fully_private_sub_agent() {
     };
 
     // Both should generate valid proofs
-    let main_pres = main_wallet
+    let main_pres = main_cclerk
         .authorize(&main_token, &request, VerificationMode::FullyPrivate)
         .unwrap();
-    let sub_pres = sub_wallet
+    let sub_pres = sub_cclerk
         .authorize(&sub_token, &request, VerificationMode::FullyPrivate)
         .unwrap();
 
-    // Verify main wallet's proof against its federation root
+    // Verify main cipherclerk's proof against its federation root
     let main_fed_root_bb = compute_federation_root_poseidon2(&main_root_key);
-    let main_bridge_proof = main_wallet
+    let main_bridge_proof = main_cclerk
         .prove_authorization(&main_token, &request)
         .unwrap();
     assert!(verify_presentation_bb(&main_bridge_proof, main_fed_root_bb));
 
-    // Verify sub wallet's proof against its federation root
+    // Verify sub cipherclerk's proof against its federation root
     let sub_fed_root_bb = compute_federation_root_poseidon2(&sub_root_key);
-    let sub_bridge_proof = sub_wallet
+    let sub_bridge_proof = sub_cclerk
         .prove_authorization(&sub_token, &request)
         .unwrap();
     assert!(verify_presentation_bb(&sub_bridge_proof, sub_fed_root_bb));

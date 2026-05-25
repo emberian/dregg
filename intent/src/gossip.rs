@@ -1,7 +1,7 @@
 //! Intent gossip: propagation and local pool management.
 //!
 //! Intents propagate through the gossip network (Plumtree lazy-push) so that
-//! all connected wallets can attempt local matching. The IntentPool manages
+//! all connected cipherclerks can attempt local matching. The IntentPool manages
 //! the set of known intents with expiry-based garbage collection.
 //!
 //! # Privacy properties
@@ -81,7 +81,7 @@ impl std::fmt::Display for ReceiveError {
         match self {
             Self::Expired => write!(f, "intent has expired"),
             Self::Duplicate => write!(f, "intent is a duplicate"),
-            Self::OwnIntent => write!(f, "intent is from this wallet"),
+            Self::OwnIntent => write!(f, "intent is from this cclerk"),
             Self::Invalid(e) => write!(f, "validation error: {e}"),
             Self::MissingStake => write!(f, "intent lacks stake proof for gossip"),
             Self::InvalidStakeProof => {
@@ -212,7 +212,7 @@ struct StoredIntent {
 pub struct IntentPool {
     /// Active intents indexed by their content-addressed ID.
     intents: HashMap<[u8; 32], StoredIntent>,
-    /// Our wallet's held capabilities (for matching).
+    /// Our cipherclerk's held capabilities (for matching).
     held_tokens: Vec<HeldCapability>,
     /// Our anonymous commitment identity.
     our_commitment: CommitmentId,
@@ -314,12 +314,12 @@ impl IntentPool {
         current_epoch(self.current_block_height)
     }
 
-    /// Update the wallet's held capabilities (call when tokens change).
+    /// Update the cipherclerk's held capabilities (call when tokens change).
     pub fn update_held_tokens(&mut self, tokens: Vec<HeldCapability>) {
         self.held_tokens = tokens;
     }
 
-    /// Broadcast a new intent from this wallet.
+    /// Broadcast a new intent from this cclerk.
     ///
     /// Returns the intent (with computed ID) ready for gossip propagation, or an error
     /// if the intent fails validation.
@@ -495,7 +495,7 @@ impl IntentPool {
         Ok(None)
     }
 
-    /// Receive a local intent (from the wallet's own page) without stake requirement.
+    /// Receive a local intent (from the cipherclerk's own page) without stake requirement.
     ///
     /// Local intents skip the stake check but still undergo validation and rate limiting.
     pub fn receive_local_intent(

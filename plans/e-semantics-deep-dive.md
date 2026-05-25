@@ -195,7 +195,7 @@ The full E-style eventual send in pyana requires composing two primitives:
 
 ```
 1. Sender publishes Intent { kind: Need, matcher: "transfer(100) to alice" }
-2. Wallet/matcher discovers it can fulfill (has route to alice's cell)
+2. Cipherclerk/matcher discovers it can fulfill (has route to alice's cell)
 3. Fulfillment creates a ConditionalTurn:
      - Turn: Transfer { from: sender, to: alice, amount: 100 }
      - Condition: ProofCondition::LocalProof { ... } (proof of alice's acceptance)

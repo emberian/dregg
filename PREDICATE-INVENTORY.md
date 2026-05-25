@@ -217,7 +217,7 @@ unification design proposes for `WitnessedPredicate` kinds.
 | `apps/governed-namespace::routes::RoutingTable::classify` | `apps/governed-namespace/src/routes.rs:1-287` | longest-prefix match | N | N | snapshot | same |
 | `rbg::routing::Pattern → Nfa → Dfa` | `rbg/src/routing.rs:1-1346` (workspace-excluded) | full regex incl. intersection | Y (real AIR + trace gen) | Y | snapshot | same |
 | `rbg::routing::TopicFilter` | `rbg/src/routing.rs` | gossip topic patterns | (Y) via DFA AIR | (Y) | snapshot | same |
-| `intent::matcher::MatchSpec` | `intent/src/lib.rs:347-373`, `intent/src/matcher.rs` | structural Datalog over `(action, resource, app_id, …)` + `compound` AND | N | N | snapshot | wallet-local cleartext-inside |
+| `intent::matcher::MatchSpec` | `intent/src/lib.rs:347-373`, `intent/src/matcher.rs` | structural Datalog over `(action, resource, app_id, …)` + `compound` AND | N | N | snapshot | cclerk-local cleartext-inside |
 | `intent::Constraint::Custom { pred, val }` | `intent/src/lib.rs:339` | named string predicate | N | N | snapshot | matcher cleartext-inside |
 | `intent::PredicateRequirement` | `intent/src/lib.rs:179` | "fulfiller must prove `attribute ≷ threshold`" | Y (via `BridgePredicateProof`) | **Y** | snapshot dsl_hash | acceptance-inside verifier |
 
@@ -419,7 +419,7 @@ The same predicate sits at different points along multiple axes.
 
 - **Cleartext-inside.** The federation node sees every slot caveat's
   inputs (`FieldEquals`, `Monotonic`, …); see `BOUNDARIES.md §2.5`.
-  The wallet sees its own preconditions and held caps.
+  The cclerk sees its own preconditions and held caps.
 - **Commitment-inside.** External readers of `public_field_view`
   (committed fields). `BlindedSet` membership: the cell knows only a
   Poseidon2 commitment to the allow-list. Sealed cap recipient sees
@@ -715,7 +715,7 @@ why:
    (`BOUNDARIES.md §2.2 vs §2.3`). Keep separate.
 
 10. **Network / time preconditions** (`NetworkPrecondition::min_height`,
-    `valid_while: TimeRange`). Wallet-side cleartext context; no
+    `valid_while: TimeRange`). Cipherclerk-side cleartext context; no
     commitment story. Already part of `Preconditions`.
 
 **Summary:** `WitnessedPredicate` cleanly subsumes the

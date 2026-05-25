@@ -68,9 +68,9 @@ pyana namespace mount --path /services/ai/inference --descriptor my-service.json
 
     <h3>Via the SDK</h3>
 
-    <pre><code class="language-rust">use pyana_sdk::{AgentWallet, ServiceDescriptor, Effect};
+    <pre><code class="language-rust">use pyana_sdk::{AgentCipherclerk, ServiceDescriptor, Effect};
 
-let mut cclerk = AgentWallet::new();
+let mut cclerk = AgentCipherclerk::new();
 
 let descriptor = ServiceDescriptor {
     name: "inference-api".into(),
@@ -123,9 +123,9 @@ pyana intent post --need '{"type":"compute","model":"gpt4","budget":5000}'
       <li><strong>Service binding:</strong> You receive a live CapTP reference to the service cell.</li>
     </ol>
 
-    <pre><code class="language-rust">use pyana_sdk::AgentWallet;
+    <pre><code class="language-rust">use pyana_sdk::AgentCipherclerk;
 
-let mut cclerk = AgentWallet::new();
+let mut cclerk = AgentCipherclerk::new();
 
 // Resolve returns a live capability reference
 let service_ref = cclerk.resolve_service("/services/ai/inference").await?;

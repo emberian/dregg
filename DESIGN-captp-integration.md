@@ -510,7 +510,7 @@ RefCount>`. The in-memory map becomes a committed Merkle tree.
 
 End-to-end walk, showing each step's runtime + AIR + wire layer:
 
-1. **Alice exports.** Alice's wallet calls `CapTpClient::export_sturdy_ref`,
+1. **Alice exports.** Alice's cclerk calls `CapTpClient::export_sturdy_ref`,
    which builds a `TurnBuilder` with one `ActionBuilder::export_sturdy_ref`
    action targeting Alice's federation's swiss-keeper cell.
    - Runtime: `Effect::ExportSturdyRef` runs in the executor. Alice's
@@ -527,10 +527,10 @@ End-to-end walk, showing each step's runtime + AIR + wire layer:
    code, email, BLE, file. Not a wire concern; not an AIR concern.
 
 3. **Bob enlivens (potentially much later, new session).**
-   - Bob's wallet parses the URI, computes the Merkle path against Alice's
+   - Bob's cclerk parses the URI, computes the Merkle path against Alice's
      federation's current `swiss_table_root` (queried via the wire layer's
      existing read APIs).
-   - Bob's wallet sends a turn to Alice's federation targeting the
+   - Bob's cclerk sends a turn to Alice's federation targeting the
      swiss-keeper cell with `ActionBuilder::enliven_ref(target, swiss,
      presenter=Bob's strand, proof=...)`.
    - Alternative path (today): Bob sends `WireMessage::EnlivenSturdyRef`,
@@ -552,7 +552,7 @@ End-to-end walk, showing each step's runtime + AIR + wire layer:
    entry. No new AIR variant needed — this exercises the existing turn
    auth path.
 
-5. **Bob drops.** Bob's wallet (or the GC sweeper) calls
+5. **Bob drops.** Bob's cclerk (or the GC sweeper) calls
    `ActionBuilder::drop_ref(target, holder=Bob's strand, session_epoch,
    refcount_proof)`. The runtime decrements; AIR proves it.
    - Wire: the existing `DropRemoteRef` message is now produced *as a result
@@ -578,7 +578,7 @@ Alice introduces Bob to Carol.
      In the OCapN model, that authority is exactly the live ref Alice already
      holds.
 
-2. **Alice signs a handoff certificate.** Alice's wallet calls
+2. **Alice signs a handoff certificate.** Alice's cclerk calls
    `HandoffCertificate::create(introducer_key=Alice, introducer_fed=A,
    target_fed=C, target_cell=Carol's cell, recipient_pk=Bob, ..., swiss=X)`
    (`captp/src/handoff.rs:142-177`). The cert is serialised to a
@@ -596,7 +596,7 @@ Alice introduces Bob to Carol.
      `approved_handoffs_root`. This insertion is part of the same turn that
      contains the `ValidateHandoff` effect.
 
-5. **Bob redeems at Carol's federation.** Bob's wallet calls
+5. **Bob redeems at Carol's federation.** Bob's cclerk calls
    `ActionBuilder::validate_handoff(target=Carol's cell, presentation=...,
    proof=...)`.
    - Wire: Bob sends `WireMessage::PresentHandoff { presentation_bytes,
@@ -933,7 +933,7 @@ is the natural home.)
    verify the introducer signature inside the AIR. ~30k constraints per
    verification. **Recommendation: defer; off-chain-then-Merkle is
    sufficient for the federation trust model.** Revisit when single-vat
-   wallets need to verify handoffs without federation trust.
+   cipherclerks need to verify handoffs without federation trust.
 4. **Garbage collection of `approved_handoffs_root` leaves.** Leaves
    consumed on ValidateHandoff. What about expired-but-unused certs?
    **Recommendation: a periodic sweep effect (`PruneHandoffs`) that

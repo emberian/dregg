@@ -1,4 +1,4 @@
-//! Integration test for `AppWallet::sign_action`.
+//! Integration test for `AppCipherclerk::sign_action`.
 //!
 //! Lives in `tests/` (not `src/`) because the `no_unchecked.rs` grep
 //! guard fences off `Authorization::Unchecked` anywhere under `src/` —
@@ -7,13 +7,13 @@
 //! replaces the authorization with a real signature.
 
 use pyana_app_framework::{
-    Action, AgentWallet, AppWallet, Authorization, CellId, DelegationMode, symbol,
+    Action, AgentCipherclerk, AppCipherclerk, Authorization, CellId, DelegationMode, symbol,
 };
 
 #[test]
 fn sign_action_overwrites_unchecked() {
-    let sdk = AgentWallet::new();
-    let wallet = AppWallet::new(sdk, [0u8; 32]);
+    let sdk = AgentCipherclerk::new();
+    let cclerk = AppCipherclerk::new(sdk, [0u8; 32]);
     let target = CellId::from_bytes([1u8; 32]);
 
     // Start from a builder-built action with Unchecked authorization.
@@ -29,7 +29,7 @@ fn sign_action_overwrites_unchecked() {
         balance_change: None,
         witness_blobs: vec![],
     };
-    let signed = wallet.sign_action(unsigned);
+    let signed = cclerk.sign_action(unsigned);
     assert!(matches!(signed.authorization, Authorization::Signature(..)));
 
     // And it's a real non-zero signature.

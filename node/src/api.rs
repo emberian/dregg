@@ -1,6 +1,6 @@
 //! Axum HTTP API router for the pyana node.
 //!
-//! Serves a localhost-only API that the browser extension wallet talks to.
+//! Serves a localhost-only API that the browser extension cipherclerk talks to.
 //! All handlers access shared [`NodeState`] via Axum's state extraction.
 
 use std::collections::HashMap;
@@ -50,7 +50,7 @@ pub struct StatusResponse {
 }
 
 #[derive(Serialize)]
-pub struct WalletResponse {
+pub struct CipherclerkResponse {
     pub unlocked: bool,
     pub public_key: String,
     pub token_count: usize,
@@ -134,7 +134,7 @@ pub struct SubmitTurnResponse {
 // inflation undesirable and because postcard is the canonical pyana wire
 // format for binary envelopes.
 //
-// The executor's X25519 unsealer secret is derived from the node's wallet
+// The executor's X25519 unsealer secret is derived from the node's cipherclerk
 // via `AgentCipherclerk::derive_symmetric_key("pyana-turn-unsealer-v1")`.
 // The matching public key is exposed via `GET /turns/encryption-key` so a
 // sender can encrypt to this executor.
@@ -153,7 +153,7 @@ pub struct SubmitTurnResponse {
 pub struct TurnEncryptionKeyResponse {
     /// 64 hex chars — the executor's static X25519 public key.
     pub executor_x25519_public: String,
-    /// Domain-string used to derive the secret from the wallet seed.
+    /// Domain-string used to derive the secret from the cipherclerk seed.
     /// Lets verifiers reconstruct the deployment's key-derivation path.
     pub derivation_domain: String,
 }
@@ -942,16 +942,16 @@ pub fn router(
         .route("/pir/info", get(get_pir_info))
         .route("/pir/query", post(post_pir_query))
         .route(
-            "/wallet/unlock",
+            "/cipherclerk/unlock",
             post({
                 let limiter = passphrase_limiter.clone();
                 move |connect_info, state, body| {
-                    post_wallet_unlock(connect_info, state, body, limiter)
+                    post_cclerk_unlock(connect_info, state, body, limiter)
                 }
             }),
         )
         .route(
-            "/wallet/set-passphrase",
+            "/cipherclerk/set-passphrase",
             post({
                 let limiter = passphrase_limiter.clone();
                 move |connect_info, state, body| {
@@ -972,12 +972,12 @@ pub fn router(
     // Protected routes (require bearer token after passphrase is set)
     let protected_routes = Router::new()
         .route("/ws", get(handle_ws))
-        .route("/wallet", get(get_wallet))
-        .route("/wallet/authorize", post(post_authorize))
-        .route("/wallet/mint", post(post_mint))
-        .route("/wallet/attenuate", post(post_attenuate))
-        .route("/wallet/tokens", get(get_tokens))
-        .route("/wallet/receipts", get(get_receipts))
+        .route("/cipherclerk", get(get_cclerk))
+        .route("/cipherclerk/authorize", post(post_authorize))
+        .route("/cipherclerk/mint", post(post_mint))
+        .route("/cipherclerk/attenuate", post(post_attenuate))
+        .route("/cipherclerk/tokens", get(get_tokens))
+        .route("/cipherclerk/receipts", get(get_receipts))
         .route("/intents", get(get_intents).post(post_intent))
         .route("/intents/encrypted", post(post_encrypted_intent))
         .route("/intents/encrypted/search", post(post_sse_search))
@@ -1004,7 +1004,7 @@ pub fn router(
         .route("/turn/certificate", post(post_fast_path_certificate))
         // AUDIT-privacy.md §11.2 wiring: encrypted-turn submission +
         // executor public-key discovery. The submit endpoint pulls the
-        // executor's X25519 secret from the wallet, hands it to
+        // executor's X25519 secret from the cipherclerk, hands it to
         // `TurnExecutor::apply_encrypted_turn`, and returns the
         // post-commit receipt's was_encrypted bit.
         .route(
@@ -1082,14 +1082,14 @@ pub fn router(
 // Handlers
 // =============================================================================
 
-/// P2 Fix 9: Status checks store accessibility and wallet initialization.
+/// P2 Fix 9: Status checks store accessibility and cipherclerk initialization.
 async fn get_status(State(state): State<NodeState>) -> Json<StatusResponse> {
     let s = state.read().await;
 
     // Check store accessibility.
     let store_ok = s.store.latest_attested_root().is_ok();
-    // Check wallet is initialized (has a passphrase set or is unlocked).
-    let wallet_ok = s.unlocked || s.passphrase_hash.is_some();
+    // Check cipherclerk is initialized (has a passphrase set or is unlocked).
+    let cclerk_ok = s.unlocked || s.passphrase_hash.is_some();
 
     let latest_height = s
         .store
@@ -1109,7 +1109,7 @@ async fn get_status(State(state): State<NodeState>) -> Json<StatusResponse> {
     };
 
     Json(StatusResponse {
-        healthy: store_ok && wallet_ok,
+        healthy: store_ok && cclerk_ok,
         peer_count,
         latest_height,
         revocation_count,
@@ -1118,9 +1118,9 @@ async fn get_status(State(state): State<NodeState>) -> Json<StatusResponse> {
     })
 }
 
-async fn get_wallet(State(state): State<NodeState>) -> Json<WalletResponse> {
-    let ws = state.wallet_status().await;
-    Json(WalletResponse {
+async fn get_cclerk(State(state): State<NodeState>) -> Json<CipherclerkResponse> {
+    let ws = state.cclerk_status().await;
+    Json(CipherclerkResponse {
         unlocked: ws.unlocked,
         public_key: ws.public_key,
         token_count: ws.token_count,
@@ -1135,7 +1135,7 @@ async fn post_authorize(
     let s = state.read().await;
 
     let token = s
-        .wallet
+        .cclerk
         .find_token_by_id(&req.token_id)
         .ok_or(StatusCode::NOT_FOUND)?;
 
@@ -1145,7 +1145,7 @@ async fn post_authorize(
         ..Default::default()
     };
 
-    let authorized = s.wallet.verify_token(token, &auth_req);
+    let authorized = s.cclerk.verify_token(token, &auth_req);
 
     Ok(Json(AuthorizeResponse {
         authorized,
@@ -1171,7 +1171,7 @@ async fn post_mint(
     let mut root_key = [0u8; 32];
     getrandom::fill(&mut root_key).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let held = s.wallet.mint_token(&root_key, &req.service);
+    let held = s.cclerk.mint_token(&root_key, &req.service);
 
     Ok(Json(MintResponse {
         token_id: held.id().to_string(),
@@ -1190,7 +1190,7 @@ async fn post_attenuate(
     }
 
     let token = s
-        .wallet
+        .cclerk
         .find_token_by_id(&req.token_id)
         .ok_or(StatusCode::NOT_FOUND)?
         .clone();
@@ -1201,7 +1201,7 @@ async fn post_attenuate(
     };
 
     let attenuated = s
-        .wallet
+        .cclerk
         .attenuate(&token, &attenuation)
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 
@@ -1214,7 +1214,7 @@ async fn post_attenuate(
 async fn get_tokens(State(state): State<NodeState>) -> Json<Vec<TokenInfo>> {
     let s = state.read().await;
     let tokens: Vec<TokenInfo> = s
-        .wallet
+        .cclerk
         .tokens()
         .iter()
         .map(|t| TokenInfo {
@@ -1228,7 +1228,7 @@ async fn get_tokens(State(state): State<NodeState>) -> Json<Vec<TokenInfo>> {
 
 async fn get_receipts(State(state): State<NodeState>) -> Json<Vec<ReceiptInfo>> {
     let s = state.read().await;
-    let chain = s.wallet.receipt_chain();
+    let chain = s.cclerk.receipt_chain();
     let receipts: Vec<ReceiptInfo> = chain
         .iter()
         .rev()
@@ -1266,12 +1266,12 @@ async fn post_submit_turn(
     }
 
     // F-P1-3: the prior code accepted `agent` from the request body and signed
-    // it with the operator's wallet, allowing a confused-deputy attack where the
+    // it with the operator's cipherclerk, allowing a confused-deputy attack where the
     // caller targets a victim cell's c-list with the operator's signature.
-    // Mirror the MCP path: derive the agent cell from the wallet's pubkey and
+    // Mirror the MCP path: derive the agent cell from the cipherclerk's pubkey and
     // ignore the body's value (we still parse it for error reporting).
     let _body_agent = hex_decode(&req.agent).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let agent_bytes = pyana_cell::CellId::derive_raw(&s.wallet.public_key().0, &[0u8; 32]).0;
+    let agent_bytes = pyana_cell::CellId::derive_raw(&s.cclerk.public_key().0, &[0u8; 32]).0;
     let turn = Turn {
         agent: CellId(agent_bytes),
         nonce: req.nonce,
@@ -1293,7 +1293,7 @@ async fn post_submit_turn(
     };
 
     // Sign the turn.
-    let signed = s.wallet.sign_turn(&turn);
+    let signed = s.cclerk.sign_turn(&turn);
     let turn_hash_bytes = turn.hash();
     let turn_hash = hex_encode(&turn_hash_bytes);
 
@@ -1322,7 +1322,7 @@ async fn post_submit_turn(
                 }
             }
 
-            s.wallet.append_receipt(receipt);
+            s.cclerk.append_receipt(receipt);
 
             // Push committed event into the ring buffer for REST polling.
             let current_height = s
@@ -1388,9 +1388,9 @@ async fn post_submit_turn(
 }
 
 /// Domain string used to derive the executor's X25519 unsealer secret from
-/// the wallet seed via `AgentCipherclerk::derive_symmetric_key`. Stable
+/// the cipherclerk seed via `AgentCipherclerk::derive_symmetric_key`. Stable
 /// across deployments — a single node always presents the same public key
-/// for a given wallet, which is required so senders can cache the recipient
+/// for a given cipherclerk, which is required so senders can cache the recipient
 /// key across reconnects.
 const TURN_UNSEALER_DOMAIN: &str = "pyana-turn-unsealer-v1";
 
@@ -1405,7 +1405,7 @@ async fn get_turn_encryption_key(
     if !s.unlocked {
         return Err(StatusCode::FORBIDDEN);
     }
-    let secret = s.wallet.derive_symmetric_key(TURN_UNSEALER_DOMAIN);
+    let secret = s.cclerk.derive_symmetric_key(TURN_UNSEALER_DOMAIN);
     let public = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(secret));
     Ok(Json(TurnEncryptionKeyResponse {
         executor_x25519_public: hex_encode(public.as_bytes()),
@@ -1414,7 +1414,7 @@ async fn get_turn_encryption_key(
 }
 
 /// POST /turns/submit-encrypted — accept a postcard-encoded
-/// `pyana_turn::EncryptedTurn` envelope, decrypt with the wallet-derived
+/// `pyana_turn::EncryptedTurn` envelope, decrypt with the cipherclerk-derived
 /// X25519 unsealer secret, and apply via
 /// `TurnExecutor::apply_encrypted_turn`. AUDIT-privacy.md §11.2: closes
 /// the "encryption claim unreachable from production" gap.
@@ -1454,9 +1454,9 @@ async fn post_submit_encrypted_turn(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    // Derive the executor's unsealer secret from the wallet. Held in a
+    // Derive the executor's unsealer secret from the cipherclerk. Held in a
     // local for the lifetime of this handler only.
-    let sealer_secret = s.wallet.derive_symmetric_key(TURN_UNSEALER_DOMAIN);
+    let sealer_secret = s.cclerk.derive_symmetric_key(TURN_UNSEALER_DOMAIN);
 
     let executor = pyana_turn::TurnExecutor::new(pyana_turn::ComputronCosts::default());
 
@@ -1485,7 +1485,7 @@ async fn post_submit_encrypted_turn(
 
             let turn_hash = hex_encode(&turn_hash_bytes);
             let was_encrypted = receipt.was_encrypted;
-            s.wallet.append_receipt(receipt);
+            s.cclerk.append_receipt(receipt);
 
             drop(s);
 
@@ -1615,7 +1615,7 @@ fn hash_passphrase(passphrase: &str) -> (String, [u8; 32]) {
 }
 
 /// P1 Fix 4: Rate-limited passphrase unlock endpoint.
-async fn post_wallet_unlock(
+async fn post_cclerk_unlock(
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     State(state): State<NodeState>,
     Json(req): Json<UnlockRequest>,
@@ -2179,7 +2179,7 @@ async fn post_fast_path_lock(
         .unwrap_or(0);
 
     // Use the node's public key as the validator signing key.
-    let validator_key = s.wallet.public_key().0;
+    let validator_key = s.cclerk.public_key().0;
 
     // Decode the agent's Ed25519 signature over turn_hash (P1-6).
     let agent_sig_bytes = match hex_decode_var(&req.agent_signature) {
@@ -2311,7 +2311,7 @@ async fn post_fast_path_certificate(
     match result {
         pyana_turn::TurnResult::Committed { receipt, .. } => {
             let hash_hex = hex_encode(&receipt.turn_hash);
-            s.wallet.append_receipt(receipt);
+            s.cclerk.append_receipt(receipt);
             drop(s);
             state.emit(NodeEvent::Receipt {
                 hash: hash_hex.clone(),
@@ -2413,7 +2413,7 @@ async fn post_resolve_conditional(
     State(state): State<NodeState>,
     Json(req): Json<ResolveConditionalRequest>,
 ) -> Result<Json<ResolveConditionalResponse>, StatusCode> {
-    // Require wallet to be unlocked for conditional resolution.
+    // Require cipherclerk to be unlocked for conditional resolution.
     {
         let s = state.read().await;
         if !s.unlocked {
@@ -2509,7 +2509,7 @@ async fn post_resolve_conditional(
                         }
                     }
                     let turn_hash = hex_encode(&receipt.turn_hash);
-                    s.wallet.append_receipt(receipt);
+                    s.cclerk.append_receipt(receipt);
                     drop(s);
                     state.emit(NodeEvent::Receipt {
                         hash: turn_hash.clone(),
@@ -2661,7 +2661,7 @@ async fn post_atomic_proposal(
     s.expire_stale_proposals();
 
     let node_id = s.silo_id;
-    let signing_key = s.wallet.gossip_signing_key().to_bytes();
+    let signing_key = s.cclerk.gossip_signing_key().to_bytes();
     let costs = pyana_turn::ComputronCosts::default();
 
     // F-P1-4: build participant key map. Prior code used (id, id) which only
@@ -2975,7 +2975,7 @@ async fn post_evaluate_proposal(
 
     // Build a Participant from the node's local identity and ledger.
     let node_id = s.silo_id;
-    let signing_key = s.wallet.gossip_signing_key().to_bytes();
+    let signing_key = s.cclerk.gossip_signing_key().to_bytes();
     let cell_id = pyana_cell::CellId(node_id);
 
     let mut participant =
@@ -3541,7 +3541,7 @@ pub struct NodeDischargeResponse {
 /// POST /api/discharge — issue a discharge macaroon from this node's gateway.
 ///
 /// The node acts as a discharge gateway for its own federation's tokens.
-/// The shared key is derived from the wallet's signing key using BLAKE3 KDF
+/// The shared key is derived from the cipherclerk's signing key using BLAKE3 KDF
 /// with domain "pyana-discharge-gateway-v1".
 async fn post_discharge(
     State(state): State<NodeState>,
@@ -3571,8 +3571,8 @@ async fn post_discharge(
     // actual replay prevention. Previously, a fresh gateway was created per
     // request, making the replay set useless (it was dropped immediately).
     if s.discharge_gateway.is_none() {
-        let gateway_key = s.wallet.derive_symmetric_key("pyana-discharge-gateway-v1");
-        let location = format!("pyana-node://{}", hex_encode(&s.wallet.public_key().0));
+        let gateway_key = s.cclerk.derive_symmetric_key("pyana-discharge-gateway-v1");
+        let location = format!("pyana-node://{}", hex_encode(&s.cclerk.public_key().0));
         let mut gateway = pyana_macaroon::DischargeGateway::new(gateway_key, location);
         // Default evaluator: require proof to prevent accidental open gateways.
         gateway.add_evaluator(Box::new(pyana_macaroon::ProofRequiredEvaluator));
@@ -3768,7 +3768,7 @@ async fn post_make_sovereign(
     }
 
     // Compute a state commitment from the cell ID (deterministic for the API response).
-    // The full state commitment is computed by the wallet SDK and submitted via
+    // The full state commitment is computed by the cipherclerk SDK and submitted via
     // /cells/register with the proper sovereign workflow.
     let commitment = blake3::derive_key("pyana-sovereign-commitment-v1", &cell_id_bytes);
 
@@ -4111,8 +4111,8 @@ async fn post_queue_allocate(
         hasher.update(vk.as_bytes());
     }
     // Add entropy from the node's public key to make queue IDs unique per node.
-    let wallet = &s.wallet;
-    hasher.update(&wallet.public_key().0);
+    let cclerk = &s.cclerk;
+    hasher.update(&cclerk.public_key().0);
     let latest_height = s
         .store
         .latest_attested_root()
@@ -4502,27 +4502,27 @@ mod tests {
         assert!(!IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)).is_loopback());
     }
 
-    /// F-P1-3: derive the wallet's agent cell id deterministically from a
+    /// F-P1-3: derive the cipherclerk's agent cell id deterministically from a
     /// pubkey; verify it differs from a victim cell id even when the caller
     /// passes the victim id as the body's `agent`.
     #[test]
-    fn audit_f_p1_3_wallet_agent_overrides_body() {
+    fn audit_f_p1_3_cclerk_agent_overrides_body() {
         // The handler derives:
-        //   `pyana_cell::CellId::derive_raw(&wallet.public_key().0, &[0u8;32])`
+        //   `pyana_cell::CellId::derive_raw(&cipherclerk.public_key().0, &[0u8;32])`
         // The body's `agent` is discarded. If a victim's `cell_id` is supplied
-        // as the body's agent, the derived id MUST differ (so the wallet's
+        // as the body's agent, the derived id MUST differ (so the cipherclerk's
         // signature can't be tricked into authorizing a victim's c-list).
-        let wallet_pk = [0x77u8; 32];
+        let cclerk_pk = [0x77u8; 32];
         let victim_cell = [0x99u8; 32];
 
-        let derived = pyana_cell::CellId::derive_raw(&wallet_pk, &[0u8; 32]).0;
+        let derived = pyana_cell::CellId::derive_raw(&cclerk_pk, &[0u8; 32]).0;
         assert_ne!(
             derived, victim_cell,
-            "agent must be derived from wallet pubkey, not victim cell id"
+            "agent must be derived from cipherclerk pubkey, not victim cell id"
         );
 
-        // Sanity: the derivation is a function of the wallet pubkey.
-        let derived2 = pyana_cell::CellId::derive_raw(&wallet_pk, &[0u8; 32]).0;
+        // Sanity: the derivation is a function of the cipherclerk pubkey.
+        let derived2 = pyana_cell::CellId::derive_raw(&cclerk_pk, &[0u8; 32]).0;
         assert_eq!(derived, derived2);
     }
 
@@ -4557,13 +4557,13 @@ mod tests {
     }
 
     /// F-P1-7: the federation ID used by `post_bearer_auth` is `s.silo_id`,
-    /// which is stable across runs (derived from the wallet's pubkey). Prior
+    /// which is stable across runs (derived from the cipherclerk's pubkey). Prior
     /// code used `known_federation_keys.first()` whose ordering is a HashSet
     /// artifact and is NOT stable. We verify the derivation of silo_id is
     /// deterministic.
     #[test]
     fn audit_f_p1_7_silo_id_is_stable() {
-        // silo_id is `blake3::hash(wallet.public_key().as_bytes())` (see
+        // silo_id is `blake3::hash(cipherclerk.public_key().as_bytes())` (see
         // state.rs:400). The same pubkey ALWAYS produces the same silo_id.
         let pk = [0xCDu8; 32];
         let id1 = *blake3::hash(&pk).as_bytes();

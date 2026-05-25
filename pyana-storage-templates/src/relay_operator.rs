@@ -37,7 +37,7 @@
 //! - `slash` — `bond_amount` decreases iff `dispute_count`
 //!   advanced (encoded as `BoundedBy { index: 0, witness_index: 7 }`).
 //!   The accompanying `Effect::Transfer` to a governance treasury is
-//!   the wallet-side composition; the cell program enforces the
+//!   the cclerk-side composition; the cell program enforces the
 //!   "no-drain-without-dispute" invariant.
 //!
 //! ## What this replaces
@@ -58,9 +58,9 @@
 //!   `EmitEvent` data is the carrier, optionally encrypted).
 
 use pyana_app_framework::{
-    Action, AppWallet, AuthRequired, CapTarget, CapTemplate, CellId, CellMode, ChildVkStrategy,
-    Effect, Event, FactoryDescriptor, FieldConstraint, FieldElement, InspectorDescriptor,
-    StarbridgeAppContext, StateConstraint, canonical_program_vk, symbol,
+    Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellId, CellMode,
+    ChildVkStrategy, Effect, Event, FactoryDescriptor, FieldConstraint, FieldElement,
+    InspectorDescriptor, StarbridgeAppContext, StateConstraint, canonical_program_vk, symbol,
 };
 use pyana_cell::predicate::{InputRef, WitnessedPredicate};
 use pyana_cell::program::{AuthorizedSet, CellProgram, TransitionCase, TransitionGuard};
@@ -347,7 +347,7 @@ pub fn relay_operator_factory_descriptor() -> FactoryDescriptor {
 
 /// Build the on-ledger [`Action`] recording a `register_inbox`.
 pub fn build_register_inbox_action(
-    wallet: &AppWallet,
+    cclerk: &AppCipherclerk,
     relay_cell: CellId,
     new_hosted_inbox_root: FieldElement,
     inbox_cell_id: [u8; 32],
@@ -367,17 +367,17 @@ pub fn build_register_inbox_action(
         },
     ];
 
-    wallet.make_action(relay_cell, "register_inbox", effects)
+    cclerk.make_action(relay_cell, "register_inbox", effects)
 }
 
 /// Build the on-ledger [`Action`] recording a `relay` dispatch.
 ///
 /// The caller is responsible for attaching the message bytes
-/// (witness 0) and the DFA proof bytes (witness 1) via the wallet's
+/// (witness 0) and the DFA proof bytes (witness 1) via the cipherclerk's
 /// witness-attach API; this builder only composes the [`Effect`]s
 /// and the method symbol.
 pub fn build_relay_action(
-    wallet: &AppWallet,
+    cclerk: &AppCipherclerk,
     relay_cell: CellId,
     new_bytes_relayed: FieldElement,
     target_inbox: [u8; 32],
@@ -398,16 +398,16 @@ pub fn build_relay_action(
         },
     ];
 
-    wallet.make_action(relay_cell, "relay", effects)
+    cclerk.make_action(relay_cell, "relay", effects)
 }
 
 /// Build the on-ledger [`Action`] recording a `slash`.
 ///
 /// The accompanying `Effect::Transfer` from the relay cell to the
-/// governance treasury is the wallet-side composition; this template
+/// governance treasury is the cclerk-side composition; this template
 /// produces the state-transition effects (bond + dispute counter).
 pub fn build_slash_action(
-    wallet: &AppWallet,
+    cclerk: &AppCipherclerk,
     relay_cell: CellId,
     new_bond_amount: FieldElement,
     new_dispute_count: FieldElement,
@@ -433,7 +433,7 @@ pub fn build_slash_action(
         },
     ];
 
-    wallet.make_action(relay_cell, "slash", effects)
+    cclerk.make_action(relay_cell, "slash", effects)
 }
 
 // =============================================================================
@@ -490,16 +490,16 @@ pub fn register(ctx: &StarbridgeAppContext) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyana_app_framework::{AgentWallet, EmbeddedExecutor};
+    use pyana_app_framework::{AgentCipherclerk, EmbeddedExecutor};
 
-    fn test_wallet() -> AppWallet {
-        AppWallet::new(AgentWallet::new(), [42u8; 32])
+    fn test_cclerk() -> AppCipherclerk {
+        AppCipherclerk::new(AgentCipherclerk::new(), [42u8; 32])
     }
 
     fn test_context() -> StarbridgeAppContext {
-        let wallet = test_wallet();
-        let executor = EmbeddedExecutor::new(&wallet, "default");
-        StarbridgeAppContext::new(wallet, executor)
+        let cclerk = test_cclerk();
+        let executor = EmbeddedExecutor::new(&cclerk, "default");
+        StarbridgeAppContext::new(cclerk, executor)
     }
 
     fn test_cell() -> CellId {
@@ -609,19 +609,19 @@ mod tests {
 
     #[test]
     fn register_inbox_action_shape() {
-        let wallet = test_wallet();
+        let cclerk = test_cclerk();
         let cell = test_cell();
-        let action = build_register_inbox_action(&wallet, cell, blake3_field(b"h"), [9u8; 32]);
+        let action = build_register_inbox_action(&cclerk, cell, blake3_field(b"h"), [9u8; 32]);
         assert_eq!(action.method, symbol("register_inbox"));
         assert_eq!(action.effects.len(), 2);
     }
 
     #[test]
     fn relay_action_shape() {
-        let wallet = test_wallet();
+        let cclerk = test_cclerk();
         let cell = test_cell();
         let action = build_relay_action(
-            &wallet,
+            &cclerk,
             cell,
             u64_field(1024),
             [11u8; 32],
@@ -633,10 +633,10 @@ mod tests {
 
     #[test]
     fn slash_action_shape() {
-        let wallet = test_wallet();
+        let cclerk = test_cclerk();
         let cell = test_cell();
         let action = build_slash_action(
-            &wallet,
+            &cclerk,
             cell,
             u64_field(500),
             u64_field(1),

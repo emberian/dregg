@@ -2,7 +2,7 @@
 //! turn execution, and proof generation.
 //!
 //! This example shows the core workflow an agent goes through:
-//! 1. Create a wallet (identity)
+//! 1. Create a cipherclerk (identity)
 //! 2. Mint a root authorization token
 //! 3. Attenuate it for a specific task
 //! 4. Delegate to a sub-agent
@@ -10,21 +10,21 @@
 //! 6. Sub-agent executes a turn using the capability
 //! 7. Print the full audit trail
 
-use pyana_sdk::{AgentRuntime, AgentWallet, Attenuation, AuthRequest, Effect};
+use pyana_sdk::{AgentCipherclerk, AgentRuntime, Attenuation, AuthRequest, Effect};
 use std::sync::{Arc, RwLock};
 
 fn main() {
     println!("=== Pyana Agent SDK Demo ===\n");
 
     // -------------------------------------------------------------------------
-    // Step 1: Create an agent wallet with a fresh Ed25519 identity.
+    // Step 1: Create an agent cipherclerk with a fresh Ed25519 identity.
     // -------------------------------------------------------------------------
-    let mut wallet = AgentWallet::new();
-    println!("[1] Created agent wallet");
-    println!("    Public key: {}", wallet.public_key());
+    let mut cclerk = AgentCipherclerk::new();
+    println!("[1] Created agent cclerk");
+    println!("    Public key: {}", cclerk.public_key());
     println!(
         "    Cell ID (compute domain): {}\n",
-        wallet.cell_id("compute")
+        cclerk.cell_id("compute")
     );
 
     // -------------------------------------------------------------------------
@@ -35,7 +35,7 @@ fn main() {
         getrandom::fill(&mut k).unwrap();
         k
     };
-    let root_token = wallet.mint_token(&root_key, "compute");
+    let root_token = cclerk.mint_token(&root_key, "compute");
     println!("[2] Minted root token");
     println!("    Label: {}", root_token.label());
     println!("    Service: {}", root_token.service());
@@ -47,7 +47,7 @@ fn main() {
         action: Some("execute".into()),
         ..Default::default()
     };
-    assert!(wallet.verify_token(&root_token, &unrestricted_request));
+    assert!(cclerk.verify_token(&root_token, &unrestricted_request));
     println!("    [OK] Root token verifies for unrestricted compute access\n");
 
     // -------------------------------------------------------------------------
@@ -58,7 +58,7 @@ fn main() {
         ..Default::default()
     };
 
-    let restricted_token = wallet.attenuate(&root_token, &app_restrictions).unwrap();
+    let restricted_token = cclerk.attenuate(&root_token, &app_restrictions).unwrap();
     println!("[3] Attenuated token for monitoring read-only");
     println!("    Label: {}", restricted_token.label());
     println!("    ID: {}", restricted_token.id());
@@ -70,7 +70,7 @@ fn main() {
         action: Some("read".into()),
         ..Default::default()
     };
-    let verified = wallet.verify_token(&restricted_token, &monitoring_request);
+    let verified = cclerk.verify_token(&restricted_token, &monitoring_request);
     println!(
         "    Verification for app=monitoring, action=read: {}\n",
         verified
@@ -84,8 +84,8 @@ fn main() {
         ..Default::default()
     };
 
-    let wallet_arc = Arc::new(RwLock::new(wallet));
-    let runtime = AgentRuntime::new(wallet_arc.clone(), "compute");
+    let cclerk_arc = Arc::new(RwLock::new(cclerk));
+    let runtime = AgentRuntime::new(cclerk_arc.clone(), "compute");
     println!("[4] Created agent runtime");
     println!("    Domain: {}", runtime.domain());
     println!("    Cell ID: {}", runtime.cell_id());
@@ -160,7 +160,7 @@ fn main() {
     println!("=== Audit Trail ===");
     println!(
         "  Parent agent: {}",
-        wallet_arc.read().unwrap().public_key()
+        cclerk_arc.read().unwrap().public_key()
     );
     println!("  Sub-agent:    {}", sub_agent.public_key());
     println!("  Domain:       {}", runtime.domain());

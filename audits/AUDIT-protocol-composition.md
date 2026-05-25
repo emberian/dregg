@@ -20,7 +20,7 @@ Layer stack (top down):
 apps/* (nameservice, privacy-voting, escrow, orderbook,
         prediction-market, gallery, ...)
    │
-   ├── pyana-sdk (AgentWallet, CapTpClient)
+   ├── pyana-sdk (AgentCipherclerk, CapTpClient)
    │       │
    │       ├── pyana-turn (Turn, Effect, TurnExecutor, ActionBuilder,
    │       │              TurnReceipt, WitnessedReceipt, EventualRef)
@@ -68,9 +68,9 @@ directly. The pattern is consistent.
   `build_register_action` calls `ActionBuilder::new(...).signed_by([0u8; 64]).effect_emit_event(...).effect_set_field(...).build()`
   (`apps/nameservice/src/effects.rs:58-66`). The `signed_by` argument is
   a zero-byte placeholder (line 56): the action shape demands a 64-byte
-  signature, but the app does not have a wallet handle to actually
+  signature, but the app does not have a cclerk handle to actually
   sign with. The module-level note (lines 19-23) defers to "when the
-  federation HTTP service gains a wallet integration." That integration
+  federation HTTP service gains a cclerk integration." That integration
   *is* the SDK.
 
 - `apps/privacy-voting/src/effects.rs:21-24` — identical pattern.
@@ -98,7 +98,7 @@ directly. The pattern is consistent.
   symbol`, `ActionBuilder`, `CallForest, CallTree`, `Turn` *all
   directly from pyana_turn*. The gallery essentially re-implements the
   turn-construction pipeline inside its settlement module rather than
-  routing through `AgentWallet::make_turn`. Line 163 builds a
+  routing through `AgentCipherclerk::make_turn`. Line 163 builds a
   `Turn { ... }` struct literal carrying `Effect::RefundEscrow`.
 
 ### Contract apps are assuming
@@ -111,7 +111,7 @@ plus `pyana-app-framework`; the framework crate has accreted the
 "authoring layer" the SDK aspired to be (`SDK-REVIEW.md` §App-side
 pain points). The SDK is currently routed through only for
 **client-of-an-app** flows (e.g. `apps/privacy-voting/src/eligibility.rs`
-uses `pyana_sdk::wallet::AgentWallet` to attenuate a token — a
+uses `pyana_sdk::cipherclerk::AgentCipherclerk` to attenuate a token — a
 client-side operation).
 
 ### Where it breaks
@@ -134,13 +134,13 @@ client-side operation).
   1000 from `apps/orderbook/src/escrow.rs:26`). Adding a field to
   `Effect::CreateEscrow` requires touching every app constructing it.
 
-- **GAP:** SDK has `wallet.sign_action(action, federation_id)`
-  (`sdk/src/wallet.rs:2403`), `wallet.make_action(target, method,
-  effects, federation_id)` (`sdk/src/wallet.rs:2440`), and
-  `wallet.make_turn(action)` (`sdk/src/wallet.rs:2475`), but no app
-  uses them. Apps cannot, today, because they do not hold a wallet
+- **GAP:** SDK has `cclerk.sign_action(action, federation_id)`
+  (`sdk/src/cipherclerk.rs:2403`), `cclerk.make_action(target, method,
+  effects, federation_id)` (`sdk/src/cipherclerk.rs:2440`), and
+  `cclerk.make_turn(action)` (`sdk/src/cipherclerk.rs:2475`), but no app
+  uses them. Apps cannot, today, because they do not hold a cclerk
   reference — they hold an HTTP request and a server state. Closing
-  this seam requires server-side wallet plumbing (`SDK-REVIEW.md`
+  this seam requires server-side cclerk plumbing (`SDK-REVIEW.md`
   Tier-0 helper).
 
 - **GOOD:** `apps/privacy-voting/src/effects.rs:114-125` and
@@ -155,7 +155,7 @@ client-side operation).
 
 ## Seam 2 — SDK → Turn
 
-**What the seam should be:** `AgentWallet` constructs `Turn` values
+**What the seam should be:** `AgentCipherclerk` constructs `Turn` values
 that the executor will accept on the first try. Invariants the SDK
 must enforce locally so they're not the executor's problem at submit
 time: agent matches signer, nonce is monotonic, previous_receipt_hash
@@ -163,13 +163,13 @@ points to the actual chain tail, forest_hash is computed (or zeroed
 and computed in `compute_turn_bytes`).
 
 **What it actually is:** the SDK has two parallel turn-construction
-paths. The minor path (`wallet.make_turn`) is the new Tier-0 helper
+paths. The minor path (`cclerk.make_turn`) is the new Tier-0 helper
 from `SDK-REVIEW.md`. The major path (`AgentRuntime::execute`) builds
 turns manually.
 
-### `wallet.make_turn` (newly added)
+### `cclerk.make_turn` (newly added)
 
-`sdk/src/wallet.rs:2475-2506`:
+`sdk/src/cipherclerk.rs:2475-2506`:
 
 ```rust
 pub fn make_turn(&self, action: pyana_turn::action::Action) -> Turn {
@@ -202,23 +202,23 @@ pub fn make_turn_for(&self, domain: &str, action: pyana_turn::action::Action) ->
 
 | Invariant | Enforced where | Notes |
 |---|---|---|
-| `agent` matches signing identity | `make_turn` line 2488: `self.cell_id(domain)` | Sound — the agent is derived from the wallet's pubkey, not user input. |
-| `forest_hash` and `tree.hash` populated | **NOT enforced.** Both zeroed (lines 2485, 2493). | **GAP:** the wallet relies on `compute_turn_bytes` (`sdk/src/wallet.rs:3832`) re-computing the forest hash on the fly for signing, and on the executor recomputing it again on receipt. The struct literal carries `[0u8; 32]` in two places that get recomputed downstream. This is *correct* given the SDK's `compute_turn_bytes` explicitly calls `turn.call_forest.compute_hash()`, but it is structurally fragile: a different caller path (e.g. someone submitting the `make_turn` output directly via wire without going through `sign_turn`) would ship a zeroed forest_hash. |
+| `agent` matches signing identity | `make_turn` line 2488: `self.cell_id(domain)` | Sound — the agent is derived from the cipherclerk's pubkey, not user input. |
+| `forest_hash` and `tree.hash` populated | **NOT enforced.** Both zeroed (lines 2485, 2493). | **GAP:** the cclerk relies on `compute_turn_bytes` (`sdk/src/cipherclerk.rs:3832`) re-computing the forest hash on the fly for signing, and on the executor recomputing it again on receipt. The struct literal carries `[0u8; 32]` in two places that get recomputed downstream. This is *correct* given the SDK's `compute_turn_bytes` explicitly calls `turn.call_forest.compute_hash()`, but it is structurally fragile: a different caller path (e.g. someone submitting the `make_turn` output directly via wire without going through `sign_turn`) would ship a zeroed forest_hash. |
 | `previous_receipt_hash` is current tail | Line 2497 — pulls from `self.receipt_chain.last()`. | Sound. **GOOD:** the SDK is the source of truth for the local chain. |
-| `nonce` is correct | **NOT enforced.** Hard-coded to 0. | **GAP:** `make_turn` always returns a turn with `nonce: 0`. The caller must mutate the returned `Turn` to set the right nonce (or accept that only the first turn of a wallet ever submits successfully). `AgentRuntime::execute` does the right thing at line 257-262 (it owns the nonce counter); `make_turn` does not, so any direct user of `make_turn` is on their own. |
-| Action authorization matches signer | Action signed by `sign_action` (line 2403) bound to `federation_id`. Wallet's signing key signs. | Sound *for action authorization*. The Turn-level `SignedTurn` then signs the canonical message via `sign_turn` (line 2361). |
-| Turn-hash domain v3 covers all load-bearing fields | `compute_turn_bytes` lines 3823-3878 | **PARTIAL.** Lines 3866-3877 carry an explicit `AUDIT[P2-10]` comment noting that `conservation_proof`, `sovereign_witnesses`, `execution_proof`, `execution_proof_cell`, `execution_proof_new_commitment`, `custom_program_proofs` are **NOT** covered by the turn-hash signing message. The auditing comment is honest about this being a Stage 9 deferral. **GAP** — the SDK trusts that nobody in the network swaps these fields between the wallet's signing and the executor's reading. The threat model is "wire-side bit-flips and bit-rot," not "active in-flight attacker." |
+| `nonce` is correct | **NOT enforced.** Hard-coded to 0. | **GAP:** `make_turn` always returns a turn with `nonce: 0`. The caller must mutate the returned `Turn` to set the right nonce (or accept that only the first turn of a cclerk ever submits successfully). `AgentRuntime::execute` does the right thing at line 257-262 (it owns the nonce counter); `make_turn` does not, so any direct user of `make_turn` is on their own. |
+| Action authorization matches signer | Action signed by `sign_action` (line 2403) bound to `federation_id`. Cipherclerk's signing key signs. | Sound *for action authorization*. The Turn-level `SignedTurn` then signs the canonical message via `sign_turn` (line 2361). |
+| Turn-hash domain v3 covers all load-bearing fields | `compute_turn_bytes` lines 3823-3878 | **PARTIAL.** Lines 3866-3877 carry an explicit `AUDIT[P2-10]` comment noting that `conservation_proof`, `sovereign_witnesses`, `execution_proof`, `execution_proof_cell`, `execution_proof_new_commitment`, `custom_program_proofs` are **NOT** covered by the turn-hash signing message. The auditing comment is honest about this being a Stage 9 deferral. **GAP** — the SDK trusts that nobody in the network swaps these fields between the cipherclerk's signing and the executor's reading. The threat model is "wire-side bit-flips and bit-rot," not "active in-flight attacker." |
 
 ### `AgentRuntime::execute` — the older path
 
 `sdk/src/runtime.rs:215-307`. Builds the Turn manually (lines 272-287)
 rather than going through `make_turn`. This is the path the
-nameservice (and most servers) use indirectly via wallet-bound
+nameservice (and most servers) use indirectly via cclerk-bound
 `AgentRuntime`. It correctly:
 - Computes signing message via `TurnExecutor::compute_signing_message`
   (line 234) — same canonical form executor uses.
 - Owns the nonce counter (lines 257-262).
-- Reads `previous_receipt_hash` from the wallet's chain (lines 264-270).
+- Reads `previous_receipt_hash` from the cipherclerk's chain (lines 264-270).
 - Constructs `Turn { ... }` and runs `self.executor.execute(&turn, &mut ledger)` directly.
 
 **GOOD:** this is the canonical "SDK builds turns that the executor
@@ -541,9 +541,9 @@ turn; `body_hash()` is what the QC signs.
 ### GAP — the lifting seam is unimplemented
 
 `TurnReceipt` is produced by `TurnExecutor::execute`
-(`turn/src/executor.rs:2598`), appended to the wallet
-(`AgentWallet::append_receipt`,
-`sdk/src/wallet.rs::append_receipt`), and surfaced over MCP
+(`turn/src/executor.rs:2598`), appended to the cclerk
+(`AgentCipherclerk::append_receipt`,
+`sdk/src/cipherclerk.rs::append_receipt`), and surfaced over MCP
 (`node/src/mcp.rs:2666`). But it does not get wrapped into a
 `FederationReceipt` anywhere in the current code.
 
@@ -972,7 +972,7 @@ In order of grep-frequency and TODO-tracked-ness:
 - **Cross-reference seam 1:** apps reaching past the SDK to
   build `EmitEvent` actions also reach past the SDK to build the
   dedicated effects once those land. Both seams want the same
-  fix: a wallet-bound action-construction surface that maps
+  fix: a cclerk-bound action-construction surface that maps
   app-level operations ("register name", "place order") to
   one-or-many `Effect` variants without exposing the enum
   shape.
@@ -1029,10 +1029,10 @@ Weaknesses:
   (`wire/src/server.rs:2458-2507`) accept-and-discard. The seam
   exists at the type level; the wire delivers nothing.
 - **Apps reach past the SDK.** Six apps, 122 raw `use pyana_*`
-  import lines, zero `use pyana_sdk::wallet::AgentWallet` in
+  import lines, zero `use pyana_sdk::cipherclerk::AgentCipherclerk` in
   the effect-construction paths. The SDK has the helpers
   (`sign_action`, `make_action`, `make_turn`) but the apps can't
-  use them because they don't hold a wallet at the right layer
+  use them because they don't hold a cclerk at the right layer
   (the framework crate intercepts the boundary).
 
 ---
@@ -1061,10 +1061,10 @@ to land the fix."
    Highest soundness gain. Estimated: substantial — this is the
    first turn-level AIR — but the per-cell substrate is ready.
 
-3. **Seam 1 — SDK helpers used by apps.** Plumb a wallet handle
+3. **Seam 1 — SDK helpers used by apps.** Plumb a cclerk handle
    into the app-framework's action-construction path so apps can
-   call `wallet.make_action(target, method, effects, federation_id)`
-   and `wallet.make_turn(action)` instead of holding zero-byte
+   call `cclerk.make_action(target, method, effects, federation_id)`
+   and `cclerk.make_turn(action)` instead of holding zero-byte
    placeholders. This closes the `[0u8; 64]` regression vector
    across nameservice and privacy-voting (and the literal
    `Effect::*` struct construction across orderbook and gallery).

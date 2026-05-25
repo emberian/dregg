@@ -75,7 +75,7 @@ audits/AUDIT-node.md                        audits/AUDIT-nullifiers.md
 audits/AUDIT-offline-mode.md                audits/AUDIT-privacy.md
 audits/AUDIT-protocol-composition.md        audits/AUDIT-sdk-rest.md
 audits/AUDIT-sovereign-witness-teeth.md     audits/AUDIT-trace-crate.md
-audits/AUDIT-turn-executor.md               audits/AUDIT-wallet.md
+audits/AUDIT-turn-executor.md               audits/AUDIT-cclerk.md
 audits/AUDIT-wasm.md                        audits/BACKWATER-CRATES-AUDIT.md
 audits/CELL-CRATE-REVIEW.md                 audits/MCP-AUDIT.md
 audits/REVIEW-effect-vm.md                  audits/SDK-PYANASCRIPT-AUDIT.md

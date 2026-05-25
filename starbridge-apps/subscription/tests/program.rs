@@ -16,7 +16,7 @@
 //!    `Immutable` under `consume` and `Monotonic` under `publish`).
 //! 5. Decrement head or tail → rejected (`MonotonicSequence`).
 //! 6. Write past capacity → rejected (the head's exact +1 increment
-//!    plus the cap check at the wallet layer; the message_root must
+//!    plus the cap check at the cclerk layer; the message_root must
 //!    advance, so the queue's logical capacity is structurally bound).
 //! 7. Operation-scoping: publish op doesn't advance tail; consume op
 //!    doesn't advance head.

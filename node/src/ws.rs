@@ -48,11 +48,11 @@ const WS_UNLOCK_WINDOW_SECS: u64 = 60;
 enum ClientMessage {
     /// Subscribe to specific event topics.
     Subscribe { topics: Vec<Topic> },
-    /// Authorize a token (same semantics as POST /wallet/authorize).
+    /// Authorize a token (same semantics as POST /cipherclerk/authorize).
     Authorize { request: AuthorizeWsRequest },
     /// Broadcast an intent to other connected clients.
     BroadcastIntent { intent: serde_json::Value },
-    /// Unlock the wallet (accepts any non-empty passphrase for now).
+    /// Unlock the cipherclerk (accepts any non-empty passphrase for now).
     Unlock { passphrase: String },
 }
 
@@ -221,12 +221,12 @@ async fn handle_socket(socket: WebSocket, state: NodeState) {
                                 }
                             }
                             Ok(ClientMessage::BroadcastIntent { intent }) => {
-                                // Issue 8 (MEDIUM): Reject intent broadcasts when wallet is locked.
+                                // Issue 8 (MEDIUM): Reject intent broadcasts when cipherclerk is locked.
                                 {
                                     let s = state.read().await;
                                     if !s.unlocked {
                                         let resp = ServerMessage::Error {
-                                            message: "wallet is locked".to_string(),
+                                            message: "cipherclerk is locked".to_string(),
                                         };
                                         let json = serde_json::to_string(&resp).unwrap();
                                         if sender.send(Message::Text(json.into())).await.is_err() {
@@ -461,7 +461,7 @@ async fn handle_authorize(state: &NodeState, request: AuthorizeWsRequest) -> Ser
     use pyana_sdk::AuthRequest;
 
     let s = state.read().await;
-    let token = match s.wallet.find_token_by_id(&request.token_id) {
+    let token = match s.cclerk.find_token_by_id(&request.token_id) {
         Some(t) => t,
         None => {
             return ServerMessage::Error {
@@ -476,7 +476,7 @@ async fn handle_authorize(state: &NodeState, request: AuthorizeWsRequest) -> Ser
         ..Default::default()
     };
 
-    let authorized = s.wallet.verify_token(token, &auth_req);
+    let authorized = s.cclerk.verify_token(token, &auth_req);
 
     ServerMessage::AuthorizeResult {
         authorized,

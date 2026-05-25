@@ -62,7 +62,7 @@
 //!   host's responsibility — see `apps/identity/server.rs` for the legacy
 //!   shape; the starbridge-host imports this crate's [`register`] and
 //!   wires it via `AppServer`.
-//! - Not a wallet. The holder's credentials live wherever the host
+//! - Not a cclerk. The holder's credentials live wherever the host
 //!   chooses to store them (inbox queues, `pyana-storage`, etc.).
 //! - Not a federation registry. Issuer-membership Merkle trees are
 //!   maintained outside this crate; the host wires them through

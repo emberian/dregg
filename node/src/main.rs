@@ -1,9 +1,9 @@
 //! `pyana-node`: The federation node daemon.
 //!
 //! This binary runs the backend that:
-//! - Hosts an AgentWallet with token management
+//! - Hosts an AgentCipherclerk with token management
 //! - Participates in federation consensus (attested roots)
-//! - Serves a localhost HTTP API for the browser extension wallet
+//! - Serves a localhost HTTP API for the browser extension cipherclerk
 //! - Syncs state with federation peers
 
 mod api;
@@ -490,7 +490,7 @@ async fn run_node(
 
         // In solo mode, initialize the SoloConsensusState with the node's signing key.
         if is_solo_mode {
-            let signing_key = s.wallet.gossip_signing_key().to_bytes();
+            let signing_key = s.cclerk.gossip_signing_key().to_bytes();
             s.solo_consensus = Some(pyana_federation::solo::SoloConsensusState::new(signing_key));
             info!("federation mode: solo (committee of one) — no quorum required");
         } else {
@@ -599,7 +599,7 @@ async fn run_node(
     {
         tracing::warn!(
             %addr,
-            "binding to all interfaces — faucet, wallet, bridge endpoints are exposed to the network"
+            "binding to all interfaces — faucet, cipherclerk, bridge endpoints are exposed to the network"
         );
     }
 
@@ -722,7 +722,7 @@ async fn run_mcp(data_dir: &str, peers: Vec<String>) {
     };
 
     // MCP stdio mode runs as a single-user CLI — no remote attacker scenario
-    // applies. Start the wallet unlocked so the tools can proceed without an
+    // applies. Start the cipherclerk unlocked so the tools can proceed without an
     // explicit unlock step. (HTTP mode keeps the passphrase requirement.)
     {
         let mut s = node_state.write().await;

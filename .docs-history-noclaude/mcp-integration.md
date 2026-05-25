@@ -54,7 +54,7 @@ Protocol flow:
 
 | Tool | Description |
 |------|-------------|
-| `pyana_create_agent` | Create a new agent identity with wallet |
+| `pyana_create_agent` | Create a new agent identity with cclerk |
 | `pyana_authorize` | Prove authorization for an action (ZK proof) |
 | `pyana_check_capabilities` | List all held capabilities/tokens |
 

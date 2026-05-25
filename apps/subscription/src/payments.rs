@@ -410,15 +410,15 @@ impl BatchExecutor for PaymentExecutor {
 mod tests {
     use super::*;
     use crate::creator::{Creator, Tier};
-    use crate::subscriber::{SubscriberRegistry, deterministic_wallet};
+    use crate::subscriber::{SubscriberRegistry, deterministic_cclerk};
     use pyana_sdk::Attenuation;
     use pyana_token::BudgetSpec;
 
-    fn wallet(seed: u8) -> pyana_sdk::AgentCipherclerk {
+    fn cclerk(seed: u8) -> pyana_sdk::AgentCipherclerk {
         let mut s = [0u8; 32];
         s[0] = seed;
         s[31] = seed.wrapping_mul(13);
-        deterministic_wallet(s)
+        deterministic_cclerk(s)
     }
 
     fn install_debit_auth(
@@ -450,9 +450,9 @@ mod tests {
     #[test]
     fn debit_moves_balance() {
         let mut reg = SubscriberRegistry::new();
-        let mut alice = wallet(1);
-        let bob = wallet(2);
-        let mut executor_w = wallet(3);
+        let mut alice = cclerk(1);
+        let bob = cclerk(2);
+        let mut executor_w = cclerk(3);
 
         install_debit_auth(&mut reg, &mut alice, &mut executor_w, 1, 1000);
 
@@ -480,9 +480,9 @@ mod tests {
     #[test]
     fn debit_wrong_asset_rejected() {
         let mut reg = SubscriberRegistry::new();
-        let mut alice = wallet(4);
-        let bob = wallet(5);
-        let mut executor_w = wallet(6);
+        let mut alice = cclerk(4);
+        let bob = cclerk(5);
+        let mut executor_w = cclerk(6);
 
         // Authorize ONLY asset 1.
         install_debit_auth(&mut reg, &mut alice, &mut executor_w, 1, 1000);
@@ -514,9 +514,9 @@ mod tests {
     #[test]
     fn debit_exceeds_limit_rejected() {
         let mut reg = SubscriberRegistry::new();
-        let mut alice = wallet(7);
-        let bob = wallet(8);
-        let mut executor_w = wallet(9);
+        let mut alice = cclerk(7);
+        let bob = cclerk(8);
+        let mut executor_w = cclerk(9);
 
         // Authorize asset 1 up to 100 per epoch.
         install_debit_auth(&mut reg, &mut alice, &mut executor_w, 1, 100);
@@ -547,9 +547,9 @@ mod tests {
     #[test]
     fn debit_cumulative_limit_enforced() {
         let mut reg = SubscriberRegistry::new();
-        let mut alice = wallet(10);
-        let bob = wallet(11);
-        let mut executor_w = wallet(12);
+        let mut alice = cclerk(10);
+        let bob = cclerk(11);
+        let mut executor_w = cclerk(12);
 
         install_debit_auth(&mut reg, &mut alice, &mut executor_w, 1, 100);
 
@@ -592,9 +592,9 @@ mod tests {
     #[test]
     fn debit_quota_resets_across_epochs() {
         let mut reg = SubscriberRegistry::new();
-        let mut alice = wallet(13);
-        let bob = wallet(14);
-        let mut executor_w = wallet(15);
+        let mut alice = cclerk(13);
+        let bob = cclerk(14);
+        let mut executor_w = cclerk(15);
 
         install_debit_auth(&mut reg, &mut alice, &mut executor_w, 1, 100);
 
@@ -623,8 +623,8 @@ mod tests {
     #[test]
     fn debit_no_auth_rejected() {
         let reg = SubscriberRegistry::new();
-        let alice = wallet(16);
-        let bob = wallet(17);
+        let alice = cclerk(16);
+        let bob = cclerk(17);
 
         let mut exec = PaymentExecutor::new();
         exec.ledger.set(alice.public_key(), 1, 500);
@@ -648,9 +648,9 @@ mod tests {
     #[test]
     fn debit_insufficient_balance_rejected() {
         let mut reg = SubscriberRegistry::new();
-        let mut alice = wallet(18);
-        let bob = wallet(19);
-        let mut executor_w = wallet(20);
+        let mut alice = cclerk(18);
+        let bob = cclerk(19);
+        let mut executor_w = cclerk(20);
 
         install_debit_auth(&mut reg, &mut alice, &mut executor_w, 1, 1000);
         let mut exec = PaymentExecutor::new();
@@ -681,9 +681,9 @@ mod tests {
     #[test]
     fn schedule_collect_apply_round_trip() {
         let mut reg = SubscriberRegistry::new();
-        let mut alice = wallet(21);
-        let creator_w = wallet(22);
-        let mut executor_w = wallet(23);
+        let mut alice = cclerk(21);
+        let creator_w = cclerk(22);
+        let mut executor_w = cclerk(23);
         reg.register_subscriber(alice.public_key(), [9u8; 32]);
 
         install_debit_auth(&mut reg, &mut alice, &mut executor_w, 1, 1000);

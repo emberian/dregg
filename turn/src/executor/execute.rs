@@ -104,14 +104,14 @@ impl TurnExecutor {
         // `previous_receipt_hash` must match the executor's stored head for
         // this agent. Genesis turns (the agent's first) must use `None`.
         //
-        // REVIEW[wallet-coord]: AUDIT-wallet.md P3-6 reports that
+        // REVIEW[cclerk-coord]: AUDIT-cclerk.md P3-6 reports that
         // `build_authorized_turn`, `allocate_queue`, `enqueue_message`,
         // `dequeue_message`, and `atomic_queue_tx` all hardcode
         // `previous_receipt_hash: None`. After this fix, every non-first turn
         // from those paths will be rejected with `ReceiptChainMismatch`. The
-        // wallet must be updated to plumb the prior receipt hash (track per
+        // cclerk must be updated to plumb the prior receipt hash (track per
         // agent, populate on build, advance on commit). This check should NOT
-        // be relaxed; the wallet is the side that needs to catch up.
+        // be relaxed; the cclerk is the side that needs to catch up.
         if let Err(e) = self.check_previous_receipt_hash(&turn.agent, turn.previous_receipt_hash) {
             return TurnResult::Rejected {
                 reason: e,

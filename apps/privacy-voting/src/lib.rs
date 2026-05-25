@@ -29,7 +29,7 @@
 //! - The tally is computed from the reveal log; any observer with the log can
 //!   recompute it.
 //!
-//! [`DelegatedToken`]: pyana_sdk::wallet::DelegatedToken
+//! [`DelegatedToken`]: pyana_sdk::cipherclerk::DelegatedToken
 
 pub mod ballot;
 pub mod effects;

@@ -717,7 +717,7 @@ modes are equivalent in soundness *for the same trace*.
 
 (b) **Chain-IVC** via `pyana_circuit::ivc` and the
 `IvcBuilder`-driven `append_receipt` hook in
-`sdk/src/cipherclerk.rs:1800` (wallet-local; not federation-side).
+`sdk/src/cipherclerk.rs:1800` (cclerk-local; not federation-side).
 This folds successive receipts' state transitions into a single
 running IVC commitment. The fold is *best-effort* — if it fails the
 receipt is still appended (cipherclerk.rs:1829).
@@ -751,14 +751,14 @@ For (a):
   the verifier, not in the variant itself.
 
 For (b):
-- The IVC state is **wallet-local**. There is no
+- The IVC state is **cclerk-local**. There is no
   `TurnReceipt.ivc_commitment` field; the running IVC commitment
-  isn't published anywhere on-chain. Two honest wallets running the
+  isn't published anywhere on-chain. Two honest cipherclerks running the
   same chain compute the same IVC commitment, but no verifier
   consults it.
-- On `append_receipt`, the wallet *mutates* `receipt.previous_receipt_hash`
+- On `append_receipt`, the cclerk *mutates* `receipt.previous_receipt_hash`
   to point at its own chain head (cipherclerk.rs:1797). If the
-  wallet's chain has diverged from the executor's (e.g., wallet
+  cipherclerk's chain has diverged from the executor's (e.g., cclerk
   missed a receipt), the appended receipt's hash will not match
   what the executor recorded. This is a **drift vector** worth
   calling out (§9).
@@ -976,7 +976,7 @@ A receipt stream + genesis lets you reconstruct:
    which is stored in `WitnessedReceipt` — a separate, opt-in,
    typically prover-local shape. The persistence claim implicitly
    means "WitnessedReceipt chain" not "TurnReceipt chain"; but most
-   of the codebase (executor, wallet, federation, blocklace) operates
+   of the codebase (executor, cclerk, federation, blocklace) operates
    on bare `TurnReceipt`. The `WitnessedReceipt` lift happens only
    at the prove site (node/src/mcp.rs) and is opt-in per-turn.
 8. **Ledger root preimages.** The receipt commits to `pre_state_hash`
@@ -1073,19 +1073,19 @@ Two patterns mixed: `Hasher::new()` + manual domain tag (Turn, Receipt)
 vs. `Hasher::new_derive_key(label)` (Federation body, Archive,
 DeathCert). And one outlier (`WitnessBundle`) uses postcard.
 
-### 9.5 Wallet rewriting `previous_receipt_hash`
+### 9.5 Cipherclerk rewriting `previous_receipt_hash`
 
 `cipherclerk.rs:1797`:
 ```rust
 receipt.previous_receipt_hash = self.receipt_chain.last().map(|r| r.receipt_hash());
 ```
 
-The wallet **overwrites** the receipt's `previous_receipt_hash` to
-the wallet's view of the chain head before storing it. If the
-executor and wallet disagree (network partition, wallet missed a
-turn), the wallet's stored receipt has a *different* `receipt_hash`
-than the executor's. The wallet's chain then diverges from the
-federation's. A verifier reading the wallet's chain sees a valid
+The cclerk **overwrites** the receipt's `previous_receipt_hash` to
+the cipherclerk's view of the chain head before storing it. If the
+executor and cclerk disagree (network partition, cclerk missed a
+turn), the cipherclerk's stored receipt has a *different* `receipt_hash`
+than the executor's. The cipherclerk's chain then diverges from the
+federation's. A verifier reading the cipherclerk's chain sees a valid
 chain that is *not* the federation's chain.
 
 The intent is recovery from out-of-order delivery, but the mechanism
@@ -1096,12 +1096,12 @@ hash mismatch is non-trivial, or surface a divergence signal.
 
 executor.rs:11832 / 12036: if a submitter omits `previous_receipt_hash`,
 the executor auto-fills from its `last_receipt_hash` map. Combined
-with §9.5's wallet rewrite, the chain head is determined by
+with §9.5's cclerk rewrite, the chain head is determined by
 *whichever side has fresher information*. This is not necessarily
 unsound, but the rule "the submitter signs over the actual chain
-head" is bent — the auto-fill happens after sign time. (Wallet
+head" is bent — the auto-fill happens after sign time. (Cipherclerk
 signature compatibility is preserved because `Turn::hash` covers
-`previous_receipt_hash` after auto-fill, but the wallet's signed
+`previous_receipt_hash` after auto-fill, but the cipherclerk's signed
 turn hash from `compute_turn_bytes` may not match — this is a
 documented separation at turn.rs:262-268.)
 
@@ -1271,7 +1271,7 @@ on the roadmap per PROTOCOL-CATEGORICAL-ANALYSIS §4.4. **Effort:
 large**, work in flight.
 
 **P3-3. Receipt-of-receipt chain-IVC bound into receipts themselves.**
-(This study §6.2.b.) Today the IVC commitment is wallet-local. Bound
+(This study §6.2.b.) Today the IVC commitment is cclerk-local. Bound
 into the receipt or the AttestedRoot, it becomes a verifiable
 "running fold over the agent's history" without re-walking the chain.
 **Effort: medium-to-large.**
@@ -1349,7 +1349,7 @@ audit.
   canonical_ledger_root, append_receipt sites)
 - `node/src/api.rs`, `node/src/mcp.rs` (chain length, receipt-chain
   query, append sites)
-- `sdk/src/cipherclerk.rs` (Wallet.append_receipt, receipt_chain,
+- `sdk/src/cipherclerk.rs` (Cipherclerk.append_receipt, receipt_chain,
   IVC chain)
 - `protocol-tests/src/invariants/receipt_chain.rs`,
   `turn/tests/proptest_invariants.rs` (chain-causality invariants)

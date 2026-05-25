@@ -26,7 +26,7 @@ The agent substrate provides a "home for AI"---not a physical location but the s
 
 == The two visions
 
-The Silver Vision---*integration-complete, pre-algebraic, every loop closed*---is operational today. CapTP messages produce real Turns on the receiving cell's ledger. Three-party handoff is constructible from the SDK. `PipelinedMsg` actually delivers. `DropMessage` actually emits over the wire. `FederationReceipt` is produced by the live node path. `AttestedRoot` is bound to a blocklace `block_id` plus finality round. $"federation_id"$ is a commitment to the committee. The trustless intent engine uses real Shamir-over-GF(256) + ChaCha20-Poly1305 threshold decryption, wired through `node::state::trustless_intent_engine`. Apps run as pure userspace through `AppWallet` with real signing keys. The Silver bench (`SILVER-VISION-E2E-VERIFICATION.md`) is the spec against which integration is judged: *two federations, one bearer cap, one CapTP delivery, one Turn at the receiver, one receipt, one `AttestedRoot`, one `WitnessedReceipt` chain export, one independent verifier verdict.*
+The Silver Vision---*integration-complete, pre-algebraic, every loop closed*---is operational today. CapTP messages produce real Turns on the receiving cell's ledger. Three-party handoff is constructible from the SDK. `PipelinedMsg` actually delivers. `DropMessage` actually emits over the wire. `FederationReceipt` is produced by the live node path. `AttestedRoot` is bound to a blocklace `block_id` plus finality round. $"federation_id"$ is a commitment to the committee. The trustless intent engine uses real Shamir-over-GF(256) + ChaCha20-Poly1305 threshold decryption, wired through `node::state::trustless_intent_engine`. Apps run as pure userspace through `AppCipherclerk` with real signing keys. The Silver bench (`SILVER-VISION-E2E-VERIFICATION.md`) is the spec against which integration is judged: *two federations, one bearer cap, one CapTP delivery, one Turn at the receiver, one receipt, one `AttestedRoot`, one `WitnessedReceipt` chain export, one independent verifier verdict.*
 
 The Golden Vision---*full distributed-semantics algebraic constraint, a folded DAG of attestations*---is the eventual north star. Today's per-cell receipt chain linearizes one cell's history; Stage 7-$gamma$.2 Phase 1 compresses one turn's bilateral view; the full Golden Vision is folded mesh: the whole graph of attested events up to "now" provable as one statement. Two alternative outer recursive layers (fix the verifier AIR for transparent end-to-end soundness, or commit to Kimchi/Pickles as a production-grade non-transparent outer layer) are live in the codebase.
 
@@ -49,9 +49,9 @@ The system is operational. What works today:
 - DFA routing as first-class userspace caveat; `RouteTarget::Userspace { kind, payload }` dispatch; governance-bound atomic table swaps.
 - Real threshold decryption: `federation::threshold_decrypt` (Shamir over GF(256) + ChaCha20-Poly1305) consumed by `intent::trustless` via `node::state::trustless_intent_engine`.
 - Backend-agnostic constraint DSL compiling to multiple proof systems; three production provers (custom STARK, Plonky3, Kimchi/Pickles) with STARK-in-Pickles wrapping skeleton.
-- AppWallet (six-method handle) + EmbeddedExecutor + StarbridgeAppContext lets apps run as pure userspace; no `[0u8; 64]` stubs, no `Authorization::Unchecked` placeholders, no app-specific `Effect` variants.
+- AppCipherclerk (six-method handle) + EmbeddedExecutor + StarbridgeAppContext lets apps run as pure userspace; no `[0u8; 64]` stubs, no `Authorization::Unchecked` placeholders, no app-specific `Effect` variants.
 - Working multi-node Blocklace consensus with Cordial Miners and Constitutional Consensus.
-- Browser extension wallet + Studio in-browser runtime (`wasm/src/runtime.rs`).
+- Browser extension cclerk + Studio in-browser runtime (`wasm/src/runtime.rs`).
 - Promise pipelining with `EventualRef` resolution and three-party introduction with $gamma$.2 trilateral binding.
 - Stealth addresses, Pedersen commitments with Bulletproof range proofs, Dandelion++ stem routing, delay pool with dummy traffic.
 - EVM bridge with SP1/Groth16 ($tilde$200K gas), Midnight attestation bridge (Level 1+1.5), Mina bridge designed.
@@ -59,7 +59,7 @@ The system is operational. What works today:
 - Two-federation end-to-end demo (`demo/two-ai-handoff/`) with real STARK proofs and the standalone `pyana-verifier` accepting from cold.
 - CapTP with sturdy refs, distributed GC, three-party handoff, pipelining, store-and-forward.
 - Service mesh, governed namespaces, petname nameservice, storage economics.
-- `pyana` CLI (cell/turn/cap/wallet/federation/register-federation/namespace/storage/directory/proof/route/doctor); standalone `pyana-verifier` (verify, bilateral-pair, replay-chain, verify-bundle).
+- `pyana` CLI (cell/turn/cap/cipherclerk/federation/register-federation/namespace/storage/directory/proof/route/doctor); standalone `pyana-verifier` (verify, bilateral-pair, replay-chain, verify-bundle).
 
 What remains:
 

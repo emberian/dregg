@@ -1,6 +1,6 @@
 # pyana-discord-bot
 
-Discord bot for the pyana devnet — custodial wallets, transfers,
+Discord bot for the pyana devnet — custodial cipherclerks, transfers,
 explorer, presence attestation, CapTP, governance, queues, names,
 federation.
 
@@ -9,34 +9,34 @@ toplevel (`/discord-bot`), as a peer of `node/`, `sdk/`, `app-framework/`
 etc. — it is not an app, it is a *consumer of* the canonical pyana
 SDK surface.
 
-## Wallet handle
+## Cipherclerk handle
 
-Per-user wallets are backed by the canonical
-[`pyana_app_framework::AppWallet`](../app-framework/src/wallet.rs) over
-[`pyana_sdk::AgentWallet`](../sdk/src/wallet.rs). Each Discord user is
+Per-user cipherclerks are backed by the canonical
+[`pyana_app_framework::AppCipherclerk`](../app-framework/src/cipherclerk.rs) over
+[`pyana_sdk::AgentCipherclerk`](../sdk/src/cipherclerk.rs). Each Discord user is
 mapped to a deterministic Ed25519 identity:
 
 ```
 seed = BLAKE3_derive_key("pyana-discord-bot-v1", bot_secret || discord_user_id)
-agent = AgentWallet::from_key_bytes(seed)
-wallet = AppWallet::new(agent, federation_id)
+agent = AgentCipherclerk::from_key_bytes(seed)
+cclerk = AppCipherclerk::new(agent, federation_id)
 ```
 
 The old in-crate `DerivedWallet` (BLAKE3-only "public key", bespoke
-cell-id domain) is gone. See `src/wallet.rs` module docs for the one
+cell-id domain) is gone. See `src/cipherclerk.rs` module docs for the one
 remaining transition gap: the legacy devnet wire format still expects
 a BLAKE3-MAC `signature` field on the `/api/turns/submit`,
 `/api/gallery/auctions/<id>/bid`, and `/api/identity/credentials/issue`
 endpoints. Until those endpoints accept canonical signed `Action`s,
-`UserWallet::legacy_secret` and `wallet::sign_legacy` provide the
-BLAKE3-MAC path; the rest of the bot uses the canonical `AppWallet`
+`UserCipherclerk::legacy_secret` and `cclerk::sign_legacy` provide the
+BLAKE3-MAC path; the rest of the bot uses the canonical `AppCipherclerk`
 surface (`make_action`, `sign_action`, `make_turn`).
 
 ## Slash commands
 
 ### Active
 
-- **Wallet**: `/wallet create | balance | address | export`
+- **Cipherclerk**: `/cipherclerk create | balance | address | export`
 - **Transfer**: `/send <@user> <amount>`, `/tip <@user> <amount>`
 - **Gallery** (apps/gallery): `/gallery list | auctions | bid | mybids`
 - **Identity** (apps/identity): `/credential issue | verify | list`
@@ -54,7 +54,7 @@ surface (`make_action`, `sign_action`, `make_turn`).
 - **Governance** (apps/governed-namespace): `/gov-propose | vote |
   status | routes`
 - **Names** (apps/nameservice): `/name-register | resolve | whois`
-- **Federation**: `/setup-federation`, `/link-wallet`, `/unlink-wallet`
+- **Federation**: `/setup-federation`, `/link-cclerk`, `/unlink-cclerk`
 
 ### Retired (apps deleted from workspace)
 

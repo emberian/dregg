@@ -128,7 +128,7 @@ Documented at `effect_vm.rs:1045-1063`; the AIR comment promises range checks ar
 
 1. **Witness-vs-constraint confusion is real and active.** The kimchi backend's missing copy constraints (P0-2) are the cleanest instance: the gate coefficients look correct in isolation, but the surrounding plumbing that would make them load-bearing is absent.
 2. **PI binding without algebraic backing** (P0-1, P1-4, P1-5): the same anti-pattern of "set value V in the prover's PI; the boundary constraint says aux[i] == PI[V]; but aux[i] is otherwise unconstrained" appears multiple times in `effect_vm.rs`.
-3. **Truncation across crate boundaries** (P1-1): stored 32-byte commitments become 4 bytes of binding. The wallet audit already flagged this on its side; the circuit side confirms the same truncation in `executor.rs::commitment_to_babybear`.
+3. **Truncation across crate boundaries** (P1-1): stored 32-byte commitments become 4 bytes of binding. The cclerk audit already flagged this on its side; the circuit side confirms the same truncation in `executor.rs::commitment_to_babybear`.
 4. **Aspirational comments / aspirational names**: `ProofTier::Production` is returned for `kimchi_native_tier()` despite the soundness gaps. The `MerkleStarkAir` deprecation message is correct but call sites haven't moved. Comments like "SOUNDNESS FIX" (good) sit next to comments admitting "Full soundness of one-hot enforcement requires copy constraints" with no follow-through.
 5. **Custom effects**: documented as security-by-verifier-cooperation, which is honest but fragile.
 

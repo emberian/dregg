@@ -71,7 +71,7 @@ nav { display: flex; gap: 0.5rem; }
 .nav-link:hover { color: var(--text-primary); background: var(--bg-hover); }
 .nav-link.active { color: var(--accent); background: rgba(139, 124, 247, 0.1); }
 
-.wallet-status {
+.cclerk-status {
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -83,7 +83,7 @@ nav { display: flex; gap: 0.5rem; }
     transition: border-color 0.2s;
 }
 
-.wallet-status:hover { border-color: var(--accent); }
+.cclerk-status:hover { border-color: var(--accent); }
 
 .dot { width: 8px; height: 8px; border-radius: 50%; }
 .dot.connected { background: var(--success); }

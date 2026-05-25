@@ -385,7 +385,7 @@ This is an optimization for the outer verification layer (federation-side or on-
 
 3. **Soundness interaction with IVC**: If non-revocation proofs are folded into an IVC chain (via Nova/Protogalaxy), the accumulator verification constraints need to be IVC-friendly. The degree-2 constraints are ideal for folding.
 
-4. **Prover knowledge requirement**: The prover must know their ancestors' hashes (to compute h_i) AND the accumulator witnesses (w_i, v_i). These must be stored in the wallet. Current Merkle approach requires storing O(log N) siblings; accumulator requires O(1) per ancestor. This is a storage improvement.
+4. **Prover knowledge requirement**: The prover must know their ancestors' hashes (to compute h_i) AND the accumulator witnesses (w_i, v_i). These must be stored in the cclerk. Current Merkle approach requires storing O(log N) siblings; accumulator requires O(1) per ancestor. This is a storage improvement.
 
 5. **Quantum resistance**: The polynomial-evaluation accumulator's security relies on the difficulty of finding roots of a high-degree polynomial at a specific evaluation point. This is information-theoretic (Schwartz-Zippel), not computational. It is quantum-safe.
 

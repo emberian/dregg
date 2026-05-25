@@ -199,7 +199,7 @@ The Effect VM uses single BabyBear elements for:
 
 #### Attack Scenario: Nullifier Collision
 
-With ~46,340 notes created, birthday paradox gives 50% chance of a nullifier collision in the 31-bit space. An adversary with a moderate-sized wallet could:
+With ~46,340 notes created, birthday paradox gives 50% chance of a nullifier collision in the 31-bit space. An adversary with a moderate-sized cclerk could:
 1. Create many notes, recording their blake3 nullifiers
 2. Find two notes whose blake3 nullifiers share the same first 4 bytes (mod p)
 3. Spend note A (nullifier recorded in-circuit as BabyBear X)
@@ -489,7 +489,7 @@ The system already partially does this:
 | Issue | File | Impact |
 |---|---|---|
 | `hash_to_bb` single-element truncation | `turn/src/executor.rs:843` | 31-bit collision on nullifiers/obligations |
-| Same pattern in SDK | `sdk/src/wallet.rs:3580` | Same |
+| Same pattern in SDK | `sdk/src/cipherclerk.rs:3580` | Same |
 | Effect VM single-element identifiers | `circuit/src/effect_vm.rs:329-369` | All security IDs at 31-bit |
 
 ### P1 (High, Next Sprint)
@@ -556,5 +556,5 @@ The system already partially does this:
 | `cell/src/cell.rs:239` | Storage | No | OK (dual system) |
 | `cell/src/note.rs:163` | Storage | No | OK (dual system) |
 | `sdk/src/embed.rs` | Integrity | No | OK |
-| `sdk/src/wallet.rs:3580` | Identifier | Yes (1 elem!) | **CRITICAL** |
+| `sdk/src/cipherclerk.rs:3580` | Identifier | Yes (1 elem!) | **CRITICAL** |
 | `apps/orderbook/src/circuit.rs:554` | Identity | Yes (1 elem!) | **HIGH** |

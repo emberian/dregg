@@ -5,7 +5,7 @@
 //! - **Recipient identity key**: each subscriber publishes a 32-byte X25519 *receive
 //!   public key* (`recv_pubkey`) when they subscribe. The corresponding 32-byte
 //!   X25519 *receive private key* (`recv_privkey`) is held ONLY by the subscriber
-//!   (in their wallet, derived from their mnemonic, etc.). The server never sees
+//!   (in their cclerk, derived from their mnemonic, etc.). The server never sees
 //!   the private key.
 //! - **Authority model**: anyone who knows `recv_pubkey` can encrypt content
 //!   *to* the subscriber (one-way). Only the holder of `recv_privkey` can
@@ -157,7 +157,7 @@ pub fn decrypt_with(recv_privkey: &[u8; 32], ciphertext: &[u8]) -> Result<Vec<u8
 
 /// Derive a subscriber's X25519 public key from their 32-byte private key.
 ///
-/// Convenience for test wiring: in production, the subscriber's wallet derives
+/// Convenience for test wiring: in production, the subscriber's cclerk derives
 /// the X25519 keypair from their mnemonic and publishes only the pubkey.
 pub fn pubkey_from_privkey(recv_privkey: &[u8; 32]) -> [u8; 32] {
     let secret = StaticSecret::from(*recv_privkey);

@@ -72,7 +72,7 @@ shim. Five things go wrong from there:
    `Effect::TopicSubscribe`. Then `Effect::BountyPost`,
    `Effect::BountyClaim` for bounties. Each new app proposes new
    effects; each new effect needs an AIR row, a cost-table entry, a
-   wallet wrapper, an executor branch. The effect surface bloats; the
+   cclerk wrapper, an executor branch. The effect surface bloats; the
    AIR's column count climbs; the constitution that names effects
    gets harder to govern.
 5. **The constraint vocabulary is the right shape; the home is
@@ -105,14 +105,14 @@ inbox sequencing, blinded-spend correctness, relay quota. New
 storage primitives plug in by *declaring a new composition of existing
 predicates* (or, in the BlindedQueue case, registering one new
 `vk_hash`-keyed `WitnessedPredicate` verifier). No new Effects, no
-new AIR row, no new wallet wrapper.
+new AIR row, no new cclerk wrapper.
 
 The migration that follows from this:
 
 - Each storage primitive becomes a **factory** (`FactoryDescriptor`)
   that declares the slot layout + `state_constraints` field
   (`cell/src/factory.rs:180-192` already supports this).
-- App code uses the **existing** `createFromFactory` extension-wallet
+- App code uses the **existing** `createFromFactory` extension-cclerk
   method (`extension/src/page.ts` — `STARBRIDGE-APPS-PLAN.md §1.3`)
   to instantiate the cell.
 - App code uses the **existing** `Effect::SetField`, `Effect::EmitEvent`,
@@ -164,7 +164,7 @@ constraints declaring the schema).**
 - `creation_budget: Option<u64>`: per-epoch cell-mint cap.
 
 The descriptor is content-addressed and inspectable. A starbridge-app
-asking the wallet to `createFromFactory(inbox_factory_vk, ...)` is
+asking the cclerk to `createFromFactory(inbox_factory_vk, ...)` is
 asking for "make me a cell that satisfies *this published contract*."
 
 **Step 2. Author the cell-program (slot layout + state constraints +
@@ -188,7 +188,7 @@ and unit tests for adversarial state transitions.
 This effect already exists (`turn/src/action.rs:625-634`), is wired
 into the executor (`turn/src/executor.rs:7100-7125`), has full AIR
 support (`circuit/src/effect_vm.rs:864-880`), and is exposed via the
-extension wallet's `createFromFactory` method
+extension cipherclerk's `createFromFactory` method
 (`extension/src/page.ts`, `STARBRIDGE-APPS-PLAN.md §1.3`). The app
 code is:
 
@@ -200,7 +200,7 @@ const inboxCellId = await window.pyana.createFromFactory(
 );
 ```
 
-No new wallet API. No new effect.
+No new cclerk API. No new effect.
 
 **Step 4. App operates on the instance via existing Effects.**
 
@@ -208,7 +208,7 @@ The operations are *compositions of existing effects under a turn*:
 
 ```rust
 // CapInbox send (replaces POST /inbox/send)
-let action = app_wallet.make_action(
+let action = app_cclerk.make_action(
     inbox_cell,
     "send",
     vec![
@@ -398,7 +398,7 @@ pub fn inbox_factory_descriptor() -> FactoryDescriptor {
 }
 ```
 
-The descriptor is what the wallet's `createFromFactory` consumes; the
+The descriptor is what the cipherclerk's `createFromFactory` consumes; the
 constitution publishes the `INBOX_FACTORY_VK` so any starbridge-app
 producing an inbox cell uses the same shape.
 
@@ -411,7 +411,7 @@ let payload_commitment = poseidon2(&payload);
 let new_head = old_head + 1;
 let new_ring_root = update_ring_root(old_ring_root, new_head, payload_commitment);
 
-app_wallet.make_action(
+app_cclerk.make_action(
     inbox_cell,
     "send",
     vec![
@@ -439,7 +439,7 @@ the capacity bound.
 let new_tail = old_tail + 1;
 let new_ring_root = remove_from_ring(old_ring_root, new_tail);
 
-app_wallet.make_action(
+app_cclerk.make_action(
     inbox_cell,
     "dequeue",
     vec![
@@ -476,7 +476,7 @@ top (as subscription already does with ChaCha20-Poly1305).
 #### What it replaces
 
 - `storage/src/inbox.rs` — most becomes thin re-exports:
-  - `CapInbox::new` → wallet `createFromFactory(INBOX_FACTORY_VK, ...)`.
+  - `CapInbox::new` → cclerk `createFromFactory(INBOX_FACTORY_VK, ...)`.
   - `CapInbox::receive` / `receive_at` → `Effect::SetField(0, head+1) + Effect::SetField(7, new_root) + Effect::EmitEvent("inbox.sent")`.
   - `CapInbox::dequeue` / `read_next` → `Effect::SetField(1, tail+1) + Effect::SetField(7, new_root) + Effect::EmitEvent("inbox.dequeued")`.
   - `CapInbox::status` → `cell.state.public_field_view()` (slots 0, 1, 2).
@@ -484,7 +484,7 @@ top (as subscription already does with ChaCha20-Poly1305).
   becomes a thin shim that translates `POST /send` into a signed
   `Action` blob and posts it to the executor.
 - `apps/subscription/src/delivery.rs:138` — `receive_at` call becomes
-  a wallet `make_action` call. The framework gap noted in the
+  a cclerk `make_action` call. The framework gap noted in the
   comment ("CapInbox should grow a way to return the message body
   inline") is solved by the `EmitEvent` carrying the payload
   commitment, with the body fetched out-of-band by content hash
@@ -779,7 +779,7 @@ pub fn pubsub_topic_factory_descriptor() -> FactoryDescriptor {
 **Publish:**
 
 ```rust
-app_wallet.make_action(
+app_cclerk.make_action(
     topic_cell,
     "publish",
     vec![
@@ -798,7 +798,7 @@ app_wallet.make_action(
 **Subscribe (advance cursor):**
 
 ```rust
-app_wallet.make_action(
+app_cclerk.make_action(
     topic_cell,
     "subscribe",
     vec![
@@ -970,7 +970,7 @@ acceptance.
 let item_commitment = poseidon2(&item, &randomness);
 let new_root = update_commitments_root(old_commitments_root, item_commitment);
 
-app_wallet.make_action(
+app_cclerk.make_action(
     queue_cell,
     "add",
     vec![
@@ -996,7 +996,7 @@ let nullifier = derive_nullifier(item, consumer_sk);
 let spend_proof = prove_spend(&item, &randomness, &consumer_sk, &commitments_root)?;
 let new_nullifier_root = update_nullifier_root(old_nullifier_root, nullifier);
 
-app_wallet.make_action(
+app_cclerk.make_action(
     queue_cell,
     "consume",
     vec![
@@ -1206,10 +1206,10 @@ pub fn relay_operator_factory_descriptor() -> FactoryDescriptor {
 
 #### Operations as Effects
 
-**Register a hosted inbox** (operator's wallet):
+**Register a hosted inbox** (operator's cclerk):
 
 ```rust
-app_wallet.make_action(
+app_cclerk.make_action(
     relay_cell,
     "register_inbox",
     vec![
@@ -1223,11 +1223,11 @@ app_wallet.make_action(
 )
 ```
 
-**Relay a message** (sender's wallet, with operator co-signature
+**Relay a message** (sender's cclerk, with operator co-signature
 or attenuated cap):
 
 ```rust
-app_wallet.make_action(
+app_cclerk.make_action(
     relay_cell,
     "relay",
     vec![
@@ -1252,7 +1252,7 @@ app_wallet.make_action(
 **Slash on dispute:**
 
 ```rust
-governance_wallet.make_action(
+governance_cclerk.make_action(
     relay_cell,
     "slash",
     vec![
@@ -1466,7 +1466,7 @@ Today uses `CapInbox::receive_at` (per `apps/subscription/src/delivery.rs:138`).
 ```rust
 // Creator delivers content to subscriber.
 fn deliver_content(
-    creator: &AgentWallet,
+    creator: &AgentCipherclerk,
     subscriber_inbox: CellId,
     content_ciphertext: &[u8],
     epoch: u64,

@@ -15,7 +15,7 @@ pub enum CellCommand {
         cell_id: String,
     },
 
-    /// List cells in your wallet.
+    /// List cells in your cclerk.
     List,
 
     /// Create a new cell.

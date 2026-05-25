@@ -46,7 +46,7 @@ Pyana's boundaries, enumerated:
     table.header([*Boundary*], [*Inside (cleartext)*], [*Enforcing primitive*]),
     [Federation membership], [BLS committee members], [BLS12-381 weighted-threshold aggregate],
     [Cap-holder (swiss-number)], [Swiss bytes holder], [Possession (bearer)],
-    [Turn-author (STARK soundness)], [Actor (wallet spending key)], [STARK soundness over `EffectVmAir`],
+    [Turn-author (STARK soundness)], [Actor (cclerk spending key)], [STARK soundness over `EffectVmAir`],
     [Sealed-box recipient], [`unsealer_secret` holder], [X25519 + ChaCha20-Poly1305 + BLAKE3 binding],
     [Cell state field visibility], [Federation node (always); external readers per `FieldVisibility`], [`public_field_view`],
     [Sovereign cell holder vs executor], [Agent (intended); agent + executor (witness path)], [STARK (proof-carrying) or signature (witness path)],

@@ -20,7 +20,7 @@ The discipline (`pyanascript/README.md`):
 Reference shape from `pyanascript/README.md` §Q1:
 
 ```rust
-let cell = Cell::new(wallet)
+let cell = Cell::new(cclerk)
     .with_state(MyState::default())
     .with_behavior(handler);
 
@@ -35,7 +35,7 @@ Augmented per task #61:
 
 - `let inbox = CapInbox::new(...)` (post-storage-as-cell-programs migration)
 - `cell.declare_slot_caveat(...)` (post-slot-caveats v1)
-- `wallet.create_from_factory(descriptor)` (already exists; document SDK shape)
+- `cclerk.create_from_factory(descriptor)` (already exists; document SDK shape)
 
 Plus the implicit primitives that walk-out reveals:
 
@@ -46,14 +46,14 @@ Plus the implicit primitives that walk-out reveals:
 
 ## Status of the codebase relative to the audit
 
-Lane H ("framework wallet refactor") and Lane SDK-REVIEW Phase 2 have
+Lane H ("framework cclerk refactor") and Lane SDK-REVIEW Phase 2 have
 already landed:
 
-- `AgentWallet::sign_action(action, federation_id)`
-- `AgentWallet::make_action(target, method, effects, federation_id)`
-- `AgentWallet::make_turn(action)` / `make_turn_for(domain, action)`
-- `AgentWallet::make_turn_with_actions(..)`
-- `AppWallet` framework wrapper (`app-framework/src/wallet.rs`) that
+- `AgentCipherclerk::sign_action(action, federation_id)`
+- `AgentCipherclerk::make_action(target, method, effects, federation_id)`
+- `AgentCipherclerk::make_turn(action)` / `make_turn_for(domain, action)`
+- `AgentCipherclerk::make_turn_with_actions(..)`
+- `AppCipherclerk` framework wrapper (`app-framework/src/cipherclerk.rs`) that
   carries a single `federation_id` and exposes the same three helpers
   without forcing apps to thread the id manually
 - `SdkError::CapTpNotConfigured` + a `captp_mut()` private helper used
@@ -69,7 +69,7 @@ already landed:
   (Lane this-task; closes SDK-REVIEW C-3).
 
 So most of "Phase 2" Tier-0 work in `SDK-REVIEW.md` is done. What
-remains is the *bottom-up* layer — the `Cell::new(wallet)...`
+remains is the *bottom-up* layer — the `Cell::new(cclerk)...`
 method-chain that pyanascript would compile against. None of that
 exists as a type. The rest of this document walks the chain primitive
 by primitive and names the gaps.
@@ -80,23 +80,23 @@ For each primitive, this section gives (a) the chain as pyanascript
 would write it, (b) the closest current-day Rust expression, (c) what
 breaks if you try to compile it today.
 
-### 1. `Cell::new(wallet).with_state(state).with_behavior(handler)`
+### 1. `Cell::new(cclerk).with_state(state).with_behavior(handler)`
 
 **Pyanascript shape:**
 ```rust
-let cell = Cell::new(wallet)
+let cell = Cell::new(cclerk)
     .with_state(MyAuctionState { bids: vec![], highest: None })
     .with_behavior(|state, msg, ctx| { /* … */ });
 ```
 
 **Current closest (ugly):**
 ```rust
-// Allocate a cell id off the wallet:
-let cell_id = wallet.cell_id("auction-1");
+// Allocate a cell id off the cclerk:
+let cell_id = cclerk.cell_id("auction-1");
 
 // Build the cell via the low-level cell crate (NOT the SDK):
 let mut cell = pyana_cell::Cell::new_hosted(
-    wallet.public_key().0,
+    cclerk.public_key().0,
     /* token_id */ [0u8; 32],
 );
 // `state` here is field-shaped, not Rust-shaped:
@@ -109,17 +109,17 @@ let cell = cell
 // `with_behavior` has no analogue. The closest is:
 let descriptor = pyana_cell::CircuitDescriptor { /* … */ };
 // then later:
-wallet.deploy_program(node_url, descriptor).await?;
+cclerk.deploy_program(node_url, descriptor).await?;
 // — but `deploy_program` requires a *deployed STARK program*, not a
 // closure. There is no "in-process handler" concept.
 ```
 
 **SDK gap:**
 
-- *Missing.* No SDK type named `Cell` representing "this wallet's
+- *Missing.* No SDK type named `Cell` representing "this cipherclerk's
   logical cell, with state and behaviour." `pyana_cell::Cell` is the
-  on-ledger record, not the runtime handle. The SDK has `AgentWallet`
-  and `AgentRuntime` (wallet + ledger + executor) but no `Cell`-shaped
+  on-ledger record, not the runtime handle. The SDK has `AgentCipherclerk`
+  and `AgentRuntime` (cclerk + ledger + executor) but no `Cell`-shaped
   facade.
 - *Missing.* `with_state(rust_value)` requires a state-encoding bridge
   from Rust types into the cell's slot fields (`Vec<u64>` keyed by
@@ -160,7 +160,7 @@ let promise = cell.send(auctioneer_cap, MsgKind::Bid { amount: 100 })?;
 **Current closest (ugly):**
 ```rust
 // You need a CapTP client and a LiveRef to the target:
-let live_ref: pyana_captp::LiveRef = wallet
+let live_ref: pyana_captp::LiveRef = cclerk
     .accept_capability("pyana://auctioneer/...")?;
 
 // Build a PipelinedAction (this is `cell.send`'s payload shape today):
@@ -201,7 +201,7 @@ let promise: EventualRef = live_ref.send(action);
 **Verdict:** the wire mechanism exists; the **typed-message bridge** does
 not. This is a tractable Tier-0/Tier-1 SDK addition (an SDK trait
 `pub trait CapMessage: Serialize { fn method(&self) -> [u8; 32]; }` plus
-a `wallet.send_typed(live_ref, msg)` helper).
+a `cclerk.send_typed(live_ref, msg)` helper).
 
 ### 3. `cell.exercise(cap, args).await`
 
@@ -215,7 +215,7 @@ let receipt: TurnReceipt = cell.exercise(escrow_cap, Args { ... }).await?;
 // "Exercise a capability" today means "build an authorized turn,
 // execute it, get the receipt." That is `build_authorized_turn` +
 // `runtime.execute_turn`:
-let signed_turn = wallet.build_authorized_turn(
+let signed_turn = cclerk.build_authorized_turn(
     &held_token,
     target,
     vec![Effect::ReleaseEscrow { escrow_id, .. }],
@@ -230,7 +230,7 @@ let receipt: TurnReceipt = runtime.execute_turn(&signed_turn.turn)?;
 
 - *Missing.* No single-call `exercise(cap, args).await` on any SDK
   type. The three pieces (build, sign, execute) are three separate
-  steps on `AgentWallet` + `AgentRuntime`.
+  steps on `AgentCipherclerk` + `AgentRuntime`.
 - *Async vs sync.* `runtime.execute_turn` is **synchronous** (the
   embedded executor runs in-process). `cell.exercise(cap, args).await`
   presumes an async path — which exists for remote federations
@@ -243,7 +243,7 @@ let receipt: TurnReceipt = runtime.execute_turn(&signed_turn.turn)?;
   not a single SDK call. Two cap surfaces (see gap 6) means two
   different exercise paths.
 
-**Verdict:** a Tier-1 SDK helper `wallet.exercise(cap, method, args) ->
+**Verdict:** a Tier-1 SDK helper `cclerk.exercise(cap, method, args) ->
 Result<TurnReceipt>` (sync) and an `EventualRef::await_receipt()` (async)
 would close most of the gap. Both are mechanical.
 
@@ -266,7 +266,7 @@ let restrictions = pyana_token::Attenuation {
     services: vec![("storage".to_string(), "r".to_string())],
     ..Default::default()
 };
-let attenuated: HeldToken = wallet.attenuate(&full_token, &restrictions)?;
+let attenuated: HeldToken = cclerk.attenuate(&full_token, &restrictions)?;
 
 // (b) CapabilityRef (cell-resident cap):
 let mut cap_set = pyana_cell::CapabilitySet::new();
@@ -311,8 +311,8 @@ let child = cell.spawn_child_with_behavior(ChildSpec {
 ```rust
 // Three different mechanisms today, none composed:
 
-// (1) AgentRuntime spawns a SubAgent (off the same wallet seed):
-let runtime: AgentRuntime = wallet.into_runtime("parent");
+// (1) AgentRuntime spawns a SubAgent (off the same cclerk seed):
+let runtime: AgentRuntime = cclerk.into_runtime("parent");
 let sub: SubAgent = runtime.spawn_sub_agent(
     "child-1",
     held_token,
@@ -323,8 +323,8 @@ let sub: SubAgent = runtime.spawn_sub_agent(
 let parent_cell: pyana_cell::Cell = /* … */;
 let child_cell = parent_cell.spawn_child(child_pk, child_token_id);
 
-// (3) wallet.create_from_factory for descriptor-bound creation:
-let turn = wallet.create_from_factory(
+// (3) cclerk.create_from_factory for descriptor-bound creation:
+let turn = cclerk.create_from_factory(
     agent_cell, factory_vk, owner_pubkey, token_id,
     factory_params, nonce, fee,
 );
@@ -338,7 +338,7 @@ let turn = wallet.create_from_factory(
 - *Partial / fragmented.* Three different "spawn" mechanisms, no
   composed call. Which one is the right backend for
   `spawn_child_with_behavior`?
-  - `SubAgent` is for **off-chain delegation** (same wallet, different
+  - `SubAgent` is for **off-chain delegation** (same cclerk, different
     key); the child is not a separate cell.
   - `Cell::spawn_child` is **ledger-internal**; produces a child cell
     record but does not install behaviour.
@@ -433,9 +433,9 @@ let (entry, proof) = inbox.read_next()?;
   re-exported through `pyana_sdk`. Apps that want an inbox must
   `use pyana_storage::CapInbox` directly — same "apps step around
   the SDK" pattern as elsewhere.
-- *Missing.* No bridge from a wallet/cell to "the inbox for this
+- *Missing.* No bridge from a cclerk/cell to "the inbox for this
   cell." Inboxes are constructed standalone (`CapInbox::new(QuotaId,
-  capacity, min_deposit)`) — there is no `wallet.inbox_for(cell_id)`.
+  capacity, min_deposit)`) — there is no `cclerk.inbox_for(cell_id)`.
 - *Missing.* `read_next` is synchronous; pyanascript's `inbox.read_next().await`
   expects an async channel. No async wrapper exists. (Tokio
   integration story: an `async fn next() -> InboxMessage` that
@@ -451,7 +451,7 @@ let (entry, proof) = inbox.read_next()?;
 
 **Verdict:** post storage-as-cell-programs, `CapInbox` should be a
 first-class SDK primitive. Tier-1 work: re-export from SDK, add
-`AgentWallet::inbox(cell_id)` returning a handle, add an async
+`AgentCipherclerk::inbox(cell_id)` returning a handle, add an async
 wrapper.
 
 ### 8. `cell.declare_slot_caveat(...)` (post-slot-caveats v1)
@@ -502,18 +502,18 @@ or app-framework), expose slot caveats as method calls on it, hide
 the field-index encoding. The cell-level mechanism already exists;
 the surface does not.
 
-### 9. `wallet.create_from_factory(descriptor)` (already exists)
+### 9. `cclerk.create_from_factory(descriptor)` (already exists)
 
 **Pyanascript shape:**
 ```rust
-let child_cell = wallet
+let child_cell = cclerk
     .create_from_factory(descriptor)
     .with_initial_state(state)
     .submit()
     .await?;
 ```
 
-**Current SDK shape (`sdk/src/wallet.rs`):**
+**Current SDK shape (`sdk/src/cipherclerk.rs`):**
 ```rust
 pub fn create_from_factory(
     &self,
@@ -554,21 +554,21 @@ mechanical / Tier-1 small design / Tier-2 deep design)**.
 
 | # | Gap | Addition | Notes |
 |---|---|---|---|
-| 1 | ~~`wallet.create_from_factory` still uses `Authorization::Unchecked`~~ | ~~Use `make_action` + `make_turn`; add `federation_id` parameter; collapse 7-arg sig into a builder~~ | **CLOSED** this task: `nonce`/`fee` removed, `federation_id` added, routes through `make_action`, two adversarial tests pinning it. Remaining: builder ergonomics (Tier-1). |
+| 1 | ~~`cclerk.create_from_factory` still uses `Authorization::Unchecked`~~ | ~~Use `make_action` + `make_turn`; add `federation_id` parameter; collapse 7-arg sig into a builder~~ | **CLOSED** this task: `nonce`/`fee` removed, `federation_id` added, routes through `make_action`, two adversarial tests pinning it. Remaining: builder ergonomics (Tier-1). |
 | 2 | `CapInbox` not re-exported from SDK | `pub use pyana_storage::CapInbox` in `sdk/src/lib.rs` | Trivial |
-| 3 | No typed-message bridge for `LiveRef::send` | SDK trait `CapMessage` + `wallet.send_typed(live_ref, msg)` | Maps Rust enum to `PipelinedAction { method, args }` |
+| 3 | No typed-message bridge for `LiveRef::send` | SDK trait `CapMessage` + `cclerk.send_typed(live_ref, msg)` | Maps Rust enum to `PipelinedAction { method, args }` |
 | 4 | No "await this promise's receipt" sync convenience | `EventualRef::await_receipt(&runtime) -> Result<TurnReceipt, _>` | Mechanical given the wire-side is plumbed |
-| 5 | `domain: &str` threading everywhere | `wallet.default_domain()` getter + `cell_id_default()` | SDK-REVIEW P1 #6 — overlaps with `AppWallet::domain` already in framework |
+| 5 | `domain: &str` threading everywhere | `cclerk.default_domain()` getter + `cell_id_default()` | SDK-REVIEW P1 #6 — overlaps with `AppCipherclerk::domain` already in framework |
 
 ### Tier-1 (small design, do next)
 
 | # | Gap | Addition | Notes |
 |---|---|---|---|
-| 6 | No `FactoryDescriptorBuilder` in the SDK | `pub struct FactoryDescriptorBuilder { … }` with `.with_slot_caveat(..)`, `.with_initial_state(..)`, `.with_creation_budget(..)`, `.deploy(&wallet) -> [u8; 32]` | Wraps `pyana_cell::FactoryDescriptor` |
-| 6b | `create_from_factory` still 6-arg positional; no submit/await | Collapse into `wallet.create_from_factory(builder, params, fed) -> Turn` then `wallet.deploy_cell(builder) -> impl Future<Receipt>` | Signing now correct; ergonomics gap remains |
-| 7 | `wallet.exercise(cap, args)` not single-call | `wallet.exercise_token(token, method, args) -> Result<TurnReceipt>`; same for `exercise_cap` (LiveRef) | Closes the "build + sign + execute" 3-step |
+| 6 | No `FactoryDescriptorBuilder` in the SDK | `pub struct FactoryDescriptorBuilder { … }` with `.with_slot_caveat(..)`, `.with_initial_state(..)`, `.with_creation_budget(..)`, `.deploy(&cclerk) -> [u8; 32]` | Wraps `pyana_cell::FactoryDescriptor` |
+| 6b | `create_from_factory` still 6-arg positional; no submit/await | Collapse into `cclerk.create_from_factory(builder, params, fed) -> Turn` then `cclerk.deploy_cell(builder) -> impl Future<Receipt>` | Signing now correct; ergonomics gap remains |
+| 7 | `cclerk.exercise(cap, args)` not single-call | `cclerk.exercise_token(token, method, args) -> Result<TurnReceipt>`; same for `exercise_cap` (LiveRef) | Closes the "build + sign + execute" 3-step |
 | 8 | `WriteOnce` slot constraint missing from `FieldConstraint` | Add `FieldConstraint::WriteOnce { field_index }` mirroring `StateConstraint::WriteOnce`; or document the split clearly | The two concepts apply at different layers (factory-deploy-time vs cell-program-perpetual) |
-| 9 | No SDK type wrapping "this wallet's logical cell" | `pub struct AgentCell<'w> { wallet: &'w mut AgentWallet, cell_id: CellId, domain: String }` with `send`/`exercise`/`attenuate_cap`/`spawn_child` methods | The actual "Cell::new(wallet)" facade |
+| 9 | No SDK type wrapping "this cipherclerk's logical cell" | `pub struct AgentCell<'w> { cclerk: &'w mut AgentCipherclerk, cell_id: CellId, domain: String }` with `send`/`exercise`/`attenuate_cap`/`spawn_child` methods | The actual "Cell::new(cclerk)" facade |
 | 10 | `SdkError::Wire` overloaded | Split into `Wire`, `Serialization`, `Configuration` | SDK-REVIEW P1 #7 |
 
 ### Tier-2 (research-grade, deferred — needs design pass)

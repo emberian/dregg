@@ -186,9 +186,9 @@ pyana storage erasure disable --cell $CELL_ID</code></pre>
 
     <h2 id="sdk">SDK Storage Operations</h2>
 
-    <pre><code class="language-rust">use pyana_sdk::AgentWallet;
+    <pre><code class="language-rust">use pyana_sdk::AgentCipherclerk;
 
-let mut cclerk = AgentWallet::new();
+let mut cclerk = AgentCipherclerk::new();
 
 // Check storage status
 let status = cclerk.storage_status().await?;

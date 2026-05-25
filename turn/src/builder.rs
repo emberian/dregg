@@ -30,7 +30,7 @@
 //! ## Signed (Ed25519)
 //!
 //! The most common mode: an Ed25519 signature over the action's canonical
-//! bytes by the caller's primary key. Use when the caller is a wallet-backed
+//! bytes by the caller's primary key. Use when the caller is a cclerk-backed
 //! identity that holds a long-lived key.
 //!
 //! ```
@@ -40,7 +40,7 @@
 //! let caller = CellId::from_bytes([1u8; 32]);
 //! let target = CellId::from_bytes([2u8; 32]);
 //!
-//! // 64-byte placeholder signature -- real callers feed a wallet output.
+//! // 64-byte placeholder signature -- real callers feed a cclerk output.
 //! let sig = [0u8; 64];
 //!
 //! let action = ActionBuilder::new(target, "transfer", caller)

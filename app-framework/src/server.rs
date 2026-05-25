@@ -179,13 +179,13 @@ impl AppServer {
 
     /// Legacy alias for [`Self::with_cipherclerk`].
     #[doc(hidden)]
-    pub fn with_wallet(self, cipherclerk: crate::cipherclerk::AppCipherclerk) -> Self {
+    pub fn with_cclerk(self, cipherclerk: crate::cipherclerk::AppCipherclerk) -> Self {
         self.with_cipherclerk(cipherclerk)
     }
 
     /// Legacy alias for [`Self::cipherclerk`].
     #[doc(hidden)]
-    pub fn wallet(&self) -> Option<&crate::cipherclerk::AppCipherclerk> {
+    pub fn cclerk(&self) -> Option<&crate::cipherclerk::AppCipherclerk> {
         self.cipherclerk()
     }
 
@@ -200,10 +200,10 @@ impl AppServer {
     ///
     /// Typical wiring in an app's `main.rs`:
     /// ```ignore
-    /// let wallet = AppCipherclerk::new(AgentCipherclerk::new(), federation_id);
-    /// let executor = EmbeddedExecutor::new(wallet.clone(), "my-domain");
+    /// let cipherclerk = AppCipherclerk::new(AgentCipherclerk::new(), federation_id);
+    /// let executor = EmbeddedExecutor::new(cipherclerk.clone(), "my-domain");
     /// AppServer::new(config)
-    ///     .with_wallet(wallet)
+    ///     .with_cipherclerk(cipherclerk)
     ///     .with_embedded_executor(executor)
     ///     .routes(my_routes)
     ///     .serve()
@@ -228,17 +228,17 @@ impl AppServer {
     ///
     /// Apps that have already registered their factories and inspectors
     /// on the context can mount it here; handlers extract it via
-    /// `axum::Extension<StarbridgeAppContext>` and reach the wallet,
+    /// `axum::Extension<StarbridgeAppContext>` and reach the cipherclerk,
     /// executor, factory registry, and inspector registry uniformly.
     ///
     /// Typical wiring in an app's `main.rs`:
     /// ```ignore
-    /// let wallet = AppCipherclerk::new(AgentCipherclerk::new(), federation_id);
-    /// let executor = EmbeddedExecutor::new(&wallet, "default");
-    /// let ctx = StarbridgeAppContext::new(wallet.clone(), executor.clone());
+    /// let cipherclerk = AppCipherclerk::new(AgentCipherclerk::new(), federation_id);
+    /// let executor = EmbeddedExecutor::new(&cipherclerk, "default");
+    /// let ctx = StarbridgeAppContext::new(cipherclerk.clone(), executor.clone());
     /// starbridge_nameservice::register(&ctx);
     /// AppServer::new(config)
-    ///     .with_wallet(wallet)
+    ///     .with_cipherclerk(cipherclerk)
     ///     .with_embedded_executor(executor)
     ///     .with_starbridge(ctx)
     ///     .serve()

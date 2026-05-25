@@ -181,7 +181,7 @@ The cell has 10 fields; the executor needs to verify only 2 of them.
 
 **Gap**: When a sovereign cell produces a proof-carrying turn, the timing of that turn reveals when the agent was active. Combined with pattern analysis (e.g., "always active at 9am Pacific"), this deanonymizes.
 
-**Mitigation**: Batched turn submission with random delays. The wallet queues turns and submits them in fixed-interval batches (e.g., every 10 minutes), adding Poisson-distributed noise to the submission time.
+**Mitigation**: Batched turn submission with random delays. The cclerk queues turns and submits them in fixed-interval batches (e.g., every 10 minutes), adding Poisson-distributed noise to the submission time.
 
 ### CapTP session establishment reveals interest
 
@@ -246,7 +246,7 @@ The achievable tradeoffs form three tiers:
 
 1. **Fast path** (existing): Hosted cells with cleartext state. Zero privacy, maximum speed. Suitable for public-goods cells, governance infrastructure, routing.
 
-2. **Standard path** (partially implemented): Sovereign cells with STARK proofs. Full privacy from the federation, moderate proof overhead (~100ms per turn). Suitable for wallets, private transfers, capability delegation.
+2. **Standard path** (partially implemented): Sovereign cells with STARK proofs. Full privacy from the federation, moderate proof overhead (~100ms per turn). Suitable for cipherclerks, private transfers, capability delegation.
 
 3. **Maximum privacy path** (future): Sovereign cells + stealth addresses + Dandelion++ + padded proofs + encrypted governance. Near-total unlinkability. Overhead: ~500ms per turn, ~3x gossip bandwidth. Suitable for high-value privacy-critical applications.
 

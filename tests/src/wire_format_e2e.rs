@@ -1,9 +1,9 @@
 //! End-to-end wire format integration test for the pyana presentation protocol.
 //!
 //! This test exercises the EXACT production path:
-//!   wallet.authorize() -> serialize -> PyanaEngine::verify
+//!   cclerk.authorize() -> serialize -> PyanaEngine::verify
 //!
-//! It exists to catch the P0 wire format mismatch where the wallet outputs raw
+//! It exists to catch the P0 wire format mismatch where the cclerk outputs raw
 //! STARK bytes but the engine expects postcard-encoded `WirePresentationProof`.
 //! If this test passes, the headline product demo works.
 //! If it fails, we have a wire protocol mismatch.
@@ -13,16 +13,16 @@ use pyana_circuit::merkle_air::MerkleAir;
 use pyana_circuit::poseidon2;
 
 // =============================================================================
-// Helpers (mirror the wallet's internal derivation logic)
+// Helpers (mirror the cipherclerk's internal derivation logic)
 // =============================================================================
 
 fn test_key(name: &str) -> [u8; 32] {
     *blake3::hash(format!("wire-format-e2e:{name}").as_bytes()).as_bytes()
 }
 
-/// Compute the federation root for an issuer key, mirroring AgentWallet::compute_federation_root_bb.
+/// Compute the federation root for an issuer key, mirroring AgentCipherclerk::compute_federation_root_bb.
 fn compute_federation_root_bb(issuer_key: &[u8; 32]) -> BabyBear {
-    let issuer_hash = wallet_bytes_to_babybear(issuer_key);
+    let issuer_hash = cclerk_bytes_to_babybear(issuer_key);
     let depth = 8;
     let mut current = issuer_hash;
     for i in 0..depth {
@@ -41,7 +41,7 @@ fn compute_federation_root_bb(issuer_key: &[u8; 32]) -> BabyBear {
     current
 }
 
-fn wallet_bytes_to_babybear(bytes: &[u8; 32]) -> BabyBear {
+fn cclerk_bytes_to_babybear(bytes: &[u8; 32]) -> BabyBear {
     let limbs = BabyBear::encode_hash(bytes);
     poseidon2::hash_many(&limbs)
 }
@@ -66,10 +66,10 @@ fn bb_to_bytes(bb: BabyBear) -> [u8; 32] {
 // The Test
 // =============================================================================
 
-/// End-to-end test: wallet.authorize() -> serialize -> PyanaEngine::verify
+/// End-to-end test: cclerk.authorize() -> serialize -> PyanaEngine::verify
 ///
 /// This test exercises the EXACT path a production deployment uses:
-/// wallet outputs bytes, engine verifies bytes, action binding checked,
+/// cclerk outputs bytes, engine verifies bytes, action binding checked,
 /// freshness checked, root checked.
 ///
 /// If this test passes, the headline product demo works.
@@ -82,11 +82,11 @@ fn wire_format_e2e_happy_path_and_adversarial() {
 
     let root_key = test_key("issuer");
 
-    // --- Step 1: Create AgentWallet ---
-    let mut wallet = AgentWallet::new();
+    // --- Step 1: Create AgentCipherclerk ---
+    let mut cclerk = AgentCipherclerk::new();
 
     // --- Step 2: Mint a root token ---
-    let held_token = wallet.mint_token(&root_key, "storage");
+    let held_token = cclerk.mint_token(&root_key, "storage");
 
     // --- Step 3: Create an AuthRequest ---
     let now_ts: i64 = 1700000000; // fixed timestamp for reproducibility
@@ -97,10 +97,10 @@ fn wire_format_e2e_happy_path_and_adversarial() {
         ..Default::default()
     };
 
-    // --- Step 4: wallet.authorize() in FullyPrivate mode -> get proof bytes ---
-    let presentation = wallet
+    // --- Step 4: cclerk.authorize() in FullyPrivate mode -> get proof bytes ---
+    let presentation = cclerk
         .authorize(&held_token, &request, VerificationMode::FullyPrivate)
-        .expect("wallet.authorize() should succeed for a valid root token");
+        .expect("cclerk.authorize() should succeed for a valid root token");
 
     let proof_bytes = match &presentation {
         pyana_sdk::AuthorizationPresentation::Private { proof, conclusion } => {
@@ -118,11 +118,11 @@ fn wire_format_e2e_happy_path_and_adversarial() {
 
     assert!(
         !proof_bytes.is_empty(),
-        "proof_bytes from wallet.authorize() must not be empty"
+        "proof_bytes from cclerk.authorize() must not be empty"
     );
 
     // --- Step 5: Create PyanaEngine with matching federation root ---
-    // The wallet uses derive_proof_key(root_key) for federation membership, not root_key directly.
+    // The cclerk uses derive_proof_key(root_key) for federation membership, not root_key directly.
     let proof_key = blake3::derive_key("pyana-proof-key-v1", &root_key);
     let federation_root_bb = compute_federation_root_bb(&proof_key);
     let federation_root_bytes = bb_to_bytes(federation_root_bb);
@@ -160,7 +160,7 @@ fn wire_format_e2e_happy_path_and_adversarial() {
                 "WIRE FORMAT / BINDING MISMATCH (P0): engine.verify_presentation_bytes() returned Ok(false).\n\
                  Detailed verify_proof_complete error: {:?}\n\
                  \n\
-                 This means the proof bytes produced by wallet.authorize() do not satisfy\n\
+                 This means the proof bytes produced by cclerk.authorize() do not satisfy\n\
                  the engine's verification checks. The wire format or binding P0 bug is present.",
                 detail.err()
             );
@@ -168,9 +168,9 @@ fn wire_format_e2e_happy_path_and_adversarial() {
         Err(e) => {
             panic!(
                 "WIRE FORMAT MISMATCH (P0): engine.verify_presentation_bytes() returned Err({:?}).\n\
-                 This means the proof bytes produced by wallet.authorize() could not even be\n\
+                 This means the proof bytes produced by cclerk.authorize() could not even be\n\
                  decoded as a WirePresentationProof. The serialization format mismatch P0 bug\n\
-                 is present (wallet outputs raw STARK bytes, engine expects postcard WirePresentationProof).",
+                 is present (cclerk outputs raw STARK bytes, engine expects postcard WirePresentationProof).",
                 e
             );
         }
@@ -293,16 +293,16 @@ fn wire_format_e2e_happy_path_and_adversarial() {
 // Wire Format Roundtrip Test (Case 14)
 // =============================================================================
 
-/// The bytes output by `wallet.authorize()` must be decodable as
+/// The bytes output by `cclerk.authorize()` must be decodable as
 /// `postcard::from_bytes::<WirePresentationProof>()`.
 ///
-/// If this test fails, the P0 format mismatch still exists: the wallet is
+/// If this test fails, the P0 format mismatch still exists: the cclerk is
 /// emitting raw STARK bytes instead of the structured WirePresentationProof.
 #[test]
 fn wire_format_roundtrip_postcard_decodable() {
     let root_key = test_key("roundtrip-issuer");
-    let mut wallet = AgentWallet::new();
-    let held_token = wallet.mint_token(&root_key, "api");
+    let mut cclerk = AgentCipherclerk::new();
+    let held_token = cclerk.mint_token(&root_key, "api");
 
     let request = AuthRequest {
         action: Some("read".into()),
@@ -311,7 +311,7 @@ fn wire_format_roundtrip_postcard_decodable() {
         ..Default::default()
     };
 
-    let presentation = wallet
+    let presentation = cclerk
         .authorize(&held_token, &request, VerificationMode::FullyPrivate)
         .expect("authorize should succeed");
 
@@ -321,7 +321,7 @@ fn wire_format_roundtrip_postcard_decodable() {
     };
 
     // THE KEY ASSERTION: the bytes must deserialize as WirePresentationProof.
-    // If this fails, wallet is emitting raw STARK bytes (the P0 bug).
+    // If this fails, cclerk is emitting raw STARK bytes (the P0 bug).
     let decoded: Result<WirePresentationProof, _> = postcard::from_bytes(&proof_bytes);
     match decoded {
         Ok(wire_proof) => {
@@ -345,8 +345,8 @@ fn wire_format_roundtrip_postcard_decodable() {
         }
         Err(e) => {
             panic!(
-                "WIRE FORMAT P0 BUG DETECTED: wallet.authorize() output cannot be decoded as\n\
-                 WirePresentationProof via postcard. The wallet is likely emitting raw STARK\n\
+                "WIRE FORMAT P0 BUG DETECTED: cclerk.authorize() output cannot be decoded as\n\
+                 WirePresentationProof via postcard. The cclerk is likely emitting raw STARK\n\
                  bytes instead of the structured wire format.\n\
                  \n\
                  Decode error: {}\n\

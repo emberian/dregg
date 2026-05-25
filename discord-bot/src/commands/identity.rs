@@ -7,8 +7,8 @@ use serenity::all::{
 };
 
 use crate::BotState;
+use crate::cipherclerk::{UserCipherclerk, sign_legacy};
 use crate::embeds;
-use crate::wallet::{UserWallet, sign_legacy};
 
 /// Register the /credential command.
 pub fn register() -> CreateCommand {
@@ -104,8 +104,8 @@ async fn handle_issue(ctx: &Context, command: &CommandInteraction, state: &BotSt
         Ok(Some(id)) => id,
         Ok(None) => {
             let embed = embeds::warning_embed(
-                "No Wallet",
-                "You need a wallet to issue credentials. Use `/wallet create` first.",
+                "No Cipherclerk",
+                "You need a cclerk to issue credentials. Use `/cipherclerk create` first.",
             );
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
@@ -121,8 +121,9 @@ async fn handle_issue(ctx: &Context, command: &CommandInteraction, state: &BotSt
         }
     };
 
-    let wallet = UserWallet::derive(&state.config.bot_secret, user_id, state.federation_id_bytes);
-    let signature = sign_credential_action(&wallet, &format!("issue:{schema}:{attributes}"));
+    let cclerk =
+        UserCipherclerk::derive(&state.config.bot_secret, user_id, state.federation_id_bytes);
+    let signature = sign_credential_action(&cclerk, &format!("issue:{schema}:{attributes}"));
 
     match state
         .devnet
@@ -179,8 +180,8 @@ async fn handle_verify(ctx: &Context, command: &CommandInteraction, state: &BotS
         Ok(Some(id)) => id,
         Ok(None) => {
             let embed = embeds::warning_embed(
-                "No Wallet",
-                "You need a wallet to verify credentials. Use `/wallet create` first.",
+                "No Cipherclerk",
+                "You need a cclerk to verify credentials. Use `/cipherclerk create` first.",
             );
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
@@ -213,8 +214,8 @@ async fn handle_verify(ctx: &Context, command: &CommandInteraction, state: &BotS
         Ok(Some(id)) => id,
         Ok(None) => {
             let embed = embeds::warning_embed(
-                "Target Has No Wallet",
-                &format!("<@{target_id}> does not have a pyana wallet."),
+                "Target Has No Cipherclerk",
+                &format!("<@{target_id}> does not have a pyana cclerk."),
             );
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
@@ -266,8 +267,8 @@ async fn handle_list(ctx: &Context, command: &CommandInteraction, state: &BotSta
         Ok(Some(id)) => id,
         Ok(None) => {
             let embed = embeds::warning_embed(
-                "No Wallet",
-                "You need a wallet to view credentials. Use `/wallet create` first.",
+                "No Cipherclerk",
+                "You need a cclerk to view credentials. Use `/cipherclerk create` first.",
             );
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
@@ -329,9 +330,9 @@ async fn handle_list(ctx: &Context, command: &CommandInteraction, state: &BotSta
 
 /// Sign a credential-issue action via the legacy BLAKE3-MAC wire
 /// scheme the devnet `/api/identity/credentials/issue` endpoint
-/// expects. See `wallet::sign_legacy` for the transition gap.
-fn sign_credential_action(wallet: &UserWallet, action: &str) -> String {
-    sign_legacy(wallet, action.as_bytes())
+/// expects. See `cclerk::sign_legacy` for the transition gap.
+fn sign_credential_action(cclerk: &UserCipherclerk, action: &str) -> String {
+    sign_legacy(cclerk, action.as_bytes())
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

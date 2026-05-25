@@ -5,7 +5,7 @@
 //!
 //! A subscriber has TWO distinct keypairs:
 //!
-//! 1. **Ed25519 identity** (`identity_pk`): the subscriber's wallet pubkey.
+//! 1. **Ed25519 identity** (`identity_pk`): the subscriber's cclerk pubkey.
 //!    This is what signs delegation envelopes and identifies them in the
 //!    `Ledger`. The corresponding private key is held by the subscriber's
 //!    `pyana_sdk::AgentCipherclerk`.
@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 
-use pyana_sdk::wallet::{DelegatedToken, DelegationAuthority};
+use pyana_sdk::cipherclerk::{DelegatedToken, DelegationAuthority};
 use pyana_sdk::{AgentCipherclerk, SdkError};
 use pyana_types::PublicKey;
 use serde::{Deserialize, Serialize};
@@ -169,7 +169,7 @@ impl SubscriberRegistry {
         subscriber: PublicKey,
         envelope: DelegatedToken,
     ) -> Result<&DebitAuthorization, SubscriberError> {
-        // (1) Pre-check delegatee matches the executor's wallet.
+        // (1) Pre-check delegatee matches the executor's cclerk.
         if envelope.delegatee != executor_cipherclerk.public_key() {
             return Err(SubscriberError::InvalidDelegation(format!(
                 "envelope addressed to {:?}, not executor {:?}",
@@ -275,8 +275,8 @@ fn verify_credential_envelope(
 
 // REVIEW[P3]: credential verification here is hand-rolled (ed25519 + envelope
 // hash). The SDK exposes `receive_signed_delegation` for envelopes addressed
-// to the current wallet, but credentials are addressed to the *subscriber*,
-// not to the executor, so the executor's wallet can't drive that path
+// to the current cclerk, but credentials are addressed to the *subscriber*,
+// not to the executor, so the executor's cclerk can't drive that path
 // directly. A framework gap: `AgentCipherclerk::verify_envelope` (no token
 // installation, just signature+authority) would let us reuse the SDK path
 // for third-party credentials.
@@ -290,7 +290,7 @@ impl From<SdkError> for SubscriberError {
 
 /// Construct an `AgentCipherclerk` bound to a given 32-byte secret. Used by tests
 /// and the server to build the executor cipherclerk with a predictable identity.
-pub fn deterministic_wallet(secret: [u8; 32]) -> AgentCipherclerk {
+pub fn deterministic_cclerk(secret: [u8; 32]) -> AgentCipherclerk {
     use zeroize::Zeroizing;
     AgentCipherclerk::from_key_bytes(Zeroizing::new(secret))
 }
@@ -306,18 +306,18 @@ mod tests {
     use pyana_sdk::Attenuation;
     use pyana_token::BudgetSpec;
 
-    fn wallet(seed: u8) -> AgentCipherclerk {
+    fn cclerk(seed: u8) -> AgentCipherclerk {
         let mut s = [0u8; 32];
         s[0] = seed;
         s[31] = seed.wrapping_mul(13);
-        deterministic_wallet(s)
+        deterministic_cclerk(s)
     }
 
     #[test]
     fn free_tier_subscribe_no_credential() {
         let mut reg = SubscriberRegistry::new();
-        let alice_w = wallet(1);
-        let creator_w = wallet(2);
+        let alice_w = cclerk(1);
+        let creator_w = cclerk(2);
 
         reg.register_subscriber(alice_w.public_key(), [9u8; 32]);
         let mut creator = Creator::new(creator_w.public_key());
@@ -335,9 +335,9 @@ mod tests {
     #[test]
     fn premium_tier_without_credential_is_rejected() {
         let mut reg = SubscriberRegistry::new();
-        let alice_w = wallet(3);
-        let creator_w = wallet(4);
-        let issuer_w = wallet(5);
+        let alice_w = cclerk(3);
+        let creator_w = cclerk(4);
+        let issuer_w = cclerk(5);
 
         reg.register_subscriber(alice_w.public_key(), [9u8; 32]);
         let mut creator = Creator::new(creator_w.public_key());
@@ -355,10 +355,10 @@ mod tests {
     #[test]
     fn premium_tier_with_wrong_issuer_is_rejected() {
         let mut reg = SubscriberRegistry::new();
-        let alice_w = wallet(6);
-        let creator_w = wallet(7);
-        let real_issuer_w = wallet(8);
-        let mut fake_issuer_w = wallet(9);
+        let alice_w = cclerk(6);
+        let creator_w = cclerk(7);
+        let real_issuer_w = cclerk(8);
+        let mut fake_issuer_w = cclerk(9);
 
         reg.register_subscriber(alice_w.public_key(), [9u8; 32]);
         let mut creator = Creator::new(creator_w.public_key());
@@ -391,9 +391,9 @@ mod tests {
     #[test]
     fn premium_tier_with_correct_issuer_accepted() {
         let mut reg = SubscriberRegistry::new();
-        let alice_w = wallet(10);
-        let creator_w = wallet(11);
-        let mut issuer_w = wallet(12);
+        let alice_w = cclerk(10);
+        let creator_w = cclerk(11);
+        let mut issuer_w = cclerk(12);
 
         reg.register_subscriber(alice_w.public_key(), [9u8; 32]);
         let mut creator = Creator::new(creator_w.public_key());
@@ -420,8 +420,8 @@ mod tests {
     #[test]
     fn debit_delegation_accepts_well_signed_envelope() {
         let mut reg = SubscriberRegistry::new();
-        let mut alice_w = wallet(20);
-        let mut executor_w = wallet(21);
+        let mut alice_w = cclerk(20);
+        let mut executor_w = cclerk(21);
 
         reg.register_subscriber(alice_w.public_key(), [9u8; 32]);
 
@@ -453,8 +453,8 @@ mod tests {
     #[test]
     fn debit_delegation_tampered_signature_rejected() {
         let mut reg = SubscriberRegistry::new();
-        let mut alice_w = wallet(22);
-        let mut executor_w = wallet(23);
+        let mut alice_w = cclerk(22);
+        let mut executor_w = cclerk(23);
 
         reg.register_subscriber(alice_w.public_key(), [9u8; 32]);
         let token = alice_w.mint_token(&[7u8; 32], "subscription-debit");
@@ -483,8 +483,8 @@ mod tests {
     #[test]
     fn debit_delegation_missing_budget_rejected() {
         let mut reg = SubscriberRegistry::new();
-        let mut alice_w = wallet(24);
-        let mut executor_w = wallet(25);
+        let mut alice_w = cclerk(24);
+        let mut executor_w = cclerk(25);
 
         let token = alice_w.mint_token(&[7u8; 32], "subscription-debit");
         let restrictions = Attenuation {
@@ -503,8 +503,8 @@ mod tests {
     #[test]
     fn debit_delegation_pins_asset_id() {
         let mut reg = SubscriberRegistry::new();
-        let mut alice_w = wallet(30);
-        let mut executor_w = wallet(31);
+        let mut alice_w = cclerk(30);
+        let mut executor_w = cclerk(31);
 
         reg.register_subscriber(alice_w.public_key(), [9u8; 32]);
         let token = alice_w.mint_token(&[7u8; 32], "subscription-debit");
@@ -533,8 +533,8 @@ mod tests {
     #[test]
     fn debit_delegation_bad_budget_class_rejected() {
         let mut reg = SubscriberRegistry::new();
-        let mut alice_w = wallet(32);
-        let mut executor_w = wallet(33);
+        let mut alice_w = cclerk(32);
+        let mut executor_w = cclerk(33);
 
         let token = alice_w.mint_token(&[7u8; 32], "subscription-debit");
         let restrictions = Attenuation {

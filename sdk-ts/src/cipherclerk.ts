@@ -1,5 +1,5 @@
 /**
- * AgentWallet: High-level wrapper for token minting, attenuation, and verification.
+ * AgentCipherclerk: High-level wrapper for token minting, attenuation, and verification.
  *
  * Manages a root key and provides ergonomic methods for the macaroon-based
  * authorization token lifecycle.
@@ -35,26 +35,26 @@ export interface VerifyOptions {
 }
 
 /**
- * AgentWallet wraps the pyana macaroon token operations into a stateful,
+ * AgentCipherclerk wraps the pyana macaroon token operations into a stateful,
  * object-oriented interface. It holds a root key and provides methods for
  * the full token lifecycle: mint, attenuate, verify.
  *
  * @example
  * ```ts
- * import { AgentWallet } from "@pyana/sdk";
+ * import { AgentCipherclerk } from "@pyana/sdk";
  *
- * const wallet = await AgentWallet.create();
- * const token = await wallet.mint("my-service");
- * const restricted = await wallet.attenuate(token.token, {
+ * const cclerk = await AgentCipherclerk.create();
+ * const token = await cclerk.mint("my-service");
+ * const restricted = await cclerk.attenuate(token.token, {
  *   service: "my-service",
  *   actions: "read",
  *   expiresSecs: 3600,
  * });
- * const result = await wallet.verify(restricted.token, { action: "read" });
+ * const result = await cclerk.verify(restricted.token, { action: "read" });
  * console.log(result.allowed); // true
  * ```
  */
-export class AgentWallet {
+export class AgentCipherclerk {
   private rootKey: Uint8Array;
   private wasm: typeof import("pyana-wasm");
 
@@ -64,29 +64,29 @@ export class AgentWallet {
   }
 
   /**
-   * Create a new AgentWallet with a randomly generated root key.
+   * Create a new AgentCipherclerk with a randomly generated root key.
    *
    * @param wasm - The initialized pyana-wasm module.
-   * @returns A new AgentWallet instance with a fresh root key.
+   * @returns A new AgentCipherclerk instance with a fresh root key.
    */
-  static async create(wasm: typeof import("pyana-wasm")): Promise<AgentWallet> {
+  static async create(wasm: typeof import("pyana-wasm")): Promise<AgentCipherclerk> {
     const keyResult: KeyResult = wasm.generate_root_key();
     const rootKey = new Uint8Array(keyResult.key_bytes);
-    return new AgentWallet(wasm, rootKey);
+    return new AgentCipherclerk(wasm, rootKey);
   }
 
   /**
-   * Create an AgentWallet from an existing root key.
+   * Create an AgentCipherclerk from an existing root key.
    *
    * @param wasm - The initialized pyana-wasm module.
    * @param rootKey - A 32-byte root key (Uint8Array or hex string).
-   * @returns A new AgentWallet instance using the provided key.
+   * @returns A new AgentCipherclerk instance using the provided key.
    * @throws Error if the key is not exactly 32 bytes.
    */
   static fromKey(
     wasm: typeof import("pyana-wasm"),
     rootKey: Uint8Array | string
-  ): AgentWallet {
+  ): AgentCipherclerk {
     const keyBytes =
       typeof rootKey === "string" ? hexToBytes(rootKey) : rootKey;
     if (keyBytes.length !== 32) {
@@ -94,7 +94,7 @@ export class AgentWallet {
         `Root key must be exactly 32 bytes, got ${keyBytes.length}`
       );
     }
-    return new AgentWallet(wasm, keyBytes);
+    return new AgentCipherclerk(wasm, keyBytes);
   }
 
   /**

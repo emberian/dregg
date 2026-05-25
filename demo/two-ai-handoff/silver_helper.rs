@@ -26,7 +26,7 @@
 //!     not yet emit per-cell WRs. GAP.
 //!
 //! The helper accepts deterministic test keypairs from a demo seed so that
-//! alice/bob identities are stable across runs without leaking real wallet
+//! alice/bob identities are stable across runs without leaking real cclerk
 //! material from the MCP nodes. The substrate types are exactly the same
 //! types the executor and verifier consume; only the keys are demo-local.
 

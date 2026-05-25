@@ -172,7 +172,7 @@ fn bench_proof_generation(c: &mut Criterion) {
     let key = test_key("prove");
 
     // --- Full private authorization (end-to-end: token -> wire proof bytes) ---
-    // This is wallet.authorize(FullyPrivate) equivalent
+    // This is cclerk.authorize(FullyPrivate) equivalent
     group.bench_function("authorize_private_1_caveat", |b| {
         b.iter(|| {
             let (mut builder, request) = make_builder(&key, 1);

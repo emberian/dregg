@@ -37,7 +37,7 @@ verification properties at each level.
 │                                                                             │
 │   CLIENT-LOCAL (user's device only)                                        │
 │   ┌───────────────┐  ┌───────────────┐                                    │
-│   │  sdk/         │  │  wallet       │                                    │
+│   │  sdk/         │  │  cclerk       │                                    │
 │   │  agent runtime│  │  key mgmt     │                                    │
 │   └───────────────┘  └───────────────┘                                    │
 │                                                                             │

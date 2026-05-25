@@ -191,7 +191,7 @@ Factory-created cells have _computable child verification keys_:
 - *Derived*: $"child_vk" = "BLAKE3"("pyana-derived-child-vk" || "factory_vk" || "param_hash")$.
 - *FromSet*: child VK must be a member of a pre-approved set.
 
-Factory creation is a composable effect within atomic turns---enabling flash-loan-style patterns where a factory spawns a child cell, the child performs work, and the parent observes the result, all within a single atomic turn with journal-based rollback on failure. Provenance tracking records which factory created each cell, enabling machine-auditable supply chains of cell construction. Factories are the foundation of *storage-as-cell-programs* (see @sec-storage-as-cell-programs)---every storage primitive lands as a factory whose descriptor declares the slot layout and `state_constraints`, with apps using the existing `createFromFactory` wallet method to instantiate.
+Factory creation is a composable effect within atomic turns---enabling flash-loan-style patterns where a factory spawns a child cell, the child performs work, and the parent observes the result, all within a single atomic turn with journal-based rollback on failure. Provenance tracking records which factory created each cell, enabling machine-auditable supply chains of cell construction. Factories are the foundation of *storage-as-cell-programs* (see @sec-storage-as-cell-programs)---every storage primitive lands as a factory whose descriptor declares the slot layout and `state_constraints`, with apps using the existing `createFromFactory` cclerk method to instantiate.
 
 == Trust Assumptions
 

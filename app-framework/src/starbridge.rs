@@ -13,7 +13,7 @@
 //!    dropped on the floor" pattern from `APPS-USERSPACE-GAPS.md`
 //!    §Gap 4.
 //! 3. A [`FactoryRegistry`] — the in-process registry that the
-//!    in-browser PyanaRuntime / extension wallet's
+//!    in-browser PyanaRuntime / extension cipherclerk's
 //!    `createFromFactory(factory_vk, ...)` resolves against.
 //!    Starbridge-apps call [`StarbridgeAppContext::register_factory`]
 //!    at startup; the host (this context) holds the descriptors so
@@ -37,7 +37,7 @@
 //! - **Composition.** A single binary can mount many starbridge-apps
 //!   side-by-side; each one's `register(ctx)` extends the shared
 //!   registries.
-//! - **Lifetimes.** The wallet, executor, and registries all live for
+//! - **Lifetimes.** The cipherclerk, executor, and registries all live for
 //!   the process lifetime; bundling them once at startup avoids
 //!   threading four args into every helper.
 //! - **Future-proofing.** As starbridge-apps need new shared services
@@ -47,9 +47,9 @@
 //! ## Wiring (typical `main.rs`)
 //!
 //! ```ignore
-//! let wallet = AppCipherclerk::new(AgentCipherclerk::new(), federation_id);
-//! let executor = EmbeddedExecutor::new(&wallet, "default");
-//! let mut ctx = StarbridgeAppContext::new(wallet.clone(), executor.clone());
+//! let cipherclerk = AppCipherclerk::new(AgentCipherclerk::new(), federation_id);
+//! let executor = EmbeddedExecutor::new(&cipherclerk, "default");
+//! let mut ctx = StarbridgeAppContext::new(cipherclerk.clone(), executor.clone());
 //!
 //! // Each starbridge-app registers its factories + inspectors.
 //! starbridge_nameservice::register(&mut ctx);
@@ -57,7 +57,7 @@
 //! // ...
 //!
 //! AppServer::new(config)
-//!     .with_wallet(wallet)
+//!     .with_cipherclerk(cipherclerk)
 //!     .with_embedded_executor(executor)
 //!     .with_starbridge(ctx)
 //!     .serve()
@@ -79,7 +79,7 @@ use crate::cipherclerk::{AppCipherclerk, EmbeddedExecutor};
 ///
 /// Used by the host to resolve `window.pyana.createFromFactory(factory_vk, ..)`
 /// lookups: each starbridge-app pushes its descriptors at startup,
-/// then the in-browser PyanaRuntime / extension wallet can fetch them
+/// then the in-browser PyanaRuntime / extension cipherclerk can fetch them
 /// by hash to verify a cell's constructor-transparency contract.
 ///
 /// Cheap to clone (internally `Arc<RwLock<BTreeMap<..>>>`).
@@ -317,7 +317,7 @@ pub struct StarbridgeAppContext {
 }
 
 impl StarbridgeAppContext {
-    /// Build a context from a wallet + executor pair.
+    /// Build a context from a cipherclerk + executor pair.
     ///
     /// The factory/inspector registries start empty; apps populate them
     /// in their `register(ctx)` hook.
@@ -359,7 +359,7 @@ impl StarbridgeAppContext {
 
     /// Legacy alias for [`Self::cipherclerk`].
     #[doc(hidden)]
-    pub fn wallet(&self) -> &AppCipherclerk {
+    pub fn cclerk(&self) -> &AppCipherclerk {
         self.cipherclerk()
     }
 
@@ -453,9 +453,9 @@ mod tests {
 
     fn fixture() -> (AppCipherclerk, EmbeddedExecutor) {
         let sdk = AgentCipherclerk::new();
-        let wallet = AppCipherclerk::new(sdk, [99u8; 32]);
-        let executor = EmbeddedExecutor::new(&wallet, "default");
-        (wallet, executor)
+        let cclerk = AppCipherclerk::new(sdk, [99u8; 32]);
+        let executor = EmbeddedExecutor::new(&cclerk, "default");
+        (cclerk, executor)
     }
 
     fn fixture_descriptor(vk: [u8; 32]) -> FactoryDescriptor {
@@ -479,10 +479,10 @@ mod tests {
     }
 
     #[test]
-    fn context_holds_wallet_and_executor() {
+    fn context_holds_cclerk_and_executor() {
         let (w, e) = fixture();
         let ctx = StarbridgeAppContext::new(w.clone(), e.clone());
-        assert_eq!(ctx.wallet().cell_id(), w.cell_id());
+        assert_eq!(ctx.cclerk().cell_id(), w.cell_id());
         assert_eq!(ctx.executor().cell_id(), e.cell_id());
     }
 

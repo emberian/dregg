@@ -156,18 +156,18 @@ fn check_identity_logic() -> Result<(), String> {
 
     let cred_id = credential.id;
 
-    // 3. Store credential in a wallet.
-    let mut wallet = CredentialWallet::new(holder_id);
-    wallet.store(credential.clone());
+    // 3. Store credential in a cclerk.
+    let mut cclerk = CredentialWallet::new(holder_id);
+    cclerk.store(credential.clone());
 
-    if wallet.len() != 1 {
+    if cclerk.len() != 1 {
         return Err(format!(
-            "wallet should have 1 credential, got {}",
-            wallet.len()
+            "cclerk should have 1 credential, got {}",
+            cclerk.len()
         ));
     }
-    if wallet.get(&cred_id).is_none() {
-        return Err("wallet should find stored credential".into());
+    if cclerk.get(&cred_id).is_none() {
+        return Err("cclerk should find stored credential".into());
     }
 
     // 4. Build a presentation with selective disclosure.

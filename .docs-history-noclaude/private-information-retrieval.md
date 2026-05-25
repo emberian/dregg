@@ -283,7 +283,7 @@ For in-STARK ORAM:
 
 ### 4.5 When ORAM Makes Sense
 
-- **Private batch scanning**: An agent wants to check ALL nullifiers in their wallet against the spent set without revealing which wallet they hold. This is O(K) queries for K wallet entries. ORAM amortizes well here.
+- **Private batch scanning**: An agent wants to check ALL nullifiers in their cclerk against the spent set without revealing which cclerk they hold. This is O(K) queries for K cclerk entries. ORAM amortizes well here.
 - **Stateful private subscriptions**: An agent subscribes to "notify me when any of my intents are matched" without revealing which intents are theirs. The subscription service uses ORAM to access the match state privately.
 
 ---

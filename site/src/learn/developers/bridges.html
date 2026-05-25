@@ -198,10 +198,10 @@ pyana bridge midnight respond --challenge $CHALLENGE_ID</code></pre>
 
     <h2 id="sdk">SDK Bridge Operations</h2>
 
-    <pre><code class="language-rust">use pyana_sdk::AgentWallet;
+    <pre><code class="language-rust">use pyana_sdk::AgentCipherclerk;
 use pyana_chain::{EvmBridge, MinaBridge};
 
-let cclerk = AgentWallet::new();
+let cclerk = AgentCipherclerk::new();
 
 // EVM: wrap and submit
 let stark_proof = cclerk.generate_proof(turn, Backend::Plonky3)?;

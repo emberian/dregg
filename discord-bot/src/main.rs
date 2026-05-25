@@ -1,12 +1,12 @@
-//! pyana Discord Bot — custodial-wallet front-end to the pyana devnet.
+//! pyana Discord Bot — custodial-cclerk front-end to the pyana devnet.
 //!
 //! Lives at the workspace toplevel `/discord-bot` (peer of `node`, `sdk`,
-//! `app-framework`) rather than under `apps/`. Per-user wallets are
+//! `app-framework`) rather than under `apps/`. Per-user cipherclerks are
 //! handles to `pyana_app_framework::AppCipherclerk` — the canonical narrow
 //! SDK surface — derived deterministically from the bot's secret and
 //! Discord user id.
 //!
-//! Slash commands cover: wallet management, transfers, gallery
+//! Slash commands cover: cclerk management, transfers, gallery
 //! (apps/gallery), credentials (apps/identity), block-explorer browsing,
 //! presence attestation (proof-of-online dischargeable caveats), CapTP
 //! (bot as a capability peer), programmable queues, governance
@@ -15,6 +15,7 @@
 
 mod activity_feed;
 pub mod captp_client;
+mod cipherclerk;
 mod commands;
 mod config;
 mod db;
@@ -22,7 +23,6 @@ mod devnet;
 pub mod discord_caps;
 mod embeds;
 pub mod presence;
-mod wallet;
 
 use std::sync::Arc;
 
@@ -54,7 +54,7 @@ pub struct BotState {
     /// Event bridge: Discord events → pyana turns.
     pub event_bridge: EventBridge,
     /// The federation id this bot binds cipherclerk signatures to. Threaded
-    /// through every per-user `UserWallet::derive(...)` call so the
+    /// through every per-user `UserCipherclerk::derive(...)` call so the
     /// AppCipherclerk's action signatures are bound to the correct group.
     pub federation_id_bytes: [u8; 32],
 }
@@ -79,7 +79,7 @@ impl EventHandler for Handler {
             // ─── Bot core ───────────────────────────────────────────────────
             commands::explorer::register(),
             commands::presence::register(),
-            commands::wallet::register(),
+            commands::cipherclerk::register(),
             commands::transfer::register_send(),
             commands::transfer::register_tip(),
             commands::gallery::register(),
@@ -134,7 +134,7 @@ impl EventHandler for Handler {
                 // ─── Bot core ───────────────────────────────────────────────
                 "explorer" => commands::explorer::handle(&ctx, &command, &self.state).await,
                 "presence" => commands::presence::handle(&ctx, &command, &self.state).await,
-                "wallet" => commands::wallet::handle(&ctx, &command, &self.state).await,
+                "cipherclerk" => commands::cipherclerk::handle(&ctx, &command, &self.state).await,
                 "send" | "tip" => commands::transfer::handle(&ctx, &command, &self.state).await,
                 "gallery" => commands::gallery::handle(&ctx, &command, &self.state).await,
                 "credential" => commands::identity::handle(&ctx, &command, &self.state).await,
@@ -187,10 +187,10 @@ impl EventHandler for Handler {
                 "setup-federation" => {
                     commands::federation::handle_setup(&ctx, &command, &self.state).await
                 }
-                "link-wallet" => {
+                "link-cipherclerk" => {
                     commands::federation::handle_link(&ctx, &command, &self.state).await
                 }
-                "unlink-wallet" => {
+                "unlink-cipherclerk" => {
                     commands::federation::handle_unlink(&ctx, &command, &self.state).await
                 }
                 _ => {
@@ -267,13 +267,14 @@ async fn main() {
 
     // Build CapTP client (the bot's own pyana identity).
     //
-    // The bot's own wallet is the user_id == 0 derivation. We use the
+    // The bot's own cclerk is the user_id == 0 derivation. We use the
     // canonical AppCipherclerk so the bot's identity (cell id, public key)
     // is computed the same way as any other pyana agent.
     let federation_id_bytes = [0u8; 32]; // Will be configured per-deployment.
     let bot_cell_id = {
-        let wallet = wallet::UserWallet::derive(&config.bot_secret, 0, federation_id_bytes);
-        wallet.cell_id_hex().to_string()
+        let cclerk =
+            cipherclerk::UserCipherclerk::derive(&config.bot_secret, 0, federation_id_bytes);
+        cclerk.cell_id_hex().to_string()
     };
     let federation_id = pyana_captp::FederationId(federation_id_bytes);
     let captp = CapTPClient::new(

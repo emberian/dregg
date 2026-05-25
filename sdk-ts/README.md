@@ -21,30 +21,30 @@ const wasm = await init();
 const client = await PyanaClient.init(wasm);
 
 // Mint a token
-const token = await client.wallet.mint("api-gateway");
+const token = await client.cclerk.mint("api-gateway");
 console.log(token.token); // "em2_..."
 
 // Attenuate (restrict) the token
-const restricted = await client.wallet.attenuate(token.token, {
+const restricted = await client.cclerk.attenuate(token.token, {
   service: "api-gateway",
   actions: "read",
   expiresSecs: 3600,
 });
 
 // Verify
-const result = await client.wallet.verify(restricted.token, { action: "read" });
+const result = await client.cclerk.verify(restricted.token, { action: "read" });
 console.log(result.allowed); // true
 ```
 
 ## Modules
 
-### Wallet (Token Lifecycle)
+### Cipherclerk (Token Lifecycle)
 
 ```ts
-const wallet = await AgentWallet.create(wasm);
-const token = await wallet.mint("my-service");
-const attenuated = await wallet.attenuate(token.token, { actions: "read" });
-const verified = await wallet.verify(attenuated.token, { action: "read" });
+const cclerk = await AgentCipherclerk.create(wasm);
+const token = await cclerk.mint("my-service");
+const attenuated = await cclerk.attenuate(token.token, { actions: "read" });
+const verified = await cclerk.verify(attenuated.token, { action: "read" });
 ```
 
 ### STARK Proofs
@@ -124,7 +124,7 @@ runtime.destroy();
 | Class | Purpose |
 |-------|---------|
 | `PyanaClient` | Main entry point combining all subsystems |
-| `AgentWallet` | Token mint/attenuate/verify |
+| `AgentCipherclerk` | Token mint/attenuate/verify |
 | `TokenOps` | Fold chains, BLAKE3 hashing, intent IDs |
 | `ProofEngine` | STARK proofs, predicates, Schnorr, garbled circuits |
 | `MerkleTree` | Root computation, membership/non-membership proofs |

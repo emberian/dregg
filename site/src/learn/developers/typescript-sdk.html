@@ -81,11 +81,11 @@ console.log(result.allowed); // true</code></pre>
     <h2 id="cipherclerk">Cipherclerk (Token Lifecycle)</h2>
 
     <p>
-      The <code>AgentWallet</code> class manages token minting, attenuation, and verification.
-      It mirrors the Rust SDK's <code>AgentWallet</code> API.
+      The <code>AgentCipherclerk</code> class manages token minting, attenuation, and verification.
+      It mirrors the Rust SDK's <code>AgentCipherclerk</code> API.
     </p>
 
-    <pre><code class="language-rust">const cclerk = await AgentWallet.create(wasm);
+    <pre><code class="language-rust">const cclerk = await AgentCipherclerk.create(wasm);
 
 // Mint a root token for a service
 const token = await cclerk.mint("my-service");
@@ -206,7 +206,7 @@ runtime.destroy();</code></pre>
           <td>Main entry point combining all subsystems</td>
         </tr>
         <tr>
-          <td><code>AgentWallet</code></td>
+          <td><code>AgentCipherclerk</code></td>
           <td>Token mint / attenuate / verify</td>
         </tr>
         <tr>

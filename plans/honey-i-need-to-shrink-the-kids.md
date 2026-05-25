@@ -130,7 +130,7 @@ This naturally incentivizes:
 
 ## What's Realistic SOON (for testnet)
 
-4. **IVC compression for sovereign histories** — infrastructure exists, needs wallet integration
+4. **IVC compression for sovereign histories** — infrastructure exists, needs cclerk integration
 5. **Algebraic accumulator for nullifiers** — AIR exists, needs to replace the Merkle-based nullifier set
 6. **Archival mode flag** — full nodes keep everything, light nodes prune aggressively
 

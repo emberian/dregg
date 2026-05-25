@@ -4,7 +4,7 @@ Short answer: No. The system provides component-level privacy (PIR for browsing,
 
 ## 1. Intent Posting Is a Surveillance Surface
 
-Intents are broadcast in cleartext over gossip. Every peer sees the full MatchSpec: actions, resources, constraints, budget. The CommitmentId is pseudonymous but REUSED across intents from the same wallet within an epoch. An observer trivially builds profiles:
+Intents are broadcast in cleartext over gossip. Every peer sees the full MatchSpec: actions, resources, constraints, budget. The CommitmentId is pseudonymous but REUSED across intents from the same cclerk within an epoch. An observer trivially builds profiles:
 
 - "CommitmentId 0xAB posts GPU compute intents every Monday, budget 500-1000"
 - "CommitmentId 0xCD always needs document/reports/* read access after 0xAB posts"

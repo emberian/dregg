@@ -36,7 +36,7 @@ Options:
 
 | Feature | GitHub Bounties | Gitcoin | Pyana Bounty Board |
 |---------|----------------|---------|-------------------|
-| Worker identity | Public (GitHub profile) | Public (wallet address) | Private (blinded commitment) |
+| Worker identity | Public (GitHub profile) | Public (cclerk address) | Private (blinded commitment) |
 | Payment | Manual transfer | On-chain, public | Private notes |
 | Qualification | Trust/reputation | On-chain history | ZK predicate proof |
 | Completion verification | Human review | Human review | STARK proof + optional human review |

@@ -260,11 +260,11 @@ impl Turn {
     // them without invalidating the signature (the "proof-swap attack").
     //
     // Note for callers: this hash is a content-addressed identifier for
-    // the entire `Turn` object. The wallet still signs over its own
-    // `compute_turn_bytes` (sdk/src/wallet.rs) which deliberately covers
-    // only the fields a wallet sees at sign time; `Turn::hash` is what
+    // the entire `Turn` object. The cclerk still signs over its own
+    // `compute_turn_bytes` (sdk/src/cipherclerk.rs) which deliberately covers
+    // only the fields a cclerk sees at sign time; `Turn::hash` is what
     // the executor, receipt chain, and (post-Stage 7-γ.0) the per-cell
-    // proof bundle agree on after the fact. Wallet signature compatibility
+    // proof bundle agree on after the fact. Cipherclerk signature compatibility
     // is therefore preserved by this bump.
     pub fn hash(&self) -> [u8; 32] {
         let forest_hash = self.call_forest.compute_hash();

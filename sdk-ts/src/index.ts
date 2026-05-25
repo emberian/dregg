@@ -18,8 +18,8 @@
  * const client = new PyanaClient(wasm);
  *
  * // Mint and verify a token
- * const token = await client.wallet.mint("my-service");
- * const result = await client.wallet.verify(token.token, { action: "read" });
+ * const token = await client.cclerk.mint("my-service");
+ * const result = await client.cclerk.verify(token.token, { action: "read" });
  *
  * // Generate a STARK proof
  * const proof = await client.proof.generateStarkProof(42, 4);
@@ -32,8 +32,8 @@
  * @packageDocumentation
  */
 
-export { AgentWallet } from "./wallet";
-export type { AttenuateOptions, VerifyOptions } from "./wallet";
+export { AgentCipherclerk } from "./cipherclerk";
+export type { AttenuateOptions, VerifyOptions } from "./cipherclerk";
 
 export { TokenOps } from "./token";
 export type { FoldOptions } from "./token";
@@ -109,7 +109,7 @@ export type {
   AuthRequired,
 } from "./types";
 
-import { AgentWallet } from "./wallet";
+import { AgentCipherclerk } from "./cipherclerk";
 import { TokenOps } from "./token";
 import { ProofEngine } from "./proof";
 import { MerkleTree } from "./merkle";
@@ -118,7 +118,7 @@ import { PyanaRuntime } from "./runtime";
 
 /**
  * PyanaClient is the main entry point for the SDK. It combines all subsystems
- * (wallet, proofs, merkle, predicates, runtime) into a single cohesive interface.
+ * (cclerk, proofs, merkle, predicates, runtime) into a single cohesive interface.
  *
  * @example
  * ```ts
@@ -129,14 +129,14 @@ import { PyanaRuntime } from "./runtime";
  * const client = new PyanaClient(wasm);
  *
  * // Use individual subsystems
- * const token = await client.wallet.mint("api-gateway");
+ * const token = await client.cclerk.mint("api-gateway");
  * const proof = await client.proof.generateStarkProof(7, 3);
  * const root = await client.merkle.computeRoot(["a", "b", "c"]);
  * ```
  */
 export class PyanaClient {
   /** Token minting, attenuation, and verification. */
-  public readonly wallet: AgentWallet;
+  public readonly cclerk: AgentCipherclerk;
   /** Token state operations and BLAKE3 hashing. */
   public readonly token: TokenOps;
   /** STARK proofs, predicate proofs, signatures. */
@@ -150,14 +150,14 @@ export class PyanaClient {
 
   /**
    * Create a new PyanaClient. Prefer using `PyanaClient.init()` which
-   * handles async wallet creation.
+   * handles async cclerk creation.
    *
    * @param wasm - The initialized pyana-wasm module.
-   * @param wallet - A pre-created AgentWallet instance.
+   * @param cclerk - A pre-created AgentCipherclerk instance.
    */
-  constructor(wasm: typeof import("pyana-wasm"), wallet: AgentWallet) {
+  constructor(wasm: typeof import("pyana-wasm"), cclerk: AgentCipherclerk) {
     this.wasm = wasm;
-    this.wallet = wallet;
+    this.cclerk = cclerk;
     this.token = new TokenOps(wasm);
     this.proof = new ProofEngine(wasm);
     this.merkle = new MerkleTree(wasm);
@@ -165,7 +165,7 @@ export class PyanaClient {
   }
 
   /**
-   * Initialize a PyanaClient with a fresh random wallet.
+   * Initialize a PyanaClient with a fresh random cclerk.
    *
    * This is the recommended way to create a client instance.
    *
@@ -173,8 +173,8 @@ export class PyanaClient {
    * @returns A fully initialized PyanaClient.
    */
   static async init(wasm: typeof import("pyana-wasm")): Promise<PyanaClient> {
-    const wallet = await AgentWallet.create(wasm);
-    return new PyanaClient(wasm, wallet);
+    const cclerk = await AgentCipherclerk.create(wasm);
+    return new PyanaClient(wasm, cclerk);
   }
 
   /**
@@ -188,8 +188,8 @@ export class PyanaClient {
     wasm: typeof import("pyana-wasm"),
     rootKey: Uint8Array | string
   ): PyanaClient {
-    const wallet = AgentWallet.fromKey(wasm, rootKey);
-    return new PyanaClient(wasm, wallet);
+    const cclerk = AgentCipherclerk.fromKey(wasm, rootKey);
+    return new PyanaClient(wasm, cclerk);
   }
 
   /**

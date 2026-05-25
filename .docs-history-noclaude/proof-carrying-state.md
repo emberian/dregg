@@ -199,7 +199,7 @@ Keep the `Ledger` but make it a cache/index rather than the source of truth.
 
 Changes:
 - Add a `receipt_chain: Vec<TurnReceipt>` field to each agent's local state
-  (in `sdk/src/wallet.rs` or equivalent)
+  (in `sdk/src/cipherclerk.rs` or equivalent)
 - The executor still updates the Ledger (for fast lookups), but the chain is
   what you present to others
 - `IvcBuilder` wraps receipt production: each turn that commits also extends
@@ -423,7 +423,7 @@ The server maintains the full proof chain on behalf of the agent. The agent can
 request their chain at any time (for portability/verification). The server acts
 as both local index (for queries) and proof chain custodian (for the agent).
 
-This is equivalent to "hosted wallet" -- the security model is that you trust the
+This is equivalent to "hosted cclerk" -- the security model is that you trust the
 server, and the proof chain provides an exit path if you stop trusting it.
 
 ### Recovery
@@ -471,7 +471,7 @@ proves I hold capabilities C derived from that state").
 1. **Wire IvcBuilder into the executor flow** -- each committed turn extends
    the agent's IVC accumulation. This is additive (no breaking changes).
 
-2. **Add receipt chain to the SDK wallet** -- agents carry their receipt history
+2. **Add receipt chain to the SDK cclerk** -- agents carry their receipt history
    locally. Still use Ledger for federation-side lookups.
 
 3. **Add IvcProof as an alternative to MembershipProof in the bridge layer** --

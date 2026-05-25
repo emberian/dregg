@@ -166,13 +166,13 @@ mod tests {
     use super::*;
     use crate::creator::{Creator, Tier};
     use crate::crypto::{decrypt_with, pubkey_from_privkey};
-    use crate::subscriber::{SubscriberRegistry, deterministic_wallet};
+    use crate::subscriber::{SubscriberRegistry, deterministic_cclerk};
 
-    fn wallet(seed: u8) -> pyana_sdk::AgentCipherclerk {
+    fn cclerk(seed: u8) -> pyana_sdk::AgentCipherclerk {
         let mut s = [0u8; 32];
         s[0] = seed;
         s[31] = seed.wrapping_mul(13);
-        deterministic_wallet(s)
+        deterministic_cclerk(s)
     }
 
     /// ADVERSARIAL: published content lands in the inbox as ciphertext that
@@ -180,8 +180,8 @@ mod tests {
     #[tokio::test]
     async fn publish_encrypts_then_alice_decrypts() {
         let mut reg = SubscriberRegistry::new();
-        let alice = wallet(1);
-        let creator_w = wallet(2);
+        let alice = cclerk(1);
+        let creator_w = cclerk(2);
 
         let alice_priv = {
             let mut k = [0u8; 32];
@@ -234,8 +234,8 @@ mod tests {
     #[tokio::test]
     async fn bob_cannot_decrypt_alices_content() {
         let mut reg = SubscriberRegistry::new();
-        let alice = wallet(3);
-        let creator_w = wallet(4);
+        let alice = cclerk(3);
+        let creator_w = cclerk(4);
 
         let alice_priv = [0xA3u8; 32];
         let bob_priv = [0xB3u8; 32];
@@ -277,8 +277,8 @@ mod tests {
     #[tokio::test]
     async fn inbox_has_pending_after_publish() {
         let mut reg = SubscriberRegistry::new();
-        let alice = wallet(5);
-        let creator_w = wallet(6);
+        let alice = cclerk(5);
+        let creator_w = cclerk(6);
         let alice_priv = [0xC1u8; 32];
         reg.register_subscriber(alice.public_key(), pubkey_from_privkey(&alice_priv));
 
@@ -314,8 +314,8 @@ mod tests {
     #[tokio::test]
     async fn subscriber_without_recv_key_is_skipped() {
         let mut reg = SubscriberRegistry::new();
-        let alice = wallet(7);
-        let creator_w = wallet(8);
+        let alice = cclerk(7);
+        let creator_w = cclerk(8);
 
         // NOTE: don't call register_subscriber, so recv_pubkey is [0; 32].
         let mut creator = Creator::new(creator_w.public_key());

@@ -26,8 +26,8 @@
 //! `sender_hex`" — closes naturally in the migration: the executor
 //! will only accept `Effect::QueueEnqueue` (or its `SetField`
 //! equivalent) authorized by a real `Authorization::Signature` from
-//! the sender's wallet. The HTTP handler stops carrying a `sender_hex`
-//! request field and instead extracts the signing wallet from the
+//! the sender's cipherclerk. The HTTP handler stops carrying a `sender_hex`
+//! request field and instead extracts the signing cipherclerk from the
 //! `AppCipherclerk` axum Extension.
 //!
 //! Verdict: **(c) needs updates post-migration**. Same shape as the

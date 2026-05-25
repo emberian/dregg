@@ -7,7 +7,7 @@ authors.workspace = true
 license.workspace = true
 homepage.workspace = true
 repository.workspace = true
-description = "Federation node daemon — hosts an agent wallet, participates in consensus, and serves a localhost API"
+description = "Federation node daemon — hosts an agent cipherclerk, participates in consensus, and serves a localhost API"
 
 [dependencies]
 pyana-types = { path = "../types" }

@@ -491,7 +491,7 @@ impl TurnExecutor {
         // the latter hashes `action.hash()`, which itself hashes
         // `action.witness_blobs` — and `witness_blobs` contains the
         // very proof bytes the predicate's verifier is checking. That
-        // would be circular at proof-generation time (the wallet would
+        // would be circular at proof-generation time (the cclerk would
         // need the proof bytes to compute the message that the proof
         // commits to).
         //

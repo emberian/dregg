@@ -261,7 +261,7 @@ pub struct SovereignRegistration {
     /// the Ed25519 public key that signs sovereign witnesses for this cell.
     /// The federation stores this at registration time so the verifier can
     /// recompute `PI[SOVEREIGN_WITNESS_KEY_COMMIT_BASE..+4]` independent of
-    /// the wallet's claim. `None` represents pre-AIR-teeth registrations;
+    /// the cipherclerk's claim. `None` represents pre-AIR-teeth registrations;
     /// those proofs verify with zero-sentinel PI, which the AIR boundary
     /// accepts (sentinel agreement). Phase 1.5: existing call sites
     /// populate this field; the option type goes away in Stage 10.

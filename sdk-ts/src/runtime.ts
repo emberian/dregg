@@ -96,7 +96,7 @@ export class PyanaRuntime {
   // ==========================================================================
 
   /**
-   * Create an agent (wallet + cell) in the runtime.
+   * Create an agent (cclerk + cell) in the runtime.
    *
    * The agent gets a deterministic keypair derived from their name,
    * a cell in the ledger with the specified balance, and a commitment ID

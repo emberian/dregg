@@ -13,7 +13,7 @@
 //!
 //! Shows:
 //! - MCP tool invocation (JSON-RPC 2.0 protocol)
-//! - Token receipt and storage in an AgentWallet
+//! - Token receipt and storage in an AgentCipherclerk
 //! - Selective disclosure (prove "can access api/v1/users" without revealing full permission set)
 //! - Delegation to sub-agent (attenuated token with budget constraint)
 //! - The "home for AI" narrative: real crypto behind simple tool calls
@@ -22,7 +22,7 @@
 
 use std::time::Instant;
 
-use pyana_sdk::{AgentWallet, AuthorizationPresentation, FactIndex, VerificationMode};
+use pyana_sdk::{AgentCipherclerk, AuthorizationPresentation, FactIndex, VerificationMode};
 use pyana_token::{Attenuation, AuthRequest, BudgetSpec};
 
 /// Format a JSON-RPC request the way it would appear on the wire.
@@ -186,8 +186,8 @@ fn main() {
 
     // --- Simulate the actual token minting (what the MCP handler does) ---
     let issuer_key = *blake3::hash(b"pyana-node:issuer:mcp-root-key-v1").as_bytes();
-    let mut wallet = AgentWallet::new();
-    let root_token = wallet.mint_token(&issuer_key, "pyana-mcp-gateway");
+    let mut cclerk = AgentCipherclerk::new();
+    let root_token = cclerk.mint_token(&issuer_key, "pyana-mcp-gateway");
 
     // Attenuate to the requested scope (using apps dimension which is well-tested)
     let agent_attenuation = Attenuation {
@@ -201,8 +201,8 @@ fn main() {
         ..Default::default()
     };
 
-    // Use the wallet to attenuate (returns HeldToken for wallet operations)
-    let held = wallet.attenuate(&root_token, &agent_attenuation).unwrap();
+    // Use the cclerk to attenuate (returns HeldToken for cclerk operations)
+    let held = cclerk.attenuate(&root_token, &agent_attenuation).unwrap();
 
     // Simulate the token ID (first 8 bytes of token hash for display)
     let token_id = short_hex(blake3::hash(b"claude-agent-token-id-v1").as_bytes());
@@ -228,7 +228,7 @@ fn main() {
     println!();
 
     // Verify the ROOT token works (before attenuation) — confirms the issuer setup is valid
-    let root_verify = wallet.authorize(
+    let root_verify = cclerk.authorize(
         &root_token,
         &AuthRequest {
             app_id: Some("api/v1/users".into()),
@@ -277,7 +277,7 @@ fn main() {
 
     // Generate a selective disclosure presentation using the root token
     let prove_start = Instant::now();
-    let presentation = wallet.authorize(
+    let presentation = cclerk.authorize(
         &root_token,
         &AuthRequest {
             app_id: Some("api/v1/users".into()),
@@ -326,7 +326,7 @@ fn main() {
     println!();
 
     // Also show the fully-private mode (zero facts revealed)
-    let private_result = wallet.authorize(
+    let private_result = cclerk.authorize(
         &root_token,
         &AuthRequest {
             app_id: Some("api/v1/users".into()),
@@ -374,14 +374,14 @@ fn main() {
     println!("  {}", indent(&delegate_call, 4));
     println!();
 
-    // Perform the actual delegation via the wallet (narrow to read-only + user confinement)
+    // Perform the actual delegation via the cclerk (narrow to read-only + user confinement)
     let sub_attenuation = Attenuation {
         apps: vec![("api/v1/users".into(), "r".into())], // Read only!
         confine_user: Some("enrichment-tool-v2".into()),
         ..Default::default()
     };
 
-    let sub_held = wallet.attenuate(&held, &sub_attenuation).unwrap();
+    let sub_held = cclerk.attenuate(&held, &sub_attenuation).unwrap();
 
     let sub_token_id = short_hex(blake3::hash(b"enrichment-tool-token-id").as_bytes());
     let delegate_response = format_jsonrpc_response(

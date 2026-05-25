@@ -574,10 +574,10 @@ fn run_token_revocation(nullifier_set: &mut NullifierSet) -> Result<(), Box<dyn 
 }
 
 fn run_progressive_disclosure(issuer_key: &[u8; 32]) -> Result<(), Box<dyn Error>> {
-    use pyana_sdk::{AgentWallet, AuthorizationPresentation, VerificationMode};
-    let mut wallet = AgentWallet::new();
-    let root_token = wallet.mint_token(issuer_key, "infrastructure");
-    let attenuated = wallet.attenuate(
+    use pyana_sdk::{AgentCipherclerk, AuthorizationPresentation, VerificationMode};
+    let mut cclerk = AgentCipherclerk::new();
+    let root_token = cclerk.mint_token(issuer_key, "infrastructure");
+    let attenuated = cclerk.attenuate(
         &root_token,
         &Attenuation {
             apps: vec![("deployments".into(), "rwcd".into())],
@@ -597,11 +597,11 @@ fn run_progressive_disclosure(issuer_key: &[u8; 32]) -> Result<(), Box<dyn Error
     };
 
     assert!(matches!(
-        wallet.authorize(&attenuated, &request, VerificationMode::Trusted),
+        cclerk.authorize(&attenuated, &request, VerificationMode::Trusted),
         Ok(AuthorizationPresentation::Trusted { .. })
     ));
     assert!(matches!(
-        wallet.authorize(
+        cclerk.authorize(
             &attenuated,
             &request,
             VerificationMode::SelectiveDisclosure {
@@ -611,7 +611,7 @@ fn run_progressive_disclosure(issuer_key: &[u8; 32]) -> Result<(), Box<dyn Error
         Ok(AuthorizationPresentation::Selective { .. })
     ));
     assert!(matches!(
-        wallet.authorize(&attenuated, &request, VerificationMode::FullyPrivate),
+        cclerk.authorize(&attenuated, &request, VerificationMode::FullyPrivate),
         Ok(AuthorizationPresentation::Private { .. })
     ));
     Ok(())
@@ -1125,20 +1125,20 @@ fn run_federation_bootstrap(federation: &SharedFederation) -> Result<(), Box<dyn
     Ok(())
 }
 
-fn run_wallet_lifecycle() -> Result<(), Box<dyn Error>> {
-    use pyana_sdk::AgentWallet;
-    let mut wallet = AgentWallet::new();
-    assert_ne!(wallet.public_key().0, [0u8; 32]);
-    let ik = *blake3::hash(b"wallet-lifecycle-issuer").as_bytes();
-    let rt = wallet.mint_token(&ik, "test-service");
-    let att = wallet.attenuate(
+fn run_cipherclerk_lifecycle() -> Result<(), Box<dyn Error>> {
+    use pyana_sdk::AgentCipherclerk;
+    let mut cclerk = AgentCipherclerk::new();
+    assert_ne!(cclerk.public_key().0, [0u8; 32]);
+    let ik = *blake3::hash(b"cclerk-lifecycle-issuer").as_bytes();
+    let rt = cclerk.mint_token(&ik, "test-service");
+    let att = cclerk.attenuate(
         &rt,
         &Attenuation {
             services: vec![("test-service".into(), "r".into())],
             ..Default::default()
         },
     )?;
-    let result = wallet.authorize(
+    let result = cclerk.authorize(
         &att,
         &AuthRequest {
             service: Some("test-service".into()),
@@ -1256,8 +1256,8 @@ fn main() {
     results.push(run_demo("Offline verification", "Advanced", || {
         run_offline_verification(&shared.federation)
     }));
-    results.push(run_demo("Wallet lifecycle", "Advanced", || {
-        run_wallet_lifecycle()
+    results.push(run_demo("Cipherclerk lifecycle", "Advanced", || {
+        run_cipherclerk_lifecycle()
     }));
     results.push(run_demo("Multi-silo budget", "Advanced", || {
         run_multi_silo_budget()

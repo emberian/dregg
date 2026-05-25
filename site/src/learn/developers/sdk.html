@@ -24,17 +24,17 @@
     <h2 id="cipherclerk">Creating a Cipherclerk</h2>
 
     <p>
-      The <code>AgentWallet</code> is the primary credential holder. It manages your
+      The <code>AgentCipherclerk</code> is the primary credential holder. It manages your
       Ed25519 identity, token collection, and proof generation.
     </p>
 
-    <pre><code class="language-rust">use pyana_sdk::AgentWallet;
+    <pre><code class="language-rust">use pyana_sdk::AgentCipherclerk;
 
 // Option 1: Fresh random identity
-let mut cclerk = AgentWallet::new();
+let mut cclerk = AgentCipherclerk::new();
 
 // Option 2: From a 24-word mnemonic (deterministic, recoverable)
-let mut cclerk = AgentWallet::from_mnemonic(
+let mut cclerk = AgentCipherclerk::from_mnemonic(
     "abandon abandon abandon ... (24 words)",
     ""  // optional passphrase
 ).unwrap();
@@ -42,7 +42,7 @@ let mut cclerk = AgentWallet::from_mnemonic(
 // Option 3: From raw key bytes (restore from backup)
 use zeroize::Zeroizing;
 let secret = Zeroizing::new([0u8; 32]); // your saved key
-let mut cclerk = AgentWallet::from_key_bytes(secret);
+let mut cclerk = AgentCipherclerk::from_key_bytes(secret);
 
 // Get your public identity
 let my_identity = cclerk.public_key();
@@ -59,9 +59,9 @@ println!("Agent ID: {:?}", my_identity);</code></pre>
       <span class="keyword">pub fn</span> <span class="fn-name">mint_token</span>(<span class="param">&amp;mut self, root_key: &amp;[u8; 32], service: &amp;str</span>) -> <span class="type">HeldToken</span>
     </div>
 
-    <pre><code class="language-rust">use pyana_sdk::AgentWallet;
+    <pre><code class="language-rust">use pyana_sdk::AgentCipherclerk;
 
-let mut cclerk = AgentWallet::new();
+let mut cclerk = AgentCipherclerk::new();
 
 // The root_key is your HMAC secret. Guard it carefully.
 let root_key: [u8; 32] = *b"my-secret-root-key-32-bytes!!!!!";
@@ -80,9 +80,9 @@ assert!(root_token.can_mint()); // Root tokens can forge new ones</code></pre>
       <span class="keyword">pub fn</span> <span class="fn-name">attenuate</span>(<span class="param">&amp;mut self, token: &amp;HeldToken, restrictions: &amp;Attenuation</span>) -> <span class="type">Result&lt;HeldToken, SdkError&gt;</span>
     </div>
 
-    <pre><code class="language-rust">use pyana_sdk::{AgentWallet, Attenuation};
+    <pre><code class="language-rust">use pyana_sdk::{AgentCipherclerk, Attenuation};
 
-let mut cclerk = AgentWallet::new();
+let mut cclerk = AgentCipherclerk::new();
 let root = cclerk.mint_token(b"my-secret-root-key-32-bytes!!!!!", "api");
 
 // Restrict to read-only on the "dns" service
@@ -103,10 +103,10 @@ assert!(!restricted.can_mint()); // Attenuated tokens cannot forge</code></pre>
       <span class="keyword">pub fn</span> <span class="fn-name">delegate</span>(<span class="param">&amp;mut self, token: &amp;HeldToken, to: &amp;PublicKey, restrictions: &amp;Attenuation</span>) -> <span class="type">Result&lt;DelegatedToken, SdkError&gt;</span>
     </div>
 
-    <pre><code class="language-rust">use pyana_sdk::{AgentWallet, Attenuation, PublicKey};
+    <pre><code class="language-rust">use pyana_sdk::{AgentCipherclerk, Attenuation, PublicKey};
 
-let mut alice = AgentWallet::new();
-let mut bob = AgentWallet::new();
+let mut alice = AgentCipherclerk::new();
+let mut bob = AgentCipherclerk::new();
 
 let root = alice.mint_token(b"alice-secret-key-32-bytes!!!!!!!", "storage");
 
@@ -135,9 +135,9 @@ bob.receive_signed_delegation(
       <span class="keyword">pub fn</span> <span class="fn-name">authorize</span>(<span class="param">&amp;self, token: &amp;HeldToken, request: &amp;AuthRequest, mode: VerificationMode</span>) -> <span class="type">Result&lt;AuthorizationPresentation, SdkError&gt;</span>
     </div>
 
-    <pre><code class="language-rust">use pyana_sdk::{AgentWallet, VerificationMode, AuthorizationPresentation, AuthRequest};
+    <pre><code class="language-rust">use pyana_sdk::{AgentCipherclerk, VerificationMode, AuthorizationPresentation, AuthRequest};
 
-let mut cclerk = AgentWallet::new();
+let mut cclerk = AgentCipherclerk::new();
 let token = cclerk.mint_token(b"my-secret-root-key-32-bytes!!!!!", "dns");
 
 let request = AuthRequest {
@@ -170,9 +170,9 @@ match private {
       <span class="keyword">pub fn</span> <span class="fn-name">sign_turn</span>(<span class="param">&amp;self, turn: &amp;Turn</span>) -> <span class="type">SignedTurn</span>
     </div>
 
-    <pre><code class="language-rust">use pyana_sdk::{AgentWallet, CellId, Turn, TurnBuilder, Effect};
+    <pre><code class="language-rust">use pyana_sdk::{AgentCipherclerk, CellId, Turn, TurnBuilder, Effect};
 
-let cclerk = AgentWallet::new();
+let cclerk = AgentCipherclerk::new();
 
 // Build a turn targeting a cell
 let turn = TurnBuilder::new()
@@ -198,10 +198,10 @@ let signed = cclerk.sign_turn(&turn);
       After each successful turn, append the receipt to build a verifiable history:
     </p>
 
-    <pre><code class="language-rust">use pyana_sdk::AgentWallet;
+    <pre><code class="language-rust">use pyana_sdk::AgentCipherclerk;
 use pyana_turn::TurnReceipt;
 
-let mut cclerk = AgentWallet::new();
+let mut cclerk = AgentCipherclerk::new();
 
 // After a turn is committed by the federation:
 // cclerk.append_receipt(receipt);
@@ -219,9 +219,9 @@ pyana_turn::verify_receipt_chain(chain).unwrap();</code></pre>
       Enable IVC to compress your entire receipt chain into a constant-size proof:
     </p>
 
-    <pre><code class="language-rust">use pyana_sdk::{AgentWallet, BabyBear, verify_ivc};
+    <pre><code class="language-rust">use pyana_sdk::{AgentCipherclerk, BabyBear, verify_ivc};
 
-let mut cclerk = AgentWallet::new();
+let mut cclerk = AgentCipherclerk::new();
 
 // Enable IVC accumulation (provide initial state root)
 cclerk.enable_ivc(BabyBear::new(0));

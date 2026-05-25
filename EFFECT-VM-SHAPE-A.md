@@ -29,7 +29,7 @@ to "actually has a hope of correct."
 - `DESIGN-dsl.md` — typestate `ActionBuilder`, four-layer tower, all 42 effects reachable
 - `DESIGN-captp-integration.md` — 3 new committed Merkle roots, consume-on-use handoffs
 
-**Companion audits** (also in root): `AUDIT-wallet.md`, `AUDIT-sdk-rest.md`, `AUDIT-node.md`,
+**Companion audits** (also in root): `AUDIT-cclerk.md`, `AUDIT-sdk-rest.md`, `AUDIT-node.md`,
 `AUDIT-extension.md`, `AUDIT-circuit.md`, `AUDIT-wasm.md`, `AUDIT-cell.md`,
 `AUDIT-turn-executor.md`, `AUDIT-dsl.md`, `REVIEW-effect-vm.md`.
 
@@ -62,7 +62,7 @@ The codebase is supposed to deliver:
 (Each entry has a corresponding fix below. Cross-refs to audit findings.)
 
 ### Build & compile
-- **B-1.** Repo doesn't compile: `sdk/wallet.rs:6833,6850` `receive_local_delegation`
+- **B-1.** Repo doesn't compile: `sdk/cipherclerk.rs:6833,6850` `receive_local_delegation`
   signature mismatch — partial revert from concurrent agents. Blocks workspace check.
 
 ### Effect VM coherence
@@ -105,13 +105,13 @@ The codebase is supposed to deliver:
 - **D-5.** `apps/gallery/src/settlement.rs:92,110` declares `balance_change` deltas that
   don't match `Transfer` amounts — conservation is advisory.
 - **D-6.** `intent/src/solver.rs:328-332` has `.min(x).max(x)` that collapses to `x`.
-- **D-7.** `sdk/src/wallet.rs:2441` `build_authorized_turn` signs with hardcoded `nonce: 0`.
+- **D-7.** `sdk/src/cipherclerk.rs:2441` `build_authorized_turn` signs with hardcoded `nonce: 0`.
 - **D-8.** `intent/src/lib.rs:535-536` epoch split has 1-bit overlap.
 - **D-9.** Missing `RegisterName` effect; `apps/nameservice` emits no effects at all.
 
 ### Receipts
 - **R-1.** `previous_receipt_hash` was unenforced — DONE in turn-executor fix; but
-  **wallet still hardcodes `None`**, so every non-first wallet turn now rejects.
+  **cclerk still hardcodes `None`**, so every non-first cclerk turn now rejects.
 - **R-2.** `Turn::hash()` doesn't cover `execution_proof_new_commitment`,
   `execution_proof`, `sovereign_witnesses`, `conservation_proof`,
   `custom_program_proofs` — proof swap attack possible until `Turn::hash` bumps v2→v3.
@@ -139,7 +139,7 @@ The codebase is supposed to deliver:
 
 ### Node / extension / WASM
 - (Per their audits — `AUDIT-node.md`, `AUDIT-extension.md`, `AUDIT-wasm.md`.)
-- Includes the CRITICAL `/wallet/set-passphrase` on `0.0.0.0` (node), CRITICAL
+- Includes the CRITICAL `/cipherclerk/set-passphrase` on `0.0.0.0` (node), CRITICAL
   unfiltered `chrome.runtime.onMessage` listeners (extension), P0s in WASM:
   stale pkg/, `seal_intent_body` derives key from plaintext, broken
   `derive_keypair_from_mnemonic`. Many already-applied edits sitting on working tree
@@ -164,7 +164,7 @@ parked opuses already exist at `~/.claude/plans/polished-tumbling-peacock-agent-
 
 | Stage | Crate | Work | Est | Deps |
 |-------|-------|------|-----|------|
-| **0a — SDK** | `sdk/` | Resolve **B-1**. Re-apply `wallet.rs`/`verify.rs`/`captp_client.rs` edits clobbered by concurrent agents. Plumb `previous_receipt_hash` through `build_authorized_turn`, queue ops, atomic ops, etc. (mandatory after R-1 / executor fix). Re-apply runtime.rs SubAgent privatization. | 2d | — |
+| **0a — SDK** | `sdk/` | Resolve **B-1**. Re-apply `cipherclerk.rs`/`verify.rs`/`captp_client.rs` edits clobbered by concurrent agents. Plumb `previous_receipt_hash` through `build_authorized_turn`, queue ops, atomic ops, etc. (mandatory after R-1 / executor fix). Re-apply runtime.rs SubAgent privatization. | 2d | — |
 | **0b — Cell** | `cell/` | Pop stashed canonical-commitment work; commit. Finding 2 sealing (`Cell::id`, `public_key`, `token_id`, `CellState::balance`/`nonce`/`proved_state`/`delegation_epoch` sealed via `pub(crate)` + accessors). P1-2, P1-5, P1-6, P2-1, P2-2, P2-3 from `AUDIT-cell.md`. | 2d | — |
 | **0c — Node** | `node/` | Adversarial tests for the already-applied F-CRIT-1/F-CRIT-2/F-P1-1..8/F-P2-1/F-P2-7 fixes. `cargo check`, `cargo test`. Commit. | 1d | — |
 | **0d — Extension** | `extension/` | Re-apply 4 missing items (P1-4 settings host-change, P2-1 `build.sh`, P2-2 sourcemap-off, P2-4 recovery clipboard). Add `extension/tests/e2e/popup-security.spec.ts` adversarial tests for the 5 popups. Rebuild `dist/` via Docker (`node:20-alpine`). | 2d | — |
@@ -178,7 +178,7 @@ Wallclock: ~2–3 days (longest pole: extension or circuit).
 
 | Stage | Crates | Work | Est | Deps |
 |-------|--------|------|-----|------|
-| **1 — Commitment & projection foundation** | `cell/`, `circuit/`, `turn/`, `sdk/` | (a) Adopt `cell::commitment::compute_canonical_state_commitment` workspace-wide. (b) Introduce typed `Commitment<T>` / `Commitment4<T>` / `Accumulator<T>` / `MerkleRoot<T>` per `DESIGN-commitment-framework.md`. (c) Widen Effect VM PI: `OLD_COMMIT[4]`, `NEW_COMMIT[4]`, `EFFECTS_HASH[4]`, `NET_DELTA_MAG_LO`/`HI` (2 BabyBears), `NET_DELTA_SIGN`, plus `CURRENT_BLOCK_HEIGHT` (new). (d) Replace `commitment_to_babybear` / `hash_to_bb` / `field_element_to_bb` with full-width Poseidon2 hashing. (e) Add cell-state fields: `max_custom_effects: u8`, `swiss_table_root`, `refcount_table_root` (CapTP prep — values can be `Commitment::empty()` until Stages 7+). (f) Add federation-state field `approved_handoffs_root`. (g) Rewrite `convert_turn_effects_to_vm` to be **total**: every runtime variant maps. For variants not yet in AIR (the 23 from E-3), the projection emits a tagged "pending" entry that contributes to `effects_hash` but logs an error and is gated behind a workspace feature flag (production wallet doesn't have it). Mirror in wallet's `convert_effects_to_vm`. (h) Resolve `REVIEW[effect-vm-coord]` markers from turn-executor fix. | 4d | 0a, 0b |
+| **1 — Commitment & projection foundation** | `cell/`, `circuit/`, `turn/`, `sdk/` | (a) Adopt `cell::commitment::compute_canonical_state_commitment` workspace-wide. (b) Introduce typed `Commitment<T>` / `Commitment4<T>` / `Accumulator<T>` / `MerkleRoot<T>` per `DESIGN-commitment-framework.md`. (c) Widen Effect VM PI: `OLD_COMMIT[4]`, `NEW_COMMIT[4]`, `EFFECTS_HASH[4]`, `NET_DELTA_MAG_LO`/`HI` (2 BabyBears), `NET_DELTA_SIGN`, plus `CURRENT_BLOCK_HEIGHT` (new). (d) Replace `commitment_to_babybear` / `hash_to_bb` / `field_element_to_bb` with full-width Poseidon2 hashing. (e) Add cell-state fields: `max_custom_effects: u8`, `swiss_table_root`, `refcount_table_root` (CapTP prep — values can be `Commitment::empty()` until Stages 7+). (f) Add federation-state field `approved_handoffs_root`. (g) Rewrite `convert_turn_effects_to_vm` to be **total**: every runtime variant maps. For variants not yet in AIR (the 23 from E-3), the projection emits a tagged "pending" entry that contributes to `effects_hash` but logs an error and is gated behind a workspace feature flag (production cclerk doesn't have it). Mirror in cipherclerk's `convert_effects_to_vm`. (h) Resolve `REVIEW[effect-vm-coord]` markers from turn-executor fix. | 4d | 0a, 0b |
 | **2 — AIR honesty pass** | `circuit/` | Fix every existing-24 tautological/wrapping/unbound constraint. Specifically: `Seal`/`Unseal` actually update `sealed_field_mask` (now a proper trace column not packed into `reserved`); `SetField` reads the mask. `ValidateHandoff` does real Merkle membership against `approved_handoffs_root` (PI) — leaf consumed on use. `EnlivenRef` does real Merkle membership against `swiss_table_root` (PI). `DropRef` binds `holder_federation` to `refcount_table_root` key. `DequeueMessage` real FIFO with head/tail pointers. `AtomicQueueTx` decomposed into N sub-rows with per-op composition constraint. `PipelineStep.pipeline_id` bound to committed pipeline registry root. `ResizeQueue` range-checked delta. `MakeSovereign` mode_flag booleanity + once-only. `Transfer` widened to full u64 (`bal_lo` + `bal_hi`). `effects_hash` becomes Poseidon2-4 directly (drop synthetic `hi`). `custom_count` sum-check `Σ s_custom == PI[CUSTOM_EFFECT_COUNT]`. `net_delta` per-row binding to `(state_after.bal - state_before.bal)`. `CreateObligation` binds beneficiary into cap_root. | 5d | 1 |
 
 ### Phase 2 — Parallel build-out (after Stage 1)

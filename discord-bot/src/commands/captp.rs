@@ -194,9 +194,9 @@ pub async fn handle_delegate(ctx: &Context, command: &CommandInteraction, state:
         Ok(Some(id)) => id,
         Ok(None) => {
             let embed = embeds::warning_embed(
-                "Target Has No Wallet",
+                "Target Has No Cipherclerk",
                 &format!(
-                    "<@{target_id}> does not have a linked pyana identity. They need to `/link-wallet` first."
+                    "<@{target_id}> does not have a linked pyana identity. They need to `/link-cclerk` first."
                 ),
             );
             let _ = command

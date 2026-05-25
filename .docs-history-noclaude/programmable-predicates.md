@@ -351,10 +351,10 @@ pub enum ProgramSupplyModel {
 Fulfilling a predicate intent means generating a proof:
 
 ```
-1. Wallet sees intent with program P (or obtains P via handshake).
-2. Wallet evaluates P locally against its private state.
-3. If satisfiable: wallet generates PredicateProof.
-4. Wallet sends proof as fulfillment.
+1. Cipherclerk sees intent with program P (or obtains P via handshake).
+2. Cipherclerk evaluates P locally against its private state.
+3. If satisfiable: cclerk generates PredicateProof.
+4. Cipherclerk sends proof as fulfillment.
 5. Intent creator verifies proof against P's public inputs.
 ```
 
@@ -472,7 +472,7 @@ allow :- balance(B), B >= 500.  % First query: learn if B >= 500
 allow :- balance(B), B >= 750.  % Second query: narrow further
 ```
 
-**Defense**: The prover sees the full program before deciding whether to prove. The wallet
+**Defense**: The prover sees the full program before deciding whether to prove. The cclerk
 UI presents: "Service X is asking you to prove: balance >= 500. Approve?" The user can
 decline. Rate limiting prevents rapid binary search.
 
@@ -585,7 +585,7 @@ Build the proof compositor that handles multi-AIR programs:
 Wire programmable predicates into the intent system:
 
 1. **ProgramRef in intents**: Intents carry inline programs, hashes, or marketplace refs.
-2. **Fulfillment protocol**: Wallet evaluates program locally, generates proof bundle.
+2. **Fulfillment protocol**: Cipherclerk evaluates program locally, generates proof bundle.
 3. **Committed intent handshake**: X25519-sealed program delivery on engagement.
 4. **Verification on fulfillment**: Intent creator verifies the proof bundle.
 
@@ -620,7 +620,7 @@ Content-addressed program registry:
 | Dimension | Ethereum | Pyana Programmable Predicates |
 |---|---|---|
 | Execution | Public (everyone re-executes) | Private (only prover executes) |
-| State | Public (on-chain) | Private (in prover's wallet) |
+| State | Public (on-chain) | Private (in prover's cclerk) |
 | Verification | Re-execution | STARK proof verification |
 | Privacy | None (all state visible) | Full ZK (only pass/fail revealed) |
 | Cost model | Gas (per instruction) | Proof generation time (prover-local) |

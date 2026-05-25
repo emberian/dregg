@@ -7,7 +7,7 @@ authors.workspace = true
 license.workspace = true
 homepage.workspace = true
 repository.workspace = true
-description = "Agent SDK and wallet for the pyana federation — token management, turn execution, and proof generation"
+description = "Agent SDK and cipherclerk for the pyana federation — token management, turn execution, and proof generation"
 
 [dependencies]
 pyana-types = { path = "../types" }
@@ -51,7 +51,7 @@ zeroize = { workspace = true }
 
 [features]
 # Native default keeps full networking surface — backward-compatible. Wasm
-# consumers (and any embedded callers that only want the wallet/runtime)
+# consumers (and any embedded callers that only want the cipherclerk/runtime)
 # pass `default-features = false`.
 default = ["federation-client", "network", "captp"]
 federation-client = ["dep:reqwest"]

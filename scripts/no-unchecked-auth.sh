@@ -77,7 +77,7 @@ ALLOWLIST_FILE_PATTERNS=(
     "node/src/mcp.rs"
     "sdk/src/committed_turn.rs"
     "sdk/src/runtime.rs"
-    "sdk/src/wallet.rs"
+    "sdk/src/cipherclerk.rs"
     "tests/src/every_variant_roundtrip.rs"
     "app-framework/src/authorizer.rs"
     # `app-framework/src/escrow.rs` is NOT allowlisted: P0f migrated it to

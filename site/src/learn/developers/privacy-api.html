@@ -58,9 +58,9 @@
       <li><strong>Mechanism:</strong> BlindedMerklePoseidon2StarkAir with fresh per-presentation blinding.</li>
     </ul>
 
-    <pre><code class="language-rust">use pyana_sdk::{AgentWallet, AuthRequest};
+    <pre><code class="language-rust">use pyana_sdk::{AgentCipherclerk, AuthRequest};
 
-let mut cclerk = AgentWallet::new();
+let mut cclerk = AgentCipherclerk::new();
 let token = cclerk.mint_token(b"secret-key-32-bytes-here!!!!!!!!!", "service");
 
 let request = AuthRequest {
@@ -147,10 +147,10 @@ let presentation = cclerk.authorize_anonymously(&token, &request).unwrap();
       <li><strong>Mechanism:</strong> Pedersen commitment to amount + Bulletproof range proof + stealth address derivation.</li>
     </ul>
 
-    <pre><code class="language-rust">use pyana_sdk::AgentWallet;
+    <pre><code class="language-rust">use pyana_sdk::AgentCipherclerk;
 
-let mut alice = AgentWallet::new();
-let mut bob = AgentWallet::new();
+let mut alice = AgentCipherclerk::new();
+let mut bob = AgentCipherclerk::new();
 
 // Bob publishes his stealth meta-address (share publicly or via discovery)
 let bob_stealth = bob.stealth_meta_address();

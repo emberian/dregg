@@ -1,7 +1,7 @@
 // starbridge-apps/nameservice/pages/turn-builders.js
 //
 // JS shim wrapping `window.pyana.signTurn(turnSpec)` (the extension
-// wallet API — see extension/src/page.ts) with name-domain
+// cclerk API — see extension/src/page.ts) with name-domain
 // conveniences that mirror the Rust turn-builders in src/lib.rs:
 //
 //   register_name(registryUri, { name, owner, expiry })

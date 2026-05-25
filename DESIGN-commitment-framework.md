@@ -22,7 +22,7 @@ digests:
 
 1. **`blake3: [u8; 32]`** — the canonical byte-domain commitment. Cheap,
    used everywhere outside a STARK: storage keys, gossip dedup, signatures,
-   wallet APIs, REST/JSON encodings, ledger Merkle leaves, log lines.
+   cclerk APIs, REST/JSON encodings, ledger Merkle leaves, log lines.
 2. **`poseidon2: [BabyBear; 4]`** — the field-domain commitment over the
    STARK-native field (BabyBear, 31-bit). Used as AIR public inputs, in
    trace state columns, in transition constraints, in lookup arguments.
@@ -31,7 +31,7 @@ The two are bound *one-directionally* to a shared canonical byte encoding
 of the underlying value. We never attempt to verify BLAKE3 inside a STARK;
 instead, the prover absorbs the same canonical preimage into both hashers
 and trust between the two forms is established at trusted boundary points
-(wallet sealing, executor verification of inbound capabilities, federation
+(cclerk sealing, executor verification of inbound capabilities, federation
 ingress) where both forms are recomputed from the preimage.
 
 This document inventories where commitments live today, defines the typed
@@ -184,12 +184,12 @@ compression block. We will not pay this cost.
 Instead the binding is **established by ceremony at trusted boundaries** and
 **proved in-circuit only on the Poseidon2 side**:
 
-- The **wallet** (or any producer of a sealed commitment) computes both
+- The **cclerk** (or any producer of a sealed commitment) computes both
   digests from the same canonical preimage and packages them together.
   This is the only place the cross-binding is asserted; thereafter, code
   that consumes a `Commitment<T>` trusts the producer to have done this
   honestly. The honesty is enforced by the producer's signature over the
-  whole structure (the wallet signs `(blake3, poseidon2, …)` so a malicious
+  whole structure (the cclerk signs `(blake3, poseidon2, …)` so a malicious
   producer who forged a mismatched pair would be liable).
 - The **circuit** only proves statements about the Poseidon2 form. The
   BLAKE3 form is a side-channel that the verifier may hash-check
@@ -413,7 +413,7 @@ We deliberately leave outside the framework:
 ## 4. In-circuit / out-of-circuit boundary
 
 ```
-                       wallet / executor
+                       cclerk / executor
                         produces both forms
                               │
        ┌──────────────────────┴─────────────────────┐
@@ -430,7 +430,7 @@ We deliberately leave outside the framework:
   ─ gossip dedup                              ─ lookup arguments
   ─ Ed25519 signing messages                  ─ recursion (IVC)
   ─ ledger Merkle leaves (federation tree)    ─ inside STARK proofs
-  ─ wallet REST API                           ─ inside SNARK proofs (Kimchi)
+  ─ cclerk REST API                           ─ inside SNARK proofs (Kimchi)
   ─ log lines, audit, debugging               ─ inside lookup tables
        │                                            │
        │                                            │
@@ -462,7 +462,7 @@ attestation is established by the producer's signature over the
 
 | Producer | What they stamp | How they prove honesty |
 | --- | --- | --- |
-| Wallet (`sdk/src/wallet.rs`) | `Commitment4<Note>` on note creation | Ed25519 signature over `(blake3, poseidon2, owner)` |
+| Cipherclerk (`sdk/src/cipherclerk.rs`) | `Commitment4<Note>` on note creation | Ed25519 signature over `(blake3, poseidon2, owner)` |
 | Executor (`turn/src/executor.rs`) | `Commitment4<Receipt>` on turn commit | Executor signature already exists (`TurnReceipt.executor_signature`); extended to cover both forms |
 | Cell program (sovereign) | `Commitment4<CellState>` post-transition | STARK proof commits to Poseidon2 form via PI; ledger entry commits to BLAKE3 form via canonical commitment |
 | Federation bridge (`bridge/`) | `Commitment4<BridgeReceipt>` | Threshold signature from federation quorum |
@@ -527,7 +527,7 @@ computed Poseidon2 form rather than re-hashing the BLAKE3 bytes.*
 
 ### 5.2 Why this isn't double work
 
-You might object: "the wallet now has to run two hash functions." Yes —
+You might object: "the cclerk now has to run two hash functions." Yes —
 **once, at production**. Thereafter the cheap form is used in every hot
 path. For comparison, the current code already runs both functions in many
 places (the canonical commitment is computed via `compute_canonical_state_commitment`
@@ -583,7 +583,7 @@ and currently desynchronize.
   BLAKE3 (`PendingBridgeSet`, nullifier sets) keep working; callers that
   pass into circuits use the `.poseidon2` accessor.
 - **Estimated LOC.** ~100 in `cell/src/note.rs`, ~50 ripple in
-  `note_bridge.rs`, ~50 in `wallet.rs`. **~200 LOC.** Smallest of the five
+  `note_bridge.rs`, ~50 in `cipherclerk.rs`. **~200 LOC.** Smallest of the five
   because the dual form already exists.
 
 ### 6.3 Note nullifier
@@ -654,12 +654,12 @@ aren't" state for long.
 3. **Versioning across forms.** Bumping a domain tag invalidates both
    forms. Do we ever want to bump just one? I argue no — divergence is the
    pathology we're fixing.
-4. **Wallet API surface.** The wallet's REST/JSON layer
+4. **Cipherclerk API surface.** The cipherclerk's REST/JSON layer
    (`sdk/src/client.rs`, `sdk-ts/`) currently exposes BLAKE3 hashes as hex
    strings. Should it also expose Poseidon2 forms? Probably yes, as a
    second hex string in every commitment-bearing response, so that a
    browser-side prover can construct an IVC step without round-tripping
-   through the wallet.
+   through the cclerk.
 5. **Migration order vs. soft fork.** A bump from `v1` tags to `v2` is a
    hard invalidation. We need a migration window where the executor accepts
    both, OR we time the migration with another planned consensus break.

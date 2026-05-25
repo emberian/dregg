@@ -181,7 +181,7 @@ mechanism does not know what federation it's enforcing for.
 **Boundary.** Who actually witnessed the private state and effects of
 a turn versus who only verifies a proof of it.
 
-**Inside.** The actor — the holder of the wallet's spending key, the
+**Inside.** The actor — the holder of the cipherclerk's spending key, the
 holder of the cell's preimage state, the prover with witness access
 to the trace.
 
@@ -608,8 +608,8 @@ opaque blob — `AUDIT-privacy.md §9.2`).
 (stake nullifiers), `intent/src/trustless.rs:184-217`.
 
 **Failure mode.** Intents themselves are public; only the matched
-pair is sealed. The matching predicate (wallet-local Datalog) runs
-inside the wallet — so the wallet operator sees both sides of the
+pair is sealed. The matching predicate (cclerk-local Datalog) runs
+inside the cclerk — so the cclerk operator sees both sides of the
 matching surface. SSE keyword tokens are domain-separated BLAKE3
 keyed hashes; they leak keyword-equality across publishers using
 the same SSE key.
@@ -894,7 +894,7 @@ binding to `AttestedRoot` (gap D); the four-level `FinalityLevel`
 
 ### §4.4. Turn/Executor
 
-**Inside.** The actor (signing wallet) and the host executor. The
+**Inside.** The actor (signing cclerk) and the host executor. The
 executor sees cleartext for every hosted cell during turn execution.
 
 **Outside.** Anyone consuming the resulting `TurnReceipt`,
@@ -908,7 +908,7 @@ proof-carrying turns).
 
 **Does not enforce.** Coverage of `sovereign_witnesses`,
 `execution_proof`, `custom_program_proofs`, `conservation_proof` by
-the v1 signing message (P2-10 — `sdk/src/wallet.rs:3895-3906`); the
+the v1 signing message (P2-10 — `sdk/src/cipherclerk.rs:3895-3906`); the
 boundary between turn-author and host executor remains porous for
 hosted cells (the host sees everything); cross-cell algebraic
 binding (`STAGE-7-GAMMA-2-PI-DESIGN.md` Phase 1).
@@ -928,7 +928,7 @@ consistency on re-derivation (scope-2 honest-mirror check).
 
 **Does not enforce.** Membership predicate on the scope-2
 audience; binding between bundle and any specific receiver; the
-turn-level v3 hash vs the wallet's v1 signing-message disagree
+turn-level v3 hash vs the cipherclerk's v1 signing-message disagree
 (P2-10).
 
 ### §4.6. Cell
@@ -1009,7 +1009,7 @@ is deterministic); recipient-side forward secrecy (static
 **Inside (intent body).** Whoever can decrypt the intent's seal
 (or, eventually, holds enough threshold shares).
 
-**Inside (intent match).** The two wallets that locally evaluated
+**Inside (intent match).** The two cipherclerks that locally evaluated
 the Datalog and matched.
 
 **Outside.** Gossip network. Sees intent bodies (currently
@@ -1018,7 +1018,7 @@ nullifiers.
 
 **Enforces.** Per-epoch stake-nullifier set (`gossip.rs`);
 SSE keyword tokens (BLAKE3 of `(keyword, epoch)`); commit-reveal
-fulfillment with 60s expiry; wallet-local Datalog matching.
+fulfillment with 60s expiry; cclerk-local Datalog matching.
 
 **Does not enforce.** Threshold-encrypted intent body
 (`intent/src/trustless.rs` is a skeleton; no cryptosystem chosen);
@@ -1164,7 +1164,7 @@ union is the effective inside.
 
 - An intent sealed to two matched parties is *commitment-inside*
   the gossip network (sealed pair_id), *cleartext-inside* the two
-  matched wallets, and *acceptance-inside* the gossip's stake
+  matched cipherclerks, and *acceptance-inside* the gossip's stake
   nullifier verification. (§2.12.)
 
 - A bridge transfer is *cleartext-inside* the note holder,
@@ -1408,7 +1408,7 @@ it is forward-looking.
 ## §10. Connection to Studio/Starbridge
 
 Studio runs an in-browser node via `wasm/src/runtime.rs`. The
-runtime is a real `pyana_sdk::AgentWallet` + real
+runtime is a real `pyana_sdk::AgentCipherclerk` + real
 `pyana_cell::Ledger` + real `pyana_turn::TurnExecutor` etc., all
 in browser linear memory.
 

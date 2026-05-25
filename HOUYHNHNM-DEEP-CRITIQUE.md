@@ -34,7 +34,7 @@ Here is the un-diplomatic version, taken at full strength.
 
 The unit of design is *the interaction including the sentient
 user*. Asking "is the proof done? is the verifier done? is the
-wallet done?" is the wrong shape of question. The right shape:
+cclerk done?" is the wrong shape of question. The right shape:
 "can a user holding only public information about a federation
 verify a third party's claim about their cell's state, undo it if
 they made a mistake, branch the system to try the change in a
@@ -335,7 +335,7 @@ receipt chain — and inherited transience everywhere else.
 The marketing claim is that WitnessedReceipt is "the persistence
 stream" (§2 of `HOUYHNHNM-COMPARISON.md`). But under the
 houyhnhnm yardstick, persistence has to extend up *and out* — to
-the IDE, to the wallet handle, to the in-flight intent. If the
+the IDE, to the cclerk handle, to the in-flight intent. If the
 persistence story bottoms out at "the chain remembers", then
 pyana is *exactly* a fancy database server with crypto — the
 shape Ch.2 was savaging.

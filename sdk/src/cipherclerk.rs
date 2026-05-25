@@ -1,6 +1,6 @@
 //! Agent cipherclerk: identity, token storage, signing, and proof generation.
 //!
-//! The [`AgentCipherclerk`] (legacy alias `AgentWallet`) is the agent's
+//! The [`AgentCipherclerk`] (legacy alias `AgentCipherclerk`) is the agent's
 //! cryptographic clerk — the primary credential holder. It manages:
 //! - An Ed25519 signing identity
 //! - A collection of held authorization tokens (macaroon-backed)
@@ -11,7 +11,7 @@
 //! The name traces to Greg Egan's *Polis* and its descendants, where a
 //! citizen's cipherclerk is the autonomous component that holds keys,
 //! attests credentials, and brokers capabilities on the citizen's
-//! behalf. "Wallet" was a poor fit: pyana cipherclerks mostly manage
+//! behalf. "Cipherclerk" was a poor fit: pyana cipherclerks mostly manage
 //! *capabilities*, not balances.
 
 use std::collections::HashMap;
@@ -303,7 +303,7 @@ pub(crate) enum DelegationBindingKind {
     Local,
 }
 
-/// A token held by this wallet, along with metadata.
+/// A token held by this cipherclerk, along with metadata.
 ///
 /// # Sealed-value construction
 ///
@@ -505,7 +505,7 @@ impl HeldToken {
     /// The encoded token string (em2_ prefixed).
     ///
     /// Returned by reference; the encoded bytes are immutable from outside the
-    /// wallet module. Direct mutation is impossible by construction (private
+    /// cipherclerk module. Direct mutation is impossible by construction (private
     /// field + no `&mut self` accessor).
     pub fn encoded(&self) -> &str {
         &self.encoded
@@ -542,7 +542,7 @@ impl HeldToken {
     /// Returns `true` if this token holds the root forging key.
     ///
     /// Attenuated and delegated tokens have a zeroed root_key and return `false`.
-    /// Only root tokens minted by this wallet return `true`.
+    /// Only root tokens minted by this cipherclerk return `true`.
     pub fn can_mint(&self) -> bool {
         self.root_key != [0u8; 32]
     }
@@ -827,7 +827,7 @@ pub enum DelegationAuthority {
 /// A delegation produced *inside this process* for handing tokens to sub-agents.
 ///
 /// This is **not** wire-transferable: it does not implement `Serialize`/`Deserialize`
-/// and its constructor is crate-private. Receiving wallets accept it via the
+/// and its constructor is crate-private. Receiving cipherclerks accept it via the
 /// dedicated [`AgentCipherclerk::receive_local_delegation`] path, which never runs on
 /// externally-sourced bytes.
 ///
@@ -849,7 +849,7 @@ pub struct LocalDelegation {
     pub(crate) delegator_public_key: PublicKey,
 }
 
-/// A turn signed by this wallet's identity, ready for submission.
+/// A turn signed by this cipherclerk's identity, ready for submission.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SignedTurn {
     /// The original turn.
@@ -860,7 +860,7 @@ pub struct SignedTurn {
     pub signer: PublicKey,
 }
 
-/// The agent wallet: manages identity, tokens, and signing.
+/// The agent cipherclerk: manages identity, tokens, and signing.
 ///
 /// This is the core credential holder that every agent carries. It provides:
 /// - Token minting (creating new root tokens)
@@ -875,7 +875,7 @@ pub struct AgentCipherclerk {
     signing_key: ed25519_dalek::SigningKey,
     /// The agent's public identity.
     public_key: PublicKey,
-    /// All tokens held by this wallet.
+    /// All tokens held by this cipherclerk.
     tokens: Vec<HeldToken>,
     /// Counter for generating unique token IDs.
     next_token_id: u64,
@@ -889,16 +889,16 @@ pub struct AgentCipherclerk {
     /// constant-size proof of the entire state transition history.
     /// Skipped during serialization as it is runtime-only state.
     ivc_builder: Option<IvcBuilder>,
-    /// The HD seed from which this wallet's key was derived (if created from mnemonic).
+    /// The HD seed from which this cipherclerk's key was derived (if created from mnemonic).
     /// Stored encrypted at rest; zeroized on drop.
     seed: Option<[u8; 64]>,
-    /// The mnemonic phrase used to create this wallet (if created from mnemonic).
+    /// The mnemonic phrase used to create this cipherclerk (if created from mnemonic).
     /// Stored encrypted at rest; zeroized on drop.
     mnemonic_phrase: Option<String>,
-    /// The derivation path used for this wallet's key (e.g., "pyana/0").
+    /// The derivation path used for this cipherclerk's key (e.g., "pyana/0").
     derivation_path: Option<String>,
     /// Stealth keypair for receiving private notes via one-time addresses.
-    /// Derived deterministically from the wallet's signing key.
+    /// Derived deterministically from the cipherclerk's signing key.
     stealth_keys: StealthKeys,
     /// Local state for sovereign cells we own.
     ///
@@ -910,9 +910,9 @@ pub struct AgentCipherclerk {
     ///
     /// Mirrors the executor-side `Ledger::last_sovereign_witness_sequence`.
     /// The next witness for `cell_id` carries
-    /// `sovereign_witness_sequences[cell_id] + 1`; the wallet bumps this
+    /// `sovereign_witness_sequences[cell_id] + 1`; the cipherclerk bumps this
     /// after each successful submission. Greenfield: persistence across
-    /// process restarts is out of scope here — the wallet recovers state
+    /// process restarts is out of scope here — the cipherclerk recovers state
     /// from the federation's stored sequence on resume.
     sovereign_witness_sequences: HashMap<CellId, u64>,
     /// Optional CapTP client for capability sharing, enlivening, and pipelining.
@@ -925,18 +925,18 @@ pub struct AgentCipherclerk {
 }
 
 impl AgentCipherclerk {
-    /// Domain separation prefix for all signatures produced by this wallet.
+    /// Domain separation prefix for all signatures produced by this cipherclerk.
     /// Prevents cross-protocol signature reuse (e.g., a signed message being
     /// replayed as a turn signature or vice versa).
     const DOMAIN_PREFIX: &'static [u8] = b"pyana-v1:";
 
-    /// Create a new wallet with a randomly generated Ed25519 identity.
+    /// Create a new cipherclerk with a randomly generated Ed25519 identity.
     ///
     /// # Example
     /// ```
     /// use pyana_sdk::AgentCipherclerk;
-    /// let wallet = AgentCipherclerk::new();
-    /// println!("Agent identity: {}", wallet.public_key());
+    /// let cipherclerk = AgentCipherclerk::new();
+    /// println!("Agent identity: {}", cipherclerk.public_key());
     /// ```
     pub fn new() -> Self {
         let mut key_bytes = Zeroizing::new([0u8; 32]);
@@ -944,15 +944,15 @@ impl AgentCipherclerk {
         Self::from_key_bytes(key_bytes)
     }
 
-    /// Create a wallet from an existing 32-byte Ed25519 secret key.
+    /// Create a cipherclerk from an existing 32-byte Ed25519 secret key.
     ///
-    /// Use this when restoring a wallet from persisted key material.
+    /// Use this when restoring a cipherclerk from persisted key material.
     ///
     /// # Security
     ///
     /// The key material is wrapped in [`Zeroizing`] to ensure it is erased from
     /// memory when no longer needed. This prevents the caller's copy from
-    /// persisting on the stack or heap after wallet construction. Callers should
+    /// persisting on the stack or heap after cipherclerk construction. Callers should
     /// always wrap key bytes in `Zeroizing` before passing them to this function
     /// to benefit from automatic zeroization on drop.
     pub fn from_key_bytes(mut secret: Zeroizing<[u8; 32]>) -> Self {
@@ -982,7 +982,7 @@ impl AgentCipherclerk {
         }
     }
 
-    /// Create a wallet from a BIP39 mnemonic phrase.
+    /// Create a cipherclerk from a BIP39 mnemonic phrase.
     ///
     /// Derives the main agent identity at path `pyana/0`. The mnemonic and seed
     /// are retained in memory (encrypted at rest) for sub-agent derivation and
@@ -995,19 +995,19 @@ impl AgentCipherclerk {
     pub fn from_mnemonic(mnemonic_str: &str, passphrase: &str) -> Result<Self, SdkError> {
         let seed = mnemonic::mnemonic_to_seed(mnemonic_str, passphrase)
             .map_err(|e| SdkError::MissingKey(e.to_string()))?;
-        let mut wallet = Self::from_seed_at_path(seed, "pyana/0");
-        wallet.mnemonic_phrase = Some(mnemonic_str.to_string());
-        Ok(wallet)
+        let mut cclerk = Self::from_seed_at_path(seed, "pyana/0");
+        cclerk.mnemonic_phrase = Some(mnemonic_str.to_string());
+        Ok(cclerk)
     }
 
-    /// Create a wallet from a raw 64-byte seed, deriving the main identity at `pyana/0`.
+    /// Create a cipherclerk from a raw 64-byte seed, deriving the main identity at `pyana/0`.
     ///
     /// Use this when the seed was obtained externally (e.g., from an encrypted backup).
     pub fn from_seed(seed: [u8; 64]) -> Self {
         Self::from_seed_at_path(seed, "pyana/0")
     }
 
-    /// Create a wallet from a seed at a specific derivation path.
+    /// Create a cipherclerk from a seed at a specific derivation path.
     fn from_seed_at_path(seed: [u8; 64], path: &str) -> Self {
         let (_pub_bytes, mut sec_bytes) = mnemonic::derive_keypair(&seed, path);
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&sec_bytes);
@@ -1034,10 +1034,10 @@ impl AgentCipherclerk {
         }
     }
 
-    /// Derive a sub-agent wallet at the given index.
+    /// Derive a sub-agent cipherclerk at the given index.
     ///
     /// The sub-agent's key is derived from the same seed at path `pyana/{index}`.
-    /// Requires that this wallet was created from a mnemonic or seed.
+    /// Requires that this cipherclerk was created from a mnemonic or seed.
     ///
     /// # Arguments
     ///
@@ -1045,25 +1045,25 @@ impl AgentCipherclerk {
     pub fn derive_sub_agent(&self, index: u32) -> Result<Self, SdkError> {
         let seed = self
             .seed
-            .ok_or_else(|| SdkError::MissingKey("wallet has no seed for derivation".into()))?;
+            .ok_or_else(|| SdkError::MissingKey("cipherclerk has no seed for derivation".into()))?;
         let path = format!("pyana/{}", index);
         Ok(Self::from_seed_at_path(seed, &path))
     }
 
-    /// Export the mnemonic phrase if this wallet was created from one.
+    /// Export the mnemonic phrase if this cipherclerk was created from one.
     ///
-    /// Returns `None` if the wallet was created from raw key bytes or if the
+    /// Returns `None` if the cipherclerk was created from raw key bytes or if the
     /// mnemonic has been explicitly cleared.
     ///
     /// # Security
     ///
     /// This method requires `&mut self` to prevent extraction via shared references.
     /// The mnemonic phrase is the master secret from which all keys are derived.
-    /// Exposing it allows full wallet reconstruction including all sub-agent keys.
+    /// Exposing it allows full cipherclerk reconstruction including all sub-agent keys.
     ///
     /// Callers MUST ensure the returned value is:
     /// - Never logged or serialized to persistent storage without encryption.
-    /// - Zeroized after use (the reference borrows from the wallet, so the wallet
+    /// - Zeroized after use (the reference borrows from the cipherclerk, so the cipherclerk
     ///   handles zeroization on drop, but callers must not copy into unprotected buffers).
     /// - Never transmitted over network without end-to-end encryption.
     #[must_use = "exported mnemonic is highly sensitive master key material"]
@@ -1073,17 +1073,17 @@ impl AgentCipherclerk {
 
     /// Export the raw seed if available.
     ///
-    /// Returns `None` if the wallet was created from raw key bytes without a seed.
+    /// Returns `None` if the cipherclerk was created from raw key bytes without a seed.
     ///
     /// # Security
     ///
     /// This method requires `&mut self` to prevent extraction via shared references.
     /// The seed is the master secret from which all keys are derived. Exposing it
-    /// allows full wallet reconstruction including all sub-agent keys.
+    /// allows full cipherclerk reconstruction including all sub-agent keys.
     ///
     /// Callers MUST ensure the returned value is:
     /// - Never logged or serialized to persistent storage without encryption.
-    /// - Zeroized after use (the reference borrows from the wallet, so the wallet
+    /// - Zeroized after use (the reference borrows from the cipherclerk, so the cipherclerk
     ///   handles zeroization on drop, but callers must not copy into unprotected buffers).
     /// - Never transmitted over network without end-to-end encryption.
     #[must_use = "exported seed is highly sensitive master key material"]
@@ -1091,7 +1091,7 @@ impl AgentCipherclerk {
         self.seed.as_ref()
     }
 
-    /// Get the derivation path used for this wallet's key.
+    /// Get the derivation path used for this cipherclerk's key.
     pub fn derivation_path(&self) -> Option<&str> {
         self.derivation_path.as_deref()
     }
@@ -1101,10 +1101,10 @@ impl AgentCipherclerk {
         self.public_key
     }
 
-    /// Derive a purpose-specific symmetric key from this wallet's signing key.
+    /// Derive a purpose-specific symmetric key from this cipherclerk's signing key.
     ///
     /// Uses BLAKE3's key derivation mode with the given context string to
-    /// produce a 32-byte key that is deterministic for this wallet but
+    /// produce a 32-byte key that is deterministic for this cipherclerk but
     /// unique per context. This is used, for example, to derive the gossip
     /// envelope signing key for federation communication.
     ///
@@ -1188,7 +1188,7 @@ impl AgentCipherclerk {
     /// Attenuate a held token by adding restrictions.
     ///
     /// This creates a new, more restricted token derived from the original.
-    /// The original token remains in the wallet unchanged. Attenuation can only
+    /// The original token remains in the cipherclerk unchanged. Attenuation can only
     /// narrow permissions, never expand them.
     ///
     /// # Arguments
@@ -1437,10 +1437,10 @@ impl AgentCipherclerk {
     /// where an attacker sends an enormous token string.
     const MAX_DELEGATED_TOKEN_SIZE: usize = 64 * 1024; // 64 KiB
 
-    /// Receive a delegated token into this wallet.
+    /// Receive a delegated token into this cipherclerk.
     ///
     /// Call this when another agent has delegated a token to us. The token
-    /// is added to the wallet's held tokens. The delegatee does NOT receive the
+    /// is added to the cipherclerk's held tokens. The delegatee does NOT receive the
     /// root key -- they can present the token for verification but cannot mint
     /// new root tokens.
     ///
@@ -1459,7 +1459,7 @@ impl AgentCipherclerk {
     /// # Authority model
     ///
     /// `policy` decides which delegator public keys are authorized to grant a
-    /// delegation to this wallet. The envelope's `delegator_public_key` must be
+    /// delegation to this cipherclerk. The envelope's `delegator_public_key` must be
     /// accepted by `policy` AND the envelope's signature must verify under that
     /// same key. See [`DelegationAuthority`] for the policy variants.
     ///
@@ -1523,10 +1523,10 @@ impl AgentCipherclerk {
             }
         }
 
-        // (d) Delegatee binding: the envelope must be addressed to this wallet.
+        // (d) Delegatee binding: the envelope must be addressed to this cipherclerk.
         if delegated.delegatee != self.public_key {
             return Err(SdkError::InvalidDelegation(format!(
-                "delegation addressed to {:?}, not this wallet ({:?})",
+                "delegation addressed to {:?}, not this cipherclerk ({:?})",
                 delegated.delegatee, self.public_key,
             )));
         }
@@ -1591,7 +1591,7 @@ impl AgentCipherclerk {
         Ok(())
     }
 
-    /// Receive a [`LocalDelegation`] produced in-process by a parent wallet.
+    /// Receive a [`LocalDelegation`] produced in-process by a parent cipherclerk.
     ///
     /// This path is NOT exposed for externally-sourced bytes — [`LocalDelegation`]
     /// is not deserializable, so no caller can produce one from untrusted input.
@@ -1599,7 +1599,7 @@ impl AgentCipherclerk {
     /// is distinct from the external-envelope tag), so authority is uniformly
     /// enforced across all code paths.
     ///
-    /// `expected_parent_pubkey` is the parent wallet's identity; the signature
+    /// `expected_parent_pubkey` is the parent cipherclerk's identity; the signature
     /// must verify under that key.
     pub fn receive_local_delegation(
         &mut self,
@@ -1633,7 +1633,7 @@ impl AgentCipherclerk {
 
         if local.delegatee != self.public_key {
             return Err(SdkError::InvalidDelegation(format!(
-                "local delegation addressed to {:?}, not this wallet ({:?})",
+                "local delegation addressed to {:?}, not this cipherclerk ({:?})",
                 local.delegatee, self.public_key,
             )));
         }
@@ -1713,7 +1713,7 @@ impl AgentCipherclerk {
     ///
     /// # Authority model (v1)
     ///
-    /// We do not have a global root-issuer registry: any wallet may legitimately
+    /// We do not have a global root-issuer registry: any cipherclerk may legitimately
     /// produce a token. "Authority" therefore reduces to: *does the receiver
     /// have prior reason to trust this delegator key for this chain?*
     ///
@@ -1784,11 +1784,11 @@ impl AgentCipherclerk {
     // Receipt Chain (Proof-Carrying State)
     // =========================================================================
 
-    /// Append a receipt to this wallet's chain after a successful turn execution.
+    /// Append a receipt to this cipherclerk's chain after a successful turn execution.
     ///
     /// The receipt's `previous_receipt_hash` will be set to the hash of the
     /// current chain head (or None if this is the first receipt). The receipt's
-    /// `agent` field must match this wallet's agent identity for the given domain.
+    /// `agent` field must match this cipherclerk's agent identity for the given domain.
     ///
     /// This is the primary method for building the proof-carrying state chain.
     /// Call this after `TurnExecutor::execute()` returns a committed result.
@@ -1835,14 +1835,14 @@ impl AgentCipherclerk {
         self.receipt_chain.push(receipt);
     }
 
-    /// Get the head (most recent) receipt in this wallet's chain.
+    /// Get the head (most recent) receipt in this cipherclerk's chain.
     ///
     /// Returns `None` if no turns have been executed yet (empty chain).
     pub fn receipt_head(&self) -> Option<&pyana_turn::TurnReceipt> {
         self.receipt_chain.last()
     }
 
-    /// Get the number of receipts in this wallet's chain.
+    /// Get the number of receipts in this cipherclerk's chain.
     ///
     /// This is the number of successfully committed turns in this agent's history.
     pub fn receipt_chain_length(&self) -> usize {
@@ -1865,7 +1865,7 @@ impl AgentCipherclerk {
         self.receipt_chain.last().map(|r| r.post_state_hash)
     }
 
-    /// Verify this wallet's own receipt chain integrity.
+    /// Verify this cipherclerk's own receipt chain integrity.
     ///
     /// Returns `Ok(())` if the chain is valid, or an error describing the break.
     /// An empty chain is considered valid (no receipts to verify).
@@ -1880,7 +1880,7 @@ impl AgentCipherclerk {
     // IVC (Incrementally Verifiable Computation)
     // =========================================================================
 
-    /// Enable IVC accumulation for this wallet's receipt chain.
+    /// Enable IVC accumulation for this cipherclerk's receipt chain.
     ///
     /// Once enabled, every call to [`append_receipt`](Self::append_receipt) will
     /// extend the IVC chain with the state transition, building a constant-size
@@ -1904,7 +1904,7 @@ impl AgentCipherclerk {
         self.ivc_builder.as_ref()?.finalize_with_air()
     }
 
-    /// Check whether IVC is currently enabled on this wallet.
+    /// Check whether IVC is currently enabled on this cipherclerk.
     pub fn ivc_enabled(&self) -> bool {
         self.ivc_builder.is_some()
     }
@@ -1941,7 +1941,7 @@ impl AgentCipherclerk {
     /// use pyana_sdk::{AgentCipherclerk, VerificationMode, AuthorizationPresentation};
     /// use pyana_token::AuthRequest;
     ///
-    /// let wallet = AgentCipherclerk::new();
+    /// let cipherclerk = AgentCipherclerk::new();
     /// # let token = todo!();
     /// let request = AuthRequest {
     ///     service: Some("dns".into()),
@@ -1949,7 +1949,7 @@ impl AgentCipherclerk {
     ///     ..Default::default()
     /// };
     ///
-    /// let presentation = wallet.authorize(&token, &request, VerificationMode::Trusted).unwrap();
+    /// let presentation = cipherclerk.authorize(&token, &request, VerificationMode::Trusted).unwrap();
     /// ```
     pub fn authorize(
         &self,
@@ -2371,7 +2371,7 @@ impl AgentCipherclerk {
 
     /// Sign a turn for submission to the ledger.
     ///
-    /// Computes the BLAKE3 hash of the turn and signs it with this wallet's
+    /// Computes the BLAKE3 hash of the turn and signs it with this cipherclerk's
     /// Ed25519 key. The resulting [`SignedTurn`] can be submitted to a silo
     /// or local executor.
     ///
@@ -2388,7 +2388,7 @@ impl AgentCipherclerk {
         }
     }
 
-    /// Sign arbitrary bytes with this wallet's identity.
+    /// Sign arbitrary bytes with this cipherclerk's identity.
     ///
     /// Useful for custom authorization schemes outside the turn model.
     pub fn sign_bytes(&self, message: &[u8]) -> Signature {
@@ -2519,7 +2519,7 @@ impl AgentCipherclerk {
     /// Equivalent to the `ActionBuilder::new(target, method, caller).signed_by(sig)`
     /// flow but performs the sign step here, so callers do not have to manually
     /// invoke `TurnExecutor::compute_signing_message` or carry zero-signature
-    /// placeholders. The `caller` field is set to the wallet's default cell.
+    /// placeholders. The `caller` field is set to the cipherclerk's default cell.
     ///
     /// For multi-effect actions, prefer building an [`Action`] directly (e.g.
     /// through `pyana_turn::builder::ActionBuilder`) and then calling
@@ -2559,9 +2559,9 @@ impl AgentCipherclerk {
     /// This is the "Turn skeleton" helper called out in `SDK-REVIEW.md` as
     /// the Tier-0 missing primitive. It bundles one already-signed action
     /// into a [`Turn`] with sane defaults: fee=0, no memo, no expiry,
-    /// `previous_receipt_hash` taken from the wallet's receipt chain head.
+    /// `previous_receipt_hash` taken from the cipherclerk's receipt chain head.
     ///
-    /// The agent field is `wallet.cell_id("default")`. Use
+    /// The agent field is `cipherclerk.cell_id("default")`. Use
     /// [`make_turn_for`](Self::make_turn_for) if you need a non-default
     /// domain.
     ///
@@ -2589,7 +2589,7 @@ impl AgentCipherclerk {
     ///
     /// Defaults match [`make_turn`](Self::make_turn): agent =
     /// `cell_id("default")`, fee = 0, `previous_receipt_hash` taken from the
-    /// wallet's chain head.
+    /// cipherclerk's chain head.
     pub fn make_turn_with_actions(&self, actions: Vec<pyana_turn::action::Action>) -> Turn {
         self.make_turn_with_actions_for("default", actions)
     }
@@ -2640,7 +2640,7 @@ impl AgentCipherclerk {
     /// and turn construction. It:
     /// 1. Generates a STARK authorization proof from the held token.
     /// 2. Constructs a turn with the given effects targeting the specified cell.
-    /// 3. Signs the turn with this wallet's identity.
+    /// 3. Signs the turn with this cipherclerk's identity.
     ///
     /// # Arguments
     ///
@@ -2662,10 +2662,10 @@ impl AgentCipherclerk {
     /// # use pyana_sdk::AgentCipherclerk;
     /// # use pyana_cell::CellId;
     /// # use pyana_turn::Effect;
-    /// # let wallet = AgentCipherclerk::new();
+    /// # let cipherclerk = AgentCipherclerk::new();
     /// # let token = todo!();
     /// # let target = CellId::derive_raw(&[0; 32], &[0; 32]);
-    /// let signed_turn = wallet.build_authorized_turn(
+    /// let signed_turn = cipherclerk.build_authorized_turn(
     ///     &token,
     ///     target,
     ///     vec![Effect::Transfer { from: target, to: target, amount: 100 }],
@@ -2733,7 +2733,7 @@ impl AgentCipherclerk {
             agent: self.cell_id("default"),
             // AUDIT[P3-6]: nonce hardcoded to 0; documented as caller's
             // responsibility. `previous_receipt_hash` is now plumbed through
-            // from the wallet's receipt chain to bind this turn to the
+            // from the cipherclerk's receipt chain to bind this turn to the
             // executor-enforced receipt chain.
             nonce: 0, // Caller should set appropriately or use a TurnBuilder
             fee,
@@ -2764,13 +2764,13 @@ impl AgentCipherclerk {
     // Delegation Envelope Signing / Verification (v2)
     //
     // Authority model:
-    //   The delegation envelope is signed by the delegator's wallet key. The
+    //   The delegation envelope is signed by the delegator's cipherclerk key. The
     //   receiver supplies a `DelegationAuthority` policy that decides which
     //   delegator key is authorized (TrustedKey / TrustedKeys / ChainsFromParent
     //   / Open). The signature MUST verify under the asserted delegator key, AND
     //   the asserted delegator key MUST be accepted by the policy.
     //
-    //   We do not chain to a root issuer because pyana wallets are sovereign:
+    //   We do not chain to a root issuer because pyana cipherclerks are sovereign:
     //   there is no global registry of "who is allowed to mint a token". Trust
     //   is established explicitly by the receiver — either by hard-coding an
     //   expected key, or by linking to a previously-accepted parent envelope.
@@ -3021,7 +3021,7 @@ impl AgentCipherclerk {
         if !token.can_mint() {
             return Err(SdkError::MissingKey(
                 "attenuated tokens cannot generate federation membership proofs; \
-                 use prove_authorization_with_issuer_key() with the issuer's proof key, \
+                 use prove_authorization_with_issuer_key() with the issuerr's proof key, \
                  or use the root token holder to prove directly"
                     .into(),
             ));
@@ -3163,7 +3163,7 @@ impl AgentCipherclerk {
         if !token.can_mint() {
             return Err(SdkError::MissingKey(
                 "attenuated tokens cannot generate selective disclosure proofs; \
-                 use prove_authorization_with_issuer_key() with the issuer's proof key, \
+                 use prove_authorization_with_issuer_key() with the issuerr's proof key, \
                  or use the root token holder to prove directly"
                     .into(),
             ));
@@ -3292,7 +3292,7 @@ impl AgentCipherclerk {
         if !root_token.can_mint() {
             return Err(SdkError::MissingKey(
                 "attenuated tokens cannot generate federation membership proofs; \
-                 use prove_authorization_with_issuer_key() with the issuer's root key"
+                 use prove_authorization_with_issuer_key() with the issuerr's root key"
                     .into(),
             ));
         }
@@ -3367,10 +3367,10 @@ impl AgentCipherclerk {
     /// use pyana_sdk::AgentCipherclerk;
     /// use pyana_bridge::Predicate;
     ///
-    /// let wallet = AgentCipherclerk::new();
+    /// let cipherclerk = AgentCipherclerk::new();
     /// # let token = todo!();
     /// // Prove: my balance >= 1000 (without revealing the actual balance)
-    /// let proof = wallet.prove_predicate(
+    /// let proof = cipherclerk.prove_predicate(
     ///     &token,
     ///     "balance",
     ///     5000, // actual balance (private)
@@ -3513,7 +3513,7 @@ impl AgentCipherclerk {
     // Relational and Committed-Threshold Predicate Proofs
     // =========================================================================
 
-    /// Prove a relational predicate comparing this wallet's private value against
+    /// Prove a relational predicate comparing this cipherclerk's private value against
     /// a counterparty's committed value.
     ///
     /// This generates a zero-knowledge proof that a specific attribute of a held
@@ -3568,7 +3568,7 @@ impl AgentCipherclerk {
         Ok(proof)
     }
 
-    /// Prove a committed-threshold predicate: the wallet's private value satisfies
+    /// Prove a committed-threshold predicate: the cipherclerk's private value satisfies
     /// a threshold that is also kept secret from third-party verifiers.
     ///
     /// This generates a zero-knowledge proof that a specific attribute value is
@@ -3632,11 +3632,11 @@ impl AgentCipherclerk {
     // Programmable Predicate Programs
     // =========================================================================
 
-    /// Prove a programmable predicate program against this wallet's private state.
+    /// Prove a programmable predicate program against this cipherclerk's private state.
     ///
     /// This is the high-level entry point for the programmable predicates system.
     /// It takes a predicate program (an expression tree of conditions) and proves
-    /// all conditions are satisfied using the wallet's private attribute values.
+    /// all conditions are satisfied using the cipherclerk's private attribute values.
     ///
     /// The program is compiled to the appropriate AIR(s) and proven in zero knowledge.
     /// The verifier learns only that the program is satisfied, not the actual values.
@@ -3751,14 +3751,14 @@ impl AgentCipherclerk {
     /// use pyana_circuit::BabyBear;
     /// use std::collections::HashMap;
     ///
-    /// let wallet = AgentCipherclerk::new();
+    /// let cipherclerk = AgentCipherclerk::new();
     /// # let intent = todo!();
     /// let mut my_values = HashMap::new();
     /// my_values.insert("balance".to_string(), 5000u64);
     /// my_values.insert("reputation".to_string(), 85u64);
     ///
     /// let state_root = BabyBear::new(99999);
-    /// let proofs = wallet.prove_for_intent_predicates(&intent, &my_values, state_root).unwrap();
+    /// let proofs = cipherclerk.prove_for_intent_predicates(&intent, &my_values, state_root).unwrap();
     /// // proofs can be attached to a FulfillmentWithPredicates
     /// ```
     pub fn prove_for_intent_predicates(
@@ -3889,14 +3889,14 @@ impl AgentCipherclerk {
         current_height: u64,
     ) -> Result<pyana_turn::TurnReceipt, SdkError> {
         // Step 1: Generate predicate proofs for the intent's requirements.
-        // Derive the state root from this wallet's receipt chain head. The receipt
+        // Derive the state root from this cipherclerk's receipt chain head. The receipt
         // chain's post_state_hash is the committed state that verifiers can check.
         let state_root = self
             .current_state_commitment()
             .map(|hash| Self::bytes_to_babybear(&hash))
             .ok_or_else(|| {
                 SdkError::MissingKey(
-                    "wallet has no receipt chain; cannot derive state root for predicate proofs. \
+                    "cclerk has no receipt chain; cannot derive state root for predicate proofs. \
                      Call append_receipt() after executing at least one turn."
                         .into(),
                 )
@@ -3949,7 +3949,7 @@ impl AgentCipherclerk {
     /// if the field boundaries are not explicit. Fixed-size fields (u64, [u8; 32])
     /// do not need length prefixes since their boundaries are unambiguous.
     fn compute_turn_bytes(&self, turn: &Turn) -> [u8; 32] {
-        // P2-10 closure (v1 → v3): the wallet's signing message is now the
+        // P2-10 closure (v1 → v3): the cipherclerk's signing message is now the
         // canonical `Turn::hash()` (domain `pyana-turn-v3:`), which covers
         // every semantically load-bearing field on the Turn: agent, nonce,
         // call_forest, fee, memo, valid_until, depends_on,
@@ -3957,7 +3957,7 @@ impl AgentCipherclerk {
         // execution_proof_cell, execution_proof_new_commitment,
         // conservation_proof, sovereign_witnesses, and
         // custom_program_proofs. This closes the wire-malleability gap where
-        // an executor between wallet and ledger could swap
+        // an executor between cipherclerk and ledger could swap
         // `sovereign_witnesses` (and other side payloads) without
         // invalidating the signature.
         turn.hash()
@@ -4142,7 +4142,7 @@ impl AgentCipherclerk {
     ) -> Vec<Result<pyana_turn::TurnReceipt, pyana_turn::PipelineError>> {
         let results = pyana_turn::execute_pipeline(pipeline, ledger, executor);
 
-        // Append successful receipts to this wallet's chain.
+        // Append successful receipts to this cipherclerk's chain.
         for result in &results {
             if let Ok(receipt) = result {
                 if receipt.agent == self.cell_id("default") {
@@ -4176,7 +4176,7 @@ impl AgentCipherclerk {
     ///
     /// # Arguments
     ///
-    /// * `input_notes` - Notes this wallet can spend (with full opening data).
+    /// * `input_notes` - Notes this cipherclerk can spend (with full opening data).
     /// * `recipients` - (amount, recipient_pubkey) pairs for outputs.
     /// * `domain` - Domain string for deriving the agent's cell ID.
     /// * `nonce` - Replay-protection nonce.
@@ -4220,7 +4220,7 @@ impl AgentCipherclerk {
     // Stealth Address Support
     // =========================================================================
 
-    /// Get this wallet's stealth meta-address (for receiving private notes).
+    /// Get this cipherclerk's stealth meta-address (for receiving private notes).
     ///
     /// Publish this so senders can generate unlinkable one-time addresses for you.
     /// The meta-address contains your view public key (for scanning) and spend
@@ -4239,7 +4239,7 @@ impl AgentCipherclerk {
         addr
     }
 
-    /// Scan announcements for notes addressed to this wallet (using our view key).
+    /// Scan announcements for notes addressed to this cipherclerk (using our view key).
     ///
     /// Iterates over the provided announcements, performing the DH check to identify
     /// notes that were sent to our stealth meta-address. Returns the note commitments
@@ -4432,17 +4432,17 @@ impl AgentCipherclerk {
         //    shape: signed by the cell's owning key over the canonical
         //    transition message, with a per-cell monotonic sequence.
         //
-        //    Greenfield assumption: the cell's owning key is the wallet's
+        //    Greenfield assumption: the cell's owning key is the cipherclerk's
         //    signing key (the common agent==sovereign-cell case). If the
-        //    cell's public_key drifts from the wallet's verifying key, we
+        //    cell's public_key drifts from the cipherclerk's verifying key, we
         //    cannot sign; surface as a missing-key error.
         if cell_state.public_key() != &self.public_key.0 {
             return Err(SdkError::MissingKey(format!(
-                "cannot sign sovereign witness for cell {}: cell's public_key does not match wallet's key",
+                "cannot sign sovereign witness for cell {}: cell's public_key does not match cipherclerk's key",
                 cell_id
             )));
         }
-        // For the witness path the wallet does not pre-execute effects, so
+        // For the witness path the cipherclerk does not pre-execute effects, so
         // it cannot pre-compute new_commitment/effects_hash. Both are
         // declared by the signer as the intended post-state and verified
         // by the executor *after* it re-executes. In the witness path
@@ -4710,7 +4710,7 @@ impl AgentCipherclerk {
     /// Stage 1 (`EFFECT-VM-SHAPE-A.md` D): mirrors the executor's
     /// `convert_turn_effects_to_vm`. Variants without AIR coverage are gated
     /// behind the `effect-vm-pending-shim` feature on the executor side;
-    /// the wallet side intentionally keeps them as NoOp because the wallet
+    /// the cipherclerk side intentionally keeps them as NoOp because the cipherclerk
     /// is the trust root and should never sign a turn whose proof cannot be
     /// soundly verified by a production executor.
     ///
@@ -4850,9 +4850,9 @@ impl AgentCipherclerk {
         vm_effects
     }
 
-    /// Store sovereign cell state in the wallet (agent maintains it).
+    /// Store sovereign cell state in the cipherclerk (agent maintains it).
     ///
-    /// Call this after transitioning a cell to sovereign mode. The wallet keeps
+    /// Call this after transitioning a cell to sovereign mode. The cipherclerk keeps
     /// the full cell state locally and provides it as a witness in future turns.
     pub fn store_sovereign_state(&mut self, cell: Cell) {
         self.sovereign_cells.insert(cell.id(), cell);
@@ -4924,7 +4924,7 @@ impl AgentCipherclerk {
     ///
     /// Deserializes sovereign cell state previously exported via
     /// [`export_sovereign_state`](Self::export_sovereign_state) and merges it
-    /// into this wallet's sovereign cell map.
+    /// into this cipherclerk's sovereign cell map.
     pub fn import_sovereign_state(&mut self, data: &[u8]) -> Result<(), SdkError> {
         let entries: Vec<(CellId, Cell)> = postcard::from_bytes(data)
             .map_err(|e| SdkError::Wire(format!("failed to deserialize sovereign state: {e}")))?;
@@ -5063,7 +5063,7 @@ impl AgentCipherclerk {
     /// Get a peer exchange session for direct sovereign interactions.
     ///
     /// Returns a [`PeerExchange`](pyana_cell::PeerExchange) initialized with
-    /// this wallet's cell ID and signing key, suitable for direct peer-to-peer
+    /// this cipherclerk's cell ID and signing key, suitable for direct peer-to-peer
     /// state exchange between sovereign cell owners.
     ///
     /// This is a convenience alias for [`peer_exchange`](Self::peer_exchange).
@@ -5182,7 +5182,7 @@ impl AgentCipherclerk {
         _kind: IntentKind,
         expiry: Option<u64>,
     ) -> EncryptedIntent {
-        // Derive the commitment ID from this wallet's public key.
+        // Derive the commitment ID from this cipherclerk's public key.
         let commitment_id = CommitmentId(self.public_key.0);
 
         // Use epoch 0 for now; in production this would come from the network clock.
@@ -5196,7 +5196,7 @@ impl AgentCipherclerk {
     // Stealth Key Derivation (internal)
     // =========================================================================
 
-    /// Derive stealth keys deterministically from the wallet's Ed25519 signing key.
+    /// Derive stealth keys deterministically from the cipherclerk's Ed25519 signing key.
     ///
     /// Uses BLAKE3 key derivation with distinct context strings to produce
     /// independent view and spend keys.
@@ -5214,7 +5214,7 @@ impl AgentCipherclerk {
     /// Create a peer exchange session for sovereign cell interactions.
     ///
     /// The exchange session is keyed to a specific domain (cell identity) and uses
-    /// this wallet's Ed25519 signing key for transition signatures.
+    /// this cipherclerk's Ed25519 signing key for transition signatures.
     pub fn peer_exchange(&self, domain: &str) -> pyana_cell::PeerExchange {
         let cell_id = self.cell_id(domain);
         let signing_key_bytes = self.signing_key.to_bytes();
@@ -5227,7 +5227,7 @@ impl AgentCipherclerk {
     /// to the `PeerExchange` to create a signed transition.
     ///
     /// # Arguments
-    /// * `exchange` - The peer exchange session (must be for this wallet's cell).
+    /// * `exchange` - The peer exchange session (must be for this cipherclerk's cell).
     /// * `old_commitment` - The commitment before this transition.
     /// * `new_commitment` - The commitment after applying effects.
     /// * `effects` - The effects that produced the state change.
@@ -5247,7 +5247,7 @@ impl AgentCipherclerk {
     // Ephemeral Federation Registration
     // =========================================================================
 
-    /// Register this wallet's sovereign cell with a federation node (ephemeral).
+    /// Register this cipherclerk's sovereign cell with a federation node (ephemeral).
     ///
     /// The federation stores only the state commitment and TTL metadata.
     /// The registration expires after `ttl_blocks` of inactivity. Call this when
@@ -5322,7 +5322,7 @@ impl AgentCipherclerk {
         }
     }
 
-    /// Deregister this wallet's sovereign cell from the federation.
+    /// Deregister this cipherclerk's sovereign cell from the federation.
     ///
     /// Voluntarily removes the cell's commitment from the federation node.
     /// Call this when the cell no longer needs federation services.
@@ -5595,7 +5595,7 @@ impl AgentCipherclerk {
         ))
     }
 
-    /// Set the CapTP client for this wallet.
+    /// Set the CapTP client for this cipherclerk.
     ///
     /// Must be called before using [`share_capability`](Self::share_capability),
     /// [`accept_capability`](Self::accept_capability), or
@@ -5784,7 +5784,7 @@ fn hex_decode_bytes(s: &str) -> Result<Vec<u8>, ()> {
         .collect()
 }
 
-/// A note detected as belonging to this wallet during stealth scanning.
+/// A note detected as belonging to this cipherclerk during stealth scanning.
 #[derive(Clone, Debug)]
 pub struct OwnedStealthNote {
     /// The note commitment (for lookup in the note tree).
@@ -5868,62 +5868,62 @@ mod tests {
     }
 
     #[test]
-    fn test_wallet_receipt_chain_empty() {
-        let wallet = AgentCipherclerk::new();
-        assert_eq!(wallet.receipt_chain_length(), 0);
-        assert!(wallet.receipt_head().is_none());
-        assert!(wallet.current_state_commitment().is_none());
-        assert!(wallet.verify_own_chain().is_ok());
+    fn test_cclerk_receipt_chain_empty() {
+        let cclerk = AgentCipherclerk::new();
+        assert_eq!(cclerk.receipt_chain_length(), 0);
+        assert!(cclerk.receipt_head().is_none());
+        assert!(cclerk.current_state_commitment().is_none());
+        assert!(cclerk.verify_own_chain().is_ok());
     }
 
     #[test]
-    fn test_wallet_append_single_receipt() {
-        let mut wallet = AgentCipherclerk::new();
-        let cell_id = wallet.cell_id("test");
+    fn test_cclerk_append_single_receipt() {
+        let mut cclerk = AgentCipherclerk::new();
+        let cell_id = cclerk.cell_id("test");
         let receipt = mock_receipt(cell_id, [1u8; 32], [2u8; 32]);
 
-        wallet.append_receipt(receipt);
+        cclerk.append_receipt(receipt);
 
-        assert_eq!(wallet.receipt_chain_length(), 1);
-        assert!(wallet.receipt_head().is_some());
-        assert_eq!(wallet.receipt_head().unwrap().post_state_hash, [2u8; 32]);
-        assert_eq!(wallet.current_state_commitment(), Some([2u8; 32]));
+        assert_eq!(cclerk.receipt_chain_length(), 1);
+        assert!(cclerk.receipt_head().is_some());
+        assert_eq!(cclerk.receipt_head().unwrap().post_state_hash, [2u8; 32]);
+        assert_eq!(cclerk.current_state_commitment(), Some([2u8; 32]));
         // Genesis receipt should have None as previous.
-        assert_eq!(wallet.receipt_head().unwrap().previous_receipt_hash, None);
-        assert!(wallet.verify_own_chain().is_ok());
+        assert_eq!(cclerk.receipt_head().unwrap().previous_receipt_hash, None);
+        assert!(cclerk.verify_own_chain().is_ok());
     }
 
     #[test]
-    fn test_wallet_append_chain_links_correctly() {
-        let mut wallet = AgentCipherclerk::new();
-        let cell_id = wallet.cell_id("test");
+    fn test_cclerk_append_chain_links_correctly() {
+        let mut cclerk = AgentCipherclerk::new();
+        let cell_id = cclerk.cell_id("test");
 
         // Append first receipt.
         let r1 = mock_receipt(cell_id, [1u8; 32], [2u8; 32]);
-        wallet.append_receipt(r1);
+        cclerk.append_receipt(r1);
 
         // Append second receipt (pre_state matches first post_state).
         let r2 = mock_receipt(cell_id, [2u8; 32], [3u8; 32]);
-        wallet.append_receipt(r2);
+        cclerk.append_receipt(r2);
 
-        assert_eq!(wallet.receipt_chain_length(), 2);
-        assert_eq!(wallet.current_state_commitment(), Some([3u8; 32]));
+        assert_eq!(cclerk.receipt_chain_length(), 2);
+        assert_eq!(cclerk.current_state_commitment(), Some([3u8; 32]));
 
         // The second receipt should have previous_receipt_hash linking to the first.
-        let chain = wallet.receipt_chain();
+        let chain = cclerk.receipt_chain();
         assert_eq!(chain[0].previous_receipt_hash, None);
         assert_eq!(
             chain[1].previous_receipt_hash,
             Some(chain[0].receipt_hash())
         );
 
-        assert!(wallet.verify_own_chain().is_ok());
+        assert!(cclerk.verify_own_chain().is_ok());
     }
 
     #[test]
-    fn test_wallet_chain_of_five() {
-        let mut wallet = AgentCipherclerk::new();
-        let cell_id = wallet.cell_id("test");
+    fn test_cclerk_chain_of_five() {
+        let mut cclerk = AgentCipherclerk::new();
+        let cell_id = cclerk.cell_id("test");
 
         let mut state = [0u8; 32];
         for i in 0..5u8 {
@@ -5931,48 +5931,48 @@ mod tests {
             state[0] = i + 1;
             let post = state;
             let receipt = mock_receipt(cell_id, pre, post);
-            wallet.append_receipt(receipt);
+            cclerk.append_receipt(receipt);
         }
 
-        assert_eq!(wallet.receipt_chain_length(), 5);
-        assert!(wallet.verify_own_chain().is_ok());
+        assert_eq!(cclerk.receipt_chain_length(), 5);
+        assert!(cclerk.verify_own_chain().is_ok());
 
         // Verify using the standalone function too.
-        let chain = wallet.receipt_chain();
+        let chain = cclerk.receipt_chain();
         assert!(pyana_turn::verify_receipt_chain(chain).is_ok());
     }
 
     #[test]
-    fn test_wallet_verify_chain_with_external_function() {
-        let mut wallet = AgentCipherclerk::new();
-        let cell_id = wallet.cell_id("test");
+    fn test_cclerk_verify_chain_with_external_function() {
+        let mut cclerk = AgentCipherclerk::new();
+        let cell_id = cclerk.cell_id("test");
 
         let r1 = mock_receipt(cell_id, [1u8; 32], [2u8; 32]);
-        wallet.append_receipt(r1);
+        cclerk.append_receipt(r1);
 
         let r2 = mock_receipt(cell_id, [2u8; 32], [3u8; 32]);
-        wallet.append_receipt(r2);
+        cclerk.append_receipt(r2);
 
         let r3 = mock_receipt(cell_id, [3u8; 32], [4u8; 32]);
-        wallet.append_receipt(r3);
+        cclerk.append_receipt(r3);
 
         // External verification.
-        let head = pyana_turn::verify_receipt_chain_head(wallet.receipt_chain()).unwrap();
+        let head = pyana_turn::verify_receipt_chain_head(cclerk.receipt_chain()).unwrap();
         assert_eq!(head, [4u8; 32]);
     }
 
     #[test]
-    fn test_wallet_from_mnemonic() {
+    fn test_cclerk_from_mnemonic() {
         let mnemonic = crate::mnemonic::generate_mnemonic();
-        let mut wallet = AgentCipherclerk::from_mnemonic(&mnemonic, "").unwrap();
-        assert!(wallet.export_mnemonic().is_some());
-        assert_eq!(wallet.export_mnemonic().unwrap(), mnemonic);
-        assert!(wallet.export_seed().is_some());
-        assert_eq!(wallet.derivation_path(), Some("pyana/0"));
+        let mut cclerk = AgentCipherclerk::from_mnemonic(&mnemonic, "").unwrap();
+        assert!(cclerk.export_mnemonic().is_some());
+        assert_eq!(cclerk.export_mnemonic().unwrap(), mnemonic);
+        assert!(cclerk.export_seed().is_some());
+        assert_eq!(cclerk.derivation_path(), Some("pyana/0"));
     }
 
     #[test]
-    fn test_wallet_from_mnemonic_deterministic() {
+    fn test_cclerk_from_mnemonic_deterministic() {
         let mnemonic = crate::mnemonic::generate_mnemonic();
         let w1 = AgentCipherclerk::from_mnemonic(&mnemonic, "pass").unwrap();
         let w2 = AgentCipherclerk::from_mnemonic(&mnemonic, "pass").unwrap();
@@ -5980,7 +5980,7 @@ mod tests {
     }
 
     #[test]
-    fn test_wallet_from_seed() {
+    fn test_cclerk_from_seed() {
         let mnemonic = crate::mnemonic::generate_mnemonic();
         let seed = crate::mnemonic::mnemonic_to_seed(&mnemonic, "").unwrap();
         let w1 = AgentCipherclerk::from_mnemonic(&mnemonic, "").unwrap();
@@ -5989,42 +5989,42 @@ mod tests {
     }
 
     #[test]
-    fn test_wallet_derive_sub_agent() {
+    fn test_cclerk_derive_sub_agent() {
         let mnemonic = crate::mnemonic::generate_mnemonic();
-        let wallet = AgentCipherclerk::from_mnemonic(&mnemonic, "").unwrap();
-        let sub1 = wallet.derive_sub_agent(1).unwrap();
-        let sub2 = wallet.derive_sub_agent(2).unwrap();
+        let cclerk = AgentCipherclerk::from_mnemonic(&mnemonic, "").unwrap();
+        let sub1 = cclerk.derive_sub_agent(1).unwrap();
+        let sub2 = cclerk.derive_sub_agent(2).unwrap();
 
-        // Sub-agents have different keys from the main wallet.
-        assert_ne!(wallet.public_key(), sub1.public_key());
-        assert_ne!(wallet.public_key(), sub2.public_key());
+        // Sub-agents have different keys from the main cipherclerk.
+        assert_ne!(cclerk.public_key(), sub1.public_key());
+        assert_ne!(cclerk.public_key(), sub2.public_key());
         assert_ne!(sub1.public_key(), sub2.public_key());
 
         // Derivation is deterministic.
-        let sub1_again = wallet.derive_sub_agent(1).unwrap();
+        let sub1_again = cclerk.derive_sub_agent(1).unwrap();
         assert_eq!(sub1.public_key(), sub1_again.public_key());
     }
 
     #[test]
-    fn test_wallet_derive_sub_agent_no_seed() {
-        let wallet = AgentCipherclerk::new();
-        let result = wallet.derive_sub_agent(1);
+    fn test_cclerk_derive_sub_agent_no_seed() {
+        let cclerk = AgentCipherclerk::new();
+        let result = cclerk.derive_sub_agent(1);
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_wallet_new_has_no_mnemonic() {
-        let mut wallet = AgentCipherclerk::new();
-        assert!(wallet.export_mnemonic().is_none());
-        assert!(wallet.export_seed().is_none());
-        assert!(wallet.derivation_path().is_none());
+    fn test_cclerk_new_has_no_mnemonic() {
+        let mut cclerk = AgentCipherclerk::new();
+        assert!(cclerk.export_mnemonic().is_none());
+        assert!(cclerk.export_seed().is_none());
+        assert!(cclerk.derivation_path().is_none());
     }
 
     #[test]
     fn test_attenuated_token_has_zeroed_root_key() {
-        let mut wallet = AgentCipherclerk::new();
+        let mut cclerk = AgentCipherclerk::new();
         let root_key = [42u8; 32];
-        let root_token = wallet.mint_token(&root_key, "compute");
+        let root_token = cclerk.mint_token(&root_key, "compute");
 
         // Root token holds the actual key.
         assert!(root_token.can_mint());
@@ -6036,7 +6036,7 @@ mod tests {
             services: vec![("compute".to_string(), "r".to_string())],
             ..Default::default()
         };
-        let attenuated = wallet.attenuate(&root_token, &restrictions).unwrap();
+        let attenuated = cclerk.attenuate(&root_token, &restrictions).unwrap();
 
         // SECURITY: The attenuated token must NOT carry the root forging key.
         assert!(!attenuated.can_mint());
@@ -6060,14 +6060,14 @@ mod tests {
             action: Some("r".into()),
             ..Default::default()
         };
-        let proof_result = wallet.prove_authorization(&attenuated, &request);
+        let proof_result = cclerk.prove_authorization(&attenuated, &request);
         assert!(
             proof_result.is_err(),
             "attenuated token should not be able to generate federation membership proofs via prove_authorization()"
         );
 
         // But the ROOT token can still prove.
-        let root_proof_result = wallet.prove_authorization(&root_token, &request);
+        let root_proof_result = cclerk.prove_authorization(&root_token, &request);
         assert!(
             root_proof_result.is_ok(),
             "root token should still be able to prove"
@@ -6076,39 +6076,39 @@ mod tests {
 
     #[test]
     fn test_delegated_token_has_zeroed_root_key() {
-        let mut wallet = AgentCipherclerk::new();
+        let mut cclerk = AgentCipherclerk::new();
         let root_key = [99u8; 32];
-        let root_token = wallet.mint_token(&root_key, "storage");
+        let root_token = cclerk.mint_token(&root_key, "storage");
 
-        let recv_wallet = AgentCipherclerk::new();
-        let delegatee_pk = recv_wallet.public_key();
+        let recv_cclerk = AgentCipherclerk::new();
+        let delegatee_pk = recv_cclerk.public_key();
 
         let restrictions = Attenuation {
             services: vec![("storage".to_string(), "r".to_string())],
             ..Default::default()
         };
-        let delegator_pk = wallet.public_key();
-        let delegated = wallet
+        let delegator_pk = cclerk.public_key();
+        let delegated = cclerk
             .delegate(&root_token, &delegatee_pk, &restrictions)
             .unwrap();
 
-        // The delegated token's underlying attenuated HeldToken in the wallet
+        // The delegated token's underlying attenuated HeldToken in the cipherclerk
         // should also have zeroed root_key.
-        let attenuated_in_wallet = wallet
+        let attenuated_in_cclerk = cclerk
             .tokens()
             .iter()
             .find(|t| t.id.contains("att"))
             .unwrap();
-        assert!(!attenuated_in_wallet.can_mint());
-        assert_eq!(attenuated_in_wallet.root_key(), &[0u8; 32]);
+        assert!(!attenuated_in_cclerk.can_mint());
+        assert_eq!(attenuated_in_cclerk.root_key(), &[0u8; 32]);
 
         // When the delegatee receives it (under TrustedKey policy), they also
         // don't get root_key.
-        let mut recv_wallet = recv_wallet;
-        recv_wallet
+        let mut recv_cclerk = recv_cclerk;
+        recv_cclerk
             .receive_signed_delegation(delegated, &DelegationAuthority::TrustedKey(delegator_pk))
             .unwrap();
-        let held = recv_wallet.tokens().first().unwrap();
+        let held = recv_cclerk.tokens().first().unwrap();
         assert!(!held.can_mint());
         assert_eq!(held.root_key(), &[0u8; 32]);
     }
@@ -6117,43 +6117,43 @@ mod tests {
     /// since the HMAC chain cannot be checked without the root key.
     #[test]
     fn test_receive_delegation_marks_unverified() {
-        let mut wallet = AgentCipherclerk::new();
+        let mut cclerk = AgentCipherclerk::new();
         let root_key = [0xAA; 32];
-        let root_token = wallet.mint_token(&root_key, "service");
+        let root_token = cclerk.mint_token(&root_key, "service");
 
         // Root token must be verified.
         assert!(root_token.is_verified());
 
-        let recv_wallet = AgentCipherclerk::new();
-        let delegatee_pk = recv_wallet.public_key();
+        let recv_cclerk = AgentCipherclerk::new();
+        let delegatee_pk = recv_cclerk.public_key();
 
         let restrictions = Attenuation {
             services: vec![("service".to_string(), "r".to_string())],
             ..Default::default()
         };
-        let delegator_pk = wallet.public_key();
-        let delegated = wallet
+        let delegator_pk = cclerk.public_key();
+        let delegated = cclerk
             .delegate(&root_token, &delegatee_pk, &restrictions)
             .unwrap();
 
         // Attenuated token created locally (from verified parent) is still verified.
-        let attenuated_in_wallet = wallet
+        let attenuated_in_cclerk = cclerk
             .tokens()
             .iter()
             .find(|t| t.id.contains("att"))
             .unwrap();
         assert!(
-            attenuated_in_wallet.is_verified(),
+            attenuated_in_cclerk.is_verified(),
             "locally-attenuated token should be verified"
         );
 
         // When a delegatee receives the token, it must be marked as UNVERIFIED
         // because the HMAC chain cannot be checked without the root key.
-        let mut recv_wallet = recv_wallet;
-        recv_wallet
+        let mut recv_cclerk = recv_cclerk;
+        recv_cclerk
             .receive_signed_delegation(delegated, &DelegationAuthority::TrustedKey(delegator_pk))
             .unwrap();
-        let received = recv_wallet.tokens().first().unwrap();
+        let received = recv_cclerk.tokens().first().unwrap();
         assert!(
             !received.is_verified(),
             "delegated token must be marked unverified (HMAC chain not checked)"
@@ -6163,9 +6163,9 @@ mod tests {
     /// P1-2 regression test: minted tokens are verified.
     #[test]
     fn test_minted_token_is_verified() {
-        let mut wallet = AgentCipherclerk::new();
+        let mut cclerk = AgentCipherclerk::new();
         let root_key = [0xBB; 32];
-        let token = wallet.mint_token(&root_key, "compute");
+        let token = cclerk.mint_token(&root_key, "compute");
         assert!(token.is_verified());
         assert!(token.can_mint());
     }
@@ -6183,16 +6183,16 @@ mod tests {
     /// extraction + prove_authorization_with_issuer_key internally.
     #[test]
     fn test_attenuate_authorize_private_end_to_end() {
-        let mut wallet = AgentCipherclerk::new();
+        let mut cclerk = AgentCipherclerk::new();
         let root_key = [0xAA; 32];
-        let root_token = wallet.mint_token(&root_key, "compute");
+        let root_token = cclerk.mint_token(&root_key, "compute");
 
         // Step 1: Attenuate the token (restrict to read-only on "compute").
         let restrictions = Attenuation {
             services: vec![("compute".to_string(), "r".to_string())],
             ..Default::default()
         };
-        let attenuated = wallet.attenuate(&root_token, &restrictions).unwrap();
+        let attenuated = cclerk.attenuate(&root_token, &restrictions).unwrap();
 
         // Verify the attenuated token's properties.
         assert!(!attenuated.can_mint(), "must not be able to mint");
@@ -6204,7 +6204,7 @@ mod tests {
             action: Some("r".into()),
             ..Default::default()
         };
-        let presentation = wallet.authorize(&attenuated, &request, VerificationMode::FullyPrivate);
+        let presentation = cclerk.authorize(&attenuated, &request, VerificationMode::FullyPrivate);
         assert!(
             presentation.is_ok(),
             "attenuated token should be able to authorize in Private mode, got: {:?}",
@@ -6224,16 +6224,16 @@ mod tests {
     /// Test that doubly-attenuated tokens can also prove (issuer_key propagates).
     #[test]
     fn test_double_attenuate_authorize_private() {
-        let mut wallet = AgentCipherclerk::new();
+        let mut cclerk = AgentCipherclerk::new();
         let root_key = [0xCC; 32];
-        let root_token = wallet.mint_token(&root_key, "storage");
+        let root_token = cclerk.mint_token(&root_key, "storage");
 
         // First attenuation: restrict to storage service.
         let r1 = Attenuation {
             services: vec![("storage".to_string(), "rw".to_string())],
             ..Default::default()
         };
-        let att1 = wallet.attenuate(&root_token, &r1).unwrap();
+        let att1 = cclerk.attenuate(&root_token, &r1).unwrap();
         assert!(att1.can_prove());
 
         // Second attenuation: further restrict to read-only.
@@ -6241,7 +6241,7 @@ mod tests {
             services: vec![("storage".to_string(), "r".to_string())],
             ..Default::default()
         };
-        let att2 = wallet.attenuate(&att1, &r2).unwrap();
+        let att2 = cclerk.attenuate(&att1, &r2).unwrap();
 
         // The doubly-attenuated token should still be able to prove.
         assert!(!att2.can_mint());
@@ -6260,7 +6260,7 @@ mod tests {
             action: Some("r".into()),
             ..Default::default()
         };
-        let presentation = wallet.authorize(&att2, &request, VerificationMode::FullyPrivate);
+        let presentation = cclerk.authorize(&att2, &request, VerificationMode::FullyPrivate);
         assert!(
             presentation.is_ok(),
             "doubly-attenuated token should authorize in Private mode, got: {:?}",
@@ -6274,20 +6274,20 @@ mod tests {
     /// including a derived proof_key. Agent B can then generate ZK proofs privately.
     #[test]
     fn test_delegated_token_can_prove_with_proof_key() {
-        let mut issuer_wallet = AgentCipherclerk::new();
-        let issuer_pk = issuer_wallet.public_key();
+        let mut issuer_cclerk = AgentCipherclerk::new();
+        let issuer_pk = issuer_cclerk.public_key();
         let root_key = [0xDD; 32];
-        let root_token = issuer_wallet.mint_token(&root_key, "api");
+        let root_token = issuer_cclerk.mint_token(&root_key, "api");
 
-        let holder_wallet = AgentCipherclerk::new();
-        let holder_wallet_pk = holder_wallet.public_key();
+        let holder_cclerk = AgentCipherclerk::new();
+        let holder_cclerk_pk = holder_cclerk.public_key();
 
         let restrictions = Attenuation {
             services: vec![("api".to_string(), "r".to_string())],
             ..Default::default()
         };
-        let delegated = issuer_wallet
-            .delegate(&root_token, &holder_wallet_pk, &restrictions)
+        let delegated = issuer_cclerk
+            .delegate(&root_token, &holder_cclerk_pk, &restrictions)
             .unwrap();
 
         // The delegation should include a proof_key (derived from issuer's root key).
@@ -6303,11 +6303,11 @@ mod tests {
         );
 
         // Holder receives the delegation (with proof_key) under a trusted-key policy.
-        let mut holder_wallet = holder_wallet;
-        holder_wallet
+        let mut holder_cclerk = holder_cclerk;
+        holder_cclerk
             .receive_signed_delegation(delegated, &DelegationAuthority::TrustedKey(issuer_pk))
             .unwrap();
-        let held = holder_wallet.tokens().first().unwrap().clone();
+        let held = holder_cclerk.tokens().first().unwrap().clone();
 
         // Delegated token cannot mint but CAN prove (has derived proof_key as issuer_key).
         assert!(!held.can_mint());
@@ -6322,7 +6322,7 @@ mod tests {
             action: Some("r".into()),
             ..Default::default()
         };
-        let result = holder_wallet.authorize(&held, &request, VerificationMode::FullyPrivate);
+        let result = holder_cclerk.authorize(&held, &request, VerificationMode::FullyPrivate);
         assert!(
             result.is_ok(),
             "delegated token with proof_key should authorize in Private mode, got: {:?}",
@@ -6338,7 +6338,7 @@ mod tests {
     /// This is the encoded form of the design fix.)
     #[test]
     fn test_delegated_token_cannot_prove_without_proof_key() {
-        let holder_wallet = AgentCipherclerk::new();
+        let holder_cclerk = AgentCipherclerk::new();
 
         // Directly construct a HeldToken with zeroed issuer_key to exercise the
         // proof-without-key path (the wire-level DelegatedToken can no longer
@@ -6361,39 +6361,39 @@ mod tests {
             action: Some("r".into()),
             ..Default::default()
         };
-        let result = holder_wallet.authorize(&held, &request, VerificationMode::FullyPrivate);
+        let result = holder_cclerk.authorize(&held, &request, VerificationMode::FullyPrivate);
         assert!(result.is_err());
     }
 
-    /// Roundtrip test: wallet.authorize() produces bytes that engine.verify_presentation_against()
+    /// Roundtrip test: cipherclerk.authorize() produces bytes that engine.verify_presentation_against()
     /// can decode and verify.
     ///
-    /// This is the P0 regression test for the format mismatch where the wallet serialized
+    /// This is the P0 regression test for the format mismatch where the cipherclerk serialized
     /// raw STARK bytes via `stark::proof_to_bytes` but the verifier expected a postcard-encoded
     /// `WirePresentationProof`. Both sides now use the same format.
     #[test]
-    fn test_wallet_authorize_engine_verify_roundtrip() {
+    fn test_cclerk_authorize_engine_verify_roundtrip() {
         use crate::embed::{EngineConfig, PyanaEngine};
 
-        let mut wallet = AgentCipherclerk::new();
+        let mut cclerk = AgentCipherclerk::new();
         let root_key = [0xEE; 32];
-        let root_token = wallet.mint_token(&root_key, "data");
+        let root_token = cclerk.mint_token(&root_key, "data");
 
         // Attenuate the token (restrict to read on "data" service).
         let restrictions = Attenuation {
             services: vec![("data".to_string(), "r".to_string())],
             ..Default::default()
         };
-        let attenuated = wallet.attenuate(&root_token, &restrictions).unwrap();
+        let attenuated = cclerk.attenuate(&root_token, &restrictions).unwrap();
         assert!(attenuated.can_prove());
 
-        // Generate the proof via wallet.authorize(FullyPrivate).
+        // Generate the proof via cipherclerk.authorize(FullyPrivate).
         let request = pyana_token::AuthRequest {
             service: Some("data".into()),
             action: Some("r".into()),
             ..Default::default()
         };
-        let presentation = wallet
+        let presentation = cclerk
             .authorize(&attenuated, &request, VerificationMode::FullyPrivate)
             .expect("authorize should succeed");
 
@@ -6405,7 +6405,7 @@ mod tests {
             other => panic!("expected Private presentation, got: {:?}", other),
         };
 
-        // Compute the federation root (same derivation the wallet uses internally).
+        // Compute the federation root (same derivation the cipherclerk uses internally).
         let federation_root_bb = AgentCipherclerk::compute_federation_root_bb(&root_key);
         let federation_root = AgentCipherclerk::bb_to_bytes(federation_root_bb);
 
@@ -6414,7 +6414,7 @@ mod tests {
         engine.set_federation_root(federation_root);
 
         // The key assertion: verify_presentation_against must successfully decode the proof.
-        // (Before the fix, this would fail with "proof decode failed" because the wallet
+        // (Before the fix, this would fail with "proof decode failed" because the cipherclerk
         // serialized raw STARK bytes instead of a postcard WirePresentationProof.)
         let result =
             engine.verify_presentation_against(&proof_bytes, &federation_root, "r", "data");
@@ -6435,10 +6435,10 @@ mod tests {
 
     #[test]
     fn test_make_sovereign_builds_turn() {
-        let mut wallet = AgentCipherclerk::new();
-        let cell_id = wallet.cell_id("test");
+        let mut cclerk = AgentCipherclerk::new();
+        let cell_id = cclerk.cell_id("test");
 
-        let turn = wallet.make_sovereign(&cell_id).unwrap();
+        let turn = cclerk.make_sovereign(&cell_id).unwrap();
 
         // The turn targets the cell we specified.
         assert_eq!(turn.agent, cell_id);
@@ -6452,11 +6452,11 @@ mod tests {
 
     #[test]
     fn test_execute_sovereign_turn_requires_stored_state() {
-        let mut wallet = AgentCipherclerk::new();
-        let cell_id = wallet.cell_id("test");
+        let mut cclerk = AgentCipherclerk::new();
+        let cell_id = cclerk.cell_id("test");
 
         // Without stored state, should fail.
-        let result = wallet.execute_sovereign_turn(&cell_id, vec![], 0);
+        let result = cclerk.execute_sovereign_turn(&cell_id, vec![], 0);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("no local sovereign state"));
@@ -6464,14 +6464,14 @@ mod tests {
 
     #[test]
     fn test_execute_sovereign_turn_with_stored_state() {
-        let mut wallet = AgentCipherclerk::new();
-        let pk = wallet.public_key().0;
+        let mut cclerk = AgentCipherclerk::new();
+        let pk = cclerk.public_key().0;
         let token_id = *blake3::hash(b"test").as_bytes();
         let cell = pyana_cell::Cell::with_balance(pk, token_id, 1000);
         let cell_id = cell.id();
 
         // Store sovereign state.
-        wallet.store_sovereign_state(cell.clone());
+        cclerk.store_sovereign_state(cell.clone());
 
         // Build a sovereign turn with a transfer effect.
         let other_cell = CellId([99u8; 32]);
@@ -6480,7 +6480,7 @@ mod tests {
             to: other_cell,
             amount: 100,
         }];
-        let turn = wallet
+        let turn = cclerk
             .execute_sovereign_turn(&cell_id, effects, 10)
             .unwrap();
 
@@ -6496,35 +6496,35 @@ mod tests {
 
     #[test]
     fn test_store_and_retrieve_sovereign_state() {
-        let mut wallet = AgentCipherclerk::new();
-        let pk = wallet.public_key().0;
+        let mut cclerk = AgentCipherclerk::new();
+        let pk = cclerk.public_key().0;
         let token_id = *blake3::hash(b"domain").as_bytes();
         let cell = pyana_cell::Cell::with_balance(pk, token_id, 500);
         let cell_id = cell.id();
 
         // Initially empty.
-        assert_eq!(wallet.sovereign_cell_count(), 0);
-        assert!(wallet.sovereign_state(&cell_id).is_none());
+        assert_eq!(cclerk.sovereign_cell_count(), 0);
+        assert!(cclerk.sovereign_state(&cell_id).is_none());
 
         // Store.
-        wallet.store_sovereign_state(cell.clone());
-        assert_eq!(wallet.sovereign_cell_count(), 1);
+        cclerk.store_sovereign_state(cell.clone());
+        assert_eq!(cclerk.sovereign_cell_count(), 1);
 
         // Retrieve.
-        let retrieved = wallet.sovereign_state(&cell_id).unwrap();
+        let retrieved = cclerk.sovereign_state(&cell_id).unwrap();
         assert_eq!(retrieved.id(), cell_id);
         assert_eq!(retrieved.state.balance(), 500);
     }
 
     #[test]
     fn test_apply_sovereign_effects() {
-        let mut wallet = AgentCipherclerk::new();
-        let pk = wallet.public_key().0;
+        let mut cclerk = AgentCipherclerk::new();
+        let pk = cclerk.public_key().0;
         let token_id = *blake3::hash(b"domain").as_bytes();
         let cell = pyana_cell::Cell::with_balance(pk, token_id, 1000);
         let cell_id = cell.id();
 
-        wallet.store_sovereign_state(cell);
+        cclerk.store_sovereign_state(cell);
 
         let other = CellId([99u8; 32]);
 
@@ -6537,22 +6537,22 @@ mod tests {
             },
             Effect::IncrementNonce { cell: cell_id },
         ];
-        wallet.apply_sovereign_effects(&cell_id, &effects).unwrap();
+        cclerk.apply_sovereign_effects(&cell_id, &effects).unwrap();
 
-        let state = wallet.sovereign_state(&cell_id).unwrap();
+        let state = cclerk.sovereign_state(&cell_id).unwrap();
         assert_eq!(state.state.balance(), 700);
         assert_eq!(state.state.nonce(), 1);
     }
 
     #[test]
     fn test_apply_sovereign_effects_transfer_in() {
-        let mut wallet = AgentCipherclerk::new();
-        let pk = wallet.public_key().0;
+        let mut cclerk = AgentCipherclerk::new();
+        let pk = cclerk.public_key().0;
         let token_id = *blake3::hash(b"domain").as_bytes();
         let cell = pyana_cell::Cell::with_balance(pk, token_id, 100);
         let cell_id = cell.id();
 
-        wallet.store_sovereign_state(cell);
+        cclerk.store_sovereign_state(cell);
 
         let other = CellId([88u8; 32]);
         let effects = vec![Effect::Transfer {
@@ -6560,56 +6560,56 @@ mod tests {
             to: cell_id,
             amount: 500,
         }];
-        wallet.apply_sovereign_effects(&cell_id, &effects).unwrap();
+        cclerk.apply_sovereign_effects(&cell_id, &effects).unwrap();
 
-        let state = wallet.sovereign_state(&cell_id).unwrap();
+        let state = cclerk.sovereign_state(&cell_id).unwrap();
         assert_eq!(state.state.balance(), 600);
     }
 
     #[test]
     fn test_apply_sovereign_effects_missing_cell() {
-        let mut wallet = AgentCipherclerk::new();
+        let mut cclerk = AgentCipherclerk::new();
         let cell_id = CellId([1u8; 32]);
 
-        let result = wallet.apply_sovereign_effects(&cell_id, &[]);
+        let result = cclerk.apply_sovereign_effects(&cell_id, &[]);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_export_import_sovereign_state_roundtrip() {
-        let mut wallet = AgentCipherclerk::new();
-        let pk = wallet.public_key().0;
+        let mut cclerk = AgentCipherclerk::new();
+        let pk = cclerk.public_key().0;
 
         // Store two sovereign cells.
         let token_id_a = *blake3::hash(b"domain-a").as_bytes();
         let cell_a = pyana_cell::Cell::with_balance(pk, token_id_a, 100);
         let id_a = cell_a.id();
-        wallet.store_sovereign_state(cell_a);
+        cclerk.store_sovereign_state(cell_a);
 
         let token_id_b = *blake3::hash(b"domain-b").as_bytes();
         let cell_b = pyana_cell::Cell::with_balance(pk, token_id_b, 200);
         let id_b = cell_b.id();
-        wallet.store_sovereign_state(cell_b);
+        cclerk.store_sovereign_state(cell_b);
 
-        assert_eq!(wallet.sovereign_cell_count(), 2);
+        assert_eq!(cclerk.sovereign_cell_count(), 2);
 
         // Export.
-        let exported = wallet.export_sovereign_state();
+        let exported = cclerk.export_sovereign_state();
         assert!(!exported.is_empty());
 
-        // Import into a fresh wallet.
-        let mut wallet2 = AgentCipherclerk::new();
-        wallet2.import_sovereign_state(&exported).unwrap();
+        // Import into a fresh cipherclerk.
+        let mut cclerk2 = AgentCipherclerk::new();
+        cclerk2.import_sovereign_state(&exported).unwrap();
 
-        assert_eq!(wallet2.sovereign_cell_count(), 2);
-        assert_eq!(wallet2.sovereign_state(&id_a).unwrap().state.balance(), 100);
-        assert_eq!(wallet2.sovereign_state(&id_b).unwrap().state.balance(), 200);
+        assert_eq!(cclerk2.sovereign_cell_count(), 2);
+        assert_eq!(cclerk2.sovereign_state(&id_a).unwrap().state.balance(), 100);
+        assert_eq!(cclerk2.sovereign_state(&id_b).unwrap().state.balance(), 200);
     }
 
     #[test]
     fn test_import_sovereign_state_invalid_data() {
-        let mut wallet = AgentCipherclerk::new();
-        let result = wallet.import_sovereign_state(b"not valid postcard data");
+        let mut cclerk = AgentCipherclerk::new();
+        let result = cclerk.import_sovereign_state(b"not valid postcard data");
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("failed to deserialize sovereign state"));
@@ -6617,10 +6617,10 @@ mod tests {
 
     #[test]
     fn test_peer_exchange_session() {
-        let wallet = AgentCipherclerk::new();
-        let exchange = wallet.peer_exchange_session("test");
-        // PeerExchange should be initialized with the wallet's cell_id.
-        let expected_cell_id = wallet.cell_id("test");
+        let cclerk = AgentCipherclerk::new();
+        let exchange = cclerk.peer_exchange_session("test");
+        // PeerExchange should be initialized with the cipherclerk's cell_id.
+        let expected_cell_id = cclerk.cell_id("test");
         assert_eq!(exchange.cell_id(), expected_cell_id);
     }
 
@@ -6706,7 +6706,7 @@ mod tests {
         // Alice delegates to Bob legitimately.
         let _legit = mint_delegation(&mut alice, bob_pk, [0x22; 32], "svc");
 
-        // Mallory (different wallet) crafts her own valid envelope to Bob,
+        // Mallory (different cipherclerk) crafts her own valid envelope to Bob,
         // signed under her own key.
         let mut mallory = AgentCipherclerk::new();
         let mallory_env = mint_delegation(&mut mallory, bob_pk, [0x33; 32], "svc");
@@ -7011,7 +7011,7 @@ mod tests {
         bob.receive_signed_delegation(env, &DelegationAuthority::TrustedKey(alice_pk))
             .unwrap();
 
-        // Find the held token in Bob's wallet by index (avoid relying on
+        // Find the held token in Bob's cipherclerk by index (avoid relying on
         // public accessors mutating state).
         assert_eq!(bob.tokens.len(), 1);
         // Pre-tamper: re-verification of the binding must succeed.
@@ -7192,13 +7192,13 @@ mod tests {
 
     /// P1-6: `receive_signed_delegation` rejects oversized membership proofs
     /// at the receive boundary so a malicious sender cannot park a DoS-shaped
-    /// proof inside our wallet for later detonation.
+    /// proof inside our cipherclerk for later detonation.
     #[test]
     fn test_receive_rejects_oversized_membership_proof() {
         use pyana_commit::merkle::MerkleProof;
         use pyana_token::Attenuation;
 
-        // Build a small token using a generated wallet.
+        // Build a small token using a generated cipherclerk.
         let mut alice = AgentCipherclerk::new();
         let bob = AgentCipherclerk::new();
         let root_token = alice.mint_token(&[42u8; 32], "test-svc");
@@ -7267,7 +7267,7 @@ mod tests {
     /// signature; if a queue method ever regressed to `Authorization::Unchecked`
     /// the variant would not be `Signature(..)` at all, but if some future
     /// "lazy sign" path produced `Signature([0;32], [0;32])` we want to catch
-    /// it too. (See `app-framework/tests/wallet_sign_action.rs` for the
+    /// it too. (See `app-framework/tests/cipherclerk_sign_action.rs` for the
     /// matching pin on the AppCipherclerk path.)
     fn assert_real_signature(action: &pyana_turn::action::Action) {
         use pyana_turn::action::Authorization;
@@ -7291,19 +7291,19 @@ mod tests {
 
     #[test]
     fn allocate_queue_produces_real_signature() {
-        let wallet = AgentCipherclerk::new();
+        let cclerk = AgentCipherclerk::new();
         let fed = [7u8; 32];
-        let turn = wallet.allocate_queue(8, None, &fed).unwrap();
+        let turn = cclerk.allocate_queue(8, None, &fed).unwrap();
         assert_real_signature(root_action(&turn));
-        assert_eq!(turn.agent, wallet.cell_id("default"));
+        assert_eq!(turn.agent, cclerk.cell_id("default"));
     }
 
     #[test]
     fn allocate_queue_with_program_vk_produces_real_signature() {
-        let wallet = AgentCipherclerk::new();
+        let cclerk = AgentCipherclerk::new();
         let fed = [3u8; 32];
         let vk = [42u8; 32];
-        let turn = wallet.allocate_queue(4, Some(vk), &fed).unwrap();
+        let turn = cclerk.allocate_queue(4, Some(vk), &fed).unwrap();
         let action = root_action(&turn);
         assert_real_signature(action);
         match &action.effects[0] {
@@ -7320,11 +7320,11 @@ mod tests {
 
     #[test]
     fn enqueue_message_produces_real_signature() {
-        let wallet = AgentCipherclerk::new();
+        let cclerk = AgentCipherclerk::new();
         let fed = [1u8; 32];
-        let queue = wallet.cell_id("queue-target");
+        let queue = cclerk.cell_id("queue-target");
         let msg_hash = [0xAB; 32];
-        let turn = wallet.enqueue_message(queue, msg_hash, 100, &fed).unwrap();
+        let turn = cclerk.enqueue_message(queue, msg_hash, 100, &fed).unwrap();
         let action = root_action(&turn);
         assert_real_signature(action);
         match &action.effects[0] {
@@ -7343,10 +7343,10 @@ mod tests {
 
     #[test]
     fn dequeue_message_produces_real_signature() {
-        let wallet = AgentCipherclerk::new();
+        let cclerk = AgentCipherclerk::new();
         let fed = [9u8; 32];
-        let queue = wallet.cell_id("queue-target");
-        let turn = wallet.dequeue_message(queue, &fed).unwrap();
+        let queue = cclerk.cell_id("queue-target");
+        let turn = cclerk.dequeue_message(queue, &fed).unwrap();
         let action = root_action(&turn);
         assert_real_signature(action);
         match &action.effects[0] {
@@ -7358,10 +7358,10 @@ mod tests {
     #[test]
     fn atomic_queue_tx_produces_real_signature() {
         use pyana_turn::QueueTxOp;
-        let wallet = AgentCipherclerk::new();
+        let cclerk = AgentCipherclerk::new();
         let fed = [5u8; 32];
-        let q1 = wallet.cell_id("q1");
-        let q2 = wallet.cell_id("q2");
+        let q1 = cclerk.cell_id("q1");
+        let q2 = cclerk.cell_id("q2");
         let ops = vec![
             QueueTxOp::Dequeue { queue: q1 },
             QueueTxOp::Enqueue {
@@ -7370,7 +7370,7 @@ mod tests {
                 deposit: 50,
             },
         ];
-        let turn = wallet.atomic_queue_tx(ops, &fed).unwrap();
+        let turn = cclerk.atomic_queue_tx(ops, &fed).unwrap();
         let action = root_action(&turn);
         assert_real_signature(action);
         match &action.effects[0] {
@@ -7381,9 +7381,9 @@ mod tests {
 
     #[test]
     fn atomic_queue_tx_rejects_empty_operations() {
-        let wallet = AgentCipherclerk::new();
+        let cclerk = AgentCipherclerk::new();
         let fed = [5u8; 32];
-        let result = wallet.atomic_queue_tx(vec![], &fed);
+        let result = cclerk.atomic_queue_tx(vec![], &fed);
         assert!(
             result.is_err(),
             "atomic_queue_tx with no operations must error"
@@ -7397,11 +7397,11 @@ mod tests {
     #[test]
     fn queue_signature_binds_to_federation_id() {
         use pyana_turn::action::Authorization;
-        let wallet = AgentCipherclerk::new();
+        let cclerk = AgentCipherclerk::new();
         let fed_a = [1u8; 32];
         let fed_b = [2u8; 32];
-        let t_a = wallet.allocate_queue(4, None, &fed_a).unwrap();
-        let t_b = wallet.allocate_queue(4, None, &fed_b).unwrap();
+        let t_a = cclerk.allocate_queue(4, None, &fed_a).unwrap();
+        let t_b = cclerk.allocate_queue(4, None, &fed_b).unwrap();
         let sig_a = match root_action(&t_a).authorization {
             Authorization::Signature(a, b) => (a, b),
             _ => panic!("expected Signature"),
@@ -7427,10 +7427,10 @@ mod tests {
 
     #[test]
     fn create_from_factory_produces_real_signature() {
-        let wallet = AgentCipherclerk::new();
+        let cclerk = AgentCipherclerk::new();
         let fed = [42u8; 32];
-        let issuer = wallet.cell_id("default");
-        let turn = wallet.create_from_factory(
+        let issuer = cclerk.cell_id("default");
+        let turn = cclerk.create_from_factory(
             issuer,
             [0xAA; 32],
             [0xBB; 32],
@@ -7450,8 +7450,8 @@ mod tests {
     #[test]
     fn create_from_factory_signature_binds_to_federation_id() {
         use pyana_turn::action::Authorization;
-        let wallet = AgentCipherclerk::new();
-        let issuer = wallet.cell_id("default");
+        let cclerk = AgentCipherclerk::new();
+        let issuer = cclerk.cell_id("default");
         let fed_a = [0x11u8; 32];
         let fed_b = [0x22u8; 32];
         let params_a = pyana_cell::FactoryCreationParams {
@@ -7462,9 +7462,9 @@ mod tests {
             initial_caps: vec![],
         };
         let params_b = params_a.clone();
-        let t_a = wallet
+        let t_a = cclerk
             .create_from_factory(issuer, [0xAA; 32], [0xBB; 32], [0xCC; 32], params_a, &fed_a);
-        let t_b = wallet
+        let t_b = cclerk
             .create_from_factory(issuer, [0xAA; 32], [0xBB; 32], [0xCC; 32], params_b, &fed_b);
         let sig_a = match root_action(&t_a).authorization {
             Authorization::Signature(a, b) => (a, b),
@@ -7480,25 +7480,25 @@ mod tests {
         );
     }
 
-    /// The signature must verify against the wallet's actual ed25519 key
+    /// The signature must verify against the cipherclerk's actual ed25519 key
     /// (not against some zero key or other party's key). This proves the
     /// signature was produced by `self.signing_key`, closing the
     /// "Unchecked → Signature shape but uses [0;64] key" attack.
     #[test]
-    fn queue_signature_verifies_against_wallet_pubkey() {
+    fn queue_signature_verifies_against_cclerk_pubkey() {
         use ed25519_dalek::{Signature, VerifyingKey};
         use pyana_turn::action::{Action, Authorization};
         use pyana_turn::executor::TurnExecutor;
 
-        let wallet = AgentCipherclerk::new();
+        let cclerk = AgentCipherclerk::new();
         let fed = [13u8; 32];
-        let turn = wallet
-            .enqueue_message(wallet.cell_id("q"), [0xEE; 32], 25, &fed)
+        let turn = cclerk
+            .enqueue_message(cclerk.cell_id("q"), [0xEE; 32], 25, &fed)
             .unwrap();
         let action = root_action(&turn);
 
         // Recompute the canonical signing message (must match what
-        // sign_action did internally), then verify with the wallet pubkey.
+        // sign_action did internally), then verify with the cipherclerk pubkey.
         let unsigned = Action {
             authorization: Authorization::Unchecked,
             ..action.clone()
@@ -7514,11 +7514,11 @@ mod tests {
         sig_bytes[32..].copy_from_slice(&b);
         let sig = Signature::from_bytes(&sig_bytes);
 
-        let vk_bytes = wallet.public_key().0;
+        let vk_bytes = cclerk.public_key().0;
         let vk = VerifyingKey::from_bytes(&vk_bytes).expect("valid pubkey");
 
         vk.verify_strict(&msg, &sig)
-            .expect("queue signature must verify against wallet pubkey");
+            .expect("queue signature must verify against cipherclerk pubkey");
     }
 }
 

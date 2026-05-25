@@ -517,7 +517,7 @@ The prover's experience:
 3. If yes: generate proof (sub-second with existing STARK machinery).
 4. Send proof (reveals only pass/fail + binding to state).
 
-For compound predicates, the wallet should present: "Service X is asking you to prove: [age >= 18] AND [country in {US, CA, UK}]. Your token satisfies this. Generate proof?"
+For compound predicates, the cclerk should present: "Service X is asking you to prove: [age >= 18] AND [country in {US, CA, UK}]. Your token satisfies this. Generate proof?"
 
 ---
 

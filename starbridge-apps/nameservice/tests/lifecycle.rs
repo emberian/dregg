@@ -40,7 +40,7 @@ use starbridge_nameservice::{
 // Helpers
 // =============================================================================
 
-fn wallet_with_seed(seed_byte: u8) -> AppCipherclerk {
+fn cclerk_with_seed(seed_byte: u8) -> AppCipherclerk {
     AppCipherclerk::new(AgentCipherclerk::new(), [seed_byte; 32])
 }
 
@@ -77,7 +77,7 @@ fn project_setfield(action: &pyana_app_framework::Action, slot: usize) -> Option
 #[test]
 fn lifecycle_register_set_target_renew_transfer_revoke_round_trips() {
     let program = fresh_program();
-    let cipherclerk = wallet_with_seed(0x10);
+    let cipherclerk = cclerk_with_seed(0x10);
     let cell = registry_cell();
     let owner = [0xAAu8; 32];
     let new_owner = [0xBBu8; 32];
@@ -258,7 +258,7 @@ fn adversarial_double_revoke_rejected_by_write_once_on_revoked_slot() {
 
 #[test]
 fn auth_register_action_carries_real_signature() {
-    let cipherclerk = wallet_with_seed(0xAA);
+    let cipherclerk = cclerk_with_seed(0xAA);
     let action = build_register_action(
         &cipherclerk,
         registry_cell(),
@@ -280,7 +280,7 @@ fn auth_register_action_carries_real_signature() {
 #[test]
 fn auth_all_lifecycle_actions_carry_real_signatures() {
     // Every entry point must emit an Authorization::Signature.
-    let cipherclerk = wallet_with_seed(0xCC);
+    let cipherclerk = cclerk_with_seed(0xCC);
     let cell = registry_cell();
     let name = "alice.pyana";
     let actions = vec![
@@ -311,10 +311,10 @@ fn auth_all_lifecycle_actions_carry_real_signatures() {
 }
 
 #[test]
-fn auth_different_wallets_produce_different_signatures_on_same_logical_action() {
-    // Same federation_id, different wallets — signatures must diverge.
-    let w1 = wallet_with_seed(0x01);
-    let w2 = wallet_with_seed(0x01);
+fn auth_different_cclerks_produce_different_signatures_on_same_logical_action() {
+    // Same federation_id, different cipherclerks — signatures must diverge.
+    let w1 = cclerk_with_seed(0x01);
+    let w2 = cclerk_with_seed(0x01);
     let cell = registry_cell();
     let a1 = build_register_action(&w1, cell, "alice", [3u8; 32], 1_000);
     let a2 = build_register_action(&w2, cell, "alice", [3u8; 32], 1_000);
@@ -325,7 +325,7 @@ fn auth_different_wallets_produce_different_signatures_on_same_logical_action() 
     };
     assert_ne!(
         r1, r2,
-        "different wallets must produce different signatures even for identical action data"
+        "different cipherclerks must produce different signatures even for identical action data"
     );
 }
 
@@ -333,7 +333,7 @@ fn auth_different_wallets_produce_different_signatures_on_same_logical_action() 
 // Adversarial: transfer attempted by a non-owner
 // =============================================================================
 
-/// Transfer authorship is bound to the wallet that signs the action. A
+/// Transfer authorship is bound to the cclerk that signs the action. A
 /// non-owner attempting the same logical transfer produces a different
 /// `Authorization::Signature`, so the executor's signer-vs-owner check
 /// can distinguish them — even though the cell-program slot caveats
@@ -367,19 +367,19 @@ fn auth_different_wallets_produce_different_signatures_on_same_logical_action() 
 /// check), not the cell program's. See README §"Owner authorization".
 #[test]
 fn adversarial_transfer_from_non_owner_authorization_diverges() {
-    let owner_wallet = wallet_with_seed(0xA1);
-    let impostor_wallet = wallet_with_seed(0xB2);
+    let owner_cclerk = cclerk_with_seed(0xA1);
+    let impostor_cclerk = cclerk_with_seed(0xB2);
     let cell = registry_cell();
     let name = "alice.pyana";
     let old_owner_pk = [0xAAu8; 32];
     let new_owner_pk = [0xCCu8; 32];
 
-    // Both wallets produce the *same* effect payload (the data the
+    // Both cipherclerks produce the *same* effect payload (the data the
     // executor would write into OWNER_HASH_SLOT is identical) — but the
-    // `Authorization::Signature(r, s)` diverges because each wallet's
+    // `Authorization::Signature(r, s)` diverges because each cipherclerk's
     // Ed25519 key is distinct.
-    let legit = build_transfer_action(&owner_wallet, cell, name, old_owner_pk, new_owner_pk);
-    let impostor = build_transfer_action(&impostor_wallet, cell, name, old_owner_pk, new_owner_pk);
+    let legit = build_transfer_action(&owner_cclerk, cell, name, old_owner_pk, new_owner_pk);
+    let impostor = build_transfer_action(&impostor_cclerk, cell, name, old_owner_pk, new_owner_pk);
 
     let (Authorization::Signature(r_owner, s_owner), Authorization::Signature(r_imp, s_imp)) =
         (&legit.authorization, &impostor.authorization)
@@ -455,7 +455,7 @@ fn factory_descriptor_hash_changes_with_state_constraints() {
 
 #[test]
 fn register_function_is_idempotent_across_repeated_calls() {
-    let cipherclerk = wallet_with_seed(0x42);
+    let cipherclerk = cclerk_with_seed(0x42);
     let executor = pyana_app_framework::EmbeddedExecutor::new(&cipherclerk, "default");
     let ctx = pyana_app_framework::StarbridgeAppContext::new(cipherclerk, executor);
     let vk1 = register(&ctx);

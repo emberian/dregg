@@ -1,4 +1,4 @@
-//! Wallet operations: balance, transfer, delegate, info.
+//! Cipherclerk operations: balance, transfer, delegate, info.
 
 use clap::Subcommand;
 
@@ -8,7 +8,7 @@ use crate::output::{Context, abbrev_hex, format_number};
 use super::{get_json, post_json};
 
 #[derive(Subcommand)]
-pub enum WalletCommand {
+pub enum CipherclerkCommand {
     /// Show balances.
     Balance,
 
@@ -38,30 +38,32 @@ pub enum WalletCommand {
         attenuate: Option<String>,
     },
 
-    /// Show wallet identity information.
+    /// Show cclerk identity information.
     Info,
 }
 
 pub async fn run(
-    cmd: WalletCommand,
+    cmd: CipherclerkCommand,
     cfg: &Config,
     ctx: &Context,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match cmd {
-        WalletCommand::Balance => balance(cfg, ctx).await,
-        WalletCommand::Transfer { to, amount, memo } => transfer(cfg, ctx, &to, amount, memo).await,
-        WalletCommand::Delegate {
+        CipherclerkCommand::Balance => balance(cfg, ctx).await,
+        CipherclerkCommand::Transfer { to, amount, memo } => {
+            transfer(cfg, ctx, &to, amount, memo).await
+        }
+        CipherclerkCommand::Delegate {
             cell_id,
             target,
             attenuate,
         } => delegate(cfg, ctx, &cell_id, &target, attenuate).await,
-        WalletCommand::Info => info(cfg, ctx).await,
+        CipherclerkCommand::Info => info(cfg, ctx).await,
     }
 }
 
 async fn balance(cfg: &Config, ctx: &Context) -> Result<(), Box<dyn std::error::Error>> {
-    let spinner = ctx.spinner("Fetching wallet...");
-    let data = get_json(cfg, "/wallet").await?;
+    let spinner = ctx.spinner("Fetching cclerk...");
+    let data = get_json(cfg, "/cipherclerk").await?;
     spinner.finish_and_clear();
 
     if cfg.is_json() {
@@ -73,7 +75,7 @@ async fn balance(cfg: &Config, ctx: &Context) -> Result<(), Box<dyn std::error::
     let receipt_chain = data["receipt_chain_length"].as_u64().unwrap_or(0);
     let computrons = data["computrons"].as_u64().unwrap_or(0);
 
-    ctx.header("Wallet Balance");
+    ctx.header("Cipherclerk Balance");
     ctx.kv("Computrons", &format_number(computrons));
     ctx.kv("Tokens", &token_count.to_string());
     ctx.kv("Receipt chain", &format_number(receipt_chain));
@@ -129,7 +131,7 @@ async fn delegate(
         "target": target,
         "attenuation": attenuate,
     });
-    let data = post_json(cfg, "/wallet/attenuate", &body).await?;
+    let data = post_json(cfg, "/cipherclerk/attenuate", &body).await?;
     spinner.finish_and_clear();
 
     if cfg.is_json() {
@@ -147,8 +149,8 @@ async fn delegate(
 }
 
 async fn info(cfg: &Config, ctx: &Context) -> Result<(), Box<dyn std::error::Error>> {
-    let spinner = ctx.spinner("Fetching wallet info...");
-    let data = get_json(cfg, "/wallet").await?;
+    let spinner = ctx.spinner("Fetching cclerk info...");
+    let data = get_json(cfg, "/cipherclerk").await?;
     spinner.finish_and_clear();
 
     if cfg.is_json() {
@@ -161,12 +163,12 @@ async fn info(cfg: &Config, ctx: &Context) -> Result<(), Box<dyn std::error::Err
     let token_count = data["token_count"].as_u64().unwrap_or(0);
     let receipt_chain = data["receipt_chain_length"].as_u64().unwrap_or(0);
 
-    ctx.header("Wallet Identity");
+    ctx.header("Cipherclerk Identity");
     ctx.kv("Public Key", pk);
     ctx.kv("Status", if unlocked { "unlocked" } else { "locked" });
     ctx.kv("Tokens", &token_count.to_string());
     ctx.kv("Receipts", &receipt_chain.to_string());
-    ctx.kv("Keyfile", &cfg.wallet.keyfile);
+    ctx.kv("Keyfile", &cfg.cclerk.keyfile);
 
     Ok(())
 }

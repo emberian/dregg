@@ -98,10 +98,10 @@ to "group". This is safe to do incrementally.
 
 ---
 
-## sdk/ (SDK / Wallet)
+## sdk/ (SDK / Cipherclerk)
 
 ### Summary
-The SDK uses `federation_id` in RuntimeConfig and wallet's
+The SDK uses `federation_id` in RuntimeConfig and cipherclerk's
 `compute_federation_root_bb` / `register_with_federation` / `deregister_from_federation`.
 
 ### Instances
@@ -109,12 +109,12 @@ The SDK uses `federation_id` in RuntimeConfig and wallet's
 | File | Lines | What | New Model | Difficulty | Priority |
 |------|-------|------|-----------|------------|----------|
 | `runtime.rs` | 236, 434, 474, 529 | `federation_id` field in RuntimeConfig, used in signing | Same bytes, rename to `group_id` | trivial | can-wait |
-| `wallet.rs` | 979-996 | `federation_tree` parameter name | Cosmetic rename | trivial | cosmetic |
-| `wallet.rs` | 1982-2245 | `compute_federation_root_bb`, `federation_root`, `federation_root_bb` | Internal to proof generation; rename later | moderate | can-wait |
-| `wallet.rs` | 4115-4208 | `register_with_federation`, `deregister_from_federation` (feature-gated) | These hit the node HTTP API; rename when node API changes | moderate | can-wait |
+| `cipherclerk.rs` | 979-996 | `federation_tree` parameter name | Cosmetic rename | trivial | cosmetic |
+| `cipherclerk.rs` | 1982-2245 | `compute_federation_root_bb`, `federation_root`, `federation_root_bb` | Internal to proof generation; rename later | moderate | can-wait |
+| `cipherclerk.rs` | 4115-4208 | `register_with_federation`, `deregister_from_federation` (feature-gated) | These hit the node HTTP API; rename when node API changes | moderate | can-wait |
 
 ### Strategy
-The wallet's "federation root" computation is really computing the GROUP's Merkle
+The cipherclerk's "federation root" computation is really computing the GROUP's Merkle
 root. No semantic change needed, just cosmetic renaming when ready.
 
 ---

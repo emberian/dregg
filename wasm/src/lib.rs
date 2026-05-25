@@ -1710,7 +1710,7 @@ pub fn derive_keypair_from_mnemonic(mnemonic: &str, passphrase: &str) -> Result<
 /// Returns the 64-byte Ed25519 signature. The extension background uses this
 /// to sign turn JSON when `build_turn` is unavailable (e.g., a turn type that
 /// doesn't map to a canonical Effect). For canonical turn construction use
-/// `build_turn` instead — it routes through `AgentWallet` directly.
+/// `build_turn` instead — it routes through `AgentCipherclerk` directly.
 ///
 /// `secret_key` must be exactly 32 bytes (the seed, not the full 64-byte
 /// expanded key). `message` may be any length.
@@ -1732,12 +1732,12 @@ pub fn sign_message(secret_key: &[u8], message: &[u8]) -> Result<Vec<u8>, JsErro
 // Canonical turn builder (signTurn canonical path)
 // ============================================================================
 
-/// Build and sign a canonical turn from a JSON spec, using `AgentWallet` as
+/// Build and sign a canonical turn from a JSON spec, using `AgentCipherclerk` as
 /// the canonical signing path.
 ///
 /// The cipherclerk is constructed from `sender_privkey` (32-byte Ed25519 seed
-/// carried by the extension background) using `AgentWallet::from_key_bytes`,
-/// and the turn is built via `AgentWallet::make_action` + `AgentWallet::make_turn_for`.
+/// carried by the extension background) using `AgentCipherclerk::from_key_bytes`,
+/// and the turn is built via `AgentCipherclerk::make_action` + `AgentCipherclerk::make_turn_for`.
 /// The action records one `Effect::IncrementNonce` (a no-op state advancement)
 /// with a custom `method` field derived from `turnSpec.action` — it carries the
 /// semantic intent without requiring ledger state for the extension's broadcast path.
@@ -1761,7 +1761,7 @@ pub fn sign_message(secret_key: &[u8], message: &[u8]) -> Result<Vec<u8>, JsErro
 /// `/turns/submit` endpoint expects.
 #[wasm_bindgen]
 pub fn build_turn(spec_json: &str) -> Result<JsValue, JsError> {
-    use pyana_sdk::AgentWallet;
+    use pyana_sdk::AgentCipherclerk;
     use pyana_turn::Effect;
     use zeroize::Zeroizing;
 
@@ -1787,8 +1787,8 @@ pub fn build_turn(spec_json: &str) -> Result<JsValue, JsError> {
     let mut seed = [0u8; 32];
     seed.copy_from_slice(&spec.sender_privkey);
 
-    let wallet = AgentWallet::from_key_bytes(Zeroizing::new(seed));
-    let cell_id = wallet.cell_id("default");
+    let cclerk = AgentCipherclerk::from_key_bytes(Zeroizing::new(seed));
+    let cell_id = cclerk.cell_id("default");
 
     // Use a zeroed federation_id for the WASM sim context. The extension
     // submits to a real node; the federation_id the node expects for devnet
@@ -1808,8 +1808,8 @@ pub fn build_turn(spec_json: &str) -> Result<JsValue, JsError> {
         vec![Effect::IncrementNonce { cell: cell_id }]
     };
 
-    let action = wallet.make_action(cell_id, &spec.action, effects, &federation_id);
-    let turn = wallet.make_turn_for("default", action);
+    let action = cclerk.make_action(cell_id, &spec.action, effects, &federation_id);
+    let turn = cclerk.make_turn_for("default", action);
     let turn_bytes = postcard::to_allocvec(&turn)
         .map_err(|e| JsError::new(&format!("postcard serialization failed: {e}")))?;
 
@@ -1839,7 +1839,7 @@ pub fn build_turn(spec_json: &str) -> Result<JsValue, JsError> {
 // ============================================================================
 
 /// Build and sign a canonical `Effect::CreateCellFromFactory` turn from a
-/// JSON spec, using `AgentWallet::create_from_factory` as the canonical
+/// JSON spec, using `AgentCipherclerk::create_from_factory` as the canonical
 /// constructor-transparency path.
 ///
 /// This replaces the standalone `create_from_factory` derivation function
@@ -1875,7 +1875,7 @@ pub fn build_turn(spec_json: &str) -> Result<JsValue, JsError> {
 pub fn cipherclerk_create_from_factory(spec_json: &str) -> Result<JsValue, JsError> {
     use pyana_cell::CellMode;
     use pyana_cell::factory::{ChildVkStrategy, FactoryCreationParams};
-    use pyana_sdk::AgentWallet;
+    use pyana_sdk::AgentCipherclerk;
     use zeroize::Zeroizing;
 
     #[derive(serde::Deserialize)]
@@ -1925,8 +1925,8 @@ pub fn cipherclerk_create_from_factory(spec_json: &str) -> Result<JsValue, JsErr
         _ => [0u8; 32],
     };
 
-    let wallet = AgentWallet::from_key_bytes(Zeroizing::new(seed));
-    let issuer_cell = wallet.cell_id("default");
+    let cclerk = AgentCipherclerk::from_key_bytes(Zeroizing::new(seed));
+    let issuer_cell = cclerk.cell_id("default");
 
     let params = FactoryCreationParams {
         mode,
@@ -1943,7 +1943,7 @@ pub fn cipherclerk_create_from_factory(spec_json: &str) -> Result<JsValue, JsErr
     let param_hash = ChildVkStrategy::compute_param_hash(&params);
     let child_vk = ChildVkStrategy::derive_child_vk(&factory_vk, &param_hash);
 
-    let turn = wallet.create_from_factory(
+    let turn = cclerk.create_from_factory(
         issuer_cell,
         factory_vk,
         owner_pubkey,
@@ -1994,7 +1994,7 @@ fn hex_decode_32(hex: &str) -> Result<[u8; 32], String> {
 // ============================================================================
 
 /// Build an `EncryptedIntent` via the canonical SDK path
-/// (`AgentWallet::post_encrypted_intent`). The cipherclerk's Ed25519 identity
+/// (`AgentCipherclerk::post_encrypted_intent`). The cipherclerk's Ed25519 identity
 /// is the source of the `commitment_id` field; the intent body is sealed
 /// with a fresh ephemeral keypair (per `EncryptedIntent::create`).
 ///
@@ -2021,7 +2021,7 @@ fn hex_decode_32(hex: &str) -> Result<[u8; 32], String> {
 #[wasm_bindgen]
 pub fn cipherclerk_post_encrypted_intent(spec_json: &str) -> Result<JsValue, JsError> {
     use pyana_intent::{IntentKind, MatchSpec};
-    use pyana_sdk::AgentWallet;
+    use pyana_sdk::AgentCipherclerk;
     use zeroize::Zeroizing;
 
     #[derive(serde::Deserialize)]
@@ -2048,8 +2048,8 @@ pub fn cipherclerk_post_encrypted_intent(spec_json: &str) -> Result<JsValue, JsE
         other => return Err(JsError::new(&format!("unknown intent kind: {other}"))),
     };
 
-    let wallet = AgentWallet::from_key_bytes(Zeroizing::new(seed));
-    let encrypted = wallet.post_encrypted_intent(&spec.match_spec, kind, spec.expiry);
+    let cclerk = AgentCipherclerk::from_key_bytes(Zeroizing::new(seed));
+    let encrypted = cclerk.post_encrypted_intent(&spec.match_spec, kind, spec.expiry);
 
     let bytes = postcard::to_allocvec(&encrypted)
         .map_err(|e| JsError::new(&format!("postcard serialization failed: {e}")))?;
@@ -2080,7 +2080,7 @@ pub fn cipherclerk_post_encrypted_intent(spec_json: &str) -> Result<JsValue, JsE
 // ============================================================================
 
 /// Build a private-transfer turn via the canonical SDK path
-/// (`AgentWallet::private_transfer`). The turn carries a Pedersen value
+/// (`AgentCipherclerk::private_transfer`). The turn carries a Pedersen value
 /// commitment (amount hidden) addressed to a freshly-derived stealth
 /// one-time pubkey for the recipient meta-address.
 ///
@@ -2103,7 +2103,7 @@ pub fn cipherclerk_post_encrypted_intent(spec_json: &str) -> Result<JsValue, JsE
 #[wasm_bindgen]
 pub fn cipherclerk_private_transfer(spec_json: &str) -> Result<JsValue, JsError> {
     use pyana_cell::stealth::StealthMetaAddress;
-    use pyana_sdk::AgentWallet;
+    use pyana_sdk::AgentCipherclerk;
     use zeroize::Zeroizing;
 
     #[derive(serde::Deserialize)]
@@ -2148,8 +2148,8 @@ pub fn cipherclerk_private_transfer(spec_json: &str) -> Result<JsValue, JsError>
         view_pubkey: view_pk,
     };
 
-    let mut wallet = AgentWallet::from_key_bytes(Zeroizing::new(seed));
-    let turn = wallet
+    let mut cclerk = AgentCipherclerk::from_key_bytes(Zeroizing::new(seed));
+    let turn = cclerk
         .private_transfer(spec.amount, spec.asset_type, &meta)
         .map_err(|e| JsError::new(&format!("private_transfer failed: {e}")))?;
 
@@ -2178,12 +2178,12 @@ pub fn cipherclerk_private_transfer(spec_json: &str) -> Result<JsValue, JsError>
 // ============================================================================
 
 /// Build a peer-exchange `PeerStateTransition` signed by the cipherclerk's
-/// Ed25519 key via `AgentWallet::peer_exchange(domain)`. This replaces
+/// Ed25519 key via `AgentCipherclerk::peer_exchange(domain)`. This replaces
 /// the prior `peer_exchange_with_proof` shape (which only emitted
 /// canonical-looking hex blobs but did not sign with the cipherclerk).
 ///
 /// The transition carries:
-///   - `cell_id`        = `wallet.cell_id("default")`
+///   - `cell_id`        = `cclerk.cell_id("default")`
 ///   - `old_commitment` = blake3-derived from (sender, receiver)
 ///   - `new_commitment` = blake3-derived from (old, amount, receiver)
 ///   - `effects_hash`   = blake3 of postcard(`Effect::Transfer{..}`)
@@ -2210,7 +2210,7 @@ pub fn cipherclerk_private_transfer(spec_json: &str) -> Result<JsValue, JsError>
 /// page-side callers don't break.
 #[wasm_bindgen]
 pub fn cipherclerk_peer_exchange(spec_json: &str) -> Result<JsValue, JsError> {
-    use pyana_sdk::AgentWallet;
+    use pyana_sdk::AgentCipherclerk;
     use pyana_turn::Effect;
     use zeroize::Zeroizing;
 
@@ -2233,9 +2233,9 @@ pub fn cipherclerk_peer_exchange(spec_json: &str) -> Result<JsValue, JsError> {
     let receiver = hex_decode_32(&spec.receiver_cell_hex)
         .map_err(|e| JsError::new(&format!("receiver_cell_hex: {e}")))?;
 
-    let wallet = AgentWallet::from_key_bytes(Zeroizing::new(seed));
-    let sender_cell = wallet.cell_id("default");
-    let mut session = wallet.peer_exchange("default");
+    let cclerk = AgentCipherclerk::from_key_bytes(Zeroizing::new(seed));
+    let sender_cell = cclerk.cell_id("default");
+    let mut session = cclerk.peer_exchange("default");
 
     // Derive deterministic old/new commitments from the request. These
     // bind the transition to the (sender, receiver, amount) tuple so a
@@ -2308,8 +2308,8 @@ pub fn cipherclerk_peer_exchange(spec_json: &str) -> Result<JsValue, JsError> {
 
 /// Build a cipherclerk-signed [`Turn`] carrying a single named action.
 ///
-/// Routes through `AgentWallet::make_action(target, method, effects,
-/// federation_id)` + `AgentWallet::make_turn_for(domain, action)` so
+/// Routes through `AgentCipherclerk::make_action(target, method, effects,
+/// federation_id)` + `AgentCipherclerk::make_turn_for(domain, action)` so
 /// the action's `authorization` field is a real Ed25519 signature
 /// over the canonical action bytes, bound to the federation_id.
 ///
@@ -2336,7 +2336,7 @@ pub fn cipherclerk_peer_exchange(spec_json: &str) -> Result<JsValue, JsError> {
 /// `/turns/submit` endpoint.
 #[wasm_bindgen]
 pub fn cipherclerk_make_action_turn(spec_json: &str) -> Result<JsValue, JsError> {
-    use pyana_sdk::AgentWallet;
+    use pyana_sdk::AgentCipherclerk;
     use pyana_turn::Effect;
     use zeroize::Zeroizing;
 
@@ -2364,16 +2364,16 @@ pub fn cipherclerk_make_action_turn(spec_json: &str) -> Result<JsValue, JsError>
         _ => [0u8; 32],
     };
 
-    let wallet = AgentWallet::from_key_bytes(Zeroizing::new(seed));
-    let cell_id = wallet.cell_id("default");
+    let cclerk = AgentCipherclerk::from_key_bytes(Zeroizing::new(seed));
+    let cell_id = cclerk.cell_id("default");
 
     // Use IncrementNonce as the placeholder effect — the action's
     // method name + memo payload carry the semantic intent, and the
     // executor / federation route by method.
     let effects: Vec<Effect> = vec![Effect::IncrementNonce { cell: cell_id }];
 
-    let action = wallet.make_action(cell_id, &spec.method, effects, &federation_id);
-    let mut turn = wallet.make_turn_for("default", action);
+    let action = cclerk.make_action(cell_id, &spec.method, effects, &federation_id);
+    let mut turn = cclerk.make_turn_for("default", action);
     turn.memo = spec.memo_json;
 
     let turn_bytes = postcard::to_allocvec(&turn)

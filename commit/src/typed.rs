@@ -12,7 +12,7 @@
 //!
 //! The two are bound one-directionally to a shared canonical byte encoding.
 //! There is no BLAKE3 inside a STARK; cross-form binding is established at
-//! trusted boundary points (wallet sealing, executor ingress) where both
+//! trusted boundary points (cclerk sealing, executor ingress) where both
 //! forms are computed from the same preimage.
 //!
 //! ## Usage

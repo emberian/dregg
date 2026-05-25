@@ -48,7 +48,7 @@ trust-critical primitive at its core (threshold encryption) is stubbed.
     actually meter spam by stake weight, only count uses-per-epoch.
   - Fence-post fix already in place: `is_expired(now) = now >= expiry`.
 - **Integration status** — Consumed everywhere: `node/src/state.rs`,
-  `node/src/api.rs`, `node/src/gossip.rs`, `sdk/src/wallet.rs`,
+  `node/src/api.rs`, `node/src/gossip.rs`, `sdk/src/cipherclerk.rs`,
   `sdk/src/discovery.rs`, `preflight/src/checks/{intents,solver,privacy}.rs`,
   `apps/compute-exchange/src/orderbook.rs`, `app-framework/src/*`,
   `demo-agent/examples/*`, `wasm/src/{lib,bindings,privacy,runtime}.rs`,
@@ -123,7 +123,7 @@ trust-critical primitive at its core (threshold encryption) is stubbed.
 
 ## `matcher.rs` (~1507 LOC, ~590 SLOC impl + tests)
 
-- **Purpose** — Wallet-local matching: given an intent and a set of
+- **Purpose** — Cipherclerk-local matching: given an intent and a set of
   `HeldCapability`s, decide if any held token satisfies the spec.
 - **Key types/functions**
   - `Sensitivity = Public | Normal | Sensitive` (Sensitive is **never**
@@ -453,11 +453,11 @@ trust-critical primitive at its core (threshold encryption) is stubbed.
     `FULFILLED_RETENTION_BLOCKS` block age) to prevent unbounded
     memory growth.
 - **Integration status** — The pool's API is the surface that
-  `sdk::wallet`, the demo agent, and the node's WS layer interact with.
+  `sdk::cclerk`, the demo agent, and the node's WS layer interact with.
   `node/src/state.rs` keeps a `intent_pool: HashMap<[u8;32], Intent>`
   separately (a "node-side" mirror) — i.e. the node does *not* use
   `IntentPool` directly; it manages its own dedup. So `IntentPool` is
-  the *client-side* abstraction, used by wallets / SDK consumers.
+  the *client-side* abstraction, used by cipherclerks / SDK consumers.
 - **Surprises**
   - **`ForPatterns` glob matches PATTERN against PATTERN** — the inline
     code is:
@@ -547,7 +547,7 @@ trust-critical primitive at its core (threshold encryption) is stubbed.
     intent.
 - **Integration status** — `node/src/api.rs` exposes a REST endpoint
   (`execute_fulfillment_flow`) that uses `FulfillmentWithPredicates`
-  and `verify_fulfillment_with_predicates_and_key`. `sdk::wallet`
+  and `verify_fulfillment_with_predicates_and_key`. `sdk::cclerk`
   also calls into `fulfillment` (mainly for the Trusted path). The
   WASM crate re-exports key entry points for browser-side flows.
 - **Surprises**
@@ -725,7 +725,7 @@ trust-critical primitive at its core (threshold encryption) is stubbed.
 ## `pir.rs` (~1767 LOC)
 
 - **Purpose** — Private Information Retrieval over the intent pool's
-  inverted index, so a wallet can ask "show me intents tagged
+  inverted index, so a cclerk can ask "show me intents tagged
   `action:read`" without revealing the tag.
 - **Key types/functions**
   - `PirMode = TwoServer | DownloadAll { max_db_size } |
@@ -812,7 +812,7 @@ trust-critical primitive at its core (threshold encryption) is stubbed.
 
 An **intent** in pyana is a content-addressed declaration of a
 capability *shape* — what someone needs, offers, or queries — broadcast
-to a gossip network, matched locally by wallets, and (if matched)
+to a gossip network, matched locally by cipherclerks, and (if matched)
 fulfilled through a verifiable artifact (macaroon, STARK proof, or
 both). Two distinct `Intent` types exist in the crate:
 
@@ -828,7 +828,7 @@ End-to-end flow:
 ```
 authoring               matching                       lowering           execution
 ─────────               ────────                       ────────           ─────────
-wallet builds                                                             executor
+cclerk builds                                                             executor
   MatchSpec ──postcard──> Intent (discovery) ──gossip──>
                                                 ├─ IntentPool.receive_intent_checked
                                                 │   (validation, stake, rate, nullifier)
@@ -1164,7 +1164,7 @@ with this flow:
 1. Buyer posts an encrypted intent (`MatchSpec`) describing job
    requirements (GPU class, SLA, deadline, budget).
 2. The intent is encrypted to candidate sellers' stealth addresses.
-3. Sellers' wallets do local SSE/PIR-based filtering, then run
+3. Sellers' cipherclerks do local SSE/PIR-based filtering, then run
    `matcher::match_intent` with `predicate_requirements`
    (temporal-predicate proofs for things like uptime over a window).
 4. Buyer selects from previewed candidates.
@@ -1186,7 +1186,7 @@ What the intent crate **doesn't yet provide**:
   auction. Today the auction is built ad-hoc on top of `partial_fill`,
   not on top of the trustless engine.
 - DFA-routed gossip topics so compute-exchange intents don't broadcast
-  to every wallet.
+  to every cclerk.
 - An SSE-query endpoint on the node so encrypted intents are
   *discoverable*, not just stored.
 - An integration with the temporal-predicate AIR (the AIR exists in
@@ -1217,7 +1217,7 @@ Boundaries for a pending intent (after posting, before match):
 | Observer | Learns |
 |---|---|
 | Same federation node receiving the broadcast | Full MatchSpec (cleartext gossip); creator's `CommitmentId`; stake proof commitment bytes (not value); expiry; any optional fields |
-| Wallet on the network running `match_intent` | Same as above (gossip is broadcast) |
+| Cipherclerk on the network running `match_intent` | Same as above (gossip is broadcast) |
 | Network-level observer (sniffing peer connections) | Same as above + IP-level metadata; gossip-relay topology |
 | Sealed-box `sse::EncryptedIntent` consumer | Encrypted blob; SSE search tokens (one per keyword in the MatchSpec) — *plus*: keyword tokens are rotated by epoch, so cross-epoch unlinkable |
 
@@ -1228,7 +1228,7 @@ Matched, before fulfillment delivery):
 |---|---|
 | The matcher (locally) | That the intent matches *some* token they hold; which token (index into `held_tokens`); the match's commitment-id-only `satisfier` field |
 | The intent creator | Nothing yet (no message has been sent) |
-| Other wallets | Nothing about this match (matches are local, not broadcast) |
+| Other cipherclerks | Nothing about this match (matches are local, not broadcast) |
 
 Boundaries after fulfillment delivery:
 
@@ -1249,7 +1249,7 @@ Boundaries the trustless engine would deliver (if implemented):
 
 Important: the creator identity is NOT revealed at any stage as long
 as `CommitmentId` is fresh per intent. Multiple intents from the
-same wallet are unlinkable *unless* the wallet chooses to reuse a
+same cclerk are unlinkable *unless* the cclerk chooses to reuse a
 commitment.
 
 ## §9. Open questions for the designer
@@ -1278,7 +1278,7 @@ commitment.
    the intent? If the latter, the docs should say so explicitly.
 
 6. **Bond escrow** — when does the solver bond actually leave the
-   solver's wallet? Today it's only a struct field. Is the
+   solver's cclerk? Today it's only a struct field. Is the
    intention to enforce on-chain escrow at submission time, with
    slashing via a follow-up turn?
 

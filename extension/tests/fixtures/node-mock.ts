@@ -46,7 +46,7 @@ export class MockNode {
       balance: 1000,
       tokens: [
         { id: 'tok_mock_001', actions: ['read', 'write'], resource: 'documents/*' },
-        { id: 'tok_mock_002', actions: ['transfer'], resource: 'wallet/balance' },
+        { id: 'tok_mock_002', actions: ['transfer'], resource: 'cipherclerk/balance' },
       ],
       quota: {
         bytesStored: 4096,
@@ -78,8 +78,8 @@ export class MockNode {
       });
     });
 
-    // Wallet balance.
-    this.app.get('/wallet/balance', (_req, res) => {
+    // Cipherclerk balance.
+    this.app.get('/cipherclerk/balance', (_req, res) => {
       res.json({ balance: this.state.balance });
     });
 

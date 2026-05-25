@@ -12,7 +12,7 @@
 //!
 //! Additionally, the binary nests a `FairDistributionEndpoint` at `/queue/ballots`
 //! exposing the blinded queue's standard `/commit`, `/consume`, `/consume-private`,
-//! `/status` routes for cross-app integration (e.g., a wallet that talks to many
+//! `/status` routes for cross-app integration (e.g., a cclerk that talks to many
 //! blinded queues uniformly).
 //!
 //! ## Privacy property
@@ -40,7 +40,7 @@ use tokio::sync::Mutex;
 
 use pyana_app_framework::auth::{AdminAuth, AdminToken, HasAdminToken};
 use pyana_app_framework::server::{ErrorResponse, api_error};
-use pyana_sdk::wallet::DelegatedToken;
+use pyana_sdk::cipherclerk::DelegatedToken;
 use pyana_storage::blinded::BlindedQueue;
 use pyana_types::PublicKey;
 

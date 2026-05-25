@@ -105,8 +105,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("    Issuer cell: {issuer_cell_hex}");
 
     // Worker: claims bounties anonymously
-    let mut worker_wallet = AgentCipherclerk::new();
-    let worker_pubkey = worker_wallet.public_key();
+    let mut worker_cclerk = AgentCipherclerk::new();
+    let worker_pubkey = worker_cclerk.public_key();
     println!(
         "    Worker pubkey: {} (PRIVATE - never revealed to issuer)",
         hex::encode(&worker_pubkey.0)
@@ -114,7 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Worker mints a credential token. In production, this token would be
     // issued by a federation authority. Here we mint locally for the demo.
-    let worker_token = worker_wallet.mint_token(&WORKER_ROOT_KEY, "federation");
+    let worker_token = worker_cclerk.mint_token(&WORKER_ROOT_KEY, "federation");
     println!(
         "    Worker credential minted: service='{}', can_prove={}",
         worker_token.service(),
@@ -181,7 +181,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let proof_start = Instant::now();
 
-    // Generate a real STARK presentation proof via the worker's wallet.
+    // Generate a real STARK presentation proof via the worker's cclerk.
     // This calls through to the bridge layer which produces a Poseidon2 STARK.
     // For membership-only proofs, both action and service must be empty strings
     // to match what verify_membership_proof expects (empty action/resource binding).
@@ -191,7 +191,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..Default::default()
     };
 
-    let proof = worker_wallet.prove_authorization(&worker_token, &request)?;
+    let proof = worker_cclerk.prove_authorization(&worker_token, &request)?;
     let wire_proof = proof.into_wire_proof();
     let proof_bytes = postcard::to_stdvec(&wire_proof)?;
 
@@ -415,7 +415,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  4. Payment released atomically (conditional turn resolution)");
     println!();
     println!(
-        "Full stack exercised: Wallet -> STARK proof -> HTTP API -> Verification -> State change"
+        "Full stack exercised: Cipherclerk -> STARK proof -> HTTP API -> Verification -> State change"
     );
 
     Ok(())
@@ -425,10 +425,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 // Helper functions
 // =============================================================================
 
-/// Compute a synthetic federation root matching the wallet's derivation.
+/// Compute a synthetic federation root matching the cipherclerk's derivation.
 ///
 /// This replicates `AgentCipherclerk::compute_federation_root_bb` so the bounty board's
-/// root matches what the wallet produces as public input in its STARK proof.
+/// root matches what the cclerk produces as public input in its STARK proof.
 fn compute_synthetic_federation_root(issuer_key: &[u8; 32]) -> BabyBear {
     use pyana_circuit::merkle_air::MerkleAir;
 

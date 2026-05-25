@@ -154,7 +154,7 @@ fn check_cli_config_roundtrip() -> Result<(), String> {
 address = "127.0.0.1:9090"
 federation = "test-federation"
 
-[wallet]
+[cclerk]
 default_cell = "my-cell"
 "#;
 

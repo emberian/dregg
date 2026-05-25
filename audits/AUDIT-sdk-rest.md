@@ -1,4 +1,4 @@
-# SDK audit (non-wallet) — `sdk/src/{lib,runtime,embed,captp_client,discharge,privacy,client,verify,full_turn_proof,committed_turn,discovery,names,mnemonic,error}.rs` + `examples/agent_demo.rs`
+# SDK audit (non-cclerk) — `sdk/src/{lib,runtime,embed,captp_client,discharge,privacy,client,verify,full_turn_proof,committed_turn,discovery,names,mnemonic,error}.rs` + `examples/agent_demo.rs`
 
 ## Verdict
 
@@ -6,7 +6,7 @@
 
 ## Summary
 
-The SDK at this layer is mostly thin orchestration: `AgentRuntime` ties wallet+ledger+executor, `PyanaEngine` is the no-IO embedder, `captp_client` is local bookkeeping over the captp crate, and `verify.rs` / `privacy.rs` re-expose proof-system verifiers. Where signature and STARK verification happen, they delegate to crates audited elsewhere. The security checks present in `client.rs` (digest-bound responses, pinned federation roots, domain-separated revocation sigs, refuses-HTTPS-fallback-to-plaintext in `discharge.rs`) are notably defensive and well-commented.
+The SDK at this layer is mostly thin orchestration: `AgentRuntime` ties cclerk+ledger+executor, `PyanaEngine` is the no-IO embedder, `captp_client` is local bookkeeping over the captp crate, and `verify.rs` / `privacy.rs` re-expose proof-system verifiers. Where signature and STARK verification happen, they delegate to crates audited elsewhere. The security checks present in `client.rs` (digest-bound responses, pinned federation roots, domain-separated revocation sigs, refuses-HTTPS-fallback-to-plaintext in `discharge.rs`) are notably defensive and well-commented.
 
 The pattern that worries me is **what the SDK does NOT enforce at the API boundary**: callers of `verify_membership_proof`, `verify_selective_presentation`, `verify_anonymous_presentation`, and several `verify_*` helpers get a `bool` back. If a caller writes `if !engine.verify_membership_proof(p, &root) { reject() }` they cannot distinguish "decode failure" from "valid proof against wrong root". A second class of footguns: `PyanaEngine::ledger_mut`, `set_federation_root`, `executor_mut`, and `SubAgent::federation_id` are all writable post-construction by anyone holding `&mut`. The current code documents these in AUDIT[P2] comments and they're not exploitable across a trust boundary (you already need `&mut PyanaEngine` to use them), but they are landmines for refactors.
 
@@ -26,7 +26,7 @@ The `agent_demo.rs` example uses the correct typed `LocalDelegation` path (via `
 The `enliven` API takes `permissions: AuthRequired` as an argument and stores them on the returned `LiveRef`. The doc says "in a real deployment, this comes from the remote's response to our enliven request" but the SDK does not enforce that any handoff/swiss-table proof is checked. A caller who threads attacker-supplied `AuthRequired` into this method gets a `LiveRef` that *claims* whatever permissions the caller passed. The downstream `send` / `pipeline` calls don't re-check. *Fix*: split into `enliven_with_proof(uri, handoff_cert)` (verifies introducer signature) and `enliven_local(uri, permissions)` (clearly marked test-only). At minimum, document this as `# Safety` and stop calling the parameter "obtained from the remote's response" in the docstring when in fact it's just a caller-supplied claim.
 
 **P2-2.  `SubAgent` `pub federation_id` (existing AUDIT marker preserved)** (`sdk/src/runtime.rs:469-498`)
-Confirmed: the AUDIT[P2] comment is in place. `federation_id: [u8; 32]` is `pub` and is used in `SubAgent::execute` at line 553 as the signing-message domain separator. A holder of `&mut SubAgent` can rewrite it post-construction. Same fix as recommended in the comment: make all `SubAgent` fields private with read-only accessors. The fields `wallet`, `cell_id`, `token`, `parent`, `domain` are also `pub` and should be moved behind accessors for the same reason.
+Confirmed: the AUDIT[P2] comment is in place. `federation_id: [u8; 32]` is `pub` and is used in `SubAgent::execute` at line 553 as the signing-message domain separator. A holder of `&mut SubAgent` can rewrite it post-construction. Same fix as recommended in the comment: make all `SubAgent` fields private with read-only accessors. The fields `cclerk`, `cell_id`, `token`, `parent`, `domain` are also `pub` and should be moved behind accessors for the same reason.
 
 **P2-3.  `PyanaEngine::verify_membership_proof` returns `bool` (existing AUDIT marker preserved)** (`sdk/src/embed.rs:442-469`)
 Confirmed: marker is in place. Same pattern reappears in:
@@ -78,17 +78,17 @@ The pattern `unwrap_or_else(|e| e.into_inner())` is documented as deliberate. Th
 - All re-exports are explicit (no `pub use ...::*`). Good.
 - Re-exports `pyana_bridge::present::verify_presentation` under `#[allow(deprecated)]` — flag for cleanup.
 - Re-exports `LocalDelegation` at crate root — this is the right type to expose for receiver-side `receive_local_delegation` callers, but the *constructor* is `pub(crate)` so external callers cannot manufacture them. Good.
-- `DelegatedToken` and `DelegationAuthority` are re-exported. `DelegationAuthority::Open` exists for backward compatibility (the wallet warns on use). The example does NOT use `Open`. Good.
+- `DelegatedToken` and `DelegationAuthority` are re-exported. `DelegationAuthority::Open` exists for backward compatibility (the cclerk warns on use). The example does NOT use `Open`. Good.
 
 ### `runtime.rs`
 | `pub fn` | Trust class |
 |---|---|
 | `AgentRuntime::new` / `new_simple` / `with_ledger` | Caller-trusted; mutates ledger |
-| `AgentRuntime::execute` / `execute_turn` | Caller-trusted; signs with wallet |
+| `AgentRuntime::execute` / `execute_turn` | Caller-trusted; signs with cclerk |
 | `AgentRuntime::spawn_sub_agent` | Caller-trusted; only path to construct `SubAgent` |
 | `AgentRuntime::set_budget_gate` | Operator-only |
-| `AgentRuntime::wallet/ledger/cell_id/domain/nonce` | Read-only accessors |
-| `SubAgent::execute` | Self-trusted (sub-agent has its own wallet/key) |
+| `AgentRuntime::cclerk/ledger/cell_id/domain/nonce` | Read-only accessors |
+| `SubAgent::execute` | Self-trusted (sub-agent has its own cclerk/key) |
 | `SubAgent::can_authorize` | Pure |
 | `SubAgent::public_key/nonce` | Read-only |
 
@@ -135,7 +135,7 @@ The pattern `unwrap_or_else(|e| e.into_inner())` is documented as deliberate. Th
 | `authorize_with_discharges` | Calls `obtain_discharge` for each 3P caveat |
 
 ### `privacy.rs`
-All four `AgentWallet` methods (`authorize_anonymously`, `create_private_note`, `transfer_note_privately`, `prove_predicate_unlinkable`, `prove_not_revoked`, `prove_not_revoked_accumulator`) are pure crypto on wallet-held secrets. The `verify_*` helpers are bare-bool — see P2-3.
+All four `AgentCipherclerk` methods (`authorize_anonymously`, `create_private_note`, `transfer_note_privately`, `prove_predicate_unlinkable`, `prove_not_revoked`, `prove_not_revoked_accumulator`) are pure crypto on cclerk-held secrets. The `verify_*` helpers are bare-bool — see P2-3.
 
 A subtle correctness note in `prove_predicate_unlinkable` (`privacy.rs:407-411`): the blinding is `u32::from_le_bytes(buf) % BABYBEAR_P`. This is a non-uniform sample (modular bias) because `2^32` is not a multiple of `BABYBEAR_P ≈ 2^31`. The bias is small but real; for unlinkability proofs where the blinding is the *only* source of unlinkability, prefer rejection sampling. Severity P3.
 
@@ -159,7 +159,7 @@ A subtle correctness note in `prove_predicate_unlinkable` (`privacy.rs:407-411`)
 - `discovery.rs:73` — `Vec::with_capacity(64)` for `encrypted_note` is a fixed constant. OK.
 - `committed_turn.rs:208` — same, constant 64. OK.
 - `verify.rs:568` — `Vec::with_capacity(current_level.len() / 2)` where `current_level` is the *caller-controlled* `member_keys`. This is `build_federation_tree`, called by trusted verifier setup with known input. OK.
-- `client.rs:544` — `Vec::with_capacity(...len() + token_id.len())` where `token_id` is wallet-local. OK.
+- `client.rs:544` — `Vec::with_capacity(...len() + token_id.len())` where `token_id` is cclerk-local. OK.
 - No attacker-controlled length-prefix → `with_capacity` patterns found.
 
 ---

@@ -1,15 +1,15 @@
-//! Full AgentWallet Lifecycle Demo: Receipt Chain as Proof-Carrying State
+//! Full AgentCipherclerk Lifecycle Demo: Receipt Chain as Proof-Carrying State
 //!
 //! Demonstrates:
-//! 1. Create a new wallet (generates Ed25519 keypair)
+//! 1. Create a new cclerk (generates Ed25519 keypair)
 //! 2. Receive a token (provision from an issuer)
 //! 3. Execute 5 turns, building up the receipt chain
-//! 4. Verify the wallet's own receipt chain (verify_receipt_chain)
+//! 4. Verify the cipherclerk's own receipt chain (verify_receipt_chain)
 //! 5. Export the receipt chain as proof of state (federation exit scenario)
 //! 6. Show: another party can verify the agent's state from just the receipt chain
 
 use pyana_sdk::{
-    AgentWallet, CellId, TurnReceipt, verify_receipt_chain, verify_receipt_chain_head,
+    AgentCipherclerk, CellId, TurnReceipt, verify_receipt_chain, verify_receipt_chain_head,
 };
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -60,7 +60,7 @@ fn simulate_turn_execution(agent: CellId, turn_number: u64, pre_state: [u8; 32])
         effects_hash,
         computrons_used: 100 + turn_number * 25,
         action_count: (turn_number as usize) + 1,
-        previous_receipt_hash: None, // AgentWallet.append_receipt() fills this
+        previous_receipt_hash: None, // AgentCipherclerk.append_receipt() fills this
         agent,
         federation_id: [0u8; 32],
         routing_directives: Vec::new(),
@@ -92,14 +92,14 @@ fn main() {
     println!("  {}", "=".repeat(60));
 
     // =========================================================================
-    // STEP 1: Create a new wallet (generates Ed25519 keypair)
+    // STEP 1: Create a new cclerk (generates Ed25519 keypair)
     // =========================================================================
 
-    section("Step 1: Create Wallet (Ed25519 identity)");
+    section("Step 1: Create Cipherclerk (Ed25519 identity)");
 
-    let mut wallet = AgentWallet::new();
-    let agent_pubkey = wallet.public_key();
-    let agent_cell = wallet.cell_id("demo-service");
+    let mut cclerk = AgentCipherclerk::new();
+    let agent_pubkey = cclerk.public_key();
+    let agent_cell = cclerk.cell_id("demo-service");
 
     item(&format!("Public key: {}", short_hex(&agent_pubkey.0)));
     item(&format!(
@@ -108,7 +108,7 @@ fn main() {
     ));
     item(&format!(
         "Receipt chain length: {} (empty, genesis)",
-        wallet.receipt_chain_length()
+        cclerk.receipt_chain_length()
     ));
     item(&format!("State commitment: None (no turns executed yet)"));
 
@@ -119,12 +119,12 @@ fn main() {
     section("Step 2: Provision Token (issuer mints for this agent)");
 
     let root_key: [u8; 32] = *blake3::hash(b"demo-issuer-root-secret-key").as_bytes();
-    let token = wallet.mint_token(&root_key, "compute");
+    let token = cclerk.mint_token(&root_key, "compute");
 
     item(&format!("Token minted for service: {}", token.service()));
     item(&format!("Token ID: {}", token.id()));
     item(&format!("Token label: {}", token.label()));
-    item(&format!("Tokens held: {}", wallet.tokens().len()));
+    item(&format!("Tokens held: {}", cclerk.tokens().len()));
 
     // =========================================================================
     // STEP 3: Execute 5 turns, building the receipt chain
@@ -141,7 +141,7 @@ fn main() {
         let post_state = receipt.post_state_hash;
         let computrons = receipt.computrons_used;
 
-        wallet.append_receipt(receipt);
+        cclerk.append_receipt(receipt);
         current_state = post_state;
 
         item(&format!(
@@ -157,7 +157,7 @@ fn main() {
     println!();
     item(&format!(
         "Receipt chain length: {}",
-        wallet.receipt_chain_length()
+        cclerk.receipt_chain_length()
     ));
     item(&format!(
         "Current state commitment: {}",
@@ -165,12 +165,12 @@ fn main() {
     ));
 
     // =========================================================================
-    // STEP 4: Verify the wallet's own receipt chain
+    // STEP 4: Verify the cipherclerk's own receipt chain
     // =========================================================================
 
     section("Step 4: Self-Verify Receipt Chain");
 
-    match wallet.verify_own_chain() {
+    match cclerk.verify_own_chain() {
         Ok(()) => {
             item("Chain verification: PASS");
             item("  - Genesis receipt has previous_receipt_hash = None");
@@ -187,7 +187,7 @@ fn main() {
     // Show the chain structure
     println!();
     item("Chain structure:");
-    let chain = wallet.receipt_chain();
+    let chain = cclerk.receipt_chain();
     for (i, receipt) in chain.iter().enumerate() {
         let prev = match &receipt.previous_receipt_hash {
             None => "None (genesis)".to_string(),
@@ -215,7 +215,7 @@ fn main() {
     println!();
 
     // Export the chain (in real code, this would be serialized to wire format)
-    let exported_chain: Vec<TurnReceipt> = wallet.receipt_chain().to_vec();
+    let exported_chain: Vec<TurnReceipt> = cclerk.receipt_chain().to_vec();
     let chain_length = exported_chain.len();
     let final_state = exported_chain.last().unwrap().post_state_hash;
 
@@ -246,7 +246,7 @@ fn main() {
     section("Step 6: Third-Party Verification (from exported chain only)");
 
     item("A receiving federation/verifier has ONLY the exported receipt chain.");
-    item("They know nothing about the wallet, tokens, or executor internals.");
+    item("They know nothing about the cclerk, tokens, or executor internals.");
     item("They verify the chain structure proves valid state evolution.");
     println!();
 

@@ -12,7 +12,7 @@
 
 | Blocker | Crate | Effort |
 |---------|-------|--------|
-| MCP server (`node/src/mcp.rs`) has `pyana_delegate` tool, but it requires the wallet to already hold the token in a numbered slot. No MCP tool for multi-hop delegation tracking or delegation-tree queries (e.g., "show all sub-agents spawned from token X"). | node | 3 days |
+| MCP server (`node/src/mcp.rs`) has `pyana_delegate` tool, but it requires the cclerk to already hold the token in a numbered slot. No MCP tool for multi-hop delegation tracking or delegation-tree queries (e.g., "show all sub-agents spawned from token X"). | node | 3 days |
 | `AgentRuntime::spawn_sub_agent` works locally but has no wire-level counterpart. A remote agent cannot request a sub-agent spawn over MCP/JSON-RPC; the hub would need a `pyana_spawn_sub_agent` tool with budget propagation. | sdk + node | 3 days |
 | Budget gate (`BudgetSlice`) is set per-runtime but not enforced cross-turn. If a sub-agent submits two turns, there is no persistent budget ledger deducting from the slice. Need a `BudgetLedger` that persists across turns. | turn | 3 days |
 | No built-in delegation revocation propagation to sub-agents. When a parent revokes, children continue operating until their token naturally expires or a revocation check is performed. Need an event/push mechanism. | sdk + wire | 2 days |
@@ -21,8 +21,8 @@
 
 | Blocker | Crate | Effort |
 |---------|-------|--------|
-| SDK exposes `prove_committed_threshold` on `AgentWallet` but no corresponding `verify_committed_threshold` at the SDK level. Verifier must drop to `pyana_circuit::committed_threshold::verify(...)` directly. Need a top-level SDK verification function. | sdk | 4 hours |
-| Ring membership proof (`authorize_anonymously`) requires the wallet to have federation membership, but there is no SDK helper to construct the federation Merkle tree for a verifier endpoint. A gate service needs `build_federation_tree(member_keys) -> root` exposed. | sdk or bridge | 1 day |
+| SDK exposes `prove_committed_threshold` on `AgentCipherclerk` but no corresponding `verify_committed_threshold` at the SDK level. Verifier must drop to `pyana_circuit::committed_threshold::verify(...)` directly. Need a top-level SDK verification function. | sdk | 4 hours |
+| Ring membership proof (`authorize_anonymously`) requires the cclerk to have federation membership, but there is no SDK helper to construct the federation Merkle tree for a verifier endpoint. A gate service needs `build_federation_tree(member_keys) -> root` exposed. | sdk or bridge | 1 day |
 | No HTTP-layer proof serialization format documented. `WirePresentationProof` goes over TCP (wire crate), but the credential gate wants to accept proofs over REST/JSON. Need a `serde_json`-compatible proof wrapper or base64 encoding convention. | bridge | 1 day |
 
 ## 4. compute-exchange (Sealed-Bid + Atomic Settlement)

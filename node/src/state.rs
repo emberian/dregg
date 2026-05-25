@@ -1,6 +1,6 @@
 //! Node state management.
 //!
-//! Holds the AgentWallet, Ledger, and PersistentStore handles behind
+//! Holds the AgentCipherclerk, Ledger, and PersistentStore handles behind
 //! Arc<RwLock<>> for concurrent access from HTTP handlers and the
 //! federation sync background task.
 
@@ -21,7 +21,7 @@ use pyana_coord::budget::{
 };
 use pyana_dsl_runtime::ProgramRegistry;
 use pyana_persist::{PersistentStore, Poseidon2NoteTree};
-use pyana_sdk::AgentWallet;
+use pyana_sdk::AgentCipherclerk;
 
 use crate::gossip::GossipHandle;
 use crate::routing_table::RoutingTable;
@@ -60,17 +60,17 @@ pub struct NodeState {
 
 /// The inner mutable state of the node.
 pub struct NodeStateInner {
-    /// The agent wallet (identity, tokens, receipts).
-    pub wallet: AgentWallet,
+    /// The agent cipherclerk (identity, tokens, receipts).
+    pub cclerk: AgentCipherclerk,
     /// The cell ledger (local cell state).
     pub ledger: Ledger,
     /// Persistent storage backend.
     pub store: PersistentStore,
     /// Federation peer addresses.
     pub peers: Vec<String>,
-    /// Whether the wallet is unlocked for signing operations.
+    /// Whether the cipherclerk is unlocked for signing operations.
     pub unlocked: bool,
-    /// Argon2id hash of the wallet passphrase in PHC string format, set on first
+    /// Argon2id hash of the cipherclerk passphrase in PHC string format, set on first
     /// `set-passphrase` call. When `Some`, unlock attempts must verify against
     /// this hash. When `None`, the first unlock sets the passphrase.
     pub passphrase_hash: Option<String>,
@@ -288,9 +288,9 @@ pub struct SyncStatus {
     pub note_count: u64,
 }
 
-/// Summary of the wallet state for the wallet endpoint.
+/// Summary of the cipherclerk state for the cipherclerk endpoint.
 #[derive(Clone, Debug, serde::Serialize)]
-pub struct WalletStatus {
+pub struct CipherclerkStatus {
     pub unlocked: bool,
     pub public_key: String,
     pub token_count: usize,
@@ -310,7 +310,7 @@ impl NodeState {
     /// The `key_file` is resolved relative to `data_dir` unless it is an absolute path.
     ///
     /// Issue 4 fix: Loads the key file from the data directory to initialize
-    /// the wallet identity. If no key file exists, generates a fresh identity
+    /// the cipherclerk identity. If no key file exists, generates a fresh identity
     /// and writes the key (first-run behavior).
     ///
     /// Issue 3 fix: Loads persisted passphrase hash from the store.
@@ -332,7 +332,7 @@ impl NodeState {
             data_dir.join(key_file)
         };
 
-        let wallet = if key_path.exists() {
+        let cclerk = if key_path.exists() {
             let key_bytes_vec = std::fs::read(&key_path)
                 .map_err(|e| format!("failed to read {}: {e}", key_path.display()))?;
             if key_bytes_vec.len() != 32 {
@@ -344,7 +344,7 @@ impl NodeState {
             }
             let mut key_bytes = [0u8; 32];
             key_bytes.copy_from_slice(&key_bytes_vec);
-            AgentWallet::from_key_bytes(zeroize::Zeroizing::new(key_bytes))
+            AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new(key_bytes))
         } else {
             // First run: generate a key and persist it.
             let mut key_bytes = [0u8; 32];
@@ -361,7 +361,7 @@ impl NodeState {
                     format!("failed to set {} permissions: {e}", key_path.display())
                 })?;
             }
-            AgentWallet::from_key_bytes(zeroize::Zeroizing::new(key_bytes))
+            AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new(key_bytes))
         };
 
         // Issue 3: Load persisted passphrase hash from the store.
@@ -420,8 +420,8 @@ impl NodeState {
         };
         let (events_tx, _) = broadcast::channel(4096);
 
-        // Derive the silo ID from the wallet's public key.
-        let silo_id: SiloId = *blake3::hash(wallet.public_key().as_bytes()).as_bytes();
+        // Derive the silo ID from the cipherclerk's public key.
+        let silo_id: SiloId = *blake3::hash(cclerk.public_key().as_bytes()).as_bytes();
 
         // Issue 10: Log a warning — node starts in discovery mode with no federation keys.
         tracing::warn!(
@@ -431,7 +431,7 @@ impl NodeState {
 
         Ok(Self {
             inner: Arc::new(RwLock::new(NodeStateInner {
-                wallet,
+                cclerk,
                 ledger,
                 store,
                 peers,
@@ -487,9 +487,9 @@ impl NodeState {
         })
     }
 
-    /// Create a NodeState with a pre-existing wallet (restored from key material).
+    /// Create a NodeState with a pre-existing cipherclerk (restored from key material).
     #[allow(dead_code)]
-    pub fn with_wallet(
+    pub fn with_cclerk(
         data_dir: &Path,
         peers: Vec<String>,
         key_bytes: [u8; 32],
@@ -498,7 +498,7 @@ impl NodeState {
         let store =
             PersistentStore::open(&db_path).map_err(|e| format!("failed to open store: {e}"))?;
 
-        let wallet = AgentWallet::from_key_bytes(zeroize::Zeroizing::new(key_bytes));
+        let cclerk = AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new(key_bytes));
 
         // Restore ledger from the latest checkpoint (if one exists).
         let ledger = match store.load_latest_ledger_checkpoint() {
@@ -508,12 +508,12 @@ impl NodeState {
 
         let (events_tx, _) = broadcast::channel(4096);
 
-        // Derive the silo ID from the wallet's public key.
-        let silo_id: SiloId = *blake3::hash(wallet.public_key().as_bytes()).as_bytes();
+        // Derive the silo ID from the cipherclerk's public key.
+        let silo_id: SiloId = *blake3::hash(cclerk.public_key().as_bytes()).as_bytes();
 
         Ok(Self {
             inner: Arc::new(RwLock::new(NodeStateInner {
-                wallet,
+                cclerk,
                 ledger,
                 store,
                 peers,
@@ -600,15 +600,15 @@ impl NodeState {
         }
     }
 
-    /// Get the current wallet status.
-    pub async fn wallet_status(&self) -> WalletStatus {
+    /// Get the current cipherclerk status.
+    pub async fn cclerk_status(&self) -> CipherclerkStatus {
         let state = self.inner.read().await;
-        let pk = state.wallet.public_key();
-        WalletStatus {
+        let pk = state.cclerk.public_key();
+        CipherclerkStatus {
             unlocked: state.unlocked,
             public_key: hex::encode(&pk.0),
-            token_count: state.wallet.tokens().len(),
-            receipt_chain_length: state.wallet.receipt_chain_length(),
+            token_count: state.cclerk.tokens().len(),
+            receipt_chain_length: state.cclerk.receipt_chain_length(),
         }
     }
 
@@ -727,7 +727,7 @@ impl NodeStateInner {
         // must be registered separately before their certificates / unlock
         // votes will be accepted (fail-closed). Wiring that registry from
         // federation membership is out of scope for this lane.
-        let my_pubkey = *self.wallet.public_key().as_bytes();
+        let my_pubkey = *self.cclerk.public_key().as_bytes();
         coordinator.register_silo_pubkey(self.silo_id, my_pubkey);
 
         self.budget_coordinators.insert(agent, coordinator);
@@ -776,7 +776,7 @@ impl NodeStateInner {
     /// for submission to the federation rebalancing process.
     pub fn collect_spending_certificates(&mut self) -> Vec<SpendingCertificate> {
         let silo_id = self.silo_id;
-        let signing_key = self.wallet.gossip_signing_key();
+        let signing_key = self.cclerk.gossip_signing_key();
         let signing_key_bytes = &signing_key.to_bytes();
         let mut certificates = Vec::new();
         for coordinator in self.budget_coordinators.values() {
@@ -859,7 +859,7 @@ impl NodeStateInner {
         let mgr = self.fast_unlock_manager.as_ref()?;
         // Check if we have a conflicting lock (i.e., we signed a commit for this proposal).
         let has_conflict = mgr.is_locked(&request.proposal_id);
-        let signing_key = self.wallet.gossip_signing_key();
+        let signing_key = self.cclerk.gossip_signing_key();
         Some(mgr.vote_unlock(request, self.silo_id, has_conflict, &signing_key.to_bytes()))
     }
 
@@ -931,10 +931,10 @@ impl NodeStateInner {
         // Self-register the local federation in KnownFederations so receipt
         // verification can route through one lookup path for both own and
         // remote federations.
-        let local_pk = self.wallet.public_key();
+        let local_pk = self.cclerk.public_key();
         let threshold = pyana_federation::quorum_threshold(keys.len()) as u32;
         let local_seat = if keys.iter().any(|pk| pk.0 == local_pk.0) {
-            let signing_key_bytes = self.wallet.gossip_signing_key().to_bytes();
+            let signing_key_bytes = self.cclerk.gossip_signing_key().to_bytes();
             let signing_key = pyana_types::SigningKey::from_bytes(&signing_key_bytes);
             Some(pyana_federation::LocalSeat {
                 index: 0, // re-indexed by Federation::from_committee

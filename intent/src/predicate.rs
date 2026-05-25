@@ -81,7 +81,7 @@ pub struct ResourceDfa {
     /// a "documents/private/*" pattern.
     pub route_root: [u8; 32],
     /// The per-input DFA acceptance trace. Produced by the prover
-    /// (typically the wallet posting the intent or evaluating a match
+    /// (typically the cclerk posting the intent or evaluating a match
     /// candidate) via `dfa::air::compile_to_air`. The verifier
     /// re-checks the trace.
     pub proof_bytes: Vec<u8>,

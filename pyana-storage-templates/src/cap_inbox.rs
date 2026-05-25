@@ -61,9 +61,9 @@
 //! Per `STORAGE-AS-CELL-PROGRAMS.md` §3.1 + `BOUNDARIES.md` §5.1.
 
 use pyana_app_framework::{
-    Action, AppWallet, AuthRequired, CapTarget, CapTemplate, CellId, CellMode, ChildVkStrategy,
-    Effect, Event, FactoryDescriptor, FieldConstraint, FieldElement, InspectorDescriptor,
-    StarbridgeAppContext, StateConstraint, canonical_program_vk, symbol,
+    Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellId, CellMode,
+    ChildVkStrategy, Effect, Event, FactoryDescriptor, FieldConstraint, FieldElement,
+    InspectorDescriptor, StarbridgeAppContext, StateConstraint, canonical_program_vk, symbol,
 };
 use pyana_cell::program::{AuthorizedSet, CellProgram, TransitionCase, TransitionGuard};
 
@@ -192,7 +192,7 @@ pub fn cap_inbox_program() -> CellProgram {
         // total_deposits may decrease on refund (no Monotonic here);
         // the head/tail bound (tail<=head) is structurally enforced
         // by MonotonicSequence on the tail (it only ever advances by
-        // exactly +1, and the dequeue path is gated at the wallet
+        // exactly +1, and the dequeue path is gated at the cclerk
         // layer on tail < head).
         // ──────────────────────────────────────────────────────────
         TransitionCase {
@@ -344,7 +344,7 @@ pub fn cap_inbox_factory_descriptor() -> FactoryDescriptor {
 /// The sender's signature authorizes the action; the executor checks
 /// `SenderAuthorized` against slot 5 on every turn.
 pub fn build_send_action(
-    wallet: &AppWallet,
+    cclerk: &AppCipherclerk,
     inbox_cell: CellId,
     new_head: FieldElement,
     new_total_deposits: FieldElement,
@@ -376,7 +376,7 @@ pub fn build_send_action(
         },
     ];
 
-    wallet.make_action(inbox_cell, "send", effects)
+    cclerk.make_action(inbox_cell, "send", effects)
 }
 
 /// Build the on-ledger [`Action`] recording a `dequeue`.
@@ -388,7 +388,7 @@ pub fn build_send_action(
 ///
 /// Owner-cap-gated by the per-cell capability layer.
 pub fn build_dequeue_action(
-    wallet: &AppWallet,
+    cclerk: &AppCipherclerk,
     inbox_cell: CellId,
     new_tail: FieldElement,
     new_total_deposits: FieldElement,
@@ -414,7 +414,7 @@ pub fn build_dequeue_action(
         },
     ];
 
-    wallet.make_action(inbox_cell, "dequeue", effects)
+    cclerk.make_action(inbox_cell, "dequeue", effects)
 }
 
 /// Build the on-ledger [`Action`] adding a sender to the
@@ -426,7 +426,7 @@ pub fn build_dequeue_action(
 ///
 /// Owner-cap-gated by the capability layer.
 pub fn build_grant_sender_action(
-    wallet: &AppWallet,
+    cclerk: &AppCipherclerk,
     inbox_cell: CellId,
     new_sender_set_root: FieldElement,
     new_sender_pk: [u8; 32],
@@ -446,7 +446,7 @@ pub fn build_grant_sender_action(
         },
     ];
 
-    wallet.make_action(inbox_cell, "grant_sender", effects)
+    cclerk.make_action(inbox_cell, "grant_sender", effects)
 }
 
 // =============================================================================
@@ -509,16 +509,16 @@ pub fn initial_state(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyana_app_framework::{AgentWallet, EmbeddedExecutor};
+    use pyana_app_framework::{AgentCipherclerk, EmbeddedExecutor};
 
-    fn test_wallet() -> AppWallet {
-        AppWallet::new(AgentWallet::new(), [42u8; 32])
+    fn test_cclerk() -> AppCipherclerk {
+        AppCipherclerk::new(AgentCipherclerk::new(), [42u8; 32])
     }
 
     fn test_context() -> StarbridgeAppContext {
-        let wallet = test_wallet();
-        let executor = EmbeddedExecutor::new(&wallet, "default");
-        StarbridgeAppContext::new(wallet, executor)
+        let cclerk = test_cclerk();
+        let executor = EmbeddedExecutor::new(&cclerk, "default");
+        StarbridgeAppContext::new(cclerk, executor)
     }
 
     fn test_cell() -> CellId {
@@ -592,23 +592,23 @@ mod tests {
 
     #[test]
     fn send_action_shape() {
-        let wallet = test_wallet();
+        let cclerk = test_cclerk();
         let cell = test_cell();
         let new_head = u64_field(1);
         let new_total = u64_field(500);
         let new_root = blake3_field(b"root-1");
         let commitment = blake3_field(b"msg");
-        let action = build_send_action(&wallet, cell, new_head, new_total, new_root, commitment);
+        let action = build_send_action(&cclerk, cell, new_head, new_total, new_root, commitment);
         assert_eq!(action.method, symbol("send"));
         assert_eq!(action.effects.len(), 4);
     }
 
     #[test]
     fn dequeue_action_shape() {
-        let wallet = test_wallet();
+        let cclerk = test_cclerk();
         let cell = test_cell();
         let action = build_dequeue_action(
-            &wallet,
+            &cclerk,
             cell,
             u64_field(1),
             u64_field(0),
@@ -620,9 +620,9 @@ mod tests {
 
     #[test]
     fn grant_sender_action_shape() {
-        let wallet = test_wallet();
+        let cclerk = test_cclerk();
         let cell = test_cell();
-        let action = build_grant_sender_action(&wallet, cell, blake3_field(b"set-v1"), [9u8; 32]);
+        let action = build_grant_sender_action(&cclerk, cell, blake3_field(b"set-v1"), [9u8; 32]);
         assert_eq!(action.method, symbol("grant_sender"));
         assert_eq!(action.effects.len(), 2);
     }

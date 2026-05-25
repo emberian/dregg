@@ -71,12 +71,12 @@ These appear in the executor at `turn/src/executor.rs:7128-7544` (the
 hot paths) and `:1922-2010` (the `simulate` paths), in the cost table
 at `:7905-7910`, and project to AIR selectors in
 `circuit/src/effect_vm.rs` alongside `CreateCellFromFactory` and the
-core CapTP effects. SDK wrappers exist in `sdk/src/wallet.rs`:
+core CapTP effects. SDK wrappers exist in `sdk/src/cipherclerk.rs`:
 
-- `AgentWallet::allocate_queue` at `:5513-5563`
-- `AgentWallet::enqueue_message` at `:5579-5640`
-- `AgentWallet::dequeue` at `:5649` (`Effect::QueueDequeue`)
-- `AgentWallet::queue_atomic_tx` at `:5715` (`Effect::QueueAtomicTx`)
+- `AgentCipherclerk::allocate_queue` at `:5513-5563`
+- `AgentCipherclerk::enqueue_message` at `:5579-5640`
+- `AgentCipherclerk::dequeue` at `:5649` (`Effect::QueueDequeue`)
+- `AgentCipherclerk::queue_atomic_tx` at `:5715` (`Effect::QueueAtomicTx`)
 - (no SDK wrapper for `QueueResize` or `QueuePipelineStep`)
 
 The executor implementation **does not import `pyana-storage`**. The
@@ -701,7 +701,7 @@ four felts in a cell (capacity, length, owner, program VK hash), not
 the Merkle root the storage crate computes. `Effect::QueueAllocate /
 Enqueue / Dequeue / Resize / AtomicTx / PipelineStep` exist in
 `turn/src/action.rs:636-689` and are SDK-callable in
-`sdk/src/wallet.rs:5513-5715`. **Everything richer — `CapInbox`,
+`sdk/src/cipherclerk.rs:5513-5715`. **Everything richer — `CapInbox`,
 `ProgrammableQueue`'s constraint vocabulary, `PubSubTopic`,
 `BlindedQueue`, `RelayOperator`, `StorageMount` — lives one layer
 below the effect VM** and is reachable only via `app-framework`'s
@@ -811,7 +811,7 @@ factory machinery — it's that no app reaches for it.**
 - Storage Poseidon2 audit: `/Users/ember/dev/breadstuffs/storage/STORAGE-POSEIDON2-AUDIT.md`
 - Queue effects (declaration): `/Users/ember/dev/breadstuffs/turn/src/action.rs:636-689`
 - Queue effects (executor): `/Users/ember/dev/breadstuffs/turn/src/executor.rs:7100-7544`
-- SDK queue wrappers: `/Users/ember/dev/breadstuffs/sdk/src/wallet.rs:5513-5715`
+- SDK queue wrappers: `/Users/ember/dev/breadstuffs/sdk/src/cipherclerk.rs:5513-5715`
 - App-framework storage endpoints:
   - `/Users/ember/dev/breadstuffs/app-framework/src/inbox_endpoint.rs:113`
   - `/Users/ember/dev/breadstuffs/app-framework/src/queue_endpoint.rs`
