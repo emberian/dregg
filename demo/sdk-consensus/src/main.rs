@@ -450,7 +450,9 @@ fn main() {
     assert_eq!(bob_balance_after, 100);
     step("Post-state: Alice=900, Bob=100 (Δ=-100 / +100, conservation holds)");
 
-    alice.append_receipt(receipt);
+    alice
+        .append_receipt(receipt)
+        .expect("local executor and cclerk chains must agree");
     assert_eq!(alice.receipt_chain_length(), 1);
     verify_receipt_chain(alice.receipt_chain())
         .expect("self-verification of Alice's freshly-extended chain must pass");

@@ -1253,7 +1253,9 @@ async fn tool_submit_turn(params: &Value, state: &NodeState) -> McpToolResult {
 
     match exec_result {
         pyana_turn::TurnResult::Committed { receipt, .. } => {
-            s.cclerk.append_receipt(receipt);
+            s.cclerk
+                .append_receipt(receipt)
+                .expect("local executor and cclerk chains must agree; divergence is a serious bug");
 
             // Serialize the full SignedTurn for gossip (postcard format).
             let turn_data = postcard::to_stdvec(&signed).expect("SignedTurn serialization");
@@ -1419,7 +1421,9 @@ async fn tool_grant_capability(params: &Value, state: &NodeState) -> McpToolResu
 
     match exec_result {
         pyana_turn::TurnResult::Committed { receipt, .. } => {
-            s.cclerk.append_receipt(receipt);
+            s.cclerk
+                .append_receipt(receipt)
+                .expect("local executor and cclerk chains must agree; divergence is a serious bug");
 
             let turn_data = postcard::to_stdvec(&signed).expect("SignedTurn serialization");
             drop(s);
@@ -1550,7 +1554,9 @@ async fn tool_revoke_capability(params: &Value, state: &NodeState) -> McpToolRes
 
     match exec_result {
         pyana_turn::TurnResult::Committed { receipt, .. } => {
-            s.cclerk.append_receipt(receipt);
+            s.cclerk
+                .append_receipt(receipt)
+                .expect("local executor and cclerk chains must agree; divergence is a serious bug");
 
             let turn_data = postcard::to_stdvec(&signed).expect("SignedTurn serialization");
             drop(s);
@@ -1767,7 +1773,9 @@ async fn tool_fulfill_intent(params: &Value, state: &NodeState) -> McpToolResult
     match result {
         Ok(receipt) => {
             let turn_hash = hex_encode(&receipt.turn_hash);
-            s.cclerk.append_receipt(receipt);
+            s.cclerk
+                .append_receipt(receipt)
+                .expect("local executor and cclerk chains must agree; divergence is a serious bug");
             drop(s);
             state.emit(crate::state::NodeEvent::Receipt {
                 hash: turn_hash.clone(),
@@ -1889,7 +1897,9 @@ async fn tool_delegate(params: &Value, state: &NodeState) -> McpToolResult {
 
     match exec_result {
         pyana_turn::TurnResult::Committed { receipt, .. } => {
-            s.cclerk.append_receipt(receipt);
+            s.cclerk
+                .append_receipt(receipt)
+                .expect("local executor and cclerk chains must agree; divergence is a serious bug");
 
             let turn_data = postcard::to_stdvec(&signed).expect("SignedTurn serialization");
             drop(s);
@@ -2314,7 +2324,9 @@ async fn tool_bridge_note(params: &Value, state: &NodeState) -> McpToolResult {
 
     match exec_result {
         pyana_turn::TurnResult::Committed { receipt, .. } => {
-            s.cclerk.append_receipt(receipt);
+            s.cclerk
+                .append_receipt(receipt)
+                .expect("local executor and cclerk chains must agree; divergence is a serious bug");
 
             let turn_data = postcard::to_stdvec(&signed).expect("SignedTurn serialization");
             drop(s);
@@ -2846,7 +2858,9 @@ async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) -> McpToolR
 
     match exec_result {
         pyana_turn::TurnResult::Committed { receipt, .. } => {
-            s.cclerk.append_receipt(receipt);
+            s.cclerk
+                .append_receipt(receipt)
+                .expect("local executor and cclerk chains must agree; divergence is a serious bug");
             drop(s);
             state.emit(crate::state::NodeEvent::Receipt {
                 hash: turn_hash.clone(),
@@ -3428,7 +3442,9 @@ async fn tool_private_transfer(params: &Value, state: &NodeState) -> McpToolResu
 
     match exec_result {
         pyana_turn::TurnResult::Committed { receipt, .. } => {
-            s.cclerk.append_receipt(receipt);
+            s.cclerk
+                .append_receipt(receipt)
+                .expect("local executor and cclerk chains must agree; divergence is a serious bug");
             drop(s);
             state.emit(crate::state::NodeEvent::Receipt {
                 hash: turn_hash.clone(),
@@ -4212,7 +4228,9 @@ async fn tool_captp_deliver(params: &Value, state: &NodeState) -> McpToolResult 
 
     match exec_result {
         pyana_turn::TurnResult::Committed { receipt, .. } => {
-            s.cclerk.append_receipt(receipt);
+            s.cclerk
+                .append_receipt(receipt)
+                .expect("local executor and cclerk chains must agree; divergence is a serious bug");
             drop(s);
             state.emit(crate::state::NodeEvent::Receipt {
                 hash: turn_hash.clone(),
@@ -4565,7 +4583,9 @@ async fn tool_bilateral_action(params: &Value, state: &NodeState) -> McpToolResu
 
     let (committed_receipt_opt, error_str) = match exec_result {
         pyana_turn::TurnResult::Committed { receipt, .. } => {
-            s.cclerk.append_receipt(receipt.clone());
+            s.cclerk
+                .append_receipt(receipt.clone())
+                .expect("local executor and cclerk chains must agree; divergence is a serious bug");
             (Some(receipt), None)
         }
         pyana_turn::TurnResult::Rejected { reason, .. } => {
@@ -4817,7 +4837,9 @@ async fn tool_create_cell_from_factory_effect(params: &Value, state: &NodeState)
 
     match exec_result {
         pyana_turn::TurnResult::Committed { receipt, .. } => {
-            s.cclerk.append_receipt(receipt);
+            s.cclerk
+                .append_receipt(receipt)
+                .expect("local executor and cclerk chains must agree; divergence is a serious bug");
             drop(s);
             state.emit(crate::state::NodeEvent::Receipt {
                 hash: turn_hash.clone(),

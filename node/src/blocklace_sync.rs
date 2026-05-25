@@ -1262,8 +1262,12 @@ async fn execute_finalized_turn(
                 }
             }
 
-            // Append receipt to cipherclerk.
-            s.cclerk.append_receipt(receipt.clone());
+            // Append receipt to cipherclerk. Strict mode: divergence between
+            // the local executor and the cipherclerk's chain is a serious
+            // bug (the receipt came from our own executor), so we expect.
+            s.cclerk
+                .append_receipt(receipt.clone())
+                .expect("local executor and cclerk chains must agree; divergence is a serious bug");
 
             // ── Lift TurnReceipt → FederationReceipt (audit F7) ──────────
             // We carry the committed turn into a federation-shaped receipt
@@ -1287,6 +1291,18 @@ async fn execute_finalized_turn(
             let federation_threshold = s.decryption_threshold.max(1);
             let signing_key_bytes = s.cclerk.gossip_signing_key().to_bytes();
 
+            // v4 (#80): bind the receipt stream this attestation covers.
+            // Each finalized blocklace block carries exactly one turn (the
+            // signed_turn we just executed), so the receipt stream for this
+            // attestation period is the singleton `[receipt.receipt_hash()]`.
+            // Two federations with the same `merkle_root` but a different
+            // turn would produce a different `receipt_stream_root`, making
+            // the "WitnessedReceipt chain IS the persistence layer" property
+            // enforceable at signature-check time.
+            let receipt_stream_root = Some(pyana_types::merkle_root_of_receipt_hashes(&[
+                receipt.receipt_hash(),
+            ]));
+
             // Build the attested root struct, then sign its canonical message.
             let mut attested = pyana_types::AttestedRoot {
                 merkle_root,
@@ -1300,6 +1316,7 @@ async fn execute_finalized_turn(
                 threshold_qc: None,
                 threshold: federation_threshold,
                 federation_id: pyana_types::FederationId(s.federation_id),
+                receipt_stream_root,
             };
             let signing_msg = attested.signing_message();
             let local_pk = s.cclerk.public_key().clone();
@@ -1327,6 +1344,7 @@ async fn execute_finalized_turn(
                 threshold_qc: attested.threshold_qc.clone(),
                 threshold: attested.threshold,
                 federation_id: attested.federation_id,
+                receipt_stream_root: attested.receipt_stream_root,
             };
             if let Err(e) = s.store.store_attested_root(&stored) {
                 warn!(error = %e, height = new_height, "failed to persist attested root");

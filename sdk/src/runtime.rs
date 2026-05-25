@@ -304,10 +304,12 @@ impl AgentRuntime {
                 // Release ledger lock before taking cipherclerk write lock.
                 drop(ledger);
                 // Append the receipt to the cipherclerk's chain (write lock).
+                // Strict mode: surface fork detection as an SdkError instead of
+                // silently rewriting the receipt's `previous_receipt_hash`.
                 self.cipherclerk
                     .write()
                     .unwrap_or_else(|e| e.into_inner())
-                    .append_receipt(receipt.clone());
+                    .append_receipt(receipt.clone())?;
                 Ok(receipt)
             }
             TurnResult::Rejected { reason, .. } => Err(SdkError::Turn(reason)),
@@ -337,10 +339,11 @@ impl AgentRuntime {
                 // Release ledger lock before taking cipherclerk write lock.
                 drop(ledger);
                 // Append the receipt to the cipherclerk's chain (write lock).
+                // Strict mode: surface fork detection as an SdkError.
                 self.cipherclerk
                     .write()
                     .unwrap_or_else(|e| e.into_inner())
-                    .append_receipt(receipt.clone());
+                    .append_receipt(receipt.clone())?;
                 Ok(receipt)
             }
             TurnResult::Rejected { reason, .. } => Err(SdkError::Turn(reason)),

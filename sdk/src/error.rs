@@ -91,4 +91,27 @@ pub enum SdkError {
     /// An IVC proof operation failed.
     #[error("IVC proof error: {0}")]
     IvcError(String),
+
+    /// The cipherclerk's receipt chain head and the receipt's claimed
+    /// predecessor disagree. This is a fork-detection signal — the
+    /// cipherclerk and the executor that produced the receipt have
+    /// diverging views of the agent's chain. See
+    /// [`crate::cipherclerk::ChainAppendError::ReceiptChainMismatch`].
+    #[error("receipt chain mismatch: expected = {expected:?}, got = {got:?}")]
+    ReceiptChainMismatch {
+        /// Cipherclerk's current chain head hash.
+        expected: Option<[u8; 32]>,
+        /// What the receipt's `previous_receipt_hash` claimed.
+        got: Option<[u8; 32]>,
+    },
+}
+
+impl From<crate::cipherclerk::ChainAppendError> for SdkError {
+    fn from(value: crate::cipherclerk::ChainAppendError) -> Self {
+        match value {
+            crate::cipherclerk::ChainAppendError::ReceiptChainMismatch { expected, got } => {
+                SdkError::ReceiptChainMismatch { expected, got }
+            }
+        }
+    }
 }

@@ -142,7 +142,9 @@ fn main() {
         let post_state = receipt.post_state_hash;
         let computrons = receipt.computrons_used;
 
-        cclerk.append_receipt(receipt);
+        cclerk
+            .append_receipt(receipt)
+            .expect("simulated receipts must chain cleanly");
         current_state = post_state;
 
         item(&format!(

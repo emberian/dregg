@@ -40,6 +40,37 @@ use crate::error::SdkError;
 use crate::mnemonic;
 
 // =============================================================================
+// Receipt-chain append errors (P0 #77 — strict, fork-detectable semantics)
+// =============================================================================
+
+/// Errors that can be returned by
+/// [`AgentCipherclerk::append_receipt`](crate::AgentCipherclerk::append_receipt).
+///
+/// This is the strict, fork-detectable counterpart to the previous silent-rewrite
+/// behavior. A divergence between the executor's view of the receipt chain and
+/// the cipherclerk's view will surface here as `ReceiptChainMismatch` rather
+/// than being papered over.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ChainAppendError {
+    /// The receipt's `previous_receipt_hash` does not match the cipherclerk's
+    /// current chain head. This indicates that the executor that produced
+    /// the receipt and this cipherclerk disagree about the receipt chain —
+    /// a fork condition. The caller must explicitly reconcile (request the
+    /// federation's view, reset the cipherclerk, branch, etc.); the
+    /// cipherclerk will not silently rewrite the link.
+    #[error(
+        "receipt chain mismatch: cipherclerk head = {expected:?}, receipt's prev = {got:?}"
+    )]
+    ReceiptChainMismatch {
+        /// What the cipherclerk thinks the prior receipt hash is (i.e., the
+        /// hash of its current chain head, or `None` for an empty chain).
+        expected: Option<[u8; 32]>,
+        /// What the receipt claims its predecessor is.
+        got: Option<[u8; 32]>,
+    },
+}
+
+// =============================================================================
 // Verification Modes
 // =============================================================================
 
@@ -1784,17 +1815,65 @@ impl AgentCipherclerk {
     // Receipt Chain (Proof-Carrying State)
     // =========================================================================
 
+    // ChainAppendError is defined at module scope below; documented here:
+    // see [`ChainAppendError::ReceiptChainMismatch`] for the strict-mode
+    // semantics enforced by [`Self::append_receipt`].
+
     /// Append a receipt to this cipherclerk's chain after a successful turn execution.
     ///
-    /// The receipt's `previous_receipt_hash` will be set to the hash of the
-    /// current chain head (or None if this is the first receipt). The receipt's
-    /// `agent` field must match this cipherclerk's agent identity for the given domain.
+    /// # Strict chain semantics (P0 #77 fix)
+    ///
+    /// The receipt's `previous_receipt_hash` is treated as follows:
+    ///
+    /// - **`Some(h)`** — `h` must equal the hash of the cipherclerk's current
+    ///   chain head. If the chain is empty, `Some(h)` is a mismatch (the
+    ///   executor that produced the receipt thinks the chain is non-empty but
+    ///   the cipherclerk thinks otherwise — a divergence). Otherwise, equality
+    ///   is required. A mismatch returns
+    ///   [`ChainAppendError::ReceiptChainMismatch`] **without** mutating the
+    ///   chain.
+    /// - **`None`** — the cipherclerk fills in its current head. This preserves
+    ///   compatibility with callers that build receipts in test contexts (or
+    ///   from paths that don't track the head) while still being strict against
+    ///   adversarial supplied-prev-hash values.
+    ///
+    /// The fork-detection contract: any caller that *does* supply a
+    /// `previous_receipt_hash` (e.g. a receipt produced by an honest executor
+    /// that auto-fills from its own ledger) will surface a divergence rather
+    /// than have it silently rewritten. Pre-fix, the cipherclerk overwrote
+    /// the supplied value unconditionally, which made the cipherclerk's chain
+    /// disagree with the federation's chain without any observable signal.
+    ///
+    /// The caller must explicitly reconcile (request the federation's view, reset
+    /// the cipherclerk, branch, etc.) — there is no audit-trail mode that papers
+    /// over a divergence by rewriting the link.
     ///
     /// This is the primary method for building the proof-carrying state chain.
     /// Call this after `TurnExecutor::execute()` returns a committed result.
-    pub fn append_receipt(&mut self, mut receipt: pyana_turn::TurnReceipt) {
-        // Link to the previous receipt.
-        receipt.previous_receipt_hash = self.receipt_chain.last().map(|r| r.receipt_hash());
+    pub fn append_receipt(
+        &mut self,
+        mut receipt: pyana_turn::TurnReceipt,
+    ) -> Result<(), ChainAppendError> {
+        let expected_prev = self.receipt_chain.last().map(|r| r.receipt_hash());
+
+        // Strict mode: if the caller provided a prev_hash, it must match the
+        // cipherclerk's current head. The previous behavior (silently overwriting
+        // the caller's value with the cipherclerk's head) would mask a fork:
+        // an executor that disagreed with the cipherclerk about the chain head
+        // would still have its receipt appended, after which cipherclerk's
+        // chain and the federation's chain would silently diverge.
+        if let Some(claimed) = receipt.previous_receipt_hash {
+            if Some(claimed) != expected_prev {
+                return Err(ChainAppendError::ReceiptChainMismatch {
+                    expected: expected_prev,
+                    got: Some(claimed),
+                });
+            }
+        }
+
+        // Link to the previous receipt (no-op if already set to the matching
+        // value; fills in when the caller left it unset).
+        receipt.previous_receipt_hash = expected_prev;
 
         // Extend the IVC chain if enabled.
         if let Some(ref mut builder) = self.ivc_builder {
@@ -1833,6 +1912,7 @@ impl AgentCipherclerk {
         }
 
         self.receipt_chain.push(receipt);
+        Ok(())
     }
 
     /// Get the head (most recent) receipt in this cipherclerk's chain.
@@ -4143,10 +4223,22 @@ impl AgentCipherclerk {
         let results = pyana_turn::execute_pipeline(pipeline, ledger, executor);
 
         // Append successful receipts to this cipherclerk's chain.
+        // Strict mode: a fork between the executor and the cipherclerk is
+        // surfaced as a warning at this layer (the pipeline return value
+        // is per-turn `Result`, so we cannot turn a mismatch into a typed
+        // error here). The receipt is dropped from the cipherclerk's chain
+        // and the caller can detect the divergence by comparing
+        // `receipt_chain_length()` against the number of `Ok` results.
         for result in &results {
             if let Ok(receipt) = result {
                 if receipt.agent == self.cell_id("default") {
-                    self.append_receipt(receipt.clone());
+                    if let Err(e) = self.append_receipt(receipt.clone()) {
+                        tracing::error!(
+                            "cipherclerk chain divergence in submit_pipeline: {} \
+                             (receipt dropped; caller must reconcile)",
+                            e
+                        );
+                    }
                 }
             }
         }
@@ -5882,7 +5974,7 @@ mod tests {
         let cell_id = cclerk.cell_id("test");
         let receipt = mock_receipt(cell_id, [1u8; 32], [2u8; 32]);
 
-        cclerk.append_receipt(receipt);
+        cclerk.append_receipt(receipt).unwrap();
 
         assert_eq!(cclerk.receipt_chain_length(), 1);
         assert!(cclerk.receipt_head().is_some());
@@ -5900,11 +5992,11 @@ mod tests {
 
         // Append first receipt.
         let r1 = mock_receipt(cell_id, [1u8; 32], [2u8; 32]);
-        cclerk.append_receipt(r1);
+        cclerk.append_receipt(r1).unwrap();
 
         // Append second receipt (pre_state matches first post_state).
         let r2 = mock_receipt(cell_id, [2u8; 32], [3u8; 32]);
-        cclerk.append_receipt(r2);
+        cclerk.append_receipt(r2).unwrap();
 
         assert_eq!(cclerk.receipt_chain_length(), 2);
         assert_eq!(cclerk.current_state_commitment(), Some([3u8; 32]));
@@ -5931,7 +6023,7 @@ mod tests {
             state[0] = i + 1;
             let post = state;
             let receipt = mock_receipt(cell_id, pre, post);
-            cclerk.append_receipt(receipt);
+            cclerk.append_receipt(receipt).unwrap();
         }
 
         assert_eq!(cclerk.receipt_chain_length(), 5);
@@ -5948,17 +6040,105 @@ mod tests {
         let cell_id = cclerk.cell_id("test");
 
         let r1 = mock_receipt(cell_id, [1u8; 32], [2u8; 32]);
-        cclerk.append_receipt(r1);
+        cclerk.append_receipt(r1).unwrap();
 
         let r2 = mock_receipt(cell_id, [2u8; 32], [3u8; 32]);
-        cclerk.append_receipt(r2);
+        cclerk.append_receipt(r2).unwrap();
 
         let r3 = mock_receipt(cell_id, [3u8; 32], [4u8; 32]);
-        cclerk.append_receipt(r3);
+        cclerk.append_receipt(r3).unwrap();
 
         // External verification.
         let head = pyana_turn::verify_receipt_chain_head(cclerk.receipt_chain()).unwrap();
         assert_eq!(head, [4u8; 32]);
+    }
+
+    // ---------------- P0 #77: strict append_receipt semantics ----------------
+
+    /// Adversarial: a receipt whose `previous_receipt_hash` does NOT match the
+    /// cipherclerk's current head must be rejected with a typed mismatch error.
+    /// The cipherclerk's chain must be unchanged on rejection.
+    ///
+    /// Pre-fix behavior: the cipherclerk silently rewrote `previous_receipt_hash`
+    /// to its own head, so two honest nodes that diverged would produce different
+    /// chains for the same agent with no detection. After this fix, the
+    /// cipherclerk surfaces the fork as `ChainAppendError::ReceiptChainMismatch`.
+    #[test]
+    fn append_receipt_rejects_stale_prev_hash_fork_detection() {
+        let mut cclerk = AgentCipherclerk::new();
+        let cell_id = cclerk.cell_id("test");
+
+        // Seed the chain so the head is known.
+        let r1 = mock_receipt(cell_id, [1u8; 32], [2u8; 32]);
+        cclerk.append_receipt(r1).unwrap();
+        let head = cclerk.receipt_head().unwrap().receipt_hash();
+
+        // Craft a receipt with a stale prev_hash (NOT equal to the cclerk's head).
+        let mut r2 = mock_receipt(cell_id, [2u8; 32], [3u8; 32]);
+        r2.previous_receipt_hash = Some([0xDE; 32]);
+
+        let err = cclerk.append_receipt(r2).expect_err("stale prev_hash must reject");
+        match err {
+            ChainAppendError::ReceiptChainMismatch { expected, got } => {
+                assert_eq!(expected, Some(head));
+                assert_eq!(got, Some([0xDE; 32]));
+            }
+        }
+
+        // Chain must be unchanged on rejection.
+        assert_eq!(cclerk.receipt_chain_length(), 1);
+        assert_eq!(cclerk.receipt_head().unwrap().receipt_hash(), head);
+    }
+
+    /// Adversarial: a receipt submitted with `prev = Some(_)` against an empty
+    /// cipherclerk must be rejected (the executor that produced the receipt
+    /// thinks the chain has history but the cipherclerk has none — divergence).
+    #[test]
+    fn append_receipt_rejects_some_prev_on_empty_chain() {
+        let mut cclerk = AgentCipherclerk::new();
+        let cell_id = cclerk.cell_id("test");
+
+        let mut r = mock_receipt(cell_id, [0u8; 32], [1u8; 32]);
+        r.previous_receipt_hash = Some([0xAB; 32]);
+
+        let err = cclerk
+            .append_receipt(r)
+            .expect_err("Some(prev) on empty cclerk chain must reject");
+        match err {
+            ChainAppendError::ReceiptChainMismatch { expected, got } => {
+                assert_eq!(expected, None);
+                assert_eq!(got, Some([0xAB; 32]));
+            }
+        }
+        assert_eq!(cclerk.receipt_chain_length(), 0);
+    }
+
+    /// Genesis: an empty cipherclerk accepts a receipt with prev = None.
+    #[test]
+    fn append_receipt_accepts_genesis_on_empty_chain() {
+        let mut cclerk = AgentCipherclerk::new();
+        let cell_id = cclerk.cell_id("test");
+
+        let r = mock_receipt(cell_id, [0u8; 32], [1u8; 32]);
+        cclerk.append_receipt(r).unwrap();
+        assert_eq!(cclerk.receipt_chain_length(), 1);
+    }
+
+    /// A receipt with an explicit prev_hash that matches the cipherclerk's
+    /// current head is accepted (this is the steady-state honest case).
+    #[test]
+    fn append_receipt_accepts_matching_prev_hash() {
+        let mut cclerk = AgentCipherclerk::new();
+        let cell_id = cclerk.cell_id("test");
+
+        let r1 = mock_receipt(cell_id, [1u8; 32], [2u8; 32]);
+        cclerk.append_receipt(r1).unwrap();
+        let head = cclerk.receipt_head().unwrap().receipt_hash();
+
+        let mut r2 = mock_receipt(cell_id, [2u8; 32], [3u8; 32]);
+        r2.previous_receipt_hash = Some(head);
+        cclerk.append_receipt(r2).unwrap();
+        assert_eq!(cclerk.receipt_chain_length(), 2);
     }
 
     #[test]

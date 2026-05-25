@@ -117,9 +117,9 @@ pub mod cclerk {
 
 // Re-export primary types at crate root for convenience.
 pub use cipherclerk::{
-    AgentCipherclerk, AuthorizationPresentation, DelegatedToken, DelegationAuthority,
-    DisclosureSpec, FactDisclosure, FactIndex, HeldToken, LocalDelegation, OwnedStealthNote,
-    SignedTurn, VerificationMode,
+    AgentCipherclerk, AuthorizationPresentation, ChainAppendError, DelegatedToken,
+    DelegationAuthority, DisclosureSpec, FactDisclosure, FactIndex, HeldToken, LocalDelegation,
+    OwnedStealthNote, SignedTurn, VerificationMode,
 };
 #[cfg(feature = "network")]
 pub use client::{PresentationResult, RevocationStatus, SiloClient};

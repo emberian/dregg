@@ -1322,7 +1322,9 @@ async fn post_submit_turn(
                 }
             }
 
-            s.cclerk.append_receipt(receipt);
+            s.cclerk
+                .append_receipt(receipt)
+                .expect("local executor and cclerk chains must agree; divergence is a serious bug");
 
             // Push committed event into the ring buffer for REST polling.
             let current_height = s
@@ -1485,7 +1487,9 @@ async fn post_submit_encrypted_turn(
 
             let turn_hash = hex_encode(&turn_hash_bytes);
             let was_encrypted = receipt.was_encrypted;
-            s.cclerk.append_receipt(receipt);
+            s.cclerk
+                .append_receipt(receipt)
+                .expect("local executor and cclerk chains must agree; divergence is a serious bug");
 
             drop(s);
 
@@ -2311,7 +2315,9 @@ async fn post_fast_path_certificate(
     match result {
         pyana_turn::TurnResult::Committed { receipt, .. } => {
             let hash_hex = hex_encode(&receipt.turn_hash);
-            s.cclerk.append_receipt(receipt);
+            s.cclerk
+                .append_receipt(receipt)
+                .expect("local executor and cclerk chains must agree; divergence is a serious bug");
             drop(s);
             state.emit(NodeEvent::Receipt {
                 hash: hash_hex.clone(),
@@ -2509,7 +2515,9 @@ async fn post_resolve_conditional(
                         }
                     }
                     let turn_hash = hex_encode(&receipt.turn_hash);
-                    s.cclerk.append_receipt(receipt);
+                    s.cclerk
+                .append_receipt(receipt)
+                .expect("local executor and cclerk chains must agree; divergence is a serious bug");
                     drop(s);
                     state.emit(NodeEvent::Receipt {
                         hash: turn_hash.clone(),
