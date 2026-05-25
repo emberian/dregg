@@ -72,6 +72,11 @@ fn auth_byte(auth: &AuthRequired) -> u8 {
         AuthRequired::Proof => 2,
         AuthRequired::Either => 3,
         AuthRequired::Impossible => 4,
+        // Custom authorizers are identified by their vk_hash; encode as 5
+        // so they are distinguished from the standard tiers in the
+        // commitment. The full vk_hash is committed separately in the
+        // permissions-commitment chain; the byte here just marks the tier.
+        AuthRequired::Custom { .. } => 5,
     }
 }
 
@@ -268,6 +273,12 @@ fn hash_program_into(hasher: &mut blake3::Hasher, program: &crate::program::Cell
         CellProgram::Circuit { circuit_hash } => {
             hasher.update(&[2u8]);
             hasher.update(circuit_hash);
+        }
+        CellProgram::Cases(cases) => {
+            hasher.update(&[3u8]);
+            let serialized = postcard::to_allocvec(cases).unwrap_or_default();
+            hasher.update(&(serialized.len() as u64).to_le_bytes());
+            hasher.update(&serialized);
         }
     }
 }

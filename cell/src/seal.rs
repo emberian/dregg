@@ -294,6 +294,7 @@ impl SealPair {
             crate::permissions::AuthRequired::Proof => 2u8,
             crate::permissions::AuthRequired::Either => 3u8,
             crate::permissions::AuthRequired::Impossible => 4u8,
+            crate::permissions::AuthRequired::Custom { .. } => 5u8,
         };
         buf.push(perm_byte);
         match &cap.breadstuff {

@@ -59,7 +59,8 @@ mod meta;
 
 pub use dfa_routed::{DfaRoutedDirectory, RouteTable, RouteTableId, TableSwapError};
 pub use directory::{
-    Directory, DirectoryEntry, DirectoryError, EntryKind, InMemoryDirectory, Listing, Version,
+    Directory, DirectoryEntry, DirectoryError, DiscoveryFilter, EntryKind, InMemoryDirectory,
+    Listing, Version,
 };
 pub use meta::{MetaDirectory, PeerHandle};
 

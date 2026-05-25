@@ -104,6 +104,7 @@ impl ChildVkStrategy {
                 AuthRequired::Proof => 2u8,
                 AuthRequired::Either => 3u8,
                 AuthRequired::Impossible => 4u8,
+                AuthRequired::Custom { .. } => 5u8,
             };
             hasher.update(&[perm_byte]);
         }
@@ -350,6 +351,7 @@ impl CapTemplate {
             AuthRequired::Proof => 2u8,
             AuthRequired::Either => 3u8,
             AuthRequired::Impossible => 4u8,
+            AuthRequired::Custom { .. } => 5u8,
         };
         hasher.update(&[perm_byte]);
         hasher.update(&[self.attenuatable as u8]);

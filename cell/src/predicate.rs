@@ -100,6 +100,19 @@ pub enum InputRef {
     /// witnessed predicates (BlindedSenderAuthorized, signature
     /// attestations).
     Sender,
+    /// The canonical action signing message — the bytes
+    /// `compute_partial_signing_message(action, position, federation_id,
+    /// turn_nonce)` produces (federation_id + action hash + position +
+    /// turn_nonce). Used by `Authorization::Custom` so the predicate
+    /// proves "the caller authorized THIS turn at THIS federation at
+    /// THIS nonce position" (AUTHORIZATION-CUSTOM-DESIGN §11.5).
+    ///
+    /// The executor binds this input automatically when dispatching a
+    /// `WitnessedPredicate` for authorization; surfaces that evaluate
+    /// `WitnessedPredicate` outside an action-authorization context
+    /// (slot caveats, preconditions) must reject this variant as
+    /// shape-mismatch.
+    SigningMessage,
 }
 
 /// The predicate-algebra kind a [`WitnessedPredicate`] uses.
@@ -276,6 +289,9 @@ pub enum PredicateInput<'a> {
     PublicInput(&'a [u64]),
     /// Sender public key (from `InputRef::Sender`).
     Sender(&'a [u8; 32]),
+    /// Canonical action signing message bytes (from
+    /// `InputRef::SigningMessage`). Used by `Authorization::Custom`.
+    SigningMessage(&'a [u8]),
 }
 
 /// Errors a witnessed-predicate verifier can produce.
@@ -380,6 +396,15 @@ pub struct WitnessedPredicateRegistry {
     builtins: BTreeMap<BuiltinKey, Arc<dyn WitnessedPredicateVerifier>>,
     /// App-registered custom verifiers, keyed on `vk_hash`.
     custom: BTreeMap<[u8; 32], Arc<dyn WitnessedPredicateVerifier>>,
+}
+
+impl std::fmt::Debug for WitnessedPredicateRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WitnessedPredicateRegistry")
+            .field("builtins_count", &self.builtins.len())
+            .field("custom_count", &self.custom.len())
+            .finish()
+    }
 }
 
 /// Ordering key for the built-in registry. Closed enum kinds are
@@ -700,6 +725,7 @@ mod tests {
             InputRef::Witness { index: 9 },
             InputRef::PublicInput { pi_index: 2 },
             InputRef::Sender,
+            InputRef::SigningMessage,
         ] {
             let bytes = postcard::to_allocvec(&ir).expect("serialize");
             let back: InputRef = postcard::from_bytes(&bytes).expect("deserialize");

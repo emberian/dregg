@@ -27,7 +27,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
 
-use pyana_dfa::router::{RouteTable, RouteTableBuilder, RouteTarget, Router};
+pub use pyana_dfa::router::RouteTable;
+use pyana_dfa::router::{RouteTableBuilder, RouteTarget, Router};
 
 use crate::directory::{
     Directory, DirectoryEntry, DirectoryError, DiscoveryFilter, InMemoryDirectory, Listing, Version,
@@ -88,14 +89,8 @@ impl DfaRoutedDirectory {
     }
 
     /// Build with a `RouteTableBuilder` (convenience).
-    /
-    pub fn with_builder(b: RouteTableBuilder) -> Result<Self, TableSwapError> {
-        /*
-        let table = b
-            .build()
-            .map_err(|e| TableSwapError::BuildError(format!("{e:?}")))?;
-        Ok(Self::new(table))
-*/unimplemented!()
+    pub fn with_builder(b: RouteTableBuilder) -> Self {
+        Self::new(b.compile())
     }
 
     /// Current route-table id.
@@ -264,8 +259,7 @@ mod tests {
         RouteTableBuilder::new()
             .route("system.*", RouteTarget::handler("dir:system"))
             .route("*", RouteTarget::handler("local"))
-            .build()
-            .expect("table build")
+            .compile()
     }
 
     fn build_strict_table() -> RouteTable {
@@ -275,8 +269,7 @@ mod tests {
             .route("blocked.*", RouteTarget::drop())
             .route("system.*", RouteTarget::handler("dir:system"))
             .route("*", RouteTarget::handler("local"))
-            .build()
-            .expect("table build")
+            .compile()
     }
 
     #[test]
