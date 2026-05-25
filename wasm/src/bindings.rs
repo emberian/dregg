@@ -208,6 +208,13 @@ pub fn get_all_cells(handle: usize) -> Result<JsValue, JsError> {
 
 /// Create an agent (wallet + cell) in the runtime.
 /// Returns the agent index (handle).
+///
+/// Genesis (agent 0) is birth-by-fiat: the ledger inserts the root cell
+/// directly because no signer exists yet. Subsequent agents are minted
+/// via `Effect::CreateCellFromFactory` against the runtime's default
+/// test-wallet factory — the canonical constructor-transparency path.
+/// To mint from a specific factory, use
+/// [`create_agent_with_factory`] / [`deploy_factory_descriptor`].
 #[wasm_bindgen]
 pub fn create_agent(handle: usize, name: &str, initial_balance: u64) -> Result<JsValue, JsError> {
     with_runtime(handle, |rt| {
@@ -227,6 +234,99 @@ pub fn create_agent(handle: usize, name: &str, initial_balance: u64) -> Result<J
             name: agent.name.clone(),
             cell_id: hex_encode(&agent.cell_id.0),
             public_key: hex_encode(&agent.public_key),
+        };
+        serde_wasm_bindgen::to_value(&result).map_err(|e| e.to_string())
+    })
+}
+
+/// Create an agent whose cell is minted from a specific factory VK
+/// (instead of the runtime's default test-wallet factory).
+///
+/// The factory must have been deployed via
+/// [`deploy_factory_descriptor`]. The new cell carries a `Provenance`
+/// record pointing at this factory, so a downstream `verify_provenance`
+/// against the named factory set will return true.
+///
+/// Genesis (the first agent in the runtime) cannot be born from a
+/// factory — no signer exists yet. This binding always returns an error
+/// for agent index 0; create the genesis agent via [`create_agent`]
+/// first, then mint subsequent agents from your factory.
+#[wasm_bindgen]
+pub fn create_agent_with_factory(
+    handle: usize,
+    name: &str,
+    initial_balance: u64,
+    factory_vk_hex: &str,
+) -> Result<JsValue, JsError> {
+    with_runtime(handle, |rt| {
+        let factory_vk = hex_decode_32(factory_vk_hex)?;
+        let idx = rt.try_create_agent_with_factory(name, initial_balance, &factory_vk)?;
+        let agent = &rt.agents[idx];
+
+        #[derive(Serialize)]
+        struct AgentResult {
+            agent_index: usize,
+            name: String,
+            cell_id: String,
+            public_key: String,
+            factory_vk: String,
+        }
+
+        let result = AgentResult {
+            agent_index: idx,
+            name: agent.name.clone(),
+            cell_id: hex_encode(&agent.cell_id.0),
+            public_key: hex_encode(&agent.public_key),
+            factory_vk: hex_encode(&factory_vk),
+        };
+        serde_wasm_bindgen::to_value(&result).map_err(|e| e.to_string())
+    })
+}
+
+/// Deploy a factory descriptor into the runtime, returning the
+/// `factory_vk` that addresses it. The factory_vk can then be passed to
+/// [`create_agent_with_factory`] (or to JS-side `createFromFactory`)
+/// to mint cells from this factory.
+///
+/// `descriptor_json` is a serde-serialized `FactoryDescriptor`. Apps
+/// that ship their own factories can call this at boot to register them
+/// alongside the runtime's default test-wallet factory.
+#[wasm_bindgen]
+pub fn deploy_factory_descriptor(handle: usize, descriptor_json: &str) -> Result<JsValue, JsError> {
+    use pyana_cell::factory::FactoryDescriptor;
+
+    with_runtime(handle, |rt| {
+        let descriptor: FactoryDescriptor =
+            serde_json::from_str(descriptor_json).map_err(|e| e.to_string())?;
+        let factory_vk = rt.deploy_factory(descriptor);
+
+        #[derive(Serialize)]
+        struct DeployResult {
+            factory_vk: String,
+        }
+        let result = DeployResult {
+            factory_vk: hex_encode(&factory_vk),
+        };
+        serde_wasm_bindgen::to_value(&result).map_err(|e| e.to_string())
+    })
+}
+
+/// Return the VK of the runtime's default test-wallet factory — the
+/// factory used by `create_agent` / `create_cell` when no explicit
+/// factory is named.
+///
+/// Exposed so the JS layer can pre-register the wasm-runtime factory
+/// set with `verifyProvenance` (or display the wasm-runtime's
+/// constructor-transparency anchor in the inspector UI).
+#[wasm_bindgen]
+pub fn default_factory_vk(handle: usize) -> Result<JsValue, JsError> {
+    with_runtime_ref(handle, |rt| {
+        #[derive(Serialize)]
+        struct VkResult {
+            factory_vk: String,
+        }
+        let result = VkResult {
+            factory_vk: hex_encode(&rt.default_factory_vk()),
         };
         serde_wasm_bindgen::to_value(&result).map_err(|e| e.to_string())
     })

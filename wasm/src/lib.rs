@@ -1835,6 +1835,161 @@ pub fn build_turn(spec_json: &str) -> Result<JsValue, JsError> {
 }
 
 // ============================================================================
+// Canonical factory-mint turn builder (createFromFactory canonical path)
+// ============================================================================
+
+/// Build and sign a canonical `Effect::CreateCellFromFactory` turn from a
+/// JSON spec, using `AgentWallet::create_from_factory` as the canonical
+/// constructor-transparency path.
+///
+/// This replaces the standalone `create_from_factory` derivation function
+/// for the extension's `window.pyana.createFromFactory` path. The previous
+/// shape only computed `(child_vk, param_hash)` deterministically — useful
+/// for client-side preview, but it never actually minted a cell. The
+/// canonical path is: build a real signed turn, submit it via
+/// `/turns/submit`, and let the node's `TurnExecutor` mint the cell with
+/// real provenance tracking.
+///
+/// JSON input:
+/// ```json
+/// {
+///   "sender_privkey": [32 bytes as number[]],
+///   "factory_vk_hex": "<64 hex chars>",
+///   "owner_pubkey_hex": "<64 hex chars>",
+///   "token_id_hex": "<64 hex chars>",
+///   "mode": "Hosted" | "Sovereign",
+///   "program_vk_hex": "<optional 64 hex chars>",
+///   "initial_fields": [[field_index, value], ...],
+///   "initial_balance": 0
+/// }
+/// ```
+///
+/// Returns JSON: `{ "turn_id": "<hex>", "turn_bytes": <Uint8Array>,
+/// "child_vk": "<hex>", "param_hash": "<hex>", "factory_vk": "<hex>" }`.
+///
+/// `turn_bytes` is the postcard-serialized `Turn` that the node's
+/// `/turns/submit` endpoint accepts. `child_vk` / `param_hash` are
+/// surfaced so the caller can immediately compute the new cell's identity
+/// without round-tripping through the node.
+#[wasm_bindgen]
+pub fn wallet_create_from_factory(spec_json: &str) -> Result<JsValue, JsError> {
+    use pyana_cell::CellMode;
+    use pyana_cell::factory::{ChildVkStrategy, FactoryCreationParams};
+    use pyana_sdk::AgentWallet;
+    use zeroize::Zeroizing;
+
+    #[derive(serde::Deserialize)]
+    struct Spec {
+        sender_privkey: Vec<u8>,
+        factory_vk_hex: String,
+        owner_pubkey_hex: String,
+        token_id_hex: String,
+        #[serde(default)]
+        mode: Option<String>,
+        #[serde(default)]
+        program_vk_hex: Option<String>,
+        #[serde(default)]
+        initial_fields: Vec<(u32, u64)>,
+        #[serde(default)]
+        federation_id_hex: Option<String>,
+    }
+
+    let spec: Spec =
+        serde_json::from_str(spec_json).map_err(|e| JsError::new(&e.to_string()))?;
+
+    if spec.sender_privkey.len() != 32 {
+        return Err(JsError::new("sender_privkey must be exactly 32 bytes"));
+    }
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(&spec.sender_privkey);
+
+    let factory_vk = hex_decode_32(&spec.factory_vk_hex)
+        .map_err(|e| JsError::new(&format!("factory_vk_hex: {e}")))?;
+    let owner_pubkey = hex_decode_32(&spec.owner_pubkey_hex)
+        .map_err(|e| JsError::new(&format!("owner_pubkey_hex: {e}")))?;
+    let token_id = hex_decode_32(&spec.token_id_hex)
+        .map_err(|e| JsError::new(&format!("token_id_hex: {e}")))?;
+    let program_vk = match spec.program_vk_hex.as_deref() {
+        Some(hex) if !hex.is_empty() => Some(
+            hex_decode_32(hex).map_err(|e| JsError::new(&format!("program_vk_hex: {e}")))?,
+        ),
+        _ => None,
+    };
+    let mode = match spec.mode.as_deref() {
+        Some("Sovereign") | Some("sovereign") => CellMode::Sovereign,
+        _ => CellMode::Hosted,
+    };
+    let federation_id = match spec.federation_id_hex.as_deref() {
+        Some(hex) if !hex.is_empty() => hex_decode_32(hex)
+            .map_err(|e| JsError::new(&format!("federation_id_hex: {e}")))?,
+        _ => [0u8; 32],
+    };
+
+    let wallet = AgentWallet::from_key_bytes(Zeroizing::new(seed));
+    let issuer_cell = wallet.cell_id("default");
+
+    let params = FactoryCreationParams {
+        mode,
+        program_vk,
+        initial_fields: spec.initial_fields,
+        initial_caps: Vec::new(),
+        owner_pubkey,
+    };
+
+    // Compute child_vk + param_hash up front so the caller can use them
+    // immediately (e.g. to display the new cell's identity, or to verify
+    // it once the receipt comes back). These are deterministic functions
+    // of (factory_vk, params), so they don't depend on the turn executing.
+    let param_hash = ChildVkStrategy::compute_param_hash(&params);
+    let child_vk = ChildVkStrategy::derive_child_vk(&factory_vk, &param_hash);
+
+    let turn = wallet.create_from_factory(
+        issuer_cell,
+        factory_vk,
+        owner_pubkey,
+        token_id,
+        params,
+        &federation_id,
+    );
+    let turn_bytes = postcard::to_allocvec(&turn)
+        .map_err(|e| JsError::new(&format!("postcard serialization failed: {e}")))?;
+    let turn_hash = blake3::hash(&turn_bytes);
+    let turn_id = hex_encode(turn_hash.as_bytes());
+
+    #[derive(Serialize)]
+    struct CreateFromFactoryResult {
+        turn_id: String,
+        turn_bytes: Vec<u8>,
+        agent_cell_id: String,
+        child_vk: String,
+        param_hash: String,
+        factory_vk: String,
+    }
+
+    let result = CreateFromFactoryResult {
+        turn_id,
+        turn_bytes,
+        agent_cell_id: hex_encode(&issuer_cell.0),
+        child_vk: hex_encode(&child_vk),
+        param_hash: hex_encode(&param_hash),
+        factory_vk: hex_encode(&factory_vk),
+    };
+    serde_wasm_bindgen::to_value(&result).map_err(|e| JsError::new(&e.to_string()))
+}
+
+fn hex_decode_32(hex: &str) -> Result<[u8; 32], String> {
+    if hex.len() != 64 {
+        return Err(format!("expected 64 hex chars, got {}", hex.len()));
+    }
+    let mut out = [0u8; 32];
+    for i in 0..32 {
+        out[i] = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16)
+            .map_err(|e| format!("invalid hex at byte {i}: {e}"))?;
+    }
+    Ok(out)
+}
+
+// ============================================================================
 // Helpers
 // ============================================================================
 
