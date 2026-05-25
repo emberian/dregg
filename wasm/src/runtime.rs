@@ -45,7 +45,7 @@ const WASM_SIM_DOMAIN: &str = "pyana-wasm-default-domain";
 /// comfortable headroom and is debited from the genesis agent's balance.
 const GENESIS_MINT_FEE: u64 = 2000;
 
-/// Derive-key tag for the default test-wallet factory VK. The factory
+/// Derive-key tag for the default test-cipherclerk factory VK. The factory
 /// is a constructor-transparency anchor — every wasm-runtime agent
 /// (other than genesis) is born from this factory, so every cell's
 /// provenance points at the same VK. The VK string is part of the
@@ -53,7 +53,7 @@ const GENESIS_MINT_FEE: u64 = 2000;
 /// invalidates any test fixtures that pin the factory VK.
 const WASM_DEFAULT_FACTORY_DOMAIN: &str = "pyana-wasm-default-test-wallet-factory-v1";
 
-/// Build the default "test wallet" `FactoryDescriptor` used by
+/// Build the default "test cipherclerk" `FactoryDescriptor` used by
 /// [`PyanaRuntime`] when an agent is created without an explicit factory.
 ///
 /// The descriptor is intentionally permissive:
@@ -77,7 +77,7 @@ const WASM_DEFAULT_FACTORY_DOMAIN: &str = "pyana-wasm-default-test-wallet-factor
 /// reproducible across browser sessions. Apps that want their own
 /// factory can deploy one via [`PyanaRuntime::deploy_factory`] and
 /// pass its VK to [`PyanaRuntime::try_create_agent_with_factory`].
-pub fn default_wallet_factory_descriptor() -> FactoryDescriptor {
+pub fn default_cipherclerk_factory_descriptor() -> FactoryDescriptor {
     let factory_vk: [u8; 32] = *blake3::Hasher::new_derive_key(WASM_DEFAULT_FACTORY_DOMAIN)
         .update(b"factory-vk")
         .finalize()
@@ -116,7 +116,7 @@ pub struct SimAgent {
     pub token_counter: u64,
     /// Canonical `PeerExchange` session for this agent. Built once at agent
     /// creation via `AgentWallet::peer_exchange(WASM_SIM_DOMAIN)`, so the
-    /// signing key used by the exchange is the wallet's real Ed25519 key —
+    /// signing key used by the exchange is the cipherclerk's real Ed25519 key —
     /// no JS-side or wasm-side reimplementation. Mutated by `register_peer`,
     /// `create_transition`, and `verify_transition`.
     pub peer_exchange: PeerExchange,
@@ -219,8 +219,8 @@ pub struct PyanaRuntime {
     /// by index. Each `SimFederation` pairs the canonical committee context with
     /// a lightweight local consensus stub — see `SimFederation` for details.
     pub federations: Vec<SimFederation>,
-    /// VK of the default test-wallet factory deployed at runtime
-    /// construction. See [`default_wallet_factory_descriptor`]. Subsequent
+    /// VK of the default test-cipherclerk factory deployed at runtime
+    /// construction. See [`default_cipherclerk_factory_descriptor`]. Subsequent
     /// agents (post-genesis) and cells minted from genesis are born via
     /// `Effect::CreateCellFromFactory` against this VK by default —
     /// closing the previous "genesis-by-fiat" gap (see
@@ -235,7 +235,7 @@ impl PyanaRuntime {
         executor.set_timestamp(1000);
         executor.set_block_height(0);
 
-        // Deploy the default "test wallet" factory so subsequent
+        // Deploy the default "test cipherclerk" factory so subsequent
         // `try_create_agent` calls can mint cells via the canonical
         // `Effect::CreateCellFromFactory` path. The factory's VK is
         // recorded here so the runtime can default to it when no
@@ -243,7 +243,7 @@ impl PyanaRuntime {
         // the wasm runtime (other than genesis) carries a `Provenance`
         // record pointing at this VK, mirroring the
         // constructor-transparency behavior of the native node.
-        let default_factory = default_wallet_factory_descriptor();
+        let default_factory = default_cipherclerk_factory_descriptor();
         let default_factory_vk = executor.deploy_factory(default_factory);
 
         PyanaRuntime {
@@ -268,12 +268,12 @@ impl PyanaRuntime {
     /// [`try_create_agent_with_factory`] /
     /// [`mint_cell_from_genesis_with_factory`] to mint cells from this
     /// factory. Exposed so apps (and tests) can register their own
-    /// factories alongside the runtime's default test-wallet factory.
+    /// factories alongside the runtime's default test-cipherclerk factory.
     pub fn deploy_factory(&mut self, descriptor: FactoryDescriptor) -> [u8; 32] {
         self.executor.deploy_factory(descriptor)
     }
 
-    /// The VK of the runtime's default "test wallet" factory — the
+    /// The VK of the runtime's default "test cipherclerk" factory — the
     /// factory used by `create_agent` / `create_cell` when no explicit
     /// factory is named. Exposed so the bindings can surface it to JS
     /// (e.g. for `verifyProvenance` against the canonical wasm-runtime
@@ -428,8 +428,8 @@ impl PyanaRuntime {
     /// from (name, idx) so a reproducible browser session can replay an
     /// identical history. The derivation is BLAKE3-of-name-and-index for the
     /// seed; the rest of the agent — public key, cell id, signing — comes
-    /// from `pyana_sdk::AgentWallet`, the same wallet used by native callers.
-    /// This is not a sim-shaped reimplementation; the wallet IS the canonical
+    /// from `pyana_sdk::AgentWallet`, the same cipherclerk implementation used by native callers.
+    /// This is not a sim-shaped reimplementation; the cipherclerk IS the canonical
     /// implementation, just constructed with a deterministic seed for
     /// reproducibility.
     ///
@@ -454,7 +454,7 @@ impl PyanaRuntime {
     /// String error rather than panicking, so wasm bindings can surface the
     /// error to JS rather than triggering an `unreachable` trap.
     ///
-    /// Uses the runtime's default test-wallet factory. To mint from a
+    /// Uses the runtime's default test-cipherclerk factory. To mint from a
     /// specific factory descriptor (e.g. an app-deployed one), use
     /// [`Self::try_create_agent_with_factory`].
     pub fn try_create_agent(&mut self, name: &str, initial_balance: u64) -> Result<usize, String> {
@@ -493,7 +493,7 @@ impl PyanaRuntime {
         let seed_bytes: [u8; 32] = *key_hash.as_bytes();
 
         // CommitmentId derivation needs the raw seed; compute it before the
-        // seed is moved into the wallet (where it's zeroized).
+        // seed is moved into the cipherclerk (where it's zeroized).
         let commitment_id = CommitmentId::derive(&seed_bytes, "pyana-wasm-commitment");
 
         let wallet = AgentWallet::from_key_bytes(Zeroizing::new(seed_bytes));
@@ -570,10 +570,10 @@ impl PyanaRuntime {
             }
         }
 
-        // Build the canonical `PeerExchange` for this agent using the wallet's
+        // Build the canonical `PeerExchange` for this agent using the cipherclerk's
         // real Ed25519 signing key. `AgentWallet::peer_exchange(domain)` is
         // the SDK's factory — same code path the native API uses — so we do
-        // not need a public signing-key accessor on the wallet.
+        // not need a public signing-key accessor on the cipherclerk.
         let peer_exchange = wallet.peer_exchange(WASM_SIM_DOMAIN);
 
         let agent = SimAgent {
@@ -595,7 +595,7 @@ impl PyanaRuntime {
     /// Mint a cell from a raw public key (used by the wasm `create_cell` JS
     /// binding). Uses the canonical factory-turn path: a turn signed by the
     /// genesis agent that emits `Effect::CreateCellFromFactory` against the
-    /// runtime's default test-wallet factory (plus an optional
+    /// runtime's default test-cipherclerk factory (plus an optional
     /// `Effect::Transfer` to fund the new cell).
     ///
     /// Returns the new cell's `CellId`. Requires at least one prior agent
@@ -764,7 +764,7 @@ impl PyanaRuntime {
             }
         }
 
-        // Sign every Unchecked action with the agent's wallet — same code
+        // Sign every Unchecked action with the agent's cipherclerk — same code
         // path native callers exercise via `AgentWallet::sign_action`.
         let federation_id = self.executor.local_federation_id;
         let wallet = &self.agents[agent_idx].wallet;
@@ -780,7 +780,7 @@ impl PyanaRuntime {
     }
 
     /// Create a note for an agent. Randomness derives deterministically from
-    /// the wallet (so the same agent + same value yields the same commitment
+    /// the cipherclerk (so the same agent + same value yields the same commitment
     /// for reproducibility), via `AgentWallet::derive_symmetric_key` rather
     /// than exposing raw signing material.
     pub fn create_note(&mut self, agent_idx: usize, value: u64, asset_type: u64) -> NoteCommitment {
@@ -795,7 +795,7 @@ impl PyanaRuntime {
         note.commitment()
     }
 
-    /// Spend a note (reveal nullifier). Spending key derived from the wallet
+    /// Spend a note (reveal nullifier). Spending key derived from the cipherclerk
     /// the same way `create_note` derives randomness — same deterministic
     /// key so the nullifier is reproducible.
     pub fn spend_note(
@@ -1075,7 +1075,7 @@ impl PyanaRuntime {
         Ok(agent.peer_exchange.registered_peers().collect())
     }
 
-    /// Get this agent's PeerExchange public key. Equivalent to the wallet's
+    /// Get this agent's PeerExchange public key. Equivalent to the cipherclerk's
     /// Ed25519 verifying key — sourced from the exchange so the binding is
     /// self-contained.
     pub fn agent_peer_pubkey(&self, agent_idx: usize) -> Result<[u8; 32], String> {

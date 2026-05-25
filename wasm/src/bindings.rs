@@ -206,13 +206,13 @@ pub fn get_all_cells(handle: usize) -> Result<JsValue, JsError> {
 // Agent / Wallet
 // ============================================================================
 
-/// Create an agent (wallet + cell) in the runtime.
+/// Create an agent (cipherclerk + cell) in the runtime.
 /// Returns the agent index (handle).
 ///
 /// Genesis (agent 0) is birth-by-fiat: the ledger inserts the root cell
 /// directly because no signer exists yet. Subsequent agents are minted
 /// via `Effect::CreateCellFromFactory` against the runtime's default
-/// test-wallet factory — the canonical constructor-transparency path.
+/// test-cipherclerk factory — the canonical constructor-transparency path.
 /// To mint from a specific factory, use
 /// [`create_agent_with_factory`] / [`deploy_factory_descriptor`].
 #[wasm_bindgen]
@@ -240,7 +240,7 @@ pub fn create_agent(handle: usize, name: &str, initial_balance: u64) -> Result<J
 }
 
 /// Create an agent whose cell is minted from a specific factory VK
-/// (instead of the runtime's default test-wallet factory).
+/// (instead of the runtime's default test-cipherclerk factory).
 ///
 /// The factory must have been deployed via
 /// [`deploy_factory_descriptor`]. The new cell carries a `Provenance`
@@ -290,7 +290,7 @@ pub fn create_agent_with_factory(
 ///
 /// `descriptor_json` is a serde-serialized `FactoryDescriptor`. Apps
 /// that ship their own factories can call this at boot to register them
-/// alongside the runtime's default test-wallet factory.
+/// alongside the runtime's default test-cipherclerk factory.
 #[wasm_bindgen]
 pub fn deploy_factory_descriptor(handle: usize, descriptor_json: &str) -> Result<JsValue, JsError> {
     use pyana_cell::factory::FactoryDescriptor;
@@ -311,7 +311,7 @@ pub fn deploy_factory_descriptor(handle: usize, descriptor_json: &str) -> Result
     })
 }
 
-/// Return the VK of the runtime's default test-wallet factory — the
+/// Return the VK of the runtime's default test-cipherclerk factory — the
 /// factory used by `create_agent` / `create_cell` when no explicit
 /// factory is named.
 ///
@@ -1247,7 +1247,7 @@ pub fn trip_revocation_channel(
 //
 // Direct facade over `pyana_cell::PeerExchange` (canonical sovereign-cell
 // peer protocol). Each agent owns one `PeerExchange` constructed with the
-// wallet's real Ed25519 signing key. These bindings carry no cryptographic
+// cipherclerk's real Ed25519 signing key. These bindings carry no cryptographic
 // logic — they just marshal arguments into / out of the canonical type.
 // ============================================================================
 
