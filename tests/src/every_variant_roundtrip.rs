@@ -243,6 +243,7 @@ fn all_effect_variants() -> Vec<Variant> {
                         threshold_qc: None,
                         threshold: 0,
                         federation_id: pyana_types::FederationId::PLACEHOLDER,
+                        receipt_stream_root: None,
                     },
                     spending_proof: vec![],
                     destination_commitment: NoteCommitment([0u8; 32]),

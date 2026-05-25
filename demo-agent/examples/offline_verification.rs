@@ -198,6 +198,7 @@ fn main() {
         quorum_signatures: Vec::new(),
         threshold: 2,
         federation_id: FederationId::PLACEHOLDER,
+        receipt_stream_root: None,
     };
 
     // Sign with quorum (2 of 3).

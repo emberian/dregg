@@ -1311,6 +1311,7 @@ mod tests {
             threshold_qc: None,
             threshold: 0,
             federation_id: pyana_types::FederationId::PLACEHOLDER,
+            receipt_stream_root: None,
         }
     }
 
@@ -1720,6 +1721,7 @@ mod tests {
             threshold_qc: None,
             threshold: 0,
             federation_id: pyana_types::FederationId::PLACEHOLDER,
+            receipt_stream_root: None,
         };
 
         let proof = PortableNoteProof {

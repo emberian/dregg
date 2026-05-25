@@ -50,6 +50,11 @@ pub struct StoredAttestedRoot {
     /// `FederationId::PLACEHOLDER` for legacy roots produced before v3.
     #[serde(default)]
     pub federation_id: FederationId,
+    /// v4 (#80): Merkle root over the canonical `receipt_hash()` of every
+    /// receipt this attestation covers. `None` for legacy roots predating
+    /// the receipt-stream binding. See `pyana_types::AttestedRoot`.
+    #[serde(default)]
+    pub receipt_stream_root: Option<[u8; 32]>,
 }
 
 impl StoredAttestedRoot {
@@ -100,7 +105,7 @@ impl StoredAttestedRoot {
     /// framing for unambiguous `Option` encoding.
     fn signing_message(&self) -> Vec<u8> {
         let mut msg = Vec::new();
-        msg.extend_from_slice(b"pyana-attested-root-v3");
+        msg.extend_from_slice(b"pyana-attested-root-v4");
         msg.extend_from_slice(&self.federation_id.0);
         msg.extend_from_slice(&self.merkle_root);
         match self.note_tree_root {
@@ -130,6 +135,14 @@ impl StoredAttestedRoot {
             Some(round) => {
                 msg.push(0x01);
                 msg.extend_from_slice(&round.to_le_bytes());
+            }
+            None => msg.push(0x00),
+        }
+        // v4 (#80): receipt_stream_root with 0x00 / 0x01||32-byte framing.
+        match self.receipt_stream_root {
+            Some(ref r) => {
+                msg.push(0x01);
+                msg.extend_from_slice(r);
             }
             None => msg.push(0x00),
         }

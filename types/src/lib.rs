@@ -313,6 +313,77 @@ pub struct AttestedRoot {
     /// (all-zero) for legacy roots produced before v3 was wired.
     #[serde(default)]
     pub federation_id: FederationId,
+    /// **v4 (issue #80):** Merkle root over the canonical
+    /// [`TurnReceipt::receipt_hash`] of every receipt the federation
+    /// committed in this attestation period.
+    ///
+    /// Today `AttestedRoot` commits to ledger state (`merkle_root`,
+    /// `note_tree_root`, `nullifier_set_root`) but not to the receipt
+    /// stream: two federations with the same `merkle_root` could process
+    /// disjoint receipt streams and look indistinguishable. Binding the
+    /// receipt stream into the signed preimage makes "the WitnessedReceipt
+    /// chain IS the persistence layer" enforceable — a verifier that holds
+    /// the claimed receipt set can recompute this root via
+    /// [`merkle_root_of_receipt_hashes`] and reject any divergence.
+    ///
+    /// `None` for legacy v3 roots that predate this field; production
+    /// v4 attestations always carry it. Receipts that hash into this root
+    /// are those whose `receipt_hash()` corresponds to the turns commiteed
+    /// in this attestation's block / period / epoch.
+    #[serde(default)]
+    pub receipt_stream_root: Option<[u8; 32]>,
+}
+
+/// Compute the canonical Merkle root over a slice of 32-byte receipt
+/// hashes (the `receipt_hash()` of each receipt).
+///
+/// **Empty input → all-zero root.** This is the canonical "no receipts in
+/// this block" commitment and matches the `receipt_stream_root: None`
+/// path's sentinel for v3-style empty attestations promoted to v4 form.
+///
+/// The tree is a balanced BLAKE3 Merkle tree with explicit leaf/inner
+/// domain separation (`b"\x00"` prefix for leaves, `b"\x01"` for internal
+/// nodes) so leaf-vs-inner collisions are not possible. Odd levels duplicate
+/// the last node (the standard Bitcoin/Ethereum pad) — note that this means
+/// a one-element tree's root differs from the lone leaf's domain-tagged
+/// hash, which is desirable: we want the root to commit to "this set has
+/// one element" rather than be indistinguishable from the leaf hash.
+///
+/// **Determinism:** the function is order-sensitive; callers MUST pass
+/// receipt hashes in the canonical order the federation committed them.
+/// For per-block attestations that is the block's turn-commit order; the
+/// production attestation site in `node/src/blocklace_sync.rs` uses the
+/// finalized-turn order so all honest verifiers reconstruct the same root.
+pub fn merkle_root_of_receipt_hashes(receipts: &[[u8; 32]]) -> [u8; 32] {
+    if receipts.is_empty() {
+        return [0u8; 32];
+    }
+    // Domain-tag leaves so an internal node can never collide with one.
+    let mut layer: Vec<[u8; 32]> = receipts
+        .iter()
+        .map(|h| {
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(b"\x00pyana-receipt-leaf-v1");
+            hasher.update(h);
+            *hasher.finalize().as_bytes()
+        })
+        .collect();
+    while layer.len() > 1 {
+        if layer.len() % 2 == 1 {
+            let last = *layer.last().unwrap();
+            layer.push(last);
+        }
+        let mut next: Vec<[u8; 32]> = Vec::with_capacity(layer.len() / 2);
+        for pair in layer.chunks_exact(2) {
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(b"\x01pyana-receipt-inner-v1");
+            hasher.update(&pair[0]);
+            hasher.update(&pair[1]);
+            next.push(*hasher.finalize().as_bytes());
+        }
+        layer = next;
+    }
+    layer[0]
 }
 
 impl AttestedRoot {
@@ -339,7 +410,45 @@ impl AttestedRoot {
             threshold_qc,
             threshold,
             federation_id: FederationId::PLACEHOLDER,
+            // Legacy roots predate the v4 receipt-stream binding (#80).
+            receipt_stream_root: None,
         }
+    }
+
+    /// Is this attested root v4-complete (carries `receipt_stream_root`)?
+    ///
+    /// v3 roots that predate issue #80 return `false`: they attest only to
+    /// ledger state, not to the receipt stream that produced it. Callers
+    /// that require Silver-complete attestation (e.g. cross-federation
+    /// verifiers that intend to enforce "the WitnessedReceipt chain IS
+    /// the persistence layer") MUST reject `false` here.
+    pub fn is_v4_receipt_complete(&self) -> bool {
+        self.receipt_stream_root.is_some()
+    }
+
+    /// Verify that the claimed receipt set hashes to this root's
+    /// `receipt_stream_root` (v4, issue #80).
+    ///
+    /// Returns `false` if:
+    /// - the root is v3-legacy (no `receipt_stream_root`), OR
+    /// - the recomputed Merkle root over the provided receipt hashes
+    ///   does not match the bound value.
+    ///
+    /// Returns `true` only when the root carries a binding AND the
+    /// reconstruction matches. Callers that wish to *accept* a v3
+    /// root's bare ledger attestation MUST gate on
+    /// [`is_v4_receipt_complete`](Self::is_v4_receipt_complete) before
+    /// calling this method.
+    ///
+    /// `receipt_hashes` must be in the same canonical order the
+    /// federation used to compute the bound root (see
+    /// [`merkle_root_of_receipt_hashes`] doc).
+    pub fn verify_receipt_stream(&self, receipt_hashes: &[[u8; 32]]) -> bool {
+        let Some(bound) = self.receipt_stream_root else {
+            return false;
+        };
+        let recomputed = merkle_root_of_receipt_hashes(receipt_hashes);
+        bound == recomputed
     }
 
     /// Check if this root has sufficient signatures (count-only check, no crypto).
@@ -431,6 +540,9 @@ impl AttestedRoot {
     /// produces a different message than `note_tree_root = None, nullifier_set_root = Some(X)`.
     pub fn signing_message(&self) -> Vec<u8> {
         let mut msg = Vec::new();
+        // v4 (issue #80) binds the receipt_stream_root so two federations
+        // with identical ledger state but different receipt streams produce
+        // different attestations.
         // v3 binds the federation_id into the preimage so a verifier
         // reconstructing the message can detect cross-federation attestation
         // swaps without consulting any out-of-band state (audit F2 applied to
@@ -438,7 +550,7 @@ impl AttestedRoot {
         // v2 binds the blocklace block_id + finality_round so that two
         // attested roots at the same `height` from different blocklace forks
         // are distinguishable (closes audit F3).
-        msg.extend_from_slice(b"pyana-attested-root-v3");
+        msg.extend_from_slice(b"pyana-attested-root-v4");
         msg.extend_from_slice(&self.federation_id.0);
         msg.extend_from_slice(&self.merkle_root);
         match self.note_tree_root {
@@ -474,6 +586,21 @@ impl AttestedRoot {
             Some(round) => {
                 msg.push(0x01);
                 msg.extend_from_slice(&round.to_le_bytes());
+            }
+            None => {
+                msg.push(0x00);
+            }
+        }
+        // v4 (#80): receipt_stream_root with 0x00 / 0x01||32-byte framing.
+        // Legacy v3 roots carry None here and produce a `0x00` tag — the
+        // verifier still sees a distinct v3-vs-v4 preimage because the
+        // domain tag changed from v3 to v4. (A v3 verifier reconstructing
+        // a v4 root's preimage with v3 tag fails signature check; that
+        // is intentional: legacy verifiers MUST be upgraded to read v4.)
+        match self.receipt_stream_root {
+            Some(ref r) => {
+                msg.push(0x01);
+                msg.extend_from_slice(r);
             }
             None => {
                 msg.push(0x00);
@@ -695,6 +822,7 @@ mod tests {
             threshold_qc: None,
             threshold: 2,
             federation_id: FederationId::PLACEHOLDER,
+            receipt_stream_root: None,
         };
         assert!(root.has_quorum()); // 3 sigs >= threshold 2
 
@@ -750,6 +878,7 @@ mod tests {
             threshold_qc: None,
             threshold: 2,
             federation_id: FederationId::PLACEHOLDER,
+            receipt_stream_root: None,
         };
 
         // Sign with real keys.
@@ -790,10 +919,173 @@ mod tests {
             threshold_qc: None,
             threshold: 1,
             federation_id: FederationId::PLACEHOLDER,
+            receipt_stream_root: Some([0x05; 32]),
         };
         let bytes = postcard::to_stdvec(&root).unwrap();
         let decoded: AttestedRoot = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(root, decoded);
+    }
+
+    // -------------------------------------------------------------------
+    // Issue #80 adversarial tests: receipt_stream_root
+    // -------------------------------------------------------------------
+
+    /// Constructor for tests: builds a v4 root with the given receipt
+    /// stream root pre-computed.
+    fn root_with_receipts(merkle: [u8; 32], receipts: &[[u8; 32]]) -> AttestedRoot {
+        AttestedRoot {
+            merkle_root: merkle,
+            note_tree_root: None,
+            nullifier_set_root: None,
+            height: 1,
+            timestamp: 1_700_000_000,
+            blocklace_block_id: Some([0xAA; 32]),
+            finality_round: Some(1),
+            quorum_signatures: vec![],
+            threshold_qc: None,
+            threshold: 1,
+            federation_id: FederationId::PLACEHOLDER,
+            receipt_stream_root: Some(merkle_root_of_receipt_hashes(receipts)),
+        }
+    }
+
+    #[test]
+    fn receipt_stream_root_empty_is_zero() {
+        // Empty input → all-zero canonical sentinel.
+        assert_eq!(merkle_root_of_receipt_hashes(&[]), [0u8; 32]);
+    }
+
+    #[test]
+    fn receipt_stream_root_single_leaf_distinct_from_hash() {
+        // One-element tree's root must NOT equal the bare leaf — the
+        // domain tag commits to "set with one element" vs the lone hash.
+        let h = [0x11u8; 32];
+        let root = merkle_root_of_receipt_hashes(&[h]);
+        assert_ne!(root, h);
+        assert_ne!(root, [0u8; 32]);
+    }
+
+    #[test]
+    fn receipt_stream_root_order_sensitive() {
+        // Reordering receipts MUST change the root.
+        let a = [0x11u8; 32];
+        let b = [0x22u8; 32];
+        let r1 = merkle_root_of_receipt_hashes(&[a, b]);
+        let r2 = merkle_root_of_receipt_hashes(&[b, a]);
+        assert_ne!(r1, r2);
+    }
+
+    #[test]
+    fn receipt_stream_root_disjoint_streams_diverge() {
+        // **The core #80 adversarial test.** Two AttestedRoots with the
+        // SAME ledger merkle_root but DIFFERENT receipt streams MUST
+        // produce different `receipt_stream_root` values.
+        let same_ledger = [0xDE; 32];
+
+        let stream_a = vec![[0x01u8; 32], [0x02u8; 32], [0x03u8; 32]];
+        let stream_b = vec![[0xF1u8; 32], [0xF2u8; 32], [0xF3u8; 32]];
+
+        let root_a = root_with_receipts(same_ledger, &stream_a);
+        let root_b = root_with_receipts(same_ledger, &stream_b);
+
+        // Same ledger commitment...
+        assert_eq!(root_a.merkle_root, root_b.merkle_root);
+        // ...but DIFFERENT receipt stream commitment.
+        assert_ne!(root_a.receipt_stream_root, root_b.receipt_stream_root);
+        assert!(root_a.is_v4_receipt_complete());
+        assert!(root_b.is_v4_receipt_complete());
+
+        // The signing-message preimage MUST also diverge: a verifier
+        // reconstructing the v4 message would catch the swap even if
+        // the ledger root looked identical.
+        assert_ne!(root_a.signing_message(), root_b.signing_message());
+    }
+
+    #[test]
+    fn receipt_stream_root_disjoint_streams_subset_diverge() {
+        // Subset attack: federation A claims [r1, r2, r3], B claims [r1, r2].
+        // Same ledger merkle_root; receipt stream MUST diverge.
+        let same_ledger = [0xCA; 32];
+        let stream_full = vec![[0x11u8; 32], [0x22u8; 32], [0x33u8; 32]];
+        let stream_subset = vec![[0x11u8; 32], [0x22u8; 32]];
+
+        let root_full = root_with_receipts(same_ledger, &stream_full);
+        let root_subset = root_with_receipts(same_ledger, &stream_subset);
+
+        assert_eq!(root_full.merkle_root, root_subset.merkle_root);
+        assert_ne!(root_full.receipt_stream_root, root_subset.receipt_stream_root);
+    }
+
+    #[test]
+    fn verify_receipt_stream_round_trip() {
+        let stream = vec![[0x01u8; 32], [0x02u8; 32], [0x03u8; 32]];
+        let root = root_with_receipts([0xDE; 32], &stream);
+        assert!(root.verify_receipt_stream(&stream));
+        // Tampering with one receipt hash must be rejected.
+        let mut tampered = stream.clone();
+        tampered[1][0] ^= 0xFF;
+        assert!(!root.verify_receipt_stream(&tampered));
+        // Reordering must be rejected.
+        let mut reordered = stream.clone();
+        reordered.swap(0, 2);
+        assert!(!root.verify_receipt_stream(&reordered));
+        // Truncation must be rejected.
+        assert!(!root.verify_receipt_stream(&stream[..2]));
+    }
+
+    #[test]
+    fn verify_receipt_stream_rejects_legacy_root() {
+        // A v3-legacy root (receipt_stream_root: None) must NOT verify
+        // any claimed receipt set — even the empty one. Callers that
+        // wish to accept legacy roots' bare ledger attestation must
+        // gate on `is_v4_receipt_complete` themselves.
+        let legacy = AttestedRoot::new_legacy([0xAB; 32], 1, 0, vec![], None, 1);
+        assert!(!legacy.is_v4_receipt_complete());
+        assert!(!legacy.verify_receipt_stream(&[]));
+        assert!(!legacy.verify_receipt_stream(&[[0u8; 32]]));
+    }
+
+    #[test]
+    fn v4_signing_message_distinct_from_v3_legacy_preimage() {
+        // Bumping the domain tag from v3 to v4 means a v4 root's
+        // signing message starts with "pyana-attested-root-v4" — a v3
+        // verifier reconstructing the preimage with v3 tag would fail
+        // signature check, so legacy verifiers MUST be upgraded.
+        let v4_root = root_with_receipts([0xCC; 32], &[[0x99; 32]]);
+        let msg = v4_root.signing_message();
+        assert!(msg.starts_with(b"pyana-attested-root-v4"));
+        // Some marker that the receipt_stream_root tag (0x01) is present
+        // at the very end of the preimage.
+        assert_eq!(*msg.last().unwrap_or(&0u8), 0x99u8);
+    }
+
+    #[test]
+    fn adversarial_same_ledger_different_receipts_signed_swap_detected() {
+        // Full Ed25519-signed scenario for #80:
+        //   1. Federation produces v4 root over (ledger=L, receipts=[a,b]).
+        //   2. Adversary swaps the receipt stream to [a,b'] but keeps the
+        //      old signature.
+        //   3. Verifier reconstructs the v4 signing message; signature
+        //      check fails because `receipt_stream_root` changed.
+        let (sk, pk) = generate_keypair();
+
+        let ledger = [0xAB; 32];
+        let receipts_honest = vec![[0x01u8; 32], [0x02u8; 32]];
+        let mut root = root_with_receipts(ledger, &receipts_honest);
+        root.threshold = 1;
+        let msg = root.signing_message();
+        let sig = sign(&sk, &msg);
+        root.quorum_signatures = vec![(pk, sig)];
+        assert!(root.is_valid(&[pk]));
+
+        // Adversary: tamper the receipt_stream_root field but keep the
+        // old signature.
+        let mut tampered = root.clone();
+        let receipts_evil = vec![[0x01u8; 32], [0xEEu8; 32]];
+        tampered.receipt_stream_root = Some(merkle_root_of_receipt_hashes(&receipts_evil));
+        // Signature check MUST reject — the signed v4 preimage no longer
+        // matches the reconstructed one.
+        assert!(!tampered.is_valid(&[pk]));
     }
 
     #[test]

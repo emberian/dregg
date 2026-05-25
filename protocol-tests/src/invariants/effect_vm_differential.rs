@@ -618,6 +618,7 @@ fn differential_bridge_mint() {
             threshold_qc: None,
             threshold: 0,
             federation_id: pyana_types::FederationId::PLACEHOLDER,
+            receipt_stream_root: None,
         },
         destination_federation: [0u8; 32],
         spending_proof: vec![],

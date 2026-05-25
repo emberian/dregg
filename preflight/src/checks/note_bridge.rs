@@ -73,6 +73,7 @@ fn attested_root() -> AttestedRoot {
         threshold_qc: None,
         threshold: 0,
         federation_id: FederationId::PLACEHOLDER,
+        receipt_stream_root: None,
     }
 }
 

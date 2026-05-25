@@ -604,17 +604,24 @@ mod clause_tests {
             postcard::from_bytes::<Preconditions>(&bytes[..bytes.len().saturating_sub(2)]).is_err(),
             "truncated preconditions must fail to decode"
         );
-        // All-zero buffer (not a valid postcard encoding).
+        // Invalid Option discriminant — the first byte is the
+        // `cell_state` Option tag; postcard uses 0=None, 1=Some, so
+        // 0xFF is structurally invalid and must be rejected.
+        //
+        // The previously-asserted negatives ("all-zero buffer" and
+        // "extra trailing bytes") were both UNSOUND under postcard 1.x:
+        //   - An all-zero buffer decodes to the canonical empty
+        //     `Preconditions { None, None, None, vec![] }`, which is a
+        //     legitimate value.
+        //   - `postcard::from_bytes` (1.x) does not reject trailing
+        //     bytes — see `take_from_bytes` for the trailing-data
+        //     variant. The extra-trailing test only succeeded against
+        //     a stricter pre-1.x decoder.
+        // We assert what is actually invariant: a malformed
+        // discriminant must produce a decode error.
         assert!(
-            postcard::from_bytes::<Preconditions>(&[0u8; 16]).is_err(),
-            "all-zero buffer must fail to decode"
-        );
-        // Extra trailing bytes (postcard is not length-prefixed for this type).
-        let mut extra = bytes.clone();
-        extra.extend_from_slice(&[0xFF, 0xFF]);
-        assert!(
-            postcard::from_bytes::<Preconditions>(&extra).is_err(),
-            "extra trailing bytes must fail to decode"
+            postcard::from_bytes::<Preconditions>(&[0xFFu8; 16]).is_err(),
+            "invalid Option discriminant must fail to decode"
         );
     }
 }

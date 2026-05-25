@@ -56,6 +56,7 @@ fn sample_attested_root(height: u64) -> StoredAttestedRoot {
         threshold_qc: None,
         threshold: 2,
         federation_id: pyana_types::FederationId::PLACEHOLDER,
+        receipt_stream_root: None,
     }
 }
 
@@ -1237,6 +1238,7 @@ fn test_attested_root_includes_note_tree() {
         threshold_qc: None,
         threshold: 1,
         federation_id: pyana_types::FederationId::PLACEHOLDER,
+        receipt_stream_root: None,
     };
 
     // Store and recover.

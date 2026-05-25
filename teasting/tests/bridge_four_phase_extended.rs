@@ -35,6 +35,7 @@ fn attested_root(merkle: [u8; 32], note_tree: Option<[u8; 32]>, height: u64) -> 
         threshold_qc: None,
         threshold: 0,
         federation_id: FederationId::PLACEHOLDER,
+        receipt_stream_root: None,
     }
 }
 
