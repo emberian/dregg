@@ -40,3 +40,21 @@ export function register(app, name, fn) {
   if (!builders[app]) builders[app] = {};
   builders[app][name] = fn;
 }
+
+// Side-effecting import: the identity app self-registers its
+// `window.pyana.builders.identity = { issue_credential, ... }` map at
+// module-load time. Hosts that don't serve identity assets silently
+// skip the registration.
+import('/starbridge-apps/identity/turn-builders.js').catch(() => {});
+
+// Side-effecting import: the subscription app self-registers its
+// `window.pyana.builders.subscription = { publish, consume,
+// grant_publisher, grant_consumer }` map at module-load time. Hosts
+// that don't serve subscription assets silently skip the registration.
+import('/starbridge-apps/subscription/turn-builders.js').catch(() => {});
+
+// Side-effecting import: the nameservice app self-registers its
+// `window.pyana.builders.nameservice = { register_name, renew_name,
+// transfer_name, revoke_name, set_target_name }` map at module-load
+// time. Mirrors `starbridge-apps/nameservice/src/lib.rs::build_*_action`.
+import('/starbridge-apps/nameservice/turn-builders.js').catch(() => {});
