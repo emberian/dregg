@@ -388,3 +388,207 @@ What this *leaves open* (deliberate, follow-on lanes):
 - `EXECUTOR-HONESTY-AUDIT.md` — this lane is broadly a T13 substrate
   ("executor claims a VK"): pre-recursion, the recipe makes the
   claim falsifiable by re-execution.
+
+## §v2. Layered VK structure (supersedes §2.1–§2.4 for new code)
+
+### §v2.1. The soundness gap v1 left open
+
+v1 (§2.1–§2.4 above) committed `vk_hash` to a single thing: the
+canonical byte serialization of the program / predicate / effect
+spec. That commits to *what the validator is supposed to run* — but
+not to *which AIR runs it*, *which verifier-impl adjudicates the
+trace*, or *which proving system produces the proof*. Two cells with
+the same `CellProgram` value but different AIRs (say, the Effect VM
+AIR vs. a hypothetical Effect VM v2 AIR with extra constraint rows
+and a different PI layout) **share** a vk_hash under v1. Validators
+cannot tell them apart from the VK alone, which is the wrong story:
+the executor's claim "I proved acceptance under VK `H`" is
+satisfiable by either AIR if the program text is the same.
+
+v2 closes this gap by binding `vk_hash` to **four** components, not
+one.
+
+### §v2.2. The four-component encoding
+
+```rust
+pub struct VkComponents<'a> {
+    pub program_bytes: &'a [u8],        // canonical postcard(CellProgram), DSL AST, opaque bytes
+    pub air_fingerprint: [u8; 32],      // hash of the AirDescriptor
+    pub verifier_fingerprint: [u8; 32], // SourceHash / WasmHash / CompiledVkHash
+    pub proving_system_id: ProvingSystemId,
+}
+
+pub fn canonical_vk_v2(c: &VkComponents) -> [u8; 32] {
+    BLAKE3_keyed("pyana-vk-v2",
+        len(c.program_bytes) || c.program_bytes ||
+        c.air_fingerprint ||
+        c.verifier_fingerprint.canonical_bytes() ||
+        len(ps_bytes) || ps_bytes)
+}
+```
+
+Each component answers a question the executor's "I ran VK `H`" claim
+implicitly depends on:
+
+1. **`program_bytes`** — *what bytes do I run?* The v1 encoding,
+   unchanged. The canonical re-execution recipe.
+2. **`air_fingerprint`** — *under which AIR's algebra do those bytes
+   prove acceptance?* Hash of an [`AirDescriptor`](#airdescriptor)
+   capturing the AIR's column count, PI layout, constraint counts,
+   max degree. Distinct AIRs ⇒ distinct fingerprints, even when
+   shapes coincidentally agree on column count.
+3. **`verifier_fingerprint`** — *what code adjudicates the AIR trace?*
+   Either a source-hash (in-tree Rust verifier), a wasm-hash (ahead-
+   of-time compiled verifier), or a compiled-VK hash (proving-system
+   VK blob).
+4. **`proving_system_id`** — *which proving system?* Plonky3-BabyBear-
+   FRI (pinned to a specific p3 git rev), Kimchi-Pasta, SP1, or a
+   custom system. A proof produced by one system is not interchangeable
+   with a proof from another even when AIR + program match.
+
+### §v2.3. AirDescriptor
+
+Each hand-written AIR module exports `pub const AIR_DESCRIPTOR:
+AirDescriptor` capturing its shape:
+
+```rust
+pub struct AirDescriptor {
+    pub air_id: &'static str,                  // e.g. "effect_vm_air_v1"
+    pub column_count: usize,
+    pub public_input_layout: &'static [PiSlot], // {name, offset, length_in_felts}
+    pub constraint_polynomial_count: usize,
+    pub boundary_constraint_count: usize,
+    pub max_degree: usize,
+    pub source_hash: Option<[u8; 32]>,         // optional git-blob-hash of the AIR src
+}
+```
+
+`pyana_circuit::air_descriptor::fingerprint(&d)` BLAKE3-keyed-derives
+`"pyana-air-fingerprint-v1"` over the descriptor's fields, with
+length-prefixed encoding so concatenation attacks cannot collide two
+distinct descriptors.
+
+The three in-tree hand-written AIRs that ship with VK v2 are:
+
+| AIR module           | `air_id`                 | column_count       | PI slots       |
+|----------------------|--------------------------|--------------------|----------------|
+| `effect_vm`          | `effect_vm_air_v1`       | `EFFECT_VM_WIDTH`  | 41 slots covering commitments, balances, bilateral roots, sovereign-witness teeth, value limbs |
+| `note_spending_air`  | `note_spending_air_v1`   | `NOTE_SPENDING_WIDTH` (19) | 5 slots: nullifier, merkle_root, value, asset_type, destination_federation |
+| `bridge_action_air`  | `bridge_action_air_v1`   | `BRIDGE_ACTION_WIDTH` (26) | 5 slots: nullifier (8), recipient (8), destination_federation (8), amount_lo, amount_hi |
+
+Future AIRs follow the same pattern: a `pub const AIR_DESCRIPTOR` at
+the bottom of the module, named `<name>_air_v<n>`.
+
+### §v2.4. ProvingSystemId
+
+```rust
+pub enum ProvingSystemId {
+    Plonky3BabyBearFri { p3_rev: &'static str },  // current default
+    KimchiPasta,
+    Sp1V6,
+    Custom { id: &'static str },
+}
+```
+
+For pyana today, cell-program VKs all use `Plonky3BabyBearFri { p3_rev: PLONKY3_PINNED_REV }`
+where `PLONKY3_PINNED_REV` is the workspace's plonky3 git rev. A
+plonky3 bump that changes the rev cascades into every cell-program
+vk_hash — by design.
+
+### §v2.5. VerifierFingerprint
+
+```rust
+pub enum VerifierFingerprint {
+    SourceHash([u8; 32]),     // git-blob-hash of the verifier's Rust source
+    WasmHash([u8; 32]),       // BLAKE3 of wasm-compiled verifier bytes
+    CompiledVkHash([u8; 32]), // hash of proving-system VK bytes
+}
+```
+
+For the three in-tree hand-written AIRs, the v2 lane initially uses
+`SourceHash(keyed_derive("pyana-effect-vm-verifier-v1", AIR_DESCRIPTOR.air_id))`
+as a sentinel — pinned to the AIR identifier rather than the literal
+source file hash. A follow-on lane wires `git hash-object` into the
+build so the fingerprint binds to the live source-tree state.
+
+### §v2.6. Consumer surface
+
+- **`pyana_cell::factory::canonical_program_vk_v2(program, air_fp,
+  verifier_fp, proving_system)`** — the v2 cell-program VK encoder.
+  Layered hash; commits to all four components.
+- **`pyana_cell::predicate::canonical_predicate_vk_v2(bytes, ...)`** —
+  the v2 custom-predicate VK encoder.
+- **`pyana_cell::CustomEffectRegistry::register(canonical_bytes,
+  air_fp, verifier_fp, proving_system, verifier)`** — registration
+  upgraded to validate the layered hash. Returns
+  `CustomEffectError::LayeredBindingMismatch` when the verifier's
+  claimed vk_hash does not match the v2 hash of the components.
+- **`pyana_app_framework::canonical_program_vk(program)`** — the
+  user-facing entry point for app authors. Hides the four-tuple
+  behind the same one-argument shape v1 used; fills in Effect VM AIR
+  fingerprint, sentinel verifier fingerprint, and Plonky3 proving
+  system. Starbridge-apps' `*_child_program_vk()` functions pick up
+  v2 hashes automatically through this wrapper.
+- **`pyana_app_framework::validate_child_vk_canonical(descriptor,
+  program)`** — v2 validation wrapper; calls
+  `FactoryDescriptor::validate_child_vk_canonical_v2` with the same
+  four components.
+
+The legacy `pyana_cell::canonical_program_vk(program)` (v1, program-
+bytes only) remains as a building block exposed under the explicit
+name `pyana_app_framework::canonical_program_bytes_hash` for callers
+that want the unlayered hash (e.g., to print both v1 and v2 in an
+inspector during migration).
+
+### §v2.7. Migration v1 → v2
+
+**Greenfield. No backcompat path.** All callers move to v2 in one
+sweep:
+
+- vk_hash constants in the tree change. The numerical value of
+  every starbridge-app's `*_child_program_vk()` is now the v2 hash;
+  the v1 hash is no longer used anywhere in the production path.
+- Receivers (factory registries, custom-predicate registries,
+  custom-effect registries) accept the new hashes uniformly.
+- v1 and v2 *never* collide — domain separation under
+  `"pyana-vk-v2"` (vs. `"pyana-cellprogram-vk-v1"` and
+  `"pyana-witnessed-predicate-vk-v1"`) guarantees disjoint hash
+  spaces. A v1 hash and a v2 hash for the same program are
+  guaranteed-different values.
+- Receipts and consensus state that pinned v1 hashes need to be
+  regenerated. (For pyana today this is acceptable — there is no
+  long-lived consensus state pinning the old VK constants outside
+  test fixtures; greenfield migration discards the v1 values.)
+
+### §v2.8. Boundary contract (per BOUNDARIES.md §5.2)
+
+```
+/// Boundary contract (VK v2):
+/// - Cleartext-inside:  VK author (knows all four components) +
+///                      validators (re-execute the program bytes
+///                      against the AIR + verifier identified by the
+///                      remaining three components).
+/// - Commitment-inside: receipt observers (see vk_hash_v2 + acceptance
+///                      bit only).
+/// - Acceptance-inside: post-recursion validators (proof + verifying
+///                      key; do not need the program bytes).
+/// - Out-of-band:       everyone else.
+/// Enforced by: BLAKE3 keyed-hash domain separation under "pyana-vk-v2",
+///   length-prefixed encoding around variable-length components.
+/// Failure mode if violated: validator computes a vk_hash that does
+///   not match the executor's claim → reject; soundness signal, not
+///   soundness loss.
+```
+
+### §v2.9. Why not in v1?
+
+The v1 design assumed a single AIR per program type (the Effect VM
+AIR for cell programs; the DFA AIR for DFA predicates; etc.) and a
+single proving system (Plonky3 STARK with BabyBear+FRI). Both
+assumptions held in early development. Once apps started defining
+custom predicates with their own AIRs (and the proving-system
+roadmap added Kimchi-Pasta for Mina interop and SP1 for off-tree
+recursion), the single-AIR / single-system assumption broke and the
+v1 hash became insufficient. v2 makes the four-component identity
+explicit so future apps can declare their own AIR + proving-system
+combos without colliding with existing identifiers.

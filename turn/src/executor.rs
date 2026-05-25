@@ -1827,7 +1827,7 @@ impl TurnExecutor {
                 }
                 let full_vk_hash = Self::expand_vk_hash_16_to_32(&vk_hash_bytes);
 
-                // Per VK-AS-RE-EXECUTION-RECIPE.md §2.4: the
+                // Per VK-AS-RE-EXECUTION-RECIPE.md §2.4 / §v2: the
                 // `Effect::Custom { vk_hash }` is dispatched through
                 // the canonical `CustomEffectRegistry` when one is
                 // wired. Apps that register an entry there get a
@@ -1837,6 +1837,14 @@ impl TurnExecutor {
                 // hash isn't registered there, the executor falls
                 // back to the legacy `program_registry` path
                 // (DSL-authored cells).
+                //
+                // TODO[vk-v2]: This dispatch path resolves vk_hash via
+                // `CustomEffectRegistry::contains`; the registry now
+                // stores v2 layered hashes (§v2.6). Callers must register
+                // verifiers under their v2 hash for this to find them.
+                // No code change needed here — the dispatch is correct;
+                // this is a documentation marker so callers know the
+                // bound contract has bumped from v1 to v2.
                 if let Some(reg) = self.custom_effect_registry.as_ref() {
                     if reg.contains(&full_vk_hash) {
                         // The CustomEffectRegistry verifier takes
