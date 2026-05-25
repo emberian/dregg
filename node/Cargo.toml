@@ -25,7 +25,7 @@ pyana-net = { path = "../net" }
 pyana-blocklace = { path = "../blocklace" }
 pyana-storage = { path = "../storage" }
 pyana-captp = { path = "../captp" }
-macaroon = { workspace = true, features = ["crypto"] }
+pyana-macaroon = { workspace = true, features = ["crypto"] }
 ark-serialize = { workspace = true }
 ark-std = "0.5.0"
 

@@ -1,5 +1,5 @@
 [package]
-name = "macaroon"
+name = "pyana-macaroon"
 version = { workspace = true }
 edition = { workspace = true }
 rust-version = { workspace = true }

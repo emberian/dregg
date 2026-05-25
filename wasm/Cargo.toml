@@ -20,7 +20,7 @@ getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
 getrandom04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 
 # Local crates (only WASM-safe ones)
-macaroon = { path = "../macaroon" }
+pyana-macaroon = { path = "../macaroon" }
 pyana-trace = { path = "../trace" }
 pyana-commit = { path = "../commit" }
 pyana-circuit = { path = "../circuit", default-features = false, features = ["mock"] }
@@ -37,7 +37,7 @@ pyana-types = { path = "../types" }
 pyana-federation = { path = "../federation", default-features = false }
 
 # Token crate without biscuit (biscuit-auth has complex deps)
-token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
+pyana-token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
 
 blake3 = "1"
 postcard = { version = "1", features = ["alloc"] }

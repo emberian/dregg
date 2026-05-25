@@ -10,7 +10,7 @@ pyana-sdk = { path = "../../sdk" }
 pyana-types = { path = "../../types" }
 pyana-turn = { path = "../../turn" }
 pyana-cell = { path = "../../cell", default-features = false }
-token = { path = "../../token" }
+pyana-token = { path = "../../token" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -1,5 +1,5 @@
 [package]
-name = "discharge-gateway"
+name = "pyana-discharge-gateway"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,7 +10,7 @@ repository.workspace = true
 description = "Standalone HTTP discharge gateway for pyana third-party macaroon caveats"
 
 [dependencies]
-macaroon = { path = "../macaroon" }
+pyana-macaroon = { path = "../macaroon" }
 
 axum = { version = "0.8" }
 base64 = { workspace = true }

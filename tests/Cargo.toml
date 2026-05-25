@@ -16,7 +16,7 @@ pyana-sdk = { path = "../sdk" }
 pyana-types = { path = "../types" }
 pyana-bridge = { path = "../bridge" }
 pyana-dsl-runtime = { path = "../pyana-dsl-runtime" }
-token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
+pyana-token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
 blake3 = "1"
 getrandom = { workspace = true }
 postcard = { version = "1", features = ["use-std"] }

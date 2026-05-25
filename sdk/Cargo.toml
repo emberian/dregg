@@ -26,8 +26,8 @@ pyana-commit = { path = "../commit" }
 pyana-dsl-runtime = { path = "../pyana-dsl-runtime" }
 pyana-dsl-tests = { path = "../pyana-dsl-tests" }
 pyana-intent = { path = "../intent" }
-macaroon = { workspace = true, features = ["crypto"] }
-token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
+pyana-macaroon = { workspace = true, features = ["crypto"] }
+pyana-token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
 pyana-trace = { path = "../trace" }
 
 async-trait = "0.1"

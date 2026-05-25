@@ -22,7 +22,7 @@
 //! when the holder constructs a `Credential` from an encoded token they
 //! already trust (e.g., when reconstructing from disk).
 
-use macaroon::Macaroon;
+use pyana_macaroon::Macaroon;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use thiserror::Error;

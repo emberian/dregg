@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["macaroon", "secrets", "token", "tokenizer", "hints", "commit", "trace", "demo", "demo-agent", "demo/sdk-consensus", "federation", "circuit", "audit", "bridge", "wire", "persist", "cell", "turn", "coord", "tests", "types", "sdk", "wasm", "node", "intent", "net", "discharge-gateway", "teasting", "apps/bounty-board", "apps/compute-exchange", "apps/gallery", "apps/identity", "apps/privacy-voting", "discord-bot", "apps/governed-namespace", "apps/nameservice", "apps/subscription", "app-framework", "pyana-dsl", "pyana-dsl-runtime", "pyana-dsl-tests", "pyana-dsl-differential", "preflight", "blocklace", "captp", "cli", "verifier", "protocol-tests", "observability", "storage", "starbridge-apps/nameservice", "dfa", "rbg", "pyana-credentials", "starbridge-apps/identity"]
+members = ["macaroon", "secrets", "token", "tokenizer", "hints", "commit", "trace", "demo", "demo-agent", "demo/sdk-consensus", "federation", "circuit", "audit", "bridge", "wire", "persist", "cell", "turn", "coord", "tests", "types", "sdk", "wasm", "node", "intent", "net", "discharge-gateway", "teasting", "apps/bounty-board", "apps/compute-exchange", "apps/gallery", "apps/identity", "apps/privacy-voting", "discord-bot", "apps/governed-namespace", "apps/nameservice", "apps/subscription", "app-framework", "pyana-dsl", "pyana-dsl-runtime", "pyana-dsl-tests", "pyana-dsl-differential", "preflight", "blocklace", "captp", "cli", "verifier", "protocol-tests", "observability", "storage", "starbridge-apps/nameservice", "dfa", "rbg", "credentials", "directory", "starbridge-apps/identity"]
 # chain/ and chain/program/ are standalone workspaces with their own root Cargo.toml.
 # chain has a known dep conflict (sp1-core-machine pins generic-array =1.1.0,
 # nova-snark needs >=1.2.0). chain/program is the SP1 guest, edition 2021,
@@ -31,12 +31,12 @@ ark-serialize-derive = { git = "https://github.com/emberian/algebra", branch = "
 
 [workspace.dependencies]
 ## Local
-macaroon = { path = "macaroon", default-features = false }
+pyana-macaroon = { path = "macaroon", default-features = false }
 pyana-net = { path = "net" }
 pyana-types = { path = "types" }
-secrets = { path = "secrets" }
-token = { path = "token" }
-tokenizer = { path = "tokenizer" }
+pyana-secrets = { path = "secrets" }
+pyana-token = { path = "token" }
+pyana-tokenizer = { path = "tokenizer" }
 
 ## Plonky3 core (rev 82cfad73 — the version pyana proofs were validated against)
 p3-air = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }

@@ -106,7 +106,7 @@ criterion = { workspace = true }
 pyana-bridge = { path = "../bridge", features = ["test-utils"] }
 pyana-cell = { path = "../cell" }
 pyana-trace = { path = "../trace" }
-token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
+pyana-token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
 pyana-turn = { path = "../turn" }
 # Used by benches (proof_benchmarks, practical_benchmarks). pyana-dsl-runtime is a
 # thin re-export over pyana-circuit::dsl; this is a dev-dep cycle that Cargo permits

@@ -10,7 +10,7 @@ pyana-commit = { path = "../commit" }
 pyana-turn = { path = "../turn" }
 pyana-types = { path = "../types" }
 serde_json = { workspace = true }
-hints = { path = "../hints" }
+hints = { path = "../hints", package = "pyana-hints" }
 blake3 = "1"
 ed25519-dalek = { version = "2", features = ["std"] }
 hex = "0.4"

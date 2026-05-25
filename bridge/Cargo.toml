@@ -15,8 +15,8 @@ pyana-trace = { path = "../trace" }
 pyana-circuit = { path = "../circuit" }
 pyana-turn = { path = "../turn" }
 pyana-dsl-runtime = { path = "../pyana-dsl-runtime" }
-token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
-macaroon = { path = "../macaroon" }
+pyana-token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
+pyana-macaroon = { path = "../macaroon" }
 blake3 = "1"
 ed25519-dalek = { version = "2", features = ["std"] }
 postcard = { version = "1", features = ["use-std"] }

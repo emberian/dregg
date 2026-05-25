@@ -13,10 +13,10 @@ description = "Starbridge userspace identity app — composes pyana-credentials 
 # inventing new effect variants.
 
 [dependencies]
-pyana-credentials = { path = "../../pyana-credentials" }
+pyana-credentials = { path = "../../credentials" }
 pyana-app-framework = { path = "../../app-framework" }
 pyana-types = { path = "../../types" }
-token = { path = "../../token", default-features = false, features = ["macaroon", "rand-deps"] }
+pyana-token = { path = "../../token", default-features = false, features = ["macaroon", "rand-deps"] }
 
 blake3 = "1"
 serde = { workspace = true }

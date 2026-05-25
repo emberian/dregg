@@ -27,7 +27,7 @@ pyana-blocklace = { path = "../blocklace" }
 pyana-captp = { path = "../captp" }
 pyana-wire = { path = "../wire" }
 pyana-storage = { path = "../storage" }
-token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
+pyana-token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
 serde_json = "1"
 toml = "0.8"
 

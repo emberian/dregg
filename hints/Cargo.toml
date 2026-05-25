@@ -1,5 +1,5 @@
 [package]
-name = "hints"
+name = "pyana-hints"
 version = "0.0.5"
 authors = [ "hints authors", "ember arlynx <ember@hellas.ai>" ]
 description = "A library for computing weighted threshold signatures"
@@ -52,6 +52,10 @@ path = "examples/save_committee.rs"
 [[example]]
 name = "measure_simple"
 path = "examples/measure_simple.rs"
+
+[lib]
+name = "hints"
+crate-type = ["lib"]
 
 [lints]
 workspace = true

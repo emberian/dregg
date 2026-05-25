@@ -13,7 +13,7 @@ pyana-wire = { path = "../../wire" }
 pyana-federation = { path = "../../federation" }
 pyana-blocklace = { path = "../../blocklace" }
 pyana-types = { path = "../../types" }
-token = { path = "../../token", default-features = false, features = ["macaroon", "rand-deps"] }
+pyana-token = { path = "../../token", default-features = false, features = ["macaroon", "rand-deps"] }
 blake3 = "1"
 postcard = { version = "1", features = ["use-std"] }
 ed25519-dalek = { version = "2", features = ["std"] }

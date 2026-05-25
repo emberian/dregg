@@ -2625,22 +2625,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "discharge-gateway"
-version = "0.1.0"
-dependencies = [
- "axum 0.8.9",
- "base64 0.22.1",
- "clap",
- "macaroon",
- "serde",
- "serde_json",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber 0.3.23",
-]
-
-[[package]]
 name = "displaydoc"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3570,30 +3554,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hints"
-version = "0.0.5"
-dependencies = [
- "ark-bls12-381",
- "ark-crypto-primitives",
- "ark-ec",
- "ark-ff 0.5.0",
- "ark-poly",
- "ark-poly-commit",
- "ark-serialize 0.5.0",
- "ark-std 0.5.0",
- "bincode 2.0.1",
- "criterion",
- "hex",
- "lockstitch",
- "once_cell",
- "rayon",
- "serde",
- "serde_json",
- "serde_with",
- "zeroize",
-]
-
-[[package]]
 name = "hkdf"
 version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4360,23 +4320,6 @@ name = "lru-slab"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
-
-[[package]]
-name = "macaroon"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "chacha20poly1305",
- "criterion",
- "getrandom 0.3.4",
- "hmac 0.12.1",
- "rmp-serde",
- "serde",
- "sha2 0.10.9",
- "subtle",
- "thiserror 2.0.18",
- "zeroize",
-]
 
 [[package]]
 name = "mach2"
@@ -6376,15 +6319,15 @@ dependencies = [
  "criterion",
  "ed25519-dalek",
  "getrandom 0.3.4",
- "macaroon",
  "postcard",
  "pyana-circuit",
  "pyana-commit",
  "pyana-dsl-runtime",
+ "pyana-macaroon",
+ "pyana-token",
  "pyana-trace",
  "pyana-turn",
  "serde",
- "token",
  "tokio",
 ]
 
@@ -6477,6 +6420,7 @@ dependencies = [
  "pyana-cell",
  "pyana-dsl",
  "pyana-dsl-runtime",
+ "pyana-token",
  "pyana-trace",
  "pyana-turn",
  "rand 0.10.1",
@@ -6484,7 +6428,6 @@ dependencies = [
  "rmp-serde",
  "serde",
  "sp1-sdk",
- "token",
  "tracing",
 ]
 
@@ -6538,15 +6481,15 @@ name = "pyana-credentials"
 version = "0.1.0"
 dependencies = [
  "blake3",
- "macaroon",
  "pyana-bridge",
  "pyana-cell",
  "pyana-circuit",
  "pyana-commit",
+ "pyana-macaroon",
+ "pyana-token",
  "pyana-trace",
  "serde",
  "thiserror 2.0.18",
- "token",
 ]
 
 [[package]]
@@ -6587,11 +6530,11 @@ dependencies = [
  "pyana-federation",
  "pyana-intent",
  "pyana-sdk",
+ "pyana-token",
  "pyana-trace",
  "pyana-turn",
  "pyana-types",
  "serde_json",
- "token",
 ]
 
 [[package]]
@@ -6615,6 +6558,22 @@ dependencies = [
  "pyana-types",
  "serde",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "pyana-discharge-gateway"
+version = "0.1.0"
+dependencies = [
+ "axum 0.8.9",
+ "base64 0.22.1",
+ "clap",
+ "pyana-macaroon",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber 0.3.23",
 ]
 
 [[package]]
@@ -6704,11 +6663,11 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.3.4",
  "hex",
- "hints",
  "postcard",
  "pyana-captp",
  "pyana-cell",
  "pyana-commit",
+ "pyana-hints",
  "pyana-turn",
  "pyana-types",
  "serde",
@@ -6748,6 +6707,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "pyana-hints"
+version = "0.0.5"
+dependencies = [
+ "ark-bls12-381",
+ "ark-crypto-primitives",
+ "ark-ec",
+ "ark-ff 0.5.0",
+ "ark-poly",
+ "ark-poly-commit",
+ "ark-serialize 0.5.0",
+ "ark-std 0.5.0",
+ "bincode 2.0.1",
+ "criterion",
+ "hex",
+ "lockstitch",
+ "once_cell",
+ "rayon",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "zeroize",
+]
+
+[[package]]
 name = "pyana-identity"
 version = "0.1.0"
 dependencies = [
@@ -6778,12 +6761,29 @@ dependencies = [
  "pyana-commit",
  "pyana-dfa",
  "pyana-federation",
+ "pyana-token",
  "pyana-trace",
  "pyana-turn",
  "serde",
  "serde_json",
- "token",
  "x25519-dalek",
+]
+
+[[package]]
+name = "pyana-macaroon"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chacha20poly1305",
+ "criterion",
+ "getrandom 0.3.4",
+ "hmac 0.12.1",
+ "rmp-serde",
+ "serde",
+ "sha2 0.10.9",
+ "subtle",
+ "thiserror 2.0.18",
+ "zeroize",
 ]
 
 [[package]]
@@ -6838,7 +6838,6 @@ dependencies = [
  "futures-util",
  "getrandom 0.3.4",
  "http-body-util",
- "macaroon",
  "metrics",
  "metrics-exporter-prometheus",
  "postcard",
@@ -6851,6 +6850,7 @@ dependencies = [
  "pyana-dsl-runtime",
  "pyana-federation",
  "pyana-intent",
+ "pyana-macaroon",
  "pyana-net",
  "pyana-persist",
  "pyana-sdk",
@@ -6931,11 +6931,11 @@ dependencies = [
  "pyana-intent",
  "pyana-sdk",
  "pyana-storage",
+ "pyana-token",
  "pyana-turn",
  "pyana-types",
  "pyana-wire",
  "serde_json",
- "token",
  "tokio",
  "toml",
 ]
@@ -6952,12 +6952,12 @@ dependencies = [
  "pyana-cell",
  "pyana-sdk",
  "pyana-storage",
+ "pyana-token",
  "pyana-turn",
  "pyana-types",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
- "token",
  "tokio",
  "tower 0.5.3",
 ]
@@ -6997,7 +6997,6 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.3.4",
  "hmac 0.12.1",
- "macaroon",
  "pbkdf2",
  "postcard",
  "pyana-bridge",
@@ -7008,6 +7007,8 @@ dependencies = [
  "pyana-dsl-runtime",
  "pyana-dsl-tests",
  "pyana-intent",
+ "pyana-macaroon",
+ "pyana-token",
  "pyana-trace",
  "pyana-turn",
  "pyana-types",
@@ -7018,7 +7019,6 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.18",
- "token",
  "tokio",
  "tracing",
  "zeroize",
@@ -7036,10 +7036,26 @@ dependencies = [
  "pyana-cell",
  "pyana-federation",
  "pyana-sdk",
+ "pyana-token",
  "pyana-turn",
  "pyana-types",
  "pyana-wire",
- "token",
+]
+
+[[package]]
+name = "pyana-secrets"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "base64 0.22.1",
+ "directories",
+ "getrandom 0.3.4",
+ "keyring",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "zeroize",
 ]
 
 [[package]]
@@ -7071,11 +7087,11 @@ dependencies = [
  "pyana-app-framework",
  "pyana-sdk",
  "pyana-storage",
+ "pyana-token",
  "pyana-types",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
- "token",
  "tokio",
  "x25519-dalek",
  "zeroize",
@@ -7089,7 +7105,6 @@ dependencies = [
  "curve25519-dalek",
  "ed25519-dalek",
  "getrandom 0.3.4",
- "macaroon",
  "postcard",
  "pyana-blocklace",
  "pyana-bridge",
@@ -7101,15 +7116,16 @@ dependencies = [
  "pyana-dsl-runtime",
  "pyana-federation",
  "pyana-intent",
+ "pyana-macaroon",
  "pyana-net",
  "pyana-persist",
  "pyana-sdk",
  "pyana-storage",
+ "pyana-token",
  "pyana-turn",
  "pyana-types",
  "pyana-wire",
  "serde",
- "token",
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.23",
@@ -7128,9 +7144,48 @@ dependencies = [
  "pyana-circuit",
  "pyana-dsl-runtime",
  "pyana-sdk",
+ "pyana-token",
  "pyana-turn",
  "pyana-types",
- "token",
+]
+
+[[package]]
+name = "pyana-token"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "biscuit-auth",
+ "blake3",
+ "criterion",
+ "ed25519-dalek",
+ "getrandom 0.3.4",
+ "globset",
+ "pyana-commit",
+ "pyana-macaroon",
+ "pyana-trace",
+ "rand 0.9.4",
+ "rmp-serde",
+ "scalable_cuckoo_filter",
+ "serde",
+ "thiserror 2.0.18",
+ "zeroize",
+]
+
+[[package]]
+name = "pyana-tokenizer"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chacha20poly1305",
+ "criterion",
+ "directories",
+ "getrandom 0.3.4",
+ "postcard",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]
@@ -7162,6 +7217,7 @@ dependencies = [
  "pyana-types",
  "serde",
  "serde_json",
+ "tracing",
  "x25519-dalek",
 ]
 
@@ -7208,7 +7264,6 @@ dependencies = [
  "getrandom 0.4.2",
  "js-sys",
  "lockstitch",
- "macaroon",
  "postcard",
  "pyana-cell",
  "pyana-circuit",
@@ -7216,14 +7271,15 @@ dependencies = [
  "pyana-coord",
  "pyana-federation",
  "pyana-intent",
+ "pyana-macaroon",
  "pyana-sdk",
+ "pyana-token",
  "pyana-trace",
  "pyana-turn",
  "pyana-types",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
- "token",
  "wasm-bindgen",
  "web-sys",
  "x25519-dalek",
@@ -7248,13 +7304,14 @@ dependencies = [
  "pyana-dsl-runtime",
  "pyana-federation",
  "pyana-persist",
+ "pyana-token",
  "pyana-turn",
  "pyana-types",
  "rustls-pemfile",
  "serde",
- "token",
  "tokio",
  "tokio-rustls 0.26.4",
+ "tracing",
 ]
 
 [[package]]
@@ -8145,22 +8202,6 @@ dependencies = [
  "serde",
  "sha2 0.10.9",
  "zbus",
-]
-
-[[package]]
-name = "secrets"
-version = "0.1.0"
-dependencies = [
- "aes-gcm",
- "base64 0.22.1",
- "directories",
- "getrandom 0.3.4",
- "keyring",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "zeroize",
 ]
 
 [[package]]
@@ -9889,10 +9930,10 @@ dependencies = [
  "blake3",
  "pyana-app-framework",
  "pyana-credentials",
+ "pyana-token",
  "pyana-types",
  "serde",
  "serde_json",
- "token",
 ]
 
 [[package]]
@@ -10284,45 +10325,6 @@ name = "tinyvec_macros"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
-
-[[package]]
-name = "token"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "biscuit-auth",
- "blake3",
- "criterion",
- "ed25519-dalek",
- "getrandom 0.3.4",
- "globset",
- "macaroon",
- "pyana-commit",
- "pyana-trace",
- "rand 0.9.4",
- "rmp-serde",
- "scalable_cuckoo_filter",
- "serde",
- "thiserror 2.0.18",
- "zeroize",
-]
-
-[[package]]
-name = "tokenizer"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "chacha20poly1305",
- "criterion",
- "directories",
- "getrandom 0.3.4",
- "postcard",
- "serde",
- "thiserror 2.0.18",
- "tokio",
- "x25519-dalek",
- "zeroize",
-]
 
 [[package]]
 name = "tokio"

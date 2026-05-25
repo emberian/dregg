@@ -21,7 +21,7 @@ pyana-dfa = { path = "../dfa" }
 pyana-federation = { path = "../federation", default-features = false }  # pure threshold_decrypt; no tokio
 pyana-trace = { path = "../trace" }
 pyana-turn = { path = "../turn" }
-token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
+pyana-token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
 serde = { workspace = true, features = ["std"] }
 serde_json = { workspace = true }
 globset = { workspace = true }

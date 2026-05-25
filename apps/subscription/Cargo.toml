@@ -8,7 +8,7 @@ description = "Subscription Service: store-and-forward content delivery, delegat
 pyana-app-framework = { path = "../../app-framework" }
 pyana-sdk = { path = "../../sdk" }
 pyana-storage = { path = "../../storage" }
-token = { path = "../../token" }
+pyana-token = { path = "../../token" }
 pyana-types = { path = "../../types" }
 
 serde = { workspace = true }

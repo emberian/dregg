@@ -1,5 +1,5 @@
 [package]
-name = "token"
+name = "pyana-token"
 version = { workspace = true }
 edition = { workspace = true }
 rust-version = { workspace = true }
@@ -10,17 +10,17 @@ license = { workspace = true }
 
 [features]
 biscuit = ["biscuit-auth"]
-macaroon = ["dep:macaroon", "macaroon/crypto"]
+macaroon = ["dep:pyana-macaroon", "pyana-macaroon/crypto"]
 default = ["biscuit", "macaroon", "rand-deps"]
 rand-deps = ["dep:getrandom", "dep:rand", "dep:scalable_cuckoo_filter", "dep:base64", "dep:ed25519-dalek"]
-zkvm = ["dep:macaroon", "macaroon/zkvm"]
+zkvm = ["dep:pyana-macaroon", "pyana-macaroon/zkvm"]
 
 [dependencies]
 base64 = { workspace = true, optional = true }
 biscuit-auth = { version = "6.0.0", optional = true }
 blake3 = "1"
 ed25519-dalek = { version = "2", features = ["std"], optional = true }
-macaroon = { workspace = true, optional = true }
+pyana-macaroon = { workspace = true, optional = true }
 pyana-trace = { path = "../trace" }
 pyana-commit = { path = "../commit" }
 getrandom = { workspace = true, optional = true }

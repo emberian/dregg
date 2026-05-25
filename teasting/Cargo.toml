@@ -23,10 +23,10 @@ pyana-net = { path = "../net" }
 pyana-intent = { path = "../intent" }
 pyana-coord = { path = "../coord" }
 pyana-captp = { path = "../captp" }
-token = { path = "../token" }
+pyana-token = { path = "../token" }
 pyana-persist = { path = "../persist" }
 pyana-storage = { path = "../storage" }
-macaroon = { workspace = true, features = ["crypto"] }
+pyana-macaroon = { workspace = true, features = ["crypto"] }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
