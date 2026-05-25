@@ -87,7 +87,7 @@ site/
 │   │                    typescript-sdk)
 │   ├── operators/      (running-a-node, setup, federation, monitoring,
 │   │                    security, relay, bridge)
-│   └── users/          (quickstart, cli, wallet, intents, privacy, captp)
+│   └── users/          (quickstart, cli, cipherclerk, intents, privacy, captp)
 ├── playground/
 │   └── (existing section modules + new ones; see §7.Playground)
 ├── explorer/

@@ -333,7 +333,7 @@ as educational standalone widgets in `/playground/learn/`.
    *Default*: full log. Compresses well, lets us replay anything.
 
 2. **Authority for live mutation in Starbridge.** Does the explorer node
-   accept *any* signed turn from a connected wallet, or only ones whose
+   accept *any* signed turn from a connected cipherclerk, or only ones whose
    capability chain it can verify against its own state? Probably the latter,
    but we need a UX for "your turn was rejected — here's why."
 
