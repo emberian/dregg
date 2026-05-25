@@ -1894,8 +1894,7 @@ pub fn wallet_create_from_factory(spec_json: &str) -> Result<JsValue, JsError> {
         federation_id_hex: Option<String>,
     }
 
-    let spec: Spec =
-        serde_json::from_str(spec_json).map_err(|e| JsError::new(&e.to_string()))?;
+    let spec: Spec = serde_json::from_str(spec_json).map_err(|e| JsError::new(&e.to_string()))?;
 
     if spec.sender_privkey.len() != 32 {
         return Err(JsError::new("sender_privkey must be exactly 32 bytes"));
@@ -1910,9 +1909,9 @@ pub fn wallet_create_from_factory(spec_json: &str) -> Result<JsValue, JsError> {
     let token_id = hex_decode_32(&spec.token_id_hex)
         .map_err(|e| JsError::new(&format!("token_id_hex: {e}")))?;
     let program_vk = match spec.program_vk_hex.as_deref() {
-        Some(hex) if !hex.is_empty() => Some(
-            hex_decode_32(hex).map_err(|e| JsError::new(&format!("program_vk_hex: {e}")))?,
-        ),
+        Some(hex) if !hex.is_empty() => {
+            Some(hex_decode_32(hex).map_err(|e| JsError::new(&format!("program_vk_hex: {e}")))?)
+        }
         _ => None,
     };
     let mode = match spec.mode.as_deref() {
@@ -1920,8 +1919,9 @@ pub fn wallet_create_from_factory(spec_json: &str) -> Result<JsValue, JsError> {
         _ => CellMode::Hosted,
     };
     let federation_id = match spec.federation_id_hex.as_deref() {
-        Some(hex) if !hex.is_empty() => hex_decode_32(hex)
-            .map_err(|e| JsError::new(&format!("federation_id_hex: {e}")))?,
+        Some(hex) if !hex.is_empty() => {
+            hex_decode_32(hex).map_err(|e| JsError::new(&format!("federation_id_hex: {e}")))?
+        }
         _ => [0u8; 32],
     };
 

@@ -140,8 +140,8 @@ pub fn verify_action_binding(
     expected_destination_federation: &[u8; 32],
     expected_amount: u64,
 ) -> Result<(), ActionBindingError> {
-    let proof: StarkProof =
-        proof_from_bytes(&binding.proof_bytes).map_err(|reason| ActionBindingError::DeserializationFailed { reason })?;
+    let proof: StarkProof = proof_from_bytes(&binding.proof_bytes)
+        .map_err(|reason| ActionBindingError::DeserializationFailed { reason })?;
     verify_bridge_action(
         expected_nullifier,
         expected_recipient,
@@ -168,7 +168,13 @@ mod tests {
     #[test]
     fn happy_path() {
         let b = sample_binding();
-        let r = verify_action_binding(&b, &b.nullifier, &b.recipient, &b.destination_federation, b.amount);
+        let r = verify_action_binding(
+            &b,
+            &b.nullifier,
+            &b.recipient,
+            &b.destination_federation,
+            b.amount,
+        );
         assert!(r.is_ok(), "honest binding must verify: {r:?}");
     }
 
@@ -177,8 +183,17 @@ mod tests {
         let b = sample_binding();
         let mut wrong = b.nullifier;
         wrong[5] ^= 0x01;
-        let r = verify_action_binding(&b, &wrong, &b.recipient, &b.destination_federation, b.amount);
-        assert!(matches!(r, Err(ActionBindingError::AirVerificationFailed { .. })));
+        let r = verify_action_binding(
+            &b,
+            &wrong,
+            &b.recipient,
+            &b.destination_federation,
+            b.amount,
+        );
+        assert!(matches!(
+            r,
+            Err(ActionBindingError::AirVerificationFailed { .. })
+        ));
     }
 
     #[test]
@@ -186,8 +201,17 @@ mod tests {
         let b = sample_binding();
         let mut wrong = b.recipient;
         wrong[10] ^= 0x02;
-        let r = verify_action_binding(&b, &b.nullifier, &wrong, &b.destination_federation, b.amount);
-        assert!(matches!(r, Err(ActionBindingError::AirVerificationFailed { .. })));
+        let r = verify_action_binding(
+            &b,
+            &b.nullifier,
+            &wrong,
+            &b.destination_federation,
+            b.amount,
+        );
+        assert!(matches!(
+            r,
+            Err(ActionBindingError::AirVerificationFailed { .. })
+        ));
     }
 
     #[test]
@@ -196,7 +220,10 @@ mod tests {
         let mut wrong = b.destination_federation;
         wrong[0] ^= 0xFF;
         let r = verify_action_binding(&b, &b.nullifier, &b.recipient, &wrong, b.amount);
-        assert!(matches!(r, Err(ActionBindingError::AirVerificationFailed { .. })));
+        assert!(matches!(
+            r,
+            Err(ActionBindingError::AirVerificationFailed { .. })
+        ));
     }
 
     #[test]
@@ -210,14 +237,23 @@ mod tests {
             &b.destination_federation,
             truncated,
         );
-        assert!(matches!(r, Err(ActionBindingError::AirVerificationFailed { .. })));
+        assert!(matches!(
+            r,
+            Err(ActionBindingError::AirVerificationFailed { .. })
+        ));
     }
 
     #[test]
     fn tampered_proof_bytes_rejected() {
         let mut b = sample_binding();
         b.proof_bytes[10] ^= 0xAA;
-        let r = verify_action_binding(&b, &b.nullifier, &b.recipient, &b.destination_federation, b.amount);
+        let r = verify_action_binding(
+            &b,
+            &b.nullifier,
+            &b.recipient,
+            &b.destination_federation,
+            b.amount,
+        );
         // Either deserialization fails or AIR verification fails — both are
         // acceptable rejection paths.
         assert!(r.is_err(), "tampered proof must be rejected: got {r:?}");

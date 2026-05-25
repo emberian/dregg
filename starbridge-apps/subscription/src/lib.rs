@@ -427,7 +427,9 @@ pub fn subscription_factory_descriptor() -> FactoryDescriptor {
     FactoryDescriptor {
         factory_vk: SUBSCRIPTION_FACTORY_VK,
         child_program_vk: Some(subscription_child_program_vk()),
-        child_vk_strategy: Some(ChildVkStrategy::Fixed(Some(subscription_child_program_vk()))),
+        child_vk_strategy: Some(ChildVkStrategy::Fixed(
+            Some(subscription_child_program_vk()),
+        )),
         allowed_cap_templates: vec![
             // Owner cap — full control over publisher/consumer grants.
             CapTemplate {

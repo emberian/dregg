@@ -358,10 +358,7 @@ impl FactoryDescriptor {
     /// (no program; transitions governed by the cell-owner's witness)
     /// reject this check — there is no program to canonicalize.
     /// Callers that want to permit `None` should not invoke this method.
-    pub fn validate_child_vk_canonical(
-        &self,
-        program: &CellProgram,
-    ) -> Result<(), FactoryError> {
+    pub fn validate_child_vk_canonical(&self, program: &CellProgram) -> Result<(), FactoryError> {
         let expected = canonical_program_vk(program);
         match self.child_program_vk {
             Some(got) if got == expected => Ok(()),

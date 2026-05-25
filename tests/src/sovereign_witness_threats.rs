@@ -101,6 +101,165 @@ fn sovereign_witness_plus_bilateral_transfer_plus_slot_caveats() {
 // authorize a non-sovereign mutation.
 // ===========================================================================
 
+// ===========================================================================
+// Extended adversarial scenarios (Phase 1 + AIR teeth)
+// ===========================================================================
+
+#[test]
+#[ignore = "blocked on sovereign-witness AIR teeth + verifier-replay: a sovereign witness signed for cell A presented on a turn that mutates cell B (cross-cell reuse) must reject"]
+fn sovereign_witness_cross_cell_reuse_rejects() {
+    // The cell_id is part of what the witness signs; presenting Alice's
+    // signed witness on a turn that targets Bob's cell must fail because
+    // the witness payload says "for cell A" but the executor is
+    // applying it to cell B.
+    panic!("blocked");
+}
+
+#[test]
+#[ignore = "blocked on sovereign-witness AIR teeth: replaying the EXACT same witness payload (same sequence, same cell, same effect) twice must reject the second occurrence — sequence must strictly increase"]
+fn sovereign_witness_exact_replay_rejects() {
+    panic!("blocked");
+}
+
+#[test]
+#[ignore = "blocked on sovereign-witness AIR teeth: witness signed under an OLD key after the cell rotated keys must reject (per-key rotation seq number bound into witness payload)"]
+fn sovereign_witness_after_key_rotation_old_key_rejects() {
+    panic!("blocked");
+}
+
+#[test]
+#[ignore = "blocked on sovereign-witness AIR teeth: witness with VALID signature but stale sequence (==current, not >) must reject — sequence must strictly increase per Phase 1 design"]
+fn sovereign_witness_equal_sequence_rejects() {
+    panic!("blocked");
+}
+
+#[test]
+#[ignore = "blocked on sovereign-witness AIR teeth: tampered witness payload (modify the effect bytes, leave signature valid for old payload) must reject — signature recomputation must require the cell key"]
+fn sovereign_witness_payload_tamper_with_intact_signature_rejects() {
+    panic!("blocked");
+}
+
+#[test]
+#[ignore = "blocked on sovereign-witness AIR teeth: two sovereign cells in one turn, both witnessed — if EITHER witness is invalid, the whole turn must reject"]
+fn turn_with_two_sovereign_cells_one_witness_invalid_rejects() {
+    panic!("blocked");
+}
+
+#[test]
+#[ignore = "blocked on sovereign-witness AIR teeth: a turn with sovereign_witnesses populated for a NON-sovereign cell — the extra witness must be ignored (not cause acceptance for a non-sovereign mutation that lacked normal authorization)"]
+fn extra_witness_for_non_sovereign_cell_does_not_grant_authorization() {
+    panic!("blocked");
+}
+
+#[test]
+#[ignore = "blocked on sovereign-witness AIR teeth: tx-time vs verify-time consistency — the witness's sequence number bound in the AIR PI must equal the sequence number in the witness payload AND in the on-chain cell state"]
+fn sovereign_witness_sequence_pi_state_payload_must_agree() {
+    panic!("blocked");
+}
+
+// ===========================================================================
+// Composition: sovereign witness + slot caveats
+// ===========================================================================
+
+#[test]
+#[ignore = "blocked on sovereign-witness AIR teeth + caveat-correctness: sovereign cell with Monotonic slot caveat — the witness authorizes the effect, but the slot caveat must fire INDEPENDENTLY (sovereign mode bypasses normal Authorization but NOT slot caveats)"]
+fn sovereign_cell_slot_caveats_still_fire() {
+    panic!("blocked");
+}
+
+#[test]
+#[ignore = "blocked on sovereign-witness AIR teeth + caveat-correctness: sovereign cell with PreimageGate slot caveat — sovereign witness authorizes the action, but the preimage gate also requires a fresh-reveal witness, distinct from the sovereign witness"]
+fn sovereign_with_preimage_gate_requires_both_witnesses() {
+    panic!("blocked");
+}
+
+// ===========================================================================
+// Sovereign + cross-federation
+// ===========================================================================
+
+#[test]
+#[ignore = "blocked on sovereign-witness AIR teeth + cross-federation: sovereign witness signed for federation F1 presented in F2 must reject; the witness payload includes federation_id (per AUDIT-federation.md F1/F2 closure expectation)"]
+fn sovereign_witness_cross_federation_replay_rejects() {
+    panic!("blocked");
+}
+
+// ===========================================================================
+// Sanity: Turn::hash covers the sovereign_witnesses field
+// ===========================================================================
+
+#[test]
+fn sovereign_witnesses_field_is_covered_by_turn_hash() {
+    use pyana_cell::Cell;
+    use pyana_cell::CellId;
+    use pyana_turn::SovereignCellWitness;
+    use pyana_turn::Turn;
+    use std::collections::HashMap;
+
+    let agent = CellId([1u8; 32]);
+
+    let make_turn = |witnesses: HashMap<CellId, SovereignCellWitness>| Turn {
+        agent,
+        nonce: 0,
+        call_forest: pyana_turn::CallForest::new(),
+        fee: 0,
+        memo: None,
+        valid_until: None,
+        previous_receipt_hash: None,
+        depends_on: vec![],
+        conservation_proof: None,
+        sovereign_witnesses: witnesses,
+        execution_proof: None,
+        execution_proof_cell: None,
+        execution_proof_new_commitment: None,
+        custom_program_proofs: None,
+    };
+
+    let empty = make_turn(HashMap::new());
+
+    // Construct a non-empty witness — bytes only need to differ from the
+    // default for the hash check (we're NOT validating the witness's
+    // signature here, only that Turn::hash sees the witness map).
+    let cell_pk = [0xCA; 32];
+    let cell = Cell::with_balance(cell_pk, [0u8; 32], 0);
+    let cell_id = cell.id();
+    let mut witnesses = HashMap::new();
+    let w = SovereignCellWitness {
+        cell_id,
+        old_commitment: [0xAA; 32],
+        new_commitment: [0xBB; 32],
+        effects_hash: [0xCC; 32],
+        timestamp: 0,
+        sequence: 1,
+        signature: [0xAB; 64],
+        cell_state: cell,
+        transition_proof: None,
+    };
+    witnesses.insert(cell_id, w);
+    let with_witness = make_turn(witnesses);
+
+    assert_ne!(
+        empty.hash(),
+        with_witness.hash(),
+        "Turn::hash MUST cover sovereign_witnesses — see EXECUTOR-HONESTY-AUDIT.md T9 wire-malleability"
+    );
+
+    // SovereignCellWitness::signing_message must be a publicly callable
+    // function so verifier-side replay can recompute the signing
+    // message and reject witnesses whose payload was tampered.
+    let msg = SovereignCellWitness::signing_message(
+        &cell_id,
+        &[0xAA; 32],
+        &[0xBB; 32],
+        &[0xCC; 32],
+        0,
+        1,
+    );
+    assert!(
+        msg.starts_with(b"pyana-sovereign-witness-v1:"),
+        "signing message must begin with the v1 domain separator"
+    );
+}
+
 #[test]
 fn turn_sovereign_witnesses_field_is_a_map_and_constructs_empty() {
     use pyana_turn::Turn;

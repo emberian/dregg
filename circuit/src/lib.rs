@@ -103,6 +103,7 @@ pub mod ivc;
 pub mod accumulator_air;
 pub mod arithmetic_predicate_air;
 pub mod block_transition_air;
+pub mod bridge_action_air;
 pub mod compound_predicate_air;
 #[allow(deprecated)]
 pub mod derivation_air;
@@ -117,7 +118,6 @@ pub mod multi_step_air;
 pub mod native_signature_air;
 #[allow(deprecated)]
 pub mod note_spending_air;
-pub mod bridge_action_air;
 #[allow(deprecated)]
 pub mod poseidon2_air;
 pub mod predicate_air;

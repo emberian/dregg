@@ -248,3 +248,127 @@ fn bilateral_transfer_with_bound_delta_caveat_on_both_sides() {
 fn bilateral_transfer_with_sovereign_witness_on_both_sides() {
     panic!("blocked");
 }
+
+// ===========================================================================
+// Preimage byte-level injectivity (additional adversarial scenarios)
+// ===========================================================================
+
+#[test]
+fn transfer_id_preimage_disambiguates_self_transfer_from_zero_amount() {
+    // The canonical preimage must distinguish "A→A, amount=0" from a
+    // trivially-empty transfer that some malicious projection might
+    // pretend was equivalent.
+    let a = CellId([1u8; 32]);
+    let p_self_zero = transfer_id_preimage(&a, &a, 0, 0);
+    let p_self_one = transfer_id_preimage(&a, &a, 1, 0);
+    assert_ne!(
+        p_self_zero, p_self_one,
+        "self-transfer amounts must be distinguished by preimage"
+    );
+}
+
+#[test]
+fn grant_id_preimage_distinguishes_zero_cap_entry_from_default() {
+    // grant_id = ...|| cap_entry_hash || ... The [0u8; 32] cap_entry is
+    // a "default" that some careless projection might use; it must be
+    // distinguishable from any non-default hash.
+    let a = CellId([1u8; 32]);
+    let b = CellId([2u8; 32]);
+    let zero_cap = [0u8; 32];
+    let other_cap = [1u8; 32];
+    assert_ne!(
+        grant_id_preimage(&a, &b, &zero_cap, 0),
+        grant_id_preimage(&a, &b, &other_cap, 0)
+    );
+}
+
+#[test]
+fn intro_id_preimage_distinguishes_self_introduce_combinations() {
+    // i=r=t (degenerate self-introduce) must still have a distinct
+    // preimage from i=r, t different; the role distinction is on cell
+    // bytes, not on the *relation* between introducer/recipient/target.
+    let a = CellId([1u8; 32]);
+    let b = CellId([2u8; 32]);
+    let p_all_self = intro_id_preimage(&a, &a, &a, 0, 0);
+    let p_partial = intro_id_preimage(&a, &a, &b, 0, 0);
+    assert_ne!(p_all_self, p_partial);
+}
+
+#[test]
+fn transfer_id_preimage_endian_stability() {
+    // amount and sender_nonce are big-endian in the preimage per §3.1.
+    // Verify directly that endianness is what the design says, so that
+    // verifier implementations on other languages can match byte-for-
+    // byte.
+    let a = CellId([1u8; 32]);
+    let b = CellId([2u8; 32]);
+    let pre = transfer_id_preimage(&a, &b, 0x0102030405060708u64, 0x0A0B0C0D0E0F1011u64);
+    // Domain separator (20 bytes) + 2*32 (cells) = 84 — amount starts here.
+    assert_eq!(pre.len(), 20 + 32 + 32 + 8 + 8);
+    assert_eq!(
+        &pre[84..92],
+        &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
+    );
+    assert_eq!(
+        &pre[92..100],
+        &[0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11]
+    );
+}
+
+// ===========================================================================
+// γ.2 + sovereign witness composition (additional)
+// ===========================================================================
+
+#[test]
+#[ignore = "blocked on γ.2 Phase 1 + sovereign witness AIR teeth + cross-fed extension: trilateral introduce across three federations where each cell is sovereign and each emits its own sovereign witness"]
+fn trilateral_introduce_three_federations_each_sovereign() {
+    panic!("blocked");
+}
+
+#[test]
+#[ignore = "blocked on γ.2 Phase 2 AIR aggregation: ring of 5 cells, each Transfer pair must agree on its transfer_id; one tampered pair must reject the whole ring"]
+fn five_cell_ring_all_pairs_bound() {
+    panic!("blocked");
+}
+
+#[test]
+#[ignore = "blocked on γ.2 Phase 1: BoundDelta with DeltaRelation::EqualAndOpposite on bilateral pair must agree on amount AND on sender_nonce derivation order"]
+fn bilateral_bound_delta_disagreement_on_nonce_rejects() {
+    // Subtle attack: A's projection uses sender_nonce=7, B's uses
+    // sender_nonce=8 (each side claims a different nonce in its trace).
+    // The γ.2 verifier must detect the disagreement because transfer_id
+    // depends on sender_nonce.
+    panic!("blocked");
+}
+
+#[test]
+#[ignore = "blocked on γ.2 Phase 1: Transfer effect against a cell that has BOTH a BoundDelta caveat AND a Monotonic caveat on the same slot — the per-cell slot caveat must fire AFTER the γ.2 binding succeeds"]
+fn bilateral_with_layered_slot_caveats_evaluation_order() {
+    panic!("blocked");
+}
+
+// ===========================================================================
+// γ.2 adversarial: forged direction bit on one side
+// ===========================================================================
+
+#[test]
+#[ignore = "blocked on γ.2 Phase 1: per-cell direction_bit (1=outflow, 0=inflow) bound in PI; A claims outflow, B's projection ALSO claims outflow (i.e. B's projection says it sent to A) — off-AIR verifier must detect the direction mismatch"]
+fn direction_bit_both_outflow_rejects() {
+    panic!("blocked");
+}
+
+#[test]
+#[ignore = "blocked on γ.2 Phase 1: direction bit tamper — A says inflow when it was actually outflow; transfer_id matches B's but direction reversed"]
+fn direction_bit_inverted_on_sender_rejects() {
+    panic!("blocked");
+}
+
+// ===========================================================================
+// γ.2 + bridge composition
+// ===========================================================================
+
+#[test]
+#[ignore = "blocked on γ.2 + bridge phase log: cross-federation Transfer where the sender's federation FED_A emits a Phase-1 lock with bridge_id, the receiver's FED_B emits a Phase-2 witness; the γ.2 transfer_id binding must compose with the bridge_id binding"]
+fn cross_federation_transfer_binds_both_transfer_id_and_bridge_id() {
+    panic!("blocked");
+}

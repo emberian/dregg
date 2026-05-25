@@ -220,8 +220,14 @@ impl AppWallet {
         params: pyana_cell::FactoryCreationParams,
     ) -> Turn {
         let issuer = self.cell_id();
-        self.read()
-            .create_from_factory(issuer, factory_vk, owner_pubkey, token_id, params, &self.federation_id)
+        self.read().create_from_factory(
+            issuer,
+            factory_vk,
+            owner_pubkey,
+            token_id,
+            params,
+            &self.federation_id,
+        )
     }
 
     /// Get a shared handle to the underlying SDK wallet lock.

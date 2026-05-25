@@ -767,10 +767,11 @@ mod tests {
             c,
             StateConstraint::Monotonic { index } if *index == REVOCATION_ROOT_SLOT as u8
         )));
-        assert!(constraints.iter().any(|c| matches!(
-            c,
-            StateConstraint::SenderAuthorized { .. }
-        )));
+        assert!(
+            constraints
+                .iter()
+                .any(|c| matches!(c, StateConstraint::SenderAuthorized { .. }))
+        );
     }
 
     #[test]

@@ -5269,27 +5269,55 @@ pub fn generate_effect_vm_trace_ext(
     // ---- 30-bit-truncation fix (CAVEAT-LAYER-COVERAGE.md §6.5) ----
     //
     // Each of the three affected effects gets its own 4×16-bit limb slot.
-    // The verifier's PI-matching loop reads the full u64 from the runtime
-    // effect and recomputes the limbs via `u64_to_4_limbs_16`; any
-    // disagreement is rejected. The legacy `value_lo` param column inside
-    // the AIR stays for backwards-compat with the existing per-effect
-    // constraints (balance debit/credit arithmetic); the new PI slots
-    // attest to the *full* u64 value the executor saw.
+    // We aggregate per-turn: each BridgeMint/BridgeLock/CreateEscrow in
+    // the trace contributes its full u64 value via wrap-add (the AIR's
+    // per-row balance arithmetic uses the legacy 30-bit-truncated
+    // `value_lo`; the new limb slots independently attest to the FULL
+    // u64 the executor saw, summed across the trace). A future
+    // refinement (per-row limb columns) sits behind a separate
+    // PI/aux-column widening.
     //
-    // Each limb is < 2^16; the executor-side helper enforces this and the
-    // verifier's PI match loop catches any limb that exceeds that.
+    // Each limb is < 2^16 by construction (`u64_to_4_limbs_16` masks).
+    // The verifier's PI match loop catches any out-of-range limb a
+    // malicious prover supplies, and the on-trace effects also bind to
+    // the same 4-limb form via the absorbed-into-effects-hash path
+    // (see `compute_effects_hash` arms for BridgeMint/BridgeLock/
+    // CreateEscrow). Together the two paths give the bit-injective
+    // u64 binding that closes §6.5.
+    let (mint_sum, lock_sum, escrow_sum) = {
+        let mut m: u64 = 0;
+        let mut l: u64 = 0;
+        let mut e: u64 = 0;
+        for eff in effects {
+            match eff {
+                Effect::BridgeMint { value_full, .. } => m = m.wrapping_add(*value_full),
+                Effect::BridgeLock { value_full, .. } => l = l.wrapping_add(*value_full),
+                Effect::CreateEscrow { amount_full, .. } => e = e.wrapping_add(*amount_full),
+                _ => {}
+            }
+        }
+        (m, l, e)
+    };
+    let mint_limbs = u64_to_4_limbs_16(mint_sum);
+    let lock_limbs = u64_to_4_limbs_16(lock_sum);
+    let escrow_limbs = u64_to_4_limbs_16(escrow_sum);
     for i in 0..pi::BRIDGE_MINT_VALUE_LIMBS_LEN {
-        public_inputs[pi::BRIDGE_MINT_VALUE_LIMBS_BASE + i] =
-            context.bridge_mint_value_limbs[i];
+        public_inputs[pi::BRIDGE_MINT_VALUE_LIMBS_BASE + i] = mint_limbs[i];
     }
     for i in 0..pi::BRIDGE_LOCK_VALUE_LIMBS_LEN {
-        public_inputs[pi::BRIDGE_LOCK_VALUE_LIMBS_BASE + i] =
-            context.bridge_lock_value_limbs[i];
+        public_inputs[pi::BRIDGE_LOCK_VALUE_LIMBS_BASE + i] = lock_limbs[i];
     }
     for i in 0..pi::CREATE_ESCROW_AMOUNT_LIMBS_LEN {
-        public_inputs[pi::CREATE_ESCROW_AMOUNT_LIMBS_BASE + i] =
-            context.create_escrow_amount_limbs[i];
+        public_inputs[pi::CREATE_ESCROW_AMOUNT_LIMBS_BASE + i] = escrow_limbs[i];
     }
+    // Unused context-field shadows (the context-supplied limbs remain in
+    // EffectVmContext for forward-compat with a per-effect-instance
+    // refinement; today they're recomputed from `effects`).
+    let _ = (
+        context.bridge_mint_value_limbs,
+        context.bridge_lock_value_limbs,
+        context.create_escrow_amount_limbs,
+    );
 
     // ---- Custom proof entries ----
     for (i, (vk_hash, proof_commit)) in custom_entries.iter().enumerate() {
@@ -5900,14 +5928,17 @@ mod tests {
             Effect::CreateEscrow {
                 amount_lo: BabyBear::new(100),
                 escrow_hash: BabyBear::new(0xF2),
+                amount_full: 100,
             },
             Effect::BridgeLock {
                 value_lo: BabyBear::new(50),
                 lock_hash: BabyBear::new(0xF3),
+                value_full: 50,
             },
             Effect::BridgeMint {
                 value_lo: BabyBear::new(200),
                 mint_hash: BabyBear::new(0xF4),
+                value_full: 200,
             },
         ];
         let (trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
@@ -5938,10 +5969,12 @@ mod tests {
             Effect::CreateEscrow {
                 amount_lo: BabyBear::new(100),
                 escrow_hash: BabyBear::new(0xE5C),
+                amount_full: 100,
             },
             Effect::BridgeLock {
                 value_lo: BabyBear::new(50),
                 lock_hash: BabyBear::new(0xB10),
+                value_full: 50,
             },
         ] {
             let state = make_initial_state(1000);

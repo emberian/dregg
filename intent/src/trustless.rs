@@ -34,8 +34,13 @@
 //!   threshold encryption (CoW relies on a trusted solver with reputation).
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use pyana_cell::CellId;
+use pyana_cell::predicate::{
+    InputRef, PredicateInput, WitnessedPredicate, WitnessedPredicateError, WitnessedPredicateKind,
+    WitnessedPredicateRegistry,
+};
 use pyana_federation::threshold_decrypt::{
     ThresholdCiphertext, ThresholdDecryptError, combine_shares,
 };
@@ -248,6 +253,22 @@ pub struct SolverSubmission {
     /// STARK proof of validity: all rings valid, score correctly computed, no
     /// intent used twice. The proof binds to the batch's decrypted intent set.
     pub validity_proof: Vec<u8>,
+    /// Optional witnessed-predicate declaration naming the verifier kind
+    /// for `validity_proof`.
+    ///
+    /// When present, the engine routes proof verification through the
+    /// canonical [`WitnessedPredicateRegistry`] keyed on
+    /// `witnessed_predicate.kind`. The predicate's `commitment` binds the
+    /// solution's audience (typically the batch's decrypted-intent-set
+    /// commitment); the `proof_bytes` come from `validity_proof`.
+    ///
+    /// When `None`, the verifier falls back to the structural-only
+    /// [`MockProofVerifier`] semantics — accepted for legacy / smoke
+    /// tests but flagged on real deployments. Production callers should
+    /// always set this field and register a real verifier in the
+    /// registry handed to [`WitnessedProofVerifier::new`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub witnessed_predicate: Option<WitnessedPredicate>,
     /// Bond posted by the solver (slashed if challenged successfully).
     pub bond: u64,
     /// Blocklace height at which this submission arrived.
@@ -328,8 +349,25 @@ impl IntentBatch {
 
 /// Trait for verifying solver solution proofs.
 ///
-/// Implementations may use STARK verification, mock verification (for testing),
-/// or delegate to an external verifier.
+/// Implementations may use STARK verification, witnessed-predicate
+/// dispatch through the canonical registry, or mock structural checks.
+///
+/// The trait offers two entry points:
+///
+/// - [`verify`](Self::verify) — the legacy proof-bytes-only signature.
+///   Kept for backwards compatibility with stub callers; the default
+///   path now flows through [`verify_submission`](Self::verify_submission).
+/// - [`verify_submission`](Self::verify_submission) — the canonical
+///   entry point. Receives the full [`SolverSubmission`] so the verifier
+///   can route the proof through the
+///   [`WitnessedPredicateRegistry`] when
+///   `submission.witnessed_predicate` is set.
+///
+/// Implementations should override `verify_submission`; the default
+/// `verify` impl forwards to it with a synthetic submission that lacks
+/// the witnessed-predicate declaration — fine for legacy mock paths,
+/// inadequate for real verification. Real implementations expose
+/// `verify_submission` directly.
 pub trait ProofVerifier: Send + Sync {
     /// Verify that a proof is valid for the given solution and intent set.
     ///
@@ -345,13 +383,305 @@ pub trait ProofVerifier: Send + Sync {
         total_score: f64,
         decrypted_intents: &[Intent],
     ) -> Result<(), String>;
+
+    /// Verify a full [`SolverSubmission`] against the batch's decrypted
+    /// intent set. Default impl forwards to [`Self::verify`] using the
+    /// raw `validity_proof` bytes, discarding any
+    /// `witnessed_predicate` declaration the submission carries.
+    ///
+    /// Production verifiers ([`WitnessedProofVerifier`]) override this
+    /// to route through the canonical
+    /// [`WitnessedPredicateRegistry`].
+    fn verify_submission(
+        &self,
+        submission: &SolverSubmission,
+        decrypted_intents: &[Intent],
+    ) -> Result<(), String> {
+        self.verify(
+            &submission.validity_proof,
+            &submission.solution,
+            submission.total_score,
+            decrypted_intents,
+        )
+    }
 }
 
-/// A mock proof verifier that accepts any non-empty proof.
-/// Used for testing the protocol flow without real STARK infrastructure.
+/// Structural consistency checks applied to every solver submission
+/// before cryptographic verification.
+///
+/// Catches the cheap-to-detect dishonesty:
+///
+/// - Score sum disagrees with claimed total.
+/// - Same `IntentId` participates in more than one ring.
+/// - A referenced `IntentId` is not present in `decrypted_intents`.
+///
+/// These checks are necessary but not sufficient — they guarantee the
+/// submission's *shape* is internally consistent, not that the proof
+/// genuinely attests to a valid solution. Cryptographic soundness is
+/// delegated to the kind verifier in
+/// [`WitnessedProofVerifier::verify_submission`].
+fn check_submission_structure(
+    solution: &[RingTrade],
+    total_score: f64,
+    decrypted_intents: &[Intent],
+) -> Result<(), String> {
+    let computed_score: f64 = solution.iter().map(|r| r.score).sum();
+    if (computed_score - total_score).abs() > 1e-9 {
+        return Err(format!(
+            "score mismatch: computed {} vs claimed {}",
+            computed_score, total_score
+        ));
+    }
+    let mut used_intents: std::collections::HashSet<IntentId> = std::collections::HashSet::new();
+    for ring in solution {
+        for participant in &ring.participants {
+            if !used_intents.insert(*participant) {
+                return Err(format!(
+                    "intent {:02x}{:02x}... used in multiple rings",
+                    participant[0], participant[1]
+                ));
+            }
+        }
+    }
+    let batch_ids: std::collections::HashSet<IntentId> =
+        decrypted_intents.iter().map(|i| i.id).collect();
+    for id in &used_intents {
+        if !batch_ids.contains(id) {
+            return Err(format!("intent {:02x}{:02x}... not in batch", id[0], id[1]));
+        }
+    }
+    Ok(())
+}
+
+/// Production proof verifier: routes the solver's `validity_proof`
+/// through the canonical [`WitnessedPredicateRegistry`].
+///
+/// When a [`SolverSubmission`] carries a `witnessed_predicate`, the
+/// verifier:
+///
+/// 1. Runs the structural shape check
+///    ([`check_submission_structure`]) — score sum, distinct intents,
+///    membership.
+/// 2. Computes the **batch binding** — a 32-byte BLAKE3 derivation
+///    over the sorted decrypted-intent-id set — and confirms it
+///    matches `witnessed_predicate.commitment`. This is the audience
+///    binding: the proof verifies against a specific batch.
+/// 3. Dispatches the proof through the canonical registry keyed on
+///    `witnessed_predicate.kind` — `Dfa`, `Temporal`,
+///    `MerkleMembership`, `BlindedSet`, `BridgePredicate`,
+///    `PedersenEquality`, or `Custom { vk_hash }`.
+/// 4. Surfaces the kind's verification verdict to the trustless
+///    engine. A `KindNotRegistered` failure means the executor refuses
+///    to validate the kind; an algebraic reject means the proof itself
+///    failed.
+///
+/// Submissions without a witnessed predicate are treated as
+/// legacy / smoke-test submissions: the structural-only checks apply
+/// and the proof bytes themselves are not cryptographically validated.
+/// Production deployments should reject this path by attaching a
+/// witnessed predicate to every submission.
+pub struct WitnessedProofVerifier {
+    registry: Arc<WitnessedPredicateRegistry>,
+    /// When true, submissions without a `witnessed_predicate` are
+    /// rejected outright (production posture). When false (default),
+    /// they fall back to structural-only verification — the legacy
+    /// `MockProofVerifier` behavior, preserved here so tests that
+    /// don't yet carry a predicate keep passing.
+    strict: bool,
+}
+
+impl WitnessedProofVerifier {
+    /// Construct a verifier wrapping an existing canonical registry.
+    ///
+    /// Production deployments pass the workspace-shared registry with
+    /// real STARK / Schnorr / Bulletproof verifiers registered for
+    /// each built-in kind. Tests can pass
+    /// `WitnessedPredicateRegistry::with_stubs()` to exercise the
+    /// dispatch plumbing without pulling in the circuit crate.
+    pub fn new(registry: WitnessedPredicateRegistry) -> Self {
+        Self {
+            registry: Arc::new(registry),
+            strict: false,
+        }
+    }
+
+    /// Construct a verifier that **rejects** submissions without a
+    /// `witnessed_predicate` declaration. Production posture.
+    pub fn strict(registry: WitnessedPredicateRegistry) -> Self {
+        Self {
+            registry: Arc::new(registry),
+            strict: true,
+        }
+    }
+
+    /// Convenience constructor: stub registry, non-strict. Test
+    /// equivalent of the legacy [`MockProofVerifier`] but routed
+    /// through the canonical surface so adversarial tests can
+    /// register their own kind verifiers.
+    pub fn with_stub_registry() -> Self {
+        Self {
+            registry: Arc::new(WitnessedPredicateRegistry::with_stubs()),
+            strict: false,
+        }
+    }
+
+    /// Access the underlying registry (for tests that want to register
+    /// custom verifiers on top of the default kinds).
+    pub fn registry(&self) -> &WitnessedPredicateRegistry {
+        &self.registry
+    }
+
+    /// Compute the canonical "batch binding" commitment for an intent
+    /// set. The binding is BLAKE3-derived over the sorted intent IDs,
+    /// so it's deterministic and order-independent.
+    ///
+    /// A solver's `witnessed_predicate.commitment` must equal this
+    /// value; otherwise the proof was generated against a different
+    /// intent set and is rejected.
+    pub fn compute_batch_binding(decrypted_intents: &[Intent]) -> [u8; 32] {
+        let mut ids: Vec<IntentId> = decrypted_intents.iter().map(|i| i.id).collect();
+        ids.sort();
+        let mut hasher = blake3::Hasher::new_derive_key("pyana-trustless-batch-binding-v1");
+        hasher.update(&(ids.len() as u64).to_le_bytes());
+        for id in &ids {
+            hasher.update(id);
+        }
+        *hasher.finalize().as_bytes()
+    }
+}
+
+impl ProofVerifier for WitnessedProofVerifier {
+    /// Legacy entry point. Defers to `verify_submission` via a
+    /// synthetic [`SolverSubmission`] without a witnessed predicate.
+    /// Strict-mode verifiers reject (the predicate is absent); permissive-
+    /// mode verifiers fall through to the structural check.
+    fn verify(
+        &self,
+        proof: &[u8],
+        solution: &[RingTrade],
+        total_score: f64,
+        decrypted_intents: &[Intent],
+    ) -> Result<(), String> {
+        if proof.is_empty() {
+            return Err("empty proof".to_string());
+        }
+        if self.strict {
+            return Err("strict verifier requires a witnessed_predicate on the submission".into());
+        }
+        check_submission_structure(solution, total_score, decrypted_intents)
+    }
+
+    fn verify_submission(
+        &self,
+        submission: &SolverSubmission,
+        decrypted_intents: &[Intent],
+    ) -> Result<(), String> {
+        if submission.validity_proof.is_empty() {
+            return Err("empty proof".to_string());
+        }
+        check_submission_structure(
+            &submission.solution,
+            submission.total_score,
+            decrypted_intents,
+        )?;
+
+        let Some(wp) = submission.witnessed_predicate.as_ref() else {
+            if self.strict {
+                return Err(
+                    "strict verifier requires a witnessed_predicate on the submission".into(),
+                );
+            }
+            // Permissive mode: structural check is all we run. Real
+            // deployments should always carry a predicate.
+            return Ok(());
+        };
+
+        // Audience binding: the predicate's commitment must equal the
+        // canonical batch binding for the decrypted intent set. This
+        // rejects a proof minted against a different batch.
+        let expected_binding = Self::compute_batch_binding(decrypted_intents);
+        if wp.commitment != expected_binding {
+            return Err(format!(
+                "batch binding mismatch: predicate commits to {:02x}{:02x}..., \
+                 expected {:02x}{:02x}... for current batch",
+                wp.commitment[0], wp.commitment[1], expected_binding[0], expected_binding[1],
+            ));
+        }
+
+        // Dispatch through the canonical registry. The predicate's
+        // `input_ref` is conceptually `PublicInput`: the batch binding
+        // is the "public input" of the proof. We supply it as
+        // `PredicateInput::Bytes(commitment)` so the verifier sees
+        // the same audience the executor sees.
+        let input_bytes = wp.commitment;
+        let input = match wp.input_ref {
+            InputRef::PublicInput { .. } | InputRef::Witness { .. } => {
+                PredicateInput::Bytes(&input_bytes)
+            }
+            // Surfaces outside an action context (slot caveats,
+            // preconditions, intent solving) must reject
+            // `SigningMessage` shape per PREDICATE-INVENTORY §3.
+            InputRef::SigningMessage => {
+                return Err(
+                    "SigningMessage input is action-context only; not valid for solver proof"
+                        .into(),
+                );
+            }
+            // Slot / Sender shapes have no meaning in a batch-binding
+            // context — they're cell-bound, not intent-batch-bound.
+            InputRef::Slot { .. } => {
+                return Err("Slot input not valid for solver proof".into());
+            }
+            InputRef::Sender => {
+                return Err("Sender input not valid for solver proof".into());
+            }
+        };
+
+        self.registry
+            .verify(wp, &input, &submission.validity_proof)
+            .map_err(|e| match e {
+                WitnessedPredicateError::KindNotRegistered { kind } => {
+                    format!("predicate kind not registered: {}", kind_label(kind))
+                }
+                WitnessedPredicateError::Rejected { kind_name, reason } => {
+                    format!("predicate {kind_name} rejected: {reason}")
+                }
+                other => format!("predicate verification failed: {other}"),
+            })
+    }
+}
+
+fn kind_label(kind: WitnessedPredicateKind) -> String {
+    match kind {
+        WitnessedPredicateKind::Dfa => "Dfa".into(),
+        WitnessedPredicateKind::Temporal => "Temporal".into(),
+        WitnessedPredicateKind::MerkleMembership => "MerkleMembership".into(),
+        WitnessedPredicateKind::BlindedSet => "BlindedSet".into(),
+        WitnessedPredicateKind::BridgePredicate => "BridgePredicate".into(),
+        WitnessedPredicateKind::PedersenEquality => "PedersenEquality".into(),
+        WitnessedPredicateKind::Custom { vk_hash } => format!(
+            "Custom {{ vk_hash: {:02x}{:02x}... }}",
+            vk_hash[0], vk_hash[1]
+        ),
+    }
+}
+
+/// **Deprecated.** Use [`WitnessedProofVerifier`] (canonical registry
+/// dispatch). `MockProofVerifier` retained only for legacy tests that
+/// have not yet migrated.
+///
+/// The verifier accepts any non-empty proof that passes the structural
+/// consistency check ([`check_submission_structure`]). It does not
+/// verify any cryptographic claim — neither the proof bytes nor any
+/// witnessed predicate.
 #[derive(Clone, Debug)]
+#[deprecated(
+    since = "0.2.0",
+    note = "use WitnessedProofVerifier which routes through WitnessedPredicateRegistry"
+)]
 pub struct MockProofVerifier;
 
+#[allow(deprecated)]
 impl ProofVerifier for MockProofVerifier {
     fn verify(
         &self,
@@ -363,36 +693,7 @@ impl ProofVerifier for MockProofVerifier {
         if proof.is_empty() {
             return Err("empty proof".to_string());
         }
-        // Verify score consistency
-        let computed_score: f64 = solution.iter().map(|r| r.score).sum();
-        if (computed_score - total_score).abs() > 1e-9 {
-            return Err(format!(
-                "score mismatch: computed {} vs claimed {}",
-                computed_score, total_score
-            ));
-        }
-        // Verify no intent used twice
-        let mut used_intents: std::collections::HashSet<IntentId> =
-            std::collections::HashSet::new();
-        for ring in solution {
-            for participant in &ring.participants {
-                if !used_intents.insert(*participant) {
-                    return Err(format!(
-                        "intent {:02x}{:02x}... used in multiple rings",
-                        participant[0], participant[1]
-                    ));
-                }
-            }
-        }
-        // Verify all intents exist in the batch
-        let batch_ids: std::collections::HashSet<IntentId> =
-            decrypted_intents.iter().map(|i| i.id).collect();
-        for id in &used_intents {
-            if !batch_ids.contains(id) {
-                return Err(format!("intent {:02x}{:02x}... not in batch", id[0], id[1]));
-            }
-        }
-        Ok(())
+        check_submission_structure(solution, total_score, decrypted_intents)
     }
 }
 
@@ -439,6 +740,15 @@ pub struct TrustlessIntentEngine {
 
 impl TrustlessIntentEngine {
     /// Create a new engine with default configuration.
+    ///
+    /// The default verifier is a [`WitnessedProofVerifier`] backed by
+    /// the stub registry — submissions without a `witnessed_predicate`
+    /// pass the structural check (preserving the legacy mock path),
+    /// while submissions that *do* carry one dispatch through the
+    /// canonical [`WitnessedPredicateRegistry`]. Production deployments
+    /// should build their own registry (with real STARK / Schnorr /
+    /// Bulletproof verifiers wired in) and hand it to
+    /// [`Self::with_verifier`] or use [`WitnessedProofVerifier::strict`].
     pub fn new(decrypt_threshold: usize, num_validators: usize) -> Self {
         Self {
             current_batch: IntentBatch::new(0),
@@ -448,7 +758,7 @@ impl TrustlessIntentEngine {
             decrypt_threshold,
             num_validators,
             current_height: 0,
-            verifier: Box::new(MockProofVerifier),
+            verifier: Box::new(WitnessedProofVerifier::with_stub_registry()),
             next_batch_id: 1,
             settled_batches: HashMap::new(),
             bond_escrow: BondEscrow::new(),
@@ -730,12 +1040,7 @@ impl TrustlessIntentEngine {
             })?;
 
         self.verifier
-            .verify(
-                &submission.validity_proof,
-                &submission.solution,
-                submission.total_score,
-                decrypted,
-            )
+            .verify_submission(&submission, decrypted)
             .map_err(|reason| EngineError::InvalidProof { reason })?;
 
         // Lock the bond in escrow. The bond stays locked until either
@@ -1142,6 +1447,7 @@ mod tests {
             solution: vec![ring],
             total_score: score,
             validity_proof: vec![0x01, 0x02, 0x03], // non-empty mock proof
+            witnessed_predicate: None,
             bond: DEFAULT_MIN_SOLVER_BOND,
             submitted_at: height,
         }
@@ -1309,6 +1615,7 @@ mod tests {
             }],
             total_score: 8.0,
             validity_proof: vec![0x01, 0x02],
+            witnessed_predicate: None,
             bond: DEFAULT_MIN_SOLVER_BOND,
             submitted_at: 12,
         };
@@ -1368,6 +1675,7 @@ mod tests {
             }],
             total_score: 10.0,
             validity_proof: vec![0x01],
+            witnessed_predicate: None,
             bond: DEFAULT_MIN_SOLVER_BOND,
             submitted_at: 12,
         };
@@ -1407,6 +1715,7 @@ mod tests {
             }],
             total_score: 10.0,
             validity_proof: vec![0x01],
+            witnessed_predicate: None,
             bond: DEFAULT_MIN_SOLVER_BOND,
             submitted_at: 11,
         };
@@ -1422,6 +1731,7 @@ mod tests {
             }],
             total_score: 3.0,
             validity_proof: vec![0x01],
+            witnessed_predicate: None,
             bond: DEFAULT_MIN_SOLVER_BOND,
             submitted_at: 12,
         };
@@ -1451,6 +1761,7 @@ mod tests {
             solution: vec![],
             total_score: 5.0,
             validity_proof: vec![],
+            witnessed_predicate: None,
             bond: DEFAULT_MIN_SOLVER_BOND,
             submitted_at: 11,
         };
@@ -1477,6 +1788,7 @@ mod tests {
             }],
             total_score: 100.0,
             validity_proof: vec![0x01],
+            witnessed_predicate: None,
             bond: DEFAULT_MIN_SOLVER_BOND,
             submitted_at: 11,
         };
@@ -1504,6 +1816,7 @@ mod tests {
             }],
             total_score: 5.0,
             validity_proof: vec![0x01],
+            witnessed_predicate: None,
             bond: DEFAULT_MIN_SOLVER_BOND,
             submitted_at: 11,
         };
@@ -1537,6 +1850,7 @@ mod tests {
             ],
             total_score: 6.0,
             validity_proof: vec![0x01],
+            witnessed_predicate: None,
             bond: DEFAULT_MIN_SOLVER_BOND,
             submitted_at: 11,
         };
@@ -1602,6 +1916,7 @@ mod tests {
             }],
             total_score: 5.0,
             validity_proof: vec![0x01],
+            witnessed_predicate: None,
             bond: DEFAULT_MIN_SOLVER_BOND,
             submitted_at: 11,
         };
@@ -1631,6 +1946,7 @@ mod tests {
             }],
             total_score: 5.0,
             validity_proof: vec![0x01],
+            witnessed_predicate: None,
             bond: 1,
             submitted_at: 11,
         };
@@ -1784,6 +2100,7 @@ mod tests {
             }],
             total_score: 5.0,
             validity_proof: vec![0x01],
+            witnessed_predicate: None,
             bond: DEFAULT_MIN_SOLVER_BOND,
             submitted_at: 11,
         };
@@ -1801,6 +2118,7 @@ mod tests {
             }],
             total_score: 99.0,
             validity_proof: vec![0x01],
+            witnessed_predicate: None,
             bond: DEFAULT_MIN_SOLVER_BOND,
             submitted_at: 16,
         };
@@ -1893,5 +2211,289 @@ mod tests {
             result,
             Err(EngineError::InvalidDecryptionShare { .. })
         ));
+    }
+
+    // =========================================================================
+    // Adversarial tests: WitnessedProofVerifier dispatch through the
+    // canonical WitnessedPredicateRegistry.
+    // =========================================================================
+
+    /// Helper: build a SolverSubmission for the given intents that
+    /// carries a `witnessed_predicate` declaration with the supplied
+    /// kind. The commitment is set to the canonical batch binding for
+    /// `intents`; tests that want to tamper with the binding override
+    /// it after construction.
+    fn make_witnessed_submission(
+        solver_byte: u8,
+        intents: &[Intent],
+        score: f64,
+        height: u64,
+        kind: WitnessedPredicateKind,
+        proof_bytes: Vec<u8>,
+    ) -> SolverSubmission {
+        let participants: Vec<IntentId> = intents.iter().map(|i| i.id).collect();
+        let mut settlements = Vec::new();
+        for i in 0..intents.len() {
+            let next = (i + 1) % intents.len();
+            settlements.push(Settlement {
+                from: intents[i].creator,
+                to: intents[next].creator,
+                asset: [i as u8; 32],
+                amount: 100,
+            });
+        }
+
+        let ring = RingTrade {
+            participants,
+            settlements,
+            score,
+        };
+
+        let commitment = WitnessedProofVerifier::compute_batch_binding(intents);
+        let wp = WitnessedPredicate {
+            kind,
+            commitment,
+            input_ref: InputRef::PublicInput { pi_index: 0 },
+            proof_witness_index: 0,
+        };
+
+        SolverSubmission {
+            solver_id: [solver_byte; 32],
+            solution: vec![ring],
+            total_score: score,
+            validity_proof: proof_bytes,
+            witnessed_predicate: Some(wp),
+            bond: DEFAULT_MIN_SOLVER_BOND,
+            submitted_at: height,
+        }
+    }
+
+    #[test]
+    fn witnessed_verifier_accepts_dfa_kind_with_stub_registry() {
+        let (key, key_shares) = make_test_keys(2, 3);
+        let mut engine = TrustlessIntentEngine::new(2, 3);
+        let intents = vec![make_intent(1), make_intent(2)];
+        drive_to_solving(&mut engine, &key, &key_shares, &intents, 10);
+
+        let sub = make_witnessed_submission(
+            0xAA,
+            &intents,
+            5.0,
+            11,
+            WitnessedPredicateKind::Dfa,
+            vec![0x01, 0x02, 0x03],
+        );
+        engine
+            .submit_solution(sub)
+            .expect("DFA stub verifier accepts non-empty proof bytes");
+        assert_eq!(engine.winning_score(), Some(5.0));
+    }
+
+    #[test]
+    fn witnessed_verifier_rejects_unknown_custom_vk_hash() {
+        // The default stub registry doesn't register any Custom { vk_hash }
+        // verifiers — an unknown vk_hash surfaces as a KindNotRegistered
+        // rejection that the engine maps to InvalidProof.
+        let (key, key_shares) = make_test_keys(2, 3);
+        let mut engine = TrustlessIntentEngine::new(2, 3);
+        let intents = vec![make_intent(1), make_intent(2)];
+        drive_to_solving(&mut engine, &key, &key_shares, &intents, 10);
+
+        let sub = make_witnessed_submission(
+            0xAA,
+            &intents,
+            5.0,
+            11,
+            WitnessedPredicateKind::Custom {
+                vk_hash: [0x99; 32],
+            },
+            vec![0x01, 0x02, 0x03],
+        );
+        let result = engine.submit_solution(sub);
+        match result {
+            Err(EngineError::InvalidProof { reason }) => {
+                assert!(
+                    reason.contains("not registered") || reason.contains("Custom"),
+                    "expected KindNotRegistered surface, got: {reason}"
+                );
+            }
+            other => panic!("expected InvalidProof for unknown Custom vk_hash, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn witnessed_verifier_accepts_registered_custom_vk_hash() {
+        // Register a custom kind, then submit with the matching vk_hash.
+        use pyana_cell::predicate::{
+            PredicateInput, WitnessedPredicateError, WitnessedPredicateVerifier as WpVerifier,
+        };
+        use std::sync::Arc;
+
+        struct AcceptAll;
+        impl WpVerifier for AcceptAll {
+            fn name(&self) -> &'static str {
+                "test-accept-all"
+            }
+            fn kind(&self) -> WitnessedPredicateKind {
+                WitnessedPredicateKind::Custom {
+                    vk_hash: [0x77; 32],
+                }
+            }
+            fn verify(
+                &self,
+                _commitment: &[u8; 32],
+                _input: &PredicateInput<'_>,
+                _proof_bytes: &[u8],
+            ) -> Result<(), WitnessedPredicateError> {
+                Ok(())
+            }
+        }
+
+        let mut reg = WitnessedPredicateRegistry::with_stubs();
+        reg.register_custom([0x77; 32], Arc::new(AcceptAll));
+
+        let (key, key_shares) = make_test_keys(2, 3);
+        let mut engine =
+            TrustlessIntentEngine::with_verifier(2, 3, Box::new(WitnessedProofVerifier::new(reg)));
+        let intents = vec![make_intent(1), make_intent(2)];
+        drive_to_solving(&mut engine, &key, &key_shares, &intents, 10);
+
+        let sub = make_witnessed_submission(
+            0xAA,
+            &intents,
+            5.0,
+            11,
+            WitnessedPredicateKind::Custom {
+                vk_hash: [0x77; 32],
+            },
+            vec![0xAB, 0xCD],
+        );
+        engine
+            .submit_solution(sub)
+            .expect("registered Custom kind should verify");
+        assert_eq!(engine.winning_score(), Some(5.0));
+    }
+
+    #[test]
+    fn witnessed_verifier_rejects_tampered_batch_binding() {
+        let (key, key_shares) = make_test_keys(2, 3);
+        let mut engine = TrustlessIntentEngine::new(2, 3);
+        let intents = vec![make_intent(1), make_intent(2)];
+        drive_to_solving(&mut engine, &key, &key_shares, &intents, 10);
+
+        let mut sub = make_witnessed_submission(
+            0xAA,
+            &intents,
+            5.0,
+            11,
+            WitnessedPredicateKind::Dfa,
+            vec![0x01, 0x02, 0x03],
+        );
+        // Tamper: rewrite the commitment to a different value. The
+        // verifier must reject because the proof's "audience" no longer
+        // matches the decrypted batch.
+        if let Some(ref mut wp) = sub.witnessed_predicate {
+            wp.commitment = [0xFF; 32];
+        }
+        let result = engine.submit_solution(sub);
+        match result {
+            Err(EngineError::InvalidProof { reason }) => {
+                assert!(
+                    reason.contains("batch binding"),
+                    "expected batch-binding rejection, got: {reason}"
+                );
+            }
+            other => {
+                panic!("expected InvalidProof for tampered commitment, got: {other:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn witnessed_verifier_rejects_empty_proof_bytes() {
+        let (key, key_shares) = make_test_keys(2, 3);
+        let mut engine = TrustlessIntentEngine::new(2, 3);
+        let intents = vec![make_intent(1), make_intent(2)];
+        drive_to_solving(&mut engine, &key, &key_shares, &intents, 10);
+
+        let sub = make_witnessed_submission(
+            0xAA,
+            &intents,
+            5.0,
+            11,
+            WitnessedPredicateKind::Dfa,
+            vec![], // empty
+        );
+        assert!(matches!(
+            engine.submit_solution(sub),
+            Err(EngineError::InvalidProof { .. })
+        ));
+    }
+
+    #[test]
+    fn witnessed_verifier_strict_mode_rejects_missing_predicate() {
+        // A strict verifier rejects any submission whose
+        // `witnessed_predicate` is None — production posture.
+        let reg = WitnessedPredicateRegistry::with_stubs();
+        let (key, key_shares) = make_test_keys(2, 3);
+        let mut engine = TrustlessIntentEngine::with_verifier(
+            2,
+            3,
+            Box::new(WitnessedProofVerifier::strict(reg)),
+        );
+        let intents = vec![make_intent(1), make_intent(2)];
+        drive_to_solving(&mut engine, &key, &key_shares, &intents, 10);
+
+        let sub = make_submission(0xAA, &intents, 5.0, 11);
+        assert!(matches!(
+            engine.submit_solution(sub),
+            Err(EngineError::InvalidProof { .. })
+        ));
+    }
+
+    #[test]
+    fn witnessed_verifier_rejects_signing_message_input_outside_action_context() {
+        // SigningMessage InputRef is for `Authorization::Custom` only —
+        // applying it to a solver proof is a shape mismatch.
+        let (key, key_shares) = make_test_keys(2, 3);
+        let mut engine = TrustlessIntentEngine::new(2, 3);
+        let intents = vec![make_intent(1), make_intent(2)];
+        drive_to_solving(&mut engine, &key, &key_shares, &intents, 10);
+
+        let mut sub = make_witnessed_submission(
+            0xAA,
+            &intents,
+            5.0,
+            11,
+            WitnessedPredicateKind::Dfa,
+            vec![0x01, 0x02],
+        );
+        if let Some(ref mut wp) = sub.witnessed_predicate {
+            wp.input_ref = InputRef::SigningMessage;
+        }
+        let result = engine.submit_solution(sub);
+        match result {
+            Err(EngineError::InvalidProof { reason }) => {
+                assert!(
+                    reason.contains("SigningMessage"),
+                    "expected SigningMessage shape mismatch, got: {reason}"
+                );
+            }
+            other => panic!("expected InvalidProof for SigningMessage input, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn batch_binding_is_deterministic_and_order_independent() {
+        let i1 = make_intent(1);
+        let i2 = make_intent(2);
+        let i3 = make_intent(3);
+        let b1 =
+            WitnessedProofVerifier::compute_batch_binding(&[i1.clone(), i2.clone(), i3.clone()]);
+        let b2 =
+            WitnessedProofVerifier::compute_batch_binding(&[i3.clone(), i1.clone(), i2.clone()]);
+        let b3 = WitnessedProofVerifier::compute_batch_binding(&[i1, i2]);
+        assert_eq!(b1, b2, "binding must be order-independent");
+        assert_ne!(b1, b3, "binding must change with intent membership");
     }
 }

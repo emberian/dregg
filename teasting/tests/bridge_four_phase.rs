@@ -655,22 +655,26 @@ fn bridge_action_air_double_mint_replay_handled_by_executor_layer() {
     let proof = prove_bridge_action(&w);
 
     // AIR: both verifications succeed.
-    assert!(verify_bridge_action(
-        &w.nullifier,
-        &w.recipient,
-        &w.destination_federation,
-        w.amount,
-        &proof
-    )
-    .is_ok());
-    assert!(verify_bridge_action(
-        &w.nullifier,
-        &w.recipient,
-        &w.destination_federation,
-        w.amount,
-        &proof
-    )
-    .is_ok());
+    assert!(
+        verify_bridge_action(
+            &w.nullifier,
+            &w.recipient,
+            &w.destination_federation,
+            w.amount,
+            &proof
+        )
+        .is_ok()
+    );
+    assert!(
+        verify_bridge_action(
+            &w.nullifier,
+            &w.recipient,
+            &w.destination_federation,
+            w.amount,
+            &proof
+        )
+        .is_ok()
+    );
 
     // Executor layer (BridgedNullifierSet): second insert rejects.
     let mut bridged = BridgedNullifierSet::new();
@@ -768,35 +772,41 @@ fn bridge_action_air_paired_with_note_spending_in_four_phase_flow() {
     let action_proof = prove_bridge_action(&action_witness);
 
     // Honest destination accepts.
-    assert!(verify_bridge_action(
-        &nullifier.0,
-        &dest_commitment.0,
-        &FED_B,
-        value,
-        &action_proof,
-    )
-    .is_ok());
+    assert!(
+        verify_bridge_action(
+            &nullifier.0,
+            &dest_commitment.0,
+            &FED_B,
+            value,
+            &action_proof,
+        )
+        .is_ok()
+    );
 
     // Adversary swaps recipient (mints to a different commitment).
     let mut adversary_commitment = dest_commitment.0;
     adversary_commitment[0] ^= 0xFF;
-    assert!(verify_bridge_action(
-        &nullifier.0,
-        &adversary_commitment,
-        &FED_B,
-        value,
-        &action_proof,
-    )
-    .is_err());
+    assert!(
+        verify_bridge_action(
+            &nullifier.0,
+            &adversary_commitment,
+            &FED_B,
+            value,
+            &action_proof,
+        )
+        .is_err()
+    );
 
     // Adversary truncates the amount to its low 30 bits.
     let truncated = value & ((1u64 << 30) - 1);
-    assert!(verify_bridge_action(
-        &nullifier.0,
-        &dest_commitment.0,
-        &FED_B,
-        truncated,
-        &action_proof,
-    )
-    .is_err());
+    assert!(
+        verify_bridge_action(
+            &nullifier.0,
+            &dest_commitment.0,
+            &FED_B,
+            truncated,
+            &action_proof,
+        )
+        .is_err()
+    );
 }

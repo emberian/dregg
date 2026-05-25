@@ -44,9 +44,9 @@ use pyana_cell::state::{CellState, FIELD_ZERO, FieldElement};
 
 use starbridge_governed_namespace::{
     DISPUTE_WINDOW_HEIGHT_SLOT, GOVERNANCE_COMMITTEE_ROOT_SLOT, PENDING_PROPOSAL_ROOT_SLOT,
-    RESERVED_SLOT_6, RESERVED_SLOT_7, ROUTE_TABLE_ROOT_SLOT, THRESHOLD_SLOT, VERSION_SLOT, VoteKind,
-    blake3_field, build_route_table, compose_proposal_root, compose_vote_update, dispatch,
-    governance_program, route_table_commitment, u64_field,
+    RESERVED_SLOT_6, RESERVED_SLOT_7, ROUTE_TABLE_ROOT_SLOT, THRESHOLD_SLOT, VERSION_SLOT,
+    VoteKind, blake3_field, build_route_table, compose_proposal_root, compose_vote_update,
+    dispatch, governance_program, route_table_commitment, u64_field,
 };
 
 use pyana_dfa::{RouteTarget, Router};
@@ -125,12 +125,7 @@ fn full_governance_cycle_bootstrap_propose_vote_commit() {
     after_propose.fields[PENDING_PROPOSAL_ROOT_SLOT as usize] = proposal_root;
     after_propose.fields[DISPUTE_WINDOW_HEIGHT_SLOT as usize] = u64_field(dispute_window);
 
-    let r = program.evaluate_with_meta(
-        &after_propose,
-        Some(&initial),
-        None,
-        &propose_meta(),
-    );
+    let r = program.evaluate_with_meta(&after_propose, Some(&initial), None, &propose_meta());
     assert!(r.is_ok(), "propose must pass slot-shape: {r:?}");
 
     // ── Step 2: alice votes approve ────────────────────────────────
@@ -141,12 +136,7 @@ fn full_governance_cycle_bootstrap_propose_vote_commit() {
             compose_vote_update(&proposal_root, &alice, VoteKind::Approve, 1);
         s
     };
-    let r = program.evaluate_with_meta(
-        &after_vote_a,
-        Some(&after_propose),
-        None,
-        &vote_meta(),
-    );
+    let r = program.evaluate_with_meta(&after_vote_a, Some(&after_propose), None, &vote_meta());
     assert!(r.is_ok(), "alice vote must pass slot-shape: {r:?}");
 
     // ── Step 3: bob votes approve (threshold met) ──────────────────
@@ -169,8 +159,7 @@ fn full_governance_cycle_bootstrap_propose_vote_commit() {
         s.fields[PENDING_PROPOSAL_ROOT_SLOT as usize] = FIELD_ZERO; // cleared
         s
     };
-    let r =
-        program.evaluate_with_meta(&after_commit, Some(&after_vote_b), None, &commit_meta());
+    let r = program.evaluate_with_meta(&after_commit, Some(&after_vote_b), None, &commit_meta());
     assert!(r.is_ok(), "commit must pass slot-shape: {r:?}");
 
     // Version exactly +1.
@@ -338,9 +327,9 @@ fn non_member_proposal_rejected_by_sender_authorized() {
         ProgramError::SenderMembershipWitnessMissing
         | ProgramError::WitnessedPredicateRequiresExecutor { .. }
         | ProgramError::MissingContextField { .. } => {} // any of these is a hard reject
-        other => panic!(
-            "expected SenderMembershipWitnessMissing or similar rejection, got {other:?}"
-        ),
+        other => {
+            panic!("expected SenderMembershipWitnessMissing or similar rejection, got {other:?}")
+        }
     }
 }
 
@@ -362,9 +351,9 @@ fn non_member_vote_rejected_by_sender_authorized() {
         ProgramError::SenderMembershipWitnessMissing
         | ProgramError::WitnessedPredicateRequiresExecutor { .. }
         | ProgramError::MissingContextField { .. } => {}
-        other => panic!(
-            "expected SenderMembershipWitnessMissing or similar rejection, got {other:?}"
-        ),
+        other => {
+            panic!("expected SenderMembershipWitnessMissing or similar rejection, got {other:?}")
+        }
     }
 }
 

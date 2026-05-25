@@ -485,13 +485,8 @@ mod tests {
         let proof = prove_bridge_action(&w);
         let mut wrong_dest = w.destination_federation;
         wrong_dest[31] ^= 0x80;
-        let result = verify_bridge_action(
-            &w.nullifier,
-            &w.recipient,
-            &wrong_dest,
-            w.amount,
-            &proof,
-        );
+        let result =
+            verify_bridge_action(&w.nullifier, &w.recipient, &wrong_dest, w.amount, &proof);
         assert!(
             result.is_err(),
             "tampered destination_federation must be rejected"
@@ -587,22 +582,26 @@ mod tests {
         // the same valid proof MUST verify twice at the AIR layer.
         let w = make_witness();
         let proof = prove_bridge_action(&w);
-        assert!(verify_bridge_action(
-            &w.nullifier,
-            &w.recipient,
-            &w.destination_federation,
-            w.amount,
-            &proof
-        )
-        .is_ok());
-        assert!(verify_bridge_action(
-            &w.nullifier,
-            &w.recipient,
-            &w.destination_federation,
-            w.amount,
-            &proof
-        )
-        .is_ok());
+        assert!(
+            verify_bridge_action(
+                &w.nullifier,
+                &w.recipient,
+                &w.destination_federation,
+                w.amount,
+                &proof
+            )
+            .is_ok()
+        );
+        assert!(
+            verify_bridge_action(
+                &w.nullifier,
+                &w.recipient,
+                &w.destination_federation,
+                w.amount,
+                &proof
+            )
+            .is_ok()
+        );
         // Replay protection is enforced one layer up (`BridgedNullifierSet`).
     }
 
@@ -633,14 +632,16 @@ mod tests {
             amount: 0,
         };
         let proof = prove_bridge_action(&w);
-        assert!(verify_bridge_action(
-            &w.nullifier,
-            &w.recipient,
-            &w.destination_federation,
-            w.amount,
-            &proof
-        )
-        .is_ok());
+        assert!(
+            verify_bridge_action(
+                &w.nullifier,
+                &w.recipient,
+                &w.destination_federation,
+                w.amount,
+                &proof
+            )
+            .is_ok()
+        );
     }
 
     /// Maximum-value amount must round-trip (u64::MAX).

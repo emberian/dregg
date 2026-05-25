@@ -94,3 +94,9 @@ pub mod sovereign_witness_threats;
 // Executor honesty threats T1-T15 from EXECUTOR-HONESTY-AUDIT.md.
 // Each test exercises one defense.
 pub mod executor_honesty_threats;
+
+// Slot caveat composition stress tests: 16-variant Predicate(Vec<_>)
+// conjunctions, large AnyOf disjunctions, and Cases-program operation-
+// scoped dispatch (CAVEAT-LAYER-COVERAGE.md §1, §8). Goes broader than
+// state_constraint_composition.rs.
+pub mod slot_caveat_composition_stress;
