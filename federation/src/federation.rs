@@ -340,6 +340,10 @@ impl Federation {
             threshold_qc: None,
             threshold: self.threshold_usize(),
             federation_id: self.id,
+            // v4 (#80): receipt stream binding — federations that have
+            // not yet attested a receipt-stream root advertise `None`,
+            // which the verifier treats as v3-legacy.
+            receipt_stream_root: None,
         }
     }
 }

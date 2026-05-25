@@ -866,6 +866,8 @@ impl FederationNode {
             quorum_signatures,
             threshold: qc.threshold,
             federation_id: pyana_types::FederationId::PLACEHOLDER,
+            // v4 (#80): not yet bound here — v3-legacy compatible.
+            receipt_stream_root: None,
         });
     }
 
@@ -980,6 +982,8 @@ impl Federation {
             quorum_signatures: Vec::new(),
             threshold: 0,
             federation_id: pyana_types::FederationId::PLACEHOLDER,
+            // v4 (#80): probe matches the stand-in shape above (v3-legacy).
+            receipt_stream_root: None,
         };
         let message = probe.signing_message();
         self.nodes
