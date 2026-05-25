@@ -14,9 +14,21 @@
 //! consult `self.witnessed_registry` when they encounter a witnessed
 //! clause.
 //!
-//! These tests exercise the dispatch surface, not the proof algebra
-//! (the stub verifier accepts any non-empty proof bytes — soundness
-//! is the real verifier's job, registered by the host).
+//! These tests exercise the dispatch surface, not the proof algebra.
+//!
+//! **Post AIR-soundness audit (commit `ce1e2def`).** The default
+//! registry now installs `NotYetWiredVerifier` for the kinds whose real
+//! cryptographic verifier lives in `pyana-circuit` / `pyana-bridge`
+//! (Dfa, Temporal, MerkleMembership, BlindedSet, BridgePredicate,
+//! PedersenEquality) — those verifiers **reject** every proof until a
+//! host installs the real adapter. NonMembership ships with the real
+//! Silver-Sound `SortedNeighborNonMembershipVerifier` in this crate.
+//!
+//! For tests that previously relied on `default_builtins()` accepting
+//! arbitrary non-empty proof bytes (the stub-verifier behavior), switch
+//! to `WitnessedPredicateRegistry::with_stubs()` explicitly — that
+//! constructor preserves the prior permissive shape under an honest
+//! name and is kept for plumbing-only tests.
 
 use pyana_cell::predicate::{
     InputRef, PredicateInput, WitnessedPredicate, WitnessedPredicateError, WitnessedPredicateKind,
@@ -29,37 +41,46 @@ use pyana_turn::TurnExecutor;
 // Registry surface tests (default_builtins constructor)
 // ─────────────────────────────────────────────────────────────────────
 
+/// The default registry MUST reject Dfa proofs until a host installs the
+/// real `pyana_circuit::dsl::circuit` adapter. Prior behavior was to
+/// accept any non-empty proof bytes — a soundness loss caught by the
+/// AIR audit.
 #[test]
-fn default_builtins_registry_dispatches_dfa() {
+fn default_builtins_registry_rejects_dfa_until_host_wires_real_verifier() {
     let reg = WitnessedPredicateRegistry::default_builtins();
     let wp = WitnessedPredicate::dfa([1u8; 32], InputRef::Sender, 0);
     let pk = [0u8; 32];
     let input = PredicateInput::Sender(&pk);
-    reg.verify(&wp, &input, b"non-empty-proof")
-        .expect("Dfa default builtin should accept non-empty proof");
+    let err = reg.verify(&wp, &input, b"non-empty-proof").unwrap_err();
+    assert!(
+        matches!(err, WitnessedPredicateError::Rejected { .. }),
+        "Dfa default must REJECT until host installs real verifier; got {err:?}"
+    );
 }
 
 #[test]
-fn default_builtins_registry_dispatches_merkle_membership() {
+fn default_builtins_registry_rejects_merkle_membership_until_host_wires_real_verifier() {
     let reg = WitnessedPredicateRegistry::default_builtins();
     let wp = WitnessedPredicate::merkle_membership([2u8; 32], InputRef::Sender, 0);
     let pk = [0u8; 32];
     let input = PredicateInput::Sender(&pk);
-    reg.verify(&wp, &input, b"non-empty-proof")
-        .expect("MerkleMembership default builtin should accept non-empty proof");
+    let err = reg.verify(&wp, &input, b"non-empty-proof").unwrap_err();
+    assert!(matches!(err, WitnessedPredicateError::Rejected { .. }));
 }
 
 #[test]
-fn default_builtins_registry_dispatches_blinded_set() {
+fn default_builtins_registry_rejects_blinded_set_until_host_wires_real_verifier() {
     let reg = WitnessedPredicateRegistry::default_builtins();
     let wp = WitnessedPredicate::blinded_set([3u8; 32], InputRef::Sender, 0);
     let pk = [0u8; 32];
-    reg.verify(&wp, &PredicateInput::Sender(&pk), b"non-empty-proof")
-        .expect("BlindedSet default builtin should accept non-empty proof");
+    let err = reg
+        .verify(&wp, &PredicateInput::Sender(&pk), b"non-empty-proof")
+        .unwrap_err();
+    assert!(matches!(err, WitnessedPredicateError::Rejected { .. }));
 }
 
 #[test]
-fn default_builtins_registry_dispatches_temporal_bridge_pedersen() {
+fn default_builtins_registry_rejects_temporal_bridge_pedersen_until_host_wires_real_verifier() {
     let reg = WitnessedPredicateRegistry::default_builtins();
     for wp in [
         WitnessedPredicate::temporal([4u8; 32], 0, 0),
@@ -67,14 +88,26 @@ fn default_builtins_registry_dispatches_temporal_bridge_pedersen() {
         WitnessedPredicate::pedersen_equality([6u8; 32], InputRef::Slot { index: 0 }, 0),
     ] {
         let pk = [0u8; 32];
-        reg.verify(&wp, &PredicateInput::Sender(&pk), b"non-empty-proof")
-            .unwrap_or_else(|e| {
-                panic!(
-                    "default-builtin {:?} should accept non-empty proof: {e}",
-                    wp.kind
-                )
-            });
+        let err = reg
+            .verify(&wp, &PredicateInput::Sender(&pk), b"non-empty-proof")
+            .unwrap_err();
+        assert!(
+            matches!(err, WitnessedPredicateError::Rejected { .. }),
+            "default-builtin {:?} must reject until host installs real verifier; got {err:?}",
+            wp.kind
+        );
     }
+}
+
+/// The `with_stubs()` constructor preserves the *prior* permissive
+/// behavior under an explicit, honest name — for plumbing-only tests.
+#[test]
+fn with_stubs_registry_still_accepts_nonempty_proof_for_plumbing_tests() {
+    let reg = WitnessedPredicateRegistry::with_stubs();
+    let wp = WitnessedPredicate::dfa([0u8; 32], InputRef::Sender, 0);
+    let pk = [0u8; 32];
+    reg.verify(&wp, &PredicateInput::Sender(&pk), b"non-empty-proof")
+        .expect("with_stubs() preserves the prior permissive behavior for plumbing tests");
 }
 
 #[test]

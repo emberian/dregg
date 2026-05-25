@@ -594,31 +594,66 @@ impl WitnessedPredicateRegistry {
         r
     }
 
-    /// Construct the executor-default registry — Cav-Codex Block 3.5.
+    /// Construct the executor-default registry — Cav-Codex Block 3.5
+    /// **post AIR-soundness audit (commit `ce1e2def`).**
     ///
-    /// Production-facing default that every `TurnExecutor` should
-    /// receive on construction (`turn::executor::TurnExecutor::new` and
-    /// friends call this so the registry is never `None`). Today this
-    /// returns the stub-verifier registry — the real per-kind verifiers
-    /// (`Dfa`, `Temporal`, `MerkleMembership`, `BlindedSet`,
-    /// `BridgePredicate`, `PedersenEquality`) live in `pyana-circuit`
-    /// and would force a circuit dependency on this cell crate; the
-    /// expectation is that the host (a binary that links both crates)
-    /// calls `set_witnessed_registry` with the
-    /// `pyana_circuit::witnessed_predicate::default_registry()` form to
-    /// upgrade the stubs into real verifiers.
+    /// # Soundness contract
     ///
-    /// Until that upgrade, the stubs accept any non-empty proof bytes.
-    /// That is *not* a soundness claim — it's a fail-safe-but-loud
-    /// signal: the dispatch path works, the surface contract is
-    /// honored, and the real verifier wiring is the next install step.
-    /// The alternative — leaving the registry `None` — was worse
-    /// because it surfaced
-    /// `ProgramError::WitnessedPredicateRequiresExecutor` *before* the
-    /// host could swap in the real verifiers, causing every action that
-    /// declared a `Witnessed { wp }` slot caveat to fail at evaluation.
+    /// The default registry installs verifiers that **reject** any proof
+    /// whose underlying cryptographic algebra is not yet wired into the
+    /// cell crate. Concretely:
+    ///
+    /// - `Dfa`, `Temporal`, `MerkleMembership`, `BlindedSet`,
+    ///   `BridgePredicate`, `PedersenEquality` →
+    ///   [`NotYetWiredVerifier`]: every `verify(...)` returns
+    ///   [`WitnessedPredicateError::Rejected`] with a `not yet wired`
+    ///   reason regardless of proof bytes.
+    /// - `NonMembership` → [`SortedNeighborNonMembershipVerifier`]: a
+    ///   real (Silver-Sound) sorted-set neighbor verifier. See
+    ///   [`NonMembershipNeighborProof::adjacency_tag`] for the
+    ///   commitment-keyed adjacency binding that closes the prior
+    ///   public-sentinel attack.
+    ///
+    /// # Why reject by default?
+    ///
+    /// Previously (`pub fn default_builtins() -> Self { Self::with_stubs() }`)
+    /// the registry returned `with_stubs()`, which accepted any non-empty
+    /// proof bytes for every kind. This was a **complete soundness loss**:
+    /// a playground prover could submit a 1-byte garbage "proof" against
+    /// any commitment and pass every `Witnessed` slot caveat / precondition
+    /// / authorization. The AIR-soundness audit
+    /// (`AIR-SOUNDNESS-AUDIT.md`) flagged this as the single largest
+    /// playground risk amplifier.
+    ///
+    /// The cell crate cannot depend on `pyana-circuit` (it would close a
+    /// dependency cycle), so the *real* per-kind verifiers must be
+    /// installed by the host at startup via
+    /// [`WitnessedPredicateRegistry::register_builtin`]. Until that
+    /// install happens, refusing is the only honest behavior — accepting
+    /// garbage was a soundness lie dressed up as fail-safe-but-loud.
+    ///
+    /// # Migration for callers
+    ///
+    /// - **Production hosts** must install real verifiers (e.g. the
+    ///   forthcoming `pyana_circuit::witnessed_predicate::default_registry()`
+    ///   adapter) for every kind they intend to exercise.
+    /// - **Tests** that exercise *plumbing only* (executor dispatch,
+    ///   registry routing, error mapping) should switch to
+    ///   [`Self::with_stubs`], which preserves the prior permissive
+    ///   behavior under an explicit name.
+    /// - **Tests** that exercise adversarial-proof rejection benefit
+    ///   from the default — it now rejects forged proofs out of the box.
     pub fn default_builtins() -> Self {
-        Self::with_stubs()
+        let mut r = Self::empty();
+        r.register_builtin(Arc::new(NotYetWiredVerifier::dfa()));
+        r.register_builtin(Arc::new(NotYetWiredVerifier::temporal()));
+        r.register_builtin(Arc::new(NotYetWiredVerifier::merkle_membership()));
+        // NonMembership ships a real (Silver-Sound) verifier in this crate.
+        r.register_builtin(Arc::new(SortedNeighborNonMembershipVerifier));
+        r.register_builtin(Arc::new(NotYetWiredVerifier::blinded_set()));
+        r.register_builtin(Arc::new(NotYetWiredVerifier::bridge_predicate()));
+        r.register_builtin(Arc::new(NotYetWiredVerifier::pedersen_equality()));
+        r
     }
 
     /// Register (or replace) a built-in kind's verifier. Custom kinds
@@ -1066,6 +1101,120 @@ impl WitnessedPredicateVerifier for StubVerifier {
             });
         }
         Ok(())
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// NotYetWiredVerifier — soundness-honest default for kinds whose real
+// verifier lives in `pyana-circuit` and must be host-installed.
+// ─────────────────────────────────────────────────────────────────────
+
+/// A verifier that **always rejects**, used as the default registration
+/// for built-in predicate kinds whose real cryptographic verifier has
+/// not been installed by the host.
+///
+/// # Why this exists
+///
+/// The cell crate cannot depend on `pyana-circuit` (cycle). The real
+/// per-kind verifiers (`dsl::circuit` for Dfa, `dsl::membership` for
+/// Merkle/BlindedSet, `temporal_predicate_dsl` for Temporal,
+/// `bridge::present::verify_predicate_proof` for BridgePredicate,
+/// Schnorr/Bulletproof for PedersenEquality) live in upstream crates.
+/// Production hosts MUST install those verifiers via
+/// [`WitnessedPredicateRegistry::register_builtin`] before any
+/// `Witnessed { wp }` caveat is evaluated.
+///
+/// Until the host installs the real verifier, the only honest behavior
+/// is to refuse — accepting garbage proofs (the previous behavior of
+/// [`StubVerifier`] under `default_builtins`) was a complete soundness
+/// loss for every witnessed-predicate caveat.
+///
+/// # Boundary
+///
+/// - The rejection reason names the missing crate / surface so an
+///   operator can diagnose "I forgot to wire the bridge verifier" vs.
+///   "I forgot to wire the Schnorr Pedersen adapter."
+/// - The `proof_bytes` are ignored: there is no proof shape this
+///   verifier accepts. This is intentional and matches the "improve,
+///   don't degrade" discipline — a structural-only check that lets a
+///   forged 96-byte blob through would be worse than honest rejection.
+struct NotYetWiredVerifier {
+    kind: WitnessedPredicateKind,
+    name: &'static str,
+    /// Human-readable name of the upstream module that should be wired
+    /// into the registry for this kind.
+    upstream: &'static str,
+}
+
+impl NotYetWiredVerifier {
+    fn dfa() -> Self {
+        Self {
+            kind: WitnessedPredicateKind::Dfa,
+            name: "not-yet-wired-dfa",
+            upstream: "pyana_circuit::dsl::circuit",
+        }
+    }
+    fn temporal() -> Self {
+        Self {
+            kind: WitnessedPredicateKind::Temporal,
+            name: "not-yet-wired-temporal",
+            upstream: "pyana_circuit::temporal_predicate_dsl",
+        }
+    }
+    fn merkle_membership() -> Self {
+        Self {
+            kind: WitnessedPredicateKind::MerkleMembership,
+            name: "not-yet-wired-merkle-membership",
+            upstream: "pyana_circuit::dsl::membership::verify_membership_dsl_full",
+        }
+    }
+    fn blinded_set() -> Self {
+        Self {
+            kind: WitnessedPredicateKind::BlindedSet,
+            name: "not-yet-wired-blinded-set",
+            upstream: "pyana_circuit::dsl::membership::verify_blinded_membership_dsl_full",
+        }
+    }
+    fn bridge_predicate() -> Self {
+        Self {
+            kind: WitnessedPredicateKind::BridgePredicate,
+            name: "not-yet-wired-bridge-predicate",
+            upstream: "pyana_bridge::present::verify_predicate_proof",
+        }
+    }
+    fn pedersen_equality() -> Self {
+        Self {
+            kind: WitnessedPredicateKind::PedersenEquality,
+            name: "not-yet-wired-pedersen-equality",
+            upstream: "pyana_circuit::value_commitment (Schnorr) / bulletproofs (range)",
+        }
+    }
+}
+
+impl WitnessedPredicateVerifier for NotYetWiredVerifier {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn kind(&self) -> WitnessedPredicateKind {
+        self.kind
+    }
+
+    fn verify(
+        &self,
+        _commitment: &[u8; 32],
+        _input: &PredicateInput<'_>,
+        _proof_bytes: &[u8],
+    ) -> Result<(), WitnessedPredicateError> {
+        Err(WitnessedPredicateError::Rejected {
+            kind_name: self.name,
+            reason: format!(
+                "real verifier not yet installed in registry: host must call \
+                 WitnessedPredicateRegistry::register_builtin with the \
+                 adapter for `{}` before this kind can be verified",
+                self.upstream
+            ),
+        })
     }
 }
 
@@ -1686,5 +1835,125 @@ mod tests {
             .get(WitnessedPredicateKind::Dfa)
             .expect("dfa stub");
         assert_eq!(p.vk_hash(), [0u8; 32]);
+    }
+
+    // ─── AIR-soundness-audit (ce1e2def) adversarial tests ──────────────
+    //
+    // Each test below mirrors the prior playground-bypass attack for one
+    // witness-bearing predicate kind: "construct any 1-byte 'proof' and
+    // submit it against a known commitment; assert the default registry
+    // rejects it." Before the audit fix, `default_builtins()` returned
+    // `with_stubs()` and every one of these passed for any non-empty
+    // bytes, silently bypassing every authorization predicate in the
+    // system.
+
+    fn assert_default_rejects_garbage(wp: WitnessedPredicate, kind_label: &str) {
+        let reg = WitnessedPredicateRegistry::default_builtins();
+        let pk = [0u8; 32];
+        let input = PredicateInput::Sender(&pk);
+        // 1-byte "proof" — the prior attack payload.
+        let err = reg
+            .verify(&wp, &input, &[0x42u8])
+            .unwrap_err_or_else_helper(kind_label);
+        assert!(
+            matches!(err, WitnessedPredicateError::Rejected { .. }),
+            "{kind_label}: default_builtins must REJECT 1-byte forged proof; got {err:?}"
+        );
+        // Random 64-byte garbage — same expectation.
+        let garbage: Vec<u8> = (0..64u8).collect();
+        let err = reg
+            .verify(&wp, &input, &garbage)
+            .unwrap_err_or_else_helper(kind_label);
+        assert!(
+            matches!(err, WitnessedPredicateError::Rejected { .. }),
+            "{kind_label}: default_builtins must REJECT 64-byte garbage proof; got {err:?}"
+        );
+    }
+
+    // Local helper trait so the inline call site reads naturally without
+    // pulling in a new trait into the public surface.
+    trait UnwrapErrHelper<T, E> {
+        fn unwrap_err_or_else_helper(self, label: &str) -> E;
+    }
+    impl<T: std::fmt::Debug, E> UnwrapErrHelper<T, E> for Result<T, E> {
+        fn unwrap_err_or_else_helper(self, label: &str) -> E {
+            match self {
+                Ok(v) => panic!(
+                    "{label}: expected default_builtins to reject forged proof, \
+                     but it ACCEPTED (returned Ok({v:?})). This is a silent \
+                     soundness loss — every witnessed-predicate caveat would \
+                     bypass under this default."
+                ),
+                Err(e) => e,
+            }
+        }
+    }
+
+    #[test]
+    fn audit_attack_default_rejects_dfa_forged_one_byte_proof() {
+        assert_default_rejects_garbage(
+            WitnessedPredicate::dfa(
+                [0xAB; 32], // route-table root
+                InputRef::Sender,
+                0,
+            ),
+            "Dfa",
+        );
+    }
+
+    #[test]
+    fn audit_attack_default_rejects_temporal_forged_one_byte_proof() {
+        assert_default_rejects_garbage(
+            WitnessedPredicate::temporal([0xCD; 32], 0, 0),
+            "Temporal",
+        );
+    }
+
+    #[test]
+    fn audit_attack_default_rejects_merkle_membership_forged_one_byte_proof() {
+        assert_default_rejects_garbage(
+            WitnessedPredicate::merkle_membership([0xEF; 32], InputRef::Sender, 0),
+            "MerkleMembership",
+        );
+    }
+
+    #[test]
+    fn audit_attack_default_rejects_blinded_set_forged_one_byte_proof() {
+        assert_default_rejects_garbage(
+            WitnessedPredicate::blinded_set([0x12; 32], InputRef::Sender, 0),
+            "BlindedSet",
+        );
+    }
+
+    #[test]
+    fn audit_attack_default_rejects_bridge_predicate_forged_one_byte_proof() {
+        assert_default_rejects_garbage(
+            WitnessedPredicate::bridge_predicate(
+                [0x34; 32],
+                InputRef::PublicInput { pi_index: 0 },
+                0,
+            ),
+            "BridgePredicate",
+        );
+    }
+
+    #[test]
+    fn audit_attack_default_rejects_pedersen_equality_forged_one_byte_proof() {
+        assert_default_rejects_garbage(
+            WitnessedPredicate::pedersen_equality([0x56; 32], InputRef::Slot { index: 0 }, 0),
+            "PedersenEquality",
+        );
+    }
+
+    /// The default registry MUST install the real NonMembership
+    /// verifier (not a NotYetWired-style rejecter) because it's the one
+    /// kind whose cryptographic algebra ships in this crate.
+    #[test]
+    fn audit_default_registry_keeps_nonmembership_real_verifier() {
+        let reg = WitnessedPredicateRegistry::default_builtins();
+        let v = reg
+            .get(WitnessedPredicateKind::NonMembership)
+            .expect("NonMembership must be registered in default_builtins");
+        assert_eq!(v.name(), "sorted-neighbor-non-membership");
     }
 }
