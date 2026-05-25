@@ -27,7 +27,7 @@ use axum::{
 };
 use pyana_app_framework::BatchExecutor;
 use pyana_app_framework::server::api_error;
-use pyana_sdk::AgentWallet;
+use pyana_sdk::AgentCipherclerk;
 use pyana_sdk::wallet::DelegatedToken;
 use pyana_storage::inbox::CapInbox;
 use pyana_types::PublicKey;
@@ -51,9 +51,9 @@ pub struct AppState {
     pub creators: Arc<RwLock<HashMap<PublicKey, Creator>>>,
     /// Payment batch executor.
     pub executor: Arc<Mutex<PaymentExecutor>>,
-    /// The payment executor's own wallet — its public key is what subscribers
+    /// The payment executor's own cipherclerk — its public key is what subscribers
     /// address auto-debit envelopes to.
-    pub executor_wallet: Arc<Mutex<AgentWallet>>,
+    pub executor_cipherclerk: Arc<Mutex<AgentCipherclerk>>,
     /// Shared inbox into which delivered content lands.
     pub inbox: Arc<Mutex<CapInbox>>,
     /// Side-log of delivered ciphertexts (see `delivery.rs` REVIEW[P1]).
@@ -61,23 +61,23 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Construct fresh state with a freshly-generated executor wallet.
+    /// Construct fresh state with a freshly-generated executor cipherclerk.
     pub fn new() -> Self {
         Self {
             registry: Arc::new(RwLock::new(SubscriberRegistry::new())),
             creators: Arc::new(RwLock::new(HashMap::new())),
             executor: Arc::new(Mutex::new(PaymentExecutor::new())),
-            executor_wallet: Arc::new(Mutex::new(AgentWallet::new())),
+            executor_cipherclerk: Arc::new(Mutex::new(AgentCipherclerk::new())),
             inbox: Arc::new(Mutex::new(new_subscriber_inbox(1024))),
             delivery_log: Arc::new(Mutex::new(DeliveryLog::new())),
         }
     }
 
-    /// Construct state from a fixed executor wallet (used by tests for
+    /// Construct state from a fixed executor cipherclerk (used by tests for
     /// determinism).
-    pub fn with_executor_wallet(wallet: AgentWallet) -> Self {
+    pub fn with_executor_cipherclerk(cipherclerk: AgentCipherclerk) -> Self {
         let mut s = Self::new();
-        s.executor_wallet = Arc::new(Mutex::new(wallet));
+        s.executor_cipherclerk = Arc::new(Mutex::new(cipherclerk));
         s
     }
 }
@@ -298,9 +298,9 @@ async fn handle_delegate_debit(
     let sub_pk = parse_pk_hex(&subscriber_pk_hex)
         .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "invalid subscriber_pk_hex"))?;
     let mut reg = state.registry.write().await;
-    let mut wallet = state.executor_wallet.lock().await;
+    let mut cipherclerk = state.executor_cipherclerk.lock().await;
     let auth = reg
-        .receive_debit_delegation(&mut wallet, sub_pk, req.envelope)
+        .receive_debit_delegation(&mut cipherclerk, sub_pk, req.envelope)
         .map_err(|e| api_error(StatusCode::UNPROCESSABLE_ENTITY, format!("{e}")))?
         .clone();
     Ok(Json(DelegateDebitResponse {

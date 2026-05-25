@@ -10,7 +10,7 @@
 //! - **Delegated auto-debit**: subscribers issue a signed [`DelegatedToken`]
 //!   that authorizes the payment executor to debit up to `max_per_epoch` of
 //!   a specific `asset_id`. Envelopes are verified by the SDK's full
-//!   [`AgentWallet::receive_signed_delegation`] path under
+//!   [`AgentCipherclerk::receive_signed_delegation`] path under
 //!   [`DelegationAuthority::TrustedKey`].
 //! - **Credential-gated tiers**: premium tiers require a signed
 //!   `DelegatedToken` issued by a known "premium issuer". Free tiers do not.
@@ -27,7 +27,7 @@
 //! - [`server`]: HTTP API.
 //!
 //! [`DelegatedToken`]: pyana_sdk::DelegatedToken
-//! [`AgentWallet::receive_signed_delegation`]: pyana_sdk::AgentWallet::receive_signed_delegation
+//! [`AgentCipherclerk::receive_signed_delegation`]: pyana_sdk::AgentCipherclerk::receive_signed_delegation
 //! [`DelegationAuthority::TrustedKey`]: pyana_sdk::DelegationAuthority::TrustedKey
 
 pub mod creator;

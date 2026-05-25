@@ -11,7 +11,7 @@
 //!
 //! ## Why we do not call `receive_signed_delegation`
 //!
-//! `AgentWallet::receive_signed_delegation` requires `delegatee == wallet.public_key`.
+//! `AgentCipherclerk::receive_signed_delegation` requires `delegatee == cipherclerk.public_key`.
 //! Eligibility credentials are addressed to the VOTER, not the server. So we
 //! verify the envelope's signature directly using the same signing message that
 //! `envelope_hash()` returns (which is the value that was signed at issuance).
@@ -102,11 +102,11 @@ pub fn verify_eligibility(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyana_sdk::wallet::AgentWallet;
+    use pyana_sdk::wallet::AgentCipherclerk;
     use pyana_token::Attenuation;
 
     /// Helper: issuer mints a token, then delegates it to `voter_pk`.
-    fn issue_credential(issuer: &mut AgentWallet, voter_pk: PublicKey) -> DelegatedToken {
+    fn issue_credential(issuer: &mut AgentCipherclerk, voter_pk: PublicKey) -> DelegatedToken {
         let root_token = issuer.mint_token(&[0x11; 32], "vote");
         let restrictions = Attenuation {
             services: vec![("vote".into(), "submit".into())],
@@ -119,9 +119,9 @@ mod tests {
 
     #[test]
     fn valid_credential_accepted() {
-        let mut issuer = AgentWallet::new();
+        let mut issuer = AgentCipherclerk::new();
         let issuer_pk = issuer.public_key();
-        let voter = AgentWallet::new();
+        let voter = AgentCipherclerk::new();
         let cred = issue_credential(&mut issuer, voter.public_key());
 
         let auth = EligibilityAuthority::Single(issuer_pk);
@@ -133,11 +133,11 @@ mod tests {
     fn wrong_issuer_rejected() {
         // Adversarial: a credential signed by an UNAUTHORIZED issuer must be
         // rejected even if its signature is well-formed.
-        let mut rogue_issuer = AgentWallet::new();
-        let voter = AgentWallet::new();
+        let mut rogue_issuer = AgentCipherclerk::new();
+        let voter = AgentCipherclerk::new();
         let cred = issue_credential(&mut rogue_issuer, voter.public_key());
 
-        let real_issuer = AgentWallet::new();
+        let real_issuer = AgentCipherclerk::new();
         let auth = EligibilityAuthority::Single(real_issuer.public_key());
         let r = verify_eligibility(&auth, &cred);
         assert!(matches!(
@@ -150,9 +150,9 @@ mod tests {
     fn forged_signature_rejected() {
         // Adversarial: an attacker who fabricates a credential with random
         // signature bytes cannot pass verification.
-        let mut issuer = AgentWallet::new();
+        let mut issuer = AgentCipherclerk::new();
         let issuer_pk = issuer.public_key();
-        let voter = AgentWallet::new();
+        let voter = AgentCipherclerk::new();
         let mut cred = issue_credential(&mut issuer, voter.public_key());
 
         // Tamper: replace the signature with garbage.
@@ -167,9 +167,9 @@ mod tests {
     fn tampered_envelope_rejected() {
         // Adversarial: an attacker who flips a bit in the envelope (e.g.,
         // re-targets it to a different delegatee) breaks the signature.
-        let mut issuer = AgentWallet::new();
+        let mut issuer = AgentCipherclerk::new();
         let issuer_pk = issuer.public_key();
-        let voter = AgentWallet::new();
+        let voter = AgentCipherclerk::new();
         let mut cred = issue_credential(&mut issuer, voter.public_key());
 
         // Tamper: swap the delegatee — the signed message hash now changes,
@@ -183,9 +183,9 @@ mod tests {
 
     #[test]
     fn federation_accepts_any_member() {
-        let mut iss_a = AgentWallet::new();
-        let iss_b = AgentWallet::new();
-        let voter = AgentWallet::new();
+        let mut iss_a = AgentCipherclerk::new();
+        let iss_b = AgentCipherclerk::new();
+        let voter = AgentCipherclerk::new();
         let cred = issue_credential(&mut iss_a, voter.public_key());
 
         let mut set = HashSet::new();
@@ -197,10 +197,10 @@ mod tests {
 
     #[test]
     fn federation_rejects_outsiders() {
-        let mut rogue = AgentWallet::new();
-        let iss_a = AgentWallet::new();
-        let iss_b = AgentWallet::new();
-        let voter = AgentWallet::new();
+        let mut rogue = AgentCipherclerk::new();
+        let iss_a = AgentCipherclerk::new();
+        let iss_b = AgentCipherclerk::new();
+        let voter = AgentCipherclerk::new();
         let cred = issue_credential(&mut rogue, voter.public_key());
 
         let mut set = HashSet::new();

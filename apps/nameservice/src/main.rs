@@ -36,7 +36,7 @@ use serde_json::json;
 
 use pyana_app_framework::server::{AppConfig, AppServer};
 use pyana_app_framework::wallet::EmbeddedExecutor;
-use pyana_app_framework::{AgentWallet, AppWallet, CellId};
+use pyana_app_framework::{AgentCipherclerk, AppCipherclerk, CellId};
 
 use cross_fed::MetaDirectory;
 use registry::{DelegationAuthority, NameRegistry, RegistryError};
@@ -63,10 +63,10 @@ struct AppState {
     meta_directory: MetaDirectory,
     /// Current epoch (in a real system this comes from federation consensus).
     current_epoch: u64,
-    /// Framework-issued wallet handle. Used to sign on-ledger Actions
+    /// Framework-issued cipherclerk handle. Used to sign on-ledger Actions
     /// emitted by the registry path (replaces the pre-framework
     /// `[0u8; 64]` placeholder signatures).
-    wallet: AppWallet,
+    cipherclerk: AppCipherclerk,
     /// Embedded executor closing `APPS-USERSPACE-GAPS.md` §Gap 4: the
     /// framework runs a private ledger + turn executor in-process, so
     /// the registration handler can actually submit its signed Action
@@ -89,17 +89,17 @@ async fn main() {
     let rental_policy = RentalPolicy::default();
     let meta_directory = MetaDirectory::new();
 
-    // Build the framework wallet. In a real deployment the seed comes
+    // Build the framework cipherclerk. In a real deployment the seed comes
     // from key management (env-supplied mnemonic, HSM, etc.). For now a
-    // fresh wallet per process keeps the surface honest: signatures
-    // verify against the wallet's pubkey, no placeholders.
-    let wallet = AppWallet::new(AgentWallet::new(), nameservice_federation_id());
+    // fresh cipherclerk per process keeps the surface honest: signatures
+    // verify against the cipherclerk's pubkey, no placeholders.
+    let cipherclerk = AppCipherclerk::new(AgentCipherclerk::new(), nameservice_federation_id());
 
     // Build the embedded executor: a per-process Ledger + TurnExecutor
-    // bound to the same wallet identity (shared via the wallet's inner
-    // `Arc<RwLock<AgentWallet>>` so signing handle and submission handle
+    // bound to the same cipherclerk identity (shared via the cipherclerk's inner
+    // `Arc<RwLock<AgentCipherclerk>>` so signing handle and submission handle
     // see the same receipt chain). Closes APPS-USERSPACE-GAPS.md §Gap 4.
-    let executor = EmbeddedExecutor::new(&wallet, "nameservice");
+    let executor = EmbeddedExecutor::new(&cipherclerk, "nameservice");
 
     let state = AppState {
         registry,
@@ -108,7 +108,7 @@ async fn main() {
         rental_policy,
         meta_directory,
         current_epoch: 1,
-        wallet: wallet.clone(),
+        cipherclerk: cipherclerk.clone(),
         executor: executor.clone(),
     };
 
@@ -118,7 +118,7 @@ async fn main() {
         .service_name("pyana-nameservice")
         .with_health()
         .with_cors()
-        .with_wallet(wallet)
+        .with_cipherclerk(cipherclerk)
         .with_embedded_executor(executor)
         .routes(app_routes)
         .serve()
@@ -301,23 +301,23 @@ async fn register_name(
             // The action is no longer authored-and-dropped.
             let registry_cell = registry_cell_id();
             let registration_action = effects::build_register_action(
-                &state.wallet,
+                &state.cipherclerk,
                 registry_cell,
                 &entry.name,
                 entry.owner,
             );
 
             // The action targets `registry_cell`, but the executor's
-            // private ledger only knows about the wallet's own cell.
+            // private ledger only knows about the cipherclerk's own cell.
             // Re-sign a self-targeted variant so the embedded turn lands
             // on the agent cell (the executor's seeded cell). The on-
             // ledger meaning is the same: an EmitEvent + SetField pair
-            // proves the registration happened with this wallet's
+            // proves the registration happened with this cipherclerk's
             // identity, bound to its federation_id and chain head.
             let self_action = state
-                .wallet
+                .cipherclerk
                 .make_self_action("register_name", registration_action.effects.clone());
-            let submission = state.executor.submit_action(&state.wallet, self_action);
+            let submission = state.executor.submit_action(&state.cipherclerk, self_action);
 
             match submission {
                 Ok(receipt) => (
@@ -723,8 +723,8 @@ mod tests {
         let reverse_index = ReverseIndex::new();
         let rental_policy = RentalPolicy::default();
         let meta_directory = MetaDirectory::new();
-        let wallet = AppWallet::new(AgentWallet::new(), nameservice_federation_id());
-        let executor = EmbeddedExecutor::new(&wallet, "nameservice");
+        let cipherclerk = AppCipherclerk::new(AgentCipherclerk::new(), nameservice_federation_id());
+        let executor = EmbeddedExecutor::new(&cipherclerk, "nameservice");
 
         let state = AppState {
             registry,
@@ -733,7 +733,7 @@ mod tests {
             rental_policy,
             meta_directory,
             current_epoch: 100,
-            wallet,
+            cipherclerk,
             executor,
         };
 

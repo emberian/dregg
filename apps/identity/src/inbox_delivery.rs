@@ -8,10 +8,10 @@
 //! REVIEW[P1]: NEITHER this module NOR the identity server actually serializes a
 //! signed `DelegatedToken` into `cert_bytes`. The tests use placeholder ASCII
 //! (`b"signed-delegated-token-v2-envelope-placeholder"`, etc.) and no code path
-//! constructs a real `DelegatedToken` via `AgentWallet::delegate(...)`. As wired,
+//! constructs a real `DelegatedToken` via `AgentCipherclerk::delegate(...)`. As wired,
 //! the inbox is a transport for opaque bytes; the holder has no way to call
 //! `receive_signed_delegation(...)` because there is no `DelegatedToken` produced
-//! anywhere in this app. Either (a) integrate `AgentWallet` issuance and call
+//! anywhere in this app. Either (a) integrate `AgentCipherclerk` issuance and call
 //! `postcard::to_allocvec(&delegated_token)` for `cert_bytes`, or (b) downgrade
 //! the docstring claims to "transport-only, signature verification out of scope".
 //!

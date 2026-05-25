@@ -5,7 +5,7 @@
 //! Apps are *userspace* — they should not reach past the framework into
 //! `pyana_turn::builder::ActionBuilder` or hand-encode placeholder
 //! signatures. This module is the canonical userspace pattern: it takes
-//! a framework-issued [`AppWallet`] and produces a real signed
+//! a framework-issued [`AppCipherclerk`] and produces a real signed
 //! [`Action`] carrying `Authorization::Signature(..)` — no `[0u8; 64]`,
 //! no direct `pyana_turn::*` imports.
 //!
@@ -34,7 +34,7 @@
 //! `turn/src/executor.rs::convert_turn_effects_to_vm`), so the
 //! registration is provable on the cell side.
 
-use pyana_app_framework::{Action, AppWallet, CellId, Effect, Event, FieldElement};
+use pyana_app_framework::{Action, AppCipherclerk, CellId, Effect, Event, FieldElement};
 
 /// State field slot at which registered name hashes are stored. Picked
 /// arbitrarily for now; a real deployment binds this to the registry
@@ -52,11 +52,11 @@ pub const NAME_STORAGE_SLOT: usize = 8;
 ///    — anchors the name binding in the cell's state field at the
 ///    pre-agreed storage slot.
 ///
-/// The action is signed by the framework's [`AppWallet`] — no placeholder
+/// The action is signed by the framework's [`AppCipherclerk`] — no placeholder
 /// signatures, no direct `pyana_turn::builder::ActionBuilder` imports.
-/// The signature binds to the wallet's federation_id.
+/// The signature binds to the cipherclerk's federation_id.
 pub fn build_register_action(
-    wallet: &AppWallet,
+    cipherclerk: &AppCipherclerk,
     registry_cell: CellId,
     name: &str,
     owner: [u8; 32],
@@ -79,7 +79,7 @@ pub fn build_register_action(
         },
     ];
 
-    wallet.make_action(registry_cell, "register_name", effects)
+    cipherclerk.make_action(registry_cell, "register_name", effects)
 }
 
 /// Hash arbitrary bytes into a [`FieldElement`] (32-byte) suitable for
@@ -91,17 +91,17 @@ fn blake3_field(bytes: &[u8]) -> FieldElement {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyana_app_framework::{AgentWallet, Authorization, Effect};
+    use pyana_app_framework::{AgentCipherclerk, Authorization, Effect};
 
-    fn test_wallet() -> AppWallet {
-        AppWallet::new(AgentWallet::new(), [42u8; 32])
+    fn test_cipherclerk() -> AppCipherclerk {
+        AppCipherclerk::new(AgentCipherclerk::new(), [42u8; 32])
     }
 
     #[test]
     fn register_action_emits_event_and_setfield() {
-        let wallet = test_wallet();
+        let cipherclerk = test_cipherclerk();
         let registry_cell = CellId::from_bytes([1u8; 32]);
-        let action = build_register_action(&wallet, registry_cell, "alice.pyana", [3u8; 32]);
+        let action = build_register_action(&cipherclerk, registry_cell, "alice.pyana", [3u8; 32]);
 
         assert_eq!(action.effects.len(), 2);
         assert!(matches!(action.effects[0], Effect::EmitEvent { .. }));
@@ -112,9 +112,9 @@ mod tests {
     fn register_action_has_real_signature() {
         // The whole point of the userspace migration: actions carry a real
         // framework-issued signature, not a `[0u8; 64]` placeholder.
-        let wallet = test_wallet();
+        let cipherclerk = test_cipherclerk();
         let registry_cell = CellId::from_bytes([1u8; 32]);
-        let action = build_register_action(&wallet, registry_cell, "alice.pyana", [3u8; 32]);
+        let action = build_register_action(&cipherclerk, registry_cell, "alice.pyana", [3u8; 32]);
         match action.authorization {
             Authorization::Signature(a, b) => {
                 assert!(
@@ -128,10 +128,10 @@ mod tests {
 
     #[test]
     fn different_names_produce_different_setfield_values() {
-        let wallet = test_wallet();
+        let cipherclerk = test_cipherclerk();
         let registry_cell = CellId::from_bytes([1u8; 32]);
-        let a = build_register_action(&wallet, registry_cell, "alice.pyana", [3u8; 32]);
-        let b = build_register_action(&wallet, registry_cell, "bob.pyana", [3u8; 32]);
+        let a = build_register_action(&cipherclerk, registry_cell, "alice.pyana", [3u8; 32]);
+        let b = build_register_action(&cipherclerk, registry_cell, "bob.pyana", [3u8; 32]);
         let pick = |action: &Action| match &action.effects[1] {
             Effect::SetField { value, .. } => *value,
             _ => panic!("unexpected effect"),
@@ -140,14 +140,14 @@ mod tests {
     }
 
     #[test]
-    fn wallet_signs_with_its_own_identity() {
-        // Two different wallets sign the same logical action with different
-        // signatures — confirms the wallet's identity is actually bound in.
-        let w1 = AppWallet::new(AgentWallet::new(), [42u8; 32]);
-        let w2 = AppWallet::new(AgentWallet::new(), [42u8; 32]);
+    fn cipherclerk_signs_with_its_own_identity() {
+        // Two different cipherclerks sign the same logical action with different
+        // signatures — confirms the cipherclerk's identity is actually bound in.
+        let cc1 = AppCipherclerk::new(AgentCipherclerk::new(), [42u8; 32]);
+        let cc2 = AppCipherclerk::new(AgentCipherclerk::new(), [42u8; 32]);
         let cell = CellId::from_bytes([1u8; 32]);
-        let a1 = build_register_action(&w1, cell, "alice", [3u8; 32]);
-        let a2 = build_register_action(&w2, cell, "alice", [3u8; 32]);
+        let a1 = build_register_action(&cc1, cell, "alice", [3u8; 32]);
+        let a2 = build_register_action(&cc2, cell, "alice", [3u8; 32]);
         let (Authorization::Signature(r1, _), Authorization::Signature(r2, _)) =
             (&a1.authorization, &a2.authorization)
         else {
@@ -155,7 +155,7 @@ mod tests {
         };
         assert_ne!(
             r1, r2,
-            "different wallets must produce different signatures"
+            "different cipherclerks must produce different signatures"
         );
     }
 }

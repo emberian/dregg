@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use pyana_app_framework::auth::AdminToken;
-use pyana_sdk::wallet::{AgentWallet, DelegatedToken};
+use pyana_sdk::wallet::{AgentCipherclerk, DelegatedToken};
 use pyana_token::Attenuation;
 use pyana_types::{PublicKey, Signature};
 
@@ -78,7 +78,7 @@ async fn get_json(app: &axum::Router, uri: &str) -> (StatusCode, Value) {
 /// Issue a delegation envelope from `issuer` to `voter_pk` granting the
 /// "vote/submit" capability. This mirrors what a real eligibility-issuer
 /// service would produce.
-fn issue_eligibility_credential(issuer: &mut AgentWallet, voter_pk: PublicKey) -> DelegatedToken {
+fn issue_eligibility_credential(issuer: &mut AgentCipherclerk, voter_pk: PublicKey) -> DelegatedToken {
     let root_token = issuer.mint_token(&[0x99; 32], "vote");
     let restrictions = Attenuation {
         services: vec![("vote".into(), "submit".into())],
@@ -95,7 +95,7 @@ fn issue_eligibility_credential(issuer: &mut AgentWallet, voter_pk: PublicKey) -
 
 #[tokio::test]
 async fn admin_creates_and_lists_proposal() {
-    let issuer = AgentWallet::new();
+    let issuer = AgentCipherclerk::new();
     let state = make_state(issuer.public_key());
     let app = make_app(state);
 
@@ -122,7 +122,7 @@ async fn admin_creates_and_lists_proposal() {
 
 #[tokio::test]
 async fn create_proposal_without_admin_token_rejected() {
-    let issuer = AgentWallet::new();
+    let issuer = AgentCipherclerk::new();
     let state = make_state(issuer.public_key());
     let app = make_app(state);
     let (status, _) = post_json(
@@ -144,8 +144,8 @@ async fn create_proposal_without_admin_token_rejected() {
 
 #[tokio::test]
 async fn submit_ballot_with_valid_credential_accepted() {
-    let mut issuer = AgentWallet::new();
-    let voter = AgentWallet::new();
+    let mut issuer = AgentCipherclerk::new();
+    let voter = AgentCipherclerk::new();
     let state = make_state(issuer.public_key());
     let app = make_app(state);
 
@@ -182,7 +182,7 @@ async fn submit_ballot_with_valid_credential_accepted() {
 #[tokio::test]
 async fn submit_ballot_without_credential_rejected() {
     // Adversarial: an empty/synthesized credential must fail.
-    let issuer = AgentWallet::new();
+    let issuer = AgentCipherclerk::new();
     let state = make_state(issuer.public_key());
     let app = make_app(state);
 
@@ -198,10 +198,10 @@ async fn submit_ballot_without_credential_rejected() {
     // We cannot easily hand-craft a `DelegatedToken` from raw JSON (its
     // PublicKey/Signature fields use a length-prefixed `serde_32`/`serde_64`
     // encoding, awkward to inline). Instead, mint a real credential from an
-    // UNAUTHORIZED issuer wallet: this exercises the same "no credential
+    // UNAUTHORIZED issuer cipherclerk: this exercises the same "no credential
     // from this issuer" rejection path.
-    let mut rogue_issuer = AgentWallet::new();
-    let voter = AgentWallet::new();
+    let mut rogue_issuer = AgentCipherclerk::new();
+    let voter = AgentCipherclerk::new();
     let cred = issue_eligibility_credential(&mut rogue_issuer, voter.public_key());
 
     let pid_bytes = pyana_app_framework::hex::hex_to_bytes32(&pid_hex).unwrap();
@@ -229,9 +229,9 @@ async fn submit_ballot_without_credential_rejected() {
 async fn submit_ballot_with_forged_signature_rejected() {
     // Adversarial: even with the correct delegator pubkey field, a tampered
     // signature must fail.
-    let mut issuer = AgentWallet::new();
+    let mut issuer = AgentCipherclerk::new();
     let issuer_pk = issuer.public_key();
-    let voter = AgentWallet::new();
+    let voter = AgentCipherclerk::new();
     let state = make_state(issuer_pk);
     let app = make_app(state);
 
@@ -271,8 +271,8 @@ async fn submit_ballot_with_forged_signature_rejected() {
 
 #[tokio::test]
 async fn double_submission_by_same_voter_rejected() {
-    let mut issuer = AgentWallet::new();
-    let voter = AgentWallet::new();
+    let mut issuer = AgentCipherclerk::new();
+    let voter = AgentCipherclerk::new();
     let state = make_state(issuer.public_key());
     let app = make_app(state);
 
@@ -340,7 +340,7 @@ async fn commitment_hides_vote() {
 
 #[tokio::test]
 async fn five_ballots_yield_correct_tally() {
-    let mut issuer = AgentWallet::new();
+    let mut issuer = AgentCipherclerk::new();
     let state = make_state(issuer.public_key());
     let app = make_app(state);
 
@@ -358,7 +358,7 @@ async fn five_ballots_yield_correct_tally() {
     let votes = [0u32, 1, 0, 0, 1];
     let mut reveals = Vec::new();
     for (i, &opt) in votes.iter().enumerate() {
-        let voter = AgentWallet::new();
+        let voter = AgentCipherclerk::new();
         let cred = issue_eligibility_credential(&mut issuer, voter.public_key());
         let r = [(i as u8 + 1) * 11u8; 32];
         let commitment = ballot::commit(&pid_bytes, opt, &r);
@@ -425,8 +425,8 @@ async fn five_ballots_yield_correct_tally() {
 async fn reveal_with_wrong_vote_rejected() {
     // Adversarial: a voter cannot reveal a different option than they
     // committed to.
-    let mut issuer = AgentWallet::new();
-    let voter = AgentWallet::new();
+    let mut issuer = AgentCipherclerk::new();
+    let voter = AgentCipherclerk::new();
     let state = make_state(issuer.public_key());
     let app = make_app(state);
 
@@ -481,7 +481,7 @@ async fn queue_entries_carry_no_identity_bytes() {
     // unit test: after several voters submit, the set of stored commitments
     // contains NONE of their public-key bytes as a substring of any entry,
     // and no entry equals any voter pubkey.
-    let mut issuer = AgentWallet::new();
+    let mut issuer = AgentCipherclerk::new();
     let state = make_state(issuer.public_key());
     let app = make_app(state.clone());
 
@@ -497,7 +497,7 @@ async fn queue_entries_carry_no_identity_bytes() {
 
     let mut voter_pks: Vec<PublicKey> = Vec::new();
     for i in 0..4u8 {
-        let voter = AgentWallet::new();
+        let voter = AgentCipherclerk::new();
         voter_pks.push(voter.public_key());
         let cred = issue_eligibility_credential(&mut issuer, voter.public_key());
         let r = [(i + 1) * 17; 32];
@@ -542,8 +542,8 @@ async fn queue_entries_carry_no_identity_bytes() {
 
 #[tokio::test]
 async fn wrong_phase_rejects_submit_and_reveal() {
-    let mut issuer = AgentWallet::new();
-    let voter = AgentWallet::new();
+    let mut issuer = AgentCipherclerk::new();
+    let voter = AgentCipherclerk::new();
     let state = make_state(issuer.public_key());
     let app = make_app(state);
 

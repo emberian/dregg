@@ -168,7 +168,7 @@ mod tests {
     use crate::crypto::{decrypt_with, pubkey_from_privkey};
     use crate::subscriber::{SubscriberRegistry, deterministic_wallet};
 
-    fn wallet(seed: u8) -> pyana_sdk::AgentWallet {
+    fn wallet(seed: u8) -> pyana_sdk::AgentCipherclerk {
         let mut s = [0u8; 32];
         s[0] = seed;
         s[31] = seed.wrapping_mul(13);

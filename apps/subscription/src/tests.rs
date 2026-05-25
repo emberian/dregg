@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use pyana_app_framework::BatchExecutor;
 use pyana_sdk::wallet::DelegatedToken;
-use pyana_sdk::{AgentWallet, Attenuation};
+use pyana_sdk::{AgentCipherclerk, Attenuation};
 use pyana_token::BudgetSpec;
 use tokio::sync::Mutex;
 
@@ -18,7 +18,7 @@ use crate::delivery::{self, DeliveryLog, new_subscriber_inbox};
 use crate::payments::{DebitTurn, PaymentExecutor};
 use crate::subscriber::{SubscriberRegistry, deterministic_wallet};
 
-fn wallet(seed: u8) -> AgentWallet {
+fn wallet(seed: u8) -> AgentCipherclerk {
     let mut s = [0u8; 32];
     s[0] = seed;
     s[31] = seed.wrapping_mul(13);
@@ -27,8 +27,8 @@ fn wallet(seed: u8) -> AgentWallet {
 
 fn install_debit_auth(
     reg: &mut SubscriberRegistry,
-    subscriber: &mut AgentWallet,
-    executor_w: &mut AgentWallet,
+    subscriber: &mut AgentCipherclerk,
+    executor_w: &mut AgentCipherclerk,
     asset_id: u64,
     max_per_epoch: u64,
 ) -> DelegatedToken {

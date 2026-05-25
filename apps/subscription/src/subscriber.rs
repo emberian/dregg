@@ -8,7 +8,7 @@
 //! 1. **Ed25519 identity** (`identity_pk`): the subscriber's wallet pubkey.
 //!    This is what signs delegation envelopes and identifies them in the
 //!    `Ledger`. The corresponding private key is held by the subscriber's
-//!    `pyana_sdk::AgentWallet`.
+//!    `pyana_sdk::AgentCipherclerk`.
 //! 2. **X25519 receive key** (`recv_pubkey`): published so content creators
 //!    can encrypt-to-subscriber. See `crypto.rs::encrypt_for`.
 //!
@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 
 use pyana_sdk::wallet::{DelegatedToken, DelegationAuthority};
-use pyana_sdk::{AgentWallet, SdkError};
+use pyana_sdk::{AgentCipherclerk, SdkError};
 use pyana_types::PublicKey;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -63,7 +63,7 @@ pub enum SubscriberError {
 ///
 /// **Only constructed via [`SubscriberRegistry::receive_debit_delegation`]**,
 /// which runs the SDK's full
-/// [`AgentWallet::receive_signed_delegation`](pyana_sdk::AgentWallet::receive_signed_delegation)
+/// [`AgentCipherclerk::receive_signed_delegation`](pyana_sdk::AgentCipherclerk::receive_signed_delegation)
 /// path under [`DelegationAuthority::TrustedKey(subscriber)`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DebitAuthorization {
@@ -119,7 +119,7 @@ impl SubscriberRegistry {
     /// (the SDK's full `receive_signed_delegation` path is exercised on the
     /// executor side for auto-debit envelopes; credential envelopes are
     /// directly verified here because we don't have a subscriber-side
-    /// AgentWallet in process).
+    /// AgentCipherclerk in process).
     pub fn subscribe(
         &mut self,
         subscriber: PublicKey,
@@ -154,27 +154,27 @@ impl SubscriberRegistry {
 
     /// Receive a subscriber's auto-debit delegation envelope.
     ///
-    /// `executor_wallet` MUST be the payment executor's wallet — its
+    /// `executor_cipherclerk` MUST be the payment executor's cipherclerk — its
     /// `public_key()` must equal the envelope's `delegatee`. This function
-    /// uses [`AgentWallet::receive_signed_delegation`] with
+    /// uses [`AgentCipherclerk::receive_signed_delegation`] with
     /// [`DelegationAuthority::TrustedKey(subscriber)`] to perform the full
     /// envelope verification (signature, structural validity, authority).
     ///
-    /// On success, the executor wallet adds a `HeldToken` to its token list
+    /// On success, the executor cipherclerk adds a `HeldToken` to its token list
     /// **and** this registry records a [`DebitAuthorization`] keyed by
     /// `subscriber`.
     pub fn receive_debit_delegation(
         &mut self,
-        executor_wallet: &mut AgentWallet,
+        executor_cipherclerk: &mut AgentCipherclerk,
         subscriber: PublicKey,
         envelope: DelegatedToken,
     ) -> Result<&DebitAuthorization, SubscriberError> {
         // (1) Pre-check delegatee matches the executor's wallet.
-        if envelope.delegatee != executor_wallet.public_key() {
+        if envelope.delegatee != executor_cipherclerk.public_key() {
             return Err(SubscriberError::InvalidDelegation(format!(
                 "envelope addressed to {:?}, not executor {:?}",
                 envelope.delegatee,
-                executor_wallet.public_key(),
+                executor_cipherclerk.public_key(),
             )));
         }
 
@@ -208,7 +208,7 @@ impl SubscriberRegistry {
         //     verification path. This checks: structural validity, expiry,
         //     delegatee binding, signature, authority (`TrustedKey`), and
         //     freshness of the binding.
-        executor_wallet
+        executor_cipherclerk
             .receive_signed_delegation(envelope, &DelegationAuthority::TrustedKey(subscriber))
             .map_err(SubscriberError::from)?;
 
@@ -233,7 +233,7 @@ impl SubscriberRegistry {
 }
 
 /// Verify a credential envelope (delegatee = subscriber, signer = expected
-/// issuer). We don't have a subscriber-side `AgentWallet` to drive
+/// issuer). We don't have a subscriber-side `AgentCipherclerk` to drive
 /// `receive_signed_delegation`, so verify the signature directly using the
 /// envelope's published `envelope_hash()` helper.
 fn verify_credential_envelope(
@@ -277,7 +277,7 @@ fn verify_credential_envelope(
 // hash). The SDK exposes `receive_signed_delegation` for envelopes addressed
 // to the current wallet, but credentials are addressed to the *subscriber*,
 // not to the executor, so the executor's wallet can't drive that path
-// directly. A framework gap: `AgentWallet::verify_envelope` (no token
+// directly. A framework gap: `AgentCipherclerk::verify_envelope` (no token
 // installation, just signature+authority) would let us reuse the SDK path
 // for third-party credentials.
 
@@ -288,11 +288,11 @@ impl From<SdkError> for SubscriberError {
     }
 }
 
-/// Construct an `AgentWallet` bound to a given 32-byte secret. Used by tests
-/// and the server to build the executor wallet with a predictable identity.
-pub fn deterministic_wallet(secret: [u8; 32]) -> AgentWallet {
+/// Construct an `AgentCipherclerk` bound to a given 32-byte secret. Used by tests
+/// and the server to build the executor cipherclerk with a predictable identity.
+pub fn deterministic_wallet(secret: [u8; 32]) -> AgentCipherclerk {
     use zeroize::Zeroizing;
-    AgentWallet::from_key_bytes(Zeroizing::new(secret))
+    AgentCipherclerk::from_key_bytes(Zeroizing::new(secret))
 }
 
 // ============================================================================
@@ -306,7 +306,7 @@ mod tests {
     use pyana_sdk::Attenuation;
     use pyana_token::BudgetSpec;
 
-    fn wallet(seed: u8) -> AgentWallet {
+    fn wallet(seed: u8) -> AgentCipherclerk {
         let mut s = [0u8; 32];
         s[0] = seed;
         s[31] = seed.wrapping_mul(13);

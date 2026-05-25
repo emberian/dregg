@@ -2,7 +2,7 @@
 //!
 //! This example demonstrates the REAL privacy-preserving flow end-to-end:
 //!
-//! 1. Worker mints a credential token via AgentWallet.
+//! 1. Worker mints a credential token via AgentCipherclerk.
 //! 2. Worker generates a STARK proof of federation membership (zero-knowledge).
 //! 3. Worker claims a bounty by presenting the proof through the HTTP API.
 //! 4. The bounty board verifies the proof without learning the worker's identity.
@@ -32,7 +32,7 @@
 use std::time::Instant;
 
 use pyana_circuit::ivc::IvcBuilder;
-use pyana_sdk::{AgentWallet, AuthRequest, BabyBear};
+use pyana_sdk::{AgentCipherclerk, AuthRequest, BabyBear};
 
 use pyana_bounty_board::server::{ServerConfig, start_server};
 use pyana_bounty_board::{
@@ -94,18 +94,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     // =========================================================================
-    // Step 1: Set up issuer and worker wallets
+    // Step 1: Set up issuer and worker cipherclerks
     // =========================================================================
-    println!("[1] Setting up wallets...");
+    println!("[1] Setting up cipherclerks...");
 
     // Issuer: posts bounties
-    let issuer_wallet = AgentWallet::new();
-    let issuer_cell = issuer_wallet.cell_id("bounty-board");
+    let issuer_cipherclerk = AgentCipherclerk::new();
+    let issuer_cell = issuer_cipherclerk.cell_id("bounty-board");
     let issuer_cell_hex = hex::encode(issuer_cell.as_bytes());
     println!("    Issuer cell: {issuer_cell_hex}");
 
     // Worker: claims bounties anonymously
-    let mut worker_wallet = AgentWallet::new();
+    let mut worker_wallet = AgentCipherclerk::new();
     let worker_pubkey = worker_wallet.public_key();
     println!(
         "    Worker pubkey: {} (PRIVATE - never revealed to issuer)",
@@ -427,7 +427,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Compute a synthetic federation root matching the wallet's derivation.
 ///
-/// This replicates `AgentWallet::compute_federation_root_bb` so the bounty board's
+/// This replicates `AgentCipherclerk::compute_federation_root_bb` so the bounty board's
 /// root matches what the wallet produces as public input in its STARK proof.
 fn compute_synthetic_federation_root(issuer_key: &[u8; 32]) -> BabyBear {
     use pyana_circuit::merkle_air::MerkleAir;
@@ -462,7 +462,7 @@ fn bb_to_bytes(bb: BabyBear) -> [u8; 32] {
 }
 
 /// Deterministic sibling hash for Merkle path construction.
-/// Must match `AgentWallet::hash_index` exactly.
+/// Must match `AgentCipherclerk::hash_index` exactly.
 fn hash_index(level: usize, sibling: usize, key: &[u8; 32]) -> u32 {
     let mut hasher = blake3::Hasher::new();
     hasher.update(&level.to_le_bytes());

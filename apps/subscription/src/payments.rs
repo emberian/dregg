@@ -414,7 +414,7 @@ mod tests {
     use pyana_sdk::Attenuation;
     use pyana_token::BudgetSpec;
 
-    fn wallet(seed: u8) -> pyana_sdk::AgentWallet {
+    fn wallet(seed: u8) -> pyana_sdk::AgentCipherclerk {
         let mut s = [0u8; 32];
         s[0] = seed;
         s[31] = seed.wrapping_mul(13);
@@ -423,8 +423,8 @@ mod tests {
 
     fn install_debit_auth(
         reg: &mut SubscriberRegistry,
-        subscriber: &mut pyana_sdk::AgentWallet,
-        executor_w: &mut pyana_sdk::AgentWallet,
+        subscriber: &mut pyana_sdk::AgentCipherclerk,
+        executor_w: &mut pyana_sdk::AgentCipherclerk,
         asset_id: u64,
         max_per_epoch: u64,
     ) {
