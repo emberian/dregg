@@ -34,6 +34,7 @@ pub mod permissions;
 pub mod preconditions;
 pub mod predicate;
 pub mod program;
+pub mod vk_v2;
 pub mod revocation_channel;
 #[cfg(feature = "crypto")]
 pub mod seal;
@@ -111,6 +112,7 @@ pub use predicate::{
     InputRef, PredicateInput, WitnessedPredicate, WitnessedPredicateError, WitnessedPredicateKind,
     WitnessedPredicateRegistry, WitnessedPredicateVerifier, canonical_predicate_vk,
 };
+pub use vk_v2::{ProvingSystemId, VerifierFingerprint, VkComponents, canonical_vk_v2};
 pub use program::{CellProgram, ProgramError, StateConstraint, field_from_u64, field_from_u64_be};
 pub use revocation_channel::{
     ChannelId, RevocationChannel, RevocationChannelError, RevocationChannelSet,
