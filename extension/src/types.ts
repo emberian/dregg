@@ -585,6 +585,17 @@ export interface PyanaWasm {
     expiry: number | null;
     encrypted: boolean;
   };
+  /**
+   * Canonical private-transfer turn-builder. Routes through
+   * `AgentWallet::private_transfer` in the SDK — Pedersen value
+   * commitment + stealth one-time-address recipient — and returns the
+   * postcard-encoded `Turn` ready for `/turns/submit`.
+   */
+  wallet_private_transfer(specJson: string): {
+    turn_id: string;
+    turn_bytes: Uint8Array;
+    agent_cell_id: string;
+  };
 }
 
 // ---------------------------------------------------------------------------

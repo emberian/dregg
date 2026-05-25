@@ -2076,6 +2076,104 @@ pub fn wallet_post_encrypted_intent(spec_json: &str) -> Result<JsValue, JsError>
 }
 
 // ============================================================================
+// Canonical private-transfer builder (privateTransfer canonical path)
+// ============================================================================
+
+/// Build a private-transfer turn via the canonical SDK path
+/// (`AgentWallet::private_transfer`). The turn carries a Pedersen value
+/// commitment (amount hidden) addressed to a freshly-derived stealth
+/// one-time pubkey for the recipient meta-address.
+///
+/// JSON input:
+/// ```json
+/// {
+///   "sender_privkey": [32 bytes as number[]],
+///   "amount": <u64>,
+///   "asset_type": <u64>,
+///   "recipient_meta": {
+///     "spend_pubkey": [32 bytes as number[]],
+///     "view_pubkey":  [32 bytes as number[]]
+///   }
+/// }
+/// ```
+///
+/// Returns JSON: `{ turn_id: <hex>, turn_bytes: Uint8Array,
+/// agent_cell_id: <hex> }`. `turn_bytes` is the postcard-serialized
+/// `Turn` ready for `/turns/submit`.
+#[wasm_bindgen]
+pub fn wallet_private_transfer(spec_json: &str) -> Result<JsValue, JsError> {
+    use pyana_cell::stealth::StealthMetaAddress;
+    use pyana_sdk::AgentWallet;
+    use zeroize::Zeroizing;
+
+    #[derive(serde::Deserialize)]
+    struct MetaInput {
+        spend_pubkey: Vec<u8>,
+        view_pubkey: Vec<u8>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Spec {
+        sender_privkey: Vec<u8>,
+        amount: u64,
+        #[serde(default)]
+        asset_type: u64,
+        recipient_meta: MetaInput,
+    }
+
+    let spec: Spec = serde_json::from_str(spec_json).map_err(|e| JsError::new(&e.to_string()))?;
+
+    if spec.sender_privkey.len() != 32 {
+        return Err(JsError::new("sender_privkey must be exactly 32 bytes"));
+    }
+    if spec.recipient_meta.spend_pubkey.len() != 32 {
+        return Err(JsError::new(
+            "recipient_meta.spend_pubkey must be exactly 32 bytes",
+        ));
+    }
+    if spec.recipient_meta.view_pubkey.len() != 32 {
+        return Err(JsError::new(
+            "recipient_meta.view_pubkey must be exactly 32 bytes",
+        ));
+    }
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(&spec.sender_privkey);
+    let mut spend_pk = [0u8; 32];
+    spend_pk.copy_from_slice(&spec.recipient_meta.spend_pubkey);
+    let mut view_pk = [0u8; 32];
+    view_pk.copy_from_slice(&spec.recipient_meta.view_pubkey);
+
+    let meta = StealthMetaAddress {
+        spend_pubkey: spend_pk,
+        view_pubkey: view_pk,
+    };
+
+    let mut wallet = AgentWallet::from_key_bytes(Zeroizing::new(seed));
+    let turn = wallet
+        .private_transfer(spec.amount, spec.asset_type, &meta)
+        .map_err(|e| JsError::new(&format!("private_transfer failed: {e}")))?;
+
+    let turn_bytes = postcard::to_allocvec(&turn)
+        .map_err(|e| JsError::new(&format!("postcard serialization failed: {e}")))?;
+    let turn_hash = blake3::hash(&turn_bytes);
+    let turn_id = hex_encode(turn_hash.as_bytes());
+
+    #[derive(Serialize)]
+    struct Out {
+        turn_id: String,
+        turn_bytes: Vec<u8>,
+        agent_cell_id: String,
+    }
+
+    let out = Out {
+        turn_id,
+        turn_bytes,
+        agent_cell_id: hex_encode(&turn.agent.0),
+    };
+    serde_wasm_bindgen::to_value(&out).map_err(|e| JsError::new(&e.to_string()))
+}
+
+// ============================================================================
 // Helpers
 // ============================================================================
 

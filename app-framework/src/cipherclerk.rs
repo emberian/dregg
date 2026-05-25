@@ -49,7 +49,7 @@
 
 use std::sync::{Arc, Mutex, RwLock};
 
-use pyana_sdk::{AgentRuntime, AgentCipherclerk};
+use pyana_sdk::{AgentCipherclerk, AgentRuntime};
 use pyana_turn::action::{Action, Effect};
 use pyana_turn::{Turn, TurnReceipt};
 use pyana_types::{CellId, PublicKey};
@@ -143,11 +143,11 @@ impl AppCipherclerk {
 
     /// Build a self-signed [`Action`] targeting this wallet's own cell.
     ///
-    /// Equivalent to `wallet.make_action(wallet.cell_id(), method, effects)`.
+    /// Equivalent to `cclerk.make_action(cclerk.cell_id(), method, effects)`.
     /// Use this for app-internal actions where the target is the agent's
     /// own cell (transferring between an app's own cells, mutating the
     /// app's local state slot, etc.) and the caller does not want to
-    /// repeat `wallet.cell_id()` at every call site.
+    /// repeat `cclerk.cell_id()` at every call site.
     ///
     /// See `APPS-USERSPACE-GAPS.md` §Gap 3 for the design framing.
     pub fn make_self_action(&self, method: &str, effects: Vec<Effect>) -> Action {
@@ -238,14 +238,21 @@ impl AppCipherclerk {
         )
     }
 
-    /// Get a shared handle to the underlying SDK wallet lock.
+    /// Get a shared handle to the underlying SDK cipherclerk lock.
     ///
     /// Used by the framework to construct an [`EmbeddedExecutor`] that
-    /// shares this wallet's receipt chain and signing key. App code
-    /// should not call this — if you find yourself reaching here from
-    /// an `apps/*` crate, the framework is missing a narrow method.
-    pub fn shared_wallet(&self) -> Arc<RwLock<AgentCipherclerk>> {
+    /// shares this cipherclerk's receipt chain and signing key. App
+    /// code should not call this — if you find yourself reaching here
+    /// from an `apps/*` crate, the framework is missing a narrow
+    /// method.
+    pub fn shared_cipherclerk(&self) -> Arc<RwLock<AgentCipherclerk>> {
         Arc::clone(&self.inner)
+    }
+
+    /// Legacy alias for [`Self::shared_cipherclerk`].
+    #[doc(hidden)]
+    pub fn shared_wallet(&self) -> Arc<RwLock<AgentCipherclerk>> {
+        self.shared_cipherclerk()
     }
 
     /// Take a read lock on the underlying SDK wallet (panic-safe).
@@ -321,8 +328,8 @@ impl EmbeddedExecutor {
     /// `domain` is the agent's domain string; should match the
     /// `AppCipherclerk`'s [`AppCipherclerk::with_domain`] setting if it was
     /// customized. Defaults to `"default"`.
-    pub fn new(wallet: &AppCipherclerk, domain: &str) -> Self {
-        let shared = wallet.shared_wallet();
+    pub fn new(cipherclerk: &AppCipherclerk, domain: &str) -> Self {
+        let shared = cipherclerk.shared_cipherclerk();
         let runtime = AgentRuntime::new(shared, domain);
         let cell_id = runtime.cell_id();
         Self {
@@ -374,10 +381,10 @@ impl EmbeddedExecutor {
     /// action through [`AppCipherclerk::make_action`] and just want to ship it.
     pub fn submit_action(
         &self,
-        wallet: &AppCipherclerk,
+        cipherclerk: &AppCipherclerk,
         action: Action,
     ) -> Result<TurnReceipt, ExecutorSubmitError> {
-        let turn = wallet.make_turn(action);
+        let turn = cipherclerk.make_turn(action);
         self.submit_turn(&turn)
     }
 }
@@ -427,12 +434,12 @@ mod tests {
 
     #[test]
     fn wallet_signs_action_with_real_signature() {
-        let sdk = AgentCipherclerk::new();
+        let sdk_cclerk = AgentCipherclerk::new();
         let fed = [7u8; 32];
-        let wallet = AppCipherclerk::new(sdk, fed);
+        let cclerk = AppCipherclerk::new(sdk_cclerk, fed);
         let target = CellId::from_bytes([1u8; 32]);
 
-        let action = wallet.make_action(target, "noop", vec![]);
+        let action = cclerk.make_action(target, "noop", vec![]);
 
         // The whole point: not Unchecked, and not a zero signature.
         match action.authorization {
@@ -448,19 +455,19 @@ mod tests {
 
     #[test]
     fn wallet_make_turn_binds_to_default_domain() {
-        let sdk = AgentCipherclerk::new();
-        let wallet = AppCipherclerk::new(sdk, [0u8; 32]);
-        let cell = wallet.cell_id();
-        let action = wallet.make_action(cell, "noop", vec![]);
-        let turn = wallet.make_turn(action);
+        let sdk_cclerk = AgentCipherclerk::new();
+        let cclerk = AppCipherclerk::new(sdk_cclerk, [0u8; 32]);
+        let cell = cclerk.cell_id();
+        let action = cclerk.make_action(cell, "noop", vec![]);
+        let turn = cclerk.make_turn(action);
         assert_eq!(turn.agent, cell);
         assert_eq!(turn.nonce, 0);
     }
 
     #[test]
     fn with_domain_changes_cell_id() {
-        let sdk = AgentCipherclerk::new();
-        let w1 = AppCipherclerk::new(sdk, [0u8; 32]);
+        let sdk_cclerk = AgentCipherclerk::new();
+        let w1 = AppCipherclerk::new(sdk_cclerk, [0u8; 32]);
         let w2 = w1.clone().with_domain("alt-domain");
         assert_ne!(w1.cell_id(), w2.cell_id());
     }
@@ -475,10 +482,10 @@ mod tests {
     #[test]
     fn make_self_action_targets_wallet_cell() {
         // Gap 3: ergonomic wrapper for app-internal actions.
-        let sdk = AgentCipherclerk::new();
-        let wallet = AppCipherclerk::new(sdk, [11u8; 32]);
-        let action = wallet.make_self_action("local-bump", vec![]);
-        assert_eq!(action.target, wallet.cell_id());
+        let sdk_cclerk = AgentCipherclerk::new();
+        let cclerk = AppCipherclerk::new(sdk_cclerk, [11u8; 32]);
+        let action = cclerk.make_self_action("local-bump", vec![]);
+        assert_eq!(action.target, cclerk.cell_id());
         match action.authorization {
             pyana_turn::action::Authorization::Signature(a, b) => {
                 assert!(a != [0u8; 32] || b != [0u8; 32]);
@@ -496,8 +503,8 @@ mod tests {
         use pyana_cell::{CellMode, FactoryCreationParams};
         use pyana_turn::action::{Authorization, Effect};
 
-        let sdk = AgentCipherclerk::new();
-        let wallet = AppCipherclerk::new(sdk, [33u8; 32]);
+        let sdk_cclerk = AgentCipherclerk::new();
+        let cclerk = AppCipherclerk::new(sdk_cclerk, [33u8; 32]);
         let factory_vk = [44u8; 32];
         let owner = [55u8; 32];
         let token = [66u8; 32];
@@ -509,10 +516,10 @@ mod tests {
             owner_pubkey: owner,
         };
 
-        let turn = wallet.create_from_factory(factory_vk, owner, token, params);
+        let turn = cclerk.create_from_factory(factory_vk, owner, token, params);
 
         // Issuer is the wallet's own cell.
-        assert_eq!(turn.agent, wallet.cell_id());
+        assert_eq!(turn.agent, cclerk.cell_id());
         // Exactly one root action, carrying the factory effect.
         assert_eq!(turn.call_forest.roots.len(), 1);
         let root = &turn.call_forest.roots[0];
@@ -542,17 +549,17 @@ mod tests {
     #[test]
     fn make_turn_with_actions_bundles_all_roots() {
         // Gap 5: multi-action atomic turn.
-        let sdk = AgentCipherclerk::new();
-        let wallet = AppCipherclerk::new(sdk, [22u8; 32]);
+        let sdk_cclerk = AgentCipherclerk::new();
+        let cclerk = AppCipherclerk::new(sdk_cclerk, [22u8; 32]);
         let t1 = CellId::from_bytes([1u8; 32]);
         let t2 = CellId::from_bytes([2u8; 32]);
-        let a1 = wallet.make_action(t1, "first", vec![]);
-        let a2 = wallet.make_action(t2, "second", vec![]);
+        let a1 = cclerk.make_action(t1, "first", vec![]);
+        let a2 = cclerk.make_action(t2, "second", vec![]);
 
         // Sanity: the two actions hash differently (different targets/methods).
         assert_ne!(a1.hash(), a2.hash());
 
-        let turn = wallet.make_turn_with_actions(vec![a1.clone(), a2.clone()]);
+        let turn = cclerk.make_turn_with_actions(vec![a1.clone(), a2.clone()]);
         assert_eq!(turn.call_forest.roots.len(), 2);
         assert_eq!(turn.call_forest.roots[0].action.target, t1);
         assert_eq!(turn.call_forest.roots[1].action.target, t2);
@@ -560,6 +567,6 @@ mod tests {
         assert_eq!(turn.call_forest.roots[0].action.hash(), a1.hash());
         assert_eq!(turn.call_forest.roots[1].action.hash(), a2.hash());
         // Turn agent is the wallet's default cell.
-        assert_eq!(turn.agent, wallet.cell_id());
+        assert_eq!(turn.agent, cclerk.cell_id());
     }
 }

@@ -134,14 +134,14 @@ pub struct AppServer {
     /// Pending nameservice registration, set by `with_name`.
     /// Registered just before the server starts accepting connections.
     pending_registration: Option<crate::discovery::NameRegistration>,
-    /// App wallet handle. When set, it is installed as an axum
-    /// `Extension<AppWallet>` so handlers can sign actions through the
-    /// framework.
-    wallet: Option<crate::wallet::AppWallet>,
+    /// App cipherclerk handle. When set, it is installed as an axum
+    /// `Extension<AppCipherclerk>` so handlers can sign actions through
+    /// the framework.
+    cipherclerk: Option<crate::cipherclerk::AppCipherclerk>,
     /// Embedded executor handle. When set, it is installed as an axum
     /// `Extension<EmbeddedExecutor>` so handlers can submit signed turns
     /// to a private ledger and get back real `TurnReceipt`s.
-    executor: Option<crate::wallet::EmbeddedExecutor>,
+    executor: Option<crate::cipherclerk::EmbeddedExecutor>,
 }
 
 impl AppServer {
@@ -157,13 +157,13 @@ impl AppServer {
         }
     }
 
-    /// Install an [`AppWallet`](crate::wallet::AppWallet) as an axum
-    /// `Extension<AppWallet>` layer.
+    /// Install an [`AppCipherclerk`](crate::cipherclerk::AppCipherclerk) as an axum
+    /// `Extension<AppCipherclerk>` layer.
     ///
-    /// Handlers can then extract it via `axum::Extension<AppWallet>` and
+    /// Handlers can then extract it via `axum::Extension<AppCipherclerk>` and
     /// build signed actions/turns through it — no `[0u8; 64]` placeholder
     /// signatures, no direct `pyana_turn::builder::ActionBuilder` imports.
-    pub fn with_wallet(mut self, wallet: crate::wallet::AppWallet) -> Self {
+    pub fn with_wallet(mut self, wallet: crate::cipherclerk::AppCipherclerk) -> Self {
         self.router = self.router.layer(axum::Extension(wallet.clone()));
         self.wallet = Some(wallet);
         self
@@ -172,11 +172,11 @@ impl AppServer {
     /// Get a reference to the installed wallet, if any. Useful for code
     /// that needs to capture the wallet *before* `serve()` consumes the
     /// builder (e.g. for shared state construction).
-    pub fn wallet(&self) -> Option<&crate::wallet::AppWallet> {
+    pub fn wallet(&self) -> Option<&crate::cipherclerk::AppCipherclerk> {
         self.wallet.as_ref()
     }
 
-    /// Install an embedded [`EmbeddedExecutor`](crate::wallet::EmbeddedExecutor)
+    /// Install an embedded [`EmbeddedExecutor`](crate::cipherclerk::EmbeddedExecutor)
     /// as an axum `Extension<EmbeddedExecutor>` layer.
     ///
     /// Handlers can then extract it via
@@ -187,7 +187,7 @@ impl AppServer {
     ///
     /// Typical wiring in an app's `main.rs`:
     /// ```ignore
-    /// let wallet = AppWallet::new(AgentWallet::new(), federation_id);
+    /// let wallet = AppCipherclerk::new(AgentCipherclerk::new(), federation_id);
     /// let executor = EmbeddedExecutor::new(wallet.clone(), "my-domain");
     /// AppServer::new(config)
     ///     .with_wallet(wallet)
@@ -196,14 +196,17 @@ impl AppServer {
     ///     .serve()
     ///     .await
     /// ```
-    pub fn with_embedded_executor(mut self, executor: crate::wallet::EmbeddedExecutor) -> Self {
+    pub fn with_embedded_executor(
+        mut self,
+        executor: crate::cipherclerk::EmbeddedExecutor,
+    ) -> Self {
         self.router = self.router.layer(axum::Extension(executor.clone()));
         self.executor = Some(executor);
         self
     }
 
     /// Get a reference to the installed embedded executor, if any.
-    pub fn embedded_executor(&self) -> Option<&crate::wallet::EmbeddedExecutor> {
+    pub fn embedded_executor(&self) -> Option<&crate::cipherclerk::EmbeddedExecutor> {
         self.executor.as_ref()
     }
 
@@ -217,7 +220,7 @@ impl AppServer {
     ///
     /// Typical wiring in an app's `main.rs`:
     /// ```ignore
-    /// let wallet = AppWallet::new(AgentWallet::new(), federation_id);
+    /// let wallet = AppCipherclerk::new(AgentCipherclerk::new(), federation_id);
     /// let executor = EmbeddedExecutor::new(&wallet, "default");
     /// let ctx = StarbridgeAppContext::new(wallet.clone(), executor.clone());
     /// starbridge_nameservice::register(&ctx);

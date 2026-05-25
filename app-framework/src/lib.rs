@@ -49,6 +49,7 @@ pub mod authorizer;
 pub mod batch_executor;
 pub mod blinded_endpoint;
 pub mod captp_server;
+pub mod cipherclerk;
 pub mod discovery;
 pub mod dispute;
 pub mod escrow;
@@ -63,7 +64,6 @@ pub mod ring_trade;
 pub mod server;
 pub mod starbridge;
 pub mod store;
-pub mod cipherclerk;
 
 /// Legacy module alias — `wallet` was renamed to `cipherclerk`. This
 /// alias keeps `pyana_app_framework::wallet::...` callers compiling
@@ -73,8 +73,8 @@ pub mod wallet {
     //! Legacy module: forwards to `cipherclerk` and re-exports
     //! `AppWallet` (renamed to `AppCipherclerk`) so pre-rename callers
     //! keep building. New code should reach for `cipherclerk`.
-    pub use crate::cipherclerk::*;
     pub use crate::cipherclerk::AppCipherclerk as AppWallet;
+    pub use crate::cipherclerk::*;
 }
 
 // =============================================================================
@@ -108,9 +108,18 @@ pub use authorizer::{
     AuthContext, AuthError, Authorizer, BearerAuthorizer, CapabilityAuthorizer,
     RejectingAuthorizer, SignedAuthorizer,
 };
+pub use cipherclerk::AppCipherclerk;
 pub use persistence::JsonPersistence;
 pub use server::{AppConfig, AppServer, ErrorResponse, api_error};
-pub use wallet::AppWallet;
+
+/// Short alias for [`AppCipherclerk`].
+pub use cipherclerk::AppCipherclerk as AppCClerk;
+
+/// Legacy alias for [`AppCipherclerk`].
+///
+/// Preserved while downstream apps migrate to the new name. New code
+/// should reach for [`AppCipherclerk`] (or the short [`AppCClerk`]).
+pub use cipherclerk::AppCipherclerk as AppWallet;
 
 // Re-export common action / effect types so apps build effects through
 // the framework rather than reaching into `pyana_turn` directly.
@@ -118,11 +127,15 @@ pub use pyana_cell::state::FieldElement;
 pub use pyana_turn::Turn;
 pub use pyana_turn::action::{Action, Authorization, DelegationMode, Effect, Event, symbol};
 
-// Re-export the SDK wallet at the framework root so applications that
-// need to *construct* a wallet (typically in `main`) don't have to add
-// `pyana-sdk` to their Cargo.toml. App code outside `main` should reach
-// for [`AppWallet`] (the narrow handle), not [`AgentWallet`].
-pub use pyana_sdk::AgentWallet;
+// Re-export the SDK cipherclerk at the framework root so applications
+// that need to *construct* one (typically in `main`) don't have to add
+// `pyana-sdk` to their Cargo.toml. App code outside `main` should
+// reach for [`AppCipherclerk`] (the narrow handle), not
+// [`AgentCipherclerk`].
+pub use pyana_sdk::AgentCipherclerk;
+
+/// Legacy alias for [`AgentCipherclerk`], re-exported from the SDK.
+pub use pyana_sdk::AgentCipherclerk as AgentWallet;
 
 // Re-export dispute framework types for apps implementing optimistic settlement.
 pub use dispute::BlindedDisputable;
@@ -147,9 +160,9 @@ pub use starbridge::{
 };
 
 // Re-export the embedded executor at the framework root for the
-// common pattern: build a wallet, build an executor, hand them to a
-// StarbridgeAppContext.
-pub use wallet::{EmbeddedExecutor, ExecutorSubmitError};
+// common pattern: build a cipherclerk, build an executor, hand them
+// to a StarbridgeAppContext.
+pub use cipherclerk::{EmbeddedExecutor, ExecutorSubmitError};
 
 // Re-export FactoryDescriptor from pyana-cell at the framework root
 // so starbridge-apps only need pyana-app-framework in their Cargo.toml
