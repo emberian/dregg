@@ -1507,18 +1507,27 @@ pub fn compute_effects_hash(effects: &[Effect]) -> (BabyBear, BabyBear) {
             Effect::CreateEscrow {
                 amount_lo,
                 escrow_hash,
+                amount_full,
             } => {
                 hasher_inputs.push(BabyBear::new(37));
                 hasher_inputs.push(*amount_lo);
                 hasher_inputs.push(*escrow_hash);
+                // 30-bit-trunc fix: absorb the four 16-bit limbs so the
+                // effects hash binds to the full u64, not the truncated
+                // value_lo.
+                let limbs = u64_to_4_limbs_16(*amount_full);
+                hasher_inputs.extend_from_slice(&limbs);
             }
             Effect::BridgeLock {
                 value_lo,
                 lock_hash,
+                value_full,
             } => {
                 hasher_inputs.push(BabyBear::new(38));
                 hasher_inputs.push(*value_lo);
                 hasher_inputs.push(*lock_hash);
+                let limbs = u64_to_4_limbs_16(*value_full);
+                hasher_inputs.extend_from_slice(&limbs);
             }
             Effect::CreateCommittedEscrow { commit_hash } => {
                 hasher_inputs.push(BabyBear::new(39));
@@ -1527,10 +1536,13 @@ pub fn compute_effects_hash(effects: &[Effect]) -> (BabyBear, BabyBear) {
             Effect::BridgeMint {
                 value_lo,
                 mint_hash,
+                value_full,
             } => {
                 hasher_inputs.push(BabyBear::new(40));
                 hasher_inputs.push(*value_lo);
                 hasher_inputs.push(*mint_hash);
+                let limbs = u64_to_4_limbs_16(*value_full);
+                hasher_inputs.extend_from_slice(&limbs);
             }
             Effect::BridgeFinalize { finalize_hash } => {
                 hasher_inputs.push(BabyBear::new(41));
@@ -4459,6 +4471,7 @@ pub fn generate_effect_vm_trace_ext(
             Effect::CreateEscrow {
                 amount_lo,
                 escrow_hash,
+                amount_full: _,
             } => {
                 // Mirror NoteCreate: param0 = escrow_hash, param1 = amount_lo
                 row[PARAM_BASE + 0] = *escrow_hash;
@@ -4471,6 +4484,7 @@ pub fn generate_effect_vm_trace_ext(
             Effect::BridgeLock {
                 value_lo,
                 lock_hash,
+                value_full: _,
             } => {
                 // Mirror CreateEscrow: balance debit by value_lo.
                 row[PARAM_BASE + 0] = *lock_hash;
@@ -4487,6 +4501,7 @@ pub fn generate_effect_vm_trace_ext(
             Effect::BridgeMint {
                 value_lo,
                 mint_hash,
+                value_full: _,
             } => {
                 // Mirror NoteSpend: balance credit by value_lo.
                 row[PARAM_BASE + 0] = *mint_hash;
