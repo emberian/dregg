@@ -1,5 +1,16 @@
 //! Metered store-and-forward relay.
 //!
+//! # DEPRECATED — folds into `pyana_storage_templates::relay_operator`
+//!
+//! Per `STORAGE-AS-CELL-PROGRAMS.md` §3.5 + §6.1 this module's
+//! [`MeteredRelay`] / [`MeteredMessage`] surface folds into the
+//! relay-operator cell's `relay` action: the metering becomes the
+//! template's `RateLimitBySum` constraint on
+//! `bytes_relayed_this_epoch`; the per-destination Merkle queues
+//! become individual `CapInboxTemplate` cells registered through the
+//! relay's `register_inbox` action. The underlying [`MerkleQueue`]
+//! data structure stays.
+//!
 //! Wraps the captp store-and-forward concept with resource accounting.
 //! Every message buffered for an offline destination costs computrons.
 //! The relay node is providing a SERVICE (storage + eventual delivery).
@@ -8,6 +19,8 @@
 //!
 //! Phase 4: MerkleQueue backend. Each destination gets a provable queue.
 //! Queue roots are content-addressed and verifiable.
+
+#![allow(deprecated)]
 
 use std::collections::HashMap;
 
@@ -87,6 +100,10 @@ impl From<QueueError> for RelayError {
 ///
 /// Phase 4 refactor: uses MerkleQueue per destination instead of VecDeque.
 /// Queue roots are content-addressed and verifiable.
+#[deprecated(
+    since = "0.1.0",
+    note = "Folds into `pyana_storage_templates::relay_operator` per STORAGE-AS-CELL-PROGRAMS.md §3.5 + §6.1. Per-destination metering becomes the relay-operator cell's `RateLimitBySum` constraint on `bytes_relayed_this_epoch`."
+)]
 #[derive(Debug)]
 pub struct MeteredRelay {
     /// Per-destination Merkle queues (content-addressed, provable).

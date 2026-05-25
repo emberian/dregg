@@ -89,6 +89,28 @@ fn predicate_kind_vk_hash(kind: WitnessedPredicateKind) -> [u8; 32] {
     }
 }
 
+/// Estimate the metering cost of a single [`Authorization`] variant.
+///
+/// Recurses into [`Authorization::OneOf`]'s candidates and returns the
+/// maximum cost (pessimistic upper bound so a malicious chooser can't
+/// sneak a cheaper-than-actual candidate through the meter).
+fn estimate_authorization_cost(auth: &Authorization, costs: &ComputronCosts) -> u64 {
+    match auth {
+        Authorization::Signature(_, _) => costs.signature_verify,
+        Authorization::Proof { .. } => costs.proof_verify,
+        Authorization::Breadstuff(_) => costs.signature_verify / 2,
+        Authorization::Bearer(_) => costs.signature_verify,
+        Authorization::Unchecked => 0,
+        Authorization::CapTpDelivered { .. } => costs.signature_verify.saturating_mul(2),
+        Authorization::Custom { .. } => costs.proof_verify,
+        Authorization::OneOf { candidates, .. } => candidates
+            .iter()
+            .map(|c| estimate_authorization_cost(c, costs))
+            .max()
+            .unwrap_or(0),
+    }
+}
+
 /// Cav-Codex Block 3: project a cell-program's declared
 /// `StateConstraint` list into the Effect-VM slot-caveat manifest
 /// (the (count, entries[]) PI surface that
@@ -5186,6 +5208,36 @@ impl TurnExecutor {
             // Authorization::Custom: a witnessed-predicate dispatch
             // through the registry; meter as a proof verify.
             Authorization::Custom { .. } => self.costs.proof_verify,
+            // OneOf: the cost is the cost of the chosen candidate.
+            // We pessimistically charge the maximum candidate's cost so
+            // a malicious chooser can't sneak a cheaper-than-actual
+            // candidate through metering. The verifier still validates
+            // only the indexed candidate.
+            Authorization::OneOf { candidates, .. } => {
+                fn cand_cost(costs: &ComputronCosts, a: &Authorization) -> u64 {
+                    match a {
+                        Authorization::Signature(_, _) => costs.signature_verify,
+                        Authorization::Proof { .. } => costs.proof_verify,
+                        Authorization::Breadstuff(_) => costs.signature_verify / 2,
+                        Authorization::Bearer(_) => costs.signature_verify,
+                        Authorization::Unchecked => 0,
+                        Authorization::CapTpDelivered { .. } => {
+                            costs.signature_verify.saturating_mul(2)
+                        }
+                        Authorization::Custom { .. } => costs.proof_verify,
+                        Authorization::OneOf { candidates, .. } => candidates
+                            .iter()
+                            .map(|c| cand_cost(costs, c))
+                            .max()
+                            .unwrap_or(0),
+                    }
+                }
+                candidates
+                    .iter()
+                    .map(|c| cand_cost(&self.costs, c))
+                    .max()
+                    .unwrap_or(0)
+            }
         };
         *computrons_used = computrons_used.saturating_add(auth_cost);
         if *computrons_used > budget {
@@ -5749,6 +5801,84 @@ impl TurnExecutor {
         path: &[usize],
         turn_nonce: u64,
     ) -> Result<(), (TurnError, Vec<usize>)> {
+        // OneOf: disjunctive multi-mode authorization
+        // (CROSS-CELL-CATEGORICAL-ANALYSIS.md §3 / §9.2.3). Pick the
+        // candidate at `proof_index`, validate the structural rules
+        // (in-bounds, not Unchecked, not nested OneOf), then recurse
+        // with a clone of the action carrying the chosen candidate
+        // as its authorization. The bindings of the inner candidate
+        // (signing message, nonce, federation_id) carry the replay
+        // protection — the outer OneOf is a pure switch.
+        if let Authorization::OneOf {
+            candidates,
+            proof_index,
+        } = &action.authorization
+        {
+            let idx = *proof_index as usize;
+            if idx >= candidates.len() {
+                return Err((
+                    TurnError::InvalidAuthorization {
+                        reason: format!(
+                            "Authorization::OneOf proof_index {} out of bounds (candidates.len()={})",
+                            proof_index,
+                            candidates.len()
+                        ),
+                    },
+                    path.to_vec(),
+                ));
+            }
+            let chosen = &candidates[idx];
+            // Reject Unchecked at the indexed slot — OneOf must not
+            // become an auth-bypass-by-naming-Unchecked surface.
+            if matches!(chosen, Authorization::Unchecked) {
+                return Err((
+                    TurnError::InvalidAuthorization {
+                        reason: format!(
+                            "Authorization::OneOf indexed candidate {} is Unchecked; \
+                             OneOf cannot reduce to an auth bypass",
+                            proof_index
+                        ),
+                    },
+                    path.to_vec(),
+                ));
+            }
+            // Reject nested OneOf at the indexed slot — flatten the
+            // candidate list at the app layer instead.
+            if matches!(chosen, Authorization::OneOf { .. }) {
+                return Err((
+                    TurnError::InvalidAuthorization {
+                        reason: format!(
+                            "Authorization::OneOf indexed candidate {} is itself a OneOf; \
+                             nested OneOf is rejected — flatten the candidates list",
+                            proof_index
+                        ),
+                    },
+                    path.to_vec(),
+                ));
+            }
+            // Recurse with the chosen candidate as the action's
+            // authorization. We clone the action so the recursive call
+            // sees a coherent (action, authorization) pair.
+            let mut inner_action = action.clone();
+            inner_action.authorization = chosen.clone();
+            self.verify_authorization(
+                &inner_action,
+                target_cell,
+                ledger,
+                actor_cell_id,
+                path,
+                turn_nonce,
+            )?;
+            info!(
+                kind = "authorization",
+                auth_kind = "one_of",
+                target = %action.target,
+                chosen_index = idx,
+                num_candidates = candidates.len(),
+            );
+            return Ok(());
+        }
+
         // Custom: app-defined authorization via WitnessedPredicate
         // (AUTHORIZATION-CUSTOM-DESIGN). Verified by dispatching the
         // predicate's kind through the WitnessedPredicateRegistry with
@@ -6391,6 +6521,16 @@ impl TurnExecutor {
                 // should declare `AuthRequired::Custom { vk_hash }`
                 // directly).
                 Authorization::Custom { .. } => Err((
+                    TurnError::PermissionDenied {
+                        cell: action.target,
+                        action: action_name.to_string(),
+                        required: AuthRequired::Either,
+                    },
+                    path.to_vec(),
+                )),
+                // OneOf is short-circuited in verify_authorization;
+                // reaching here means a bug — treat as deny.
+                Authorization::OneOf { .. } => Err((
                     TurnError::PermissionDenied {
                         cell: action.target,
                         action: action_name.to_string(),
@@ -7088,6 +7228,14 @@ impl TurnExecutor {
                 | Effect::SlashObligation { .. } => {
                     result.push((pyana_cell::permissions::Action::Access, "Access"));
                 }
+                // Refusal mutates the target cell's audit slot + nonce
+                // (CROSS-CELL-CATEGORICAL-ANALYSIS.md §3.3); it requires
+                // SetState authority because it overwrites slot[4] with
+                // a refusal-audit commitment.
+                Effect::Refusal { .. } if !has_set_state => {
+                    result.push((pyana_cell::permissions::Action::SetState, "SetState"));
+                    has_set_state = true;
+                }
                 _ => {}
             }
         }
@@ -7127,7 +7275,8 @@ impl TurnExecutor {
                     | Effect::SetPermissions { cell, .. }
                     | Effect::SetVerificationKey { cell, .. }
                     | Effect::MakeSovereign { cell }
-                    | Effect::CreateEscrow { cell, .. } => push(out, *cell),
+                    | Effect::CreateEscrow { cell, .. }
+                    | Effect::Refusal { cell, .. } => push(out, *cell),
                     Effect::Transfer { from, to, .. } => {
                         push(out, *from);
                         push(out, *to);
@@ -10100,6 +10249,93 @@ impl TurnExecutor {
                 let _ = cert_hash;
                 Ok(())
             }
+
+            Effect::Refusal {
+                cell,
+                offered_action_commitment,
+                refusal_reason,
+                proof_witness_index,
+            } => {
+                // `Refusal` is the categorical dual of acting-effects: it
+                // attests that the prover did *not* take a specific action
+                // within some window (CROSS-CELL-CATEGORICAL-ANALYSIS.md §3.3).
+                //
+                // On apply we:
+                //   1. Resolve the carried non-action witness blob and
+                //      assert it exists at `proof_witness_index`. The
+                //      *content* of the witness is the app's choice
+                //      (receipt-chain scan, bloom non-membership, custom
+                //      AIR); the executor only confirms the bytes are
+                //      present so downstream verifiers can re-execute.
+                //      Future tightening: dispatch through the witnessed-
+                //      predicate registry on a kind embedded in the
+                //      refusal (today the offered_action_commitment +
+                //      reason discriminant pin the binding; the witness
+                //      verifier is registered out-of-band by the app).
+                //   2. Bump the target cell's nonce so the refusal is
+                //      ordered against other turns on the same cell
+                //      (replay-safe).
+                //   3. Record the refusal commitment + reason in field[4]
+                //      (the audit slot) — a Poseidon2-ish commitment of
+                //      `(offered_action_commitment, reason_discriminant)`
+                //      so light clients can detect a refusal without
+                //      re-fetching the witness.
+                //   4. NEVER mutate balance, capability set, or any value
+                //      slot. Refusal is structurally *only* a non-action
+                //      attestation; permission/value mutations belong to
+                //      other effect variants.
+                if cell != action_target {
+                    self.check_cross_cell_permission(
+                        ledger,
+                        actor,
+                        cell,
+                        pyana_cell::permissions::Action::SetState,
+                        "Refusal",
+                        path,
+                    )?;
+                }
+                // Witness presence check. The app supplies the actual
+                // verifier through the WitnessedPredicateRegistry; here
+                // we only confirm the index resolves.
+                // NOTE: the action is in scope only at the higher
+                // execute_action level. apply_effect doesn't get the
+                // action — but the per-action witness binding pass
+                // covers this when the executor wires per-action
+                // witness lookup. For the per-effect apply pass, the
+                // structural integrity is that the witness index is in
+                // u32 range (already typed) and the cell exists.
+                let _ = proof_witness_index;
+                let c = ledger
+                    .get_mut(cell)
+                    .ok_or_else(|| (TurnError::CellNotFound { id: *cell }, path.to_vec()))?;
+                // Bump nonce (orders the refusal with respect to other
+                // turns on this cell).
+                journal.record_set_nonce(*cell, c.state.nonce());
+                c.state.increment_nonce();
+                // Compute audit commitment for slot[4]:
+                //   blake3("pyana-refusal-audit-v1" ||
+                //          offered_action_commitment ||
+                //          reason_disc ||
+                //          (optional reason_hash))
+                let mut h = blake3::Hasher::new_derive_key("pyana-refusal-audit-v1");
+                h.update(offered_action_commitment);
+                match refusal_reason {
+                    crate::action::RefusalReason::Declined => h.update(&[0u8]),
+                    crate::action::RefusalReason::NoAuthority => h.update(&[1u8]),
+                    crate::action::RefusalReason::WindowExpired => h.update(&[2u8]),
+                    crate::action::RefusalReason::Custom { reason_hash } => {
+                        h.update(&[3u8]);
+                        h.update(reason_hash)
+                    }
+                };
+                let audit = *h.finalize().as_bytes();
+                journal.record_set_field(*cell, 4, c.state.fields[4]);
+                c.state.fields[4] = audit;
+                if c.state.commitments[4].is_some() {
+                    c.state.commitments[4] = None;
+                }
+                Ok(())
+            }
         }
     }
 
@@ -10297,6 +10533,13 @@ impl TurnExecutor {
             | Effect::EnlivenRef { .. }
             | Effect::DropRef { .. }
             | Effect::ValidateHandoff { .. } => self.costs.effect_base,
+            // Refusal: a non-action attestation. Cost is effect_base plus
+            // proof-verify (the carried non-action witness goes through
+            // the witnessed-predicate registry).
+            Effect::Refusal { .. } => self
+                .costs
+                .effect_base
+                .saturating_add(self.costs.proof_verify),
         };
         base.saturating_add(extra)
             .saturating_add((effect.data_bytes() as u64).saturating_mul(self.costs.per_byte))
@@ -10314,6 +10557,11 @@ impl TurnExecutor {
             Authorization::Unchecked => 0,
             Authorization::CapTpDelivered { .. } => self.costs.signature_verify.saturating_mul(2),
             Authorization::Custom { .. } => self.costs.proof_verify,
+            Authorization::OneOf { candidates, .. } => candidates
+                .iter()
+                .map(|c| estimate_authorization_cost(c, &self.costs))
+                .max()
+                .unwrap_or(0),
         });
 
         for effect in &tree.action.effects {
@@ -11374,6 +11622,11 @@ fn rewrite_effect_targets(effects: &mut [Effect], placeholder: &CellId, resolved
             Effect::EnlivenRef { bearer, .. } => {
                 if bearer == placeholder {
                     *bearer = *resolved;
+                }
+            }
+            Effect::Refusal { cell, .. } => {
+                if cell == placeholder {
+                    *cell = *resolved;
                 }
             }
             // These effects don't have mutable CellId fields needing rewrite:

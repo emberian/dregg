@@ -185,6 +185,47 @@ BILAT_RC=$?
 [ $BILAT_RC -eq 0 ] && ok "γ.2 BilateralBundle assembled (alice + bob WRs)" \
                   || fail "silver-helper make-bilateral-bundle failed ($BILAT_RC)"
 
+# ── Step 4b: interaction-matrix lane additions ────────────────────────
+# These exercise protocol primitives the existing scenarios don't touch:
+#   * slot-caveat-suite — 5 more StateConstraint variants (Immutable,
+#     StrictMonotonic, BoundedBy, FieldDelta, FieldDeltaInRange) each with
+#     positive AND negative cases against CellProgram::evaluate_static.
+#   * make-credential-set-auth — AuthorizedSet::CredentialSet primitive
+#     (the cross-app lane uses this for credential-gated voting in
+#     governed-namespace and the identity-attested tier in nameservice).
+#   * make-introduce — Effect::Introduce + γ.2 three-cell bundle. The
+#     existing Transfer-only bilateral demo doesn't exercise the
+#     three-party Introduce schedule, which is the substrate primitive
+#     for cross-cell capability grants.
+# See DEMO-INTERACTION-MATRIX.md for the full coverage matrix.
+step 4b "interaction-matrix lane: slot-caveat-suite + credential-set-auth + Effect::Introduce γ.2"
+
+"$HELPER_BIN" slot-caveat-suite \
+    --state-dir "$STATE_DIR" > "$LOG_DIR/silver.slot-caveat-suite.stdout" 2> "$LOG_DIR/silver.slot-caveat-suite.stderr"
+SUITE_RC=$?
+[ $SUITE_RC -eq 0 ] && ok "slot-caveat-suite exercised (5 StateConstraint variants, positive + negative)" \
+                  || fail "silver-helper slot-caveat-suite failed ($SUITE_RC)"
+
+"$HELPER_BIN" make-credential-set-auth \
+    --state-dir "$STATE_DIR" > "$LOG_DIR/silver.credential-set-auth.stdout" 2> "$LOG_DIR/silver.credential-set-auth.stderr"
+CSET_RC=$?
+[ $CSET_RC -eq 0 ] && ok "AuthorizedSet::CredentialSet commitment derived (reproducibility + collision-resistance checked)" \
+                 || fail "silver-helper make-credential-set-auth failed ($CSET_RC)"
+
+# For Effect::Introduce, use Alice as introducer, Bob as recipient, and a
+# synthetic third cell as target. The target cell can be any well-known
+# CellId; we hash a demo label so it's stable across runs.
+INTRO_TARGET_HEX=$(printf 'demo-introduce-target-v1' | shasum -a 256 | awk '{print $1}')
+"$HELPER_BIN" make-introduce \
+    --state-dir "$STATE_DIR" \
+    --introducer-cell "$ALICE_CELL" \
+    --recipient-cell "$BOB_CELL" \
+    --target-cell "$INTRO_TARGET_HEX" \
+    --turn-nonce 1 > "$LOG_DIR/silver.introduce.stdout" 2> "$LOG_DIR/silver.introduce.stderr"
+INTRO_RC=$?
+[ $INTRO_RC -eq 0 ] && ok "Effect::Introduce γ.2 bundle assembled (introducer + recipient + target WRs)" \
+                  || fail "silver-helper make-introduce failed ($INTRO_RC)"
+
 # ── Step 5/6/7: bob exercises (existing MCP path; Authorization::Bearer) ──
 # GAP: today's MCP tool `pyana_exercise_bearer_cap` uses Authorization::Bearer,
 # not CapTpDelivered. silver-helper above produces a canonical CapTpDelivered
@@ -235,6 +276,32 @@ CAV_REWRITE_REJECTED=$(get_bool slot_caveat_rewrite_rejected)
 CAV_RENEWAL_OK=$(get_bool slot_caveat_renewal_ok)
 BILAT_VERIFIED=$(get_bool bilateral_verified)
 BILAT_TAMPER_REJECTED=$(get_bool bilateral_tampered_rejected)
+CSET_REPRODUCIBLE=$(get_bool credential_set_reproducible)
+CSET_SCHEMA_DISTINCT=$(get_bool credential_set_distinct_schemas)
+CSET_ISSUER_DISTINCT=$(get_bool credential_set_distinct_issuers)
+INTRO_SCHED_OK=$(get_bool introduce_schedule_has_one_introduce)
+INTRO_VERIFIED=$(get_bool introduce_bilateral_verified)
+INTRO_TAMPER_REJECTED=$(get_bool introduce_bilateral_tampered_rejected)
+# slot_caveat_suite is a nested dict; extract per-variant via python.
+suite_case() {
+    echo "$CHARLIE_OUT" | "$PY" -c "
+import json, sys
+d = json.load(sys.stdin)
+suite = d.get('slot_caveat_suite', {})
+case = suite.get('$1', {})
+print(case.get('$2', False))
+" 2>/dev/null || echo False
+}
+SUITE_IMMUT_POS=$(suite_case Immutable positive_ok)
+SUITE_IMMUT_NEG=$(suite_case Immutable negative_rejected)
+SUITE_SM_POS=$(suite_case StrictMonotonic positive_ok)
+SUITE_SM_NEG=$(suite_case StrictMonotonic negative_rejected)
+SUITE_BB_POS=$(suite_case BoundedBy positive_ok)
+SUITE_BB_NEG=$(suite_case BoundedBy negative_rejected)
+SUITE_FD_POS=$(suite_case FieldDelta positive_ok)
+SUITE_FD_NEG=$(suite_case FieldDelta negative_rejected)
+SUITE_FDR_POS=$(suite_case FieldDeltaInRange positive_ok)
+SUITE_FDR_NEG=$(suite_case FieldDeltaInRange negative_rejected)
 
 [ "$GRANT_VERIFIED" = "True" ]         && ok "grant proof verified" || warn "grant proof NOT verified"
 [ "$EXERCISE_VERIFIED" = "True" ]      && ok "exercise proof verified" || warn "exercise proof NOT verified"
@@ -248,6 +315,20 @@ BILAT_TAMPER_REJECTED=$(get_bool bilateral_tampered_rejected)
 [ "$CAV_RENEWAL_OK" = "True" ]         && ok "slot caveat: renewal ok" || warn "slot caveat renewal failed"
 [ "$BILAT_VERIFIED" = "True" ]         && ok "γ.2 bilateral bundle verified (alice + bob)" || warn "γ.2 bilateral bundle NOT verified"
 [ "$BILAT_TAMPER_REJECTED" = "True" ]  && ok "γ.2 bilateral tampered bundle rejected (must_not_pass)" || warn "γ.2 tampered bundle WRONGLY accepted"
+# interaction-matrix lane: slot-caveat-suite (5 variants)
+for v in "Immutable:SUITE_IMMUT" "StrictMonotonic:SUITE_SM" "BoundedBy:SUITE_BB" "FieldDelta:SUITE_FD" "FieldDeltaInRange:SUITE_FDR"; do
+    name="${v%%:*}"; var="${v##*:}"
+    pos_var="${var}_POS"; neg_var="${var}_NEG"
+    pos_val="${!pos_var}"; neg_val="${!neg_var}"
+    [ "$pos_val" = "True" ] && ok "slot-caveat-suite[$name] positive accepted" || warn "slot-caveat-suite[$name] positive FAILED"
+    [ "$neg_val" = "True" ] && ok "slot-caveat-suite[$name] negative REJECTED (must_not_pass)" || warn "slot-caveat-suite[$name] negative WRONGLY accepted"
+done
+[ "$CSET_REPRODUCIBLE" = "True" ]      && ok "AuthorizedSet::CredentialSet commitment reproducible" || warn "credential-set commitment NOT reproducible"
+[ "$CSET_SCHEMA_DISTINCT" = "True" ]   && ok "AuthorizedSet::CredentialSet: distinct schemas → distinct commitments" || warn "credential-set: schemas collided"
+[ "$CSET_ISSUER_DISTINCT" = "True" ]   && ok "AuthorizedSet::CredentialSet: distinct issuers → distinct commitments" || warn "credential-set: issuers collided"
+[ "$INTRO_SCHED_OK" = "True" ]         && ok "Effect::Introduce schedule reconstructs (1 entry, correct introducer/recipient/target)" || warn "Effect::Introduce schedule reconstruction failed"
+[ "$INTRO_VERIFIED" = "True" ]         && ok "Effect::Introduce γ.2 bilateral bundle pair-verifies (3 cells)" || warn "Effect::Introduce γ.2 bundle NOT verified"
+[ "$INTRO_TAMPER_REJECTED" = "True" ]  && ok "Effect::Introduce γ.2 tampered bundle rejected (must_not_pass)" || warn "Effect::Introduce tampered bundle WRONGLY accepted"
 
 # ─── balance checks ───
 BOB_DELTA=$(echo "$BOB_OUT" | "$PY" -c 'import json,sys;print(json.load(sys.stdin).get("bob_balance_delta", 0))' 2>/dev/null || echo 0)
@@ -292,6 +373,17 @@ add_check "SovereignCellWitness self-verifies"                                 $
 add_check "slot caveat: first registration succeeds"                           $(b2i "$CAV_FIRST_OK")
 add_check "slot caveat: renewal (Monotonic) succeeds"                          $(b2i "$CAV_RENEWAL_OK")
 add_check "γ.2 bilateral bundle pair-verifies (alice + bob)"                   $(b2i "$BILAT_VERIFIED")
+# interaction-matrix lane positive checks
+add_check "slot-caveat-suite[Immutable] positive accepted"                      $(b2i "$SUITE_IMMUT_POS")
+add_check "slot-caveat-suite[StrictMonotonic] positive accepted"                $(b2i "$SUITE_SM_POS")
+add_check "slot-caveat-suite[BoundedBy] positive accepted"                      $(b2i "$SUITE_BB_POS")
+add_check "slot-caveat-suite[FieldDelta] positive accepted"                     $(b2i "$SUITE_FD_POS")
+add_check "slot-caveat-suite[FieldDeltaInRange] positive accepted"              $(b2i "$SUITE_FDR_POS")
+add_check "AuthorizedSet::CredentialSet commitment reproducible"                $(b2i "$CSET_REPRODUCIBLE")
+add_check "AuthorizedSet::CredentialSet: distinct schemas distinct commitments" $(b2i "$CSET_SCHEMA_DISTINCT")
+add_check "AuthorizedSet::CredentialSet: distinct issuers distinct commitments" $(b2i "$CSET_ISSUER_DISTINCT")
+add_check "Effect::Introduce schedule reconstructs as expected"                 $(b2i "$INTRO_SCHED_OK")
+add_check "Effect::Introduce γ.2 bundle pair-verifies (3 cells)"                $(b2i "$INTRO_VERIFIED")
 add_check "charlie: grant proof verified"                                      $(b2i "$GRANT_VERIFIED")
 add_check "charlie: exercise proof verified"                                   $(b2i "$EXERCISE_VERIFIED")
 add_check "charlie: WitnessedReceipt v1 replay-chain verified"                 $(b2i "$REPLAY_CHAIN_VERIFIED")
@@ -305,6 +397,13 @@ add_check "must_not_pass: CapTpDelivered tampered sig is REJECTED"             $
 add_check "must_not_pass: SovereignCellWitness tampered commitment REJECTED"   $(b2i "$SOV_TAMPER_REJECTED")
 add_check "must_not_pass: slot WriteOnce re-register is REJECTED"              $(b2i "$CAV_REWRITE_REJECTED")
 add_check "must_not_pass: γ.2 tampered bundle is REJECTED"                     $(b2i "$BILAT_TAMPER_REJECTED")
+# interaction-matrix lane must_not_pass checks
+add_check "must_not_pass: slot-caveat-suite[Immutable] negative REJECTED"       $(b2i "$SUITE_IMMUT_NEG")
+add_check "must_not_pass: slot-caveat-suite[StrictMonotonic] negative REJECTED" $(b2i "$SUITE_SM_NEG")
+add_check "must_not_pass: slot-caveat-suite[BoundedBy] negative REJECTED"       $(b2i "$SUITE_BB_NEG")
+add_check "must_not_pass: slot-caveat-suite[FieldDelta] negative REJECTED"      $(b2i "$SUITE_FD_NEG")
+add_check "must_not_pass: slot-caveat-suite[FieldDeltaInRange] negative REJECTED" $(b2i "$SUITE_FDR_NEG")
+add_check "must_not_pass: Effect::Introduce γ.2 tampered bundle is REJECTED"    $(b2i "$INTRO_TAMPER_REJECTED")
 
 PASS=1
 for i in "${!CHECKS_LABEL[@]}"; do
@@ -318,7 +417,7 @@ done
 
 echo
 if [ $PASS -eq 1 ]; then
-    printf '%s — Silver-Vision substrate pieces all demonstrated end-to-end\n' "$(color_green '[demo] PASS')"
+    printf '%s — Silver-Vision substrate pieces + interaction-matrix lane all demonstrated end-to-end\n' "$(color_green '[demo] PASS')"
     exit 0
 else
     printf '%s — see logs in %s\n' "$(color_red '[demo] FAIL')" "$LOG_DIR"

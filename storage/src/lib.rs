@@ -1,5 +1,29 @@
 //! # pyana-storage
 //!
+//! # Migration to cell-program templates
+//!
+//! Per `STORAGE-AS-CELL-PROGRAMS.md` the operator-side primitives in
+//! this crate's `inbox`, `pubsub`, `blinded`, `programmable`,
+//! `operator`, and `relay` modules are **deprecated** in favor of
+//! cell-program templates in
+//! [`pyana_storage_templates`](https://crates.io/crates/pyana-storage-templates):
+//!
+//! | Legacy (this crate) | Canonical replacement |
+//! |---|---|
+//! | [`inbox::CapInbox`] | `pyana_storage_templates::cap_inbox` (§3.1) |
+//! | [`programmable::ProgrammableQueue`] | `pyana_storage_templates::programmable_queue` (§3.2) |
+//! | [`pubsub::PubSubTopic`] | `pyana_storage_templates::pubsub_topic` (§3.3) |
+//! | [`blinded::BlindedQueue`] | `pyana_storage_templates::blinded_queue` (§3.4) |
+//! | [`operator::RelayOperator`] | `pyana_storage_templates::relay_operator` (§3.5) |
+//! | [`relay::MeteredRelay`] | folds into `relay_operator` (§3.5 + §6.1) |
+//!
+//! Per `STORAGE-AS-CELL-PROGRAMS.md` §6 the legacy structs become thin
+//! re-exports after the migration sweep completes; this lane marks
+//! them `#[deprecated]` so callsite warnings surface the migration
+//! path. The underlying data structures
+//! ([`queue::MerkleQueue`], [`commitment`], [`wal`]) stay — only the
+//! parallel enforcement loop is retired.
+//!
 //! # Trust Model
 //!
 //! This crate operates at the **OPERATOR-TRUSTED** trust level.

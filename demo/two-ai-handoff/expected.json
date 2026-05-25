@@ -4,6 +4,10 @@
   "//": "SovereignCellWitness, slot caveats (WriteOnce), and γ.2 bilateral binding.",
   "//": "Each entry below is a boolean post-condition; arrays group related checks.",
 
+  "//": "Interaction-matrix lane additions: slot_caveat_suite (5 StateConstraint variants),",
+  "//": "credential_set_auth (AuthorizedSet::CredentialSet primitive used by cross-app),",
+  "//": "introduce_bilateral (Effect::Introduce + γ.2 three-cell bundle). See DEMO-INTERACTION-MATRIX.md.",
+
   "scenario": "alice grants bob a bearer cap; bob exercises via CapTP-delivered turn; charlie verifies (Silver-shape demo)",
   "transfer_amount": 100,
 
@@ -30,6 +34,19 @@
     "bilateral_bundle_transfer_count_eq_1",
     "bilateral_bundle_is_agent_cell_alice",
 
+    "slot_caveat_suite_immutable_positive_ok",
+    "slot_caveat_suite_strict_monotonic_positive_ok",
+    "slot_caveat_suite_bounded_by_positive_ok",
+    "slot_caveat_suite_field_delta_positive_ok",
+    "slot_caveat_suite_field_delta_in_range_positive_ok",
+
+    "credential_set_commitment_reproducible",
+    "credential_set_distinct_schemas_distinct_commitments",
+    "credential_set_distinct_issuers_distinct_commitments",
+
+    "introduce_schedule_has_one_introduce",
+    "introduce_bilateral_bundle_verifies",
+
     "charlie_grant_proof_verified",
     "charlie_exercise_proof_verified",
     "charlie_replay_chain_verified",
@@ -45,7 +62,13 @@
     "sovereign_witness_tampered_commitment_accepted",
     "slot_caveat_rewrite_rejected",
     "bilateral_tampered_bundle_accepted",
-    "captp_delivered_bearer_cap_reused"
+    "captp_delivered_bearer_cap_reused",
+    "slot_caveat_suite_immutable_negative_accepted",
+    "slot_caveat_suite_strict_monotonic_negative_accepted",
+    "slot_caveat_suite_bounded_by_negative_accepted",
+    "slot_caveat_suite_field_delta_negative_accepted",
+    "slot_caveat_suite_field_delta_in_range_negative_accepted",
+    "introduce_bilateral_tampered_bundle_accepted"
   ],
 
   "verifier_independence": {

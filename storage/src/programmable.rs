@@ -1,10 +1,27 @@
 //! Programmable queues: queues with attached DSL programs that validate every operation.
 //!
+//! # DEPRECATED — migrate to `pyana_storage_templates::programmable_queue`
+//!
+//! Per `STORAGE-AS-CELL-PROGRAMS.md` §3.2 this module's
+//! [`ProgrammableQueue`] / [`QueueProgram`] / [`QueueConstraint`] /
+//! [`QueueFactory`] / [`ValidationContext`] surface is the legacy
+//! operator-side enforcement loop. The canonical replacement is the
+//! cell-program template
+//! [`pyana_storage_templates::programmable_queue`], whose
+//! `programmable_queue_factory_descriptor()` exports a
+//! `FactoryDescriptor` with operation-scoped
+//! [`CellProgram::Cases`] enforced by the executor on every
+//! turn — no parallel storage-side evaluator. New consumers should
+//! reach for the template; this module's items are
+//! `#[deprecated]` so the migration warnings surface at every
+//! callsite. The underlying [`MerkleQueue`] data structure stays
+//! (per §6 it's the canonical ring backing).
+//!
 //! A `ProgrammableQueue` is a `MerkleQueue` paired with a `QueueProgram` that
 //! cryptographically enforces enqueue/dequeue rules. The queue becomes a programmable
 //! channel where operations are validated against constraints before mutation.
 //!
-//! # Design
+//! # Design (legacy)
 //!
 //! - The program is proven in-circuit: invalid operations produce invalid proofs.
 //! - Each queue has a content-addressed identity (`program_vk_hash`) derived from its rules.
@@ -16,6 +33,12 @@
 //! - Composes with the Effect VM's `Custom` effect dispatch (circuit/src/effect_vm.rs).
 //! - Follows the `CellProgram` pattern from turn/src/executor.rs.
 //! - Uses `CircuitDescriptor`-style constraint expressions (circuit/src/dsl/circuit.rs).
+
+// Internal uses of the deprecated types within this module are
+// expected during the migration window — silence the warnings here so
+// the deprecation markers only surface at *external* callsites (the
+// real migration signal).
+#![allow(deprecated)]
 
 use crate::queue::{DequeueProof, MerkleQueue, QueueEntry, QueueError};
 
@@ -43,6 +66,10 @@ pub use pyana_cell::program::{
 /// A queue with an attached validation program (QueueProgram).
 /// Every enqueue/dequeue must satisfy the program's constraints.
 /// The program is proven in-circuit — invalid operations produce invalid proofs.
+#[deprecated(
+    since = "0.1.0",
+    note = "Use `pyana_storage_templates::programmable_queue::programmable_queue_factory_descriptor()` per STORAGE-AS-CELL-PROGRAMS.md §3.2. The cell-program template enforces the queue's constraints via the executor's per-turn evaluator — no parallel storage-side enforcement loop."
+)]
 #[derive(Debug, Clone)]
 pub struct ProgrammableQueue {
     /// The underlying Merkle queue.
@@ -63,6 +90,10 @@ pub struct ProgrammableQueue {
 
 /// A queue validation program expressed as constraints.
 /// This is a simplified CircuitDescriptor specialized for queue operations.
+#[deprecated(
+    since = "0.1.0",
+    note = "Use `pyana_cell::program::CellProgram::Cases` with `pyana_storage_templates::programmable_queue::programmable_queue_program_with(&cfg)` per STORAGE-AS-CELL-PROGRAMS.md §3.2."
+)]
 #[derive(Debug, Clone)]
 pub struct QueueProgram {
     /// Human-readable name.
@@ -74,6 +105,10 @@ pub struct QueueProgram {
 }
 
 /// Constraints specific to queue operations.
+#[deprecated(
+    since = "0.1.0",
+    note = "Use `pyana_cell::program::StateConstraint` (the lifted 21-variant slot-caveat vocabulary) per STORAGE-AS-CELL-PROGRAMS.md §3.2. The `LiftedQueueConstraint` re-export at the top of this module already aliases the cell-side enum."
+)]
 #[derive(Debug, Clone)]
 pub enum QueueConstraint {
     /// Sender must be in an authorized set (Merkle membership via lookup).
@@ -103,6 +138,10 @@ pub enum QueueConstraint {
 }
 
 /// A lookup table for queue program validation (e.g., authorized sender set).
+#[deprecated(
+    since = "0.1.0",
+    note = "Lookup tables fold into slot commitments (e.g. `authorized_set_root` slot) under the cell-program migration per STORAGE-AS-CELL-PROGRAMS.md §3.2."
+)]
 #[derive(Debug, Clone)]
 pub struct QueueLookupTable {
     pub name: String,
@@ -110,6 +149,10 @@ pub struct QueueLookupTable {
 }
 
 /// Context passed to validation (block height, sender info, etc.)
+#[deprecated(
+    since = "0.1.0",
+    note = "Use the executor's `EvalContext` (per SLOT-CAVEATS-DESIGN.md §2) — the cell-program migration unifies the validation context with the executor's per-turn evaluator. See STORAGE-AS-CELL-PROGRAMS.md §3.2 migration risks for the 1:1 mapping."
+)]
 #[derive(Debug, Clone)]
 pub struct ValidationContext {
     /// The sender's identity (public key).
@@ -299,6 +342,10 @@ impl ProgrammableQueue {
 
 /// Factory that creates programmable queues with validated program constraints.
 /// The factory itself has rules about what programs are allowed.
+#[deprecated(
+    since = "0.1.0",
+    note = "Subsumed by `pyana_cell::factory::FactoryDescriptor`. Use `pyana_storage_templates::programmable_queue::programmable_queue_factory_descriptor()` per STORAGE-AS-CELL-PROGRAMS.md §3.2."
+)]
 #[derive(Debug, Clone)]
 pub struct QueueFactory {
     /// Maximum allowed constraints per program.

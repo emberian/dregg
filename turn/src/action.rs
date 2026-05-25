@@ -282,6 +282,53 @@ pub enum Authorization {
         /// authorization condition over the canonical signing message.
         predicate: WitnessedPredicate,
     },
+    /// **Disjunctive multi-mode authorization: any one of `candidates`
+    /// suffices.** Per `CROSS-CELL-CATEGORICAL-ANALYSIS.md §3 / §9.2.3`,
+    /// this is the categorical coproduct in the `Authorization`
+    /// category — the missing "alternation" primitive.
+    ///
+    /// **App drivers.** *Multi-key wallets* ("authorized by any of
+    /// these 3 keys"); *recovery flows* ("primary OR backup OR
+    /// social-recovery quorum"); *cross-mode bridge requests* ("signed
+    /// by this federation OR proven by this STARK"); *hot/cold cap
+    /// exercise* ("by the hot key OR by a Custom presentation of the
+    /// cold-vault proof"). Each candidate may itself be any
+    /// [`Authorization`] variant — `Signature`, `Proof`, `Custom`,
+    /// `Bearer`, even a nested `OneOf` (combinatorial blow-up is the
+    /// app's problem; nest sparingly).
+    ///
+    /// **Caveat: M-of-N is *not* `OneOf` of M-tuples** (combinatorial
+    /// blow-up). For genuine M-of-N threshold authorization use
+    /// [`Authorization::Custom`] with a threshold-sig
+    /// `WitnessedPredicate`. `OneOf` is *purely* 1-of-N alternation;
+    /// the executor verifies *exactly one* indexed candidate.
+    ///
+    /// **Soundness contract.** `proof_index` is the prover's
+    /// declaration of *which* candidate they're satisfying. The
+    /// executor recursively verifies only that one candidate. The
+    /// signing-message / nonce / federation-id bindings of the
+    /// **indexed candidate** are what guard against replay — the
+    /// outer `OneOf` does not add its own binding.
+    ///
+    /// **Authorization::OneOf::Unchecked is rejected.** A candidate
+    /// of `Authorization::Unchecked` reduces this primitive to
+    /// "auth-bypass-by-naming-Unchecked" — the executor rejects
+    /// any `OneOf` whose indexed candidate is `Unchecked`, mirroring
+    /// the executor honesty audit's posture against `Unchecked`
+    /// auth (`EXECUTOR-HONESTY-AUDIT.md`).
+    ///
+    /// **Nested `OneOf` is rejected.** A `OneOf` whose indexed
+    /// candidate is itself a `OneOf` is rejected to bound the
+    /// recursion depth and audit surface. Apps that want nested
+    /// alternation should flatten the `candidates` list.
+    OneOf {
+        /// The disjunctive candidates. Any *one* satisfying the
+        /// chosen `proof_index` authorizes the action.
+        candidates: Vec<Authorization>,
+        /// Which candidate (0-indexed into `candidates`) the prover
+        /// is claiming satisfies the authorization.
+        proof_index: u32,
+    },
 }
 
 /// Proof-carrying bearer capability: demonstrates delegated authority to exercise
@@ -351,6 +398,11 @@ impl Authorization {
             // require Custom auth declare `AuthRequired::Custom { vk_hash }`
             // and the executor checks the predicate directly.
             Authorization::Custom { .. } => None,
+            // OneOf is a disjunction — its discriminant depends on
+            // which candidate the executor verifies, not on the
+            // wrapper. Permission checks dispatch by inspecting the
+            // chosen candidate at `verify_authorization` time.
+            Authorization::OneOf { .. } => None,
         }
     }
 
@@ -864,6 +916,101 @@ pub enum Effect {
         /// 32-byte identifier of the reference being dropped (per-export id).
         ref_id: [u8; 32],
     },
+    /// **Categorical dual of acting-effects: proof of *non-action*.**
+    ///
+    /// A `Refusal` is a structural artifact that the prover did *not*
+    /// take action `offered_action_commitment` within some window.
+    /// This is NOT a cancellation (which would mutate the cancelled
+    /// action) — it is *evidence of absence*, the categorical
+    /// "initial object" in the Effect category that
+    /// `CROSS-CELL-CATEGORICAL-ANALYSIS.md §3.3 / §9.2.2` names.
+    ///
+    /// **App drivers:**
+    /// - *Auditable rejection in HFT-style flows.* "I received an
+    ///   order; I declined to fill; here is the proof I declined and
+    ///   the reason." Silence is otherwise indistinguishable from
+    ///   outage; a `Refusal` makes the rejection a first-class on-
+    ///   chain artifact.
+    /// - *Non-repudiation of timely response.* The receiver
+    ///   committed, on-chain, to having considered (and declined) a
+    ///   specific offer-commitment within a window.
+    /// - *Compliance: "I did not bid above X within block-range
+    ///   [a, b]."* The proof binds the *absence* of a matching
+    ///   action under the prover's identity within the window.
+    ///
+    /// **How the proof works.** Proving a *negative* is hard; the
+    /// proof references a `proof_witness_index` into the action's
+    /// `witness_blobs`, and the carried bytes are one of:
+    /// - A *receipt-chain scan witness* — postcard-encoded receipt
+    ///   chain of every turn the prover authored within the window,
+    ///   plus an inclusion-completeness proof that no other turn
+    ///   exists. The verifier checks none match
+    ///   `offered_action_commitment`.
+    /// - A *bloom-filter non-membership proof* against an
+    ///   offered-actions registry; the witnessed-predicate verifier
+    ///   dispatches by `WitnessedPredicateKind::NonMembership` on
+    ///   the registry's sorted-set root.
+    /// - A *custom non-action AIR* the app registers via
+    ///   `WitnessedPredicateKind::Custom`.
+    ///
+    /// The choice is left to the app — the executor only validates
+    /// the carried witness through the
+    /// `WitnessedPredicateRegistry`, treating the `Refusal` as a
+    /// state-mutating effect that bumps the target cell's nonce and
+    /// records the refusal commitment + reason for auditability.
+    Refusal {
+        /// The cell whose history attests to the non-action.
+        ///
+        /// The refusal is anchored to a specific cell — its nonce
+        /// bumps, its refusal-log slot (cell-specific; typically the
+        /// "audit" slot) records `(offered_action_commitment,
+        /// refusal_reason)`. Cross-cell refusals chain through
+        /// multiple `Refusal` effects.
+        cell: CellId,
+        /// 32-byte commitment to the (action, offerer, window) tuple
+        /// the prover is refusing. Typically `blake3("pyana-offered-
+        /// action-v1" || offerer || action_bytes || window_start ||
+        /// window_end)`. The verifier of the carried non-action
+        /// witness checks the witness binds to this commitment.
+        offered_action_commitment: [u8; 32],
+        /// Why the prover refused.
+        refusal_reason: RefusalReason,
+        /// Index into `Action::witness_blobs` carrying the non-action
+        /// proof bytes. The witness is verified via the
+        /// `WitnessedPredicateRegistry` keyed on a kind chosen by
+        /// the app (typically `NonMembership` against an offered-
+        /// actions registry root; or a `Custom` non-action AIR).
+        ///
+        /// The witness verifier's commitment is implicitly
+        /// `offered_action_commitment` — i.e. the verifier checks
+        /// that the carried proof binds the absence to *this*
+        /// specific offered action.
+        proof_witness_index: u32,
+    },
+}
+
+/// Why a [`Effect::Refusal`] was issued. Refusals are *evidence of
+/// absence*, but the reason field gives downstream auditors a
+/// structured signal beyond raw non-action.
+///
+/// Per `CROSS-CELL-CATEGORICAL-ANALYSIS.md §3.3`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RefusalReason {
+    /// The prover deliberately declined the offered action — explicit
+    /// rejection (e.g. "the price was wrong").
+    Declined,
+    /// The prover lacked authority to take the action (e.g. cap
+    /// revoked, facet disallows). Distinct from `Declined` because
+    /// the failure is structural rather than discretionary.
+    NoAuthority,
+    /// The window during which the offered action was valid has
+    /// expired before the prover could (or would) act.
+    WindowExpired,
+    /// App-specific reason — the 32-byte commitment is opaque to the
+    /// substrate; apps decode via their `CustomEffectVerifier` or by
+    /// pairing this with an `EmitEvent` carrying the decoded reason.
+    Custom { reason_hash: [u8; 32] },
+}
     /// Validate a handoff certificate and accept the bearer (CapTP).
     /// Off-chain Ed25519 signature verification has already happened (the
     /// federation maintains `approved_handoffs_root`); the executor proves
@@ -996,6 +1143,22 @@ impl Action {
                 let pred_bytes = postcard::to_allocvec(predicate).unwrap_or_default();
                 hasher.update(&(pred_bytes.len() as u64).to_le_bytes());
                 hasher.update(&pred_bytes);
+            }
+            Authorization::OneOf {
+                candidates,
+                proof_index,
+            } => {
+                hasher.update(&[7u8]);
+                hasher.update(&proof_index.to_le_bytes());
+                hasher.update(&(candidates.len() as u64).to_le_bytes());
+                // Bind the entire candidate list into the hash so a
+                // tampering executor can't shuffle / add / remove
+                // candidates after signing. We use postcard for a
+                // canonical byte encoding — `Authorization` already
+                // derives Serialize.
+                let cand_bytes = postcard::to_allocvec(candidates).unwrap_or_default();
+                hasher.update(&(cand_bytes.len() as u64).to_le_bytes());
+                hasher.update(&cand_bytes);
             }
         }
         // Hash delegation mode.
@@ -1636,6 +1799,26 @@ impl Effect {
                 hasher.update(&[46u8]);
                 hasher.update(cert_hash);
             }
+            Effect::Refusal {
+                cell,
+                offered_action_commitment,
+                refusal_reason,
+                proof_witness_index,
+            } => {
+                hasher.update(&[47u8]);
+                hasher.update(cell.as_bytes());
+                hasher.update(offered_action_commitment);
+                match refusal_reason {
+                    RefusalReason::Declined => hasher.update(&[0u8]),
+                    RefusalReason::NoAuthority => hasher.update(&[1u8]),
+                    RefusalReason::WindowExpired => hasher.update(&[2u8]),
+                    RefusalReason::Custom { reason_hash } => {
+                        hasher.update(&[3u8]);
+                        hasher.update(reason_hash);
+                    }
+                }
+                hasher.update(&proof_witness_index.to_le_bytes());
+            }
         }
         *hasher.finalize().as_bytes()
     }
@@ -1757,6 +1940,17 @@ impl Effect {
             Effect::EnlivenRef { .. } => 32 + 32,      // swiss + bearer
             Effect::DropRef { .. } => 32,              // ref_id
             Effect::ValidateHandoff { .. } => 32,      // cert_hash
+            // Refusal: cell + commitment + reason-discriminant (+ opt 32-byte
+            // custom reason hash) + u32 witness index.
+            Effect::Refusal { refusal_reason, .. } => {
+                32 + 32
+                    + 1
+                    + match refusal_reason {
+                        RefusalReason::Custom { .. } => 32,
+                        _ => 0,
+                    }
+                    + 4
+            }
         }
     }
 
@@ -1823,6 +2017,7 @@ impl Effect {
             | Effect::EnlivenRef { .. }
             | Effect::DropRef { .. }
             | Effect::ValidateHandoff { .. } => pyana_cell::EFFECT_CAPTP_OPS,
+            Effect::Refusal { .. } => pyana_cell::EFFECT_REFUSAL,
         }
     }
 }

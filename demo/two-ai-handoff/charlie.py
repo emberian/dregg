@@ -256,6 +256,68 @@ def main() -> int:
         bilateral_tampered_rejected = False
         blocker_notes.append("no silver.bilateral.json")
 
+    # ─── interaction-matrix lane: slot-caveat-suite ──────────────────────
+    suite_path = state_dir / "silver.slot-caveat-suite.json"
+    slot_caveat_suite: dict = {}
+    if suite_path.exists():
+        suite = json.loads(suite_path.read_text())
+        for case in suite.get("cases", []):
+            cname = case.get("constraint", "?")
+            slot_caveat_suite[cname] = {
+                "positive_ok": bool(case.get("positive_ok", False)),
+                "negative_rejected": bool(case.get("negative_rejected", False)),
+                "positive_reason": case.get("positive_reason", ""),
+                "negative_reason": case.get("negative_reason", ""),
+            }
+            if not case.get("positive_ok", False):
+                blocker_notes.append(f"slot-caveat-suite[{cname}] positive failed: {case.get('positive_reason', '')}")
+            if not case.get("negative_rejected", False):
+                blocker_notes.append(f"slot-caveat-suite[{cname}] negative WRONGLY accepted: {case.get('negative_reason', '')}")
+    else:
+        blocker_notes.append("no silver.slot-caveat-suite.json (imatrix lane gap)")
+
+    # ─── interaction-matrix lane: credential-set auth ────────────────────
+    cset_path = state_dir / "silver.credential-set-auth.json"
+    if cset_path.exists():
+        cset = json.loads(cset_path.read_text())
+        credential_set_reproducible = bool(cset.get("commitment_reproducible", False))
+        credential_set_distinct_schemas = bool(cset.get("distinct_schemas_distinct_commitments", False))
+        credential_set_distinct_issuers = bool(cset.get("distinct_issuers_distinct_commitments", False))
+        if not credential_set_reproducible:
+            blocker_notes.append("credential-set commitment not reproducible")
+        if not credential_set_distinct_schemas:
+            blocker_notes.append("credential-set: distinct schemas collided in commitment")
+        if not credential_set_distinct_issuers:
+            blocker_notes.append("credential-set: distinct issuers collided in commitment")
+    else:
+        credential_set_reproducible = False
+        credential_set_distinct_schemas = False
+        credential_set_distinct_issuers = False
+        blocker_notes.append("no silver.credential-set-auth.json (imatrix lane gap)")
+
+    # ─── interaction-matrix lane: Effect::Introduce bilateral bundle ─────
+    intro_path = state_dir / "silver.introduce.json"
+    if intro_path.exists():
+        intro = json.loads(intro_path.read_text())
+        introduce_schedule_has_one = bool(intro.get("schedule_has_one_introduce", False))
+        intro_bundle = Path(intro["bundle_path"])
+        intro_bundle_t = Path(intro["bundle_path_tampered"])
+        intro_verified, intro_reason = verify_bilateral(args.verifier_bin, intro_bundle)
+        intro_tamper_accepted, intro_tamper_reason = verify_bilateral(args.verifier_bin, intro_bundle_t)
+        introduce_bilateral_verified = intro_verified
+        introduce_bilateral_tampered_rejected = not intro_tamper_accepted
+        if not introduce_schedule_has_one:
+            blocker_notes.append("introduce schedule does not have exactly one Introduce entry")
+        if not introduce_bilateral_verified:
+            blocker_notes.append(f"introduce bilateral bundle rejected: {intro_reason}")
+        if intro_tamper_accepted:
+            blocker_notes.append(f"introduce tampered bundle WRONGLY accepted: {intro_tamper_reason}")
+    else:
+        introduce_schedule_has_one = False
+        introduce_bilateral_verified = False
+        introduce_bilateral_tampered_rejected = False
+        blocker_notes.append("no silver.introduce.json (imatrix lane gap)")
+
     # ─── Assemble verdict ─────────────────────────────────────────────────
     result = {
         "grant_verified": grant_verified,
@@ -276,6 +338,13 @@ def main() -> int:
         "slot_caveat_renewal_ok": slot_caveat_renewal_ok,
         "bilateral_verified": bilateral_verified,
         "bilateral_tampered_rejected": bilateral_tampered_rejected,
+        "slot_caveat_suite": slot_caveat_suite,
+        "credential_set_reproducible": credential_set_reproducible,
+        "credential_set_distinct_schemas": credential_set_distinct_schemas,
+        "credential_set_distinct_issuers": credential_set_distinct_issuers,
+        "introduce_schedule_has_one_introduce": introduce_schedule_has_one,
+        "introduce_bilateral_verified": introduce_bilateral_verified,
+        "introduce_bilateral_tampered_rejected": introduce_bilateral_tampered_rejected,
         "pid": os.getpid(),
         "independent_node": True,
         "independent_binary": True,

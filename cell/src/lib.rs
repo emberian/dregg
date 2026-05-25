@@ -36,6 +36,10 @@ pub mod predicate;
 pub mod program;
 pub mod revocation_channel;
 pub mod ring_closure;
+/// γ.2 unilateral binding (1-arity sibling) — plain data type used by
+/// `peer_exchange` to ship per-cell self-attestations. PI / accumulator
+/// logic lives in `pyana_turn::bilateral_schedule`.
+pub mod unilateral;
 #[cfg(feature = "crypto")]
 pub mod seal;
 pub mod state;
@@ -103,6 +107,7 @@ pub use oblivious_transfer::{
 #[cfg(feature = "crypto")]
 pub use peer_exchange::{PeerCellView, PeerExchange, PeerExchangeError, PeerStateTransition};
 pub use permissions::{Action, AuthKind, AuthRequired, Permissions};
+pub use unilateral::{UnilateralAttestation, UnilateralAttestationKind};
 #[allow(deprecated)]
 pub use preconditions::PreconditionClause;
 pub use preconditions::{

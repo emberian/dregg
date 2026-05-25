@@ -1,5 +1,27 @@
 //! Blinded queue: stores commitments, tracks nullifiers, enables private consumption.
 //!
+//! # DEPRECATED — migrate to `pyana_storage_templates::blinded_queue`
+//!
+//! Per `STORAGE-AS-CELL-PROGRAMS.md` §3.4 this module's
+//! [`BlindedQueue`] / [`ConsumptionProof`] /
+//! [`PrivateConsumptionProof`] / [`ConsumeResult`] /
+//! [`FairDistribution`] surface is the legacy operator-side
+//! private-consumption primitive. The canonical replacement is the
+//! cell-program template
+//! [`pyana_storage_templates::blinded_queue`], whose
+//! `blinded_queue_factory_descriptor()` exports a `FactoryDescriptor`
+//! whose `CellProgram::Cases` declares the
+//! `WitnessedPredicate::Custom { vk_hash =
+//! BLINDED_QUEUE_SPEND_AIR_VK }` constraint enforced by the
+//! executor on every `consume` turn against the registered spend AIR
+//! (the existing [`crate::blinded::NoteSpendingAir`] adapter).
+//!
+//! The verifier registration itself is host-level
+//! (`WitnessedPredicateRegistry::register_custom`) and stays in this
+//! module's [`crypto`] sub-module per §3.4 ("the AIR itself already
+//! exists; the migration's net new circuit-work is ~zero"). The
+//! storage-side enforcement loop is retired.
+//!
 //! A blinded queue holds `Com(item_i) = Poseidon2(item_i, randomness_i)`
 //! commitments. Consumption publishes a nullifier
 //! `null_i = Poseidon2(commitment_i, secret_i, position_i)` without
@@ -27,6 +49,8 @@
 //! membership/nullifier checks). See `storage/src/commitment.rs` and
 //! `storage/STORAGE-POSEIDON2-AUDIT.md`.
 
+#![allow(deprecated)]
+
 use std::collections::HashSet;
 
 use pyana_circuit::dsl::note_spending::verify_note_spend_dsl_with_destination;
@@ -45,6 +69,10 @@ use crate::queue::QueueError;
 /// A blinded queue: stores commitments, tracks nullifiers.
 /// Consumption is private (can't link nullifier to commitment).
 /// Guarantees: each element consumed at most once (nullifier uniqueness).
+#[deprecated(
+    since = "0.1.0",
+    note = "Use `pyana_storage_templates::blinded_queue::blinded_queue_factory_descriptor()` per STORAGE-AS-CELL-PROGRAMS.md §3.4. The cell-program template carries a `WitnessedPredicate::Custom { vk_hash = BLINDED_QUEUE_SPEND_AIR_VK }` consumed by the executor on every `consume` turn; the AIR itself remains here and is registered into `WitnessedPredicateRegistry`."
+)]
 pub struct BlindedQueue {
     /// Commitments (dual-form: BLAKE3 + Poseidon2)
     commitments: Vec<BlindedItemCommitment>,

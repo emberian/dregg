@@ -1,13 +1,35 @@
 //! Capability inbox: receives incoming HandoffCertificates, SturdyRefs, and messages.
 //!
+//! # DEPRECATED — migrate to `pyana_storage_templates::cap_inbox`
+//!
+//! Per `STORAGE-AS-CELL-PROGRAMS.md` §3.1 this module's
+//! [`CapInbox`] / [`InboxMessage`] / [`InboxStatus`] surface is the
+//! legacy operator-side store-and-forward primitive. The canonical
+//! replacement is the cell-program template
+//! [`pyana_storage_templates::cap_inbox`], whose
+//! `cap_inbox_factory_descriptor()` exports a `FactoryDescriptor`
+//! whose `CellProgram::Cases` enforces sequencing,
+//! sender-authorization, and conservation on every turn via the
+//! executor's evaluator. The underlying [`MerkleQueue`] data
+//! structure stays as the canonical message ring.
+//!
+//! New consumers reach for the template; this module's items are
+//! `#[deprecated]` so the migration warnings surface at each callsite.
+//!
 //! Bounded by the owner's storage quota. Senders pay deposits (anti-spam).
 //! The inbox is a MerkleQueue specialized for capability delivery.
+
+#![allow(deprecated)]
 
 use crate::queue::{DequeueProof, MerkleQueue, QueueEntry, QueueError};
 use crate::{ComputronRefund, QuotaId};
 
 /// A capability inbox: receives incoming HandoffCertificates, SturdyRefs, and messages.
 /// Bounded by the owner's storage quota. Senders pay deposits.
+#[deprecated(
+    since = "0.1.0",
+    note = "Use `pyana_storage_templates::cap_inbox::cap_inbox_factory_descriptor()` per STORAGE-AS-CELL-PROGRAMS.md §3.1. The cell-program template's `MonotonicSequence` / `SenderAuthorized` / `Monotonic` / `Immutable` constraints are enforced by the executor on every turn."
+)]
 #[derive(Debug, Clone)]
 pub struct CapInbox {
     /// The underlying queue.

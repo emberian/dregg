@@ -40,8 +40,8 @@ use serde::{Deserialize, Serialize};
 
 use pyana_captp::HandoffCertificate;
 use pyana_cell::{
-    AuthRequired, Cell, CellId, CellProgram, CellState, FIELD_ZERO, ProgramError, StateConstraint,
-    field_from_u64,
+    AuthRequired, Cell, CellId, CellProgram, CellState, FIELD_ZERO, FieldElement, ProgramError,
+    StateConstraint, field_from_u64,
 };
 use pyana_circuit::field::BabyBear;
 use pyana_turn::bilateral_schedule::ExpectedBilateral;
@@ -59,9 +59,10 @@ use pyana_verifier::{BilateralBundle, BilateralEntry, fabricate_witnessed_receip
 /// Derive a deterministic Ed25519 keypair from the demo seed + role label.
 /// This is **demo-local** — these keys never see real funds, and exist only
 /// so the demo's substrate artifacts have a stable identity across runs
-/// without sharing keys with the MCP wallets (which the MCP layer cannot
-/// export). In a real cross-federation flow, Alice's federation would
-/// register Bob's recipient pk out-of-band, exactly as the demo does here.
+/// without sharing keys with the MCP cipherclerks (which the MCP layer
+/// cannot export). In a real cross-federation flow, Alice's federation
+/// would register Bob's recipient pk out-of-band, exactly as the demo
+/// does here.
 fn derive_demo_key(seed: &[u8], role: &str) -> SigningKey {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"pyana-two-ai-demo-key-v1:");
@@ -161,6 +162,78 @@ struct BilateralArtifact {
     bundle_path_tampered: String,
 }
 
+#[derive(Serialize, Deserialize)]
+struct SlotCaveatSuiteCase {
+    /// Human-readable name of the StateConstraint variant exercised.
+    constraint: String,
+    /// Positive case: must accept.
+    positive_ok: bool,
+    positive_reason: String,
+    /// Negative case: must reject (with ProgramError::ConstraintViolated).
+    negative_rejected: bool,
+    negative_reason: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SlotCaveatSuiteArtifact {
+    /// Each case is one StateConstraint variant under test.
+    cases: Vec<SlotCaveatSuiteCase>,
+    /// True iff every case's positive-ok AND negative-rejected both hold.
+    all_passed: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+struct CredentialSetAuthArtifact {
+    /// Hex-encoded issuer cell id (the identity issuer).
+    issuer_cell_hex: String,
+    /// Hex-encoded credential schema id (e.g. blake3 of "kyc-v1" schema).
+    credential_schema_id_hex: String,
+    /// Hex-encoded credential-set commitment, as
+    /// `AuthorizedSet::credential_set_commitment` produces it.
+    commitment_hex: String,
+    /// The `CellProgram::Predicate` JSON containing the
+    /// `StateConstraint::SenderAuthorized { source: AuthorizedSet::CredentialSet }`
+    /// for inspection.
+    program_json: serde_json::Value,
+    /// Recomputing the commitment from scratch with the same inputs must
+    /// be bytewise equal (the commitment derivation is stable across builds).
+    commitment_reproducible: bool,
+    /// Changing the schema id must change the commitment (collision-resistance
+    /// at the demo-honesty level).
+    distinct_schemas_distinct_commitments: bool,
+    /// Changing the issuer cell must change the commitment.
+    distinct_issuers_distinct_commitments: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+struct IntroduceArtifact {
+    turn_hash_hex: String,
+    introducer_cell_hex: String,
+    recipient_cell_hex: String,
+    target_cell_hex: String,
+    /// γ.2 BilateralBundle path (introducer + recipient + target WRs).
+    bundle_path: String,
+    /// Tampered variant — must reject when pair-verified.
+    bundle_path_tampered: String,
+    /// True iff the canonical schedule has exactly one Introduce entry
+    /// with the expected fields (sanity check before charlie runs).
+    schedule_has_one_introduce: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+struct RecursiveWitnessArtifact {
+    /// True iff `from_components_with_compression` attached a recursive
+    /// proof to the WR's witness_bundle.
+    recursive_compression_attached: bool,
+    /// True iff the strict-recursive constructor returned Ok.
+    strict_recursive_built: bool,
+    /// Path to the chain.json the verifier should consume with
+    /// `pyana-verifier scope-recursive`.
+    chain_path: String,
+    /// Path to the tampered chain (must reject).
+    chain_path_tampered: String,
+}
+
 #[derive(Serialize, Deserialize, Default)]
 struct SilverManifest {
     identities: Option<DemoIdentities>,
@@ -169,6 +242,10 @@ struct SilverManifest {
     sovereign_witness: Option<SovereignWitnessArtifact>,
     slot_caveat: Option<SlotCaveatArtifact>,
     bilateral: Option<BilateralArtifact>,
+    slot_caveat_suite: Option<SlotCaveatSuiteArtifact>,
+    credential_set_auth: Option<CredentialSetAuthArtifact>,
+    introduce: Option<IntroduceArtifact>,
+    recursive_witness: Option<RecursiveWitnessArtifact>,
 }
 
 // ---------------------------------------------------------------------------
@@ -678,6 +755,459 @@ fn cmd_slot_caveat_demo(state_dir: &PathBuf) {
     println!("{}", serde_json::to_string(&art).unwrap());
 }
 
+/// Subcommand: `slot-caveat-suite` — exercise the StateConstraint variants
+/// that the existing `slot-caveat-demo` does not touch (Immutable,
+/// StrictMonotonic, BoundedBy, FieldDelta, FieldDeltaInRange). Each case is
+/// a positive (must-accept) and a negative (must-reject) transition against
+/// `CellProgram::evaluate_static`. This is the "interaction-matrix" lane's
+/// equivalent of cell-program-coverage at the demo layer.
+///
+/// Why pure off-AIR evaluation: every variant here is enforced inside
+/// `CellProgram::evaluate_static` independent of any STARK circuit, so
+/// rejection of the negative case is the substrate-honest signal we want.
+fn cmd_slot_caveat_suite(state_dir: &PathBuf) {
+    let mut cases: Vec<SlotCaveatSuiteCase> = Vec::new();
+
+    // Helper: build a Predicate-program with one constraint, then run an
+    // (old, new) transition through evaluate_static.
+    let eval_one = |constraint: StateConstraint,
+                    old_fields: Vec<FieldElement>,
+                    new_fields: Vec<FieldElement>,
+                    nonce: u64|
+     -> Result<(), ProgramError> {
+        let program = CellProgram::Predicate(vec![constraint]);
+        let mut old_state = CellState::new(nonce);
+        for (i, f) in old_fields.iter().enumerate() {
+            old_state.fields[i] = *f;
+        }
+        let mut new_state = CellState::new(nonce);
+        for (i, f) in new_fields.iter().enumerate() {
+            new_state.fields[i] = *f;
+        }
+        program.evaluate_static(&new_state, Some(&old_state))
+    };
+
+    // ── Immutable: after init, slot is read-only ──
+    let imm_constraint = StateConstraint::Immutable { index: 0 };
+    let imm_pos = eval_one(
+        imm_constraint.clone(),
+        vec![field_from_u64(42)],
+        vec![field_from_u64(42)],
+        1,
+    );
+    let imm_neg = eval_one(
+        imm_constraint,
+        vec![field_from_u64(42)],
+        vec![field_from_u64(43)],
+        1,
+    );
+    cases.push(SlotCaveatSuiteCase {
+        constraint: "Immutable".into(),
+        positive_ok: imm_pos.is_ok(),
+        positive_reason: imm_pos
+            .map(|_| "unchanged slot accepted".into())
+            .unwrap_or_else(|e| format!("{e:?}")),
+        negative_rejected: matches!(
+            imm_neg.as_ref().err(),
+            Some(ProgramError::ConstraintViolated { .. })
+        ),
+        negative_reason: imm_neg
+            .map(|_| "unexpectedly accepted".into())
+            .unwrap_or_else(|e| format!("{e:?}")),
+    });
+
+    // ── StrictMonotonic: new > old strictly ──
+    let sm_constraint = StateConstraint::StrictMonotonic { index: 0 };
+    let sm_pos = eval_one(
+        sm_constraint.clone(),
+        vec![field_from_u64(10)],
+        vec![field_from_u64(11)],
+        1,
+    );
+    let sm_neg = eval_one(
+        sm_constraint,
+        vec![field_from_u64(10)],
+        vec![field_from_u64(10)], // equal, not strict
+        1,
+    );
+    cases.push(SlotCaveatSuiteCase {
+        constraint: "StrictMonotonic".into(),
+        positive_ok: sm_pos.is_ok(),
+        positive_reason: sm_pos
+            .map(|_| "strict increase accepted".into())
+            .unwrap_or_else(|e| format!("{e:?}")),
+        negative_rejected: matches!(
+            sm_neg.as_ref().err(),
+            Some(ProgramError::ConstraintViolated { .. })
+        ),
+        negative_reason: sm_neg
+            .map(|_| "equal value unexpectedly accepted".into())
+            .unwrap_or_else(|e| format!("{e:?}")),
+    });
+
+    // ── BoundedBy: slot[index] may only change if slot[witness_index] != 0 ──
+    let bb_constraint = StateConstraint::BoundedBy {
+        index: 0,
+        witness_index: 1,
+    };
+    // Positive: witness slot non-zero → bounded slot may change.
+    let bb_pos = eval_one(
+        bb_constraint.clone(),
+        vec![field_from_u64(5), field_from_u64(1)],
+        vec![field_from_u64(7), field_from_u64(1)],
+        1,
+    );
+    // Negative: witness slot zero → bounded slot must not change.
+    let bb_neg = eval_one(
+        bb_constraint,
+        vec![field_from_u64(5), FIELD_ZERO],
+        vec![field_from_u64(7), FIELD_ZERO],
+        1,
+    );
+    cases.push(SlotCaveatSuiteCase {
+        constraint: "BoundedBy".into(),
+        positive_ok: bb_pos.is_ok(),
+        positive_reason: bb_pos
+            .map(|_| "witness present; change accepted".into())
+            .unwrap_or_else(|e| format!("{e:?}")),
+        negative_rejected: matches!(
+            bb_neg.as_ref().err(),
+            Some(ProgramError::ConstraintViolated { .. })
+        ),
+        negative_reason: bb_neg
+            .map(|_| "witness absent but change unexpectedly accepted".into())
+            .unwrap_or_else(|e| format!("{e:?}")),
+    });
+
+    // ── FieldDelta: new = old + delta (modular field arithmetic). For a
+    //   field of large prime characteristic, adding delta = N to old value V
+    //   yields V+N as a field element. Positive: respect the delta.
+    //   Negative: violate it by 1.
+    let delta = field_from_u64(7);
+    let fd_constraint = StateConstraint::FieldDelta {
+        index: 0,
+        delta: delta,
+    };
+    let fd_pos = eval_one(
+        fd_constraint.clone(),
+        vec![field_from_u64(100)],
+        vec![field_from_u64(107)],
+        1,
+    );
+    let fd_neg = eval_one(
+        fd_constraint,
+        vec![field_from_u64(100)],
+        vec![field_from_u64(108)], // off-by-one
+        1,
+    );
+    cases.push(SlotCaveatSuiteCase {
+        constraint: "FieldDelta".into(),
+        positive_ok: fd_pos.is_ok(),
+        positive_reason: fd_pos
+            .map(|_| "delta=7 transition accepted".into())
+            .unwrap_or_else(|e| format!("{e:?}")),
+        negative_rejected: matches!(
+            fd_neg.as_ref().err(),
+            Some(ProgramError::ConstraintViolated { .. })
+        ),
+        negative_reason: fd_neg
+            .map(|_| "off-by-one delta unexpectedly accepted".into())
+            .unwrap_or_else(|e| format!("{e:?}")),
+    });
+
+    // ── FieldDeltaInRange: new in [old+min_delta, old+max_delta] ──
+    let fdr_constraint = StateConstraint::FieldDeltaInRange {
+        index: 0,
+        min_delta: field_from_u64(5),
+        max_delta: field_from_u64(15),
+    };
+    let fdr_pos = eval_one(
+        fdr_constraint.clone(),
+        vec![field_from_u64(100)],
+        vec![field_from_u64(110)], // +10 in [5,15]
+        1,
+    );
+    let fdr_neg = eval_one(
+        fdr_constraint,
+        vec![field_from_u64(100)],
+        vec![field_from_u64(120)], // +20 outside [5,15]
+        1,
+    );
+    cases.push(SlotCaveatSuiteCase {
+        constraint: "FieldDeltaInRange".into(),
+        positive_ok: fdr_pos.is_ok(),
+        positive_reason: fdr_pos
+            .map(|_| "delta within range accepted".into())
+            .unwrap_or_else(|e| format!("{e:?}")),
+        negative_rejected: matches!(
+            fdr_neg.as_ref().err(),
+            Some(ProgramError::ConstraintViolated { .. })
+        ),
+        negative_reason: fdr_neg
+            .map(|_| "delta out of range unexpectedly accepted".into())
+            .unwrap_or_else(|e| format!("{e:?}")),
+    });
+
+    let all_passed = cases
+        .iter()
+        .all(|c| c.positive_ok && c.negative_rejected);
+    let art = SlotCaveatSuiteArtifact { cases, all_passed };
+    fs::write(
+        state_dir.join("silver.slot-caveat-suite.json"),
+        serde_json::to_string_pretty(&art).unwrap(),
+    )
+    .unwrap();
+    println!("{}", serde_json::to_string(&art).unwrap());
+}
+
+/// Subcommand: `make-credential-set-auth` — exercise the
+/// `AuthorizedSet::CredentialSet { issuer_cell, credential_schema_id }`
+/// primitive that the cross-app lane wires governed-namespace voting and
+/// nameservice's identity-attested tier through.
+///
+/// What this demonstrates (substrate-honest):
+///   * the deterministic commitment-derivation
+///     (`AuthorizedSet::credential_set_commitment`) is stable bytewise
+///     across recomputation (replay-safe);
+///   * the commitment is **distinct** when the schema id changes (a
+///     KYC-schema commitment does not collide with a gov-id-schema
+///     commitment);
+///   * the commitment is **distinct** when the issuer cell changes (two
+///     issuer cells offering "KYC" produce two distinct credential sets);
+///   * the resulting `CellProgram::Predicate(vec![SenderAuthorized {
+///     CredentialSet { .. } }])` is well-formed and round-trips through
+///     JSON.
+fn cmd_make_credential_set_auth(state_dir: &PathBuf) {
+    use pyana_cell::program::AuthorizedSet;
+
+    // Synthetic but stable identity-issuer cell + schema. In the cross-app
+    // composition these come from `starbridge_identity::issuer_cell` (the
+    // cell registered as an identity issuer) and
+    // `starbridge_identity::schema_commitment(&kyc_schema())`. We hash
+    // independent demo labels so this demo is self-contained.
+    let issuer_cell: [u8; 32] = *blake3::hash(b"demo-issuer-cell-kyc-v1").as_bytes();
+    let schema_kyc: [u8; 32] = *blake3::hash(b"demo-schema-kyc-v1").as_bytes();
+    let schema_gov_id: [u8; 32] = *blake3::hash(b"demo-schema-gov-id-v1").as_bytes();
+    let issuer_cell_alt: [u8; 32] = *blake3::hash(b"demo-issuer-cell-alt-v1").as_bytes();
+
+    // Canonical commitment derivation.
+    let commitment = AuthorizedSet::credential_set_commitment(&issuer_cell, &schema_kyc);
+    // Reproducibility (replay-safe across builds).
+    let commitment_again = AuthorizedSet::credential_set_commitment(&issuer_cell, &schema_kyc);
+    let commitment_reproducible = commitment == commitment_again;
+    // Distinct schemas → distinct commitments.
+    let commitment_gov = AuthorizedSet::credential_set_commitment(&issuer_cell, &schema_gov_id);
+    let distinct_schemas_distinct_commitments = commitment != commitment_gov;
+    // Distinct issuers → distinct commitments.
+    let commitment_alt_issuer =
+        AuthorizedSet::credential_set_commitment(&issuer_cell_alt, &schema_kyc);
+    let distinct_issuers_distinct_commitments = commitment != commitment_alt_issuer;
+
+    // Build the CellProgram a credential-gated cell would carry.
+    let program = CellProgram::Predicate(vec![StateConstraint::SenderAuthorized {
+        set: AuthorizedSet::CredentialSet {
+            issuer_cell,
+            credential_schema_id: schema_kyc,
+        },
+    }]);
+    let program_json = serde_json::to_value(&program).unwrap();
+
+    let art = CredentialSetAuthArtifact {
+        issuer_cell_hex: hex::encode(issuer_cell),
+        credential_schema_id_hex: hex::encode(schema_kyc),
+        commitment_hex: hex::encode(commitment),
+        program_json,
+        commitment_reproducible,
+        distinct_schemas_distinct_commitments,
+        distinct_issuers_distinct_commitments,
+    };
+    fs::write(
+        state_dir.join("silver.credential-set-auth.json"),
+        serde_json::to_string_pretty(&art).unwrap(),
+    )
+    .unwrap();
+    println!("{}", serde_json::to_string(&art).unwrap());
+}
+
+/// Subcommand: `make-introduce` — exercise the three-party
+/// `Effect::Introduce` shape end-to-end through γ.2 bilateral schedule
+/// reconstruction.
+///
+/// Builds a single-action Turn with an `Introduce { introducer, recipient,
+/// target, permissions: SignaturePermission }` effect, fabricates one
+/// WitnessedReceipt per touched cell (introducer + recipient + target),
+/// and assembles a `BilateralBundle` that pair-verifies. A tampered variant
+/// (one felt flipped in the introducer's INCOMING/OUTGOING accumulator
+/// slots) must reject.
+///
+/// This covers the Capability §1 row "Effect::Introduce" and the Cross-cell
+/// §4 row "γ.2 bilateral (Introduce)" — neither of which the existing
+/// Transfer-only γ.2 demo touches.
+fn cmd_make_introduce(
+    state_dir: &PathBuf,
+    introducer_cell_hex: &str,
+    recipient_cell_hex: &str,
+    target_cell_hex: &str,
+    turn_nonce: u64,
+) {
+    let introducer_cell = CellId(parse_32(introducer_cell_hex));
+    let recipient_cell = CellId(parse_32(recipient_cell_hex));
+    let target_cell = CellId(parse_32(target_cell_hex));
+
+    let action = Action {
+        target: introducer_cell,
+        method: pyana_turn::action::symbol("introduce"),
+        args: vec![],
+        authorization: Authorization::Unchecked,
+        preconditions: Default::default(),
+        effects: vec![Effect::Introduce {
+            introducer: introducer_cell,
+            recipient: recipient_cell,
+            target: target_cell,
+            permissions: AuthRequired::Signature,
+        }],
+        may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Full,
+        balance_change: None,
+        witness_blobs: vec![],
+    };
+    let mut forest = CallForest::new();
+    forest.add_root(action);
+    let turn = Turn {
+        agent: introducer_cell,
+        nonce: turn_nonce,
+        call_forest: forest,
+        fee: 0,
+        memo: Some("γ.2 Introduce demo turn".into()),
+        valid_until: None,
+        previous_receipt_hash: None,
+        depends_on: vec![],
+        conservation_proof: None,
+        sovereign_witnesses: HashMap::new(),
+        execution_proof: None,
+        execution_proof_cell: None,
+        execution_proof_new_commitment: None,
+        custom_program_proofs: None,
+        effect_binding_proofs: Vec::new(),
+        cross_effect_dependencies: Vec::new(),
+        effect_witness_index_map: Vec::new(),
+    };
+
+    let sched = ExpectedBilateral::from_turn(&turn);
+    let schedule_has_one_introduce = sched.introduces.len() == 1
+        && sched.introduces[0].introducer == introducer_cell
+        && sched.introduces[0].recipient == recipient_cell
+        && sched.introduces[0].target == target_cell;
+
+    let dummy_receipt = |agent: CellId| TurnReceipt {
+        turn_hash: [0u8; 32],
+        forest_hash: [0u8; 32],
+        pre_state_hash: [0u8; 32],
+        post_state_hash: [0u8; 32],
+        timestamp: 0,
+        effects_hash: [0u8; 32],
+        computrons_used: 0,
+        action_count: 0,
+        previous_receipt_hash: None,
+        agent,
+        federation_id: [0u8; 32],
+        routing_directives: vec![],
+        introduction_exports: vec![],
+        derivation_records: vec![],
+        emitted_events: vec![],
+        executor_signature: None,
+        finality: Default::default(),
+        was_encrypted: false,
+    };
+
+    let intro_wr =
+        fabricate_witnessed_receipt(&turn, &introducer_cell, dummy_receipt(introducer_cell));
+    let recp_wr =
+        fabricate_witnessed_receipt(&turn, &recipient_cell, dummy_receipt(introducer_cell));
+    let tgt_wr = fabricate_witnessed_receipt(&turn, &target_cell, dummy_receipt(introducer_cell));
+
+    let bundle = BilateralBundle {
+        turn: turn.clone(),
+        entries: vec![
+            BilateralEntry {
+                cell_id: introducer_cell,
+                witnessed_receipt: intro_wr.clone(),
+            },
+            BilateralEntry {
+                cell_id: recipient_cell,
+                witnessed_receipt: recp_wr,
+            },
+            BilateralEntry {
+                cell_id: target_cell,
+                witnessed_receipt: tgt_wr,
+            },
+        ],
+    };
+    let bundle_path = state_dir.join("silver.introduce-bundle.json");
+    fs::write(&bundle_path, serde_json::to_string_pretty(&bundle).unwrap()).unwrap();
+
+    // Tampered: flip a felt inside the introducer's PI. We target the first
+    // Introduce-accumulator slot of the introducer cell's PI; the verifier's
+    // reconstruction from `sched` will disagree.
+    use pyana_circuit::effect_vm::pi as p;
+    let mut tampered_intro_wr = intro_wr.clone();
+    // OUTGOING_INTRODUCE_ROOT lives at the same struct location as
+    // OUTGOING_TRANSFER_ROOT for the introducer side. The exact slot matters
+    // less than perturbing a γ.2 PI cell whose reconstruction is determined
+    // by the schedule.
+    if tampered_intro_wr.public_inputs.len() > p::OUTGOING_TRANSFER_ROOT_BASE {
+        tampered_intro_wr.public_inputs[p::OUTGOING_TRANSFER_ROOT_BASE] =
+            BabyBear::new(0xDEAD_BEEF).as_u32();
+    }
+    let tampered_bundle = BilateralBundle {
+        turn: turn.clone(),
+        entries: vec![
+            BilateralEntry {
+                cell_id: introducer_cell,
+                witnessed_receipt: tampered_intro_wr,
+            },
+            BilateralEntry {
+                cell_id: recipient_cell,
+                witnessed_receipt: fabricate_witnessed_receipt(
+                    &turn,
+                    &recipient_cell,
+                    dummy_receipt(introducer_cell),
+                ),
+            },
+            BilateralEntry {
+                cell_id: target_cell,
+                witnessed_receipt: fabricate_witnessed_receipt(
+                    &turn,
+                    &target_cell,
+                    dummy_receipt(introducer_cell),
+                ),
+            },
+        ],
+    };
+    let bundle_path_tampered = state_dir.join("silver.introduce-bundle.tampered.json");
+    fs::write(
+        &bundle_path_tampered,
+        serde_json::to_string_pretty(&tampered_bundle).unwrap(),
+    )
+    .unwrap();
+
+    let art = IntroduceArtifact {
+        turn_hash_hex: hex::encode(turn.hash()),
+        introducer_cell_hex: hex::encode(introducer_cell.0),
+        recipient_cell_hex: hex::encode(recipient_cell.0),
+        target_cell_hex: hex::encode(target_cell.0),
+        bundle_path: bundle_path.display().to_string(),
+        bundle_path_tampered: bundle_path_tampered.display().to_string(),
+        schedule_has_one_introduce,
+    };
+    fs::write(
+        state_dir.join("silver.introduce.json"),
+        serde_json::to_string_pretty(&art).unwrap(),
+    )
+    .unwrap();
+    println!("{}", serde_json::to_string(&art).unwrap());
+}
+
 /// Subcommand: `make-bilateral-bundle` — assemble a γ.2 bilateral bundle
 /// for the canonical Transfer turn (alice -> bob, 100). Build one
 /// `WitnessedReceipt` per cell with the γ.2 PI layout computed from the
@@ -846,6 +1376,9 @@ fn usage() -> ExitCode {
            verify-captp-delivered-tampered\n  \
            make-sovereign-witness --cell <hex32> --sequence N\n  \
            slot-caveat-demo\n  \
+           slot-caveat-suite\n  \
+           make-credential-set-auth\n  \
+           make-introduce --introducer-cell <hex32> --recipient-cell <hex32> --target-cell <hex32> --turn-nonce N\n  \
            make-bilateral-bundle --alice-cell <hex32> --bob-cell <hex32> --amount N --turn-nonce N\n"
     );
     ExitCode::from(2)
@@ -903,6 +1436,22 @@ fn run(cmd: &str, rest: &[String], state_dir: &PathBuf) -> Result<bool, String> 
         }
         "slot-caveat-demo" => {
             cmd_slot_caveat_demo(state_dir);
+            Ok(true)
+        }
+        "slot-caveat-suite" => {
+            cmd_slot_caveat_suite(state_dir);
+            Ok(true)
+        }
+        "make-credential-set-auth" => {
+            cmd_make_credential_set_auth(state_dir);
+            Ok(true)
+        }
+        "make-introduce" => {
+            let introducer = need("--introducer-cell")?;
+            let recipient = need("--recipient-cell")?;
+            let target = need("--target-cell")?;
+            let turn_nonce = need_u64("--turn-nonce", Some("1"))?;
+            cmd_make_introduce(state_dir, &introducer, &recipient, &target, turn_nonce);
             Ok(true)
         }
         "make-bilateral-bundle" => {

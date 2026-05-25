@@ -57,6 +57,11 @@ pub const EFFECT_QUEUE_OPS: EffectMask = 1 << 18;
 /// Stage 7 / P1.A: these are the runtime emitters for the AIR-only orphan
 /// CapTP variants (selectors 14..17 in `circuit/src/effect_vm.rs`).
 pub const EFFECT_CAPTP_OPS: EffectMask = 1 << 19;
+/// `Effect::Refusal` — categorical dual of acting-effects; proof of
+/// non-action per `CROSS-CELL-CATEGORICAL-ANALYSIS.md §3.3 / §9.2.2`.
+/// Mutates only the target cell's nonce + refusal-audit slot; never
+/// transfers, grants, or creates.
+pub const EFFECT_REFUSAL: EffectMask = 1 << 20;
 
 /// All effect kinds permitted (equivalent to no restriction).
 pub const EFFECT_ALL: EffectMask = 0xFFFF_FFFF;

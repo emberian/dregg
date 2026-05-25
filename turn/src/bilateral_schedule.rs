@@ -288,142 +288,41 @@ impl GrantEntry {
 // ---------------------------------------------------------------------------
 // Unilateral binding (γ.2 1-arity sibling of bilateral)
 // ---------------------------------------------------------------------------
+//
+// The plain data type lives in `pyana_cell::unilateral` so it can be
+// embedded in `pyana_cell::peer_exchange::PeerStateTransition`. This module
+// owns the *accumulator-side* logic: the kind→PI tag projection, the
+// kind→salt mapping, and the per-cell Poseidon2 fold.
 
-/// A unilateral attestation: a cell binding a property over its *own*
-/// transitions without a counterparty.
-///
-/// Bilateral (γ.2 2-arity Transfer / Grant) and trilateral (3-arity Introduce)
-/// bind agreement *across cells*. The 1-arity sibling binds a cell's own
-/// witnessing — used by sovereign cells (via `peer_exchange`'s federation-
-/// bypass primitive) to attest to state transitions, nonce advances, or
-/// signed sovereign witnesses without needing a counterparty in the bundle.
-///
-/// Composability: a [`pyana_cell::peer_exchange::PeerStateTransition`] can
-/// carry an optional `unilateral_attestation`. When present, the receiver
-/// recomputes the canonical encoding from the sender's cell-id-derived view
-/// and confirms it matches what's folded into the sender's PI accumulator.
-///
-/// Categorical lens: this is the 1-arity sibling of γ.2's bilateral binding,
-/// closing the n-arity family {1, 2, 3} (Unilateral / Transfer+Grant /
-/// Introduce). See `CROSS-CELL-CATEGORICAL-ANALYSIS.md` §3.5.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct UnilateralAttestation {
-    pub kind: UnilateralAttestationKind,
-    /// 32-byte canonical hash of the attestation's witness. The exact preimage
-    /// is kind-specific:
-    /// - `SelfStateTransition`: BLAKE3(domain || cell_id || old_commit || new_commit || effects_hash)
-    /// - `SelfNonceBump`:       BLAKE3(domain || cell_id || prev_nonce_be || new_nonce_be)
-    /// - `SovereignWitness`:    BLAKE3(domain || cell_id || pubkey || sequence_be || signature)
-    /// - `Custom`:              opaque caller-provided 32-byte commitment
-    pub attestation_data: [u8; 32],
-}
+pub use pyana_cell::{UnilateralAttestation, UnilateralAttestationKind};
 
-/// Discriminant of [`UnilateralAttestation`]. The numeric kind_tag is folded
-/// into the PI accumulator so that two attestations with colliding
-/// `attestation_data` but different kinds remain distinguishable.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum UnilateralAttestationKind {
-    /// "My cell state went from X to Y." Used by hosted-cell sovereign-style
-    /// receipts where the cell self-publishes the transition.
-    SelfStateTransition,
-    /// "My nonce was N, now N+1." Useful for clients that want to publish
-    /// monotonic activity without leaking effect content.
-    SelfNonceBump,
-    /// "I signed this transition as a sovereign witness." Composes with the
-    /// SOVEREIGN_WITNESS_* PI slots — but distinct from those: those bind the
-    /// AIR's row-0 owner-pubkey hash, while this binds the post-hoc auditable
-    /// trail (one accumulator entry per signed transition the cell produced
-    /// in this turn).
-    SovereignWitness,
-    /// Caller-provided 30-bit `kind_tag`. The PI projection masks the tag to
-    /// 30 bits and OR's with `UNILATERAL_ATTESTATION_KIND_CUSTOM_BASE` so it
-    /// remains in canonical BabyBear space and can never collide with a
-    /// well-known kind.
-    Custom {
-        kind_tag: u32,
-    },
-}
-
-impl UnilateralAttestationKind {
-    /// Projection to the PI kind tag (BabyBear-canonical u32).
-    pub fn pi_tag(&self) -> u32 {
-        use pyana_circuit::effect_vm::pi;
-        match self {
-            Self::SelfStateTransition => pi::UNILATERAL_ATTESTATION_KIND_SELF_STATE_TRANSITION,
-            Self::SelfNonceBump => pi::UNILATERAL_ATTESTATION_KIND_SELF_NONCE_BUMP,
-            Self::SovereignWitness => pi::UNILATERAL_ATTESTATION_KIND_SOVEREIGN_WITNESS,
-            Self::Custom { kind_tag } => {
-                pi::UNILATERAL_ATTESTATION_KIND_CUSTOM_BASE | (kind_tag & 0x3FFF_FFFF)
-            }
+/// Projection to the PI kind tag (BabyBear-canonical u32). Folded into the
+/// `UNILATERAL_ATTESTATIONS_ROOT` accumulator alongside the data block.
+pub fn unilateral_pi_tag(kind: &UnilateralAttestationKind) -> u32 {
+    use pyana_circuit::effect_vm::pi;
+    match kind {
+        UnilateralAttestationKind::SelfStateTransition => {
+            pi::UNILATERAL_ATTESTATION_KIND_SELF_STATE_TRANSITION
         }
-    }
-
-    /// Salt folded into the accumulator update (distinct per kind).
-    fn salt(&self) -> u32 {
-        match self {
-            Self::SelfStateTransition => UNILATERAL_SELF_STATE_TRANSITION_SALT,
-            Self::SelfNonceBump => UNILATERAL_SELF_NONCE_BUMP_SALT,
-            Self::SovereignWitness => UNILATERAL_SOVEREIGN_WITNESS_SALT,
-            Self::Custom { .. } => UNILATERAL_CUSTOM_SALT,
+        UnilateralAttestationKind::SelfNonceBump => pi::UNILATERAL_ATTESTATION_KIND_SELF_NONCE_BUMP,
+        UnilateralAttestationKind::SovereignWitness => {
+            pi::UNILATERAL_ATTESTATION_KIND_SOVEREIGN_WITNESS
+        }
+        UnilateralAttestationKind::Custom { kind_tag } => {
+            pi::UNILATERAL_ATTESTATION_KIND_CUSTOM_BASE | (kind_tag & 0x3FFF_FFFF)
         }
     }
 }
 
-impl UnilateralAttestation {
-    /// Canonical helper: build a SelfStateTransition attestation from cell id
-    /// + the four canonical 32-byte commitments. Mirrors the canonical
-    /// signing-message layout of `peer_exchange::canonical_message` so the
-    /// receiver can rebuild without coordination.
-    pub fn self_state_transition(
-        cell_id: &CellId,
-        old_commit: &[u8; 32],
-        new_commit: &[u8; 32],
-        effects_hash: &[u8; 32],
-    ) -> Self {
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(b"pyana-unilateral-self-state-transition-v1");
-        hasher.update(cell_id.as_bytes());
-        hasher.update(old_commit);
-        hasher.update(new_commit);
-        hasher.update(effects_hash);
-        Self {
-            kind: UnilateralAttestationKind::SelfStateTransition,
-            attestation_data: *hasher.finalize().as_bytes(),
-        }
-    }
-
-    /// Canonical helper: a SelfNonceBump attestation over (prev_nonce, new_nonce).
-    pub fn self_nonce_bump(cell_id: &CellId, prev_nonce: u64, new_nonce: u64) -> Self {
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(b"pyana-unilateral-self-nonce-bump-v1");
-        hasher.update(cell_id.as_bytes());
-        hasher.update(&prev_nonce.to_be_bytes());
-        hasher.update(&new_nonce.to_be_bytes());
-        Self {
-            kind: UnilateralAttestationKind::SelfNonceBump,
-            attestation_data: *hasher.finalize().as_bytes(),
-        }
-    }
-
-    /// Canonical helper: a SovereignWitness attestation over (pubkey,
-    /// sequence, signature). Used by sovereign cells that publish their
-    /// signed transitions as auditable artifacts.
-    pub fn sovereign_witness(
-        cell_id: &CellId,
-        pubkey: &[u8; 32],
-        sequence: u64,
-        signature: &[u8; 64],
-    ) -> Self {
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(b"pyana-unilateral-sovereign-witness-v1");
-        hasher.update(cell_id.as_bytes());
-        hasher.update(pubkey);
-        hasher.update(&sequence.to_be_bytes());
-        hasher.update(signature);
-        Self {
-            kind: UnilateralAttestationKind::SovereignWitness,
-            attestation_data: *hasher.finalize().as_bytes(),
-        }
+/// Salt folded into the accumulator state-update — distinct per kind so two
+/// attestations with colliding `attestation_data` but different kinds still
+/// produce distinct accumulator roots.
+fn unilateral_salt(kind: &UnilateralAttestationKind) -> u32 {
+    match kind {
+        UnilateralAttestationKind::SelfStateTransition => UNILATERAL_SELF_STATE_TRANSITION_SALT,
+        UnilateralAttestationKind::SelfNonceBump => UNILATERAL_SELF_NONCE_BUMP_SALT,
+        UnilateralAttestationKind::SovereignWitness => UNILATERAL_SOVEREIGN_WITNESS_SALT,
+        UnilateralAttestationKind::Custom { .. } => UNILATERAL_CUSTOM_SALT,
     }
 }
 
@@ -542,9 +441,9 @@ impl ExpectedBilateral {
         };
         let mut acc = [BabyBear::ZERO; 4];
         for att in entries {
-            let salt = att.kind.salt();
+            let salt = unilateral_salt(&att.kind);
             let kind_block = [
-                BabyBear::new(att.kind.pi_tag() & 0x7FFF_FFFF),
+                BabyBear::new(unilateral_pi_tag(&att.kind) & 0x7FFF_FFFF),
                 BabyBear::ZERO,
                 BabyBear::ZERO,
                 BabyBear::ZERO,
@@ -899,11 +798,11 @@ mod tests {
     #[test]
     fn unilateral_attestation_kinds_have_distinct_pi_tags() {
         let tags = [
-            UnilateralAttestationKind::SelfStateTransition.pi_tag(),
-            UnilateralAttestationKind::SelfNonceBump.pi_tag(),
-            UnilateralAttestationKind::SovereignWitness.pi_tag(),
-            UnilateralAttestationKind::Custom { kind_tag: 0 }.pi_tag(),
-            UnilateralAttestationKind::Custom { kind_tag: 1 }.pi_tag(),
+            unilateral_pi_tag(&UnilateralAttestationKind::SelfStateTransition),
+            unilateral_pi_tag(&UnilateralAttestationKind::SelfNonceBump),
+            unilateral_pi_tag(&UnilateralAttestationKind::SovereignWitness),
+            unilateral_pi_tag(&UnilateralAttestationKind::Custom { kind_tag: 0 }),
+            unilateral_pi_tag(&UnilateralAttestationKind::Custom { kind_tag: 1 }),
         ];
         for i in 0..tags.len() {
             for j in (i + 1)..tags.len() {

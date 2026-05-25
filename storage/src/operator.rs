@@ -1,5 +1,18 @@
 //! Relay operator obligation model.
 //!
+//! # DEPRECATED — migrate to `pyana_storage_templates::relay_operator`
+//!
+//! Per `STORAGE-AS-CELL-PROGRAMS.md` §3.5 this module's
+//! [`RelayOperator`] / [`HostedInbox`] / [`DeliveryDispute`] surface
+//! is the legacy operator-side bond / quota / dispute primitive.
+//! The canonical replacement is the cell-program template
+//! [`pyana_storage_templates::relay_operator`], whose
+//! `relay_operator_factory_descriptor()` exports a
+//! `FactoryDescriptor` whose `CellProgram::Cases` enforces
+//! `RateLimitBySum` quota, `BoundedBy` bond-decrement-on-dispute,
+//! `Monotonic` dispute counting, and `WitnessedPredicate::Dfa`
+//! dispatch classification on every turn.
+//!
 //! A relay operator bonds computrons (CreateObligation pattern) to host inboxes.
 //! If they fail to deliver messages (provable non-delivery), they get slashed.
 //! If they deliver correctly, the bond is returned + they earn fees.
@@ -20,6 +33,8 @@
 //! - Operator proves delivery via dequeue proof (new queue root).
 //! - If operator cannot produce dequeue proof within SLA window → slash.
 
+#![allow(deprecated)]
+
 use std::collections::HashMap;
 
 use crate::QuotaId;
@@ -34,6 +49,10 @@ const BOND_RATE_PER_CAPACITY: u64 = 100;
 const OPERATOR_GC_FEE_PCT: u64 = 10;
 
 /// A relay operator that bonds computrons to host inboxes.
+#[deprecated(
+    since = "0.1.0",
+    note = "Use `pyana_storage_templates::relay_operator::relay_operator_factory_descriptor()` per STORAGE-AS-CELL-PROGRAMS.md §3.5. The cell-program template's `RateLimitBySum` quota, `BoundedBy` slash-only-on-dispute, monotonic dispute counter, and `WitnessedPredicate::Dfa` dispatch are enforced by the executor on every turn."
+)]
 #[derive(Debug, Clone)]
 pub struct RelayOperator {
     /// The operator's identity.

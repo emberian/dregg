@@ -60,6 +60,27 @@ pub struct PeerStateTransition {
     /// path always emits the 1-byte option tag.
     #[serde(default)]
     pub transition_proof: Option<Vec<u8>>,
+    /// γ.2 unilateral binding (1-arity sibling of bilateral): the optional
+    /// self-attestation this peer signed alongside the transition. When
+    /// present, the receiver re-derives the canonical attestation_data from
+    /// the sender's cell-id-derived encoding and confirms the bundle's
+    /// `UNILATERAL_ATTESTATIONS_*` PI accumulator absorbed exactly this
+    /// attestation — closing the executor-trust gap on sovereign-cell
+    /// self-witnessing.
+    ///
+    /// Categorical lens: γ.2 binds pairs (Transfer/Grant) and triples
+    /// (Introduce); unilateral is the 1-arity sibling, used by
+    /// `peer_exchange` (the federation-bypass primitive) so a sovereign
+    /// cell can structurally bind a property over its own transitions
+    /// without a counterparty in the bundle. See
+    /// `CROSS-CELL-CATEGORICAL-ANALYSIS.md` §3.5.
+    ///
+    /// Storing the typed value here (rather than just `attestation_data`)
+    /// lets the receiver verify the canonical-preimage derivation against
+    /// the sender's `cell_id`: a forged sender produces a different
+    /// canonical hash because `cell_id` is folded into the preimage.
+    #[serde(default)]
+    pub unilateral_attestation: Option<crate::unilateral::UnilateralAttestation>,
 }
 
 /// A peer's view of another cell's state.
