@@ -1,5 +1,21 @@
 # Pyana Codebase Remediation — Master Plan
 
+## Status (as of 2026-05-24)
+
+The remediation plan below was written early in the season; Stages 1-3
+have largely landed (see `docs-history/STAGE-3-AIR-PLAN.md` for the
+completed Stage-3 work). Subsequent design has moved onto higher
+layers — see `STAGE-7-GAMMA-2-PI-DESIGN.md` (bilateral PI binding),
+`SOVEREIGN-WITNESS-AIR-DESIGN.md`, `VK-AS-RE-EXECUTION-RECIPE.md`,
+and `NEW-WORLD.md` (the current coherent picture). Treat this file as
+the *origin* of the substrate work, not the live tracker.
+
+Audit references in this document point to the original repo-root
+filenames; the audits now live under `audits/` (see
+`TOPLEVEL-MD-INDEX.md`).
+
+---
+
 **Status:** post-design-research. The Effect VM Shape A plan absorbed enough of the
 codebase's coherence problems that this file is now the master plan for moving from
 "The Mess" (2-day-old Opus 4.6 generation, multiple audits with P0s, build broken)
