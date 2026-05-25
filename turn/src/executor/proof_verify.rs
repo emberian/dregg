@@ -917,6 +917,7 @@ impl TurnExecutor {
             SCHEMA_NOTE_SPEND,
             SCHEMA_NOTE_CREATE,
             SCHEMA_BRIDGE_LOCK,
+            SCHEMA_BURN,
         );
         None
     }
@@ -1024,6 +1025,15 @@ impl TurnExecutor {
             ("pyana-effect-revoke-delegation-v1", Effect::RevokeDelegation { child }) => {
                 Some((vec![*child.as_bytes()], vec![]))
             }
+            // SCHEMA_BURN (AIR-SOUNDNESS-AUDIT.md #75) is wired below in
+            // `extract_burn_binding_params` because it needs the pre/post
+            // ledger snapshot (`old_balance`, `new_balance`) which the
+            // generic snapshot-free extractor cannot reconstruct. Returning
+            // None here means the wire-PI matching loop must route Burn
+            // through the snapshot-aware path; see
+            // `verify_effect_binding_proofs` for the snapshot-supplied
+            // call site.
+            ("pyana-effect-burn-v1", Effect::Burn { .. }) => None,
             // Other variants: extend as wire-in surface grows. Today
             // the lane closes NoteSpend/NoteCreate/BridgeLock at full
             // fidelity (the deferred §5 items); the remaining
