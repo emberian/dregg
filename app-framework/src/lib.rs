@@ -63,7 +63,13 @@ pub mod ring_trade;
 pub mod server;
 pub mod starbridge;
 pub mod store;
-pub mod wallet;
+pub mod cipherclerk;
+
+/// Legacy module alias — `wallet` was renamed to `cipherclerk`. This
+/// alias keeps `pyana_app_framework::wallet::...` callers compiling
+/// during the migration. New code should reach for `cipherclerk`.
+#[doc(hidden)]
+pub use cipherclerk as wallet;
 
 // =============================================================================
 // Re-exports: types that apps commonly need from sub-crates
