@@ -896,6 +896,10 @@ pub mod pi {
     ///   97..101 CREATE_ESCROW_AMOUNT_LIMBS[4]       (30-bit-trunc fix)
     ///   101     SLOT_CAVEAT_COUNT                   (Cav-Codex Block 3)
     ///   102..126 SLOT_CAVEAT_MANIFEST[24]            (Cav-Codex Block 3)
+    ///   126     CROSS_EFFECT_DEPS_COUNT             (Proof-to-Action §3.3)
+    ///   127..151 CROSS_EFFECT_DEPS_MANIFEST[24]     (Proof-to-Action §3.3)
+    ///   151     WITNESS_INDEX_MAP_COUNT             (Proof-to-Action §3.2)
+    ///   152..168 WITNESS_INDEX_MAP[16]              (Proof-to-Action §3.2)
     ///
     /// ---- Slot-caveat manifest (Cav-Codex Block 3) ----
     ///
@@ -946,8 +950,77 @@ pub mod pi {
     pub const SLOT_CAVEAT_TAG_SENDER_AUTHORIZED: u32 = 11;
     pub const SLOT_CAVEAT_TAG_ALLOWED_TRANSITIONS: u32 = 12;
 
+    // ---- Cross-effect within-turn chain pinning (Proof-to-Action Binding §3.3) ----
+    //
+    // Per `PROOF-TO-ACTION-BINDING-SWEEP.md` §3.3: when two effects in
+    // the same turn chain (e.g., `SpendNote` produces a nullifier that
+    // a later `BridgeMint` consumes in the same turn), the AIR needs to
+    // witness that the producer's output equals the consumer's input.
+    // Without this, a malicious executor could route the consumer to a
+    // different value than what the producer actually produced.
+    //
+    // The manifest is fixed-size — up to `MAX_CROSS_EFFECT_DEPS` entries
+    // of `CROSS_EFFECT_DEP_ENTRY_SIZE` felts each, prefixed by a
+    // single-felt count. Each entry is a 6-felt tuple:
+    //   [producer_index, consumer_index, field_tag, vc0, vc1, vc2]
+    // where:
+    //   - producer_index, consumer_index: u32-as-BabyBear indices into
+    //     the canonical DFS-traversal order of the call_forest;
+    //   - field_tag: discriminator for the named field (nullifier=1,
+    //     note_commitment=2, escrow_id=3, destination=4, note_tree_root=5);
+    //   - vc0..vc2: 3 of the 8 limbs of the chained 32-byte value
+    //     commitment, providing ~93-bit binding strength (one
+    //     commitment cell can pack 32 bytes only with 8 limbs; the
+    //     fixed manifest entry size of 6 felts holds the first 3 limbs;
+    //     callers that need stronger binding should additionally
+    //     submit an `EffectBindingProof` schema entry which carries the
+    //     full 8 limbs).
+    //
+    // The verifier-side off-AIR check (`TurnExecutor::verify_effect_binding_proofs`)
+    // enforces the full 32-byte algebraic match; the AIR slot here is the
+    // shared-PI surface that future row-bound enforcement (Stage 7-γ.3)
+    // will tie to specific trace rows of the producer/consumer effects.
+    pub const CROSS_EFFECT_DEPS_COUNT: usize =
+        SLOT_CAVEAT_MANIFEST_BASE + MAX_SLOT_CAVEATS * SLOT_CAVEAT_ENTRY_SIZE; // 126
+    pub const MAX_CROSS_EFFECT_DEPS: usize = 4;
+    pub const CROSS_EFFECT_DEP_ENTRY_SIZE: usize = 6;
+    pub const CROSS_EFFECT_DEPS_BASE: usize = CROSS_EFFECT_DEPS_COUNT + 1; // 127
+
+    /// Field-name tags for cross-effect dependencies. Kept in sync with
+    /// `pyana_turn::binding_proof::EffectDependency::field_name` string
+    /// match in `TurnExecutor::extract_named_field_32b`.
+    pub const CROSS_EFFECT_FIELD_TAG_NULLIFIER: u32 = 1;
+    pub const CROSS_EFFECT_FIELD_TAG_NOTE_COMMITMENT: u32 = 2;
+    pub const CROSS_EFFECT_FIELD_TAG_ESCROW_ID: u32 = 3;
+    pub const CROSS_EFFECT_FIELD_TAG_DESTINATION: u32 = 4;
+    pub const CROSS_EFFECT_FIELD_TAG_NOTE_TREE_ROOT: u32 = 5;
+
+    // ---- Witness-blob → Effect indexing (Proof-to-Action Binding §3.2) ----
+    //
+    // Per `PROOF-TO-ACTION-BINDING-SWEEP.md` §3.2: the runtime `Action`
+    // carries `witness_blobs: Vec<WitnessBlob>` and witness-attached
+    // predicates reference blobs by `proof_witness_index`. The Effect VM
+    // currently does not bind which witness blob feeds which effect: a
+    // malicious executor could shuffle blobs so that an effect needing
+    // witness K reads bytes meant for effect L.
+    //
+    // Fix: a per-effect `witness_blob_index` manifest. Each entry is a
+    // 2-felt tuple:
+    //   [effect_index, witness_index]
+    // both as u32-as-BabyBear. Unused entries are zero-padded; the
+    // count prefix tells the verifier how many entries are live.
+    //
+    // The off-AIR verifier checks well-formedness (bounds, no-dupes); a
+    // future per-effect AIR slot binds the witness blob's BLAKE3 hash to
+    // the effect's row-0 columns for full algebraic enforcement.
+    pub const WITNESS_INDEX_MAP_COUNT: usize =
+        CROSS_EFFECT_DEPS_BASE + MAX_CROSS_EFFECT_DEPS * CROSS_EFFECT_DEP_ENTRY_SIZE; // 127 + 24 = 151
+    pub const MAX_WITNESS_INDEX_ENTRIES: usize = 8;
+    pub const WITNESS_INDEX_ENTRY_SIZE: usize = 2;
+    pub const WITNESS_INDEX_MAP_BASE: usize = WITNESS_INDEX_MAP_COUNT + 1; // 152
+
     pub const BASE_COUNT: usize =
-        SLOT_CAVEAT_MANIFEST_BASE + MAX_SLOT_CAVEATS * SLOT_CAVEAT_ENTRY_SIZE; // 102 + 24 = 126
+        WITNESS_INDEX_MAP_BASE + MAX_WITNESS_INDEX_ENTRIES * WITNESS_INDEX_ENTRY_SIZE; // 152 + 16 = 168
     /// Elements per custom effect entry in PI (4 vk_hash + 4 proof_commit).
     pub const CUSTOM_ENTRY_SIZE: usize = 8;
 
@@ -6072,6 +6145,62 @@ mod tests {
 
     fn make_initial_state(balance: u64) -> CellState {
         CellState::new(balance, 0)
+    }
+
+    // ---- PI layout sanity (Proof-to-Action Binding §3.2 + §3.3) ----
+
+    #[test]
+    fn pi_layout_cross_effect_and_witness_index_offsets() {
+        // The two new manifest sections sit between the slot-caveat
+        // manifest (ends at 126) and BASE_COUNT (168).
+        assert_eq!(pi::CROSS_EFFECT_DEPS_COUNT, 126);
+        assert_eq!(pi::CROSS_EFFECT_DEPS_BASE, 127);
+        assert_eq!(pi::MAX_CROSS_EFFECT_DEPS, 4);
+        assert_eq!(pi::CROSS_EFFECT_DEP_ENTRY_SIZE, 6);
+        assert_eq!(pi::WITNESS_INDEX_MAP_COUNT, 151);
+        assert_eq!(pi::WITNESS_INDEX_MAP_BASE, 152);
+        assert_eq!(pi::MAX_WITNESS_INDEX_ENTRIES, 8);
+        assert_eq!(pi::WITNESS_INDEX_ENTRY_SIZE, 2);
+        assert_eq!(pi::BASE_COUNT, 168);
+        // CUSTOM_PROOFS_BASE follows BASE_COUNT (append-only invariant).
+        assert_eq!(pi::CUSTOM_PROOFS_BASE, pi::BASE_COUNT);
+    }
+
+    #[test]
+    fn pi_layout_no_overlap_between_manifests() {
+        // Slot-caveat manifest ends at SLOT_CAVEAT_MANIFEST_BASE + MAX_SLOT_CAVEATS * SLOT_CAVEAT_ENTRY_SIZE.
+        let slot_caveat_end =
+            pi::SLOT_CAVEAT_MANIFEST_BASE + pi::MAX_SLOT_CAVEATS * pi::SLOT_CAVEAT_ENTRY_SIZE;
+        assert!(slot_caveat_end <= pi::CROSS_EFFECT_DEPS_COUNT);
+
+        let cross_effect_end =
+            pi::CROSS_EFFECT_DEPS_BASE + pi::MAX_CROSS_EFFECT_DEPS * pi::CROSS_EFFECT_DEP_ENTRY_SIZE;
+        assert!(cross_effect_end <= pi::WITNESS_INDEX_MAP_COUNT);
+
+        let witness_index_end =
+            pi::WITNESS_INDEX_MAP_BASE + pi::MAX_WITNESS_INDEX_ENTRIES * pi::WITNESS_INDEX_ENTRY_SIZE;
+        assert_eq!(witness_index_end, pi::BASE_COUNT);
+    }
+
+    #[test]
+    fn pi_layout_field_tag_discriminators_distinct() {
+        // Each cross-effect field tag must be a distinct nonzero value
+        // (zero is the "no dependency" sentinel).
+        let tags = [
+            pi::CROSS_EFFECT_FIELD_TAG_NULLIFIER,
+            pi::CROSS_EFFECT_FIELD_TAG_NOTE_COMMITMENT,
+            pi::CROSS_EFFECT_FIELD_TAG_ESCROW_ID,
+            pi::CROSS_EFFECT_FIELD_TAG_DESTINATION,
+            pi::CROSS_EFFECT_FIELD_TAG_NOTE_TREE_ROOT,
+        ];
+        for &t in &tags {
+            assert!(t != 0, "field tag must be nonzero (zero is the sentinel)");
+        }
+        let mut sorted = tags;
+        sorted.sort_unstable();
+        for w in sorted.windows(2) {
+            assert!(w[0] != w[1], "field tag values must be distinct");
+        }
     }
 
     #[test]
