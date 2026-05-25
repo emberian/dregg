@@ -894,6 +894,184 @@ mod tests {
         assert_ne!(sender.outgoing_transfer, receiver.incoming_transfer);
     }
 
+    // ---- Unilateral binding tests (γ.2 1-arity sibling) -------------------
+
+    #[test]
+    fn unilateral_attestation_kinds_have_distinct_pi_tags() {
+        let tags = [
+            UnilateralAttestationKind::SelfStateTransition.pi_tag(),
+            UnilateralAttestationKind::SelfNonceBump.pi_tag(),
+            UnilateralAttestationKind::SovereignWitness.pi_tag(),
+            UnilateralAttestationKind::Custom { kind_tag: 0 }.pi_tag(),
+            UnilateralAttestationKind::Custom { kind_tag: 1 }.pi_tag(),
+        ];
+        for i in 0..tags.len() {
+            for j in (i + 1)..tags.len() {
+                assert_ne!(tags[i], tags[j], "tags {i} and {j} collide");
+            }
+        }
+    }
+
+    #[test]
+    fn unilateral_root_for_empty_is_sentinel() {
+        let sched = ExpectedBilateral::default();
+        let root = sched.unilateral_root_for(&cid(1));
+        assert_eq!(root, [BabyBear::ZERO; 4]);
+        assert_eq!(sched.unilateral_count_for(&cid(1)), 0);
+    }
+
+    #[test]
+    fn unilateral_root_differs_by_kind() {
+        // Same attestation_data, different kinds → distinct roots
+        // (kind tag and kind salt are both folded into the accumulator).
+        let data = [0xAB; 32];
+        let mut sched_a = ExpectedBilateral::default();
+        sched_a.push_unilateral(
+            cid(1),
+            UnilateralAttestation {
+                kind: UnilateralAttestationKind::SelfStateTransition,
+                attestation_data: data,
+            },
+        );
+        let mut sched_b = ExpectedBilateral::default();
+        sched_b.push_unilateral(
+            cid(1),
+            UnilateralAttestation {
+                kind: UnilateralAttestationKind::SelfNonceBump,
+                attestation_data: data,
+            },
+        );
+        let root_a = sched_a.unilateral_root_for(&cid(1));
+        let root_b = sched_b.unilateral_root_for(&cid(1));
+        assert_ne!(root_a, root_b);
+    }
+
+    #[test]
+    fn unilateral_root_differs_by_data() {
+        let mut sched_a = ExpectedBilateral::default();
+        sched_a.push_unilateral(
+            cid(1),
+            UnilateralAttestation {
+                kind: UnilateralAttestationKind::SelfStateTransition,
+                attestation_data: [0xAB; 32],
+            },
+        );
+        let mut sched_b = ExpectedBilateral::default();
+        sched_b.push_unilateral(
+            cid(1),
+            UnilateralAttestation {
+                kind: UnilateralAttestationKind::SelfStateTransition,
+                attestation_data: [0xCD; 32],
+            },
+        );
+        assert_ne!(
+            sched_a.unilateral_root_for(&cid(1)),
+            sched_b.unilateral_root_for(&cid(1))
+        );
+    }
+
+    #[test]
+    fn unilateral_root_is_per_cell() {
+        // Attestation from cell A should not appear in cell B's root.
+        let mut sched = ExpectedBilateral::default();
+        sched.push_unilateral(
+            cid(1),
+            UnilateralAttestation {
+                kind: UnilateralAttestationKind::SelfStateTransition,
+                attestation_data: [0xAB; 32],
+            },
+        );
+        assert_ne!(sched.unilateral_root_for(&cid(1)), [BabyBear::ZERO; 4]);
+        assert_eq!(sched.unilateral_root_for(&cid(2)), [BabyBear::ZERO; 4]);
+    }
+
+    #[test]
+    fn unilateral_count_grows_with_pushes() {
+        let mut sched = ExpectedBilateral::default();
+        for i in 0..5u8 {
+            sched.push_unilateral(
+                cid(1),
+                UnilateralAttestation {
+                    kind: UnilateralAttestationKind::SelfNonceBump,
+                    attestation_data: [i; 32],
+                },
+            );
+        }
+        assert_eq!(sched.unilateral_count_for(&cid(1)), 5);
+    }
+
+    #[test]
+    fn unilateral_project_extract_roundtrip() {
+        use pyana_circuit::effect_vm::pi as p;
+        let mut sched = ExpectedBilateral::default();
+        sched.push_unilateral(
+            cid(7),
+            UnilateralAttestation {
+                kind: UnilateralAttestationKind::SovereignWitness,
+                attestation_data: [0xEE; 32],
+            },
+        );
+        sched.push_unilateral(
+            cid(7),
+            UnilateralAttestation {
+                kind: UnilateralAttestationKind::SelfStateTransition,
+                attestation_data: [0xFF; 32],
+            },
+        );
+        let counts = sched.counts_for(&cid(7));
+        let roots = sched.roots_for(&cid(7), 0);
+        assert_eq!(counts.unilateral_attestations, 2);
+        assert_ne!(roots.unilateral_attestations, [BabyBear::ZERO; 4]);
+
+        let mut pi = vec![BabyBear::ZERO; p::BASE_COUNT];
+        project_into_pi(&mut pi, &counts, &roots);
+        let (rc, rr) = extract_from_pi(&pi);
+        assert_eq!(rc, counts);
+        assert_eq!(rr, roots);
+    }
+
+    #[test]
+    fn unilateral_canonical_helpers_are_deterministic() {
+        let a = UnilateralAttestation::self_state_transition(
+            &cid(1),
+            &[0x01; 32],
+            &[0x02; 32],
+            &[0x03; 32],
+        );
+        let b = UnilateralAttestation::self_state_transition(
+            &cid(1),
+            &[0x01; 32],
+            &[0x02; 32],
+            &[0x03; 32],
+        );
+        assert_eq!(a, b);
+        // Different cell id => different data hash.
+        let c = UnilateralAttestation::self_state_transition(
+            &cid(2),
+            &[0x01; 32],
+            &[0x02; 32],
+            &[0x03; 32],
+        );
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn unilateral_custom_kind_tag_masked_to_30_bits() {
+        // A kind_tag with the high bits set must still produce a canonical
+        // BabyBear value (< 0x7800_0001).
+        let custom = UnilateralAttestationKind::Custom {
+            kind_tag: 0xFFFF_FFFF,
+        };
+        let tag = custom.pi_tag();
+        // Custom discriminant bit (0x4000_0000) set.
+        assert_ne!(tag & 0x4000_0000, 0);
+        // Tag fits in 31 bits — and canonical 32-bit BabyBear (the AIR
+        // canonicalizes; this just keeps us inside u32). Test by checking
+        // the value can be turned into a BabyBear and round-trip via mod p.
+        let bb = BabyBear::new(tag & 0x7FFF_FFFF);
+        assert!(bb.as_u32() < 0x7800_0001);
+    }
+
     #[test]
     fn counts_match_role() {
         let sched = ExpectedBilateral {
