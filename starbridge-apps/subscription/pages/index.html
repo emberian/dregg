@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Starbridge — Subscription</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!--
+      starbridge-app fragment for the subscription queue (CapInbox-as-
+      cell-program). Mounts under /starbridge-apps/subscription/ on the
+      site build.
+
+      The factory_vk hex below mirrors SUBSCRIPTION_FACTORY_VK from
+      src/lib.rs. Keep these two in sync; the build script in a real
+      deployment would lift the constant from the Rust crate at build
+      time.
+
+      Wired-in JS:
+        - /pkg/pyana_wasm.js                                — in-browser node
+        - /_includes/studio/runtimes.js                     — runtime registry
+        - /starbridge-apps/shared/inspectors/index.js       — inspector registry
+        - /starbridge-apps/subscription/inspectors.js       — <pyana-subscription>,
+                                                              <pyana-subscription-publish-form>,
+                                                              <pyana-subscription-feed>
+        - /starbridge-apps/subscription/turn-builders.js    — publish/consume/grant_*
+                                                              presets (window.pyana.builders.subscription)
+        - /starbridge-apps/shared/turn-builders/index.js    — signed Action presets
+    -->
+    <link rel="stylesheet" href="/_includes/studio/styles.css" />
+  </head>
+  <body>
+    <header class="starbridge-subscription-chrome">
+      <h1>Pyana Subscription</h1>
+      <p>Publisher/consumer message queues whose invariants
+         (<code>MonotonicSequence</code> on head/tail,
+         <code>Immutable</code> on capacity + owner,
+         <code>Monotonic</code> on roots + message_root,
+         <code>SenderAuthorized</code> against published publisher /
+         consumer sets) live in a
+         <code>FactoryDescriptor</code> in
+         <code>starbridge-apps/subscription/src/lib.rs</code>. The
+         executor enforces them on every turn.</p>
+      <p><em>Storage-as-cell-programs proof: this app replaces the
+         operator-side <code>storage::programmable::ProgrammableQueue</code>
+         enforcement loop with the cell-program substrate. See
+         <code>README.md</code> for the side-by-side
+         comparison.</em></p>
+    </header>
+    <main>
+      <pyana-app
+        runtime="in-memory"
+        factory-vk="73746172627269646765-73756273637269707469-6f6e2d666163746f7279-21"
+        registry-uri="pyana://cell/subscription-default"
+      >
+        <pyana-subscription slot="primary"></pyana-subscription>
+        <pyana-subscription-publish-form slot="publisher"></pyana-subscription-publish-form>
+        <pyana-subscription-feed slot="consumer"></pyana-subscription-feed>
+      </pyana-app>
+    </main>
+    <script type="module" src="/pkg/pyana_wasm.js"></script>
+    <script type="module" src="/_includes/studio/runtimes.js"></script>
+    <script type="module" src="/starbridge-apps/shared/inspectors/index.js"></script>
+    <script type="module" src="/starbridge-apps/subscription/inspectors.js"></script>
+    <script type="module" src="/starbridge-apps/subscription/turn-builders.js"></script>
+    <script type="module" src="/starbridge-apps/shared/turn-builders/index.js"></script>
+  </body>
+</html>
