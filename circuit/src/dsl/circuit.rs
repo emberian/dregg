@@ -322,16 +322,28 @@ impl ConstraintExpr {
                 sib_cols,
                 position_col,
             } => {
-                // Reconstruct children in canonical order from (current, siblings, position)
+                // Reconstruct children in canonical order from (current, siblings, position).
+                //
+                // NOTE: At interpolated points on the blown-up evaluation domain, `position`
+                // is an arbitrary BabyBear value (not necessarily in {0,1,2,3}). The C1
+                // position-validity constraint pos*(pos-1)*(pos-2)*(pos-3)==0 only enforces
+                // {0,1,2,3} at trace rows; off-domain evaluations must not panic. The hash
+                // is opaque (constraint degree marked as 1, dsl_plonky3 emits ZERO) so the
+                // value at off-domain points does not affect soundness — only correctness
+                // at trace rows matters. Clamp to a valid index for off-domain robustness.
                 let current = local[*current_col];
-                let position = local[*position_col].0 as u8;
+                let position_raw = local[*position_col].0 as usize;
                 let siblings = [local[sib_cols[0]], local[sib_cols[1]], local[sib_cols[2]]];
                 let mut children = [BabyBear::ZERO; 4];
-                let mut sib_idx = 0;
+                // Position slot for `current` is clamped to 0..=3; siblings fill the rest
+                // in order. At a trace row (where C1 is satisfied) position is in {0..3}
+                // and this reproduces the canonical (current, siblings) interleaving.
+                let position = (position_raw % 4) as u8;
+                let mut sib_idx: usize = 0;
                 for i in 0..4u8 {
                     if i == position {
                         children[i as usize] = current;
-                    } else {
+                    } else if sib_idx < siblings.len() {
                         children[i as usize] = siblings[sib_idx];
                         sib_idx += 1;
                     }
