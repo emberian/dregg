@@ -892,7 +892,10 @@ pub enum TurnLifecyclePayload {
     /// reasons are public (they're the executor's error path).
     Rejected {
         reason: String,
-        at_action: Option<usize>,
+        /// Action-path: each level names the action index at that nesting
+        /// depth. Empty `Vec` means the turn was rejected before any
+        /// specific action (turn-level structural rejection).
+        at_action: Vec<usize>,
     },
     /// The turn expired before execution (valid_until passed).
     Expired,

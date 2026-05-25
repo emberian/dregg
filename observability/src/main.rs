@@ -15,7 +15,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use pyana_captp::{HandoffCertificate, HandoffPresentation};
 use pyana_cell::program::{ReadSet, StateConstraint};
-use pyana_cell::state::{CellState, FIELD_ZERO, FieldElement, field_from_u64_be};
+use pyana_cell::program::field_from_u64_be;
+use pyana_cell::state::{CellState, FIELD_ZERO, FieldElement};
 use pyana_cell::{AuthRequired, Cell, CellProgram, EffectMask, Ledger, Permissions};
 use pyana_circuit::field::BabyBear;
 use pyana_federation::{Federation, LocalSeat};
@@ -497,7 +498,7 @@ fn emit_authorization_tour(em: &Emitter, turn_hash: &[u8; 32]) {
         },
         expires_at: 1_000_000,
         revocation_channel: Some([0x55; 32]),
-        allowed_effects: Some(EffectMask(0b1010)),
+        allowed_effects: Some(0b1010u32),
     });
     emit_auth_event(em, turn_hash, &auth_bearer_signed);
 
@@ -550,7 +551,7 @@ fn build_captp_authorization() -> Authorization {
         target_cell,
         recipient_pubkey.0,
         AuthRequired::Signature,
-        Some(EffectMask(0b0011)),
+        Some(0b0011u32),
         Some(2_000_000),
         Some(3),
         swiss,
@@ -708,9 +709,14 @@ fn hex32(bytes: &[u8; 32]) -> String {
 #[allow(dead_code)]
 fn _api_surface_anchor() {
     let _ = HandoffPresentation::presentation_message;
+    // `LocalSeat::bls_secret` is gated on `pyana-federation/runtime`; that
+    // feature is unified-on across the workspace (e.g. `node/` enables it),
+    // so the field is always present in the build observability participates
+    // in. We always set it.
     let _ = LocalSeat {
         index: 0,
         signing_key: SigningKey::from_bytes(&[0u8; 32]),
+        bls_secret: None,
     };
     let _: BabyBear = BabyBear::ZERO;
     let _ = BilateralCounts::default();
@@ -718,6 +724,7 @@ fn _api_surface_anchor() {
     let _ = ReadSet {
         new_slots: vec![],
         old_slots: vec![],
+        ..Default::default()
     };
     let _ = BearerDelegationSummary::SignedDelegation {
         delegator_pk: String::new(),
