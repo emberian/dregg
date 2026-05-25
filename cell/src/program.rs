@@ -255,6 +255,32 @@ impl TransitionGuard {
                 .all(|g| g.matches(meta, old_state, new_state)),
         }
     }
+
+    /// Returns `true` if this guard discriminates on the action's
+    /// *method or effect dispatch* (i.e., is operation-binding rather
+    /// than a pure state invariant).
+    ///
+    /// Cav-Codex Block 4 default-deny: when a `CellProgram::Cases` value
+    /// has at least one operation-binding case, the executor must treat
+    /// an action whose method matches *none* of them as
+    /// `NoTransitionCaseMatched` — even if a separate `Always`-guarded
+    /// invariants case still matches. Without this distinction the
+    /// `Always` case silently absorbs unknown methods (and only the
+    /// invariants get checked), which is exactly the
+    /// `unknown_method_default_denied` shape the
+    /// `starbridge-subscription` / `starbridge-governed-namespace` /
+    /// `pyana-storage-templates::cap_inbox` tests assert against.
+    pub fn is_method_dispatching(&self) -> bool {
+        match self {
+            TransitionGuard::Always => false,
+            TransitionGuard::MethodIs { .. } => true,
+            TransitionGuard::EffectKindIs { .. } => true,
+            TransitionGuard::SlotChanged { .. } => false,
+            TransitionGuard::AnyOf(children) | TransitionGuard::AllOf(children) => {
+                children.iter().any(|g| g.is_method_dispatching())
+            }
+        }
+    }
 }
 
 impl Default for CellProgram {
@@ -1019,10 +1045,37 @@ impl CellProgram {
                 Ok(())
             }
             CellProgram::Cases(cases) => {
+                // Track matches separately for invariant cases (Always /
+                // SlotChanged) and operation-binding cases (MethodIs /
+                // EffectKindIs / boolean composition over those).
+                //
+                // Cav-Codex Block 4 default-deny: if the program defines
+                // at least one operation-binding case, an action whose
+                // dispatch matches NONE of them is rejected as
+                // `NoTransitionCaseMatched`, even when invariant cases
+                // still match. Without this carve-out, an `Always`
+                // invariants case silently absorbs unknown methods —
+                // the executor would only ever enforce the universal
+                // invariants on a `cipherclerk_drain_funds` symbol and
+                // the program's whole purpose (operation discrimination)
+                // would erode. See the
+                // `unknown_method_default_denied` tests in
+                // `starbridge-subscription`,
+                // `starbridge-governed-namespace`, and
+                // `pyana-storage-templates::cap_inbox_tests`.
                 let mut any_matched = false;
+                let mut any_dispatch_case = false;
+                let mut any_dispatch_matched = false;
                 for case in cases {
+                    let is_dispatch = case.guard.is_method_dispatching();
+                    if is_dispatch {
+                        any_dispatch_case = true;
+                    }
                     if case.guard.matches(meta, old_state, new_state) {
                         any_matched = true;
+                        if is_dispatch {
+                            any_dispatch_matched = true;
+                        }
                         for constraint in &case.constraints {
                             evaluate_constraint_full(
                                 constraint, new_state, old_state, ctx, witnesses,
@@ -1031,7 +1084,12 @@ impl CellProgram {
                     }
                 }
                 if !any_matched {
-                    // Default-deny: no case applied to this transition.
+                    // No case at all applied — pure default-deny.
+                    return Err(ProgramError::NoTransitionCaseMatched);
+                }
+                if any_dispatch_case && !any_dispatch_matched {
+                    // Program defines operation-binding cases but the
+                    // action's dispatch matched none of them.
                     return Err(ProgramError::NoTransitionCaseMatched);
                 }
                 Ok(())

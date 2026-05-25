@@ -43,6 +43,20 @@ fn blake3_field(bytes: &[u8]) -> FieldElement {
     *blake3::hash(bytes).as_bytes()
 }
 
+/// Build a 32-byte field element where every byte equals `b`. Used in
+/// transition-shape tests so the test author can manually order base vs
+/// mutated values. `Monotonic` slot-caveats compare bytes big-endian,
+/// so e.g. `byte_field(0x10)` < `byte_field(0x20)` byte-wise. Using
+/// random blake3 digests here would make the ordering inscrutable and
+/// silently flip-flop the constraint that fires first on adversarial
+/// inputs (which is what the `grant_publisher_cannot_advance_head` test
+/// observes — the test wants to assert `Immutable on head`, but a
+/// blake3-shrinking publishers_root would trip `Monotonic` first and
+/// mask the head violation).
+fn byte_field(b: u8) -> FieldElement {
+    [b; 32]
+}
+
 /// Construct a base subscription state with capacity / owner / roots
 /// initialised. Used as the `old_state` baseline in adversarial tests.
 fn base_state(head: u64, tail: u64) -> CellState {
@@ -50,10 +64,18 @@ fn base_state(head: u64, tail: u64) -> CellState {
     s.fields[SEQ_HEAD_SLOT as usize] = u64_field(head);
     s.fields[SEQ_TAIL_SLOT as usize] = u64_field(tail);
     s.fields[CAPACITY_SLOT as usize] = u64_field(8);
-    s.fields[PUBLISHERS_ROOT_SLOT as usize] = blake3_field(b"publishers-root-v0");
-    s.fields[CONSUMERS_ROOT_SLOT as usize] = blake3_field(b"consumers-root-v0");
+    // Roots default to a small non-zero byte-pattern. Picking a low
+    // ordered prefix lets adversarial "decrement" tests pick `[0; 32]`
+    // (strictly smaller, traps Monotonic) and lets positive-shape tests
+    // pick `byte_field(0x20)` (strictly greater, satisfies Monotonic).
+    // blake3 digests of label strings would randomize this ordering and
+    // mask the constraint actually being tested (e.g.
+    // `grant_publisher_cannot_advance_head` expects Immutable-on-head,
+    // not Monotonic-on-root, to fire first).
+    s.fields[PUBLISHERS_ROOT_SLOT as usize] = byte_field(0x10);
+    s.fields[CONSUMERS_ROOT_SLOT as usize] = byte_field(0x10);
     s.fields[OWNER_PK_HASH_SLOT as usize] = blake3_field(b"owner-pk-v0");
-    s.fields[MESSAGE_ROOT_SLOT as usize] = blake3_field(b"message-root-v0");
+    s.fields[MESSAGE_ROOT_SLOT as usize] = byte_field(0x10);
     s.fields[LATEST_PAYLOAD_SLOT as usize] = FIELD_ZERO;
     s.set_nonce(1);
     s
@@ -457,7 +479,9 @@ fn legal_grant_publisher_passes_slot_shape() {
     let program = program_without_sender_authorized();
     let old = base_state(2, 1);
     let mut new = old.clone();
-    new.fields[PUBLISHERS_ROOT_SLOT as usize] = blake3_field(b"publishers-root-v1");
+    // `byte_field(0x20)` > base's `byte_field(0x10)` byte-wise, so Monotonic
+    // on `PUBLISHERS_ROOT_SLOT` is satisfied. See `base_state` rationale.
+    new.fields[PUBLISHERS_ROOT_SLOT as usize] = byte_field(0x20);
 
     let r = program.evaluate_with_meta(&new, Some(&old), None, &grant_publisher_meta());
     assert!(r.is_ok(), "legal grant_publisher must pass: {r:?}");
@@ -468,7 +492,10 @@ fn grant_publisher_cannot_advance_head() {
     let program = program_without_sender_authorized();
     let old = base_state(2, 1);
     let mut bad_new = old.clone();
-    bad_new.fields[PUBLISHERS_ROOT_SLOT as usize] = blake3_field(b"publishers-root-v1");
+    // Use an ordered-greater root so Monotonic passes — the adversarial
+    // signal we want to surface is `Immutable on head`, not the
+    // accidental Monotonic-on-root that random blake3 would cause.
+    bad_new.fields[PUBLISHERS_ROOT_SLOT as usize] = byte_field(0x20);
     // Adversarial: also advance head.
     bad_new.fields[SEQ_HEAD_SLOT as usize] = u64_field(3);
 
@@ -489,9 +516,11 @@ fn grant_consumer_cannot_modify_publishers_root() {
     let program = program_without_sender_authorized();
     let old = base_state(2, 1);
     let mut bad_new = old.clone();
-    bad_new.fields[CONSUMERS_ROOT_SLOT as usize] = blake3_field(b"consumers-root-v1");
-    // Adversarial: also change the publishers root.
-    bad_new.fields[PUBLISHERS_ROOT_SLOT as usize] = blake3_field(b"publishers-root-attacker");
+    // CONSUMERS_ROOT advances legitimately under grant_consumer.
+    bad_new.fields[CONSUMERS_ROOT_SLOT as usize] = byte_field(0x20);
+    // Adversarial: also change the publishers root (still ordered-greater
+    // so the violation we surface is Immutable, not Monotonic).
+    bad_new.fields[PUBLISHERS_ROOT_SLOT as usize] = byte_field(0x20);
 
     let err = program
         .evaluate_with_meta(&bad_new, Some(&old), None, &grant_consumer_meta())
@@ -533,7 +562,7 @@ fn legal_grant_consumer_passes_slot_shape() {
     let program = program_without_sender_authorized();
     let old = base_state(2, 1);
     let mut new = old.clone();
-    new.fields[CONSUMERS_ROOT_SLOT as usize] = blake3_field(b"consumers-root-v1");
+    new.fields[CONSUMERS_ROOT_SLOT as usize] = byte_field(0x20);
 
     let r = program.evaluate_with_meta(&new, Some(&old), None, &grant_consumer_meta());
     assert!(r.is_ok(), "legal grant_consumer must pass: {r:?}");
