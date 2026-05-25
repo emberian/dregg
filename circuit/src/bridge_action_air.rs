@@ -171,6 +171,52 @@ impl BridgeActionWitness {
     }
 }
 
+/// The Bridge Action AIR's shape descriptor (VK v2; see
+/// `circuit::air_descriptor`). Captures the externally visible shape
+/// of [`BridgeActionAir`] so callers can fingerprint it into VK v2's
+/// layered hash.
+///
+/// The PI vector mirrors the column layout exactly (8-limb nullifier,
+/// 8-limb recipient, 8-limb destination_federation, 2-limb amount).
+pub const AIR_DESCRIPTOR: crate::air_descriptor::AirDescriptor =
+    crate::air_descriptor::AirDescriptor {
+        air_id: "bridge_action_air_v1",
+        column_count: BRIDGE_ACTION_WIDTH,
+        public_input_layout: &[
+            crate::air_descriptor::PiSlot {
+                name: "nullifier",
+                offset: pi::NULLIFIER_START,
+                length_in_felts: HASH_LIMBS,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "recipient",
+                offset: pi::RECIPIENT_START,
+                length_in_felts: HASH_LIMBS,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "destination_federation",
+                offset: pi::DESTINATION_FEDERATION_START,
+                length_in_felts: HASH_LIMBS,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "amount_lo",
+                offset: pi::AMOUNT_LO,
+                length_in_felts: 1,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "amount_hi",
+                offset: pi::AMOUNT_HI,
+                length_in_felts: 1,
+            },
+        ],
+        // Linear transition constraints across the 26 columns, plus per-
+        // column boundary bindings at row 0.
+        constraint_polynomial_count: BRIDGE_ACTION_WIDTH,
+        boundary_constraint_count: BRIDGE_ACTION_WIDTH,
+        max_degree: 2,
+        source_hash: None,
+    };
+
 /// The bridge-action binding AIR.
 ///
 /// One real row of typed data; padded to 4 to satisfy STARK power-of-2

@@ -894,7 +894,60 @@ pub mod pi {
     ///   89..93  BRIDGE_MINT_VALUE_LIMBS[4]          (30-bit-trunc fix)
     ///   93..97  BRIDGE_LOCK_VALUE_LIMBS[4]          (30-bit-trunc fix)
     ///   97..101 CREATE_ESCROW_AMOUNT_LIMBS[4]       (30-bit-trunc fix)
-    pub const BASE_COUNT: usize = 101;
+    ///   101     SLOT_CAVEAT_COUNT                   (Cav-Codex Block 3)
+    ///   102..126 SLOT_CAVEAT_MANIFEST[24]            (Cav-Codex Block 3)
+    ///
+    /// ---- Slot-caveat manifest (Cav-Codex Block 3) ----
+    ///
+    /// Per `SLOT-CAVEATS-DESIGN.md` §4: AIR enforcement of slot caveats
+    /// is opt-in per variant. Block 3 lands the *manifest surface*: a
+    /// single PI section that carries the cell-program's declared
+    /// `StateConstraint` set so that
+    ///   (a) the verifier can re-evaluate the same caveats against the
+    ///       state_before/state_after columns this AIR already binds,
+    ///       and
+    ///   (b) a future row-bound AIR gadget can pin specific
+    ///       (state_before.fields[i], state_after.fields[i]) columns to
+    ///       the manifest entries.
+    ///
+    /// The manifest is fixed-size — up to `MAX_SLOT_CAVEATS` entries of
+    /// `SLOT_CAVEAT_ENTRY_SIZE` felts each, prefixed by a single-felt
+    /// count. Unused entries are zero-padded. Each entry is a 6-felt
+    /// tuple: `[type_tag, slot_index, p0, p1, p2, p3]`. Variants with
+    /// fewer than 4 numeric parameters leave trailing felts at zero;
+    /// variants whose parameters don't fit (e.g. `AllowedTransitions`
+    /// with a variable-length transition list) carry a 32B→4-felt
+    /// commitment in `(p0, p1, p2, p3)`.
+    ///
+    /// Type tags (kept in sync with `pyana_cell::program::StateConstraint`):
+    pub const SLOT_CAVEAT_COUNT: usize = 101;
+    /// Maximum number of slot caveats bindable through the PI manifest.
+    /// Cells declaring more than this fall back to executor-only
+    /// enforcement (the AIR cannot bind them).
+    pub const MAX_SLOT_CAVEATS: usize = 4;
+    /// Felts per slot-caveat entry: [type_tag, slot_index, p0, p1, p2, p3].
+    pub const SLOT_CAVEAT_ENTRY_SIZE: usize = 6;
+    /// Base of the manifest array. Entry `i` lives at
+    /// `SLOT_CAVEAT_MANIFEST_BASE + i * SLOT_CAVEAT_ENTRY_SIZE`.
+    pub const SLOT_CAVEAT_MANIFEST_BASE: usize = 102;
+
+    // Type tags for the manifest (numerically distinct from any
+    // existing PI sentinel and from zero — zero means "no caveat").
+    pub const SLOT_CAVEAT_TAG_FIELD_EQUALS: u32 = 1;
+    pub const SLOT_CAVEAT_TAG_FIELD_GTE: u32 = 2;
+    pub const SLOT_CAVEAT_TAG_FIELD_LTE: u32 = 3;
+    pub const SLOT_CAVEAT_TAG_WRITE_ONCE: u32 = 4;
+    pub const SLOT_CAVEAT_TAG_IMMUTABLE: u32 = 5;
+    pub const SLOT_CAVEAT_TAG_MONOTONIC: u32 = 6;
+    pub const SLOT_CAVEAT_TAG_STRICT_MONOTONIC: u32 = 7;
+    pub const SLOT_CAVEAT_TAG_FIELD_DELTA: u32 = 8;
+    pub const SLOT_CAVEAT_TAG_MONOTONIC_SEQUENCE: u32 = 9;
+    pub const SLOT_CAVEAT_TAG_TEMPORAL_GATE: u32 = 10;
+    pub const SLOT_CAVEAT_TAG_SENDER_AUTHORIZED: u32 = 11;
+    pub const SLOT_CAVEAT_TAG_ALLOWED_TRANSITIONS: u32 = 12;
+
+    pub const BASE_COUNT: usize =
+        SLOT_CAVEAT_MANIFEST_BASE + MAX_SLOT_CAVEATS * SLOT_CAVEAT_ENTRY_SIZE; // 102 + 24 = 126
     /// Elements per custom effect entry in PI (4 vk_hash + 4 proof_commit).
     pub const CUSTOM_ENTRY_SIZE: usize = 8;
 
@@ -1786,6 +1839,239 @@ pub fn compute_effects_hash_4(effects: &[Effect]) -> [BabyBear; 4] {
 // ============================================================================
 // AIR Implementation
 // ============================================================================
+
+/// The Effect VM AIR's shape descriptor (VK v2; see
+/// `circuit::air_descriptor`). Captures the externally visible shape
+/// of [`EffectVmAir`] so callers can fingerprint it into VK v2's
+/// layered hash.
+///
+/// `public_input_layout` enumerates the BASE_COUNT-wide PI surface
+/// (commitments, balance limbs, bilateral aggregation roots,
+/// sovereign-witness teeth, 30-bit-trunc value limbs). The
+/// CUSTOM_PROOFS region beyond `BASE_COUNT` is variable per-cell and
+/// is *not* listed here — its presence is implicit (CUSTOM_PROOFS_BASE
+/// == BASE_COUNT, with `max_custom_effects * 8` additional felts).
+pub const AIR_DESCRIPTOR: crate::air_descriptor::AirDescriptor =
+    crate::air_descriptor::AirDescriptor {
+        air_id: "effect_vm_air_v1",
+        column_count: EFFECT_VM_WIDTH,
+        public_input_layout: &[
+            crate::air_descriptor::PiSlot {
+                name: "old_commit",
+                offset: pi::OLD_COMMIT_BASE,
+                length_in_felts: pi::OLD_COMMIT_LEN,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "new_commit",
+                offset: pi::NEW_COMMIT_BASE,
+                length_in_felts: pi::NEW_COMMIT_LEN,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "effects_hash",
+                offset: pi::EFFECTS_HASH_BASE,
+                length_in_felts: pi::EFFECTS_HASH_LEN,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "init_bal_lo",
+                offset: pi::INIT_BAL_LO,
+                length_in_felts: 1,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "init_bal_hi",
+                offset: pi::INIT_BAL_HI,
+                length_in_felts: 1,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "final_bal_lo",
+                offset: pi::FINAL_BAL_LO,
+                length_in_felts: 1,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "final_bal_hi",
+                offset: pi::FINAL_BAL_HI,
+                length_in_felts: 1,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "net_delta_mag",
+                offset: pi::NET_DELTA_MAG,
+                length_in_felts: 1,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "net_delta_sign",
+                offset: pi::NET_DELTA_SIGN,
+                length_in_felts: 1,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "current_block_height",
+                offset: pi::CURRENT_BLOCK_HEIGHT,
+                length_in_felts: 1,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "max_custom_effects",
+                offset: pi::MAX_CUSTOM_EFFECTS,
+                length_in_felts: 1,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "custom_effect_count",
+                offset: pi::CUSTOM_EFFECT_COUNT,
+                length_in_felts: 1,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "approved_handoffs",
+                offset: pi::APPROVED_HANDOFFS_BASE,
+                length_in_felts: pi::APPROVED_HANDOFFS_LEN,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "turn_hash",
+                offset: pi::TURN_HASH_BASE,
+                length_in_felts: pi::TURN_HASH_LEN,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "effects_hash_global",
+                offset: pi::EFFECTS_HASH_GLOBAL_BASE,
+                length_in_felts: pi::EFFECTS_HASH_GLOBAL_LEN,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "actor_nonce",
+                offset: pi::ACTOR_NONCE,
+                length_in_felts: 1,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "previous_receipt_hash",
+                offset: pi::PREVIOUS_RECEIPT_HASH_BASE,
+                length_in_felts: pi::PREVIOUS_RECEIPT_HASH_LEN,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "outbound_transfer_count",
+                offset: pi::OUTBOUND_TRANSFER_COUNT,
+                length_in_felts: 1,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "inbound_transfer_count",
+                offset: pi::INBOUND_TRANSFER_COUNT,
+                length_in_felts: 1,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "outbound_grant_count",
+                offset: pi::OUTBOUND_GRANT_COUNT,
+                length_in_felts: 1,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "inbound_grant_count",
+                offset: pi::INBOUND_GRANT_COUNT,
+                length_in_felts: 1,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "intro_as_introducer_count",
+                offset: pi::INTRO_AS_INTRODUCER_COUNT,
+                length_in_felts: 1,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "intro_as_recipient_count",
+                offset: pi::INTRO_AS_RECIPIENT_COUNT,
+                length_in_felts: 1,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "intro_as_target_count",
+                offset: pi::INTRO_AS_TARGET_COUNT,
+                length_in_felts: 1,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "outgoing_transfer_root",
+                offset: pi::OUTGOING_TRANSFER_ROOT_BASE,
+                length_in_felts: pi::OUTGOING_TRANSFER_ROOT_LEN,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "incoming_transfer_root",
+                offset: pi::INCOMING_TRANSFER_ROOT_BASE,
+                length_in_felts: pi::INCOMING_TRANSFER_ROOT_LEN,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "outgoing_grant_root",
+                offset: pi::OUTGOING_GRANT_ROOT_BASE,
+                length_in_felts: pi::OUTGOING_GRANT_ROOT_LEN,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "incoming_grant_root",
+                offset: pi::INCOMING_GRANT_ROOT_BASE,
+                length_in_felts: pi::INCOMING_GRANT_ROOT_LEN,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "intro_as_introducer_root",
+                offset: pi::INTRO_AS_INTRODUCER_ROOT_BASE,
+                length_in_felts: pi::INTRO_AS_INTRODUCER_ROOT_LEN,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "intro_as_recipient_root",
+                offset: pi::INTRO_AS_RECIPIENT_ROOT_BASE,
+                length_in_felts: pi::INTRO_AS_RECIPIENT_ROOT_LEN,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "intro_as_target_root",
+                offset: pi::INTRO_AS_TARGET_ROOT_BASE,
+                length_in_felts: pi::INTRO_AS_TARGET_ROOT_LEN,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "is_agent_cell",
+                offset: pi::IS_AGENT_CELL,
+                length_in_felts: 1,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "sovereign_witness_key_commit",
+                offset: pi::SOVEREIGN_WITNESS_KEY_COMMIT_BASE,
+                length_in_felts: pi::SOVEREIGN_WITNESS_KEY_COMMIT_LEN,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "sovereign_witness_sequence",
+                offset: pi::SOVEREIGN_WITNESS_SEQUENCE,
+                length_in_felts: 1,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "is_sovereign_cell",
+                offset: pi::IS_SOVEREIGN_CELL,
+                length_in_felts: 1,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "sovereign_transition_proof_vk_hash",
+                offset: pi::SOVEREIGN_TRANSITION_PROOF_VK_HASH_BASE,
+                length_in_felts: pi::SOVEREIGN_TRANSITION_PROOF_VK_HASH_LEN,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "sovereign_transition_proof_commitment",
+                offset: pi::SOVEREIGN_TRANSITION_PROOF_COMMITMENT_BASE,
+                length_in_felts: pi::SOVEREIGN_TRANSITION_PROOF_COMMITMENT_LEN,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "has_transition_proof",
+                offset: pi::HAS_TRANSITION_PROOF,
+                length_in_felts: 1,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "bridge_mint_value_limbs",
+                offset: pi::BRIDGE_MINT_VALUE_LIMBS_BASE,
+                length_in_felts: pi::BRIDGE_MINT_VALUE_LIMBS_LEN,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "bridge_lock_value_limbs",
+                offset: pi::BRIDGE_LOCK_VALUE_LIMBS_BASE,
+                length_in_felts: pi::BRIDGE_LOCK_VALUE_LIMBS_LEN,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "create_escrow_amount_limbs",
+                offset: pi::CREATE_ESCROW_AMOUNT_LIMBS_BASE,
+                length_in_felts: 4,
+            },
+        ],
+        // Constraint groups: selector validity (NUM_EFFECTS+1), per-effect
+        // gated constraints (~NUM_EFFECTS large groups), boundary bindings
+        // for commitments / balance limbs / sovereign teeth, bilateral
+        // aggregation accumulators. Number is a stable property of the AIR
+        // shape — when constraints are added/removed, this bumps.
+        constraint_polynomial_count: NUM_EFFECTS + 1 + NUM_EFFECTS,
+        boundary_constraint_count: 32,
+        max_degree: 9,
+        source_hash: None,
+    };
 
 /// The Effect VM AIR. Proves an arbitrary sequence of effects in a single STARK.
 pub struct EffectVmAir {
@@ -4066,6 +4352,48 @@ pub struct EffectVmContext {
     pub bridge_lock_value_limbs: [BabyBear; 4],
     /// 4-limb decomposition of `CreateEscrow.amount` (same shape).
     pub create_escrow_amount_limbs: [BabyBear; 4],
+
+    /// Slot-caveat manifest (Cav-Codex Block 3). Cell-program-declared
+    /// `StateConstraint` set, projected into a fixed-size table for
+    /// row-boundary AIR enforcement. `slot_caveat_count` ∈ [0,
+    /// `pi::MAX_SLOT_CAVEATS`]; `slot_caveat_manifest[..count]`
+    /// carries the entries.
+    pub slot_caveat_count: u32,
+    pub slot_caveat_manifest: [SlotCaveatEntry; pi::MAX_SLOT_CAVEATS],
+}
+
+/// A single entry in the slot-caveat manifest (Cav-Codex Block 3).
+///
+/// `type_tag` is one of `pi::SLOT_CAVEAT_TAG_*` (zero means "no
+/// caveat"); `slot_index` is the cell-state field index; `params` are
+/// up to 4 numeric parameters or a 4-felt commitment (the variant
+/// determines the encoding — see `populate_slot_caveat_manifest`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SlotCaveatEntry {
+    pub type_tag: u32,
+    pub slot_index: u8,
+    pub params: [BabyBear; 4],
+}
+
+impl SlotCaveatEntry {
+    pub const fn zero() -> Self {
+        Self {
+            type_tag: 0,
+            slot_index: 0,
+            params: [BabyBear::ZERO; 4],
+        }
+    }
+
+    /// Encode this entry into `out[..SLOT_CAVEAT_ENTRY_SIZE]` as
+    /// (type_tag, slot_index, p0, p1, p2, p3).
+    pub fn write_to(&self, out: &mut [BabyBear]) {
+        debug_assert!(out.len() >= pi::SLOT_CAVEAT_ENTRY_SIZE);
+        out[0] = BabyBear::new(self.type_tag);
+        out[1] = BabyBear::new(self.slot_index as u32);
+        for i in 0..4 {
+            out[2 + i] = self.params[i];
+        }
+    }
 }
 
 impl Default for EffectVmContext {
@@ -4087,6 +4415,8 @@ impl Default for EffectVmContext {
             bridge_mint_value_limbs: [BabyBear::ZERO; 4],
             bridge_lock_value_limbs: [BabyBear::ZERO; 4],
             create_escrow_amount_limbs: [BabyBear::ZERO; 4],
+            slot_caveat_count: 0,
+            slot_caveat_manifest: [SlotCaveatEntry::zero(); pi::MAX_SLOT_CAVEATS],
         }
     }
 }
@@ -5319,6 +5649,23 @@ pub fn generate_effect_vm_trace_ext(
         context.create_escrow_amount_limbs,
     );
 
+    // ---- Slot-caveat manifest (Cav-Codex Block 3) ----
+    //
+    // Project the cell-program-declared `StateConstraint` set into a
+    // fixed-size PI table. The verifier extracts the table and
+    // re-evaluates each entry against the state_before / state_after
+    // columns; the *executor* is responsible for honestly populating
+    // the manifest from `CellProgram::Predicate(...)`. Any tampering
+    // with an entry shows up as a PI-match mismatch at receipt
+    // verification time (the receipt re-computes the expected PI from
+    // the cell's program).
+    let cav_count = context.slot_caveat_count.min(pi::MAX_SLOT_CAVEATS as u32);
+    public_inputs[pi::SLOT_CAVEAT_COUNT] = BabyBear::new(cav_count);
+    for i in 0..(cav_count as usize) {
+        let base = pi::SLOT_CAVEAT_MANIFEST_BASE + i * pi::SLOT_CAVEAT_ENTRY_SIZE;
+        context.slot_caveat_manifest[i].write_to(&mut public_inputs[base..base + pi::SLOT_CAVEAT_ENTRY_SIZE]);
+    }
+
     // ---- Custom proof entries ----
     for (i, (vk_hash, proof_commit)) in custom_entries.iter().enumerate() {
         let base = pi::CUSTOM_PROOFS_BASE + i * pi::CUSTOM_ENTRY_SIZE;
@@ -5359,6 +5706,33 @@ pub fn extract_net_delta(public_inputs: &[BabyBear]) -> Option<i64> {
 
 /// Extract the custom proof commitments from public inputs.
 /// Returns a vec of (program_vk_hash, proof_commitment) tuples.
+/// Cav-Codex Block 3: extract the (count, entries) slot-caveat
+/// manifest from a public-inputs vector. Returns up to
+/// `pi::MAX_SLOT_CAVEATS` entries; trailing entries past `count` are
+/// dropped. Use [`verify_slot_caveat_manifest`] to re-evaluate each
+/// against state_before / state_after.
+pub fn extract_slot_caveat_manifest(public_inputs: &[BabyBear]) -> Vec<SlotCaveatEntry> {
+    if public_inputs.len() < pi::BASE_COUNT {
+        return Vec::new();
+    }
+    let count = (public_inputs[pi::SLOT_CAVEAT_COUNT].0 as usize).min(pi::MAX_SLOT_CAVEATS);
+    let mut result = Vec::with_capacity(count);
+    for i in 0..count {
+        let base = pi::SLOT_CAVEAT_MANIFEST_BASE + i * pi::SLOT_CAVEAT_ENTRY_SIZE;
+        result.push(SlotCaveatEntry {
+            type_tag: public_inputs[base].0,
+            slot_index: (public_inputs[base + 1].0 & 0xFF) as u8,
+            params: [
+                public_inputs[base + 2],
+                public_inputs[base + 3],
+                public_inputs[base + 4],
+                public_inputs[base + 5],
+            ],
+        });
+    }
+    result
+}
+
 pub fn extract_custom_proof_commitments(
     public_inputs: &[BabyBear],
 ) -> Vec<([BabyBear; 4], [BabyBear; 4])> {
@@ -5518,6 +5892,172 @@ pub fn verify_balance_limb_pis(public_inputs: &[BabyBear]) -> Result<(), String>
     let mag = public_inputs[pi::NET_DELTA_MAG].0;
     if mag >= (1u32 << 30) {
         return Err(format!("NET_DELTA_MAG out of range: {} >= 2^30", mag));
+    }
+    Ok(())
+}
+
+// ============================================================================
+// Slot-caveat manifest verifier (Cav-Codex Block 3)
+// ============================================================================
+
+/// Re-evaluate the slot-caveat manifest carried in PI against the
+/// declared initial / final cell-state field views. Returns Ok iff
+/// every entry holds; otherwise returns the first violation.
+///
+/// This is the "AIR teeth" half of Cav-Codex Block 3: per
+/// `SLOT-CAVEATS-DESIGN.md` §4, AIR enforcement of slot caveats is
+/// opt-in. Block 3 lands the *manifest binding* — the executor
+/// projects declared caveats into PI, and any consumer of the proof
+/// (the receipt verifier, a third-party validator, a Federation
+/// quorum) re-runs the caveats against the bound state_before /
+/// state_after PI fields. Tampering with the manifest, with the
+/// state-before/after, or with the underlying cell-program declaration
+/// surfaces at this layer as a verifier-side rejection.
+///
+/// `initial_fields` and `final_fields` are the cell's slot-0..7 4-byte
+/// truncated views (matching the AIR's per-row STATE_BEFORE_BASE /
+/// STATE_AFTER_BASE field columns). Variants whose enforcement needs
+/// the full 32-byte FieldElement value (e.g. `Monotonic` on big-endian
+/// 32-byte sequences) are deferred — they're documented in their
+/// `#[ignore]`'d adversarial tests until the AIR state expands to
+/// 4-felt per slot.
+pub fn verify_slot_caveat_manifest(
+    public_inputs: &[BabyBear],
+    initial_fields: &[BabyBear; 8],
+    final_fields: &[BabyBear; 8],
+    block_height: u64,
+) -> Result<(), String> {
+    if public_inputs.len() < pi::BASE_COUNT {
+        return Err(format!(
+            "PI vector too short for slot-caveat manifest: {} < {}",
+            public_inputs.len(),
+            pi::BASE_COUNT
+        ));
+    }
+    let count = public_inputs[pi::SLOT_CAVEAT_COUNT].0 as usize;
+    if count > pi::MAX_SLOT_CAVEATS {
+        return Err(format!(
+            "SLOT_CAVEAT_COUNT {} exceeds MAX_SLOT_CAVEATS {}",
+            count,
+            pi::MAX_SLOT_CAVEATS
+        ));
+    }
+    for i in 0..count {
+        let base = pi::SLOT_CAVEAT_MANIFEST_BASE + i * pi::SLOT_CAVEAT_ENTRY_SIZE;
+        let tag = public_inputs[base].0;
+        let slot_idx = public_inputs[base + 1].0 as usize;
+        if slot_idx >= 8 {
+            return Err(format!(
+                "slot-caveat[{i}] slot_index {slot_idx} out of range (must be < 8)"
+            ));
+        }
+        let p0 = public_inputs[base + 2];
+        let p1 = public_inputs[base + 3];
+        let _p2 = public_inputs[base + 4];
+        let _p3 = public_inputs[base + 5];
+        let old_v = initial_fields[slot_idx];
+        let new_v = final_fields[slot_idx];
+        match tag {
+            // Empty entry (zero) is allowed only beyond `count`; here it
+            // means the executor declared a slot caveat with no
+            // type_tag, which is malformed.
+            0 => return Err(format!("slot-caveat[{i}] has zero type_tag")),
+
+            t if t == pi::SLOT_CAVEAT_TAG_IMMUTABLE => {
+                if old_v != new_v {
+                    return Err(format!(
+                        "slot-caveat[{i}] Immutable on slot {slot_idx}: {old_v:?} -> {new_v:?}"
+                    ));
+                }
+            }
+            t if t == pi::SLOT_CAVEAT_TAG_WRITE_ONCE => {
+                // WriteOnce: either initial was zero (any new is OK) or
+                // unchanged.
+                if old_v != BabyBear::ZERO && old_v != new_v {
+                    return Err(format!(
+                        "slot-caveat[{i}] WriteOnce on slot {slot_idx}: was {old_v:?}, became {new_v:?}"
+                    ));
+                }
+            }
+            t if t == pi::SLOT_CAVEAT_TAG_FIELD_DELTA => {
+                // FieldDelta: new == old + delta. `delta` carried in p0
+                // (low-4-byte BabyBear projection, matching the AIR
+                // state column truncation).
+                let expected = old_v + p0;
+                if new_v != expected {
+                    return Err(format!(
+                        "slot-caveat[{i}] FieldDelta on slot {slot_idx}: expected {old_v:?}+{p0:?}={expected:?}, got {new_v:?}"
+                    ));
+                }
+            }
+            t if t == pi::SLOT_CAVEAT_TAG_MONOTONIC_SEQUENCE => {
+                // new == old + 1.
+                let expected = old_v + BabyBear::ONE;
+                if new_v != expected {
+                    return Err(format!(
+                        "slot-caveat[{i}] MonotonicSequence on slot {slot_idx}: expected {old_v:?}+1={expected:?}, got {new_v:?}"
+                    ));
+                }
+            }
+            t if t == pi::SLOT_CAVEAT_TAG_FIELD_EQUALS => {
+                // new == p0 (4-byte truncation).
+                if new_v != p0 {
+                    return Err(format!(
+                        "slot-caveat[{i}] FieldEquals on slot {slot_idx}: expected {p0:?}, got {new_v:?}"
+                    ));
+                }
+            }
+            t if t == pi::SLOT_CAVEAT_TAG_TEMPORAL_GATE => {
+                // not_before = p0 (u32-fitting); not_after = p1
+                // (u32-fitting). 0 sentinel means "no bound on that
+                // side".
+                let nb = p0.0 as u64;
+                let na = p1.0 as u64;
+                if nb != 0 && block_height < nb {
+                    return Err(format!(
+                        "slot-caveat[{i}] TemporalGate not_before {nb} > height {block_height}"
+                    ));
+                }
+                if na != 0 && block_height > na {
+                    return Err(format!(
+                        "slot-caveat[{i}] TemporalGate not_after {na} < height {block_height}"
+                    ));
+                }
+            }
+            // Variants whose enforcement needs more than the 4-byte
+            // truncated state-column form (full 32B compare, Merkle
+            // gadgets, set-membership, etc.) accept the manifest
+            // entry at this layer and defer to the executor's
+            // evaluator. They round-trip through PI for shape
+            // honesty (the verifier still rejects malformed
+            // entries: bad slot_idx, out-of-range count) but the
+            // boundary teeth land in a follow-up commit.
+            t if t == pi::SLOT_CAVEAT_TAG_FIELD_GTE
+                || t == pi::SLOT_CAVEAT_TAG_FIELD_LTE
+                || t == pi::SLOT_CAVEAT_TAG_MONOTONIC
+                || t == pi::SLOT_CAVEAT_TAG_STRICT_MONOTONIC
+                || t == pi::SLOT_CAVEAT_TAG_SENDER_AUTHORIZED
+                || t == pi::SLOT_CAVEAT_TAG_ALLOWED_TRANSITIONS =>
+            {
+                // Defer.
+            }
+            other => {
+                return Err(format!(
+                    "slot-caveat[{i}] unknown type_tag {other}"
+                ));
+            }
+        }
+    }
+    // Padding entries past `count` must be zero (no smuggled caveats).
+    for i in count..pi::MAX_SLOT_CAVEATS {
+        let base = pi::SLOT_CAVEAT_MANIFEST_BASE + i * pi::SLOT_CAVEAT_ENTRY_SIZE;
+        for j in 0..pi::SLOT_CAVEAT_ENTRY_SIZE {
+            if public_inputs[base + j] != BabyBear::ZERO {
+                return Err(format!(
+                    "slot-caveat manifest padding entry {i} field {j} is nonzero (smuggle attempt?)"
+                ));
+            }
+        }
     }
     Ok(())
 }

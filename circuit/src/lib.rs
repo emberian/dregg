@@ -86,6 +86,7 @@
 //! - [`constraint_prover`]: Constraint satisfaction evaluator.
 //! - [`stark`]: Real STARK prover/verifier (FRI + Merkle + Fiat-Shamir).
 
+pub mod air_descriptor;
 pub mod babybear8;
 pub mod binding;
 pub mod body_membership;

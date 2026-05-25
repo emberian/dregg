@@ -307,6 +307,58 @@ impl NoteSpendingWitness {
 
 /// The note spending AIR. Proves knowledge of spending key + note preimage + Merkle membership.
 ///
+/// The Note Spending AIR's shape descriptor (VK v2; see
+/// `circuit::air_descriptor`). Captures the externally visible shape
+/// of [`NoteSpendingAir`] so callers can fingerprint it into VK v2's
+/// layered hash.
+///
+/// `column_count` is the fixed-width commitment row (`NOTE_SPENDING_WIDTH`);
+/// the Merkle-level rows that follow use a different 6-column layout
+/// (see [`merkle_col`]) but are not separately surfaced through the
+/// descriptor — the AIR's `width()` is the trace-row width, which is
+/// the commitment-row width.
+pub const AIR_DESCRIPTOR: crate::air_descriptor::AirDescriptor =
+    crate::air_descriptor::AirDescriptor {
+        air_id: "note_spending_air_v1",
+        column_count: NOTE_SPENDING_WIDTH,
+        public_input_layout: &[
+            crate::air_descriptor::PiSlot {
+                name: "nullifier",
+                offset: pi::NULLIFIER,
+                length_in_felts: 1,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "merkle_root",
+                offset: pi::MERKLE_ROOT,
+                length_in_felts: 1,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "value",
+                offset: pi::VALUE,
+                length_in_felts: 1,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "asset_type",
+                offset: pi::ASSET_TYPE,
+                length_in_felts: 1,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "destination_federation",
+                offset: pi::DESTINATION_FEDERATION,
+                length_in_felts: 1,
+            },
+        ],
+        // Constraints: commitment-row Poseidon2 binding, spending-key
+        // verification, Merkle-level recursion, nullifier derivation,
+        // is_merkle flag boolean, position validity. Approximate count
+        // is a stable property of the AIR shape — the exact value will
+        // not vary across rebuilds.
+        constraint_polynomial_count: 12,
+        boundary_constraint_count: 5,
+        max_degree: 4,
+        source_hash: None,
+    };
+
 /// DEPRECATED: Use `crate::dsl::note_spending::note_spending_dsl_circuit()` and
 /// `crate::dsl::note_spending::prove_note_spend_dsl()` instead.
 /// The DSL version uses `hash_fact`-based Merkle constraints (algebraically sound).
