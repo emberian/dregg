@@ -117,7 +117,12 @@
 //!   [65..69]  INTRO_AS_RECIPIENT_ROOT[4]      (7-γ.2)
 //!   [69..73]  INTRO_AS_TARGET_ROOT[4]         (7-γ.2)
 //!   [73]      IS_AGENT_CELL                   (7-γ.2; 1 iff this proof is the actor's)
-//!   [74..]    CUSTOM_PROOFS                   per-custom-effect (vk_hash[4], proof_commit[4])
+//!   ... (sovereign-witness teeth, value-limbs, slot-caveat / cross-effect /
+//!        witness-index manifests; see `pi::BASE_COUNT` for the precise tail
+//!        layout) ...
+//!   [168]     UNILATERAL_ATTESTATIONS_COUNT   (7-γ.2 unilateral; number of self-attestations this turn)
+//!   [169..173] UNILATERAL_ATTESTATIONS_ROOT[4] (7-γ.2 unilateral; Merkle/Poseidon2 accumulator over (kind, data) tuples)
+//!   [173..]   CUSTOM_PROOFS                   per-custom-effect (vk_hash[4], proof_commit[4])
 //! ```
 //!
 //! The four 7-γ.0a additions (TURN_HASH, EFFECTS_HASH_GLOBAL, ACTOR_NONCE,
@@ -869,7 +874,7 @@ pub mod pi {
     pub const CUSTOM_PROOFS_BASE: usize = BASE_COUNT;
     /// Base public inputs (without custom proof data).
     ///
-    /// Layout (post sovereign-witness teeth, BASE_COUNT bumped 74 -> 89):
+    /// Layout (post sovereign-witness teeth + unilateral binding; BASE_COUNT 173):
     ///   0..21   pre-γ.0a slots (commitments, balances, block height, etc.)
     ///   21..25  APPROVED_HANDOFFS[4]
     ///   25..29  TURN_HASH[4]                       (γ.0a)
@@ -900,6 +905,8 @@ pub mod pi {
     ///   127..151 CROSS_EFFECT_DEPS_MANIFEST[24]     (Proof-to-Action §3.3)
     ///   151     WITNESS_INDEX_MAP_COUNT             (Proof-to-Action §3.2)
     ///   152..168 WITNESS_INDEX_MAP[16]              (Proof-to-Action §3.2)
+    ///   168     UNILATERAL_ATTESTATIONS_COUNT       (γ.2 unilateral)
+    ///   169..173 UNILATERAL_ATTESTATIONS_ROOT[4]    (γ.2 unilateral)
     ///
     /// ---- Slot-caveat manifest (Cav-Codex Block 3) ----
     ///
@@ -1019,8 +1026,53 @@ pub mod pi {
     pub const WITNESS_INDEX_ENTRY_SIZE: usize = 2;
     pub const WITNESS_INDEX_MAP_BASE: usize = WITNESS_INDEX_MAP_COUNT + 1; // 152
 
-    pub const BASE_COUNT: usize =
-        WITNESS_INDEX_MAP_BASE + MAX_WITNESS_INDEX_ENTRIES * WITNESS_INDEX_ENTRY_SIZE; // 152 + 16 = 168
+    // ---- Stage 7-γ.2 unilateral binding (1-arity sibling of bilateral) ----
+    //
+    // Per `CROSS-CELL-CATEGORICAL-ANALYSIS.md` §3.5: γ.2 binds pairs (Transfer,
+    // Grant) and triples (Introduce) but has no 1-arity sibling. *Unilateral*
+    // attestations are the dual — a single cell self-attests to a property
+    // over its own transitions (state, nonce bump, sovereign-witness signing)
+    // *without a counterparty*. They compose with `peer_exchange`'s
+    // federation-bypass primitive: a peer state transition can carry one
+    // unilateral attestation, and the receiver verifies it against the
+    // sender's cell-id-derived canonical encoding.
+    //
+    // PI shape (append-only after `WITNESS_INDEX_MAP`):
+    //   - `UNILATERAL_ATTESTATIONS_COUNT` (1 felt): number of unilateral
+    //     attestations this turn produced for this cell.
+    //   - `UNILATERAL_ATTESTATIONS_ROOT_BASE` (4 felts): Merkle/Poseidon2
+    //     accumulator over the `(attestation_kind, attestation_data)` tuples,
+    //     order-preserving DFS. The future AIR boundary constraint pins the
+    //     in-trace `unilateral_root` aux column to this PI slot — same shape
+    //     as the bilateral roots (γ.2.1 work). Today the off-AIR verifier
+    //     recomputes the expected accumulator from the bundle's declared
+    //     attestation list and rejects any mismatch.
+    //
+    // Sentinel: `[BabyBear::ZERO; 4]` when count == 0. Distinct salt per
+    // attestation kind ensures `SelfStateTransition` cannot be confused with
+    // `SelfNonceBump` even at colliding data.
+    pub const UNILATERAL_ATTESTATIONS_COUNT: usize =
+        WITNESS_INDEX_MAP_BASE + MAX_WITNESS_INDEX_ENTRIES * WITNESS_INDEX_ENTRY_SIZE; // 168
+    pub const UNILATERAL_ATTESTATIONS_ROOT_BASE: usize = UNILATERAL_ATTESTATIONS_COUNT + 1; // 169
+    pub const UNILATERAL_ATTESTATIONS_ROOT_LEN: usize = 4;
+
+    /// Maximum unilateral attestations the off-AIR verifier walks per turn.
+    /// The accumulator size is independent of this cap (4-felt root); the
+    /// cap is a guardrail on the schedule reconstruction.
+    pub const MAX_UNILATERAL_ATTESTATIONS: usize = 8;
+
+    // Type tags for `UnilateralAttestationKind` — kept in sync with
+    // `pyana_turn::bilateral_schedule::UnilateralAttestationKind`. Zero is
+    // the "no attestation" sentinel (count == 0 → all data zero).
+    pub const UNILATERAL_ATTESTATION_KIND_SELF_STATE_TRANSITION: u32 = 1;
+    pub const UNILATERAL_ATTESTATION_KIND_SELF_NONCE_BUMP: u32 = 2;
+    pub const UNILATERAL_ATTESTATION_KIND_SOVEREIGN_WITNESS: u32 = 3;
+    /// `Custom { kind_tag }` flattens to the high half of u32 space: bit 31
+    /// would put us out of canonical BabyBear, so kind_tag is masked to 30
+    /// bits and OR'd with this discriminant.
+    pub const UNILATERAL_ATTESTATION_KIND_CUSTOM_BASE: u32 = 0x4000_0000;
+
+    pub const BASE_COUNT: usize = UNILATERAL_ATTESTATIONS_ROOT_BASE + UNILATERAL_ATTESTATIONS_ROOT_LEN; // 173
     /// Elements per custom effect entry in PI (4 vk_hash + 4 proof_commit).
     pub const CUSTOM_ENTRY_SIZE: usize = 8;
 
@@ -2133,6 +2185,17 @@ pub const AIR_DESCRIPTOR: crate::air_descriptor::AirDescriptor =
                 name: "create_escrow_amount_limbs",
                 offset: pi::CREATE_ESCROW_AMOUNT_LIMBS_BASE,
                 length_in_felts: 4,
+            },
+            // Stage 7-γ.2 unilateral binding (1-arity sibling of bilateral).
+            crate::air_descriptor::PiSlot {
+                name: "unilateral_attestations_count",
+                offset: pi::UNILATERAL_ATTESTATIONS_COUNT,
+                length_in_felts: 1,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "unilateral_attestations_root",
+                offset: pi::UNILATERAL_ATTESTATIONS_ROOT_BASE,
+                length_in_felts: pi::UNILATERAL_ATTESTATIONS_ROOT_LEN,
             },
         ],
         // Constraint groups: selector validity (NUM_EFFECTS+1), per-effect
@@ -6151,8 +6214,8 @@ mod tests {
 
     #[test]
     fn pi_layout_cross_effect_and_witness_index_offsets() {
-        // The two new manifest sections sit between the slot-caveat
-        // manifest (ends at 126) and BASE_COUNT (168).
+        // The two manifest sections sit between the slot-caveat manifest
+        // (ends at 126) and the unilateral-binding section (starts at 168).
         assert_eq!(pi::CROSS_EFFECT_DEPS_COUNT, 126);
         assert_eq!(pi::CROSS_EFFECT_DEPS_BASE, 127);
         assert_eq!(pi::MAX_CROSS_EFFECT_DEPS, 4);
@@ -6161,7 +6224,11 @@ mod tests {
         assert_eq!(pi::WITNESS_INDEX_MAP_BASE, 152);
         assert_eq!(pi::MAX_WITNESS_INDEX_ENTRIES, 8);
         assert_eq!(pi::WITNESS_INDEX_ENTRY_SIZE, 2);
-        assert_eq!(pi::BASE_COUNT, 168);
+        // Unilateral binding lives at slots 168..173 (count + 4-felt root).
+        assert_eq!(pi::UNILATERAL_ATTESTATIONS_COUNT, 168);
+        assert_eq!(pi::UNILATERAL_ATTESTATIONS_ROOT_BASE, 169);
+        assert_eq!(pi::UNILATERAL_ATTESTATIONS_ROOT_LEN, 4);
+        assert_eq!(pi::BASE_COUNT, 173);
         // CUSTOM_PROOFS_BASE follows BASE_COUNT (append-only invariant).
         assert_eq!(pi::CUSTOM_PROOFS_BASE, pi::BASE_COUNT);
     }
@@ -6179,7 +6246,12 @@ mod tests {
 
         let witness_index_end =
             pi::WITNESS_INDEX_MAP_BASE + pi::MAX_WITNESS_INDEX_ENTRIES * pi::WITNESS_INDEX_ENTRY_SIZE;
-        assert_eq!(witness_index_end, pi::BASE_COUNT);
+        // Witness-index manifest ends exactly at the unilateral count slot
+        // (append-only — unilateral binding sits in slots 168..173).
+        assert_eq!(witness_index_end, pi::UNILATERAL_ATTESTATIONS_COUNT);
+        let unilateral_end =
+            pi::UNILATERAL_ATTESTATIONS_ROOT_BASE + pi::UNILATERAL_ATTESTATIONS_ROOT_LEN;
+        assert_eq!(unilateral_end, pi::BASE_COUNT);
     }
 
     #[test]
