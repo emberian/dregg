@@ -1,5 +1,5 @@
 <layout src="_layouts/default.html">
-<title>Using the Wallet — Pyana</title>
+<title>Using the Cipherclerk — Pyana</title>
 
 <div class="docs-layout">
   <aside class="docs-sidebar">
@@ -11,12 +11,12 @@
       <span class="docs-breadcrumb__sep">/</span>
       <a href="/learn/users/quickstart.html">Users</a>
       <span class="docs-breadcrumb__sep">/</span>
-      <span>Wallet</span>
+      <span>Cipherclerk</span>
     </nav>
-<h1>Using the Wallet</h1>
+<h1>Using the Cipherclerk</h1>
 
     <p>
-      The pyana wallet manages your agent identity, capability tokens, and proof
+      The pyana cipherclerk manages your agent identity, capability tokens, and proof
       generation. It runs as a browser extension with all cryptographic operations
       happening locally -- your keys never leave your device.
     </p>
@@ -25,7 +25,7 @@
 
     <h3>Creating an Identity</h3>
     <p>
-      A pyana identity is an Ed25519 keypair. The wallet generates this from a
+      A pyana identity is an Ed25519 keypair. The cipherclerk generates this from a
       24-word BIP39 mnemonic using BLAKE3-based hierarchical derivation at path
       <code>pyana/0</code>. The mnemonic is your master backup -- store it securely
       offline.
@@ -38,9 +38,9 @@
       you run multiple agents with independent identities backed by a single recovery phrase.
     </p>
 
-    <h3>Restoring a Wallet</h3>
+    <h3>Restoring a Cipherclerk</h3>
     <p>
-      Enter your 24-word mnemonic and optional passphrase. The wallet deterministically
+      Enter your 24-word mnemonic and optional passphrase. The cipherclerk deterministically
       re-derives the same keypair at <code>pyana/0</code> and any sub-agents you had.
     </p>
 
@@ -48,7 +48,7 @@
 
     <h3>Viewing Held Tokens</h3>
     <p>
-      The "Tokens" tab shows all capability tokens in your wallet. Each displays:
+      The "Tokens" tab shows all capability tokens in your cipherclerk. Each displays:
     </p>
     <ul>
       <li><strong>Label</strong> -- Human-readable name (e.g., "root:dns")</li>
@@ -59,7 +59,7 @@
 
     <h3>Receiving Tokens</h3>
     <p>
-      Other agents delegate tokens to you. When you receive a delegation, the wallet
+      Other agents delegate tokens to you. When you receive a delegation, the cipherclerk
       validates it (structure, expiry, size limits) before adding it to your collection.
       Delegated tokens do NOT carry the root key -- you can further attenuate and present
       them, but cannot mint new root tokens.
@@ -75,7 +75,7 @@
     <h2 id="proof-generation">Proof Generation</h2>
 
     <p>
-      When a web page or application requests authorization, the wallet generates
+      When a web page or application requests authorization, the cipherclerk generates
       a STARK proof locally. This is computationally intensive but fast (sub-second
       on modern hardware). The proof size is approximately 24 KiB.
     </p>
