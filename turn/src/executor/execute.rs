@@ -211,9 +211,55 @@ impl TurnExecutor {
                     let turn_hash = turn.hash();
                     let forest_hash = turn.call_forest.compute_hash();
 
-                    // Proof-carrying turns use a minimal receipt (zero computrons,
-                    // zero effects enumeration — the proof IS the validation).
-                    let effects_hash = self.compute_effects_hash(&[]);
+                    // Audit P0 #78: the proof-carrying path previously emitted a
+                    // stub receipt with `effects_hash = H(&[])`,
+                    // `computrons_used = 0`, `action_count = 0` even when the
+                    // attested transition was non-trivial. Receipt observers
+                    // would then see no relation between the receipt and what
+                    // the proof actually adjudicated.
+                    //
+                    // The proof verifier (`verify_and_commit_proof`) binds the
+                    // canonical effects_hash (4 BabyBear felts derived from the
+                    // turn's effects) into the PI vector and checks that PI
+                    // matches the proof, so the proof attests to the same
+                    // effects the executor sees here. We therefore recompute
+                    // the receipt's BLAKE3 effects_hash from the turn's
+                    // call_forest (it's what `verify_and_commit_proof` keyed
+                    // its bound effects_hash to), and we report
+                    // `action_count` from the call_forest. `computrons_used`
+                    // is reported as the proof-carrying base cost — the proof
+                    // path bypasses the per-effect execute loop, so the only
+                    // honest non-zero "work" attestable here is the executor's
+                    // proof-verification budget (proxied via the action_count
+                    // weighted base cost — keeps the field load-bearing for
+                    // metering verifiers without claiming work that wasn't
+                    // measured).
+                    let mut effect_hashes: Vec<[u8; 32]> = Vec::new();
+                    fn collect_effect_hashes(
+                        tree: &crate::forest::CallTree,
+                        out: &mut Vec<[u8; 32]>,
+                    ) {
+                        for effect in &tree.action.effects {
+                            out.push(crate::action::Effect::hash(effect));
+                        }
+                        for child in &tree.children {
+                            collect_effect_hashes(child, out);
+                        }
+                    }
+                    for root in &turn.call_forest.roots {
+                        collect_effect_hashes(root, &mut effect_hashes);
+                    }
+                    let effects_hash = self.compute_effects_hash(&effect_hashes);
+                    let action_count = turn.call_forest.action_count();
+                    // Proof-verification budget proxy: charge one effect_base
+                    // computron per declared action so the receipt's
+                    // `computrons_used` is at least monotone in the size of
+                    // the attested turn body. The proof itself bears the
+                    // soundness; this field exists for metering / observability.
+                    let computrons_used = self
+                        .costs
+                        .effect_base
+                        .saturating_mul(action_count as u64);
 
                     let mut receipt = TurnReceipt {
                         turn_hash,
@@ -222,8 +268,8 @@ impl TurnExecutor {
                         post_state_hash,
                         timestamp: self.current_timestamp,
                         effects_hash,
-                        computrons_used: 0,
-                        action_count: 0,
+                        computrons_used,
+                        action_count,
                         previous_receipt_hash: turn.previous_receipt_hash,
                         agent: turn.agent,
                         federation_id: self.local_federation_id,
@@ -274,7 +320,7 @@ impl TurnExecutor {
                     return TurnResult::Committed {
                         ledger_delta: delta,
                         receipt,
-                        computrons_used: 0,
+                        computrons_used,
                     };
                 }
                 Err(err) => {
@@ -489,6 +535,7 @@ impl TurnExecutor {
                 &mut journal,
                 &mut excess,
                 turn.nonce,
+                &turn.agent,
             );
 
             if let Err((error, path)) = result {
