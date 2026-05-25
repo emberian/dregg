@@ -299,11 +299,27 @@ pub enum ReplayWitnessAvailability {
     Inline,
 }
 
+/// Mirror of `pyana_turn::RecursiveProofVariant`. When present in a
+/// [`ReplayWitnessBundle`], a verifier may dispatch through
+/// [`pyana_circuit::recursive_witness_bundle::verify_recursive_proof_variant`]
+/// instead of re-running the AIR over the inline trace.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReplayRecursiveProofVariant {
+    pub proof_bytes: Vec<u8>,
+    pub public_inputs: Vec<u32>,
+    pub recursive_vk_hash: [u8; 32],
+}
+
 /// Mirror of `pyana_turn::WitnessBundle`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplayWitnessBundle {
     pub trace_rows: Vec<Vec<u32>>,
     pub availability: ReplayWitnessAvailability,
+    /// Golden Vision recursive compression. `None` for legacy
+    /// Silver-Vision-only chains; `Some` for chains produced with
+    /// `recursive_compress = true`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recursive_proof: Option<ReplayRecursiveProofVariant>,
 }
 
 impl ReplayWitnessBundle {
@@ -762,6 +778,150 @@ pub fn verify_recursive_replay(
     }
 }
 
+/// Golden Vision scope-2 replay: verify a [`ReplayEntry`] whose
+/// [`ReplayWitnessBundle::recursive_proof`] field carries a recursive
+/// proof.
+///
+/// Steps:
+/// 1. Same scope-1 STARK verification + receipt-PI binding as
+///    [`verify_recursive_replay`].
+/// 2. Pull `recursive_proof` out of the entry's witness bundle. If
+///    absent → `InnerProofRejected` ("no recursive proof attached").
+/// 3. Dispatch through
+///    [`pyana_circuit::recursive_witness_bundle::verify_recursive_proof_variant`],
+///    cross-binding the variant's public inputs against the receipt's
+///    `public_inputs` (so a swapped recursive proof from a different
+///    receipt is caught).
+///
+/// Returns `Verified` only when every step passes.
+pub fn verify_recursive_replay_from_bundle(
+    wr: &ReplayEntry,
+    prev_receipt_hash: Option<[u8; 32]>,
+) -> RecursiveReplayVerdict {
+    use pyana_circuit::recursive_witness_bundle::{
+        RecursiveVariantVerdict, verify_recursive_proof_variant,
+    };
+
+    // Step 1: scope-1 STARK verification (algebraic soundness).
+    let (proof_verdict, code) =
+        verify_effect_vm_proof(&wr.proof_bytes, &wr.public_inputs, AUTO_DETECT_VK_HASH);
+    if code != exit_code::VERIFIED {
+        return RecursiveReplayVerdict::InnerProofRejected {
+            reason: format!("STARK verify failed: {}", proof_verdict.reason),
+        };
+    }
+
+    // Step 1b: PI completeness — same cross-binding as the trust-replay path.
+    if let Some(reason) = check_receipt_pi_binding(wr, prev_receipt_hash) {
+        return RecursiveReplayVerdict::InnerProofRejected { reason };
+    }
+
+    // Step 2: pull the recursive proof out of the bundle.
+    let Some(bundle) = wr.witness_bundle.as_ref() else {
+        return RecursiveReplayVerdict::InnerProofRejected {
+            reason: "no witness bundle attached; recursive replay needs one".to_string(),
+        };
+    };
+    let Some(rp) = bundle.recursive_proof.as_ref() else {
+        return RecursiveReplayVerdict::InnerProofRejected {
+            reason: "witness bundle has no recursive_proof; this WR was produced \
+                     without recursive_compress = true"
+                .to_string(),
+        };
+    };
+
+    // Step 3: dispatch through the circuit-crate verifier, cross-binding
+    // the recursive variant's PI against the receipt's authoritative PI.
+    let verdict = verify_recursive_proof_variant(
+        &rp.proof_bytes,
+        &rp.public_inputs,
+        &rp.recursive_vk_hash,
+        Some(&wr.public_inputs),
+    );
+
+    match verdict {
+        RecursiveVariantVerdict::Verified => RecursiveReplayVerdict::Verified,
+        RecursiveVariantVerdict::UnknownVkHash { hash } => {
+            RecursiveReplayVerdict::RecursiveProofRejected {
+                reason: format!("unknown recursive_vk_hash: {}", hex::encode(hash)),
+            }
+        }
+        RecursiveVariantVerdict::PublicInputsTooShort { have, need } => {
+            RecursiveReplayVerdict::RecursiveProofRejected {
+                reason: format!(
+                    "recursive variant PI too short: have {have}, need {need}"
+                ),
+            }
+        }
+        RecursiveVariantVerdict::PublicInputsMismatch { reason } => {
+            RecursiveReplayVerdict::RecursiveProofRejected {
+                reason: format!("recursive variant PI mismatch: {reason}"),
+            }
+        }
+        RecursiveVariantVerdict::ProofRejected { reason } => {
+            RecursiveReplayVerdict::RecursiveProofRejected {
+                reason: format!("recursive proof rejected: {reason}"),
+            }
+        }
+    }
+}
+
+/// Chain-level Golden Vision replay: run
+/// [`verify_recursive_replay_from_bundle`] over a slice of entries,
+/// honoring the chain-walk invariant.
+pub fn replay_chain_recursive(entries: &[ReplayEntry]) -> ReplayChainOutput {
+    let mut per_entry = Vec::with_capacity(entries.len());
+    let mut first_failure: Option<usize> = None;
+    let mut verified = 0usize;
+
+    let mut prev_receipt_hash: Option<[u8; 32]> = None;
+    for (idx, wr) in entries.iter().enumerate() {
+        let r = verify_recursive_replay_from_bundle(wr, prev_receipt_hash);
+        let v = match &r {
+            RecursiveReplayVerdict::Verified => ReplayVerdict::Verified,
+            RecursiveReplayVerdict::InnerProofRejected { reason } => ReplayVerdict::Rejected {
+                reason: format!("inner: {reason}"),
+            },
+            RecursiveReplayVerdict::RecursiveProofRejected { reason } => ReplayVerdict::Rejected {
+                reason: format!("recursive: {reason}"),
+            },
+        };
+        let is_ok = matches!(v, ReplayVerdict::Verified);
+        if is_ok {
+            verified += 1;
+        } else if first_failure.is_none() {
+            first_failure = Some(idx);
+        }
+        prev_receipt_hash = Some(wr.receipt.receipt_hash());
+        per_entry.push(v);
+    }
+
+    let overall_verified = first_failure.is_none();
+    let summary = if overall_verified {
+        format!(
+            "recursive chain verified: {}/{} entries",
+            verified,
+            entries.len()
+        )
+    } else {
+        format!(
+            "recursive chain rejected: {}/{} entries verified; first failure at index {}",
+            verified,
+            entries.len(),
+            first_failure.unwrap()
+        )
+    };
+
+    ReplayChainOutput {
+        total: entries.len(),
+        verified,
+        first_failure,
+        per_entry,
+        overall_verified,
+        summary,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -839,6 +999,7 @@ mod tests {
         let bundle = ReplayWitnessBundle {
             trace_rows: vec![vec![0u32; 4]; 4],
             availability: ReplayWitnessAvailability::Inline,
+            recursive_proof: None,
         };
         let entry = ReplayEntry {
             receipt: sample_receipt(),

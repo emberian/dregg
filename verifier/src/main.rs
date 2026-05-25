@@ -27,8 +27,9 @@
 
 use pyana_verifier::{
     CommitteeDescriptor, JsonRequest, ReplayEntry, VerifierOutput, exit_code,
-    parse_public_inputs_json, replay_chain, verify_aggregated_bundle_json,
-    verify_bilateral_bundle_json, verify_cross_fed_bundle, verify_effect_vm_proof,
+    parse_public_inputs_json, replay_chain, replay_chain_recursive,
+    verify_aggregated_bundle_json, verify_bilateral_bundle_json, verify_cross_fed_bundle,
+    verify_effect_vm_proof,
 };
 use std::{
     env,
@@ -42,6 +43,9 @@ fn main() {
     // Subcommand dispatch.
     if args.len() >= 2 && args[1] == "replay-chain" {
         run_replay_chain(&args[2..]);
+    }
+    if args.len() >= 2 && args[1] == "scope-recursive" {
+        run_scope_recursive(&args[2..]);
     }
     if args.len() >= 2 && (args[1] == "verify-cross-fed-bundle" || args[1] == "cross-fed") {
         run_verify_cross_fed_bundle(&args[2..]);
@@ -348,6 +352,73 @@ fn run_bilateral_pair(args: &[String]) -> ! {
         .unwrap_or_else(|_| r#"{"verified":false,"reason":"serialisation error"}"#.to_string());
     println!("{}", json);
     let code = if verdict.verified {
+        exit_code::VERIFIED
+    } else {
+        exit_code::REJECTED
+    };
+    process::exit(code);
+}
+
+// ---------------------------------------------------------------------------
+// scope-recursive subcommand (Golden Vision Block 3)
+// ---------------------------------------------------------------------------
+
+/// `pyana-verifier scope-recursive <path-to-chain.json>` or
+/// `pyana-verifier scope-recursive <path-to-wr.json>` (single entry)
+///
+/// Reads either a JSON array of `WitnessedReceipt`s or a single object,
+/// runs the **Golden Vision** scope-2 replay loop (verify the recursive
+/// proof attached to each WR's witness_bundle instead of re-running the
+/// AIR over the inline trace), and prints a JSON verdict.
+///
+/// A WR may be produced with a recursive proof via
+/// `WitnessedReceipt::from_components_with_compression(.., recursive_compress: true)`
+/// or `WitnessedReceipt::from_components_strict_recursive(..)`.
+///
+/// Exit code: 0 = all verified, 1 = at least one rejection, 2 = read /
+/// parse error.
+///
+/// If a WR carries no `recursive_proof`, it is rejected by this
+/// subcommand — fall back to `replay-chain` (Silver Vision) for those.
+fn run_scope_recursive(args: &[String]) -> ! {
+    let path = match args.first() {
+        Some(p) => p,
+        None => {
+            eprintln!("Usage: pyana-verifier scope-recursive <path-to-chain.json>");
+            process::exit(exit_code::ERROR);
+        }
+    };
+
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("cannot read {}: {}", path, e);
+            process::exit(exit_code::ERROR);
+        }
+    };
+
+    // Accept either a single ReplayEntry or an array of them.
+    let entries: Vec<ReplayEntry> = match serde_json::from_str::<Vec<ReplayEntry>>(&text) {
+        Ok(v) => v,
+        Err(_) => match serde_json::from_str::<ReplayEntry>(&text) {
+            Ok(single) => vec![single],
+            Err(e) => {
+                eprintln!(
+                    "cannot parse {} as a ReplayEntry array or single ReplayEntry: {}",
+                    path, e
+                );
+                process::exit(exit_code::ERROR);
+            }
+        },
+    };
+
+    let output = replay_chain_recursive(&entries);
+    let json = serde_json::to_string_pretty(&output).unwrap_or_else(|_| {
+        r#"{"overall_verified":false,"summary":"serialisation error"}"#.to_string()
+    });
+    println!("{}", json);
+
+    let code = if output.overall_verified {
         exit_code::VERIFIED
     } else {
         exit_code::REJECTED

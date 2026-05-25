@@ -358,6 +358,13 @@ fn witnessed_to_replay(wr: &pyana_turn::WitnessedReceipt) -> crate::ReplayEntry 
         .map(|b| crate::ReplayWitnessBundle {
             trace_rows: b.trace_rows.clone(),
             availability: crate::ReplayWitnessAvailability::Inline,
+            recursive_proof: b.recursive_proof.as_ref().map(|rp| {
+                crate::ReplayRecursiveProofVariant {
+                    proof_bytes: rp.proof_bytes.clone(),
+                    public_inputs: rp.public_inputs.clone(),
+                    recursive_vk_hash: rp.recursive_vk_hash,
+                }
+            }),
         });
     crate::ReplayEntry {
         receipt: wr.receipt.clone(),
