@@ -22,6 +22,7 @@ pub mod facet;
 pub mod factory;
 pub mod id;
 pub mod ledger;
+pub mod lifecycle;
 pub mod note;
 #[cfg(feature = "crypto")]
 pub mod note_bridge;
@@ -92,6 +93,7 @@ pub use ledger::{
     CellStateDelta, DEFAULT_SOVEREIGN_TTL, Ledger, LedgerDelta, LedgerError, MembershipProof, Side,
     SovereignHistory, SovereignRegistration, WitnessDiff,
 };
+pub use lifecycle::{ArchivalAttestation, CellLifecycle, DeathCertificate, DeathReason};
 pub use note::{Note, NoteBatcher, NoteCommitment, NoteError, Nullifier, PositionedNote};
 #[cfg(feature = "crypto")]
 pub use note_bridge::{

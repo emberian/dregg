@@ -58,7 +58,7 @@ use crate::state::{CellState, FieldVisibility};
 /// circuit public inputs derive their domain separation transitively from this
 /// context — bumping it cleanly invalidates stale commitments rather than
 /// allowing silent cross-version collisions.
-pub const CANONICAL_COMMITMENT_CONTEXT: &str = "pyana-cell:canonical-state-commitment v1";
+pub const CANONICAL_COMMITMENT_CONTEXT: &str = "pyana-cell:canonical-state-commitment v2";
 
 /// Domain-separation context for the canonical capability-set root.
 pub const CANONICAL_CAP_ROOT_CONTEXT: &str = "pyana-cell:canonical-capability-root v1";
@@ -181,7 +181,61 @@ pub fn compute_canonical_state_commitment(cell: &Cell) -> [u8; 32] {
     // ---- Program ----
     hash_program_into(&mut hasher, &cell.program);
 
+    // ---- Lifecycle (v2 addition) ----
+    //
+    // Per `PROTOCOL-CATEGORICAL-ANALYSIS.md §1`, the canonical lifecycle
+    // is authority-bearing: a Destroyed cell rejects every effect, a
+    // Sealed cell rejects new effects, an Archived cell retains a
+    // checkpoint hash that prunes prior receipt history. Two cells with
+    // identical (mode, state, permissions, ...) but different lifecycle
+    // states must produce distinct commitments — otherwise a malicious
+    // executor could omit the destruction transition and present the
+    // cell as still-Live to downstream verifiers.
+    hash_lifecycle_into(&mut hasher, &cell.lifecycle);
+
     *hasher.finalize().as_bytes()
+}
+
+/// Commit a [`crate::lifecycle::CellLifecycle`] value into a canonical
+/// commitment hasher. Per-variant payload bytes are written so that two
+/// distinct lifecycle states (including same-discriminant variants with
+/// distinct inner bytes) produce distinct commitments.
+fn hash_lifecycle_into(hasher: &mut blake3::Hasher, lc: &crate::lifecycle::CellLifecycle) {
+    use crate::lifecycle::CellLifecycle;
+    hasher.update(&[lc.discriminant()]);
+    match lc {
+        CellLifecycle::Live => {}
+        CellLifecycle::Sealed {
+            reason_hash,
+            sealed_at,
+        } => {
+            hasher.update(reason_hash);
+            hasher.update(&sealed_at.to_le_bytes());
+        }
+        CellLifecycle::Migrated {
+            to,
+            attestation,
+            migrated_at,
+        } => {
+            hasher.update(to.as_bytes());
+            hasher.update(attestation);
+            hasher.update(&migrated_at.to_le_bytes());
+        }
+        CellLifecycle::Destroyed {
+            death_certificate_hash,
+            destroyed_at,
+        } => {
+            hasher.update(death_certificate_hash);
+            hasher.update(&destroyed_at.to_le_bytes());
+        }
+        CellLifecycle::Archived {
+            checkpoint_hash,
+            archived_through,
+        } => {
+            hasher.update(checkpoint_hash);
+            hasher.update(&archived_through.to_le_bytes());
+        }
+    }
 }
 
 /// Hash the inner `CellState` (no domain separator — used as a sub-hasher).
@@ -494,6 +548,43 @@ mod tests {
         a[3] = 0x20;
         b[3] = 0x10;
         assert_ne!(canonical_to_babybear_pi(&a), canonical_to_babybear_pi(&b));
+    }
+
+    /// Adversarial test (lifecycle): changing the cell's lifecycle state
+    /// must alter the canonical commitment. Without lifecycle binding,
+    /// a Destroyed cell could be presented as Live to downstream
+    /// verifiers without breaking the commitment chain.
+    #[test]
+    fn changing_lifecycle_changes_commitment() {
+        let cell_live = Cell::new(test_key(7), test_token(11));
+        let mut cell_sealed = cell_live.clone();
+        cell_sealed.lifecycle = crate::lifecycle::CellLifecycle::Sealed {
+            reason_hash: [9u8; 32],
+            sealed_at: 100,
+        };
+        let mut cell_destroyed = cell_live.clone();
+        cell_destroyed.lifecycle = crate::lifecycle::CellLifecycle::Destroyed {
+            death_certificate_hash: [7u8; 32],
+            destroyed_at: 200,
+        };
+
+        let c_live = compute_canonical_state_commitment(&cell_live);
+        let c_sealed = compute_canonical_state_commitment(&cell_sealed);
+        let c_destroyed = compute_canonical_state_commitment(&cell_destroyed);
+
+        assert_ne!(c_live, c_sealed, "Live vs Sealed must differ");
+        assert_ne!(c_live, c_destroyed, "Live vs Destroyed must differ");
+        assert_ne!(c_sealed, c_destroyed, "Sealed vs Destroyed must differ");
+
+        // Two Sealed cells with different reason_hash must also differ —
+        // payload bytes are bound, not just the discriminant.
+        let mut cell_sealed2 = cell_live.clone();
+        cell_sealed2.lifecycle = crate::lifecycle::CellLifecycle::Sealed {
+            reason_hash: [42u8; 32],
+            sealed_at: 100,
+        };
+        let c_sealed2 = compute_canonical_state_commitment(&cell_sealed2);
+        assert_ne!(c_sealed, c_sealed2, "Sealed payload bytes must bind");
     }
 
     /// All output felts must fit within BabyBear's representable range

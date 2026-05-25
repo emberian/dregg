@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::capability::CapabilitySet;
 use crate::delegation::DelegatedRef;
 use crate::id::CellId;
+use crate::lifecycle::CellLifecycle;
 use crate::permissions::Permissions;
 use crate::program::CellProgram;
 use crate::state::CellState;
@@ -87,6 +88,16 @@ pub struct Cell {
     /// backward compatibility with existing serialized cells.
     #[serde(default)]
     pub mode: CellMode,
+    /// Canonical lifecycle state of the cell. Per
+    /// `PROTOCOL-CATEGORICAL-ANALYSIS.md §1`, this enumerates the
+    /// structural states a cell can inhabit (Live, Sealed, Migrated,
+    /// Destroyed, Archived). Defaults to [`CellLifecycle::Live`].
+    ///
+    /// `#[serde(default)]`: existing serialized cells deserialize to
+    /// `Live`, preserving backward compatibility while making the
+    /// lifecycle explicit going forward.
+    #[serde(default)]
+    pub lifecycle: CellLifecycle,
 }
 
 /// Configuration for creating a new cell.
@@ -179,6 +190,7 @@ impl Cell {
             capabilities: CapabilitySet::new(),
             program: CellProgram::None,
             mode: CellMode::Sovereign,
+            lifecycle: CellLifecycle::Live,
         }
     }
 
@@ -199,6 +211,7 @@ impl Cell {
             capabilities: CapabilitySet::new(),
             program: CellProgram::None,
             mode: CellMode::Hosted,
+            lifecycle: CellLifecycle::Live,
         }
     }
 
@@ -219,6 +232,7 @@ impl Cell {
             capabilities: CapabilitySet::new(),
             program: CellProgram::None,
             mode: CellMode::Hosted,
+            lifecycle: CellLifecycle::Live,
         }
     }
 
@@ -283,6 +297,7 @@ impl Cell {
             capabilities: CapabilitySet::new(),
             program: CellProgram::None,
             mode: CellMode::Hosted,
+            lifecycle: CellLifecycle::Live,
         }
     }
 
@@ -301,6 +316,7 @@ impl Cell {
             capabilities: CapabilitySet::new(),
             program: config.program.unwrap_or(CellProgram::None),
             mode: config.mode,
+            lifecycle: CellLifecycle::Live,
         }
     }
 
@@ -382,6 +398,7 @@ impl Cell {
             capabilities: CapabilitySet::new(),
             program: CellProgram::None,
             mode: CellMode::Hosted,
+            lifecycle: CellLifecycle::Live,
         }
     }
 
@@ -434,6 +451,7 @@ impl Cell {
             capabilities: CapabilitySet::new(),
             program: CellProgram::None,
             mode: CellMode::Hosted,
+            lifecycle: CellLifecycle::Live,
         }
     }
 }

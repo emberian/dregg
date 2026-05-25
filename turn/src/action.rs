@@ -987,6 +987,16 @@ pub enum Effect {
         /// specific offered action.
         proof_witness_index: u32,
     },
+    /// Validate a handoff certificate and accept the bearer (CapTP).
+    /// Off-chain Ed25519 signature verification has already happened (the
+    /// federation maintains `approved_handoffs_root`); the executor proves
+    /// Merkle membership of `cert_hash` in the root and consumes the leaf
+    /// (single-use guarantee per `DESIGN-captp-integration.md` §9.4).
+    ValidateHandoff {
+        /// The Poseidon2 hash of the handoff certificate (matches the leaf
+        /// the federation inserted when accepting the cert).
+        cert_hash: [u8; 32],
+    },
 }
 
 /// Why a [`Effect::Refusal`] was issued. Refusals are *evidence of
@@ -1010,17 +1020,6 @@ pub enum RefusalReason {
     /// substrate; apps decode via their `CustomEffectVerifier` or by
     /// pairing this with an `EmitEvent` carrying the decoded reason.
     Custom { reason_hash: [u8; 32] },
-}
-    /// Validate a handoff certificate and accept the bearer (CapTP).
-    /// Off-chain Ed25519 signature verification has already happened (the
-    /// federation maintains `approved_handoffs_root`); the executor proves
-    /// Merkle membership of `cert_hash` in the root and consumes the leaf
-    /// (single-use guarantee per `DESIGN-captp-integration.md` §9.4).
-    ValidateHandoff {
-        /// The Poseidon2 hash of the handoff certificate (matches the leaf
-        /// the federation inserted when accepting the cert).
-        cert_hash: [u8; 32],
-    },
 }
 
 /// An operation within an atomic queue transaction.
