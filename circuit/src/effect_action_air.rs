@@ -528,6 +528,87 @@ pub const SCHEMA_CREATE_COMMITTED_ESCROW: EffectActionSchema = EffectActionSchem
     amount_count: 2,
 };
 
+/// Schema for `NoteSpend` binding (full-fidelity proof-to-action binding):
+///
+/// fields = [nullifier (32B), note_tree_root (32B),
+///           asset_type_commitment (32B; BLAKE3 of asset_type.to_le_bytes()
+///                                  for backward compat — see note below),
+///           value_commitment (32B; Pedersen 32B if Some, ZERO if None)]
+/// amounts = [value (u64), asset_type (u64)]
+///
+/// # Relationship with the deprecated `note_spending_air`
+///
+/// `circuit/src/note_spending_air.rs` is the legacy AIR that proves
+/// knowledge of the spending key, Merkle membership of the note, and
+/// pins `nullifier`/`merkle_root`/`value`/`asset_type` as **single
+/// BabyBear felts each** (Poseidon2-compressed). That AIR's PIs are
+/// one-way digests — a verifier cannot algebraically attribute a spend
+/// to a specific 32-byte nullifier; it can only check a felt-sized digest.
+///
+/// `SCHEMA_NOTE_SPEND` here is the **canonical full-fidelity binding**:
+/// each 32-byte field is 8 × 4-byte BabyBear limbs (~248-bit binding),
+/// each u64 amount is 2 × 32-bit limbs (full 64-bit binding). The
+/// `value_commitment` slot is ZERO when the runtime variant carries
+/// `None` (cleartext-value path) and the Pedersen point's compressed
+/// 32 bytes when the runtime variant carries `Some` (committed path).
+///
+/// **Recommendation:** deprecate `note_spending_air` in favor of the
+/// schema-based generalized AIR. The schema-based binding gives every
+/// callsite 248-bit-strength on every 32-byte field plus full 64-bit
+/// amount binding, replacing the felt-sized PIs of the legacy AIR.
+/// The Merkle / spending-key half of the legacy AIR continues to live
+/// in the spend proof (or its replacement); only the binding role
+/// migrates here.
+pub const SCHEMA_NOTE_SPEND: EffectActionSchema = EffectActionSchema {
+    kind_name: "pyana-effect-note-spend-v1",
+    field_count: 4,
+    amount_count: 2,
+};
+
+/// Schema for `NoteCreate` binding (full-fidelity proof-to-action binding):
+///
+/// fields = [note_commitment (32B),
+///           asset_type_commitment (32B; see NoteSpend note),
+///           value_commitment (32B; Pedersen 32B if Some, ZERO if None),
+///           range_proof_hash (32B; BLAKE3 of range_proof bytes if Some,
+///                             ZERO if None)]
+/// amounts = [value (u64), asset_type (u64)]
+///
+/// # Relationship with the deprecated `note_spending_air`
+///
+/// Same story as `SCHEMA_NOTE_SPEND` — the legacy `note_spending_air`
+/// proves spend-side semantics with felt-sized PIs; this schema is the
+/// **canonical full-fidelity binding** for the create-side action
+/// parameters. Recommend deprecating the legacy AIR in favor of the
+/// schema-based generalized AIR.
+pub const SCHEMA_NOTE_CREATE: EffectActionSchema = EffectActionSchema {
+    kind_name: "pyana-effect-note-create-v1",
+    field_count: 4,
+    amount_count: 2,
+};
+
+/// Schema for `BridgeLock` binding (sibling to `bridge_action_air`,
+/// which covers BridgeMint):
+///
+/// fields = [nullifier (32B), destination_federation (32B),
+///           asset_type_commitment (32B),
+///           value_commitment (32B; ZERO when none)]
+/// amounts = [value (u64), asset_type (u64), timeout_height (u64)]
+///
+/// `bridge_action_air` is the canonical full-fidelity binding for
+/// `Effect::BridgeMint` (nullifier + recipient + destination_federation +
+/// amount). This schema closes the symmetric gap for `Effect::BridgeLock`:
+/// the runtime variant carries `nullifier`, `destination`, `value`,
+/// `asset_type`, and `timeout_height`, and prior to this schema only
+/// `(nullifier, destination, asset_type)` were folded into a 4-byte
+/// `lock_hash`, with `timeout_height` and the `value_commitment`
+/// unbound. Now every parameter is pinned at full fidelity.
+pub const SCHEMA_BRIDGE_LOCK: EffectActionSchema = EffectActionSchema {
+    kind_name: "pyana-effect-bridge-lock-v1",
+    field_count: 4,
+    amount_count: 3,
+};
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -1344,6 +1425,448 @@ mod tests {
         assert!(
             r.is_err(),
             "30-bit-truncated amount must not collide with high-bit amount"
+        );
+    }
+
+    // ─── NoteSpend / NoteCreate ─────────────────────────────────────────
+    //
+    // The deprecated `note_spending_air` uses single-felt PIs for the
+    // nullifier / commitment / value / asset_type / merkle_root (~31-bit
+    // binding each). The schemas below give every 32-byte field full
+    // 248-bit binding strength and every u64 amount full 64-bit binding.
+    // Recommend migrating callers off `note_spending_air` to this
+    // schema-based sibling binding AIR.
+
+    #[test]
+    fn note_spend_full_fidelity_roundtrip() {
+        let nullifier = [0xAAu8; 32];
+        let note_tree_root = [0xBBu8; 32];
+        let asset_type_commit = [0xCCu8; 32];
+        let value_commit = [0xDDu8; 32];
+        let value: u64 = (1u64 << 40) | 0xCAFE;
+        let asset_type: u64 = 1u64 << 33; // above u32
+        let r = roundtrip(
+            SCHEMA_NOTE_SPEND,
+            vec![nullifier, note_tree_root, asset_type_commit, value_commit],
+            vec![value, asset_type],
+        );
+        assert!(r.is_ok(), "honest note_spend binding must verify: {r:?}");
+    }
+
+    #[test]
+    fn note_spend_tamper_nullifier_rejected() {
+        let nullifier = [0xAAu8; 32];
+        let note_tree_root = [0xBBu8; 32];
+        let asset_type_commit = [0xCCu8; 32];
+        let value_commit = [0xDDu8; 32];
+        let value: u64 = 1000;
+        let asset_type: u64 = 0;
+        let w = EffectActionWitness {
+            schema: SCHEMA_NOTE_SPEND,
+            fields: vec![nullifier, note_tree_root, asset_type_commit, value_commit],
+            amounts: vec![value, asset_type],
+        };
+        let proof = prove_effect_action(&w);
+        let mut wrong = nullifier;
+        wrong[0] ^= 0x01;
+        let r = verify_effect_action(
+            SCHEMA_NOTE_SPEND,
+            &[wrong, note_tree_root, asset_type_commit, value_commit],
+            &[value, asset_type],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered nullifier must be rejected");
+    }
+
+    #[test]
+    fn note_spend_tamper_note_tree_root_rejected() {
+        let nullifier = [0xAAu8; 32];
+        let note_tree_root = [0xBBu8; 32];
+        let asset_type_commit = [0xCCu8; 32];
+        let value_commit = [0xDDu8; 32];
+        let w = EffectActionWitness {
+            schema: SCHEMA_NOTE_SPEND,
+            fields: vec![nullifier, note_tree_root, asset_type_commit, value_commit],
+            amounts: vec![100, 0],
+        };
+        let proof = prove_effect_action(&w);
+        let mut wrong = note_tree_root;
+        wrong[31] ^= 0x80;
+        let r = verify_effect_action(
+            SCHEMA_NOTE_SPEND,
+            &[nullifier, wrong, asset_type_commit, value_commit],
+            &[100, 0],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered note_tree_root must be rejected");
+    }
+
+    #[test]
+    fn note_spend_tamper_value_commitment_rejected() {
+        let nullifier = [0xAAu8; 32];
+        let note_tree_root = [0xBBu8; 32];
+        let asset_type_commit = [0xCCu8; 32];
+        let value_commit = [0xDDu8; 32];
+        let w = EffectActionWitness {
+            schema: SCHEMA_NOTE_SPEND,
+            fields: vec![nullifier, note_tree_root, asset_type_commit, value_commit],
+            amounts: vec![100, 0],
+        };
+        let proof = prove_effect_action(&w);
+        let mut wrong = value_commit;
+        wrong[15] ^= 0x10;
+        let r = verify_effect_action(
+            SCHEMA_NOTE_SPEND,
+            &[nullifier, note_tree_root, asset_type_commit, wrong],
+            &[100, 0],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered value_commitment must be rejected");
+    }
+
+    #[test]
+    fn note_spend_value_above_2_pow_30_rejected_as_truncation() {
+        // 30-bit truncation gambit must not collide.
+        let nullifier = [0xAAu8; 32];
+        let note_tree_root = [0xBBu8; 32];
+        let asset_type_commit = [0xCCu8; 32];
+        let value_commit = [0xDDu8; 32];
+        let value: u64 = (1u64 << 50) | 0xBEEF;
+        let asset_type: u64 = 0;
+        let w = EffectActionWitness {
+            schema: SCHEMA_NOTE_SPEND,
+            fields: vec![nullifier, note_tree_root, asset_type_commit, value_commit],
+            amounts: vec![value, asset_type],
+        };
+        let proof = prove_effect_action(&w);
+        let r = verify_effect_action(
+            SCHEMA_NOTE_SPEND,
+            &[nullifier, note_tree_root, asset_type_commit, value_commit],
+            &[value & ((1u64 << 30) - 1), asset_type],
+            &proof,
+        );
+        assert!(
+            r.is_err(),
+            "30-bit-truncated value must not collide with high-bit value"
+        );
+    }
+
+    #[test]
+    fn note_spend_none_value_commitment_zero_sentinel_roundtrip() {
+        // value_commitment == None → 32-byte ZERO sentinel; must round-trip.
+        let nullifier = [0xAAu8; 32];
+        let note_tree_root = [0xBBu8; 32];
+        let asset_type_commit = [0xCCu8; 32];
+        let none_value_commit = [0u8; 32];
+        let r = roundtrip(
+            SCHEMA_NOTE_SPEND,
+            vec![nullifier, note_tree_root, asset_type_commit, none_value_commit],
+            vec![100, 0],
+        );
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn note_create_full_fidelity_roundtrip() {
+        let commitment = [0x11u8; 32];
+        let asset_type_commit = [0x22u8; 32];
+        let value_commit = [0x33u8; 32];
+        let range_proof_hash = [0x44u8; 32];
+        let value: u64 = u64::MAX;
+        let asset_type: u64 = 7;
+        let r = roundtrip(
+            SCHEMA_NOTE_CREATE,
+            vec![commitment, asset_type_commit, value_commit, range_proof_hash],
+            vec![value, asset_type],
+        );
+        assert!(r.is_ok(), "honest note_create binding must verify: {r:?}");
+    }
+
+    #[test]
+    fn note_create_tamper_commitment_rejected() {
+        let commitment = [0x11u8; 32];
+        let asset_type_commit = [0x22u8; 32];
+        let value_commit = [0x33u8; 32];
+        let range_proof_hash = [0x44u8; 32];
+        let w = EffectActionWitness {
+            schema: SCHEMA_NOTE_CREATE,
+            fields: vec![commitment, asset_type_commit, value_commit, range_proof_hash],
+            amounts: vec![100, 0],
+        };
+        let proof = prove_effect_action(&w);
+        let mut wrong = commitment;
+        wrong[0] ^= 0x01;
+        let r = verify_effect_action(
+            SCHEMA_NOTE_CREATE,
+            &[wrong, asset_type_commit, value_commit, range_proof_hash],
+            &[100, 0],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered commitment must be rejected");
+    }
+
+    #[test]
+    fn note_create_tamper_range_proof_hash_rejected() {
+        let commitment = [0x11u8; 32];
+        let asset_type_commit = [0x22u8; 32];
+        let value_commit = [0x33u8; 32];
+        let range_proof_hash = [0x44u8; 32];
+        let w = EffectActionWitness {
+            schema: SCHEMA_NOTE_CREATE,
+            fields: vec![commitment, asset_type_commit, value_commit, range_proof_hash],
+            amounts: vec![100, 0],
+        };
+        let proof = prove_effect_action(&w);
+        let mut wrong = range_proof_hash;
+        wrong[7] ^= 0x80;
+        let r = verify_effect_action(
+            SCHEMA_NOTE_CREATE,
+            &[commitment, asset_type_commit, value_commit, wrong],
+            &[100, 0],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered range_proof_hash must be rejected");
+    }
+
+    #[test]
+    fn note_create_tamper_asset_type_amount_rejected() {
+        let commitment = [0x11u8; 32];
+        let asset_type_commit = [0x22u8; 32];
+        let value_commit = [0x33u8; 32];
+        let range_proof_hash = [0x44u8; 32];
+        let value: u64 = 100;
+        let asset_type: u64 = 42;
+        let w = EffectActionWitness {
+            schema: SCHEMA_NOTE_CREATE,
+            fields: vec![commitment, asset_type_commit, value_commit, range_proof_hash],
+            amounts: vec![value, asset_type],
+        };
+        let proof = prove_effect_action(&w);
+        let r = verify_effect_action(
+            SCHEMA_NOTE_CREATE,
+            &[commitment, asset_type_commit, value_commit, range_proof_hash],
+            &[value, asset_type + 1],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered asset_type must be rejected");
+    }
+
+    #[test]
+    fn note_spend_create_domain_separation() {
+        // Critical: a NoteSpend proof must NOT verify as NoteCreate
+        // (same shape: 4 fields, 2 amounts).
+        let f0 = [0xAAu8; 32];
+        let f1 = [0xBBu8; 32];
+        let f2 = [0xCCu8; 32];
+        let f3 = [0xDDu8; 32];
+        let w_spend = EffectActionWitness {
+            schema: SCHEMA_NOTE_SPEND,
+            fields: vec![f0, f1, f2, f3],
+            amounts: vec![100, 0],
+        };
+        let proof_spend = prove_effect_action(&w_spend);
+        let r = verify_effect_action(SCHEMA_NOTE_CREATE, &[f0, f1, f2, f3], &[100, 0], &proof_spend);
+        assert!(
+            r.is_err(),
+            "NoteSpend proof must not verify as NoteCreate (domain separation)"
+        );
+    }
+
+    // ─── BridgeLock sibling AIR ─────────────────────────────────────────
+
+    #[test]
+    fn bridge_lock_full_fidelity_roundtrip() {
+        let nullifier = [0x10u8; 32];
+        let destination_federation = [0x20u8; 32];
+        let asset_type_commit = [0x30u8; 32];
+        let value_commit = [0x40u8; 32];
+        let value: u64 = (1u64 << 45) | 0xCAFE_BABE;
+        let asset_type: u64 = 99;
+        let timeout_height: u64 = 1_000_000;
+        let r = roundtrip(
+            SCHEMA_BRIDGE_LOCK,
+            vec![nullifier, destination_federation, asset_type_commit, value_commit],
+            vec![value, asset_type, timeout_height],
+        );
+        assert!(r.is_ok(), "honest bridge_lock binding must verify: {r:?}");
+    }
+
+    #[test]
+    fn bridge_lock_tamper_destination_rejected() {
+        let nullifier = [0x10u8; 32];
+        let destination_federation = [0x20u8; 32];
+        let asset_type_commit = [0x30u8; 32];
+        let value_commit = [0x40u8; 32];
+        let w = EffectActionWitness {
+            schema: SCHEMA_BRIDGE_LOCK,
+            fields: vec![nullifier, destination_federation, asset_type_commit, value_commit],
+            amounts: vec![100, 1, 1000],
+        };
+        let proof = prove_effect_action(&w);
+        let mut wrong = destination_federation;
+        wrong[5] ^= 0x10;
+        let r = verify_effect_action(
+            SCHEMA_BRIDGE_LOCK,
+            &[nullifier, wrong, asset_type_commit, value_commit],
+            &[100, 1, 1000],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered destination must be rejected");
+    }
+
+    #[test]
+    fn bridge_lock_tamper_timeout_height_rejected() {
+        let nullifier = [0x10u8; 32];
+        let destination_federation = [0x20u8; 32];
+        let asset_type_commit = [0x30u8; 32];
+        let value_commit = [0x40u8; 32];
+        let timeout = 1_000_000u64;
+        let w = EffectActionWitness {
+            schema: SCHEMA_BRIDGE_LOCK,
+            fields: vec![nullifier, destination_federation, asset_type_commit, value_commit],
+            amounts: vec![100, 1, timeout],
+        };
+        let proof = prove_effect_action(&w);
+        let r = verify_effect_action(
+            SCHEMA_BRIDGE_LOCK,
+            &[nullifier, destination_federation, asset_type_commit, value_commit],
+            &[100, 1, timeout + 1],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered timeout_height must be rejected");
+    }
+
+    #[test]
+    fn bridge_lock_tamper_nullifier_rejected() {
+        let nullifier = [0x10u8; 32];
+        let destination_federation = [0x20u8; 32];
+        let asset_type_commit = [0x30u8; 32];
+        let value_commit = [0x40u8; 32];
+        let w = EffectActionWitness {
+            schema: SCHEMA_BRIDGE_LOCK,
+            fields: vec![nullifier, destination_federation, asset_type_commit, value_commit],
+            amounts: vec![100, 1, 1000],
+        };
+        let proof = prove_effect_action(&w);
+        let mut wrong = nullifier;
+        wrong[0] ^= 0xFF;
+        let r = verify_effect_action(
+            SCHEMA_BRIDGE_LOCK,
+            &[wrong, destination_federation, asset_type_commit, value_commit],
+            &[100, 1, 1000],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered nullifier must be rejected");
+    }
+
+    #[test]
+    fn bridge_lock_tamper_asset_type_rejected() {
+        let nullifier = [0x10u8; 32];
+        let destination_federation = [0x20u8; 32];
+        let asset_type_commit = [0x30u8; 32];
+        let value_commit = [0x40u8; 32];
+        let w = EffectActionWitness {
+            schema: SCHEMA_BRIDGE_LOCK,
+            fields: vec![nullifier, destination_federation, asset_type_commit, value_commit],
+            amounts: vec![100, 42, 1000],
+        };
+        let proof = prove_effect_action(&w);
+        // Tamper asset_type amount (u64).
+        let r = verify_effect_action(
+            SCHEMA_BRIDGE_LOCK,
+            &[nullifier, destination_federation, asset_type_commit, value_commit],
+            &[100, 43, 1000],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered asset_type must be rejected");
+        // Tamper asset_type_commit field.
+        let mut wrong = asset_type_commit;
+        wrong[20] ^= 0x80;
+        let r = verify_effect_action(
+            SCHEMA_BRIDGE_LOCK,
+            &[nullifier, destination_federation, wrong, value_commit],
+            &[100, 42, 1000],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered asset_type_commit must be rejected");
+    }
+
+    #[test]
+    fn bridge_lock_tamper_value_rejected() {
+        let nullifier = [0x10u8; 32];
+        let destination_federation = [0x20u8; 32];
+        let asset_type_commit = [0x30u8; 32];
+        let value_commit = [0x40u8; 32];
+        let value: u64 = (1u64 << 50) | 0xDEAD;
+        let w = EffectActionWitness {
+            schema: SCHEMA_BRIDGE_LOCK,
+            fields: vec![nullifier, destination_federation, asset_type_commit, value_commit],
+            amounts: vec![value, 1, 1000],
+        };
+        let proof = prove_effect_action(&w);
+        // 30-bit truncation must not collide.
+        let r = verify_effect_action(
+            SCHEMA_BRIDGE_LOCK,
+            &[nullifier, destination_federation, asset_type_commit, value_commit],
+            &[value & ((1u64 << 30) - 1), 1, 1000],
+            &proof,
+        );
+        assert!(
+            r.is_err(),
+            "30-bit-truncated value must not collide with high-bit value"
+        );
+    }
+
+    #[test]
+    fn bridge_lock_tamper_value_commitment_rejected() {
+        let nullifier = [0x10u8; 32];
+        let destination_federation = [0x20u8; 32];
+        let asset_type_commit = [0x30u8; 32];
+        let value_commit = [0x40u8; 32];
+        let w = EffectActionWitness {
+            schema: SCHEMA_BRIDGE_LOCK,
+            fields: vec![nullifier, destination_federation, asset_type_commit, value_commit],
+            amounts: vec![100, 1, 1000],
+        };
+        let proof = prove_effect_action(&w);
+        let mut wrong = value_commit;
+        wrong[31] ^= 0x01;
+        let r = verify_effect_action(
+            SCHEMA_BRIDGE_LOCK,
+            &[nullifier, destination_federation, asset_type_commit, wrong],
+            &[100, 1, 1000],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered value_commitment must be rejected");
+    }
+
+    #[test]
+    fn bridge_lock_domain_separated_from_bridge_finalize() {
+        // Distinct kind_name domain separator → a BridgeLock proof must
+        // not be replayable as any other bridge-side proof (different
+        // shape AND different kind_name).
+        let nullifier = [0x10u8; 32];
+        let destination_federation = [0x20u8; 32];
+        let asset_type_commit = [0x30u8; 32];
+        let value_commit = [0x40u8; 32];
+        let w = EffectActionWitness {
+            schema: SCHEMA_BRIDGE_LOCK,
+            fields: vec![nullifier, destination_federation, asset_type_commit, value_commit],
+            amounts: vec![100, 1, 1000],
+        };
+        let proof = prove_effect_action(&w);
+        // BridgeFinalize has 2 fields, 0 amounts → shape mismatch first
+        // line of defence (count check). But even if a caller crafted a
+        // matching-shape SCHEMA, the kind_name domain separator rejects.
+        let r = verify_effect_action(
+            SCHEMA_BRIDGE_FINALIZE,
+            &[nullifier, destination_federation],
+            &[],
+            &proof,
+        );
+        assert!(
+            r.is_err(),
+            "BridgeLock proof must not verify as BridgeFinalize"
         );
     }
 }

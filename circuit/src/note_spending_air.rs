@@ -1,5 +1,28 @@
 //! Note spending circuit: ZK proof that the spender knows the spending key.
 //!
+//! # DEPRECATION NOTICE
+//!
+//! This AIR is **superseded for proof-to-action binding purposes** by the
+//! schema-based generalized AIR in `effect_action_air.rs`:
+//!   - `SCHEMA_NOTE_SPEND` (full-fidelity binding for `Effect::NoteSpend`)
+//!   - `SCHEMA_NOTE_CREATE` (full-fidelity binding for `Effect::NoteCreate`)
+//!
+//! The legacy AIR below pins `nullifier`/`merkle_root`/`value`/`asset_type`
+//! as **single BabyBear felts** (Poseidon2-compressed digests, ~31 bits
+//! each). That suffices for spend-side semantics (knowledge of spending
+//! key + Merkle membership) but provides only felt-sized binding to a
+//! verifier asking "which 32-byte nullifier was spent?".
+//!
+//! The schema-based AIRs in `effect_action_air.rs` carry every 32-byte
+//! field as 8 × 4-byte BabyBear limbs (~248-bit binding) and every u64
+//! amount as 2 × 32-bit limbs (full 64-bit binding). New code SHOULD
+//! prefer them for action binding. The spend-side semantics half of the
+//! legacy AIR (key knowledge + Merkle membership) can continue to live
+//! here, or migrate to a dedicated key/membership AIR; only the binding
+//! role moves.
+//!
+//! # Original docs
+//!
 //! This AIR proves:
 //! 1. Prover knows `spending_key` (8 BabyBear limbs = 248 bits) such that
 //!    `nullifier = poseidon2(commitment || spending_key[0..8] || creation_nonce)`
