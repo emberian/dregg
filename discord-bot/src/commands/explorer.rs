@@ -615,9 +615,6 @@ async fn handle_stats(ctx: &Context, command: &CommandInteraction, state: &BotSt
                 )
                 .field("Turns (epoch)", stats.turns_this_epoch.to_string(), true)
                 .field("Active Auctions", stats.active_auctions.to_string(), true)
-                .field("AMM TVL", format!("{} PYN", stats.amm_tvl), true)
-                .field("Active Orders", stats.active_orders.to_string(), true)
-                .field("Open CDPs", stats.open_cdps.to_string(), true)
                 .field(
                     "Federation",
                     format!(
