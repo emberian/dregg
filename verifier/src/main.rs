@@ -27,9 +27,8 @@
 
 use pyana_verifier::{
     CommitteeDescriptor, JsonRequest, ReplayEntry, VerifierOutput, exit_code,
-    parse_public_inputs_json, replay_chain, replay_chain_recursive,
-    verify_aggregated_bundle_json, verify_bilateral_bundle_json, verify_cross_fed_bundle,
-    verify_effect_vm_proof,
+    parse_public_inputs_json, replay_chain, replay_chain_recursive, verify_aggregated_bundle_json,
+    verify_bilateral_bundle_json, verify_cross_fed_bundle, verify_effect_vm_proof,
 };
 use std::{
     env,

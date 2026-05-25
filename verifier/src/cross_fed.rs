@@ -471,6 +471,7 @@ mod tests {
             emitted_events: Vec::new(),
             executor_signature: None,
             finality: Default::default(),
+            was_encrypted: false,
         };
         let wr = WitnessedReceipt::from_components(receipt, vec![0u8; 8], vec![1, 2, 3], None);
         CrossFedReceiptBundle::new(

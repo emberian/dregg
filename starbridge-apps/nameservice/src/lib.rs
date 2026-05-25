@@ -448,7 +448,11 @@ pub fn build_transfer_action(
 /// one-way: once the slot transitions from `FIELD_ZERO` to a tombstone,
 /// the executor rejects any subsequent write. A revoked name cannot be
 /// "un-revoked" by the owner, nor moved to a different tombstone.
-pub fn build_revoke_action(cipherclerk: &AppCipherclerk, registry_cell: CellId, name: &str) -> Action {
+pub fn build_revoke_action(
+    cipherclerk: &AppCipherclerk,
+    registry_cell: CellId,
+    name: &str,
+) -> Action {
     let name_hash = blake3_field(name.as_bytes());
     let tombstone = revoked_tombstone(name);
 
@@ -812,7 +816,12 @@ pub fn build_register_with_credential_action(
             cell: registry_cell,
             event: Event::new(
                 symbol("name-registered-attested"),
-                vec![name_hash_val, owner_hash, issuer_field, credential_schema_id],
+                vec![
+                    name_hash_val,
+                    owner_hash,
+                    issuer_field,
+                    credential_schema_id,
+                ],
             ),
         },
     ];
@@ -1143,7 +1152,8 @@ mod tests {
     #[test]
     fn register_action_writes_three_slots_and_emits_event() {
         let cipherclerk = test_cipherclerk();
-        let action = build_register_action(&cipherclerk, test_cell(), "alice.pyana", [3u8; 32], 1_000);
+        let action =
+            build_register_action(&cipherclerk, test_cell(), "alice.pyana", [3u8; 32], 1_000);
 
         assert_eq!(action.effects.len(), 4);
         assert!(matches!(
@@ -1166,7 +1176,8 @@ mod tests {
         // The whole point of the userspace stance: actions carry a real
         // framework-issued signature, not a `[0u8; 64]` placeholder.
         let cipherclerk = test_cipherclerk();
-        let action = build_register_action(&cipherclerk, test_cell(), "alice.pyana", [3u8; 32], 1_000);
+        let action =
+            build_register_action(&cipherclerk, test_cell(), "alice.pyana", [3u8; 32], 1_000);
         match action.authorization {
             Authorization::Signature(a, b) => {
                 assert!(

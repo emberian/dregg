@@ -71,7 +71,7 @@ export interface Intent {
 // Token / Capability types
 // ---------------------------------------------------------------------------
 
-/** A capability token held in the wallet. */
+/** A capability token held in the cipherclerk. */
 export interface CapabilityToken {
   id: string;
   actions: string[];
@@ -103,13 +103,13 @@ export interface CapabilityToken {
 
 /** All message types in the extension protocol. */
 export type MessageType =
-  // Core wallet operations
+  // Core cipherclerk operations
   | "pyana:authorize"
   | "pyana:isConnected"
   | "pyana:canAuthorize"
   | "pyana:provision"
   | "pyana:subscribe"
-  // Popup-only wallet operations
+  // Popup-only cipherclerk operations
   | "pyana:getState"
   | "pyana:lock"
   | "pyana:unlock"
@@ -302,7 +302,7 @@ export interface StealthPrivateKeys {
   viewPrivkey: number[];
 }
 
-/** A stealth note matched to our wallet. */
+/** A stealth note matched to our cipherclerk. */
 export interface StealthNote {
   noteId: string;
   amount: number | null;
@@ -313,7 +313,7 @@ export interface StealthNote {
   receivedAt: number;
 }
 
-/** A log entry for wallet activity. */
+/** A log entry for cipherclerk activity. */
 export interface LogEntry {
   action: string;
   resource: string;
@@ -582,7 +582,7 @@ export interface PyanaWasm {
   /**
    * Canonical encrypted-intent post path. Routes through
    * `AgentWallet::post_encrypted_intent` in the SDK so the resulting
-   * `EncryptedIntent`'s `commitment_id` is bound to the wallet's
+   * `EncryptedIntent`'s `commitment_id` is bound to the cipherclerk's
    * Ed25519 public key. Returns the postcard-encoded `EncryptedIntent`
    * bytes alongside the content-addressed intent id (hex) and the
    * (optional) expiry that was set.
@@ -606,9 +606,9 @@ export interface PyanaWasm {
     agent_cell_id: string;
   };
   /**
-   * Canonical wallet-signed peer exchange. Routes through
+   * Canonical cipherclerk-signed peer exchange. Routes through
    * `AgentWallet::peer_exchange("default")` so the resulting
-   * `PeerStateTransition` is signed by the wallet's Ed25519 identity.
+   * `PeerStateTransition` is signed by the cipherclerk's Ed25519 identity.
    * `transition_bytes` is the postcard-encoded transition for direct
    * peer-to-peer exchange; the legacy `exchange_id` / `proof_commitment`
    * hex fields are retained for UI display parity.
@@ -622,7 +622,7 @@ export interface PyanaWasm {
     amount: number;
   };
   /**
-   * Canonical wallet-signed action-turn builder for federation-routed
+   * Canonical cipherclerk-signed action-turn builder for federation-routed
    * actions like `propose_routes` / `vote_on_proposal`. Routes through
    * `AgentWallet::make_action` + `AgentWallet::make_turn_for`, so the
    * action's `authorization` is an Ed25519 signature bound to the

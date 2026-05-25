@@ -88,7 +88,8 @@ fn roundtrip_issue_present_verify() {
     // Userspace anchor: emit the issuance action on the issuer cell.
     let cipherclerk = fixture_cipherclerk();
     let issuer_cell = fixture_cell(1);
-    let action = build_issue_credential_action(&cipherclerk, issuer_cell, &credential, 1, [0u8; 32]);
+    let action =
+        build_issue_credential_action(&cipherclerk, issuer_cell, &credential, 1, [0u8; 32]);
     assert_eq!(action.effects.len(), 3, "expected 3 effects");
     // First effect bumps the issuance counter (slot 3).
     match &action.effects[0] {
@@ -299,8 +300,12 @@ fn verify_action_records_accept_event() {
         ..Default::default()
     };
     let cipherclerk = fixture_cipherclerk();
-    let action =
-        build_verify_presentation_action(&cipherclerk, fixture_cell(2), &presentation, &verify_opts);
+    let action = build_verify_presentation_action(
+        &cipherclerk,
+        fixture_cell(2),
+        &presentation,
+        &verify_opts,
+    );
     match &action.effects[0] {
         Effect::EmitEvent { event, .. } => {
             assert_eq!(event.data.len(), 3);
@@ -344,8 +349,12 @@ fn verify_action_records_reject_event() {
         ..Default::default()
     };
     let cipherclerk = fixture_cipherclerk();
-    let action =
-        build_verify_presentation_action(&cipherclerk, fixture_cell(2), &presentation, &verify_opts);
+    let action = build_verify_presentation_action(
+        &cipherclerk,
+        fixture_cell(2),
+        &presentation,
+        &verify_opts,
+    );
     match &action.effects[0] {
         Effect::EmitEvent { event, .. } => {
             assert_eq!(event.data[1][31], 0, "accept flag must be zero on reject");

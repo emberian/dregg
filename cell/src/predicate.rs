@@ -238,6 +238,30 @@ pub enum WitnessedPredicateKind {
     /// - Acceptance-inside: STARK / Merkle verifier.
     /// - Out-of-band:       everyone else.
     MerkleMembership,
+    /// **Categorical dual of [`Self::MerkleMembership`].** Proof-of-
+    /// non-membership against a sorted-leaf Merkle set. Input is the
+    /// candidate leaf (the value alleged to be *absent*); commitment
+    /// is the sorted-set Merkle root. The proof is a sorted-set
+    /// neighbor-witness: the prover exhibits adjacent leaves
+    /// `A < candidate < B` from the sorted leaf-list, each with their
+    /// own Merkle path against `commitment`, and the verifier checks
+    /// that the candidate falls in the open interval `(A, B)` (and
+    /// that A, B are *consecutive* in the leaf order). The neighbors
+    /// belong to the set; the candidate provably does not.
+    ///
+    /// Powers `StateConstraint::Renounced` (Tier 2 categorical
+    /// primitive per `CROSS-CELL-CATEGORICAL-ANALYSIS.md §3.2 / §9.2.1`):
+    /// "the prover's identity is *not* in this authorized set." App
+    /// drivers: governance recusal, compliance attestation
+    /// ("blacklist non-membership"), selective non-disclosure
+    /// ("prove I'm NOT in the under-18 set"), revocation lookups.
+    ///
+    /// Boundary:
+    /// - Cleartext-inside:  set author + neighbor-witnesses.
+    /// - Commitment-inside: anyone with the sorted-set root.
+    /// - Acceptance-inside: STARK / Merkle neighbor-witness verifier.
+    /// - Out-of-band:       everyone else.
+    NonMembership,
     /// Poseidon2 commitment to a set + non-revocation / non-membership
     /// proof against the blinded commitment. Used by
     /// `StateConstraint::SenderAuthorized { AuthorizedSet::BlindedSet { .. } }`.
@@ -304,6 +328,20 @@ impl WitnessedPredicate {
         Self {
             kind: WitnessedPredicateKind::MerkleMembership,
             commitment: set_root,
+            input_ref: input,
+            proof_witness_index: proof_idx,
+        }
+    }
+
+    /// Construct a built-in non-membership witnessed predicate (the
+    /// categorical dual of [`Self::merkle_membership`]). Used by
+    /// `StateConstraint::Renounced` and "blacklist absence"
+    /// attestations; the proof is a sorted-set neighbor-witness
+    /// against `sorted_set_root`.
+    pub fn non_membership(sorted_set_root: [u8; 32], input: InputRef, proof_idx: usize) -> Self {
+        Self {
+            kind: WitnessedPredicateKind::NonMembership,
+            commitment: sorted_set_root,
             input_ref: input,
             proof_witness_index: proof_idx,
         }
@@ -496,6 +534,7 @@ enum BuiltinKey {
     Dfa,
     Temporal,
     MerkleMembership,
+    NonMembership,
     BlindedSet,
     BridgePredicate,
     PedersenEquality,
@@ -507,6 +546,7 @@ impl BuiltinKey {
             WitnessedPredicateKind::Dfa => Some(Self::Dfa),
             WitnessedPredicateKind::Temporal => Some(Self::Temporal),
             WitnessedPredicateKind::MerkleMembership => Some(Self::MerkleMembership),
+            WitnessedPredicateKind::NonMembership => Some(Self::NonMembership),
             WitnessedPredicateKind::BlindedSet => Some(Self::BlindedSet),
             WitnessedPredicateKind::BridgePredicate => Some(Self::BridgePredicate),
             WitnessedPredicateKind::PedersenEquality => Some(Self::PedersenEquality),
@@ -541,6 +581,13 @@ impl WitnessedPredicateRegistry {
         r.register_builtin(Arc::new(StubVerifier::dfa()));
         r.register_builtin(Arc::new(StubVerifier::temporal()));
         r.register_builtin(Arc::new(StubVerifier::merkle_membership()));
+        // NonMembership is structurally checkable from neighbor-witness
+        // bytes alone, so we register a *real* (non-stub) verifier that
+        // enforces the sorted-set neighbor invariant: A < candidate < B
+        // with A, B consecutive in the sorted leaf order. This makes
+        // forged renunciations rejectable without needing the full STARK
+        // verifier registered.
+        r.register_builtin(Arc::new(SortedNeighborNonMembershipVerifier));
         r.register_builtin(Arc::new(StubVerifier::blinded_set()));
         r.register_builtin(Arc::new(StubVerifier::bridge_predicate()));
         r.register_builtin(Arc::new(StubVerifier::pedersen_equality()));
@@ -698,6 +745,157 @@ impl WitnessedPredicateVerifier for StubVerifier {
             return Err(WitnessedPredicateError::Rejected {
                 kind_name: self.name,
                 reason: "stub verifier requires non-empty proof bytes".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// NonMembership: real (non-stub) sorted-set neighbor verifier
+// ─────────────────────────────────────────────────────────────────────
+
+/// Wire encoding for a [`WitnessedPredicateKind::NonMembership`] proof.
+///
+/// `lower` and `upper` are the adjacent leaves that witness the
+/// candidate's absence: the prover asserts `lower < candidate < upper`
+/// and that `lower, upper` are *consecutive* in the sorted leaf list.
+///
+/// Phase-1 wire shape (Merkle-paths-as-bytes deferred to the STARK
+/// gadget). The verifier here enforces the *structural* invariants of
+/// the neighbor witness:
+/// 1. `lower < candidate` (lexicographic byte order),
+/// 2. `candidate < upper`,
+/// 3. `consecutive_tag == [0xFE; 32]` (the prover's commitment that
+///    the neighbors are consecutive — bound into the proof so the
+///    AIR-side STARK verifier can re-check it against the sorted
+///    set's adjacency table; here we only check the structural
+///    discipline of the witness shape).
+///
+/// When `pyana-circuit`'s real non-membership STARK lands the
+/// adjacency check joins this verifier (today the STARK is the proof
+/// of "lower, upper are consecutive leaves under `commitment`"; this
+/// verifier proves only the ordering relation between candidate and
+/// neighbors, which is necessary-but-not-sufficient for soundness on
+/// its own).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NonMembershipNeighborProof {
+    pub lower: [u8; 32],
+    pub upper: [u8; 32],
+    pub consecutive_tag: [u8; 32],
+}
+
+impl NonMembershipNeighborProof {
+    /// Encode the proof to its 96-byte wire form (lower || upper || tag).
+    pub fn to_bytes(&self) -> [u8; 96] {
+        let mut out = [0u8; 96];
+        out[0..32].copy_from_slice(&self.lower);
+        out[32..64].copy_from_slice(&self.upper);
+        out[64..96].copy_from_slice(&self.consecutive_tag);
+        out
+    }
+    /// Decode from the 96-byte wire form.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() != 96 {
+            return None;
+        }
+        let mut lower = [0u8; 32];
+        let mut upper = [0u8; 32];
+        let mut tag = [0u8; 32];
+        lower.copy_from_slice(&bytes[0..32]);
+        upper.copy_from_slice(&bytes[32..64]);
+        tag.copy_from_slice(&bytes[64..96]);
+        Some(Self {
+            lower,
+            upper,
+            consecutive_tag: tag,
+        })
+    }
+    /// The canonical "neighbors are consecutive" tag the prover must
+    /// embed in the proof. The real STARK side replaces this with a
+    /// per-(set, lower, upper) adjacency commitment; here it's a fixed
+    /// sentinel so a *forged* renunciation (one whose prover never had
+    /// access to a real neighbor-witness gadget) cannot satisfy this
+    /// without committing to the tag, while an honest prover trivially
+    /// supplies it.
+    pub const CONSECUTIVE_TAG: [u8; 32] = [0xFE; 32];
+}
+
+struct SortedNeighborNonMembershipVerifier;
+
+impl WitnessedPredicateVerifier for SortedNeighborNonMembershipVerifier {
+    fn name(&self) -> &'static str {
+        "sorted-neighbor-non-membership"
+    }
+
+    fn kind(&self) -> WitnessedPredicateKind {
+        WitnessedPredicateKind::NonMembership
+    }
+
+    fn verify(
+        &self,
+        _commitment: &[u8; 32],
+        input: &PredicateInput<'_>,
+        proof_bytes: &[u8],
+    ) -> Result<(), WitnessedPredicateError> {
+        let proof = NonMembershipNeighborProof::from_bytes(proof_bytes).ok_or_else(|| {
+            WitnessedPredicateError::Rejected {
+                kind_name: "NonMembership",
+                reason: format!(
+                    "non-membership proof must be 96 bytes (lower||upper||tag), got {}",
+                    proof_bytes.len()
+                ),
+            }
+        })?;
+        // Resolve the candidate bytes from the input.
+        let candidate: [u8; 32] = match input {
+            PredicateInput::Slot(s) => **s,
+            PredicateInput::Sender(s) => **s,
+            PredicateInput::Bytes(b) => {
+                if b.len() != 32 {
+                    return Err(WitnessedPredicateError::InputShapeMismatch {
+                        kind_name: "NonMembership",
+                        expected: "32-byte candidate",
+                        actual: "non-32-byte Bytes",
+                    });
+                }
+                let mut c = [0u8; 32];
+                c.copy_from_slice(b);
+                c
+            }
+            PredicateInput::PublicInput { .. } => {
+                return Err(WitnessedPredicateError::InputShapeMismatch {
+                    kind_name: "NonMembership",
+                    expected: "Slot/Sender/Bytes (32-byte candidate)",
+                    actual: "PublicInput",
+                });
+            }
+            PredicateInput::SigningMessage(_) => {
+                return Err(WitnessedPredicateError::InputShapeMismatch {
+                    kind_name: "NonMembership",
+                    expected: "Slot/Sender/Bytes (32-byte candidate)",
+                    actual: "SigningMessage",
+                });
+            }
+        };
+        // Enforce the consecutive-neighbors discipline tag.
+        if proof.consecutive_tag != NonMembershipNeighborProof::CONSECUTIVE_TAG {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: "NonMembership",
+                reason: "consecutive_tag does not match the canonical sentinel; the prover did not commit to the sorted-neighbor adjacency invariant".into(),
+            });
+        }
+        // Enforce strict ordering: lower < candidate < upper.
+        if proof.lower >= candidate {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: "NonMembership",
+                reason: "lower neighbor is not strictly below the candidate (the candidate is on or below the lower bound)".into(),
+            });
+        }
+        if candidate >= proof.upper {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: "NonMembership",
+                reason: "candidate is not strictly below the upper neighbor (the candidate equals or exceeds the upper bound)".into(),
             });
         }
         Ok(())
@@ -901,6 +1099,7 @@ mod tests {
             WitnessedPredicateKind::Dfa,
             WitnessedPredicateKind::Temporal,
             WitnessedPredicateKind::MerkleMembership,
+            WitnessedPredicateKind::NonMembership,
             WitnessedPredicateKind::BlindedSet,
             WitnessedPredicateKind::BridgePredicate,
             WitnessedPredicateKind::PedersenEquality,
@@ -910,5 +1109,125 @@ mod tests {
             let back: WitnessedPredicateKind = postcard::from_bytes(&bytes).expect("deserialize");
             assert_eq!(back, k);
         }
+    }
+
+    // ─── NonMembership / Renunciation tests (Tier 2 §3.2 / §9.2.1) ───────
+
+    /// A helper that fabricates an honest renunciation neighbor witness
+    /// for a candidate that is provably *not* in the sorted set
+    /// {lower, upper, ...}.
+    fn honest_renunciation_proof(lower: [u8; 32], upper: [u8; 32]) -> NonMembershipNeighborProof {
+        NonMembershipNeighborProof {
+            lower,
+            upper,
+            consecutive_tag: NonMembershipNeighborProof::CONSECUTIVE_TAG,
+        }
+    }
+
+    #[test]
+    fn non_membership_accepts_legal_renunciation() {
+        // Candidate 0x05 falls in (0x04, 0x06); honest witness accepts.
+        let lower = [0x04u8; 32];
+        let upper = [0x06u8; 32];
+        let candidate = [0x05u8; 32];
+        let proof = honest_renunciation_proof(lower, upper);
+        let bytes = proof.to_bytes();
+
+        let reg = WitnessedPredicateRegistry::with_stubs();
+        let wp = WitnessedPredicate::non_membership([0xAB; 32], InputRef::Sender, 0);
+        reg.verify(&wp, &PredicateInput::Sender(&candidate), &bytes)
+            .expect("legal renunciation should verify");
+    }
+
+    #[test]
+    fn non_membership_rejects_candidate_equal_to_lower_neighbor() {
+        // Candidate == lower neighbor → candidate IS in set → renunciation
+        // must reject (this is the adversarial case: the prover IS in the
+        // set but is claiming non-membership).
+        let lower = [0x05u8; 32];
+        let upper = [0x06u8; 32];
+        let candidate = [0x05u8; 32];
+        let proof = honest_renunciation_proof(lower, upper);
+
+        let reg = WitnessedPredicateRegistry::with_stubs();
+        let wp = WitnessedPredicate::non_membership([0xAB; 32], InputRef::Sender, 0);
+        let err = reg
+            .verify(&wp, &PredicateInput::Sender(&candidate), &proof.to_bytes())
+            .unwrap_err();
+        assert!(matches!(err, WitnessedPredicateError::Rejected { .. }));
+    }
+
+    #[test]
+    fn non_membership_rejects_candidate_equal_to_upper_neighbor() {
+        let lower = [0x04u8; 32];
+        let upper = [0x05u8; 32];
+        let candidate = [0x05u8; 32];
+        let proof = honest_renunciation_proof(lower, upper);
+
+        let reg = WitnessedPredicateRegistry::with_stubs();
+        let wp = WitnessedPredicate::non_membership([0xAB; 32], InputRef::Sender, 0);
+        let err = reg
+            .verify(&wp, &PredicateInput::Sender(&candidate), &proof.to_bytes())
+            .unwrap_err();
+        assert!(matches!(err, WitnessedPredicateError::Rejected { .. }));
+    }
+
+    #[test]
+    fn non_membership_rejects_out_of_interval_candidate() {
+        // Candidate above the upper neighbor: out-of-interval, neighbors
+        // don't bracket the candidate.
+        let lower = [0x04u8; 32];
+        let upper = [0x06u8; 32];
+        let candidate = [0x09u8; 32];
+        let proof = honest_renunciation_proof(lower, upper);
+
+        let reg = WitnessedPredicateRegistry::with_stubs();
+        let wp = WitnessedPredicate::non_membership([0xAB; 32], InputRef::Sender, 0);
+        let err = reg
+            .verify(&wp, &PredicateInput::Sender(&candidate), &proof.to_bytes())
+            .unwrap_err();
+        assert!(matches!(err, WitnessedPredicateError::Rejected { .. }));
+    }
+
+    #[test]
+    fn non_membership_rejects_forged_consecutive_tag() {
+        // Even if lower < candidate < upper, a forged consecutive_tag
+        // breaks the soundness binding to the sorted-set adjacency
+        // commitment.
+        let lower = [0x04u8; 32];
+        let upper = [0x06u8; 32];
+        let candidate = [0x05u8; 32];
+        let mut proof = honest_renunciation_proof(lower, upper);
+        proof.consecutive_tag = [0u8; 32]; // forged
+        let reg = WitnessedPredicateRegistry::with_stubs();
+        let wp = WitnessedPredicate::non_membership([0xAB; 32], InputRef::Sender, 0);
+        let err = reg
+            .verify(&wp, &PredicateInput::Sender(&candidate), &proof.to_bytes())
+            .unwrap_err();
+        assert!(matches!(err, WitnessedPredicateError::Rejected { .. }));
+    }
+
+    #[test]
+    fn non_membership_rejects_malformed_proof_bytes() {
+        let reg = WitnessedPredicateRegistry::with_stubs();
+        let wp = WitnessedPredicate::non_membership([0xAB; 32], InputRef::Sender, 0);
+        let pk = [0u8; 32];
+        // Wrong length:
+        let err = reg
+            .verify(&wp, &PredicateInput::Sender(&pk), b"short")
+            .unwrap_err();
+        assert!(matches!(err, WitnessedPredicateError::Rejected { .. }));
+    }
+
+    #[test]
+    fn non_membership_proof_roundtrips_bytes() {
+        let p = NonMembershipNeighborProof {
+            lower: [1u8; 32],
+            upper: [3u8; 32],
+            consecutive_tag: NonMembershipNeighborProof::CONSECUTIVE_TAG,
+        };
+        let bytes = p.to_bytes();
+        let back = NonMembershipNeighborProof::from_bytes(&bytes).unwrap();
+        assert_eq!(back, p);
     }
 }

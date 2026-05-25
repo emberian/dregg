@@ -10866,4 +10866,3 @@ mod binding_proof_executor_tests {
         assert_ne!(h_a, h_c, "adding a binding proof must change the hash");
     }
 }
-

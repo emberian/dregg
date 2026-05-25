@@ -422,9 +422,7 @@ mod tests {
         VerifierFingerprint::SourceHash([0xB2; 32])
     }
     fn test_proving_system() -> ProvingSystemId {
-        ProvingSystemId::Plonky3BabyBearFri {
-            p3_rev: "test-rev",
-        }
+        ProvingSystemId::Plonky3BabyBearFri { p3_rev: "test-rev" }
     }
 
     fn registry_with_one_entry() -> (CustomEffectRegistry, [u8; 32], Vec<u8>) {
@@ -522,7 +520,10 @@ mod tests {
                 verifier,
             )
             .unwrap_err();
-        assert!(matches!(err, CustomEffectError::LayeredBindingMismatch { .. }));
+        assert!(matches!(
+            err,
+            CustomEffectError::LayeredBindingMismatch { .. }
+        ));
     }
 
     #[test]

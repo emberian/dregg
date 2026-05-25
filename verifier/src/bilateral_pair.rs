@@ -261,6 +261,7 @@ mod tests {
             emitted_events: vec![],
             executor_signature: None,
             finality: Default::default(),
+            was_encrypted: false,
         }
     }
 

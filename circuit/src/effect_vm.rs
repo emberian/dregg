@@ -1072,7 +1072,8 @@ pub mod pi {
     /// bits and OR'd with this discriminant.
     pub const UNILATERAL_ATTESTATION_KIND_CUSTOM_BASE: u32 = 0x4000_0000;
 
-    pub const BASE_COUNT: usize = UNILATERAL_ATTESTATIONS_ROOT_BASE + UNILATERAL_ATTESTATIONS_ROOT_LEN; // 173
+    pub const BASE_COUNT: usize =
+        UNILATERAL_ATTESTATIONS_ROOT_BASE + UNILATERAL_ATTESTATIONS_ROOT_LEN; // 173
     /// Elements per custom effect entry in PI (4 vk_hash + 4 proof_commit).
     pub const CUSTOM_ENTRY_SIZE: usize = 8;
 
@@ -6240,12 +6241,12 @@ mod tests {
             pi::SLOT_CAVEAT_MANIFEST_BASE + pi::MAX_SLOT_CAVEATS * pi::SLOT_CAVEAT_ENTRY_SIZE;
         assert!(slot_caveat_end <= pi::CROSS_EFFECT_DEPS_COUNT);
 
-        let cross_effect_end =
-            pi::CROSS_EFFECT_DEPS_BASE + pi::MAX_CROSS_EFFECT_DEPS * pi::CROSS_EFFECT_DEP_ENTRY_SIZE;
+        let cross_effect_end = pi::CROSS_EFFECT_DEPS_BASE
+            + pi::MAX_CROSS_EFFECT_DEPS * pi::CROSS_EFFECT_DEP_ENTRY_SIZE;
         assert!(cross_effect_end <= pi::WITNESS_INDEX_MAP_COUNT);
 
-        let witness_index_end =
-            pi::WITNESS_INDEX_MAP_BASE + pi::MAX_WITNESS_INDEX_ENTRIES * pi::WITNESS_INDEX_ENTRY_SIZE;
+        let witness_index_end = pi::WITNESS_INDEX_MAP_BASE
+            + pi::MAX_WITNESS_INDEX_ENTRIES * pi::WITNESS_INDEX_ENTRY_SIZE;
         // Witness-index manifest ends exactly at the unilateral count slot
         // (append-only — unilateral binding sits in slots 168..173).
         assert_eq!(witness_index_end, pi::UNILATERAL_ATTESTATIONS_COUNT);

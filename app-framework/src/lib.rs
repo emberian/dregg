@@ -58,13 +58,13 @@ pub mod hex;
 pub mod inbox_endpoint;
 pub mod middleware;
 pub mod multi_group;
-pub mod vk;
 pub mod persistence;
 pub mod queue_endpoint;
 pub mod ring_trade;
 pub mod server;
 pub mod starbridge;
 pub mod store;
+pub mod vk;
 
 /// Legacy module alias — `wallet` was renamed to `cipherclerk`. This
 /// alias keeps `pyana_app_framework::wallet::...` callers compiling

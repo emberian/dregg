@@ -1,5 +1,5 @@
 /**
- * Popup script for the Pyana wallet extension UI.
+ * Popup script for the Pyana cipherclerk extension UI.
  * Communicates with the background service worker via chrome.runtime.sendMessage.
  */
 
@@ -100,12 +100,12 @@ interface LogEntryDisplay {
 
 async function loadLog(): Promise<void> {
   const stored = await chrome.storage.local.get("pyana_cipherclerk");
-  const wallet = stored["pyana_cipherclerk"] as { log?: LogEntryDisplay[] } | undefined;
-  if (!wallet || !wallet.log || wallet.log.length === 0) {
+  const cc = stored["pyana_cipherclerk"] as { log?: LogEntryDisplay[] } | undefined;
+  if (!cc || !cc.log || cc.log.length === 0) {
     logContainer.innerHTML = '<div class="empty">No recent authorizations</div>';
     return;
   }
-  const entries = wallet.log.slice(-5).reverse();
+  const entries = cc.log.slice(-5).reverse();
   logContainer.innerHTML = entries.map(entry => {
     const time = new Date(entry.timestamp).toLocaleTimeString();
     const icon = entry.allowed ? "&#x2713;" : "&#x2717;";

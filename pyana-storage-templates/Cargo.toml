@@ -1,0 +1,38 @@
+[package]
+name = "pyana-storage-templates"
+version = "0.1.0"
+edition = "2024"
+description = "Cell-program reference templates for the storage primitives migrated per STORAGE-AS-CELL-PROGRAMS.md (§3.2–§3.5). One FactoryDescriptor + operation-scoped CellProgram::Cases per primitive — CapInbox, ProgrammableQueue, PubSubTopic, BlindedQueue, RelayOperator — exported as canonical `<name>_factory_descriptor()` functions. Mirrors `starbridge-apps/subscription/` (the proof-of-pattern for §3.1) and retires the operator-side `pyana_storage::{programmable, inbox, pubsub, blinded, operator, relay}` enforcement loop."
+
+# Per STORAGE-AS-CELL-PROGRAMS.md the storage primitives are not new
+# Effects — they are *cell-program patterns* whose invariants are
+# enforced by the executor on every turn. This crate authors the five
+# canonical templates the migration documents (§3.1 is already shipped
+# as `starbridge-apps/subscription/`; §§3.2-3.5 land here).
+#
+# Each template exports:
+#   - <name>_factory_descriptor() -> FactoryDescriptor
+#   - <name>_program() -> CellProgram (the operation-scoped Cases value)
+#   - <name>_child_program_vk() -> [u8; 32] (canonical VK)
+#   - per-method symbol() helpers
+#   - turn-builder helpers composing only existing Effect variants
+#   - slot-layout pub const SLOT indices
+#
+# No new Effect variants. No new wallet APIs. No storage-side
+# enforcement loops. The executor's `evaluate_with_meta` is the single
+# enforcement venue.
+
+[lib]
+name = "pyana_storage_templates"
+
+[dependencies]
+pyana-app-framework = { path = "../app-framework" }
+pyana-cell = { path = "../cell", default-features = false }
+pyana-types = { path = "../types" }
+
+blake3 = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

@@ -53,6 +53,7 @@ fn dummy_receipt(agent: CellId) -> TurnReceipt {
         emitted_events: vec![],
         executor_signature: None,
         finality: Default::default(),
+        was_encrypted: false,
     }
 }
 

@@ -124,6 +124,55 @@ pub struct SubmitTurnResponse {
     pub turn_hash: Option<String>,
 }
 
+// =============================================================================
+// EncryptedTurn submission types (AUDIT-privacy.md §11.2 wiring).
+//
+// Wire format: the request body is the postcard-serialized
+// `pyana_turn::EncryptedTurn` envelope as **raw bytes** (Content-Type:
+// application/octet-stream). The body is **not** wrapped in JSON because
+// the EncryptedTurn includes a ciphertext blob whose size makes hex/base64
+// inflation undesirable and because postcard is the canonical pyana wire
+// format for binary envelopes.
+//
+// The executor's X25519 unsealer secret is derived from the node's wallet
+// via `AgentCipherclerk::derive_symmetric_key("pyana-turn-unsealer-v1")`.
+// The matching public key is exposed via `GET /turns/encryption-key` so a
+// sender can encrypt to this executor.
+//
+// Boundary (BOUNDARIES.md §5):
+//   - **out-of-band**: gossip observers / route hops (see only ciphertext)
+//   - **cleartext-inside**: the executor holding the unsealer secret
+//   - the receipt's `was_encrypted: true` bit is the only fact disclosed
+//     after commit.
+// =============================================================================
+
+/// Response from `GET /turns/encryption-key` — the X25519 public key
+/// the executor accepts `EncryptedTurn`s under. Senders use this with
+/// `EncryptedTurn::encrypt_for_executor`.
+#[derive(Serialize)]
+pub struct TurnEncryptionKeyResponse {
+    /// 64 hex chars — the executor's static X25519 public key.
+    pub executor_x25519_public: String,
+    /// Domain-string used to derive the secret from the wallet seed.
+    /// Lets verifiers reconstruct the deployment's key-derivation path.
+    pub derivation_domain: String,
+}
+
+/// Response from `POST /turns/submit-encrypted`.
+#[derive(Serialize)]
+pub struct SubmitEncryptedTurnResponse {
+    pub accepted: bool,
+    /// On success, hex-encoded BLAKE3 hash of the recovered inner turn.
+    /// On reject, contains "rejected: <reason>". The recovered turn hash
+    /// is itself derivable by anyone who can decrypt; it is NOT a privacy
+    /// leak (the encrypted-turn commitment already binds to this hash).
+    pub turn_hash: Option<String>,
+    /// Whether the receipt's `was_encrypted` bit was set (always `true`
+    /// on success; included so the caller can confirm the encrypted path
+    /// was actually taken).
+    pub was_encrypted: bool,
+}
+
 #[derive(Serialize)]
 pub struct CellResponse {
     pub id: String,
@@ -953,6 +1002,21 @@ pub fn router(
         )
         .route("/turn/fast-path", post(post_fast_path_lock))
         .route("/turn/certificate", post(post_fast_path_certificate))
+        // AUDIT-privacy.md §11.2 wiring: encrypted-turn submission +
+        // executor public-key discovery. The submit endpoint pulls the
+        // executor's X25519 secret from the wallet, hands it to
+        // `TurnExecutor::apply_encrypted_turn`, and returns the
+        // post-commit receipt's was_encrypted bit.
+        .route(
+            "/turns/submit-encrypted",
+            post({
+                let limiter = turn_limiter.clone();
+                move |connect_info, state, body| {
+                    post_submit_encrypted_turn(connect_info, state, limiter, body)
+                }
+            }),
+        )
+        .route("/turns/encryption-key", get(get_turn_encryption_key))
         .route("/turn/submit-conditional", post(post_submit_conditional))
         .route("/turn/resolve-conditional", post(post_resolve_conditional))
         .route("/turn/pending", get(get_pending_conditionals))
@@ -1318,6 +1382,132 @@ async fn post_submit_turn(
             Ok(Json(SubmitTurnResponse {
                 accepted: false,
                 turn_hash: None,
+            }))
+        }
+    }
+}
+
+/// Domain string used to derive the executor's X25519 unsealer secret from
+/// the wallet seed via `AgentCipherclerk::derive_symmetric_key`. Stable
+/// across deployments — a single node always presents the same public key
+/// for a given wallet, which is required so senders can cache the recipient
+/// key across reconnects.
+const TURN_UNSEALER_DOMAIN: &str = "pyana-turn-unsealer-v1";
+
+/// GET /turns/encryption-key — return the executor's static X25519 public
+/// key (the value senders pass as `recipient_public` to
+/// `EncryptedTurn::encrypt_for_executor`). AUDIT-privacy.md §11.2: this is
+/// the production discovery hop that closes the encrypted-turn pipeline.
+async fn get_turn_encryption_key(
+    State(state): State<NodeState>,
+) -> Result<Json<TurnEncryptionKeyResponse>, StatusCode> {
+    let s = state.read().await;
+    if !s.unlocked {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let secret = s.wallet.derive_symmetric_key(TURN_UNSEALER_DOMAIN);
+    let public = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(secret));
+    Ok(Json(TurnEncryptionKeyResponse {
+        executor_x25519_public: hex_encode(public.as_bytes()),
+        derivation_domain: TURN_UNSEALER_DOMAIN.to_string(),
+    }))
+}
+
+/// POST /turns/submit-encrypted — accept a postcard-encoded
+/// `pyana_turn::EncryptedTurn` envelope, decrypt with the wallet-derived
+/// X25519 unsealer secret, and apply via
+/// `TurnExecutor::apply_encrypted_turn`. AUDIT-privacy.md §11.2: closes
+/// the "encryption claim unreachable from production" gap.
+///
+/// Wire format: `Content-Type: application/octet-stream`, body =
+/// `postcard::to_stdvec(&encrypted_turn)` bytes.
+///
+/// Boundary contract (BOUNDARIES.md §5):
+/// - **out-of-band** to gossip / wire observers (only ciphertext visible)
+/// - **cleartext-inside** the executor holding the unsealer secret
+/// - the produced receipt's `was_encrypted = true` flag is the **only**
+///   metadata bit disclosed; it does not leak inner-turn content.
+async fn post_submit_encrypted_turn(
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    State(state): State<NodeState>,
+    limiter: RateLimiter,
+    body: axum::body::Bytes,
+) -> Result<Json<SubmitEncryptedTurnResponse>, StatusCode> {
+    // Reuse the cleartext-turn rate limiter — encrypted turns shouldn't
+    // get a privacy-flavored quota bypass.
+    if !limiter.check(addr.ip()).await {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    crate::metrics::inc_turns_submitted();
+    let start = Instant::now();
+
+    // Decode the envelope. A malformed wire body returns 400; no further
+    // executor work is done.
+    let encrypted: pyana_turn::EncryptedTurn = match postcard::from_bytes(&body) {
+        Ok(e) => e,
+        Err(_) => return Err(StatusCode::BAD_REQUEST),
+    };
+
+    let mut s = state.write().await;
+    if !s.unlocked {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    // Derive the executor's unsealer secret from the wallet. Held in a
+    // local for the lifetime of this handler only.
+    let sealer_secret = s.wallet.derive_symmetric_key(TURN_UNSEALER_DOMAIN);
+
+    let executor = pyana_turn::TurnExecutor::new(pyana_turn::ComputronCosts::default());
+
+    let result = executor.apply_encrypted_turn(&encrypted, &sealer_secret, &mut s.ledger);
+
+    match result {
+        Ok(mut receipt) => {
+            crate::metrics::inc_turns_executed("committed");
+            crate::metrics::record_turn_execution_duration(start.elapsed().as_secs_f64());
+            crate::metrics::set_ledger_cell_count(s.ledger.len() as f64);
+
+            // Solo mode: record nullifier + tentative finality, same as
+            // the cleartext path (post_submit_turn). The encrypted path
+            // doesn't change consensus semantics — only privacy.
+            let turn_hash_bytes = receipt.turn_hash;
+            if let Some(ref mut solo) = s.solo_consensus {
+                if solo.is_solo {
+                    receipt.finality = pyana_turn::Finality::Tentative;
+                    let height = solo.height;
+                    let _ = solo
+                        .nullifier_log
+                        .insert(turn_hash_bytes, turn_hash_bytes, height);
+                    solo.advance_height();
+                }
+            }
+
+            let turn_hash = hex_encode(&turn_hash_bytes);
+            let was_encrypted = receipt.was_encrypted;
+            s.wallet.append_receipt(receipt);
+
+            drop(s);
+
+            // Emit receipt event (same surface as cleartext-turn commits).
+            state.emit(crate::state::NodeEvent::Receipt {
+                hash: turn_hash.clone(),
+            });
+
+            Ok(Json(SubmitEncryptedTurnResponse {
+                accepted: true,
+                turn_hash: Some(turn_hash),
+                was_encrypted,
+            }))
+        }
+        Err(reason) => {
+            crate::metrics::inc_turns_executed("rejected");
+            crate::metrics::record_turn_execution_duration(start.elapsed().as_secs_f64());
+            drop(s);
+            Ok(Json(SubmitEncryptedTurnResponse {
+                accepted: false,
+                turn_hash: Some(format!("rejected: {reason}")),
+                was_encrypted: false,
             }))
         }
     }

@@ -1,0 +1,38 @@
+{
+  "scenario": "federation_attestation",
+  "summary": "F1 and F2 produce AttestedRoots over their respective blocklace tips; both federations cross-register descriptors; tampered descriptors are rejected at registration; federation_ids are committee-derived (audit F1).",
+  "actors": ["F1 committee (3 nodes)", "F2 committee (3 nodes)"],
+
+  "must_pass": [
+    "F1_federation_roots_endpoint_responds",
+    "F2_federation_roots_endpoint_responds",
+    "F1_has_F2_descriptor_on_disk",
+    "F2_has_F1_descriptor_on_disk",
+    "F1_committee_epoch_matches_across_federations",
+    "F1_committee_size_consistent_with_NODES_PER_FED",
+    "federation_ids_are_committee_derived_32_byte_hex",
+    "federation_F1_and_F2_have_distinct_ids",
+    "every_F1_node_knows_F2",
+    "every_F2_node_knows_F1"
+  ],
+
+  "must_not_pass": [
+    "tampered_federation_descriptor_rejected"
+  ],
+
+  "must_not_pass_explanation": {
+    "tampered_federation_descriptor_rejected": "Append a fresh validator to F1's descriptor while keeping the declared federation_id. The register-federation command at node/src/main.rs:884 must recompute H(sorted_pubkeys || epoch) and refuse to write the descriptor when the recomputed id mismatches the declared one. The scenario records this assertion `true` when the CLI's exit code is non-zero (rejection occurred)."
+  },
+
+  "blocked_on": [
+    "Lane D: FederationReceipt::with_threshold_qc lift on commit (AUDIT-protocol-composition.md seam 6) — the /federation/roots endpoint exposes the AttestedRoot but not the FederationReceipt today.",
+    "AttestedRoot's blocklace_finality field (AUDIT-federation.md F3) — when this lands, expand must_pass to include 'attested_root_carries_blocklace_finality'."
+  ],
+
+  "documented_gaps": [
+    "Solo federation_mode runs with threshold=1; the n>=2 must_pass for committee_threshold is in a sibling scenario.",
+    "The descriptor exchange is bilateral by file copy at startup; production cross-federation discovery is out of scope."
+  ],
+
+  "improve_dont_degrade": "When lane D lands, add to must_pass: attested_root_signature_verifies_against_committee, attested_root_carries_blocklace_finality, attested_root_federation_id_binding_holds. Add to must_not_pass: equivocating_federation_two_roots_same_height_undetected, federation_receipt_with_tampered_id_accepted, stale_committee_epoch_receipt_accepted_after_rotation."
+}

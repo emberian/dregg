@@ -522,7 +522,7 @@ impl Default for Finality {
 }
 
 /// A receipt produced when a turn is committed, providing cryptographic evidence.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct TurnReceipt {
     pub turn_hash: [u8; 32],
     pub forest_hash: [u8; 32],
@@ -569,6 +569,15 @@ pub struct TurnReceipt {
     /// `Tentative` when produced by a solo-mode node awaiting peer validation.
     #[serde(default)]
     pub finality: Finality,
+    /// True when this receipt was produced by decrypting an `EncryptedTurn`
+    /// envelope (the Layer-2 privacy path); false for cleartext-`Turn`
+    /// submissions. AUDIT-privacy.md §11.2 / BOUNDARIES.md §5: external
+    /// verifiers may want to know "this turn arrived over the encrypted
+    /// path" without learning anything about its content. The flag itself
+    /// is the *only* metadata bit disclosed — it is bound by
+    /// `receipt_hash` so a malicious executor cannot strip or forge it.
+    #[serde(default)]
+    pub was_encrypted: bool,
 }
 
 impl TurnReceipt {
@@ -638,6 +647,10 @@ impl TurnReceipt {
                 hasher.update(&[0x02]);
             }
         }
+        // Privacy-path disclosure binding: was this receipt produced by
+        // decrypting an `EncryptedTurn` envelope? Bound so an executor cannot
+        // strip / forge this bit without breaking the receipt hash chain.
+        hasher.update(&[if self.was_encrypted { 0x01 } else { 0x00 }]);
         *hasher.finalize().as_bytes()
     }
 

@@ -1190,11 +1190,7 @@ pub fn register_nameservice_route_action(
         cell: namespace_cell,
         event: Event::new(
             symbol("service-registered"),
-            vec![
-                path_hash,
-                target_field,
-                nameservice_resolve_target,
-            ],
+            vec![path_hash, target_field, nameservice_resolve_target],
         ),
     }];
 
@@ -1552,7 +1548,8 @@ mod tests {
         let cipherclerk = test_cipherclerk();
         let cell = test_cell();
         let prior_root = blake3_field(b"prior-proposal-root");
-        let action = build_vote_on_proposal_action(&cipherclerk, cell, prior_root, VoteKind::Approve, 1);
+        let action =
+            build_vote_on_proposal_action(&cipherclerk, cell, prior_root, VoteKind::Approve, 1);
 
         assert_eq!(action.method, symbol("vote_on_proposal"));
         assert_eq!(action.effects.len(), 2);
@@ -1574,8 +1571,14 @@ mod tests {
         let table = dummy_route_table(&[("/treasury/*", "treasury_v2")]);
         let committee = dummy_committee_root();
         let proof = b"threshold-sig-bytes-stub".to_vec();
-        let action =
-            build_commit_table_update_action(&cipherclerk, cell, &table, 1, proof.clone(), committee);
+        let action = build_commit_table_update_action(
+            &cipherclerk,
+            cell,
+            &table,
+            1,
+            proof.clone(),
+            committee,
+        );
 
         assert_eq!(action.method, symbol("commit_table_update"));
         assert_eq!(action.effects.len(), 4, "3 SetField + 1 EmitEvent");
@@ -1955,13 +1958,8 @@ mod tests {
         let target_cell = CellId::from_bytes([77u8; 32]);
         let ns_resolve = blake3_field(b"pyana://cell/bob.dev-actual-target");
 
-        let action = register_nameservice_route_action(
-            &wallet,
-            cell,
-            "/bob.dev",
-            target_cell,
-            ns_resolve,
-        );
+        let action =
+            register_nameservice_route_action(&wallet, cell, "/bob.dev", target_cell, ns_resolve);
 
         assert_eq!(action.method, symbol("register_service"));
         assert_eq!(action.effects.len(), 1);

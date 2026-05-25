@@ -317,7 +317,9 @@ async fn register_name(
             let self_action = state
                 .cipherclerk
                 .make_self_action("register_name", registration_action.effects.clone());
-            let submission = state.executor.submit_action(&state.cipherclerk, self_action);
+            let submission = state
+                .executor
+                .submit_action(&state.cipherclerk, self_action);
 
             match submission {
                 Ok(receipt) => (

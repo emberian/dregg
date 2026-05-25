@@ -78,7 +78,10 @@ async fn get_json(app: &axum::Router, uri: &str) -> (StatusCode, Value) {
 /// Issue a delegation envelope from `issuer` to `voter_pk` granting the
 /// "vote/submit" capability. This mirrors what a real eligibility-issuer
 /// service would produce.
-fn issue_eligibility_credential(issuer: &mut AgentCipherclerk, voter_pk: PublicKey) -> DelegatedToken {
+fn issue_eligibility_credential(
+    issuer: &mut AgentCipherclerk,
+    voter_pk: PublicKey,
+) -> DelegatedToken {
     let root_token = issuer.mint_token(&[0x99; 32], "vote");
     let restrictions = Attenuation {
         services: vec![("vote".into(), "submit".into())],

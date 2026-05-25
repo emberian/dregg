@@ -152,9 +152,9 @@
 //! state. See the README for the dependency note.
 
 use pyana_app_framework::{
-    Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellId, CellMode, ChildVkStrategy,
-    Effect, Event, FactoryDescriptor, FieldConstraint, FieldElement, InspectorDescriptor,
-    StarbridgeAppContext, StateConstraint, canonical_program_vk, symbol,
+    Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellId, CellMode,
+    ChildVkStrategy, Effect, Event, FactoryDescriptor, FieldConstraint, FieldElement,
+    InspectorDescriptor, StarbridgeAppContext, StateConstraint, canonical_program_vk, symbol,
 };
 use pyana_cell::program::{AuthorizedSet, CellProgram, TransitionCase, TransitionGuard};
 
@@ -786,8 +786,7 @@ pub fn build_bounty_state_publish_action(
     new_state: BountyState,
     actor_pk_hash: &[u8; 32],
 ) -> Action {
-    let payload_hash =
-        bounty_state_payload_hash(bounty_id, prior_state, new_state, actor_pk_hash);
+    let payload_hash = bounty_state_payload_hash(bounty_id, prior_state, new_state, actor_pk_hash);
     build_publish_action(
         cipherclerk,
         subscription_cell,
@@ -1052,7 +1051,8 @@ mod tests {
     fn consume_action_shape() {
         let cipherclerk = test_cipherclerk();
         let cell = test_cell();
-        let action = build_consume_action(&cipherclerk, cell, u64_field(1), blake3_field(b"payload"));
+        let action =
+            build_consume_action(&cipherclerk, cell, u64_field(1), blake3_field(b"payload"));
 
         assert_eq!(action.method, symbol("consume"));
         assert_eq!(action.effects.len(), 2);
@@ -1293,24 +1293,12 @@ mod tests {
     fn bounty_state_payload_hash_distinguishes_transitions() {
         let id = [9u8; 32];
         let actor = [11u8; 32];
-        let claim = bounty_state_payload_hash(
-            &id,
-            BountyState::Posted,
-            BountyState::Claimed,
-            &actor,
-        );
-        let fulfill = bounty_state_payload_hash(
-            &id,
-            BountyState::Claimed,
-            BountyState::Fulfilled,
-            &actor,
-        );
-        let settle = bounty_state_payload_hash(
-            &id,
-            BountyState::Fulfilled,
-            BountyState::Settled,
-            &actor,
-        );
+        let claim =
+            bounty_state_payload_hash(&id, BountyState::Posted, BountyState::Claimed, &actor);
+        let fulfill =
+            bounty_state_payload_hash(&id, BountyState::Claimed, BountyState::Fulfilled, &actor);
+        let settle =
+            bounty_state_payload_hash(&id, BountyState::Fulfilled, BountyState::Settled, &actor);
         assert_ne!(claim, fulfill);
         assert_ne!(fulfill, settle);
         assert_ne!(claim, settle);
@@ -1319,18 +1307,10 @@ mod tests {
     #[test]
     fn bounty_state_payload_hash_distinguishes_actors() {
         let id = [9u8; 32];
-        let a1 = bounty_state_payload_hash(
-            &id,
-            BountyState::Posted,
-            BountyState::Claimed,
-            &[1u8; 32],
-        );
-        let a2 = bounty_state_payload_hash(
-            &id,
-            BountyState::Posted,
-            BountyState::Claimed,
-            &[2u8; 32],
-        );
+        let a1 =
+            bounty_state_payload_hash(&id, BountyState::Posted, BountyState::Claimed, &[1u8; 32]);
+        let a2 =
+            bounty_state_payload_hash(&id, BountyState::Posted, BountyState::Claimed, &[2u8; 32]);
         assert_ne!(a1, a2);
     }
 

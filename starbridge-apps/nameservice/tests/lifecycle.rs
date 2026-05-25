@@ -25,7 +25,9 @@
 //! together) — duplicating that wiring here would just couple this
 //! crate to an executor it does not depend on.
 
-use pyana_app_framework::{AgentCipherclerk, AppCipherclerk, Authorization, CellId, Effect, FieldElement};
+use pyana_app_framework::{
+    AgentCipherclerk, AppCipherclerk, Authorization, CellId, Effect, FieldElement,
+};
 use pyana_cell::{CellProgram, ProgramError, StateConstraint};
 use starbridge_nameservice::{
     EXPIRY_SLOT, NAME_FACTORY_VK, NAME_HASH_SLOT, OWNER_HASH_SLOT, RESOLVE_TARGET_SLOT,
@@ -257,7 +259,13 @@ fn adversarial_double_revoke_rejected_by_write_once_on_revoked_slot() {
 #[test]
 fn auth_register_action_carries_real_signature() {
     let cipherclerk = wallet_with_seed(0xAA);
-    let action = build_register_action(&cipherclerk, registry_cell(), "alice.pyana", [3u8; 32], 1_000);
+    let action = build_register_action(
+        &cipherclerk,
+        registry_cell(),
+        "alice.pyana",
+        [3u8; 32],
+        1_000,
+    );
     match action.authorization {
         Authorization::Signature(a, b) => {
             assert!(

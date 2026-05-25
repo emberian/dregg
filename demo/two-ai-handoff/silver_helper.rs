@@ -762,6 +762,7 @@ fn cmd_make_bilateral_bundle(
         emitted_events: vec![],
         executor_signature: None,
         finality: Default::default(),
+        was_encrypted: false,
     };
 
     let alice_wr = fabricate_witnessed_receipt(&turn, &alice_cell, dummy_receipt(alice_cell));

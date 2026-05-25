@@ -957,7 +957,8 @@ mod tests {
         let cipherclerk = test_cipherclerk();
         let new_root = [0xa5u8; 32];
         let credential_id = [0x55u8; 32];
-        let action = build_revoke_credential_action(&cipherclerk, test_cell(), credential_id, new_root);
+        let action =
+            build_revoke_credential_action(&cipherclerk, test_cell(), credential_id, new_root);
         assert_eq!(action.effects.len(), 2);
         match &action.effects[0] {
             Effect::SetField { value, index, .. } => {
@@ -1039,7 +1040,10 @@ mod tests {
         let c3 = credential_set_commitment(issuer_b, &kyc_schema());
         let c4 = credential_set_commitment(issuer_a, &gov_id_schema());
         assert_eq!(c1, c2, "commitment is deterministic");
-        assert_ne!(c1, c3, "different issuer cells produce distinct commitments");
+        assert_ne!(
+            c1, c3,
+            "different issuer cells produce distinct commitments"
+        );
         assert_ne!(c1, c4, "different schemas produce distinct commitments");
     }
 

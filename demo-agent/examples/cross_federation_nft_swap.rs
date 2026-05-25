@@ -379,6 +379,7 @@ fn main() {
         emitted_events: vec![],
         executor_signature: None,
         finality: Default::default(),
+        was_encrypted: false,
     };
 
     // Use resolve_condition to demonstrate the timeout logic
@@ -440,6 +441,7 @@ fn main() {
         emitted_events: vec![],
         executor_signature: None,
         finality: Default::default(),
+        was_encrypted: false,
     };
 
     // Fresh conditional for this test

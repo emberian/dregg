@@ -1,0 +1,35 @@
+{
+  "scenario": "intent_match_cross_fed",
+  "summary": "Trustless intent submitted on F1, decrypted by F1's committee, settles against a cell on F2. The substrate exposes /intents/trustless on F1, /intents listing, /intents/encrypted, and /api/cells on F2.",
+  "actors": ["alice (intent submitter, F1)", "F1 committee (threshold-decrypter)", "bob (settlement target, F2)", "F2 committee (settlement ratifier)"],
+
+  "must_pass": [
+    "F1_trustless_intent_route_present",
+    "F1_intents_listing_responds",
+    "F1_encrypted_intent_route_present",
+    "F2_cells_listing_responds",
+    "F1_committee_threshold_at_least_2",
+    "intent_routing_is_cross_federation"
+  ],
+
+  "must_not_pass": [
+    "tampered_intent_collapsed_to_same_federation_detected"
+  ],
+
+  "must_not_pass_explanation": {
+    "tampered_intent_collapsed_to_same_federation_detected": "If an adversary edits submitter_federation := target_federation, the resulting intent is no longer cross-federation and the executor's cross-fed-settlement predicate (submitter ≠ target) should reject. The scenario records `true` when the equality is observable in the JSON; executor enforcement is in intent/src/solver.rs."
+  },
+
+  "blocked_on": [
+    "intent/src/trustless.rs: threshold-decrypter quorum vote (currently scaffolded, not driven end-to-end here)",
+    "intent/src/solver.rs: cross-federation settlement routing — does decryption on F1 emit a SignedTurn that travels to F2 over CapTP, or does F2 pull?",
+    "Lane B/CapTP: cross-fed Turn delivery wire route (post-decryption hand-off)"
+  ],
+
+  "documented_gaps": [
+    "The scenario only probes route presence and routing-field semantics. A real encrypted-intent submission with a verified threshold-decrypt + cross-fed settlement is the next milestone.",
+    "F1_committee_threshold_at_least_2 is asserted against genesis.json's threshold field. The genesis derives this from quorum_threshold(N=3) = 3, which is correct for full-BFT mode; solo mode uses threshold=1 at runtime regardless. When solo mode is replaced with full mode (FEDERATION_MODE=full to start_devnet.sh), this assertion exercises the BFT path."
+  ],
+
+  "improve_dont_degrade": "When the intent lane integrates end-to-end, add to must_pass: trustless_intent_accepted_under_threshold_decrypt_quorum, decrypted_action_routed_to_F2, F2_cell_settled_with_correct_amount, settlement_receipt_links_to_F1_intent_hash. Add to must_not_pass: subquorum_decryption_accepted, intent_targeting_wrong_federation_settled, intent_replayed_on_F1_after_settlement_re_executes."
+}

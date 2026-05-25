@@ -1153,7 +1153,119 @@ impl TurnExecutor {
 
         // 4. Dispatch to the standard execution path. All the usual
         //    nullifier-set, ledger, and conservation gates apply.
-        self.execute(&turn, ledger)
+        //
+        // BOUNDARIES.md §5: flip the `was_encrypted` bit on the receipt
+        // (cleartext-inside the executor; bound into `receipt_hash` and
+        // the executor signature). External observers see only that
+        // some receipt was produced via the privacy path — nothing about
+        // the inner turn's content leaks through this flag.
+        let result = self.execute(&turn, ledger);
+        match result {
+            TurnResult::Committed {
+                ledger_delta,
+                mut receipt,
+                computrons_used,
+            } => {
+                receipt.was_encrypted = true;
+                // Re-sign so the executor signature covers the new bit.
+                // (The signature's canonical message doesn't currently include
+                // `was_encrypted`, but `receipt_hash` does — and any downstream
+                // verifier that recomputes `receipt_hash` would fail without
+                // this resign step.)
+                receipt.executor_signature = self.maybe_sign_receipt(&receipt);
+                // Rebind the per-agent chain head to the post-flip hash.
+                self.record_receipt_hash(receipt.agent, receipt.receipt_hash());
+                TurnResult::Committed {
+                    ledger_delta,
+                    receipt,
+                    computrons_used,
+                }
+            }
+            other => other,
+        }
+    }
+
+    /// **Canonical** encrypted-turn entry point (AUDIT-privacy.md §11.2):
+    /// decrypt an `EncryptedTurn` with the supplied X25519 unsealer secret,
+    /// recover the underlying `Turn`, apply it through the normal executor,
+    /// and return the `TurnReceipt` (with `was_encrypted = true`).
+    ///
+    /// This is the production wiring node-level callers (HTTP / MCP) hit
+    /// when forwarding an `EncryptedTurn` envelope. Unlike
+    /// [`Self::execute_encrypted_turn`] (which mutates the executor's
+    /// `turn_decryption_keypair`), this method accepts the sealer secret
+    /// explicitly — useful when the secret is held in an HSM-style wrapper
+    /// or when a single executor process serves multiple sealer pairs.
+    ///
+    /// The `sealer_secret` is the 32-byte X25519 static secret (`unsealer_secret`
+    /// in `cell/src/seal.rs` terminology). The public key is recomputed from it
+    /// so the decrypt path can verify the BLAKE3-key-derivation salt.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TurnError::InvalidEffect { reason }` when:
+    /// - the envelope's metadata fails self-consistency (`verify_metadata`),
+    /// - decryption fails (wrong key / tampered ciphertext → Poly1305 MAC fail),
+    /// - the decrypted `turn.agent` does not match `envelope.agent` (binding
+    ///   the public-side fee/nonce preflight to the actual turn body), or
+    /// - the inner turn was rejected by `execute` (insufficient fee, replayed
+    ///   nullifier, broken receipt chain, etc.).
+    pub fn apply_encrypted_turn(
+        &self,
+        encrypted: &crate::encrypted::EncryptedTurn,
+        sealer_secret: &[u8; 32],
+        ledger: &mut Ledger,
+    ) -> Result<TurnReceipt, TurnError> {
+        // 1. Metadata consistency.
+        encrypted
+            .verify_metadata()
+            .map_err(|e| TurnError::InvalidEffect {
+                reason: format!("encrypted turn metadata invalid: {:?}", e),
+            })?;
+
+        // 2. Recompute the public key from the secret and decrypt.
+        let public = {
+            let pk =
+                x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(*sealer_secret));
+            *pk.as_bytes()
+        };
+        let turn = encrypted
+            .decrypt_for_executor(sealer_secret, &public)
+            .map_err(|e| TurnError::InvalidEffect {
+                reason: format!("encrypted turn decryption failed: {:?}", e),
+            })?;
+
+        // 3. Agent binding: the cleartext envelope.agent (used by the
+        //    federation for fee/nonce preflight) must equal the inner
+        //    turn.agent the executor would actually charge.
+        if turn.agent != encrypted.agent {
+            return Err(TurnError::InvalidEffect {
+                reason: "encrypted turn agent mismatch: decrypted turn.agent != envelope.agent"
+                    .to_string(),
+            });
+        }
+
+        // 4. Apply through the standard execute path.
+        match self.execute(&turn, ledger) {
+            TurnResult::Committed { mut receipt, .. } => {
+                receipt.was_encrypted = true;
+                receipt.executor_signature = self.maybe_sign_receipt(&receipt);
+                // Rebind the per-agent chain head to the post-flip hash so
+                // the next turn's `previous_receipt_hash` check uses the
+                // committed value.
+                self.record_receipt_hash(receipt.agent, receipt.receipt_hash());
+                Ok(receipt)
+            }
+            TurnResult::Rejected { reason, .. } => Err(reason),
+            TurnResult::Expired => Err(TurnError::InvalidEffect {
+                reason: "encrypted turn expired before application".to_string(),
+            }),
+            TurnResult::Pending => Err(TurnError::InvalidEffect {
+                reason: "encrypted turn returned Pending (conditional encrypted turns \
+                         are out of scope for apply_encrypted_turn)"
+                    .to_string(),
+            }),
+        }
     }
 
     /// Sign `receipt.receipt_hash()` with the executor's signing key if one
@@ -2198,17 +2310,15 @@ impl TurnExecutor {
 
             // Reconstruct expected (fields, amounts) from the executor's
             // view of the effect's typed parameters.
-            let (exp_fields, exp_amounts) =
-                Self::extract_binding_params(eff, &bp.schema_id).ok_or_else(|| {
+            let (exp_fields, exp_amounts) = Self::extract_binding_params(eff, &bp.schema_id)
+                .ok_or_else(|| {
                     TurnError::InvalidExecutionProof(format!(
                         "effect_binding_proofs[{}]: effect at index {} does not match \
                          schema_id {:?} (schema/variant mismatch)",
                         i, bp.effect_index, bp.schema_id
                     ))
                 })?;
-            if exp_fields.len() != schema.field_count
-                || exp_amounts.len() != schema.amount_count
-            {
+            if exp_fields.len() != schema.field_count || exp_amounts.len() != schema.amount_count {
                 return Err(TurnError::InvalidExecutionProof(format!(
                     "effect_binding_proofs[{}]: schema {:?} expects {} fields + \
                      {} amounts, executor reconstruction got {} + {}",
@@ -2247,14 +2357,12 @@ impl TurnExecutor {
                     i, e
                 ))
             })?;
-            eaa::verify_effect_action(schema, &exp_fields, &exp_amounts, &proof).map_err(
-                |e| {
-                    TurnError::ProofVerificationFailed(format!(
-                        "effect_binding_proofs[{}] (schema {:?}, effect {}): {}",
-                        i, bp.schema_id, bp.effect_index, e
-                    ))
-                },
-            )?;
+            eaa::verify_effect_action(schema, &exp_fields, &exp_amounts, &proof).map_err(|e| {
+                TurnError::ProofVerificationFailed(format!(
+                    "effect_binding_proofs[{}] (schema {:?}, effect {}): {}",
+                    i, bp.schema_id, bp.effect_index, e
+                ))
+            })?;
         }
 
         // ---- 2) Cross-effect within-turn chain pinning ----
@@ -2278,24 +2386,22 @@ impl TurnExecutor {
                     i, dep.consumer_index
                 ))
             })?;
-            let prod_out = Self::extract_named_field_32b(prod, &dep.field_name).ok_or_else(
-                || {
+            let prod_out =
+                Self::extract_named_field_32b(prod, &dep.field_name).ok_or_else(|| {
                     TurnError::InvalidExecutionProof(format!(
                         "cross_effect_dependencies[{}]: producer effect has no \
                          output field {:?}",
                         i, dep.field_name
                     ))
-                },
-            )?;
-            let cons_in = Self::extract_named_field_32b(cons, &dep.field_name).ok_or_else(
-                || {
+                })?;
+            let cons_in =
+                Self::extract_named_field_32b(cons, &dep.field_name).ok_or_else(|| {
                     TurnError::InvalidExecutionProof(format!(
                         "cross_effect_dependencies[{}]: consumer effect has no \
                          input field {:?}",
                         i, dep.field_name
                     ))
-                },
-            )?;
+                })?;
             if prod_out != dep.value_commit {
                 return Err(TurnError::InvalidExecutionProof(format!(
                     "cross_effect_dependencies[{}]: producer's {:?} disagrees with \
@@ -2414,14 +2520,17 @@ impl TurnExecutor {
         schema_id: &str,
     ) -> Option<(Vec<[u8; 32]>, Vec<u64>)> {
         match (schema_id, effect) {
-            ("pyana-effect-note-spend-v1", Effect::NoteSpend {
-                nullifier,
-                note_tree_root,
-                value,
-                asset_type,
-                value_commitment,
-                ..
-            }) => {
+            (
+                "pyana-effect-note-spend-v1",
+                Effect::NoteSpend {
+                    nullifier,
+                    note_tree_root,
+                    value,
+                    asset_type,
+                    value_commitment,
+                    ..
+                },
+            ) => {
                 let asset_type_commit = {
                     let mut h = blake3::Hasher::new();
                     h.update(b"pyana-asset-type-commit/v1");
@@ -2434,14 +2543,17 @@ impl TurnExecutor {
                     vec![*value, *asset_type],
                 ))
             }
-            ("pyana-effect-note-create-v1", Effect::NoteCreate {
-                commitment,
-                value,
-                asset_type,
-                value_commitment,
-                range_proof,
-                ..
-            }) => {
+            (
+                "pyana-effect-note-create-v1",
+                Effect::NoteCreate {
+                    commitment,
+                    value,
+                    asset_type,
+                    value_commitment,
+                    range_proof,
+                    ..
+                },
+            ) => {
                 let asset_type_commit = {
                     let mut h = blake3::Hasher::new();
                     h.update(b"pyana-asset-type-commit/v1");
@@ -2458,14 +2570,17 @@ impl TurnExecutor {
                     vec![*value, *asset_type],
                 ))
             }
-            ("pyana-effect-bridge-lock-v1", Effect::BridgeLock {
-                nullifier,
-                destination,
-                value,
-                asset_type,
-                timeout_height,
-                ..
-            }) => {
+            (
+                "pyana-effect-bridge-lock-v1",
+                Effect::BridgeLock {
+                    nullifier,
+                    destination,
+                    value,
+                    asset_type,
+                    timeout_height,
+                    ..
+                },
+            ) => {
                 let asset_type_commit = {
                     let mut h = blake3::Hasher::new();
                     h.update(b"pyana-asset-type-commit/v1");
@@ -2481,10 +2596,7 @@ impl TurnExecutor {
                     vec![*value, *asset_type, *timeout_height],
                 ))
             }
-            ("pyana-effect-bridge-finalize-v1", Effect::BridgeFinalize {
-                nullifier,
-                receipt,
-            }) => {
+            ("pyana-effect-bridge-finalize-v1", Effect::BridgeFinalize { nullifier, receipt }) => {
                 let receipt_hash = {
                     let bytes = postcard::to_allocvec(receipt).unwrap_or_default();
                     *blake3::hash(&bytes).as_bytes()
@@ -2516,9 +2628,7 @@ impl TurnExecutor {
             ("nullifier", Effect::BridgeLock { nullifier, .. }) => Some(*nullifier),
             ("nullifier", Effect::BridgeFinalize { nullifier, .. }) => Some(*nullifier),
             ("nullifier", Effect::BridgeCancel { nullifier }) => Some(*nullifier),
-            ("nullifier", Effect::BridgeMint { portable_proof }) => {
-                Some(portable_proof.nullifier)
-            }
+            ("nullifier", Effect::BridgeMint { portable_proof }) => Some(portable_proof.nullifier),
             ("note_commitment" | "commitment", Effect::NoteCreate { commitment, .. }) => {
                 Some(commitment.0)
             }
@@ -4286,6 +4396,11 @@ impl TurnExecutor {
                         emitted_events: vec![],
                         executor_signature: None,
                         finality: crate::turn::Finality::Final,
+                        // Cleartext path: encrypted-path callers
+                        // (`apply_encrypted_turn`) flip this on after the inner
+                        // `execute` returns. We can't know here whether we were
+                        // entered via an EncryptedTurn wrapper.
+                        was_encrypted: false,
                     };
                     // R-4: sign the receipt over its canonical hash if the
                     // executor has been configured with a signing key.
@@ -4754,6 +4869,10 @@ impl TurnExecutor {
             emitted_events: Self::collect_emitted_events(&journal),
             executor_signature: None,
             finality: crate::turn::Finality::Final,
+            // Cleartext path. `apply_encrypted_turn` re-signs after flipping
+            // this bit so the encrypted-arrival fact is bound into the
+            // receipt hash AND the executor signature.
+            was_encrypted: false,
         };
         // R-4: sign the receipt over its canonical hash if the executor has
         // been configured with a signing key (`with_executor_signing_key`).

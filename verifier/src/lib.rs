@@ -848,9 +848,7 @@ pub fn verify_recursive_replay_from_bundle(
         }
         RecursiveVariantVerdict::PublicInputsTooShort { have, need } => {
             RecursiveReplayVerdict::RecursiveProofRejected {
-                reason: format!(
-                    "recursive variant PI too short: have {have}, need {need}"
-                ),
+                reason: format!("recursive variant PI too short: have {have}, need {need}"),
             }
         }
         RecursiveVariantVerdict::PublicInputsMismatch { reason } => {
@@ -987,6 +985,7 @@ mod tests {
             emitted_events: Vec::new(),
             executor_signature: None,
             finality: Default::default(),
+            was_encrypted: false,
         }
     }
 

@@ -81,6 +81,7 @@ fn make_channel_receipt(
         emitted_events: Vec::new(),
         executor_signature: None,
         finality: Default::default(),
+        was_encrypted: false,
     }
 }
 

@@ -432,6 +432,7 @@ mod tests {
             emitted_events: Vec::new(),
             executor_signature: None,
             finality: Default::default(),
+            was_encrypted: false,
         }
     }
 

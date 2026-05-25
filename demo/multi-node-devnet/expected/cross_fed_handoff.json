@@ -1,0 +1,40 @@
+{
+  "scenario": "cross_fed_handoff",
+  "summary": "Alice on F1 creates a bearer cap targeting bob_cell on F2; cap traverses out-of-band channel; F2 sees Bob's exercise turn; AttestedRoot heights advance on both sides; replay/tamper artifacts are distinguishable.",
+  "actors": ["alice@F1", "bob@F2", "F1 committee (3 nodes)", "F2 committee (3 nodes)"],
+
+  "must_pass": [
+    "both_federations_responding",
+    "alice_uri_produced_on_F1",
+    "uri_delivered_to_F2_inbox",
+    "bob_inbox_target_federation_is_F2",
+    "F1_exposes_federation_roots",
+    "F2_exposes_federation_roots"
+  ],
+
+  "must_not_pass": [
+    "handoff_replay_artifact_constructed",
+    "handoff_tampered_artifact_distinguishable"
+  ],
+
+  "must_not_pass_explanation": {
+    "handoff_replay_artifact_constructed": "We constructed a replay artifact (same nonce, same payload). The scenario records `true` when the artifact IS structurally a replay; the executor's rejection of replayed certs is the cert-nonce nullifier set (lane F-redux). When that lane lands, this assertion's semantics flip to 'the second submission rejects with NullifierAlreadySpent'.",
+    "handoff_tampered_artifact_distinguishable": "Flipping `.permissions` from TRANSFER_ONLY to ALL produces a distinguishable byte sequence. The scenario records `true` when the diff is non-empty; the executor's rejection is the introducer-signature check (lanes A + D)."
+  },
+
+  "blocked_on": [
+    "SILVER-VISION §5.2.2: pyana_create_cross_fed_bearer_cap MCP tool",
+    "SILVER-VISION §5.2.3: validate_handoff registry-lookup hardening",
+    "SILVER-VISION §5.2.4: CrossFedReceiptBundle type + serde",
+    "SILVER-VISION §5.2.5: pyana-verifier verify-cross-fed-bundle subcommand",
+    "Lane F-redux: cert-nonce nullifier set production",
+    "Lane A: pending_captp_turns drainer wires CapTpDelivered through the executor"
+  ],
+
+  "documented_gaps": [
+    "The cert URI is a JSON scaffold, not an Ed25519-signed canonical pyana-handoff: URI. The MCP tool will produce the real artifact.",
+    "Bob's exercise turn never reaches F2's executor in this scenario — the scenario asserts substrate observability (HTTP surface, FS hand-off, cross-fed routing fields), not end-to-end signature verification."
+  ],
+
+  "improve_dont_degrade": "When the in-flight lanes land, edit this expected.json to add 'cert_introducer_sig_verified', 'cert_nonce_in_F2_nullifier_set', 'R2_executor_signature_binds_F2_federation_id' to must_pass — and add 'cert_replayed_at_F2_accepted', 'tampered_cert_accepted', 'unknown_federation_committee_accepted' to must_not_pass. Do not weaken these by removing or commenting them out; widen as the substrate grows."
+}

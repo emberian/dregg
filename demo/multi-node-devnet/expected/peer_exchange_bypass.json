@@ -1,0 +1,34 @@
+{
+  "scenario": "peer_exchange_bypass",
+  "summary": "Two sovereign cells (one on F1, one on F2) run a peer_exchange without federation execution. Each emits a SovereignCellWitness; the witness pair is self-contained. The federations act only as notaries — neither's ledger applies the remote cell's effect.",
+  "actors": ["sovereign_cell_F1", "sovereign_cell_F2", "F1 committee (notary)", "F2 committee (notary)"],
+
+  "must_pass": [
+    "F1_peer_exchange_route_present",
+    "F2_peer_exchange_route_present",
+    "sovereign_witness_sequence_monotonic_strict",
+    "sovereign_witness_equal_sequence_detected_as_regression",
+    "peer_exchange_id_derived_32_byte_hex",
+    "peer_exchange_id_federation_invariant",
+    "F1_ledger_unchanged_by_idle_observation",
+    "sovereign_witness_self_verifies_without_committee"
+  ],
+
+  "must_not_pass": [],
+
+  "must_not_pass_explanation": {
+    "_note": "must_not_pass for this scenario lives in the SovereignCellWitness AIR teeth (AUDIT-sovereign-witness-teeth.md). When the AIR enforces sequence-monotonicity inside the proof rather than as an external check, the negative cases (skipped witness, equal sequence, cross-cell witness reuse, signed-under-old-key after rotation) will be enforceable from receipts alone. Today's scenario asserts the property at the orchestration level."
+  },
+
+  "blocked_on": [
+    "SovereignCellWitness AIR teeth — see AUDIT-sovereign-witness-teeth.md. Today the witness verifies Ed25519 + records a sequence, but the AIR does not enforce sequence-monotonicity inside the proof.",
+    "wire/src/hardening.rs: peer_exchange CapTP message variant — the scenario probes the HTTP /turns/peer-exchange route but does not exercise the full sovereign-to-sovereign wire flow."
+  ],
+
+  "documented_gaps": [
+    "Both peer_exchange route probes use empty bodies and expect any non-404 response. A signed payload would exercise the full code path; that's the next milestone.",
+    "F1_ledger_unchanged_by_idle_observation is asserted between two /api/cells snapshots 2s apart. Solo-mode nodes can autonomously advance height (e.g. via gossip-driven cell creation); the scenario tolerates this as informational rather than a failure."
+  ],
+
+  "improve_dont_degrade": "When the sovereign-witness AIR teeth land, the must_not_pass list grows: sovereign_witness_skipped_for_sovereign_transition_accepts, sovereign_witness_with_sequence_regression_accepts, sovereign_witness_signing_message_tampered_accepts, sovereign_witness_cross_cell_reuse_accepts, sovereign_witness_signed_under_old_key_after_rotation_accepts, sovereign_witness_with_equal_sequence_accepts. Each is a receipts-alone negative test."
+}

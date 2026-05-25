@@ -1605,7 +1605,8 @@ mod tests {
         let program = canonical_test_program();
         let verifier_fp = VerifierFingerprint::SourceHash([0xFE; 32]);
         let ps = ProvingSystemId::Plonky3BabyBearFri { p3_rev: "0xabc" };
-        let correct_vk = canonical_program_vk_v2(&program, [0xCA; 32], verifier_fp.clone(), ps.clone());
+        let correct_vk =
+            canonical_program_vk_v2(&program, [0xCA; 32], verifier_fp.clone(), ps.clone());
         let desc = FactoryDescriptor {
             factory_vk: test_factory_vk(),
             child_program_vk: Some(correct_vk),

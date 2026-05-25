@@ -1560,7 +1560,12 @@ mod tests {
         let none_value_commit = [0u8; 32];
         let r = roundtrip(
             SCHEMA_NOTE_SPEND,
-            vec![nullifier, note_tree_root, asset_type_commit, none_value_commit],
+            vec![
+                nullifier,
+                note_tree_root,
+                asset_type_commit,
+                none_value_commit,
+            ],
             vec![100, 0],
         );
         assert!(r.is_ok());
@@ -1576,7 +1581,12 @@ mod tests {
         let asset_type: u64 = 7;
         let r = roundtrip(
             SCHEMA_NOTE_CREATE,
-            vec![commitment, asset_type_commit, value_commit, range_proof_hash],
+            vec![
+                commitment,
+                asset_type_commit,
+                value_commit,
+                range_proof_hash,
+            ],
             vec![value, asset_type],
         );
         assert!(r.is_ok(), "honest note_create binding must verify: {r:?}");
@@ -1590,7 +1600,12 @@ mod tests {
         let range_proof_hash = [0x44u8; 32];
         let w = EffectActionWitness {
             schema: SCHEMA_NOTE_CREATE,
-            fields: vec![commitment, asset_type_commit, value_commit, range_proof_hash],
+            fields: vec![
+                commitment,
+                asset_type_commit,
+                value_commit,
+                range_proof_hash,
+            ],
             amounts: vec![100, 0],
         };
         let proof = prove_effect_action(&w);
@@ -1613,7 +1628,12 @@ mod tests {
         let range_proof_hash = [0x44u8; 32];
         let w = EffectActionWitness {
             schema: SCHEMA_NOTE_CREATE,
-            fields: vec![commitment, asset_type_commit, value_commit, range_proof_hash],
+            fields: vec![
+                commitment,
+                asset_type_commit,
+                value_commit,
+                range_proof_hash,
+            ],
             amounts: vec![100, 0],
         };
         let proof = prove_effect_action(&w);
@@ -1638,13 +1658,23 @@ mod tests {
         let asset_type: u64 = 42;
         let w = EffectActionWitness {
             schema: SCHEMA_NOTE_CREATE,
-            fields: vec![commitment, asset_type_commit, value_commit, range_proof_hash],
+            fields: vec![
+                commitment,
+                asset_type_commit,
+                value_commit,
+                range_proof_hash,
+            ],
             amounts: vec![value, asset_type],
         };
         let proof = prove_effect_action(&w);
         let r = verify_effect_action(
             SCHEMA_NOTE_CREATE,
-            &[commitment, asset_type_commit, value_commit, range_proof_hash],
+            &[
+                commitment,
+                asset_type_commit,
+                value_commit,
+                range_proof_hash,
+            ],
             &[value, asset_type + 1],
             &proof,
         );
@@ -1665,7 +1695,12 @@ mod tests {
             amounts: vec![100, 0],
         };
         let proof_spend = prove_effect_action(&w_spend);
-        let r = verify_effect_action(SCHEMA_NOTE_CREATE, &[f0, f1, f2, f3], &[100, 0], &proof_spend);
+        let r = verify_effect_action(
+            SCHEMA_NOTE_CREATE,
+            &[f0, f1, f2, f3],
+            &[100, 0],
+            &proof_spend,
+        );
         assert!(
             r.is_err(),
             "NoteSpend proof must not verify as NoteCreate (domain separation)"
@@ -1685,7 +1720,12 @@ mod tests {
         let timeout_height: u64 = 1_000_000;
         let r = roundtrip(
             SCHEMA_BRIDGE_LOCK,
-            vec![nullifier, destination_federation, asset_type_commit, value_commit],
+            vec![
+                nullifier,
+                destination_federation,
+                asset_type_commit,
+                value_commit,
+            ],
             vec![value, asset_type, timeout_height],
         );
         assert!(r.is_ok(), "honest bridge_lock binding must verify: {r:?}");
@@ -1699,7 +1739,12 @@ mod tests {
         let value_commit = [0x40u8; 32];
         let w = EffectActionWitness {
             schema: SCHEMA_BRIDGE_LOCK,
-            fields: vec![nullifier, destination_federation, asset_type_commit, value_commit],
+            fields: vec![
+                nullifier,
+                destination_federation,
+                asset_type_commit,
+                value_commit,
+            ],
             amounts: vec![100, 1, 1000],
         };
         let proof = prove_effect_action(&w);
@@ -1723,13 +1768,23 @@ mod tests {
         let timeout = 1_000_000u64;
         let w = EffectActionWitness {
             schema: SCHEMA_BRIDGE_LOCK,
-            fields: vec![nullifier, destination_federation, asset_type_commit, value_commit],
+            fields: vec![
+                nullifier,
+                destination_federation,
+                asset_type_commit,
+                value_commit,
+            ],
             amounts: vec![100, 1, timeout],
         };
         let proof = prove_effect_action(&w);
         let r = verify_effect_action(
             SCHEMA_BRIDGE_LOCK,
-            &[nullifier, destination_federation, asset_type_commit, value_commit],
+            &[
+                nullifier,
+                destination_federation,
+                asset_type_commit,
+                value_commit,
+            ],
             &[100, 1, timeout + 1],
             &proof,
         );
@@ -1744,7 +1799,12 @@ mod tests {
         let value_commit = [0x40u8; 32];
         let w = EffectActionWitness {
             schema: SCHEMA_BRIDGE_LOCK,
-            fields: vec![nullifier, destination_federation, asset_type_commit, value_commit],
+            fields: vec![
+                nullifier,
+                destination_federation,
+                asset_type_commit,
+                value_commit,
+            ],
             amounts: vec![100, 1, 1000],
         };
         let proof = prove_effect_action(&w);
@@ -1752,7 +1812,12 @@ mod tests {
         wrong[0] ^= 0xFF;
         let r = verify_effect_action(
             SCHEMA_BRIDGE_LOCK,
-            &[wrong, destination_federation, asset_type_commit, value_commit],
+            &[
+                wrong,
+                destination_federation,
+                asset_type_commit,
+                value_commit,
+            ],
             &[100, 1, 1000],
             &proof,
         );
@@ -1767,14 +1832,24 @@ mod tests {
         let value_commit = [0x40u8; 32];
         let w = EffectActionWitness {
             schema: SCHEMA_BRIDGE_LOCK,
-            fields: vec![nullifier, destination_federation, asset_type_commit, value_commit],
+            fields: vec![
+                nullifier,
+                destination_federation,
+                asset_type_commit,
+                value_commit,
+            ],
             amounts: vec![100, 42, 1000],
         };
         let proof = prove_effect_action(&w);
         // Tamper asset_type amount (u64).
         let r = verify_effect_action(
             SCHEMA_BRIDGE_LOCK,
-            &[nullifier, destination_federation, asset_type_commit, value_commit],
+            &[
+                nullifier,
+                destination_federation,
+                asset_type_commit,
+                value_commit,
+            ],
             &[100, 43, 1000],
             &proof,
         );
@@ -1800,14 +1875,24 @@ mod tests {
         let value: u64 = (1u64 << 50) | 0xDEAD;
         let w = EffectActionWitness {
             schema: SCHEMA_BRIDGE_LOCK,
-            fields: vec![nullifier, destination_federation, asset_type_commit, value_commit],
+            fields: vec![
+                nullifier,
+                destination_federation,
+                asset_type_commit,
+                value_commit,
+            ],
             amounts: vec![value, 1, 1000],
         };
         let proof = prove_effect_action(&w);
         // 30-bit truncation must not collide.
         let r = verify_effect_action(
             SCHEMA_BRIDGE_LOCK,
-            &[nullifier, destination_federation, asset_type_commit, value_commit],
+            &[
+                nullifier,
+                destination_federation,
+                asset_type_commit,
+                value_commit,
+            ],
             &[value & ((1u64 << 30) - 1), 1, 1000],
             &proof,
         );
@@ -1825,7 +1910,12 @@ mod tests {
         let value_commit = [0x40u8; 32];
         let w = EffectActionWitness {
             schema: SCHEMA_BRIDGE_LOCK,
-            fields: vec![nullifier, destination_federation, asset_type_commit, value_commit],
+            fields: vec![
+                nullifier,
+                destination_federation,
+                asset_type_commit,
+                value_commit,
+            ],
             amounts: vec![100, 1, 1000],
         };
         let proof = prove_effect_action(&w);
@@ -1851,7 +1941,12 @@ mod tests {
         let value_commit = [0x40u8; 32];
         let w = EffectActionWitness {
             schema: SCHEMA_BRIDGE_LOCK,
-            fields: vec![nullifier, destination_federation, asset_type_commit, value_commit],
+            fields: vec![
+                nullifier,
+                destination_federation,
+                asset_type_commit,
+                value_commit,
+            ],
             amounts: vec![100, 1, 1000],
         };
         let proof = prove_effect_action(&w);

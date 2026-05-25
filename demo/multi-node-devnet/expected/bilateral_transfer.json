@@ -1,0 +1,37 @@
+{
+  "scenario": "bilateral_transfer",
+  "summary": "γ.2 bilateral binding exercised cross-federation. transfer_id is committee-bound (audit F1-style: H(alice||bob||amount||nonce||federation_id_F2)). Direction bits XOR to 1 (credit + debit). Amount mismatches in the pair are detectable.",
+  "actors": ["alice (stub on F2, anchored at F1)", "bob (cell on F2)", "F1 committee", "F2 committee"],
+
+  "must_pass": [
+    "F1_live",
+    "F2_live",
+    "transfer_id_derived_32_byte_hex",
+    "transfer_id_derivation_deterministic",
+    "transfer_id_distinguishes_target_federation",
+    "bilateral_pair_direction_complement_holds",
+    "bilateral_pair_amount_agrees",
+    "F2_turns_peer_exchange_route_reachable"
+  ],
+
+  "must_not_pass": [
+    "bilateral_pair_amount_mismatch_detectable"
+  ],
+
+  "must_not_pass_explanation": {
+    "bilateral_pair_amount_mismatch_detectable": "Synthesizing a pair with alice_amount=99 and bob_amount=100 must be flagged by the off-AIR pair verifier. The scenario records `true` when the inequality is observable — the executor's enforcement is in the γ.2 pair-verify routine."
+  },
+
+  "blocked_on": [
+    "γ.2 Phase 1: PI fields {transfer_id, grant_id, intro_id} land in the per-cell AIRs (STAGE-7-GAMMA-2-PHASE-2-SKETCH.md).",
+    "γ.2 off-AIR pair/triple verifier: pyana-verifier bilateral-pair (alluded to in demo/two-ai-handoff/run.sh).",
+    "Lane D: federation_id binding in compute_partial_signing_message — without it, transfer_id can be claimed for F1 even when the turn executed on F2."
+  ],
+
+  "documented_gaps": [
+    "transfer_id derivation in this scenario is a Python-shell BLAKE2b stand-in, not the canonical pyana-cell transfer-id from `cell/src/witness.rs`. When the canonical derivation lands, swap the python3 block for a call to a helper binary.",
+    "The scenario does not submit a real signed Turn to F2's executor; it asserts the substrate properties (deterministic id, federation binding, direction-complement) that the executor's pair-verifier will assume."
+  ],
+
+  "improve_dont_degrade": "When γ.2 Phase 1 lands, expand must_pass with: bob_proof_verifies_against_per_cell_AIR, alice_stub_proof_verifies_against_per_cell_AIR, pair_PI_transfer_ids_equal_under_AIR_PI_layout, federation_id_in_signing_message_is_F2_for_both_rows. Add to must_not_pass: pair_with_swapped_direction_bits_accepts, pair_with_different_transfer_ids_accepts, pair_with_federation_id_F1_in_one_row_accepts."
+}
