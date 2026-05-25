@@ -2273,12 +2273,12 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
     case "pyana:createFromFactory": {
       requireWasm("createFromFactory");
       const w = wasm!;
-      const wallet = await loadState();
-      if (wallet.locked) return { id: message.id, error: "Cipherclerk is locked" };
-      if (wallet.needsPassphraseSetup) {
+      const cc = await loadState();
+      if (cc.locked) return { id: message.id, error: "Cipherclerk is locked" };
+      if (cc.needsPassphraseSetup) {
         return { id: message.id, error: "Set a cipherclerk passphrase before minting cells from a factory." };
       }
-      if (!wallet.secretKey) return { id: message.id, error: "Cipherclerk secret key not available" };
+      if (!cc.secretKey) return { id: message.id, error: "Cipherclerk secret key not available" };
 
       const factoryVkHex = message.factoryVkHex as string;
       const ownerPubkeyHex = message.ownerPubkeyHex as string;
@@ -2291,7 +2291,7 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
       const initialFields = (message.initialFields as Array<[number, number]> | undefined) ?? [];
 
       const specJson = JSON.stringify({
-        sender_privkey: wallet.secretKey,
+        sender_privkey: cc.secretKey,
         factory_vk_hex: factoryVkHex,
         owner_pubkey_hex: ownerPubkeyHex,
         token_id_hex: tokenIdHex,
@@ -2324,7 +2324,7 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
         body: JSON.stringify({
           turn_id: turnData.turn_id,
           turn_bytes: Array.from(turnData.turn_bytes),
-          sender_pubkey: wallet.publicKey,
+          sender_pubkey: cc.publicKey,
         }),
       });
 
@@ -2345,7 +2345,7 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
         };
       }
 
-      wallet.log.push({
+      cc.log.push({
         action: "createFromFactory",
         resource: turnData.child_vk,
         allowed: true,
@@ -2380,8 +2380,8 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
     case "pyana:makeCellSovereign": {
       requireWasm("makeCellSovereign");
       const w = wasm!;
-      const wallet = await loadState();
-      if (wallet.locked) return { id: message.id, error: "Cipherclerk is locked" };
+      const cc = await loadState();
+      if (cc.locked) return { id: message.id, error: "Cipherclerk is locked" };
       const result = w.make_cell_sovereign(message.cellIdHex as string, 0);
       resetLockTimer();
       return { id: message.id, result };
@@ -2390,16 +2390,16 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
     case "pyana:peerExchange": {
       requireWasm("peerExchange");
       const w = wasm!;
-      const wallet = await loadState();
-      if (wallet.locked) return { id: message.id, error: "Cipherclerk is locked" };
-      if (!wallet.secretKey) return { id: message.id, error: "Cipherclerk secret key not available" };
-      // Route through the wallet's canonical `PeerExchange` session so
-      // the emitted `PeerStateTransition` is signed by the wallet's
+      const cc = await loadState();
+      if (cc.locked) return { id: message.id, error: "Cipherclerk is locked" };
+      if (!cc.secretKey) return { id: message.id, error: "Cipherclerk secret key not available" };
+      // Route through the cipherclerk's canonical `PeerExchange` session so
+      // the emitted `PeerStateTransition` is signed by the cipherclerk's
       // Ed25519 key. The previous binding (`peer_exchange_with_proof`)
       // used canonical types but bypassed signing entirely.
       try {
         const result = w.wallet_peer_exchange(JSON.stringify({
-          sender_privkey: wallet.secretKey,
+          sender_privkey: cc.secretKey,
           receiver_cell_hex: message.receiverCellHex as string,
           amount: message.amount as number,
           timestamp: Math.floor(Date.now() / 1000),
@@ -2439,9 +2439,9 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
 
     case "pyana:getPrivacyState": {
       if (!isExtensionPopup(sender)) return { id: message.id, error: "Only available from extension popup." };
-      const wallet = await loadState();
-      if (wallet.locked) return { id: message.id, result: { active: false, locked: true } };
-      return { id: message.id, result: { active: true, stealthMeta: wallet.stealthMeta } };
+      const cc = await loadState();
+      if (cc.locked) return { id: message.id, result: { active: false, locked: true } };
+      return { id: message.id, result: { active: true, stealthMeta: cc.stealthMeta } };
     }
 
     case "pyana:setCommittedTransferMode": {
@@ -2451,17 +2451,17 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
 
     case "pyana:getStealthNotes": {
       if (!isExtensionPopup(sender)) return { id: message.id, error: "Only available from extension popup." };
-      const wallet = await loadState();
-      if (wallet.locked) return { id: message.id, error: "Cipherclerk is locked" };
-      return { id: message.id, result: wallet.stealthNotes || [] };
+      const cc = await loadState();
+      if (cc.locked) return { id: message.id, error: "Cipherclerk is locked" };
+      return { id: message.id, result: cc.stealthNotes || [] };
     }
 
     case "pyana:postEncryptedIntent": {
       requireWasm("postEncryptedIntent");
       const w = wasm!;
-      const wallet = await loadState();
-      if (wallet.locked) return { id: message.id, error: "Cipherclerk is locked" };
-      if (!wallet.secretKey) return { id: message.id, error: "Cipherclerk secret key not available" };
+      const cc = await loadState();
+      if (cc.locked) return { id: message.id, error: "Cipherclerk is locked" };
+      if (!cc.secretKey) return { id: message.id, error: "Cipherclerk secret key not available" };
       const matchSpec = (message.matchSpec as MatchSpec) || {};
       const options = (message.options as { expiry?: number; kind?: string } | undefined) || {};
       const kind = options.kind || "need";
@@ -2488,7 +2488,7 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
       const expiry = options.expiry ?? null;
       try {
         const result = w.wallet_post_encrypted_intent(JSON.stringify({
-          sender_privkey: wallet.secretKey,
+          sender_privkey: cc.secretKey,
           match_spec: canonicalMatchSpec,
           kind: kind === "offer" ? "Offer" : kind === "query" ? "Query" : "Need",
           expiry,
@@ -2514,10 +2514,10 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
     case "pyana:privateTransfer": {
       requireWasm("privateTransfer");
       const w = wasm!;
-      const wallet = await loadState();
-      if (wallet.locked) return { id: message.id, error: "Cipherclerk is locked" };
-      if (!wallet.secretKey) return { id: message.id, error: "Cipherclerk secret key not available" };
-      if (wallet.needsPassphraseSetup) {
+      const cc = await loadState();
+      if (cc.locked) return { id: message.id, error: "Cipherclerk is locked" };
+      if (!cc.secretKey) return { id: message.id, error: "Cipherclerk secret key not available" };
+      if (cc.needsPassphraseSetup) {
         return { id: message.id, error: "Set a cipherclerk passphrase before signing private transfers." };
       }
       const amount = message.amount as number;
@@ -2535,7 +2535,7 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
         : (typeof assetType === "string" && /^[0-9]+$/.test(assetType) ? parseInt(assetType, 10) : 0);
       try {
         const result = w.wallet_private_transfer(JSON.stringify({
-          sender_privkey: wallet.secretKey,
+          sender_privkey: cc.secretKey,
           amount,
           asset_type: assetTypeU64,
           recipient_meta: {
@@ -2548,10 +2548,10 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
           body: JSON.stringify({
             turn_id: result.turn_id,
             turn_bytes: Array.from(result.turn_bytes),
-            sender_pubkey: wallet.publicKey,
+            sender_pubkey: cc.publicKey,
           }),
         });
-        wallet.log.push({
+        cc.log.push({
           action: "privateTransfer",
           resource: "*",
           allowed: true,
@@ -2722,18 +2722,18 @@ function tryConnect(url: string, onFail: () => void): void {
 
     switch (msg.type) {
       case "revocation": {
-        const wallet = await loadState();
-        const idx = wallet.tokens.findIndex(t => t.id === msg.token_id);
+        const cc = await loadState();
+        const idx = cc.tokens.findIndex(t => t.id === msg.token_id);
         if (idx !== -1) {
-          wallet.tokens.splice(idx, 1);
+          cc.tokens.splice(idx, 1);
           await saveState();
         }
         notifySubscribers("revoked", { tokenId: msg.token_id });
         break;
       }
       case "receipt": {
-        const wallet = await loadState();
-        wallet.receiptChain.push(msg.hash as string);
+        const cc = await loadState();
+        cc.receiptChain.push(msg.hash as string);
         await saveState();
         notifySubscribers("receipt", { hash: msg.hash });
         break;

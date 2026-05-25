@@ -10083,6 +10083,259 @@ mod privacy_wiring {
             "expected decryption failure, got: {msg}"
         );
     }
+
+    // =========================================================================
+    // apply_encrypted_turn canonical-method adversarial tests
+    // (AUDIT-privacy.md §11.2 / BOUNDARIES.md §5).
+    //
+    // These exercise the NEW `TurnExecutor::apply_encrypted_turn(encrypted,
+    // sealer_secret, ledger) -> Result<TurnReceipt, TurnError>` surface — the
+    // production-facing entry point the node's `/turns/submit-encrypted`
+    // HTTP endpoint calls. They verify:
+    //   1. round-trip success → receipt.was_encrypted=true, hash binds bit
+    //   2. wrong recipient (sealer secret mismatch) → DecryptionFailed
+    //   3. tampered nonce → Poly1305 MAC fail
+    //   4. replay (same envelope twice) → nullifier / nonce-bump rejects
+    //   5. cleartext path leaves receipt.was_encrypted=false
+    // =========================================================================
+
+    /// Build a simple turn we can authorize successfully end-to-end (no
+    /// effects, just a fee). Used by the canonical-method tests below.
+    fn build_authorizing_turn(
+        agent: CellId,
+        agent_kp: &TestKeypair,
+        nonce: u64,
+        fee: u64,
+        _federation_id: [u8; 32],
+    ) -> Turn {
+        let mut action = crate::action::Action {
+            target: agent,
+            method: crate::action::symbol("noop"),
+            args: vec![],
+            authorization: crate::action::Authorization::Unchecked,
+            preconditions: pyana_cell::Preconditions::default(),
+            effects: vec![],
+            may_delegate: crate::action::DelegationMode::None,
+            commitment_mode: crate::action::CommitmentMode::Full,
+            balance_change: None,
+            witness_blobs: vec![],
+        };
+        // `sign_action` already binds to the zero federation_id (matches
+        // executor default for tests).
+        action.authorization = agent_kp.sign_action(&action);
+
+        let mut forest = CallForest::new();
+        forest.add_root(action);
+        Turn {
+            agent,
+            nonce,
+            call_forest: forest,
+            fee,
+            memo: None,
+            valid_until: None,
+            previous_receipt_hash: None,
+            depends_on: vec![],
+            conservation_proof: None,
+            sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
+            custom_program_proofs: None,
+        }
+    }
+
+    /// Adversarial #1: round-trip happy path. Sender encrypts a Turn to the
+    /// executor's X25519 public key, executor calls `apply_encrypted_turn`,
+    /// and the returned receipt is committed with `was_encrypted=true`.
+    #[test]
+    fn apply_encrypted_turn_round_trip_sets_flag() {
+        let mut ledger = Ledger::new();
+        let (agent, agent_kp) = make_open_cell(31, 1_000_000);
+        let agent_id = agent.id();
+        ledger.insert_cell(agent).unwrap();
+
+        let sealer_secret = [0x42u8; 32];
+        let sealer_public = *x25519_dalek::PublicKey::from(
+            &x25519_dalek::StaticSecret::from(sealer_secret),
+        )
+        .as_bytes();
+
+        let mut executor = TurnExecutor::new(ComputronCosts::default());
+        // Use AcceptAll so the inner turn can authorize via the standard
+        // execute path. We're testing the encrypted-arrival plumbing, not
+        // the auth subsystem.
+        executor.set_proof_verifier(Box::new(AcceptAll));
+        let federation_id = [0u8; 32]; // executor default
+        let turn = build_authorizing_turn(agent_id, &agent_kp, 0, 100, federation_id);
+
+        let encrypted = build_consistent_encrypted_turn(&turn, agent_id, &sealer_public);
+
+        let receipt = executor
+            .apply_encrypted_turn(&encrypted, &sealer_secret, &mut ledger)
+            .expect("encrypted apply should commit");
+
+        assert!(
+            receipt.was_encrypted,
+            "encrypted-path receipt must have was_encrypted=true"
+        );
+        // The flag is bound into receipt_hash: flipping it changes the hash.
+        let with_flag = receipt.receipt_hash();
+        let without_flag = {
+            let mut r = receipt.clone();
+            r.was_encrypted = false;
+            r.receipt_hash()
+        };
+        assert_ne!(
+            with_flag, without_flag,
+            "was_encrypted MUST be bound by receipt_hash so an executor cannot \
+             strip the bit without breaking the chain"
+        );
+    }
+
+    /// Adversarial #2: wrong recipient (executor holds a sealer secret that
+    /// doesn't match the public key the sender encrypted to) →
+    /// `DecryptionFailed`.
+    ///
+    /// X25519+ChaCha20-Poly1305 binds the AEAD key to the DH shared secret;
+    /// a wrong unsealer derives a different key and Poly1305 verification
+    /// fails before the plaintext is exposed.
+    #[test]
+    fn apply_encrypted_turn_rejects_wrong_recipient() {
+        let mut ledger = Ledger::new();
+        let (agent, agent_kp) = make_open_cell(32, 1_000_000);
+        let agent_id = agent.id();
+        ledger.insert_cell(agent).unwrap();
+
+        // Sender encrypts to executor_A's public key.
+        let executor_a_secret = [0x11u8; 32];
+        let executor_a_public = *x25519_dalek::PublicKey::from(
+            &x25519_dalek::StaticSecret::from(executor_a_secret),
+        )
+        .as_bytes();
+
+        // But executor_B (a *different* sealer pair) tries to apply.
+        let executor_b_secret = [0x22u8; 32];
+
+        let executor = TurnExecutor::new(ComputronCosts::default());
+        let federation_id = [0u8; 32];
+        let turn = build_authorizing_turn(agent_id, &agent_kp, 0, 100, federation_id);
+
+        let encrypted = build_consistent_encrypted_turn(&turn, agent_id, &executor_a_public);
+
+        let result = executor.apply_encrypted_turn(&encrypted, &executor_b_secret, &mut ledger);
+        let err = result.expect_err("wrong recipient must reject");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("decryption") || msg.contains("Decryption"),
+            "expected DecryptionFailed-flavoured error, got: {msg}"
+        );
+    }
+
+    /// Adversarial #3: a flipped byte in the nonce yields a different
+    /// Poly1305 key/IV pair → MAC verification fails.
+    #[test]
+    fn apply_encrypted_turn_rejects_tampered_nonce() {
+        let mut ledger = Ledger::new();
+        let (agent, agent_kp) = make_open_cell(33, 1_000_000);
+        let agent_id = agent.id();
+        ledger.insert_cell(agent).unwrap();
+
+        let sealer_secret = [0x77u8; 32];
+        let sealer_public = *x25519_dalek::PublicKey::from(
+            &x25519_dalek::StaticSecret::from(sealer_secret),
+        )
+        .as_bytes();
+
+        let executor = TurnExecutor::new(ComputronCosts::default());
+        let federation_id = [0u8; 32];
+        let turn = build_authorizing_turn(agent_id, &agent_kp, 0, 100, federation_id);
+
+        let mut encrypted = build_consistent_encrypted_turn(&turn, agent_id, &sealer_public);
+        // Tamper: flip the high bit of the first nonce byte.
+        encrypted.nonce[0] ^= 0x80;
+
+        let result = executor.apply_encrypted_turn(&encrypted, &sealer_secret, &mut ledger);
+        let err = result.expect_err("tampered nonce must reject");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("decryption") || msg.contains("Decryption"),
+            "expected DecryptionFailed from MAC failure, got: {msg}"
+        );
+    }
+
+    /// Adversarial #4: replay. Submitting the same `EncryptedTurn` envelope
+    /// twice — the second submission must reject at the inner-turn level
+    /// because the executor's per-agent nonce / receipt-chain head moved
+    /// forward after the first commit.
+    ///
+    /// This is the "nullifier-set / nonce-bump catches at the inner turn
+    /// level" requirement from the deliverable: the encrypted layer doesn't
+    /// have its own replay protection beyond what the inner Turn provides.
+    /// That's correct — putting replay protection at *both* layers would be
+    /// duplicate gating; we just verify the inner gate fires.
+    #[test]
+    fn apply_encrypted_turn_replay_rejected_by_inner_nonce() {
+        let mut ledger = Ledger::new();
+        let (agent, agent_kp) = make_open_cell(34, 1_000_000);
+        let agent_id = agent.id();
+        ledger.insert_cell(agent).unwrap();
+
+        let sealer_secret = [0x55u8; 32];
+        let sealer_public = *x25519_dalek::PublicKey::from(
+            &x25519_dalek::StaticSecret::from(sealer_secret),
+        )
+        .as_bytes();
+
+        let mut executor = TurnExecutor::new(ComputronCosts::default());
+        executor.set_proof_verifier(Box::new(AcceptAll));
+        let federation_id = [0u8; 32];
+        let turn = build_authorizing_turn(agent_id, &agent_kp, 0, 100, federation_id);
+
+        let encrypted = build_consistent_encrypted_turn(&turn, agent_id, &sealer_public);
+
+        // First submission commits.
+        let first = executor
+            .apply_encrypted_turn(&encrypted, &sealer_secret, &mut ledger)
+            .expect("first encrypted apply should commit");
+        assert!(first.was_encrypted);
+
+        // Second submission of the SAME envelope must reject. The cell's
+        // nonce / receipt-chain head moved forward, so the inner turn
+        // (nonce=0) is no longer applicable.
+        let second = executor.apply_encrypted_turn(&encrypted, &sealer_secret, &mut ledger);
+        let err = second.expect_err("replayed encrypted turn must reject");
+        let msg = format!("{err:?}");
+        // Acceptable rejection categories: nonce-mismatch, receipt-chain
+        // mismatch, or other inner-execute errors. We just need the second
+        // attempt to NOT commit.
+        assert!(
+            !msg.is_empty(),
+            "replay should produce a non-empty error message, got: {msg}"
+        );
+    }
+
+    /// Adversarial #5: control test — cleartext turns through `execute`
+    /// must leave `was_encrypted = false`. Confirms the flag is set by the
+    /// encrypted-path wrappers and not bleeding from elsewhere.
+    #[test]
+    fn cleartext_turn_does_not_set_was_encrypted() {
+        let mut ledger = Ledger::new();
+        let (agent, agent_kp) = make_open_cell(35, 1_000_000);
+        let agent_id = agent.id();
+        ledger.insert_cell(agent).unwrap();
+
+        let mut executor = TurnExecutor::new(ComputronCosts::default());
+        executor.set_proof_verifier(Box::new(AcceptAll));
+        let federation_id = [0u8; 32];
+        let turn = build_authorizing_turn(agent_id, &agent_kp, 0, 100, federation_id);
+
+        let result = executor.execute(&turn, &mut ledger);
+        let (_, receipt, _) = result.unwrap_committed();
+        assert!(
+            !receipt.was_encrypted,
+            "cleartext-path receipt must have was_encrypted=false"
+        );
+    }
 }
 
 // =============================================================================

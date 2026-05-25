@@ -69,6 +69,14 @@ const INTRO_INTRODUCER_SALT: u32 = 0x4949_4E32; // "IIN2"
 const INTRO_RECIPIENT_SALT: u32 = 0x4952_4332; // "IRC2"
 const INTRO_TARGET_SALT: u32 = 0x4954_4732; // "ITG2"
 
+// Unilateral binding (γ.2 1-arity sibling) — one salt per attestation kind.
+// Folded into the accumulator so a `SelfStateTransition` cannot collide with
+// a `SelfNonceBump` even at colliding `attestation_data`.
+const UNILATERAL_SELF_STATE_TRANSITION_SALT: u32 = 0x5553_5432; // "USST" → "USST2"-ish
+const UNILATERAL_SELF_NONCE_BUMP_SALT: u32 = 0x554E_4232; // "UNB2"
+const UNILATERAL_SOVEREIGN_WITNESS_SALT: u32 = 0x5553_5732; // "USW2"
+const UNILATERAL_CUSTOM_SALT: u32 = 0x5543_5432; // "UCT2"
+
 // ---------------------------------------------------------------------------
 // Roles
 // ---------------------------------------------------------------------------
@@ -277,6 +285,148 @@ impl GrantEntry {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Unilateral binding (γ.2 1-arity sibling of bilateral)
+// ---------------------------------------------------------------------------
+
+/// A unilateral attestation: a cell binding a property over its *own*
+/// transitions without a counterparty.
+///
+/// Bilateral (γ.2 2-arity Transfer / Grant) and trilateral (3-arity Introduce)
+/// bind agreement *across cells*. The 1-arity sibling binds a cell's own
+/// witnessing — used by sovereign cells (via `peer_exchange`'s federation-
+/// bypass primitive) to attest to state transitions, nonce advances, or
+/// signed sovereign witnesses without needing a counterparty in the bundle.
+///
+/// Composability: a [`pyana_cell::peer_exchange::PeerStateTransition`] can
+/// carry an optional `unilateral_attestation`. When present, the receiver
+/// recomputes the canonical encoding from the sender's cell-id-derived view
+/// and confirms it matches what's folded into the sender's PI accumulator.
+///
+/// Categorical lens: this is the 1-arity sibling of γ.2's bilateral binding,
+/// closing the n-arity family {1, 2, 3} (Unilateral / Transfer+Grant /
+/// Introduce). See `CROSS-CELL-CATEGORICAL-ANALYSIS.md` §3.5.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct UnilateralAttestation {
+    pub kind: UnilateralAttestationKind,
+    /// 32-byte canonical hash of the attestation's witness. The exact preimage
+    /// is kind-specific:
+    /// - `SelfStateTransition`: BLAKE3(domain || cell_id || old_commit || new_commit || effects_hash)
+    /// - `SelfNonceBump`:       BLAKE3(domain || cell_id || prev_nonce_be || new_nonce_be)
+    /// - `SovereignWitness`:    BLAKE3(domain || cell_id || pubkey || sequence_be || signature)
+    /// - `Custom`:              opaque caller-provided 32-byte commitment
+    pub attestation_data: [u8; 32],
+}
+
+/// Discriminant of [`UnilateralAttestation`]. The numeric kind_tag is folded
+/// into the PI accumulator so that two attestations with colliding
+/// `attestation_data` but different kinds remain distinguishable.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum UnilateralAttestationKind {
+    /// "My cell state went from X to Y." Used by hosted-cell sovereign-style
+    /// receipts where the cell self-publishes the transition.
+    SelfStateTransition,
+    /// "My nonce was N, now N+1." Useful for clients that want to publish
+    /// monotonic activity without leaking effect content.
+    SelfNonceBump,
+    /// "I signed this transition as a sovereign witness." Composes with the
+    /// SOVEREIGN_WITNESS_* PI slots — but distinct from those: those bind the
+    /// AIR's row-0 owner-pubkey hash, while this binds the post-hoc auditable
+    /// trail (one accumulator entry per signed transition the cell produced
+    /// in this turn).
+    SovereignWitness,
+    /// Caller-provided 30-bit `kind_tag`. The PI projection masks the tag to
+    /// 30 bits and OR's with `UNILATERAL_ATTESTATION_KIND_CUSTOM_BASE` so it
+    /// remains in canonical BabyBear space and can never collide with a
+    /// well-known kind.
+    Custom {
+        kind_tag: u32,
+    },
+}
+
+impl UnilateralAttestationKind {
+    /// Projection to the PI kind tag (BabyBear-canonical u32).
+    pub fn pi_tag(&self) -> u32 {
+        use pyana_circuit::effect_vm::pi;
+        match self {
+            Self::SelfStateTransition => pi::UNILATERAL_ATTESTATION_KIND_SELF_STATE_TRANSITION,
+            Self::SelfNonceBump => pi::UNILATERAL_ATTESTATION_KIND_SELF_NONCE_BUMP,
+            Self::SovereignWitness => pi::UNILATERAL_ATTESTATION_KIND_SOVEREIGN_WITNESS,
+            Self::Custom { kind_tag } => {
+                pi::UNILATERAL_ATTESTATION_KIND_CUSTOM_BASE | (kind_tag & 0x3FFF_FFFF)
+            }
+        }
+    }
+
+    /// Salt folded into the accumulator update (distinct per kind).
+    fn salt(&self) -> u32 {
+        match self {
+            Self::SelfStateTransition => UNILATERAL_SELF_STATE_TRANSITION_SALT,
+            Self::SelfNonceBump => UNILATERAL_SELF_NONCE_BUMP_SALT,
+            Self::SovereignWitness => UNILATERAL_SOVEREIGN_WITNESS_SALT,
+            Self::Custom { .. } => UNILATERAL_CUSTOM_SALT,
+        }
+    }
+}
+
+impl UnilateralAttestation {
+    /// Canonical helper: build a SelfStateTransition attestation from cell id
+    /// + the four canonical 32-byte commitments. Mirrors the canonical
+    /// signing-message layout of `peer_exchange::canonical_message` so the
+    /// receiver can rebuild without coordination.
+    pub fn self_state_transition(
+        cell_id: &CellId,
+        old_commit: &[u8; 32],
+        new_commit: &[u8; 32],
+        effects_hash: &[u8; 32],
+    ) -> Self {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"pyana-unilateral-self-state-transition-v1");
+        hasher.update(cell_id.as_bytes());
+        hasher.update(old_commit);
+        hasher.update(new_commit);
+        hasher.update(effects_hash);
+        Self {
+            kind: UnilateralAttestationKind::SelfStateTransition,
+            attestation_data: *hasher.finalize().as_bytes(),
+        }
+    }
+
+    /// Canonical helper: a SelfNonceBump attestation over (prev_nonce, new_nonce).
+    pub fn self_nonce_bump(cell_id: &CellId, prev_nonce: u64, new_nonce: u64) -> Self {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"pyana-unilateral-self-nonce-bump-v1");
+        hasher.update(cell_id.as_bytes());
+        hasher.update(&prev_nonce.to_be_bytes());
+        hasher.update(&new_nonce.to_be_bytes());
+        Self {
+            kind: UnilateralAttestationKind::SelfNonceBump,
+            attestation_data: *hasher.finalize().as_bytes(),
+        }
+    }
+
+    /// Canonical helper: a SovereignWitness attestation over (pubkey,
+    /// sequence, signature). Used by sovereign cells that publish their
+    /// signed transitions as auditable artifacts.
+    pub fn sovereign_witness(
+        cell_id: &CellId,
+        pubkey: &[u8; 32],
+        sequence: u64,
+        signature: &[u8; 64],
+    ) -> Self {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"pyana-unilateral-sovereign-witness-v1");
+        hasher.update(cell_id.as_bytes());
+        hasher.update(pubkey);
+        hasher.update(&sequence.to_be_bytes());
+        hasher.update(signature);
+        Self {
+            kind: UnilateralAttestationKind::SovereignWitness,
+            attestation_data: *hasher.finalize().as_bytes(),
+        }
+    }
+}
+
 /// One trilateral Introduce.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IntroduceEntry {
@@ -301,11 +451,24 @@ impl IntroduceEntry {
 /// The expected bilateral schedule for a turn: every Transfer / Grant /
 /// Introduce in DFS-call_forest order. The verifier computes this from
 /// `(call_forest, ACTOR_NONCE)` alone; no per-cell PI / witness is needed.
+///
+/// **Unilateral attestations** are tracked separately: they are per-cell
+/// (the cell self-attesting) and cannot be derived from the call_forest
+/// alone, since they may carry private witnessing context (cell-internal
+/// state hashes, nonce bumps). The bundle's `unilateral_attestations`
+/// field is populated by the prover / sovereign-witness path and verified
+/// against each per-cell PI's `UNILATERAL_ATTESTATIONS_ROOT` accumulator.
+/// See `CROSS-CELL-CATEGORICAL-ANALYSIS.md` §3.5.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct ExpectedBilateral {
     pub transfers: Vec<TransferEntry>,
     pub grants: Vec<GrantEntry>,
     pub introduces: Vec<IntroduceEntry>,
+    /// Per-cell unilateral attestations, keyed by the attesting cell id.
+    /// The verifier compares this against the corresponding per-cell PI's
+    /// `UNILATERAL_ATTESTATIONS_*` slots. Empty when no cell in the turn
+    /// produced a self-attestation (the default for hosted-cell turns).
+    pub unilateral_attestations: std::collections::BTreeMap<CellId, Vec<UnilateralAttestation>>,
 }
 
 impl ExpectedBilateral {
@@ -358,6 +521,56 @@ impl ExpectedBilateral {
         sched
     }
 
+    /// Add a unilateral attestation produced by `cell` in this turn.
+    /// Order-preserving — append-only — so the accumulator absorb sequence
+    /// is deterministic when reconstructed from the bundle.
+    pub fn push_unilateral(&mut self, cell: CellId, attestation: UnilateralAttestation) {
+        self.unilateral_attestations
+            .entry(cell)
+            .or_default()
+            .push(attestation);
+    }
+
+    /// Compute the unilateral accumulator root for `cell`. Each entry folds
+    /// `(kind_tag_block, data_block)` after a kind-specific salt absorb. The
+    /// starting state is `[BabyBear::ZERO; 4]` (sentinel-equivalent), so when
+    /// `cell` has no attestations the root is the same sentinel as the
+    /// per-cell empty case.
+    pub fn unilateral_root_for(&self, cell: &CellId) -> [BabyBear; 4] {
+        let Some(entries) = self.unilateral_attestations.get(cell) else {
+            return [BabyBear::ZERO; 4];
+        };
+        let mut acc = [BabyBear::ZERO; 4];
+        for att in entries {
+            let salt = att.kind.salt();
+            let kind_block = [
+                BabyBear::new(att.kind.pi_tag() & 0x7FFF_FFFF),
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+            ];
+            let data_block = canonical_32_to_felts_4(&att.attestation_data);
+            let salt_block = [
+                BabyBear::new(salt & 0x7FFF_FFFF),
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+            ];
+            acc = absorb_4(acc, salt_block);
+            acc = absorb_4(acc, kind_block);
+            acc = absorb_4(acc, data_block);
+        }
+        acc
+    }
+
+    /// Count of unilateral attestations produced by `cell` in this turn.
+    pub fn unilateral_count_for(&self, cell: &CellId) -> u32 {
+        self.unilateral_attestations
+            .get(cell)
+            .map(|v| v.len() as u32)
+            .unwrap_or(0)
+    }
+
     /// Counts of bilateral effects on the given cell, per the seven PI
     /// count slots. Returns the same shape the verifier checks against
     /// PI[OUTBOUND_TRANSFER_COUNT..INTRO_AS_TARGET_COUNT].
@@ -390,6 +603,7 @@ impl ExpectedBilateral {
                 c.intro_as_target += 1;
             }
         }
+        c.unilateral_attestations = self.unilateral_count_for(cell);
         c
     }
 
@@ -448,11 +662,13 @@ impl ExpectedBilateral {
                     fold_entry(roots.intro_as_target, INTRO_TARGET_SALT, id, peer);
             }
         }
+        roots.unilateral_attestations = self.unilateral_root_for(cell);
         roots
     }
 }
 
-/// Per-cell counts of bilateral effects, mirroring the seven PI count slots.
+/// Per-cell counts of bilateral effects (seven slots) plus the unilateral
+/// attestations count (γ.2 1-arity sibling).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BilateralCounts {
     pub outbound_transfer: u32,
@@ -462,9 +678,13 @@ pub struct BilateralCounts {
     pub intro_as_introducer: u32,
     pub intro_as_recipient: u32,
     pub intro_as_target: u32,
+    /// γ.2 unilateral: number of self-attestations produced by this cell
+    /// in the turn. Default 0 (no attestations).
+    pub unilateral_attestations: u32,
 }
 
-/// Per-cell 4-felt accumulator roots, mirroring the seven PI root fields.
+/// Per-cell 4-felt accumulator roots, mirroring the seven bilateral PI root
+/// fields plus the unilateral PI root (γ.2 1-arity sibling).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BilateralRoots {
     pub outgoing_transfer: [BabyBear; 4],
@@ -474,6 +694,9 @@ pub struct BilateralRoots {
     pub intro_as_introducer: [BabyBear; 4],
     pub intro_as_recipient: [BabyBear; 4],
     pub intro_as_target: [BabyBear; 4],
+    /// γ.2 unilateral attestations accumulator root. Sentinel
+    /// `[BabyBear::ZERO; 4]` when no attestations.
+    pub unilateral_attestations: [BabyBear; 4],
 }
 
 impl Default for BilateralRoots {
@@ -486,6 +709,7 @@ impl Default for BilateralRoots {
             intro_as_introducer: [BabyBear::ZERO; 4],
             intro_as_recipient: [BabyBear::ZERO; 4],
             intro_as_target: [BabyBear::ZERO; 4],
+            unilateral_attestations: [BabyBear::ZERO; 4],
         }
     }
 }
@@ -518,6 +742,12 @@ pub fn project_into_pi(pi: &mut [BabyBear], counts: &BilateralCounts, roots: &Bi
         pi[p::INTRO_AS_RECIPIENT_ROOT_BASE + i] = roots.intro_as_recipient[i];
         pi[p::INTRO_AS_TARGET_ROOT_BASE + i] = roots.intro_as_target[i];
     }
+
+    // γ.2 unilateral binding (1-arity sibling).
+    pi[p::UNILATERAL_ATTESTATIONS_COUNT] = BabyBear::new(counts.unilateral_attestations);
+    for i in 0..p::UNILATERAL_ATTESTATIONS_ROOT_LEN {
+        pi[p::UNILATERAL_ATTESTATIONS_ROOT_BASE + i] = roots.unilateral_attestations[i];
+    }
 }
 
 /// Extract the γ.2 bilateral counts + roots from a PI vector.
@@ -531,6 +761,7 @@ pub fn extract_from_pi(pi: &[BabyBear]) -> (BilateralCounts, BilateralRoots) {
         intro_as_introducer: pi[p::INTRO_AS_INTRODUCER_COUNT].as_u32(),
         intro_as_recipient: pi[p::INTRO_AS_RECIPIENT_COUNT].as_u32(),
         intro_as_target: pi[p::INTRO_AS_TARGET_COUNT].as_u32(),
+        unilateral_attestations: pi[p::UNILATERAL_ATTESTATIONS_COUNT].as_u32(),
     };
     let read4 =
         |base: usize| -> [BabyBear; 4] { [pi[base], pi[base + 1], pi[base + 2], pi[base + 3]] };
@@ -542,6 +773,7 @@ pub fn extract_from_pi(pi: &[BabyBear]) -> (BilateralCounts, BilateralRoots) {
         intro_as_introducer: read4(p::INTRO_AS_INTRODUCER_ROOT_BASE),
         intro_as_recipient: read4(p::INTRO_AS_RECIPIENT_ROOT_BASE),
         intro_as_target: read4(p::INTRO_AS_TARGET_ROOT_BASE),
+        unilateral_attestations: read4(p::UNILATERAL_ATTESTATIONS_ROOT_BASE),
     };
     (counts, roots)
 }

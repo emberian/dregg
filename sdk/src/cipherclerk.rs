@@ -2396,6 +2396,82 @@ impl AgentCipherclerk {
         Signature(sig.to_bytes())
     }
 
+    /// Build an [`EncryptedTurn`](pyana_turn::EncryptedTurn) envelope for
+    /// the given `Turn`, encrypted to `executor_x25519_public` (the X25519
+    /// public key the recipient executor exposes via
+    /// `GET /turns/encryption-key`).
+    ///
+    /// This is the sender-side counterpart of
+    /// [`pyana_turn::TurnExecutor::apply_encrypted_turn`]. The resulting
+    /// envelope can be postcard-encoded and POSTed to
+    /// `/turns/submit-encrypted`.
+    ///
+    /// # Validity proof
+    ///
+    /// Per AUDIT-privacy.md §11.2, this Phase-1 helper packs an empty
+    /// validity proof whose public inputs bind to the actual turn
+    /// commitment / agent commitment / conflict-set commitment so
+    /// `EncryptedTurn::verify_metadata` succeeds at the executor. The
+    /// STARK proof itself is the responsibility of a future phase
+    /// (Phase-2 STARK-validity ceremony) — callers wanting real proof
+    /// validation should construct the `TurnValidityProof` themselves
+    /// and use `EncryptedTurn::encrypt_for_executor` directly.
+    ///
+    /// # Boundary (BOUNDARIES.md §5)
+    ///
+    /// The sender is `cleartext-inside` until this call returns; after
+    /// return, the inner turn is `commitment-inside` everyone except
+    /// holders of the executor's matching X25519 unsealer secret.
+    pub fn make_encrypted_turn(
+        &self,
+        turn: &Turn,
+        executor_x25519_public: &[u8; 32],
+        submitted_at: i64,
+    ) -> Result<pyana_turn::EncryptedTurn, pyana_turn::EncryptedTurnError> {
+        use pyana_turn::{
+            ConflictSet, EncryptedTurn, TurnValidityProof, TurnValidityPublicInputs,
+        };
+
+        // Build an empty Bloom conflict set. A real sender would populate
+        // this from the turn's access set so the federation can detect
+        // conflicts without seeing cell IDs; the Phase-1 helper keeps it
+        // empty (false-positive-free over zero cells).
+        let conflict_set = ConflictSet::new();
+
+        // Compute the commitment over the same serialization
+        // (`serde_json`) that `encrypt_for_executor` uses, so
+        // `verify_metadata` succeeds at the executor.
+        let plaintext = serde_json::to_vec(turn)
+            .map_err(|e| pyana_turn::EncryptedTurnError::SerializationFailed(e.to_string()))?;
+        let turn_commitment = {
+            let mut hasher = blake3::Hasher::new_derive_key("pyana-encrypted-turn-commitment v1");
+            hasher.update(&plaintext);
+            *hasher.finalize().as_bytes()
+        };
+
+        let public_inputs = TurnValidityPublicInputs {
+            turn_commitment,
+            agent_commitment: TurnValidityPublicInputs::compute_agent_commitment(&turn.agent),
+            claimed_nonce: turn.nonce,
+            min_fee: 0,
+            conflict_set_commitment: conflict_set.commitment(),
+        };
+
+        let validity_proof = TurnValidityProof {
+            proof_bytes: Vec::new(),
+            public_inputs,
+        };
+
+        EncryptedTurn::encrypt_for_executor(
+            turn,
+            turn.agent,
+            executor_x25519_public,
+            conflict_set,
+            validity_proof,
+            submitted_at,
+        )
+    }
+
     /// Sign an [`Action`](pyana_turn::action::Action) by replacing its
     /// authorization with a real [`Signature`](pyana_turn::action::Authorization)
     /// over the canonical signing message.

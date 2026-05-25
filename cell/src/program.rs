@@ -347,6 +347,21 @@ impl AuthorizedSet {
     }
 }
 
+/// Source for [`StateConstraint::Renounced`]'s sender-non-membership
+/// check. Mirrors [`AuthorizedSet`] but the predicate is *negative* —
+/// the sender's identity must verifiably NOT be in the named sorted
+/// leaf set. See `CROSS-CELL-CATEGORICAL-ANALYSIS.md §3.2`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RenouncedSet {
+    /// Public Merkle root of the *unheld* sorted leaf set, sourced from
+    /// slot `set_root_index`. The action's witness side carries a
+    /// non-membership neighbor-witness proof against the root.
+    PublicRoot { set_root_index: u8 },
+    /// Blinded sorted-set commitment. The witness side carries a
+    /// non-membership neighbor-witness against the commitment.
+    BlindedSet { commitment: [u8; 32] },
+}
+
 /// Delta-relation kind for `BoundDelta` cross-cell binding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeltaRelation {
@@ -732,6 +747,41 @@ pub enum StateConstraint {
     /// Replay: per PREDICATE-INVENTORY §6.3, the receipt snapshots the
     /// commitment at receipt-time so scope-2 replay is deterministic.
     Witnessed { wp: WitnessedPredicate },
+
+    /// **Categorical dual of [`Self::SenderAuthorized`]: proof of
+    /// non-holding / non-membership.** A *renunciation* slot caveat —
+    /// the action's sender must verifiably *NOT* be in the
+    /// `set`'s sorted Merkle leaf set. Implemented as a typed shim
+    /// that dispatches through the
+    /// [`crate::predicate::WitnessedPredicateKind::NonMembership`]
+    /// verifier in the registry, using the sender pk as the candidate
+    /// input and the commitment carried in `set`.
+    ///
+    /// Per `CROSS-CELL-CATEGORICAL-ANALYSIS.md §3.2 / §9.2.1`:
+    /// `Renunciation` is the initial-object dual of `Authorization`.
+    /// `SenderAuthorized` says "I prove I have authority"; `Renounced`
+    /// says "I prove I lack authority over THIS set." App drivers:
+    /// *governance recusal* ("I attest I do not hold a conflicting-
+    /// interest cap before voting"), *compliance attestation* ("the
+    /// sender is not on the blacklist"), *revocation lookups* (the
+    /// sender's identity is not in the revocation set), *selective
+    /// non-disclosure* ("the sender is not in the under-18 set").
+    ///
+    /// The variant exists as a structurally separate slot caveat from
+    /// `Witnessed { wp: WitnessedPredicate { kind: NonMembership, … } }`
+    /// so audit tooling can clearly distinguish "this cell requires
+    /// the sender to *be* in a set" (positive auth) from "this cell
+    /// requires the sender to *not* be in a set" (renunciation). The
+    /// underlying gadget is shared.
+    ///
+    /// Replay: like `SenderAuthorized`, replay is deterministic once
+    /// the commitment (or its slot snapshot) is carried in the receipt.
+    Renounced {
+        /// The sorted-set commitment the sender must *not* be in.
+        /// Either a slot-borne public root or a fixed blinded
+        /// commitment (mirrors [`AuthorizedSet`]).
+        set: RenouncedSet,
+    },
 
     // ─── Escape hatch ───
     /// DSL-authored predicate. The executor evaluates by hash lookup in
@@ -1454,6 +1504,48 @@ fn evaluate_constraint_full(
             Ok(())
         }
 
+        StateConstraint::Renounced { set } => {
+            // Dual of SenderAuthorized: verify the sender is *not* in
+            // the named sorted-leaf set by dispatching the
+            // NonMembership verifier.
+            let ctx = ctx.ok_or(ProgramError::MissingContextField { field: "sender" })?;
+            let sender = ctx
+                .sender
+                .as_ref()
+                .ok_or(ProgramError::MissingContextField { field: "sender" })?;
+            let commitment = match set {
+                RenouncedSet::PublicRoot { set_root_index } => {
+                    let idx = check_index(*set_root_index)?;
+                    new_state.fields[idx]
+                }
+                RenouncedSet::BlindedSet { commitment } => *commitment,
+            };
+            let Some(registry) = witnesses.registry else {
+                return Err(ProgramError::SenderMembershipWitnessMissing);
+            };
+            // The non-membership neighbor witness is a ProofBytes blob
+            // (96 bytes — see `NonMembershipNeighborProof`).
+            let blob = witnesses
+                .blobs
+                .iter()
+                .find(|b| b.kind == WitnessKindTag::ProofBytes)
+                .ok_or(ProgramError::SenderMembershipWitnessMissing)?;
+            let wp = crate::predicate::WitnessedPredicate {
+                kind: crate::predicate::WitnessedPredicateKind::NonMembership,
+                commitment,
+                input_ref: InputRef::Sender,
+                proof_witness_index: 0,
+            };
+            let input = PredicateInput::Sender(sender);
+            registry.verify(&wp, &input, blob.bytes).map_err(|e| {
+                ProgramError::WitnessedPredicateRejected {
+                    kind_name: "NonMembership",
+                    reason: e.to_string(),
+                }
+            })?;
+            Ok(())
+        }
+
         StateConstraint::CapabilityUniqueness { cap_set_root_slot } => {
             let _ = check_index(*cap_set_root_slot)?;
             // Structural declaration: enforcement is on the cap-set root
@@ -1720,6 +1812,7 @@ fn evaluate_constraint_full(
                 crate::predicate::WitnessedPredicateKind::Dfa => "Dfa",
                 crate::predicate::WitnessedPredicateKind::Temporal => "Temporal",
                 crate::predicate::WitnessedPredicateKind::MerkleMembership => "MerkleMembership",
+                crate::predicate::WitnessedPredicateKind::NonMembership => "NonMembership",
                 crate::predicate::WitnessedPredicateKind::BlindedSet => "BlindedSet",
                 crate::predicate::WitnessedPredicateKind::BridgePredicate => "BridgePredicate",
                 crate::predicate::WitnessedPredicateKind::PedersenEquality => "PedersenEquality",
@@ -2678,5 +2771,164 @@ mod tests {
             p.evaluate(&s, None, None).unwrap_err(),
             ProgramError::CircuitProofRequired { .. }
         ));
+    }
+
+    // ── Renunciation — Tier 2 §3.2 / §9.2.1 ──────────────────────────────
+
+    #[test]
+    fn renounced_accepts_legal_non_membership() {
+        // Sender 0x05 is between lower=0x04 and upper=0x06 → not in
+        // the set → renunciation accepts.
+        let candidate = [0x05u8; 32];
+        let proof = crate::predicate::NonMembershipNeighborProof {
+            lower: [0x04u8; 32],
+            upper: [0x06u8; 32],
+            consecutive_tag: crate::predicate::NonMembershipNeighborProof::CONSECUTIVE_TAG,
+        };
+        let proof_bytes = proof.to_bytes();
+        let registry = crate::predicate::WitnessedPredicateRegistry::with_stubs();
+        let blobs: [WitnessBlobView<'_>; 1] = [WitnessBlobView {
+            kind: WitnessKindTag::ProofBytes,
+            bytes: &proof_bytes,
+        }];
+        let bundle = WitnessBundle {
+            blobs: &blobs,
+            registry: Some(&registry),
+        };
+
+        let p = CellProgram::Predicate(vec![StateConstraint::Renounced {
+            set: RenouncedSet::BlindedSet {
+                commitment: [0xAB; 32],
+            },
+        }]);
+        let s = CellState::new(0);
+        let ctx = ctx_sender(candidate, 0);
+        p.evaluate_full(&s, None, Some(&ctx), &TransitionMeta::wildcard(), &bundle)
+            .expect("legal renunciation accepts");
+    }
+
+    #[test]
+    fn renounced_rejects_when_prover_is_in_set() {
+        // Adversarial: candidate == lower neighbor → the prover IS in
+        // the set but is forging a renunciation. Must reject.
+        let candidate = [0x05u8; 32];
+        let proof = crate::predicate::NonMembershipNeighborProof {
+            lower: [0x05u8; 32], // candidate matches lower → in set
+            upper: [0x06u8; 32],
+            consecutive_tag: crate::predicate::NonMembershipNeighborProof::CONSECUTIVE_TAG,
+        };
+        let proof_bytes = proof.to_bytes();
+        let registry = crate::predicate::WitnessedPredicateRegistry::with_stubs();
+        let blobs: [WitnessBlobView<'_>; 1] = [WitnessBlobView {
+            kind: WitnessKindTag::ProofBytes,
+            bytes: &proof_bytes,
+        }];
+        let bundle = WitnessBundle {
+            blobs: &blobs,
+            registry: Some(&registry),
+        };
+
+        let p = CellProgram::Predicate(vec![StateConstraint::Renounced {
+            set: RenouncedSet::BlindedSet {
+                commitment: [0xAB; 32],
+            },
+        }]);
+        let s = CellState::new(0);
+        let ctx = ctx_sender(candidate, 0);
+        let err = p
+            .evaluate_full(&s, None, Some(&ctx), &TransitionMeta::wildcard(), &bundle)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ProgramError::WitnessedPredicateRejected { kind_name: "NonMembership", .. }
+        ));
+    }
+
+    #[test]
+    fn renounced_rejects_forged_consecutive_tag() {
+        let candidate = [0x05u8; 32];
+        let proof = crate::predicate::NonMembershipNeighborProof {
+            lower: [0x04u8; 32],
+            upper: [0x06u8; 32],
+            consecutive_tag: [0u8; 32], // forged
+        };
+        let proof_bytes = proof.to_bytes();
+        let registry = crate::predicate::WitnessedPredicateRegistry::with_stubs();
+        let blobs: [WitnessBlobView<'_>; 1] = [WitnessBlobView {
+            kind: WitnessKindTag::ProofBytes,
+            bytes: &proof_bytes,
+        }];
+        let bundle = WitnessBundle {
+            blobs: &blobs,
+            registry: Some(&registry),
+        };
+
+        let p = CellProgram::Predicate(vec![StateConstraint::Renounced {
+            set: RenouncedSet::BlindedSet {
+                commitment: [0xAB; 32],
+            },
+        }]);
+        let s = CellState::new(0);
+        let ctx = ctx_sender(candidate, 0);
+        let err = p
+            .evaluate_full(&s, None, Some(&ctx), &TransitionMeta::wildcard(), &bundle)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ProgramError::WitnessedPredicateRejected { kind_name: "NonMembership", .. }
+        ));
+    }
+
+    #[test]
+    fn renounced_requires_sender_in_ctx() {
+        let registry = crate::predicate::WitnessedPredicateRegistry::with_stubs();
+        let bundle = WitnessBundle {
+            blobs: &[],
+            registry: Some(&registry),
+        };
+        let p = CellProgram::Predicate(vec![StateConstraint::Renounced {
+            set: RenouncedSet::BlindedSet {
+                commitment: [0xAB; 32],
+            },
+        }]);
+        let s = CellState::new(0);
+        // No ctx at all.
+        let err = p
+            .evaluate_full(&s, None, None, &TransitionMeta::wildcard(), &bundle)
+            .unwrap_err();
+        assert!(matches!(err, ProgramError::MissingContextField { .. }));
+        // Ctx without sender.
+        let bare = EvalContext::default();
+        let err = p
+            .evaluate_full(&s, None, Some(&bare), &TransitionMeta::wildcard(), &bundle)
+            .unwrap_err();
+        assert!(matches!(err, ProgramError::MissingContextField { .. }));
+    }
+
+    #[test]
+    fn renounced_public_root_reads_slot_commitment() {
+        // PublicRoot variant pulls commitment from a state slot.
+        let candidate = [0x05u8; 32];
+        let proof = crate::predicate::NonMembershipNeighborProof {
+            lower: [0x04u8; 32],
+            upper: [0x06u8; 32],
+            consecutive_tag: crate::predicate::NonMembershipNeighborProof::CONSECUTIVE_TAG,
+        };
+        let proof_bytes = proof.to_bytes();
+        let registry = crate::predicate::WitnessedPredicateRegistry::with_stubs();
+        let mut blobs: [WitnessBlobView<'_>; 1] = [WitnessBlobView {
+            kind: WitnessKindTag::ProofBytes,
+            bytes: &proof_bytes,
+        }];
+        let bundle = renunciation_bundle(&proof_bytes, &mut blobs, &registry);
+
+        let p = CellProgram::Predicate(vec![StateConstraint::Renounced {
+            set: RenouncedSet::PublicRoot { set_root_index: 3 },
+        }]);
+        let mut s = CellState::new(0);
+        s.fields[3] = [0xCC; 32]; // set root from slot
+        let ctx = ctx_sender(candidate, 0);
+        p.evaluate_full(&s, None, Some(&ctx), &TransitionMeta::wildcard(), &bundle)
+            .expect("legal renunciation via PublicRoot accepts");
     }
 }

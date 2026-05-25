@@ -670,6 +670,324 @@ impl WitnessedPredicateRegistry {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// WitnessProducer — left adjoint of WitnessedPredicateVerifier
+// (CROSS-CELL-CATEGORICAL-ANALYSIS.md §3.4 + §4.1 + §9.1.4)
+// ─────────────────────────────────────────────────────────────────────
+
+/// Errors a `WitnessProducer` can surface while constructing proof
+/// bytes for a `WitnessedPredicate`.
+///
+/// Symmetric to [`WitnessedPredicateError`] on the verifier side: each
+/// "the verifier rejected" shape has a corresponding "the producer
+/// could not synthesize" shape.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WitnessProducerError {
+    /// The producer received an input shape it cannot fold into a
+    /// witness — e.g. `Sender` input given to a producer that expects
+    /// `Slot`-shaped witnesses.
+    InputShapeMismatch {
+        kind_name: &'static str,
+        expected: &'static str,
+        actual: &'static str,
+    },
+    /// The producer could not synthesize a witness from the supplied
+    /// input (commitment mismatch, missing aux data, AIR proving
+    /// error, etc.). `reason` carries the producer-side diagnostic.
+    ProducerFailed {
+        kind_name: &'static str,
+        reason: String,
+    },
+    /// The producer's vk_hash differs from the requested commitment;
+    /// the registry routed to the wrong producer (or the caller is
+    /// trying to forge a proof under a different VK).
+    VkHashMismatch {
+        expected: [u8; 32],
+        actual: [u8; 32],
+    },
+    /// No producer is registered for this kind.
+    KindNotRegistered { kind: WitnessedPredicateKind },
+}
+
+impl core::fmt::Display for WitnessProducerError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::InputShapeMismatch {
+                kind_name,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "witness producer {kind_name} input shape mismatch: expected {expected}, got {actual}"
+            ),
+            Self::ProducerFailed { kind_name, reason } => {
+                write!(f, "witness producer {kind_name} failed: {reason}")
+            }
+            Self::VkHashMismatch { expected, actual } => write!(
+                f,
+                "witness producer vk_hash mismatch: expected {expected:02x?}, got {actual:02x?}"
+            ),
+            Self::KindNotRegistered { kind } => write!(
+                f,
+                "no witness producer registered for predicate kind {kind:?}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for WitnessProducerError {}
+
+/// Producer-side counterpart to [`WitnessedPredicateVerifier`] — the
+/// left adjoint of the `Predicate ⊣ Witness` adjunction.
+///
+/// Per `CROSS-CELL-CATEGORICAL-ANALYSIS.md` §3.4 + §4.1 + §9.1.4: every
+/// prover in the tree (`BridgePredicateProof::new`,
+/// `PortableNoteProof::from_witness`, `BlindedMerkleStarkAir::prove`,
+/// …) already implements *this shape* ad hoc. Naming it lifts the
+/// asymmetry from "verifier-only trait, prover-side bespoke" to a
+/// symmetric pair:
+///
+/// - [`WitnessedPredicateVerifier::verify`] is the **counit**: given a
+///   witness, decide acceptance.
+/// - [`WitnessProducer::produce`] is the **unit**: given an input,
+///   synthesize the witness that the counit accepts.
+/// - The unit-counit identity: for every well-formed
+///   `(commitment, input, witness)`, the proof bytes the producer
+///   returns must verify under the registered verifier with the same
+///   `(commitment, input)`. Round-trip tests assert this.
+///
+/// # Object-safety
+///
+/// The trait is object-safe so [`WitnessProducerRegistry`] holds
+/// `Arc<dyn WitnessProducer>` and dispatches by kind at runtime,
+/// mirroring [`WitnessedPredicateRegistry`].
+///
+/// # Witness vs. input
+///
+/// The signature splits **input** (the predicate's public datum the
+/// verifier's PI loop binds against; resolved from [`InputRef`]) from
+/// **witness** (the prover-side secret / auxiliary data — Merkle
+/// paths, openings, full preimages of commitments). Both are needed
+/// to produce proof bytes; only input is needed to verify.
+///
+/// # vk_hash binding
+///
+/// Each producer publishes its `vk_hash` (for `Custom` kinds) or
+/// returns `[0u8; 32]` for built-in kinds. The registry checks the
+/// hash on dispatch so a producer registered for vk `H1` cannot be
+/// invoked under vk `H2`. This is the producer-side analog of the
+/// verifier's `kind()` dispatch.
+pub trait WitnessProducer: Send + Sync {
+    /// Human-readable name for diagnostics.
+    fn name(&self) -> &'static str;
+
+    /// The predicate kind this producer synthesizes proofs for.
+    fn kind(&self) -> WitnessedPredicateKind;
+
+    /// For `Custom` kinds, the verifier-key hash this producer
+    /// targets. For built-in kinds, returns the all-zero hash. The
+    /// registry uses this to disambiguate multiple `Custom`
+    /// producers.
+    fn vk_hash(&self) -> [u8; 32] {
+        match self.kind() {
+            WitnessedPredicateKind::Custom { vk_hash } => vk_hash,
+            _ => [0u8; 32],
+        }
+    }
+
+    /// Synthesize proof bytes for a [`WitnessedPredicate`] given a
+    /// concrete input and a witness blob.
+    ///
+    /// - `commitment`: the predicate's commitment (must match what
+    ///   the verifier expects — Merkle root, DSL hash, blinded set
+    ///   commitment, etc.).
+    /// - `input`: the resolved [`PredicateInput`] (same shape the
+    ///   verifier consumes).
+    /// - `witness_bytes`: the prover-side auxiliary data —
+    ///   Merkle path, opening, full message, etc.
+    ///
+    /// Returns the proof bytes the verifier accepts. The unit-counit
+    /// identity: feeding the result back through the verifier's
+    /// `verify` (with the same commitment + input) must accept.
+    fn produce(
+        &self,
+        commitment: &[u8; 32],
+        input: &PredicateInput<'_>,
+        witness_bytes: &[u8],
+    ) -> Result<Vec<u8>, WitnessProducerError>;
+}
+
+/// Registry of [`WitnessProducer`]s — the producer-side mirror of
+/// [`WitnessedPredicateRegistry`].
+///
+/// Per `CROSS-CELL-CATEGORICAL-ANALYSIS.md` §4.1: the adjunction
+/// `Predicate ⊣ Witness` is complete when both functors are named.
+/// This registry is the **left adjoint / free** functor; the
+/// verifier registry is the **right adjoint / forgetful** functor.
+/// Holding both side-by-side gives every kind a symmetric prover-
+/// side API.
+///
+/// # SDK ergonomics
+///
+/// Today an SDK that wants to construct a proof for a
+/// `Witnessed { wp }` slot caveat picks the right per-kind prover by
+/// hand (`BridgePredicateProof::new`, etc.). With this registry the
+/// SDK calls `producer_registry.produce(&wp, &input, witness_bytes)`
+/// and the same kind-dispatch logic the verifier already uses fires
+/// on the producer side. Per-kind impls are still kind-specific code;
+/// dispatch is unified.
+#[derive(Default, Clone)]
+pub struct WitnessProducerRegistry {
+    /// Built-in kind producers.
+    builtins: BTreeMap<BuiltinKey, Arc<dyn WitnessProducer>>,
+    /// App-registered custom producers, keyed on `vk_hash`.
+    custom: BTreeMap<[u8; 32], Arc<dyn WitnessProducer>>,
+}
+
+impl std::fmt::Debug for WitnessProducerRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WitnessProducerRegistry")
+            .field("builtins_count", &self.builtins.len())
+            .field("custom_count", &self.custom.len())
+            .finish()
+    }
+}
+
+impl WitnessProducerRegistry {
+    /// Construct an empty registry.
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    /// Construct a registry with stub producers for every built-in
+    /// kind — symmetric to [`WitnessedPredicateRegistry::with_stubs`].
+    /// Each stub produces a length-prefixed witness blob that the
+    /// matching stub verifier accepts (non-empty proof bytes); round-
+    /// tripping a stub producer's output through a stub verifier
+    /// satisfies the unit-counit identity in tests.
+    ///
+    /// Production callers must replace stubs with real per-kind
+    /// producers (`pyana-circuit` for Dfa / Temporal /
+    /// MerkleMembership / BlindedSet / BridgePredicate /
+    /// PedersenEquality, app-side for `Custom`).
+    pub fn with_stubs() -> Self {
+        let mut r = Self::empty();
+        r.register_builtin(Arc::new(StubProducer {
+            kind: WitnessedPredicateKind::Dfa,
+            name: "stub-producer-dfa",
+        }));
+        r.register_builtin(Arc::new(StubProducer {
+            kind: WitnessedPredicateKind::Temporal,
+            name: "stub-producer-temporal",
+        }));
+        r.register_builtin(Arc::new(StubProducer {
+            kind: WitnessedPredicateKind::MerkleMembership,
+            name: "stub-producer-merkle-membership",
+        }));
+        r.register_builtin(Arc::new(StubProducer {
+            kind: WitnessedPredicateKind::NonMembership,
+            name: "stub-producer-non-membership",
+        }));
+        r.register_builtin(Arc::new(StubProducer {
+            kind: WitnessedPredicateKind::BlindedSet,
+            name: "stub-producer-blinded-set",
+        }));
+        r.register_builtin(Arc::new(StubProducer {
+            kind: WitnessedPredicateKind::BridgePredicate,
+            name: "stub-producer-bridge-predicate",
+        }));
+        r.register_builtin(Arc::new(StubProducer {
+            kind: WitnessedPredicateKind::PedersenEquality,
+            name: "stub-producer-pedersen-equality",
+        }));
+        r
+    }
+
+    /// Register (or replace) a built-in producer.
+    pub fn register_builtin(&mut self, producer: Arc<dyn WitnessProducer>) {
+        let key = BuiltinKey::from_kind(producer.kind())
+            .expect("register_builtin called with Custom kind; use register_custom");
+        self.builtins.insert(key, producer);
+    }
+
+    /// Register an app-defined `Custom { vk_hash }` producer.
+    pub fn register_custom(&mut self, vk_hash: [u8; 32], producer: Arc<dyn WitnessProducer>) {
+        debug_assert!(
+            matches!(producer.kind(), WitnessedPredicateKind::Custom { vk_hash: h } if h == vk_hash),
+            "register_custom: producer.kind() vk_hash must match passed vk_hash"
+        );
+        self.custom.insert(vk_hash, producer);
+    }
+
+    /// Look up a producer for the given kind.
+    pub fn get(&self, kind: WitnessedPredicateKind) -> Option<Arc<dyn WitnessProducer>> {
+        match kind {
+            WitnessedPredicateKind::Custom { vk_hash } => self.custom.get(&vk_hash).cloned(),
+            other => BuiltinKey::from_kind(other).and_then(|k| self.builtins.get(&k).cloned()),
+        }
+    }
+
+    /// Produce proof bytes for a [`WitnessedPredicate`] given a
+    /// resolved input and witness. The caller is responsible for
+    /// resolving the predicate's `input_ref` into a concrete
+    /// [`PredicateInput`] — the same way the verifier registry's
+    /// `verify` consumes it.
+    pub fn produce(
+        &self,
+        wp: &WitnessedPredicate,
+        input: &PredicateInput<'_>,
+        witness_bytes: &[u8],
+    ) -> Result<Vec<u8>, WitnessProducerError> {
+        let producer = self
+            .get(wp.kind)
+            .ok_or(WitnessProducerError::KindNotRegistered { kind: wp.kind })?;
+        // Enforce vk_hash consistency for Custom kinds.
+        if let WitnessedPredicateKind::Custom { vk_hash } = wp.kind {
+            let registered = producer.vk_hash();
+            if registered != vk_hash {
+                return Err(WitnessProducerError::VkHashMismatch {
+                    expected: vk_hash,
+                    actual: registered,
+                });
+            }
+        }
+        producer.produce(&wp.commitment, input, witness_bytes)
+    }
+}
+
+/// Stub producer mirroring [`StubVerifier`]. Synthesizes a
+/// domain-tagged length-prefixed blob of the form
+/// `b"stub-witness:" || u32(witness_len) || witness_bytes`. The stub
+/// verifier accepts any non-empty proof bytes, so this satisfies the
+/// unit-counit identity for tests.
+struct StubProducer {
+    kind: WitnessedPredicateKind,
+    name: &'static str,
+}
+
+impl WitnessProducer for StubProducer {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn kind(&self) -> WitnessedPredicateKind {
+        self.kind
+    }
+
+    fn produce(
+        &self,
+        _commitment: &[u8; 32],
+        _input: &PredicateInput<'_>,
+        witness_bytes: &[u8],
+    ) -> Result<Vec<u8>, WitnessProducerError> {
+        let mut out = Vec::with_capacity(13 + 4 + witness_bytes.len());
+        out.extend_from_slice(b"stub-witness:");
+        out.extend_from_slice(&(witness_bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(witness_bytes);
+        Ok(out)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Stub verifiers
 // ─────────────────────────────────────────────────────────────────────
 
