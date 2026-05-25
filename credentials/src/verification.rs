@@ -17,7 +17,7 @@
 
 use thiserror::Error;
 
-use pyana_bridge::present::PresentationVerification;
+use pyana_circuit::PresentationVerification;
 
 use crate::presentation::{Presentation, WirePresentation};
 use crate::revocation::RevocationProof;

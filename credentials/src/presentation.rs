@@ -29,7 +29,7 @@ use crate::issuance::Credential;
 use crate::schema::{AttrValue, PredicateRequest};
 
 /// Options controlling how a presentation is generated.
-#[derive(Clone, Debug, Default)]
+#[derive(Default)]
 pub struct PresentationOptions {
     /// Attributes the holder wishes to *reveal* in cleartext. Other
     /// attributes are not transmitted at all. (Predicates are handled
@@ -47,6 +47,19 @@ pub struct PresentationOptions {
     /// `FederationRegistry` so the membership Merkle proof comes from
     /// the real federation tree.
     pub federation_registry: Option<Box<dyn FederationRegistry>>,
+}
+
+impl core::fmt::Debug for PresentationOptions {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PresentationOptions")
+            .field("disclose", &self.disclose)
+            .field("predicates", &self.predicates)
+            .field(
+                "federation_registry",
+                &self.federation_registry.as_ref().map(|_| "<dyn FederationRegistry>"),
+            )
+            .finish()
+    }
 }
 
 impl PresentationOptions {
@@ -67,7 +80,12 @@ impl PresentationOptions {
 
 /// A credential presentation: a STARK proof + the holder's disclosed
 /// attributes + any predicate proofs.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+///
+/// Note: `Presentation` is NOT `Serialize`/`Deserialize`. The underlying
+/// `BridgePresentationProof` carries an `AuthorizationTrace` that must
+/// never be transmitted; convert to [`WirePresentation`] via
+/// [`Self::to_wire`] before serializing.
+#[derive(Clone, Debug)]
 pub struct Presentation {
     /// The underlying ZK proof. **The `trace` field on this proof MUST
     /// NOT be transmitted** — use [`Self::to_wire`] to strip it before
