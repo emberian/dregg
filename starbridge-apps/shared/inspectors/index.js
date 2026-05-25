@@ -251,6 +251,10 @@ import('/starbridge-apps/subscription/inspectors.js').catch(() => {});
 import('/starbridge-apps/nameservice/inspectors.js').catch(() => {});
 import('/starbridge-apps/nameservice/turn-builders.js').catch(() => {});
 
+// Governed-namespace inspectors + turn-builders.
+import('/starbridge-apps/governed-namespace/inspectors.js').catch(() => {});
+import('/starbridge-apps/governed-namespace/turn-builders.js').catch(() => {});
+
 // =========================================================================
 // JS-side registry mirror
 // =========================================================================

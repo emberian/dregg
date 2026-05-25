@@ -58,3 +58,10 @@ import('/starbridge-apps/subscription/turn-builders.js').catch(() => {});
 // transfer_name, revoke_name, set_target_name }` map at module-load
 // time. Mirrors `starbridge-apps/nameservice/src/lib.rs::build_*_action`.
 import('/starbridge-apps/nameservice/turn-builders.js').catch(() => {});
+
+// Side-effecting import: the governed-namespace app self-registers its
+// `window.pyana.builders['governed-namespace'] = { propose_table_update,
+// vote_on_proposal, commit_table_update, register_service }` map at
+// module-load time. Mirrors
+// `starbridge-apps/governed-namespace/src/lib.rs::build_*_action`.
+import('/starbridge-apps/governed-namespace/turn-builders.js').catch(() => {});
