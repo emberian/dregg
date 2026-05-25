@@ -6388,7 +6388,7 @@ mod tests {
         assert!(turn.sovereign_witnesses.contains_key(&cell_id));
         let witness = &turn.sovereign_witnesses[&cell_id];
         assert_eq!(witness.cell_state.id(), cell_id);
-        assert_eq!(witness.state_proof, cell.state_commitment());
+        assert_eq!(witness.new_commitment, cell.state_commitment());
     }
 
     #[test]
