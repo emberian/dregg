@@ -1,5 +1,5 @@
 //! Custodial wallet: deterministic per-user wallets backed by the canonical
-//! `pyana_app_framework::AppWallet` (and underneath, `pyana_sdk::AgentWallet`).
+//! `pyana_app_framework::AppCipherclerk` (and underneath, `pyana_sdk::AgentCipherclerk`).
 //!
 //! Each Discord user maps to a deterministic 32-byte seed:
 //!
@@ -7,9 +7,9 @@
 //! seed = BLAKE3_derive_key("pyana-discord-bot-v1", bot_secret || discord_user_id)
 //! ```
 //!
-//! The seed is fed into `AgentWallet::from_key_bytes` to produce a real
+//! The seed is fed into `AgentCipherclerk::from_key_bytes` to produce a real
 //! Ed25519 signing identity. The Discord user's `CellId` is then
-//! `AppWallet::cell_id()` — the canonical pyana derivation (public_key +
+//! `AppCipherclerk::cell_id()` — the canonical pyana derivation (public_key +
 //! BLAKE3(domain)). No bespoke key derivation, no parallel cell-id
 //! derivation: the bot is a peer of the SDK rather than a separate
 //! implementation.
@@ -20,26 +20,26 @@
 //! `/api/gallery/auctions/<id>/bid`, `/api/identity/credentials/issue`, etc.)
 //! expects a hex-encoded `signature` field defined as
 //! `blake3(action_bytes || raw_secret)`. That scheme is *not* Ed25519, and
-//! `AppWallet` deliberately hides the raw secret to keep apps from
+//! `AppCipherclerk` deliberately hides the raw secret to keep apps from
 //! reaching past the framework. Until the devnet endpoints accept
 //! canonical signed `Action`s / `Turn`s, this wallet retains the raw
-//! 32-byte seed alongside the `AppWallet` and exposes it via
+//! 32-byte seed alongside the `AppCipherclerk` and exposes it via
 //! [`UserWallet::legacy_secret`] for the BLAKE3-MAC wire-signature path.
 //! Once the devnet wire format moves to canonical actions, that field
-//! and its accessor should be deleted in favor of `AppWallet::sign_action`.
+//! and its accessor should be deleted in favor of `AppCipherclerk::sign_action`.
 
-use pyana_app_framework::AppWallet;
-use pyana_sdk::AgentWallet;
+use pyana_app_framework::AppCipherclerk;
+use pyana_sdk::AgentCipherclerk;
 use zeroize::Zeroizing;
 
 /// A deterministic per-user wallet handle.
 ///
-/// Wraps a canonical [`AppWallet`] derived from the bot secret + Discord
+/// Wraps a canonical [`AppCipherclerk`] derived from the bot secret + Discord
 /// user id. The raw seed is retained for the legacy BLAKE3-MAC wire
 /// signature path (see module docs).
 pub struct UserWallet {
-    /// Canonical app-level wallet handle (Ed25519, framework-bound).
-    pub app: AppWallet,
+    /// Canonical app-level cipherclerk handle (Ed25519, framework-bound).
+    pub app: AppCipherclerk,
     /// Raw 32-byte seed (== Ed25519 secret key). Held only for the
     /// legacy BLAKE3-MAC wire signature; do not use for new signing
     /// paths — call `app.sign_action(...)` / `app.make_action(...)`.
@@ -59,7 +59,7 @@ impl UserWallet {
     /// * `discord_user_id` — the Discord snowflake id.
     /// * `federation_id` — the federation this bot binds signed
     ///   actions to (the bot's configured pyana node group). Used by
-    ///   `AppWallet` to bind action signatures against cross-federation
+    ///   `AppCipherclerk` to bind action signatures against cross-federation
     ///   replay.
     pub fn derive(bot_secret: &[u8; 32], discord_user_id: u64, federation_id: [u8; 32]) -> Self {
         // Step 1: derive the deterministic 32-byte seed (matches the
@@ -70,19 +70,19 @@ impl UserWallet {
         input.extend_from_slice(&user_id_bytes);
         let seed = blake3::derive_key("pyana-discord-bot-v1", &input);
 
-        // Step 2: build a canonical AgentWallet from the seed. Wrapping
+        // Step 2: build a canonical AgentCipherclerk from the seed. Wrapping
         // the secret in `Zeroizing` here ensures the temporary copy
         // we hand to `from_key_bytes` is wiped after construction.
         let secret = Zeroizing::new(seed);
-        let agent = AgentWallet::from_key_bytes(secret);
+        let agent = AgentCipherclerk::from_key_bytes(secret);
 
-        // Step 3: wrap in an AppWallet bound to this bot's federation.
-        // The default domain ("default") is what AgentWallet::cell_id
+        // Step 3: wrap in an AppCipherclerk bound to this bot's federation.
+        // The default domain ("default") is what AgentCipherclerk::cell_id
         // uses for its identity-cell derivation; we use that same
         // domain here so callers can call `wallet.cell_id()` without
         // threading a domain string.
         let public_key_hex_cached = hex::encode(agent.public_key().0);
-        let app = AppWallet::new(agent, federation_id);
+        let app = AppCipherclerk::new(agent, federation_id);
         let cell_id = app.cell_id();
         let cell_id_bytes_cached = cell_id.0;
         let cell_id_hex_cached = hex::encode(cell_id_bytes_cached);
@@ -127,7 +127,7 @@ impl UserWallet {
     ///
     /// Discord users see this as their "private key"; it is the
     /// Ed25519 secret. Once the wire format migration completes, this
-    /// continues to be a valid export (matches `AgentWallet::from_key_bytes`).
+    /// continues to be a valid export (matches `AgentCipherclerk::from_key_bytes`).
     pub fn private_key_hex(&self) -> String {
         hex::encode(self.legacy_secret)
     }

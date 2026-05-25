@@ -111,7 +111,7 @@ async fn handle_attest(ctx: &Context, command: &CommandInteraction, state: &BotS
     // Parse the claim type from options.
     let claim = parse_claim_from_options(command).unwrap_or(PresenceClaim::CurrentlyOnline);
 
-    // Get the user's cell ID via the canonical AppWallet.
+    // Get the user's cell ID via the canonical AppCipherclerk.
     let wallet = UserWallet::derive(&state.config.bot_secret, user_id, state.federation_id_bytes);
 
     let _ = command

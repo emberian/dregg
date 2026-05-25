@@ -2,7 +2,7 @@
 //!
 //! Lives at the workspace toplevel `/discord-bot` (peer of `node`, `sdk`,
 //! `app-framework`) rather than under `apps/`. Per-user wallets are
-//! handles to `pyana_app_framework::AppWallet` — the canonical narrow
+//! handles to `pyana_app_framework::AppCipherclerk` — the canonical narrow
 //! SDK surface — derived deterministically from the bot's secret and
 //! Discord user id.
 //!
@@ -53,9 +53,9 @@ pub struct BotState {
     pub discord_caps: DiscordCapRegistry,
     /// Event bridge: Discord events → pyana turns.
     pub event_bridge: EventBridge,
-    /// The federation id this bot binds wallet signatures to. Threaded
+    /// The federation id this bot binds cipherclerk signatures to. Threaded
     /// through every per-user `UserWallet::derive(...)` call so the
-    /// AppWallet's action signatures are bound to the correct group.
+    /// AppCipherclerk's action signatures are bound to the correct group.
     pub federation_id_bytes: [u8; 32],
 }
 
@@ -268,7 +268,7 @@ async fn main() {
     // Build CapTP client (the bot's own pyana identity).
     //
     // The bot's own wallet is the user_id == 0 derivation. We use the
-    // canonical AppWallet so the bot's identity (cell id, public key)
+    // canonical AppCipherclerk so the bot's identity (cell id, public key)
     // is computed the same way as any other pyana agent.
     let federation_id_bytes = [0u8; 32]; // Will be configured per-deployment.
     let bot_cell_id = {
