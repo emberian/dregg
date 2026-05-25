@@ -308,6 +308,7 @@ pub fn seal_plan_uniform(
             may_delegate: pyana_turn::action::DelegationMode::None,
             commitment_mode: pyana_turn::action::CommitmentMode::Full,
             balance_change: None,
+            witness_blobs: vec![],
         };
         builder.add_action(action);
     }
@@ -369,6 +370,7 @@ where
             may_delegate: pyana_turn::action::DelegationMode::None,
             commitment_mode: pyana_turn::action::CommitmentMode::Full,
             balance_change: None,
+            witness_blobs: vec![],
         };
         builder.add_action(action);
     }

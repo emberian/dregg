@@ -234,10 +234,10 @@ pub mod ingress_keys {
 }
 
 /// Build the route key the [`IngressFilter`] classifies for a given
-/// [`crate::WireMessage`]. The key is a short stable byte string of the form
+/// [`crate::message::WireMessage`]. The key is a short stable byte string of the form
 /// `<namespace>:<variant>` so operators can write patterns like
 /// `"captp:*"` or `"handshake:hello"` to selectively block.
-pub fn wire_message_route_key(msg: &crate::WireMessage) -> Vec<u8> {
+pub fn wire_message_route_key(msg: &crate::message::WireMessage) -> Vec<u8> {
     let variant: &str = msg.variant_name();
     let ns: &[u8] = match variant {
         "Hello" | "Welcome" | "PeerChallenge" | "PeerAuthResponse" | "PeerAuthenticated" => {

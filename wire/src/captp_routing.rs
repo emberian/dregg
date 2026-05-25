@@ -28,6 +28,7 @@ use pyana_turn::action::{Action, Authorization, CommitmentMode, DelegationMode, 
 use pyana_turn::forest::{CallForest, CallTree};
 use pyana_turn::turn::Turn;
 use pyana_types::SigningKey;
+use tracing::info;
 
 /// Build a single-action `Turn` carrying a CapTP `Effect`.
 ///
@@ -60,6 +61,7 @@ pub fn build_captp_turn(agent: CellId, target: CellId, effect: Effect, nonce: u6
         may_delegate: DelegationMode::None,
         commitment_mode: CommitmentMode::Full,
         balance_change: None,
+        witness_blobs: vec![],
     };
     let call_forest = CallForest {
         roots: vec![CallTree::new(action)],
@@ -130,6 +132,7 @@ pub fn build_captp_turn_delivered(
         may_delegate: DelegationMode::None,
         commitment_mode: CommitmentMode::Full,
         balance_change: None,
+        witness_blobs: vec![],
     };
     let call_forest = CallForest {
         roots: vec![CallTree::new(action)],
@@ -169,6 +172,9 @@ pub fn build_captp_turn_delivered_from_parts(
     sender_pk: [u8; 32],
     sender_signature: [u8; 64],
 ) -> Turn {
+    // Studio trace: captp_delivered turn constructed from wire-layer parts.
+    // Emitted before executor verification; the executor emits a matching authorization event on success.
+    info!(kind = "authorization", auth_kind = "captp_delivered", agent = %agent, target = %target, nonce);
     let action = Action {
         target,
         method: symbol("captp.route"),
@@ -184,6 +190,7 @@ pub fn build_captp_turn_delivered_from_parts(
         may_delegate: DelegationMode::None,
         commitment_mode: CommitmentMode::Full,
         balance_change: None,
+        witness_blobs: vec![],
     };
     let call_forest = CallForest {
         roots: vec![CallTree::new(action)],

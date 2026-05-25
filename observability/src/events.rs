@@ -307,7 +307,7 @@ impl AuthorizationPayload {
                 permissions: auth_required_str(&b.permissions).to_string(),
                 expires_at: b.expires_at,
                 revocation_channel: b.revocation_channel.as_ref().map(hex32),
-                allowed_effects: b.allowed_effects.map(|m| m.0),
+                allowed_effects: b.allowed_effects,
                 delegation: bearer_delegation_summary(b),
             },
             Authorization::Unchecked => AuthorizationPayload::Unchecked,
@@ -334,7 +334,7 @@ impl AuthorizationPayload {
                     expires_at: handoff_cert.expires_at,
                     max_uses: handoff_cert.max_uses,
                     permissions: auth_required_str(&handoff_cert.permissions).to_string(),
-                    allowed_effects: handoff_cert.allowed_effects.map(|m| m.0),
+                    allowed_effects: handoff_cert.allowed_effects,
                 }
             }
         }
@@ -374,6 +374,11 @@ fn auth_required_str(p: &AuthRequired) -> &'static str {
         AuthRequired::Proof => "proof",
         AuthRequired::Either => "either",
         AuthRequired::Impossible => "impossible",
+        // App-defined auth mode: rendered as a generic "custom" tag at the
+        // observability layer. Tools that need to distinguish modes consult
+        // the AuthModeRegistry by vk_hash (per AUTHORIZATION-CUSTOM-DESIGN
+        // §6.3); the structured-event stream stays vocabulary-stable.
+        AuthRequired::Custom { .. } => "custom",
     }
 }
 
@@ -557,6 +562,10 @@ fn constraint_dissect(
         } => ("bound_delta", Some(*local_slot), vec![*peer_slot]),
         SC::AnyOf { .. } => ("any_of", None, vec![]),
         SC::Custom { .. } => ("custom", None, vec![]),
+        // Witnessed predicates are checked by the executor's predicate
+        // registry; the observability layer surfaces them as a generic
+        // tag (consumers introspect via the WitnessedPredicateRegistry).
+        SC::Witnessed { .. } => ("witnessed", None, vec![]),
     }
 }
 

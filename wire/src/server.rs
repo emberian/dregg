@@ -2754,6 +2754,11 @@ impl SiloServer {
                             pyana_cell::AuthRequired::Proof => 2u8,
                             pyana_cell::AuthRequired::Either => 3u8,
                             pyana_cell::AuthRequired::Impossible => 4u8,
+                            // App-defined auth mode (AUTHORIZATION-CUSTOM-DESIGN).
+                            // Discriminant 5 on the wire; the vk_hash routes
+                            // through the cell's AuthModeRegistry at execution
+                            // time, not the perm_tag byte.
+                            pyana_cell::AuthRequired::Custom { .. } => 5u8,
                         };
                         let bearer_cell = entry.cell_id;
                         // Stage 7 / P1.B: route the EnlivenRef as a Turn.
@@ -3017,6 +3022,9 @@ impl SiloServer {
                             pyana_cell::AuthRequired::Proof => 2u8,
                             pyana_cell::AuthRequired::Either => 3u8,
                             pyana_cell::AuthRequired::Impossible => 4u8,
+                            // App-defined auth mode (AUTHORIZATION-CUSTOM-DESIGN);
+                            // see the matching arm in the EnlivenRef path above.
+                            pyana_cell::AuthRequired::Custom { .. } => 5u8,
                         };
                         // Stage 7 / P1.B + Seam 3 keystone: route the ValidateHandoff
                         // as a Turn. The cert_hash is BLAKE3 over the presentation

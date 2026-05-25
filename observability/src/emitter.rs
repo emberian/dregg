@@ -99,13 +99,23 @@ pub struct Emitter {
     inner: Rc<RefCell<EmitterState>>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct EmitterState {
     log: EventLog,
     next_seq: u64,
     /// Optional unix-millis clock override. When `None`, events use
     /// `unix_millis_now()` (a clock-less fallback that returns 0 in tests).
     clock: Option<Box<dyn Fn() -> i64>>,
+}
+
+impl core::fmt::Debug for EmitterState {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("EmitterState")
+            .field("log", &self.log)
+            .field("next_seq", &self.next_seq)
+            .field("clock", &self.clock.as_ref().map(|_| "<fn>"))
+            .finish()
+    }
 }
 
 impl Emitter {

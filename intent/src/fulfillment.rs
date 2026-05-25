@@ -808,6 +808,7 @@ pub fn create_fulfillment_turn(
         may_delegate: DelegationMode::None,
         commitment_mode: Default::default(),
         balance_change: None,
+        witness_blobs: vec![],
     };
 
     let mut call_forest = CallForest::new();
@@ -1227,6 +1228,7 @@ pub fn execute_committed_fulfillment_flow(
         may_delegate: DelegationMode::None,
         commitment_mode: CommitmentMode::Full,
         balance_change: None,
+        witness_blobs: vec![],
     };
 
     let mut call_forest = CallForest::new();
