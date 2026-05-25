@@ -1116,6 +1116,10 @@ fn cmd_make_introduce(
         executor_signature: None,
         finality: Default::default(),
         was_encrypted: false,
+        // This dummy receipt belongs to an introduce-flow turn that
+        // carries no Effect::Burn; the lifecycle flag must be false so
+        // receipt_hash matches the canonical no-burn binding.
+        was_burn: false,
     };
 
     let intro_wr =
@@ -1140,6 +1144,8 @@ fn cmd_make_introduce(
                 witnessed_receipt: tgt_wr,
             },
         ],
+        // No sovereign-witness cell in this introduce flow.
+        unilateral_attestations: std::collections::BTreeMap::new(),
     };
     let bundle_path = state_dir.join("silver.introduce-bundle.json");
     fs::write(&bundle_path, serde_json::to_string_pretty(&bundle).unwrap()).unwrap();
@@ -1181,6 +1187,7 @@ fn cmd_make_introduce(
                 ),
             },
         ],
+        unilateral_attestations: std::collections::BTreeMap::new(),
     };
     let bundle_path_tampered = state_dir.join("silver.introduce-bundle.tampered.json");
     fs::write(
@@ -1297,6 +1304,8 @@ fn cmd_make_recursive_witness(state_dir: &PathBuf, turn_nonce: u64) {
         executor_signature: None,
         finality: Default::default(),
         was_encrypted: false,
+        // Recursive-witness fabrication turn carries no Burn.
+        was_burn: false,
     };
 
     // Step 1: best-effort compression. Should attach a recursive proof.
@@ -1451,6 +1460,8 @@ fn cmd_make_bilateral_bundle(
         executor_signature: None,
         finality: Default::default(),
         was_encrypted: false,
+        // Bilateral-pair demo turn has only a Transfer; no Burn.
+        was_burn: false,
     };
 
     let alice_wr = fabricate_witnessed_receipt(&turn, &alice_cell, dummy_receipt(alice_cell));
@@ -1468,6 +1479,7 @@ fn cmd_make_bilateral_bundle(
                 witnessed_receipt: bob_wr,
             },
         ],
+        unilateral_attestations: std::collections::BTreeMap::new(),
     };
     let bundle_path = state_dir.join("silver.bilateral-bundle.json");
     fs::write(&bundle_path, serde_json::to_string_pretty(&bundle).unwrap()).unwrap();
@@ -1495,6 +1507,7 @@ fn cmd_make_bilateral_bundle(
                 ),
             },
         ],
+        unilateral_attestations: std::collections::BTreeMap::new(),
     };
     let bundle_path_tampered = state_dir.join("silver.bilateral-bundle.tampered.json");
     fs::write(
