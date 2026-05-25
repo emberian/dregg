@@ -659,6 +659,9 @@ fn kind_label(kind: WitnessedPredicateKind) -> String {
         WitnessedPredicateKind::BlindedSet => "BlindedSet".into(),
         WitnessedPredicateKind::BridgePredicate => "BridgePredicate".into(),
         WitnessedPredicateKind::PedersenEquality => "PedersenEquality".into(),
+        // Categorical dual of MerkleMembership — sorted-set non-membership
+        // via adjacent-leaf witnessing. Label kept terse for log lines.
+        WitnessedPredicateKind::NonMembership => "NonMembership".into(),
         WitnessedPredicateKind::Custom { vk_hash } => format!(
             "Custom {{ vk_hash: {:02x}{:02x}... }}",
             vk_hash[0], vk_hash[1]
