@@ -2854,6 +2854,11 @@ impl TurnExecutor {
                         vm_effects.push(VmEffect::BridgeMint {
                             value_lo,
                             mint_hash: hash_to_bb(mint_hash_bytes.as_bytes()),
+                            // 30-bit-trunc fix (CAVEAT-LAYER-COVERAGE.md
+                            // §6.5): carry the full u64 in the VmEffect so
+                            // the AIR's effects-hash + PI limbs bind to
+                            // the entire value, not just the low 30 bits.
+                            value_full: portable_proof.value,
                         });
                     }
                     Effect::BridgeLock {
@@ -2875,6 +2880,8 @@ impl TurnExecutor {
                         vm_effects.push(VmEffect::BridgeLock {
                             value_lo,
                             lock_hash: hash_to_bb(lock_hash_bytes.as_bytes()),
+                            // 30-bit-trunc fix.
+                            value_full: *value,
                         });
                     }
                     Effect::BridgeFinalize { nullifier, receipt } => {
@@ -2963,6 +2970,8 @@ impl TurnExecutor {
                         vm_effects.push(VmEffect::CreateEscrow {
                             amount_lo,
                             escrow_hash: hash_to_bb(escrow_hash_bytes.as_bytes()),
+                            // 30-bit-trunc fix.
+                            amount_full: *amount,
                         });
                     }
                     Effect::ReleaseEscrow { escrow_id, .. } => {
