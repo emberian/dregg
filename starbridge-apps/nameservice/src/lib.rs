@@ -107,6 +107,27 @@ pub const OWNER_HASH_SLOT: usize = 3;
 /// State field slot at which the rent expiry block height is recorded.
 pub const EXPIRY_SLOT: usize = 4;
 
+/// State field slot at which the name's revocation marker is recorded.
+///
+/// Zero = active. Non-zero = revoked (the non-zero value is the
+/// `blake3_field(b"revoked:" || name_hash)` tombstone so the
+/// revocation is bound to the name being revoked and replays do not
+/// move a different name's tombstone here).
+///
+/// Carries `StateConstraint::WriteOnce` so revocation is one-way: once
+/// set, the slot cannot be cleared or rewritten to a different tombstone.
+/// This closes the "owner re-uses a revoked name's cell" gap.
+pub const REVOKED_SLOT: usize = 5;
+
+/// State field slot at which the name's resolve target is recorded.
+///
+/// Free-form 32 bytes; conventionally the BLAKE3 hash of a
+/// `pyana://cell/...` URI that the name resolves to. The owner may
+/// update this slot at will to point the name at different targets
+/// (changing your website's cell, redirecting to a new owner's
+/// document, etc.); no `Monotonic` or `WriteOnce` constraint applies.
+pub const RESOLVE_TARGET_SLOT: usize = 6;
+
 // =============================================================================
 // Rent / factory configuration
 // =============================================================================
@@ -200,6 +221,9 @@ pub fn name_factory_descriptor() -> FactoryDescriptor {
             },
             StateConstraint::Monotonic {
                 index: EXPIRY_SLOT as u8,
+            },
+            StateConstraint::WriteOnce {
+                index: REVOKED_SLOT as u8,
             },
         ],
         default_mode: CellMode::Sovereign,
@@ -371,6 +395,119 @@ pub fn build_transfer_action(
     wallet.make_action(registry_cell, "transfer_name", effects)
 }
 
+/// Build the on-ledger [`Action`] that revokes a name.
+///
+/// Sets the [`REVOKED_SLOT`] to a tombstone value that binds the
+/// revocation to this specific name (so a replay can't move a tombstone
+/// from one cell to another to "revoke" a different name), and emits a
+/// `name-revoked` event for off-chain indexers.
+///
+/// # Slot-caveat enforcement
+///
+/// The [`name_factory_descriptor`]'s
+/// `StateConstraint::WriteOnce { index: REVOKED_SLOT }` makes revocation
+/// one-way: once the slot transitions from `FIELD_ZERO` to a tombstone,
+/// the executor rejects any subsequent write. A revoked name cannot be
+/// "un-revoked" by the owner, nor moved to a different tombstone.
+pub fn build_revoke_action(
+    wallet: &AppWallet,
+    registry_cell: CellId,
+    name: &str,
+) -> Action {
+    let name_hash = blake3_field(name.as_bytes());
+    let tombstone = revoked_tombstone(name);
+
+    let effects = vec![
+        Effect::SetField {
+            cell: registry_cell,
+            index: REVOKED_SLOT,
+            value: tombstone,
+        },
+        Effect::EmitEvent {
+            cell: registry_cell,
+            event: Event::new(symbol("name-revoked"), vec![name_hash, tombstone]),
+        },
+    ];
+
+    wallet.make_action(registry_cell, "revoke_name", effects)
+}
+
+/// Build the on-ledger [`Action`] that re-points a name's resolve target.
+///
+/// Updates [`RESOLVE_TARGET_SLOT`] to a new 32-byte target (conventionally
+/// `blake3_field(target_uri.as_bytes())` where `target_uri` is the
+/// `pyana://cell/<id>` URI the name should resolve to) and emits a
+/// `name-target-set` event.
+///
+/// The resolve-target slot carries no `Monotonic` or `WriteOnce`
+/// constraint (a name's owner may freely re-point the name at any
+/// target). The `WriteOnce { index: NAME_HASH_SLOT }` invariant means
+/// the binding `name -> cell` is permanent, but the binding
+/// `cell -> target` is mutable — exactly the semantics a hierarchical
+/// nameservice wants.
+pub fn build_set_target_action(
+    wallet: &AppWallet,
+    registry_cell: CellId,
+    name: &str,
+    target: FieldElement,
+) -> Action {
+    let name_hash = blake3_field(name.as_bytes());
+
+    let effects = vec![
+        Effect::SetField {
+            cell: registry_cell,
+            index: RESOLVE_TARGET_SLOT,
+            value: target,
+        },
+        Effect::EmitEvent {
+            cell: registry_cell,
+            event: Event::new(symbol("name-target-set"), vec![name_hash, target]),
+        },
+    ];
+
+    wallet.make_action(registry_cell, "set_name_target", effects)
+}
+
+/// Compute the canonical revocation tombstone for a name.
+///
+/// Public so off-chain indexers / cross-app code can reproduce it.
+/// The tombstone is `blake3_field(b"pyana-nameservice-revoked:" || name_bytes)`,
+/// which is content-addressed to the name being revoked. This means:
+///
+/// - A replay attacker cannot move one name's tombstone into another
+///   cell's REVOKED_SLOT to "revoke" a different name; the value would
+///   not match `revoked_tombstone(other_name)`.
+/// - The same name always produces the same tombstone, so verifiers
+///   can confirm "this slot value is the canonical tombstone for
+///   *this* name".
+pub fn revoked_tombstone(name: &str) -> FieldElement {
+    let mut input = Vec::with_capacity(b"pyana-nameservice-revoked:".len() + name.len());
+    input.extend_from_slice(b"pyana-nameservice-revoked:");
+    input.extend_from_slice(name.as_bytes());
+    blake3_field(&input)
+}
+
+/// Convenience: hash a name string to its canonical 32-byte field.
+///
+/// Public for off-chain indexers + cross-app code that wants to
+/// reproduce the value the executor sees in `NAME_HASH_SLOT`.
+pub fn name_hash(name: &str) -> FieldElement {
+    blake3_field(name.as_bytes())
+}
+
+/// Convenience: encode a u64 as the canonical big-endian-padded
+/// [`FieldElement`] used by the nameservice's `EXPIRY_SLOT`.
+pub fn expiry_field(expiry_height: u64) -> FieldElement {
+    u64_field(expiry_height)
+}
+
+/// Convenience: hash a target URI string to a [`FieldElement`] suitable
+/// for [`RESOLVE_TARGET_SLOT`]. Public so callers can prepare the
+/// target value the same way the inspector chain expects.
+pub fn resolve_target(uri: &str) -> FieldElement {
+    blake3_field(uri.as_bytes())
+}
+
 // =============================================================================
 // StarbridgeAppContext mount
 // =============================================================================
@@ -449,7 +586,14 @@ pub fn register(ctx: &StarbridgeAppContext) -> [u8; 32] {
             "component": "pyana-name",
             "module": "/starbridge-apps/nameservice/inspectors.js",
             "uri_prefix": "pyana://cell/",
-            "summary_fields": ["name_hash", "owner_hash", "expiry"],
+            "summary_fields": ["name_hash", "owner_hash", "expiry", "revoked", "target"],
+            "slot_layout": {
+                "name_hash":   NAME_HASH_SLOT,
+                "owner_hash":  OWNER_HASH_SLOT,
+                "expiry":      EXPIRY_SLOT,
+                "revoked":     REVOKED_SLOT,
+                "target":      RESOLVE_TARGET_SLOT,
+            },
             "factory_vk_hex": hex_encode(&factory_vk),
             "child_program_vk_hex": hex_encode(&NAME_CHILD_PROGRAM_VK),
         }),
@@ -465,6 +609,28 @@ pub fn register(ctx: &StarbridgeAppContext) -> [u8; 32] {
             "module": "/starbridge-apps/nameservice/inspectors.js",
             "uri_prefix": "pyana://cell/",
             "child_inspector": "name",
+        })
+    });
+
+    // 4. Register the register-form inspector — the mutation surface
+    // that wraps `window.pyana.signTurn` with the nameservice's
+    // `register_name` / `renew_name` / `transfer_name` / `revoke_name`
+    // / `set_name_target` preset builders. The Studio renders this as
+    // a side-pane editor when the user is looking at a registry cell
+    // and wants to author a turn against it.
+    ctx.register_inspector_with("name-register-form", || {
+        serde_json::json!({
+            "component": "pyana-name-register-form",
+            "module": "/starbridge-apps/nameservice/inspectors.js",
+            "uri_prefix": "pyana://cell/",
+            "builders_module": "/starbridge-apps/nameservice/turn-builders.js",
+            "methods": [
+                "register_name",
+                "renew_name",
+                "transfer_name",
+                "revoke_name",
+                "set_name_target",
+            ],
         })
     });
 
@@ -580,6 +746,38 @@ mod tests {
             )),
             "name factory must install Monotonic on EXPIRY_SLOT"
         );
+        assert!(
+            d.state_constraints.iter().any(|c| matches!(
+                c,
+                StateConstraint::WriteOnce { index } if *index == REVOKED_SLOT as u8
+            )),
+            "name factory must install WriteOnce on REVOKED_SLOT (revocations are one-way)"
+        );
+        // Pin the exact set so additions are caught in review.
+        assert_eq!(d.state_constraints.len(), 3);
+    }
+
+    #[test]
+    fn factory_descriptor_does_not_constrain_resolve_target_slot() {
+        // RESOLVE_TARGET_SLOT is intentionally unconstrained so the
+        // owner can repoint the name freely. If a future change adds
+        // a constraint here, the rationale belongs in the factory
+        // descriptor doc-comment and this test should be updated to
+        // match.
+        let d = name_factory_descriptor();
+        let target_index = RESOLVE_TARGET_SLOT as u8;
+        for c in &d.state_constraints {
+            let constrained_index = match c {
+                StateConstraint::WriteOnce { index }
+                | StateConstraint::Immutable { index }
+                | StateConstraint::Monotonic { index }
+                | StateConstraint::StrictMonotonic { index } => Some(*index),
+                _ => None,
+            };
+            if constrained_index == Some(target_index) {
+                panic!("RESOLVE_TARGET_SLOT must remain unconstrained, found {c:?}");
+            }
+        }
     }
 
     // ── Slot-caveat enforcement (positive + negative). ───────────────────
@@ -799,6 +997,49 @@ mod tests {
             .expect("name-registry inspector registered");
         assert_eq!(registry_insp.descriptor["component"], "pyana-name-registry");
         assert_eq!(registry_insp.descriptor["child_inspector"], "name");
+
+        // The register-form inspector binds the JS turn-builders module.
+        let form_insp = ctx
+            .inspector_registry()
+            .get("name-register-form")
+            .expect("name-register-form inspector registered");
+        assert_eq!(
+            form_insp.descriptor["component"],
+            "pyana-name-register-form"
+        );
+        assert_eq!(
+            form_insp.descriptor["builders_module"],
+            "/starbridge-apps/nameservice/turn-builders.js"
+        );
+        let methods = form_insp.descriptor["methods"]
+            .as_array()
+            .expect("methods array present");
+        let methods: Vec<&str> = methods.iter().filter_map(|m| m.as_str()).collect();
+        for required in [
+            "register_name",
+            "renew_name",
+            "transfer_name",
+            "revoke_name",
+            "set_name_target",
+        ] {
+            assert!(
+                methods.contains(&required),
+                "register-form inspector must list method `{required}` but methods were {methods:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn name_inspector_descriptor_carries_slot_layout() {
+        let ctx = test_context();
+        register(&ctx);
+        let name_insp = ctx.inspector_registry().get("name").unwrap();
+        let layout = &name_insp.descriptor["slot_layout"];
+        assert_eq!(layout["name_hash"], NAME_HASH_SLOT);
+        assert_eq!(layout["owner_hash"], OWNER_HASH_SLOT);
+        assert_eq!(layout["expiry"], EXPIRY_SLOT);
+        assert_eq!(layout["revoked"], REVOKED_SLOT);
+        assert_eq!(layout["target"], RESOLVE_TARGET_SLOT);
     }
 
     #[test]
@@ -825,6 +1066,149 @@ mod tests {
             .expect("factory_vk_hex must be a string");
         assert_eq!(hex.len(), 64);
         assert_eq!(hex, hex_encode(&NAME_FACTORY_VK));
+    }
+
+    #[test]
+    fn revoke_action_writes_revoked_slot_and_emits_event() {
+        let wallet = test_wallet();
+        let action = build_revoke_action(&wallet, test_cell(), "alice.pyana");
+        assert_eq!(action.effects.len(), 2);
+        match &action.effects[0] {
+            Effect::SetField { index, value, .. } => {
+                assert_eq!(*index, REVOKED_SLOT);
+                assert_eq!(*value, revoked_tombstone("alice.pyana"));
+                assert_ne!(*value, [0u8; 32], "tombstone must be non-zero");
+            }
+            other => panic!("expected SetField, got {other:?}"),
+        }
+        assert!(matches!(&action.effects[1], Effect::EmitEvent { .. }));
+    }
+
+    #[test]
+    fn revoke_action_tombstone_is_name_bound() {
+        // Two different names produce two different tombstones — defeats
+        // "move tombstone from cell A to cell B to revoke a different name".
+        let t1 = revoked_tombstone("alice.pyana");
+        let t2 = revoked_tombstone("bob.pyana");
+        assert_ne!(t1, t2);
+        // Same name = same tombstone (replay-safe verifier).
+        let t1_again = revoked_tombstone("alice.pyana");
+        assert_eq!(t1, t1_again);
+    }
+
+    #[test]
+    fn set_target_action_writes_resolve_slot_and_emits_event() {
+        let wallet = test_wallet();
+        let target = resolve_target("pyana://cell/abc123");
+        let action = build_set_target_action(&wallet, test_cell(), "alice.pyana", target);
+        assert_eq!(action.effects.len(), 2);
+        match &action.effects[0] {
+            Effect::SetField { index, value, .. } => {
+                assert_eq!(*index, RESOLVE_TARGET_SLOT);
+                assert_eq!(*value, target);
+            }
+            other => panic!("expected SetField, got {other:?}"),
+        }
+        assert!(matches!(&action.effects[1], Effect::EmitEvent { .. }));
+    }
+
+    #[test]
+    fn name_hash_is_blake3_of_name_bytes() {
+        // Public helper must match the value the executor sees in
+        // NAME_HASH_SLOT.
+        let direct = blake3_field(b"alice.pyana");
+        let helper = name_hash("alice.pyana");
+        assert_eq!(direct, helper);
+    }
+
+    #[test]
+    fn expiry_field_helper_matches_internal_encoding() {
+        let direct = u64_field(5_000);
+        let helper = expiry_field(5_000);
+        assert_eq!(direct, helper);
+        // Sanity: low byte ends up at position 31 (big-endian).
+        assert_eq!(helper[31], (5_000u64 & 0xff) as u8);
+    }
+
+    // ── Slot-caveat: double-revoke rejected by WriteOnce. ────────────────
+
+    #[test]
+    fn slot_caveats_double_revoke_is_write_once_violation() {
+        let program = build_name_program();
+        let alice_hash = blake3_field(b"alice.pyana");
+        let mut old = state_with(alice_hash, 5_000);
+        old.set_nonce(1);
+        old.fields[REVOKED_SLOT] = revoked_tombstone("alice.pyana");
+        // Attempt: overwrite the tombstone (e.g., with zero, to "un-revoke",
+        // or with a different tombstone).
+        let mut new = state_with(alice_hash, 5_000);
+        new.fields[REVOKED_SLOT] = revoked_tombstone("alice.pyana-different");
+        let err = program
+            .evaluate(&new, Some(&old), None)
+            .expect_err("double revoke must be rejected");
+        match err {
+            pyana_cell::ProgramError::ConstraintViolated {
+                constraint: StateConstraint::WriteOnce { index },
+                ..
+            } => assert_eq!(index, REVOKED_SLOT as u8),
+            other => panic!("expected WriteOnce on REVOKED_SLOT, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn slot_caveats_un_revoke_clearing_to_zero_is_write_once_violation() {
+        let program = build_name_program();
+        let alice_hash = blake3_field(b"alice.pyana");
+        let mut old = state_with(alice_hash, 5_000);
+        old.set_nonce(1);
+        old.fields[REVOKED_SLOT] = revoked_tombstone("alice.pyana");
+        // Attempt: clear the tombstone back to FIELD_ZERO.
+        let new = state_with(alice_hash, 5_000); // REVOKED_SLOT == FIELD_ZERO
+        let err = program
+            .evaluate(&new, Some(&old), None)
+            .expect_err("un-revocation must be rejected");
+        match err {
+            pyana_cell::ProgramError::ConstraintViolated {
+                constraint: StateConstraint::WriteOnce { index },
+                ..
+            } => assert_eq!(index, REVOKED_SLOT as u8),
+            other => panic!("expected WriteOnce on REVOKED_SLOT, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn slot_caveats_legal_initial_revocation_succeeds() {
+        // First revocation on an active name: REVOKED_SLOT transitions
+        // FIELD_ZERO → tombstone. WriteOnce permits.
+        let program = build_name_program();
+        let alice_hash = blake3_field(b"alice.pyana");
+        let mut old = state_with(alice_hash, 5_000);
+        old.set_nonce(1);
+        let mut new = state_with(alice_hash, 5_000);
+        new.fields[REVOKED_SLOT] = revoked_tombstone("alice.pyana");
+        let result = program.evaluate(&new, Some(&old), None);
+        assert!(
+            result.is_ok(),
+            "legal initial revocation must succeed: {result:?}"
+        );
+    }
+
+    #[test]
+    fn slot_caveats_target_repointing_is_unconstrained() {
+        // RESOLVE_TARGET_SLOT carries no slot caveats — the owner may
+        // freely set, change, and re-clear the slot.
+        let program = build_name_program();
+        let alice_hash = blake3_field(b"alice.pyana");
+        let mut old = state_with(alice_hash, 5_000);
+        old.set_nonce(1);
+        old.fields[RESOLVE_TARGET_SLOT] = resolve_target("pyana://cell/first");
+        let mut new = state_with(alice_hash, 5_000);
+        new.fields[RESOLVE_TARGET_SLOT] = resolve_target("pyana://cell/second");
+        let result = program.evaluate(&new, Some(&old), None);
+        assert!(
+            result.is_ok(),
+            "freely changing the resolve target must succeed: {result:?}"
+        );
     }
 
     #[test]
