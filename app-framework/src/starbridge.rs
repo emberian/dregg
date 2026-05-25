@@ -4,7 +4,7 @@
 //! its `register(ctx)` hook fires. It carries the four things a
 //! starbridge-app needs:
 //!
-//! 1. An [`AppWallet`] — narrow signing handle (six methods, no key
+//! 1. An [`AppCipherclerk`] — narrow signing handle (six methods, no key
 //!    export). Apps build signed [`pyana_turn::action::Action`]s through
 //!    it.
 //! 2. An [`EmbeddedExecutor`] — turn-submission handle. Apps submit
@@ -47,7 +47,7 @@
 //! ## Wiring (typical `main.rs`)
 //!
 //! ```ignore
-//! let wallet = AppWallet::new(AgentWallet::new(), federation_id);
+//! let wallet = AppCipherclerk::new(AgentCipherclerk::new(), federation_id);
 //! let executor = EmbeddedExecutor::new(&wallet, "default");
 //! let mut ctx = StarbridgeAppContext::new(wallet.clone(), executor.clone());
 //!
@@ -69,7 +69,7 @@ use std::sync::{Arc, RwLock};
 
 use pyana_cell::FactoryDescriptor;
 
-use crate::wallet::{AppWallet, EmbeddedExecutor};
+use crate::cipherclerk::{AppCipherclerk, EmbeddedExecutor};
 
 // =============================================================================
 // FactoryRegistry
@@ -293,9 +293,9 @@ impl std::fmt::Debug for InspectorRegistry {
 /// every field is internally `Arc`-backed.
 #[derive(Clone)]
 pub struct StarbridgeAppContext {
-    /// Narrow wallet handle (Lane C). Apps build signed actions through
-    /// it.
-    wallet: AppWallet,
+    /// Narrow cipherclerk handle (Lane C). Apps build signed actions
+    /// through it.
+    cipherclerk: AppCipherclerk,
     /// Embedded executor (Lane H). Apps submit signed turns through it
     /// and receive real receipts.
     executor: EmbeddedExecutor,
@@ -321,9 +321,9 @@ impl StarbridgeAppContext {
     ///
     /// The factory/inspector registries start empty; apps populate them
     /// in their `register(ctx)` hook.
-    pub fn new(wallet: AppWallet, executor: EmbeddedExecutor) -> Self {
+    pub fn new(cipherclerk: AppCipherclerk, executor: EmbeddedExecutor) -> Self {
         Self {
-            wallet,
+            cipherclerk,
             executor,
             factories: FactoryRegistry::new(),
             inspectors: InspectorRegistry::new(),
@@ -352,9 +352,15 @@ impl StarbridgeAppContext {
         self
     }
 
-    /// Wallet handle (signing surface).
-    pub fn wallet(&self) -> &AppWallet {
-        &self.wallet
+    /// Cipherclerk handle (signing surface).
+    pub fn cipherclerk(&self) -> &AppCipherclerk {
+        &self.cipherclerk
+    }
+
+    /// Legacy alias for [`Self::cipherclerk`].
+    #[doc(hidden)]
+    pub fn wallet(&self) -> &AppCipherclerk {
+        self.cipherclerk()
     }
 
     /// Embedded executor handle (turn submission surface).
@@ -427,7 +433,7 @@ impl StarbridgeAppContext {
 impl std::fmt::Debug for StarbridgeAppContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StarbridgeAppContext")
-            .field("wallet", &self.wallet)
+            .field("cipherclerk", &self.cipherclerk)
             .field("executor", &self.executor)
             .field("factories", &self.factories)
             .field("inspectors", &self.inspectors)
@@ -443,11 +449,11 @@ impl std::fmt::Debug for StarbridgeAppContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyana_sdk::AgentWallet;
+    use pyana_sdk::AgentCipherclerk;
 
-    fn fixture() -> (AppWallet, EmbeddedExecutor) {
-        let sdk = AgentWallet::new();
-        let wallet = AppWallet::new(sdk, [99u8; 32]);
+    fn fixture() -> (AppCipherclerk, EmbeddedExecutor) {
+        let sdk = AgentCipherclerk::new();
+        let wallet = AppCipherclerk::new(sdk, [99u8; 32]);
         let executor = EmbeddedExecutor::new(&wallet, "default");
         (wallet, executor)
     }

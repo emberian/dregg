@@ -28,7 +28,7 @@
 //! equivalent) authorized by a real `Authorization::Signature` from
 //! the sender's wallet. The HTTP handler stops carrying a `sender_hex`
 //! request field and instead extracts the signing wallet from the
-//! `AppWallet` axum Extension.
+//! `AppCipherclerk` axum Extension.
 //!
 //! Verdict: **(c) needs updates post-migration**. Same shape as the
 //! `blinded_endpoint.rs` post-migration sketch: the endpoint stays
