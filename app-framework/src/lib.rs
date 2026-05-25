@@ -58,6 +58,7 @@ pub mod hex;
 pub mod inbox_endpoint;
 pub mod middleware;
 pub mod multi_group;
+pub mod vk;
 pub mod persistence;
 pub mod queue_endpoint;
 pub mod ring_trade;
@@ -169,6 +170,18 @@ pub use cipherclerk::{EmbeddedExecutor, ExecutorSubmitError};
 // to construct factory descriptors.
 pub use pyana_cell::{
     AuthRequired, CapGrant, CapTarget, CapTemplate, CellMode, CellProgram, ChildVkStrategy,
-    FactoryDescriptor, FieldConstraint, StateConstraint, canonical_predicate_vk,
-    canonical_program_vk,
+    FactoryDescriptor, FieldConstraint, ProvingSystemId, StateConstraint, VerifierFingerprint,
+    VkComponents, canonical_vk_v2,
+};
+
+// VK v2: re-export the layered VK encoders from `vk` module at the
+// framework root. These *shadow* the cell crate's v1 `canonical_program_vk`
+// / `canonical_predicate_vk` re-exports — apps that import from
+// `pyana_app_framework` automatically pick up the v2 layered hashes,
+// closing the "same spec, different AIR" gap that v1 left open.
+// (`VK-AS-RE-EXECUTION-RECIPE.md` §v2.)
+pub use vk::{
+    DEFAULT_PROVING_SYSTEM, PLONKY3_PINNED_REV, canonical_predicate_vk,
+    canonical_program_bytes_hash, canonical_program_vk, effect_vm_air_fingerprint,
+    effect_vm_verifier_fingerprint, validate_child_vk_canonical,
 };

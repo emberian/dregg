@@ -777,10 +777,13 @@ mod tests {
 
     #[test]
     fn factory_descriptor_validates_against_canonical_program() {
+        // VK v2: app-framework wrapper validates against the layered
+        // canonical hash (program bytes + Effect VM AIR + verifier +
+        // Plonky3 proving system).
         let d = name_factory_descriptor();
         let program = name_cell_program();
-        d.validate_child_vk_canonical(&program)
-            .expect("descriptor's child_program_vk must bind to name_cell_program()");
+        pyana_app_framework::validate_child_vk_canonical(&d, &program)
+            .expect("descriptor's child_program_vk must bind to name_cell_program() under v2");
     }
 
     #[test]

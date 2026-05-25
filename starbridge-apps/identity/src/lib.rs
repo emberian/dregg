@@ -740,8 +740,11 @@ mod tests {
     fn factory_descriptor_validates_against_canonical_program() {
         let d = issuer_factory_descriptor();
         let program = issuer_program();
-        d.validate_child_vk_canonical(&program)
-            .expect("descriptor's child_program_vk must bind to issuer_program()");
+        // VK v2: use the app-framework wrapper that binds the
+        // descriptor's child_program_vk against the *layered* vk_hash
+        // (program bytes + Effect VM AIR + verifier + proving system).
+        pyana_app_framework::validate_child_vk_canonical(&d, &program)
+            .expect("descriptor's child_program_vk must bind to issuer_program() under v2");
     }
 
     #[test]

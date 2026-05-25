@@ -427,6 +427,35 @@ impl FactoryDescriptor {
         }
     }
 
+    /// V2 variant of [`Self::validate_child_vk_canonical`].
+    ///
+    /// Validates that `self.child_program_vk` is the **layered** v2
+    /// vk_hash of the supplied program under the given AIR / verifier
+    /// / proving-system components. Per
+    /// `VK-AS-RE-EXECUTION-RECIPE.md` §v2 this is the soundness-
+    /// correct binding for new factories.
+    pub fn validate_child_vk_canonical_v2(
+        &self,
+        program: &CellProgram,
+        air_fingerprint: [u8; 32],
+        verifier_fingerprint: VerifierFingerprint,
+        proving_system_id: ProvingSystemId,
+    ) -> Result<(), FactoryError> {
+        let expected = canonical_program_vk_v2(
+            program,
+            air_fingerprint,
+            verifier_fingerprint,
+            proving_system_id,
+        );
+        match self.child_program_vk {
+            Some(got) if got == expected => Ok(()),
+            other => Err(FactoryError::ProgramMismatch {
+                expected: Some(expected),
+                got: other,
+            }),
+        }
+    }
+
     /// Check that a capability grant is within at least one template.
     fn cap_within_templates(&self, cap: &CapGrant) -> bool {
         self.allowed_cap_templates.iter().any(|tmpl| {
@@ -1518,5 +1547,79 @@ mod tests {
                 expected: Some(_)
             }
         ));
+    }
+
+    // ─── VK v2 tests (VK-AS-RE-EXECUTION-RECIPE.md §v2)
+
+    #[test]
+    fn canonical_program_vk_v2_differs_from_v1() {
+        // The whole soundness gap v2 closes: same program, different
+        // hashes when components vary.
+        let p = canonical_test_program();
+        let v1 = canonical_program_vk(&p);
+        let v2 = canonical_program_vk_v2(
+            &p,
+            [0xAA; 32],
+            VerifierFingerprint::SourceHash([0xBB; 32]),
+            ProvingSystemId::KimchiPasta,
+        );
+        assert_ne!(v1, v2, "v2 vk_hash must not collide with v1");
+    }
+
+    #[test]
+    fn canonical_program_vk_v2_sensitive_to_air_fingerprint() {
+        // Same program, different AIR fingerprints — must produce
+        // distinct vk_hashes. This is the "same spec, different AIR"
+        // attack that v1 left exposed.
+        let p = canonical_test_program();
+        let verifier_fp = VerifierFingerprint::SourceHash([0xBB; 32]);
+        let ps = ProvingSystemId::Plonky3BabyBearFri { p3_rev: "rev" };
+        let a = canonical_program_vk_v2(&p, [0x11; 32], verifier_fp.clone(), ps.clone());
+        let b = canonical_program_vk_v2(&p, [0x22; 32], verifier_fp, ps);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn validate_child_vk_canonical_v2_round_trips() {
+        let program = canonical_test_program();
+        let air_fp = [0xCA; 32];
+        let verifier_fp = VerifierFingerprint::SourceHash([0xFE; 32]);
+        let ps = ProvingSystemId::Plonky3BabyBearFri { p3_rev: "0xabc" };
+        let vk = canonical_program_vk_v2(&program, air_fp, verifier_fp.clone(), ps.clone());
+        let desc = FactoryDescriptor {
+            factory_vk: test_factory_vk(),
+            child_program_vk: Some(vk),
+            child_vk_strategy: None,
+            allowed_cap_templates: vec![],
+            field_constraints: vec![],
+            state_constraints: vec![],
+            default_mode: CellMode::Hosted,
+            creation_budget: None,
+        };
+        desc.validate_child_vk_canonical_v2(&program, air_fp, verifier_fp, ps)
+            .expect("v2 descriptor must validate under matching components");
+    }
+
+    #[test]
+    fn validate_child_vk_canonical_v2_rejects_wrong_components() {
+        let program = canonical_test_program();
+        let verifier_fp = VerifierFingerprint::SourceHash([0xFE; 32]);
+        let ps = ProvingSystemId::Plonky3BabyBearFri { p3_rev: "0xabc" };
+        let correct_vk = canonical_program_vk_v2(&program, [0xCA; 32], verifier_fp.clone(), ps.clone());
+        let desc = FactoryDescriptor {
+            factory_vk: test_factory_vk(),
+            child_program_vk: Some(correct_vk),
+            child_vk_strategy: None,
+            allowed_cap_templates: vec![],
+            field_constraints: vec![],
+            state_constraints: vec![],
+            default_mode: CellMode::Hosted,
+            creation_budget: None,
+        };
+        // Wrong AIR fingerprint — must reject.
+        let err = desc
+            .validate_child_vk_canonical_v2(&program, [0x99; 32], verifier_fp, ps)
+            .expect_err("wrong AIR fingerprint must be rejected");
+        assert!(matches!(err, FactoryError::ProgramMismatch { .. }));
     }
 }

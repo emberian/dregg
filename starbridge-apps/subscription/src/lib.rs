@@ -824,12 +824,13 @@ mod tests {
 
     #[test]
     fn factory_descriptor_validates_against_canonical_program() {
-        // `FactoryDescriptor::validate_child_vk_canonical` confirms the
-        // descriptor's claimed VK actually binds to the program text.
+        // VK v2: the app-framework wrapper validates against the
+        // *layered* canonical hash (program bytes + Effect VM AIR +
+        // verifier + Plonky3 proving system).
         let d = subscription_factory_descriptor();
         let program = subscription_program();
-        d.validate_child_vk_canonical(&program)
-            .expect("descriptor's child_program_vk must bind to subscription_program()");
+        pyana_app_framework::validate_child_vk_canonical(&d, &program)
+            .expect("descriptor's child_program_vk must bind to subscription_program() under v2");
     }
 
     #[test]
