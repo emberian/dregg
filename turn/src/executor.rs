@@ -5196,6 +5196,59 @@ impl TurnExecutor {
         // Verify authorization (including signature/proof verification).
         self.verify_authorization(action, target_cell, ledger, parent_cell, &path, turn_nonce)?;
 
+        // Refusal-vs-mutation structural conflict guard.
+        // `Effect::Refusal { cell, .. }` is the categorical
+        // "evidence of non-action" (CROSS-CELL-CATEGORICAL-ANALYSIS.md
+        // §3.3). It must NOT co-occur with any state-mutating effect
+        // on the same cell within the same action — that collapses the
+        // attest-non-action semantics into an ambiguous "did the prover
+        // act or refuse?" Reject closed; downstream verifiers do not
+        // have to silently pick an ordering.
+        for (ref_idx, ref_eff) in action.effects.iter().enumerate() {
+            if let Effect::Refusal { cell: ref_cell, .. } = ref_eff {
+                for (other_idx, other) in action.effects.iter().enumerate() {
+                    if ref_idx == other_idx {
+                        continue;
+                    }
+                    let (conflicts, name): (bool, &'static str) = match other {
+                        Effect::SetField { cell, .. } => (cell == ref_cell, "SetField"),
+                        Effect::SetPermissions { cell, .. } => {
+                            (cell == ref_cell, "SetPermissions")
+                        }
+                        Effect::SetVerificationKey { cell, .. } => {
+                            (cell == ref_cell, "SetVerificationKey")
+                        }
+                        Effect::Transfer { from, to, .. } => (
+                            from == ref_cell || to == ref_cell,
+                            "Transfer",
+                        ),
+                        Effect::GrantCapability { from, to, .. } => (
+                            from == ref_cell || to == ref_cell,
+                            "GrantCapability",
+                        ),
+                        Effect::RevokeCapability { cell, .. } => {
+                            (cell == ref_cell, "RevokeCapability")
+                        }
+                        Effect::IncrementNonce { cell } => (cell == ref_cell, "IncrementNonce"),
+                        // A second Refusal on the same cell is itself a
+                        // structural conflict (two non-action attestations
+                        // collapse into ambiguity about which is binding).
+                        Effect::Refusal { cell, .. } => (cell == ref_cell, "Refusal"),
+                        _ => (false, ""),
+                    };
+                    if conflicts {
+                        return Err((
+                            TurnError::RefusalConflictsWithMutation {
+                                cell: *ref_cell,
+                                conflicting_effect: name,
+                            },
+                            path,
+                        ));
+                    }
+                }
+            }
+        }
+
         // Meter authorization cost.
         let auth_cost = match &action.authorization {
             Authorization::Signature(_, _) => self.costs.signature_verify,
@@ -13650,6 +13703,203 @@ mod hardening_tests {
             ),
             "expected ExecutorSignatureInvalid, got {:?}",
             err
+        );
+    }
+
+    // =========================================================================
+    // Lane-2 honesty sweep: adversarial tests for Authorization::OneOf and
+    // Effect::Refusal. Pre-sweep, the structural primitives existed but no
+    // executor-side test ever constructed them, so the defensive cascade
+    // (executor.rs ~5812 for OneOf; the new Refusal-vs-mutation guard) was
+    // dead code from a coverage standpoint.
+    // =========================================================================
+
+    use crate::action::RefusalReason;
+
+    /// Build a single-action turn whose action carries `authorization`
+    /// and the given `effects`. Target is the agent itself; no
+    /// preconditions; permissive cell so authorization is the only
+    /// gate the executor checks.
+    fn build_single_action_turn(
+        agent: CellId,
+        nonce: u64,
+        authorization: Authorization,
+        effects: Vec<Effect>,
+    ) -> Turn {
+        let action = Action {
+            target: agent,
+            method: [0u8; 32],
+            args: vec![],
+            authorization,
+            preconditions: Preconditions::default(),
+            effects,
+            may_delegate: DelegationMode::None,
+            commitment_mode: Default::default(),
+            balance_change: None,
+            witness_blobs: vec![],
+        };
+        let tree = CallTree {
+            action,
+            children: vec![],
+            hash: [0u8; 32],
+        };
+        Turn {
+            agent,
+            nonce,
+            call_forest: CallForest {
+                roots: vec![tree],
+                forest_hash: [0u8; 32],
+            },
+            fee: 0,
+            memo: None,
+            valid_until: None,
+            previous_receipt_hash: None,
+            depends_on: vec![],
+            conservation_proof: None,
+            sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
+            custom_program_proofs: None,
+            effect_binding_proofs: Vec::new(),
+            cross_effect_dependencies: Vec::new(),
+            effect_witness_index_map: Vec::new(),
+        }
+    }
+
+    /// `Authorization::OneOf { candidates, proof_index }` with `proof_index`
+    /// past the end of `candidates` MUST be rejected with an
+    /// `InvalidAuthorization` whose reason mentions "out of bounds".
+    /// Pins the defensive cascade at executor.rs ~5818.
+    #[test]
+    fn one_of_rejects_out_of_bounds_proof_index() {
+        let mut ledger = Ledger::new();
+        let agent = make_permissive_cell(0x71, 1000);
+        let agent_id = agent.id();
+        ledger.insert_cell(agent).unwrap();
+
+        let executor = TurnExecutor::new(ComputronCosts::zero());
+
+        // 1 candidate, proof_index=5 -> out of bounds.
+        let auth = Authorization::OneOf {
+            candidates: vec![Authorization::Signature([0u8; 32], [0u8; 32])],
+            proof_index: 5,
+        };
+        let turn = build_single_action_turn(agent_id, 0, auth, vec![]);
+
+        let r = executor.execute(&turn, &mut ledger);
+        match r {
+            TurnResult::Rejected {
+                reason: TurnError::InvalidAuthorization { reason },
+                ..
+            } => {
+                assert!(
+                    reason.contains("out of bounds"),
+                    "expected reason to mention 'out of bounds', got: {reason}"
+                );
+            }
+            other => panic!("expected InvalidAuthorization (out of bounds), got: {:?}", other),
+        }
+    }
+
+    /// `Authorization::OneOf` whose indexed candidate is
+    /// `Authorization::Unchecked` MUST be rejected — `OneOf` must not
+    /// reduce to an auth-bypass-by-naming-Unchecked surface.
+    /// Pins the defensive cascade at executor.rs ~5833.
+    #[test]
+    fn one_of_rejects_unchecked_indexed_slot() {
+        let mut ledger = Ledger::new();
+        let agent = make_permissive_cell(0x72, 1000);
+        let agent_id = agent.id();
+        ledger.insert_cell(agent).unwrap();
+
+        let executor = TurnExecutor::new(ComputronCosts::zero());
+
+        // Candidates: [Unchecked, Signature]; indexed slot 0 is Unchecked.
+        let auth = Authorization::OneOf {
+            candidates: vec![
+                Authorization::Unchecked,
+                Authorization::Signature([0u8; 32], [0u8; 32]),
+            ],
+            proof_index: 0,
+        };
+        let turn = build_single_action_turn(agent_id, 0, auth, vec![]);
+
+        let r = executor.execute(&turn, &mut ledger);
+        match r {
+            TurnResult::Rejected {
+                reason: TurnError::InvalidAuthorization { reason },
+                ..
+            } => {
+                assert!(
+                    reason.contains("Unchecked"),
+                    "expected reason to mention 'Unchecked', got: {reason}"
+                );
+            }
+            other => panic!(
+                "expected InvalidAuthorization (Unchecked indexed slot), got: {:?}",
+                other
+            ),
+        }
+    }
+
+    /// An action that carries both `Effect::Refusal { cell, .. }` and
+    /// `Effect::SetField { cell, .. }` on the SAME cell MUST be rejected
+    /// with `RefusalConflictsWithMutation`. Refusal is "evidence of
+    /// non-action" — it cannot coexist with a real state mutation
+    /// on the same target within a single action.
+    #[test]
+    fn refusal_conflicts_with_set_field_on_same_cell() {
+        let mut ledger = Ledger::new();
+        let agent = make_permissive_cell(0x73, 1000);
+        let agent_id = agent.id();
+        ledger.insert_cell(agent).unwrap();
+
+        let executor = TurnExecutor::new(ComputronCosts::zero());
+
+        let refusal = Effect::Refusal {
+            cell: agent_id,
+            offered_action_commitment: [0xAB; 32],
+            refusal_reason: RefusalReason::Declined,
+            proof_witness_index: 0,
+        };
+        let set_field = Effect::SetField {
+            cell: agent_id,
+            index: 0,
+            value: [0xCD; 32],
+        };
+
+        let turn = build_single_action_turn(
+            agent_id,
+            0,
+            Authorization::Unchecked,
+            vec![refusal, set_field],
+        );
+
+        let r = executor.execute(&turn, &mut ledger);
+        match r {
+            TurnResult::Rejected {
+                reason:
+                    TurnError::RefusalConflictsWithMutation {
+                        cell,
+                        conflicting_effect,
+                    },
+                ..
+            } => {
+                assert_eq!(cell, agent_id);
+                assert_eq!(conflicting_effect, "SetField");
+            }
+            other => panic!(
+                "expected RefusalConflictsWithMutation, got: {:?}",
+                other
+            ),
+        }
+
+        // Agent's slot[0] MUST remain at FIELD_ZERO -- the entire action
+        // was rejected closed, no mutation applied.
+        assert_eq!(
+            ledger.get(&agent_id).unwrap().state.fields[0],
+            pyana_cell::state::FIELD_ZERO
         );
     }
 }

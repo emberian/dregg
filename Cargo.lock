@@ -7076,6 +7076,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pyana-storage-templates"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "pyana-app-framework",
+ "pyana-cell",
+ "pyana-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "pyana-subscription"
 version = "0.1.0"
 dependencies = [
@@ -9959,6 +9971,7 @@ dependencies = [
  "blake3",
  "pyana-app-framework",
  "pyana-cell",
+ "pyana-turn",
  "pyana-types",
  "serde",
  "serde_json",

@@ -313,6 +313,27 @@ pub enum TurnError {
         /// built-ins (the built-in identity is in `kind`).
         vk_hash: [u8; 32],
     },
+
+    /// An action carries `Effect::Refusal { cell, .. }` alongside another
+    /// state-mutating effect (`SetField`, `SetPermissions`,
+    /// `SetVerificationKey`, `Transfer`, `GrantCapability`,
+    /// `RevokeCapability`) on the *same* cell.
+    ///
+    /// `Refusal` is the categorical "evidence of non-action"
+    /// (CROSS-CELL-CATEGORICAL-ANALYSIS.md §3.3) — a structural
+    /// attestation that the prover did NOT act. Co-occurring it with a
+    /// real mutation on the same target collapses the semantics: was
+    /// the action refused, or taken? The executor rejects the action
+    /// closed rather than silently picking an order.
+    ///
+    /// Per task-1 of the 2026-05-25 lane-honesty sweep.
+    RefusalConflictsWithMutation {
+        /// The cell whose refusal collides with a co-occurring
+        /// state-mutating effect.
+        cell: CellId,
+        /// Human-readable name of the conflicting effect for triage.
+        conflicting_effect: &'static str,
+    },
 }
 
 impl core::fmt::Display for TurnError {
@@ -697,6 +718,18 @@ impl core::fmt::Display for TurnError {
                     "receipt chain mismatch: expected {}, got {}",
                     fmt_hash(expected),
                     fmt_hash(got)
+                )
+            }
+            TurnError::RefusalConflictsWithMutation {
+                cell,
+                conflicting_effect,
+            } => {
+                write!(
+                    f,
+                    "Effect::Refusal on cell {cell} conflicts with co-occurring \
+                     state-mutating effect '{conflicting_effect}' on the same cell: \
+                     refusal is evidence-of-non-action and cannot coexist with a \
+                     real mutation in the same action"
                 )
             }
         }
