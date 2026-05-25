@@ -683,7 +683,37 @@ impl TurnReceipt {
     /// the signature does not cover that field). Including them here means
     /// downstream verifiers can check the signature *alone* — they no longer
     /// have to independently recompute `receipt_hash` for soundness.
+    ///
+    /// **v3 (audit P0 #76 closed):** the canonical signed message now binds
+    /// the *full* `receipt_hash()`. v2 narrowed the message to the
+    /// turn-identity / state-transition prefix, leaving
+    /// `effects_hash`, `computrons_used`, `action_count`,
+    /// `previous_receipt_hash`, `derivation_records`, `routing_directives`,
+    /// `introduction_exports`, `emitted_events`, `finality`,
+    /// `was_encrypted`, and `was_burn` unsigned. An executor signature was
+    /// therefore recoverable onto a receipt with a tampered
+    /// `was_encrypted` bit, a stripped derivation record, or a forged
+    /// chain link — none of which v2 covered. By signing the full
+    /// canonical `receipt_hash` under a fresh domain string, v3 makes the
+    /// signature attest to *every* field bound into `receipt_hash`. The
+    /// v2 narrow message is preserved (see
+    /// [`canonical_executor_signed_message_v2`]) so existing fixtures and
+    /// test vectors can still round-trip; new signers should use v3.
     pub fn canonical_executor_signed_message(&self) -> Vec<u8> {
+        const DOMAIN: &[u8] = b"executor-receipt-sig-v3:";
+        let receipt_hash = self.receipt_hash();
+        let mut msg = Vec::with_capacity(DOMAIN.len() + 32);
+        msg.extend_from_slice(DOMAIN);
+        msg.extend_from_slice(&receipt_hash);
+        msg
+    }
+
+    /// Legacy v2 canonical executor-signed message. Preserved for
+    /// fixtures and any verifier still expecting the narrow prefix
+    /// (turn_hash + pre/post + timestamp + federation_id + agent). New
+    /// signers must use [`canonical_executor_signed_message`] (v3) —
+    /// see audit P0 #76 for the soundness gap v2 left open.
+    pub fn canonical_executor_signed_message_v2(&self) -> Vec<u8> {
         const DOMAIN: &[u8] = b"executor-receipt-sig-v2:";
         let agent_bytes = self.agent.as_bytes();
         let mut msg = Vec::with_capacity(DOMAIN.len() + 32 + 32 + 32 + 8 + 32 + agent_bytes.len());
