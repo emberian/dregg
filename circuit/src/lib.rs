@@ -105,6 +105,7 @@ pub mod arithmetic_predicate_air;
 pub mod block_transition_air;
 pub mod bridge_action_air;
 pub mod compound_predicate_air;
+pub mod effect_action_air;
 #[allow(deprecated)]
 pub mod derivation_air;
 pub mod fold_air;
