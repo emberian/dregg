@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Starbridge — Identity</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!--
+      starbridge-app fragment for the identity credentials surface.
+      Mounts under /starbridge-apps/identity/ on the site build.
+
+      Bootstraps the same <pyana-app> context the Studio uses (see
+      site/STUDIO.md §6) and the same URI-addressable inspectors. The
+      page itself is intentionally thin: shared inspectors do the
+      rendering; this fragment configures which factory_vk to mount
+      and which issuer cell to target.
+
+      Wired-in JS:
+        - /pkg/pyana_wasm.js                       — the in-browser node
+        - /_includes/studio/runtimes.js            — runtime registry
+        - /starbridge-apps/shared/inspectors/      — shared inspector registry
+        - /starbridge-apps/identity/inspectors.js  — four custom elements:
+            <pyana-credential>
+            <pyana-credential-issue-form>
+            <pyana-credential-present-form>
+            <pyana-credential-verifier>
+        - /starbridge-apps/identity/turn-builders.js
+            — issue/present/verify presets that wrap window.pyana.signTurn
+
+      The factory_vk hex below mirrors ISSUER_FACTORY_VK from src/lib.rs.
+      Keep these two in sync; a real deployment lifts the constant from
+      the Rust crate at build time.
+    -->
+    <link rel="stylesheet" href="/_includes/studio/styles.css" />
+    <style>
+      .identity-chrome { padding: 1rem 1.5rem; border-bottom: 1px solid var(--border, #ddd); }
+      .identity-tabs { display: flex; gap: 1rem; margin: 0.5rem 0 0; }
+      .identity-tab {
+        padding: 0.4rem 0.8rem;
+        border: 1px solid var(--border, #ddd);
+        border-radius: 4px;
+        cursor: pointer;
+        background: var(--bg, #fff);
+      }
+      .identity-tab[aria-selected="true"] {
+        background: var(--accent, #4a7bff);
+        color: white;
+        border-color: var(--accent, #4a7bff);
+      }
+      .identity-panel { padding: 1.5rem; }
+    </style>
+  </head>
+  <body>
+    <header class="identity-chrome">
+      <h1>Pyana Identity</h1>
+      <p>Issue, present, and verify verifiable credentials. All ZK heavy
+         lifting via <code>pyana-credentials</code>; this app is the
+         userspace shell wiring it through cell programs. Backed by
+         <code>issuer_factory_descriptor()</code> in
+         <code>starbridge-apps/identity/src/lib.rs</code>.</p>
+      <nav class="identity-tabs" role="tablist">
+        <button class="identity-tab" role="tab" aria-selected="true"  data-panel="panel-wallet">Wallet</button>
+        <button class="identity-tab" role="tab" aria-selected="false" data-panel="panel-issue">Issue</button>
+        <button class="identity-tab" role="tab" aria-selected="false" data-panel="panel-present">Present</button>
+        <button class="identity-tab" role="tab" aria-selected="false" data-panel="panel-verify">Verify</button>
+      </nav>
+    </header>
+    <main class="identity-panel">
+      <pyana-app
+        runtime="in-memory"
+        factory-vk="73746172627269646765-6964656e746974792d6973737565722d66616374"
+        registry-uri="pyana://cell/identity-issuer-default"
+      >
+        <section id="panel-wallet" data-tab-panel>
+          <h2>Credentials</h2>
+          <pyana-credential uri="pyana://credential/active"></pyana-credential>
+        </section>
+        <section id="panel-issue" data-tab-panel hidden>
+          <h2>Issue Credential</h2>
+          <pyana-credential-issue-form
+            issuer-uri="pyana://cell/identity-issuer-default"
+            schema="kyc-v1"
+          ></pyana-credential-issue-form>
+        </section>
+        <section id="panel-present" data-tab-panel hidden>
+          <h2>Present Credential</h2>
+          <pyana-credential-present-form
+            credential-uri="pyana://credential/active"
+          ></pyana-credential-present-form>
+        </section>
+        <section id="panel-verify" data-tab-panel hidden>
+          <h2>Verify Presentation</h2>
+          <pyana-credential-verifier
+            verifier-uri="pyana://cell/verifier-default"
+          ></pyana-credential-verifier>
+        </section>
+      </pyana-app>
+    </main>
+    <script type="module" src="/pkg/pyana_wasm.js"></script>
+    <script type="module" src="/_includes/studio/runtimes.js"></script>
+    <script type="module" src="/starbridge-apps/shared/inspectors/index.js"></script>
+    <script type="module" src="/starbridge-apps/identity/inspectors.js"></script>
+    <script type="module" src="/starbridge-apps/identity/turn-builders.js"></script>
+    <script type="module">
+      // Minimal tab-switcher (keeps the panels thin; logic stays in the
+      // web components themselves).
+      const tabs  = document.querySelectorAll('.identity-tab');
+      const panels = document.querySelectorAll('[data-tab-panel]');
+      tabs.forEach((t) => t.addEventListener('click', () => {
+        const target = t.getAttribute('data-panel');
+        tabs.forEach((x) => x.setAttribute('aria-selected', x === t ? 'true' : 'false'));
+        panels.forEach((p) => { p.hidden = (p.id !== target); });
+      }));
+    </script>
+  </body>
+</html>
