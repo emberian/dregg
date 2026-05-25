@@ -135,7 +135,7 @@
 <body>
   <div class="container">
     <h1>Pyana Auth Demo</h1>
-    <p class="subtitle">Browser extension wallet authorization flow</p>
+    <p class="subtitle">Browser extension cipherclerk authorization flow</p>
 
     <div class="status-bar">
       <div class="status-dot" id="statusDot"></div>
@@ -275,7 +275,7 @@
         const elapsed = performance.now() - start;
         log('');
         if (result.accepted) {
-          logSuccess('Token provisioned into wallet');
+          logSuccess('Token provisioned into cipherclerk');
           if (result.tokenId) logLabel('Token ID', result.tokenId);
         } else {
           logError('Token rejected by user');
@@ -352,9 +352,9 @@
 
         log('');
         if (connected) {
-          logSuccess('Wallet is connected');
+          logSuccess('Cipherclerk is connected');
         } else {
-          logError('Wallet is not connected (locked or no identity loaded)');
+          logError('Cipherclerk is not connected (locked or no identity loaded)');
         }
         logTiming('Response time', elapsed);
       } catch (err) {
@@ -385,7 +385,7 @@
 
         log('');
         if (result) {
-          logSuccess('Yes -- wallet holds a matching capability');
+          logSuccess('Yes -- cipherclerk holds a matching capability');
         } else {
           logError('No -- no matching capability found');
         }

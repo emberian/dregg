@@ -116,7 +116,7 @@ export async function getCell(id) {
   return get(`/api/cell/${id}`);
 }
 
-/** Get wallet tokens (capabilities). */
+/** Get cipherclerk tokens (capabilities). */
 export async function getTokens() {
   return get('/api/tokens');
 }
@@ -141,8 +141,8 @@ export async function getPirInfo() {
   return get('/pir/info');
 }
 
-/** Get wallet status. */
-export async function getWallet() {
+/** Get cipherclerk status. */
+export async function getCipherclerk() {
   return get('/wallet');
 }
 
