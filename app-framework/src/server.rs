@@ -152,7 +152,7 @@ impl AppServer {
             router: Router::new(),
             service_name: "pyana-app".into(),
             pending_registration: None,
-            wallet: None,
+            cipherclerk: None,
             executor: None,
         }
     }

@@ -2415,8 +2415,72 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
       }
     }
 
-    case "pyana:privateTransfer":
-      return { id: message.id, result: { error: "Requires WASM module -- not yet migrated" } };
+    case "pyana:privateTransfer": {
+      requireWasm("privateTransfer");
+      const w = wasm!;
+      const wallet = await loadState();
+      if (wallet.locked) return { id: message.id, error: "Wallet is locked" };
+      if (!wallet.secretKey) return { id: message.id, error: "Wallet secret key not available" };
+      if (wallet.needsPassphraseSetup) {
+        return { id: message.id, error: "Set a wallet passphrase before signing private transfers." };
+      }
+      const amount = message.amount as number;
+      const assetType = message.assetType as string | number | undefined;
+      const recipientMeta = message.recipientStealthMeta as StealthMetaAddress | undefined;
+      if (!recipientMeta || !recipientMeta.spendPubkey || !recipientMeta.viewPubkey) {
+        return { id: message.id, error: "recipientStealthMeta must include spendPubkey and viewPubkey" };
+      }
+      // Coerce the page-side `assetType` (commonly a symbolic string like
+      // "credit") to the canonical u64 the SDK expects. The wasm
+      // `wallet_private_transfer` binding treats this as the asset_type
+      // tag carried on every committed note.
+      const assetTypeU64 = typeof assetType === "number"
+        ? assetType
+        : (typeof assetType === "string" && /^[0-9]+$/.test(assetType) ? parseInt(assetType, 10) : 0);
+      try {
+        const result = w.wallet_private_transfer(JSON.stringify({
+          sender_privkey: wallet.secretKey,
+          amount,
+          asset_type: assetTypeU64,
+          recipient_meta: {
+            spend_pubkey: recipientMeta.spendPubkey,
+            view_pubkey: recipientMeta.viewPubkey,
+          },
+        }));
+        const resp = await nodeRequest(nodeConfig, "/turns/submit", {
+          method: "POST",
+          body: JSON.stringify({
+            turn_id: result.turn_id,
+            turn_bytes: Array.from(result.turn_bytes),
+            sender_pubkey: wallet.publicKey,
+          }),
+        });
+        wallet.log.push({
+          action: "privateTransfer",
+          resource: "*",
+          allowed: true,
+          timestamp: Date.now(),
+          mode: "private",
+          turnId: result.turn_id,
+          amount,
+          recipientStealthMeta: recipientMeta,
+        });
+        await saveState();
+        resetLockTimer();
+        notifySubscribers("privateTransfer", { turnId: result.turn_id, amount });
+        return {
+          id: message.id,
+          result: {
+            success: resp.ok,
+            turnId: result.turn_id,
+            error: resp.ok ? undefined : `Submit failed: ${resp.error}`,
+          },
+        };
+      } catch (e: unknown) {
+        const err = e as Error;
+        return { id: message.id, error: err.message || "private_transfer failed" };
+      }
+    }
 
     default:
       return { id: message.id, error: "Unknown message type" };

@@ -105,11 +105,15 @@ pub mod wordlist;
 
 /// Legacy module name for the cipherclerk surface.
 ///
-/// During the rename window this re-exports `cipherclerk` so downstream
-/// `use pyana_sdk::wallet::...` paths keep compiling. New code should
-/// reach for `pyana_sdk::cipherclerk`.
+/// During the rename window this re-exports `cipherclerk` plus an
+/// `AgentWallet` alias so downstream `use pyana_sdk::wallet::...`
+/// paths keep compiling. New code should reach for
+/// `pyana_sdk::cipherclerk`.
 #[doc(hidden)]
-pub use cipherclerk as wallet;
+pub mod wallet {
+    pub use crate::cipherclerk::*;
+    pub use crate::cipherclerk::AgentCipherclerk as AgentWallet;
+}
 
 // Re-export primary types at crate root for convenience.
 pub use cipherclerk::{
