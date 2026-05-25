@@ -505,7 +505,29 @@ export interface PyanaWasm {
   verify_bearer_cap(tokenHex: string, delegatorKeyHex: string, targetCellHex: string, action: string, expiry: number, currentTime: number): { valid: boolean; expired: boolean };
 
   // Factory operations
+  /**
+   * Deterministic preview: hash-derives `(child_vk, param_hash)` from
+   * `(factory_vk, owner_pubkey)` without minting a cell. Useful for
+   * client-side display before submission. Does NOT produce a signed
+   * turn; use `wallet_create_from_factory` for that.
+   */
   create_from_factory(factoryVkHex: string, ownerPubkeyHex: string, initialBalance: number): { childVk: string; paramHash: string; factoryVk: string };
+  /**
+   * Canonical mint path: build and sign a real
+   * `Effect::CreateCellFromFactory` turn via `AgentWallet::create_from_factory`.
+   * The returned `turn_bytes` is the postcard-encoded Turn ready for
+   * `/turns/submit`. Also surfaces `child_vk` / `param_hash` so the
+   * caller can display the new cell's identity without waiting on the
+   * node round-trip.
+   */
+  wallet_create_from_factory(specJson: string): {
+    turn_id: string;
+    turn_bytes: Uint8Array;
+    agent_cell_id: string;
+    child_vk: string;
+    param_hash: string;
+    factory_vk: string;
+  };
   verify_provenance(cellVkHex: string, knownFactoryVks: string): { fromFactory: boolean; factoryVk: string | null };
 
   // Sovereign cells

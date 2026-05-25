@@ -2186,12 +2186,112 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
       return { id: message.id, result };
     }
 
-    // Factory
+    // Factory: canonical constructor-transparency mint.
+    //
+    // Routes through `wallet_create_from_factory` (AgentWallet::create_from_factory)
+    // — the canonical SDK path — to build a real signed
+    // `Effect::CreateCellFromFactory` turn, submit it via /turns/submit,
+    // and return the new cell's `(child_vk, param_hash, factory_vk)`
+    // identity tuple to the caller. This replaces the prior shape that
+    // only hash-derived (child_vk, param_hash) client-side and never
+    // actually minted a cell.
     case "pyana:createFromFactory": {
       requireWasm("createFromFactory");
       const w = wasm!;
-      const result = w.create_from_factory(message.factoryVkHex as string, message.ownerPubkeyHex as string, (message.initialBalance as number) || 0);
-      return { id: message.id, result };
+      const wallet = await loadState();
+      if (wallet.locked) return { id: message.id, error: "Wallet is locked" };
+      if (wallet.needsPassphraseSetup) {
+        return { id: message.id, error: "Set a wallet passphrase before minting cells from a factory." };
+      }
+      if (!wallet.secretKey) return { id: message.id, error: "Wallet secret key not available" };
+
+      const factoryVkHex = message.factoryVkHex as string;
+      const ownerPubkeyHex = message.ownerPubkeyHex as string;
+      // Token-id is domain-scoped; default to BLAKE3-derive of the canonical
+      // signing domain so the resulting cell shares the token namespace with
+      // other extension-minted cells.
+      const tokenIdHex = (message.tokenIdHex as string | undefined)
+        ?? w.blake3_hash("pyana-wallet-default-token-domain");
+      const mode = (message.mode as string | undefined) ?? "Hosted";
+      const initialFields = (message.initialFields as Array<[number, number]> | undefined) ?? [];
+
+      const specJson = JSON.stringify({
+        sender_privkey: wallet.secretKey,
+        factory_vk_hex: factoryVkHex,
+        owner_pubkey_hex: ownerPubkeyHex,
+        token_id_hex: tokenIdHex,
+        mode,
+        program_vk_hex: message.programVkHex || null,
+        initial_fields: initialFields,
+        federation_id_hex: message.federationIdHex || null,
+      });
+
+      let turnData: {
+        turn_id: string;
+        turn_bytes: Uint8Array;
+        agent_cell_id: string;
+        child_vk: string;
+        param_hash: string;
+        factory_vk: string;
+      };
+      try {
+        turnData = w.wallet_create_from_factory(specJson);
+      } catch (e: unknown) {
+        const err = e as Error;
+        return { id: message.id, error: `Failed to build factory turn: ${err.message || String(err)}` };
+      }
+
+      // Submit the signed factory turn to the node. The node's executor
+      // validates the factory descriptor + params and mints the cell,
+      // tracking provenance for downstream verifyProvenance calls.
+      const resp = await nodeRequest(nodeConfig, "/turns/submit", {
+        method: "POST",
+        body: JSON.stringify({
+          turn_id: turnData.turn_id,
+          turn_bytes: Array.from(turnData.turn_bytes),
+          sender_pubkey: wallet.publicKey,
+        }),
+      });
+
+      if (!resp.ok) {
+        return {
+          id: message.id,
+          // Even when submission fails the caller can still display the
+          // derived (child_vk, param_hash, factory_vk) — they are
+          // deterministic functions of the inputs.
+          result: {
+            childVk: turnData.child_vk,
+            paramHash: turnData.param_hash,
+            factoryVk: turnData.factory_vk,
+            submitted: false,
+            error: `Factory turn rejected by node: ${resp.error}`,
+            turnId: turnData.turn_id,
+          },
+        };
+      }
+
+      wallet.log.push({
+        action: "createFromFactory",
+        resource: turnData.child_vk,
+        allowed: true,
+        timestamp: Date.now(),
+        mode: "factory",
+        turnId: turnData.turn_id,
+      });
+      await saveState();
+
+      return {
+        id: message.id,
+        result: {
+          childVk: turnData.child_vk,
+          paramHash: turnData.param_hash,
+          factoryVk: turnData.factory_vk,
+          submitted: true,
+          turnId: turnData.turn_id,
+          agentCellId: turnData.agent_cell_id,
+          nodeResult: resp.data as Record<string, unknown> | undefined,
+        },
+      };
     }
 
     case "pyana:verifyProvenance": {

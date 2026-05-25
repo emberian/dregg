@@ -133,7 +133,33 @@ export interface PyanaAPI {
   privateTransfer(amount: number, assetType: string, recipientStealthMeta: StealthMetaAddress): Promise<{ success: boolean; turnId?: string; commitment?: number[] }>;
   createBearerCap(targetCellHex: string, action: string, expiry?: number): Promise<{ bearerTokenHex: string; targetCell: string; action: string }>;
   verifyBearerCap(bearerTokenHex: string, delegatorKeyHex: string, targetCellHex: string, action: string, expiry: number): Promise<{ valid: boolean; expired: boolean }>;
-  createFromFactory(factoryVkHex: string, ownerPubkeyHex: string, initialBalance: number): Promise<{ childVk: string; paramHash: string; factoryVk: string }>;
+  /**
+   * Mint a cell from a factory via the canonical
+   * `Effect::CreateCellFromFactory` path. Routes through
+   * `AgentWallet::create_from_factory` in the SDK to build a real
+   * signed turn, submits it to the configured node's `/turns/submit`,
+   * and returns the new cell's identity tuple plus a submission flag.
+   *
+   * `initialBalance` is retained for shape compatibility but is no longer
+   * load-bearing: cells are minted with the factory's default balance;
+   * top-ups go through a follow-up `signTurn({action: "transfer", ...})`.
+   * Optional fields: `tokenIdHex`, `mode` ("Hosted" | "Sovereign"),
+   * `programVkHex`, `initialFields`, `federationIdHex` — pass via the
+   * extension's typed request shape when needed.
+   *
+   * On submission failure the derived `(childVk, paramHash, factoryVk)`
+   * are still returned (they are deterministic functions of the inputs);
+   * `submitted: false` and an `error` field flag the failure.
+   */
+  createFromFactory(factoryVkHex: string, ownerPubkeyHex: string, initialBalance: number): Promise<{
+    childVk: string;
+    paramHash: string;
+    factoryVk: string;
+    submitted?: boolean;
+    turnId?: string;
+    agentCellId?: string;
+    error?: string;
+  }>;
   verifyProvenance(cellVkHex: string, knownFactoryVks: string[]): Promise<{ fromFactory: boolean; factoryVk: string | null }>;
   makeCellSovereign(cellIdHex: string): Promise<{ cellId: string; stateCommitment: string; mode: string }>;
   peerExchange(receiverCellHex: string, amount: number): Promise<{ exchangeId: string; proofCommitment: string }>;
