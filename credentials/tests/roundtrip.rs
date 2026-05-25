@@ -11,7 +11,7 @@ use pyana_credentials::{
     AttrValue, CredentialAttributes, CredentialSchema, IssuerKeys, Predicate, PredicateRequest,
     PresentationOptions, RevocationRegistry, VerificationOptions, issue, present, revoke, verify,
 };
-use pyana_token::AuthRequest;
+use pyana_token::{AuthRequest, AuthToken};
 
 fn fixture_issuer() -> IssuerKeys {
     IssuerKeys::new(

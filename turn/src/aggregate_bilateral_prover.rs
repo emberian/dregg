@@ -737,8 +737,7 @@ fn replay_aggregation_air(trace: &[Vec<BabyBear>], pi: &[BabyBear]) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::ActionBuilder;
-    use crate::builder::TurnBuilder;
+    use crate::builder::{ActionBuilder, TurnBuilder};
     use crate::turn::TurnReceipt;
     use pyana_cell::AuthRequired;
 

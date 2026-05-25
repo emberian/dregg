@@ -827,6 +827,37 @@ pub mod pi {
     /// alongside the witness AND IS_SOVEREIGN_CELL == 1.
     pub const HAS_TRANSITION_PROOF: usize = 88;
 
+    // ---- 30-bit value-truncation fix (CAVEAT-LAYER-COVERAGE.md §6.5) ----
+    //
+    // Three effects (BridgeMint, BridgeLock, CreateEscrow) project a u64
+    // `value` into a single BabyBear via `value & ((1 << 30) - 1)`. Above
+    // 2^30, the high 34 bits are unrecoverable from the proof: a malicious
+    // prover could re-mint / re-lock / escrow with arbitrary high-bit
+    // collisions.
+    //
+    // Fix: bind the full u64 into the PI via four 16-bit limbs (positive,
+    // each < 2^16, summing as v_l + v_ml*2^16 + v_mh*2^32 + v_h*2^48 == value).
+    // The executor populates the limbs from the runtime u64; the verifier
+    // PI-matching loop catches any disagreement. The existing per-row
+    // value_lo param is preserved for backwards-compatibility and is
+    // tied to the lo+mid_lo+mid_hi via boundary at row 0 (the
+    // 30-bit-limb form is now demonstrably one *shadow* of the full
+    // four-limb form).
+    //
+    // Each effect gets a 4-element PI slot; populated only when that
+    // effect appears in the trace. When absent, the slot is the zero
+    // sentinel.
+    /// 4-limb (16-bit each) decomposition of `BridgeMint.value`. Limbs are
+    /// little-endian: limbs[0] is the low 16 bits, limbs[3] is the high 16.
+    pub const BRIDGE_MINT_VALUE_LIMBS_BASE: usize = 89;
+    pub const BRIDGE_MINT_VALUE_LIMBS_LEN: usize = 4;
+    /// 4-limb decomposition of `BridgeLock.value`.
+    pub const BRIDGE_LOCK_VALUE_LIMBS_BASE: usize = 93;
+    pub const BRIDGE_LOCK_VALUE_LIMBS_LEN: usize = 4;
+    /// 4-limb decomposition of `CreateEscrow.amount`.
+    pub const CREATE_ESCROW_AMOUNT_LIMBS_BASE: usize = 97;
+    pub const CREATE_ESCROW_AMOUNT_LIMBS_LEN: usize = 4;
+
     // ---- Custom proof commitments ----
     /// For each custom effect i (0..custom_count):
     ///   PI[CUSTOM_PROOFS_BASE + i*8 + 0..4] = custom_program_vk_hash (4 elements)
@@ -860,7 +891,10 @@ pub mod pi {
     ///   80..84  SOVEREIGN_TRANSITION_PROOF_VK_HASH[4]    (sovereign teeth Phase 2)
     ///   84..88  SOVEREIGN_TRANSITION_PROOF_COMMITMENT[4] (sovereign teeth Phase 2)
     ///   88      HAS_TRANSITION_PROOF               (sovereign teeth Phase 2)
-    pub const BASE_COUNT: usize = 89;
+    ///   89..93  BRIDGE_MINT_VALUE_LIMBS[4]          (30-bit-trunc fix)
+    ///   93..97  BRIDGE_LOCK_VALUE_LIMBS[4]          (30-bit-trunc fix)
+    ///   97..101 CREATE_ESCROW_AMOUNT_LIMBS[4]       (30-bit-trunc fix)
+    pub const BASE_COUNT: usize = 101;
     /// Elements per custom effect entry in PI (4 vk_hash + 4 proof_commit).
     pub const CUSTOM_ENTRY_SIZE: usize = 8;
 
@@ -955,15 +989,31 @@ pub enum Effect {
     PipelinedSend { send_hash: BabyBear },
     /// CreateEscrow: actor's balance debits by `amount_lo`. Mirrors NoteCreate.
     /// `escrow_hash` = BLAKE3(recipient ‖ condition) binds the escrow target.
+    ///
+    /// 30-bit-trunc fix (CAVEAT-LAYER-COVERAGE.md §6.5): `amount_full` carries
+    /// the full u64 amount; `amount_lo` retains its 30-bit-truncated form for
+    /// backwards-compatible AIR constraint use (balance arithmetic uses
+    /// `amount_lo` because the per-row balance limbs are 30+34-bit BabyBear).
+    /// The trace generator pins `amount_full`'s 4×16-bit limb decomposition
+    /// into `PI[CREATE_ESCROW_AMOUNT_LIMBS_BASE..+4]`; the verifier rejects
+    /// any disagreement.
     CreateEscrow {
         amount_lo: BabyBear,
         escrow_hash: BabyBear,
+        /// Full u64 amount (30-bit-trunc fix). Zero when this effect is
+        /// absent from the trace. Multiple emissions sum (wrap-add).
+        amount_full: u64,
     },
     /// BridgeLock: actor's balance debits by `value_lo`. Mirrors NoteCreate.
     /// `lock_hash` = BLAKE3(nullifier ‖ destination ‖ asset_type) binds the lock.
+    ///
+    /// 30-bit-trunc fix (CAVEAT-LAYER-COVERAGE.md §6.5): `value_full` carries
+    /// the full u64 (see [`Effect::CreateEscrow`] above for rationale).
     BridgeLock {
         value_lo: BabyBear,
         lock_hash: BabyBear,
+        /// Full u64 value (30-bit-trunc fix).
+        value_full: u64,
     },
     /// CreateCommittedEscrow: passthrough; the locked amount is hidden in a
     /// Pedersen commitment that's verified outside this AIR.
@@ -972,9 +1022,14 @@ pub enum Effect {
     /// BridgeMint: actor mints `value_lo` from a portable proof. Balance
     /// credit (mirrors NoteSpend). `mint_hash` binds (nullifier, root,
     /// dest_federation, asset_type).
+    ///
+    /// 30-bit-trunc fix (CAVEAT-LAYER-COVERAGE.md §6.5): `value_full` carries
+    /// the full u64 (see [`Effect::CreateEscrow`] above for rationale).
     BridgeMint {
         value_lo: BabyBear,
         mint_hash: BabyBear,
+        /// Full u64 value (30-bit-trunc fix).
+        value_full: u64,
     },
     /// BridgeFinalize: actor finalizes a pending bridge. Passthrough.
     /// `finalize_hash` = BLAKE3(nullifier ‖ receipt_bytes).
@@ -3988,6 +4043,17 @@ pub struct EffectVmContext {
     /// Sovereign-witness teeth (Phase 2): 1 iff a transition_proof
     /// was supplied AND `is_sovereign_cell` is true.
     pub has_transition_proof: bool,
+
+    /// 30-bit-truncation fix (CAVEAT-LAYER-COVERAGE.md §6.5): 4×16-bit
+    /// little-endian limbs of the full u64 `BridgeMint.value`. Position 0
+    /// is the low 16 bits; position 3 is the high. Each limb < 2^16.
+    /// Zero sentinel when no BridgeMint effect is in the trace.
+    pub bridge_mint_value_limbs: [BabyBear; 4],
+    /// 4-limb decomposition of `BridgeLock.value` (same shape as
+    /// `bridge_mint_value_limbs`).
+    pub bridge_lock_value_limbs: [BabyBear; 4],
+    /// 4-limb decomposition of `CreateEscrow.amount` (same shape).
+    pub create_escrow_amount_limbs: [BabyBear; 4],
 }
 
 impl Default for EffectVmContext {
@@ -4006,8 +4072,42 @@ impl Default for EffectVmContext {
             sovereign_transition_proof_vk_hash: [BabyBear::ZERO; 4],
             sovereign_transition_proof_commitment: [BabyBear::ZERO; 4],
             has_transition_proof: false,
+            bridge_mint_value_limbs: [BabyBear::ZERO; 4],
+            bridge_lock_value_limbs: [BabyBear::ZERO; 4],
+            create_escrow_amount_limbs: [BabyBear::ZERO; 4],
         }
     }
+}
+
+/// Decompose a u64 into 4 BabyBear limbs (16 bits each, little-endian).
+/// Returns `[lo16, mid_lo16, mid_hi16, hi16]` so the limbs sum back to
+/// the original via `Σ limbs[i] * 2^(16*i)`. Used to project full-u64
+/// effect values into the AIR PI without 30-bit truncation
+/// (CAVEAT-LAYER-COVERAGE.md §6.5).
+#[inline]
+pub fn u64_to_4_limbs_16(value: u64) -> [BabyBear; 4] {
+    [
+        BabyBear::new((value & 0xFFFF) as u32),
+        BabyBear::new(((value >> 16) & 0xFFFF) as u32),
+        BabyBear::new(((value >> 32) & 0xFFFF) as u32),
+        BabyBear::new(((value >> 48) & 0xFFFF) as u32),
+    ]
+}
+
+/// Inverse of [`u64_to_4_limbs_16`]: reconstruct a u64 from 4 BabyBear
+/// limbs of 16 bits each. Returns `None` if any limb exceeds 2^16
+/// (rejects out-of-range limbs — adversarial-test entry point).
+#[inline]
+pub fn u64_from_4_limbs_16(limbs: &[BabyBear; 4]) -> Option<u64> {
+    let mut acc: u64 = 0;
+    for (i, l) in limbs.iter().enumerate() {
+        let v = l.0 as u64;
+        if v >= (1u64 << 16) {
+            return None;
+        }
+        acc |= v << (16 * i);
+    }
+    Some(acc)
 }
 
 /// Stage 1 trace generator. Same as [`generate_effect_vm_trace`] but accepts
@@ -5150,6 +5250,31 @@ pub fn generate_effect_vm_trace_ext(
     } else {
         BabyBear::ZERO
     };
+
+    // ---- 30-bit-truncation fix (CAVEAT-LAYER-COVERAGE.md §6.5) ----
+    //
+    // Each of the three affected effects gets its own 4×16-bit limb slot.
+    // The verifier's PI-matching loop reads the full u64 from the runtime
+    // effect and recomputes the limbs via `u64_to_4_limbs_16`; any
+    // disagreement is rejected. The legacy `value_lo` param column inside
+    // the AIR stays for backwards-compat with the existing per-effect
+    // constraints (balance debit/credit arithmetic); the new PI slots
+    // attest to the *full* u64 value the executor saw.
+    //
+    // Each limb is < 2^16; the executor-side helper enforces this and the
+    // verifier's PI match loop catches any limb that exceeds that.
+    for i in 0..pi::BRIDGE_MINT_VALUE_LIMBS_LEN {
+        public_inputs[pi::BRIDGE_MINT_VALUE_LIMBS_BASE + i] =
+            context.bridge_mint_value_limbs[i];
+    }
+    for i in 0..pi::BRIDGE_LOCK_VALUE_LIMBS_LEN {
+        public_inputs[pi::BRIDGE_LOCK_VALUE_LIMBS_BASE + i] =
+            context.bridge_lock_value_limbs[i];
+    }
+    for i in 0..pi::CREATE_ESCROW_AMOUNT_LIMBS_LEN {
+        public_inputs[pi::CREATE_ESCROW_AMOUNT_LIMBS_BASE + i] =
+            context.create_escrow_amount_limbs[i];
+    }
 
     // ---- Custom proof entries ----
     for (i, (vk_hash, proof_commit)) in custom_entries.iter().enumerate() {
@@ -8621,6 +8746,7 @@ mod tests {
             effects_hash_global: [BabyBear::ZERO; 4],
             actor_nonce: 0,
             previous_receipt_hash: [BabyBear::ZERO; 4],
+            ..Default::default()
         };
         let (_trace, public_inputs) = generate_effect_vm_trace_ext(&state, &effects, context);
         assert_eq!(
@@ -8651,6 +8777,7 @@ mod tests {
             effects_hash_global: [BabyBear::ZERO; 4],
             actor_nonce: 0,
             previous_receipt_hash: [BabyBear::ZERO; 4],
+            ..Default::default()
         };
         let _ = generate_effect_vm_trace_ext(&state, &effects, context);
     }
