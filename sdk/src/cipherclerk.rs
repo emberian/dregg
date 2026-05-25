@@ -1,4 +1,4 @@
-//! Agent cipherclerk: identity, token storage, signing, and proof generation.
+//! Agent cipherclerk: identity, wallet, signing, and proof generation.
 //!
 //! The [`AgentCipherclerk`] (legacy alias `AgentCipherclerk`) is the agent's
 //! cryptographic clerk — the primary credential holder. It manages:
@@ -11,7 +11,7 @@
 //! The name traces to Greg Egan's *Polis* and its descendants, where a
 //! citizen's cipherclerk is the autonomous component that holds keys,
 //! attests credentials, and brokers capabilities on the citizen's
-//! behalf. "Cipherclerk" was a poor fit: pyana cipherclerks mostly manage
+//! behalf. "Wallet" was a poor fit: pyana wallets mostly manage
 //! *capabilities*, not balances.
 
 use std::collections::HashMap;
@@ -875,7 +875,7 @@ pub struct AgentCipherclerk {
     signing_key: ed25519_dalek::SigningKey,
     /// The agent's public identity.
     public_key: PublicKey,
-    /// All tokens held by this cipherclerk.
+    /// All tokens held in this cipherclerk's wallet.
     tokens: Vec<HeldToken>,
     /// Counter for generating unique token IDs.
     next_token_id: u64,

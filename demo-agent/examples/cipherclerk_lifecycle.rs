@@ -70,6 +70,7 @@ fn simulate_turn_execution(agent: CellId, turn_number: u64, pre_state: [u8; 32])
         executor_signature: None,
         finality: Default::default(),
         was_encrypted: false,
+        was_burn: false,
     }
 }
 

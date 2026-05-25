@@ -380,6 +380,7 @@ fn main() {
         executor_signature: None,
         finality: Default::default(),
         was_encrypted: false,
+        was_burn: false,
     };
 
     // Use resolve_condition to demonstrate the timeout logic
@@ -442,6 +443,7 @@ fn main() {
         executor_signature: None,
         finality: Default::default(),
         was_encrypted: false,
+        was_burn: false,
     };
 
     // Fresh conditional for this test

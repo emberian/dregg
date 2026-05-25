@@ -71,7 +71,7 @@ export interface Intent {
 // Token / Capability types
 // ---------------------------------------------------------------------------
 
-/** A capability token held in the cipherclerk. */
+/** A capability token held in the wallet. */
 export interface CapabilityToken {
   id: string;
   actions: string[];

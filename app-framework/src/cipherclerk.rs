@@ -27,7 +27,7 @@
 //! - Extract the underlying signing key (only the framework holds the SDK
 //!   cipherclerk; apps see [`AppCipherclerk`] which deliberately exposes no
 //!   key-export methods).
-//! - Mutate the cipherclerk's receipt chain or token list.
+//! - Mutate the cipherclerk's receipt chain or wallet.
 //! - Reach into `AgentCipherclerk`'s 107-method surface — that's an SDK
 //!   concern, not an app concern.
 //!

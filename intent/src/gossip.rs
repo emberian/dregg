@@ -314,7 +314,7 @@ impl IntentPool {
         current_epoch(self.current_block_height)
     }
 
-    /// Update the cipherclerk's held capabilities (call when tokens change).
+    /// Update the cipherclerk's wallet (call when tokens change).
     pub fn update_held_tokens(&mut self, tokens: Vec<HeldCapability>) {
         self.held_tokens = tokens;
     }

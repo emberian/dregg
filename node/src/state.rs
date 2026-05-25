@@ -60,7 +60,7 @@ pub struct NodeState {
 
 /// The inner mutable state of the node.
 pub struct NodeStateInner {
-    /// The agent cipherclerk (identity, tokens, receipts).
+    /// The agent cipherclerk (identity, wallet, receipts).
     pub cclerk: AgentCipherclerk,
     /// The cell ledger (local cell state).
     pub ledger: Ledger,

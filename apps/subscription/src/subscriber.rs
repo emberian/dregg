@@ -160,7 +160,7 @@ impl SubscriberRegistry {
     /// [`DelegationAuthority::TrustedKey(subscriber)`] to perform the full
     /// envelope verification (signature, structural validity, authority).
     ///
-    /// On success, the executor cipherclerk adds a `HeldToken` to its token list
+    /// On success, the executor cipherclerk adds a `HeldToken` to its wallet
     /// **and** this registry records a [`DebitAuthorization`] keyed by
     /// `subscriber`.
     pub fn receive_debit_delegation(
