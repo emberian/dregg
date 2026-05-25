@@ -131,6 +131,10 @@ cat > "$ALICE_URI_DIR/handoff.uri.json" <<EOF
   "note": "Scaffold artifact: real cert + Ed25519 sig require pyana_create_cross_fed_bearer_cap MCP tool (SILVER-VISION §5.2.2)."
 }
 EOF
+# SCAFFOLD ASSERTION: alice_uri_produced_on_F1 checks only that bash
+# successfully wrote the heredoc to disk. It is NOT in expected.json's
+# must_pass list (see scaffold_only field) because it tests file-write,
+# not any production code path.
 if [ -s "$ALICE_URI_DIR/handoff.uri.json" ]; then
     record alice_uri_produced_on_F1 true
 else
@@ -138,6 +142,7 @@ else
 fi
 
 # Out-of-band delivery: cp.
+# SCAFFOLD ASSERTION: uri_delivered_to_F2_inbox likewise checks cp success.
 cp "$ALICE_URI_DIR/handoff.uri.json" "$BOB_INBOX/handoff.uri.json"
 if [ -s "$BOB_INBOX/handoff.uri.json" ]; then
     record uri_delivered_to_F2_inbox true
@@ -168,25 +173,32 @@ echo "$roots_F2_after" > "$SCN_LOG_DIR/roots_F2_after.json"
 if [ -n "$roots_F1_after" ]; then record F1_exposes_federation_roots true; else record F1_exposes_federation_roots false; fi
 if [ -n "$roots_F2_after" ]; then record F2_exposes_federation_roots true; else record F2_exposes_federation_roots false; fi
 
-# ── step 4: must_not_pass — replay defense ──────────────────────────
+# ── step 4: scaffold — replay artifact construction ─────────────────
 # Re-copy the URI to bob's inbox and assert the nonce in the second
-# copy is identical (a replay; F2's executor should reject it via the
+# copy is identical (a replay; F2's executor SHOULD reject it via the
 # consumed-cert nullifier set once lane F-redux lands).
+#
+# SCAFFOLD ASSERTION: handoff_replay_artifact_constructed tests that
+# `cp` + `jq .nonce` agrees with itself — always true. Kept in
+# scaffold_only in expected.json, not in must_not_pass, because it
+# tests no executor behavior. Promote when F-redux nullifier lands.
 cp "$ALICE_URI_DIR/handoff.uri.json" "$BOB_INBOX/handoff.uri.replay.json"
 if command -v jq >/dev/null 2>&1; then
     n1=$(jq -r .nonce "$BOB_INBOX/handoff.uri.json")
     n2=$(jq -r .nonce "$BOB_INBOX/handoff.uri.replay.json")
     if [ "$n1" = "$n2" ]; then
-        # The replay defense is the *executor*'s job; this scenario only
-        # asserts the artifact is structurally a replay. Real rejection
-        # is in expected.json's blocked_on (lane F-redux).
         record handoff_replay_artifact_constructed true
     else
         record handoff_replay_artifact_constructed false
     fi
 fi
 
-# ── step 5: must_not_pass — tampered cert artifact ──────────────────
+# ── step 5: scaffold — tampered cert artifact ────────────────────────
+# SCAFFOLD ASSERTION: handoff_tampered_artifact_distinguishable tests
+# that jq field-substitution produces a different byte sequence — always
+# true when jq works. The real rejection check (executor verifies
+# introducer Ed25519 sig over permissions field) is blocked on lanes A+D.
+# Kept as scaffold_only in expected.json, not in must_not_pass.
 TAMPER="$SCN_LOG_DIR/handoff.uri.tampered.json"
 if command -v jq >/dev/null 2>&1; then
     jq '.permissions = "ALL"' "$BOB_INBOX/handoff.uri.json" > "$TAMPER"

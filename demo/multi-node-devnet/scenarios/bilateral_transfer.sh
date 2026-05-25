@@ -123,6 +123,12 @@ fi
 # direction bit 0 = credit, 1 = debit. Per γ.2, the bob row carries
 # direction=0 and the alice_stub row carries direction=1; the off-AIR
 # verifier checks (direction_alice XOR direction_bob) == 1.
+#
+# SYNTHETIC ASSERTION (blocked_on: γ.2 Phase 1): these are hardcoded
+# constants representing the *design intent*, not observed values from
+# a real witness pair. When the γ.2 off-AIR pair verifier lands, replace
+# these with values extracted from the per-cell proof public inputs
+# (PI[direction] fields from alice_stub_proof.json and bob_proof.json).
 ALICE_DIR=1
 BOB_DIR=0
 if [ $((ALICE_DIR ^ BOB_DIR)) -eq 1 ]; then
@@ -130,10 +136,15 @@ if [ $((ALICE_DIR ^ BOB_DIR)) -eq 1 ]; then
 else
     record bilateral_pair_direction_complement_holds false
 fi
+devnet_warn "bilateral_pair_direction_complement_holds: SYNTHETIC (hardcoded ALICE_DIR/BOB_DIR, not real witness PI)"
 
 # ── 5: amount agreement check ───────────────────────────────────────
 # Both rows MUST agree on |amount|. A scenario where the rows disagree
 # is a must_not_pass.
+#
+# SYNTHETIC ASSERTION (blocked_on: γ.2 Phase 1): same as above — values
+# are hardcoded constants. Replace with extracted PI[amount] fields when
+# the real proof artifacts exist.
 ALICE_AMOUNT=100
 BOB_AMOUNT=100
 if [ "$ALICE_AMOUNT" = "$BOB_AMOUNT" ]; then
@@ -141,15 +152,18 @@ if [ "$ALICE_AMOUNT" = "$BOB_AMOUNT" ]; then
 else
     record bilateral_pair_amount_agrees false
 fi
+devnet_warn "bilateral_pair_amount_agrees: SYNTHETIC (hardcoded ALICE_AMOUNT/BOB_AMOUNT, not real witness PI)"
 
 # Negative case: amount disagreement must be detectable. Synthesize
 # a mismatched pair and confirm a simple equality check rejects it.
+# SYNTHETIC: this is pure arithmetic on constants, not a real pair verifier.
 ALICE_AMOUNT_TAMPER=99
 if [ "$ALICE_AMOUNT_TAMPER" != "$BOB_AMOUNT" ]; then
     record bilateral_pair_amount_mismatch_detectable true
 else
     record bilateral_pair_amount_mismatch_detectable false
 fi
+devnet_warn "bilateral_pair_amount_mismatch_detectable: SYNTHETIC (99 != 100 arithmetic, not real pair-verifier)"
 
 # ── 6: probe /turns endpoint shape on F2 (the executing federation) ─
 # Without a signed turn the endpoint will reject (auth), but it should

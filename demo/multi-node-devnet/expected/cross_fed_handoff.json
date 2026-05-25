@@ -5,17 +5,21 @@
 
   "must_pass": [
     "both_federations_responding",
-    "alice_uri_produced_on_F1",
-    "uri_delivered_to_F2_inbox",
     "bob_inbox_target_federation_is_F2",
     "F1_exposes_federation_roots",
     "F2_exposes_federation_roots"
   ],
 
-  "must_not_pass": [
+  "scaffold_only": [
+    "alice_uri_produced_on_F1",
+    "uri_delivered_to_F2_inbox",
     "handoff_replay_artifact_constructed",
     "handoff_tampered_artifact_distinguishable"
   ],
+
+  "scaffold_only_explanation": "These four assertions test bash file-write success and jq field equality on a JSON heredoc — they have no system behavior behind them. Moved from must_pass/must_not_pass to scaffold_only so the scenario accurately reports what it actually verifies. Promoted to must_pass/must_not_pass when the pyana_create_cross_fed_bearer_cap MCP tool lands (SILVER-VISION §5.2.2).",
+
+  "must_not_pass": [],
 
   "must_not_pass_explanation": {
     "handoff_replay_artifact_constructed": "We constructed a replay artifact (same nonce, same payload). The scenario records `true` when the artifact IS structurally a replay; the executor's rejection of replayed certs is the cert-nonce nullifier set (lane F-redux). When that lane lands, this assertion's semantics flip to 'the second submission rejects with NullifierAlreadySpent'.",
