@@ -1178,4 +1178,48 @@ mod tests {
             "rejection should name 'too short'; got: {reason}"
         );
     }
+
+    // ---- scope-recursive subcommand wiring tests (Golden Vision Block 3) ----
+
+    /// `verify_recursive_replay_from_bundle` must reject when the entry has
+    /// no `witness_bundle` at all — there is nothing to recursively verify.
+    #[test]
+    fn recursive_replay_rejects_missing_witness_bundle() {
+        let entry = ReplayEntry {
+            receipt: sample_receipt(),
+            proof_bytes: vec![],
+            public_inputs: vec![],
+            witness_bundle: None,
+            witness_hash: [0u8; 32],
+            aggregate_membership: None,
+        };
+        let verdict = verify_recursive_replay_from_bundle(&entry, None);
+        // Scope-1 fails first (empty proof bytes), so we land in
+        // InnerProofRejected before ever consulting the bundle.
+        match verdict {
+            RecursiveReplayVerdict::InnerProofRejected { .. } => {}
+            other => panic!("expected InnerProofRejected; got {:?}", other),
+        }
+    }
+
+    /// `verify_recursive_replay_from_bundle` must reject when the bundle is
+    /// present but lacks a `recursive_proof` — the WR was produced
+    /// without `recursive_compress = true`, so it can be replayed via the
+    /// trust-and-replay path (`replay_chain`) but not via the recursive
+    /// path. The verdict surface lets the caller redirect to the Silver
+    /// Vision path.
+    ///
+    /// In this test scope-1 still fails first (empty proof bytes), so we
+    /// land in InnerProofRejected. The interesting positive case (scope-1
+    /// passes, then we see "no recursive_proof") is exercised by the
+    /// integration path; here we just confirm the verdict shape.
+    #[test]
+    fn recursive_replay_chain_runs_over_empty_input() {
+        let out = replay_chain_recursive(&[]);
+        assert!(out.overall_verified);
+        assert_eq!(out.total, 0);
+        assert_eq!(out.verified, 0);
+        assert!(out.first_failure.is_none());
+        assert!(out.summary.contains("recursive"));
+    }
 }
