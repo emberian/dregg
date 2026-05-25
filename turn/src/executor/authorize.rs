@@ -1526,5 +1526,4 @@ impl TurnExecutor {
         walk(&mut out, &action.effects);
         out
     }
-
 }

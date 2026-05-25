@@ -5,7 +5,6 @@
 use super::*;
 
 impl TurnExecutor {
-
     /// Execute a turn against a ledger, returning the result.
     ///
     /// This is the main entry point. The executor:
@@ -820,5 +819,4 @@ impl TurnExecutor {
 
         Ok(())
     }
-
 }

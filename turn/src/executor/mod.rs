@@ -1275,18 +1275,16 @@ impl TurnExecutor {
     pub fn deploy_factory(&mut self, descriptor: pyana_cell::FactoryDescriptor) -> [u8; 32] {
         self.factory_registry.borrow_mut().deploy(descriptor)
     }
-
 }
 
 // ─── Decomposed Implementation Modules ──────────────────────────────────────
 
-mod proof_verify;
+mod apply;
+mod authorize;
 mod execute;
 mod execute_tree;
-mod authorize;
-mod apply;
 mod finalize;
-
+mod proof_verify;
 
 // ─── Pipeline Execution ──────────────────────────────────────────────────────
 
@@ -1300,4 +1298,3 @@ mod atomic;
 pub use atomic::{
     AtomicProofEntry, AtomicSovereignTurn, AtomicTurnError, MixedAtomicResult, MixedAtomicTurn,
 };
-

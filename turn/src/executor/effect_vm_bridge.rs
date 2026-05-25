@@ -241,8 +241,7 @@ pub(super) fn convert_turn_effects_to_vm(
                     let source_root = hash_to_bb(source.as_bytes());
                     // Source new root = hash(source_old, message) — use a deterministic placeholder.
                     let msg_hash = hash_to_bb(pipeline_id);
-                    let source_new =
-                        pyana_circuit::poseidon2::hash_2_to_1(source_root, msg_hash);
+                    let source_new = pyana_circuit::poseidon2::hash_2_to_1(source_root, msg_hash);
                     let sink_root = if let Some(sink) = sinks.first() {
                         hash_to_bb(sink.as_bytes())
                     } else {
@@ -494,9 +493,8 @@ pub(super) fn convert_turn_effects_to_vm(
                     hasher.update(destination);
                     hasher.update(&asset_type.to_le_bytes());
                     let lock_hash_bytes = hasher.finalize();
-                    let value_lo = pyana_circuit::field::BabyBear::new(
-                        (*value & ((1u64 << 30) - 1)) as u32,
-                    );
+                    let value_lo =
+                        pyana_circuit::field::BabyBear::new((*value & ((1u64 << 30) - 1)) as u32);
                     vm_effects.push(VmEffect::BridgeLock {
                         value_lo,
                         lock_hash: hash_to_bb(lock_hash_bytes.as_bytes()),
@@ -584,9 +582,8 @@ pub(super) fn convert_turn_effects_to_vm(
                     hasher.update(&cond_bytes);
                     let escrow_hash_bytes = hasher.finalize();
                     // Truncate amount to u32 for the field element.
-                    let amount_lo = pyana_circuit::field::BabyBear::new(
-                        (*amount & ((1u64 << 30) - 1)) as u32,
-                    );
+                    let amount_lo =
+                        pyana_circuit::field::BabyBear::new((*amount & ((1u64 << 30) - 1)) as u32);
                     vm_effects.push(VmEffect::CreateEscrow {
                         amount_lo,
                         escrow_hash: hash_to_bb(escrow_hash_bytes.as_bytes()),

@@ -5,7 +5,7 @@
 use super::*;
 use crate::field::BabyBear;
 use crate::poseidon2::{hash_2_to_1, hash_4_to_1};
-use crate::stark::{prove, verify, StarkAir};
+use crate::stark::{StarkAir, prove, verify};
 
 fn make_initial_state(balance: u64) -> CellState {
     CellState::new(balance, 0)

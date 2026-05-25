@@ -872,7 +872,9 @@ impl TurnExecutor {
     /// Resolve an `EffectActionSchema` by its `schema_id` (the
     /// `kind_name` string used as the AIR's Fiat-Shamir domain
     /// separator). Returns `None` for unknown ids.
-    pub(super) fn schema_by_id(id: &str) -> Option<pyana_circuit::effect_action_air::EffectActionSchema> {
+    pub(super) fn schema_by_id(
+        id: &str,
+    ) -> Option<pyana_circuit::effect_action_air::EffectActionSchema> {
         use pyana_circuit::effect_action_air as eaa;
         macro_rules! match_schemas {
             ($($s:ident),* $(,)?) => {

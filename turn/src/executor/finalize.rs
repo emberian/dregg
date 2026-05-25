@@ -280,7 +280,9 @@ impl TurnExecutor {
     }
 
     /// Verify range proofs on NoteCreate outputs with value commitments.
-    pub(super) fn verify_output_range_proofs(forest: &crate::forest::CallForest) -> Result<(), TurnError> {
+    pub(super) fn verify_output_range_proofs(
+        forest: &crate::forest::CallForest,
+    ) -> Result<(), TurnError> {
         for tree in &forest.roots {
             Self::verify_output_range_proofs_tree(tree)?;
         }
@@ -503,7 +505,10 @@ impl TurnExecutor {
     ///
     /// The journal records the old (pre-mutation) values. By comparing those to the
     /// current state in the ledger, we derive the delta without needing a full ledger snapshot.
-    pub(super) fn compute_delta_from_journal(journal: &LedgerJournal, ledger: &Ledger) -> LedgerDelta {
+    pub(super) fn compute_delta_from_journal(
+        journal: &LedgerJournal,
+        ledger: &Ledger,
+    ) -> LedgerDelta {
         use std::collections::{HashMap, HashSet};
 
         let mut delta = LedgerDelta::new();

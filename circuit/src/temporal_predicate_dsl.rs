@@ -1113,13 +1113,9 @@ mod tests {
         let honest_threshold = BabyBear::new(0);
         let values: Vec<BabyBear> = vec![10, 20, 30].into_iter().map(BabyBear::new).collect();
         let state_roots = test_state_roots(3);
-        let mut proof = prove_temporal_predicate(
-            &values,
-            &state_roots,
-            PredicateType::Gte,
-            honest_threshold,
-        )
-        .expect("honest threshold=0 prove succeeds");
+        let mut proof =
+            prove_temporal_predicate(&values, &state_roots, PredicateType::Gte, honest_threshold)
+                .expect("honest threshold=0 prove succeeds");
 
         // Tamper the plain field — claim threshold=99999.
         let forged_threshold = BabyBear::new(99999);
@@ -1128,13 +1124,8 @@ mod tests {
         // Now: a verifier who *also* lies (passing forged_threshold as
         // expected) will fail the STARK check. PI[1] reconstruction =
         // forged_threshold, but the STARK boundary committed to 0.
-        let valid = verify_temporal_predicate(
-            &proof,
-            forged_threshold,
-            3,
-            state_roots[0],
-            state_roots[2],
-        );
+        let valid =
+            verify_temporal_predicate(&proof, forged_threshold, 3, state_roots[0], state_roots[2]);
         assert!(
             !valid,
             "tampered threshold must be rejected by STARK PI[1] boundary commitment"
@@ -1160,8 +1151,7 @@ mod tests {
         // simulate the *fully-coordinated* attack we pass the forged
         // value as expected. The STARK then rejects via PI[2] vs row-0
         // STATE_ROOT boundary mismatch.
-        let valid =
-            verify_temporal_predicate(&proof, threshold, 3, forged_initial, state_roots[2]);
+        let valid = verify_temporal_predicate(&proof, threshold, 3, forged_initial, state_roots[2]);
         assert!(
             !valid,
             "tampered initial_state_root must be rejected by STARK PI[2] boundary commitment"
@@ -1180,8 +1170,7 @@ mod tests {
         let forged_final = BabyBear::new(789012);
         proof.final_state_root = forged_final;
 
-        let valid =
-            verify_temporal_predicate(&proof, threshold, 3, state_roots[0], forged_final);
+        let valid = verify_temporal_predicate(&proof, threshold, 3, state_roots[0], forged_final);
         assert!(
             !valid,
             "tampered final_state_root must be rejected by STARK PI[3] boundary commitment"
