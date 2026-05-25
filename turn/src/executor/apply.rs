@@ -279,6 +279,30 @@ impl TurnExecutor {
                         path,
                     )?;
                 }
+                // Audit P0 #69: the apply path must reject `VerificationKey`s
+                // whose declared `hash` is not `blake3(data)`. Without this
+                // check a turn can pin an arbitrary `hash` while shipping
+                // unrelated `data`, which then propagates into the cell
+                // commitment (via `commitment.rs` line 148, `hasher.update(&vk.hash)`)
+                // and into downstream verifiers that re-derive program
+                // identity from the hash. Reject the apply rather than silently
+                // accepting a mis-bound VK.
+                if let Some(vk) = new_vk {
+                    let expected = *blake3::hash(&vk.data).as_bytes();
+                    if expected != vk.hash {
+                        return Err((
+                            TurnError::InvalidEffect {
+                                reason: format!(
+                                    "SetVerificationKey: VerificationKey integrity invariant violated \
+                                     (declared hash {:02x}{:02x}.. but blake3(data) is {:02x}{:02x}..)",
+                                    vk.hash[0], vk.hash[1],
+                                    expected[0], expected[1],
+                                ),
+                            },
+                            path.to_vec(),
+                        ));
+                    }
+                }
                 let c = ledger
                     .get_mut(cell)
                     .ok_or_else(|| (TurnError::CellNotFound { id: *cell }, path.to_vec()))?;

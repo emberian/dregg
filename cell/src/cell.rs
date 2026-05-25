@@ -40,11 +40,70 @@ impl VerificationKey {
         VerificationKey { hash, data }
     }
 
-    /// Create a verification key with a pre-computed hash (e.g., from deserialization).
+    /// Create a verification key with a pre-computed hash (e.g., from
+    /// deserialization).
+    ///
+    /// **Audit P0 #69:** this constructor does *not* validate the
+    /// `hash == blake3(data)` invariant. It exists for the
+    /// deserialization fast-path where the producer has already paid
+    /// the hash and we want to avoid recomputing it. Untrusted-input
+    /// call sites (the `SetVerificationKey` apply, wire decoders,
+    /// federation gossip ingest) MUST use [`Self::from_parts_checked`]
+    /// instead — otherwise an attacker can pin an arbitrary `hash` and
+    /// defeat the layered-VK design (the cell commitment binds the
+    /// `hash`, but downstream verifiers expect that `hash` to be the
+    /// commitment of `data`).
     pub fn from_parts(hash: [u8; 32], data: Vec<u8>) -> Self {
         VerificationKey { hash, data }
     }
+
+    /// Create a verification key with a pre-computed hash, validating
+    /// the integrity invariant `hash == blake3(data)`.
+    ///
+    /// Returns `Err(VerificationKeyIntegrityError)` if the supplied hash
+    /// does not match the BLAKE3 commitment of the supplied data. This
+    /// is the correct constructor for any code path that consumes a
+    /// `VerificationKey` from outside trust boundaries (a turn body, a
+    /// federation broadcast, a deserialized snapshot) — see audit P0 #69.
+    pub fn from_parts_checked(
+        hash: [u8; 32],
+        data: Vec<u8>,
+    ) -> Result<Self, VerificationKeyIntegrityError> {
+        let expected = *blake3::hash(&data).as_bytes();
+        if expected != hash {
+            return Err(VerificationKeyIntegrityError {
+                expected,
+                got: hash,
+            });
+        }
+        Ok(VerificationKey { hash, data })
+    }
 }
+
+/// Returned when a [`VerificationKey`]'s declared `hash` does not match
+/// `blake3(data)`. See [`VerificationKey::from_parts_checked`] and audit
+/// P0 #69.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerificationKeyIntegrityError {
+    /// Hash the validator computed from the supplied `data`.
+    pub expected: [u8; 32],
+    /// Hash the caller declared.
+    pub got: [u8; 32],
+}
+
+impl std::fmt::Display for VerificationKeyIntegrityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "VerificationKey hash mismatch: declared {:02x}{:02x}{:02x}{:02x}.. \
+             but blake3(data) is {:02x}{:02x}{:02x}{:02x}..",
+            self.got[0], self.got[1], self.got[2], self.got[3],
+            self.expected[0], self.expected[1], self.expected[2], self.expected[3],
+        )
+    }
+}
+
+impl std::error::Error for VerificationKeyIntegrityError {}
 
 /// A Cell is an isolated agent execution context.
 /// This is the agent-model analog of a Mina zkApp account.

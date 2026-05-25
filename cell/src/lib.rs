@@ -62,7 +62,7 @@ pub use capability_proof::{
     CapabilityExerciseRequest, CapabilityExerciseResponse, CapabilityProof, CapabilityProofData,
     CapabilityProofError, PeerEffect, VerificationContext, sign_capability_proof,
 };
-pub use cell::{Cell, CellConfig, CellMode, VerificationKey};
+pub use cell::{Cell, CellConfig, CellMode, VerificationKey, VerificationKeyIntegrityError};
 pub use commitment::{
     CANONICAL_CAP_ROOT_CONTEXT, CANONICAL_COMMITMENT_CONTEXT, canonical_to_babybear_pi,
     compute_canonical_capability_root, compute_canonical_state_commitment,
