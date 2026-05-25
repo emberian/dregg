@@ -38,30 +38,41 @@
 //! # Architecture
 //!
 //! ```text
-//! ┌─────────────────────────────────────────────────────────────────┐
-//! │                      AgentRuntime                                 │
-//! │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
-//! │  │ AgentWallet  │  │   Ledger     │  │    SiloClient        │  │
-//! │  │ (identity +  │  │   (local     │  │    (remote silo      │  │
-//! │  │  tokens)     │  │    state)    │  │     interaction)     │  │
-//! │  └──────────────┘  └──────────────┘  └──────────────────────┘  │
-//! └─────────────────────────────────────────────────────────────────┘
+//! ┌─────────────────────────────────────────────────────────────────────────┐
+//! │                          AgentRuntime                                    │
+//! │  ┌────────────────────┐  ┌──────────────┐  ┌──────────────────────┐    │
+//! │  │ AgentCipherclerk   │  │   Ledger     │  │    SiloClient        │    │
+//! │  │ (identity +        │  │   (local     │  │    (remote silo      │    │
+//! │  │  tokens + keys)    │  │    state)    │  │     interaction)     │    │
+//! │  └────────────────────┘  └──────────────┘  └──────────────────────┘    │
+//! └─────────────────────────────────────────────────────────────────────────┘
 //! ```
+//!
+//! # The cipherclerk
+//!
+//! `AgentCipherclerk` (alias `AgentCClerk`, legacy alias `AgentWallet`) is the
+//! agent-side *cryptographic clerk*: it holds signing keys, authorization
+//! tokens, the receipt chain, and presents credentials/proofs on behalf of a
+//! Principal. The name borrows from Greg Egan's *Polis* (and its descendants),
+//! where a citizen's "cipherclerk" is the autonomous component that manages
+//! their cryptographic identity and capability handles. "Wallet" was a poor
+//! fit — wallets connote value storage, but a pyana cipherclerk's authority
+//! is mostly *capabilities*, not balances.
 //!
 //! # Quick Start
 //!
 //! ```no_run
-//! use pyana_sdk::{AgentWallet, AgentRuntime};
+//! use pyana_sdk::{AgentCipherclerk, AgentRuntime};
 //! use pyana_token::Attenuation;
 //!
-//! // Create a wallet with a fresh identity
-//! let mut wallet = AgentWallet::new();
+//! // Create a cipherclerk with a fresh identity
+//! let mut cclerk = AgentCipherclerk::new();
 //!
 //! // Mint a root token for our service
-//! let root_token = wallet.mint_token(b"my-secret-root-key-32-bytes!!!!!", "my-service");
+//! let root_token = cclerk.mint_token(b"my-secret-root-key-32-bytes!!!!!", "my-service");
 //!
 //! // Attenuate it for a specific task
-//! let restricted = wallet.attenuate(&root_token, &Attenuation {
+//! let restricted = cclerk.attenuate(&root_token, &Attenuation {
 //!     services: vec![("dns".into(), "r".into())],
 //!     ..Default::default()
 //! }).unwrap();
@@ -72,6 +83,7 @@
 // the always-on group below is wasm-friendly.
 #[cfg(feature = "captp")]
 pub mod captp_client;
+pub mod cipherclerk;
 #[cfg(feature = "network")]
 pub mod client;
 pub mod committed_turn;
@@ -89,10 +101,22 @@ pub mod names;
 pub mod privacy;
 pub mod runtime;
 pub mod verify;
-pub mod wallet;
 pub mod wordlist;
 
+/// Legacy module name for the cipherclerk surface.
+///
+/// During the rename window this re-exports `cipherclerk` so downstream
+/// `use pyana_sdk::wallet::...` paths keep compiling. New code should
+/// reach for `pyana_sdk::cipherclerk`.
+#[doc(hidden)]
+pub use cipherclerk as wallet;
+
 // Re-export primary types at crate root for convenience.
+pub use cipherclerk::{
+    AgentCipherclerk, AuthorizationPresentation, DelegatedToken, DelegationAuthority,
+    DisclosureSpec, FactDisclosure, FactIndex, HeldToken, LocalDelegation, OwnedStealthNote,
+    SignedTurn, VerificationMode,
+};
 #[cfg(feature = "network")]
 pub use client::{PresentationResult, RevocationStatus, SiloClient};
 pub use committed_turn::{
@@ -100,11 +124,18 @@ pub use committed_turn::{
 };
 pub use error::SdkError;
 pub use runtime::{AgentRuntime, SubAgent};
-pub use wallet::{
-    AgentWallet, AuthorizationPresentation, DelegatedToken, DelegationAuthority, DisclosureSpec,
-    FactDisclosure, FactIndex, HeldToken, LocalDelegation, OwnedStealthNote, SignedTurn,
-    VerificationMode,
-};
+
+/// Short alias for [`AgentCipherclerk`] — the "capability clerk" handle.
+///
+/// Use in tight scopes where the full name would dominate signatures.
+pub use cipherclerk::AgentCipherclerk as AgentCClerk;
+
+/// Legacy alias for [`AgentCipherclerk`].
+///
+/// Preserved while downstream consumers (apps, starbridge-apps, the
+/// discord bot, the extension wallet) migrate. New code should reach
+/// for [`AgentCipherclerk`] (or the short [`AgentCClerk`] alias).
+pub use cipherclerk::AgentCipherclerk as AgentWallet;
 
 // Re-export commonly needed types from dependencies so users don't need
 // to add them separately.
@@ -172,9 +203,13 @@ pub use pyana_circuit::{CryptographicProof, ProofTier, VerifiedProof};
 // Re-export name resolution types for the petname system.
 #[cfg(feature = "captp")]
 pub use names::{
-    EdgeNameEntry, NameError, NameProvenance, NameResolver, PetnameDb, PetnameEntry,
-    ProposedNameEntry, ResolvedName, WalletNames, WhoisResult,
+    CipherclerkNames, EdgeNameEntry, NameError, NameProvenance, NameResolver, PetnameDb,
+    PetnameEntry, ProposedNameEntry, ResolvedName, WhoisResult,
 };
+
+/// Legacy alias for [`CipherclerkNames`].
+#[cfg(feature = "captp")]
+pub use names::CipherclerkNames as WalletNames;
 
 // Re-export CapTP client types for capability sharing and pipelining.
 #[cfg(feature = "captp")]

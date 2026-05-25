@@ -1,6 +1,6 @@
 //! Agent wallet: identity, token storage, signing, and proof generation.
 //!
-//! The [`AgentWallet`] is the primary credential holder for an agent. It manages:
+//! The [`AgentCipherclerk`] is the primary credential holder for an agent. It manages:
 //! - An Ed25519 signing identity
 //! - A collection of held authorization tokens (macaroon-backed)
 //! - Token attenuation and delegation to other agents
@@ -304,11 +304,11 @@ pub(crate) enum DelegationBindingKind {
 /// mutate `encoded`, `caveat_chain_hash`, `membership_proof`, the secret keys,
 /// or the (private) delegation binding. The only construction paths are:
 ///
-/// - [`AgentWallet::mint_token`] — local mint from a held root key (no
+/// - [`AgentCipherclerk::mint_token`] — local mint from a held root key (no
 ///   delegation binding).
-/// - [`AgentWallet::receive_signed_delegation`] — external envelope receive
+/// - [`AgentCipherclerk::receive_signed_delegation`] — external envelope receive
 ///   path; binds the verified envelope onto the held token.
-/// - [`AgentWallet::receive_local_delegation`] — local envelope receive path;
+/// - [`AgentCipherclerk::receive_local_delegation`] — local envelope receive path;
 ///   binds the verified local envelope onto the held token.
 ///
 /// External code interacts via read-only accessors ([`HeldToken::encoded`],
@@ -429,7 +429,7 @@ impl HeldToken {
         // For root tokens, derive a proof-only key from the root key.
         // This ensures the issuer_key NEVER equals the root_key, preventing
         // key leakage through attenuation or delegation paths.
-        // Uses the same context string as AgentWallet::derive_proof_key().
+        // Uses the same context string as AgentCipherclerk::derive_proof_key().
         let issuer_key = if root_key != [0u8; 32] {
             blake3::derive_key("pyana-proof-key-v1", &root_key)
         } else {
@@ -602,7 +602,7 @@ impl HeldToken {
 
         let signing_message = match binding.kind {
             DelegationBindingKind::ExternalV2 => {
-                AgentWallet::compute_delegation_signing_message_v2(
+                AgentCipherclerk::compute_delegation_signing_message_v2(
                     &self.encoded,
                     &binding.delegatee,
                     &self.service,
@@ -615,17 +615,19 @@ impl HeldToken {
                     &binding.delegator_public_key,
                 )
             }
-            DelegationBindingKind::Local => AgentWallet::compute_local_delegation_signing_message(
-                &self.encoded,
-                &binding.delegatee,
-                &self.service,
-                &self.id,
-                &binding.restrictions,
-                &binding.proof_key,
-                &self.caveat_chain_hash,
-                binding.membership_leaf.as_ref(),
-                &binding.delegator_public_key,
-            ),
+            DelegationBindingKind::Local => {
+                AgentCipherclerk::compute_local_delegation_signing_message(
+                    &self.encoded,
+                    &binding.delegatee,
+                    &self.service,
+                    &self.id,
+                    &binding.restrictions,
+                    &binding.proof_key,
+                    &self.caveat_chain_hash,
+                    binding.membership_leaf.as_ref(),
+                    &binding.delegator_public_key,
+                )
+            }
         };
 
         use ed25519_dalek::Verifier;
@@ -677,7 +679,7 @@ impl HeldToken {
 ///
 /// **The envelope is NOT trustworthy on its own**: the receiver must additionally
 /// check that `delegator_public_key` is an *authorized* delegator for this chain.
-/// See [`AgentWallet::receive_signed_delegation`] for the authority model.
+/// See [`AgentCipherclerk::receive_signed_delegation`] for the authority model.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DelegatedToken {
     /// The serialized attenuated token (encoded macaroon string).
@@ -701,7 +703,7 @@ pub struct DelegatedToken {
     /// NOT the ability to mint or forge tokens (one-way derivation).
     ///
     /// When `None`, the delegatee cannot generate proofs without out-of-band
-    /// key material. This field is populated by [`AgentWallet::delegate()`] when
+    /// key material. This field is populated by [`AgentCipherclerk::delegate()`] when
     /// the delegator holds a token with proof capability.
     #[serde(default)]
     pub proof_key: Option<[u8; 32]>,
@@ -740,7 +742,7 @@ pub struct DelegatedToken {
     /// The signed payload covers `token_bytes`, `delegatee`, `service`, `id`,
     /// `restrictions`, `proof_key`, `caveat_chain_hash`, `membership_leaf`,
     /// `parent_delegation_hash`, and the envelope domain tag. See
-    /// [`AgentWallet::compute_delegation_signing_message_v2`].
+    /// [`AgentCipherclerk::compute_delegation_signing_message_v2`].
     ///
     /// This prevents a malicious holder of `proof_key` from forging an envelope:
     /// they cannot produce a signature that verifies under the legitimate
@@ -751,7 +753,7 @@ pub struct DelegatedToken {
     /// **WARNING**: This field is asserted by the wire envelope, not verified by it.
     /// The receiver MUST additionally check that this public key is an authorized
     /// delegator (matches an expected key or chains to a previously-accepted
-    /// envelope). See [`AgentWallet::receive_signed_delegation`].
+    /// envelope). See [`AgentCipherclerk::receive_signed_delegation`].
     pub delegator_public_key: PublicKey,
 }
 
@@ -760,7 +762,7 @@ impl DelegatedToken {
     /// is later re-delegated (forming a chain).
     pub fn envelope_hash(&self) -> [u8; 32] {
         let membership_leaf = self.membership_proof.as_ref().map(|p| p.leaf_hash);
-        AgentWallet::compute_delegation_signing_message_v2(
+        AgentCipherclerk::compute_delegation_signing_message_v2(
             &self.token_bytes,
             &self.delegatee,
             &self.service,
@@ -777,7 +779,7 @@ impl DelegatedToken {
 
 /// Authority policy for accepting [`DelegatedToken`] envelopes.
 ///
-/// See [`AgentWallet::check_delegation_authority`] for the security model.
+/// See [`AgentCipherclerk::check_delegation_authority`] for the security model.
 #[derive(Clone, Debug)]
 pub enum DelegationAuthority {
     /// Accept envelopes signed by exactly this public key. Most common case for
@@ -819,7 +821,7 @@ pub enum DelegationAuthority {
 ///
 /// This is **not** wire-transferable: it does not implement `Serialize`/`Deserialize`
 /// and its constructor is crate-private. Receiving wallets accept it via the
-/// dedicated [`AgentWallet::receive_local_delegation`] path, which never runs on
+/// dedicated [`AgentCipherclerk::receive_local_delegation`] path, which never runs on
 /// externally-sourced bytes.
 ///
 /// Even local delegations are signed (so authority binding is uniform across all
@@ -861,7 +863,7 @@ pub struct SignedTurn {
 /// - Proof generation (ZK presentation of authorization)
 /// - Receipt chain management (proof-carrying state)
 /// - HD key derivation from mnemonic (BIP39 + BLAKE3)
-pub struct AgentWallet {
+pub struct AgentCipherclerk {
     /// The agent's Ed25519 signing key.
     signing_key: ed25519_dalek::SigningKey,
     /// The agent's public identity.
@@ -915,7 +917,7 @@ pub struct AgentWallet {
     captp_client: Option<crate::captp_client::CapTpClient>,
 }
 
-impl AgentWallet {
+impl AgentCipherclerk {
     /// Domain separation prefix for all signatures produced by this wallet.
     /// Prevents cross-protocol signature reuse (e.g., a signed message being
     /// replayed as a turn signature or vice versa).
@@ -925,8 +927,8 @@ impl AgentWallet {
     ///
     /// # Example
     /// ```
-    /// use pyana_sdk::AgentWallet;
-    /// let wallet = AgentWallet::new();
+    /// use pyana_sdk::AgentCipherclerk;
+    /// let wallet = AgentCipherclerk::new();
     /// println!("Agent identity: {}", wallet.public_key());
     /// ```
     pub fn new() -> Self {
@@ -955,7 +957,7 @@ impl AgentWallet {
         // Explicitly zeroize before drop for defense-in-depth (Zeroizing's Drop
         // impl will also do this, but we want to be clear about intent).
         secret.zeroize();
-        AgentWallet {
+        AgentCipherclerk {
             signing_key,
             public_key,
             tokens: Vec::new(),
@@ -1007,7 +1009,7 @@ impl AgentWallet {
         let verifying_key = signing_key.verifying_key();
         let public_key = PublicKey(verifying_key.to_bytes());
         let stealth_keys = Self::derive_stealth_keys(&signing_key);
-        AgentWallet {
+        AgentCipherclerk {
             signing_key,
             public_key,
             tokens: Vec::new(),
@@ -1929,10 +1931,10 @@ impl AgentWallet {
     /// # Example
     ///
     /// ```no_run
-    /// use pyana_sdk::{AgentWallet, VerificationMode, AuthorizationPresentation};
+    /// use pyana_sdk::{AgentCipherclerk, VerificationMode, AuthorizationPresentation};
     /// use pyana_token::AuthRequest;
     ///
-    /// let wallet = AgentWallet::new();
+    /// let wallet = AgentCipherclerk::new();
     /// # let token = todo!();
     /// let request = AuthRequest {
     ///     service: Some("dns".into()),
@@ -2573,10 +2575,10 @@ impl AgentWallet {
     /// # Example
     ///
     /// ```no_run
-    /// # use pyana_sdk::AgentWallet;
+    /// # use pyana_sdk::AgentCipherclerk;
     /// # use pyana_cell::CellId;
     /// # use pyana_turn::Effect;
-    /// # let wallet = AgentWallet::new();
+    /// # let wallet = AgentCipherclerk::new();
     /// # let token = todo!();
     /// # let target = CellId::derive_raw(&[0; 32], &[0; 32]);
     /// let signed_turn = wallet.build_authorized_turn(
@@ -2711,7 +2713,7 @@ impl AgentWallet {
 
     /// Compute the canonical v2 signing message for an external delegation envelope.
     ///
-    /// Binds every authority-affecting field. See [`AgentWallet::compute_delegation_signing_message_v2`]
+    /// Binds every authority-affecting field. See [`AgentCipherclerk::compute_delegation_signing_message_v2`]
     /// documentation block above for the full payload listing.
     pub(crate) fn compute_delegation_signing_message_v2(
         token_bytes: &str,
@@ -2771,7 +2773,7 @@ impl AgentWallet {
     /// Verify the v2 delegation envelope signature.
     ///
     /// Checks only the cryptographic signature; **does not** check authority.
-    /// Use [`AgentWallet::check_delegation_authority`] first.
+    /// Use [`AgentCipherclerk::check_delegation_authority`] first.
     pub(crate) fn verify_delegation_envelope_v2(env: &DelegatedToken) -> Result<(), SdkError> {
         use ed25519_dalek::Verifier;
 
@@ -3275,10 +3277,10 @@ impl AgentWallet {
     /// # Example
     ///
     /// ```no_run
-    /// use pyana_sdk::AgentWallet;
+    /// use pyana_sdk::AgentCipherclerk;
     /// use pyana_bridge::Predicate;
     ///
-    /// let wallet = AgentWallet::new();
+    /// let wallet = AgentCipherclerk::new();
     /// # let token = todo!();
     /// // Prove: my balance >= 1000 (without revealing the actual balance)
     /// let proof = wallet.prove_predicate(
@@ -3658,11 +3660,11 @@ impl AgentWallet {
     /// # Example
     ///
     /// ```no_run
-    /// use pyana_sdk::AgentWallet;
+    /// use pyana_sdk::AgentCipherclerk;
     /// use pyana_circuit::BabyBear;
     /// use std::collections::HashMap;
     ///
-    /// let wallet = AgentWallet::new();
+    /// let wallet = AgentCipherclerk::new();
     /// # let intent = todo!();
     /// let mut my_values = HashMap::new();
     /// my_values.insert("balance".to_string(), 5000u64);
@@ -5694,13 +5696,13 @@ pub struct OwnedStealthNote {
     pub spending_key: [u8; 32],
 }
 
-impl Default for AgentWallet {
+impl Default for AgentCipherclerk {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Drop for AgentWallet {
+impl Drop for AgentCipherclerk {
     fn drop(&mut self) {
         // P2-2 / SAFETY: We explicitly zeroize the externally-shaped key
         // material (`seed`, `mnemonic_phrase`) that we own. The Ed25519
@@ -5722,9 +5724,9 @@ impl Drop for AgentWallet {
     }
 }
 
-impl std::fmt::Debug for AgentWallet {
+impl std::fmt::Debug for AgentCipherclerk {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AgentWallet")
+        f.debug_struct("AgentCipherclerk")
             .field("public_key", &self.public_key)
             .field("tokens_held", &self.tokens.len())
             .field("receipt_chain_length", &self.receipt_chain.len())
@@ -5766,7 +5768,7 @@ mod tests {
 
     #[test]
     fn test_wallet_receipt_chain_empty() {
-        let wallet = AgentWallet::new();
+        let wallet = AgentCipherclerk::new();
         assert_eq!(wallet.receipt_chain_length(), 0);
         assert!(wallet.receipt_head().is_none());
         assert!(wallet.current_state_commitment().is_none());
@@ -5775,7 +5777,7 @@ mod tests {
 
     #[test]
     fn test_wallet_append_single_receipt() {
-        let mut wallet = AgentWallet::new();
+        let mut wallet = AgentCipherclerk::new();
         let cell_id = wallet.cell_id("test");
         let receipt = mock_receipt(cell_id, [1u8; 32], [2u8; 32]);
 
@@ -5792,7 +5794,7 @@ mod tests {
 
     #[test]
     fn test_wallet_append_chain_links_correctly() {
-        let mut wallet = AgentWallet::new();
+        let mut wallet = AgentCipherclerk::new();
         let cell_id = wallet.cell_id("test");
 
         // Append first receipt.
@@ -5819,7 +5821,7 @@ mod tests {
 
     #[test]
     fn test_wallet_chain_of_five() {
-        let mut wallet = AgentWallet::new();
+        let mut wallet = AgentCipherclerk::new();
         let cell_id = wallet.cell_id("test");
 
         let mut state = [0u8; 32];
@@ -5841,7 +5843,7 @@ mod tests {
 
     #[test]
     fn test_wallet_verify_chain_with_external_function() {
-        let mut wallet = AgentWallet::new();
+        let mut wallet = AgentCipherclerk::new();
         let cell_id = wallet.cell_id("test");
 
         let r1 = mock_receipt(cell_id, [1u8; 32], [2u8; 32]);
@@ -5861,7 +5863,7 @@ mod tests {
     #[test]
     fn test_wallet_from_mnemonic() {
         let mnemonic = crate::mnemonic::generate_mnemonic();
-        let mut wallet = AgentWallet::from_mnemonic(&mnemonic, "").unwrap();
+        let mut wallet = AgentCipherclerk::from_mnemonic(&mnemonic, "").unwrap();
         assert!(wallet.export_mnemonic().is_some());
         assert_eq!(wallet.export_mnemonic().unwrap(), mnemonic);
         assert!(wallet.export_seed().is_some());
@@ -5871,8 +5873,8 @@ mod tests {
     #[test]
     fn test_wallet_from_mnemonic_deterministic() {
         let mnemonic = crate::mnemonic::generate_mnemonic();
-        let w1 = AgentWallet::from_mnemonic(&mnemonic, "pass").unwrap();
-        let w2 = AgentWallet::from_mnemonic(&mnemonic, "pass").unwrap();
+        let w1 = AgentCipherclerk::from_mnemonic(&mnemonic, "pass").unwrap();
+        let w2 = AgentCipherclerk::from_mnemonic(&mnemonic, "pass").unwrap();
         assert_eq!(w1.public_key(), w2.public_key());
     }
 
@@ -5880,15 +5882,15 @@ mod tests {
     fn test_wallet_from_seed() {
         let mnemonic = crate::mnemonic::generate_mnemonic();
         let seed = crate::mnemonic::mnemonic_to_seed(&mnemonic, "").unwrap();
-        let w1 = AgentWallet::from_mnemonic(&mnemonic, "").unwrap();
-        let w2 = AgentWallet::from_seed(seed);
+        let w1 = AgentCipherclerk::from_mnemonic(&mnemonic, "").unwrap();
+        let w2 = AgentCipherclerk::from_seed(seed);
         assert_eq!(w1.public_key(), w2.public_key());
     }
 
     #[test]
     fn test_wallet_derive_sub_agent() {
         let mnemonic = crate::mnemonic::generate_mnemonic();
-        let wallet = AgentWallet::from_mnemonic(&mnemonic, "").unwrap();
+        let wallet = AgentCipherclerk::from_mnemonic(&mnemonic, "").unwrap();
         let sub1 = wallet.derive_sub_agent(1).unwrap();
         let sub2 = wallet.derive_sub_agent(2).unwrap();
 
@@ -5904,14 +5906,14 @@ mod tests {
 
     #[test]
     fn test_wallet_derive_sub_agent_no_seed() {
-        let wallet = AgentWallet::new();
+        let wallet = AgentCipherclerk::new();
         let result = wallet.derive_sub_agent(1);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_wallet_new_has_no_mnemonic() {
-        let mut wallet = AgentWallet::new();
+        let mut wallet = AgentCipherclerk::new();
         assert!(wallet.export_mnemonic().is_none());
         assert!(wallet.export_seed().is_none());
         assert!(wallet.derivation_path().is_none());
@@ -5919,7 +5921,7 @@ mod tests {
 
     #[test]
     fn test_attenuated_token_has_zeroed_root_key() {
-        let mut wallet = AgentWallet::new();
+        let mut wallet = AgentCipherclerk::new();
         let root_key = [42u8; 32];
         let root_token = wallet.mint_token(&root_key, "compute");
 
@@ -5973,11 +5975,11 @@ mod tests {
 
     #[test]
     fn test_delegated_token_has_zeroed_root_key() {
-        let mut wallet = AgentWallet::new();
+        let mut wallet = AgentCipherclerk::new();
         let root_key = [99u8; 32];
         let root_token = wallet.mint_token(&root_key, "storage");
 
-        let recv_wallet = AgentWallet::new();
+        let recv_wallet = AgentCipherclerk::new();
         let delegatee_pk = recv_wallet.public_key();
 
         let restrictions = Attenuation {
@@ -6014,14 +6016,14 @@ mod tests {
     /// since the HMAC chain cannot be checked without the root key.
     #[test]
     fn test_receive_delegation_marks_unverified() {
-        let mut wallet = AgentWallet::new();
+        let mut wallet = AgentCipherclerk::new();
         let root_key = [0xAA; 32];
         let root_token = wallet.mint_token(&root_key, "service");
 
         // Root token must be verified.
         assert!(root_token.is_verified());
 
-        let recv_wallet = AgentWallet::new();
+        let recv_wallet = AgentCipherclerk::new();
         let delegatee_pk = recv_wallet.public_key();
 
         let restrictions = Attenuation {
@@ -6060,7 +6062,7 @@ mod tests {
     /// P1-2 regression test: minted tokens are verified.
     #[test]
     fn test_minted_token_is_verified() {
-        let mut wallet = AgentWallet::new();
+        let mut wallet = AgentCipherclerk::new();
         let root_key = [0xBB; 32];
         let token = wallet.mint_token(&root_key, "compute");
         assert!(token.is_verified());
@@ -6080,7 +6082,7 @@ mod tests {
     /// extraction + prove_authorization_with_issuer_key internally.
     #[test]
     fn test_attenuate_authorize_private_end_to_end() {
-        let mut wallet = AgentWallet::new();
+        let mut wallet = AgentCipherclerk::new();
         let root_key = [0xAA; 32];
         let root_token = wallet.mint_token(&root_key, "compute");
 
@@ -6121,7 +6123,7 @@ mod tests {
     /// Test that doubly-attenuated tokens can also prove (issuer_key propagates).
     #[test]
     fn test_double_attenuate_authorize_private() {
-        let mut wallet = AgentWallet::new();
+        let mut wallet = AgentCipherclerk::new();
         let root_key = [0xCC; 32];
         let root_token = wallet.mint_token(&root_key, "storage");
 
@@ -6171,12 +6173,12 @@ mod tests {
     /// including a derived proof_key. Agent B can then generate ZK proofs privately.
     #[test]
     fn test_delegated_token_can_prove_with_proof_key() {
-        let mut issuer_wallet = AgentWallet::new();
+        let mut issuer_wallet = AgentCipherclerk::new();
         let issuer_pk = issuer_wallet.public_key();
         let root_key = [0xDD; 32];
         let root_token = issuer_wallet.mint_token(&root_key, "api");
 
-        let holder_wallet = AgentWallet::new();
+        let holder_wallet = AgentCipherclerk::new();
         let holder_wallet_pk = holder_wallet.public_key();
 
         let restrictions = Attenuation {
@@ -6235,7 +6237,7 @@ mod tests {
     /// This is the encoded form of the design fix.)
     #[test]
     fn test_delegated_token_cannot_prove_without_proof_key() {
-        let holder_wallet = AgentWallet::new();
+        let holder_wallet = AgentCipherclerk::new();
 
         // Directly construct a HeldToken with zeroed issuer_key to exercise the
         // proof-without-key path (the wire-level DelegatedToken can no longer
@@ -6272,7 +6274,7 @@ mod tests {
     fn test_wallet_authorize_engine_verify_roundtrip() {
         use crate::embed::{EngineConfig, PyanaEngine};
 
-        let mut wallet = AgentWallet::new();
+        let mut wallet = AgentCipherclerk::new();
         let root_key = [0xEE; 32];
         let root_token = wallet.mint_token(&root_key, "data");
 
@@ -6303,8 +6305,8 @@ mod tests {
         };
 
         // Compute the federation root (same derivation the wallet uses internally).
-        let federation_root_bb = AgentWallet::compute_federation_root_bb(&root_key);
-        let federation_root = AgentWallet::bb_to_bytes(federation_root_bb);
+        let federation_root_bb = AgentCipherclerk::compute_federation_root_bb(&root_key);
+        let federation_root = AgentCipherclerk::bb_to_bytes(federation_root_bb);
 
         // Create an engine and set the federation root to match.
         let mut engine = PyanaEngine::new(EngineConfig::for_testing());
@@ -6332,7 +6334,7 @@ mod tests {
 
     #[test]
     fn test_make_sovereign_builds_turn() {
-        let mut wallet = AgentWallet::new();
+        let mut wallet = AgentCipherclerk::new();
         let cell_id = wallet.cell_id("test");
 
         let turn = wallet.make_sovereign(&cell_id).unwrap();
@@ -6349,7 +6351,7 @@ mod tests {
 
     #[test]
     fn test_execute_sovereign_turn_requires_stored_state() {
-        let mut wallet = AgentWallet::new();
+        let mut wallet = AgentCipherclerk::new();
         let cell_id = wallet.cell_id("test");
 
         // Without stored state, should fail.
@@ -6361,7 +6363,7 @@ mod tests {
 
     #[test]
     fn test_execute_sovereign_turn_with_stored_state() {
-        let mut wallet = AgentWallet::new();
+        let mut wallet = AgentCipherclerk::new();
         let pk = wallet.public_key().0;
         let token_id = *blake3::hash(b"test").as_bytes();
         let cell = pyana_cell::Cell::with_balance(pk, token_id, 1000);
@@ -6393,7 +6395,7 @@ mod tests {
 
     #[test]
     fn test_store_and_retrieve_sovereign_state() {
-        let mut wallet = AgentWallet::new();
+        let mut wallet = AgentCipherclerk::new();
         let pk = wallet.public_key().0;
         let token_id = *blake3::hash(b"domain").as_bytes();
         let cell = pyana_cell::Cell::with_balance(pk, token_id, 500);
@@ -6415,7 +6417,7 @@ mod tests {
 
     #[test]
     fn test_apply_sovereign_effects() {
-        let mut wallet = AgentWallet::new();
+        let mut wallet = AgentCipherclerk::new();
         let pk = wallet.public_key().0;
         let token_id = *blake3::hash(b"domain").as_bytes();
         let cell = pyana_cell::Cell::with_balance(pk, token_id, 1000);
@@ -6443,7 +6445,7 @@ mod tests {
 
     #[test]
     fn test_apply_sovereign_effects_transfer_in() {
-        let mut wallet = AgentWallet::new();
+        let mut wallet = AgentCipherclerk::new();
         let pk = wallet.public_key().0;
         let token_id = *blake3::hash(b"domain").as_bytes();
         let cell = pyana_cell::Cell::with_balance(pk, token_id, 100);
@@ -6465,7 +6467,7 @@ mod tests {
 
     #[test]
     fn test_apply_sovereign_effects_missing_cell() {
-        let mut wallet = AgentWallet::new();
+        let mut wallet = AgentCipherclerk::new();
         let cell_id = CellId([1u8; 32]);
 
         let result = wallet.apply_sovereign_effects(&cell_id, &[]);
@@ -6474,7 +6476,7 @@ mod tests {
 
     #[test]
     fn test_export_import_sovereign_state_roundtrip() {
-        let mut wallet = AgentWallet::new();
+        let mut wallet = AgentCipherclerk::new();
         let pk = wallet.public_key().0;
 
         // Store two sovereign cells.
@@ -6495,7 +6497,7 @@ mod tests {
         assert!(!exported.is_empty());
 
         // Import into a fresh wallet.
-        let mut wallet2 = AgentWallet::new();
+        let mut wallet2 = AgentCipherclerk::new();
         wallet2.import_sovereign_state(&exported).unwrap();
 
         assert_eq!(wallet2.sovereign_cell_count(), 2);
@@ -6505,7 +6507,7 @@ mod tests {
 
     #[test]
     fn test_import_sovereign_state_invalid_data() {
-        let mut wallet = AgentWallet::new();
+        let mut wallet = AgentCipherclerk::new();
         let result = wallet.import_sovereign_state(b"not valid postcard data");
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
@@ -6514,7 +6516,7 @@ mod tests {
 
     #[test]
     fn test_peer_exchange_session() {
-        let wallet = AgentWallet::new();
+        let wallet = AgentCipherclerk::new();
         let exchange = wallet.peer_exchange_session("test");
         // PeerExchange should be initialized with the wallet's cell_id.
         let expected_cell_id = wallet.cell_id("test");
@@ -6530,7 +6532,7 @@ mod tests {
 
     /// Helper: mint a delegated envelope from `delegator` to `recipient_pk`.
     fn mint_delegation(
-        delegator: &mut AgentWallet,
+        delegator: &mut AgentCipherclerk,
         recipient_pk: PublicKey,
         root_key: [u8; 32],
         service: &str,
@@ -6551,9 +6553,9 @@ mod tests {
     /// proof_key, they cannot sign under the legitimate delegator's key.
     #[test]
     fn test_envelope_rejects_attacker_forged_signature() {
-        let mut alice = AgentWallet::new();
+        let mut alice = AgentCipherclerk::new();
         let alice_pk = alice.public_key();
-        let bob = AgentWallet::new();
+        let bob = AgentCipherclerk::new();
         let bob_pk = bob.public_key();
 
         // Alice delegates legitimately to Bob.
@@ -6561,11 +6563,11 @@ mod tests {
 
         // Attacker Mallory tries to forge a new envelope: same content but
         // signed under her own key, claiming to be from Alice.
-        let mallory = AgentWallet::new();
+        let mallory = AgentCipherclerk::new();
         let mut forged = env.clone();
         // Mallory keeps Alice's pubkey but signs with her own key. The signature
         // will not verify under Alice's key.
-        let msg = AgentWallet::compute_delegation_signing_message_v2(
+        let msg = AgentCipherclerk::compute_delegation_signing_message_v2(
             &forged.token_bytes,
             &forged.delegatee,
             &forged.service,
@@ -6595,9 +6597,9 @@ mod tests {
     /// key — the authority policy rejects them.
     #[test]
     fn test_envelope_rejects_unauthorized_delegator() {
-        let mut alice = AgentWallet::new();
+        let mut alice = AgentCipherclerk::new();
         let alice_pk = alice.public_key();
-        let bob = AgentWallet::new();
+        let bob = AgentCipherclerk::new();
         let bob_pk = bob.public_key();
 
         // Alice delegates to Bob legitimately.
@@ -6605,7 +6607,7 @@ mod tests {
 
         // Mallory (different wallet) crafts her own valid envelope to Bob,
         // signed under her own key.
-        let mut mallory = AgentWallet::new();
+        let mut mallory = AgentCipherclerk::new();
         let mallory_env = mint_delegation(&mut mallory, bob_pk, [0x33; 32], "svc");
 
         // Bob's policy is "TrustedKey(alice_pk)" — Mallory must be rejected
@@ -6624,11 +6626,11 @@ mod tests {
     /// payload, so an envelope minted for Bob cannot be accepted by Carol.
     #[test]
     fn test_envelope_rejects_replay_to_wrong_recipient() {
-        let mut alice = AgentWallet::new();
+        let mut alice = AgentCipherclerk::new();
         let alice_pk = alice.public_key();
-        let bob = AgentWallet::new();
+        let bob = AgentCipherclerk::new();
         let bob_pk = bob.public_key();
-        let mut carol = AgentWallet::new();
+        let mut carol = AgentCipherclerk::new();
 
         // Alice delegates to Bob.
         let env_for_bob = mint_delegation(&mut alice, bob_pk, [0x44; 32], "svc");
@@ -6661,9 +6663,9 @@ mod tests {
     /// invalidates the signature.
     #[test]
     fn test_envelope_rejects_tampered_fields() {
-        let mut alice = AgentWallet::new();
+        let mut alice = AgentCipherclerk::new();
         let alice_pk = alice.public_key();
-        let bob = AgentWallet::new();
+        let bob = AgentCipherclerk::new();
         let bob_pk = bob.public_key();
 
         let env = mint_delegation(&mut alice, bob_pk, [0x55; 32], "svc");
@@ -6674,21 +6676,21 @@ mod tests {
             services: vec![("svc".to_string(), "rw".to_string())],
             ..Default::default()
         };
-        let mut bob1 = AgentWallet::from_key_bytes(Zeroizing::new(bob.signing_key.to_bytes()));
+        let mut bob1 = AgentCipherclerk::from_key_bytes(Zeroizing::new(bob.signing_key.to_bytes()));
         let r1 = bob1.receive_signed_delegation(t1, &DelegationAuthority::TrustedKey(alice_pk));
         assert!(matches!(r1, Err(SdkError::InvalidDelegation(_))));
 
         // Tamper with service.
         let mut t2 = env.clone();
         t2.service = "other-svc".to_string();
-        let mut bob2 = AgentWallet::from_key_bytes(Zeroizing::new(bob.signing_key.to_bytes()));
+        let mut bob2 = AgentCipherclerk::from_key_bytes(Zeroizing::new(bob.signing_key.to_bytes()));
         let r2 = bob2.receive_signed_delegation(t2, &DelegationAuthority::TrustedKey(alice_pk));
         assert!(matches!(r2, Err(SdkError::InvalidDelegation(_))));
 
         // Tamper with id.
         let mut t3 = env.clone();
         t3.id = "different-id".to_string();
-        let mut bob3 = AgentWallet::from_key_bytes(Zeroizing::new(bob.signing_key.to_bytes()));
+        let mut bob3 = AgentCipherclerk::from_key_bytes(Zeroizing::new(bob.signing_key.to_bytes()));
         let r3 = bob3.receive_signed_delegation(t3, &DelegationAuthority::TrustedKey(alice_pk));
         assert!(matches!(r3, Err(SdkError::InvalidDelegation(_))));
     }
@@ -6696,11 +6698,11 @@ mod tests {
     /// P1: chain delegations only validate when `parent_delegation_hash` matches.
     #[test]
     fn test_envelope_chain_rejects_wrong_parent_hash() {
-        let mut alice = AgentWallet::new();
+        let mut alice = AgentCipherclerk::new();
         let alice_pk = alice.public_key();
-        let bob = AgentWallet::new();
+        let bob = AgentCipherclerk::new();
         let bob_pk = bob.public_key();
-        let carol = AgentWallet::new();
+        let carol = AgentCipherclerk::new();
         let carol_pk = carol.public_key();
 
         // Alice → Bob.
@@ -6733,7 +6735,7 @@ mod tests {
             .unwrap();
 
         // Carol with the wrong expected parent hash must reject.
-        let mut carol_bad = AgentWallet::new();
+        let mut carol_bad = AgentCipherclerk::new();
         let env_bc_for_carol_bad = bob
             .delegate_with_parent(
                 &bob_token,
@@ -6776,8 +6778,8 @@ mod tests {
         //   };
 
         // Sanity check: a well-formed envelope round-trips through serde.
-        let mut alice = AgentWallet::new();
-        let bob = AgentWallet::new();
+        let mut alice = AgentCipherclerk::new();
+        let bob = AgentCipherclerk::new();
         let env = mint_delegation(&mut alice, bob.public_key(), [0x77; 32], "svc");
         let bytes = postcard::to_allocvec(&env).unwrap();
         let _restored: DelegatedToken = postcard::from_bytes(&bytes).unwrap();
@@ -6788,12 +6790,12 @@ mod tests {
     /// envelope still gets rejected by the signature check.
     #[test]
     fn test_envelope_open_policy_still_verifies_signature() {
-        let mut alice = AgentWallet::new();
-        let bob = AgentWallet::new();
+        let mut alice = AgentCipherclerk::new();
+        let bob = AgentCipherclerk::new();
         let env = mint_delegation(&mut alice, bob.public_key(), [0x88; 32], "svc");
 
         // Open policy accepts a legitimate envelope.
-        let mut bob1 = AgentWallet::from_key_bytes(Zeroizing::new(bob.signing_key.to_bytes()));
+        let mut bob1 = AgentCipherclerk::from_key_bytes(Zeroizing::new(bob.signing_key.to_bytes()));
         bob1.receive_signed_delegation(env.clone(), &DelegationAuthority::Open { warn: false })
             .unwrap();
 
@@ -6803,7 +6805,7 @@ mod tests {
             services: vec![("svc".to_string(), "rw".to_string())],
             ..Default::default()
         };
-        let mut bob2 = AgentWallet::from_key_bytes(Zeroizing::new(bob.signing_key.to_bytes()));
+        let mut bob2 = AgentCipherclerk::from_key_bytes(Zeroizing::new(bob.signing_key.to_bytes()));
         let result =
             bob2.receive_signed_delegation(tampered, &DelegationAuthority::Open { warn: false });
         assert!(matches!(result, Err(SdkError::InvalidDelegation(_))));
@@ -6814,11 +6816,11 @@ mod tests {
     /// LocalDelegation (the struct is non-public and crate-internal).
     #[test]
     fn test_local_delegation_signature_required() {
-        let mut parent = AgentWallet::new();
+        let mut parent = AgentCipherclerk::new();
         let root_key = [0x99; 32];
         let parent_token = parent.mint_token(&root_key, "svc");
 
-        let child = AgentWallet::new();
+        let child = AgentCipherclerk::new();
         let child_pk = child.public_key();
 
         // Build a legitimate local delegation.
@@ -6841,7 +6843,7 @@ mod tests {
             .unwrap();
 
         // Child rejects if we claim a different expected parent.
-        let mut child2 = AgentWallet::new();
+        let mut child2 = AgentCipherclerk::new();
         let local2 = parent.make_local_delegation(
             parent_token.encoded.clone(),
             "svc".to_string(),
@@ -6853,7 +6855,7 @@ mod tests {
             None,
             None,
         );
-        let bogus_pk = AgentWallet::new().public_key();
+        let bogus_pk = AgentCipherclerk::new().public_key();
         let result = child2.receive_local_delegation(local2, &bogus_pk);
         assert!(
             matches!(result, Err(SdkError::InvalidDelegation(_))),
@@ -6875,13 +6877,13 @@ mod tests {
     /// the resulting HeldToken can produce ZK proofs (exercises the full
     /// authorize_private path).
     fn mint_provable_delegation(
-        delegator: &mut AgentWallet,
+        delegator: &mut AgentCipherclerk,
         recipient_pk: PublicKey,
         root_key: [u8; 32],
         service: &str,
     ) -> DelegatedToken {
         let root_token = delegator.mint_token(&root_key, service);
-        let proof_key = AgentWallet::derive_proof_key(&root_key);
+        let proof_key = AgentCipherclerk::derive_proof_key(&root_key);
         let mut tree = pyana_commit::merkle::MerkleTree::new();
         tree.insert_hash(proof_key);
         let restrictions = Attenuation {
@@ -6899,9 +6901,9 @@ mod tests {
     /// use against the current `encoded` value.
     #[test]
     fn test_held_token_tamper_encoded_breaks_authorize() {
-        let mut alice = AgentWallet::new();
+        let mut alice = AgentCipherclerk::new();
         let alice_pk = alice.public_key();
-        let mut bob = AgentWallet::new();
+        let mut bob = AgentCipherclerk::new();
         let bob_pk = bob.public_key();
 
         let env = mint_provable_delegation(&mut alice, bob_pk, [0xAB; 32], "svc");
@@ -6953,9 +6955,9 @@ mod tests {
     /// the caveat_chain_hash.
     #[test]
     fn test_held_token_tamper_chain_hash_breaks_authorize() {
-        let mut alice = AgentWallet::new();
+        let mut alice = AgentCipherclerk::new();
         let alice_pk = alice.public_key();
-        let mut bob = AgentWallet::new();
+        let mut bob = AgentCipherclerk::new();
         let bob_pk = bob.public_key();
 
         let env = mint_provable_delegation(&mut alice, bob_pk, [0xCD; 32], "svc");
@@ -7002,9 +7004,9 @@ mod tests {
         // callsite (the field is private). What we *can* check here is that
         // the public accessors are read-only references and that the
         // round-tripped values match what was set internally.
-        let mut alice = AgentWallet::new();
+        let mut alice = AgentCipherclerk::new();
         let alice_pk = alice.public_key();
-        let mut bob = AgentWallet::new();
+        let mut bob = AgentCipherclerk::new();
         let bob_pk = bob.public_key();
 
         let env = mint_provable_delegation(&mut alice, bob_pk, [0xEF; 32], "svc");
@@ -7047,18 +7049,18 @@ mod tests {
     }
 
     /// P1-6: `compute_root_from_membership_proof` must reject proofs whose
-    /// depth exceeds [`AgentWallet::MAX_MEMBERSHIP_PROOF_DEPTH`].
+    /// depth exceeds [`AgentCipherclerk::MAX_MEMBERSHIP_PROOF_DEPTH`].
     #[test]
     fn test_membership_proof_depth_bound() {
         use pyana_commit::merkle::MerkleProof;
-        let depth = AgentWallet::MAX_MEMBERSHIP_PROOF_DEPTH + 1;
+        let depth = AgentCipherclerk::MAX_MEMBERSHIP_PROOF_DEPTH + 1;
         let proof = MerkleProof {
             siblings: vec![[[0u8; 32]; 3]; depth],
             path_indices: vec![0; depth],
             leaf_hash: [0u8; 32],
             bucket_siblings: vec![],
         };
-        let result = AgentWallet::compute_root_from_membership_proof(&proof);
+        let result = AgentCipherclerk::compute_root_from_membership_proof(&proof);
         assert!(result.is_err(), "depth-exceeding proof must be rejected");
         let err_msg = format!("{:?}", result.err().unwrap());
         assert!(
@@ -7078,7 +7080,7 @@ mod tests {
             leaf_hash: [0u8; 32],
             bucket_siblings: vec![],
         };
-        let result = AgentWallet::compute_root_from_membership_proof(&proof);
+        let result = AgentCipherclerk::compute_root_from_membership_proof(&proof);
         assert!(result.is_err(), "mismatched lengths must be rejected");
         let err_msg = format!("{:?}", result.err().unwrap());
         assert!(
@@ -7096,12 +7098,12 @@ mod tests {
         use pyana_token::Attenuation;
 
         // Build a small token using a generated wallet.
-        let mut alice = AgentWallet::new();
-        let bob = AgentWallet::new();
+        let mut alice = AgentCipherclerk::new();
+        let bob = AgentCipherclerk::new();
         let root_token = alice.mint_token(&[42u8; 32], "test-svc");
 
         // Forge a v2 delegation envelope with an enormous membership proof.
-        let oversized_depth = AgentWallet::MAX_MEMBERSHIP_PROOF_DEPTH + 5;
+        let oversized_depth = AgentCipherclerk::MAX_MEMBERSHIP_PROOF_DEPTH + 5;
         let mp = MerkleProof {
             siblings: vec![[[0u8; 32]; 3]; oversized_depth],
             path_indices: vec![0; oversized_depth],
@@ -7188,7 +7190,7 @@ mod tests {
 
     #[test]
     fn allocate_queue_produces_real_signature() {
-        let wallet = AgentWallet::new();
+        let wallet = AgentCipherclerk::new();
         let fed = [7u8; 32];
         let turn = wallet.allocate_queue(8, None, &fed).unwrap();
         assert_real_signature(root_action(&turn));
@@ -7197,7 +7199,7 @@ mod tests {
 
     #[test]
     fn allocate_queue_with_program_vk_produces_real_signature() {
-        let wallet = AgentWallet::new();
+        let wallet = AgentCipherclerk::new();
         let fed = [3u8; 32];
         let vk = [42u8; 32];
         let turn = wallet.allocate_queue(4, Some(vk), &fed).unwrap();
@@ -7217,7 +7219,7 @@ mod tests {
 
     #[test]
     fn enqueue_message_produces_real_signature() {
-        let wallet = AgentWallet::new();
+        let wallet = AgentCipherclerk::new();
         let fed = [1u8; 32];
         let queue = wallet.cell_id("queue-target");
         let msg_hash = [0xAB; 32];
@@ -7240,7 +7242,7 @@ mod tests {
 
     #[test]
     fn dequeue_message_produces_real_signature() {
-        let wallet = AgentWallet::new();
+        let wallet = AgentCipherclerk::new();
         let fed = [9u8; 32];
         let queue = wallet.cell_id("queue-target");
         let turn = wallet.dequeue_message(queue, &fed).unwrap();
@@ -7255,7 +7257,7 @@ mod tests {
     #[test]
     fn atomic_queue_tx_produces_real_signature() {
         use pyana_turn::QueueTxOp;
-        let wallet = AgentWallet::new();
+        let wallet = AgentCipherclerk::new();
         let fed = [5u8; 32];
         let q1 = wallet.cell_id("q1");
         let q2 = wallet.cell_id("q2");
@@ -7278,7 +7280,7 @@ mod tests {
 
     #[test]
     fn atomic_queue_tx_rejects_empty_operations() {
-        let wallet = AgentWallet::new();
+        let wallet = AgentCipherclerk::new();
         let fed = [5u8; 32];
         let result = wallet.atomic_queue_tx(vec![], &fed);
         assert!(
@@ -7294,7 +7296,7 @@ mod tests {
     #[test]
     fn queue_signature_binds_to_federation_id() {
         use pyana_turn::action::Authorization;
-        let wallet = AgentWallet::new();
+        let wallet = AgentCipherclerk::new();
         let fed_a = [1u8; 32];
         let fed_b = [2u8; 32];
         let t_a = wallet.allocate_queue(4, None, &fed_a).unwrap();
@@ -7324,7 +7326,7 @@ mod tests {
 
     #[test]
     fn create_from_factory_produces_real_signature() {
-        let wallet = AgentWallet::new();
+        let wallet = AgentCipherclerk::new();
         let fed = [42u8; 32];
         let issuer = wallet.cell_id("default");
         let turn = wallet.create_from_factory(
@@ -7347,7 +7349,7 @@ mod tests {
     #[test]
     fn create_from_factory_signature_binds_to_federation_id() {
         use pyana_turn::action::Authorization;
-        let wallet = AgentWallet::new();
+        let wallet = AgentCipherclerk::new();
         let issuer = wallet.cell_id("default");
         let fed_a = [0x11u8; 32];
         let fed_b = [0x22u8; 32];
@@ -7387,7 +7389,7 @@ mod tests {
         use pyana_turn::action::{Action, Authorization};
         use pyana_turn::executor::TurnExecutor;
 
-        let wallet = AgentWallet::new();
+        let wallet = AgentCipherclerk::new();
         let fed = [13u8; 32];
         let turn = wallet
             .enqueue_message(wallet.cell_id("q"), [0xEE; 32], 25, &fed)
@@ -7426,24 +7428,24 @@ mod doctest_compile_fail {
     /// broken.
     ///
     /// ```compile_fail
-    /// use pyana_sdk::AgentWallet;
-    /// let mut w = AgentWallet::new();
+    /// use pyana_sdk::AgentCipherclerk;
+    /// let mut w = AgentCipherclerk::new();
     /// let held = w.mint_token(&[0u8; 32], "svc");
     /// // The `encoded` field is private; this must NOT compile.
     /// let _ = held.encoded;
     /// ```
     ///
     /// ```compile_fail
-    /// use pyana_sdk::AgentWallet;
-    /// let mut w = AgentWallet::new();
+    /// use pyana_sdk::AgentCipherclerk;
+    /// let mut w = AgentCipherclerk::new();
     /// let mut held = w.mint_token(&[0u8; 32], "svc");
     /// // Direct mutation of `encoded` must NOT compile.
     /// held.encoded = String::from("forged");
     /// ```
     ///
     /// ```compile_fail
-    /// use pyana_sdk::AgentWallet;
-    /// let mut w = AgentWallet::new();
+    /// use pyana_sdk::AgentCipherclerk;
+    /// let mut w = AgentCipherclerk::new();
     /// let mut held = w.mint_token(&[0u8; 32], "svc");
     /// // Direct mutation of `caveat_chain_hash` must NOT compile.
     /// held.caveat_chain_hash = Some([0u8; 32]);

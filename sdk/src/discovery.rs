@@ -286,10 +286,10 @@ impl<T: PirTransport> PrivateDiscoveryClient<T> {
 }
 
 // ---------------------------------------------------------------------------
-// Integration with AgentWallet
+// Integration with AgentCipherclerk
 // ---------------------------------------------------------------------------
 
-impl crate::wallet::AgentWallet {
+impl crate::cipherclerk::AgentCipherclerk {
     /// Discover intents matching a capability using private information retrieval.
     ///
     /// This is a convenience method that creates a [`PrivateDiscoveryClient`] with
@@ -546,7 +546,7 @@ mod tests {
         let (index, intents) = build_test_index();
         let transport = MockTransport::new(index);
 
-        let wallet = crate::wallet::AgentWallet::new();
+        let wallet = crate::cipherclerk::AgentCipherclerk::new();
         let ids = wallet
             .discover_matching_intents(
                 "action:capability_3",

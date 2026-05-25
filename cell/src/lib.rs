@@ -60,6 +60,9 @@ pub use commitment::{
     CANONICAL_CAP_ROOT_CONTEXT, CANONICAL_COMMITMENT_CONTEXT, canonical_to_babybear_pi,
     compute_canonical_capability_root, compute_canonical_state_commitment,
 };
+pub use custom_effect::{
+    CustomEffectError, CustomEffectRegistry, CustomEffectVerifier, StubCustomEffectVerifier,
+};
 pub use delegation::DelegatedRef;
 pub use derivation::{
     DerivationEdge, DerivationNode, DerivationRecord, DerivationTree, DerivationType,
@@ -107,9 +110,6 @@ pub use preconditions::{
 pub use predicate::{
     InputRef, PredicateInput, WitnessedPredicate, WitnessedPredicateError, WitnessedPredicateKind,
     WitnessedPredicateRegistry, WitnessedPredicateVerifier, canonical_predicate_vk,
-};
-pub use custom_effect::{
-    CustomEffectError, CustomEffectRegistry, CustomEffectVerifier, StubCustomEffectVerifier,
 };
 pub use program::{CellProgram, ProgramError, StateConstraint, field_from_u64, field_from_u64_be};
 pub use revocation_channel::{

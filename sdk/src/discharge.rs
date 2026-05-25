@@ -3,8 +3,8 @@
 //! This module provides convenience functions for obtaining discharge macaroons
 //! from a remote gateway and binding them to held tokens.
 
+use crate::cipherclerk::HeldToken;
 use crate::error::SdkError;
-use crate::wallet::HeldToken;
 
 /// Obtain a discharge macaroon from a remote gateway.
 ///

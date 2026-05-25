@@ -32,7 +32,23 @@
     "dave_verifies_carol_receive_proof_from_receipts_alone",
     "dave_verifies_bilateral_pair_alice_bob_transfer_id_match",
     "dave_verifies_trilateral_alice_bob_carol_intro_id_match",
-    "dave_verifies_sovereign_witness_chain_no_sequence_regression"
+    "dave_verifies_sovereign_witness_chain_no_sequence_regression",
+
+    "bridge_lock_witness_finalize_four_phase_happy_path",
+    "bridge_lock_refund_alt_path_after_timeout",
+    "bridge_phase_log_monotone_advancement_observed_by_both_federations",
+    "bridge_id_distinguishes_destinations_across_federations",
+    "bridge_id_distinguishes_initiating_nonces",
+
+    "bls_threshold_aggregation_t_of_n_succeeds_n4_t3",
+    "bls_threshold_aggregation_t_of_n_succeeds_n7_t5",
+    "bls_qc_verifies_against_canonical_message",
+
+    "predicate_16_honest_state_constraint_variants_in_one_program_accept_legal_transition",
+    "any_of_20_branches_disjunction_accepts_any_match",
+    "cases_program_5_arm_method_dispatch_only_matching_arm_fires",
+
+    "ring_of_3_cells_all_transfer_id_pairs_bind_for_observer"
   ],
 
   "must_not_pass": [
@@ -45,6 +61,9 @@
     "sovereign_witness_skipped_for_sovereign_transition_accepts",
     "sovereign_witness_with_sequence_regression_accepts",
     "sovereign_witness_signing_message_tampered_accepts",
+    "sovereign_witness_cross_cell_reuse_accepts",
+    "sovereign_witness_signed_under_old_key_after_rotation_accepts",
+    "sovereign_witness_with_equal_sequence_accepts",
 
     "rate_limit_5th_turn_in_epoch_accepts",
     "monotonic_balance_decrease_accepts",
@@ -56,8 +75,28 @@
 
     "captp_delivery_tampered_introducer_sig_accepts",
     "captp_delivery_recipient_pk_mismatch_with_cert_accepts",
+    "captp_delivery_tampered_recipient_sig_accepts",
+    "captp_delivery_handoff_cert_replayed_accepts",
 
-    "cross_federation_replay_alice_grant_at_federation_c_accepts"
+    "cross_federation_replay_alice_grant_at_federation_c_accepts",
+
+    "bridge_locked_nullifier_relocked_to_different_destination_accepts",
+    "bridge_phase_skip_locked_to_finalized_without_witness_accepts",
+    "bridge_witnessed_envelope_with_tampered_dst_federation_accepts",
+    "bridge_double_mint_same_nullifier_at_one_destination_accepts",
+    "bridge_portable_note_against_untrusted_source_root_accepts",
+    "bridge_portable_note_against_empty_trusted_roots_accepts",
+
+    "bls_t_minus_one_of_n_aggregation_accepts",
+    "bls_qc_verifies_against_different_message_accepts",
+    "bls_one_share_signed_over_wrong_message_aggregate_verifies_canonical_accepts",
+
+    "equivocating_federation_two_attested_roots_same_height_undetected",
+    "forked_blocklace_prefixes_produce_identical_attested_roots",
+    "federation_receipt_with_tampered_federation_id_accepted_under_correct_committee",
+    "stale_committee_epoch_receipt_accepted_after_rotation",
+
+    "predicate_with_one_sentinel_state_constraint_accepts_transition_before_caveat_correctness_lane"
   ],
 
   "verifier_independence": {

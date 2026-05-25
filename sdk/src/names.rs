@@ -576,19 +576,19 @@ pub struct WhoisResult {
 // Wallet Integration
 // =============================================================================
 
-/// Extension trait for AgentWallet to add name resolution capabilities.
+/// Extension trait for AgentCipherclerk to add name resolution capabilities.
 ///
 /// This provides the wallet-level API surface for name operations.
 /// The actual PetnameDb is stored in the wallet state and persisted with it.
-pub struct WalletNames {
+pub struct CipherclerkNames {
     /// The petname database.
     pub db: PetnameDb,
     /// Current epoch (updated by the wallet on each block).
     pub current_epoch: u64,
 }
 
-impl WalletNames {
-    /// Create a new WalletNames with an empty database.
+impl CipherclerkNames {
+    /// Create a new CipherclerkNames with an empty database.
     pub fn new() -> Self {
         Self {
             db: PetnameDb::new(),
@@ -713,7 +713,7 @@ impl WalletNames {
     }
 }
 
-impl Default for WalletNames {
+impl Default for CipherclerkNames {
     fn default() -> Self {
         Self::new()
     }
@@ -998,7 +998,7 @@ mod tests {
 
     #[tokio::test]
     async fn whois_reverse_lookup() {
-        let mut wallet_names = WalletNames::new();
+        let mut wallet_names = CipherclerkNames::new();
         wallet_names.set_epoch(100);
         let client = test_client();
 
@@ -1086,12 +1086,12 @@ mod tests {
     }
 
     // =========================================================================
-    // Test 10: WalletNames set_petname validates
+    // Test 10: CipherclerkNames set_petname validates
     // =========================================================================
 
     #[test]
     fn wallet_names_validates_on_set() {
-        let mut wn = WalletNames::new();
+        let mut wn = CipherclerkNames::new();
         let target = test_uri(1);
 
         // Valid
@@ -1110,7 +1110,7 @@ mod tests {
 
     #[tokio::test]
     async fn whois_empty_db() {
-        let wallet_names = WalletNames::new();
+        let wallet_names = CipherclerkNames::new();
         let client = test_client();
         let cell_id = CellId([0xFF; 32]);
 

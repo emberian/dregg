@@ -22,7 +22,7 @@
 //! honest PI, and the verifier rejects.
 
 use pyana_circuit::effect_vm::{
-    self, generate_effect_vm_trace_ext, CellState, Effect, EffectVmContext,
+    self, CellState, Effect, EffectVmContext, generate_effect_vm_trace_ext,
 };
 use pyana_circuit::field::BabyBear;
 use pyana_circuit::stark::{prove, verify};

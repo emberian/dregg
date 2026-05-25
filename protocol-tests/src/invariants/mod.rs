@@ -50,3 +50,13 @@ pub mod gamma2_id_injectivity;
 /// Action-hash domain separation across `Authorization` variants — every
 /// tamper must change the action hash.
 pub mod authorization_hash_domain_separation;
+
+/// 4-phase `BridgeReceiptEnvelope` phase log monotonicity:
+/// Locked→Witnessed→Finalized or Locked→Refunded; everything else
+/// must reject.
+pub mod bridge_phase_monotonicity;
+
+/// γ.2 cross-federation extension: `intro_id` and `transfer_id`
+/// preimages must include federation_id when crossing federations (per
+/// AUDIT-federation.md F1 + STAGE-7-GAMMA-2-PI-DESIGN §1.3 tail).
+pub mod gamma2_cross_federation_binding;

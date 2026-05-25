@@ -32,10 +32,10 @@ use pyana_token::AuthRequest;
 
 // `discovery` is gated behind `network` (tokio-using); the lone method below
 // that needs it is gated the same way.
+use crate::cipherclerk::{AgentCipherclerk, HeldToken};
 #[cfg(feature = "network")]
 use crate::discovery::{PirTransport, PrivateDiscoveryClient};
 use crate::error::SdkError;
-use crate::wallet::{AgentWallet, HeldToken};
 
 // =============================================================================
 // Result Types
@@ -144,7 +144,7 @@ pub struct AccumulatorNonMembershipProof {
 // Privacy API Implementation
 // =============================================================================
 
-impl AgentWallet {
+impl AgentCipherclerk {
     /// Prove authorization without revealing which federation member you are.
     ///
     /// # Privacy Guarantee
@@ -788,7 +788,7 @@ mod tests {
 
     #[test]
     fn test_create_private_note_produces_valid_commitment() {
-        let wallet = AgentWallet::new();
+        let wallet = AgentCipherclerk::new();
         let (commitment, secret) = wallet.create_private_note(1000, 1).unwrap();
 
         // The commitment should match what Note::commitment() produces.
@@ -804,7 +804,7 @@ mod tests {
 
     #[test]
     fn test_create_private_note_unique_commitments() {
-        let wallet = AgentWallet::new();
+        let wallet = AgentCipherclerk::new();
         let (c1, _) = wallet.create_private_note(1000, 1).unwrap();
         let (c2, _) = wallet.create_private_note(1000, 1).unwrap();
 
@@ -814,7 +814,7 @@ mod tests {
 
     #[test]
     fn test_create_private_note_spending_key_derives_correctly() {
-        let wallet = AgentWallet::new();
+        let wallet = AgentCipherclerk::new();
         let (_, secret) = wallet.create_private_note(500, 2).unwrap();
 
         // The spending key should be deterministic for the same wallet.
@@ -824,7 +824,7 @@ mod tests {
 
     #[test]
     fn test_prove_predicate_unlinkable_produces_fresh_commitment() {
-        let mut wallet = AgentWallet::new();
+        let mut wallet = AgentCipherclerk::new();
         let root_key = [0xAB; 32];
         let token = wallet.mint_token(&root_key, "test-service");
 
@@ -861,7 +861,7 @@ mod tests {
 
     #[test]
     fn test_prove_predicate_unlinkable_fails_on_false_statement() {
-        let mut wallet = AgentWallet::new();
+        let mut wallet = AgentCipherclerk::new();
         let root_key = [0xCD; 32];
         let token = wallet.mint_token(&root_key, "test-service");
 
@@ -879,7 +879,7 @@ mod tests {
 
     #[test]
     fn test_prove_not_revoked_succeeds_for_non_revoked_token() {
-        let mut wallet = AgentWallet::new();
+        let mut wallet = AgentCipherclerk::new();
         let root_key = [0xEF; 32];
         let token = wallet.mint_token(&root_key, "service");
 
@@ -915,7 +915,7 @@ mod tests {
 
     #[test]
     fn test_authorize_anonymously_produces_unlinkable_proofs() {
-        let mut wallet = AgentWallet::new();
+        let mut wallet = AgentCipherclerk::new();
         let root_key = [0x42; 32];
         let token = wallet.mint_token(&root_key, "dns");
 
@@ -948,7 +948,7 @@ mod tests {
 
     #[test]
     fn test_transfer_note_privately() {
-        let wallet = AgentWallet::new();
+        let wallet = AgentCipherclerk::new();
         let (_, secret) = wallet.create_private_note(1000, 1).unwrap();
 
         // Create a minimal Merkle path (depth 2 as required by the circuit).

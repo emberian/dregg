@@ -11,8 +11,8 @@ use std::time::Duration;
 use pyana_commit::{MerkleTree, NonMembershipProof};
 use pyana_wire::prelude::*;
 
+use crate::cipherclerk::{AgentCipherclerk, HeldToken};
 use crate::error::SdkError;
-use crate::wallet::{AgentWallet, HeldToken};
 
 /// Result of a revocation check, distinguishing between cryptographically verified
 /// outcomes and unverified server assertions.
@@ -58,11 +58,11 @@ pub struct PresentationResult {
 /// # Example
 ///
 /// ```no_run
-/// use pyana_sdk::{AgentWallet, SiloClient};
+/// use pyana_sdk::{AgentCipherclerk, SiloClient};
 /// use std::sync::Arc;
 ///
 /// # async fn example() -> Result<(), pyana_sdk::SdkError> {
-/// let wallet = Arc::new(AgentWallet::new());
+/// let wallet = Arc::new(AgentCipherclerk::new());
 /// let client = SiloClient::connect("127.0.0.1:9100".parse().unwrap(), wallet).await?;
 /// # Ok(())
 /// # }
@@ -71,7 +71,7 @@ pub struct SiloClient {
     /// Remote silo address.
     address: SocketAddr,
     /// The agent's wallet (for signing and proof generation).
-    wallet: Arc<AgentWallet>,
+    wallet: Arc<AgentCipherclerk>,
     /// The underlying TCP connection.
     connection: PeerConnection,
     /// The federation root obtained from the trusted handshake with the remote silo.
@@ -104,7 +104,10 @@ impl SiloClient {
     /// # Errors
     ///
     /// Returns [`SdkError::Wire`] if the connection cannot be established.
-    pub async fn connect(addr: SocketAddr, wallet: Arc<AgentWallet>) -> Result<Self, SdkError> {
+    pub async fn connect(
+        addr: SocketAddr,
+        wallet: Arc<AgentCipherclerk>,
+    ) -> Result<Self, SdkError> {
         let conn = PeerConnection::connect(&addr.to_string())
             .await
             .map_err(|e| SdkError::Wire(format!("connect failed: {e}")))?;
@@ -132,7 +135,7 @@ impl SiloClient {
     ///   will fail with [`SdkError::FederationRootMismatch`] if the remote root differs.
     pub async fn connect_pinned(
         addr: SocketAddr,
-        wallet: Arc<AgentWallet>,
+        wallet: Arc<AgentCipherclerk>,
         expected_root: [u8; 32],
     ) -> Result<Self, SdkError> {
         let conn = PeerConnection::connect(&addr.to_string())
@@ -151,7 +154,7 @@ impl SiloClient {
     /// Connect with a timeout.
     pub async fn connect_timeout(
         addr: SocketAddr,
-        wallet: Arc<AgentWallet>,
+        wallet: Arc<AgentCipherclerk>,
         timeout: Duration,
     ) -> Result<Self, SdkError> {
         let conn = PeerConnection::connect_timeout(&addr.to_string(), timeout)

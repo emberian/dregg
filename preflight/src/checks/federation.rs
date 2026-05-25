@@ -17,7 +17,68 @@ pub fn run() -> Vec<CheckResult> {
         run_check("roots", check_root_changes),
         run_check("nullifiers", check_nullifier_double_spend),
         run_check("note_tree", check_note_tree_updates),
+        run_check("bls_threshold_aggregation", check_bls_threshold_aggregation),
+        run_check(
+            "bls_below_threshold_rejects",
+            check_bls_below_threshold_rejects,
+        ),
+        run_check("bls_wrong_message_rejects", check_bls_wrong_message_rejects),
     ]
+}
+
+fn check_bls_threshold_aggregation() -> Result<(), String> {
+    use pyana_federation::threshold::generate_test_committee;
+    let (committee, members) =
+        generate_test_committee(4, 3).map_err(|e| format!("committee creation failed: {e:?}"))?;
+    let msg = b"preflight-bls-happy-path";
+    let shares: Vec<_> = members
+        .iter()
+        .take(3)
+        .map(|m| (m.index, committee.sign_share(m, msg)))
+        .collect();
+    let qc = committee
+        .aggregate(&shares, msg)
+        .map_err(|e| format!("aggregate failed: {e:?}"))?;
+    committee
+        .verify(&qc, msg)
+        .map_err(|e| format!("verify failed: {e:?}"))?;
+    Ok(())
+}
+
+fn check_bls_below_threshold_rejects() -> Result<(), String> {
+    use pyana_federation::threshold::generate_test_committee;
+    let (committee, members) =
+        generate_test_committee(4, 3).map_err(|e| format!("committee creation failed: {e:?}"))?;
+    let msg = b"preflight-bls-below-threshold";
+    let shares: Vec<_> = members
+        .iter()
+        .take(2) // below threshold
+        .map(|m| (m.index, committee.sign_share(m, msg)))
+        .collect();
+    match committee.aggregate(&shares, msg) {
+        Err(_) => Ok(()),
+        Ok(_) => Err("below-threshold aggregate MUST fail".into()),
+    }
+}
+
+fn check_bls_wrong_message_rejects() -> Result<(), String> {
+    use pyana_federation::threshold::generate_test_committee;
+    let (committee, members) =
+        generate_test_committee(4, 3).map_err(|e| format!("committee creation failed: {e:?}"))?;
+    let msg = b"preflight-bls-msg";
+    let wrong = b"preflight-bls-other";
+    let shares: Vec<_> = members
+        .iter()
+        .take(3)
+        .map(|m| (m.index, committee.sign_share(m, msg)))
+        .collect();
+    let qc = committee
+        .aggregate(&shares, msg)
+        .map_err(|e| format!("aggregate: {e:?}"))?;
+    match committee.verify(&qc, wrong) {
+        Err(_) => Ok(()),
+        Ok(_) => Err("QC MUST NOT verify against the wrong message".into()),
+    }
 }
 
 fn check_block_advancement() -> Result<(), String> {

@@ -22,7 +22,7 @@
 //! withhold + threshold near-miss tests are exercisable today against
 //! `pyana_federation::threshold::FederationCommittee`.
 
-use pyana_federation::threshold::{ThresholdError, generate_test_committee};
+use pyana_federation::threshold::generate_test_committee;
 
 // ===========================================================================
 // BLS share withhold: t-1 of n must fail aggregation
@@ -43,7 +43,7 @@ fn bls_t_minus_one_of_n_aggregation_rejects() {
     let shares: Vec<_> = members
         .iter()
         .take((threshold - 1) as usize)
-        .map(|m| committee.sign_share(m, message))
+        .map(|m| (m.index, committee.sign_share(m, message)))
         .collect();
 
     let result = committee.aggregate(&shares, message);
@@ -64,7 +64,7 @@ fn bls_t_minus_one_of_n_aggregation_rejects_medium_committee() {
     let shares: Vec<_> = members
         .iter()
         .take((threshold - 1) as usize)
-        .map(|m| committee.sign_share(m, message))
+        .map(|m| (m.index, committee.sign_share(m, message)))
         .collect();
 
     let result = committee.aggregate(&shares, message);
@@ -95,7 +95,11 @@ fn bls_threshold_met_but_one_share_signed_over_wrong_message_rejects() {
     let s1 = committee.sign_share(&members[1], canonical_message);
     let s2_bad = committee.sign_share(&members[2], attacker_message);
 
-    let shares = vec![s0, s1, s2_bad];
+    let shares = vec![
+        (members[0].index, s0),
+        (members[1].index, s1),
+        (members[2].index, s2_bad),
+    ];
     let qc_result = committee.aggregate(&shares, canonical_message);
 
     // Either aggregation fails outright, OR aggregation succeeds but
@@ -146,7 +150,7 @@ fn bls_aggregate_does_not_verify_against_different_message() {
     let shares: Vec<_> = members
         .iter()
         .take(threshold as usize)
-        .map(|m| committee.sign_share(m, msg))
+        .map(|m| (m.index, committee.sign_share(m, msg)))
         .collect();
     let qc = committee.aggregate(&shares, msg).expect("aggregate ok");
 

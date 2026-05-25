@@ -111,10 +111,7 @@ impl core::fmt::Display for CustomEffectError {
                 f,
                 "canonical bytes do not hash to claimed vk_hash: \
                  claimed {:02x}{:02x}..., computed {:02x}{:02x}...",
-                claimed_vk_hash[0],
-                claimed_vk_hash[1],
-                computed_vk_hash[0],
-                computed_vk_hash[1],
+                claimed_vk_hash[0], claimed_vk_hash[1], computed_vk_hash[0], computed_vk_hash[1],
             ),
             Self::ProofMissing { vk_hash } => write!(
                 f,
@@ -149,11 +146,7 @@ pub trait CustomEffectVerifier: Send + Sync {
     ///
     /// Returns `Ok(())` on accept; `CustomEffectError::Rejected` on
     /// algebraic reject.
-    fn verify(
-        &self,
-        public_inputs: &[u8],
-        proof_bytes: &[u8],
-    ) -> Result<(), CustomEffectError>;
+    fn verify(&self, public_inputs: &[u8], proof_bytes: &[u8]) -> Result<(), CustomEffectError>;
 }
 
 /// The registry resolving `Effect::Custom` vk_hashes to their
@@ -233,10 +226,7 @@ impl CustomEffectRegistry {
     /// **Soundness note:** without canonical bytes, validators cannot
     /// re-execute. Use this only when canonical bytes live in a
     /// parallel registry that's queryable on dispute.
-    pub fn register_without_bytes(
-        &mut self,
-        verifier: Arc<dyn CustomEffectVerifier>,
-    ) -> [u8; 32] {
+    pub fn register_without_bytes(&mut self, verifier: Arc<dyn CustomEffectVerifier>) -> [u8; 32] {
         let vk_hash = verifier.vk_hash();
         self.entries.insert(
             vk_hash,
@@ -292,9 +282,9 @@ impl CustomEffectRegistry {
         if proof_bytes.is_empty() {
             return Err(CustomEffectError::ProofMissing { vk_hash: *vk_hash });
         }
-        let verifier = self.get(vk_hash).ok_or(CustomEffectError::VkHashNotRegistered {
-            vk_hash: *vk_hash,
-        })?;
+        let verifier = self
+            .get(vk_hash)
+            .ok_or(CustomEffectError::VkHashNotRegistered { vk_hash: *vk_hash })?;
         verifier.verify(public_inputs, proof_bytes)
     }
 }
@@ -332,11 +322,7 @@ impl CustomEffectVerifier for StubCustomEffectVerifier {
         self.vk_hash
     }
 
-    fn verify(
-        &self,
-        _public_inputs: &[u8],
-        proof_bytes: &[u8],
-    ) -> Result<(), CustomEffectError> {
+    fn verify(&self, _public_inputs: &[u8], proof_bytes: &[u8]) -> Result<(), CustomEffectError> {
         if proof_bytes.is_empty() {
             return Err(CustomEffectError::Rejected {
                 vk_hash: self.vk_hash,
@@ -375,10 +361,7 @@ mod tests {
     fn unknown_vk_hash_yields_not_registered() {
         let reg = CustomEffectRegistry::empty();
         let err = reg.verify(&[7u8; 32], b"pi", b"proof").unwrap_err();
-        assert!(matches!(
-            err,
-            CustomEffectError::VkHashNotRegistered { .. }
-        ));
+        assert!(matches!(err, CustomEffectError::VkHashNotRegistered { .. }));
     }
 
     #[test]
@@ -442,11 +425,7 @@ mod tests {
             fn vk_hash(&self) -> [u8; 32] {
                 self.vk
             }
-            fn verify(
-                &self,
-                _pi: &[u8],
-                proof_bytes: &[u8],
-            ) -> Result<(), CustomEffectError> {
+            fn verify(&self, _pi: &[u8], proof_bytes: &[u8]) -> Result<(), CustomEffectError> {
                 if proof_bytes.len() < 4 {
                     return Err(CustomEffectError::Rejected {
                         vk_hash: self.vk,
@@ -454,9 +433,12 @@ mod tests {
                         reason: "proof bytes shorter than 4-byte header".into(),
                     });
                 }
-                let claimed_len =
-                    u32::from_le_bytes([proof_bytes[0], proof_bytes[1], proof_bytes[2], proof_bytes[3]])
-                        as usize;
+                let claimed_len = u32::from_le_bytes([
+                    proof_bytes[0],
+                    proof_bytes[1],
+                    proof_bytes[2],
+                    proof_bytes[3],
+                ]) as usize;
                 if claimed_len + 4 != proof_bytes.len() {
                     return Err(CustomEffectError::Rejected {
                         vk_hash: self.vk,

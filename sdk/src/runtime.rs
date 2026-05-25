@@ -18,8 +18,8 @@ use pyana_turn::{
 };
 use pyana_types::PublicKey;
 
+use crate::cipherclerk::{AgentCipherclerk, HeldToken};
 use crate::error::SdkError;
-use crate::wallet::{AgentWallet, HeldToken};
 
 /// The agent runtime: orchestrates wallet, ledger, and execution.
 ///
@@ -36,11 +36,11 @@ use crate::wallet::{AgentWallet, HeldToken};
 /// # Example
 ///
 /// ```no_run
-/// use pyana_sdk::{AgentWallet, AgentRuntime, Effect};
+/// use pyana_sdk::{AgentCipherclerk, AgentRuntime, Effect};
 /// use pyana_types::CellId;
 /// use std::sync::{Arc, RwLock};
 ///
-/// let wallet = Arc::new(RwLock::new(AgentWallet::new()));
+/// let wallet = Arc::new(RwLock::new(AgentCipherclerk::new()));
 /// let runtime = AgentRuntime::new(wallet, "my-domain");
 ///
 /// // Execute effects against the local ledger
@@ -50,7 +50,7 @@ use crate::wallet::{AgentWallet, HeldToken};
 /// ```
 pub struct AgentRuntime {
     /// The agent's wallet (read-write lock for receipt chain mutation).
-    wallet: Arc<RwLock<AgentWallet>>,
+    wallet: Arc<RwLock<AgentCipherclerk>>,
     /// The agent's cell ID in the local domain.
     cell_id: CellId,
     /// The domain this runtime operates in.
@@ -78,12 +78,12 @@ impl AgentRuntime {
     /// # Example
     ///
     /// ```no_run
-    /// use pyana_sdk::{AgentWallet, AgentRuntime};
+    /// use pyana_sdk::{AgentCipherclerk, AgentRuntime};
     ///
-    /// let wallet = AgentWallet::new();
+    /// let wallet = AgentCipherclerk::new();
     /// let runtime = AgentRuntime::new_simple(wallet, "my-domain");
     /// ```
-    pub fn new_simple(wallet: AgentWallet, domain: &str) -> Self {
+    pub fn new_simple(wallet: AgentCipherclerk, domain: &str) -> Self {
         Self::new(Arc::new(RwLock::new(wallet)), domain)
     }
 
@@ -96,7 +96,7 @@ impl AgentRuntime {
     ///
     /// * `wallet` - Shared read-write reference to the agent's wallet.
     /// * `domain` - The domain this agent operates in (e.g., "compute", "storage").
-    pub fn new(wallet: Arc<RwLock<AgentWallet>>, domain: &str) -> Self {
+    pub fn new(wallet: Arc<RwLock<AgentCipherclerk>>, domain: &str) -> Self {
         let cell_id;
         let public_key;
         {
@@ -137,7 +137,7 @@ impl AgentRuntime {
     /// Use this when the ledger is shared with other components or has been
     /// restored from persistent storage.
     pub fn with_ledger(
-        wallet: Arc<RwLock<AgentWallet>>,
+        wallet: Arc<RwLock<AgentCipherclerk>>,
         domain: &str,
         ledger: Arc<Mutex<Ledger>>,
     ) -> Self {
@@ -182,7 +182,7 @@ impl AgentRuntime {
     /// Callers should use `.read().unwrap_or_else(|e| e.into_inner())` for read
     /// access or `.write().unwrap_or_else(|e| e.into_inner())` for mutation
     /// (e.g., enabling IVC, minting tokens).
-    pub fn wallet(&self) -> &Arc<RwLock<AgentWallet>> {
+    pub fn wallet(&self) -> &Arc<RwLock<AgentCipherclerk>> {
         &self.wallet
     }
 
@@ -360,7 +360,7 @@ impl AgentRuntime {
         token: &HeldToken,
     ) -> Result<SubAgent, SdkError> {
         // Create a new wallet for the sub-agent.
-        let mut sub_wallet = AgentWallet::new();
+        let mut sub_wallet = AgentCipherclerk::new();
         let sub_pk = sub_wallet.public_key();
 
         // Attenuate the token for the sub-agent.
@@ -467,7 +467,7 @@ impl std::fmt::Debug for AgentRuntime {
 /// Each sub-agent maintains its own receipt chain binding: every turn it executes
 /// includes `previous_receipt_hash` linking to its last committed receipt. This
 /// prevents reordering and replay of sub-agent turns.
-// AUDIT[P2]: `SubAgent` exposes `pub wallet: Arc<AgentWallet>` and `pub token:
+// AUDIT[P2]: `SubAgent` exposes `pub wallet: Arc<AgentCipherclerk>` and `pub token:
 // HeldToken`. The `HeldToken` itself is now sealed-value (P0 fix), so its
 // authority-affecting fields cannot be tampered with. But `pub federation_id:
 // [u8; 32]` IS writable by an external caller holding a `&mut SubAgent`. This
@@ -486,7 +486,7 @@ pub struct SubAgent {
     // post-construct. Access from outside the crate is via the read-only
     // accessor methods below.
     /// The sub-agent's wallet.
-    pub(crate) wallet: Arc<AgentWallet>,
+    pub(crate) wallet: Arc<AgentCipherclerk>,
     /// The sub-agent's cell ID.
     pub(crate) cell_id: CellId,
     /// The attenuated token this sub-agent holds.
@@ -519,7 +519,7 @@ impl SubAgent {
     }
 
     /// Read-only access to the sub-agent's wallet.
-    pub fn wallet(&self) -> &Arc<AgentWallet> {
+    pub fn wallet(&self) -> &Arc<AgentCipherclerk> {
         &self.wallet
     }
 
@@ -550,7 +550,7 @@ impl SubAgent {
 
     /// Check whether the sub-agent's token authorizes a request.
     ///
-    /// P1-4: previously delegated to [`AgentWallet::verify_token`], which
+    /// P1-4: previously delegated to [`AgentCipherclerk::verify_token`], which
     /// requires the token's `root_key` to be set (HMAC verification). Sub-agent
     /// tokens are delegated and carry a zeroed `root_key`, so `verify_token`
     /// always returned `false` — the method had no useful semantics.

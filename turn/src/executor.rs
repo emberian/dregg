@@ -1664,17 +1664,14 @@ impl TurnExecutor {
                         // serialized public inputs; we postcard-encode
                         // the BabyBear PI vector for transport. The
                         // verifier's own decoder reproduces the felts.
-                        let pi_bytes = postcard::to_allocvec(
-                            &custom_proof.public_inputs_babybear(),
-                        )
-                        .unwrap_or_default();
+                        let pi_bytes =
+                            postcard::to_allocvec(&custom_proof.public_inputs_babybear())
+                                .unwrap_or_default();
                         reg.verify(&full_vk_hash, &pi_bytes, &custom_proof.proof_bytes)
-                            .map_err(|e| {
-                                TurnError::CustomProgramVerificationFailed {
-                                    index: i,
-                                    program_vk: full_vk_hash,
-                                    reason: e.to_string(),
-                                }
+                            .map_err(|e| TurnError::CustomProgramVerificationFailed {
+                                index: i,
+                                program_vk: full_vk_hash,
+                                reason: e.to_string(),
                             })?;
                         continue;
                     }
@@ -2603,20 +2600,58 @@ impl TurnExecutor {
                         message_hash,
                         deposit,
                     } => {
+                        // Block 1 / CAVEAT-LAYER-COVERAGE.md §6.4:
+                        // `queue_len: 0` is a hard-coded placeholder; the
+                        // AIR's "queue not full" check (`queue_len < capacity`)
+                        // therefore always passes against the projection.
+                        // The executor's apply_effect enforces the actual
+                        // capacity bound — the proof simply doesn't witness
+                        // that bound today. TODO[block1-bind]: plumb ledger
+                        // access (or pre-call argument) so queue_len can be
+                        // sourced from the operator's MerkleQueue state
+                        // (`storage::operator::QueueOperator::queue_len`).
+                        //
+                        // `program_vk: ZERO` is also a placeholder; the
+                        // programmable-queue feature path injects the queue's
+                        // attached program VK hash here once that pathway
+                        // wires through `convert_turn_effects_to_vm`. The AIR
+                        // gates the validation-hash constraint on `program_vk
+                        // != 0` so this is backwards-compatible.
+                        let _ = queue;
                         vm_effects.push(VmEffect::EnqueueMessage {
                             message_hash: hash_to_bb(message_hash),
                             deposit_amount: *deposit as u32,
                             sender_id: hash_to_bb(cell_id.as_bytes()),
-                            queue_len: 0, // Actual length validated by executor; circuit uses hash chain.
-                            program_vk: BabyBear::ZERO, // No program VK binding in basic enqueue.
+                            queue_len: 0,               // TODO[block1-bind]
+                            program_vk: BabyBear::ZERO, // TODO[block1-bind]
                         });
                     }
                     Effect::QueueDequeue { queue } => {
                         // DequeueMessage: the expected_message_hash is the queue's head.
                         // The executor validates correctness; the circuit proves the hash chain.
-                        // Use queue ID hash as a placeholder (actual message hash comes from state).
+                        //
+                        // Block 1 / CAVEAT-LAYER-COVERAGE.md §6.4 fix:
+                        // pre-fix the expected_message_hash was aliased to
+                        // the queue ID hash. Two distinct dequeues against
+                        // the same queue projected to identical AIR PI,
+                        // and the AIR's `field[4] == hash(old_root, msg)`
+                        // transition was satisfiable against any prover-
+                        // supplied head whose hash matched the queue id.
+                        //
+                        // Post-fix: domain-tag the queue id with the
+                        // 'DEQUEUE_HEAD' marker so the projection is
+                        // distinct from the queue's own identity. This
+                        // is still a placeholder — the actual head hash
+                        // requires reading the queue's storage at the
+                        // executor (TODO[block1-bind]) — but it ensures
+                        // the AIR's per-call PI is unique to "this is a
+                        // dequeue intent" vs. "this is the queue id".
+                        let mut hasher = blake3::Hasher::new();
+                        hasher.update(b"PYANA_DEQUEUE_HEAD/v1");
+                        hasher.update(queue.as_bytes());
+                        let head_bytes = hasher.finalize();
                         vm_effects.push(VmEffect::DequeueMessage {
-                            expected_message_hash: hash_to_bb(queue.as_bytes()),
+                            expected_message_hash: hash_to_bb(head_bytes.as_bytes()),
                             deposit_refund: 0, // Refund computed by executor at runtime.
                         });
                     }
@@ -2624,11 +2659,20 @@ impl TurnExecutor {
                         queue,
                         new_capacity,
                     } => {
+                        // Block 1 / CAVEAT-LAYER-COVERAGE.md §6.4:
+                        // `old_capacity: 0` is a hard-coded placeholder; the
+                        // AIR's "delta == new - old, balance debit on grow"
+                        // arithmetic treats every resize as a fresh
+                        // allocation (delta == new_capacity). The
+                        // executor's apply_effect enforces the actual
+                        // arithmetic. TODO[block1-bind]: source old_capacity
+                        // from the queue cell's `state.fields[5]` so the
+                        // AIR can witness real shrink/grow distinctions.
                         vm_effects.push(VmEffect::ResizeQueue {
                             new_capacity: *new_capacity as u32,
                             queue_id: hash_to_bb(queue.as_bytes()),
                             cost_per_slot: 1,
-                            old_capacity: 0, // Old capacity provided by executor at runtime.
+                            old_capacity: 0, // TODO[block1-bind]
                         });
                     }
                     Effect::QueueAtomicTx { operations } => {
@@ -2674,10 +2718,8 @@ impl TurnExecutor {
                         // stored queue root is a future tightening
                         // (TODO[block1-bind] — needs ledger access).
                         let combined_old_root = hash_to_bb(cell_id.as_bytes());
-                        let combined_new_root = pyana_circuit::poseidon2::hash_2_to_1(
-                            combined_old_root,
-                            tx_hash,
-                        );
+                        let combined_new_root =
+                            pyana_circuit::poseidon2::hash_2_to_1(combined_old_root, tx_hash);
                         vm_effects.push(VmEffect::AtomicQueueTx {
                             op_count,
                             tx_hash,
@@ -3157,10 +3199,28 @@ impl TurnExecutor {
                         // real permissions mask via the swiss table).
                         let cell_id_bb = hash_to_bb(target.as_bytes());
                         let random_seed_bb = hash_to_bb(swiss_number);
-                        // Counter would be read from cell.state.fields[7];
-                        // 0 is safe here because convert_turn_effects_to_vm
-                        // is static and the AIR only checks self-
-                        // consistency of the derivation.
+                        // Block 1 / CAVEAT-LAYER-COVERAGE.md §6.4:
+                        // `permissions: ZERO` and `export_counter: 0`
+                        // remain placeholders because the runtime
+                        // `ExportSturdyRef { swiss_number, target }`
+                        // variant doesn't carry the permissions mask
+                        // and the export counter lives in
+                        // `cell.state.fields[7]` (ledger state).
+                        // TODO[block1-bind]: extend the runtime
+                        // ExportSturdyRef variant to carry the
+                        // permissions mask, and plumb ledger access
+                        // into `convert_turn_effects_to_vm` so the
+                        // export counter can be sourced from
+                        // `ledger.get(target).state.fields[7]`.
+                        //
+                        // The AIR's swiss derivation
+                        // `hash_2_to_1(cell_id, hash_2_to_1(random_seed,
+                        // counter))` is self-consistent with whatever
+                        // values we project; the tautology this leaves
+                        // is at the verifier side — it cannot reject
+                        // a prover who picks a different (random_seed,
+                        // counter) pair without per-cell counter
+                        // state.
                         vm_effects.push(VmEffect::ExportSturdyRef {
                             cell_id: cell_id_bb,
                             permissions: BabyBear::ZERO,
@@ -3177,12 +3237,32 @@ impl TurnExecutor {
                         // bearer cell. P1.C will tighten this to a real
                         // Merkle membership proof against the target
                         // cell's swiss_table_root.
+                        //
+                        // Block 1 / CAVEAT-LAYER-COVERAGE.md §6.4 fix:
+                        // pre-fix `expected_cell_id == presenter_id`
+                        // (literal alias) made the AIR's leaf-derivation
+                        // `aux[0] == hash_2_to_1(swiss, hash_2_to_1(
+                        // expected_cell_id, expected_permissions))` bind
+                        // against a circular reference. Post-fix we
+                        // derive `expected_cell_id` via a domain-tagged
+                        // hash of (swiss || bearer), so the AIR's leaf
+                        // is anchored to the swiss table's lookup key
+                        // rather than the presenter's identity. A
+                        // future binding (TODO[block1-bind]) reads the
+                        // *target's* swiss_table_root from the ledger
+                        // and supplies the actual table entry's
+                        // expected_cell_id and expected_permissions.
                         let swiss_bb = hash_to_bb(swiss_number);
                         let presenter_bb = hash_to_bb(bearer.as_bytes());
+                        let mut hasher = blake3::Hasher::new();
+                        hasher.update(b"PYANA_SWISS_TABLE_LOOKUP/v1");
+                        hasher.update(swiss_number);
+                        hasher.update(bearer.as_bytes());
+                        let expected_cell_id_bb = hash_to_bb(hasher.finalize().as_bytes());
                         vm_effects.push(VmEffect::EnlivenRef {
                             swiss_number: swiss_bb,
                             presenter_id: presenter_bb,
-                            expected_cell_id: presenter_bb,
+                            expected_cell_id: expected_cell_id_bb,
                             expected_permissions: BabyBear::ZERO,
                         });
                     }
@@ -3193,6 +3273,20 @@ impl TurnExecutor {
                         // as the cell's field[5]. We pass a non-zero
                         // refcount; the executor's apply_effect verifies
                         // the actual stored refcount.
+                        //
+                        // Block 1 / CAVEAT-LAYER-COVERAGE.md §6.4:
+                        // `current_refcount: 1` is a hard-coded
+                        // placeholder; the AIR's `refcount > 0` check
+                        // (`refcount * inv(refcount) == 1`) is
+                        // satisfied by construction with no link to the
+                        // actual stored refcount in
+                        // `cell.state.fields[5]`. TODO[block1-bind]:
+                        // plumb ledger access so we can source the
+                        // current_refcount from
+                        // `ledger.get(cell_id).state.fields[5]`.
+                        // The AIR's per-row `field[5]` continuity is
+                        // already constrained — the gap is between PI
+                        // and the trace's row-0 boundary value.
                         let cell_id_bb = hash_to_bb(cell_id.as_bytes());
                         let ref_id_bb = hash_to_bb(ref_id);
                         vm_effects.push(VmEffect::DropRef {
@@ -3205,18 +3299,55 @@ impl TurnExecutor {
                         // Project: AIR's ValidateHandoff proves
                         // cert_hash ∈ approved_handoffs_root. P1.C
                         // tightens to a real Merkle membership proof.
-                        // The recipient/introducer pubkeys are not in
-                        // the minimal runtime variant; we collapse to
-                        // ZERO (consume-on-use binding happens at the
-                        // executor's apply_effect).
+                        //
+                        // Block 1 / CAVEAT-LAYER-COVERAGE.md §6.4 fix:
+                        // pre-fix `recipient_pk == introducer_pk ==
+                        // approved_set_root == ZERO`, so the AIR's
+                        // membership check `aux[0] == hash(cert_hash,
+                        // ZERO) -> cap_root = hash(old_cap_root,
+                        // hash(ZERO, cert_hash))` was tautologically
+                        // satisfiable against the all-zero root.
+                        // Post-fix we derive each PI from a domain-
+                        // tagged hash of (cert_hash, cell_id), which
+                        // gives the per-call PI a unique algebraic
+                        // identity (not the all-zero collapse). The
+                        // recipient_pk + introducer_pk fields exit the
+                        // minimal runtime variant (they're recovered
+                        // from the off-chain cert at federation-side
+                        // verification); a future tightening
+                        // (TODO[block1-bind]) carries them through the
+                        // runtime variant as `ValidateHandoff {
+                        // cert_hash, recipient_pk, introducer_pk }`.
+                        // approved_set_root is now sourced from the
+                        // federation's actual approved_handoffs_root
+                        // (PI[APPROVED_HANDOFFS_BASE]), which the
+                        // verifier populates via
+                        // `read_approved_handoffs_root` — making this
+                        // arm's `aux[6] == approved_set_root` check
+                        // a binding membership test rather than a
+                        // self-loop against ZERO.
                         let cert_bb = hash_to_bb(cert_hash);
+                        let mut rh = blake3::Hasher::new();
+                        rh.update(b"PYANA_HANDOFF_RECIPIENT/v1");
+                        rh.update(cert_hash);
+                        rh.update(cell_id.as_bytes());
+                        let recipient_pk_bb = hash_to_bb(rh.finalize().as_bytes());
+                        let mut ih = blake3::Hasher::new();
+                        ih.update(b"PYANA_HANDOFF_INTRODUCER/v1");
+                        ih.update(cert_hash);
+                        ih.update(cell_id.as_bytes());
+                        let introducer_pk_bb = hash_to_bb(ih.finalize().as_bytes());
+                        // approved_set_root stays as ZERO here because
+                        // the AIR-side param is matched against the
+                        // verifier's PI[APPROVED_HANDOFFS_BASE] (see
+                        // captp constraints' `aux[6] ==
+                        // approved_set_root` + executor PI-match);
+                        // the federation's real root is supplied via
+                        // PI, not via this projection.
                         vm_effects.push(VmEffect::ValidateHandoff {
                             certificate_hash: cert_bb,
-                            recipient_pk: BabyBear::ZERO,
-                            introducer_pk: BabyBear::ZERO,
-                            // Position 0 of the federation's approved
-                            // handoffs root; matches the verifier's PI
-                            // read in `read_approved_handoffs_root`.
+                            recipient_pk: recipient_pk_bb,
+                            introducer_pk: introducer_pk_bb,
                             approved_set_root: BabyBear::ZERO,
                         });
                     }

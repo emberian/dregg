@@ -9,10 +9,10 @@
 //! # Example
 //!
 //! ```no_run
-//! use pyana_sdk::AgentWallet;
+//! use pyana_sdk::AgentCipherclerk;
 //! use pyana_sdk::captp_client::{CapTpConfig, EventualRef};
 //!
-//! let wallet = AgentWallet::new();
+//! let wallet = AgentCipherclerk::new();
 //! // ... share a cell as a sturdy reference:
 //! // let uri = wallet.share_capability(cell_id);
 //! ```
@@ -327,7 +327,7 @@ impl std::fmt::Debug for LiveRef {
 
 /// Client-side CapTP state: swiss table, GC, pipeline, and sessions.
 ///
-/// This is held by the `AgentWallet` and provides the high-level CapTP API.
+/// This is held by the `AgentCipherclerk` and provides the high-level CapTP API.
 /// It manages:
 /// - A swiss table for exporting cells as sturdy references
 /// - Import GC tracking for live references we hold

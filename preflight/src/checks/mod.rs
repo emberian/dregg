@@ -29,3 +29,8 @@ pub mod wire;
 // γ.2 canonical id derivations behave as documented. If these fail,
 // none of the heavier substrate tests are worth running.
 pub mod state_constraints;
+
+// Preflight: bridge phase-log + portable-note sanity checks. Smoke
+// tests for `pyana_cell::note_bridge` invariants. Separate from
+// `bridges.rs` (Mina bridge state machine).
+pub mod note_bridge;

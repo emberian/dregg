@@ -56,7 +56,7 @@ impl VerifyOutcome {
 /// Verify a serialized authorization proof against a federation root.
 ///
 /// This is the verifier-side entry point: given proof bytes (produced by
-/// [`AgentWallet::prove_authorization`](crate::AgentWallet::prove_authorization))
+/// [`AgentCipherclerk::prove_authorization`](crate::AgentCipherclerk::prove_authorization))
 /// and the federation root of trust, check whether the proof is valid.
 ///
 /// The proof bytes should be a serialized `BridgePresentationProof` (via postcard)
