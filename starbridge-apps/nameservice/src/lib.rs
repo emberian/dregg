@@ -32,7 +32,7 @@
 //!    `STARBRIDGE-APPS-PLAN.md` §3.1 "Real version".)
 //!
 //! 3. [`build_register_action`] — turn-builder helper that takes an
-//!    [`AppWallet`] and produces a real signed
+//!    [`AppCipherclerk`] and produces a real signed
 //!    [`Action`] recording a name registration via
 //!    `Effect::SetField` + `Effect::EmitEvent`. No new Effect variant
 //!    is introduced.
@@ -79,7 +79,7 @@
 //! CLIs use.
 
 use pyana_app_framework::{
-    Action, AppWallet, AuthRequired, CapTarget, CapTemplate, CellId, CellMode, CellProgram,
+    Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellId, CellMode, CellProgram,
     ChildVkStrategy, Effect, Event, FactoryDescriptor, FieldConstraint, FieldElement,
     InspectorDescriptor, StarbridgeAppContext, StateConstraint, canonical_program_vk, symbol,
 };
@@ -772,6 +772,21 @@ mod tests {
             name_child_program_vk(),
             old_placeholder,
             "canonical VK must differ from the pre-recipe placeholder"
+        );
+    }
+
+    #[test]
+    fn name_child_program_vk_is_v2_layered_hash() {
+        // VK v2 (VK-AS-RE-EXECUTION-RECIPE.md §v2): the app-framework
+        // `canonical_program_vk` wrapper commits to four components,
+        // not just program bytes. The resulting hash must be distinct
+        // from the v1 program-bytes-only hash.
+        let program = name_cell_program();
+        let v2 = name_child_program_vk();
+        let v1 = pyana_app_framework::canonical_program_bytes_hash(&program);
+        assert_ne!(
+            v2, v1,
+            "v2 layered hash must differ from v1 program-bytes-only hash"
         );
     }
 

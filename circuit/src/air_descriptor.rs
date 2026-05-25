@@ -270,6 +270,25 @@ mod tests {
     }
 
     #[test]
+    fn in_tree_air_descriptors_have_distinct_fingerprints() {
+        // The three hand-written AIRs in the tree must produce distinct
+        // fingerprints. If they collided, a vk_hash bound to one AIR
+        // would mistakenly accept proofs under another.
+        let effect_vm = fingerprint(&crate::effect_vm::AIR_DESCRIPTOR);
+        #[allow(deprecated)]
+        let note_spending = fingerprint(&crate::note_spending_air::AIR_DESCRIPTOR);
+        let bridge_action = fingerprint(&crate::bridge_action_air::AIR_DESCRIPTOR);
+        assert_ne!(effect_vm, note_spending);
+        assert_ne!(note_spending, bridge_action);
+        assert_ne!(effect_vm, bridge_action);
+        // Each fingerprint is also non-zero (BLAKE3 of any input is
+        // non-zero w.h.p.).
+        assert_ne!(effect_vm, [0u8; 32]);
+        assert_ne!(note_spending, [0u8; 32]);
+        assert_ne!(bridge_action, [0u8; 32]);
+    }
+
+    #[test]
     fn pi_layout_length_prefix_disambiguates_concatenation() {
         // Two descriptors whose slot lists concatenate to the same byte
         // string should still fingerprint distinctly, because the

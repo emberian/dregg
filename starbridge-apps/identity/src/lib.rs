@@ -737,6 +737,19 @@ mod tests {
     }
 
     #[test]
+    fn issuer_child_program_vk_is_v2_layered_hash() {
+        // VK v2 (VK-AS-RE-EXECUTION-RECIPE.md §v2): the layered hash
+        // must differ from the v1 program-bytes-only hash.
+        let program = issuer_program();
+        let v2 = issuer_child_program_vk();
+        let v1 = pyana_app_framework::canonical_program_bytes_hash(&program);
+        assert_ne!(
+            v2, v1,
+            "v2 layered hash must differ from v1 program-bytes-only hash"
+        );
+    }
+
+    #[test]
     fn factory_descriptor_validates_against_canonical_program() {
         let d = issuer_factory_descriptor();
         let program = issuer_program();

@@ -823,6 +823,19 @@ mod tests {
     }
 
     #[test]
+    fn subscription_child_program_vk_is_v2_layered_hash() {
+        // VK v2 (VK-AS-RE-EXECUTION-RECIPE.md §v2): the layered hash
+        // must differ from the v1 program-bytes-only hash.
+        let program = subscription_program();
+        let v2 = subscription_child_program_vk();
+        let v1 = pyana_app_framework::canonical_program_bytes_hash(&program);
+        assert_ne!(
+            v2, v1,
+            "v2 layered hash must differ from v1 program-bytes-only hash"
+        );
+    }
+
+    #[test]
     fn factory_descriptor_validates_against_canonical_program() {
         // VK v2: the app-framework wrapper validates against the
         // *layered* canonical hash (program bytes + Effect VM AIR +
