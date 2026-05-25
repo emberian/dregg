@@ -765,7 +765,9 @@ mod tests {
     fn name_child_program_vk_is_not_placeholder_bytes() {
         // The pre-recipe placeholder was `*b"starbridge-nameservice-childprg"`.
         // The canonical VK MUST differ — otherwise we did not migrate.
-        let old_placeholder: [u8; 32] = *b"starbridge-nameservice-childprg";
+        // Pad the 31-byte historical sentinel with a trailing NUL to fit
+        // the 32-byte VK slot.
+        let old_placeholder: [u8; 32] = *b"starbridge-nameservice-childprg\0";
         assert_ne!(
             name_child_program_vk(),
             old_placeholder,

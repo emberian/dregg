@@ -95,7 +95,7 @@ fn main() {
     auction_state.set_field_visibility(3, FieldVisibility::Committed, 42);
     auction_state.set_field_visibility(4, FieldVisibility::Committed, 43);
 
-    let init_result = auction_program.evaluate(&auction_state, None);
+    let init_result = auction_program.evaluate(&auction_state, None, None);
     assert!(init_result.is_ok());
 
     println!("  Auction cell created with program constraints");
@@ -199,7 +199,7 @@ fn main() {
     auction_state.fields[5] = field_from_u64(1); // State: reveal complete
 
     // Verify program still holds (highest_bid >= minimum_bid, immutables unchanged)
-    let reveal_result = auction_program.evaluate(&auction_state, Some(&old_auction_state));
+    let reveal_result = auction_program.evaluate(&auction_state, Some(&old_auction_state), None);
     assert!(reveal_result.is_ok(), "Reveal should satisfy program");
     println!("  Auction cell updated with winner");
     println!("  Program constraints verified: [PASS]");
@@ -293,14 +293,14 @@ fn main() {
     // Attempt 1: Try to change asset_id (immutable)
     let mut adversary_state = auction_state.clone();
     adversary_state.fields[0] = field_from_u64(0xDEADBEEF);
-    let adversary_result = auction_program.evaluate(&adversary_state, Some(&auction_state));
+    let adversary_result = auction_program.evaluate(&adversary_state, Some(&auction_state), None);
     assert!(adversary_result.is_err());
     println!("  Attack 1: Change asset_id -> REJECTED (Immutable)");
 
     // Attempt 2: Lower minimum_bid retroactively
     let mut adversary_state2 = auction_state.clone();
     adversary_state2.fields[1] = field_from_u64(0);
-    let adversary_result2 = auction_program.evaluate(&adversary_state2, Some(&auction_state));
+    let adversary_result2 = auction_program.evaluate(&adversary_state2, Some(&auction_state), None);
     assert!(adversary_result2.is_err());
     println!("  Attack 2: Lower minimum_bid -> REJECTED (Immutable)");
 
@@ -312,7 +312,7 @@ fn main() {
     // Attempt 4: Set highest_bid below minimum
     let mut adversary_state3 = auction_state.clone();
     adversary_state3.fields[3] = field_from_u64(100); // below minimum of 500
-    let adversary_result3 = auction_program.evaluate(&adversary_state3, Some(&auction_state));
+    let adversary_result3 = auction_program.evaluate(&adversary_state3, Some(&auction_state), None);
     assert!(adversary_result3.is_err());
     println!("  Attack 4: Set highest_bid < minimum -> REJECTED (FieldGte)");
     println!();

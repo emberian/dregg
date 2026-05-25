@@ -76,7 +76,7 @@ fn main() {
     escrow_state.fields[4] = field_from_u64(depositor_id); // Depositor
 
     // Verify initial state satisfies program (initialization)
-    let init_result = escrow_program.evaluate(&escrow_state, None);
+    let init_result = escrow_program.evaluate(&escrow_state, None, None);
     assert!(init_result.is_ok(), "Initial state must satisfy program");
 
     println!("  Program constraints:");
@@ -107,7 +107,7 @@ fn main() {
     new_state.fields[0] = field_from_u64(7000); // deposited = 7000
     new_state.fields[1] = field_from_u64(3000); // withdrawn = 3000
 
-    let rebalance_result = escrow_program.evaluate(&new_state, Some(&old_state));
+    let rebalance_result = escrow_program.evaluate(&new_state, Some(&old_state), None);
     assert!(rebalance_result.is_ok(), "Valid rebalance should pass");
     println!("  Rebalance: deposited=7000, withdrawn=3000 (sum=10000) [PASS]");
 
@@ -116,7 +116,7 @@ fn main() {
     bad_state.fields[0] = field_from_u64(7000);
     bad_state.fields[1] = field_from_u64(5000); // sum = 12000 != 10000!
 
-    let bad_result = escrow_program.evaluate(&bad_state, Some(&old_state));
+    let bad_result = escrow_program.evaluate(&bad_state, Some(&old_state), None);
     assert!(bad_result.is_err(), "Conservation violation should fail");
     println!("  INVALID: deposited=7000, withdrawn=5000 (sum=12000) [REJECTED]");
     if let Err(e) = bad_result {
@@ -136,7 +136,7 @@ fn main() {
     let mut early_state = escrow_state.clone();
     early_state.fields[2] = field_from_u64(1700000000); // Try to set earlier unlock
 
-    let early_result = escrow_program.evaluate(&early_state, Some(&escrow_state));
+    let early_result = escrow_program.evaluate(&early_state, Some(&escrow_state), None);
     assert!(
         early_result.is_err(),
         "Lowering unlock time should fail (FieldGte)"
@@ -156,7 +156,7 @@ fn main() {
     let mut tamper_state = escrow_state.clone();
     tamper_state.fields[3] = field_from_u64(attacker_id); // Try to change beneficiary
 
-    let tamper_result = escrow_program.evaluate(&tamper_state, Some(&escrow_state));
+    let tamper_result = escrow_program.evaluate(&tamper_state, Some(&escrow_state), None);
     assert!(
         tamper_result.is_err(),
         "Changing immutable beneficiary should fail"
@@ -189,7 +189,7 @@ fn main() {
     // Keep unlock_time at or above threshold (proving current_time >= unlock_time)
     withdrawal_state.fields[2] = field_from_u64(unlock_time + 86400); // 1 day after unlock
 
-    let withdrawal_result = escrow_program.evaluate(&withdrawal_state, Some(&escrow_state));
+    let withdrawal_result = escrow_program.evaluate(&withdrawal_state, Some(&escrow_state), None);
     assert!(
         withdrawal_result.is_ok(),
         "Valid withdrawal after unlock should pass"
@@ -262,7 +262,7 @@ fn main() {
     assert_eq!(final_deposited + final_withdrawn, total_escrow_value);
 
     // One final comprehensive check
-    let final_check = escrow_program.evaluate(&escrow_state, Some(&escrow_state));
+    let final_check = escrow_program.evaluate(&escrow_state, Some(&escrow_state), None);
     assert!(
         final_check.is_ok(),
         "Final state must satisfy all program constraints"
