@@ -219,33 +219,92 @@ expansion; coordinated landing).
 
 ## §4 — Closures landed in this lane
 
-See per-commit log. Each closure consists of:
+The closures use a generalized `effect_action_air` AIR
+(`circuit/src/effect_action_air.rs`) parameterized over a per-Effect
+`EffectActionSchema` (`field_count`, `amount_count`, and `kind_name`
+for Fiat-Shamir domain separation). Each closure consists of:
 
-1. A `prove_X_binding` / `verify_X_binding` pair using the generalized
-   `effect_action_air` infrastructure (carries 8 limbs per 32B field,
-   2 limbs per u64).
-2. A `Portable*Binding` wrapper exposed for the executor / bridge to
-   construct and verify.
-3. Adversarial tests: per-parameter tamper rejects.
+1. A `pub const SCHEMA_<EFFECT_NAME>` declaration with the per-effect
+   list of 32-byte fields and u64 amounts.
+2. Honest round-trip test (`prove_effect_action` →
+   `verify_effect_action`).
+3. Per-parameter tamper-reject tests (single byte flip on each field;
+   ±1 on each amount).
+4. Where applicable: positional-binding tests (swap two fields → reject),
+   30-bit-truncation-rejected tests (high-bit amount must not collide
+   with low-30-bit form), cross-kind proof-confusion test (kind A
+   proof must not verify as kind B).
 
-Closures (per commit):
+Closures landed (commit `ce79a735` + `20124ca3`):
 
-- **§4.1** GrantCapability — binds `cap.slot`, `cap.target` (32B),
-  `cap.permissions: AuthRequired`, `cap.allowed_effects: EffectMask`.
-- **§4.2** RevokeCapability — binds `cell_id` (32B) and `slot: u32`.
-- **§4.3** EmitEvent — binds `topic` (32B) and `data_hash` (32B,
-  Poseidon2 of full data).
-- **§4.4** CreateCell — binds `public_key` (32B), `token_id` (32B),
-  `balance` (u64).
-- **§4.5** SetPermissions — binds `cell_id` (32B) and full permissions
-  hash (32B).
-- **§4.6** SetVerificationKey — binds `cell_id` (32B) and vk hash
-  (32B; ZERO for None).
-- **§4.7** Introduce — binds `introducer`, `recipient`, `target` (3 ×
-  32B) and `permissions: AuthRequired` (u32 discriminant + optional
-  vk_hash 32B).
-- **§4.8** CreateSealPair — binds `sealer_holder`, `unsealer_holder`
-  (2 × 32B).
+- **§4.1** `GrantCapability` — binds `cap.target` (32B), permissions
+  hash (32B), allowed_effects hash (32B), `cap.slot` (u64). 4 tamper
+  tests + roundtrip.
+- **§4.2** `RevokeCapability` — binds `cell_id` (32B) and `slot` (u64).
+- **§4.3** `EmitEvent` — binds `topic` (32B), `data_hash` (32B),
+  `data_len` (u64).
+- **§4.4** `CreateCell` — binds `public_key` (32B), `token_id` (32B),
+  `balance` (full u64). Includes regression test that a balance with
+  bit 50 set is NOT verified as its low-30-bit truncation.
+- **§4.5** `SetPermissions` — binds `cell_id` (32B), `permissions_hash`
+  (32B).
+- **§4.6** `SetVerificationKey` — binds `cell_id` (32B), `vk_hash`
+  (32B; ZERO for None). Includes cross-kind confusion test against
+  `SetPermissions` (same shape, different `kind_name`).
+- **§4.7** `Introduce` — binds 3 × `CellId` (introducer, recipient,
+  target) + `permissions_vk_hash` (32B; zero for non-Custom) +
+  `permissions_discriminant` (u64). Includes a swap-recipient/target
+  rejection test.
+- **§4.8** `CreateSealPair` — binds `sealer_holder` (32B),
+  `unsealer_holder` (32B). Includes a swap rejection test.
+- **§4.9** `BridgeFinalize` — binds `nullifier` (32B), `receipt_hash`
+  (32B).
+- **§4.10** `BridgeCancel` — binds `nullifier` (32B).
+- **§4.11** `RevokeDelegation` — binds `child` (32B).
+- **§4.12** `SpawnWithDelegation` — binds `child_pk` (32B),
+  `child_token_id` (32B), `max_staleness` (u64).
+- **§4.13** `ReleaseEscrow` — binds `escrow_id` (32B), `proof_hash`
+  (32B). Includes cross-kind separation test (a release proof must
+  not verify as a refund proof).
+- **§4.14** `RefundEscrow` — binds `escrow_id` (32B).
+- **§4.15** `ExerciseViaCapability` — binds `inner_effects_hash` (32B),
+  `cap_slot` (u64), `inner_effects_len` (u64). Length-binding closes
+  the gap where a different-length inner-effect chain with a colliding
+  hash prefix could project to the same VmEffect.
+- **§4.16** `CreateObligation` — binds `beneficiary` (32B),
+  `condition_hash` (32B), `stake_commitment` (32B), `deadline_height`
+  (u64), `stake_amount` (u64). Includes 30-bit-truncation-rejected
+  test for stake_amount.
+- **§4.17** `CreateEscrow` — binds `recipient` (32B), `condition_hash`
+  (32B), `escrow_id` (32B), `amount` (u64), `timeout_height` (u64).
+  Closes the executor gap where `escrow_id` and `timeout_height` were
+  dropped from VmEffect.
+- **§4.18** `PipelinedSend` — binds `source_turn` (32B), `action_hash`
+  (32B), `output_slot` (u64).
+- **§4.19** `CreateCellFromFactory` — binds `factory_vk` (32B),
+  `owner_pubkey` (32B), `token_id` (32B), `params_hash` (32B). Closes
+  the executor gap where `token_id` and `params` were dropped.
+- **§4.20** `CreateCommittedEscrow` — binds 6 commitment fields (32B
+  each) + `amount` (cleartext u64) + `timeout_height` (u64). Closes
+  the executor gap where the cleartext amount the executor balance-
+  debits is not pinned in the proof (the Pedersen commitment + range
+  proof hide the value from observers, but the proof-to-action
+  binding must still pin what the executor will apply).
+
+Total: **20 per-Effect closures**, each with adversarial tamper-reject
+tests. The two source commits are:
+
+  - `ce79a735` — generalized AIR + 8 schemas (GrantCapability through
+    CreateSealPair).
+  - `20124ca3` — 11 additional schemas (BridgeFinalize through
+    CreateCommittedEscrow) + 12 additional tests.
+
+The AIR is `circuit/src/effect_action_air.rs::EffectActionAir`. It is
+a sidecar binding AIR (sibling to the Effect VM proof, not a
+replacement) — the Effect VM proof retains its 4-byte hash truncations
+for backwards compatibility of the existing trace shape; the sidecar
+binding proof is what a verifier consults for algebraic, full-fidelity
+parameter binding.
 
 ---
 
@@ -255,24 +314,34 @@ Closures (per commit):
   expansion).
 - **§3.3** Cross-Effect within-turn chain pinning (needs Effect VM row
   layout expansion).
-- **NoteSpend** — note_tree_root, asset_type, value_commitment binding
-  expansion. Partially overlaps with `note_spending_air`'s existing
-  PIs; needs coordination with the note-spend AIR maintainer to avoid
-  double-binding and to bind asset_type / value_commitment explicitly.
+- **NoteSpend** — `note_tree_root`, `asset_type`, `value_commitment`
+  binding expansion. Partially overlaps with the deprecated
+  `note_spending_air`'s existing PIs; needs coordination with the
+  note-spend AIR maintainer to avoid double-binding and to bind
+  `asset_type` / `value_commitment` explicitly.
   Marker: `circuit/src/note_spending_air.rs` is deprecated; expand via
   the DSL or sibling.
-- **NoteCreate** — asset_type and value_commitment binding (same
-  rationale).
-- **CreateObligation** — `condition: ProofCondition` and
-  `deadline_height: u64` binding.
-- **CreateCommittedEscrow** — `amount` (full u64), `escrow_id`,
-  `timeout_height`, `range_proof_hash` binding.
-- **Bridges** — `BridgeLock.destination`, `BridgeLock.timeout_height`
-  binding via sibling AIR (analogous to `bridge_action_air` for mint).
-- **PipelinedSend / ExerciseViaCapability** — sub-action recursion;
-  the action being deferred should have *its own* bindings (each inner
-  effect having its own binding proof — recursive composition).
-- **CreateCellFromFactory** — `token_id` and `params` binding.
+- **NoteCreate** — `asset_type` and `value_commitment` binding (same
+  rationale as NoteSpend).
+- **Executor wire-in** — `convert_turn_effects_to_vm`
+  (`turn/src/executor.rs:2511`) currently projects each runtime
+  `Effect` to a `VmEffect` for the Effect-VM AIR. To make the new
+  sidecar binding proofs available to verifiers, a follow-up commit
+  will (a) attach a `Vec<EffectBindingProof>` field to the turn's
+  on-wire shape, (b) populate one entry per effect using
+  `prove_effect_action` with the appropriate schema, and (c) extend
+  the verifier path to check every binding proof against the
+  executor's view of the effect parameters.
+- **BridgeLock sibling AIR** — analogous to `bridge_action_air` for
+  mint, but for lock: binds `nullifier`, `destination`,
+  `asset_type`, `value`, `timeout_height` at full fidelity. The
+  existing `value_full` field on `VmEffect::BridgeLock` covers the
+  30-bit gap on `value`, but `destination`, `timeout_height`, and
+  `asset_type` remain unbound in the lock-side projection.
+- **Substrate-AIR lane** — the 12 placeholder-bearing variants
+  (`Seal`, `Unseal`, `Queue*`, CapTP-`*`, `FulfillObligation`,
+  `SlashObligation`) are owned by that lane; once they're at full
+  fidelity, the corresponding schemas can be added here as well.
 
 ---
 
