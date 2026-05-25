@@ -50,7 +50,7 @@ use crate::error::SdkError;
 /// ```
 pub struct AgentRuntime {
     /// The agent's wallet (read-write lock for receipt chain mutation).
-    wallet: Arc<RwLock<AgentCipherclerk>>,
+    cipherclerk: Arc<RwLock<AgentCipherclerk>>,
     /// The agent's cell ID in the local domain.
     cell_id: CellId,
     /// The domain this runtime operates in.
@@ -83,8 +83,8 @@ impl AgentRuntime {
     /// let wallet = AgentCipherclerk::new();
     /// let runtime = AgentRuntime::new_simple(wallet, "my-domain");
     /// ```
-    pub fn new_simple(wallet: AgentCipherclerk, domain: &str) -> Self {
-        Self::new(Arc::new(RwLock::new(wallet)), domain)
+    pub fn new_simple(cipherclerk: AgentCipherclerk, domain: &str) -> Self {
+        Self::new(Arc::new(RwLock::new(cipherclerk)), domain)
     }
 
     /// Create a new agent runtime.
@@ -96,7 +96,7 @@ impl AgentRuntime {
     ///
     /// * `wallet` - Shared read-write reference to the agent's wallet.
     /// * `domain` - The domain this agent operates in (e.g., "compute", "storage").
-    pub fn new(wallet: Arc<RwLock<AgentCipherclerk>>, domain: &str) -> Self {
+    pub fn new(cipherclerk: Arc<RwLock<AgentCipherclerk>>, domain: &str) -> Self {
         let cell_id;
         let public_key;
         {
@@ -104,7 +104,7 @@ impl AgentRuntime {
             // A poisoned RwLock means a writer panicked while holding the lock;
             // we accept the potentially-inconsistent state as preferable to
             // bringing down the entire runtime.
-            let w = wallet.read().unwrap_or_else(|e| e.into_inner());
+            let w = cipherclerk.read().unwrap_or_else(|e| e.into_inner());
             cell_id = w.cell_id(domain);
             public_key = w.public_key();
         }
@@ -123,7 +123,7 @@ impl AgentRuntime {
         let executor = TurnExecutor::new(ComputronCosts::default_costs());
 
         AgentRuntime {
-            wallet,
+            cipherclerk,
             cell_id,
             domain: domain.to_string(),
             ledger: Arc::new(Mutex::new(ledger)),
@@ -137,18 +137,18 @@ impl AgentRuntime {
     /// Use this when the ledger is shared with other components or has been
     /// restored from persistent storage.
     pub fn with_ledger(
-        wallet: Arc<RwLock<AgentCipherclerk>>,
+        cipherclerk: Arc<RwLock<AgentCipherclerk>>,
         domain: &str,
         ledger: Arc<Mutex<Ledger>>,
     ) -> Self {
-        let cell_id = wallet
+        let cell_id = cipherclerk
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .cell_id(domain);
         let executor = TurnExecutor::new(ComputronCosts::default_costs());
 
         AgentRuntime {
-            wallet,
+            cipherclerk,
             cell_id,
             domain: domain.to_string(),
             ledger,
@@ -177,13 +177,19 @@ impl AgentRuntime {
         *self.nonce.lock().unwrap()
     }
 
-    /// Get a reference to the wallet (behind RwLock).
+    /// Get a reference to the cipherclerk (behind RwLock).
     ///
     /// Callers should use `.read().unwrap_or_else(|e| e.into_inner())` for read
     /// access or `.write().unwrap_or_else(|e| e.into_inner())` for mutation
     /// (e.g., enabling IVC, minting tokens).
+    pub fn cipherclerk(&self) -> &Arc<RwLock<AgentCipherclerk>> {
+        &self.cipherclerk
+    }
+
+    /// Legacy alias for [`Self::cipherclerk`].
+    #[doc(hidden)]
     pub fn wallet(&self) -> &Arc<RwLock<AgentCipherclerk>> {
-        &self.wallet
+        self.cipherclerk()
     }
 
     /// Attach a budget gate (Stingray bounded counter) to this runtime's executor.
@@ -237,7 +243,7 @@ impl AgentRuntime {
             &self.executor.local_federation_id,
         );
         let sig = self
-            .wallet
+            .cipherclerk
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .sign_bytes(&message);
@@ -264,7 +270,7 @@ impl AgentRuntime {
 
         // Bind this turn to the receipt chain: read the latest receipt hash from the wallet.
         let previous_receipt_hash = self
-            .wallet
+            .cipherclerk
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .receipt_head()
@@ -295,7 +301,7 @@ impl AgentRuntime {
                 // Release ledger lock before taking wallet write lock.
                 drop(ledger);
                 // Append the receipt to the wallet's chain (write lock).
-                self.wallet
+                self.cipherclerk
                     .write()
                     .unwrap_or_else(|e| e.into_inner())
                     .append_receipt(receipt.clone());
@@ -328,7 +334,7 @@ impl AgentRuntime {
                 // Release ledger lock before taking wallet write lock.
                 drop(ledger);
                 // Append the receipt to the wallet's chain (write lock).
-                self.wallet
+                self.cipherclerk
                     .write()
                     .unwrap_or_else(|e| e.into_inner())
                     .append_receipt(receipt.clone());
@@ -360,8 +366,8 @@ impl AgentRuntime {
         token: &HeldToken,
     ) -> Result<SubAgent, SdkError> {
         // Create a new wallet for the sub-agent.
-        let mut sub_wallet = AgentCipherclerk::new();
-        let sub_pk = sub_wallet.public_key();
+        let mut sub_cclerk = AgentCipherclerk::new();
+        let sub_pk = sub_cclerk.public_key();
 
         // Attenuate the token for the sub-agent.
         let decoded = token.decode()?;
@@ -399,11 +405,11 @@ impl AgentRuntime {
         // distinct domain tag), and the receiver verifies it against the parent
         // wallet's public key.
         let parent_pubkey = {
-            let parent = self.wallet.read().unwrap_or_else(|e| e.into_inner());
+            let parent = self.cipherclerk.read().unwrap_or_else(|e| e.into_inner());
             parent.public_key()
         };
         let local = {
-            let parent = self.wallet.read().unwrap_or_else(|e| e.into_inner());
+            let parent = self.cipherclerk.read().unwrap_or_else(|e| e.into_inner());
             parent.make_local_delegation(
                 encoded,
                 token.service().to_string(),
@@ -416,10 +422,10 @@ impl AgentRuntime {
                 None, // no caveat_chain_hash; sub-agent operates on local state
             )
         };
-        sub_wallet.receive_local_delegation(local, &parent_pubkey)?;
+        sub_cclerk.receive_local_delegation(local, &parent_pubkey)?;
 
         // Create the sub-agent's cell in the ledger.
-        let sub_cell_id = sub_wallet.cell_id(&self.domain);
+        let sub_cell_id = sub_cclerk.cell_id(&self.domain);
         {
             let mut ledger = self.ledger.lock().unwrap();
             let sub_cell = Cell::with_balance(
@@ -432,11 +438,11 @@ impl AgentRuntime {
         }
 
         Ok(SubAgent {
-            wallet: Arc::new(sub_wallet),
+            cipherclerk: Arc::new(sub_cclerk),
             cell_id: sub_cell_id,
             token: delegated_token,
             parent: self
-                .wallet
+            .cipherclerk
                 .read()
                 .unwrap_or_else(|e| e.into_inner())
                 .public_key(),
@@ -485,8 +491,8 @@ pub struct SubAgent {
     // (the signing-message domain separator) or swap `wallet` / `token`
     // post-construct. Access from outside the crate is via the read-only
     // accessor methods below.
-    /// The sub-agent's wallet.
-    pub(crate) wallet: Arc<AgentCipherclerk>,
+    /// The sub-agent's cipherclerk.
+    pub(crate) cipherclerk: Arc<AgentCipherclerk>,
     /// The sub-agent's cell ID.
     pub(crate) cell_id: CellId,
     /// The attenuated token this sub-agent holds.
@@ -515,12 +521,18 @@ pub struct SubAgent {
 impl SubAgent {
     /// Get the sub-agent's public key.
     pub fn public_key(&self) -> PublicKey {
-        self.wallet.public_key()
+        self.cipherclerk.public_key()
     }
 
-    /// Read-only access to the sub-agent's wallet.
+    /// Read-only access to the sub-agent's cipherclerk.
+    pub fn cipherclerk(&self) -> &Arc<AgentCipherclerk> {
+        &self.cipherclerk
+    }
+
+    /// Legacy alias for [`Self::cipherclerk`].
+    #[doc(hidden)]
     pub fn wallet(&self) -> &Arc<AgentCipherclerk> {
-        &self.wallet
+        self.cipherclerk()
     }
 
     /// Get the sub-agent's cell ID.
@@ -566,7 +578,7 @@ impl SubAgent {
             return false;
         }
         match self
-            .wallet
+            .cipherclerk
             .authorize(&self.token, request, crate::VerificationMode::Trusted)
         {
             Ok(crate::AuthorizationPresentation::Trusted { trace, .. }) => {
@@ -614,7 +626,7 @@ impl SubAgent {
         // Sign with the sub-agent's wallet using the parent's federation_id
         // for correct domain separation.
         let message = TurnExecutor::compute_signing_message(&action_unsigned, &self.federation_id);
-        let sig = self.wallet.sign_bytes(&message);
+        let sig = self.cipherclerk.sign_bytes(&message);
 
         let action_signed = Action {
             authorization: Authorization::from_sig_bytes(sig.0),

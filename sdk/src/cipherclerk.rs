@@ -1,11 +1,18 @@
-//! Agent wallet: identity, token storage, signing, and proof generation.
+//! Agent cipherclerk: identity, token storage, signing, and proof generation.
 //!
-//! The [`AgentCipherclerk`] is the primary credential holder for an agent. It manages:
+//! The [`AgentCipherclerk`] (legacy alias `AgentWallet`) is the agent's
+//! cryptographic clerk — the primary credential holder. It manages:
 //! - An Ed25519 signing identity
 //! - A collection of held authorization tokens (macaroon-backed)
 //! - Token attenuation and delegation to other agents
 //! - Turn signing for submission to the ledger
 //! - Zero-knowledge proof generation via the bridge layer
+//!
+//! The name traces to Greg Egan's *Polis* and its descendants, where a
+//! citizen's cipherclerk is the autonomous component that holds keys,
+//! attests credentials, and brokers capabilities on the citizen's
+//! behalf. "Wallet" was a poor fit: pyana cipherclerks mostly manage
+//! *capabilities*, not balances.
 
 use std::collections::HashMap;
 
@@ -7167,7 +7174,7 @@ mod tests {
     /// the variant would not be `Signature(..)` at all, but if some future
     /// "lazy sign" path produced `Signature([0;32], [0;32])` we want to catch
     /// it too. (See `app-framework/tests/wallet_sign_action.rs` for the
-    /// matching pin on the AppWallet path.)
+    /// matching pin on the AppCipherclerk path.)
     fn assert_real_signature(action: &pyana_turn::action::Action) {
         use pyana_turn::action::Authorization;
         match &action.authorization {
