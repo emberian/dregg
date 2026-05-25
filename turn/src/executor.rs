@@ -73,6 +73,7 @@ fn predicate_kind_name(kind: WitnessedPredicateKind) -> String {
         WitnessedPredicateKind::Dfa => "Dfa".into(),
         WitnessedPredicateKind::Temporal => "Temporal".into(),
         WitnessedPredicateKind::MerkleMembership => "MerkleMembership".into(),
+        WitnessedPredicateKind::NonMembership => "NonMembership".into(),
         WitnessedPredicateKind::BlindedSet => "BlindedSet".into(),
         WitnessedPredicateKind::BridgePredicate => "BridgePredicate".into(),
         WitnessedPredicateKind::PedersenEquality => "PedersenEquality".into(),
@@ -241,6 +242,11 @@ pub fn project_slot_caveat_manifest(
                         *set_root_index
                     }
                     pyana_cell::program::AuthorizedSet::BlindedSet { .. } => 0,
+                    // CredentialSet dispatches via the BlindedSet verifier
+                    // off-chain (see AuthorizedSet::credential_set_commitment).
+                    // No public-slot root to index — use 0 as the
+                    // "no-slot" sentinel like BlindedSet.
+                    pyana_cell::program::AuthorizedSet::CredentialSet { .. } => 0,
                 };
                 Some(SlotCaveatEntry {
                     type_tag: pi::SLOT_CAVEAT_TAG_SENDER_AUTHORIZED,
@@ -270,6 +276,11 @@ pub fn project_slot_caveat_manifest(
             | pyana_cell::StateConstraint::BoundDelta { .. }
             | pyana_cell::StateConstraint::AnyOf { .. }
             | pyana_cell::StateConstraint::Witnessed { .. }
+            // `Renounced` is the categorical dual of SenderAuthorized
+            // (CROSS-CELL-CATEGORICAL-ANALYSIS.md §3.2). No AIR projection
+            // in Block-3 first wave; the witness side is checked by the
+            // `WitnessedPredicateRegistry` NonMembership verifier.
+            | pyana_cell::StateConstraint::Renounced { .. }
             | pyana_cell::StateConstraint::Custom { .. } => None,
         };
         if let Some(e) = entry {

@@ -595,6 +595,12 @@ impl CellId {
     pub const ZERO: CellId = CellId([0u8; 32]);
 }
 
+impl Default for CellId {
+    fn default() -> Self {
+        CellId::ZERO
+    }
+}
+
 impl fmt::Debug for CellId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(

@@ -1808,9 +1808,15 @@ impl Effect {
                 hasher.update(cell.as_bytes());
                 hasher.update(offered_action_commitment);
                 match refusal_reason {
-                    RefusalReason::Declined => hasher.update(&[0u8]),
-                    RefusalReason::NoAuthority => hasher.update(&[1u8]),
-                    RefusalReason::WindowExpired => hasher.update(&[2u8]),
+                    RefusalReason::Declined => {
+                        hasher.update(&[0u8]);
+                    }
+                    RefusalReason::NoAuthority => {
+                        hasher.update(&[1u8]);
+                    }
+                    RefusalReason::WindowExpired => {
+                        hasher.update(&[2u8]);
+                    }
                     RefusalReason::Custom { reason_hash } => {
                         hasher.update(&[3u8]);
                         hasher.update(reason_hash);
