@@ -2786,11 +2786,11 @@ mod tests {
         // Sender 0x05 is between lower=0x04 and upper=0x06 → not in
         // the set → renunciation accepts.
         let candidate = [0x05u8; 32];
-        let proof = crate::predicate::NonMembershipNeighborProof {
-            lower: [0x04u8; 32],
-            upper: [0x06u8; 32],
-            consecutive_tag: crate::predicate::NonMembershipNeighborProof::CONSECUTIVE_TAG,
-        };
+        let proof = crate::predicate::NonMembershipNeighborProof::new(
+            &[0xAB; 32],
+            [0x04u8; 32],
+            [0x06u8; 32],
+        );
         let proof_bytes = proof.to_bytes();
         let registry = crate::predicate::WitnessedPredicateRegistry::with_stubs();
         let blobs: [WitnessBlobView<'_>; 1] = [WitnessBlobView {
@@ -2818,11 +2818,11 @@ mod tests {
         // Adversarial: candidate == lower neighbor → the prover IS in
         // the set but is forging a renunciation. Must reject.
         let candidate = [0x05u8; 32];
-        let proof = crate::predicate::NonMembershipNeighborProof {
-            lower: [0x05u8; 32], // candidate matches lower → in set
-            upper: [0x06u8; 32],
-            consecutive_tag: crate::predicate::NonMembershipNeighborProof::CONSECUTIVE_TAG,
-        };
+        let proof = crate::predicate::NonMembershipNeighborProof::new(
+            &[0xAB; 32],
+            [0x05u8; 32], // candidate matches lower → in set
+            [0x06u8; 32],
+        );
         let proof_bytes = proof.to_bytes();
         let registry = crate::predicate::WitnessedPredicateRegistry::with_stubs();
         let blobs: [WitnessBlobView<'_>; 1] = [WitnessBlobView {
@@ -2854,12 +2854,12 @@ mod tests {
     }
 
     #[test]
-    fn renounced_rejects_forged_consecutive_tag() {
+    fn renounced_rejects_forged_adjacency_tag() {
         let candidate = [0x05u8; 32];
         let proof = crate::predicate::NonMembershipNeighborProof {
             lower: [0x04u8; 32],
             upper: [0x06u8; 32],
-            consecutive_tag: [0u8; 32], // forged
+            adjacency_tag: [0u8; 32], // forged (zero != commitment-keyed tag)
         };
         let proof_bytes = proof.to_bytes();
         let registry = crate::predicate::WitnessedPredicateRegistry::with_stubs();
@@ -2921,11 +2921,12 @@ mod tests {
     fn renounced_public_root_reads_slot_commitment() {
         // PublicRoot variant pulls commitment from a state slot.
         let candidate = [0x05u8; 32];
-        let proof = crate::predicate::NonMembershipNeighborProof {
-            lower: [0x04u8; 32],
-            upper: [0x06u8; 32],
-            consecutive_tag: crate::predicate::NonMembershipNeighborProof::CONSECUTIVE_TAG,
-        };
+        // Slot 3 carries the set root [0xCC; 32] (see below).
+        let proof = crate::predicate::NonMembershipNeighborProof::new(
+            &[0xCC; 32],
+            [0x04u8; 32],
+            [0x06u8; 32],
+        );
         let proof_bytes = proof.to_bytes();
         let registry = crate::predicate::WitnessedPredicateRegistry::with_stubs();
         let blobs: [WitnessBlobView<'_>; 1] = [WitnessBlobView {

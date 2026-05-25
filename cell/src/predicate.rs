@@ -1233,32 +1233,55 @@ impl WitnessedPredicateVerifier for NotYetWiredVerifier {
 /// the neighbor witness:
 /// 1. `lower < candidate` (lexicographic byte order),
 /// 2. `candidate < upper`,
-/// 3. `consecutive_tag == [0xFE; 32]` (the prover's commitment that
-///    the neighbors are consecutive — bound into the proof so the
-///    AIR-side STARK verifier can re-check it against the sorted
-///    set's adjacency table; here we only check the structural
-///    discipline of the witness shape).
+/// 3. `adjacency_tag == [`Self::adjacency_tag`]`(commitment, lower, upper)
+///    — a per-(set, lower, upper) keyed BLAKE3 derivation that the
+///    prover must reconstruct from the sorted set's Merkle root. This
+///    closes the prior "public sentinel" attack
+///    (`AIR-SOUNDNESS-AUDIT.md` finding #2) where an attacker chose
+///    arbitrary `lower=0x00…`, `upper=0xFF…`, `tag=0xFE…` and bypassed
+///    `Renounced` for an unknown set: today the tag binds to the
+///    commitment, so a prover who doesn't know the set's `commitment`
+///    cannot reconstruct the tag.
 ///
-/// When `pyana-circuit`'s real non-membership STARK lands the
-/// adjacency check joins this verifier (today the STARK is the proof
-/// of "lower, upper are consecutive leaves under `commitment`"; this
-/// verifier proves only the ordering relation between candidate and
-/// neighbors, which is necessary-but-not-sufficient for soundness on
-/// its own).
+/// # Silver-Sound vs. Golden-Sound
+///
+/// This is **explicitly Silver-Sound, not Sound.** The tag commits to
+/// the *set's root* but not to "lower and upper are adjacent leaves
+/// **under** that root." An attacker who *knows the set's commitment*
+/// (e.g. it was published) can still forge `lower=0x00…`,
+/// `upper=0xFF…`, compute a valid `adjacency_tag`, and claim
+/// non-membership for any candidate without any Merkle path. Closing
+/// that attack requires a real Merkle adjacency STARK that proves
+/// `MerklePath(commitment, lower)` and `MerklePath(commitment, upper)`
+/// at *consecutive leaf indices* — the Golden Vision lift. Until that
+/// lands, this verifier is the **interim** form: stronger than the
+/// pre-audit public sentinel (no one without the commitment can forge),
+/// weaker than the full Merkle gadget (anyone with the commitment can).
+///
+/// # Versioning
+///
+/// The keyed-derive domain `pyana-nonmembership-adjacency-v1` is a
+/// versioned wire format. The Golden lift will introduce
+/// `pyana-nonmembership-adjacency-v2` with a different layout that
+/// includes leaf-index public inputs; v1 and v2 produce different
+/// tags so the cut-over is unambiguous.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NonMembershipNeighborProof {
     pub lower: [u8; 32],
     pub upper: [u8; 32],
-    pub consecutive_tag: [u8; 32],
+    /// Per-(commitment, lower, upper) keyed adjacency commitment;
+    /// reconstruct via [`Self::adjacency_tag`].
+    pub adjacency_tag: [u8; 32],
 }
 
 impl NonMembershipNeighborProof {
-    /// Encode the proof to its 96-byte wire form (lower || upper || tag).
+    /// Encode the proof to its 96-byte wire form
+    /// (lower || upper || adjacency_tag).
     pub fn to_bytes(&self) -> [u8; 96] {
         let mut out = [0u8; 96];
         out[0..32].copy_from_slice(&self.lower);
         out[32..64].copy_from_slice(&self.upper);
-        out[64..96].copy_from_slice(&self.consecutive_tag);
+        out[64..96].copy_from_slice(&self.adjacency_tag);
         out
     }
     /// Decode from the 96-byte wire form.
@@ -1275,17 +1298,51 @@ impl NonMembershipNeighborProof {
         Some(Self {
             lower,
             upper,
-            consecutive_tag: tag,
+            adjacency_tag: tag,
         })
     }
-    /// The canonical "neighbors are consecutive" tag the prover must
-    /// embed in the proof. The real STARK side replaces this with a
-    /// per-(set, lower, upper) adjacency commitment; here it's a fixed
-    /// sentinel so a *forged* renunciation (one whose prover never had
-    /// access to a real neighbor-witness gadget) cannot satisfy this
-    /// without committing to the tag, while an honest prover trivially
-    /// supplies it.
-    pub const CONSECUTIVE_TAG: [u8; 32] = [0xFE; 32];
+
+    /// Compute the canonical adjacency tag for a non-membership
+    /// neighbor witness.
+    ///
+    /// `tag = BLAKE3_keyed("pyana-nonmembership-adjacency-v1",
+    ///                     commitment || lower || upper)`.
+    ///
+    /// The prover must reconstruct this from the set's Merkle root
+    /// (`commitment`) and the chosen adjacent leaves. An attacker who
+    /// doesn't know `commitment` cannot reconstruct the tag, which is
+    /// what closes the prior public-sentinel attack — the previous
+    /// `CONSECUTIVE_TAG = [0xFE; 32]` was a public constant, so anyone
+    /// could "prove" non-membership for arbitrary sets.
+    ///
+    /// # Silver-vs-Golden gap
+    ///
+    /// This binds the tag to the set's *commitment* but **not** to a
+    /// real Merkle adjacency relation. An attacker who knows
+    /// `commitment` (e.g. a public root) can still pick
+    /// `lower = 0x00…`, `upper = 0xFF…` and recompute the tag. The
+    /// remaining attack requires the real Merkle adjacency STARK
+    /// (Golden Vision); this commitment-keyed form is the interim
+    /// rung. Document this when wiring `Renounced` flows.
+    pub fn adjacency_tag(commitment: &[u8; 32], lower: &[u8; 32], upper: &[u8; 32]) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new_derive_key("pyana-nonmembership-adjacency-v1");
+        hasher.update(commitment);
+        hasher.update(lower);
+        hasher.update(upper);
+        *hasher.finalize().as_bytes()
+    }
+
+    /// Construct a well-formed neighbor proof against a known set
+    /// commitment. Prover-side helper that pairs with
+    /// [`Self::adjacency_tag`].
+    pub fn new(commitment: &[u8; 32], lower: [u8; 32], upper: [u8; 32]) -> Self {
+        let adjacency_tag = Self::adjacency_tag(commitment, &lower, &upper);
+        Self {
+            lower,
+            upper,
+            adjacency_tag,
+        }
+    }
 }
 
 struct SortedNeighborNonMembershipVerifier;
@@ -1301,7 +1358,7 @@ impl WitnessedPredicateVerifier for SortedNeighborNonMembershipVerifier {
 
     fn verify(
         &self,
-        _commitment: &[u8; 32],
+        commitment: &[u8; 32],
         input: &PredicateInput<'_>,
         proof_bytes: &[u8],
     ) -> Result<(), WitnessedPredicateError> {
@@ -1309,7 +1366,7 @@ impl WitnessedPredicateVerifier for SortedNeighborNonMembershipVerifier {
             WitnessedPredicateError::Rejected {
                 kind_name: "NonMembership",
                 reason: format!(
-                    "non-membership proof must be 96 bytes (lower||upper||tag), got {}",
+                    "non-membership proof must be 96 bytes (lower||upper||adjacency_tag), got {}",
                     proof_bytes.len()
                 ),
             }
@@ -1345,11 +1402,27 @@ impl WitnessedPredicateVerifier for SortedNeighborNonMembershipVerifier {
                 });
             }
         };
-        // Enforce the consecutive-neighbors discipline tag.
-        if proof.consecutive_tag != NonMembershipNeighborProof::CONSECUTIVE_TAG {
+        // Enforce the per-(commitment, lower, upper) adjacency tag.
+        // This closes the AIR-soundness-audit (ce1e2def) finding #2:
+        // the prior `[0xFE; 32]` sentinel was a public constant any
+        // playground prover could supply for arbitrary sets. Today the
+        // tag is keyed on the set's commitment, so a prover who doesn't
+        // know `commitment` cannot reconstruct the tag.
+        //
+        // SILVER-vs-GOLDEN GAP: this binds the tag to the commitment
+        // but not to a real Merkle adjacency relation. An attacker who
+        // *knows* the commitment (e.g. it was published) can still
+        // pick lower=0x00…, upper=0xFF… and recompute a valid tag —
+        // the candidate trivially falls in the interval. Closing that
+        // requires the real Merkle adjacency STARK (Golden Vision):
+        // prove MerklePath(commitment, lower) and
+        // MerklePath(commitment, upper) at consecutive leaf indices.
+        let expected =
+            NonMembershipNeighborProof::adjacency_tag(commitment, &proof.lower, &proof.upper);
+        if proof.adjacency_tag != expected {
             return Err(WitnessedPredicateError::Rejected {
                 kind_name: "NonMembership",
-                reason: "consecutive_tag does not match the canonical sentinel; the prover did not commit to the sorted-neighbor adjacency invariant".into(),
+                reason: "adjacency_tag does not match BLAKE3_keyed(\"pyana-nonmembership-adjacency-v1\", commitment || lower || upper); the prover did not bind to this set's commitment".into(),
             });
         }
         // Enforce strict ordering: lower < candidate < upper.
@@ -1580,15 +1653,15 @@ mod tests {
 
     // ─── NonMembership / Renunciation tests (Tier 2 §3.2 / §9.2.1) ───────
 
+    /// Canonical set-commitment used in NonMembership tests.
+    const SET_COMMITMENT: [u8; 32] = [0xAB; 32];
+
     /// A helper that fabricates an honest renunciation neighbor witness
-    /// for a candidate that is provably *not* in the sorted set
-    /// {lower, upper, ...}.
+    /// for a candidate that is provably *not* in the sorted set with
+    /// root `SET_COMMITMENT`. Uses the post-audit (ce1e2def)
+    /// commitment-keyed adjacency tag derivation.
     fn honest_renunciation_proof(lower: [u8; 32], upper: [u8; 32]) -> NonMembershipNeighborProof {
-        NonMembershipNeighborProof {
-            lower,
-            upper,
-            consecutive_tag: NonMembershipNeighborProof::CONSECUTIVE_TAG,
-        }
+        NonMembershipNeighborProof::new(&SET_COMMITMENT, lower, upper)
     }
 
     #[test]
@@ -1601,7 +1674,7 @@ mod tests {
         let bytes = proof.to_bytes();
 
         let reg = WitnessedPredicateRegistry::with_stubs();
-        let wp = WitnessedPredicate::non_membership([0xAB; 32], InputRef::Sender, 0);
+        let wp = WitnessedPredicate::non_membership(SET_COMMITMENT, InputRef::Sender, 0);
         reg.verify(&wp, &PredicateInput::Sender(&candidate), &bytes)
             .expect("legal renunciation should verify");
     }
@@ -1617,7 +1690,7 @@ mod tests {
         let proof = honest_renunciation_proof(lower, upper);
 
         let reg = WitnessedPredicateRegistry::with_stubs();
-        let wp = WitnessedPredicate::non_membership([0xAB; 32], InputRef::Sender, 0);
+        let wp = WitnessedPredicate::non_membership(SET_COMMITMENT, InputRef::Sender, 0);
         let err = reg
             .verify(&wp, &PredicateInput::Sender(&candidate), &proof.to_bytes())
             .unwrap_err();
@@ -1632,7 +1705,7 @@ mod tests {
         let proof = honest_renunciation_proof(lower, upper);
 
         let reg = WitnessedPredicateRegistry::with_stubs();
-        let wp = WitnessedPredicate::non_membership([0xAB; 32], InputRef::Sender, 0);
+        let wp = WitnessedPredicate::non_membership(SET_COMMITMENT, InputRef::Sender, 0);
         let err = reg
             .verify(&wp, &PredicateInput::Sender(&candidate), &proof.to_bytes())
             .unwrap_err();
@@ -1649,7 +1722,7 @@ mod tests {
         let proof = honest_renunciation_proof(lower, upper);
 
         let reg = WitnessedPredicateRegistry::with_stubs();
-        let wp = WitnessedPredicate::non_membership([0xAB; 32], InputRef::Sender, 0);
+        let wp = WitnessedPredicate::non_membership(SET_COMMITMENT, InputRef::Sender, 0);
         let err = reg
             .verify(&wp, &PredicateInput::Sender(&candidate), &proof.to_bytes())
             .unwrap_err();
@@ -1657,17 +1730,17 @@ mod tests {
     }
 
     #[test]
-    fn non_membership_rejects_forged_consecutive_tag() {
-        // Even if lower < candidate < upper, a forged consecutive_tag
+    fn non_membership_rejects_forged_zero_adjacency_tag() {
+        // Even if lower < candidate < upper, a forged adjacency_tag
         // breaks the soundness binding to the sorted-set adjacency
         // commitment.
         let lower = [0x04u8; 32];
         let upper = [0x06u8; 32];
         let candidate = [0x05u8; 32];
         let mut proof = honest_renunciation_proof(lower, upper);
-        proof.consecutive_tag = [0u8; 32]; // forged
+        proof.adjacency_tag = [0u8; 32]; // forged
         let reg = WitnessedPredicateRegistry::with_stubs();
-        let wp = WitnessedPredicate::non_membership([0xAB; 32], InputRef::Sender, 0);
+        let wp = WitnessedPredicate::non_membership(SET_COMMITMENT, InputRef::Sender, 0);
         let err = reg
             .verify(&wp, &PredicateInput::Sender(&candidate), &proof.to_bytes())
             .unwrap_err();
@@ -1677,7 +1750,7 @@ mod tests {
     #[test]
     fn non_membership_rejects_malformed_proof_bytes() {
         let reg = WitnessedPredicateRegistry::with_stubs();
-        let wp = WitnessedPredicate::non_membership([0xAB; 32], InputRef::Sender, 0);
+        let wp = WitnessedPredicate::non_membership(SET_COMMITMENT, InputRef::Sender, 0);
         let pk = [0u8; 32];
         // Wrong length:
         let err = reg
@@ -1688,14 +1761,101 @@ mod tests {
 
     #[test]
     fn non_membership_proof_roundtrips_bytes() {
-        let p = NonMembershipNeighborProof {
-            lower: [1u8; 32],
-            upper: [3u8; 32],
-            consecutive_tag: NonMembershipNeighborProof::CONSECUTIVE_TAG,
-        };
+        let p = NonMembershipNeighborProof::new(&SET_COMMITMENT, [1u8; 32], [3u8; 32]);
         let bytes = p.to_bytes();
         let back = NonMembershipNeighborProof::from_bytes(&bytes).unwrap();
         assert_eq!(back, p);
+    }
+
+    // ─── AIR-soundness-audit (ce1e2def) finding #2 adversarial tests ───
+    //
+    // The prior public-sentinel attack: pick lower=0x00…, upper=0xFF…,
+    // adjacency_tag=0xFE…, "prove" non-membership in an arbitrary set
+    // without knowing the set's commitment. Today the adjacency_tag is
+    // derived from BLAKE3_keyed("pyana-nonmembership-adjacency-v1",
+    // commitment || lower || upper), so a prover who doesn't know the
+    // commitment cannot reconstruct the tag.
+
+    #[test]
+    fn audit_attack_non_membership_rejects_legacy_public_sentinel() {
+        // The pre-audit attack: pick wide-bracket neighbors and the
+        // public sentinel [0xFE; 32]. Today the verifier rejects
+        // because the sentinel does not match the per-commitment
+        // adjacency_tag derivation.
+        let candidate = [0x42u8; 32];
+        let attacker_proof = NonMembershipNeighborProof {
+            lower: [0x00u8; 32],
+            upper: [0xFFu8; 32],
+            adjacency_tag: [0xFEu8; 32], // the prior public constant
+        };
+        let reg = WitnessedPredicateRegistry::default_builtins();
+        let wp = WitnessedPredicate::non_membership(SET_COMMITMENT, InputRef::Sender, 0);
+        let err = reg
+            .verify(
+                &wp,
+                &PredicateInput::Sender(&candidate),
+                &attacker_proof.to_bytes(),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(err, WitnessedPredicateError::Rejected { .. }),
+            "pre-audit sentinel attack must reject; got {err:?}"
+        );
+    }
+
+    #[test]
+    fn audit_attack_non_membership_rejects_wrong_commitment_keyed_tag() {
+        // An attacker constructs a *well-formed* tag against a different
+        // commitment, then submits the proof against `SET_COMMITMENT`.
+        // The verifier recomputes the tag against the predicate's
+        // declared commitment and rejects.
+        let candidate = [0x42u8; 32];
+        let lower = [0x00u8; 32];
+        let upper = [0xFFu8; 32];
+        let wrong_commitment = [0xCCu8; 32];
+        let attacker_proof = NonMembershipNeighborProof::new(&wrong_commitment, lower, upper);
+        let reg = WitnessedPredicateRegistry::default_builtins();
+        let wp = WitnessedPredicate::non_membership(SET_COMMITMENT, InputRef::Sender, 0);
+        let err = reg
+            .verify(
+                &wp,
+                &PredicateInput::Sender(&candidate),
+                &attacker_proof.to_bytes(),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(err, WitnessedPredicateError::Rejected { .. }),
+            "wrong-commitment tag attack must reject; got {err:?}"
+        );
+    }
+
+    /// SILVER-vs-GOLDEN-GAP regression test: a prover who *does* know
+    /// the set's commitment can still construct a wide-bracket proof
+    /// (lower=0x00…, upper=0xFF…) and bypass non-membership for any
+    /// candidate. This is the documented remaining gap; closing it
+    /// requires the full Merkle adjacency STARK (Golden Vision).
+    ///
+    /// This test pins the gap: it deliberately ACCEPTS the attack so a
+    /// future Golden-Vision verifier can be detected as a behavior
+    /// change (the test will start failing — that failure is the
+    /// expected signal that the Golden lift has landed).
+    #[test]
+    fn audit_silver_golden_gap_commitment_knower_can_still_forge_wide_bracket() {
+        let candidate = [0x42u8; 32];
+        // Attacker knows SET_COMMITMENT (public).
+        let proof = NonMembershipNeighborProof::new(&SET_COMMITMENT, [0x00u8; 32], [0xFFu8; 32]);
+        let reg = WitnessedPredicateRegistry::default_builtins();
+        let wp = WitnessedPredicate::non_membership(SET_COMMITMENT, InputRef::Sender, 0);
+        match reg.verify(&wp, &PredicateInput::Sender(&candidate), &proof.to_bytes()) {
+            Ok(()) => {
+                // Expected (Silver gap). Document the Golden-Vision lift.
+            }
+            Err(e) => panic!(
+                "Silver-vs-Golden gap regression: a future verifier rejected the \
+                 wide-bracket attack — likely the Merkle adjacency STARK landed. \
+                 Update this test to assert rejection. Got: {e:?}"
+            ),
+        }
     }
 
     // ─── WitnessProducer — left adjoint of WitnessedPredicateVerifier ──
@@ -1903,10 +2063,7 @@ mod tests {
 
     #[test]
     fn audit_attack_default_rejects_temporal_forged_one_byte_proof() {
-        assert_default_rejects_garbage(
-            WitnessedPredicate::temporal([0xCD; 32], 0, 0),
-            "Temporal",
-        );
+        assert_default_rejects_garbage(WitnessedPredicate::temporal([0xCD; 32], 0, 0), "Temporal");
     }
 
     #[test]
