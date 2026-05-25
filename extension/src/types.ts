@@ -612,6 +612,20 @@ export interface PyanaWasm {
     transition_bytes: Uint8Array;
     amount: number;
   };
+  /**
+   * Canonical wallet-signed action-turn builder for federation-routed
+   * actions like `propose_routes` / `vote_on_proposal`. Routes through
+   * `AgentWallet::make_action` + `AgentWallet::make_turn_for`, so the
+   * action's `authorization` is an Ed25519 signature bound to the
+   * federation_id. The arbitrary action payload travels in the turn's
+   * `memo` field as a JSON string.
+   */
+  wallet_make_action_turn(specJson: string): {
+    turn_id: string;
+    turn_bytes: Uint8Array;
+    agent_cell_id: string;
+    method: string;
+  };
 }
 
 // ---------------------------------------------------------------------------

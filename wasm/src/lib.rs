@@ -2306,6 +2306,102 @@ pub fn wallet_peer_exchange(spec_json: &str) -> Result<JsValue, JsError> {
 }
 
 // ============================================================================
+// Generic wallet-signed action turn
+// (proposeRoutes / voteOnProposal canonical path)
+// ============================================================================
+
+/// Build a wallet-signed [`Turn`] carrying a single named action.
+///
+/// Routes through `AgentWallet::make_action(target, method, effects,
+/// federation_id)` + `AgentWallet::make_turn_for(domain, action)` so
+/// the action's `authorization` field is a real Ed25519 signature
+/// over the canonical action bytes, bound to the federation_id.
+///
+/// The action's `method` carries the semantic name
+/// (e.g. `"propose_routes"`, `"vote_on_proposal"`); the request payload
+/// is carried in the [`Turn::memo`] field as a JSON string. The
+/// federation can dispatch by `method` and decode the memo to recover
+/// the proposal / vote payload. The action's effects are a single
+/// `IncrementNonce` (no ledger mutation in the action itself — the
+/// federation drives any state change from the memo'd payload).
+///
+/// JSON input:
+/// ```json
+/// {
+///   "sender_privkey": [32 bytes],
+///   "method": "propose_routes",
+///   "memo_json": "<arbitrary JSON string for the action body>",
+///   "federation_id_hex": "<optional 64 hex chars>"
+/// }
+/// ```
+///
+/// Returns JSON: `{ turn_id, turn_bytes, agent_cell_id, method }`.
+/// `turn_bytes` is the postcard-serialized signed `Turn` for the node's
+/// `/turns/submit` endpoint.
+#[wasm_bindgen]
+pub fn wallet_make_action_turn(spec_json: &str) -> Result<JsValue, JsError> {
+    use pyana_sdk::AgentWallet;
+    use pyana_turn::Effect;
+    use zeroize::Zeroizing;
+
+    #[derive(serde::Deserialize)]
+    struct Spec {
+        sender_privkey: Vec<u8>,
+        method: String,
+        #[serde(default)]
+        memo_json: Option<String>,
+        #[serde(default)]
+        federation_id_hex: Option<String>,
+    }
+
+    let spec: Spec = serde_json::from_str(spec_json).map_err(|e| JsError::new(&e.to_string()))?;
+    if spec.sender_privkey.len() != 32 {
+        return Err(JsError::new("sender_privkey must be exactly 32 bytes"));
+    }
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(&spec.sender_privkey);
+
+    let federation_id = match spec.federation_id_hex.as_deref() {
+        Some(hex) if !hex.is_empty() => {
+            hex_decode_32(hex).map_err(|e| JsError::new(&format!("federation_id_hex: {e}")))?
+        }
+        _ => [0u8; 32],
+    };
+
+    let wallet = AgentWallet::from_key_bytes(Zeroizing::new(seed));
+    let cell_id = wallet.cell_id("default");
+
+    // Use IncrementNonce as the placeholder effect — the action's
+    // method name + memo payload carry the semantic intent, and the
+    // executor / federation route by method.
+    let effects: Vec<Effect> = vec![Effect::IncrementNonce { cell: cell_id }];
+
+    let action = wallet.make_action(cell_id, &spec.method, effects, &federation_id);
+    let mut turn = wallet.make_turn_for("default", action);
+    turn.memo = spec.memo_json;
+
+    let turn_bytes = postcard::to_allocvec(&turn)
+        .map_err(|e| JsError::new(&format!("postcard serialization failed: {e}")))?;
+    let turn_hash = blake3::hash(&turn_bytes);
+    let turn_id = hex_encode(turn_hash.as_bytes());
+
+    #[derive(Serialize)]
+    struct Out {
+        turn_id: String,
+        turn_bytes: Vec<u8>,
+        agent_cell_id: String,
+        method: String,
+    }
+    let out = Out {
+        turn_id,
+        turn_bytes,
+        agent_cell_id: hex_encode(&cell_id.0),
+        method: spec.method,
+    };
+    serde_wasm_bindgen::to_value(&out).map_err(|e| JsError::new(&e.to_string()))
+}
+
+// ============================================================================
 // Helpers
 // ============================================================================
 

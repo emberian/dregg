@@ -1613,23 +1613,63 @@ async function getFederationStatus(): Promise<{ mode?: string; height?: number; 
 async function proposeRoutes(routes: unknown[]): Promise<{ proposalId?: string; submitted?: boolean; error?: string }> {
   const wallet = await loadState();
   if (wallet.locked) return { error: "Wallet is locked" };
-  const resp = await nodeRequest<{ proposal_id?: string }>(nodeConfig, "/turn/atomic", {
-    method: "POST",
-    body: JSON.stringify({ type: "route-update", args: { routes } }),
-  });
-  if (!resp.ok) return { error: `Proposal failed: ${resp.error}` };
-  return { proposalId: resp.data?.proposal_id || "", submitted: true };
+  if (!wallet.secretKey) return { error: "Wallet secret key not available" };
+  if (wallet.needsPassphraseSetup) {
+    return { error: "Set a wallet passphrase before signing federation proposals." };
+  }
+  requireWasm("proposeRoutes");
+  const w = wasm!;
+  try {
+    const built = w.wallet_make_action_turn(JSON.stringify({
+      sender_privkey: wallet.secretKey,
+      method: "propose_routes",
+      memo_json: JSON.stringify({ routes }),
+    }));
+    const resp = await nodeRequest<{ proposal_id?: string }>(nodeConfig, "/turns/submit", {
+      method: "POST",
+      body: JSON.stringify({
+        turn_id: built.turn_id,
+        turn_bytes: Array.from(built.turn_bytes),
+        sender_pubkey: wallet.publicKey,
+      }),
+    });
+    if (!resp.ok) return { error: `Proposal failed: ${resp.error}` };
+    return { proposalId: resp.data?.proposal_id || built.turn_id, submitted: true };
+  } catch (e: unknown) {
+    const err = e as Error;
+    return { error: err.message || "wallet_make_action_turn failed" };
+  }
 }
 
 async function voteOnProposal(proposalId: string, approve: boolean): Promise<{ accepted?: boolean; proposalId?: string; error?: string }> {
   const wallet = await loadState();
   if (wallet.locked) return { error: "Wallet is locked" };
-  const resp = await nodeRequest<{ accepted?: boolean }>(nodeConfig, "/turn/atomic/vote", {
-    method: "POST",
-    body: JSON.stringify({ proposal_id: proposalId, vote: !!approve }),
-  });
-  if (!resp.ok) return { error: `Vote failed: ${resp.error}` };
-  return { accepted: resp.data?.accepted !== false, proposalId };
+  if (!wallet.secretKey) return { error: "Wallet secret key not available" };
+  if (wallet.needsPassphraseSetup) {
+    return { error: "Set a wallet passphrase before signing federation votes." };
+  }
+  requireWasm("voteOnProposal");
+  const w = wasm!;
+  try {
+    const built = w.wallet_make_action_turn(JSON.stringify({
+      sender_privkey: wallet.secretKey,
+      method: "vote_on_proposal",
+      memo_json: JSON.stringify({ proposal_id: proposalId, vote: !!approve }),
+    }));
+    const resp = await nodeRequest<{ accepted?: boolean }>(nodeConfig, "/turns/submit", {
+      method: "POST",
+      body: JSON.stringify({
+        turn_id: built.turn_id,
+        turn_bytes: Array.from(built.turn_bytes),
+        sender_pubkey: wallet.publicKey,
+      }),
+    });
+    if (!resp.ok) return { error: `Vote failed: ${resp.error}` };
+    return { accepted: resp.data?.accepted !== false, proposalId };
+  } catch (e: unknown) {
+    const err = e as Error;
+    return { error: err.message || "wallet_make_action_turn failed" };
+  }
 }
 
 // ---------------------------------------------------------------------------
