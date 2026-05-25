@@ -603,7 +603,7 @@ mod tests {
         });
         assert!(
             has_bounded,
-            "slash must declare BoundedBy { bond_amount, dispute_count }"
+            "slash must declare BoundedBy {{ bond_amount, dispute_count }}"
         );
     }
 

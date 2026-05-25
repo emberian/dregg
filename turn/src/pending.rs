@@ -467,6 +467,7 @@ mod tests {
             executor_signature: None,
             finality: Default::default(),
             was_encrypted: false,
+            was_burn: false,
         }
     }
 

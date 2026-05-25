@@ -1067,6 +1067,7 @@ mod participant_tests {
                 executor_signature: None,
                 finality: Default::default(),
                 was_encrypted: false,
+                was_burn: false,
             },
             signatures: vec![(node_id(1), sig_1), (node_id(2), sig_2)],
         };
@@ -1118,6 +1119,7 @@ mod participant_tests {
                 executor_signature: None,
                 finality: Default::default(),
                 was_encrypted: false,
+                was_burn: false,
             },
             signatures: vec![(node_id(1), sig_1), (node_id(2), sig_2)],
         };

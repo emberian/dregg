@@ -811,6 +811,7 @@ mod hardening_tests {
     use crate::action::{Action, Authorization, DelegationMode, Effect};
     use crate::forest::{CallForest, CallTree};
     use crate::turn::Turn;
+    use crate::{ComputronCosts, TurnError, TurnResult};
     use pyana_cell::permissions::{AuthRequired, Permissions};
     use pyana_cell::{Cell, Preconditions};
 

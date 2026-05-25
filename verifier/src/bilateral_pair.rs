@@ -306,6 +306,7 @@ mod tests {
             executor_signature: None,
             finality: Default::default(),
             was_encrypted: false,
+            was_burn: false,
         }
     }
 
@@ -344,6 +345,7 @@ mod tests {
                     ),
                 },
             ],
+            unilateral_attestations: std::collections::BTreeMap::new(),
         };
         let verdict = verify_bilateral_bundle(&bundle);
         assert!(verdict.verified, "honest bundle must verify: {:?}", verdict);
@@ -380,6 +382,7 @@ mod tests {
                     ),
                 },
             ],
+            unilateral_attestations: std::collections::BTreeMap::new(),
         };
         let verdict = verify_bilateral_bundle(&bundle);
         assert!(!verdict.verified);
@@ -418,6 +421,7 @@ mod tests {
                     witnessed_receipt: bob_wr,
                 },
             ],
+            unilateral_attestations: std::collections::BTreeMap::new(),
         };
         let verdict = verify_bilateral_bundle(&bundle);
         assert!(!verdict.verified, "transfer_id tamper must reject");
@@ -457,6 +461,7 @@ mod tests {
                     ),
                 },
             ],
+            unilateral_attestations: std::collections::BTreeMap::new(),
         };
         let verdict = verify_bilateral_bundle(&bundle);
         assert!(!verdict.verified, "wrong peer cell must reject");
@@ -489,6 +494,7 @@ mod tests {
                     dummy_receipt(alice),
                 ),
             }],
+            unilateral_attestations: std::collections::BTreeMap::new(),
         };
         let verdict = verify_bilateral_bundle(&bundle);
         assert!(
@@ -523,6 +529,7 @@ mod tests {
                     ),
                 },
             ],
+            unilateral_attestations: std::collections::BTreeMap::new(),
         };
         let json = serde_json::to_string(&bundle).expect("serialize");
         let verdict = verify_bilateral_bundle_json(&json);
@@ -576,6 +583,7 @@ mod tests {
                     ),
                 },
             ],
+            unilateral_attestations: std::collections::BTreeMap::new(),
         };
         let verdict = verify_bilateral_bundle(&bundle);
         assert!(
@@ -823,6 +831,7 @@ mod tests {
                     ),
                 },
             ],
+            unilateral_attestations: std::collections::BTreeMap::new(),
         };
         let verdict = verify_bilateral_bundle(&bundle);
         assert!(

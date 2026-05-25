@@ -795,6 +795,7 @@ mod tests {
             executor_signature: None,
             finality: Default::default(),
             was_encrypted: false,
+            was_burn: false,
         };
         // Sign the receipt hash with the executor key.
         let receipt_hash = receipt.receipt_hash();
@@ -840,6 +841,7 @@ mod tests {
             executor_signature: None,
             finality: Default::default(),
             was_encrypted: false,
+            was_burn: false,
         };
         let proof = ConditionProof::Receipt(receipt);
         let mut n = nullifiers();
@@ -881,6 +883,7 @@ mod tests {
             executor_signature: None,
             finality: Default::default(),
             was_encrypted: false,
+            was_burn: false,
         };
         let proof = ConditionProof::Receipt(receipt);
         let mut n = nullifiers();

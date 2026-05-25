@@ -763,6 +763,7 @@ mod tests {
             }],
             grants: vec![],
             introduces: vec![],
+            unilateral_attestations: std::collections::BTreeMap::new(),
         };
         let roots_for_unrelated = sched.roots_for(&cid(99), 7);
         // Unrelated cell sees nothing — all sentinels.
@@ -779,6 +780,7 @@ mod tests {
             }],
             grants: vec![],
             introduces: vec![],
+            unilateral_attestations: std::collections::BTreeMap::new(),
         };
         let sender = sched.roots_for(&cid(1), 7);
         let receiver = sched.roots_for(&cid(2), 7);
@@ -961,7 +963,7 @@ mod tests {
         let custom = UnilateralAttestationKind::Custom {
             kind_tag: 0xFFFF_FFFF,
         };
-        let tag = custom.pi_tag();
+        let tag = unilateral_pi_tag(&custom);
         // Custom discriminant bit (0x4000_0000) set.
         assert_ne!(tag & 0x4000_0000, 0);
         // Tag fits in 31 bits — and canonical 32-bit BabyBear (the AIR
@@ -988,6 +990,7 @@ mod tests {
             ],
             grants: vec![],
             introduces: vec![],
+            unilateral_attestations: std::collections::BTreeMap::new(),
         };
         let c1 = sched.counts_for(&cid(1));
         assert_eq!(c1.outbound_transfer, 2);

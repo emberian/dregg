@@ -457,7 +457,7 @@ fn factory_descriptor_hash_changes_with_state_constraints() {
 fn register_function_is_idempotent_across_repeated_calls() {
     let cipherclerk = wallet_with_seed(0x42);
     let executor = pyana_app_framework::EmbeddedExecutor::new(&cipherclerk, "default");
-    let ctx = pyana_app_framework::StarbridgeAppContext::new(wallet, executor);
+    let ctx = pyana_app_framework::StarbridgeAppContext::new(cipherclerk, executor);
     let vk1 = register(&ctx);
     let vk2 = register(&ctx);
     let vk3 = register(&ctx);

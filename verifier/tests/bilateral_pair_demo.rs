@@ -54,6 +54,7 @@ fn dummy_receipt(agent: CellId) -> TurnReceipt {
         executor_signature: None,
         finality: Default::default(),
         was_encrypted: false,
+        was_burn: false,
     }
 }
 
@@ -108,6 +109,7 @@ fn bilateral_pair_demo_happy_path_then_tamper() {
                 witnessed_receipt: bob_wr.clone(),
             },
         ],
+        unilateral_attestations: std::collections::BTreeMap::new(),
     };
     let bundle_file = write_bundle(&bundle);
 
@@ -142,6 +144,7 @@ fn bilateral_pair_demo_happy_path_then_tamper() {
                 witnessed_receipt: bob_wr,
             },
         ],
+        unilateral_attestations: std::collections::BTreeMap::new(),
     };
     let tampered_file = write_bundle(&tampered_bundle);
     let (code, verdict) = run_subcommand(tampered_file.path());
@@ -179,6 +182,7 @@ fn bilateral_pair_demo_missing_peer_rejects() {
             cell_id: alice,
             witnessed_receipt: alice_wr,
         }],
+        unilateral_attestations: std::collections::BTreeMap::new(),
     };
     let bundle_file = write_bundle(&bundle);
     let (code, verdict) = run_subcommand(bundle_file.path());
