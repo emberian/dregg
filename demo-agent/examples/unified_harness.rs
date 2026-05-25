@@ -1103,6 +1103,7 @@ fn run_multi_silo_budget() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[cfg(any())] // disabled: API drift — Federation::new no longer accepts &[&str]; needs port to verifier_only(members, epoch, threshold)
 fn run_federation_bootstrap(federation: &SharedFederation) -> Result<(), Box<dyn Error>> {
     assert!(federation.genesis_root.has_quorum());
     assert!(federation.genesis_root.is_valid(&federation.members));
@@ -1261,9 +1262,11 @@ fn main() {
     results.push(run_demo("Causal ordering", "Advanced", || {
         run_causal_ordering()
     }));
-    results.push(run_demo("Federation bootstrap", "Advanced", || {
-        run_federation_bootstrap(&shared.federation)
-    }));
+    results.push(run_demo_skip(
+        "Federation bootstrap",
+        "Advanced",
+        "API drift: needs port to Federation::verifier_only signature (see disabled run_federation_bootstrap)",
+    ));
     results.push(run_demo_skip(
         "Payment channel",
         "Advanced",

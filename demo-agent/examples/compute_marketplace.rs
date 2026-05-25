@@ -386,7 +386,7 @@ fn main() {
     // Verify escrow program constraints hold
     let escrow_state = &ledger.get(&escrow_id).unwrap().state;
     let escrow_program = &ledger.get(&escrow_id).unwrap().program;
-    assert!(escrow_program.evaluate(escrow_state, None).is_ok());
+    assert!(escrow_program.evaluate(escrow_state, None, None).is_ok());
     println!("  Escrow program constraints: SATISFIED");
     println!();
 
