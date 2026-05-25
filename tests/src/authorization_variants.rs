@@ -318,6 +318,9 @@ fn touch_every_authorization(a: &Authorization) -> &'static str {
         Authorization::Unchecked => "unchecked",
         Authorization::CapTpDelivered { .. } => "captp_delivered",
         Authorization::Custom { .. } => "custom",
+        // 1-of-N disjunctive authorization. Soundness contract documented
+        // in turn::action — `proof_index` selects the satisfying candidate.
+        Authorization::OneOf { .. } => "one_of",
     }
 }
 

@@ -491,6 +491,73 @@ fn all_effect_variants() -> Vec<Variant> {
                 cert_hash: [0xCDu8; 32],
             },
         },
+        // -- Refusal (evidence-of-absence) ----------------------------------------
+        Variant {
+            label: "Refusal",
+            effect: Effect::Refusal {
+                cell: cell_a,
+                offered_action_commitment: [0xAB; 32],
+                refusal_reason: pyana_turn::action::RefusalReason::Declined,
+                proof_witness_index: 0,
+            },
+        },
+        // -- Cell lifecycle (Silver-Vision subset) --------------------------------
+        Variant {
+            label: "CellSeal",
+            effect: Effect::CellSeal {
+                target: cell_a,
+                reason: [0x11; 32],
+            },
+        },
+        Variant {
+            label: "CellUnseal",
+            effect: Effect::CellUnseal { target: cell_a },
+        },
+        Variant {
+            label: "CellDestroy",
+            effect: Effect::CellDestroy {
+                target: cell_a,
+                certificate: pyana_cell::lifecycle::DeathCertificate {
+                    cell_id: cell_a,
+                    last_receipt_hash: [0x22; 32],
+                    final_state_commitment: [0x33; 32],
+                    destroyed_at_height: 1,
+                    reason: pyana_cell::lifecycle::DeathReason::Voluntary,
+                },
+            },
+        },
+        Variant {
+            label: "Burn",
+            effect: Effect::Burn {
+                target: cell_a,
+                slot: 0,
+                amount: 1,
+            },
+        },
+        Variant {
+            label: "AttenuateCapability",
+            effect: Effect::AttenuateCapability {
+                cell: cell_a,
+                slot: 0,
+                narrower_permissions: AuthRequired::None,
+                narrower_effects: None,
+                narrower_expiry: Some(1),
+            },
+        },
+        Variant {
+            label: "ReceiptArchive",
+            effect: Effect::ReceiptArchive {
+                prefix_end_height: 1,
+                checkpoint: pyana_cell::lifecycle::ArchivalAttestation {
+                    cell_id: cell_a,
+                    archive_start_height: 0,
+                    archive_end_height: 1,
+                    archive_blob_hash: [0x44; 32],
+                    archive_terminal_commitment: [0x55; 32],
+                    archive_terminal_receipt_hash: [0x66; 32],
+                },
+            },
+        },
     ]
 }
 
@@ -548,6 +615,13 @@ fn assert_variant_coverage(e: &Effect) -> &'static str {
         Effect::EnlivenRef { .. } => "EnlivenRef",
         Effect::DropRef { .. } => "DropRef",
         Effect::ValidateHandoff { .. } => "ValidateHandoff",
+        Effect::Refusal { .. } => "Refusal",
+        Effect::CellSeal { .. } => "CellSeal",
+        Effect::CellUnseal { .. } => "CellUnseal",
+        Effect::CellDestroy { .. } => "CellDestroy",
+        Effect::Burn { .. } => "Burn",
+        Effect::AttenuateCapability { .. } => "AttenuateCapability",
+        Effect::ReceiptArchive { .. } => "ReceiptArchive",
     }
 }
 

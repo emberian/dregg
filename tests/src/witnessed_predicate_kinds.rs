@@ -257,6 +257,8 @@ fn touch_every_kind(k: WitnessedPredicateKind) -> &'static str {
         WitnessedPredicateKind::BlindedSet => "blinded_set",
         WitnessedPredicateKind::BridgePredicate => "bridge_predicate",
         WitnessedPredicateKind::PedersenEquality => "pedersen_equality",
+        // Categorical dual of MerkleMembership — sorted-set non-membership.
+        WitnessedPredicateKind::NonMembership => "non_membership",
         WitnessedPredicateKind::Custom { .. } => "custom",
     }
 }
