@@ -5020,9 +5020,14 @@ impl TurnExecutor {
         // Until this site existed, `Preconditions::witnessed` clauses
         // were dead code (CAVEAT-LAYER-COVERAGE.md §6.7).
         if !preconditions.witnessed.is_empty() {
-            let Some(registry) = self.witnessed_registry.as_ref() else {
-                // No registry configured — surface the same shape as
-                // KindNotRegistered so the precondition fails closed.
+            // Fail-closed gate: if the registry was disabled by an
+            // explicit set_witnessed_registry(None)-style host
+            // configuration, every witnessed clause rejects rather
+            // than silently passing. dispatch_witnessed_clause
+            // reproduces this check; the gate here makes the error
+            // message specific to "no registry at all" vs "kind not
+            // registered".
+            if self.witnessed_registry.is_none() {
                 return Err((
                     TurnError::PreconditionFailed {
                         description:
@@ -5031,7 +5036,7 @@ impl TurnExecutor {
                     },
                     path.to_vec(),
                 ));
-            };
+            }
             for wp in &preconditions.witnessed {
                 self.dispatch_witnessed_clause(
                     wp,
