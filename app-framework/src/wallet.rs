@@ -183,6 +183,47 @@ impl AppWallet {
             .make_turn_with_actions_for(&self.domain, actions)
     }
 
+    /// Build a signed [`Turn`] that mints a new cell from a deployed
+    /// factory descriptor via the canonical `Effect::CreateCellFromFactory`
+    /// path.
+    ///
+    /// This is the *userspace* entry to constructor-transparency cell
+    /// birth: the extension wallet's `window.pyana.createFromFactory`,
+    /// the wasm runtime's `create_agent`, and any in-process app that
+    /// mints cells go through here. No callers should reach past the
+    /// `AppWallet` for `Effect::CreateCellFromFactory` — when they do, a
+    /// new framework method is the right answer.
+    ///
+    /// # Arguments
+    ///
+    /// * `factory_vk` — VK hash of a factory previously deployed via
+    ///   `TurnExecutor::deploy_factory`. The factory must accept the
+    ///   `mode` from `params`; mismatches surface as a runtime
+    ///   `FactoryError::ModeMismatch` when the turn executes.
+    /// * `owner_pubkey` — the ed25519 public key of the new cell's owner.
+    /// * `token_id` — the token-domain identifier for the new cell.
+    /// * `params` — additional creation parameters (program VK, initial
+    ///   fields/caps, mode).
+    ///
+    /// The issuing cell is this wallet's `cell_id()`; the federation_id
+    /// is the wallet's bound `federation_id`.
+    ///
+    /// The returned `Turn` is fully signed (real
+    /// `Authorization::Signature(..)`); pair with
+    /// [`EmbeddedExecutor::submit_turn`] (or any in-process executor /
+    /// remote node `/turns/submit`) to actually mint the cell.
+    pub fn create_from_factory(
+        &self,
+        factory_vk: [u8; 32],
+        owner_pubkey: [u8; 32],
+        token_id: [u8; 32],
+        params: pyana_cell::FactoryCreationParams,
+    ) -> Turn {
+        let issuer = self.cell_id();
+        self.read()
+            .create_from_factory(issuer, factory_vk, owner_pubkey, token_id, params, &self.federation_id)
+    }
+
     /// Get a shared handle to the underlying SDK wallet lock.
     ///
     /// Used by the framework to construct an [`EmbeddedExecutor`] that
@@ -427,6 +468,58 @@ mod tests {
         match action.authorization {
             pyana_turn::action::Authorization::Signature(a, b) => {
                 assert!(a != [0u8; 32] || b != [0u8; 32]);
+            }
+            other => panic!("expected Signature variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn create_from_factory_emits_signed_turn_with_factory_effect() {
+        // The canonical constructor-transparency mint path: AppWallet wraps
+        // AgentWallet::create_from_factory and binds it to the framework's
+        // federation_id. The returned Turn must carry one
+        // Effect::CreateCellFromFactory action with a real signature.
+        use pyana_cell::{CellMode, FactoryCreationParams};
+        use pyana_turn::action::{Authorization, Effect};
+
+        let sdk = AgentWallet::new();
+        let wallet = AppWallet::new(sdk, [33u8; 32]);
+        let factory_vk = [44u8; 32];
+        let owner = [55u8; 32];
+        let token = [66u8; 32];
+        let params = FactoryCreationParams {
+            mode: CellMode::Hosted,
+            program_vk: None,
+            initial_fields: vec![],
+            initial_caps: vec![],
+            owner_pubkey: owner,
+        };
+
+        let turn = wallet.create_from_factory(factory_vk, owner, token, params);
+
+        // Issuer is the wallet's own cell.
+        assert_eq!(turn.agent, wallet.cell_id());
+        // Exactly one root action, carrying the factory effect.
+        assert_eq!(turn.call_forest.roots.len(), 1);
+        let root = &turn.call_forest.roots[0];
+        assert_eq!(root.action.effects.len(), 1);
+        match &root.action.effects[0] {
+            Effect::CreateCellFromFactory {
+                factory_vk: fv,
+                owner_pubkey: op,
+                token_id: tid,
+                ..
+            } => {
+                assert_eq!(*fv, factory_vk);
+                assert_eq!(*op, owner);
+                assert_eq!(*tid, token);
+            }
+            other => panic!("expected CreateCellFromFactory effect, got {other:?}"),
+        }
+        // Real signature, not Unchecked.
+        match &root.action.authorization {
+            Authorization::Signature(a, b) => {
+                assert!(*a != [0u8; 32] || *b != [0u8; 32]);
             }
             other => panic!("expected Signature variant, got {other:?}"),
         }
