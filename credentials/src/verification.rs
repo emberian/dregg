@@ -126,9 +126,9 @@ fn verify_inner(
     //    `LocalOnly` (constraint-check) for the test path. Production
     //    callers should pass `require_real_stark = true` (TODO when the
     //    Bridge-Hardening lane lands the proof-to-action binding).
-    match proof.verification {
+    match &proof.verification {
         PresentationVerification::Valid | PresentationVerification::LocalOnly => {}
-        other => return Err(VerificationError::Bridge(other)),
+        other => return Err(VerificationError::Bridge(other.clone())),
     }
 
     // 3. Schema match. Each disclosed attribute must belong to the

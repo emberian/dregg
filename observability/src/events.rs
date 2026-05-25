@@ -231,6 +231,17 @@ pub enum AuthorizationPayload {
         delegation: BearerDelegationSummary,
     },
     Unchecked,
+    /// App-defined authorization (AUTHORIZATION-CUSTOM-DESIGN). The
+    /// observability stream surfaces the witnessed-predicate kind tag
+    /// and (for `Custom { vk_hash }`) the vk_hash so studio consumers
+    /// can distinguish auth modes; the predicate witness itself stays
+    /// in the receipt.
+    Custom {
+        /// Predicate-kind tag (built-in discriminant name, or `"custom"`).
+        predicate_kind: String,
+        /// vk_hash hex (set for `Custom` kind; empty otherwise).
+        vk_hash: String,
+    },
     CapTpDelivered {
         /// Hash of the `HandoffCertificate` (BLAKE3 over its canonical
         /// signing message — i.e. the same bytes the introducer signed).
@@ -311,6 +322,28 @@ impl AuthorizationPayload {
                 delegation: bearer_delegation_summary(b),
             },
             Authorization::Unchecked => AuthorizationPayload::Unchecked,
+            Authorization::Custom { predicate } => {
+                use pyana_cell::predicate::WitnessedPredicateKind as K;
+                let (predicate_kind, vk_hash) = match predicate.kind {
+                    K::Dfa => ("dfa".to_string(), String::new()),
+                    K::Temporal => ("temporal".to_string(), String::new()),
+                    K::MerkleMembership => {
+                        ("merkle_membership".to_string(), String::new())
+                    }
+                    K::BlindedSet => ("blinded_set".to_string(), String::new()),
+                    K::BridgePredicate => {
+                        ("bridge_predicate".to_string(), String::new())
+                    }
+                    K::PedersenEquality => {
+                        ("pedersen_equality".to_string(), String::new())
+                    }
+                    K::Custom { vk_hash } => ("custom".to_string(), hex32(&vk_hash)),
+                };
+                AuthorizationPayload::Custom {
+                    predicate_kind,
+                    vk_hash,
+                }
+            }
             Authorization::CapTpDelivered {
                 handoff_cert,
                 introducer_pk,
