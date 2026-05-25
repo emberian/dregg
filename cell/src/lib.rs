@@ -35,6 +35,7 @@ pub mod preconditions;
 pub mod predicate;
 pub mod program;
 pub mod revocation_channel;
+pub mod ring_closure;
 #[cfg(feature = "crypto")]
 pub mod seal;
 pub mod state;
@@ -72,7 +73,7 @@ pub use facet::{
     EFFECT_ALL, EFFECT_BRIDGE_OPS, EFFECT_CAPTP_OPS, EFFECT_CREATE_CELL, EFFECT_DELEGATION_OPS,
     EFFECT_EMIT_EVENT, EFFECT_ESCROW_OPS, EFFECT_GRANT_CAPABILITY, EFFECT_INCREMENT_NONCE,
     EFFECT_INTRODUCE, EFFECT_NOTE_CREATE, EFFECT_NOTE_SPEND, EFFECT_OBLIGATION_OPS,
-    EFFECT_QUEUE_OPS, EFFECT_REVOKE_CAPABILITY, EFFECT_SEAL_OPS, EFFECT_SET_FIELD,
+    EFFECT_QUEUE_OPS, EFFECT_REFUSAL, EFFECT_REVOKE_CAPABILITY, EFFECT_SEAL_OPS, EFFECT_SET_FIELD,
     EFFECT_SET_PERMISSIONS, EFFECT_SET_VERIFICATION_KEY, EFFECT_SOVEREIGN_OPS, EFFECT_TRANSFER,
     EffectContext, EffectMask, ExtendedFacet, FACET_ADMIN, FACET_DELEGATOR, FACET_READ_ONLY,
     FACET_STATE_WRITER, FACET_TRANSFER_ONLY, FacetBuilder, FacetConstraint, FacetViolation,
@@ -116,6 +117,10 @@ pub use predicate::{
 pub use program::{CellProgram, ProgramError, StateConstraint, field_from_u64, field_from_u64_be};
 pub use revocation_channel::{
     ChannelId, RevocationChannel, RevocationChannelError, RevocationChannelSet,
+};
+pub use ring_closure::{
+    ClosureProofKind, RingClosureAttestation, RingClosureError, RingLegPi,
+    canonical_silver_commitment,
 };
 #[cfg(feature = "crypto")]
 pub use seal::{SealError, SealPair, SealedBox, SealerPublic, test_seal_pair};
