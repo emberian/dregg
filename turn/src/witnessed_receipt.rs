@@ -75,14 +75,34 @@ pub enum WitnessAvailability {
 
 /// The replay-material bundle.
 ///
-/// For v1 we ship the post-trace-generation form: the full trace rows as
-/// canonical-BabyBear `u32` cells. This is the most direct mirror of what
-/// `stark::prove` consumed; a replayer reconstructs the [`BabyBear`]
-/// elements by calling `BabyBear::new_canonical(u32)`.
+/// # Two replay modes (Silver Vision vs. Golden Vision)
 ///
-/// We deliberately do *not* ship the pre-state + effects in v1 — those
-/// remain the prover's local secret and are the v2 refinement (strategy C
-/// bifurcation; design doc §3).
+/// The bundle carries the inline trace (Silver Vision form) and, optionally,
+/// a [`RecursiveProofVariant`] (Golden Vision form). A future replayer may
+/// pick either:
+///
+/// - **Silver Vision (Inline trace replay):** re-run `EffectVmAir::eval_constraints`
+///   over every consecutive row pair of `trace_rows`. Cost grows linearly with
+///   trace height; the witness payload is hundreds of KB per turn.
+/// - **Golden Vision (recursive proof):** verify the single recursive STARK
+///   proof in `recursive_proof`, which attests "I re-ran the AIR over the
+///   inline witness data and accepted." Verifier cost is independent of trace
+///   length; the proof payload is ~KB.
+///
+/// Both modes attest the same fact (AIR acceptance over the same trace + PI).
+/// A bundle may carry either or both: a producer running with
+/// `recursive_compress = true` ships both an inline trace and a recursive
+/// proof; a verifier may then choose freely.
+///
+/// # Why an additive shape instead of a bare `enum`
+///
+/// The Golden Vision plan in `THOUGHTS-AND-DREAMS.md` framed the two modes as
+/// two enum variants. We carry the inline trace as a required field
+/// (so the existing Silver-Vision-only consumer in `node/src/mcp.rs` stays
+/// untouched, per this lane's "do not touch node/" constraint) plus an
+/// optional [`RecursiveProofVariant`] for the Golden Vision compression. The
+/// semantic contract — "RecursiveProof attests the same acceptance as
+/// re-running the AIR over the inline trace" — is preserved.
 ///
 /// [`BabyBear`]: pyana_circuit::field::BabyBear
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -92,6 +112,39 @@ pub struct WitnessBundle {
     pub trace_rows: Vec<Vec<u32>>,
     /// How this witness is made available. Always `Inline` in v1.
     pub availability: WitnessAvailability,
+    /// Optional Golden Vision recursive compression. When present, a
+    /// replayer may verify *this proof* in lieu of re-running the AIR over
+    /// `trace_rows`. The proof attests acceptance of the same trace; an
+    /// adversary cannot replace the trace and reuse the proof because the
+    /// proof's own public inputs would no longer match the receipt's PI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recursive_proof: Option<RecursiveProofVariant>,
+}
+
+/// Golden Vision recursive compression: a single small Plonky3 recursive
+/// STARK proof attesting that the inline trace satisfied the Effect VM
+/// AIR's constraints.
+///
+/// The proof is produced by
+/// `pyana_circuit::recursive_witness_bundle::RecursiveProofProducer` and
+/// verified by
+/// `pyana_circuit::recursive_witness_bundle::verify_recursive_proof_variant`.
+/// Both sides share a registry of `recursive_vk_hash` values (VK v2
+/// layered encoding) so an unknown hash → reject at registry lookup.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RecursiveProofVariant {
+    /// Postcard-encoded `BatchStarkProof<PyanaRecursionConfig>` bytes from
+    /// the recursive layer.
+    pub proof_bytes: Vec<u8>,
+    /// Public inputs the recursive proof commits to, as canonical-BabyBear
+    /// `u32` cells. Should equal `WitnessedReceipt.public_inputs` for the
+    /// scope-2 replay binding to hold.
+    pub public_inputs: Vec<u32>,
+    /// VK v2 layered hash identifying which recursive-verifier the
+    /// receiver should dispatch to. v1 supports exactly one
+    /// (`EFFECT_VM_RECURSIVE_VK_HASH`); unknown hashes are rejected at
+    /// the registry lookup step.
+    pub recursive_vk_hash: [u8; 32],
 }
 
 impl WitnessBundle {
@@ -104,16 +157,77 @@ impl WitnessBundle {
         Self {
             trace_rows,
             availability: WitnessAvailability::Inline,
+            recursive_proof: None,
         }
+    }
+
+    /// Like [`inline_from_trace`] but additionally attaches a recursive
+    /// compression proof. The two replay modes are then both available.
+    pub fn inline_with_recursive(
+        trace: &[Vec<pyana_circuit::field::BabyBear>],
+        recursive: RecursiveProofVariant,
+    ) -> Self {
+        let mut wb = Self::inline_from_trace(trace);
+        wb.recursive_proof = Some(recursive);
+        wb
+    }
+
+    /// True iff this bundle carries a Golden Vision recursive proof.
+    pub fn has_recursive_proof(&self) -> bool {
+        self.recursive_proof.is_some()
     }
 
     /// BLAKE3 hash of the postcard-serialized bundle. Always defined (even
     /// when `availability` is non-inline); binds the WR to a specific
     /// witness independent of disclosure.
+    ///
+    /// Note: this hash covers **both** the inline trace and the optional
+    /// recursive proof. If a producer ships only-inline today and decides
+    /// to add a recursive proof later, the witness_hash changes — that is
+    /// intentional, since the bundle has changed.
     pub fn witness_hash(&self) -> [u8; 32] {
         let bytes = postcard::to_allocvec(self).expect("WitnessBundle is serializable");
         *blake3::hash(&bytes).as_bytes()
     }
+}
+
+// ---------------------------------------------------------------------------
+// Recursive compression bridge (Golden Vision)
+// ---------------------------------------------------------------------------
+
+/// Produce a [`RecursiveProofVariant`] from an inline scope-2 trace + the
+/// receipt's public inputs.
+///
+/// Thin wrapper around
+/// [`pyana_circuit::recursive_witness_bundle::RecursiveProofProducer::produce`]
+/// so [`WitnessedReceipt::from_components_with_compression`] does not have
+/// to thread `BabyBear` through its signature. Returns the compressed
+/// variant on success; on failure returns the error string from the
+/// recursion library (e.g. AIR build failure, postcard encode error).
+///
+/// Relies on the `recursion` feature being enabled in `pyana-circuit`
+/// (which is in its default feature set). If the host disables the
+/// feature, this entry point becomes a link-time error — which is the
+/// honest signal: opt-in recursive compression requires the recursion
+/// substrate.
+fn produce_recursive_variant(
+    trace: &[Vec<pyana_circuit::field::BabyBear>],
+    public_inputs_u32: &[u32],
+) -> Result<RecursiveProofVariant, String> {
+    use pyana_circuit::field::BabyBear;
+    use pyana_circuit::recursive_witness_bundle::RecursiveProofProducer;
+
+    let pi: Vec<BabyBear> = public_inputs_u32
+        .iter()
+        .map(|&v| BabyBear::new_canonical(v))
+        .collect();
+
+    let out = RecursiveProofProducer::produce(trace, &pi)?;
+    Ok(RecursiveProofVariant {
+        proof_bytes: out.proof_bytes,
+        public_inputs: public_inputs_u32.to_vec(),
+        recursive_vk_hash: out.recursive_vk_hash,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -164,9 +278,44 @@ impl WitnessedReceipt {
         public_inputs: Vec<u32>,
         trace: Option<&[Vec<pyana_circuit::field::BabyBear>]>,
     ) -> Self {
+        Self::from_components_with_compression(receipt, proof_bytes, public_inputs, trace, false)
+    }
+
+    /// Like [`Self::from_components`] but with an opt-in Golden Vision
+    /// recursive compression flag.
+    ///
+    /// When `recursive_compress` is `true` AND `trace` is `Some`, this
+    /// runs `pyana_circuit::recursive_witness_bundle::RecursiveProofProducer`
+    /// on the trace + public inputs and attaches a [`RecursiveProofVariant`]
+    /// to the resulting [`WitnessBundle`]. The inline trace is kept
+    /// alongside, so downstream replayers may pick *either* mode (re-run
+    /// AIR vs. recursive verify).
+    ///
+    /// When `recursive_compress` is `false` (default), behaves identically
+    /// to [`Self::from_components`].
+    ///
+    /// # Errors
+    ///
+    /// Recursive compression is best-effort: if the producer fails, the
+    /// receipt is still returned with the inline trace attached (silver
+    /// vision form) so the chain is not lost. The recursive proof is just
+    /// not attached. Callers wanting hard-fail-on-compression should use
+    /// [`Self::from_components_strict_recursive`].
+    pub fn from_components_with_compression(
+        receipt: TurnReceipt,
+        proof_bytes: Vec<u8>,
+        public_inputs: Vec<u32>,
+        trace: Option<&[Vec<pyana_circuit::field::BabyBear>]>,
+        recursive_compress: bool,
+    ) -> Self {
         let (witness_bundle, witness_hash) = match trace {
             Some(t) => {
-                let wb = WitnessBundle::inline_from_trace(t);
+                let mut wb = WitnessBundle::inline_from_trace(t);
+                if recursive_compress {
+                    if let Ok(rp) = produce_recursive_variant(t, &public_inputs) {
+                        wb.recursive_proof = Some(rp);
+                    }
+                }
                 let h = wb.witness_hash();
                 (Some(wb), h)
             }
@@ -180,6 +329,28 @@ impl WitnessedReceipt {
             witness_hash,
             aggregate_membership: None,
         }
+    }
+
+    /// Like [`Self::from_components_with_compression`] but hard-fails if
+    /// recursive compression cannot be produced. Use when the caller
+    /// requires the Golden Vision form.
+    pub fn from_components_strict_recursive(
+        receipt: TurnReceipt,
+        proof_bytes: Vec<u8>,
+        public_inputs: Vec<u32>,
+        trace: &[Vec<pyana_circuit::field::BabyBear>],
+    ) -> Result<Self, String> {
+        let rp = produce_recursive_variant(trace, &public_inputs)?;
+        let wb = WitnessBundle::inline_with_recursive(trace, rp);
+        let h = wb.witness_hash();
+        Ok(Self {
+            receipt,
+            proof_bytes,
+            public_inputs,
+            witness_bundle: Some(wb),
+            witness_hash: h,
+            aggregate_membership: None,
+        })
     }
 
     /// Stage 7-γ.2 Phase 1: verify bilateral cross-cell consistency for a
