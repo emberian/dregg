@@ -637,27 +637,27 @@ fn run_programmable_cell(_ledger: &mut Ledger) -> Result<(), Box<dyn Error>> {
     state.fields[0] = field_from_u64(800);
     state.fields[1] = field_from_u64(42);
     state.fields[2] = field_from_u64(200);
-    assert!(program.evaluate(&state, None).is_ok());
+    assert!(program.evaluate(&state, None, None).is_ok());
 
     let old = state.clone();
     let mut good = state.clone();
     good.fields[0] = field_from_u64(500);
     good.fields[2] = field_from_u64(500);
-    assert!(program.evaluate(&good, Some(&old)).is_ok());
+    assert!(program.evaluate(&good, Some(&old), None).is_ok());
 
     let mut bad = state.clone();
     bad.fields[0] = field_from_u64(50);
     bad.fields[2] = field_from_u64(950);
-    assert!(program.evaluate(&bad, Some(&old)).is_err());
+    assert!(program.evaluate(&bad, Some(&old), None).is_err());
 
     let mut tamper = state.clone();
     tamper.fields[1] = field_from_u64(99);
-    assert!(program.evaluate(&tamper, Some(&old)).is_err());
+    assert!(program.evaluate(&tamper, Some(&old), None).is_err());
 
     let mut inflate = state.clone();
     inflate.fields[0] = field_from_u64(900);
     inflate.fields[2] = field_from_u64(200);
-    assert!(program.evaluate(&inflate, Some(&old)).is_err());
+    assert!(program.evaluate(&inflate, Some(&old), None).is_err());
     Ok(())
 }
 

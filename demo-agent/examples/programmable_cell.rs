@@ -72,7 +72,7 @@ fn main() {
     cell_state.fields[2] = field_from_u64(200); // reserve = 200 (800 + 200 = 1000)
 
     // Verify initial state satisfies the program.
-    let init_result = predicate_program.evaluate(&cell_state, None);
+    let init_result = predicate_program.evaluate(&cell_state, None, None);
     assert!(init_result.is_ok(), "Initial state must satisfy program");
     println!("  Initial state: balance=800, type=42, reserve=200");
     println!("  Program satisfied: [PASS]");
@@ -86,7 +86,7 @@ fn main() {
     new_state.fields[0] = field_from_u64(500); // balance -> 500 (still >= 100)
     new_state.fields[2] = field_from_u64(500); // reserve -> 500 (500 + 500 = 1000)
 
-    let result = predicate_program.evaluate(&new_state, Some(&old_state));
+    let result = predicate_program.evaluate(&new_state, Some(&old_state), None);
     assert!(result.is_ok());
     println!("    New state: balance=500, reserve=500");
     println!("    FieldGte(0, 100): 500 >= 100 [PASS]");
@@ -102,7 +102,7 @@ fn main() {
     bad_state.fields[0] = field_from_u64(50); // balance -> 50 (< 100!)
     bad_state.fields[2] = field_from_u64(950); // keep sum = 1000
 
-    let result = predicate_program.evaluate(&bad_state, Some(&old_state));
+    let result = predicate_program.evaluate(&bad_state, Some(&old_state), None);
     assert!(result.is_err());
     match result.unwrap_err() {
         ProgramError::ConstraintViolated { description, .. } => {
@@ -119,7 +119,7 @@ fn main() {
     let mut tamper_state = cell_state.clone();
     tamper_state.fields[1] = field_from_u64(99); // try to change type
 
-    let result = predicate_program.evaluate(&tamper_state, Some(&old_state));
+    let result = predicate_program.evaluate(&tamper_state, Some(&old_state), None);
     assert!(result.is_err());
     match result.unwrap_err() {
         ProgramError::ConstraintViolated { description, .. } => {
@@ -137,7 +137,7 @@ fn main() {
     inflate_state.fields[0] = field_from_u64(900); // balance = 900
     inflate_state.fields[2] = field_from_u64(200); // reserve stays 200 -> sum = 1100 != 1000
 
-    let result = predicate_program.evaluate(&inflate_state, Some(&old_state));
+    let result = predicate_program.evaluate(&inflate_state, Some(&old_state), None);
     assert!(result.is_err());
     match result.unwrap_err() {
         ProgramError::ConstraintViolated { description, .. } => {
@@ -168,7 +168,7 @@ fn main() {
 
     // Show that directly evaluating a circuit program demands a proof.
     let state = CellState::new(0);
-    let result = circuit_program.evaluate(&state, None);
+    let result = circuit_program.evaluate(&state, None, None);
     assert!(result.is_err());
     match result.unwrap_err() {
         ProgramError::CircuitProofRequired { circuit_hash: h } => {

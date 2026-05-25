@@ -35,7 +35,7 @@ fn alice_to_bob_transfer_with_bilateral_id_match() {
     // 2. Alice signs Turn(Transfer(A→B, 100)) at nonce=7.
     // 3. Harness drives the per-cell proofs for A and B.
     // 4. Off-AIR verifier joins them on transfer_id and accepts.
-    let _ = SimulationHarness::default;
+    let _ = SimulationHarness::new_federation;
 }
 
 #[test]
