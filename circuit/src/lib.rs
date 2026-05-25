@@ -172,6 +172,12 @@ pub mod plonky3_verifier_air;
 #[cfg(feature = "recursion")]
 pub mod plonky3_recursion_impl;
 
+/// Recursive (Golden Vision) compression bridge for `pyana_turn::WitnessedReceipt`
+/// scope-2 replay. See the module docs for the Silver→Golden mapping and
+/// the VK v2 layered encoding of the recursive VK hash.
+#[cfg(feature = "recursion")]
+pub mod recursive_witness_bundle;
+
 /// Stage 7-γ.2 Phase 2 joint bilateral aggregation AIR. Consumes N per-cell
 /// γ.2 PI vectors and the schedule-derived projection; emits a single outer
 /// proof attesting bilateral consistency. See module docs and
