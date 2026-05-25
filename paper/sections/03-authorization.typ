@@ -6,23 +6,56 @@
 
 == Multi-Modal Authorization
 
-Pyana supports five authorization modes, each suited to different trust contexts:
+Pyana supports six authorization modes, each suited to a different trust context:
 
 #figure(
   table(
     columns: (auto, auto, auto),
     align: (left, left, left),
     table.header([*Mode*], [*Mechanism*], [*Use Case*]),
-    [Signature], [Ed25519 over turn hash], [Standard agent-initiated turns],
-    [Proof], [STARK proof of authorization (Datalog evaluation)], [Cross-boundary, privacy-preserving],
-    [Breadstuff], [Macaroon HMAC chain with caveats], [Attenuated delegation within a trust domain],
-    [Bearer], [BearerCapProof (signed or STARK delegation chain)], [One-shot tokens, tickets, ephemeral access],
-    [Unchecked], [No verification (genesis only)], [System bootstrap],
+    [`Signature`], [Ed25519 over canonical v3 turn message], [Standard agent-initiated turns],
+    [`Proof`], [STARK proof of authorization (Datalog evaluation)], [Cross-boundary, privacy-preserving],
+    [`Breadstuff`], [Macaroon HMAC chain with caveats], [Attenuated delegation within a trust domain],
+    [`Bearer`], [`BearerCapProof` (signed or STARK delegation chain)], [One-shot tokens, tickets, ephemeral access],
+    [`CapTpDelivered`], [Handoff certificate + recipient presentation + swiss enliven], [Cross-vat CapTP-delivered messages producing on-ledger Turns],
+    [`Custom { predicate, descriptor }`], [App-defined: `WitnessedPredicate` proves authorization], [Multisig, DAO-quorum, time-locked, capability-conditional, compute-attested],
   ),
-  caption: [Authorization modes. A turn declares which mode it uses; the executor validates accordingly.],
+  caption: [Authorization modes. A turn declares which mode it uses; the executor dispatches accordingly. `Authorization::Unchecked` is, in current production, only allowed through a CI-guarded carve-out list (Stage 8 P2.F).],
 )
 
 The Bearer mode carries a `BearerCapProof`: either a signed Ed25519 delegation chain (fast, non-private) or a STARK proof that a valid delegation chain exists (private, post-quantum). The choice is made at delegation time based on the desired privacy/performance tradeoff.
+
+=== `Authorization::CapTpDelivered`
+
+CapTP-delivered messages produce algebraically-bound Turns on the receiving ledger. When federation $F_2$ receives a CapTP message originating from federation $F_1$ for cell `bob_cell`, the wire layer constructs a Turn with `Authorization::CapTpDelivered { introducer, recipient_pk, handoff_cert, swiss_proof, ... }`. The executor verifies:
+
++ The handoff certificate's Ed25519 introducer signature against the entry in `known_federations` for $F_1$.
++ The recipient's presentation signature against `recipient_pk`.
++ The swiss-bytes enliven against the local swiss table.
++ The certificate's `max_uses` counter is not exhausted; if `max_uses == None`, replay protection comes from the `HandoffError::ReplayDetected` ledger (per-cert nonce-seen set).
+
+The resulting Turn produces a real `TurnReceipt`---closing the integration loop "every CapTP mutation has a corresponding on-chain receipt." The prior gap (CapTP-routed Turns were pushed to a `pending_captp_turns` queue that was never drained) is closed by `CapTpState::process_pending_turns` invoked on every executor tick.
+
+=== `Authorization::Custom { predicate, descriptor }`
+
+The new `Custom` variant lets apps define their own authorization modes purely through the `WitnessedPredicate` registry, without kernel changes:
+
+```rust
+Authorization::Custom {
+    predicate: WitnessedPredicate,           // proves authorization
+    descriptor: AuthModeDescriptor,           // (vk_hash, human_name, semver, boundary_contract)
+}
+```
+
+The executor's verification path:
+
++ *Descriptor consistency*: if `predicate.kind == Custom { vk_hash }`, require `vk_hash == descriptor.vk_hash`; for built-in kinds (`Dfa`, `Temporal`, etc.) require `descriptor.vk_hash == canonical_vk_hash_for(kind)`.
++ *Registry lookup*: resolve the verifier via `WitnessedPredicateRegistry::lookup(descriptor.vk_hash)`. If the federation has not registered the verifier, reject with `TurnError::AuthModeNotRegistered { vk_hash }`---no silent fallback.
++ *Input binding*: compute the canonical action signing message `M = canonical_signing_message(action, position, federation_id, turn_nonce)`---the same message the `Signature` path uses---and bind it as the predicate's input.
++ *Verifier call*: `verifier.verify(commitment, input = M, proof_bytes = action.witness_blobs[predicate.proof_witness_index])`.
++ *Effect-mask check*: if the descriptor declares an `allowed_effects: Option<EffectMask>`, the same facet-attenuation check that `Bearer` performs applies.
+
+This single variant subsumes a class of formerly-hardcoded modes: multisig (two `BridgePredicateProof`s wrapped in `WitnessedPredicate { kind: Custom { vk_hash: multisig_vk } }`), DAO-quorum (a STARK proving $k$-of-$n$ signature threshold satisfied), time-locked (a `Temporal` predicate proving block height $>=$ threshold), capability-conditional (a `MerkleMembership` predicate against the actor's c-list), compute-attested (a `Custom { vk_hash }` proof from an external zkVM). The auth mode becomes app-extensible.
 
 == Capabilities as Datalog Facts
 
@@ -32,16 +65,69 @@ Authorization state is encoded as a set of Datalog facts. A fact is a ground ato
 
 The same Datalog rules yield the same answer in two modes:
 
-- *Trusted mode* (local evaluation): Cost $tilde 8 mu s$. Used within a trust boundary.
-- *Trustless mode* (STARK proof): The prover generates a STARK proof that Datalog evaluation produced `allow`. Cost $tilde 64 mu s$ prove, $tilde 438 mu s$ verify.
+- *Trusted mode* (local evaluation): cost $tilde 8 mu s$. Used within a trust boundary.
+- *Trustless mode* (STARK proof): the prover generates a STARK proof that Datalog evaluation produced `allow`. Cost $tilde 64 mu s$ prove, $tilde 438 mu s$ verify.
 
 Both modes evaluate identical rules over identical data. The proof attests to the computation, not to a separate protocol.
+
+== Predicate Substrate <sec-predicate-substrate>
+
+Authorization is one consumer of a broader predicate substrate that spans slot caveats, per-action preconditions, capability caveats, and now `Authorization::Custom`. The substrate is organized in two halves: a 21+ variant `StateConstraint` vocabulary for cleartext or commitment-bearing predicates, and a unified `WitnessedPredicate` shape for predicates that carry a witness/proof against a commitment.
+
+=== `StateConstraint`: 21+ variants
+
+Slot caveats (declared per-cell in the `CellProgram`, enforced by the executor on every state-modifying turn) span the following families:
+
+#figure(
+  table(
+    columns: (auto, auto),
+    align: (left, left),
+    table.header([*Family*], [*Variants*]),
+    [Static post-state], [`FieldEquals`, `FieldGte`, `FieldLte`, `SumEquals`],
+    [Transition], [`WriteOnce`, `Immutable`, `Monotonic`, `StrictMonotonic`, `BoundedBy`, `FieldDelta`, `FieldDeltaInRange`, `AllowedTransitions`],
+    [Temporal/network], [`FieldGteHeight`, `FieldLteHeight`, `TemporalGate`, `MonotonicSequence`],
+    [Flow conservation], [`SumEqualsAcross`, `BoundDelta` (cross-cell, $gamma$.2)],
+    [Sender-bound], [`SenderAuthorized { Public | Blinded }`, `CapabilityUniqueness`],
+    [Rate], [`RateLimit`, `RateLimitBySum`],
+    [Witnessed (proof-bearing)], [`TemporalPredicate { dsl_hash }`, `Witnessed(WitnessedPredicate)`],
+    [Composition], [`AnyOf`, `Custom { ir_hash, descriptor, reads }`],
+    [Preimage], [`PreimageGate { commitment_index }`],
+  ),
+  caption: [21+ slot caveat variants in `StateConstraint`. The legacy `QueueConstraint` vocabulary in `storage::programmable` is aliased to these post-Lane-G Phase 1; storage primitives become *cell-program patterns* expressed in this vocabulary (see @sec-storage-as-cell-programs).],
+)
+
+=== `WitnessedPredicate`: the unification
+
+Predicates that ship a witness/proof bound to a commitment unify under a single shape:
+
+```rust
+pub struct WitnessedPredicate {
+    pub kind: WitnessedPredicateKind,        // Dfa, Temporal, MerkleMembership,
+                                              // BlindedMembership, BridgePredicate,
+                                              // PedersenEquality, Custom { vk_hash }
+    pub commitment: [u8; 32],
+    pub input_ref: InputRef,                  // Slot | Witness | PublicInput | Sender
+    pub proof_witness_index: u8,
+}
+```
+
+Each `WitnessedPredicateKind` registers a verifier; the registry is the only thing that grows when a new kind lands. The pattern mirrors macaroon `CaveatType`'s existing polymorphic-registry design: closed enum for platform kinds, `Custom { vk_hash }` escape for app-defined kinds.
+
+Three surface variants embed `WitnessedPredicate`:
+
++ `StateConstraint::Witnessed(WP)` --- slot caveats that depend on a witness.
++ `Preconditions::witnessed: Vec<WP>` --- per-action preconditions that depend on a witness.
++ `CapabilityCaveat::Witnessed(WP)` --- capability caveats that require the holder to produce a matching proof.
+
+After the unification, fifteen previously-distinct witness-attached predicate shapes collapse into one substrate: `StateConstraint::TemporalPredicate`, `StateConstraint::SenderAuthorized { BlindedSet }`, `PortableNoteProof.spending_proof`, `PeerStateTransition.transition_proof`, `BridgePresentationProof`, `BridgePredicateProof`, the DFA-classification predicate, the Merkle-membership gadget, the blinded-set non-revocation proof, the Pedersen `ConservationProof`, the Bulletproof `RangeProof`, and the `EvmCredentialProof`. The same registry dispatch serves every surface.
+
+What the unification does *not* absorb: per-action static preconditions (`SlotEquals`, `NonceAtLeast`---no commitment, no proof), the capability authority lattice (`AuthRequired::is_narrower_or_equal`---order-theoretic, not witness-bearing), federation aggregate signatures (`AttestedRoot::has_quorum`---multi-party-signature algebra, not STARK), macaroon caveats (already polymorphic over `Access`), CapTP swiss enliven (possession, not knowledge of a witness). Those remain parallel.
 
 == Capability Derivation and Revocation
 
 === The Capability Derivation Tree
 
-In seL4 @sel4, every capability exists in a _Capability Derivation Tree_ (CDT): a tree rooted at the original untyped memory capability, where each child is derived (copied with possible attenuation) from its parent. The kernel traverses this tree synchronously to revoke an entire subtree in $O(n)$ time.
+In seL4 @sel4, every capability exists in a _Capability Derivation Tree_ (CDT): a tree rooted at the original untyped memory capability, where each child is derived from its parent. The kernel traverses this tree synchronously to revoke an entire subtree in $O(n)$ time.
 
 Pyana maintains a distributed analog. Each delegation step records:
 
@@ -51,8 +137,6 @@ These edges form a tree committed to a Merkle structure. The CDT is not enforced
 
 === The Duality: Enforce vs. Prove
 
-The key intellectual distinction:
-
 #figure(
   table(
     columns: (auto, auto, auto),
@@ -61,7 +145,7 @@ The key intellectual distinction:
     [Tree structure], [In-kernel data structure], [Merkle-committed proof tree],
     [Revocation], [Kernel walks tree synchronously], [Verifiable revocation claim],
     [Latency], [Instantaneous (same address space)], [Bounded staleness],
-    [Distribution], [Single machine], [Cross-group],
+    [Distribution], [Single machine], [Cross-federation],
     [Trust model], [Kernel is TCB], [Hash function is TCB],
     [Verification], [Hardware-enforced access], [STARK proof of non-membership],
   ),
@@ -80,11 +164,7 @@ The child acts offline using the snapshot. Acceptors (remote verifiers) reject p
 
 === RevocationChannel: Opt-in Synchrony
 
-For applications requiring instant revocation (high-value credentials, safety-critical access), Pyana provides an opt-in synchrony primitive: the _RevocationChannel_. A capability enrolled in a RevocationChannel is checked against a real-time revocation feed before acceptance. This restores seL4-like instant revocation at the cost of requiring channel liveness.
-
-A `RevocationChannel` is a circuit breaker between a revoker and one or more subjects. Subjects voluntarily subscribe and check channel state before exercising delegated capabilities. The channel is a leaf in a group-attested Merkle tree (the "channel tree").
-
-The lifecycle is: (1) Revoker creates a channel. (2) Subject subscribes by adding `channel_id` to their `DelegatedRef`. (3) Before exercising a gated capability, the subject checks `channel_state == Active`---one hash lookup in local state. (4) Revoker trips the channel via a signed `TripEvent`. (5) Reference group includes the trip in the next block; the attested root updates. (6) Gossip propagates the new attestation. Connected subjects learn of the trip within one consensus round.
+For applications requiring instant revocation, Pyana provides an opt-in synchrony primitive: the _RevocationChannel_. A capability enrolled in a RevocationChannel is checked against a real-time revocation feed before acceptance. This restores seL4-like instant revocation at the cost of requiring channel liveness.
 
 #figure(
   table(
@@ -99,7 +179,7 @@ The lifecycle is: (1) Revoker creates a channel. (2) Subject subscribes by addin
   caption: [Revocation modes from weakest to strongest. Pyana supports the first three; seL4 achieves the fourth by being a kernel.],
 )
 
-The design philosophy: instant revocation is not free in a distributed system. Rather than pretending it is (and failing under partition), Pyana makes the cost explicit and lets applications choose their revocation tier.
+Two revocation mechanisms today exist disjointly in the codebase (`derivation.rs` for verifier-side CDT, `revocation_channel.rs` for executor-side $O(1)$ lookup); a CDT revocation does not trip a channel. Unifying them is open question 7 in BOUNDARIES.md.
 
 == Provable CapTP Effects
 
@@ -110,15 +190,13 @@ Four CapTP operations are encoded as provable effects in the Effect VM, enabling
     columns: (auto, auto, auto),
     align: (left, left, left),
     table.header([*Effect*], [*What the STARK Proves*], [*Public Inputs*]),
-    [ExportSturdyRef], [Swiss number correctly registered; capability exported with valid EffectMask], [Target hash, export epoch],
-    [EnlivenRef], [Sturdy ref resolved; swiss number valid; live reference correctly issued], [Session ID, import slot],
-    [DropRef], [Reference correctly released; refcount decremented; session epoch valid], [Session epoch, export ID],
-    [ValidateHandoff], [Handoff certificate valid: Ed25519 signature verifies, recipient matches, one-time use], [Introducer key, recipient key],
+    [`ExportSturdyRef`], [Swiss number correctly registered; capability exported with valid EffectMask], [Target hash, export epoch],
+    [`EnlivenRef`], [Sturdy ref resolved; swiss number valid; live reference correctly issued], [Session ID, import slot],
+    [`DropRef`], [Reference correctly released; refcount decremented; session epoch valid], [Session epoch, export ID],
+    [`ValidateHandoff`], [Handoff certificate valid: Ed25519 signature verifies, recipient matches, one-time use], [Introducer key, recipient key],
   ),
-  caption: [CapTP effects as provable operations. Each can be composed with authorization proofs into a single STARK.],
+  caption: [CapTP effects as provable operations. Each can be composed with authorization proofs into a single STARK. Verification that these four are *real* Merkle membership and not tautological is in-flight per Stage 7 cont P1.C.],
 )
-
-These effects enable fully trustless CapTP: a sovereign cell can prove it correctly performed a distributed capability operation without trusting the executor.
 
 == Generalized Intent Solver
 
@@ -140,32 +218,32 @@ The intent solver operates over 5 exchangeable item types:
 
 When no bilateral match exists, the solver finds multi-party cycles. A ring trade $(A -> B -> C -> A)$ satisfies all three parties simultaneously. The solver uses Johnson's algorithm bounded to cycle length $k <= 5$ over a directed compatibility graph.
 
-=== Trustless 7-Layer Protocol
+=== Trustless 7-Layer Protocol (Real Threshold Decryption)
 
-Intent fulfillment follows a 7-layer trustless protocol: SUBMIT (threshold-encrypted), BATCH (consensus-determined boundary), DECRYPT (threshold ceremony after batch seal), SOLVE (open competition with bonds), PROVE (STARK validity proof per solution), SELECT (deterministic scoring + challenge window), SETTLE (atomic compound turn). Front-running is structurally impossible: intents are encrypted until after the batch boundary is finalized. See @sec-intents for the full protocol.
+Intent fulfillment follows a 7-layer trustless protocol: SUBMIT (threshold-encrypted), BATCH (consensus-determined boundary), DECRYPT (threshold ceremony after batch seal), SOLVE (open competition with bonds), PROVE (STARK validity proof per solution), SELECT (deterministic scoring + challenge window), SETTLE (atomic compound turn). Front-running is structurally impossible: intents are encrypted until after the batch boundary is finalized.
+
+The threshold-encryption substrate is *real* and *production-wired*: `federation::threshold_decrypt` provides Shamir-over-GF(256) secret sharing combined with ChaCha20-Poly1305 AEAD; `intent::trustless` consumes the same `combine_shares` primitive; `node::state::trustless_intent_engine` wires the full pipeline into the production node path. The prior gap (a cleartext `set_decrypted_intents` side-channel that bypassed the threshold ceremony) is replaced---validators now contribute real decryption shares to a per-batch `ThresholdCiphertext`, the canonical `combine_shares` is called once $t$ shares accumulate, and the resulting cleartext intents flow into the solver auction. See @sec-intents for the full protocol.
 
 == Nameservice as Capability Discovery <sec-nameservice-auth>
 
-Nameservice resolution is a form of authorization: resolving a name yields a capability reference (specifically, a sturdy ref). The petname architecture (local petnames, edge names, proposed names) provides human-readable paths to capabilities without global naming authority. Resolution through the DFA-governed namespace requires proving route validity and ACL satisfaction---making name lookup itself a provable operation.
+Nameservice resolution is a form of authorization: resolving a name yields a capability reference (specifically, a sturdy ref). The petname architecture (local petnames, edge names, proposed names) provides human-readable paths to capabilities without global naming authority. Resolution through the DFA-governed namespace requires proving route validity and ACL satisfaction---making name lookup itself a provable operation, expressed as a `WitnessedPredicate { kind: Dfa }`.
 
 == Sealer/Unsealer Pairs
 
-=== Construction
+E's sealer/unsealer primitive enables rights amplification: the sealer encrypts data that only the unsealer holder can read. Pyana implements this with X25519 Diffie-Hellman + ChaCha20-Poly1305 AEAD + a BLAKE3 commitment binding `(cap_hash, ephemeral_public, nonce)`. Each seal uses a fresh ephemeral X25519 keypair, providing per-message sender-side forward secrecy. The recipient's `unsealer_secret` is the long-term secret; compromise of `unsealer_secret` decrypts all prior sealed boxes to that pair.
 
-E's sealer/unsealer primitive enables rights amplification: the sealer encrypts data that only the unsealer holder can read. Pyana implements this with X25519 Diffie-Hellman:
+=== Boundary contract
 
-- *Key generation*: X25519 keypair. `sealer_public` = public key; `unsealer_secret` = private key.
-- *Sealing*: Fresh ephemeral X25519 keypair $arrow.r$ DH(ephemeral, sealer_public) $arrow.r$ ChaCha20-Poly1305 encryption.
-- *Unsealing*: DH(unsealer_secret, ephemeral_public) $arrow.r$ same shared secret $arrow.r$ decrypt.
+Boundary contract (per BOUNDARIES.md §2.4):
 
-Each seal uses a fresh ephemeral key, providing forward secrecy.
+- *Cleartext-inside*: sender (ephemeral DH key holder) and recipient (`unsealer_secret` holder).
+- *Commitment-inside*: anyone with the `pair_id` (a deterministic recipient identifier). Sees the `pair_id` and ciphertext size and timing.
+- *Out-of-band*: anyone without the ciphertext.
+
+Three known caveats: (a) `pair_id` is deterministic, so anyone who has ever seen the recipient's `SealerPublic` can link every seal to that recipient; (b) ciphertext size is not padded; (c) sealing a faceted cap (`FACET_TRANSFER_ONLY`) and unsealing it formerly produced an *unfaceted* cap---the v3 sealed-plaintext format (soundness sweep) now encodes `allowed_effects` to close the authority-amplification surface.
 
 === Partition-Tolerant Offline Transfer
 
-The critical use case: transferring a capability to a party that is currently offline or unreachable. The sender seals the capability under the recipient's `sealer_public`. The sealed box can traverse untrusted channels---the ciphertext reveals nothing about the capability. When the recipient comes online, they unseal using their `unsealer_secret`.
+The critical use case: transferring a capability to a party that is currently offline or unreachable. The sender seals the capability under the recipient's `sealer_public`; the sealed box can traverse untrusted channels; the recipient unseals on connection. This enables offline capability delegation that neither UCAN (requires online chain verification) nor traditional capability systems (require live introduction) support.
 
-This enables a form of offline capability delegation that neither UCAN (requires online verification of the full chain) nor traditional capability systems (require live introduction) support.
-
-=== Relationship to Rights Amplification
-
-In E, sealer/unsealer pairs enable brand-checking: "only the holder of this specific unsealer can access this data." Pyana extends this pattern cryptographically---the sealed box carries a BLAKE3 commitment that binds the ciphertext to the capability without revealing it, enabling verification that the box contains a well-formed capability even without unsealing.
+When the recipient is another sovereign cell on a different federation, the sealed box composes with `peer_exchange` (@sec-peer-exchange) for federation-bypass: the cell receives the cap, applies the granted authority via signed peer-exchange transitions, and only publishes to the federation when reconnection is desired.

@@ -302,7 +302,27 @@ Recursive verification collapses N proofs into 1:
 + *Chain* the recursive proofs: the proof verifying sub-proof $k$ also verifies the recursive proof covering sub-proofs $1, ..., k-1$.
 + The final output is a single STARK proof of constant size ($tilde 24$ KiB) that transitively attests to all sub-proofs.
 
-*Current status:* Recursive verification is operational for pairs of proofs (verified via Plonky3) and sequential IVC chains (`build_recursive_ivc_chain` chains $N$ fold proofs into a single recursive attestation). STARK-in-Pickles wrapping produces constant-size recursive SNARKs over the Pasta curve cycle. The DSL composition operators (`compose_and`, `compose_or`, `compose_chain`, `compose_aggregate`) provide structural proof combination with cryptographic binding. Full composition of heterogeneous AIRs (derivation + fold + membership + Effect VM in one recursive proof) is designed and structurally supported but not yet end-to-end operational for arbitrary combinations.
+*Current status and the corrected aggregation architecture:* Sequential IVC chains via `build_recursive_ivc_chain` work; pairwise recursive verification via Plonky3 works for simple AIRs. STARK-in-Pickles wrapping over the Pasta curve cycle is structurally present in `circuit/src/backends/stark_in_pickles.rs` + `circuit/src/poseidon_stark*.rs` (the existing skeleton).
+
+The earlier Stage 7-$zeta$ "Mangrove-style chunked folding" architecture turns out to be *unsound* in its proposed wrap layer (a hash chain over leaf-proof bytes is metadata, not soundness; a verifier-acceptance check must be inside the AIR). The corrected architecture, validated against SP1 v6 Hypercube, Stwo/SHARP, and RISC Zero:
+
+```
+inner proof bytes -> canonical parser ->
+  verifier AIR that enforces accept = 1
+    (parser + Merkle paths + challenger + FRI/openings + final accept) ->
+  acceptance bit constrained to 1 ->
+  recursive compression tree ->
+  optional final wrapper for export
+```
+
+Hash chains are *fine as metadata after acceptance is enforced*, not as the soundness mechanism. The `plonky3_verifier_air.rs` placeholder in the existing tree is precisely what becomes functional in the generalized `plonky3_recursion_impl` (Lane Golden-Edge Block 1).
+
+Two outer-recursive-layer paths are live in the codebase:
+
+- *Fix the verifier AIR (transparent path)*: lift `plonky3_recursion_impl` past `P3MerklePoseidon2Air` into a real verifier-as-AIR, generic over the inner AIR shape. Stays transparent end-to-end; same field (BabyBear), same hash (Poseidon2), same toolchain.
+- *Kimchi/Pickles (production-proven outer layer)*: $tilde$9.7K LOC of `circuit/src/backends/kimchi_native/` (predicate circuits) plus $tilde$5.8K LOC of `circuit/src/backends/mina/` (assisted-recursion `pickles.rs` + dual-curve step/wrap) plus the $tilde$3.2K LOC `stark_in_pickles.rs` skeleton. Mina compresses a whole chain to $tilde$22 KiB with $tilde$864-byte state proofs and $tilde$200ms verification. Loses transparency at the outer layer; gains a production-proven recursive primitive. Same overall shape as RISC Zero, with Kimchi instead of Groth16.
+
+The DSL composition operators (`compose_and`, `compose_or`, `compose_chain`, `compose_aggregate`) provide the structural framework for proof combination with cryptographic binding via shared public inputs and VK-hash linking columns. Full composition of heterogeneous AIRs (derivation + fold + membership + Effect VM in one recursive proof) is designed and structurally supported; arbitrary-N aggregation today uses sequential chaining, with the corrected tree-shaped substrate (verifier-AIR-as-leaf) approaching the Golden Vision of folded mesh.
 
 == Soundness Analysis
 
@@ -337,6 +357,59 @@ The number of sub-proofs in a non-recursive presentation leaks the _structure_ (
 - Proof sizes reveal approximate trace lengths (hence: delegation chain length, derivation depth)
 
 Recursive composition eliminates this leakage: the final proof is constant-size and reveals only the conclusion bit. This is why recursive verification is architecturally critical---not merely a performance optimization, but a privacy requirement.
+
+== Cross-Cell Algebraic Binding (Stage 7-$gamma$.2) <sec-gamma-2>
+
+The shared-PI bundle from Stage 7-$gamma$.0 (`TURN_HASH`, `EFFECTS_HASH_GLOBAL`, `ACTOR_NONCE`, `PREVIOUS_RECEIPT_HASH`) joins per-cell proofs of *one turn* into one bundle: the verifier's PI-matching loop requires all per-cell proofs to agree on these fields. That closes *"are these proofs from the same turn?"*. It does *not* close *"do these two proofs describe the same `Transfer` / `GrantCapability` / `Introduce`?"*---as soon as cells live on different federations or are shipped to a verifier weeks apart, the executor's say-so isn't reachable.
+
+Stage 7-$gamma$.2 Phase 1 closes that gap with new PI fields whose canonical derivation is publicly computable from the bilateral effect's surface inputs. The verifier, given two `WitnessedReceipt`s, recomputes the canonical id from one side, looks it up in the other side's PI, and confirms match. The AIR binds in-trace transfer/grant/intro data to the same id, so a prover cannot emit a proof whose claimed id is unrelated to the actual amount/direction/cap-entry it wrote into the trace.
+
+=== Canonical bilateral identifiers
+
+Three bilateral effects each get a deterministic instance id:
+
+$ "transfer_id" &= "Poseidon2"("pyana-transfer-id-v1" || "from" || "to" || "amount" || "ACTOR_NONCE") \
+  "grant_id" &= "Poseidon2"("pyana-grant-id-v1" || "from" || "to" || "cap_entry_hash" || "ACTOR_NONCE") \
+  "intro_id" &= "Poseidon2"("pyana-intro-id-v1" || "introducer" || "recipient" || "target" || "permissions_bits" || "introducer_nonce") $
+
+`ACTOR_NONCE` is already in PI (from $gamma$.0), so the verifier can re-derive any id from the bilateral effect's surface inputs without additional witness data.
+
+=== New PI fields
+
+Per-cell PI grows by 35 felts to accommodate Phase 1's bilateral accumulators (post-$gamma$.2 `BASE_COUNT = 73`, up from $gamma$.0's 38):
+
+- *Counts (7 felts)*: `OUTBOUND_TRANSFER_COUNT`, `INBOUND_TRANSFER_COUNT`, `OUTBOUND_GRANT_COUNT`, `INBOUND_GRANT_COUNT`, `INTRO_AS_INTRODUCER_COUNT`, `INTRO_AS_RECIPIENT_COUNT`, `INTRO_AS_TARGET_COUNT`. Predict the number of entries each accumulator carries.
+- *Accumulators (28 felts, 7 $times$ 4)*: `OUTGOING_TRANSFER_ROOT`, `INCOMING_TRANSFER_ROOT`, `OUTGOING_GRANT_ROOT`, `INCOMING_GRANT_ROOT`, `INTRO_AS_INTRODUCER_ROOT`, `INTRO_AS_RECIPIENT_ROOT`, `INTRO_AS_TARGET_ROOT`. Each is a 4-felt Poseidon2 hash accumulating $"hash"("id" || "peer_cell_id" || "amount_lo" || "amount_hi")$ per bilateral row, with direction baked into the domain separator.
+
+`peer_cell_id` is folded into the accumulator absorb rather than surfaced separately, to avoid leaking cross-cell topology to a public verifier when the witness is sealed.
+
+=== Off-AIR verifier algorithm
+
+The `pyana-verifier` standalone binary gains a `bilateral-pair <receipt_a> <receipt_b>` subcommand that verifies cross-cell consistency:
+
++ Parse both receipts; verify each per-cell STARK independently.
++ Recompute the canonical id (e.g., `transfer_id`) from the bilateral effect's surface inputs $(""from"", ""to"", ""amount"", ""ACTOR_NONCE"")$.
++ Walk the sender's `OUTGOING_TRANSFER_ROOT` accumulator entries; for each, locate the matching entry in the receiver's `INCOMING_TRANSFER_ROOT`.
++ Confirm direction, amount, and id agreement.
++ If any sender entry lacks a matching receiver entry (or vice versa), reject.
+
+Sentinel handling: when a per-cell proof has no bilateral effects of a kind, the corresponding root field is `Commitment4::empty()` and the count is 0; the match loop short-circuits when both sides are sentinels.
+
+=== Phase 2: joint aggregation AIR
+
+Phase 1 binds via PI and an off-AIR verifier. Phase 2 lifts the match-loop *inside* an AIR: a joint aggregation circuit takes the two per-cell proofs as witness and constrains the bilateral binding algebraically. This is built atop the generalized `plonky3_recursion_impl` substrate (Lane Golden-Edge Block 1), which lifts the recursive verifier AIR past the `P3MerklePoseidon2Air` placeholder into a real verifier-as-AIR. The result: cross-cell binding becomes a single STARK that any third party verifies in one verification call.
+
+== Sovereign-Witness AIR Teeth <sec-sovereign-witness-air>
+
+The sovereign-witness path historically had *no AIR teeth*: `SovereignCellWitness` was a federation-side bookkeeping handshake whose only binding was the pre-image relation between `witness.cell_state.state_commitment()` and the federation's stored commitment. The Phase 1 design adds minimal AIR teeth:
+
+- *New trace column*: `WITNESS_KEY_COMMIT` (single BabyBear felt). Computed by the prover as $"Poseidon2"("cell.owner_pubkey")$. For non-sovereign-witnessed turns, zero (sentinel).
+- *New PI slots*: `SOVEREIGN_WITNESS_KEY_COMMIT` (verifier-supplied; bound to the signature key that the executor's pre-AIR check verified under) and `IS_SOVEREIGN_CELL` (boolean PI gating the teeth).
+- *New boundary constraint*: when `IS_SOVEREIGN_CELL == 1`, $"WITNESS_KEY_COMMIT" == "SOVEREIGN_WITNESS_KEY_COMMIT"$ at row 0.
+
+Phase 1 closes the "any-snooper-can-resubmit" surface (the wire malleability gap from the sovereign-witness audit §2.2)---the AIR now witnesses that the witness's signing identity matches the cell's owning key.
+
+Phase 2 recurses into the optional `transition_proof: Option<Vec<u8>>` on the witness. When present, the AIR calls Lane Golden-Edge's recursive verifier AIR to attest that the transition itself is sound. This replaces the witness-vs-proof-carrying fork (today mutually exclusive) with a layered spectrum: witnesses always carry signature teeth (Phase 1); witnesses with `Some(transition_proof)` additionally carry algebraic-validity teeth (Phase 2).
 
 == Proof Backend Agility: The Constraint DSL
 
@@ -417,7 +490,7 @@ The EVM bridge includes a VK registry with governance, an incremental Merkle tre
 
 == Effect VM: The Sovereign Proof Mechanism <sec-effect-vm>
 
-The Effect VM is the primary proof mechanism for sovereign cells. It is a multi-row AIR circuit that proves arbitrary turns---one STARK per turn regardless of effect count. The 71-column trace encodes state transitions for a 24-opcode instruction set:
+The Effect VM is the primary proof mechanism for sovereign and hosted cells alike. It is a multi-row AIR circuit that proves arbitrary turns---one STARK per cell touched in a turn, regardless of per-cell effect count. The trace is approximately *151 columns* after Stage 7-$gamma$.0 + $gamma$.2 Phase 1 + sovereign-witness Phase 1, with per-cell public inputs growing to $tilde$73 felts plus per-`Custom`-effect entries. The full instruction set spans state mutation, bilateral capability flow, CapTP, queue, and dispatch:
 
 #figure(
   table(
@@ -597,3 +670,37 @@ All proof logic is now defined exclusively through the constraint DSL (`circuit/
 )
 
 The Effect VM is the primary sovereign proof mechanism: a single STARK proves an entire turn regardless of effect count. The DSL descriptors above provide the component circuits that the Effect VM dispatches to via `Custom` CellProgram effects.
+
+== Executor Honesty Audit and the Soundness Ledger <sec-honesty-audit>
+
+The system maintains a *living threat ledger* enumerating attacks an malicious executor could attempt, the layer at which each is prevented, and the status of each defense. Defenses live at three layers in order of strength:
+
++ *AIR (Effect VM)*: the strongest. The prover-side STARK constrains the *transition* itself; a dishonest executor cannot produce a passing proof.
++ *Canonical-message signing*: the actor signs a domain-separated hash (`pyana-turn-v3:`) of the turn body; the executor signs a receipt hash (`executor-receipt-sig-v1:`). Any verifier with the relevant public key can detect deviation.
++ *Verifier-side replay (witnessed-receipt chain)*: a verifier replays the chain, checking each STARK against its PI and (scope-2) re-deriving post-state from inline witness data.
+
+#figure(
+  table(
+    columns: (auto, auto, auto),
+    align: (left, left, left),
+    table.header([*Threat*], [*Defense layer*], [*Status*]),
+    [T1: Reorder effects within a turn], [AIR (`EFFECTS_HASH_GLOBAL` chain)], [Closed at AIR (single-cell); multi-cell $gamma$.2],
+    [T2: Invent effects the actor did not sign], [Signature (effects_hash in v3 body)], [Closed],
+    [T3: Skip / omit effects from a signed turn], [AIR (`EFFECTS_HASH_GLOBAL` termination)], [Closed at AIR (single-cell); multi-cell $gamma$.2],
+    [T4: Lie about pre/post state hash], [AIR (state hash columns + PI binding)], [Single-cell: pending verification of full pre/post state binding; ACTOR_NONCE row-0 binding landed],
+    [T5: Reuse a nonce], [AIR (`ACTOR_NONCE` row-0 boundary)], [*Closed at AIR* via Stage 7 cont §B],
+    [T6: Replay a turn from another federation], [Signature (`federation_id` in canonical message) + `KnownFederations` registry], [Closed by Lane D unification (federation_id is a commitment)],
+    [T7: Forge a receipt signature], [Signature (`executor-receipt-sig-v1`)], [Closed (standard Ed25519)],
+    [T8: Fake `previous_receipt_hash` link], [AIR (`PREVIOUS_RECEIPT_HASH_BASE` in PI, $gamma$.0) + verifier check], [Closed by verifier PI completeness],
+    [T9: Skip sovereign-witness verification], [AIR (sovereign-witness Phase 1: `WITNESS_KEY_COMMIT` boundary)], [Phase 1 designed (Lane Hardening); Phase 2 recurses on `transition_proof`],
+    [T10: Skip a permission / capability check], [AIR (per-effect Merkle membership)], [In flight: Stage 7 cont P1.C verifies CapTP variants are real Merkle, not tautological],
+    [T11: Submit a stale / cached proof for a new turn], [AIR (`TURN_HASH` in PI, $gamma$.0) + verifier match], [Closed by verifier PI completeness],
+    [T12: Lie about balance deltas], [AIR (`compute_balance_delta_from_effects` derives delta)], [Single-cell closed; conservation-derivation landed in builder (Stage 8 P2.D)],
+    [T13: Cross-cell aliasing (same cell ID across federations)], [Signature (`federation_id` in cell ID derivation)], [Closed for normal cells; `Cell::remote_stub_with_id` escape hatch audited],
+    [T14: Skip the AIR proof entirely], [Verifier (rejects receipts without valid proofs)], [Closed by `pyana-verifier` standalone binary],
+    [T15: Forge `effects_hash` (prove over E' while signing E)], [AIR (in-trace `EFFECTS_HASH_GLOBAL` termination $arrow.r$ PI; verifier matches PI to signed turn)], [Closed at AIR (single-cell) via Stage 7 cont §B; multi-cell $gamma$.2],
+  ),
+  caption: [Executor honesty threats and current defense status. The "closed at AIR" / "closed by signature" / "closed by verifier completeness" labels are the soundness rule of thumb: AIR $>$ signature $>$ verifier. Each step down is a soundness reduction; we want as much at AIR level as we can afford.],
+)
+
+The cross-cutting open questions: (a) trace-side binding completeness for `{ACTOR_NONCE, EFFECTS_HASH_GLOBAL, TURN_HASH, PRE/POST_STATE, PREVIOUS_RECEIPT_HASH}` (Stage 7 cont addresses two; the other three are followup-pass items); (b) canonical signing message audit (T6, T13)---confirm `federation_id`, `actor_id`, `nonce`, `effects_hash`, `previous_receipt_hash` are all in `canonical_signing_message`; (c) verifier completeness---walk `verifier/src/main.rs` and confirm every PI is checked, not just deserialized; (d) `Cell::remote_stub_with_id` escape hatch (T13 tail)---what prevents arbitrary-id cell minting; (e) sovereign-witness algebraic teeth (T9 Phase 1 design lands the answer).
