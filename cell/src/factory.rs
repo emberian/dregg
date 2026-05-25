@@ -14,19 +14,25 @@ use crate::cell::CellMode;
 use crate::id::CellId;
 use crate::permissions::AuthRequired;
 use crate::program::CellProgram;
+use crate::vk_v2::{ProvingSystemId, VerifierFingerprint, VkComponents, canonical_vk_v2};
 
-/// Compute the canonical VK hash for a [`CellProgram`].
+/// Compute the **program-bytes layer** of a cell-program VK hash.
 ///
-/// Per `VK-AS-RE-EXECUTION-RECIPE.md` §2.1: a `child_program_vk`
-/// (and any other `[u8; 32]` VK identifier naming a `CellProgram`)
-/// is the BLAKE3-keyed hash of the program's canonical postcard
-/// serialization under the domain `"pyana-cellprogram-vk-v1"`.
+/// Per `VK-AS-RE-EXECUTION-RECIPE.md` §2.1 (v1) this *was* the full VK
+/// identifier; per §v2 it is the program-bytes component of a four-
+/// component vk_hash. The legacy v1 encoding survives as this
+/// function's return value and is fed into [`canonical_program_vk_v2`]
+/// alongside the AIR fingerprint, verifier fingerprint, and proving-
+/// system identifier to produce the layered hash.
 ///
-/// This makes the VK a *re-execution recipe*: any validator with the
-/// `CellProgram` value can recompute this hash and verify the binding.
-/// Pre-recursion, the validator population is expected to re-execute
-/// the program against witness data; the VK is the cryptographic name
-/// of "the bytes the validator runs."
+/// **Use [`canonical_program_vk_v2`] for new VK identifiers.** Callers
+/// that produce a `child_program_vk` slot, a custom-predicate vk_hash,
+/// or a custom-effect vk_hash should always go through the v2 path,
+/// passing this function's output as the `program_bytes` component.
+/// This function is retained for content-addressed identity within
+/// cell-internal data structures where AIR / verifier / proving-system
+/// identity is not relevant (e.g., the program-text hash inside a
+/// factory descriptor's content hash).
 ///
 /// # Determinism
 ///
@@ -34,8 +40,7 @@ use crate::program::CellProgram;
 /// impl. `CellProgram` and its constituent types (`StateConstraint`,
 /// `TransitionCase`, `WitnessedPredicate`, …) derive `Serialize` via
 /// `serde`, so the encoding is determined by the variant layout in
-/// source. A breaking change to `CellProgram`'s shape requires bumping
-/// the domain string to `-vk-v2` so old and new VKs do not collide.
+/// source.
 ///
 /// # Boundary contract
 ///
@@ -53,6 +58,59 @@ pub fn canonical_program_vk(program: &CellProgram) -> [u8; 32] {
     hasher.update(&(serialized.len() as u64).to_le_bytes());
     hasher.update(&serialized);
     *hasher.finalize().as_bytes()
+}
+
+/// Canonically serialize a `CellProgram` to its postcard bytes — the
+/// `program_bytes` component of [`canonical_program_vk_v2`].
+///
+/// Exposed so v2 callers in higher layers (`pyana-app-framework` and
+/// app crates that depend on both `pyana-cell` and `pyana-circuit`)
+/// can feed the program directly into a [`VkComponents`] without
+/// re-encoding.
+pub fn canonical_program_bytes(program: &CellProgram) -> Vec<u8> {
+    postcard::to_allocvec(program)
+        .expect("CellProgram postcard serialization is infallible for v1 encoding")
+}
+
+/// Compute the canonical **layered** (v2) VK hash for a `CellProgram`.
+///
+/// Per `VK-AS-RE-EXECUTION-RECIPE.md` §v2, a vk_hash commits to four
+/// components, not one:
+///
+/// 1. The program's canonical postcard bytes (the spec).
+/// 2. The AIR-shape fingerprint (which AIR runs the spec). Computed by
+///    `pyana_circuit::air_descriptor::fingerprint(&AIR_DESCRIPTOR)`.
+/// 3. The verifier-impl fingerprint (which code/wasm/compiled-VK
+///    runs the verifier).
+/// 4. The proving-system identifier (Plonky3-FRI, Kimchi, SP1, …).
+///
+/// This function performs the postcard serialization of `program` and
+/// hands the result, plus the caller-supplied components, to
+/// [`canonical_vk_v2`].
+///
+/// # Migration from v1
+///
+/// v1 callers (`canonical_program_vk(program)`) committed only to
+/// component 1. Their vk_hashes are *not* equivalent to v2 vk_hashes
+/// computed over the same program — domain separation under the v2
+/// domain string `"pyana-vk-v2"` ensures the two never collide.
+/// Greenfield migration: starbridge-apps and other VK authors bump all
+/// their vk_hash constants to v2 in one move; receivers (factory
+/// registries, custom-predicate / custom-effect registries) accept the
+/// new hashes uniformly.
+pub fn canonical_program_vk_v2(
+    program: &CellProgram,
+    air_fingerprint: [u8; 32],
+    verifier_fingerprint: VerifierFingerprint,
+    proving_system_id: ProvingSystemId,
+) -> [u8; 32] {
+    let program_bytes = canonical_program_bytes(program);
+    canonical_vk_v2(&VkComponents {
+        program_bytes: &program_bytes,
+        air_fingerprint,
+        verifier_fingerprint,
+        proving_system_id,
+    })
 }
 
 /// Strategy for determining the child cell's program VK at creation time.

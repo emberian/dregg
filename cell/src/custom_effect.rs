@@ -62,6 +62,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::predicate::canonical_predicate_vk;
+use crate::vk_v2::{ProvingSystemId, VerifierFingerprint, VkComponents, canonical_vk_v2};
 
 /// Errors a [`CustomEffectVerifier`] can produce.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -80,6 +81,17 @@ pub enum CustomEffectError {
     /// one, but we surface it through the registry so callers see a
     /// consistent error surface.
     CanonicalBindingMismatch {
+        claimed_vk_hash: [u8; 32],
+        computed_vk_hash: [u8; 32],
+    },
+    /// The four-component v2 vk_hash computed from the supplied
+    /// `(canonical_bytes, air_fingerprint, verifier_fingerprint,
+    /// proving_system_id)` did not match the verifier's claimed
+    /// `vk_hash()`. The verifier is registering with a different AIR
+    /// / verifier-impl / proving-system than its claimed identity.
+    /// Surfaced from the v2 [`CustomEffectRegistry::register`] path
+    /// (`VK-AS-RE-EXECUTION-RECIPE.md` §v2).
+    LayeredBindingMismatch {
         claimed_vk_hash: [u8; 32],
         computed_vk_hash: [u8; 32],
     },
@@ -111,6 +123,16 @@ impl core::fmt::Display for CustomEffectError {
                 f,
                 "canonical bytes do not hash to claimed vk_hash: \
                  claimed {:02x}{:02x}..., computed {:02x}{:02x}...",
+                claimed_vk_hash[0], claimed_vk_hash[1], computed_vk_hash[0], computed_vk_hash[1],
+            ),
+            Self::LayeredBindingMismatch {
+                claimed_vk_hash,
+                computed_vk_hash,
+            } => write!(
+                f,
+                "v2 layered binding mismatch: claimed vk_hash {:02x}{:02x}..., \
+                 computed (from canonical bytes + air + verifier + proving-system) \
+                 {:02x}{:02x}...",
                 claimed_vk_hash[0], claimed_vk_hash[1], computed_vk_hash[0], computed_vk_hash[1],
             ),
             Self::ProofMissing { vk_hash } => write!(
@@ -188,15 +210,66 @@ impl CustomEffectRegistry {
         Self::default()
     }
 
-    /// Register a verifier under its canonical bytes.
+    /// Register a verifier under its **layered (v2)** vk_hash.
+    ///
+    /// Per `VK-AS-RE-EXECUTION-RECIPE.md` §v2, the vk_hash commits to
+    /// four components: canonical program bytes, AIR fingerprint,
+    /// verifier-impl fingerprint, and proving-system identifier. The
+    /// verifier's [`vk_hash()`](CustomEffectVerifier::vk_hash) must
+    /// equal the v2 hash computed from the supplied components;
+    /// otherwise registration is refused with
+    /// [`CustomEffectError::LayeredBindingMismatch`]. The canonical
+    /// bytes are stored so validators can re-execute pre-recursion.
+    ///
+    /// Returns the computed v2 `vk_hash` on success.
+    pub fn register(
+        &mut self,
+        canonical_bytes: Vec<u8>,
+        air_fingerprint: [u8; 32],
+        verifier_fingerprint: VerifierFingerprint,
+        proving_system_id: ProvingSystemId,
+        verifier: Arc<dyn CustomEffectVerifier>,
+    ) -> Result<[u8; 32], CustomEffectError> {
+        let computed = canonical_vk_v2(&VkComponents {
+            program_bytes: &canonical_bytes,
+            air_fingerprint,
+            verifier_fingerprint,
+            proving_system_id,
+        });
+        let claimed = verifier.vk_hash();
+        if computed != claimed {
+            return Err(CustomEffectError::LayeredBindingMismatch {
+                claimed_vk_hash: claimed,
+                computed_vk_hash: computed,
+            });
+        }
+        self.entries.insert(
+            computed,
+            Entry {
+                canonical_bytes,
+                verifier,
+            },
+        );
+        Ok(computed)
+    }
+
+    /// Legacy v1 registration: vk_hash bound to canonical bytes only.
+    ///
+    /// **Deprecated for new code.** Use [`register`](Self::register)
+    /// for the v2 layered-binding path. Retained only so test code
+    /// that pre-dates v2 keeps compiling; production callers MUST
+    /// upgrade before depending on this for soundness.
     ///
     /// The vk_hash is derived from `canonical_bytes` via
     /// [`canonical_predicate_vk`]; the verifier's
     /// [`vk_hash()`](CustomEffectVerifier::vk_hash) must match. Both
     /// the canonical bytes and the verifier handle are stored.
-    ///
-    /// Returns the computed `vk_hash` on success.
-    pub fn register(
+    #[deprecated(
+        note = "v1 binding does not commit to AIR / verifier / proving-system; \
+                use register() for the v2 layered-binding path \
+                (VK-AS-RE-EXECUTION-RECIPE.md §v2)"
+    )]
+    pub fn register_v1(
         &mut self,
         canonical_bytes: Vec<u8>,
         verifier: Arc<dyn CustomEffectVerifier>,
@@ -342,12 +415,36 @@ impl CustomEffectVerifier for StubCustomEffectVerifier {
 mod tests {
     use super::*;
 
+    fn test_air_fp() -> [u8; 32] {
+        [0xA1; 32]
+    }
+    fn test_verifier_fp() -> VerifierFingerprint {
+        VerifierFingerprint::SourceHash([0xB2; 32])
+    }
+    fn test_proving_system() -> ProvingSystemId {
+        ProvingSystemId::Plonky3BabyBearFri {
+            p3_rev: "test-rev",
+        }
+    }
+
     fn registry_with_one_entry() -> (CustomEffectRegistry, [u8; 32], Vec<u8>) {
         let bytes = b"stub-cell-program-v1".to_vec();
-        let vk_hash = canonical_predicate_vk(&bytes);
+        let vk_hash = canonical_vk_v2(&VkComponents {
+            program_bytes: &bytes,
+            air_fingerprint: test_air_fp(),
+            verifier_fingerprint: test_verifier_fp(),
+            proving_system_id: test_proving_system(),
+        });
         let verifier = Arc::new(StubCustomEffectVerifier::new(vk_hash, "stub-program"));
         let mut reg = CustomEffectRegistry::empty();
-        reg.register(bytes.clone(), verifier).expect("register");
+        reg.register(
+            bytes.clone(),
+            test_air_fp(),
+            test_verifier_fp(),
+            test_proving_system(),
+            verifier,
+        )
+        .expect("register");
         (reg, vk_hash, bytes)
     }
 
@@ -372,24 +469,60 @@ mod tests {
     }
 
     #[test]
-    fn canonical_binding_mismatch_rejected_at_registration_time() {
-        // Build a verifier claiming vk_hash X, register with canonical
-        // bytes whose hash is Y != X.
+    fn layered_binding_mismatch_rejected_at_registration_time() {
+        // Build a verifier claiming vk_hash X, register with v2
+        // components whose v2 hash is Y != X.
         let bogus_vk = [0xFFu8; 32];
         let verifier = Arc::new(StubCustomEffectVerifier::new(bogus_vk, "bogus"));
         let bytes = b"different-bytes".to_vec();
         let mut reg = CustomEffectRegistry::empty();
-        let err = reg.register(bytes, verifier).unwrap_err();
+        let err = reg
+            .register(
+                bytes,
+                test_air_fp(),
+                test_verifier_fp(),
+                test_proving_system(),
+                verifier,
+            )
+            .unwrap_err();
         match err {
-            CustomEffectError::CanonicalBindingMismatch {
+            CustomEffectError::LayeredBindingMismatch {
                 claimed_vk_hash,
                 computed_vk_hash,
             } => {
                 assert_eq!(claimed_vk_hash, bogus_vk);
                 assert_ne!(claimed_vk_hash, computed_vk_hash);
             }
-            other => panic!("expected CanonicalBindingMismatch, got: {other:?}"),
+            other => panic!("expected LayeredBindingMismatch, got: {other:?}"),
         }
+    }
+
+    #[test]
+    fn layered_binding_rejects_wrong_air_fingerprint() {
+        // The verifier registers under a v2 vk_hash computed with
+        // air_fp = test_air_fp(); attempting to register the same
+        // verifier with a different air_fp must fail because the
+        // layered hash no longer matches the verifier's claim.
+        let bytes = b"some-program".to_vec();
+        let correct_vk = canonical_vk_v2(&VkComponents {
+            program_bytes: &bytes,
+            air_fingerprint: test_air_fp(),
+            verifier_fingerprint: test_verifier_fp(),
+            proving_system_id: test_proving_system(),
+        });
+        let verifier = Arc::new(StubCustomEffectVerifier::new(correct_vk, "x"));
+        let wrong_air_fp = [0xCC; 32];
+        let mut reg = CustomEffectRegistry::empty();
+        let err = reg
+            .register(
+                bytes,
+                wrong_air_fp,
+                test_verifier_fp(),
+                test_proving_system(),
+                verifier,
+            )
+            .unwrap_err();
+        assert!(matches!(err, CustomEffectError::LayeredBindingMismatch { .. }));
     }
 
     #[test]
@@ -454,10 +587,22 @@ mod tests {
         }
 
         let bytes = b"len-check-program".to_vec();
-        let vk = canonical_predicate_vk(&bytes);
+        let vk = canonical_vk_v2(&VkComponents {
+            program_bytes: &bytes,
+            air_fingerprint: test_air_fp(),
+            verifier_fingerprint: test_verifier_fp(),
+            proving_system_id: test_proving_system(),
+        });
         let verifier = Arc::new(LenCheck { vk });
         let mut reg = CustomEffectRegistry::empty();
-        reg.register(bytes, verifier).unwrap();
+        reg.register(
+            bytes,
+            test_air_fp(),
+            test_verifier_fp(),
+            test_proving_system(),
+            verifier,
+        )
+        .unwrap();
 
         // Honest proof: 3 bytes of payload after the length prefix.
         let mut honest = (3u32).to_le_bytes().to_vec();

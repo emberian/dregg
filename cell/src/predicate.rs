@@ -97,6 +97,33 @@ pub fn canonical_predicate_vk(predicate_bytes: &[u8]) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 
+/// Compute the canonical **layered** (v2) VK hash for a custom predicate.
+///
+/// Per `VK-AS-RE-EXECUTION-RECIPE.md` §v2, the `vk_hash` inside
+/// [`WitnessedPredicateKind::Custom`] (and the matching
+/// `Authorization::Custom` / `Effect::Custom` carriers) commits to
+/// four components: the predicate's authoring bytes, the AIR
+/// fingerprint of the verifier's AIR, the verifier-impl fingerprint,
+/// and the proving-system identifier.
+///
+/// This is the predicate-side analog of
+/// [`crate::factory::canonical_program_vk_v2`]. Use it for new VK
+/// identifiers; the legacy [`canonical_predicate_vk`] (program-bytes-
+/// only) remains as the bottom layer that v2 feeds.
+pub fn canonical_predicate_vk_v2(
+    predicate_bytes: &[u8],
+    air_fingerprint: [u8; 32],
+    verifier_fingerprint: crate::vk_v2::VerifierFingerprint,
+    proving_system_id: crate::vk_v2::ProvingSystemId,
+) -> [u8; 32] {
+    crate::vk_v2::canonical_vk_v2(&crate::vk_v2::VkComponents {
+        program_bytes: predicate_bytes,
+        air_fingerprint,
+        verifier_fingerprint,
+        proving_system_id,
+    })
+}
+
 /// A witness-attached predicate declaration.
 ///
 /// Carries the *shape* (kind), the *commitment* binding the predicate's
