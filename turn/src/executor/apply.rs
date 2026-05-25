@@ -3288,6 +3288,42 @@ impl TurnExecutor {
                         path.to_vec(),
                     ));
                 }
+                // Audit P0 #79: bind `archive_terminal_receipt_hash` to the
+                // live chain head. Without this check, an attestation can
+                // self-assert a fictional terminal receipt hash that bears
+                // no relation to the actual chain, defeating the whole
+                // point of the archive checkpoint (which is to pin the
+                // chain at `archive_end_height` so post-archive turns can
+                // link to it via `previous_receipt_hash`).
+                //
+                // The executor tracks `last_receipt_hash` per cell; for an
+                // archive at height H, the terminal receipt hash MUST equal
+                // the cell's currently-known chain head. (We do not store a
+                // height->hash index here, so the strongest binding
+                // available is "matches the most recent receipt the
+                // executor has committed for this cell". A divergent claim
+                // is rejected.) Cells with no prior receipt skip the check
+                // — there is no head to bind to, and the attestation's own
+                // non-zero invariant covers the degenerate case.
+                if let Some(live_head) = self.get_last_receipt_hash(action_target) {
+                    if checkpoint.archive_terminal_receipt_hash != live_head {
+                        return Err((
+                            TurnError::InvalidEffect {
+                                reason: format!(
+                                    "ReceiptArchive archive_terminal_receipt_hash \
+                                     {:02x}{:02x}.. does not match live chain head \
+                                     {:02x}{:02x}.. for cell {:?}",
+                                    checkpoint.archive_terminal_receipt_hash[0],
+                                    checkpoint.archive_terminal_receipt_hash[1],
+                                    live_head[0],
+                                    live_head[1],
+                                    action_target,
+                                ),
+                            },
+                            path.to_vec(),
+                        ));
+                    }
+                }
                 let c = ledger.get_mut(action_target).ok_or_else(|| {
                     (
                         TurnError::CellNotFound { id: *action_target },
