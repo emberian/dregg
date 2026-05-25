@@ -21,6 +21,7 @@ deploy/genesis/keys/
 deploy/genesis/*.key
 deploy/genesis/secrets/
 demo/two-ai-handoff/state/
+demo/multi-node-devnet/state/
 
 CLAUDIT.md
 

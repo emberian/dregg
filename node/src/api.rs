@@ -1036,9 +1036,9 @@ pub fn router(
         .route("/turns/peer-exchange", post(post_peer_exchange))
         // Queue operations
         .route("/queues/allocate", post(post_queue_allocate))
-        .route("/queues/:id/enqueue", post(post_queue_enqueue))
-        .route("/queues/:id/dequeue", post(post_queue_dequeue))
-        .route("/queues/:id/status", get(get_queue_status))
+        .route("/queues/{id}/enqueue", post(post_queue_enqueue))
+        .route("/queues/{id}/dequeue", post(post_queue_dequeue))
+        .route("/queues/{id}/status", get(get_queue_status))
         .route("/queues/atomic-tx", post(post_queue_atomic_tx))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
