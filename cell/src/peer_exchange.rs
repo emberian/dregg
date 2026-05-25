@@ -241,6 +241,7 @@ impl PeerExchange {
             sequence: self.my_sequence,
             signature: sig.to_bytes(),
             transition_proof: None,
+            unilateral_attestation: None,
         }
     }
 
