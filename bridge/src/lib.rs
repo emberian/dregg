@@ -38,6 +38,13 @@ pub mod midnight_observer;
 pub mod mina;
 pub mod present;
 
+/// Full-fidelity bridge-action binding: a thin re-export plus a wrapper for
+/// the new sibling AIR `pyana_circuit::bridge_action_air` that pins
+/// (nullifier, recipient, destination_federation, amount) at full byte/bit
+/// fidelity (no 30-bit amount truncation, no Poseidon2 compression of 32-byte
+/// values into a single felt). See module docs for the integration shape.
+pub mod action_binding;
+
 #[cfg(feature = "turn")]
 pub mod verifier;
 
@@ -45,6 +52,9 @@ pub mod verifier;
 mod tests;
 
 // Re-export primary types for convenience.
+pub use action_binding::{
+    ActionBindingError, PortableActionBinding, create_action_binding, verify_action_binding,
+};
 pub use authorize::{AuthError, authorize_with_trace};
 pub use convert::{grant_to_facts, macaroon_to_factset};
 pub use delta::attenuation_to_delta;
