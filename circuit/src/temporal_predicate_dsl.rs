@@ -38,9 +38,26 @@ pub const ACC_PLUS_ONE: usize = STEP_INDEX + 1; // 35
 pub const STEP_PLUS_ONE: usize = ACC_PLUS_ONE + 1; // 36
 pub const DSL_TRACE_WIDTH: usize = STEP_PLUS_ONE + 1; // 37
 
-/// Public input layout: [num_steps]
+/// Public input layout: `[padded_len, threshold]`.
+///
+/// **Post AIR-soundness audit (commit `ce1e2def`, finding #3).**
+/// PI[1]=threshold was added to close the "forge proof.threshold after
+/// the fact" attack: previously the only PI was `padded_len` and
+/// `proof.threshold` was a plain serde field that the verifier
+/// compared against the caller's expectation without any STARK binding.
+/// An attacker could honestly prove threshold=0 (trivially satisfiable)
+/// and then mutate `proof.threshold` to any value; the wrapper would
+/// re-compare the mutated field against itself and accept.
+///
+/// Today PI[1]=threshold is bound into row-0 of the THRESHOLD column
+/// via [`TemporalPredicateDsl::boundary_constraints`] and held constant
+/// across the trace by an inter-row constraint in
+/// [`TemporalPredicateDsl::eval_constraints`]. Tampering on
+/// `proof.threshold` makes the verifier's reconstructed PI[1] mismatch
+/// the STARK's boundary commitment and the verify call rejects.
 pub const PI_NUM_STEPS: usize = 0;
-pub const DSL_PUBLIC_INPUT_COUNT: usize = 1;
+pub const PI_THRESHOLD: usize = 1;
+pub const DSL_PUBLIC_INPUT_COUNT: usize = 2;
 
 /// Column index submodule (mirrors the `mod col` in the `#[pyana_circuit]` definition).
 pub mod col {
@@ -131,6 +148,13 @@ impl StarkAir for TemporalPredicateDsl {
                 next[col::ACCUMULATOR] - local[col::ACC_PLUS_ONE],
                 // T2: next[step_index] = local[step_plus_one]
                 next[col::STEP_INDEX] - local[col::STEP_PLUS_ONE],
+                // T3 (AIR-soundness-audit ce1e2def finding #3): THRESHOLD
+                // is constant across all rows. Combined with the row-0
+                // boundary constraint binding THRESHOLD to PI[1], this
+                // forces the prover's threshold to match the verifier's
+                // PI[1] for every row — closing the "honest-prove for
+                // threshold=0 then forge proof.threshold field" attack.
+                next[col::THRESHOLD] - local[col::THRESHOLD],
             ]
         };
 

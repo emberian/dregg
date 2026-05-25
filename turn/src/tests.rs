@@ -10162,10 +10162,9 @@ mod privacy_wiring {
         ledger.insert_cell(agent).unwrap();
 
         let sealer_secret = [0x42u8; 32];
-        let sealer_public = *x25519_dalek::PublicKey::from(
-            &x25519_dalek::StaticSecret::from(sealer_secret),
-        )
-        .as_bytes();
+        let sealer_public =
+            *x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(sealer_secret))
+                .as_bytes();
 
         let mut executor = TurnExecutor::new(ComputronCosts::default());
         // Use AcceptAll so the inner turn can authorize via the standard
@@ -10215,10 +10214,9 @@ mod privacy_wiring {
 
         // Sender encrypts to executor_A's public key.
         let executor_a_secret = [0x11u8; 32];
-        let executor_a_public = *x25519_dalek::PublicKey::from(
-            &x25519_dalek::StaticSecret::from(executor_a_secret),
-        )
-        .as_bytes();
+        let executor_a_public =
+            *x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(executor_a_secret))
+                .as_bytes();
 
         // But executor_B (a *different* sealer pair) tries to apply.
         let executor_b_secret = [0x22u8; 32];
@@ -10248,10 +10246,9 @@ mod privacy_wiring {
         ledger.insert_cell(agent).unwrap();
 
         let sealer_secret = [0x77u8; 32];
-        let sealer_public = *x25519_dalek::PublicKey::from(
-            &x25519_dalek::StaticSecret::from(sealer_secret),
-        )
-        .as_bytes();
+        let sealer_public =
+            *x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(sealer_secret))
+                .as_bytes();
 
         let executor = TurnExecutor::new(ComputronCosts::default());
         let federation_id = [0u8; 32];
@@ -10288,10 +10285,9 @@ mod privacy_wiring {
         ledger.insert_cell(agent).unwrap();
 
         let sealer_secret = [0x55u8; 32];
-        let sealer_public = *x25519_dalek::PublicKey::from(
-            &x25519_dalek::StaticSecret::from(sealer_secret),
-        )
-        .as_bytes();
+        let sealer_public =
+            *x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(sealer_secret))
+                .as_bytes();
 
         let mut executor = TurnExecutor::new(ComputronCosts::default());
         executor.set_proof_verifier(Box::new(AcceptAll));

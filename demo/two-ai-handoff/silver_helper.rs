@@ -1332,8 +1332,7 @@ fn cmd_make_recursive_witness(state_dir: &PathBuf, turn_nonce: u64) {
     };
     let chain = vec![wr_for_chain.clone()];
     let chain_path = state_dir.join("silver.recursive-chain.json");
-    let chain_json =
-        WitnessedReceipt::chain_to_json(&chain).expect("chain serialise must succeed");
+    let chain_json = WitnessedReceipt::chain_to_json(&chain).expect("chain serialise must succeed");
     fs::write(&chain_path, &chain_json).unwrap();
 
     // Tampered variant: corrupt the recursive_vk_hash so the verifier's

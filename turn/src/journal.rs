@@ -10,8 +10,8 @@ use std::sync::Mutex;
 
 use pyana_cell::{
     CapabilityRef, CellId, DelegatedRef, Ledger, NoteCommitment, Nullifier, Permissions,
-    VerificationKey, note_bridge::BridgedNullifierSet, nullifier_set::NullifierSet,
-    state::FieldElement,
+    VerificationKey, lifecycle::CellLifecycle, note_bridge::BridgedNullifierSet,
+    nullifier_set::NullifierSet, permissions::AuthRequired, state::FieldElement,
 };
 
 use crate::action::Symbol;
@@ -119,6 +119,22 @@ pub(crate) enum JournalEntry {
     /// On rollback, this escrow_id must be REMOVED from both committed_escrows
     /// and committed_escrow_amounts maps.
     CommittedEscrowInserted { escrow_id: [u8; 32] },
+    /// A cell's lifecycle state was changed (Seal, Unseal, Destroy, Archive).
+    /// Records the old lifecycle so rollback can restore it.
+    SetLifecycle {
+        cell: CellId,
+        old_lifecycle: CellLifecycle,
+    },
+    /// A capability slot was attenuated in place. Records the prior values
+    /// of the three narrow-able fields (permissions, allowed_effects, expires_at)
+    /// so rollback can restore the slot exactly.
+    AttenuateCapability {
+        cell: CellId,
+        slot: u32,
+        old_permissions: AuthRequired,
+        old_allowed_effects: Option<pyana_cell::EffectMask>,
+        old_expires_at: Option<u64>,
+    },
 }
 
 /// The undo journal for a turn's execution.
@@ -347,6 +363,32 @@ impl LedgerJournal {
             .push(JournalEntry::CommittedEscrowInserted { escrow_id });
     }
 
+    /// Record a cell-lifecycle change (Seal/Unseal/Destroy/Archive).
+    pub fn record_set_lifecycle(&mut self, cell: CellId, old_lifecycle: CellLifecycle) {
+        self.entries.push(JournalEntry::SetLifecycle {
+            cell,
+            old_lifecycle,
+        });
+    }
+
+    /// Record an in-place capability attenuation.
+    pub fn record_attenuate_capability(
+        &mut self,
+        cell: CellId,
+        slot: u32,
+        old_permissions: AuthRequired,
+        old_allowed_effects: Option<pyana_cell::EffectMask>,
+        old_expires_at: Option<u64>,
+    ) {
+        self.entries.push(JournalEntry::AttenuateCapability {
+            cell,
+            slot,
+            old_permissions,
+            old_allowed_effects,
+            old_expires_at,
+        });
+    }
+
     /// Roll back all recorded changes in reverse order.
     ///
     /// After this call, the ledger is restored to the state it was in before
@@ -449,6 +491,34 @@ impl LedgerJournal {
                 JournalEntry::CommittedEscrowInserted { escrow_id } => {
                     committed_escrows.lock().unwrap().remove(&escrow_id);
                     committed_escrow_amounts.lock().unwrap().remove(&escrow_id);
+                }
+                JournalEntry::SetLifecycle {
+                    cell,
+                    old_lifecycle,
+                } => {
+                    if let Some(c) = ledger.get_mut(&cell) {
+                        c.lifecycle = old_lifecycle;
+                    }
+                }
+                JournalEntry::AttenuateCapability {
+                    cell,
+                    slot,
+                    old_permissions,
+                    old_allowed_effects,
+                    old_expires_at,
+                } => {
+                    if let Some(c) = ledger.get_mut(&cell) {
+                        // Directly restore the slot's fields via a
+                        // mutable lookup (CapabilitySet exposes
+                        // attenuate_in_place, but rollback may need to
+                        // widen back to the original — bypass the
+                        // narrowing check by mutating in place).
+                        if let Some(cap) = c.capabilities.iter_mut().find(|r| r.slot == slot) {
+                            cap.permissions = old_permissions;
+                            cap.allowed_effects = old_allowed_effects;
+                            cap.expires_at = old_expires_at;
+                        }
+                    }
                 }
                 // Note/obligation/escrow/event entries don't modify ledger state directly.
                 // On rollback these are simply discarded — the note layer,

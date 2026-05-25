@@ -66,6 +66,26 @@ use crate::turn::{EmittedEvent, Turn, TurnReceipt, TurnResult};
 
 use pyana_dsl_runtime::ProgramRegistry;
 
+/// Whether a single `Effect` is a `Burn`, recursing into
+/// `ExerciseViaCapability::inner_effects`. Powers `was_burn` disclosure.
+fn effect_is_burn(e: &Effect) -> bool {
+    match e {
+        Effect::Burn { .. } => true,
+        Effect::ExerciseViaCapability { inner_effects, .. } => {
+            inner_effects.iter().any(effect_is_burn)
+        }
+        _ => false,
+    }
+}
+
+/// Recursive: does any action in this tree carry an `Effect::Burn`?
+fn tree_has_burn_effect(t: &crate::forest::CallTree) -> bool {
+    if t.action.effects.iter().any(effect_is_burn) {
+        return true;
+    }
+    t.children.iter().any(tree_has_burn_effect)
+}
+
 /// Human-readable name of a `WitnessedPredicateKind` for diagnostic
 /// error messages (used by `TurnError::AuthModeNotRegistered`).
 fn predicate_kind_name(kind: WitnessedPredicateKind) -> String {
@@ -4458,6 +4478,7 @@ impl TurnExecutor {
                         // `execute` returns. We can't know here whether we were
                         // entered via an EncryptedTurn wrapper.
                         was_encrypted: false,
+                        was_burn: Self::forest_carries_burn(&turn.call_forest),
                     };
                     // R-4: sign the receipt over its canonical hash if the
                     // executor has been configured with a signing key.
@@ -4930,6 +4951,11 @@ impl TurnExecutor {
             // this bit so the encrypted-arrival fact is bound into the
             // receipt hash AND the executor signature.
             was_encrypted: false,
+            // Burn-disclosure flag: true iff any action in the forest
+            // carried an `Effect::Burn`. Bound into `receipt_hash` so an
+            // executor cannot strip the non-conservation disclosure
+            // (Silver-Vision lifecycle plan).
+            was_burn: Self::forest_carries_burn(&turn.call_forest),
         };
         // R-4: sign the receipt over its canonical hash if the executor has
         // been configured with a signing key (`with_executor_signing_key`).
@@ -5223,20 +5249,16 @@ impl TurnExecutor {
                     }
                     let (conflicts, name): (bool, &'static str) = match other {
                         Effect::SetField { cell, .. } => (cell == ref_cell, "SetField"),
-                        Effect::SetPermissions { cell, .. } => {
-                            (cell == ref_cell, "SetPermissions")
-                        }
+                        Effect::SetPermissions { cell, .. } => (cell == ref_cell, "SetPermissions"),
                         Effect::SetVerificationKey { cell, .. } => {
                             (cell == ref_cell, "SetVerificationKey")
                         }
-                        Effect::Transfer { from, to, .. } => (
-                            from == ref_cell || to == ref_cell,
-                            "Transfer",
-                        ),
-                        Effect::GrantCapability { from, to, .. } => (
-                            from == ref_cell || to == ref_cell,
-                            "GrantCapability",
-                        ),
+                        Effect::Transfer { from, to, .. } => {
+                            (from == ref_cell || to == ref_cell, "Transfer")
+                        }
+                        Effect::GrantCapability { from, to, .. } => {
+                            (from == ref_cell || to == ref_cell, "GrantCapability")
+                        }
                         Effect::RevokeCapability { cell, .. } => {
                             (cell == ref_cell, "RevokeCapability")
                         }
@@ -10400,6 +10422,261 @@ impl TurnExecutor {
                 }
                 Ok(())
             }
+
+            // ── Cell lifecycle effects (Silver-Vision lifecycle subset) ──
+            //
+            // Each effect dispatches to the cell-side primitive shipped in
+            // commits 9d819ea3/c0496d79/136ef24f. The executor handles:
+            //   * target == action_target consistency (cross-cell lifecycle
+            //     mutation is rejected as a structural error),
+            //   * journaling the old lifecycle/capability state for rollback,
+            //   * mapping `LifecycleTransitionError` to `TurnError::InvalidEffect`
+            //     so the existing rollback path catches the failure.
+            Effect::CellSeal { target, reason } => {
+                if target != action_target {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "CellSeal target must match action target".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                let c = ledger
+                    .get_mut(target)
+                    .ok_or_else(|| (TurnError::CellNotFound { id: *target }, path.to_vec()))?;
+                let old = c.lifecycle.clone();
+                c.seal(*reason, self.block_height).map_err(|e| {
+                    (
+                        TurnError::InvalidEffect {
+                            reason: format!("CellSeal failed: {e}"),
+                        },
+                        path.to_vec(),
+                    )
+                })?;
+                journal.record_set_lifecycle(*target, old);
+                Ok(())
+            }
+
+            Effect::CellUnseal { target } => {
+                if target != action_target {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "CellUnseal target must match action target".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                let c = ledger
+                    .get_mut(target)
+                    .ok_or_else(|| (TurnError::CellNotFound { id: *target }, path.to_vec()))?;
+                let old = c.lifecycle.clone();
+                c.unseal().map_err(|e| {
+                    (
+                        TurnError::InvalidEffect {
+                            reason: format!("CellUnseal failed: {e}"),
+                        },
+                        path.to_vec(),
+                    )
+                })?;
+                journal.record_set_lifecycle(*target, old);
+                Ok(())
+            }
+
+            Effect::CellDestroy {
+                target,
+                certificate,
+            } => {
+                if target != action_target {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "CellDestroy target must match action target".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                let c = ledger
+                    .get_mut(target)
+                    .ok_or_else(|| (TurnError::CellNotFound { id: *target }, path.to_vec()))?;
+                let old = c.lifecycle.clone();
+                c.destroy(certificate).map_err(|e| {
+                    (
+                        TurnError::InvalidEffect {
+                            reason: format!("CellDestroy failed: {e}"),
+                        },
+                        path.to_vec(),
+                    )
+                })?;
+                journal.record_set_lifecycle(*target, old);
+                Ok(())
+            }
+
+            Effect::Burn {
+                target,
+                slot,
+                amount,
+            } => {
+                // Silver-Vision: only the canonical balance slot (sentinel
+                // 0) is burnable. Future expansion may introduce per-asset
+                // slots; for now any other slot is rejected so the executor
+                // never silently writes outside the balance field.
+                if *slot != 0 {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: format!(
+                                "Burn slot {} is not a burnable balance slot (only slot 0 supported)",
+                                slot
+                            ),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                if target != action_target {
+                    self.check_cross_cell_permission(
+                        ledger,
+                        actor,
+                        target,
+                        pyana_cell::permissions::Action::Send,
+                        "Burn",
+                        path,
+                    )?;
+                }
+                let c = ledger
+                    .get(target)
+                    .ok_or_else(|| (TurnError::CellNotFound { id: *target }, path.to_vec()))?;
+                let bal = c.state.balance();
+                if bal < *amount {
+                    return Err((
+                        TurnError::InsufficientBalance {
+                            cell: *target,
+                            required: *amount,
+                            available: bal,
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                let new_bal = bal - *amount;
+                let cm = ledger
+                    .get_mut(target)
+                    .ok_or_else(|| (TurnError::CellNotFound { id: *target }, path.to_vec()))?;
+                journal.record_set_balance(*target, bal);
+                cm.state.set_balance(new_bal);
+                Ok(())
+            }
+
+            Effect::AttenuateCapability {
+                cell,
+                slot,
+                narrower_permissions,
+                narrower_effects,
+                narrower_expiry,
+            } => {
+                if cell != actor {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "AttenuateCapability cell must match the actor".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                let c = ledger
+                    .get_mut(cell)
+                    .ok_or_else(|| (TurnError::CellNotFound { id: *cell }, path.to_vec()))?;
+                // Snapshot the slot's prior fields for rollback BEFORE
+                // attenuation.
+                let prior = c
+                    .capabilities
+                    .iter()
+                    .find(|r| r.slot == *slot)
+                    .ok_or_else(|| {
+                        (
+                            TurnError::InvalidEffect {
+                                reason: format!(
+                                    "AttenuateCapability slot {slot} not present in c-list"
+                                ),
+                            },
+                            path.to_vec(),
+                        )
+                    })?;
+                let old_permissions = prior.permissions.clone();
+                let old_allowed_effects = prior.allowed_effects;
+                let old_expires_at = prior.expires_at;
+                let result = c.capabilities.attenuate_in_place(
+                    *slot,
+                    narrower_permissions.clone(),
+                    *narrower_effects,
+                    *narrower_expiry,
+                );
+                if result.is_none() {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "AttenuateCapability rejected: not a monotone narrowing".into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                journal.record_attenuate_capability(
+                    *cell,
+                    *slot,
+                    old_permissions,
+                    old_allowed_effects,
+                    old_expires_at,
+                );
+                Ok(())
+            }
+
+            Effect::ReceiptArchive {
+                prefix_end_height,
+                checkpoint,
+            } => {
+                if checkpoint.cell_id != *action_target {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: "ReceiptArchive checkpoint cell_id mismatches action target"
+                                .into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                if checkpoint.archive_end_height != *prefix_end_height {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason:
+                                "ReceiptArchive prefix_end_height mismatches checkpoint.archive_end_height"
+                                    .into(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                // Reject archiving past the current head (block_height).
+                if *prefix_end_height > self.block_height {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: format!(
+                                "ReceiptArchive prefix_end_height {} exceeds current head height {}",
+                                prefix_end_height, self.block_height
+                            ),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                let c = ledger.get_mut(action_target).ok_or_else(|| {
+                    (
+                        TurnError::CellNotFound { id: *action_target },
+                        path.to_vec(),
+                    )
+                })?;
+                let old = c.lifecycle.clone();
+                c.archive(checkpoint).map_err(|e| {
+                    (
+                        TurnError::InvalidEffect {
+                            reason: format!("ReceiptArchive failed: {e}"),
+                        },
+                        path.to_vec(),
+                    )
+                })?;
+                journal.record_set_lifecycle(*action_target, old);
+                Ok(())
+            }
         }
     }
 
@@ -10604,6 +10881,18 @@ impl TurnExecutor {
                 .costs
                 .effect_base
                 .saturating_add(self.costs.proof_verify),
+            // Lifecycle transitions: structural state mutations with no
+            // proof verification; each is one effect_base.
+            Effect::CellSeal { .. }
+            | Effect::CellUnseal { .. }
+            | Effect::CellDestroy { .. }
+            | Effect::ReceiptArchive { .. } => self.costs.effect_base,
+            // Burn: a balance mutation analogous to Transfer's effect_base
+            // + transfer cost.
+            Effect::Burn { .. } => self.costs.effect_base.saturating_add(self.costs.transfer),
+            // AttenuateCapability: an in-place c-list mutation, like
+            // GrantCapability.
+            Effect::AttenuateCapability { .. } => self.costs.effect_base,
         };
         base.saturating_add(extra)
             .saturating_add((effect.data_bytes() as u64).saturating_mul(self.costs.per_byte))
@@ -11123,6 +11412,14 @@ impl TurnExecutor {
                 | JournalEntry::CommittedEscrowReleased { .. }
                 | JournalEntry::CommittedEscrowRefunded { .. }
                 | JournalEntry::CommittedEscrowInserted { .. } => {}
+                // Lifecycle / capability narrowing: rollback-only — no
+                // separate LedgerDelta field today. On commit the cell's
+                // CellLifecycle / CapabilityRef change is read off the
+                // cell itself; verifiers re-execute against state
+                // commitment v2 which folds the lifecycle byte in (see
+                // cell/src/commitment.rs).
+                JournalEntry::SetLifecycle { .. }
+                | JournalEntry::AttenuateCapability { .. } => {}
             }
         }
 
@@ -11260,6 +11557,13 @@ impl TurnExecutor {
     }
 
     /// Collect emitted events from the journal for inclusion in the turn receipt.
+    /// Recursive: does any action in the forest carry an `Effect::Burn`?
+    /// Drives the `was_burn` flag in the receipt so the non-conservation
+    /// disclosure is committed (Silver-Vision lifecycle plan).
+    fn forest_carries_burn(forest: &crate::forest::CallForest) -> bool {
+        forest.roots.iter().any(tree_has_burn_effect)
+    }
+
     fn collect_emitted_events(journal: &LedgerJournal) -> Vec<EmittedEvent> {
         journal
             .entries()
@@ -11693,6 +11997,36 @@ fn rewrite_effect_targets(effects: &mut [Effect], placeholder: &CellId, resolved
                     *cell = *resolved;
                 }
             }
+            Effect::CellSeal { target, .. } => {
+                if target == placeholder {
+                    *target = *resolved;
+                }
+            }
+            Effect::CellUnseal { target } => {
+                if target == placeholder {
+                    *target = *resolved;
+                }
+            }
+            Effect::CellDestroy { target, .. } => {
+                if target == placeholder {
+                    *target = *resolved;
+                }
+            }
+            Effect::Burn { target, .. } => {
+                if target == placeholder {
+                    *target = *resolved;
+                }
+            }
+            Effect::AttenuateCapability { cell, .. } => {
+                if cell == placeholder {
+                    *cell = *resolved;
+                }
+            }
+            // ReceiptArchive carries an ArchivalAttestation that pins
+            // its own cell_id; rewriting it would invalidate the
+            // attestation's hash. Submitters must construct the
+            // attestation with the resolved CellId already in place.
+            Effect::ReceiptArchive { .. } => {}
             // These effects don't have mutable CellId fields needing rewrite:
             Effect::CreateCell { .. }
             | Effect::NoteSpend { .. }
@@ -13809,7 +14143,10 @@ mod hardening_tests {
                     "expected reason to mention 'out of bounds', got: {reason}"
                 );
             }
-            other => panic!("expected InvalidAuthorization (out of bounds), got: {:?}", other),
+            other => panic!(
+                "expected InvalidAuthorization (out of bounds), got: {:?}",
+                other
+            ),
         }
     }
 
@@ -13900,10 +14237,7 @@ mod hardening_tests {
                 assert_eq!(cell, agent_id);
                 assert_eq!(conflicting_effect, "SetField");
             }
-            other => panic!(
-                "expected RefusalConflictsWithMutation, got: {:?}",
-                other
-            ),
+            other => panic!("expected RefusalConflictsWithMutation, got: {:?}", other),
         }
 
         // Agent's slot[0] MUST remain at FIELD_ZERO -- the entire action

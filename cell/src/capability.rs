@@ -429,6 +429,13 @@ impl CapabilitySet {
         self.refs.iter()
     }
 
+    /// Mutably iterate over capability refs. Used by the executor's
+    /// rollback path to restore in-place narrowings; not for general use
+    /// (apps should go through `attenuate_in_place` / `grant`).
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut CapabilityRef> {
+        self.refs.iter_mut()
+    }
+
     /// Get all capabilities targeting a specific cell.
     pub fn capabilities_for(&self, target: &CellId) -> Vec<&CapabilityRef> {
         self.refs.iter().filter(|r| &r.target == target).collect()
@@ -478,7 +485,10 @@ mod attenuate_in_place_tests {
         let h = caps
             .attenuate_in_place(slot, AuthRequired::Signature, None, None)
             .expect("narrowing Either -> Signature must succeed");
-        assert_eq!(caps.lookup(slot).unwrap().permissions, AuthRequired::Signature);
+        assert_eq!(
+            caps.lookup(slot).unwrap().permissions,
+            AuthRequired::Signature
+        );
         // Slot identity unchanged.
         assert_eq!(caps.lookup(slot).unwrap().slot, slot);
         assert_ne!(h, [0u8; 32], "commitment must be non-zero");
@@ -492,7 +502,10 @@ mod attenuate_in_place_tests {
         let result = caps.attenuate_in_place(slot, AuthRequired::Either, None, None);
         assert!(result.is_none(), "must reject widening Signature -> Either");
         // Cap state must be unchanged on rejection.
-        assert_eq!(caps.lookup(slot).unwrap().permissions, AuthRequired::Signature);
+        assert_eq!(
+            caps.lookup(slot).unwrap().permissions,
+            AuthRequired::Signature
+        );
     }
 
     #[test]
@@ -507,7 +520,11 @@ mod attenuate_in_place_tests {
         let mut caps = CapabilitySet::new();
         // Start with a faceted cap allowing only TRANSFER.
         let slot = caps
-            .grant_faceted(cid(1), AuthRequired::Signature, crate::facet::EFFECT_TRANSFER)
+            .grant_faceted(
+                cid(1),
+                AuthRequired::Signature,
+                crate::facet::EFFECT_TRANSFER,
+            )
             .unwrap();
         // Try to widen to TRANSFER | SET_FIELD.
         let result = caps.attenuate_in_place(
@@ -530,7 +547,10 @@ mod attenuate_in_place_tests {
             .grant_with_expiry(cid(1), AuthRequired::Signature, 100)
             .unwrap();
         let result = caps.attenuate_in_place(slot, AuthRequired::Signature, None, Some(200));
-        assert!(result.is_none(), "must reject expiry extension (100 -> 200)");
+        assert!(
+            result.is_none(),
+            "must reject expiry extension (100 -> 200)"
+        );
         assert_eq!(caps.lookup(slot).unwrap().expires_at, Some(100));
     }
 
@@ -592,7 +612,9 @@ mod attenuate_in_place_tests {
         let slot = caps.grant(target, AuthRequired::Either).unwrap();
         let before_slot = caps.lookup(slot).unwrap().slot;
         let before_target = caps.lookup(slot).unwrap().target;
-        let _ = caps.attenuate_in_place(slot, AuthRequired::Signature, None, None).unwrap();
+        let _ = caps
+            .attenuate_in_place(slot, AuthRequired::Signature, None, None)
+            .unwrap();
         assert_eq!(caps.lookup(slot).unwrap().slot, before_slot);
         assert_eq!(caps.lookup(slot).unwrap().target, before_target);
     }
@@ -612,12 +634,18 @@ mod attenuate_in_place_tests {
         let h2 = caps
             .attenuate_in_place(slot, AuthRequired::Signature, None, None)
             .unwrap();
-        assert_eq!(h1, h2, "identical narrowed state must produce equal commitments");
+        assert_eq!(
+            h1, h2,
+            "identical narrowed state must produce equal commitments"
+        );
 
         // Further narrowing to Impossible — commitment must differ.
         let h3 = caps
             .attenuate_in_place(slot, AuthRequired::Impossible, None, None)
             .unwrap();
-        assert_ne!(h1, h3, "different narrowed state must produce different commitments");
+        assert_ne!(
+            h1, h3,
+            "different narrowed state must produce different commitments"
+        );
     }
 }

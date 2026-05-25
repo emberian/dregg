@@ -578,6 +578,13 @@ pub struct TurnReceipt {
     /// `receipt_hash` so a malicious executor cannot strip or forge it.
     #[serde(default)]
     pub was_encrypted: bool,
+    /// True when any action in this turn carried an `Effect::Burn`. The
+    /// flag is bound into `receipt_hash` so an executor cannot strip the
+    /// non-conservation disclosure: a verifier seeing `was_burn = true`
+    /// knows total supply on this turn provably did not balance.
+    /// Analogous to `was_encrypted` per the Silver-Vision lifecycle plan.
+    #[serde(default)]
+    pub was_burn: bool,
 }
 
 impl TurnReceipt {
@@ -651,6 +658,10 @@ impl TurnReceipt {
         // decrypting an `EncryptedTurn` envelope? Bound so an executor cannot
         // strip / forge this bit without breaking the receipt hash chain.
         hasher.update(&[if self.was_encrypted { 0x01 } else { 0x00 }]);
+        // Burn disclosure binding: did any action in this turn carry an
+        // `Effect::Burn`? Bound so an executor cannot strip the non-
+        // conservation disclosure. Silver-Vision lifecycle extension.
+        hasher.update(&[if self.was_burn { 0x01 } else { 0x00 }]);
         *hasher.finalize().as_bytes()
     }
 

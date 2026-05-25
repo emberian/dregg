@@ -420,15 +420,27 @@ mod tests {
 
         let mut c = base.clone();
         c.final_state_commitment = [9u8; 32];
-        assert_ne!(c.certificate_hash(), h_base, "final_state_commitment must bind");
+        assert_ne!(
+            c.certificate_hash(),
+            h_base,
+            "final_state_commitment must bind"
+        );
 
         let mut c = base.clone();
         c.destroyed_at_height = 43;
-        assert_ne!(c.certificate_hash(), h_base, "destroyed_at_height must bind");
+        assert_ne!(
+            c.certificate_hash(),
+            h_base,
+            "destroyed_at_height must bind"
+        );
 
         let mut c = base.clone();
         c.reason = DeathReason::Forced;
-        assert_ne!(c.certificate_hash(), h_base, "reason discriminant must bind");
+        assert_ne!(
+            c.certificate_hash(),
+            h_base,
+            "reason discriminant must bind"
+        );
 
         // Custom-reason inner hash must bind.
         let custom_a = DeathReason::Custom {

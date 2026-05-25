@@ -641,7 +641,11 @@ mod lifecycle_transition_tests {
         let err = c.seal([7u8; 32], 200).unwrap_err();
         assert_eq!(err, LifecycleTransitionError::AlreadySealed);
         // Original seal data must be preserved.
-        if let CellLifecycle::Sealed { reason_hash, sealed_at } = c.lifecycle {
+        if let CellLifecycle::Sealed {
+            reason_hash,
+            sealed_at,
+        } = c.lifecycle
+        {
             assert_eq!(reason_hash, [9u8; 32]);
             assert_eq!(sealed_at, 100);
         } else {
@@ -728,7 +732,10 @@ mod lifecycle_transition_tests {
         };
         c.archive(&a).unwrap();
         assert!(c.accepts_effects(), "archived cells still accept effects");
-        if let CellLifecycle::Archived { archived_through, .. } = c.lifecycle {
+        if let CellLifecycle::Archived {
+            archived_through, ..
+        } = c.lifecycle
+        {
             assert_eq!(archived_through, 100);
         } else {
             panic!("expected Archived");
@@ -769,7 +776,10 @@ mod lifecycle_transition_tests {
             LifecycleTransitionError::ArchiveNotMonotone
         );
         c.archive(&a3_newer).unwrap(); // monotone advance OK
-        if let CellLifecycle::Archived { archived_through, .. } = c.lifecycle {
+        if let CellLifecycle::Archived {
+            archived_through, ..
+        } = c.lifecycle
+        {
             assert_eq!(archived_through, 200);
         }
     }

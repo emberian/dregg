@@ -4,11 +4,14 @@
 //! Each action targets a cell, specifies a method, carries authorization, declares
 //! preconditions, and produces effects.
 
+use pyana_cell::lifecycle::{ArchivalAttestation, DeathCertificate};
 use pyana_cell::note_bridge::{BridgeReceipt, PortableNoteProof};
 use pyana_cell::permissions::AuthRequired;
 use pyana_cell::predicate::WitnessedPredicate;
 use pyana_cell::state::FieldElement;
-use pyana_cell::{CapabilityRef, CellId, NoteCommitment, Nullifier, Preconditions, SealedBox};
+use pyana_cell::{
+    CapabilityRef, CapabilitySet, CellId, NoteCommitment, Nullifier, Preconditions, SealedBox,
+};
 #[allow(unused_imports)]
 use pyana_cell::{ValueCommitment, ValueCommitmentBytes};
 use serde::{Deserialize, Serialize};
@@ -997,6 +1000,91 @@ pub enum Effect {
         /// the federation inserted when accepting the cert).
         cert_hash: [u8; 32],
     },
+
+    // ─── Cell lifecycle effects (Silver-Vision lifecycle subset) ─────────────
+    //
+    // Per `PROTOCOL-CATEGORICAL-ANALYSIS.md §1.4–§1.5` and the cell-side
+    // primitives shipped with `CellLifecycle` (commit `9d819ea3`),
+    // `Cell::seal`/`unseal`/`destroy`/`archive` (commit `c0496d79`), and
+    // `CapabilitySet::attenuate_in_place` (commit `136ef24f`).
+    //
+    /// Seal a cell: transition its lifecycle to `CellLifecycle::Sealed`.
+    /// The cell rejects new effects after sealing but state and history
+    /// are preserved; reversible via [`Effect::CellUnseal`]. The reason
+    /// is committed (cleartext lives off-chain).
+    CellSeal {
+        /// Which cell to seal (must match `action.target`).
+        target: CellId,
+        /// 32-byte commitment to the sealing reason (the cleartext lives
+        /// off-chain).
+        reason: [u8; 32],
+    },
+    /// Reverse a seal: transition the cell from `Sealed` back to `Live`.
+    /// Rejected if the cell is not currently sealed.
+    CellUnseal {
+        /// Which cell to unseal (must match `action.target`).
+        target: CellId,
+    },
+    /// Permanently retire a cell: transition lifecycle to `Destroyed`
+    /// and bind the [`DeathCertificate`] hash into the final state.
+    /// Once destroyed, the cell cannot transition to any other state
+    /// (it is `is_terminal()`); subsequent effects targeting it are
+    /// rejected.
+    CellDestroy {
+        /// Which cell to destroy (must match `action.target`).
+        target: CellId,
+        /// The death certificate. Its `cell_id` must match `target`;
+        /// the executor binds `certificate.certificate_hash()` into
+        /// the new `CellLifecycle::Destroyed`.
+        certificate: DeathCertificate,
+    },
+    /// Burn an explicit, non-conservation amount from a cell's balance
+    /// slot. Unlike `Transfer`, no destination credit happens — the
+    /// supply is provably reduced. The receipt's `was_burn` flag is
+    /// bound into `receipt_hash` so an executor cannot strip the
+    /// disclosure (analogous to `was_encrypted`).
+    Burn {
+        /// The cell whose balance is reduced.
+        target: CellId,
+        /// Slot identifier. Sentinel `0` is the canonical cell-balance
+        /// slot (per `state.balance()`). Any other value is rejected
+        /// in Silver-Vision; a future expansion may use this to burn
+        /// other ledgered quantities.
+        slot: u32,
+        /// Amount to burn (must not exceed the balance).
+        amount: u64,
+    },
+    /// Monotonically narrow an existing capability in the actor's
+    /// c-list via [`CapabilitySet::attenuate_in_place`]. Widening is
+    /// rejected (the underlying primitive returns `None`).
+    AttenuateCapability {
+        /// The actor whose c-list holds the slot.
+        cell: CellId,
+        /// Slot index in the actor's c-list to narrow.
+        slot: u32,
+        /// New permissions — must be `is_narrower_or_equal` to the
+        /// existing permissions.
+        narrower_permissions: AuthRequired,
+        /// New effect-mask facet (subset-only). `None` leaves it as-is.
+        narrower_effects: Option<pyana_cell::EffectMask>,
+        /// New expiry. Can only shrink relative to the existing expiry
+        /// (or bind a finite expiry to a previously unbounded cap).
+        narrower_expiry: Option<u64>,
+    },
+    /// Declare that the cell's receipt-chain prefix up to
+    /// `prefix_end_height` is summarized by the carried
+    /// [`ArchivalAttestation`]. Lifecycle transitions to `Archived`
+    /// (the cell remains live); prior chain links may be pruned from
+    /// the live tail (off-chain), with `checkpoint` as the standing
+    /// witness.
+    ReceiptArchive {
+        /// Inclusive end-height of the archived prefix.
+        prefix_end_height: u64,
+        /// The archival attestation; its `cell_id` must match
+        /// `action.target` and its `archive_end_height` must equal
+        /// `prefix_end_height`.
+        checkpoint: ArchivalAttestation,
+    },
 }
 
 /// Why a [`Effect::Refusal`] was issued. Refusals are *evidence of
@@ -1798,6 +1886,93 @@ impl Effect {
                 hasher.update(&[46u8]);
                 hasher.update(cert_hash);
             }
+            Effect::CellSeal { target, reason } => {
+                hasher.update(&[48u8]);
+                hasher.update(target.as_bytes());
+                hasher.update(reason);
+            }
+            Effect::CellUnseal { target } => {
+                hasher.update(&[49u8]);
+                hasher.update(target.as_bytes());
+            }
+            Effect::CellDestroy {
+                target,
+                certificate,
+            } => {
+                hasher.update(&[50u8]);
+                hasher.update(target.as_bytes());
+                // Bind the canonical death-certificate hash (cell-side
+                // routine `DeathCertificate::certificate_hash`).
+                hasher.update(&certificate.certificate_hash());
+            }
+            Effect::Burn {
+                target,
+                slot,
+                amount,
+            } => {
+                hasher.update(&[51u8]);
+                hasher.update(target.as_bytes());
+                hasher.update(&slot.to_le_bytes());
+                hasher.update(&amount.to_le_bytes());
+            }
+            Effect::AttenuateCapability {
+                cell,
+                slot,
+                narrower_permissions,
+                narrower_effects,
+                narrower_expiry,
+            } => {
+                hasher.update(&[52u8]);
+                hasher.update(cell.as_bytes());
+                hasher.update(&slot.to_le_bytes());
+                match narrower_permissions {
+                    AuthRequired::None => {
+                        hasher.update(&[0u8]);
+                    }
+                    AuthRequired::Signature => {
+                        hasher.update(&[1u8]);
+                    }
+                    AuthRequired::Proof => {
+                        hasher.update(&[2u8]);
+                    }
+                    AuthRequired::Either => {
+                        hasher.update(&[3u8]);
+                    }
+                    AuthRequired::Impossible => {
+                        hasher.update(&[4u8]);
+                    }
+                    AuthRequired::Custom { vk_hash } => {
+                        hasher.update(&[5u8]);
+                        hasher.update(vk_hash);
+                    }
+                }
+                match narrower_effects {
+                    Some(mask) => {
+                        hasher.update(&[1u8]);
+                        hasher.update(&mask.to_le_bytes());
+                    }
+                    None => {
+                        hasher.update(&[0u8]);
+                    }
+                }
+                match narrower_expiry {
+                    Some(exp) => {
+                        hasher.update(&[1u8]);
+                        hasher.update(&exp.to_le_bytes());
+                    }
+                    None => {
+                        hasher.update(&[0u8]);
+                    }
+                }
+            }
+            Effect::ReceiptArchive {
+                prefix_end_height,
+                checkpoint,
+            } => {
+                hasher.update(&[53u8]);
+                hasher.update(&prefix_end_height.to_le_bytes());
+                hasher.update(&checkpoint.checkpoint_hash());
+            }
             Effect::Refusal {
                 cell,
                 offered_action_commitment,
@@ -1956,6 +2131,13 @@ impl Effect {
                     }
                     + 4
             }
+            // Lifecycle effects: small fixed-size payloads.
+            Effect::CellSeal { .. } => 32 + 32, // target + reason
+            Effect::CellUnseal { .. } => 32,    // target
+            Effect::CellDestroy { .. } => 32 + 32, // target + cert hash
+            Effect::Burn { .. } => 32 + 4 + 8,  // target + slot + amount
+            Effect::AttenuateCapability { .. } => 32 + 4 + 1 + 4 + 8, // cell + slot + perms + mask + expiry
+            Effect::ReceiptArchive { .. } => 8 + 32,                  // height + checkpoint hash
         }
     }
 
@@ -2023,6 +2205,12 @@ impl Effect {
             | Effect::DropRef { .. }
             | Effect::ValidateHandoff { .. } => pyana_cell::EFFECT_CAPTP_OPS,
             Effect::Refusal { .. } => pyana_cell::EFFECT_REFUSAL,
+            Effect::CellSeal { .. }
+            | Effect::CellUnseal { .. }
+            | Effect::CellDestroy { .. }
+            | Effect::ReceiptArchive { .. } => pyana_cell::EFFECT_LIFECYCLE_OPS,
+            Effect::Burn { .. } => pyana_cell::EFFECT_BURN,
+            Effect::AttenuateCapability { .. } => pyana_cell::EFFECT_ATTENUATE_CAPABILITY,
         }
     }
 }

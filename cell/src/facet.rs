@@ -62,6 +62,19 @@ pub const EFFECT_CAPTP_OPS: EffectMask = 1 << 19;
 /// Mutates only the target cell's nonce + refusal-audit slot; never
 /// transfers, grants, or creates.
 pub const EFFECT_REFUSAL: EffectMask = 1 << 20;
+/// Cell-lifecycle transitions: `CellSeal`, `CellUnseal`, `CellDestroy`,
+/// `ReceiptArchive`. Mutates `Cell::lifecycle` (and, for `ReceiptArchive`,
+/// folds an archival attestation in). Per `PROTOCOL-CATEGORICAL-ANALYSIS.md
+/// §1.4–§1.5` and `§4.2`.
+pub const EFFECT_LIFECYCLE_OPS: EffectMask = 1 << 21;
+/// `Effect::Burn` — economic explicitness: a non-conservation balance
+/// decrement bound to the receipt as `was_burn`. Distinct from `Transfer`
+/// (which always conserves).
+pub const EFFECT_BURN: EffectMask = 1 << 22;
+/// `Effect::AttenuateCapability` — monotone in-place narrowing of a
+/// capability already in the actor's c-list. Distinct from grant/revoke
+/// because no new slot is allocated and no existing slot is removed.
+pub const EFFECT_ATTENUATE_CAPABILITY: EffectMask = 1 << 23;
 
 /// All effect kinds permitted (equivalent to no restriction).
 pub const EFFECT_ALL: EffectMask = 0xFFFF_FFFF;
