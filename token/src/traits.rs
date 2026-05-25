@@ -83,6 +83,11 @@ pub struct AuthRequest {
     /// Cost of this specific request (in budget units).
     /// Required when the token has Budget caveats.
     pub request_cost: Option<u64>,
+    /// Revocation non-membership proofs: set of token IDs confirmed not-revoked.
+    /// Required when the token has `Revocable` caveats; the bridge's authorize
+    /// path (`bridge/src/authorize.rs`) checks each revocable id against this
+    /// set.
+    pub not_revoked: std::collections::HashSet<String>,
 }
 
 /// Restrictions to apply when attenuating a token.
