@@ -111,8 +111,8 @@ pub mod wordlist;
 /// `pyana_sdk::cipherclerk`.
 #[doc(hidden)]
 pub mod wallet {
-    pub use crate::cipherclerk::*;
     pub use crate::cipherclerk::AgentCipherclerk as AgentWallet;
+    pub use crate::cipherclerk::*;
 }
 
 // Re-export primary types at crate root for convenience.

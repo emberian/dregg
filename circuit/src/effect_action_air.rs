@@ -157,9 +157,7 @@ pub struct EffectActionAir {
 
 impl EffectActionAir {
     /// Generate the execution trace and public inputs from a witness.
-    pub fn generate_trace(
-        witness: &EffectActionWitness,
-    ) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
+    pub fn generate_trace(witness: &EffectActionWitness) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
         assert_eq!(
             witness.fields.len(),
             witness.schema.field_count,
@@ -594,8 +592,15 @@ mod tests {
         let perm = [0x22u8; 32];
         let allowed = [0x33u8; 32];
         let slot = 0xCAFEBABEu64;
-        let r = roundtrip(SCHEMA_GRANT_CAPABILITY, vec![target, perm, allowed], vec![slot]);
-        assert!(r.is_ok(), "honest grant_capability binding must verify: {r:?}");
+        let r = roundtrip(
+            SCHEMA_GRANT_CAPABILITY,
+            vec![target, perm, allowed],
+            vec![slot],
+        );
+        assert!(
+            r.is_ok(),
+            "honest grant_capability binding must verify: {r:?}"
+        );
     }
 
     #[test]
@@ -1293,7 +1298,14 @@ mod tests {
         let timeout = 2_000_000u64;
         let r = roundtrip(
             SCHEMA_CREATE_COMMITTED_ESCROW,
-            vec![creator_c, recipient_c, value_c, condition_c, escrow_id, range_proof_h],
+            vec![
+                creator_c,
+                recipient_c,
+                value_c,
+                condition_c,
+                escrow_id,
+                range_proof_h,
+            ],
             vec![amount, timeout],
         );
         assert!(r.is_ok());
@@ -1304,14 +1316,28 @@ mod tests {
         // PI binding to the amount.
         let w = EffectActionWitness {
             schema: SCHEMA_CREATE_COMMITTED_ESCROW,
-            fields: vec![creator_c, recipient_c, value_c, condition_c, escrow_id, range_proof_h],
+            fields: vec![
+                creator_c,
+                recipient_c,
+                value_c,
+                condition_c,
+                escrow_id,
+                range_proof_h,
+            ],
             amounts: vec![amount, timeout],
         };
         let proof = prove_effect_action(&w);
         // Verifier with the 30-bit truncation must REJECT.
         let r = verify_effect_action(
             SCHEMA_CREATE_COMMITTED_ESCROW,
-            &[creator_c, recipient_c, value_c, condition_c, escrow_id, range_proof_h],
+            &[
+                creator_c,
+                recipient_c,
+                value_c,
+                condition_c,
+                escrow_id,
+                range_proof_h,
+            ],
             &[amount & ((1u64 << 30) - 1), timeout],
             &proof,
         );

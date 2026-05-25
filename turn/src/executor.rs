@@ -89,6 +89,175 @@ fn predicate_kind_vk_hash(kind: WitnessedPredicateKind) -> [u8; 32] {
     }
 }
 
+/// Cav-Codex Block 3: project a cell-program's declared
+/// `StateConstraint` list into the Effect-VM slot-caveat manifest
+/// (the (count, entries[]) PI surface that
+/// `pyana_circuit::effect_vm::verify_slot_caveat_manifest` will
+/// re-evaluate).
+///
+/// Returns `(count, manifest)` where `count <= MAX_SLOT_CAVEATS` and
+/// `manifest[..count]` carries one entry per binding-eligible
+/// constraint. Constraints whose AIR teeth aren't yet implemented
+/// (Custom, Witnessed, BoundDelta, FieldGteHeight, FieldLteHeight,
+/// FieldDeltaInRange, RateLimit, RateLimitBySum, BoundedBy,
+/// PreimageGate, MonotonicSequence-on-32B-state, AnyOf,
+/// SumEqualsAcross, SumEquals, CapabilityUniqueness, TemporalPredicate)
+/// are skipped at projection time; they still evaluate
+/// executor-side, but the proof carries no manifest entry that
+/// binds them — see `SLOT-CAVEATS-DESIGN.md` §4 ("AIR enforcement is
+/// strong-soundness opt-in").
+pub fn project_slot_caveat_manifest(
+    constraints: &[pyana_cell::StateConstraint],
+) -> (
+    u32,
+    [pyana_circuit::effect_vm::SlotCaveatEntry; pyana_circuit::effect_vm::pi::MAX_SLOT_CAVEATS],
+) {
+    use pyana_circuit::effect_vm::SlotCaveatEntry;
+    use pyana_circuit::effect_vm::pi;
+    use pyana_circuit::field::BabyBear;
+
+    let mut entries = [SlotCaveatEntry::zero(); pi::MAX_SLOT_CAVEATS];
+    let mut count: usize = 0;
+
+    /// Project a 32-byte field-element to a BabyBear via the
+    /// low-4-bytes path used everywhere else by the Effect VM's
+    /// state column truncation.
+    fn fe_to_bb(fe: &[u8; 32]) -> BabyBear {
+        let mut buf = [0u8; 4];
+        buf.copy_from_slice(&fe[0..4]);
+        BabyBear::new(u32::from_le_bytes(buf))
+    }
+
+    for c in constraints {
+        if count >= pi::MAX_SLOT_CAVEATS {
+            break;
+        }
+        let entry = match c {
+            pyana_cell::StateConstraint::Immutable { index } => Some(SlotCaveatEntry {
+                type_tag: pi::SLOT_CAVEAT_TAG_IMMUTABLE,
+                slot_index: *index,
+                params: [BabyBear::ZERO; 4],
+            }),
+            pyana_cell::StateConstraint::WriteOnce { index } => Some(SlotCaveatEntry {
+                type_tag: pi::SLOT_CAVEAT_TAG_WRITE_ONCE,
+                slot_index: *index,
+                params: [BabyBear::ZERO; 4],
+            }),
+            pyana_cell::StateConstraint::FieldDelta { index, delta } => Some(SlotCaveatEntry {
+                type_tag: pi::SLOT_CAVEAT_TAG_FIELD_DELTA,
+                slot_index: *index,
+                params: [
+                    fe_to_bb(delta),
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                ],
+            }),
+            pyana_cell::StateConstraint::MonotonicSequence { seq_index } => Some(SlotCaveatEntry {
+                type_tag: pi::SLOT_CAVEAT_TAG_MONOTONIC_SEQUENCE,
+                slot_index: *seq_index,
+                params: [BabyBear::ZERO; 4],
+            }),
+            pyana_cell::StateConstraint::FieldEquals { index, value } => Some(SlotCaveatEntry {
+                type_tag: pi::SLOT_CAVEAT_TAG_FIELD_EQUALS,
+                slot_index: *index,
+                params: [
+                    fe_to_bb(value),
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                ],
+            }),
+            pyana_cell::StateConstraint::FieldGte { index, value } => Some(SlotCaveatEntry {
+                type_tag: pi::SLOT_CAVEAT_TAG_FIELD_GTE,
+                slot_index: *index,
+                params: [
+                    fe_to_bb(value),
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                ],
+            }),
+            pyana_cell::StateConstraint::FieldLte { index, value } => Some(SlotCaveatEntry {
+                type_tag: pi::SLOT_CAVEAT_TAG_FIELD_LTE,
+                slot_index: *index,
+                params: [
+                    fe_to_bb(value),
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                ],
+            }),
+            pyana_cell::StateConstraint::Monotonic { index } => Some(SlotCaveatEntry {
+                type_tag: pi::SLOT_CAVEAT_TAG_MONOTONIC,
+                slot_index: *index,
+                params: [BabyBear::ZERO; 4],
+            }),
+            pyana_cell::StateConstraint::StrictMonotonic { index } => Some(SlotCaveatEntry {
+                type_tag: pi::SLOT_CAVEAT_TAG_STRICT_MONOTONIC,
+                slot_index: *index,
+                params: [BabyBear::ZERO; 4],
+            }),
+            pyana_cell::StateConstraint::TemporalGate {
+                not_before,
+                not_after,
+            } => Some(SlotCaveatEntry {
+                type_tag: pi::SLOT_CAVEAT_TAG_TEMPORAL_GATE,
+                // TemporalGate is cell-scoped, not slot-scoped — store
+                // slot_index = 0 sentinel; the verifier never reads it.
+                slot_index: 0,
+                params: [
+                    BabyBear::new((not_before.unwrap_or(0) & 0x7FFF_FFFF) as u32),
+                    BabyBear::new((not_after.unwrap_or(0) & 0x7FFF_FFFF) as u32),
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                ],
+            }),
+            pyana_cell::StateConstraint::SenderAuthorized { set } => {
+                let slot_index = match set {
+                    pyana_cell::program::AuthorizedSet::PublicRoot { set_root_index } => {
+                        *set_root_index
+                    }
+                    pyana_cell::program::AuthorizedSet::BlindedSet { .. } => 0,
+                };
+                Some(SlotCaveatEntry {
+                    type_tag: pi::SLOT_CAVEAT_TAG_SENDER_AUTHORIZED,
+                    slot_index,
+                    params: [BabyBear::ZERO; 4],
+                })
+            }
+            pyana_cell::StateConstraint::AllowedTransitions { slot_index, .. } => {
+                Some(SlotCaveatEntry {
+                    type_tag: pi::SLOT_CAVEAT_TAG_ALLOWED_TRANSITIONS,
+                    slot_index: *slot_index,
+                    params: [BabyBear::ZERO; 4],
+                })
+            }
+            // Deferred — no AIR teeth in Block 3 first wave.
+            pyana_cell::StateConstraint::SumEquals { .. }
+            | pyana_cell::StateConstraint::BoundedBy { .. }
+            | pyana_cell::StateConstraint::FieldDeltaInRange { .. }
+            | pyana_cell::StateConstraint::FieldGteHeight { .. }
+            | pyana_cell::StateConstraint::FieldLteHeight { .. }
+            | pyana_cell::StateConstraint::SumEqualsAcross { .. }
+            | pyana_cell::StateConstraint::CapabilityUniqueness { .. }
+            | pyana_cell::StateConstraint::RateLimit { .. }
+            | pyana_cell::StateConstraint::RateLimitBySum { .. }
+            | pyana_cell::StateConstraint::PreimageGate { .. }
+            | pyana_cell::StateConstraint::TemporalPredicate { .. }
+            | pyana_cell::StateConstraint::BoundDelta { .. }
+            | pyana_cell::StateConstraint::AnyOf { .. }
+            | pyana_cell::StateConstraint::Witnessed { .. }
+            | pyana_cell::StateConstraint::Custom { .. } => None,
+        };
+        if let Some(e) = entry {
+            entries[count] = e;
+            count += 1;
+        }
+    }
+    (count as u32, entries)
+}
+
 /// Whether note effects in a turn use Pedersen value commitments or cleartext values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NoteCommitmentMode {
@@ -674,15 +843,25 @@ pub struct TurnExecutor {
     /// (`verify_receipt_chain_with_keys`) treats absent signatures as a
     /// best-effort property, so the field is opt-in.
     pub executor_signing_key: Option<[u8; 32]>,
-    /// Optional witnessed-predicate registry (Cav-Codex Block 2).
+    /// Witnessed-predicate registry (Cav-Codex Block 2 + Block 3.5).
     ///
-    /// When set, slot-caveat variants that need verifier dispatch
+    /// Slot-caveat variants that need verifier dispatch
     /// (`StateConstraint::Witnessed`, `TemporalPredicate`,
-    /// `SenderAuthorized { BlindedSet }`, `Custom`) call into this
-    /// registry to verify the proof bytes from the action's
-    /// `witness_blobs`. When absent, those variants surface the legacy
-    /// "requires executor wiring" sentinel (programs that don't use
-    /// them are unaffected).
+    /// `SenderAuthorized { BlindedSet }`, `Custom`), `Preconditions::witnessed`
+    /// clauses, and `CapabilityCaveat::Witnessed` exercise sites all
+    /// route through this registry to verify proof bytes from the
+    /// action's `witness_blobs`.
+    ///
+    /// Block 3.5: defaults to
+    /// [`pyana_cell::WitnessedPredicateRegistry::default_builtins`] on
+    /// every `TurnExecutor` constructor, so the dispatch path is
+    /// always live and programs that declare `Witnessed { wp }` always
+    /// evaluate. Hosts that want to swap in real (non-stub) verifiers
+    /// call `set_witnessed_registry` with a registry pre-populated by
+    /// `pyana_circuit::witnessed_predicate::default_registry()` (or
+    /// register kinds piecemeal). `None` is *legal* — it disables
+    /// dispatch and reverts to the legacy sentinel surface — but
+    /// nothing inside `turn` constructs an executor that way anymore.
     pub witnessed_registry: Option<pyana_cell::WitnessedPredicateRegistry>,
     /// Optional custom-effect verifier registry, parallel structure to
     /// [`pyana_cell::WitnessedPredicateRegistry`] but keyed on the
@@ -729,7 +908,7 @@ impl TurnExecutor {
             last_receipt_hash: Mutex::new(HashMap::new()),
             executor_signing_key: None,
             turn_decryption_keypair: None,
-            witnessed_registry: None,
+            witnessed_registry: Some(pyana_cell::WitnessedPredicateRegistry::default_builtins()),
             custom_effect_registry: None,
         }
     }
@@ -769,7 +948,7 @@ impl TurnExecutor {
             last_receipt_hash: Mutex::new(HashMap::new()),
             executor_signing_key: None,
             turn_decryption_keypair: None,
-            witnessed_registry: None,
+            witnessed_registry: Some(pyana_cell::WitnessedPredicateRegistry::default_builtins()),
             custom_effect_registry: None,
         }
     }
@@ -805,7 +984,7 @@ impl TurnExecutor {
             last_receipt_hash: Mutex::new(HashMap::new()),
             executor_signing_key: None,
             turn_decryption_keypair: None,
-            witnessed_registry: None,
+            witnessed_registry: Some(pyana_cell::WitnessedPredicateRegistry::default_builtins()),
             custom_effect_registry: None,
         }
     }
@@ -4433,8 +4612,8 @@ impl TurnExecutor {
             .get(&action.target)
             .ok_or_else(|| (TurnError::CellNotFound { id: action.target }, path.clone()))?;
 
-        // Check preconditions.
-        self.check_preconditions(&action.preconditions, target_cell, &path)?;
+        // Check preconditions (including witnessed clauses — Block 3.5).
+        self.check_preconditions(action, target_cell, &path)?;
 
         // Verify authorization (including signature/proof verification).
         self.verify_authorization(action, target_cell, ledger, parent_cell, &path, turn_nonce)?;
@@ -4800,13 +4979,26 @@ impl TurnExecutor {
     /// allowing verifiers to confirm guards were checked without trusting the executor.
     fn check_preconditions(
         &self,
-        preconditions: &Preconditions,
+        action: &Action,
         target_cell: &Cell,
         path: &[usize],
     ) -> Result<(), (TurnError, Vec<usize>)> {
+        let preconditions = &action.preconditions;
+        let sender_pk = match &action.authorization {
+            Authorization::Signature(pk, _) => Some(*pk),
+            Authorization::Bearer(bp) => match &bp.delegation_proof {
+                crate::action::DelegationProofData::SignedDelegation { delegator_pk, .. } => {
+                    Some(*delegator_pk)
+                }
+                _ => None,
+            },
+            Authorization::CapTpDelivered { sender_pk, .. } => Some(*sender_pk),
+            _ => None,
+        };
         let ctx = EvalContext {
             block_height: self.block_height,
             timestamp: self.current_timestamp,
+            sender: sender_pk,
             ..Default::default()
         };
 
@@ -4819,7 +5011,157 @@ impl TurnExecutor {
                     },
                     path.to_vec(),
                 )
-            })
+            })?;
+
+        // Cav-Codex Block 3.5: dispatch each `Preconditions::witnessed`
+        // clause through the witnessed-predicate registry. Each clause
+        // names a `WitnessedPredicateKind`, a commitment, an InputRef,
+        // and a proof_witness_index naming the action's witness_blob.
+        // Until this site existed, `Preconditions::witnessed` clauses
+        // were dead code (CAVEAT-LAYER-COVERAGE.md §6.7).
+        if !preconditions.witnessed.is_empty() {
+            let Some(registry) = self.witnessed_registry.as_ref() else {
+                // No registry configured — surface the same shape as
+                // KindNotRegistered so the precondition fails closed.
+                return Err((
+                    TurnError::PreconditionFailed {
+                        description:
+                            "witnessed precondition declared but executor has no witnessed_registry"
+                                .into(),
+                    },
+                    path.to_vec(),
+                ));
+            };
+            for wp in &preconditions.witnessed {
+                self.dispatch_witnessed_clause(
+                    wp,
+                    action,
+                    &target_cell.state,
+                    sender_pk.as_ref(),
+                    path,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Resolve a `WitnessedPredicate`'s `InputRef` against the current
+    /// action / target-cell context and dispatch through
+    /// `self.witnessed_registry`. Used by `Preconditions::witnessed`
+    /// (Block 3.5 dispatch site) and (eventually) by
+    /// `CapabilityCaveat::Witnessed`.
+    ///
+    /// On dispatch failure surfaces `TurnError::PreconditionFailed`
+    /// with the verifier's diagnostic.
+    fn dispatch_witnessed_clause(
+        &self,
+        wp: &pyana_cell::WitnessedPredicate,
+        action: &Action,
+        target_state: &pyana_cell::CellState,
+        sender_pk: Option<&[u8; 32]>,
+        path: &[usize],
+    ) -> Result<(), (TurnError, Vec<usize>)> {
+        let registry = match self.witnessed_registry.as_ref() {
+            Some(r) => r,
+            None => {
+                return Err((
+                    TurnError::PreconditionFailed {
+                        description:
+                            "witnessed clause requires executor.witnessed_registry to be set".into(),
+                    },
+                    path.to_vec(),
+                ));
+            }
+        };
+        let proof_blob = action
+            .witness_blobs
+            .get(wp.proof_witness_index)
+            .ok_or_else(|| {
+                (
+                    TurnError::PreconditionFailed {
+                        description: format!(
+                            "witnessed clause references missing proof witness_index {}",
+                            wp.proof_witness_index
+                        ),
+                    },
+                    path.to_vec(),
+                )
+            })?;
+        // Resolve the input ref.
+        let input: PredicateInput<'_> = match &wp.input_ref {
+            InputRef::Slot { index } => {
+                let idx = *index as usize;
+                if idx >= STATE_SLOTS {
+                    return Err((
+                        TurnError::PreconditionFailed {
+                            description: format!(
+                                "witnessed clause references out-of-range slot index {idx}"
+                            ),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                PredicateInput::Slot(&target_state.fields[idx])
+            }
+            InputRef::Witness { index } => {
+                let b = action.witness_blobs.get(*index).ok_or_else(|| {
+                    (
+                        TurnError::PreconditionFailed {
+                            description: format!(
+                                "witnessed clause references missing input witness_index {index}"
+                            ),
+                        },
+                        path.to_vec(),
+                    )
+                })?;
+                PredicateInput::Bytes(&b.bytes)
+            }
+            InputRef::PublicInput { .. } => {
+                return Err((
+                    TurnError::PreconditionFailed {
+                        description:
+                            "witnessed clause InputRef::PublicInput is not resolvable at the precondition site"
+                                .into(),
+                    },
+                    path.to_vec(),
+                ));
+            }
+            InputRef::Sender => {
+                let pk = sender_pk.ok_or_else(|| {
+                    (
+                        TurnError::PreconditionFailed {
+                            description:
+                                "witnessed clause requires a sender pubkey but action carries none"
+                                    .into(),
+                        },
+                        path.to_vec(),
+                    )
+                })?;
+                PredicateInput::Sender(pk)
+            }
+            InputRef::SigningMessage => {
+                return Err((
+                    TurnError::PreconditionFailed {
+                        description:
+                            "witnessed clause InputRef::SigningMessage is reserved for Authorization::Custom"
+                                .into(),
+                    },
+                    path.to_vec(),
+                ));
+            }
+        };
+        registry.verify(wp, &input, &proof_blob.bytes).map_err(|e| {
+            (
+                TurnError::PreconditionFailed {
+                    description: format!(
+                        "witnessed clause {}: {}",
+                        predicate_kind_name(wp.kind),
+                        e
+                    ),
+                },
+                path.to_vec(),
+            )
+        })
     }
 
     /// TRUST-CRITICAL: This function gates ALL state mutations behind authorization checks.
@@ -11588,9 +11930,7 @@ impl TurnExecutor {
             }
 
             // 3. Preconditions.
-            if let Err((err, _)) =
-                self.check_preconditions(&action.preconditions, &target_cell, &path)
-            {
+            if let Err((err, _)) = self.check_preconditions(action, &target_cell, &path) {
                 journal.rollback(
                     ledger,
                     &self.obligations,

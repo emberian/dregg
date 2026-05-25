@@ -5663,7 +5663,8 @@ pub fn generate_effect_vm_trace_ext(
     public_inputs[pi::SLOT_CAVEAT_COUNT] = BabyBear::new(cav_count);
     for i in 0..(cav_count as usize) {
         let base = pi::SLOT_CAVEAT_MANIFEST_BASE + i * pi::SLOT_CAVEAT_ENTRY_SIZE;
-        context.slot_caveat_manifest[i].write_to(&mut public_inputs[base..base + pi::SLOT_CAVEAT_ENTRY_SIZE]);
+        context.slot_caveat_manifest[i]
+            .write_to(&mut public_inputs[base..base + pi::SLOT_CAVEAT_ENTRY_SIZE]);
     }
 
     // ---- Custom proof entries ----
@@ -6042,9 +6043,7 @@ pub fn verify_slot_caveat_manifest(
                 // Defer.
             }
             other => {
-                return Err(format!(
-                    "slot-caveat[{i}] unknown type_tag {other}"
-                ));
+                return Err(format!("slot-caveat[{i}] unknown type_tag {other}"));
             }
         }
     }

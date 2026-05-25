@@ -442,7 +442,7 @@ impl AgentRuntime {
             cell_id: sub_cell_id,
             token: delegated_token,
             parent: self
-            .cipherclerk
+                .cipherclerk
                 .read()
                 .unwrap_or_else(|e| e.into_inner())
                 .public_key(),

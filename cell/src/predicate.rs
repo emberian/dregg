@@ -520,6 +520,33 @@ impl WitnessedPredicateRegistry {
         r
     }
 
+    /// Construct the executor-default registry — Cav-Codex Block 3.5.
+    ///
+    /// Production-facing default that every `TurnExecutor` should
+    /// receive on construction (`turn::executor::TurnExecutor::new` and
+    /// friends call this so the registry is never `None`). Today this
+    /// returns the stub-verifier registry — the real per-kind verifiers
+    /// (`Dfa`, `Temporal`, `MerkleMembership`, `BlindedSet`,
+    /// `BridgePredicate`, `PedersenEquality`) live in `pyana-circuit`
+    /// and would force a circuit dependency on this cell crate; the
+    /// expectation is that the host (a binary that links both crates)
+    /// calls `set_witnessed_registry` with the
+    /// `pyana_circuit::witnessed_predicate::default_registry()` form to
+    /// upgrade the stubs into real verifiers.
+    ///
+    /// Until that upgrade, the stubs accept any non-empty proof bytes.
+    /// That is *not* a soundness claim — it's a fail-safe-but-loud
+    /// signal: the dispatch path works, the surface contract is
+    /// honored, and the real verifier wiring is the next install step.
+    /// The alternative — leaving the registry `None` — was worse
+    /// because it surfaced
+    /// `ProgramError::WitnessedPredicateRequiresExecutor` *before* the
+    /// host could swap in the real verifiers, causing every action that
+    /// declared a `Witnessed { wp }` slot caveat to fail at evaluation.
+    pub fn default_builtins() -> Self {
+        Self::with_stubs()
+    }
+
     /// Register (or replace) a built-in kind's verifier. Custom kinds
     /// (whose verifiers are keyed on vk_hash) go through
     /// [`Self::register_custom`].

@@ -2262,12 +2262,8 @@ pub fn wallet_peer_exchange(spec_json: &str) -> Result<JsValue, JsError> {
         .map_err(|e| JsError::new(&format!("effects serialization failed: {e}")))?;
     let effects_hash = *blake3::hash(&effects_bytes).as_bytes();
 
-    let transition = session.create_transition_at(
-        old_commitment,
-        new_commitment,
-        effects_hash,
-        spec.timestamp,
-    );
+    let transition =
+        session.create_transition_at(old_commitment, new_commitment, effects_hash, spec.timestamp);
 
     let transition_bytes = postcard::to_allocvec(&transition)
         .map_err(|e| JsError::new(&format!("transition serialization failed: {e}")))?;

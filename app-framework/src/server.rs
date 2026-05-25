@@ -164,10 +164,7 @@ impl AppServer {
     /// and build signed actions/turns through it — no `[0u8; 64]`
     /// placeholder signatures, no direct
     /// `pyana_turn::builder::ActionBuilder` imports.
-    pub fn with_cipherclerk(
-        mut self,
-        cipherclerk: crate::cipherclerk::AppCipherclerk,
-    ) -> Self {
+    pub fn with_cipherclerk(mut self, cipherclerk: crate::cipherclerk::AppCipherclerk) -> Self {
         self.router = self.router.layer(axum::Extension(cipherclerk.clone()));
         self.cipherclerk = Some(cipherclerk);
         self
