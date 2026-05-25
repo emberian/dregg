@@ -16,7 +16,7 @@ use pyana_storage::multi_asset::{ExchangeRate, FeeError, FeePayment, FeePolicy};
 use pyana_storage::operator::{DeliveryDispute, DisputeOutcome, RelayOperator};
 use pyana_storage::programmable::{ProgramError, ProgrammableQueue, ValidationContext, programs};
 use pyana_storage::pubsub::PubSubTopic;
-use pyana_storage::queue::{MerkleQueue, QueueEntry, verify_dequeue_proof};
+use pyana_storage::queue::{MerkleQueue, QueueEntry, empty_queue_root, verify_dequeue_proof};
 use pyana_storage::relay::RelayError;
 use pyana_teasting::fault::{FaultConfig, FaultyNetwork, MessageBuffer};
 use pyana_teasting::harness::SimulationHarness;
@@ -103,7 +103,7 @@ fn relay_crash_mid_enqueue_message_lost() {
     assert_eq!(recovered_operator.total_pending(), 0);
     assert_eq!(
         recovered_operator.inbox_root(&owner).unwrap(),
-        *blake3::hash(b"empty_queue").as_bytes()
+        empty_queue_root()
     );
 
     // Invariant check: deposits are balanced (message was lost, deposit never committed).
@@ -115,7 +115,7 @@ fn relay_crash_mid_enqueue_message_lost() {
         .receive_message(&owner, retry_msg, 500, harness.clock.block_height)
         .unwrap();
     assert_eq!(recovered_operator.total_pending(), 1);
-    assert_ne!(retry_root, *blake3::hash(b"empty_queue").as_bytes());
+    assert_ne!(retry_root, empty_queue_root());
 }
 
 // =============================================================================
@@ -183,7 +183,7 @@ fn relay_crash_with_pending_drain_recoverable_if_checkpointed() {
     assert_eq!(operator.total_pending(), 0);
     assert_eq!(
         operator.inbox_root(&owner).unwrap(),
-        *blake3::hash(b"empty_queue").as_bytes()
+        empty_queue_root()
     );
 }
 
@@ -304,7 +304,7 @@ fn partition_relay_owner_messages_accumulate_then_drain() {
     assert_eq!(operator.total_pending(), 0);
     assert_eq!(
         operator.inbox_root(&owner).unwrap(),
-        *blake3::hash(b"empty_queue").as_bytes()
+        empty_queue_root()
     );
 }
 
@@ -1013,7 +1013,7 @@ fn queue_root_consistency_after_complex_operations() {
         total_deposits_in += deposit;
     }
     let root_after_8 = operator.inbox_root(&owner).unwrap();
-    assert_ne!(root_after_8, *blake3::hash(b"empty_queue").as_bytes());
+    assert_ne!(root_after_8, empty_queue_root());
 
     // Phase 2: Drain 3 messages.
     let drained_3 = operator.drain_for_owner(&owner, 3, harness.clock.block_height);
@@ -1048,7 +1048,7 @@ fn queue_root_consistency_after_complex_operations() {
 
     // Queue empty.
     let final_root = operator.inbox_root(&owner).unwrap();
-    assert_eq!(final_root, *blake3::hash(b"empty_queue").as_bytes());
+    assert_eq!(final_root, empty_queue_root());
     assert_eq!(operator.total_pending(), 0);
 
     // INVARIANT: All deposits accounted for (in = out).

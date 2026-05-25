@@ -5,7 +5,9 @@
 //! simulation harness.
 
 use pyana_storage::QuotaId;
-use pyana_storage::queue::{MerkleQueue, QueueEntry, QueueError, verify_dequeue_proof};
+use pyana_storage::queue::{
+    MerkleQueue, QueueEntry, QueueError, empty_queue_root, verify_dequeue_proof,
+};
 use pyana_teasting::harness::SimulationHarness;
 
 /// Deterministic sender identity from a seed byte.
@@ -36,8 +38,13 @@ fn queue_allocation_produces_verifiable_root() {
     let queue = MerkleQueue::new(10);
     let initial_root = queue.root();
 
-    // Empty queue root is deterministic and verifiable.
-    let expected_empty = *blake3::hash(b"empty_queue").as_bytes();
+    // Empty queue root is deterministic and verifiable. As of the
+    // typed-commitment migration (storage `recompute_root` comment), the
+    // canonical empty root is `empty_queue_root()` (the all-zeros
+    // sentinel from `MerkleRoot::empty().blake3_root`), not the legacy
+    // `blake3("empty_queue")` value. Use the storage crate's canonical
+    // constant.
+    let expected_empty = empty_queue_root();
     assert_eq!(initial_root, expected_empty);
 
     // Allocation is reproducible (same capacity = same empty root).
@@ -121,7 +128,7 @@ fn dequeue_returns_fifo_with_valid_proofs() {
 
     // Queue is now empty.
     assert!(queue.is_empty());
-    assert_eq!(queue.root(), *blake3::hash(b"empty_queue").as_bytes());
+    assert_eq!(queue.root(), empty_queue_root());
 }
 
 // ---------------------------------------------------------------------------
@@ -315,7 +322,7 @@ fn tampered_dequeue_proof_rejected() {
     let mut same_root_tamper = valid_proof.clone();
     same_root_tamper.old_root = same_root_tamper.new_root;
     // This should fail unless it equals the empty queue marker.
-    let is_empty_root = same_root_tamper.new_root == *blake3::hash(b"empty_queue").as_bytes();
+    let is_empty_root = same_root_tamper.new_root == empty_queue_root();
     if !is_empty_root {
         assert!(
             !verify_dequeue_proof(&same_root_tamper),
