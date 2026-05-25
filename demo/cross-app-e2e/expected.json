@@ -1,0 +1,72 @@
+{
+  "//": "Post-conditions the cross-app-e2e run.sh harness asserts after the four-app",
+  "//": "composition story (alice issues credential -> bob registers attested name +",
+  "//": "mounts namespace route -> carol posts bounty + subscription -> dan claims +",
+  "//": "fulfills -> bob consumes -> carol settles).",
+  "//": "",
+  "//": "Each entry is the name of a boolean result emitted by verify.py. The",
+  "//": "verifier MUST report `true` for every must_pass entry and `true` for every",
+  "//": "must_not_pass entry (the latter use names of the form `rejects_*` so a",
+  "//": "true value means the tamper attempt was correctly rejected).",
+
+  "scenario": "four-app cross-composition: identity → nameservice → governed-namespace → subscription",
+
+  "kernel_primitives_exercised": [
+    "AuthorizedSet::CredentialSet (cell program substrate)",
+    "WitnessedPredicate::BlindedSet (witness/predicate dispatch)",
+    "MonotonicSequence (subscription head, identity counter)",
+    "Monotonic (revocation root, message root, publishers/consumers root)",
+    "Immutable (capacity, owner_pk_hash, schema_commitment)",
+    "SenderAuthorized { PublicRoot } (issuer auth, publisher/consumer set)",
+    "SenderAuthorized { CredentialSet } (cross-app credential gating)",
+    "canonical Action shape (method symbol, effects, witness_blobs)"
+  ],
+
+  "must_pass": [
+    "alice_schema_commitment_canonical",
+    "credential_holder_is_bob_cell",
+    "tier_constraint_commitment_matches_canonical",
+    "witness_predicate_commitment_matches_canonical",
+    "tier_constraint_eq_witness_predicate_commitment",
+    "bob_registration_uses_attested_method",
+    "bob_registration_carries_proof_witness",
+    "bob_registration_event_topic_attested",
+    "bob_registration_event_carries_issuer_and_schema",
+    "mount_carries_nameservice_resolve_target",
+    "mount_event_data_includes_resolve_target",
+    "dan_claim_payload_hash_canonical",
+    "dan_fulfill_payload_hash_canonical",
+    "carol_settle_payload_hash_canonical",
+    "bounty_state_transitions_distinct",
+    "subscription_head_advances_claim",
+    "subscription_head_advances_fulfill",
+    "subscription_head_advances_settle",
+    "bob_consume_advances_tail_by_one",
+    "grant_consumer_writes_consumers_root",
+    "grant_publisher_writes_publishers_root",
+    "bob_consumes_dan_claim_payload",
+    "constraint_is_credential_set",
+    "witness_predicate_kind_blinded_set"
+  ],
+
+  "must_not_pass": [
+    "rejects_forged_credential_wrong_issuer",
+    "rejects_forged_credential_wrong_schema",
+    "rejects_fulfillment_with_wrong_actor",
+    "rejects_tampered_prior_state",
+    "rejects_tampered_resolve_target",
+    "rejects_unattested_method_for_attested_tier",
+    "rejects_wrong_authorized_set_variant"
+  ],
+
+  "composition_story_steps": [
+    "step1: alice creates identity-issuer cell + issues verified-developer-v1 credential to bob",
+    "step2: bob registers bob.dev in nameservice attested tier (witness predicate = credential set commitment)",
+    "step3: bob mounts pyana://bob.dev under governed-namespace (resolve target = nameservice hash)",
+    "step4: carol posts bounty + creates subscription cell + grants bob consumer + grants own bounty cell publisher",
+    "step5: dan claims bounty (Posted -> Claimed publish)",
+    "step6: dan fulfills bounty (Claimed -> Fulfilled publish)",
+    "step7: bob consumes subscription event (tail += 1)",
+    "step8: carol settles bounty (Fulfilled -> Settled publish)"
+  ]
+}
