@@ -297,7 +297,7 @@ fn t6_signed_turn_for_federation_a_rejects_on_federation_b() {
     let action = Action {
         target,
         method: symbol("transfer"),
-        args: vec![b"demo".to_vec()],
+        args: vec![[0xD6u8; 32]],
         authorization: Authorization::Unchecked,
         preconditions: Default::default(),
         effects: vec![Effect::Transfer {
