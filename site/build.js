@@ -74,6 +74,13 @@ const COPY_BUILT_FILES = [
   { from: 'paper/dregg.pdf', to: 'assets/dregg.pdf' },
 ];
 
+const COPY_VENDOR_FILES = [
+  {
+    from: path.join(__dirname, 'node_modules', 'split.js', 'dist', 'split.es.js'),
+    to: path.join('_includes', 'vendor', 'split.es.js'),
+  },
+];
+
 let highlighter = null;
 
 async function init() {
@@ -269,6 +276,18 @@ function build() {
       const dst = path.join(DIST, to);
       ensureDir(path.dirname(dst));
       fs.copyFileSync(src, dst);
+    }
+  }
+
+  // Runtime browser dependencies used directly as ESM. The site intentionally
+  // remains no-bundler; curated vendor files are copied from package manager
+  // installs so versions are still tracked in package-lock.json.
+  for (const { from, to } of COPY_VENDOR_FILES) {
+    if (fs.existsSync(from)) {
+      const dst = path.join(DIST, to);
+      ensureDir(path.dirname(dst));
+      fs.copyFileSync(from, dst);
+      console.log(`  Copy: ${to}`);
     }
   }
 

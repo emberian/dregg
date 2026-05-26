@@ -71,7 +71,7 @@ pub async fn handle_register(ctx: &Context, command: &CommandInteraction, state:
         Ok(None) => {
             let embed = embeds::warning_embed(
                 "No Cipherclerk",
-                "You need a linked dregg identity to register names. Use `/link-cclerk` first.",
+                "You need a linked dregg identity to register names. Use `/link-cipherclerk` first.",
             );
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))

@@ -8,6 +8,7 @@ use serenity::all::{
 
 use crate::BotState;
 use crate::cipherclerk::{UserCipherclerk, sign_legacy};
+use crate::db::IdentityMode;
 use crate::embeds;
 
 /// Register the /send command.
@@ -91,9 +92,23 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
 
     let recipient_discord = recipient_id.to_string();
 
-    // Verify sender has a cclerk.
-    let sender_cell = match state.db.get_cell_id(&sender_discord).await {
-        Ok(Some(id)) => id,
+    // Verify sender has a hosted cclerk. External links are receive-only until
+    // a proper external signing flow exists.
+    let sender_cell = match state.db.get_user_identity(&sender_discord).await {
+        Ok(Some(identity)) if identity.mode == IdentityMode::Hosted => identity.cell_id,
+        Ok(Some(identity)) => {
+            let embed = embeds::warning_embed(
+                "External Signing Required",
+                &format!(
+                    "Your linked identity is `{}`. The Discord bot cannot sign transfers for external identities yet.",
+                    identity.mode.as_str()
+                ),
+            );
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
         Ok(None) => {
             let embed = embeds::warning_embed(
                 "No Cipherclerk",

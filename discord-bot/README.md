@@ -44,6 +44,9 @@ surface (`make_action`, `sign_action`, `make_turn`).
   proof-of-online attestations usable as dischargeable caveats
 - **Status**: `/status`, `/proof verify`, `/metrics`
 - **Social**: `/faucet`, `/leaderboard`, `/history`
+- **Starbridge dashboard**: `/dregg` opens app cards, buttons, an app picker,
+  and modal forms for the checked-in Starbridge identity, nameservice,
+  governed-namespace, and subscription flows.
 - **Explorer**: `/explorer feed | cell | turn | block | note | proof |
   factory | search | stats | recent | watch | unwatch`
 - **CapTP** (bot as capability peer): `/cap-share`, `/cap-accept`,
@@ -54,7 +57,11 @@ surface (`make_action`, `sign_action`, `make_turn`).
 - **Governance** (apps/governed-namespace): `/gov-propose | vote |
   status | routes`
 - **Names** (apps/nameservice): `/name-register | resolve | whois`
-- **Federation**: `/setup-federation`, `/link-cclerk`, `/unlink-cclerk`
+- **Federation**: `/setup-federation`, `/link-cipherclerk`, `/unlink-cipherclerk`
+
+External `/link-cipherclerk` records are pending until ownership is proven.
+Hosted `/cipherclerk create` identities remain the only identities the bot can
+sign transfers and CapTP management commands for.
 
 ### Retired (apps deleted from workspace)
 

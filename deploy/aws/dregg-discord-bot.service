@@ -1,33 +1,25 @@
 [Unit]
-Description=Dregg Gateway Node
-After=network-online.target
+Description=Dregg Discord Bot
+After=network-online.target dregg-gateway.service
 Wants=network-online.target
+Requires=dregg-gateway.service
 
 [Service]
 Type=simple
 User=dregg
 Group=dregg
 WorkingDirectory=/opt/dregg
-ExecStart=/opt/dregg/target/release/dregg-node run \
-    --data-dir /opt/dregg-data \
-    --port 8420 \
-    --bind 127.0.0.1 \
-    --node-index 0 \
-    --federation-size 4 \
-    --enable-pruning \
-    --enable-faucet \
-    --federation-mode solo \
-    --consensus blocklace
+EnvironmentFile=/etc/dregg/discord-bot.env
+ExecStart=/opt/dregg/target/release/dregg-discord-bot
 Restart=always
 RestartSec=5
 Environment=RUST_LOG=info
-Environment=DREGG_GATEWAY=true
 
 # Security hardening
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/dregg-data
+ReadWritePaths=/opt/dregg-data /var/lib/dregg-discord-bot
 PrivateTmp=true
 ProtectKernelTunables=true
 ProtectKernelModules=true

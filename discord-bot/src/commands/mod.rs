@@ -20,6 +20,7 @@ pub mod transfer;
 
 // ─── CapTP integration commands ─────────────────────────────────────────────
 pub mod captp;
+pub mod dashboard;
 pub mod federation;
 pub mod governance;
 pub mod names;

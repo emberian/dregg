@@ -34,6 +34,16 @@ devnet.dregg.fg-goose.online {
         reverse_proxy localhost:8420
     }
 
+    # Discord bot Starbridge RemoteRuntime read surface
+    handle /discord-bot/api/* {
+        uri strip_prefix /discord-bot
+        reverse_proxy localhost:8080
+    }
+    handle /discord-bot/observability/stream {
+        uri strip_prefix /discord-bot
+        reverse_proxy localhost:8080
+    }
+
     # Faucet
     handle /faucet/* {
         reverse_proxy localhost:8420

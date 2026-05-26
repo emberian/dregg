@@ -43,7 +43,12 @@ export async function createInMemoryRuntime({ wasm, signals }) {
     console.warn('[runtime-in-memory] §4.6 SDK not available (no /pkg/@dregg/sdk or import fail), falling back to raw wasm (visible gap):', e?.message || e);
   }
 
-  const handle = wasm.create_runtime();
+  // Keep the typed SDK mutators and the signal-backed wasm getters on the
+  // same underlying runtime handle. The SDK owns its handle; direct getters
+  // read it for synchronous Preact computed() updates.
+  const handle = sdkRuntime && Number.isFinite(Number(sdkRuntime.handle))
+    ? sdkRuntime.handle
+    : wasm.create_runtime();
 
   // Coarse version counter; bumped on any mutation. All cached signals depend
   // on this — reading them after a mutation triggers re-fetch.

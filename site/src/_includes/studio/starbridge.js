@@ -68,6 +68,14 @@ function writeUrlState({ at, runtime }) {
   const uriInput   = document.getElementById('sb-uri');
   const goBtn      = document.getElementById('sb-go');
   const snapBtn    = document.getElementById('sb-snapshot');
+  const paletteOpenBtn = document.getElementById('sb-palette-open');
+  const paletteEl = document.getElementById('sb-palette');
+  const paletteInput = document.getElementById('sb-palette-input');
+  const paletteList = document.getElementById('sb-palette-list');
+  const paletteCloseBtn = document.getElementById('sb-palette-close');
+  const runtimeConfig = document.getElementById('sb-runtime-config');
+  const remoteUrlInput = document.getElementById('sb-remote-url');
+  const connectBtn = document.getElementById('sb-connect');
   const cursorEl   = document.getElementById('sb-cursor');
   const cursorVal  = document.getElementById('sb-cursor-val');
   const cursorMax  = document.getElementById('sb-cursor-max');
@@ -87,7 +95,12 @@ function writeUrlState({ at, runtime }) {
   const activityCount = document.getElementById('sb-activity-count');
   const simActions = document.getElementById('sb-sim-actions');
   const inspector  = document.getElementById('sb-inspector');
+  const workspaceTitle = document.getElementById('sb-workspace-title');
   const rawEl      = document.getElementById('sb-raw');
+  const consoleEl = document.getElementById('sb-console');
+  const consoleOut = document.getElementById('sb-console-output');
+  const consoleForm = document.getElementById('sb-console-form');
+  const consoleInput = document.getElementById('sb-console-input');
   const app        = document.getElementById('sb-app');
 
   function setStatus(text, state) {
@@ -102,6 +115,15 @@ function writeUrlState({ at, runtime }) {
   let currentRuntimeId = null;
   let currentUri = null;
   let kinds = null;
+  const appCatalog = new Map();
+  let labBusy = 0;
+  const labState = {
+    alice: null,
+    bob: null,
+    federation: null,
+    lastTransfer: null,
+    lastIntent: null,
+  };
 
   // Per-runtime teardown of effects we owned. Cleared and rebuilt on swap.
   const teardowns = [];
@@ -112,12 +134,213 @@ function writeUrlState({ at, runtime }) {
     }
   }
 
+  function updateRuntimeConfigVisibility() {
+    if (!runtimeConfig) return;
+    runtimeConfig.hidden = pickerEl.value !== 'remote';
+    if (remoteUrlInput && !remoteUrlInput.value) {
+      remoteUrlInput.value = (window.localStorage && localStorage.getItem('dregg.remote.baseUrl'))
+        || 'https://devnet.dregg.fg-goose.online';
+    }
+  }
+
+  function runtimeLabel() {
+    return runtime?.source?.label || currentRuntimeId || 'runtime';
+  }
+
+  function currentCounts() {
+    const safeLen = (read) => {
+      try {
+        const v = read();
+        return Array.isArray(v) ? v.length : 0;
+      } catch { return 0; }
+    };
+    return {
+      cells: safeLen(() => runtime?.listCells?.().value || []),
+      receipts: safeLen(() => runtime?.listReceipts?.().value || []),
+      intents: safeLen(() => runtime?.listIntents?.().value || []),
+      activities: safeLen(() => runtime?.getTraceEvents?.().value?.events || []),
+    };
+  }
+
+  function selectWorkbenchTool(tool) {
+    const showConsole = tool === 'console';
+    if (rawEl) rawEl.hidden = showConsole;
+    if (consoleEl) consoleEl.hidden = !showConsole;
+    for (const btn of document.querySelectorAll('[data-tool]')) {
+      btn.setAttribute('aria-selected', btn.dataset.tool === tool ? 'true' : 'false');
+    }
+    if (showConsole) queueMicrotask(() => consoleInput?.focus());
+  }
+
+  function consoleLog(message, kind = 'info') {
+    if (!consoleOut) return;
+    const line = document.createElement('div');
+    line.className = `sb__console-line sb__console-line--${kind}`;
+    line.textContent = message;
+    consoleOut.appendChild(line);
+    consoleOut.scrollTop = consoleOut.scrollHeight;
+  }
+
+  function appMetaFor(id) {
+    return appCatalog.get(id) || {
+      id,
+      name: id.replace(/-/g, ' '),
+      page: `/starbridge-apps/${id}/pages/index.html`,
+    };
+  }
+
+  function readArraySignal(read) {
+    try {
+      const value = read();
+      return Array.isArray(value) ? value : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function paletteItems() {
+    const items = [
+      { group: 'Scripts', label: 'Seed alice + bob', detail: 'Create starter agents', run: seedWorld },
+      { group: 'Scripts', label: 'Run transfer turn', detail: 'Transfer from alice to bob', run: runTransferFlow },
+      { group: 'Scripts', label: 'Create federation block', detail: 'Finalize a local federation block', run: createFederationFlow },
+      { group: 'Scripts', label: 'Post storage intent', detail: 'Publish a storage need intent', run: postIntentFlow },
+      { group: 'Workbench', label: 'Open console', detail: 'Switch right pane to console', run: () => selectWorkbenchTool('console') },
+      { group: 'Workbench', label: 'Open raw view', detail: 'Switch right pane to raw JSON', run: () => selectWorkbenchTool('raw') },
+      { group: 'Workbench', label: 'Export snapshot', detail: 'Download runtime JSON snapshot', run: exportSnapshot },
+      { group: 'Workbench', label: 'Activity feed', detail: 'Inspect runtime activity', run: () => setCurrentUri('dregg://activity/feed') },
+    ];
+
+    for (const id of ['nameservice', 'identity', 'governed-namespace', 'subscription']) {
+      const appMeta = appMetaFor(id);
+      items.push({
+        group: 'Programs',
+        label: appMeta.name || id,
+        detail: `Open ${id}`,
+        run: () => renderAppWorkspace(appMetaFor(id)),
+      });
+    }
+    for (const id of Object.keys(kinds || {})) {
+      items.push({
+        group: 'Runtimes',
+        label: kinds[id]?.label || id,
+        detail: id,
+        run: async () => {
+          pickerEl.value = id;
+          updateRuntimeConfigVisibility();
+          await swapRuntime(id);
+        },
+      });
+    }
+
+    const cells = readArraySignal(() => runtime?.listCells?.().value);
+    for (const cell of cells.slice(0, 16)) {
+      const id = cell.cell_id || cell.id || (typeof cell === 'string' ? cell : '');
+      if (!id) continue;
+      items.push({ group: 'Objects', label: `Cell ${id.slice(0, 12)}`, detail: id, run: () => setCurrentUri(`dregg://cell/${id}`) });
+    }
+    const receipts = readArraySignal(() => runtime?.listReceipts?.().value);
+    for (const receipt of receipts.slice(0, 16)) {
+      const id = receipt.turn_hash || receipt.receipt_hash || receipt.hash || '';
+      if (!id) continue;
+      items.push({ group: 'Objects', label: `Receipt ${id.slice(0, 12)}`, detail: id, run: () => setCurrentUri(`dregg://receipt/${id}`) });
+    }
+    const intents = readArraySignal(() => runtime?.listIntents?.().value);
+    for (const [idx, intent] of intents.slice(0, 16).entries()) {
+      const id = intent.intent_id || intent.id || String(intent.intent_index ?? idx);
+      items.push({ group: 'Objects', label: `${intent.kind || 'Intent'} ${String(id).slice(0, 12)}`, detail: String(id), run: () => setCurrentUri(`dregg://intent/${id}`) });
+    }
+    const blocks = readArraySignal(() => runtime?.listBlocks?.().value);
+    for (const block of blocks.slice(0, 16)) {
+      const h = block.height ?? block.block_height ?? 0;
+      const fedIndex = block.fed_index ?? 0;
+      items.push({ group: 'Objects', label: `Block h=${h} fed #${fedIndex}`, detail: block.block_hash || '', run: () => setCurrentUri(`dregg://block/${fedIndex}/${h}`) });
+    }
+    return items;
+  }
+
+  function paletteScore(item, query) {
+    if (!query) return 1;
+    const hay = `${item.group} ${item.label} ${item.detail}`.toLowerCase();
+    const needle = query.toLowerCase().trim();
+    if (hay.includes(needle)) return 10 + needle.length;
+    let pos = 0;
+    for (const ch of needle) {
+      pos = hay.indexOf(ch, pos);
+      if (pos < 0) return 0;
+      pos += 1;
+    }
+    return 2;
+  }
+
+  function renderPalette() {
+    if (!paletteList) return;
+    const query = paletteInput?.value || '';
+    const matches = paletteItems()
+      .map((item) => ({ item, score: paletteScore(item, query) }))
+      .filter((entry) => entry.score > 0)
+      .sort((a, b) => b.score - a.score || a.item.group.localeCompare(b.item.group) || a.item.label.localeCompare(b.item.label))
+      .slice(0, 18);
+    paletteList.replaceChildren();
+    if (!matches.length) {
+      const empty = document.createElement('div');
+      empty.className = 'sb__palette-empty';
+      empty.textContent = 'No matching command';
+      paletteList.appendChild(empty);
+      return;
+    }
+    for (const [idx, { item }] of matches.entries()) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'sb__palette-item';
+      btn.setAttribute('role', 'option');
+      btn.setAttribute('aria-selected', idx === 0 ? 'true' : 'false');
+      btn.innerHTML = `
+        <span class="sb__palette-item-main">${escapeHtml(item.label)}</span>
+        <span class="sb__palette-item-detail">${escapeHtml(item.group)} · ${escapeHtml(item.detail || '')}</span>
+      `;
+      btn.addEventListener('click', async () => {
+        closePalette();
+        await item.run();
+      });
+      paletteList.appendChild(btn);
+    }
+  }
+
+  function openPalette(seed = '') {
+    if (!paletteEl) return;
+    paletteEl.hidden = false;
+    if (paletteInput) paletteInput.value = seed;
+    renderPalette();
+    queueMicrotask(() => paletteInput?.focus());
+  }
+
+  function closePalette() {
+    if (paletteEl) paletteEl.hidden = true;
+  }
+
+  async function runSelectedPaletteItem() {
+    const selected = paletteList?.querySelector('.sb__palette-item[aria-selected="true"]');
+    if (!selected) return;
+    selected.click();
+  }
+
+  function movePaletteSelection(delta) {
+    const items = Array.from(paletteList?.querySelectorAll('.sb__palette-item') || []);
+    if (!items.length) return;
+    const current = items.findIndex((item) => item.getAttribute('aria-selected') === 'true');
+    const next = (current + delta + items.length) % items.length;
+    items.forEach((item, idx) => item.setAttribute('aria-selected', idx === next ? 'true' : 'false'));
+    items[next].scrollIntoView({ block: 'nearest' });
+  }
+
   // --------------------------------------------------------------------------
   // Inspector pane: mount a `<dregg-${kind}>` for the current URI, or show a
   // helpful empty/missing-kind message.
   // --------------------------------------------------------------------------
   function renderAppWorkspace(appMeta) {
+    if (appMeta?.id) appCatalog.set(appMeta.id, appMeta);
     inspector.replaceChildren();
+    if (workspaceTitle) workspaceTitle.textContent = 'Program';
     rawEl.textContent = JSON.stringify(appMeta, null, 2);
     currentUri = `dregg://app/${appMeta.id}`;
     uriInput.value = currentUri;
@@ -125,17 +348,28 @@ function writeUrlState({ at, runtime }) {
 
     const shell = document.createElement('div');
     shell.className = 'sb__app-host';
-    const page = appMeta.page || `/starbridge-apps/${appMeta.id}/pages/index.html`;
+    const pageUrl = new URL(appMeta.page || `/starbridge-apps/${appMeta.id}/pages/index.html`, window.location.origin);
+    if (pageUrl.pathname.endsWith('/index.html')) {
+      pageUrl.pathname = pageUrl.pathname.slice(0, -'index.html'.length);
+    }
+    pageUrl.searchParams.set('embedded', '1');
+    pageUrl.searchParams.set('runtime', currentRuntimeId || 'in-memory');
+    const page = pageUrl.pathname + pageUrl.search + pageUrl.hash;
     const registryUri = appMeta.registry_uri || appMeta.registryUri || '';
     shell.innerHTML = `
       <div class="sb__app-hostbar">
         <div>
           <div class="sb__app-title">${escapeHtml(appMeta.name || appMeta.id)}</div>
-          <div class="sb__app-meta">${escapeHtml(appMeta.description || 'starbridge-app')}</div>
+          <div class="sb__app-meta">
+            <span>${escapeHtml(appMeta.description || 'starbridge-app')}</span>
+            <code>${escapeHtml(currentRuntimeId || 'runtime')}</code>
+            <code>dregg://app/${escapeHtml(appMeta.id)}</code>
+          </div>
         </div>
         <div class="sb__app-actions">
           ${registryUri ? `<button type="button" class="sb__btn sb__btn--small" data-uri="${escapeHtml(registryUri)}">Inspect registry</button>` : ''}
-          <a class="sb__btn sb__btn--small sb__btn--ghost" href="${escapeHtml(page)}" target="_blank">Standalone</a>
+          <button type="button" class="sb__btn sb__btn--small sb__btn--ghost" data-reload-app>Reload</button>
+          <a class="sb__btn sb__btn--small sb__btn--ghost" href="${escapeHtml(page)}" target="_blank">Pop out</a>
         </div>
       </div>
       <iframe
@@ -147,17 +381,19 @@ function writeUrlState({ at, runtime }) {
     shell.querySelector('[data-uri]')?.addEventListener('click', (e) => {
       setCurrentUri(e.currentTarget.dataset.uri);
     });
+    shell.querySelector('[data-reload-app]')?.addEventListener('click', () => {
+      const frame = shell.querySelector('.sb__app-frame');
+      if (frame) frame.src = frame.src;
+    });
     inspector.appendChild(shell);
     setStatus(`app workspace · ${appMeta.name || appMeta.id}`, 'ready');
   }
 
   function renderInspectorPane(uri) {
     inspector.replaceChildren();
+    if (workspaceTitle) workspaceTitle.textContent = uri ? 'Inspector' : 'Workspace';
     if (!uri) {
-      const empty = document.createElement('div');
-      empty.className = 'sb__inspector-empty';
-      empty.textContent = 'paste a dregg:// URI above and hit Go';
-      inspector.appendChild(empty);
+      inspector.appendChild(renderDashboard());
       return;
     }
     let parsed;
@@ -190,6 +426,86 @@ function writeUrlState({ at, runtime }) {
     return String(s ?? '').replace(/[&<>"']/g, (c) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
     })[c]);
+  }
+
+  function renderDashboard() {
+    const counts = currentCounts();
+    const panel = document.createElement('div');
+    panel.className = 'sb__dashboard';
+    panel.innerHTML = `
+      <section class="sb__hero">
+        <div>
+          <div class="sb__eyebrow">Starbridge workspace</div>
+          <h2>Dragon's Egg workbench</h2>
+        </div>
+        <div class="sb__runtime-card">
+          <span>${escapeHtml(runtimeLabel())}</span>
+          <strong>${escapeHtml(currentRuntimeId || 'boot')}</strong>
+        </div>
+      </section>
+      <section class="sb__metric-grid" aria-label="Runtime summary">
+        <div class="sb__metric"><span>Cells</span><strong>${counts.cells}</strong></div>
+        <div class="sb__metric"><span>Receipts</span><strong>${counts.receipts}</strong></div>
+        <div class="sb__metric"><span>Intents</span><strong>${counts.intents}</strong></div>
+        <div class="sb__metric"><span>Activity</span><strong>${counts.activities}</strong></div>
+      </section>
+      <section class="sb__flow-grid" aria-label="Quick flows">
+        <button type="button" class="sb__flow" data-flow="seed">
+          <span>Seed world</span>
+          <strong>alice + bob</strong>
+        </button>
+        <button type="button" class="sb__flow" data-flow="transfer">
+          <span>Execute turn</span>
+          <strong>transfer + receipt</strong>
+        </button>
+        <button type="button" class="sb__flow" data-flow="federation">
+          <span>Consensus</span>
+          <strong>federation block</strong>
+        </button>
+        <button type="button" class="sb__flow" data-flow="intent">
+          <span>Intent market</span>
+          <strong>storage need</strong>
+        </button>
+      </section>
+      <section class="sb__landing-split">
+        <div>
+          <h3>System programs</h3>
+          <div class="sb__landing-actions">
+            <button type="button" class="sb__btn sb__btn--ghost" data-open-app="nameservice">Nameservice</button>
+            <button type="button" class="sb__btn sb__btn--ghost" data-open-app="identity">Identity</button>
+            <button type="button" class="sb__btn sb__btn--ghost" data-open-app="governed-namespace">Namespace</button>
+            <button type="button" class="sb__btn sb__btn--ghost" data-open-app="subscription">Subscription</button>
+            <button type="button" class="sb__btn sb__btn--ghost" data-open-activity>Activity feed</button>
+            <button type="button" class="sb__btn sb__btn--ghost" data-open-console>Console</button>
+          </div>
+        </div>
+        <div>
+          <h3>Direct inspect</h3>
+          <form class="sb__inline-form" data-uri-form>
+            <input class="sb__input" name="uri" placeholder="dregg://cell/…" autocomplete="off" spellcheck="false">
+            <button class="sb__btn" type="submit">Inspect</button>
+          </form>
+        </div>
+      </section>
+    `;
+    panel.querySelector('[data-flow="seed"]')?.addEventListener('click', seedWorld);
+    panel.querySelector('[data-flow="transfer"]')?.addEventListener('click', runTransferFlow);
+    panel.querySelector('[data-flow="federation"]')?.addEventListener('click', createFederationFlow);
+    panel.querySelector('[data-flow="intent"]')?.addEventListener('click', postIntentFlow);
+    panel.querySelector('[data-open-activity]')?.addEventListener('click', () => setCurrentUri('dregg://activity/feed'));
+    panel.querySelector('[data-open-console]')?.addEventListener('click', () => {
+      selectWorkbenchTool('console');
+      consoleLog('console ready. try: help, seed, transfer, fed, intent, app nameservice', 'ok');
+    });
+    for (const btn of panel.querySelectorAll('[data-open-app]')) {
+      btn.addEventListener('click', () => renderAppWorkspace(appMetaFor(btn.dataset.openApp)));
+    }
+    panel.querySelector('[data-uri-form]')?.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const v = new FormData(e.currentTarget).get('uri')?.toString().trim();
+      if (v) setCurrentUri(v);
+    });
+    return panel;
   }
 
   // --------------------------------------------------------------------------
@@ -326,9 +642,10 @@ function writeUrlState({ at, runtime }) {
       getSignal: () => runtime.listBlocks && runtime.listBlocks(),
       map: (block) => {
         const h = block.height ?? block.block_height ?? 0;
+        const fedIndex = block.fed_index ?? 0;
         return {
-          uri: `dregg://block/${h}`,
-          label: `h=${String(h)} · fed #${String(block.fed_index ?? 0)}`,
+          uri: `dregg://block/${fedIndex}/${h}`,
+          label: `h=${String(h)} · fed #${String(fedIndex)}`,
           title: block.block_hash || `height ${h}`,
         };
       },
@@ -387,12 +704,33 @@ function writeUrlState({ at, runtime }) {
     }
   }
 
+  async function setupSplitPanes() {
+    if (!window.matchMedia('(min-width: 821px)').matches) return;
+    try {
+      const { default: Split } = await import('/_includes/vendor/split.es.js');
+      const saved = window.localStorage && localStorage.getItem('starbridge.split.sizes');
+      const sizes = saved ? JSON.parse(saved) : [18, 52, 30];
+      Split(['.sb__pane--tree', '.sb__pane--inspector', '.sb__pane--raw'], {
+        sizes,
+        minSize: [180, 360, 260],
+        gutterSize: 8,
+        cursor: 'col-resize',
+        onDragEnd(next) {
+          try { localStorage.setItem('starbridge.split.sizes', JSON.stringify(next)); } catch {}
+        },
+      });
+    } catch (e) {
+      console.warn('[starbridge] split panes unavailable:', e);
+    }
+  }
+
   // --------------------------------------------------------------------------
   // Current URI mutator. Single funnel: pane render + raw pane + URL sync.
   // --------------------------------------------------------------------------
   function setCurrentUri(uri) {
     currentUri = uri || null;
     if (uri) uriInput.value = uri;
+    if (uri) consoleLog(`inspect ${uri}`, 'cmd');
     // Refresh tree highlight without rebuilding (cheap path).
     for (const btn of document.querySelectorAll('.sb__list-item')) {
       btn.removeAttribute('aria-current');
@@ -409,6 +747,186 @@ function writeUrlState({ at, runtime }) {
     // sub-teardown list so we don't kill the tree+cursor effects.
     rebindRawOnly(uri);
     writeUrlState({ at: uri, runtime: currentRuntimeId });
+  }
+
+  async function runLab(label, fn) {
+    if (!runtime) return;
+    labBusy += 1;
+    setLabButtonsDisabled(true);
+    setStatus(`${label}…`, 'boot');
+    consoleLog(`run ${label}`, 'cmd');
+    try {
+      const result = await fn();
+      setStatus(`ready · ${runtimeLabel()}`, 'ready');
+      consoleLog(`${label} complete`, 'ok');
+      return result;
+    } catch (err) {
+      console.warn(`[starbridge] ${label} failed:`, err);
+      setStatus(`${label} failed: ${err?.message || err}`, 'err');
+      consoleLog(`${label} failed: ${err?.message || err}`, 'err');
+      window.dreggUi?.toast?.(`${label}: ${err?.message || err}`, 'err');
+      return null;
+    } finally {
+      labBusy = Math.max(0, labBusy - 1);
+      if (labBusy === 0) setLabButtonsDisabled(false);
+    }
+  }
+
+  function setLabButtonsDisabled(disabled) {
+    for (const el of document.querySelectorAll('#sb-sim-actions button, .sb__flow')) {
+      el.disabled = disabled;
+    }
+  }
+
+  function requireMutable() {
+    if (!(runtime?.caps && runtime.caps.mutate)) {
+      throw new Error('current runtime is read-only');
+    }
+  }
+
+  async function seedWorld() {
+    return runLab('seed world', async () => {
+      requireMutable();
+      if (!labState.alice) labState.alice = await runtime.createAgent('alice', 5000);
+      if (!labState.bob) labState.bob = await runtime.createAgent('bob', 0);
+      const id = labState.alice?.cell_id || labState.alice?.cellId;
+      if (id) setCurrentUri(`dregg://cell/${id}`);
+      return { alice: labState.alice, bob: labState.bob };
+    });
+  }
+
+  async function ensureSeeded() {
+    if (!labState.alice || !labState.bob) await seedWorld();
+    if (!labState.alice || !labState.bob) throw new Error('seed world did not produce agents');
+  }
+
+  async function runTransferFlow() {
+    return runLab('transfer turn', async () => {
+      requireMutable();
+      await ensureSeeded();
+      const result = await runtime.executeTurn(
+        Number(labState.alice.agent_index ?? 0),
+        [{ type: 'transfer', to: labState.bob.cell_id, amount: 100, excess: 500 }],
+        500,
+      );
+      labState.lastTransfer = result;
+      const hash = result?.turn_hash || result?.receipt_hash || result?.hash;
+      if (hash) setCurrentUri(`dregg://receipt/${hash}`);
+      return result;
+    });
+  }
+
+  async function createFederationFlow() {
+    return runLab('federation block', async () => {
+      requireMutable();
+      const fed = labState.federation || await runtime.createFederation('local-devnet', 4);
+      labState.federation = fed;
+      const fedIndex = Number(fed.fed_index ?? fed.registered_index ?? 0);
+      let block = null;
+      if (typeof runtime.proposeBlock === 'function') {
+        block = await runtime.proposeBlock(fedIndex, [
+          `event-${Date.now().toString(36)}`,
+          `height-${runtime.cursor?.value ?? 0}`,
+        ]);
+      }
+      if (block?.height != null) setCurrentUri(`dregg://block/${fedIndex}/${block.height}`);
+      else setCurrentUri(`dregg://federation/${fedIndex}`);
+      return { fed, block };
+    });
+  }
+
+  async function postIntentFlow() {
+    return runLab('storage intent', async () => {
+      requireMutable();
+      await ensureSeeded();
+      if (typeof runtime.createIntent !== 'function') throw new Error('runtime has no createIntent');
+      const expiry = Math.floor(Date.now() / 1000) + 3600;
+      const intent = await runtime.createIntent(
+        Number(labState.alice.agent_index ?? 0),
+        'Need',
+        [{ action: 'read', resource: 'docs/starbridge/*' }],
+        [{ Service: 'storage' }],
+        'dregg://resource/storage/docs/*',
+        expiry,
+      );
+      labState.lastIntent = intent;
+      const id = intent?.intent_id || intent?.intent_index || 0;
+      setCurrentUri(`dregg://intent/${id}`);
+      return intent;
+    });
+  }
+
+  async function runConsoleCommand(raw) {
+    const line = String(raw || '').trim();
+    if (!line) return;
+    consoleLog(`> ${line}`, 'input');
+    const [cmd, ...args] = line.split(/\s+/);
+    const rest = args.join(' ');
+    switch (cmd.toLowerCase()) {
+      case 'help':
+      case '?':
+        consoleLog('commands: help, status, seed, transfer, fed, intent, app <id>, inspect <uri>, runtime <id>, raw, clear, snapshot', 'ok');
+        break;
+      case 'status': {
+        const counts = currentCounts();
+        consoleLog(`${runtimeLabel()} · cells=${counts.cells} receipts=${counts.receipts} intents=${counts.intents} activity=${counts.activities} selected=${currentUri || '(none)'}`, 'ok');
+        break;
+      }
+      case 'seed':
+        await seedWorld();
+        break;
+      case 'transfer':
+      case 'turn':
+        await runTransferFlow();
+        break;
+      case 'fed':
+      case 'federation':
+      case 'block':
+        await createFederationFlow();
+        break;
+      case 'intent':
+        await postIntentFlow();
+        break;
+      case 'app':
+      case 'open': {
+        const id = rest || 'nameservice';
+        renderAppWorkspace(appMetaFor(id));
+        consoleLog(`opened app ${id}`, 'ok');
+        break;
+      }
+      case 'inspect':
+      case 'go':
+        if (!rest || !isRef(rest)) consoleLog('usage: inspect dregg://kind/id', 'err');
+        else setCurrentUri(rest);
+        break;
+      case 'raw':
+        selectWorkbenchTool('raw');
+        break;
+      case 'console':
+        selectWorkbenchTool('console');
+        break;
+      case 'snapshot':
+        exportSnapshot();
+        break;
+      case 'runtime': {
+        if (!rest) {
+          consoleLog(`runtime ${currentRuntimeId}; available: ${Object.keys(kinds || {}).join(', ')}`, 'ok');
+        } else if (!kinds?.[rest]) {
+          consoleLog(`unknown runtime: ${rest}`, 'err');
+        } else {
+          pickerEl.value = rest;
+          updateRuntimeConfigVisibility();
+          await swapRuntime(rest);
+          consoleLog(`runtime switched to ${rest}`, 'ok');
+        }
+        break;
+      }
+      case 'clear':
+        if (consoleOut) consoleOut.replaceChildren();
+        break;
+      default:
+        consoleLog(`unknown command: ${cmd}. type "help"`, 'err');
+    }
   }
 
   // Independent teardown list for the raw pane, so URI changes don't dispose
@@ -437,9 +955,15 @@ function writeUrlState({ at, runtime }) {
     } else if (parsed.kind === 'federation' && typeof runtime.getFederation === 'function') {
       sig = runtime.getFederation(parsed.id);
     } else if (parsed.kind === 'block' && typeof runtime.getBlock === 'function') {
-      sig = runtime.getBlock(parsed.id);
+      sig = parsed.sub?.length
+        ? runtime.getBlock({ fedIndex: parsed.id, height: parsed.sub[0] })
+        : runtime.getBlock(parsed.id);
     } else if (parsed.kind === 'activity' && typeof runtime.getTraceEvents === 'function') {
       sig = runtime.getTraceEvents();
+    } else if (parsed.kind === 'app') {
+      const appMeta = appCatalog.get(parsed.id) || { id: parsed.id, page: `/starbridge-apps/${parsed.id}/pages/index.html` };
+      rawEl.textContent = JSON.stringify(appMeta, null, 2);
+      return;
     }
     if (!sig) {
       rawEl.textContent = `no resolver for kind "${parsed.kind}"`;
@@ -485,7 +1009,7 @@ function writeUrlState({ at, runtime }) {
       const opts = { wasm, signals: api };
       if (id === 'remote') {
         // Best-effort: try to read a configured base URL; otherwise empty.
-        opts.baseUrl = (window.localStorage && localStorage.getItem('dregg.remote.baseUrl')) || '';
+        opts.baseUrl = (remoteUrlInput?.value || (window.localStorage && localStorage.getItem('dregg.remote.baseUrl')) || '').trim();
       }
       runtime = await entry.factory(opts);
       currentRuntimeId = id;
@@ -494,6 +1018,7 @@ function writeUrlState({ at, runtime }) {
       bindObjectTree();
       bindCursor();
       rebindRawOnly(currentUri);
+      updateRuntimeConfigVisibility();
       setStatus(`ready · ${runtime.source ? runtime.source.label : id}`, 'ready');
       writeUrlState({ at: currentUri, runtime: id });
     } catch (e) {
@@ -517,6 +1042,10 @@ function writeUrlState({ at, runtime }) {
     await import('/_includes/studio/inspectors.js');
 
     kinds = await loadRuntimeKinds();
+    if (remoteUrlInput) {
+      remoteUrlInput.value = (window.localStorage && localStorage.getItem('dregg.remote.baseUrl'))
+        || 'https://devnet.dregg.fg-goose.online';
+    }
 
     // Populate picker.
     pickerEl.replaceChildren();
@@ -536,8 +1065,10 @@ function writeUrlState({ at, runtime }) {
       (url.runtime && kinds[url.runtime]) ? url.runtime :
       (kinds['in-memory'] ? 'in-memory' : Object.keys(kinds)[0]);
     pickerEl.value = initialId;
+    updateRuntimeConfigVisibility();
 
     await swapRuntime(initialId);
+    await setupSplitPanes();
 
     if (url.at && isRef(url.at)) {
       setCurrentUri(url.at);
@@ -546,7 +1077,22 @@ function writeUrlState({ at, runtime }) {
     }
 
     // --- Event wiring ---
-    pickerEl.addEventListener('change', () => swapRuntime(pickerEl.value));
+    pickerEl.addEventListener('change', () => {
+      updateRuntimeConfigVisibility();
+      swapRuntime(pickerEl.value);
+    });
+    connectBtn?.addEventListener('click', () => {
+      if (remoteUrlInput && window.localStorage) {
+        localStorage.setItem('dregg.remote.baseUrl', remoteUrlInput.value.trim());
+      }
+      swapRuntime(pickerEl.value);
+    });
+    remoteUrlInput?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        connectBtn?.click();
+      }
+    });
 
     function commitUri() {
       const v = uriInput.value.trim();
@@ -567,23 +1113,77 @@ function writeUrlState({ at, runtime }) {
     });
 
     snapBtn.addEventListener('click', () => {
-      window.alert('Snapshot export will be wired up once the wasm side is shipped.');
+      exportSnapshot();
+    });
+
+    for (const tab of document.querySelectorAll('[data-tool]')) {
+      tab.addEventListener('click', () => selectWorkbenchTool(tab.dataset.tool || 'raw'));
+    }
+    consoleForm?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const raw = consoleInput?.value || '';
+      if (consoleInput) consoleInput.value = '';
+      await runConsoleCommand(raw);
+    });
+    consoleLog('console ready. type help for commands.', 'ok');
+
+    paletteOpenBtn?.addEventListener('click', () => openPalette());
+    paletteCloseBtn?.addEventListener('click', closePalette);
+    paletteEl?.addEventListener('click', (e) => {
+      if (e.target === paletteEl) closePalette();
+    });
+    paletteInput?.addEventListener('input', renderPalette);
+    paletteInput?.addEventListener('keydown', async (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closePalette();
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        movePaletteSelection(1);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        movePaletteSelection(-1);
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        await runSelectedPaletteItem();
+      }
+    });
+    document.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        openPalette();
+      } else if (e.key === 'Escape' && paletteEl && !paletteEl.hidden) {
+        e.preventDefault();
+        closePalette();
+      }
     });
 
     // Sim convenience buttons (best-effort; absent on read-only runtimes).
     const btn = (id, fn) => {
       const e = document.getElementById(id);
       if (!e) return;
-      e.addEventListener('click', () => {
-        try { fn(); } catch (err) {
-          console.warn(`[starbridge] ${id} failed:`, err);
-          window.dreggUi?.toast?.(`${id}: ${err.message || err}`, 'err');
-        }
-      });
+      e.addEventListener('click', () => runLab(id, fn));
     };
-    btn('sb-mk-alice', () => runtime.createAgent && runtime.createAgent('alice', 5000));
-    btn('sb-mk-bob',   () => runtime.createAgent && runtime.createAgent('bob',   0));
-    btn('sb-advance',  () => runtime.advanceHeight && runtime.advanceHeight(1));
+    btn('sb-seed-world', seedWorld);
+    btn('sb-run-transfer', runTransferFlow);
+    btn('sb-create-fed', createFederationFlow);
+    btn('sb-post-intent', postIntentFlow);
+    btn('sb-mk-alice', async () => {
+      requireMutable();
+      labState.alice = await runtime.createAgent('alice', 5000);
+      if (labState.alice?.cell_id) setCurrentUri(`dregg://cell/${labState.alice.cell_id}`);
+      return labState.alice;
+    });
+    btn('sb-mk-bob', async () => {
+      requireMutable();
+      labState.bob = await runtime.createAgent('bob', 0);
+      if (labState.bob?.cell_id) setCurrentUri(`dregg://cell/${labState.bob.cell_id}`);
+      return labState.bob;
+    });
+    btn('sb-advance', async () => {
+      requireMutable();
+      return runtime.advanceHeight && runtime.advanceHeight(1);
+    });
 
     // Expose for tests / console debugging.
     window.__starbridge = {
@@ -606,5 +1206,46 @@ function writeUrlState({ at, runtime }) {
   } catch (e) {
     console.error('[starbridge] boot failed:', e);
     setStatus('boot failed: ' + (e?.message || e), 'err');
+  }
+
+  function readSignal(fn, fallback) {
+    try {
+      const sig = fn();
+      return sig && 'value' in sig ? sig.value : fallback;
+    } catch { return fallback; }
+  }
+
+  function buildSnapshot() {
+    const state = {
+      schema_version: 1,
+      generated_at: new Date().toISOString(),
+      runtime: currentRuntimeId,
+      source: runtime?.source || null,
+      selected_uri: currentUri,
+      cursor: runtime?.cursor?.value ?? null,
+      caps: runtime?.caps || null,
+      cells: readSignal(() => runtime.listCells(), []),
+      receipts: readSignal(() => runtime.listReceipts(), []),
+      intents: readSignal(() => runtime.listIntents(), []),
+      federations: readSignal(() => runtime.listKnownFederations(), []),
+      blocks: readSignal(() => runtime.listBlocks(), []),
+      activity: readSignal(() => runtime.getTraceEvents(), null),
+    };
+    return state;
+  }
+
+  function exportSnapshot() {
+    const snapshot = buildSnapshot();
+    const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `starbridge-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    setStatus('snapshot exported', 'ready');
+    consoleLog('snapshot exported', 'ok');
   }
 })();

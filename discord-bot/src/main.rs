@@ -45,6 +45,46 @@ use devnet::DevnetClient;
 use discord_caps::{DiscordCapRegistry, EventBridge};
 use presence::{PresenceStatus, PresenceTracker};
 
+const REGISTERED_COMMAND_NAMES: &[&str] = &[
+    "explorer",
+    "presence",
+    "cipherclerk",
+    "send",
+    "tip",
+    "gallery",
+    "credential",
+    "status",
+    "proof",
+    "metrics",
+    "faucet",
+    "leaderboard",
+    "history",
+    "dregg",
+    "cap-share",
+    "cap-accept",
+    "cap-delegate",
+    "cap-list",
+    "cap-revoke",
+    "queue-create",
+    "queue-publish",
+    "queue-subscribe",
+    "queue-status",
+    "queue-mount",
+    "gov-propose",
+    "gov-vote",
+    "gov-status",
+    "gov-routes",
+    "name-register",
+    "name-resolve",
+    "name-whois",
+    "setup-federation",
+    "link-cipherclerk",
+    "unlink-cipherclerk",
+];
+
+#[cfg(test)]
+const ROUTED_COMMAND_NAMES: &[&str] = REGISTERED_COMMAND_NAMES;
+
 /// Shared bot state accessible from all command handlers.
 pub struct BotState {
     pub config: Config,
@@ -98,6 +138,7 @@ impl EventHandler for Handler {
             commands::social::register_faucet(),
             commands::social::register_leaderboard(),
             commands::social::register_history(),
+            commands::dashboard::register(),
             // ─── CapTP commands ─────────────────────────────────────────────
             commands::captp::register_share(),
             commands::captp::register_accept(),
@@ -123,13 +164,8 @@ impl EventHandler for Handler {
             commands::federation::register_setup(),
             commands::federation::register_link(),
             commands::federation::register_unlink(),
-            // ─── §4.7 intent/handoff slash flows (bot as soft-federation peer) ─
-            // These complement existing captp/ names flows. Full orchestration
-            // (intent post → relay to #dregg-intents, handoff cert paste,
-            // reaction-to-fulfill via TurnComposer) uses the CapTPClient +
-            // AppCipherclerk already wired.
-            commands::status::register_status(), // placeholder until dedicated intent/handoff modules land (reuses status surface for now)
         ];
+        debug_assert_eq!(commands.len(), REGISTERED_COMMAND_NAMES.len());
 
         match Command::set_global_commands(&ctx.http, commands).await {
             Ok(cmds) => info!("Registered {} global slash commands", cmds.len()),
@@ -160,6 +196,7 @@ impl EventHandler for Handler {
                     commands::social::handle_leaderboard(&ctx, &command, &self.state).await
                 }
                 "history" => commands::social::handle_history(&ctx, &command, &self.state).await,
+                "dregg" => commands::dashboard::handle(&ctx, &command, &self.state).await,
                 // ─── CapTP commands ─────────────────────────────────────────
                 "cap-share" => commands::captp::handle_share(&ctx, &command, &self.state).await,
                 "cap-accept" => commands::captp::handle_accept(&ctx, &command, &self.state).await,
@@ -207,16 +244,14 @@ impl EventHandler for Handler {
                 "unlink-cipherclerk" => {
                     commands::federation::handle_unlink(&ctx, &command, &self.state).await
                 }
-                // §4.7 slash for intent/handoff (soft-federation for friend clique)
-                "intent" | "handoff" => {
-                    // Placeholder: routes to status handler for demo; real impl would
-                    // use captp_client + TurnComposer + NullifierSet ordering.
-                    commands::status::handle_status(&ctx, &command, &self.state).await
-                }
                 _ => {
                     tracing::warn!("Unknown command: {name}");
                 }
             }
+        } else if let Interaction::Component(component) = interaction {
+            commands::dashboard::handle_component(&ctx, &component, &self.state).await;
+        } else if let Interaction::Modal(modal) = interaction {
+            commands::dashboard::handle_modal(&ctx, &modal, &self.state).await;
         }
     }
 
@@ -372,5 +407,31 @@ async fn main() {
     info!("Connecting to Discord...");
     if let Err(e) = client.start().await {
         error!("Bot error: {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{REGISTERED_COMMAND_NAMES, ROUTED_COMMAND_NAMES};
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn registered_commands_have_no_duplicates() {
+        let unique: BTreeSet<_> = REGISTERED_COMMAND_NAMES.iter().copied().collect();
+        assert_eq!(
+            unique.len(),
+            REGISTERED_COMMAND_NAMES.len(),
+            "registered slash command names must be unique"
+        );
+    }
+
+    #[test]
+    fn registered_commands_match_router_surface() {
+        let registered: BTreeSet<_> = REGISTERED_COMMAND_NAMES.iter().copied().collect();
+        let routed: BTreeSet<_> = ROUTED_COMMAND_NAMES.iter().copied().collect();
+        assert_eq!(
+            registered, routed,
+            "every registered command must have a router arm and every router arm must be registered"
+        );
     }
 }

@@ -6,7 +6,12 @@
     "serve": "npx serve dist"
   },
   "devDependencies": {
-    "shiki": "^4.0",
-    "lightningcss": "^1.27"
+    "@playwright/test": "^1.60.0",
+    "lightningcss": "^1.27",
+    "serve": "^14.2.6",
+    "shiki": "^4.0"
+  },
+  "dependencies": {
+    "split.js": "^1.6.5"
   }
 }

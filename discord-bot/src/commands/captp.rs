@@ -10,6 +10,7 @@ use serenity::all::{
 };
 
 use crate::BotState;
+use crate::db::IdentityMode;
 use crate::embeds;
 
 // ─── Registration ───────────────────────────────────────────────────────────
@@ -79,6 +80,13 @@ pub async fn handle_share(ctx: &Context, command: &CommandInteraction, state: &B
 
     defer_ephemeral(ctx, command).await;
 
+    if let Err(embed) = ensure_user_can_manage_cell(command, state, &cell_id).await {
+        let _ = command
+            .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+            .await;
+        return;
+    }
+
     match state.captp.export_cap(&cell_id).await {
         Ok(uri) => {
             let uri_str = uri.to_string();
@@ -91,12 +99,7 @@ pub async fn handle_share(ctx: &Context, command: &CommandInteraction, state: &B
             let embed = embeds::success_embed("Capability Shared")
                 .description("Sturdy ref exported. Anyone with this URI can enliven the cap.")
                 .field("Cell", format!("`{short_cell}`"), true)
-                .field("URI", format!("```\n{uri_str}\n```"), false)
-                .field(
-                    "QR",
-                    format!("[Scan](https://api.qrserver.com/v1/create-qr-code/?data={uri_str})"),
-                    true,
-                );
+                .field("URI", format!("```\n{uri_str}\n```"), false);
 
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
@@ -177,6 +180,13 @@ pub async fn handle_delegate(ctx: &Context, command: &CommandInteraction, state:
 
     defer_ephemeral(ctx, command).await;
 
+    if let Err(embed) = ensure_user_can_manage_cell(command, state, &cell_id).await {
+        let _ = command
+            .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+            .await;
+        return;
+    }
+
     let target_id = match target_user_id {
         Some(id) => id,
         None => {
@@ -190,14 +200,24 @@ pub async fn handle_delegate(ctx: &Context, command: &CommandInteraction, state:
 
     // Look up the target user's dregg key.
     let target_discord = target_id.to_string();
-    let recipient_key = match state.db.get_cell_id(&target_discord).await {
-        Ok(Some(id)) => id,
+    let recipient_key = match state.db.get_user_identity(&target_discord).await {
+        Ok(Some(identity)) if identity.mode != IdentityMode::ExternalPending => identity.cell_id,
+        Ok(Some(_)) => {
+            let embed = embeds::warning_embed(
+                "Target Link Pending",
+                &format!(
+                    "<@{target_id}> has a pending external identity link. They need to prove ownership before receiving delegated capabilities."
+                ),
+            );
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
         Ok(None) => {
             let embed = embeds::warning_embed(
                 "Target Has No Cipherclerk",
-                &format!(
-                    "<@{target_id}> does not have a linked dregg identity. They need to `/link-cclerk` first."
-                ),
+                &format!("<@{target_id}> does not have a linked dregg identity."),
             );
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
@@ -309,6 +329,13 @@ pub async fn handle_revoke(ctx: &Context, command: &CommandInteraction, state: &
 
     defer_ephemeral(ctx, command).await;
 
+    if let Err(embed) = ensure_user_can_manage_cell(command, state, &cell_id).await {
+        let _ = command
+            .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+            .await;
+        return;
+    }
+
     match state.captp.revoke_cap(&cell_id).await {
         Ok(()) => {
             let embed = embeds::success_embed("Capability Revoked").description(format!(
@@ -339,4 +366,39 @@ async fn defer_ephemeral(ctx: &Context, command: &CommandInteraction) {
             ),
         )
         .await;
+}
+
+async fn ensure_user_can_manage_cell(
+    command: &CommandInteraction,
+    state: &BotState,
+    cell_id: &str,
+) -> Result<(), serenity::all::CreateEmbed> {
+    if cell_id.len() != 64 || hex::decode(cell_id).is_err() {
+        return Err(embeds::error_embed(
+            "Invalid Cell ID",
+            "Cell IDs must be 64 hex characters.",
+        ));
+    }
+
+    let discord_id = command.user.id.get().to_string();
+    match state.db.get_user_identity(&discord_id).await {
+        Ok(Some(identity))
+            if identity.mode == IdentityMode::Hosted && identity.cell_id == cell_id =>
+        {
+            Ok(())
+        }
+        Ok(Some(identity)) if identity.cell_id == cell_id => Err(embeds::warning_embed(
+            "External Identity Pending",
+            "The bot cannot export, delegate, or revoke capabilities for an external identity until holder proof is implemented and verified.",
+        )),
+        Ok(Some(_)) => Err(embeds::error_embed(
+            "Capability Not Held",
+            "You can only manage capabilities for your own hosted cipherclerk cell.",
+        )),
+        Ok(None) => Err(embeds::warning_embed(
+            "No Cipherclerk",
+            "Create a hosted cipherclerk with `/cipherclerk create` before managing capabilities.",
+        )),
+        Err(e) => Err(embeds::error_embed("Database Error", &e.to_string())),
+    }
 }

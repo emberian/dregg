@@ -77,6 +77,8 @@ function installPreviewBridge(runtime, wasm) {
 }
 
 function installDevtoolsLink(appEl) {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('embedded') === '1') return;
   const uri = appEl.getAttribute('registry-uri') || appEl.getAttribute('uri') || '';
   const href = uri ? `/starbridge/?at=${encodeURIComponent(uri)}` : '/starbridge/';
   const link = document.createElement('a');
@@ -100,15 +102,77 @@ function installDevtoolsLink(appEl) {
   document.body.appendChild(link);
 }
 
+function installEmbeddedChromeReset() {
+  document.documentElement.dataset.embedded = 'starbridge';
+  if (document.getElementById('starbridge-embedded-reset')) return;
+  const style = document.createElement('style');
+  style.id = 'starbridge-embedded-reset';
+  style.textContent = `
+    html[data-embedded="starbridge"],
+    html[data-embedded="starbridge"] body {
+      margin: 0;
+      min-height: 100%;
+      max-width: none;
+      background: transparent;
+    }
+    html[data-embedded="starbridge"] .starbridge-devtools-link,
+    html[data-embedded="starbridge"] .site-header,
+    html[data-embedded="starbridge"] .app-header,
+    html[data-embedded="starbridge"] footer {
+      display: none !important;
+    }
+    html[data-embedded="starbridge"] header {
+      margin: 0;
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid #ddd;
+    }
+    html[data-embedded="starbridge"] header h1 {
+      margin: 0;
+      font-size: 1.05rem;
+    }
+    html[data-embedded="starbridge"] header p {
+      margin: 0.35rem 0 0;
+      font-size: 0.82rem;
+      line-height: 1.35;
+    }
+    html[data-embedded="starbridge"] main,
+    html[data-embedded="starbridge"] dregg-app {
+      display: block;
+      min-height: 100%;
+    }
+    html[data-embedded="starbridge"] main {
+      padding: 1rem;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
 async function boot() {
   const api = await whenDreggUi();
   const wasm = await import('/pkg/dregg_wasm.js');
   await wasm.default();
+  const params = new URLSearchParams(window.location.search);
+  const embedded = params.get('embedded') === '1';
+  if (embedded) installEmbeddedChromeReset();
+  let hostRuntime = null;
+  if (embedded && window.parent && window.parent !== window) {
+    try {
+      hostRuntime = window.parent.__starbridge?.runtime || null;
+    } catch {
+      hostRuntime = null;
+    }
+  }
 
   const runtimes = new Map();
   const apps = Array.from(document.querySelectorAll('dregg-app'));
   for (const appEl of apps) {
     const runtimeKind = appEl.getAttribute('runtime') || 'in-memory';
+    if (hostRuntime) {
+      appEl.runtime = hostRuntime;
+      runtimes.set(appEl, hostRuntime);
+      installPreviewBridge(hostRuntime, wasm);
+      continue;
+    }
     if (runtimeKind !== 'in-memory') {
       console.warn(`[starbridge-app] runtime "${runtimeKind}" awaits app-boot support; using in-memory`);
     }

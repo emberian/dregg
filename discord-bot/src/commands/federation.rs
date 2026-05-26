@@ -1,4 +1,4 @@
-//! Federation setup commands: `/setup-federation`, `/link-cclerk`, `/unlink-cclerk`.
+//! Federation setup commands: `/setup-federation`, `/link-cipherclerk`, `/unlink-cipherclerk`.
 //!
 //! Links a Discord guild to a dregg reference group and binds user identities.
 
@@ -19,7 +19,7 @@ pub fn register_setup() -> CreateCommand {
         .description("Register this guild as a dregg reference group (federation)")
 }
 
-/// Register `/link-cclerk <dregg-address>`.
+/// Register `/link-cipherclerk <dregg-address>`.
 pub fn register_link() -> CreateCommand {
     CreateCommand::new("link-cipherclerk")
         .description("Link your Discord account to your dregg identity")
@@ -33,7 +33,7 @@ pub fn register_link() -> CreateCommand {
         )
 }
 
-/// Register `/unlink-cclerk`.
+/// Register `/unlink-cipherclerk`.
 pub fn register_unlink() -> CreateCommand {
     CreateCommand::new("unlink-cipherclerk")
         .description("Unlink your Discord account from your dregg identity")
@@ -144,7 +144,7 @@ pub async fn handle_setup(ctx: &Context, command: &CommandInteraction, state: &B
     }
 }
 
-/// Handle `/link-cclerk`.
+/// Handle `/link-cipherclerk`.
 pub async fn handle_link(ctx: &Context, command: &CommandInteraction, state: &BotState) {
     let address = command
         .data
@@ -178,7 +178,7 @@ pub async fn handle_link(ctx: &Context, command: &CommandInteraction, state: &Bo
             let embed = embeds::warning_embed(
                 "Already Linked",
                 &format!(
-                    "Your account is already linked to `{}...`.\nUse `/unlink-cclerk` first to change it.",
+                    "Your account is already linked to `{}...`.\nUse `/unlink-cipherclerk` first to change it.",
                     &existing[..16.min(existing.len())]
                 ),
             );
@@ -197,12 +197,20 @@ pub async fn handle_link(ctx: &Context, command: &CommandInteraction, state: &Bo
         _ => {}
     }
 
-    // Store the link.
-    match state.db.register_user(&discord_id, &address).await {
+    let challenge = ownership_challenge(&discord_id, &address);
+
+    // Store as pending only. A later verifier can promote this record after a
+    // signature proof over the challenge; until then the bot will not sign for it.
+    match state
+        .db
+        .create_pending_external_link(&discord_id, &address, &challenge)
+        .await
+    {
         Ok(()) => {
-            let embed = embeds::success_embed("Cipherclerk Linked")
-                .description("Your Discord account is now linked to your dregg identity.")
-                .field("Cell ID", format!("`{}...`", &address[..16]), true);
+            let embed = embeds::success_embed("External Link Pending")
+                .description("Your Discord account recorded this external identity, but it is not active until ownership is proven.")
+                .field("Cell ID", format!("`{}...`", &address[..16]), true)
+                .field("Challenge", format!("```\n{challenge}\n```"), false);
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
                 .await;
@@ -216,7 +224,7 @@ pub async fn handle_link(ctx: &Context, command: &CommandInteraction, state: &Bo
     }
 }
 
-/// Handle `/unlink-cclerk`.
+/// Handle `/unlink-cipherclerk`.
 pub async fn handle_unlink(ctx: &Context, command: &CommandInteraction, state: &BotState) {
     defer_ephemeral(ctx, command).await;
 
@@ -255,6 +263,14 @@ pub async fn handle_unlink(ctx: &Context, command: &CommandInteraction, state: &
                 .await;
         }
     }
+}
+
+fn ownership_challenge(discord_id: &str, address: &str) -> String {
+    let input = format!("dregg-discord-link-v1:{discord_id}:{address}");
+    format!(
+        "dregg-discord-link-v1:{}",
+        blake3::hash(input.as_bytes()).to_hex()
+    )
 }
 
 // ─── Wire types ─────────────────────────────────────────────────────────────

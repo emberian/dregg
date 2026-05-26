@@ -1,5 +1,6 @@
 /**
- * <dregg-block uri="dregg://block/<height>"> — block at a given height.
+ * <dregg-block uri="dregg://block/<height>"> or
+ * <dregg-block uri="dregg://block/<fed>/<height>"> — block at a given height.
  *
  * IMPORTANT: the wasm sim does NOT expose a block getter. `propose_block`
  * returns the new block_hash + height; `simulate_consensus_round` returns
@@ -31,8 +32,12 @@ class DreggBlock extends InspectorBase {
     try { parsed = parseRef(refAttr); } catch {}
     if (renderParseError(this, refAttr, parsed, 'block')) return;
 
-    const height = parsed.id;
-    const sig = this._runtime.getBlock(height);
+    const scoped = parsed.sub && parsed.sub.length > 0;
+    const fedIndex = scoped ? parsed.id : 0;
+    const height = scoped ? parsed.sub[0] : parsed.id;
+    const sig = scoped
+      ? this._runtime.getBlock({ fedIndex, height })
+      : this._runtime.getBlock(height);
     const root = document.createElement('div');
     this.appendChild(root);
 

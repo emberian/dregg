@@ -99,7 +99,7 @@ pub async fn handle_propose(ctx: &Context, command: &CommandInteraction, state: 
         Ok(None) => {
             let embed = embeds::warning_embed(
                 "No Cipherclerk",
-                "You need a linked dregg identity to propose. Use `/link-cclerk` first.",
+                "You need a linked dregg identity to propose. Use `/link-cipherclerk` first.",
             );
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
@@ -194,7 +194,7 @@ pub async fn handle_vote(ctx: &Context, command: &CommandInteraction, state: &Bo
         Ok(None) => {
             let embed = embeds::warning_embed(
                 "No Cipherclerk",
-                "You need a linked dregg identity to vote. Use `/link-cclerk` first.",
+                "You need a linked dregg identity to vote. Use `/link-cipherclerk` first.",
             );
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))

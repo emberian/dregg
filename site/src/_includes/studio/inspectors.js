@@ -214,21 +214,20 @@ class DreggAppList extends HTMLElement {
     root.innerHTML = '';
     const wrap = document.createElement('div');
     wrap.className = 'dregg-app-list';
-    wrap.style.cssText = 'display:flex;flex-direction:column;gap:0.4rem;font-size:0.85rem;';
     if (this._loading) {
-      wrap.innerHTML = '<div style="color:#888">loading apps…</div>';
+      wrap.innerHTML = '<div class="dregg-app-list__empty">loading apps…</div>';
       root.appendChild(wrap);
       return;
     }
     this._apps.forEach(app => {
       const card = document.createElement('div');
-      card.style.cssText = 'border:1px solid #eee;border-radius:4px;padding:0.4rem;background:#fafafa;';
+      card.className = 'dregg-app-list__card';
       card.innerHTML = `
-        <div style="font-weight:600">${escapeHtml(app.name)}</div>
-        <div style="color:#555;font-size:0.75rem;margin:0.2rem 0;">${escapeHtml(app.description)}</div>
-        <div style="display:flex;gap:0.3rem;flex-wrap:wrap;">
-          <button data-act="open" style="font-size:0.7rem;padding:0.15rem 0.4rem;">Open in workspace</button>
-          <a href="${app.page}" target="_blank" style="font-size:0.7rem;color:#25439a;">Standalone</a>
+        <div class="dregg-app-list__name">${escapeHtml(app.name)}</div>
+        <div class="dregg-app-list__desc">${escapeHtml(app.description)}</div>
+        <div class="dregg-app-list__actions">
+          <button data-act="open" type="button">Open in workspace</button>
+          <a href="${app.page}" target="_blank">Standalone</a>
         </div>
       `;
       const btn = card.querySelector('[data-act=open]');

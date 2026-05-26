@@ -1,5 +1,5 @@
 <layout src="_layouts/default.html">
-<title>Starbridge — <code>dregg</code> Studio</title>
+<title>Starbridge — Dragon's Egg Workbench</title>
 
 <link rel="stylesheet" href="/_includes/studio/starbridge.css">
 
@@ -19,8 +19,18 @@
                spellcheck="false">
       </label>
       <button id="sb-go" class="sb__btn">Go</button>
+      <button id="sb-palette-open" class="sb__btn sb__btn--ghost" title="Open command palette">Palette</button>
       <button id="sb-snapshot" class="sb__btn sb__btn--ghost" title="Export snapshot">Snapshot</button>
       <div id="sb-status" class="sb__status" data-state="boot">booting</div>
+    </div>
+    <div id="sb-runtime-config" class="sb__topbar-row sb__topbar-row--config" hidden>
+      <label class="sb__field sb__field--grow">
+        <span class="sb__field-label">Remote URL</span>
+        <input id="sb-remote-url" class="sb__input" type="url"
+               placeholder="https://devnet.dregg.fg-goose.online"
+               autocomplete="off" spellcheck="false">
+      </label>
+      <button id="sb-connect" class="sb__btn sb__btn--ghost">Connect</button>
     </div>
     <div class="sb__topbar-row sb__topbar-row--time">
       <span class="sb__field-label">Time</span>
@@ -35,22 +45,31 @@
 
   <dregg-app id="sb-app">
     <div class="sb__panes">
-      <aside class="sb__pane sb__pane--tree" aria-label="Object tree">
-        <h2 class="sb__pane-title">Objects</h2>
+      <aside class="sb__pane sb__pane--tree" aria-label="System map">
+        <h2 class="sb__pane-title">System Map</h2>
+        <section class="sb__section">
+          <h3 class="sb__section-title">
+            System Programs <span id="sb-app-count" class="sb__count">0</span>
+          </h3>
+          <dregg-app-list id="sb-app-list"></dregg-app-list>
+        </section>
+        <hr class="sb__hr">
+        <section id="sb-sim-actions" class="sb__section">
+          <h3 class="sb__section-title">Scripts</h3>
+          <button id="sb-seed-world" class="sb__btn sb__btn--small">Seed alice + bob</button>
+          <button id="sb-run-transfer" class="sb__btn sb__btn--small">Run transfer turn</button>
+          <button id="sb-create-fed" class="sb__btn sb__btn--small">Create federation block</button>
+          <button id="sb-post-intent" class="sb__btn sb__btn--small">Post storage intent</button>
+          <button id="sb-mk-alice" class="sb__btn sb__btn--small">+ agent (alice)</button>
+          <button id="sb-mk-bob" class="sb__btn sb__btn--small">+ agent (bob)</button>
+          <button id="sb-advance" class="sb__btn sb__btn--small">advance +1</button>
+        </section>
+        <hr class="sb__hr">
         <section class="sb__section">
           <h3 class="sb__section-title">
             Cells <span id="sb-cell-count" class="sb__count">0</span>
           </h3>
           <ul id="sb-cell-list" class="sb__list"></ul>
-        </section>
-        <!-- Apps tab / browser (STARBRIDGE-PLAN §4.8): <dregg-app-list> reads
-             starbridge-apps/*/manifest.json (Q3 format). First e2e demo is
-             the nameservice (mounts its inspectors + typed turn-builders). -->
-        <section class="sb__section">
-          <h3 class="sb__section-title">
-            Apps <span id="sb-app-count" class="sb__count">0</span>
-          </h3>
-          <dregg-app-list id="sb-app-list"></dregg-app-list>
         </section>
         <section class="sb__section">
           <h3 class="sb__section-title">
@@ -88,26 +107,46 @@
           </h3>
           <ul id="sb-activity-list" class="sb__list"></ul>
         </section>
-        <hr class="sb__hr">
-        <section id="sb-sim-actions" class="sb__section">
-          <h3 class="sb__section-title">Sim actions</h3>
-          <button id="sb-mk-alice" class="sb__btn sb__btn--small">+ agent (alice)</button>
-          <button id="sb-mk-bob" class="sb__btn sb__btn--small">+ agent (bob)</button>
-          <button id="sb-advance" class="sb__btn sb__btn--small">advance +1</button>
-        </section>
       </aside>
 
-      <section class="sb__pane sb__pane--inspector" aria-label="Inspector">
-        <h2 class="sb__pane-title">Inspector</h2>
+      <section class="sb__pane sb__pane--inspector" aria-label="Workspace">
+        <h2 id="sb-workspace-title" class="sb__pane-title">Workspace</h2>
         <div id="sb-inspector" class="sb__inspector"></div>
       </section>
 
-      <section class="sb__pane sb__pane--raw" aria-label="Raw JSON">
-        <h2 class="sb__pane-title">Raw JSON</h2>
+      <section class="sb__pane sb__pane--raw" aria-label="Workbench output">
+        <div class="sb__pane-head">
+          <h2 class="sb__pane-title">Workbench</h2>
+          <div class="sb__tool-tabs" role="tablist" aria-label="Workbench tools">
+            <button id="sb-tool-raw" type="button" role="tab" aria-selected="true" data-tool="raw">Raw</button>
+            <button id="sb-tool-console" type="button" role="tab" aria-selected="false" data-tool="console">Console</button>
+          </div>
+        </div>
         <pre id="sb-raw" class="sb__raw">no object selected</pre>
+        <section id="sb-console" class="sb__console" hidden>
+          <div id="sb-console-output" class="sb__console-output" aria-live="polite"></div>
+          <form id="sb-console-form" class="sb__console-form">
+            <span class="sb__console-prompt">&gt;</span>
+            <input id="sb-console-input" class="sb__console-input" type="text"
+                   autocomplete="off" spellcheck="false"
+                   placeholder="help, seed, transfer, app nameservice, inspect dregg://…" />
+          </form>
+        </section>
       </section>
     </div>
   </dregg-app>
+
+  <div id="sb-palette" class="sb__palette" role="dialog" aria-modal="true" aria-label="Command palette" hidden>
+    <div class="sb__palette-panel">
+      <div class="sb__palette-head">
+        <input id="sb-palette-input" class="sb__palette-input" type="text"
+               autocomplete="off" spellcheck="false"
+               placeholder="apps, scripts, objects, runtimes…" />
+        <button id="sb-palette-close" class="sb__palette-close" type="button" aria-label="Close">×</button>
+      </div>
+      <div id="sb-palette-list" class="sb__palette-list" role="listbox"></div>
+    </div>
+  </div>
 </main>
 
 <script type="module" src="/_includes/runtime-bootstrap.js"></script>

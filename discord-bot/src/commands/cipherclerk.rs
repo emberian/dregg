@@ -7,11 +7,12 @@ use serenity::all::{
 
 use crate::BotState;
 use crate::cipherclerk::UserCipherclerk;
+use crate::db::IdentityMode;
 use crate::embeds;
 
 /// Register the /cipherclerk command with all subcommands.
 pub fn register() -> CreateCommand {
-    CreateCommand::new("cclerk")
+    CreateCommand::new("cipherclerk")
         .description("Manage your dregg cclerk")
         .add_option(CreateCommandOption::new(
             CommandOptionType::SubCommand,
@@ -100,7 +101,11 @@ async fn handle_create(ctx: &Context, command: &CommandInteraction, state: &BotS
     }
 
     // Store in database.
-    if let Err(e) = state.db.register_user(&discord_id, &cell_id).await {
+    if let Err(e) = state
+        .db
+        .register_user_with_mode(&discord_id, &cell_id, IdentityMode::Hosted, None)
+        .await
+    {
         let embed = embeds::error_embed("Database Error", &e.to_string());
         let _ = command
             .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
