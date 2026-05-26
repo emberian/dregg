@@ -35,6 +35,10 @@ pyana-types = { path = "../types" }
 # Federation (pure types + consensus orchestration). The `runtime` feature
 # (tokio + crossbeam transport) is non-wasm32, hence default-features = false.
 pyana-federation = { path = "../federation", default-features = false }
+# Observability (EventLog + Emitter for live <pyana-activity> feed). All
+# heavy deps (circuit/federation) already gated in its own Cargo.toml;
+# wasm consumes with default-features=false for wasm32 safety.
+pyana-observability = { path = "../observability", default-features = false }
 
 # Token crate without biscuit (biscuit-auth has complex deps)
 pyana-token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }

@@ -88,13 +88,12 @@ function variantRows(auth, html) {
 
   if (kind === 'CapTpDelivered') {
     const cert = auth.handoff_cert_summary || {};
+    const certData = JSON.stringify({ handoff_cert_summary: cert });
     return html`
       <dt>introducer pk</dt><dd><code title=${auth.introducer_pk}>${shortHex(auth.introducer_pk, 16)}</code></dd>
       <dt>sender pk</dt><dd><code title=${auth.sender_pk}>${shortHex(auth.sender_pk, 16)}</code></dd>
       <dt>sender sig</dt><dd><code title=${auth.sender_signature}>${shortHex(auth.sender_signature, 16)}</code></dd>
-      <dt>cert: introducer fed</dt><dd><code title=${cert.introducer_federation}>${shortHex(cert.introducer_federation, 16)}</code></dd>
-      <dt>cert: recipient pk</dt><dd><code title=${cert.recipient_pk}>${shortHex(cert.recipient_pk, 16)}</code></dd>
-      <dt>cert: nonce</dt><dd><code title=${cert.nonce}>${shortHex(cert.nonce, 16)}</code></dd>
+      <dt>cert</dt><dd><pyana-handoff-certificate data=${certData} mode="compact"></pyana-handoff-certificate></dd>
     `;
   }
 

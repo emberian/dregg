@@ -27,7 +27,13 @@ export function initEffectVm(wasm) {
   const section = document.getElementById('section-effect-vm');
   if (!section) return;
 
-  section.innerHTML = `
+  // §4.9 Tier 2 migration note (FOLLOWUP-05) injected at init (after full read)
+  const migrationNote = `
+    <div style="background:#fff8e6;border:1px solid #f0d080;padding:0.25rem 0.5rem;font-size:0.75rem;margin:0.3rem 0;">
+      <strong>§4.9 Migration:</strong> Superseded by platform <code>&lt;pyana-turn-debugger&gt;</code> (AIR trace table, step-by-step). Educational content preserved (learn carve-out per plan).
+      <a href="/starbridge.html?at=pyana://turn/demo" target="_blank">Deep-link to Starbridge now →</a>
+    </div>`;
+  section.innerHTML = migrationNote + `
     <div class="pg-section__header">
       <h2>Effect VM</h2>
       <p>Build an effect sequence, watch the execution trace form, check constraints, and prove it.</p>

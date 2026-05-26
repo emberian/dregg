@@ -54,7 +54,10 @@ async fn submit(cfg: &Config, ctx: &Context, file: &str) -> Result<(), Box<dyn s
         return Ok(());
     }
 
-    let turn_id = data["turn_id"].as_str().unwrap_or("?");
+    let turn_id = data["turn_hash"]
+        .as_str()
+        .or_else(|| data["turn_id"].as_str())
+        .unwrap_or("?");
     let status_str = data["status"].as_str().unwrap_or("submitted");
     ctx.success(&format!("Turn submitted: {}", abbrev_hex(turn_id, 8, 4)));
     ctx.kv("Status", status_str);

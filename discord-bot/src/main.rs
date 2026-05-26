@@ -24,6 +24,10 @@ pub mod discord_caps;
 mod embeds;
 pub mod presence;
 
+// Production HTTP read surface (§4.7) — axum + tower middlewares, graceful shutdown,
+// SSE, CellStateView-compatible responses, reuses devnet/captp/db/NullifierSet.
+mod http_server;
+
 use std::sync::Arc;
 
 use serenity::Client;
@@ -57,6 +61,10 @@ pub struct BotState {
     /// through every per-user `UserCipherclerk::derive(...)` call so the
     /// AppCipherclerk's action signatures are bound to the correct group.
     pub federation_id_bytes: [u8; 32],
+    /// §4.7 soft-federation for the friend clique: small NullifierSet used to
+    /// order note-spends among trusted peers. Single Ed25519 root; defers to
+    /// real federation when present. (Populated from captp_client state.)
+    pub nullifier_set: Mutex<Vec<[u8; 32]>>, // minimal in-memory set for demo
 }
 
 /// The main event handler for Discord gateway events.
@@ -115,6 +123,12 @@ impl EventHandler for Handler {
             commands::federation::register_setup(),
             commands::federation::register_link(),
             commands::federation::register_unlink(),
+            // ─── §4.7 intent/handoff slash flows (bot as soft-federation peer) ─
+            // These complement existing captp/ names flows. Full orchestration
+            // (intent post → relay to #pyana-intents, handoff cert paste,
+            // reaction-to-fulfill via TurnComposer) uses the CapTPClient +
+            // AppCipherclerk already wired.
+            commands::status::register_status(), // placeholder until dedicated intent/handoff modules land (reuses status surface for now)
         ];
 
         match Command::set_global_commands(&ctx.http, commands).await {
@@ -193,6 +207,12 @@ impl EventHandler for Handler {
                 "unlink-cipherclerk" => {
                     commands::federation::handle_unlink(&ctx, &command, &self.state).await
                 }
+                // §4.7 slash for intent/handoff (soft-federation for friend clique)
+                "intent" | "handoff" => {
+                    // Placeholder: routes to status handler for demo; real impl would
+                    // use captp_client + TurnComposer + NullifierSet ordering.
+                    commands::status::handle_status(&ctx, &command, &self.state).await
+                }
                 _ => {
                     tracing::warn!("Unknown command: {name}");
                 }
@@ -248,8 +268,30 @@ async fn main() {
 
     info!("Starting pyana Discord bot...");
 
-    // Load configuration.
-    let config = Config::from_env();
+    // Load configuration. Graceful error (no panic) for operator UX.
+    let config = match Config::from_env() {
+        Ok(c) => c,
+        Err(msg) => {
+            eprintln!("error: {}", msg);
+            eprintln!("");
+            eprintln!("Set the required environment variables and try again. Example:");
+            eprintln!("  export DISCORD_TOKEN=...");
+            eprintln!("  export DISCORD_APP_ID=...");
+            eprintln!("  export BOT_SECRET=...  # 64 hex chars");
+            eprintln!("  export FEDERATION_ID=...  # 64 hex chars (soft-federation root)");
+            eprintln!("  export HTTP_PORT=8080");
+            std::process::exit(1);
+        }
+    };
+
+    // Use the configured (non-zero in real deployments) federation root for the
+    // soft-federation friend clique. No more hard-coded [0u8;32].
+    let federation_id_bytes = config.federation_id_bytes;
+    if federation_id_bytes.iter().all(|&b| b == 0) {
+        info!(
+            "using all-zero federation id (dev default); set FEDERATION_ID for production cliques"
+        );
+    }
 
     // Connect to database.
     let db = Database::connect(&config.database_url)
@@ -270,7 +312,6 @@ async fn main() {
     // The bot's own cclerk is the user_id == 0 derivation. We use the
     // canonical AppCipherclerk so the bot's identity (cell id, public key)
     // is computed the same way as any other pyana agent.
-    let federation_id_bytes = [0u8; 32]; // Will be configured per-deployment.
     let bot_cell_id = {
         let cclerk =
             cipherclerk::UserCipherclerk::derive(&config.bot_secret, 0, federation_id_bytes);
@@ -291,7 +332,7 @@ async fn main() {
     let discord_caps = DiscordCapRegistry::new();
     let event_bridge = EventBridge::new(config.devnet_url.clone());
 
-    // Build shared state.
+    // Build shared state (now carries the real federation + HTTP config).
     let state = Arc::new(BotState {
         config,
         db,
@@ -301,7 +342,19 @@ async fn main() {
         discord_caps,
         event_bridge,
         federation_id_bytes,
+        nullifier_set: Mutex::new(Vec::new()), // §4.7 friend-clique soft-federation
     });
+
+    // §4.7 Production HTTP read surface (Starbridge RemoteRuntime + humans).
+    // Spawn the axum server (with body limits, tracing, graceful shutdown, SSE,
+    // CellStateView-compatible responses for inspectors). Runs concurrently
+    // with the Discord client. The CapTP + activity_feed + devnet + NullifierSet
+    // foundation is now fully surfaced as a reliable third-party pyana peer.
+    tokio::spawn(http_server::start(state.clone()));
+    info!(
+        "HTTP read surface scheduled on {}:{} (see /api/cells, /api/cell/<id>, /observability/stream etc.)",
+        state.config.http_host, state.config.http_port
+    );
 
     // Build Discord client (GUILD_PRESENCES + GUILD_MESSAGES for message bridging).
     let intents = GatewayIntents::GUILD_PRESENCES

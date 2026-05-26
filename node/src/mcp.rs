@@ -5994,8 +5994,12 @@ fn parse_attributes_into(
         if !schema.has_attribute(k) {
             return Err(format!("attribute '{k}' not in schema '{}'", schema.name));
         }
-        let attr_value = if let Some(i) = v.as_i64() {
-            AttrValue::Integer(i)
+        let attr_value = if let Some(u) = v.as_u64() {
+            AttrValue::Integer(u)
+        } else if let Some(i) = v.as_i64() {
+            return Err(format!(
+                "attribute '{k}' integer value must be non-negative"
+            ));
         } else if let Some(s) = v.as_str() {
             AttrValue::Text(s.into())
         } else {
@@ -6068,8 +6072,8 @@ async fn tool_issue_credential(params: &Value, state: &NodeState) -> McpToolResu
     // Mint the credential.  Use a deterministic IssuerKeys derived from
     // the node's pubkey so the issuance is reproducible across replays.
     let issuer_keys = SbIssuerKeys::new(
-        *blake3::derive_key("pyana-mcp-issuer-root-v1", &node_pk).as_bytes(),
-        *blake3::derive_key("pyana-mcp-issuer-federation-v1", &node_pk).as_bytes(),
+        blake3::derive_key("pyana-mcp-issuer-root-v1", &node_pk),
+        blake3::derive_key("pyana-mcp-issuer-federation-v1", &node_pk),
         node_pk.to_vec(),
         "pyana-node-mcp",
     );

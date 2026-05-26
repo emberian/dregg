@@ -60,40 +60,49 @@ fn build_valid_entry(
     receipt: pyana_turn::TurnReceipt,
 ) -> ReplayEntry {
     let state = CellState::new(balance, 0);
-    let (trace, pi_bb) = generate_effect_vm_trace(&state, effects);
+    let (trace, mut pi) = generate_effect_vm_trace(&state, effects);
     let air = EffectVmAir::new(trace.len());
-    let proof = stark::prove(&air, &trace, &pi_bb);
-    let proof_bytes = proof_to_bytes(&proof);
 
-    // Build PI u32 vector, then patch in turn-identity slots from the receipt.
-    let mut pi_u32: Vec<u32> = pi_bb.iter().map(|b| b.as_u32()).collect();
-
-    // Ensure the PI is long enough to hold all turn-identity slots.
-    let needed = (pi::IS_AGENT_CELL + 1)
+    // Patch the turn-identity slots (from receipt) into the PI *before* proving.
+    // This ensures the proof is generated against the exact PI vector that will
+    // be supplied at verify time (fixes "Public inputs mismatch").
+    // Extended needed to pi::BASE_COUNT to cover the full current layout
+    // (Stage 7-γ turn id, sovereign teeth, slot-caveat manifest, bridge value
+    // limbs, emit-event hashes, cross-effect deps, witness index map,
+    // unilateral attestations, etc.) produced by generate_effect_vm_trace_ext
+    // + EffectVmContext population. All non-identity fields (commits, balances,
+    // per-cell effects_hash, actor_nonce from state, etc.) are preserved from
+    // the generate path.
+    let needed = pi::BASE_COUNT
         .max(pi::TURN_HASH_BASE + pi::TURN_HASH_LEN)
         .max(pi::PREVIOUS_RECEIPT_HASH_BASE + pi::PREVIOUS_RECEIPT_HASH_LEN);
-    if pi_u32.len() < needed {
-        pi_u32.resize(needed, 0);
+    if pi.len() < needed {
+        pi.resize(needed, BabyBear::ZERO);
     }
 
     // TURN_HASH binding.
     let th = canonical_32_to_felts_4(&receipt.turn_hash);
     for i in 0..pi::TURN_HASH_LEN {
-        pi_u32[pi::TURN_HASH_BASE + i] = th[i].as_u32();
+        pi[pi::TURN_HASH_BASE + i] = th[i];
     }
 
     // PREVIOUS_RECEIPT_HASH binding.
-    if pi_u32.len() >= pi::PREVIOUS_RECEIPT_HASH_BASE + pi::PREVIOUS_RECEIPT_HASH_LEN {
+    if pi.len() >= pi::PREVIOUS_RECEIPT_HASH_BASE + pi::PREVIOUS_RECEIPT_HASH_LEN {
         let prev = canonical_32_to_felts_4(&receipt.previous_receipt_hash.unwrap_or([0u8; 32]));
         for i in 0..pi::PREVIOUS_RECEIPT_HASH_LEN {
-            pi_u32[pi::PREVIOUS_RECEIPT_HASH_BASE + i] = prev[i].as_u32();
+            pi[pi::PREVIOUS_RECEIPT_HASH_BASE + i] = prev[i];
         }
     }
 
     // IS_AGENT_CELL = 1.
-    if pi_u32.len() > pi::IS_AGENT_CELL {
-        pi_u32[pi::IS_AGENT_CELL] = 1;
+    if pi.len() > pi::IS_AGENT_CELL {
+        pi[pi::IS_AGENT_CELL] = BabyBear::ONE;
     }
+
+    let proof = stark::prove(&air, &trace, &pi);
+    let proof_bytes = proof_to_bytes(&proof);
+
+    let pi_u32: Vec<u32> = pi.iter().map(|b| b.as_u32()).collect();
 
     // Build the witness bundle from the trace.
     let trace_rows: Vec<Vec<u32>> = trace

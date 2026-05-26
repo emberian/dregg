@@ -16,7 +16,8 @@
  *   - receipt chain                      — runtime.listReceipts(agentIdx)
  *   - held tokens (HeldCapability list)  — runtime._wasm.get_capability_tree
  *     re-exposes held_tokens indirectly; direct token listing is NOT yet a
- *     first-class wasm export → surfaced as TODO below
+ *     first-class wasm export → now surfaced via <pyana-attenuated-token> + <pyana-bearer-cap>
+ *     (Wave 3 inspectors; see their demo attenuate flows + cipherclerk Holdings tab)
  *   - sovereign cells                    — derived from listCells() filtered by
  *     matching public_key
  *

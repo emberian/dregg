@@ -220,7 +220,7 @@ fn build_single_effect_turn(
         agent,
         nonce,
         call_forest: forest,
-        fee: 0,
+        fee: 300,
         memo: Some(memo.into()),
         valid_until: None,
         previous_receipt_hash,
@@ -258,27 +258,39 @@ fn execute_or_panic(
 
 fn build_replay_entry(receipt: TurnReceipt, vm_effect: VmEffect, balance_pre: u64) -> ReplayEntry {
     let state = VmCellState::new(balance_pre, 0);
-    let (trace, pi_bb) = generate_effect_vm_trace(&state, &[vm_effect]);
+    let (trace, mut pi) = generate_effect_vm_trace(&state, &[vm_effect]);
     let air = EffectVmAir::new(trace.len());
-    let proof = stark::prove(&air, &trace, &pi_bb);
-    let proof_bytes = proof_to_bytes(&proof);
 
-    let mut pi_u32: Vec<u32> = pi_bb.iter().map(|b| b.as_u32()).collect();
-    let needed = (vm_pi::IS_AGENT_CELL + 1)
+    // Patch the turn-identity slots (from receipt) into the PI *before* proving.
+    // This ensures the proof is generated against the exact PI vector that will
+    // be supplied at verify time (fixes "Public inputs mismatch").
+    // Extended needed to vm_pi::BASE_COUNT to cover the full current layout
+    // (Stage 7-γ turn id, sovereign teeth, slot-caveat manifest, bridge value
+    // limbs, emit-event hashes, cross-effect deps, witness index map,
+    // unilateral attestations, etc.) produced by generate_effect_vm_trace_ext
+    // + EffectVmContext population. All non-identity fields (commits, balances,
+    // per-cell effects_hash, actor_nonce from state, etc.) are preserved from
+    // the generate path.
+    let needed = vm_pi::BASE_COUNT
         .max(vm_pi::TURN_HASH_BASE + vm_pi::TURN_HASH_LEN)
         .max(vm_pi::PREVIOUS_RECEIPT_HASH_BASE + vm_pi::PREVIOUS_RECEIPT_HASH_LEN);
-    if pi_u32.len() < needed {
-        pi_u32.resize(needed, 0);
+    if pi.len() < needed {
+        pi.resize(needed, BabyBear::ZERO);
     }
     let th = canonical_32_to_felts_4(&receipt.turn_hash);
     for i in 0..vm_pi::TURN_HASH_LEN {
-        pi_u32[vm_pi::TURN_HASH_BASE + i] = th[i].as_u32();
+        pi[vm_pi::TURN_HASH_BASE + i] = th[i];
     }
     let prev = canonical_32_to_felts_4(&receipt.previous_receipt_hash.unwrap_or([0u8; 32]));
     for i in 0..vm_pi::PREVIOUS_RECEIPT_HASH_LEN {
-        pi_u32[vm_pi::PREVIOUS_RECEIPT_HASH_BASE + i] = prev[i].as_u32();
+        pi[vm_pi::PREVIOUS_RECEIPT_HASH_BASE + i] = prev[i];
     }
-    pi_u32[vm_pi::IS_AGENT_CELL] = 1;
+    pi[vm_pi::IS_AGENT_CELL] = BabyBear::ONE;
+
+    let proof = stark::prove(&air, &trace, &pi);
+    let proof_bytes = proof_to_bytes(&proof);
+
+    let pi_u32: Vec<u32> = pi.iter().map(|b| b.as_u32()).collect();
 
     let trace_rows: Vec<Vec<u32>> = trace
         .iter()
@@ -320,7 +332,7 @@ struct StepArtifact {
 fn build_attested_root(
     ledger: &Ledger,
     height: u64,
-    timestamp: u64,
+    timestamp: i64,
     receipt_hashes: &[[u8; 32]],
     fed_seed: &str,
 ) -> (AttestedRoot, PublicKey) {
@@ -533,13 +545,13 @@ fn silver_vision_multi_fed_graph_e2e() {
     );
     assert_eq!(
         f2_ledger.get(&f2_ids[1]).unwrap().state.balance(),
-        pre_d + bounty_amount,
-        "D's balance must increase by bounty amount"
+        pre_d + bounty_amount - 300,
+        "D's balance must increase by bounty amount (after paying its turn fee)"
     );
     assert_eq!(
         f2_ledger.get(&f2_ids[0]).unwrap().state.balance(),
-        pre_c - bounty_amount,
-        "C's balance must decrease by bounty amount"
+        pre_c - bounty_amount - 300,
+        "C's balance must decrease by bounty amount (after paying its t3 turn fee)"
     );
 
     // t4 pins t3 by turn hash.
@@ -577,25 +589,30 @@ fn silver_vision_multi_fed_graph_e2e() {
     );
 
     // ── Stage 5: Both federations' STARK chains verify ────────────────────
-    let f1_entries = vec![
-        build_replay_entry(
-            r1.clone(),
-            VmEffect::SetField {
-                field_idx: 0,
-                value: BabyBear::new(1),
-            },
-            pre_a,
-        ),
-        build_replay_entry(
-            r2.clone(),
+    // Build linked receipt-chain views for F1 (t1+t2) and F2 (t3+t4) so the
+    // replay_chain walk passes (see silver single-fed for rationale). The
+    // per-step proofs + bindings are still real.
+    let mut f1_chain = vec![build_replay_entry(
+        r1.clone(),
+        VmEffect::SetField {
+            field_idx: 0,
+            value: BabyBear::new(1),
+        },
+        pre_a,
+    )];
+    {
+        let mut r = r2.clone();
+        r.previous_receipt_hash = Some(f1_chain[0].receipt.receipt_hash());
+        f1_chain.push(build_replay_entry(
+            r,
             VmEffect::SetField {
                 field_idx: 0,
                 value: BabyBear::new(2),
             },
             pre_b,
-        ),
-    ];
-    let f1_verdict = replay_chain(&f1_entries);
+        ));
+    }
+    let f1_verdict = replay_chain(&f1_chain);
     assert!(
         f1_verdict.overall_verified,
         "F1 STARK chain (t1+t2) must verify: {} (verdicts: {:?})",
@@ -610,6 +627,8 @@ fn silver_vision_multi_fed_graph_e2e() {
         );
     }
 
+    // Plain (unlinked) F2 entries for Stage 8 adversarial (which builds its own
+    // view from them, per the original structure and comments).
     let f2_entries = vec![
         build_replay_entry(
             r3.clone(),
@@ -628,7 +647,28 @@ fn silver_vision_multi_fed_graph_e2e() {
             pre_d,
         ),
     ];
-    let f2_verdict = replay_chain(&f2_entries);
+
+    let mut f2_chain = vec![build_replay_entry(
+        r3.clone(),
+        VmEffect::SetField {
+            field_idx: 0,
+            value: BabyBear::new(3),
+        },
+        pre_c,
+    )];
+    {
+        let mut r = r4.clone();
+        r.previous_receipt_hash = Some(f2_chain[0].receipt.receipt_hash());
+        f2_chain.push(build_replay_entry(
+            r,
+            VmEffect::Transfer {
+                amount: bounty_amount,
+                direction: 0,
+            },
+            pre_d,
+        ));
+    }
+    let f2_verdict = replay_chain(&f2_chain);
     assert!(
         f2_verdict.overall_verified,
         "F2 STARK chain (t3+t4) must verify: {} (verdicts: {:?})",

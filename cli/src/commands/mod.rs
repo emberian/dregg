@@ -56,7 +56,12 @@ pub async fn post_json(
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        return Err(format!("HTTP {status}: {text}").into());
+        let hint = if status == reqwest::StatusCode::UNPROCESSABLE_ENTITY {
+            " (422: JSON shape mismatch — CLI now emits current node/api.rs request structs; was skew on cell_id/agent/bearer_proof)"
+        } else {
+            ""
+        };
+        return Err(format!("HTTP {status}: {text}{hint}").into());
     }
     let json = resp.json::<serde_json::Value>().await?;
     Ok(json)

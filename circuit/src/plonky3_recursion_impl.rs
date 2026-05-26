@@ -39,8 +39,8 @@ pub mod recursive {
     use p3_circuit_prover::BatchStarkProver;
     use p3_commit::{ExtensionMmcs, Pcs};
     use p3_dft::Radix2DitParallel;
-    use p3_field::extension::BinomialExtensionField;
     use p3_field::Field;
+    use p3_field::extension::BinomialExtensionField;
     use p3_fri::{FriParameters, TwoAdicFriPcs};
     use p3_lookup::logup::LogUpGadget;
     use p3_lookup::symbolic::InteractionSymbolicBuilder;
@@ -55,9 +55,7 @@ pub mod recursive {
         RecursionInput, RecursionOutput, build_and_prove_next_layer, ops::Poseidon2Config,
     };
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-    use p3_uni_stark::{
-        Proof, StarkConfig, StarkGenericConfig, Val, prove, verify,
-    };
+    use p3_uni_stark::{Proof, StarkConfig, StarkGenericConfig, Val, prove, verify};
 
     use crate::field::BabyBear;
     use crate::plonky3_prover::{

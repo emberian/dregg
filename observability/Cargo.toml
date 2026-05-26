@@ -9,7 +9,7 @@ description = "Studio-shape trace event emitter for the pyana turn substrate"
 
 [dependencies]
 pyana-cell = { path = "../cell" }
-pyana-circuit = { path = "../circuit" }
+pyana-circuit = { path = "../circuit", default-features = false }
 pyana-turn = { path = "../turn" }
 pyana-captp = { path = "../captp" }
 pyana-federation = { path = "../federation", default-features = false }

@@ -89,9 +89,12 @@
     <script type="module" src="/pkg/pyana_wasm.js"></script>
     <script type="module" src="/_includes/studio/runtimes.js"></script>
     <!-- The shared inspector registry lazy-imports this app's
-         inspectors and turn-builders, but we also load them directly
-         here so the page is self-contained when served outside the
-         shared host. -->
+         inspectors and turn-builders (now canonical typed versions in
+         shared/ per §4.8), plus the legacy full impl for standalone.
+         This page is the first end-to-end starbridge-app demonstration
+         (register name → see cell-program slot caveats in <pyana-name>
+         which reuses platform <pyana-cell> etc.). Surfaced via the new
+         Apps tab + <pyana-app-list> in /starbridge/. -->
     <script type="module" src="/starbridge-apps/shared/inspectors/index.js"></script>
     <script type="module" src="./inspectors.js"></script>
     <script type="module" src="./turn-builders.js"></script>

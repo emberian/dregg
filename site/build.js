@@ -323,6 +323,27 @@ function build() {
     copyDir(studioSrc, studioDst);
   }
 
+  // @pyana/sdk (built from sdk-ts/) — for §4.6 wiring into runtime-in-memory
+  // and starbridge-apps. Served under /pkg/@pyana/sdk/ so browser ESM imports
+  // from studio pages and spikes can `import { PyanaRuntime } from '/pkg/@pyana/sdk/index.mjs'`.
+  // The dist is CJS+ESM bundle; we copy the ESM entry + CJS for completeness.
+  const sdkSrcDir = path.join(__dirname, '..', 'sdk-ts', 'dist');
+  if (fs.existsSync(sdkSrcDir)) {
+    const sdkDstDir = path.join(DIST, 'pkg', '@pyana', 'sdk');
+    ensureDir(sdkDstDir);
+    const mjsSrc = path.join(sdkSrcDir, 'index.mjs');
+    const jsSrc = path.join(sdkSrcDir, 'index.js');
+    if (fs.existsSync(mjsSrc)) {
+      fs.copyFileSync(mjsSrc, path.join(sdkDstDir, 'index.mjs'));
+      console.log('  Copy: pkg/@pyana/sdk/index.mjs (from sdk-ts/dist for SDK wiring)');
+    }
+    if (fs.existsSync(jsSrc)) {
+      fs.copyFileSync(jsSrc, path.join(sdkDstDir, 'index.js'));
+    }
+  } else {
+    console.log('  Skip: @pyana/sdk (no dist/ yet; run `cd sdk-ts && npm run build`)');
+  }
+
   console.log('\nDone.');
 }
 

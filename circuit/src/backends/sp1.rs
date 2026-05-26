@@ -1707,7 +1707,6 @@ impl HostSubstitution {
     fn get(&self, var: u32) -> Option<u64> {
         self.bindings.get(var as usize).copied().flatten()
     }
-
 }
 
 fn unify_atom_host(

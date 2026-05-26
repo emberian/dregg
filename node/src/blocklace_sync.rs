@@ -43,19 +43,22 @@ use crate::state::{NodeEvent, NodeState};
 /// Gossip topic for blocklace dissemination messages.
 pub const TOPIC_BLOCKLACE: &str = "pyana/blocklace";
 
-/// Produce a blocklace checkpoint every N finalized blocks.
+/// Default for blocklace checkpoint production interval (finalized blocks).
+/// Overridable via --blocklace-checkpoint-interval for devnet vs. production tuning.
 /// Checkpoints enable new nodes to fast-sync from a recent known-good state
 /// instead of replaying the full block history.
-pub const CHECKPOINT_INTERVAL: u64 = 100;
+pub const DEFAULT_BLOCKLACE_CHECKPOINT_INTERVAL: u64 = 100;
 
 /// Maximum number of blocklace checkpoints to retain. Older checkpoints are pruned
 /// to bound storage growth.
 const MAX_RETAINED_CHECKPOINTS: usize = 5;
 
 /// Default COD budget for optimistic execution (number of outstanding turns).
+/// Overridable via --blocklace-cod-budget CLI flag (tune for devnet speed vs prod stability).
 const DEFAULT_COD_BUDGET: usize = 8;
 
 /// Default timeout for constitutional waves (milliseconds).
+/// Overridable via --blocklace-wave-timeout-ms .
 const DEFAULT_CONSTITUTION_TIMEOUT_MS: u64 = 10_000;
 
 // ─── Gossip Message Types ───────────────────────────────────────────────────
@@ -113,6 +116,13 @@ pub struct BlocklaceHandle {
     pub auto_approve_joins: bool,
     /// Node state handle for persisting blocks to the store on mutations.
     pub node_state: NodeState,
+
+    // Blocklace configurability fields (populated from CLI or safe defaults).
+    // Allows operators to tune for devnet (low latency, small budgets) vs production
+    // (larger windows, conservative timeouts) without "wrong way" source hacks.
+    pub checkpoint_interval: u64,
+    pub cod_budget: usize,
+    pub constitution_timeout_ms: u64,
 }
 
 /// A finalized block's payload, ready for execution by the finality executor.
@@ -438,7 +448,13 @@ pub async fn run_blocklace_sync(
     state: NodeState,
     gossip_port: u16,
     auto_approve_joins: bool,
+    blocklace_checkpoint_interval: u64,
+    cod_budget: usize,
+    constitution_timeout_ms: u64,
 ) -> Option<BlocklaceHandle> {
+    // Blocklace tuning params (from CLI --blocklace-* or safe defaults in main).
+    // This is the core of making blocklace easy to configure/enable/disable/tune
+    // for different envs without wrong-way const edits or forks.
     let peers = {
         let s = state.read().await;
         s.peers.clone()
@@ -482,8 +498,8 @@ pub async fn run_blocklace_sync(
         "initializing blocklace consensus"
     );
 
-    // Initialize the constitution with our participant set.
-    let constitution = Constitution::new(participants.clone(), DEFAULT_CONSTITUTION_TIMEOUT_MS);
+    // Initialize the constitution with our participant set. (tunable via CLI)
+    let constitution = Constitution::new(participants.clone(), constitution_timeout_ms);
     let constitution_manager = ConstitutionManager::new(constitution);
 
     // Attempt to restore blocklace from persistent storage.
@@ -515,7 +531,7 @@ pub async fn run_blocklace_sync(
             }
         }
     };
-    let bridge = PyanaBlocklaceBridge::new(DEFAULT_COD_BUDGET);
+    let bridge = PyanaBlocklaceBridge::new(cod_budget);
 
     // Create the PeerNode (QUIC endpoint) for gossip.
     let bind_addr_str = format!("0.0.0.0:{gossip_port}");
@@ -663,6 +679,10 @@ pub async fn run_blocklace_sync(
         finality_notify: finality_notify.clone(),
         auto_approve_joins, // F-CRIT-2: gated by main.rs on --auto-approve-joins CLI flag OR .devnet marker
         node_state: state.clone(),
+        // Blocklace tunables — enables env-specific config (devnet fast vs prod safe) without source edits.
+        checkpoint_interval: blocklace_checkpoint_interval,
+        cod_budget,
+        constitution_timeout_ms,
     };
 
     info!("blocklace gossip layer initialized, processing messages");
@@ -1489,8 +1509,8 @@ async fn maybe_produce_checkpoint(state: &NodeState, handle: &BlocklaceHandle) {
         *e as u64
     };
 
-    // Only produce checkpoints at interval boundaries.
-    if executed_count == 0 || executed_count % CHECKPOINT_INTERVAL != 0 {
+    // Only produce checkpoints at interval boundaries. (uses the configured value for this run)
+    if executed_count == 0 || executed_count % handle.checkpoint_interval != 0 {
         return;
     }
 

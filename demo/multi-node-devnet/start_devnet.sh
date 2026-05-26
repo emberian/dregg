@@ -35,10 +35,22 @@ devnet_step "step 1 — generate genesis for each federation"
 
 for fed in "${FEDERATIONS[@]}"; do
     gdir=$(fed_genesis_dir "$fed")
-    if [ -d "$gdir" ] && [ -f "$gdir/genesis.json" ]; then
+    # Robust reuse check (P0 for clean reset+start flows): only reuse if the
+    # *complete* expected outputs from `pyana-node genesis` exist (genesis.json
+    # + all per-node keys). Partial dirs (e.g. post-reset races, interrupted
+    # prior runs) force a fresh generation. This makes devnet bringup reliable
+    # and "correct by default" after ./reset_devnet.sh.
+    complete=0
+    if [ -d "$gdir" ] && [ -f "$gdir/genesis.json" ] \
+       && [ -f "$gdir/node-0.key" ] && [ -f "$gdir/node-1.key" ] && [ -f "$gdir/node-2.key" ]; then
+        complete=1
+    fi
+    if [ "$complete" = "1" ]; then
         devnet_dim "$fed: reusing existing genesis at $gdir"
         continue
     fi
+    # Incomplete or missing — force clean regen.
+    rm -rf "$gdir"
     mkdir -p "$gdir"
     if "$NODE_BIN" genesis \
             --validators "$NODES_PER_FED" \

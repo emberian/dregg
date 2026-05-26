@@ -54,11 +54,11 @@
   }
 
   // src/background.ts
-  var LEGACY_STORAGE_KEY = "pyana_cipherclerk";
-  var LEGACY_ENCRYPTED_STATE_KEY = "pyana_wallet_encrypted";
   var STORAGE_KEY = "pyana_cipherclerk";
   var ENCRYPTED_STATE_KEY = "pyana_cipherclerk_encrypted";
   var MNEMONIC_KEY = "pyana_mnemonic_encrypted";
+  var LEGACY_STORAGE_KEY = "pyana_cipherclerk";
+  var LEGACY_ENCRYPTED_STATE_KEY = "pyana_wallet_encrypted";
   var ALLOWED_ORIGINS_KEY = "pyana_allowed_origins";
   var NODE_CONFIG_KEY = "pyana_node_config";
   var DEFAULT_NODE_URL = "https://devnet.pyana.fg-goose.online";
@@ -75,6 +75,7 @@
   var DEFAULT_INTENT_EXPIRY_MS = 5 * 60 * 1e3;
   var INTENT_GC_INTERVAL = 6e4;
   var LIVE_REFS_KEY = "pyana_live_refs";
+  var KNOWN_FEDERATIONS_KEY = "pyana_known_federations";
   var WS_MAX_RECONNECT_DELAY = 6e4;
   var WS_AUTH_TIMEOUT_MS = 5e3;
   var nodeConfig = {
@@ -367,6 +368,23 @@
     return { publicKey: result.public_key, secretKey: result.secret_key };
   }
   var subscribers = /* @__PURE__ */ new Map();
+  var activityFeed = {
+    schema_version: 1,
+    event_count: 0,
+    events: []
+  };
+  function pushActivity(kind, payload, envelopeExtras = {}) {
+    const env = {
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      seq: activityFeed.event_count,
+      actor: "extension-cclerk",
+      ...envelopeExtras
+    };
+    activityFeed.events.push({ kind, envelope: env, payload });
+    activityFeed.event_count = activityFeed.events.length;
+    if (activityFeed.events.length > 200) activityFeed.events.shift();
+    notifySubscribers("activity", activityFeed);
+  }
   function notifySubscribers(event, payload) {
     for (const [tabId, events] of subscribers) {
       if (events.has(event)) {
@@ -378,8 +396,23 @@
   }
   var state = null;
   var cclerkPassphrase = null;
+  async function migrateLegacyStorageKeys() {
+    const newCheck = await chrome.storage.local.get(ENCRYPTED_STATE_KEY);
+    if (newCheck[ENCRYPTED_STATE_KEY]) return;
+    const oldEncrypted = await chrome.storage.local.get(LEGACY_ENCRYPTED_STATE_KEY);
+    if (oldEncrypted[LEGACY_ENCRYPTED_STATE_KEY]) {
+      await chrome.storage.local.set({ [ENCRYPTED_STATE_KEY]: oldEncrypted[LEGACY_ENCRYPTED_STATE_KEY] });
+      await chrome.storage.local.remove(LEGACY_ENCRYPTED_STATE_KEY);
+    }
+    const oldPlain = await chrome.storage.local.get(LEGACY_STORAGE_KEY);
+    if (oldPlain[LEGACY_STORAGE_KEY]) {
+      await chrome.storage.local.set({ [STORAGE_KEY]: oldPlain[LEGACY_STORAGE_KEY] });
+      await chrome.storage.local.remove(LEGACY_STORAGE_KEY);
+    }
+  }
   async function loadState() {
     if (state) return state;
+    await migrateLegacyStorageKeys();
     const stored = await chrome.storage.local.get(STORAGE_KEY);
     if (stored[STORAGE_KEY]) {
       state = stored[STORAGE_KEY];
@@ -702,11 +735,11 @@
     if (!wasmLoaded || !wasm) {
       return { allowed: false, error: "Cryptographic module unavailable. Cannot authorize securely." };
     }
-    const cclerk = await loadState();
-    if (cclerk.locked) {
+    const cc = await loadState();
+    if (cc.locked) {
       return { allowed: false, error: "Cipherclerk is locked" };
     }
-    const matchingToken = cclerk.tokens.find(
+    const matchingToken = cc.tokens.find(
       (t) => t.actions.includes(request.action) && (t.resource === "*" || t.resource === request.resource) && (!t.expiry || t.expiry > Date.now())
     );
     if (!matchingToken) {
@@ -722,8 +755,8 @@
     );
     const proof = generateProof(witness, mode);
     const receiptHash = Array.from(proof.slice(0, 16)).map((b) => b.toString(16).padStart(2, "0")).join("");
-    cclerk.receiptChain.push(receiptHash);
-    cclerk.log.push({
+    cc.receiptChain.push(receiptHash);
+    cc.log.push({
       action: request.action,
       resource: request.resource,
       allowed: true,
@@ -753,7 +786,7 @@
           }
         }
       } catch (_e) {
-        const stateRootInput = cclerk.receiptChain.length > 0 ? cclerk.receiptChain[cclerk.receiptChain.length - 1] : "0";
+        const stateRootInput = cc.receiptChain.length > 0 ? cc.receiptChain[cc.receiptChain.length - 1] : "0";
         requireWasm("authorize:blake3_hash");
         const stateRootHash = wasm.blake3_hash(stateRootInput);
         stateRoot = parseInt(stateRootHash.slice(0, 8), 16) >>> 0;
@@ -810,12 +843,13 @@
       allowed: true,
       mode
     });
+    pushActivity("authorization", { auth_kind: mode, action: request.action, resource: request.resource }, { source: "cclerk" });
     return result;
   }
   async function canAuthorize(request) {
-    const cclerk = await loadState();
-    if (cclerk.locked) return false;
-    const matchingToken = cclerk.tokens.find(
+    const cc = await loadState();
+    if (cc.locked) return false;
+    const matchingToken = cc.tokens.find(
       (t) => t.actions.includes(request.action) && (t.resource === "*" || t.resource === request.resource) && (!t.expiry || t.expiry > Date.now())
     );
     if (!matchingToken) return false;
@@ -896,11 +930,11 @@
     });
   }
   async function authorizeWithDisclosure(request, origin) {
-    const cclerk = await loadState();
-    if (cclerk.locked) {
+    const cc = await loadState();
+    if (cc.locked) {
       return { allowed: false, error: "Cipherclerk is locked" };
     }
-    const matchingToken = cclerk.tokens.find(
+    const matchingToken = cc.tokens.find(
       (t) => t.actions.includes(request.action) && (t.resource === "*" || t.resource === request.resource) && (!t.expiry || t.expiry > Date.now())
     );
     if (!matchingToken) {
@@ -978,7 +1012,7 @@
           if (!validatePopupSender(message, sender, nonce, "provision.html")) return;
           chrome.runtime.onMessage.removeListener(listener);
           if (message.accepted) {
-            const cclerk = await loadState();
+            const cc = await loadState();
             const token = {
               id: `tok_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
               actions: tokenData.actions || [],
@@ -987,7 +1021,7 @@
               issuer: tokenData.issuer || null,
               provisioned: Date.now()
             };
-            cclerk.tokens.push(token);
+            cc.tokens.push(token);
             await saveState();
             resolve({ accepted: true, tokenId: token.id });
           } else {
@@ -1167,8 +1201,8 @@
   setInterval(gcIntentPool, INTENT_GC_INTERVAL);
   var liveRefs = /* @__PURE__ */ new Map();
   async function shareCapability(cellId) {
-    const cclerk = await loadState();
-    if (cclerk.locked) return { error: "Cipherclerk is locked" };
+    const cc = await loadState();
+    if (cc.locked) return { error: "Cipherclerk is locked" };
     const resp = await nodeRequest(nodeConfig, "/turns/bearer-auth", {
       method: "POST",
       body: JSON.stringify({ cell_id: cellId })
@@ -1177,13 +1211,13 @@
     const nodeId = resp.data?.node_id || "local";
     const secret = resp.data?.secret || "";
     const uri = `pyana://${nodeId}/${cellId}/${secret}`;
-    cclerk.log.push({ action: "shareCapability", resource: cellId, allowed: true, timestamp: Date.now(), mode: "captp" });
+    cc.log.push({ action: "shareCapability", resource: cellId, allowed: true, timestamp: Date.now(), mode: "captp" });
     await saveState();
     return { uri, cellId, nodeId };
   }
   async function acceptCapability(uri, tabId) {
-    const cclerk = await loadState();
-    if (cclerk.locked) return { error: "Cipherclerk is locked" };
+    const cc = await loadState();
+    if (cc.locked) return { error: "Cipherclerk is locked" };
     if (!uri.startsWith("pyana://")) return { error: "Invalid URI: must start with pyana://" };
     const parts = uri.replace("pyana://", "").split("/");
     if (parts.length < 3) return { error: "Invalid URI format. Expected: pyana://<node>/<cell>/<secret>" };
@@ -1205,13 +1239,13 @@
     };
     liveRefs.set(refId, liveRef);
     await persistLiveRefs();
-    cclerk.log.push({ action: "acceptCapability", resource: cellId, allowed: true, timestamp: Date.now(), mode: "captp" });
+    cc.log.push({ action: "acceptCapability", resource: cellId, allowed: true, timestamp: Date.now(), mode: "captp" });
     await saveState();
     return { refId, cellId, nodeId, permissions: liveRef.permissions };
   }
   async function createHandoff(cellId, recipientPk) {
-    const cclerk = await loadState();
-    if (cclerk.locked) return { error: "Cipherclerk is locked" };
+    const cc = await loadState();
+    if (cc.locked) return { error: "Cipherclerk is locked" };
     const resp = await nodeRequest(nodeConfig, "/turns/peer-exchange", {
       method: "POST",
       body: JSON.stringify({ cell_id: cellId, recipient_pk: recipientPk })
@@ -1251,8 +1285,8 @@
     cleanupTabRefs(tabId);
   });
   async function mountService(path, sturdyRef, kind, tags) {
-    const cclerk = await loadState();
-    if (cclerk.locked) return { error: "Cipherclerk is locked" };
+    const cc = await loadState();
+    if (cc.locked) return { error: "Cipherclerk is locked" };
     const resp = await nodeRequest(nodeConfig, "/registry/mount", {
       method: "POST",
       body: JSON.stringify({ path, uri: sturdyRef, kind: kind || "service", tags: tags || [] })
@@ -1274,8 +1308,8 @@
     return resp.data || {};
   }
   async function storageWrite(dataBase64) {
-    const cclerk = await loadState();
-    if (cclerk.locked) return { error: "Cipherclerk is locked" };
+    const cc = await loadState();
+    if (cc.locked) return { error: "Cipherclerk is locked" };
     const binary = Uint8Array.from(atob(dataBase64), (c) => c.charCodeAt(0));
     const resp = await nodeRequest(nodeConfig, "/files/write", {
       method: "POST",
@@ -1314,113 +1348,125 @@
     };
   }
   async function proposeRoutes(routes) {
-    const cclerk = await loadState();
-    if (cclerk.locked) return { error: "Cipherclerk is locked" };
-    const resp = await nodeRequest(nodeConfig, "/turn/atomic", {
-      method: "POST",
-      body: JSON.stringify({ type: "route-update", args: { routes } })
-    });
-    if (!resp.ok) return { error: `Proposal failed: ${resp.error}` };
-    return { proposalId: resp.data?.proposal_id || "", submitted: true };
+    const cc = await loadState();
+    if (cc.locked) return { error: "Cipherclerk is locked" };
+    if (!cc.secretKey) return { error: "Cipherclerk secret key not available" };
+    if (cc.needsPassphraseSetup) {
+      return { error: "Set a cipherclerk passphrase before signing federation proposals." };
+    }
+    requireWasm("proposeRoutes");
+    const w = wasm;
+    try {
+      const built = w.cipherclerk_make_action_turn(JSON.stringify({
+        sender_privkey: cc.secretKey,
+        method: "propose_routes",
+        memo_json: JSON.stringify({ routes })
+      }));
+      const resp = await nodeRequest(nodeConfig, "/turns/submit", {
+        method: "POST",
+        body: JSON.stringify({
+          turn_id: built.turn_id,
+          turn_bytes: Array.from(built.turn_bytes),
+          sender_pubkey: cc.publicKey
+        })
+      });
+      if (!resp.ok) return { error: `Proposal failed: ${resp.error}` };
+      return { proposalId: resp.data?.proposal_id || built.turn_id, submitted: true };
+    } catch (e) {
+      const err = e;
+      return { error: err.message || "cipherclerk_make_action_turn failed" };
+    }
   }
   async function voteOnProposal(proposalId, approve) {
-    const cclerk = await loadState();
-    if (cclerk.locked) return { error: "Cipherclerk is locked" };
-    const resp = await nodeRequest(nodeConfig, "/turn/atomic/vote", {
-      method: "POST",
-      body: JSON.stringify({ proposal_id: proposalId, vote: !!approve })
-    });
-    if (!resp.ok) return { error: `Vote failed: ${resp.error}` };
-    return { accepted: resp.data?.accepted !== false, proposalId };
+    const cc = await loadState();
+    if (cc.locked) return { error: "Cipherclerk is locked" };
+    if (!cc.secretKey) return { error: "Cipherclerk secret key not available" };
+    if (cc.needsPassphraseSetup) {
+      return { error: "Set a cipherclerk passphrase before signing federation votes." };
+    }
+    requireWasm("voteOnProposal");
+    const w = wasm;
+    try {
+      const built = w.cipherclerk_make_action_turn(JSON.stringify({
+        sender_privkey: cc.secretKey,
+        method: "vote_on_proposal",
+        memo_json: JSON.stringify({ proposal_id: proposalId, vote: !!approve })
+      }));
+      const resp = await nodeRequest(nodeConfig, "/turns/submit", {
+        method: "POST",
+        body: JSON.stringify({
+          turn_id: built.turn_id,
+          turn_bytes: Array.from(built.turn_bytes),
+          sender_pubkey: cc.publicKey
+        })
+      });
+      if (!resp.ok) return { error: `Vote failed: ${resp.error}` };
+      return { accepted: resp.data?.accepted !== false, proposalId };
+    } catch (e) {
+      const err = e;
+      return { error: err.message || "cipherclerk_make_action_turn failed" };
+    }
   }
   async function signTurn(turnSpec) {
     requireWasm("signTurn");
     const w = wasm;
-    const cclerk = await loadState();
-    if (cclerk.locked) return { error: "Cipherclerk is locked", submitted: false };
-    if (cclerk.needsPassphraseSetup) {
+    const cc = await loadState();
+    if (cc.locked) return { error: "Cipherclerk is locked", submitted: false };
+    if (cc.needsPassphraseSetup) {
       return { error: "Set a cipherclerk passphrase before signing turns.", submitted: false };
     }
-    if (!cclerk.secretKey) return { error: "Cipherclerk secret key not available", submitted: false };
-    let turnData;
-    if (w.build_turn) {
-      turnData = w.build_turn(JSON.stringify({
-        sender_pubkey: cclerk.publicKey,
-        sender_privkey: cclerk.secretKey,
-        action: turnSpec.action,
-        resource: turnSpec.resource || "*",
-        amount: turnSpec.amount || 0,
-        recipient: turnSpec.recipient || null,
-        metadata: turnSpec.metadata || null,
-        timestamp: Date.now()
-      }));
-    } else {
-      const turnJson = JSON.stringify({
-        sender: cclerk.publicKey,
-        action: turnSpec.action,
-        resource: turnSpec.resource || "*",
-        amount: turnSpec.amount || 0,
-        recipient: turnSpec.recipient || null,
-        metadata: turnSpec.metadata || null,
-        timestamp: Date.now()
-      });
-      if (!w.sign_message) {
-        return { error: "WASM sign_message export not available", submitted: false };
-      }
-      const signature = w.sign_message(
-        new Uint8Array(cclerk.secretKey),
-        new TextEncoder().encode(turnJson)
-      );
-      turnData = {
-        turn_id: "js:" + Array.from(crypto.getRandomValues(new Uint8Array(16))).map((b) => b.toString(16).padStart(2, "0")).join(""),
-        turn_bytes: new TextEncoder().encode(turnJson),
-        signature
-      };
+    if (!cc.secretKey) return { error: "Cipherclerk secret key not available", submitted: false };
+    if (!w.build_turn) {
+      throw new Error("build_turn export required (v3 message format)");
     }
-    const resp = await nodeRequest(nodeConfig, "/turns/submit", {
-      method: "POST",
-      body: JSON.stringify({
-        turn_id: turnData.turn_id,
-        turn_bytes: Array.from(turnData.turn_bytes),
-        signature: turnData.signature ? Array.from(turnData.signature) : void 0,
-        sender_pubkey: cclerk.publicKey
-      })
-    });
-    if (!resp.ok) {
-      return { error: `Failed to submit turn: ${resp.error}`, turnId: turnData.turn_id, submitted: false };
-    }
-    cclerk.log.push({ action: turnSpec.action, resource: turnSpec.resource || "*", allowed: true, timestamp: Date.now(), mode: "turn", turnId: turnData.turn_id });
-    await saveState();
-    return { turnId: turnData.turn_id, submitted: true, nodeResult: resp.data };
+    throw new Error("signTurn JSON fallback removed; v3 required. Use pyana.signTurnV3(turnBytes) for postcard-encoded turns from starbridge-apps turn-builders.");
   }
   async function queryBalance() {
-    const cclerk = await loadState();
-    if (cclerk.locked) return { error: "Cipherclerk is locked" };
-    const pubkeyHex = Array.from(cclerk.publicKey).map((b) => b.toString(16).padStart(2, "0")).join("");
+    const cc = await loadState();
+    if (cc.locked) return { error: "Cipherclerk is locked" };
+    const pubkeyHex = Array.from(cc.publicKey).map((b) => b.toString(16).padStart(2, "0")).join("");
     const resp = await nodeRequest(nodeConfig, `/accounts/${pubkeyHex}/balance`);
     if (!resp.ok) return { error: `Failed to query balance: ${resp.error}` };
     return { balance: resp.data?.balance ?? 0 };
   }
+  async function signTurnV3(_turnBytes) {
+    return { error: "signTurnV3: wasm sign_turn_v3 export not yet available", submitted: false };
+  }
+  async function registerFederation(federationId, name, committeePubkeys) {
+    const stored = await chrome.storage.local.get(KNOWN_FEDERATIONS_KEY);
+    const registry = stored[KNOWN_FEDERATIONS_KEY] || {};
+    registry[federationId] = { federationId, name, committeePubkeys, registeredAt: Date.now() };
+    await chrome.storage.local.set({ [KNOWN_FEDERATIONS_KEY]: registry });
+    return { success: true };
+  }
+  async function listKnownFederations() {
+    const stored = await chrome.storage.local.get(KNOWN_FEDERATIONS_KEY);
+    const registry = stored[KNOWN_FEDERATIONS_KEY] || {};
+    return Object.values(registry);
+  }
+  function createCapTpDeliveredAuth(_handoffCertB58, _introducerPk, _senderPk) {
+    return { authBytes: [], error: "createCapTpDeliveredAuth: wasm export not yet available" };
+  }
   async function getCipherclerkState() {
-    const cclerk = await loadState();
+    const cc = await loadState();
     const internalKey = await getInternalEncryptionKey();
     return {
-      locked: cclerk.locked,
-      tokenCount: cclerk.tokens.length,
-      chainLength: cclerk.receiptChain.length,
-      hasMnemonic: cclerk.hasMnemonic || false,
-      mnemonicShown: cclerk.mnemonicShown || false,
+      locked: cc.locked,
+      tokenCount: cc.tokens.length,
+      chainLength: cc.receiptChain.length,
+      hasMnemonic: cc.hasMnemonic || false,
+      mnemonicShown: cc.mnemonicShown || false,
       hasPassphrase: cclerkPassphrase !== null && cclerkPassphrase !== internalKey,
-      needsPassphraseSetup: cclerk.needsPassphraseSetup || false,
-      hasStealthKeys: cclerk.stealthMeta !== null && cclerk.stealthMeta !== void 0,
-      stealthNotesCount: (cclerk.stealthNotes || []).length
+      needsPassphraseSetup: cc.needsPassphraseSetup || false,
+      hasStealthKeys: cc.stealthMeta !== null && cc.stealthMeta !== void 0,
+      stealthNotesCount: (cc.stealthNotes || []).length
     };
   }
   async function getCapabilities() {
-    const cclerk = await loadState();
-    if (cclerk.locked) return [];
+    const cc = await loadState();
+    if (cc.locked) return [];
     const actions = /* @__PURE__ */ new Set();
-    for (const token of cclerk.tokens) {
+    for (const token of cc.tokens) {
       for (const action of token.actions) {
         actions.add(action);
       }
@@ -1428,10 +1474,10 @@
     return Array.from(actions);
   }
   async function revokeToken(tokenId) {
-    const cclerk = await loadState();
-    const idx = cclerk.tokens.findIndex((t) => t.id === tokenId);
+    const cc = await loadState();
+    const idx = cc.tokens.findIndex((t) => t.id === tokenId);
     if (idx === -1) return { revoked: false, error: "Token not found" };
-    cclerk.tokens.splice(idx, 1);
+    cc.tokens.splice(idx, 1);
     await saveState();
     notifySubscribers("revoked", { tokenId });
     return { revoked: true };
@@ -1484,6 +1530,8 @@
     "pyana:isConnected",
     "pyana:canAuthorize",
     "pyana:subscribe",
+    "pyana:getActivityFeed",
+    // Phase 1: live activity feed for <pyana-activity> / debugger
     "pyana:provision",
     "pyana:postIntent",
     "pyana:getStealthAddress",
@@ -1497,8 +1545,8 @@
     "pyana:peerExchange",
     "pyana:composeProofs",
     "pyana:signTurn",
+    "pyana:signTurnV3",
     "pyana:queryBalance",
-    "pyana:getNodeConfig",
     "pyana:shareCapability",
     "pyana:acceptCapability",
     "pyana:createHandoff",
@@ -1510,7 +1558,10 @@
     "pyana:storageQuota",
     "pyana:federationStatus",
     "pyana:proposeRoutes",
-    "pyana:voteOnProposal"
+    "pyana:voteOnProposal",
+    "pyana:registerFederation",
+    "pyana:listKnownFederations",
+    "pyana:createCapTpDeliveredAuth"
   ]);
   var POPUP_ONLY_METHODS = /* @__PURE__ */ new Set([
     "pyana:unlock",
@@ -1587,9 +1638,9 @@
       }
       case "pyana:getMnemonic": {
         if (!isExtensionPopup(sender)) return { id: message.id, error: "Only available from extension popup." };
-        const cclerk = await loadState();
-        if (cclerk.locked) return { id: message.id, error: "Cipherclerk is locked" };
-        if (cclerk.needsPassphraseSetup) {
+        const cc = await loadState();
+        if (cc.locked) return { id: message.id, error: "Cipherclerk is locked" };
+        if (cc.needsPassphraseSetup) {
           return { id: message.id, error: "Set a cipherclerk passphrase before viewing the recovery phrase." };
         }
         const mnemonic = await getMnemonic();
@@ -1618,6 +1669,9 @@
           subscribers.get(tabId).add(message.event);
         }
         return { id: message.id, result: true };
+      }
+      case "pyana:getActivityFeed": {
+        return { id: message.id, result: activityFeed };
       }
       case "pyana:provisionDecision":
       case "pyana:intentConfirmation":
@@ -1686,13 +1740,13 @@
         return { id: message.id, result: { error: "Not yet migrated to TypeScript" } };
       }
       case "pyana:getFulfillableIntents": {
-        const cclerk = await loadState();
-        if (cclerk.locked) return { id: message.id, result: [] };
+        const cc = await loadState();
+        if (cc.locked) return { id: message.id, result: [] };
         const now = Date.now();
         const fulfillable = [];
         for (const [, { intent }] of intentPool) {
           if (intent.expiry <= now || intent.kind !== "need") continue;
-          const matchResult = matchIntentLocally(intent, cclerk.tokens, now);
+          const matchResult = matchIntentLocally(intent, cc.tokens, now);
           if (matchResult) {
             fulfillable.push({
               intentId: intent.id,
@@ -1790,9 +1844,9 @@
       case "pyana:createBearerCap": {
         requireWasm("createBearerCap");
         const w = wasm;
-        const cclerk = await loadState();
-        if (cclerk.locked) return { id: message.id, error: "Cipherclerk is locked" };
-        const delegatorKeyHex = Array.from(cclerk.publicKey).map((b) => b.toString(16).padStart(2, "0")).join("");
+        const cc = await loadState();
+        if (cc.locked) return { id: message.id, error: "Cipherclerk is locked" };
+        const delegatorKeyHex = Array.from(cc.publicKey).map((b) => b.toString(16).padStart(2, "0")).join("");
         const result = w.create_bearer_cap(delegatorKeyHex, message.targetCellHex, message.action, message.expiry || 0);
         resetLockTimer();
         return { id: message.id, result };
@@ -1814,8 +1868,79 @@
       case "pyana:createFromFactory": {
         requireWasm("createFromFactory");
         const w = wasm;
-        const result = w.create_from_factory(message.factoryVkHex, message.ownerPubkeyHex, message.initialBalance || 0);
-        return { id: message.id, result };
+        const cc = await loadState();
+        if (cc.locked) return { id: message.id, error: "Cipherclerk is locked" };
+        if (cc.needsPassphraseSetup) {
+          return { id: message.id, error: "Set a cipherclerk passphrase before minting cells from a factory." };
+        }
+        if (!cc.secretKey) return { id: message.id, error: "Cipherclerk secret key not available" };
+        const factoryVkHex = message.factoryVkHex;
+        const ownerPubkeyHex = message.ownerPubkeyHex;
+        const tokenIdHex = message.tokenIdHex ?? w.blake3_hash("pyana-cipherclerk-default-token-domain");
+        const mode = message.mode ?? "Hosted";
+        const initialFields = message.initialFields ?? [];
+        const specJson = JSON.stringify({
+          sender_privkey: cc.secretKey,
+          factory_vk_hex: factoryVkHex,
+          owner_pubkey_hex: ownerPubkeyHex,
+          token_id_hex: tokenIdHex,
+          mode,
+          program_vk_hex: message.programVkHex || null,
+          initial_fields: initialFields,
+          federation_id_hex: message.federationIdHex || null
+        });
+        let turnData;
+        try {
+          turnData = w.cipherclerk_create_from_factory(specJson);
+        } catch (e) {
+          const err = e;
+          return { id: message.id, error: `Failed to build factory turn: ${err.message || String(err)}` };
+        }
+        const resp = await nodeRequest(nodeConfig, "/turns/submit", {
+          method: "POST",
+          body: JSON.stringify({
+            turn_id: turnData.turn_id,
+            turn_bytes: Array.from(turnData.turn_bytes),
+            sender_pubkey: cc.publicKey
+          })
+        });
+        if (!resp.ok) {
+          return {
+            id: message.id,
+            // Even when submission fails the caller can still display the
+            // derived (child_vk, param_hash, factory_vk) — they are
+            // deterministic functions of the inputs.
+            result: {
+              childVk: turnData.child_vk,
+              paramHash: turnData.param_hash,
+              factoryVk: turnData.factory_vk,
+              submitted: false,
+              error: `Factory turn rejected by node: ${resp.error}`,
+              turnId: turnData.turn_id
+            }
+          };
+        }
+        cc.log.push({
+          action: "createFromFactory",
+          resource: turnData.child_vk,
+          allowed: true,
+          timestamp: Date.now(),
+          mode: "factory",
+          turnId: turnData.turn_id
+        });
+        await saveState();
+        return {
+          id: message.id,
+          result: {
+            childVk: turnData.child_vk,
+            paramHash: turnData.param_hash,
+            factoryVk: turnData.factory_vk,
+            submitted: true,
+            turnId: turnData.turn_id,
+            agentCellId: turnData.agent_cell_id,
+            nodeResult: resp.data
+          }
+        };
       }
       case "pyana:verifyProvenance": {
         requireWasm("verifyProvenance");
@@ -1826,8 +1951,8 @@
       case "pyana:makeCellSovereign": {
         requireWasm("makeCellSovereign");
         const w = wasm;
-        const cclerk = await loadState();
-        if (cclerk.locked) return { id: message.id, error: "Cipherclerk is locked" };
+        const cc = await loadState();
+        if (cc.locked) return { id: message.id, error: "Cipherclerk is locked" };
         const result = w.make_cell_sovereign(message.cellIdHex, 0);
         resetLockTimer();
         return { id: message.id, result };
@@ -1835,14 +1960,31 @@
       case "pyana:peerExchange": {
         requireWasm("peerExchange");
         const w = wasm;
-        const cclerk = await loadState();
-        if (cclerk.locked) return { id: message.id, error: "Cipherclerk is locked" };
-        const senderCellHex = w.blake3_hash(
-          Array.from(cclerk.publicKey).map((b) => String.fromCharCode(b)).join("")
-        );
-        const result = w.peer_exchange_with_proof(senderCellHex, message.receiverCellHex, message.amount);
-        resetLockTimer();
-        return { id: message.id, result };
+        const cc = await loadState();
+        if (cc.locked) return { id: message.id, error: "Cipherclerk is locked" };
+        if (!cc.secretKey) return { id: message.id, error: "Cipherclerk secret key not available" };
+        try {
+          const result = w.cipherclerk_peer_exchange(JSON.stringify({
+            sender_privkey: cc.secretKey,
+            receiver_cell_hex: message.receiverCellHex,
+            amount: message.amount,
+            timestamp: Math.floor(Date.now() / 1e3)
+          }));
+          resetLockTimer();
+          return {
+            id: message.id,
+            result: {
+              exchangeId: result.exchange_id,
+              proofCommitment: result.proof_commitment,
+              senderCell: result.sender_cell,
+              receiverCell: result.receiver_cell,
+              transitionBytes: Array.from(result.transition_bytes)
+            }
+          };
+        } catch (e) {
+          const err = e;
+          return { id: message.id, error: err.message || "peer_exchange failed" };
+        }
       }
       case "pyana:composeProofs": {
         requireWasm("composeProofs");
@@ -1858,9 +2000,9 @@
         return { id: message.id, result: state?.stealthMeta || null };
       case "pyana:getPrivacyState": {
         if (!isExtensionPopup(sender)) return { id: message.id, error: "Only available from extension popup." };
-        const cclerk = await loadState();
-        if (cclerk.locked) return { id: message.id, result: { active: false, locked: true } };
-        return { id: message.id, result: { active: true, stealthMeta: cclerk.stealthMeta } };
+        const cc = await loadState();
+        if (cc.locked) return { id: message.id, result: { active: false, locked: true } };
+        return { id: message.id, result: { active: true, stealthMeta: cc.stealthMeta } };
       }
       case "pyana:setCommittedTransferMode": {
         if (!isExtensionPopup(sender)) return { id: message.id, error: "Only available from extension popup." };
@@ -1868,13 +2010,143 @@
       }
       case "pyana:getStealthNotes": {
         if (!isExtensionPopup(sender)) return { id: message.id, error: "Only available from extension popup." };
-        const cclerk = await loadState();
-        if (cclerk.locked) return { id: message.id, error: "Cipherclerk is locked" };
-        return { id: message.id, result: cclerk.stealthNotes || [] };
+        const cc = await loadState();
+        if (cc.locked) return { id: message.id, error: "Cipherclerk is locked" };
+        return { id: message.id, result: cc.stealthNotes || [] };
       }
-      case "pyana:postEncryptedIntent":
-      case "pyana:privateTransfer":
-        return { id: message.id, result: { error: "Requires WASM module -- not yet migrated" } };
+      case "pyana:postEncryptedIntent": {
+        requireWasm("postEncryptedIntent");
+        const w = wasm;
+        const cc = await loadState();
+        if (cc.locked) return { id: message.id, error: "Cipherclerk is locked" };
+        if (!cc.secretKey) return { id: message.id, error: "Cipherclerk secret key not available" };
+        const matchSpec = message.matchSpec || {};
+        const options = message.options || {};
+        const kind = options.kind || "need";
+        const canonicalMatchSpec = {
+          actions: (matchSpec.actions || []).map((a) => ({ action: a.action || null, resource: a.resource || null })),
+          constraints: (matchSpec.constraints || []).map((c) => {
+            if (c.type === "appId") return { AppId: c.value };
+            if (c.type === "service") return { Service: c.value };
+            if (c.type === "userId") return { UserId: c.value };
+            if (c.type === "notExpiredAt") return { NotExpiredAt: c.value };
+            if (c.type === "feature") return { Feature: c.value };
+            if (c.type === "oauthProvider") return { OAuthProvider: c.value };
+            return { Custom: { predicate: String(c.type || ""), value: String(c.value ?? "") } };
+          }),
+          min_budget: matchSpec.minBudget ?? null,
+          resource_pattern: matchSpec.resourcePattern ?? null,
+          compound: null,
+          predicate_requirements: [],
+          strict_resource_matching: false
+        };
+        const expiry = options.expiry ?? null;
+        try {
+          const result = w.cipherclerk_post_encrypted_intent(JSON.stringify({
+            sender_privkey: cc.secretKey,
+            match_spec: canonicalMatchSpec,
+            kind: kind === "offer" ? "Offer" : kind === "query" ? "Query" : "Need",
+            expiry
+          }));
+          const resp = await nodeRequest(nodeConfig, "/intents/encrypted", {
+            method: "POST",
+            body: result.encrypted_intent_json,
+            headers: { "Content-Type": "application/json" }
+          });
+          const submitted = resp.ok;
+          resetLockTimer();
+          return { id: message.id, result: { intentId: result.intent_id, expiry: result.expiry, encrypted: true, submitted, submitError: submitted ? void 0 : resp.error } };
+        } catch (e) {
+          const err = e;
+          return { id: message.id, error: err.message || "post_encrypted_intent failed" };
+        }
+      }
+      case "pyana:privateTransfer": {
+        requireWasm("privateTransfer");
+        const w = wasm;
+        const cc = await loadState();
+        if (cc.locked) return { id: message.id, error: "Cipherclerk is locked" };
+        if (!cc.secretKey) return { id: message.id, error: "Cipherclerk secret key not available" };
+        if (cc.needsPassphraseSetup) {
+          return { id: message.id, error: "Set a cipherclerk passphrase before signing private transfers." };
+        }
+        const amount = message.amount;
+        const assetType = message.assetType;
+        const recipientMeta = message.recipientStealthMeta;
+        if (!recipientMeta || !recipientMeta.spendPubkey || !recipientMeta.viewPubkey) {
+          return { id: message.id, error: "recipientStealthMeta must include spendPubkey and viewPubkey" };
+        }
+        const assetTypeU64 = typeof assetType === "number" ? assetType : typeof assetType === "string" && /^[0-9]+$/.test(assetType) ? parseInt(assetType, 10) : 0;
+        try {
+          const result = w.cipherclerk_private_transfer(JSON.stringify({
+            sender_privkey: cc.secretKey,
+            amount,
+            asset_type: assetTypeU64,
+            recipient_meta: {
+              spend_pubkey: recipientMeta.spendPubkey,
+              view_pubkey: recipientMeta.viewPubkey
+            }
+          }));
+          const resp = await nodeRequest(nodeConfig, "/turns/submit", {
+            method: "POST",
+            body: JSON.stringify({
+              turn_id: result.turn_id,
+              turn_bytes: Array.from(result.turn_bytes),
+              sender_pubkey: cc.publicKey
+            })
+          });
+          cc.log.push({
+            action: "privateTransfer",
+            resource: "*",
+            allowed: true,
+            timestamp: Date.now(),
+            mode: "private",
+            turnId: result.turn_id,
+            amount,
+            recipientStealthMeta: recipientMeta
+          });
+          await saveState();
+          resetLockTimer();
+          notifySubscribers("privateTransfer", { turnId: result.turn_id, amount });
+          return {
+            id: message.id,
+            result: {
+              success: resp.ok,
+              turnId: result.turn_id,
+              error: resp.ok ? void 0 : `Submit failed: ${resp.error}`
+            }
+          };
+        } catch (e) {
+          const err = e;
+          return { id: message.id, error: err.message || "private_transfer failed" };
+        }
+      }
+      case "pyana:signTurnV3": {
+        const turnBytes = new Uint8Array(message.turnBytes);
+        const result = await signTurnV3(turnBytes);
+        resetLockTimer();
+        return { id: message.id, result };
+      }
+      case "pyana:registerFederation": {
+        const result = await registerFederation(
+          message.federationId,
+          message.name,
+          message.committeePubkeys
+        );
+        return { id: message.id, result };
+      }
+      case "pyana:listKnownFederations": {
+        const result = await listKnownFederations();
+        return { id: message.id, result };
+      }
+      case "pyana:createCapTpDeliveredAuth": {
+        const result = createCapTpDeliveredAuth(
+          message.handoffCertB58,
+          message.introducerPk,
+          message.senderPk
+        );
+        return { id: message.id, result };
+      }
       default:
         return { id: message.id, error: "Unknown message type" };
     }
@@ -1995,24 +2267,27 @@
       if (!validateNodeMessage(msg)) return;
       switch (msg.type) {
         case "revocation": {
-          const cclerk = await loadState();
-          const idx = cclerk.tokens.findIndex((t) => t.id === msg.token_id);
+          const cc = await loadState();
+          const idx = cc.tokens.findIndex((t) => t.id === msg.token_id);
           if (idx !== -1) {
-            cclerk.tokens.splice(idx, 1);
+            cc.tokens.splice(idx, 1);
             await saveState();
           }
           notifySubscribers("revoked", { tokenId: msg.token_id });
+          pushActivity("turn_lifecycle", { phase: "revoked", token_id: msg.token_id }, { source: "node-ws" });
           break;
         }
         case "receipt": {
-          const cclerk = await loadState();
-          cclerk.receiptChain.push(msg.hash);
+          const cc = await loadState();
+          cc.receiptChain.push(msg.hash);
           await saveState();
           notifySubscribers("receipt", { hash: msg.hash });
+          pushActivity("turn_lifecycle", { phase: "committed", receipt_hash: msg.hash }, { source: "node-ws" });
           break;
         }
         case "root": {
           notifySubscribers("root", { height: msg.height, merkle_root: msg.merkle_root });
+          pushActivity("federation", { event: "root", height: msg.height, merkle_root: msg.merkle_root }, { source: "node-ws" });
           break;
         }
         case "intent": {
@@ -2020,6 +2295,40 @@
           if (intent && intent.expiry > Date.now() && !intentPool.has(intent.id)) {
             intentPool.set(intent.id, { intent, receivedAt: Date.now() });
           }
+          notifySubscribers("intent", { intent });
+          pushActivity("turn_lifecycle", { phase: "intent_received", intent_id: intent?.id, ...intent }, { source: "node-ws" });
+          break;
+        }
+        case "note_announcement": {
+          if (!wasm || !wasmLoaded) break;
+          const w = wasm;
+          const cc = await loadState();
+          if (cc.locked || !cc.stealthPrivate || !cc.stealthMeta) break;
+          const ephemeralPubkey = new Uint8Array(msg.ephemeral_pubkey);
+          const oneTimePubkey = new Uint8Array(msg.one_time_pubkey);
+          const viewPrivkey = new Uint8Array(cc.stealthPrivate.viewPrivkey);
+          const spendPubkey = new Uint8Array(cc.stealthMeta.spendPubkey);
+          let ownershipResult;
+          try {
+            ownershipResult = w.check_stealth_ownership(viewPrivkey, spendPubkey, ephemeralPubkey, oneTimePubkey);
+          } catch (_e) {
+            break;
+          }
+          if (!ownershipResult.is_ours) break;
+          const note = {
+            noteId: msg.note_id,
+            amount: msg.amount ?? null,
+            assetType: msg.asset_type || "unknown",
+            oneTimePrivkey: ownershipResult.one_time_privkey ? Array.from(ownershipResult.one_time_privkey) : null,
+            ephemeralPubkey: Array.from(ephemeralPubkey),
+            memo: msg.memo || null,
+            receivedAt: Date.now()
+          };
+          cc.stealthNotes.push(note);
+          await saveState();
+          notifySubscribers("stealthNoteReceived", { note });
+          notifySubscribers("note_announcement", { note_id: msg.note_id, ...msg });
+          pushActivity("bilateral_receipt", { direction: "inbound", note_id: msg.note_id, amount: msg.amount }, { source: "node-ws" });
           break;
         }
       }
@@ -2069,6 +2378,7 @@
         intentService: federationState.intentService,
         lastUpdated: federationState.lastUpdated
       });
+      pushActivity("federation", { event: "discovery_update", ...federationState }, { source: "extension" });
     } catch (e) {
       const err = e;
       federationState.fetchError = err.message;

@@ -6,7 +6,12 @@ export function initCrossfed(wasm) {
   const container = document.getElementById('section-crossfed');
   container.innerHTML = `
     <div class="section-header">
-      <h2>Cross-Federation</h2>
+      <h2>Cross-Federation (retired §4.9)</h2>
+      <!-- §4.9 outright retire (FOLLOWUP-05): pure animation/setTimeout per plan; replaced by federation + handoff inspectors -->
+      <div style="background:#ffeeee;border:1px solid #c00;padding:0.25rem 0.5rem;font-size:0.75rem;margin:0.3rem 0;">
+        <strong>§4.9 Retire:</strong> This demo (animation-only) retired. Use Starbridge federation + <code>&lt;pyana-handoff-certificate&gt;</code> + CapTP. 
+        <a href="/starbridge.html?at=pyana://federation/0" target="_blank">Open live federation in Starbridge →</a>
+      </div>
       <p>
         Pyana federations are independent authorization domains. Cross-federation operations
         bridge notes, tokens, and capabilities across boundaries using conditional turns and

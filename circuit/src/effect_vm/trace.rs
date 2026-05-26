@@ -8,10 +8,9 @@ use crate::field::BabyBear;
 use crate::poseidon2::hash_2_to_1;
 
 use super::{
-    AUX_BASE, CellState, EFFECT_VM_WIDTH, Effect,
-    PARAM_BASE, STATE_AFTER_BASE, STATE_BEFORE_BASE, aux_off, compute_effects_hash,
-    compute_effects_hash_4, fill_reserved_bits, param, pi, sel, split_u64,
-    u64_to_4_limbs_16,
+    AUX_BASE, CellState, EFFECT_VM_WIDTH, Effect, PARAM_BASE, STATE_AFTER_BASE, STATE_BEFORE_BASE,
+    aux_off, compute_effects_hash, compute_effects_hash_4, fill_reserved_bits, param, pi, sel,
+    split_u64, u64_to_4_limbs_16,
 };
 
 /// Generate the execution trace and public inputs for an effect VM proof.

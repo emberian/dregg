@@ -1,0 +1,1394 @@
+   Compiling pyana-types v0.1.0 (/Users/ember/dev/breadstuffs/types)
+warning: field `aux_cols` is never read
+  --> pyana-dsl/src/emit_stark_impl.rs:26:5
+   |
+18 | struct TraceLayout {
+   |        ----------- field in this struct
+...
+26 |     aux_cols: Vec<AuxCol>,
+   |     ^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `num_cols` is never read
+  --> pyana-dsl/src/emit_stark_impl.rs:32:5
+   |
+29 | struct ParamLayout {
+   |        ----------- field in this struct
+...
+32 |     num_cols: usize,
+   |     ^^^^^^^^
+
+warning: fields `diff_col` and `bit_col` are never read
+  --> pyana-dsl/src/emit_stark_impl.rs:40:18
+   |
+40 |     RangeCheck { diff_col: usize, bit_col: usize },
+   |     ----------   ^^^^^^^^         ^^^^^^^
+   |     |
+   |     fields in this variant
+   |
+   = note: `AuxCol` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: field `inv_col` is never read
+  --> pyana-dsl/src/emit_stark_impl.rs:42:15
+   |
+42 |     Inverse { inv_col: usize },
+   |     -------   ^^^^^^^
+   |     |
+   |     field in this variant
+   |
+   = note: `AuxCol` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: field `sel_col` is never read
+  --> pyana-dsl/src/emit_stark_impl.rs:44:16
+   |
+44 |     Selector { sel_col: usize },
+   |     --------   ^^^^^^^
+   |     |
+   |     field in this variant
+   |
+   = note: `AuxCol` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: associated items `all_requirements`, `collect_requirements`, `all_mutations`, and `collect_mutations` are never used
+  --> pyana-dsl/src/ir.rs:23:12
+   |
+21 | impl ConstraintIr {
+   | ----------------- associated items in this implementation
+22 |     /// Extract all top-level requirements (flattening match arms).
+23 |     pub fn all_requirements(&self) -> Vec<&Requirement> {
+   |            ^^^^^^^^^^^^^^^^
+...
+31 |     fn collect_requirements<'a>(stmt: &'a Statement, out: &mut Vec<&'a Requirement>) {
+   |        ^^^^^^^^^^^^^^^^^^^^
+...
+46 |     pub fn all_mutations(&self) -> Vec<&Mutation> {
+   |            ^^^^^^^^^^^^^
+...
+54 |     fn collect_mutations<'a>(stmt: &'a Statement, out: &mut Vec<&'a Mutation>) {
+   |        ^^^^^^^^^^^^^^^^^
+
+warning: variant `ByteMatrix32` is never constructed
+  --> pyana-dsl/src/ir.rs:89:5
+   |
+84 | pub enum ParamType {
+   |          --------- variant in this enum
+...
+89 |     ByteMatrix32(u32),
+   |     ^^^^^^^^^^^^
+   |
+   = note: `ParamType` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: variants `BitRange`, `MerkleAtPosition`, and `Poseidon2Hash` are never constructed
+   --> pyana-dsl/src/ir.rs:156:5
+    |
+144 | pub enum RequirementKind {
+    |          --------------- variants in this enum
+...
+156 |     BitRange { value: syn::Expr, bits: u32 },
+    |     ^^^^^^^^
+...
+163 |     MerkleAtPosition {
+    |     ^^^^^^^^^^^^^^^^
+...
+174 |     Poseidon2Hash {
+    |     ^^^^^^^^^^^^^
+    |
+    = note: `RequirementKind` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: method `op_str` is never used
+   --> pyana-dsl/src/ir.rs:182:12
+    |
+180 | impl RequirementKind {
+    | -------------------- method in this implementation
+181 |     /// Human-readable operator for error messages.
+182 |     pub fn op_str(&self) -> &'static str {
+    |            ^^^^^^
+
+warning: `pyana-dsl` (lib) generated 9 warnings
+warning: unused import: `Macaroon`
+  --> macaroon/src/discharge_gateway.rs:27:23
+   |
+27 | use crate::macaroon::{Macaroon, create_discharge};
+   |                       ^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `pyana-macaroon` (lib) generated 1 warning (run `cargo fix --lib -p pyana-macaroon` to apply 1 suggestion)
+   Compiling pyana-circuit v0.1.0 (/Users/ember/dev/breadstuffs/circuit)
+warning: associated function `find_all_substitutions` is never used
+   --> trace/src/eval.rs:290:8
+    |
+ 58 | impl Evaluator {
+    | -------------- associated function in this implementation
+...
+290 |     fn find_all_substitutions(rule: &Rule, facts: &[Fact]) -> Vec<(Substitution, Vec<usize>)> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `pyana-trace` (lib) generated 1 warning
+   Compiling socket2 v0.5.10
+   Compiling tower-http v0.6.11
+   Compiling axum-macros v0.5.1
+   Compiling futures v0.3.32
+   Compiling tower-http v0.5.2
+warning: `pyana-trace` (lib test) generated 1 warning (1 duplicate)
+warning: `pyana-dsl` (lib test) generated 9 warnings (9 duplicates)
+   Compiling hyper-util v0.1.20
+   Compiling quinn-udp v0.5.14
+   Compiling pyana-cell v0.1.0 (/Users/ember/dev/breadstuffs/cell)
+   Compiling pyana-blocklace v0.1.0 (/Users/ember/dev/breadstuffs/blocklace)
+   Compiling quinn v0.11.9
+warning: use of deprecated function `multi_step_air::verify_authorization_stark`: Use body_membership::verify_authorization_with_membership for adversarial settings. This function does not verify body fact existence (soundness gap).
+   --> circuit/src/lib.rs:285:5
+    |
+285 |     verify_authorization_stark,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated function `multi_step_air::verify_authorization_stark`: Use body_membership::verify_authorization_with_membership for adversarial settings. This function does not verify body fact existence (soundness gap).
+  --> circuit/src/body_membership.rs:28:50
+   |
+28 |     MultiStepWitness, prove_authorization_stark, verify_authorization_stark,
+   |                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `multi_step_air::verify_authorization_stark`: Use body_membership::verify_authorization_with_membership for adversarial settings. This function does not verify body fact existence (soundness gap).
+   --> circuit/src/body_membership.rs:183:5
+    |
+183 |     verify_authorization_stark(conclusion, accumulated_hash, &proof.derivation_proof)?;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `multi_step_air::verify_authorization_stark`: Use body_membership::verify_authorization_with_membership for adversarial settings. This function does not verify body fact existence (soundness gap).
+  --> circuit/src/chunked_derivation.rs:35:54
+   |
+35 |     MultiStepWitness, pi, prove_authorization_stark, verify_authorization_stark,
+   |                                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `multi_step_air::verify_authorization_stark`: Use body_membership::verify_authorization_with_membership for adversarial settings. This function does not verify body fact existence (soundness gap).
+   --> circuit/src/chunked_derivation.rs:354:9
+    |
+354 |         verify_authorization_stark(chunk_conclusion, chunk_final_acc, chunk_proof)
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated unit struct `accumulator_air::AccumulatorNonRevocationAir`: Use crate::dsl::accumulator::{prove,verify}_accumulator_non_revocation_dsl instead
+  --> circuit/src/dsl/accumulator.rs:25:57
+   |
+25 |     ACCUMULATOR_WIDTH, AccumulatorNonMembershipWitness, AccumulatorNonRevocationAir,
+   |                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `accumulator_air::AccumulatorNonRevocationAir`: Use crate::dsl::accumulator::{prove,verify}_accumulator_non_revocation_dsl instead
+   --> circuit/src/dsl/accumulator.rs:450:9
+    |
+450 |         AccumulatorNonRevocationAir::generate_trace(witness, accumulator, alpha);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `multi_step_air::verify_authorization_stark`: Use body_membership::verify_authorization_with_membership for adversarial settings. This function does not verify body fact existence (soundness gap).
+    --> circuit/src/dsl/derivation.rs:1038:28
+     |
+1038 |     crate::multi_step_air::verify_authorization_stark(conclusion, accumulated_hash, proof)
+     |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `note_spending_air::NoteSpendingAir`: Use crate::dsl::note_spending::{prove_note_spend_dsl, verify_note_spend_dsl} instead
+  --> circuit/src/dsl/note_spending.rs:43:5
+   |
+43 |     NoteSpendingAir, NoteSpendingWitness as NoteSpendingWitnessType, create_test_witness,
+   |     ^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `accumulator_air::prove_accumulator_non_revocation`: Use crate::dsl::accumulator::prove_accumulator_non_revocation_dsl instead
+   --> circuit/src/backends/plonky3.rs:841:47
+    |
+841 |         use crate::accumulator_air::{ExtElem, prove_accumulator_non_revocation};
+    |                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `accumulator_air::verify_accumulator_non_revocation`: Use crate::dsl::accumulator::verify_accumulator_non_revocation_dsl instead
+   --> circuit/src/backends/plonky3.rs:908:47
+    |
+908 |         use crate::accumulator_air::{ExtElem, verify_accumulator_non_revocation};
+    |                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `accumulator_air::prove_accumulator_non_revocation`: Use crate::dsl::accumulator::prove_accumulator_non_revocation_dsl instead
+   --> circuit/src/backends/plonky3.rs:868:27
+    |
+868 |         let stark_proof = prove_accumulator_non_revocation(
+    |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `accumulator_air::verify_accumulator_non_revocation`: Use crate::dsl::accumulator::verify_accumulator_non_revocation_dsl instead
+   --> circuit/src/backends/plonky3.rs:924:9
+    |
+924 |         verify_accumulator_non_revocation(acc, alp, num_ancestors, &stark_proof)
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+   Compiling pyana-net v0.1.0 (/Users/ember/dev/breadstuffs/net)
+   Compiling hyper-rustls v0.27.9
+   Compiling hyper-tls v0.6.0
+   Compiling axum v0.8.9
+   Compiling reqwest v0.12.28
+warning: fields `signing_key` and `max_connections` are never read
+   --> net/src/gossip.rs:171:5
+    |
+160 | pub struct GossipNetwork {
+    |            ------------- fields in this struct
+...
+171 |     signing_key: Arc<SigningKey>,
+    |     ^^^^^^^^^^^
+172 |     /// Maximum concurrent gossip connections.
+173 |     max_connections: usize,
+    |     ^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling metrics-exporter-prometheus v0.16.2
+   Compiling pyana-captp v0.1.0 (/Users/ember/dev/breadstuffs/captp)
+   Compiling pyana-directory v0.1.0 (/Users/ember/dev/breadstuffs/directory)
+   Compiling pyana-discharge-gateway v0.1.0 (/Users/ember/dev/breadstuffs/discharge-gateway)
+   Compiling pyana-rbg v0.1.0 (/Users/ember/dev/breadstuffs/rbg)
+warning: unused variable: `spending_key`
+   --> rbg/src/vfs.rs:304:9
+    |
+304 |         spending_key: &[u8; 32],
+    |         ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_spending_key`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `MAX_TAGS_PER_ENTRY` is never used
+   --> rbg/src/directory.rs:189:7
+    |
+189 | const MAX_TAGS_PER_ENTRY: usize = 16;
+    |       ^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `directory_cell_id` is never read
+   --> rbg/src/directory.rs:596:5
+    |
+594 | pub struct ScopedIntentPool {
+    |            ---------------- field in this struct
+595 |     /// The directory cell this pool is bound to.
+596 |     directory_cell_id: CellId,
+    |     ^^^^^^^^^^^^^^^^^
+
+   Compiling serenity v0.12.5
+warning: `pyana-net` (lib test) generated 1 warning (1 duplicate)
+warning: `pyana-net` (lib) generated 1 warning
+warning: `pyana-rbg` (lib) generated 3 warnings (run `cargo fix --lib -p pyana-rbg` to apply 1 suggestion)
+   Compiling pyana-cli v0.1.0 (/Users/ember/dev/breadstuffs/cli)
+warning: `pyana-rbg` (lib test) generated 3 warnings (3 duplicates)
+   Compiling pyana-dsl-runtime v0.1.0 (/Users/ember/dev/breadstuffs/pyana-dsl-runtime)
+   Compiling pyana-storage v0.1.0 (/Users/ember/dev/breadstuffs/storage)
+warning: function `generate_merkle_proof` is never used
+   --> storage/src/blinded.rs:540:15
+    |
+540 | pub(crate) fn generate_merkle_proof(
+    |               ^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `STABLE_BLINDED_ITEM_BLAKE3` is never used
+   --> storage/src/commitment.rs:877:7
+    |
+877 | const STABLE_BLINDED_ITEM_BLAKE3: [u8; 32] = [
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `STABLE_BLINDED_ITEM_POSEIDON2` is never used
+   --> storage/src/commitment.rs:881:7
+    |
+881 | const STABLE_BLINDED_ITEM_POSEIDON2: [u32; 4] = [433_477_333, 626_868_483, 68_240_588, 967_854_049];
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+   Compiling pyana-commit v0.1.0 (/Users/ember/dev/breadstuffs/commit)
+   Compiling pyana-dsl-tests v0.1.0 (/Users/ember/dev/breadstuffs/pyana-dsl-tests)
+warning: use of deprecated struct `pyana_circuit::accumulator_air::AccumulatorNonRevocationAir`: Use crate::dsl::accumulator::{prove,verify}_accumulator_non_revocation_dsl instead
+   --> pyana-dsl-tests/src/accumulator_dsl.rs:488:9
+    |
+488 |         AccumulatorNonRevocationAir::generate_trace(&witness, acc, alpha);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated unit struct `pyana_circuit::accumulator_air::AccumulatorNonRevocationAir`: Use crate::dsl::accumulator::{prove,verify}_accumulator_non_revocation_dsl instead
+   --> pyana-dsl-tests/src/accumulator_dsl.rs:444:42
+    |
+444 |         AccumulatorNonMembershipWitness, AccumulatorNonRevocationAir,
+    |                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variants `Outgoing` and `Incoming` are never constructed
+  --> pyana-dsl-tests/src/lib.rs:72:5
+   |
+71 | enum Direction {
+   |      --------- variants in this enum
+72 |     Outgoing,
+   |     ^^^^^^^^
+73 |     Incoming,
+   |     ^^^^^^^^
+   |
+   = note: `Direction` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: variants `Incoming` and `Outgoing` are never constructed
+   --> pyana-dsl-tests/src/pyana_definitions.rs:162:5
+    |
+161 | enum TransferDirection {
+    |      ----------------- variants in this enum
+162 |     Incoming,
+    |     ^^^^^^^^
+163 |     Outgoing,
+    |     ^^^^^^^^
+    |
+    = note: `TransferDirection` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+   Compiling pyana-turn v0.1.0 (/Users/ember/dev/breadstuffs/turn)
+warning: `pyana-storage` (lib) generated 3 warnings
+   Compiling pyana-token v0.1.0 (/Users/ember/dev/breadstuffs/token)
+   Compiling pyana-audit v0.1.0 (/Users/ember/dev/breadstuffs/audit)
+warning: method `contains` is never used
+   --> token/src/revocation.rs:329:8
+    |
+312 | impl SortedRevocationTree {
+    | ------------------------- method in this implementation
+...
+329 |     fn contains(&self, leaf_hash: &[u8; 32]) -> bool {
+    |        ^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling pyana-dsl-differential v0.1.0 (/Users/ember/dev/breadstuffs/pyana-dsl-differential)
+warning: `pyana-dsl-tests` (lib) generated 4 warnings
+   Compiling pyana-federation v0.1.0 (/Users/ember/dev/breadstuffs/federation)
+   Compiling pyana-bridge v0.1.0 (/Users/ember/dev/breadstuffs/bridge)
+   Compiling pyana-coord v0.1.0 (/Users/ember/dev/breadstuffs/coord)
+warning: `pyana-token` (lib) generated 1 warning
+   Compiling pyana-protocol-tests v0.1.0 (/Users/ember/dev/breadstuffs/protocol-tests)
+warning: use of deprecated type alias `budget::BudgetCoordinator`: renamed to StingrayCounter (arXiv:2501.06531)
+  --> coord/src/lib.rs:83:5
+   |
+83 |     BudgetCoordinator, BudgetError, BudgetSlice, FastUnlockManager, StingrayCounter,
+   |     ^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: unused imports: `arb_transfer_ops` and `build_transfer_turn`
+  --> protocol-tests/src/invariants/balance_conservation.rs:17:31
+   |
+17 | use crate::generators::turn::{arb_transfer_ops, build_transfer_turn};
+   |                               ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `LedgerSpec` and `build_open_ledger`
+  --> protocol-tests/src/invariants/balance_conservation.rs:18:25
+   |
+18 | use crate::generators::{LedgerSpec, build_open_ledger};
+   |                         ^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `ComputronCosts` and `TurnExecutor`
+  --> protocol-tests/src/invariants/balance_conservation.rs:21:18
+   |
+21 | use pyana_turn::{ComputronCosts, TurnExecutor};
+   |                  ^^^^^^^^^^^^^^  ^^^^^^^^^^^^
+
+warning: unused import: `crate::generators::capability::arb_auth_required`
+  --> protocol-tests/src/invariants/capability_attenuation.rs:21:5
+   |
+21 | use crate::generators::capability::arb_auth_required;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `LedgerSpec` and `build_open_ledger`
+  --> protocol-tests/src/invariants/capability_attenuation.rs:22:31
+   |
+22 | use crate::generators::cell::{LedgerSpec, build_open_ledger};
+   |                               ^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `AuthRequired`, `CapabilityRef`, and `is_attenuation`
+  --> protocol-tests/src/invariants/capability_attenuation.rs:25:18
+   |
+25 | use pyana_cell::{AuthRequired, CapabilityRef, is_attenuation};
+   |                  ^^^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^
+
+warning: unused imports: `Action`, `Authorization`, `CallForest`, `ComputronCosts`, `DelegationMode`, `Effect`, `TurnExecutor`, `TurnResult`, and `turn::Turn`
+  --> protocol-tests/src/invariants/capability_attenuation.rs:27:5
+   |
+27 |     Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, TurnExecutor,
+   |     ^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^  ^^^^^^  ^^^^^^^^^^^^
+28 |     TurnResult, turn::Turn,
+   |     ^^^^^^^^^^  ^^^^^^^^^^
+
+warning: unused imports: `AuthRequired::None as AuthNone` and `Permissions`
+  --> protocol-tests/src/invariants/effect_vm_differential.rs:33:32
+   |
+33 | use pyana_cell::{AuthRequired, AuthRequired::None as AuthNone, Cell, CellId, Ledger, Permissions};
+   |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^                        ^^^^^^^^^^^
+
+warning: unused imports: `ComputronCosts` and `TurnExecutor`
+  --> protocol-tests/src/invariants/effect_vm_differential.rs:40:40
+   |
+40 |     Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, TurnExecutor,
+   |                                        ^^^^^^^^^^^^^^                          ^^^^^^^^^^^^
+
+warning: unused import: `Signer`
+  --> protocol-tests/src/invariants/facet_attenuation.rs:21:21
+   |
+21 | use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+   |                     ^^^^^^
+
+warning: unused imports: `AuthRequired`, `Cell`, `EffectMask`, and `is_facet_attenuation`
+  --> protocol-tests/src/invariants/facet_attenuation.rs:23:18
+   |
+23 | use pyana_cell::{AuthRequired, Cell, EffectMask, is_facet_attenuation};
+   |                  ^^^^^^^^^^^^  ^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Action`, `Authorization`, `BearerCapProof`, `CallForest`, `ComputronCosts`, `DelegationMode`, `DelegationProofData`, `Effect`, `TurnExecutor`, `TurnResult`, and `turn::Turn`
+  --> protocol-tests/src/invariants/facet_attenuation.rs:25:5
+   |
+25 |     Action, Authorization, BearerCapProof, CallForest, ComputronCosts, DelegationMode,
+   |     ^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^
+26 |     DelegationProofData, Effect, TurnExecutor, TurnResult, turn::Turn,
+   |     ^^^^^^^^^^^^^^^^^^^  ^^^^^^  ^^^^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^
+
+warning: unused imports: `LedgerSpec` and `build_open_ledger`
+  --> protocol-tests/src/invariants/nonce_monotonicity.rs:13:31
+   |
+13 | use crate::generators::cell::{LedgerSpec, build_open_ledger};
+   |                               ^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::generators::turn::build_no_op_turn`
+  --> protocol-tests/src/invariants/nonce_monotonicity.rs:14:5
+   |
+14 | use crate::generators::turn::build_no_op_turn;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `ComputronCosts`, `TurnExecutor`, and `TurnResult`
+  --> protocol-tests/src/invariants/nonce_monotonicity.rs:17:18
+   |
+17 | use pyana_turn::{ComputronCosts, TurnExecutor, TurnResult};
+   |                  ^^^^^^^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^^^^^
+
+warning: unused import: `Signer`
+  --> protocol-tests/src/invariants/permission_enforcement.rs:32:21
+   |
+32 | use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+   |                     ^^^^^^
+
+warning: unused imports: `AuthKind` and `Cell`
+  --> protocol-tests/src/invariants/permission_enforcement.rs:34:18
+   |
+34 | use pyana_cell::{AuthKind, AuthRequired, Cell, Permissions};
+   |                  ^^^^^^^^                ^^^^
+
+warning: unused imports: `Action`, `Authorization`, `CallForest`, `ComputronCosts`, `DelegationMode`, `Effect`, `TurnExecutor`, `TurnResult`, and `turn::Turn`
+  --> protocol-tests/src/invariants/permission_enforcement.rs:36:5
+   |
+36 |     Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, TurnExecutor,
+   |     ^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^  ^^^^^^  ^^^^^^^^^^^^
+37 |     TurnResult, turn::Turn,
+   |     ^^^^^^^^^^  ^^^^^^^^^^
+
+warning: unused imports: `LedgerSpec` and `build_open_ledger`
+  --> protocol-tests/src/invariants/receipt_chain.rs:17:31
+   |
+17 | use crate::generators::cell::{LedgerSpec, build_open_ledger};
+   |                               ^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `ComputronCosts` and `verify::verify_receipt_chain`
+  --> protocol-tests/src/invariants/receipt_chain.rs:22:5
+   |
+22 |     ComputronCosts, TurnExecutor, TurnReceipt, TurnResult, verify::verify_receipt_chain,
+   |     ^^^^^^^^^^^^^^                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `LedgerSpec` and `build_open_ledger`
+  --> protocol-tests/src/invariants/sealed_field_integrity.rs:27:31
+   |
+27 | use crate::generators::cell::{LedgerSpec, build_open_ledger};
+   |                               ^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `build_no_op_turn` and `build_transfer_turn`
+  --> protocol-tests/src/invariants/sealed_field_integrity.rs:28:31
+   |
+28 | use crate::generators::turn::{build_no_op_turn, build_transfer_turn};
+   |                               ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `ComputronCosts`, `Effect`, and `TurnExecutor`
+  --> protocol-tests/src/invariants/sealed_field_integrity.rs:31:18
+   |
+31 | use pyana_turn::{ComputronCosts, Effect, TurnExecutor};
+   |                  ^^^^^^^^^^^^^^  ^^^^^^  ^^^^^^^^^^^^
+
+warning: unused imports: `CellProgram` and `CellState`
+  --> protocol-tests/src/invariants/state_constraint_conjunction.rs:14:18
+   |
+14 | use pyana_cell::{CellProgram, CellState, StateConstraint, field_from_u64};
+   |                  ^^^^^^^^^^^  ^^^^^^^^^
+
+warning: unused imports: `CellProgram`, `CellState`, and `StateConstraint`
+  --> protocol-tests/src/invariants/any_of_disjunction.rs:14:18
+   |
+14 | use pyana_cell::{CellProgram, CellState, StateConstraint, field_from_u64};
+   |                  ^^^^^^^^^^^  ^^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: unused import: `pyana_cell::id::CellId`
+  --> protocol-tests/src/invariants/sentinel_variants_reject.rs:16:5
+   |
+16 | use pyana_cell::id::CellId;
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `pyana_cell::predicate::WitnessedPredicate`
+  --> protocol-tests/src/invariants/sentinel_variants_reject.rs:17:5
+   |
+17 | use pyana_cell::predicate::WitnessedPredicate;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `CustomDescriptor`, `DeltaRelation`, and `ReadSet`
+  --> protocol-tests/src/invariants/sentinel_variants_reject.rs:18:27
+   |
+18 | use pyana_cell::program::{CustomDescriptor, DeltaRelation, ReadSet};
+   |                           ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^
+
+warning: unused imports: `CellProgram`, `CellState`, `InputRef`, and `StateConstraint`
+  --> protocol-tests/src/invariants/sentinel_variants_reject.rs:19:18
+   |
+19 | use pyana_cell::{CellProgram, CellState, InputRef, StateConstraint};
+   |                  ^^^^^^^^^^^  ^^^^^^^^^  ^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: unused imports: `BearerCapProof` and `DelegationProofData`
+  --> protocol-tests/src/invariants/authorization_hash_domain_separation.rs:16:49
+   |
+16 | use pyana_turn::action::{Action, Authorization, BearerCapProof, DelegationProofData};
+   |                                                 ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `BridgePhaseLog` and `compute_bridge_id`
+  --> protocol-tests/src/invariants/bridge_phase_monotonicity.rs:22:18
+   |
+22 |     BridgePhase, BridgePhaseLog, BridgeReceiptEnvelope, compute_bridge_id,
+   |                  ^^^^^^^^^^^^^^                         ^^^^^^^^^^^^^^^^^
+
+warning: `pyana-protocol-tests` (lib) generated 31 warnings (run `cargo fix --lib -p pyana-protocol-tests` to apply 31 suggestions)
+warning: function `budget_revocation_facts` is never used
+   --> bridge/src/authorize.rs:398:15
+    |
+398 | pub(crate) fn budget_revocation_facts(request: &AuthRequest) -> Vec<TraceFact> {
+    |               ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `pyana-coord` (lib) generated 1 warning
+   Compiling pyana-persist v0.1.0 (/Users/ember/dev/breadstuffs/persist)
+   Compiling pyana-intent v0.1.0 (/Users/ember/dev/breadstuffs/intent)
+   Compiling pyana-verifier v0.1.0 (/Users/ember/dev/breadstuffs/verifier)
+warning: use of deprecated function `pyana_circuit::verify_authorization_stark`: Use body_membership::verify_authorization_with_membership for adversarial settings. This function does not verify body fact existence (soundness gap).
+  --> intent/src/fulfillment.rs:28:54
+   |
+28 |     MultiStepWitness, pi, prove_authorization_stark, verify_authorization_stark,
+   |                                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated function `pyana_circuit::verify_authorization_stark`: Use body_membership::verify_authorization_with_membership for adversarial settings. This function does not verify body fact existence (soundness gap).
+   --> intent/src/fulfillment.rs:311:13
+    |
+311 |             verify_authorization_stark(conclusion, accumulated_hash, &proof)
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+   Compiling pyana-credentials v0.1.0 (/Users/ember/dev/breadstuffs/credentials)
+   Compiling pyana-observability v0.1.0 (/Users/ember/dev/breadstuffs/observability)
+warning: `pyana-bridge` (lib) generated 1 warning
+   Compiling pyana-wire v0.1.0 (/Users/ember/dev/breadstuffs/wire)
+   Compiling pyana-sdk v0.1.0 (/Users/ember/dev/breadstuffs/sdk)
+   Compiling pyana-app-framework v0.1.0 (/Users/ember/dev/breadstuffs/app-framework)
+   Compiling pyana-teasting v0.1.0 (/Users/ember/dev/breadstuffs/teasting)
+warning: unused imports: `cell_target` and `federation_target`
+ --> teasting/src/router_sim.rs:8:69
+  |
+8 |     GovernanceProof, GovernedRouter, RouteTarget, RouteUpdateError, cell_target, compile_routes,
+  |                                                                     ^^^^^^^^^^^
+9 |     federation_target,
+  |     ^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `pyana-intent` (lib) generated 2 warnings
+   Compiling starbridge-nameservice v0.1.0 (/Users/ember/dev/breadstuffs/starbridge-apps/nameservice)
+   Compiling starbridge-identity v0.1.0 (/Users/ember/dev/breadstuffs/starbridge-apps/identity)
+   Compiling starbridge-governed-namespace v0.1.0 (/Users/ember/dev/breadstuffs/starbridge-apps/governed-namespace)
+   Compiling starbridge-subscription v0.1.0 (/Users/ember/dev/breadstuffs/starbridge-apps/subscription)
+   Compiling pyana-storage-templates v0.1.0 (/Users/ember/dev/breadstuffs/pyana-storage-templates)
+warning: `pyana-teasting` (lib) generated 1 warning (run `cargo fix --lib -p pyana-teasting` to apply 1 suggestion)
+   Compiling pyana-tests v0.1.0 (/Users/ember/dev/breadstuffs/tests)
+warning: unused imports: `ComputronCosts`, `Effect`, and `TurnResult`
+  --> tests/src/sovereign_proof.rs:11:18
+   |
+11 | use pyana_turn::{ComputronCosts, Effect, TurnExecutor, TurnResult};
+   |                  ^^^^^^^^^^^^^^  ^^^^^^                ^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `CellId`, `Cell`, and `Ledger`
+  --> tests/src/dsl_pipeline.rs:16:18
+   |
+16 | use pyana_cell::{Cell, CellId, Ledger};
+   |                  ^^^^  ^^^^^^  ^^^^^^
+
+warning: unused imports: `CellProgram`, `DslCircuit`, and `ProgramRegistry`
+  --> tests/src/dsl_pipeline.rs:17:26
+   |
+17 | use pyana_circuit::dsl::{CellProgram, DslCircuit, ProgramRegistry};
+   |                          ^^^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: unused imports: `StarkAir` and `self`
+  --> tests/src/dsl_pipeline.rs:19:28
+   |
+19 | use pyana_circuit::stark::{self, StarkAir};
+   |                            ^^^^  ^^^^^^^^
+
+warning: unused import: `pyana_turn::builder::ActionBuilder`
+  --> tests/src/dsl_pipeline.rs:23:5
+   |
+23 | use pyana_turn::builder::ActionBuilder;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `ComputronCosts`, `DelegationMode`, `Effect`, `TurnBuilder`, `TurnExecutor`, and `TurnResult`
+  --> tests/src/dsl_pipeline.rs:24:18
+   |
+24 | use pyana_turn::{ComputronCosts, DelegationMode, Effect, TurnBuilder, TurnExecutor, TurnResult};
+   |                  ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^  ^^^^^^  ^^^^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^^^^^
+
+warning: unused imports: `EffectVmContext`, `compute_effects_hash`, `generate_effect_vm_trace_ext`, and `self`
+  --> tests/src/captp_effects_pipeline.rs:12:5
+   |
+12 |     self, CellState, Effect, EffectVmAir, EffectVmContext, compute_effects_hash,
+   |     ^^^^                                  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^
+13 |     generate_effect_vm_trace, generate_effect_vm_trace_ext,
+   |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `pyana_circuit::poseidon2::hash_2_to_1`
+  --> tests/src/captp_effects_pipeline.rs:16:5
+   |
+16 | use pyana_circuit::poseidon2::hash_2_to_1;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `self`
+  --> tests/src/dfa_circuit.rs:18:28
+   |
+18 | use pyana_circuit::stark::{self, BoundaryConstraint, StarkAir};
+   |                            ^^^^
+
+warning: unused imports: `compute_effects_hash`, `extract_net_delta`, `generate_effect_vm_trace`, and `self`
+  --> tests/src/service_mesh_e2e.rs:12:5
+   |
+12 |     self, CellState, Effect, EffectVmAir, EffectVmContext, compute_effects_hash, extract_net_delta,
+   |     ^^^^                                                   ^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+13 |     generate_effect_vm_trace, generate_effect_vm_trace_ext,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `ComputronCosts` and `TurnExecutor`
+  --> tests/src/every_variant_roundtrip.rs:51:28
+   |
+51 |     Action, Authorization, ComputronCosts, DelegationMode, Effect, Event, Turn, TurnExecutor,
+   |                            ^^^^^^^^^^^^^^                                       ^^^^^^^^^^^^
+
+warning: unused import: `pyana_cell::predicate::WitnessedPredicate`
+  --> tests/src/state_constraint_variants.rs:28:5
+   |
+28 | use pyana_cell::predicate::WitnessedPredicate;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `AuthorizedSet`, `CustomDescriptor`, `DeltaRelation`, `HashKind`, `ReadSet`, `SimpleStateConstraint`, `TransitionCase`, and `TransitionGuard`
+  --> tests/src/state_constraint_variants.rs:30:5
+   |
+30 |     AuthorizedSet, CustomDescriptor, DeltaRelation, HashKind, ReadSet, SimpleStateConstraint,
+   |     ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^  ^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^
+31 |     TransitionCase, TransitionGuard,
+   |     ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: unused imports: `FIELD_ZERO` and `InputRef`
+  --> tests/src/state_constraint_variants.rs:34:42
+   |
+34 |     CellProgram, CellState, EvalContext, FIELD_ZERO, FieldElement, InputRef, ProgramError,
+   |                                          ^^^^^^^^^^                ^^^^^^^^
+
+warning: unused imports: `Ledger`, `StateConstraint`, and `field_from_u64`
+  --> tests/src/state_constraint_executor.rs:18:46
+   |
+18 |     AuthRequired, Cell, CellId, CellProgram, Ledger, Permissions, StateConstraint, field_from_u64,
+   |                                              ^^^^^^               ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^
+
+warning: unused imports: `ComputronCosts`, `TurnExecutor`, and `TurnResult`
+  --> tests/src/state_constraint_executor.rs:22:40
+   |
+22 |     Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, Turn, TurnExecutor,
+   |                                        ^^^^^^^^^^^^^^                                ^^^^^^^^^^^^
+23 |     TurnResult,
+   |     ^^^^^^^^^^
+
+warning: unused import: `pyana_cell::predicate::WitnessedPredicate`
+  --> tests/src/state_constraint_composition.rs:15:5
+   |
+15 | use pyana_cell::predicate::WitnessedPredicate;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `pyana_cell::program::SimpleStateConstraint`
+  --> tests/src/state_constraint_composition.rs:16:5
+   |
+16 | use pyana_cell::program::SimpleStateConstraint;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `CellProgram`, `EvalContext`, `InputRef`, `ProgramError`, and `StateConstraint`
+  --> tests/src/state_constraint_composition.rs:18:5
+   |
+18 |     CellProgram, CellState, EvalContext, InputRef, ProgramError, StateConstraint, field_from_u64,
+   |     ^^^^^^^^^^^             ^^^^^^^^^^^  ^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: unused import: `WitnessedPredicateRegistry`
+  --> tests/src/witnessed_predicate_kinds.rs:18:49
+   |
+18 |     WitnessedPredicate, WitnessedPredicateKind, WitnessedPredicateRegistry,
+   |                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `ProgramError`
+  --> tests/src/witnessed_predicate_kinds.rs:20:28
+   |
+20 | use pyana_cell::{InputRef, ProgramError};
+   |                            ^^^^^^^^^^^^
+
+warning: unused imports: `BearerCapProof` and `DelegationProofData`
+  --> tests/src/authorization_variants.rs:18:28
+   |
+18 |     Action, Authorization, BearerCapProof, DelegationMode, DelegationProofData,
+   |                            ^^^^^^^^^^^^^^                  ^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `CallForest`, `Effect`, and `Turn`
+  --> tests/src/authorization_variants.rs:20:18
+   |
+20 | use pyana_turn::{CallForest, Effect, Turn};
+   |                  ^^^^^^^^^^  ^^^^^^  ^^^^
+
+warning: unused import: `pyana_cell::CellId`
+  --> tests/src/sovereign_witness_threats.rs:18:5
+   |
+18 | use pyana_cell::CellId;
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Ledger`
+  --> tests/src/executor_honesty_threats.rs:15:46
+   |
+15 | use pyana_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
+   |                                              ^^^^^^
+
+warning: unused imports: `BearerCapProof` and `DelegationProofData`
+  --> tests/src/executor_honesty_threats.rs:16:49
+   |
+16 | use pyana_turn::action::{Action, Authorization, BearerCapProof, DelegationProofData, symbol};
+   |                                                 ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `ComputronCosts`, `TurnExecutor`, and `TurnResult`
+  --> tests/src/executor_honesty_threats.rs:18:17
+   |
+18 |     CallForest, ComputronCosts, DelegationMode, Effect, Turn, TurnExecutor, TurnResult,
+   |                 ^^^^^^^^^^^^^^                                ^^^^^^^^^^^^  ^^^^^^^^^^
+
+warning: unused imports: `SimpleStateConstraint`, `TransitionCase`, `TransitionGuard`, and `TransitionMeta`
+  --> tests/src/slot_caveat_composition_stress.rs:36:27
+   |
+36 | use pyana_cell::program::{SimpleStateConstraint, TransitionCase, TransitionGuard, TransitionMeta};
+   |                           ^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^
+
+warning: unused imports: `CellProgram`, `FIELD_ZERO`, and `StateConstraint`
+  --> tests/src/slot_caveat_composition_stress.rs:38:5
+   |
+38 |     CellProgram, CellState, EvalContext, FIELD_ZERO, StateConstraint, field_from_u64,
+   |     ^^^^^^^^^^^                          ^^^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: `pyana-tests` (lib) generated 29 warnings (run `cargo fix --lib -p pyana-tests` to apply 29 suggestions)
+warning: `pyana-circuit` (lib) generated 13 warnings
+   Compiling pyana-demo v0.1.0 (/Users/ember/dev/breadstuffs/demo)
+   Compiling pyana-demo-agent v0.1.0 (/Users/ember/dev/breadstuffs/demo-agent)
+warning: method `sign_bytes` is never used
+  --> demo/src/authority.rs:93:12
+   |
+28 | impl Authority {
+   | -------------- method in this implementation
+...
+93 |     pub fn sign_bytes(&self, message: &[u8]) -> [u8; 64] {
+   |            ^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: use of deprecated struct `pyana_storage::operator::RelayOperator`: Use `pyana_storage_templates::relay_operator::relay_operator_factory_descriptor()` per STORAGE-AS-CELL-PROGRAMS.md §3.5. The cell-program template's `RateLimitBySum` quota, `BoundedBy` slash-only-on-dispute, monotonic dispute counter, and `WitnessedPredicate::Dfa` dispatch are enforced by the executor on every turn.
+ --> teasting/tests/relay_operators.rs:7:64
+  |
+7 | use pyana_storage::operator::{DeliveryDispute, DisputeOutcome, RelayOperator};
+  |                                                                ^^^^^^^^^^^^^
+  |
+  = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated struct `pyana_storage::operator::RelayOperator`: Use `pyana_storage_templates::relay_operator::relay_operator_factory_descriptor()` per STORAGE-AS-CELL-PROGRAMS.md §3.5. The cell-program template's `RateLimitBySum` quota, `BoundedBy` slash-only-on-dispute, monotonic dispute counter, and `WitnessedPredicate::Dfa` dispatch are enforced by the executor on every turn.
+  --> teasting/tests/relay_operators.rs:18:30
+   |
+18 | fn well_bonded_operator() -> RelayOperator {
+   |                              ^^^^^^^^^^^^^
+
+warning: use of deprecated struct `pyana_storage::operator::RelayOperator`: Use `pyana_storage_templates::relay_operator::relay_operator_factory_descriptor()` per STORAGE-AS-CELL-PROGRAMS.md §3.5. The cell-program template's `RateLimitBySum` quota, `BoundedBy` slash-only-on-dispute, monotonic dispute counter, and `WitnessedPredicate::Dfa` dispatch are enforced by the executor on every turn.
+  --> teasting/tests/relay_operators.rs:19:5
+   |
+19 |     RelayOperator::new(identity(0xAA), 100_000, 50)
+   |     ^^^^^^^^^^^^^
+
+warning: use of deprecated struct `pyana_storage::operator::RelayOperator`: Use `pyana_storage_templates::relay_operator::relay_operator_factory_descriptor()` per STORAGE-AS-CELL-PROGRAMS.md §3.5. The cell-program template's `RateLimitBySum` quota, `BoundedBy` slash-only-on-dispute, monotonic dispute counter, and `WitnessedPredicate::Dfa` dispatch are enforced by the executor on every turn.
+   --> teasting/tests/relay_operators.rs:170:24
+    |
+170 |     let mut operator = RelayOperator::new(identity(0xAA), 500, 50);
+    |                        ^^^^^^^^^^^^^
+
+warning: use of deprecated field `pyana_storage::operator::RelayOperator::earned_fees`: Use `pyana_storage_templates::relay_operator::relay_operator_factory_descriptor()` per STORAGE-AS-CELL-PROGRAMS.md §3.5. The cell-program template's `RateLimitBySum` quota, `BoundedBy` slash-only-on-dispute, monotonic dispute counter, and `WitnessedPredicate::Dfa` dispatch are enforced by the executor on every turn.
+   --> teasting/tests/relay_operators.rs:144:16
+    |
+144 |     assert_eq!(operator.earned_fees, 0);
+    |                ^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `pyana_storage::operator::RelayOperator::earned_fees`: Use `pyana_storage_templates::relay_operator::relay_operator_factory_descriptor()` per STORAGE-AS-CELL-PROGRAMS.md §3.5. The cell-program template's `RateLimitBySum` quota, `BoundedBy` slash-only-on-dispute, monotonic dispute counter, and `WitnessedPredicate::Dfa` dispatch are enforced by the executor on every turn.
+   --> teasting/tests/relay_operators.rs:152:16
+    |
+152 |     assert_eq!(operator.earned_fees, 300);
+    |                ^^^^^^^^^^^^^^^^^^^^
+
+   Compiling pyana-preflight v0.1.0 (/Users/ember/dev/breadstuffs/preflight)
+warning: unused imports: `MessagePriority` and `QueuedMessage`
+ --> preflight/src/checks/captp.rs:7:34
+  |
+7 | use pyana_captp::store_forward::{MessagePriority, QueuedMessage};
+  |                                  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `ChildVkStrategy`, `FactoryDescriptor`, `FactoryRegistry`, and `FieldConstraint`
+ --> preflight/src/checks/cells.rs:4:29
+  |
+4 |     Cell, CellId, CellMode, ChildVkStrategy, FactoryDescriptor, FactoryRegistry, FieldConstraint,
+  |                             ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: unused import: `Child`
+  --> preflight/src/checks/demo_agent.rs:18:20
+   |
+18 | use std::process::{Child, Command, Stdio};
+   |                    ^^^^^
+
+warning: unused imports: `EngineConfig` and `PyanaEngine`
+ --> preflight/src/checks/federation.rs:6:17
+  |
+6 | use pyana_sdk::{EngineConfig, PyanaEngine};
+  |                 ^^^^^^^^^^^^  ^^^^^^^^^^^
+
+warning: use of deprecated function `pyana_circuit::verify_authorization_stark`: Use body_membership::verify_authorization_with_membership for adversarial settings. This function does not verify body fact existence (soundness gap).
+  --> preflight/src/checks/backends.rs:10:58
+   |
+10 | use pyana_circuit::{BabyBear, prove_authorization_stark, verify_authorization_stark};
+   |                                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated function `pyana_circuit::verify_authorization_stark`: Use body_membership::verify_authorization_with_membership for adversarial settings. This function does not verify body fact existence (soundness gap).
+  --> preflight/src/checks/backends.rs:89:5
+   |
+89 |     verify_authorization_stark(conclusion, acc_hash, &proof)
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `pyana_circuit::verify_authorization_stark`: Use body_membership::verify_authorization_with_membership for adversarial settings. This function does not verify body fact existence (soundness gap).
+ --> preflight/src/checks/composition.rs:7:58
+  |
+7 | use pyana_circuit::{BabyBear, prove_authorization_stark, verify_authorization_stark};
+  |                                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `pyana_circuit::verify_authorization_stark`: Use body_membership::verify_authorization_with_membership for adversarial settings. This function does not verify body fact existence (soundness gap).
+   --> preflight/src/checks/composition.rs:128:5
+    |
+128 |     verify_authorization_stark(conclusion, acc_hash, &proof)
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `pyana_circuit::verify_authorization_stark`: Use body_membership::verify_authorization_with_membership for adversarial settings. This function does not verify body fact existence (soundness gap).
+   --> preflight/src/checks/composition.rs:257:22
+    |
+257 |         let result = verify_authorization_stark(
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `pyana_circuit::verify_authorization_stark`: Use body_membership::verify_authorization_with_membership for adversarial settings. This function does not verify body fact existence (soundness gap).
+  --> preflight/src/checks/proofs.rs:10:58
+   |
+10 | use pyana_circuit::{BabyBear, prove_authorization_stark, verify_authorization_stark};
+   |                                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `pyana_circuit::verify_authorization_stark`: Use body_membership::verify_authorization_with_membership for adversarial settings. This function does not verify body fact existence (soundness gap).
+   --> preflight/src/checks/proofs.rs:199:25
+    |
+199 |     let verify_result = verify_authorization_stark(conclusion, accumulated_hash, &stark_proof);
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `pyana_storage::relay::MeteredRelay`: Folds into `pyana_storage_templates::relay_operator` per STORAGE-AS-CELL-PROGRAMS.md §3.5 + §6.1. Per-destination metering becomes the relay-operator cell's `RateLimitBySum` constraint on `bytes_relayed_this_epoch`.
+ --> preflight/src/checks/relay.rs:5:27
+  |
+5 | use pyana_storage::relay::MeteredRelay;
+  |                           ^^^^^^^^^^^^
+
+warning: use of deprecated struct `pyana_storage::relay::MeteredRelay`: Folds into `pyana_storage_templates::relay_operator` per STORAGE-AS-CELL-PROGRAMS.md §3.5 + §6.1. Per-destination metering becomes the relay-operator cell's `RateLimitBySum` constraint on `bytes_relayed_this_epoch`.
+  --> preflight/src/checks/relay.rs:17:21
+   |
+17 | fn make_relay() -> (MeteredRelay, QuotaId) {
+   |                     ^^^^^^^^^^^^
+
+warning: use of deprecated struct `pyana_storage::relay::MeteredRelay`: Folds into `pyana_storage_templates::relay_operator` per STORAGE-AS-CELL-PROGRAMS.md §3.5 + §6.1. Per-destination metering becomes the relay-operator cell's `RateLimitBySum` constraint on `bytes_relayed_this_epoch`.
+  --> preflight/src/checks/relay.rs:25:6
+   |
+25 |     (MeteredRelay::new(bank, 65536, 1000), payer)
+   |      ^^^^^^^^^^^^
+
+warning: use of deprecated struct `pyana_storage::inbox::CapInbox`: Use `pyana_storage_templates::cap_inbox::cap_inbox_factory_descriptor()` per STORAGE-AS-CELL-PROGRAMS.md §3.1. The cell-program template's `MonotonicSequence` / `SenderAuthorized` / `Monotonic` / `Immutable` constraints are enforced by the executor on every turn.
+ --> preflight/src/checks/storage.rs:5:28
+  |
+5 | use pyana_storage::inbox::{CapInbox, InboxMessage};
+  |                            ^^^^^^^^
+
+warning: use of deprecated struct `pyana_storage::programmable::ProgrammableQueue`: Use `pyana_storage_templates::programmable_queue::programmable_queue_factory_descriptor()` per STORAGE-AS-CELL-PROGRAMS.md §3.2. The cell-program template enforces the queue's constraints via the executor's per-turn evaluator — no parallel storage-side enforcement loop.
+ --> preflight/src/checks/storage.rs:7:19
+  |
+7 |     ProgramError, ProgrammableQueue, QueueConstraint, QueueProgram, ValidationContext,
+  |                   ^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated enum `pyana_storage::programmable::QueueConstraint`: Use `pyana_cell::program::StateConstraint` (the lifted 21-variant slot-caveat vocabulary) per STORAGE-AS-CELL-PROGRAMS.md §3.2. The `LiftedQueueConstraint` re-export at the top of this module already aliases the cell-side enum.
+ --> preflight/src/checks/storage.rs:7:38
+  |
+7 |     ProgramError, ProgrammableQueue, QueueConstraint, QueueProgram, ValidationContext,
+  |                                      ^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `pyana_storage::programmable::QueueProgram`: Use `pyana_cell::program::CellProgram::Cases` with `pyana_storage_templates::programmable_queue::programmable_queue_program_with(&cfg)` per STORAGE-AS-CELL-PROGRAMS.md §3.2.
+ --> preflight/src/checks/storage.rs:7:55
+  |
+7 |     ProgramError, ProgrammableQueue, QueueConstraint, QueueProgram, ValidationContext,
+  |                                                       ^^^^^^^^^^^^
+
+warning: use of deprecated struct `pyana_storage::programmable::ValidationContext`: Use the executor's `EvalContext` (per SLOT-CAVEATS-DESIGN.md §2) — the cell-program migration unifies the validation context with the executor's per-turn evaluator. See STORAGE-AS-CELL-PROGRAMS.md §3.2 migration risks for the 1:1 mapping.
+ --> preflight/src/checks/storage.rs:7:69
+  |
+7 |     ProgramError, ProgrammableQueue, QueueConstraint, QueueProgram, ValidationContext,
+  |                                                                     ^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `pyana_storage::pubsub::PubSubTopic`: Use `pyana_storage_templates::pubsub_topic::pubsub_topic_factory_descriptor()` per STORAGE-AS-CELL-PROGRAMS.md §3.3. The cell-program template's publisher-`SenderAuthorized`, monotonic `event_root`, monotonic `subscriber_cursors_root`, and monotonic `dedup_root` constraints are enforced by the executor on every turn.
+ --> preflight/src/checks/storage.rs:9:28
+  |
+9 | use pyana_storage::pubsub::PubSubTopic;
+  |                            ^^^^^^^^^^^
+
+warning: use of deprecated struct `pyana_storage::inbox::CapInbox`: Use `pyana_storage_templates::cap_inbox::cap_inbox_factory_descriptor()` per STORAGE-AS-CELL-PROGRAMS.md §3.1. The cell-program template's `MonotonicSequence` / `SenderAuthorized` / `Monotonic` / `Immutable` constraints are enforced by the executor on every turn.
+  --> preflight/src/checks/storage.rs:81:21
+   |
+81 |     let mut inbox = CapInbox::new(owner_quota, 100, 50);
+   |                     ^^^^^^^^
+
+warning: use of deprecated struct `pyana_storage::programmable::QueueProgram`: Use `pyana_cell::program::CellProgram::Cases` with `pyana_storage_templates::programmable_queue::programmable_queue_program_with(&cfg)` per STORAGE-AS-CELL-PROGRAMS.md §3.2.
+   --> preflight/src/checks/storage.rs:121:19
+    |
+121 |     let program = QueueProgram {
+    |                   ^^^^^^^^^^^^
+
+warning: use of deprecated variant `pyana_storage::programmable::QueueConstraint::MinDeposit`: Use `pyana_cell::program::StateConstraint` (the lifted 21-variant slot-caveat vocabulary) per STORAGE-AS-CELL-PROGRAMS.md §3.2. The `LiftedQueueConstraint` re-export at the top of this module already aliases the cell-side enum.
+   --> preflight/src/checks/storage.rs:124:30
+    |
+124 |             QueueConstraint::MinDeposit { amount: 50 },
+    |                              ^^^^^^^^^^
+
+warning: use of deprecated variant `pyana_storage::programmable::QueueConstraint::MaxSize`: Use `pyana_cell::program::StateConstraint` (the lifted 21-variant slot-caveat vocabulary) per STORAGE-AS-CELL-PROGRAMS.md §3.2. The `LiftedQueueConstraint` re-export at the top of this module already aliases the cell-side enum.
+   --> preflight/src/checks/storage.rs:125:30
+    |
+125 |             QueueConstraint::MaxSize { bytes: 1024 },
+    |                              ^^^^^^^
+
+warning: use of deprecated struct `pyana_storage::programmable::ProgrammableQueue`: Use `pyana_storage_templates::programmable_queue::programmable_queue_factory_descriptor()` per STORAGE-AS-CELL-PROGRAMS.md §3.2. The cell-program template enforces the queue's constraints via the executor's per-turn evaluator — no parallel storage-side enforcement loop.
+   --> preflight/src/checks/storage.rs:130:18
+    |
+130 |     let mut pq = ProgrammableQueue::new("test-queue".to_string(), owner, program, None, 100);
+    |                  ^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `pyana_storage::programmable::ValidationContext`: Use the executor's `EvalContext` (per SLOT-CAVEATS-DESIGN.md §2) — the cell-program migration unifies the validation context with the executor's per-turn evaluator. See STORAGE-AS-CELL-PROGRAMS.md §3.2 migration risks for the 1:1 mapping.
+   --> preflight/src/checks/storage.rs:141:15
+    |
+141 |     let ctx = ValidationContext {
+    |               ^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `pyana_storage::pubsub::PubSubTopic`: Use `pyana_storage_templates::pubsub_topic::pubsub_topic_factory_descriptor()` per STORAGE-AS-CELL-PROGRAMS.md §3.3. The cell-program template's publisher-`SenderAuthorized`, monotonic `event_root`, monotonic `subscriber_cursors_root`, and monotonic `dedup_root` constraints are enforced by the executor on every turn.
+   --> preflight/src/checks/storage.rs:252:21
+    |
+252 |     let mut topic = PubSubTopic::new(publisher, "test-topic".to_string(), 100, 10);
+    |                     ^^^^^^^^^^^
+
+warning: unused import: `hash_4_to_1`
+    --> circuit/src/ivc.rs:2670:32
+     |
+2670 |         use crate::poseidon2::{hash_4_to_1, hash_fact};
+     |                                ^^^^^^^^^^^
+     |
+     = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `hash_4_to_1`
+ --> circuit/src/effect_vm/tests.rs:7:37
+  |
+7 | use crate::poseidon2::{hash_2_to_1, hash_4_to_1};
+  |                                     ^^^^^^^^^^^
+
+warning: unused import: `crate::non_membership::SetIdentifier`
+    --> circuit/src/predicate_program.rs:3121:13
+     |
+3121 |         use crate::non_membership::SetIdentifier;
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::poseidon2::hash_many`
+    --> circuit/src/predicate_program.rs:3169:13
+     |
+3169 |         use crate::poseidon2::hash_many;
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `StarkAir`
+    --> circuit/src/poseidon_stark_verifier_circuit.rs:1098:40
+     |
+1098 |     use crate::stark::{MerkleStarkAir, StarkAir, generate_merkle_trace};
+     |                                        ^^^^^^^^
+
+warning: unused import: `crate::field::BabyBear`
+   --> circuit/src/effect_vm_p3_air.rs:255:9
+    |
+255 |     use crate::field::BabyBear;
+    |         ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::stark::StarkAir`
+   --> circuit/src/effect_vm_p3_air.rs:256:9
+    |
+256 |     use crate::stark::StarkAir;
+    |         ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Wire`
+    --> circuit/src/backends/kimchi_native/tests.rs:1940:44
+     |
+1940 |     use kimchi::circuits::wires::{COLUMNS, Wire};
+     |                                            ^^^^
+
+warning: unused import: `MockProof`
+  --> circuit/src/tests.rs:15:31
+   |
+15 | use crate::mock_prover::{Air, MockProof, MockProver};
+   |                               ^^^^^^^^^
+
+error[E0308]: mismatched types
+   --> preflight/src/checks/effect_vm.rs:313:13
+    |
+313 |             program_vk_hash,
+    |             ^^^^^^^^^^^^^^^ expected an array with a size of 8, found one with a size of 4
+    |
+    = note: expected array `[BabyBear; 8]`
+               found array `[BabyBear; 4]`
+
+warning: use of deprecated field `pyana_storage::programmable::QueueProgram::name`: Use `pyana_cell::program::CellProgram::Cases` with `pyana_storage_templates::programmable_queue::programmable_queue_program_with(&cfg)` per STORAGE-AS-CELL-PROGRAMS.md §3.2.
+   --> preflight/src/checks/storage.rs:122:9
+    |
+122 |         name: "test-program".to_string(),
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `pyana_storage::programmable::QueueProgram::constraints`: Use `pyana_cell::program::CellProgram::Cases` with `pyana_storage_templates::programmable_queue::programmable_queue_program_with(&cfg)` per STORAGE-AS-CELL-PROGRAMS.md §3.2.
+   --> preflight/src/checks/storage.rs:123:9
+    |
+123 | /         constraints: vec![
+124 | |             QueueConstraint::MinDeposit { amount: 50 },
+125 | |             QueueConstraint::MaxSize { bytes: 1024 },
+126 | |         ],
+    | |_________^
+
+warning: use of deprecated field `pyana_storage::programmable::QueueProgram::lookup_tables`: Use `pyana_cell::program::CellProgram::Cases` with `pyana_storage_templates::programmable_queue::programmable_queue_program_with(&cfg)` per STORAGE-AS-CELL-PROGRAMS.md §3.2.
+   --> preflight/src/checks/storage.rs:127:9
+    |
+127 |         lookup_tables: vec![],
+    |         ^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `pyana_storage::programmable::ValidationContext::sender`: Use the executor's `EvalContext` (per SLOT-CAVEATS-DESIGN.md §2) — the cell-program migration unifies the validation context with the executor's per-turn evaluator. See STORAGE-AS-CELL-PROGRAMS.md §3.2 migration risks for the 1:1 mapping.
+   --> preflight/src/checks/storage.rs:142:9
+    |
+142 |         sender: owner,
+    |         ^^^^^^^^^^^^^
+
+warning: use of deprecated field `pyana_storage::programmable::ValidationContext::current_height`: Use the executor's `EvalContext` (per SLOT-CAVEATS-DESIGN.md §2) — the cell-program migration unifies the validation context with the executor's per-turn evaluator. See STORAGE-AS-CELL-PROGRAMS.md §3.2 migration risks for the 1:1 mapping.
+   --> preflight/src/checks/storage.rs:143:9
+    |
+143 |         current_height: 10,
+    |         ^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `pyana_storage::programmable::ValidationContext::current_epoch`: Use the executor's `EvalContext` (per SLOT-CAVEATS-DESIGN.md §2) — the cell-program migration unifies the validation context with the executor's per-turn evaluator. See STORAGE-AS-CELL-PROGRAMS.md §3.2 migration risks for the 1:1 mapping.
+   --> preflight/src/checks/storage.rs:144:9
+    |
+144 |         current_epoch: 1,
+    |         ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `pyana_storage::programmable::ValidationContext::sender_epoch_count`: Use the executor's `EvalContext` (per SLOT-CAVEATS-DESIGN.md §2) — the cell-program migration unifies the validation context with the executor's per-turn evaluator. See STORAGE-AS-CELL-PROGRAMS.md §3.2 migration risks for the 1:1 mapping.
+   --> preflight/src/checks/storage.rs:145:9
+    |
+145 |         sender_epoch_count: 0,
+    |         ^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `pyana_storage::programmable::ValidationContext::preimage`: Use the executor's `EvalContext` (per SLOT-CAVEATS-DESIGN.md §2) — the cell-program migration unifies the validation context with the executor's per-turn evaluator. See STORAGE-AS-CELL-PROGRAMS.md §3.2 migration risks for the 1:1 mapping.
+   --> preflight/src/checks/storage.rs:146:9
+    |
+146 |         preimage: None,
+    |         ^^^^^^^^^^^^^^
+
+warning: use of deprecated field `pyana_storage::programmable::ValidationContext::sequence`: Use the executor's `EvalContext` (per SLOT-CAVEATS-DESIGN.md §2) — the cell-program migration unifies the validation context with the executor's per-turn evaluator. See STORAGE-AS-CELL-PROGRAMS.md §3.2 migration risks for the 1:1 mapping.
+   --> preflight/src/checks/storage.rs:147:9
+    |
+147 |         sequence: None,
+    |         ^^^^^^^^^^^^^^
+
+warning: value assigned to `stdout_buf` is never read
+   --> preflight/src/checks/demo_agent.rs:130:30
+    |
+130 |         let mut stdout_buf = Vec::new();
+    |                              ^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `stderr_buf` is never read
+   --> preflight/src/checks/demo_agent.rs:131:30
+    |
+131 |         let mut stderr_buf = Vec::new();
+    |                              ^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: use of deprecated unit struct `stark::MerkleStarkAir`: Use crate::dsl::descriptors::merkle_poseidon2_circuit() for algebraic soundness. MerkleStarkAir uses a linear hash binding that is not collision-resistant.
+    --> circuit/src/poseidon_stark.rs:1341:24
+     |
+1341 |     use crate::stark::{MerkleStarkAir, StarkAir, generate_merkle_trace};
+     |                        ^^^^^^^^^^^^^^
+
+warning: use of deprecated unit struct `stark::MerkleStarkAir`: Use crate::dsl::descriptors::merkle_poseidon2_circuit() for algebraic soundness. MerkleStarkAir uses a linear hash binding that is not collision-resistant.
+    --> circuit/src/poseidon_stark.rs:1398:19
+     |
+1398 |         let air = MerkleStarkAir;
+     |                   ^^^^^^^^^^^^^^
+
+warning: use of deprecated unit struct `stark::MerkleStarkAir`: Use crate::dsl::descriptors::merkle_poseidon2_circuit() for algebraic soundness. MerkleStarkAir uses a linear hash binding that is not collision-resistant.
+    --> circuit/src/poseidon_stark.rs:1422:19
+     |
+1422 |         let air = MerkleStarkAir;
+     |                   ^^^^^^^^^^^^^^
+
+warning: use of deprecated unit struct `stark::MerkleStarkAir`: Use crate::dsl::descriptors::merkle_poseidon2_circuit() for algebraic soundness. MerkleStarkAir uses a linear hash binding that is not collision-resistant.
+    --> circuit/src/poseidon_stark.rs:1441:19
+     |
+1441 |         let air = MerkleStarkAir;
+     |                   ^^^^^^^^^^^^^^
+
+warning: use of deprecated unit struct `stark::MerkleStarkAir`: Use crate::dsl::descriptors::merkle_poseidon2_circuit() for algebraic soundness. MerkleStarkAir uses a linear hash binding that is not collision-resistant.
+    --> circuit/src/poseidon_stark.rs:1461:19
+     |
+1461 |         let air = MerkleStarkAir;
+     |                   ^^^^^^^^^^^^^^
+
+warning: use of deprecated unit struct `stark::MerkleStarkAir`: Use crate::dsl::descriptors::merkle_poseidon2_circuit() for algebraic soundness. MerkleStarkAir uses a linear hash binding that is not collision-resistant.
+    --> circuit/src/poseidon_stark.rs:1480:19
+     |
+1480 |         let air = MerkleStarkAir;
+     |                   ^^^^^^^^^^^^^^
+
+warning: use of deprecated unit struct `stark::MerkleStarkAir`: Use crate::dsl::descriptors::merkle_poseidon2_circuit() for algebraic soundness. MerkleStarkAir uses a linear hash binding that is not collision-resistant.
+    --> circuit/src/poseidon_stark.rs:1500:19
+     |
+1500 |         let air = MerkleStarkAir;
+     |                   ^^^^^^^^^^^^^^
+
+warning: use of deprecated unit struct `stark::MerkleStarkAir`: Use crate::dsl::descriptors::merkle_poseidon2_circuit() for algebraic soundness. MerkleStarkAir uses a linear hash binding that is not collision-resistant.
+    --> circuit/src/poseidon_stark_verifier_circuit.rs:1098:24
+     |
+1098 |     use crate::stark::{MerkleStarkAir, StarkAir, generate_merkle_trace};
+     |                        ^^^^^^^^^^^^^^
+
+warning: use of deprecated unit struct `stark::MerkleStarkAir`: Use crate::dsl::descriptors::merkle_poseidon2_circuit() for algebraic soundness. MerkleStarkAir uses a linear hash binding that is not collision-resistant.
+    --> circuit/src/poseidon_stark_verifier_circuit.rs:1113:19
+     |
+1113 |         let air = MerkleStarkAir;
+     |                   ^^^^^^^^^^^^^^
+
+warning: use of deprecated unit struct `stark::MerkleStarkAir`: Use crate::dsl::descriptors::merkle_poseidon2_circuit() for algebraic soundness. MerkleStarkAir uses a linear hash binding that is not collision-resistant.
+    --> circuit/src/poseidon_stark_verifier_circuit.rs:1146:19
+     |
+1146 |         let air = MerkleStarkAir;
+     |                   ^^^^^^^^^^^^^^
+
+warning: use of deprecated unit struct `stark::MerkleStarkAir`: Use crate::dsl::descriptors::merkle_poseidon2_circuit() for algebraic soundness. MerkleStarkAir uses a linear hash binding that is not collision-resistant.
+    --> circuit/src/poseidon_stark_verifier_circuit.rs:1188:19
+     |
+1188 |         let air = MerkleStarkAir;
+     |                   ^^^^^^^^^^^^^^
+
+warning: use of deprecated unit struct `stark::MerkleStarkAir`: Use crate::dsl::descriptors::merkle_poseidon2_circuit() for algebraic soundness. MerkleStarkAir uses a linear hash binding that is not collision-resistant.
+    --> circuit/src/poseidon_stark_verifier_circuit.rs:1276:19
+     |
+1276 |         let air = MerkleStarkAir;
+     |                   ^^^^^^^^^^^^^^
+
+warning: use of deprecated unit struct `stark::MerkleStarkAir`: Use crate::dsl::descriptors::merkle_poseidon2_circuit() for algebraic soundness. MerkleStarkAir uses a linear hash binding that is not collision-resistant.
+    --> circuit/src/poseidon_stark_verifier_circuit.rs:1344:23
+     |
+1344 |             let air = MerkleStarkAir;
+     |                       ^^^^^^^^^^^^^^
+
+warning: use of deprecated unit struct `stark::MerkleStarkAir`: Use crate::dsl::descriptors::merkle_poseidon2_circuit() for algebraic soundness. MerkleStarkAir uses a linear hash binding that is not collision-resistant.
+    --> circuit/src/poseidon_stark_verifier_circuit.rs:1403:19
+     |
+1403 |         let air = MerkleStarkAir;
+     |                   ^^^^^^^^^^^^^^
+
+warning: use of deprecated function `backends::mina::ipa_verifier::build_ipa_verifier_circuit`: Superseded by dual-curve step/wrap architecture. Use build_step_verifier_circuit + build_wrap_verifier_circuit.
+   --> circuit/src/backends/mina/tests.rs:364:41
+    |
+364 |     let (gates, public_count, layout) = build_ipa_verifier_circuit(IPA_ROUNDS);
+    |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `backends::mina::ipa_verifier::build_ipa_verifier_circuit`: Superseded by dual-curve step/wrap architecture. Use build_step_verifier_circuit + build_wrap_verifier_circuit.
+   --> circuit/src/backends/mina/tests.rs:385:30
+    |
+385 |     let (gates, _, layout) = build_ipa_verifier_circuit(IPA_ROUNDS);
+    |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `backends::mina::ipa_verifier::build_ipa_verifier_circuit`: Superseded by dual-curve step/wrap architecture. Use build_step_verifier_circuit + build_wrap_verifier_circuit.
+   --> circuit/src/backends/mina/tests.rs:877:34
+    |
+877 |     let (mut gates, _, layout) = build_ipa_verifier_circuit(IPA_ROUNDS);
+    |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `backends::mina::ipa_verifier::build_ipa_verifier_circuit`: Superseded by dual-curve step/wrap architecture. Use build_step_verifier_circuit + build_wrap_verifier_circuit.
+    --> circuit/src/backends/mina/tests.rs:1014:31
+     |
+1014 |     let (_, _, mono_layout) = build_ipa_verifier_circuit(IPA_ROUNDS);
+     |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated unit struct `stark::MerkleStarkAir`: Use crate::dsl::descriptors::merkle_poseidon2_circuit() for algebraic soundness. MerkleStarkAir uses a linear hash binding that is not collision-resistant.
+   --> circuit/src/backends/stark_in_pickles.rs:513:24
+    |
+513 |     use crate::stark::{MerkleStarkAir, generate_merkle_trace};
+    |                        ^^^^^^^^^^^^^^
+
+warning: use of deprecated unit struct `stark::MerkleStarkAir`: Use crate::dsl::descriptors::merkle_poseidon2_circuit() for algebraic soundness. MerkleStarkAir uses a linear hash binding that is not collision-resistant.
+   --> circuit/src/backends/stark_in_pickles.rs:528:19
+    |
+528 |         let air = MerkleStarkAir;
+    |                   ^^^^^^^^^^^^^^
+
+warning: use of deprecated unit struct `stark::MerkleStarkAir`: Use crate::dsl::descriptors::merkle_poseidon2_circuit() for algebraic soundness. MerkleStarkAir uses a linear hash binding that is not collision-resistant.
+   --> circuit/src/backends/stark_in_pickles.rs:566:19
+    |
+566 |         let air = MerkleStarkAir;
+    |                   ^^^^^^^^^^^^^^
+
+warning: use of deprecated unit struct `stark::MerkleStarkAir`: Use crate::dsl::descriptors::merkle_poseidon2_circuit() for algebraic soundness. MerkleStarkAir uses a linear hash binding that is not collision-resistant.
+   --> circuit/src/backends/stark_in_pickles.rs:592:19
+    |
+592 |         let air = MerkleStarkAir;
+    |                   ^^^^^^^^^^^^^^
+
+warning: use of deprecated unit struct `stark::MerkleStarkAir`: Use crate::dsl::descriptors::merkle_poseidon2_circuit() for algebraic soundness. MerkleStarkAir uses a linear hash binding that is not collision-resistant.
+   --> circuit/src/backends/stark_in_pickles.rs:610:19
+    |
+610 |         let air = MerkleStarkAir;
+    |                   ^^^^^^^^^^^^^^
+
+warning: use of deprecated unit struct `stark::MerkleStarkAir`: Use crate::dsl::descriptors::merkle_poseidon2_circuit() for algebraic soundness. MerkleStarkAir uses a linear hash binding that is not collision-resistant.
+   --> circuit/src/backends/stark_in_pickles.rs:659:19
+    |
+659 |         let air = MerkleStarkAir;
+    |                   ^^^^^^^^^^^^^^
+
+warning: use of deprecated unit struct `stark::MerkleStarkAir`: Use crate::dsl::descriptors::merkle_poseidon2_circuit() for algebraic soundness. MerkleStarkAir uses a linear hash binding that is not collision-resistant.
+   --> circuit/src/backends/stark_in_pickles.rs:683:19
+    |
+683 |         let air = MerkleStarkAir;
+    |                   ^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0308`.
+warning: `pyana-preflight` (bin "pyana-preflight" test) generated 38 warnings
+error: could not compile `pyana-preflight` (bin "pyana-preflight" test) due to 1 previous error; 38 warnings emitted
+warning: build failed, waiting for other jobs to finish...
+warning: `pyana-teasting` (test "relay_operators") generated 6 warnings
+warning: `pyana-demo` (bin "pyana-demo" test) generated 1 warning
+warning: unused import: `StarkAir`
+    --> circuit/src/poseidon_stark.rs:1341:40
+     |
+1341 |     use crate::stark::{MerkleStarkAir, StarkAir, generate_merkle_trace};
+     |                                        ^^^^^^^^
+
+warning: unused variable: `root`
+   --> circuit/src/dsl/membership.rs:416:35
+    |
+416 |         let (siblings, positions, root) = create_test_witness(leaf, 4);
+    |                                   ^^^^ help: if this is intentional, prefix it with an underscore: `_root`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `proof1`
+   --> circuit/src/dsl/tiered_revocation.rs:454:13
+    |
+454 |         let proof1 = set.prove_non_revocation(clean).unwrap();
+    |             ^^^^^^ help: if this is intentional, prefix it with an underscore: `_proof1`
+
+warning: unused variable: `deltas`
+    --> circuit/src/ivc.rs:2965:13
+     |
+2965 |         let deltas: Vec<FoldDelta> = witnesses
+     |             ^^^^^^ help: if this is intentional, prefix it with an underscore: `_deltas`
+
+warning: unused variable: `state`
+    --> circuit/src/effect_vm/tests.rs:1054:9
+     |
+1054 |     let state = make_initial_state(1000);
+     |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_state`
+
+warning: unused variable: `real_pi`
+    --> circuit/src/poseidon_stark.rs:1501:21
+     |
+1501 |         let (trace, real_pi) = generate_merkle_trace(
+     |                     ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_real_pi`
+
+warning: unused variable: `x`
+   --> circuit/src/backends/mina/tests.rs:501:9
+    |
+501 |     let x = Fp::from(1u64);
+    |         ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `sr`
+    --> circuit/src/backends/kimchi_native/derivation.rs:1596:13
+     |
+1596 |         let sr = w.state_root;
+     |             ^^ help: if this is intentional, prefix it with an underscore: `_sr`
+
+warning: unused variable: `dh`
+    --> circuit/src/backends/kimchi_native/derivation.rs:1597:13
+     |
+1597 |         let dh = w.derived_hash();
+     |             ^^ help: if this is intentional, prefix it with an underscore: `_dh`
+
+warning: unused variable: `pc`
+    --> circuit/src/backends/kimchi_native/dsl_backend.rs:1737:21
+     |
+1737 |         let (gates, pc) = descriptor_to_kimchi_gates(&desc).unwrap();
+     |                     ^^ help: if this is intentional, prefix it with an underscore: `_pc`
+
+warning: unused variable: `i`
+   --> circuit/src/tests.rs:750:13
+    |
+750 |         for i in 0..folds.len().saturating_sub(1) {
+    |             ^
+    |
+help: you might have meant to pattern match on the similarly named constant `S`
+    |
+750 -         for i in 0..folds.len().saturating_sub(1) {
+750 +         for schnorr_air::pi::S in 0..folds.len().saturating_sub(1) {
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+750 |         for _i in 0..folds.len().saturating_sub(1) {
+    |             +
+
+warning: `pyana-circuit` (lib test) generated 58 warnings (13 duplicates) (run `cargo fix --lib -p pyana-circuit --tests` to apply 19 suggestions)
+error: command `/Users/ember/.rustup/toolchains/nightly-2026-01-01-aarch64-apple-darwin/bin/cargo test --no-run --message-format json-render-diagnostics --release` exited with code 101

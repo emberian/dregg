@@ -1,0 +1,11 @@
+{
+  "id": "subscription",
+  "name": "Subscription",
+  "description": "Pub/sub topic and capability subscription starbridge-app.",
+  "version": "0.1.0",
+  "factory_vks": [],
+  "page": "/starbridge-apps/subscription/pages/index.html",
+  "inspectors": [],
+  "turn_builders": [],
+  "required_apis": ["signTurn"]
+}

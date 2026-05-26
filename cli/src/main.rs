@@ -19,14 +19,26 @@ use commands::{
 /// Pyana -- sovereign cell-based compute substrate.
 ///
 /// Interact with cells, turns, capabilities, and federation nodes.
+///
+/// This is the primary user-facing client / SDK surface for a live node.
+/// It has parity with many wasm runtime + SDK operations (cells, caps,
+/// federation, receipts, blocklace checkpoints, etc.).
+///
+/// Examples:
+///   pyana --node-url http://localhost:8420 cell create --label demo
+///   pyana cipherclerk transfer <recipient-cell> 1000 --memo "pay"
+///   pyana cap export <cell-id>
+///   pyana doctor
+///   pyana node blocklace-checkpoint
+///   pyana turn build   # interactive effectful turn
 #[derive(Parser)]
 #[command(
     name = "pyana",
     version,
-    about = "Pyana CLI -- manage cells, turns, capabilities, and federation nodes",
-    long_about = None,
+    about = "Pyana CLI -- manage cells, turns, capabilities, and federation nodes (full SDK client)",
+    long_about = "Pyana CLI (pyana-cli crate) -- hardened, expanded client with better errors, confirms for dangerous ops, blocklace support, doctor diagnostics, and parity targets from wasm bindings (federation, receipts, observability).\n\nSee subcommand --help for details. All POST shapes now match current node/api.rs handlers (no more 422 skews on cell/cipherclerk/cap).",
     propagate_version = true,
-    arg_required_else_help = true,
+    arg_required_else_help = true
 )]
 struct Cli {
     /// Node URL to connect to (overrides config).
@@ -241,7 +253,6 @@ fn run_config(
             ctx.header("Configuration");
             ctx.kv("Path", &path.display().to_string());
             ctx.kv("Node URL", &cfg.node.url);
-            ctx.kv("Keyfile", &cfg.cclerk.keyfile);
             ctx.kv("Output format", &cfg.output.format);
             Ok(())
         }

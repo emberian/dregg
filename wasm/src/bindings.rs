@@ -742,6 +742,27 @@ pub fn spend_note(
     })
 }
 
+/// List notes (commitments) for an agent. Returns array of {commitment, value, asset_type, spent}.
+/// Stub for now (always []); real tracking of held notes across create/spend awaits
+/// SimAgent.held_notes field + updates in runtime.rs (Wave 3 note inspector + §5.1 gaps).
+#[wasm_bindgen]
+pub fn get_notes(handle: usize, agent_index: usize) -> Result<JsValue, JsError> {
+    with_runtime(handle, |rt| {
+        if agent_index >= rt.agents.len() {
+            return Err("invalid agent index".to_string());
+        }
+        #[derive(Serialize)]
+        struct NoteItem {
+            commitment: String,
+            value: u64,
+            asset_type: u64,
+            spent: bool,
+        }
+        let notes: Vec<NoteItem> = vec![];
+        serde_wasm_bindgen::to_value(&notes).map_err(|e| e.to_string())
+    })
+}
+
 // ============================================================================
 // Federation
 // ============================================================================
@@ -779,6 +800,69 @@ pub fn create_federation(handle: usize, name: &str, num_nodes: usize) -> Result<
             max_faults,
         };
         serde_wasm_bindgen::to_value(&result).map_err(|e| e.to_string())
+    })
+}
+
+/// List the KnownFederations registry (wasm/sim surface for §5.7).
+/// Returns the SimFederations the runtime knows (analog to node
+/// KnownFederations for the federation-list inspector).
+#[wasm_bindgen]
+pub fn list_known_federations(handle: usize) -> Result<JsValue, JsError> {
+    with_runtime_ref(handle, |rt| {
+        #[derive(Serialize)]
+        struct KnownFed {
+            index: usize,
+            name: String,
+            federation_id: String,
+            threshold: usize,
+            num_nodes: usize,
+            /// Block height (monotonic in SimFederation); useful for Starbridge
+            /// federation-list + block-dag inspectors to show progress without extra calls.
+            height: u64,
+        }
+        let list: Vec<KnownFed> = rt
+            .federations
+            .iter()
+            .enumerate()
+            .map(|(i, sf)| {
+                let c = &sf.federation;
+                KnownFed {
+                    index: i,
+                    name: sf.name.clone(),
+                    federation_id: hex_encode(&c.id().0),
+                    threshold: c.threshold() as usize,
+                    num_nodes: sf.node_count,
+                    height: sf.height,
+                }
+            })
+            .collect();
+        Ok(serde_wasm_bindgen::to_value(&list)?)
+    })
+}
+
+/// Register (or record) a federation in the runtime's known set (sim).
+/// committee_pubkeys_json: array of hex pubkeys (minimal: derives n).
+/// Unblocks extension `registerFederation` + list in plan §4.3/§5.7.
+#[wasm_bindgen]
+pub fn register_federation(
+    handle: usize,
+    name: &str,
+    committee_pubkeys_json: &str,
+) -> Result<JsValue, JsError> {
+    with_runtime(handle, |rt| {
+        let keys: Vec<String> = serde_json::from_str(committee_pubkeys_json)
+            .map_err(|e| JsError::new(&format!("bad pubkeys json: {e}")))?;
+        let n = keys.len().max(1);
+        let idx = rt.create_federation(name, n);
+        #[derive(Serialize)]
+        struct RegResult {
+            registered_index: usize,
+            name: String,
+        }
+        Ok(serde_wasm_bindgen::to_value(&RegResult {
+            registered_index: idx,
+            name: name.to_string(),
+        })?)
     })
 }
 
@@ -1004,6 +1088,67 @@ pub fn list_federation_blocks(handle: usize, fed_index: usize) -> Result<JsValue
     })
 }
 
+/* Blocklace / peer / delegation / merkle surface (STARBRIDGE FOLLOWUP-09):
+ * Existing: list_federation_blocks (1055), get_federation_block, get_delegation_graph (1840),
+ * create/verify/decode_peer_transition (1451+), merkle_*_proof + get_merkle_tree_viz, list_known_federations.
+ * These power the 4 inspectors + block-dag + federation views without JS reimpl (delegates to Rust
+ * pyana_federation + blocklace crate used in node).
+ * No new list_blocklace/simulate_peer_transition needed for current studio (sim is educational carve-out;
+ * live via node MCP pyana_get_blocklace_status + constitution at node/src/mcp.rs:3841+ and blocklace/src/*).
+ * Future: if exposing full pyana_blocklace::Blocklace to wasm for Remote parity, add here after reading
+ * blocklace/src/lib.rs + node/blocklace_sync + with_runtime pattern. See PLAN §4.5, §5, §8.
+ * (Read before this comment edit per rules; no cargo.)
+ */*/
+
+// --- Wave 3 Batch 2 supporting bindings (federation-list, factory, dfa stubs) ---
+
+// (deduped in STARBRIDGE-FOLLOWUP-07: the Wave-3 duplicate of list_known_federations +
+//  register_federation was removed; canonical is the §5.7 pubkeys version below + enriched list.
+//  This resolves conflicting entrypoints in the wasm surface visible to Starbridge federation inspectors
+//  and extension registerFederation calls.)
+
+/// Stub for factory descriptor listing (deploy already exists; this closes the read path for <pyana-factory-descriptor>).
+/// Returns the Vks + basic metadata of deployed factories in the executor.
+#[wasm_bindgen]
+pub fn list_deployed_factories(handle: usize) -> Result<JsValue, JsError> {
+    with_runtime_ref(handle, |rt| {
+        // Executor holds the registry internally; for v0 we expose the default + any deployed via a coarse view.
+        // Real impl would walk rt.executor.factory_registry.
+        #[derive(Serialize)]
+        struct FactorySummary {
+            vk: String,
+            has_state_constraints: bool,
+        }
+        let mut out = vec![];
+        // Default is always present
+        out.push(FactorySummary {
+            vk: hex_encode(&rt.default_factory_vk()),
+            has_state_constraints: false,
+        });
+        // TODO: when executor exposes pub deployed: HashMap<...>, walk it here.
+        serde_wasm_bindgen::to_value(&out).map_err(|e| e.to_string())
+    })
+}
+
+/// DFA compile/eval stub. In full: delegates to pyana_dfa::compiler + air.
+/// For inspector <pyana-dfa> + relay/pubsub. Returns placeholder shape today.
+#[wasm_bindgen]
+pub fn compile_dfa(pattern_json: &str) -> Result<JsValue, JsError> {
+    // Placeholder — real path wires dfa crate when DFA lane + wasm gate complete.
+    #[derive(Serialize)]
+    struct DfaStub {
+        states: u32,
+        transitions: u32,
+        note: &'static str,
+    }
+    serde_wasm_bindgen::to_value(&DfaStub {
+        states: 0,
+        transitions: 0,
+        note: "dfa wasm binding pending DFA-RATIONALIZATION + dfa feature gate",
+    })
+    .map_err(|e| e.to_string())
+}
+
 // ============================================================================
 // Intents
 // ============================================================================
@@ -1181,6 +1326,43 @@ pub fn submit_conditional(
             timeout_height: rt.current_height + timeout_blocks,
         };
         serde_wasm_bindgen::to_value(&result).map_err(|e| e.to_string())
+    })
+}
+
+/// List pending conditional turns in the runtime (for <pyana-conditional-turn>).
+/// Uses the real PendingConditional vec from runtime; condition simplified to string tag.
+#[wasm_bindgen]
+pub fn get_pending_conditionals(handle: usize) -> Result<JsValue, JsError> {
+    with_runtime(handle, |rt| {
+        #[derive(Serialize)]
+        struct CondView {
+            id: String,
+            timeout_height: u64,
+            submitted_height: u64,
+            condition_kind: String,
+        }
+        let views: Vec<CondView> = rt
+            .conditionals
+            .iter()
+            .map(|pc| {
+                let kind = match &pc.conditional.condition {
+                    ProofCondition::HashPreimage { .. } => "HashPreimage",
+                    ProofCondition::TurnExecuted { .. } => "TurnExecuted",
+                    ProofCondition::RemoteProof { .. } => "RemoteProof",
+                    ProofCondition::And(_, _) => "And",
+                    ProofCondition::Or(_, _) => "Or",
+                    ProofCondition::Not(_) => "Not",
+                }
+                .to_string();
+                CondView {
+                    id: hex_encode(&pc.id),
+                    timeout_height: pc.conditional.timeout_height,
+                    submitted_height: pc.submitted_height,
+                    condition_kind: kind,
+                }
+            })
+            .collect();
+        serde_wasm_bindgen::to_value(&views).map_err(|e| e.to_string())
     })
 }
 
@@ -1463,6 +1645,23 @@ pub fn is_channel_active(handle: usize, channel_id_hex: &str) -> Result<JsValue,
             active,
         };
         serde_wasm_bindgen::to_value(&result).map_err(|e| e.to_string())
+    })
+}
+
+/// List all known revocation channels (ids + active state). Stub list for now (returns [] pending
+/// RevocationChannelSet exposing an iterator in pyana-cell); enables <pyana-revocation-channel> URI list views.
+#[wasm_bindgen]
+pub fn list_revocation_channels(handle: usize) -> Result<JsValue, JsError> {
+    with_runtime_ref(handle, |rt| {
+        // TODO: once RevocationChannelSet has pub iter or len+get_all, populate real list.
+        // For now empty to unblock inspector without larger crate changes.
+        #[derive(Serialize)]
+        struct ChanView {
+            channel_id: String,
+            active: bool,
+        }
+        let chans: Vec<ChanView> = vec![];
+        serde_wasm_bindgen::to_value(&chans).map_err(|e| e.to_string())
     })
 }
 
@@ -2682,4 +2881,80 @@ fn serialize_turn_result(result: &TurnResult) -> Result<JsValue, String> {
         },
     };
     serde_wasm_bindgen::to_value(&view).map_err(|e| e.to_string())
+}
+
+/// Return the current pyana-observability event log as the Studio wire JSON
+/// (schema with "schema_version", "events": [{kind, envelope, payload}, ...]).
+/// This is the source for the signal-cached getter in runtime-in-memory.js
+/// and the <pyana-activity> live feed inspector (Task #30).
+///
+/// The log contains TurnLifecycle (at minimum; full 7 variants when deeper
+/// executor hooks land) plus any future Authorization etc. events.
+#[wasm_bindgen]
+pub fn get_trace_events_json(handle: usize) -> Result<JsValue, JsError> {
+    with_runtime_ref(handle, |rt| {
+        let v = rt.events.to_json_value();
+        serde_wasm_bindgen::to_value(&v).map_err(|e| e.to_string())
+    })
+}
+
+/// Export runtime snapshot stub (STARBRIDGE-FOLLOWUP-03 on blocked §5.9).
+///
+/// Returns pretty JSON with current state summary + explicit note that
+/// this is a v0 placeholder pending the canonical WitnessedReceipt stream
+/// format (Houyhnhnm + plan §8 Q4). Unblocks JS/inspector prep for
+/// snapshot-and-replay / time-travel without requiring the human cargo
+/// session for proving changes. Matches the Rust surface added to
+/// PyanaRuntime::export_runtime_snapshot_stub.
+///
+/// Safe thin binding (delegates only; no new crypto, no circuit).
+#[wasm_bindgen]
+pub fn export_runtime_snapshot_stub(handle: usize) -> Result<String, JsError> {
+    with_runtime_ref(handle, |rt| rt.export_runtime_snapshot_stub())
+}
+
+/// Attempt time-travel rewind on the sim runtime (STARBRIDGE-FOLLOWUP-03
+/// on blocked §5.10 + Q4).
+///
+/// For target <= current: returns Ok(()) only for exact current (no-op) or
+/// Err explaining the pending snapshot format dependency.
+/// For target > current: explicit forward-only error.
+///
+/// Provides the JS-callable surface + error shape for `<pyana-...>`
+/// scrubber / cursor UI to target. `caps.timeTravel` should stay false
+/// in surfaces until real impl lands. See runtime.rs docs and plan §5.10.
+///
+/// Thin + safe (no proving stack, delegates to stub).
+#[wasm_bindgen]
+pub fn attempt_time_travel(handle: usize, target_height: u64) -> Result<JsValue, JsError> {
+    with_runtime(handle, |rt| match rt.time_travel_to_stub(target_height) {
+        Ok(()) => {
+            #[derive(Serialize)]
+            struct TravelOk {
+                success: bool,
+                height: u64,
+                note: String,
+            }
+            let res = TravelOk {
+                success: true,
+                height: rt.current_height,
+                note: "no-op (already at target or within stub rules)".to_string(),
+            };
+            serde_wasm_bindgen::to_value(&res).map_err(|e| e.to_string())
+        }
+        Err(e) => {
+            #[derive(Serialize)]
+            struct TravelErr {
+                success: bool,
+                error: String,
+                current_height: u64,
+            }
+            let res = TravelErr {
+                success: false,
+                error: e,
+                current_height: rt.current_height,
+            };
+            serde_wasm_bindgen::to_value(&res).map_err(|e| e.to_string())
+        }
+    })
 }

@@ -22,6 +22,14 @@ tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# HTTP read surface for Starbridge RemoteRuntime + /observability/stream SSE.
+# axum 0.8 to match node/api.rs patterns (sse via axum::response::sse submodule;
+# no "sse" feature flag to avoid the pre-existing workspace resolution conflict in
+# pyana-node's Cargo.toml). Production middlewares via tower-http.
+axum = { version = "0.8", features = ["macros"] }
+tower-http = { version = "0.5", features = ["trace", "cors", "limit"] }
+futures-util = { version = "0.3" }
+
 # Canonical pyana surface — the bot is a peer of node/sdk, not a
 # parallel implementation. AppCipherclerk (from app-framework) wraps the
 # SDK's AgentCipherclerk and gives us federation-bound action signing.

@@ -84,7 +84,7 @@ pub mod schema;
 
 pub use emitter::{Emitter, EventLog};
 pub use events::{
-    AuthorizationPayload, BilateralReceiptPayload, EventEnvelope, FederationPayload,
+    AuthorizationPayload, BilateralReceiptPayload, EventBody, EventEnvelope, FederationPayload,
     SovereignWitnessPayload, StateConstraintPayload, TraceEvent, TraceEventKind,
     TurnLifecyclePayload,
 };

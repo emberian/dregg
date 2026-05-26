@@ -53,7 +53,7 @@ fn build_transfer_turn(agent: CellId, nonce: u64, from: CellId, to: CellId, amou
     Turn {
         agent,
         nonce,
-        fee: 0,
+        fee: 300,
         memo: None,
         valid_until: None,
         previous_receipt_hash: None,

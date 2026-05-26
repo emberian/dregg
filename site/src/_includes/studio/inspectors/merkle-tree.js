@@ -15,6 +15,13 @@
  *   runtime._wasm.compute_merkle_root(JSON.stringify(leaves))
  *   runtime._wasm.merkle_membership_proof(JSON.stringify(leaves), leaf)
  *   runtime._wasm.merkle_non_membership_proof(JSON.stringify(leaves), leaf)
+ *
+ * Pattern note (FOLLOWUP-09): Extends HTMLElement (lazy findRuntime for standalone use in
+ * playground/learn/ + data= support for predicate inspectors); see _base.js:21 + cell style
+ * (inspectors.js:23) for full InspectorBase + effect + signals + reuse. Delegates all crypto
+ * to wasm (no JS reimpl of merkle/poseidon). Real merkle in pyana-dsl + circuit (merkle_dsl.rs,
+ * poseidon2 etc); used for receipts/ARs per plan §4.5. Sample leaves from devnet manifests or
+ * SSE activity events can be wired via <pyana-activity> + predicate views.
  */
 
 import { InspectorBase, shortHex } from './_base.js';

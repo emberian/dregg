@@ -1048,7 +1048,7 @@ impl NodeStateInner {
                         path = %path.display(),
                         has_validators = v["validators"].is_array(),
                         has_members = v["members"].is_array(),
-                        "skipping malformed federation descriptor (no parseable validators/members)",
+                        "skipping federation descriptor (no parseable pubkeys under validators[].public_key or members[]); this may be empty, corrupted, or an unrecognized schema. Cross-federation verification for this peer may be unavailable until fixed.",
                     );
                 }
             }
@@ -1194,13 +1194,28 @@ pub(crate) fn parse_federation_descriptor(
             if h.len() != 64 {
                 return None;
             }
+            // Use the same robust hex decode pattern as hex_decode_32 in main.rs
+            // (from_str_radix) rather than the previous char-cast + to_digit
+            // version. This eliminates a source of spurious "malformed descriptor"
+            // skips for valid cross-federation descriptors written by
+            // register-federation or genesis flows. Inconsistent decode impls
+            // were a latent footgun for operators running multi-federation setups.
             let mut out = [0u8; 32];
-            for (i, chunk) in h.as_bytes().chunks(2).enumerate() {
-                let hi = (chunk[0] as char).to_digit(16)? as u8;
-                let lo = (chunk[1] as char).to_digit(16)? as u8;
-                out[i] = (hi << 4) | lo;
+            let mut ok = true;
+            for (i, byte) in out.iter_mut().enumerate() {
+                match u8::from_str_radix(&h[i * 2..i * 2 + 2], 16) {
+                    Ok(b) => *byte = b,
+                    Err(_) => {
+                        ok = false;
+                        break;
+                    }
+                }
             }
-            Some(pyana_types::PublicKey(out))
+            if ok {
+                Some(pyana_types::PublicKey(out))
+            } else {
+                None
+            }
         })
         .collect();
     if members.is_empty() {

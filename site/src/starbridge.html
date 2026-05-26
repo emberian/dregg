@@ -43,6 +43,15 @@
           </h3>
           <ul id="sb-cell-list" class="sb__list"></ul>
         </section>
+        <!-- Apps tab / browser (STARBRIDGE-PLAN §4.8): <pyana-app-list> reads
+             starbridge-apps/*/manifest.json (Q3 format). First e2e demo is
+             the nameservice (mounts its inspectors + typed turn-builders). -->
+        <section class="sb__section">
+          <h3 class="sb__section-title">
+            Apps <span id="sb-app-count" class="sb__count">0</span>
+          </h3>
+          <pyana-app-list id="sb-app-list"></pyana-app-list>
+        </section>
         <details class="sb__section sb__section--placeholder">
           <summary>Turns</summary>
           <p class="sb__placeholder">listTurns not yet exposed on runtime.</p>

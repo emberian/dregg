@@ -1,0 +1,11 @@
+{
+  "id": "governed-namespace",
+  "name": "Governed Namespace",
+  "description": "Governance and table-driven namespace starbridge-app.",
+  "version": "0.1.0",
+  "factory_vks": [],
+  "page": "/starbridge-apps/governed-namespace/pages/index.html",
+  "inspectors": [],
+  "turn_builders": [],
+  "required_apis": ["signTurn"]
+}

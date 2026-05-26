@@ -15,6 +15,7 @@ use axum::extract::DefaultBodyLimit;
 use axum::http::Request;
 use axum::http::{HeaderValue, Method, header};
 use axum::response::Response;
+use axum::response::sse::{Event, Sse};
 use axum::{
     Json, Router,
     extract::ConnectInfo,
@@ -25,9 +26,12 @@ use axum::{
     middleware,
     routing::{get, post},
 };
+use futures_util::stream::{self, Stream};
 use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
 use subtle::ConstantTimeEq;
 use tokio::sync::Mutex;
+use tokio::time::{self, Duration};
 
 use pyana_sdk::{Attenuation, AuthRequest, CellId};
 use pyana_turn::{CallForest, Turn};
@@ -206,12 +210,19 @@ pub struct CellDetailResponse {
     pub balance: u64,
     pub nonce: u64,
     pub capability_count: usize,
+    /// Alias for JS inspector compat (cell.js + Starbridge Remote expect num_capabilities in some paths).
+    pub num_capabilities: usize,
     pub has_delegate: bool,
     pub delegate: Option<String>,
     pub has_program: bool,
     pub public_key: String,
     pub token_id: String,
     pub proved_state: bool,
+    pub delegation_epoch: u64,
+    /// Content-addressed commitment for PeerExchange / state sync (matches wasm CellStateView).
+    pub state_commitment: String,
+    /// Quick kind for <pyana-cell-program> and raw views without full program dump.
+    pub program_kind: String,
 }
 
 #[derive(Serialize)]
@@ -936,6 +947,7 @@ pub fn router(
         .route("/api/conditionals", get(get_pending_conditionals))
         .route("/api/discharge", post(post_discharge))
         .route("/api/events", get(get_events))
+        .route("/observability/stream", get(observability_stream))
         .route("/checkpoint/latest", get(get_checkpoint_latest))
         .route("/checkpoint/{height}", get(get_checkpoint_at_height))
         .route("/api/blocklace/checkpoint", get(get_blocklace_checkpoint))
@@ -1575,12 +1587,22 @@ async fn get_cell_detail(
             balance: cell.state.balance(),
             nonce: cell.state.nonce(),
             capability_count: cell.capabilities.len(),
+            num_capabilities: cell.capabilities.len(),
             has_delegate: cell.delegate.is_some(),
             delegate: cell.delegate.as_ref().map(|d| hex_encode(&d.0)),
             has_program: !matches!(cell.program, pyana_cell::CellProgram::None),
             public_key: hex_encode(cell.public_key()),
             token_id: hex_encode(cell.token_id()),
             proved_state: cell.state.proved_state(),
+            delegation_epoch: cell.state.delegation_epoch(),
+            state_commitment: hex_encode(&cell.state_commitment()),
+            program_kind: match &cell.program {
+                pyana_cell::CellProgram::None => "None".to_string(),
+                pyana_cell::CellProgram::Predicate { .. } => "Predicate".to_string(),
+                pyana_cell::CellProgram::Cases { .. } => "Cases".to_string(),
+                pyana_cell::CellProgram::Circuit { .. } => "Circuit".to_string(),
+                _ => "Other".to_string(),
+            },
         })),
         None => Ok(Json(CellDetailResponse {
             id,
@@ -1588,12 +1610,16 @@ async fn get_cell_detail(
             balance: 0,
             nonce: 0,
             capability_count: 0,
+            num_capabilities: 0,
             has_delegate: false,
             delegate: None,
             has_program: false,
             public_key: String::new(),
             token_id: String::new(),
             proved_state: false,
+            delegation_epoch: 0,
+            state_commitment: String::new(),
+            program_kind: "None".to_string(),
         })),
     }
 }
@@ -1810,6 +1836,18 @@ async fn get_events(
         .cloned()
         .collect();
     Json(events)
+}
+
+/// GET /observability/stream — SSE live feed of pyana-observability events
+/// (Task #30). Currently serves a welcome event (proves the path + remote
+/// consumption). Full broadcast of TurnLifecycle etc. from node turns is
+/// future (would wire Emitter into submit path + shared tx in NodeState).
+async fn observability_stream() -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let welcome = Event::default()
+        .event("observability")
+        .data(r#"{"schema_version":1,"schema_name":"pyana-observability-event-stream-v1","event_count":1,"events":[{"kind":"turn_lifecycle","envelope":{"seq":0,"timestamp":"2026-05-25T00:00:00.000Z"},"payload":{"phase":"stream_connected"}}]}"#);
+    let stream = stream::once(async move { Ok::<_, Infallible>(welcome) });
+    Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
 }
 
 /// POST /intents/encrypted — submit an SSE-encrypted intent for gossip propagation.

@@ -13,6 +13,15 @@
  * Modes (via `mode` attribute):
  *   default  — full KV grid with header
  *   compact  — single line: seq=N cell=abc… newC=def…
+ *
+ * Pattern note (STARBRIDGE FOLLOWUP 09): Imports InspectorBase/shortHex but extends
+ * HTMLElement directly (data/bytes-driven, used standalone in studio.html:87 peer-paste UX
+ * and cross-tab Discord flows; does not require <pyana-app> uri). See cell.js style in
+ * inspectors.js:23 (uses base + signals + preact). For full runtime integration see
+ * runtime-in-memory.js:453 (decodePeerTransition wrapper), wasm/src/bindings.rs:1451
+ * (create/verify/decode_peer_transition), wasm/src/runtime.rs (PeerExchange via cipherclerk).
+ * Real peer/fed surfaces in pyana_federation + node net/gossip; no JS reimpl of transitions.
+ * See STARBRIDGE-PLAN §11.4 success + §4.5 for <pyana-peer-transition> + blocklace peer.
  */
 
 import { InspectorBase, shortHex } from './_base.js';

@@ -33,6 +33,13 @@ use pyana_turn::{
     ComputronCosts, Effect, Turn, TurnBuilder, TurnExecutor, TurnReceipt, TurnResult,
 };
 
+// Observability live feed (STARBRIDGE-03 Task #30). Emitter provides the
+// canonical EventLog; we surface snapshots via the `events` field for
+// wasm-bindgen + JS signal caching. No JS reimplementation per substrate rule.
+use pyana_observability::{
+    Emitter, EventBody, EventEnvelope, EventLog, TraceEvent, TurnLifecyclePayload,
+};
+
 /// Cell-ID domain shared by every wasm-sim agent. AgentCipherclerk derives the
 /// CellId deterministically as `f(public_key, domain)` so this string is part
 /// of the agent's identity surface.
@@ -197,6 +204,17 @@ pub struct TraceStep {
     pub computrons_used: u64,
 }
 
+// Local hex32 for observability payloads (lowercase, no prefix; matches
+// schema::hex32 contract). Placed here (free fn) so it is usable from
+// execute_turn_for_agent without being an inherent method.
+fn hex32(bytes: &[u8; 32]) -> String {
+    let mut out = String::with_capacity(64);
+    for b in bytes {
+        out.push_str(&format!("{:02x}", b));
+    }
+    out
+}
+
 // ============================================================================
 // PyanaRuntime: the core state container
 // ============================================================================
@@ -231,6 +249,13 @@ pub struct PyanaRuntime {
     /// closing the previous "genesis-by-fiat" gap (see
     /// `STUDIO-REFACTOR-PICKUP.md`).
     pub default_factory_vk: [u8; 32],
+
+    /// pyana-observability Emitter (internal; drives seq + timestamps for trace events).
+    emitter: Emitter,
+    /// Snapshot of the event log (populated on turn lifecycle results for
+    /// Committed/Rejected/Expired). Exposed to bindings for get_trace_events_json
+    /// and JS <pyana-activity> live feed. Canonical Rust types only (substrate rule).
+    pub events: EventLog,
 }
 
 impl PyanaRuntime {
@@ -266,6 +291,8 @@ impl PyanaRuntime {
             turns: Vec::new(),
             federations: Vec::new(),
             default_factory_vk,
+            emitter: Emitter::new(),
+            events: EventLog::new(),
         }
     }
 
@@ -780,9 +807,56 @@ impl PyanaRuntime {
 
         let result = self.executor.execute(&turn, &mut self.ledger);
 
-        if let TurnResult::Committed { ref receipt, .. } = result {
-            self.receipts.push(receipt.clone());
-            self.turns.push(turn.clone());
+        // Wire Emitter (STARBRIDGE §4.4 Task #30) into the three result paths
+        // that the Studio <pyana-activity> live feed cares about. Other 6 event
+        // kinds (Authorization etc) require deeper hooks into TurnExecutor/apply
+        // (future work); here we at least anchor every turn with lifecycle.
+        // All construction uses canonical pyana_observability types (substrate).
+        {
+            let (seq, ts) = self.emitter.next_envelope_seed();
+            let mut env = EventEnvelope::new(seq, ts)
+                .with_turn_hash(&turn.hash())
+                .with_actor(&cell_id);
+            match &result {
+                TurnResult::Committed { receipt, .. } => {
+                    self.receipts.push(receipt.clone());
+                    self.turns.push(turn.clone());
+                    let payload = TurnLifecyclePayload::Committed {
+                        receipt_hash: hex32(&receipt.turn_hash),
+                        forest_hash: hex32(&receipt.forest_hash),
+                        pre_state_hash: hex32(&receipt.pre_state_hash),
+                        post_state_hash: hex32(&receipt.post_state_hash),
+                        effects_hash: hex32(&receipt.effects_hash),
+                        timestamp: receipt.timestamp,
+                        action_count: receipt.action_count,
+                        computrons_used: receipt.computrons_used,
+                        finality: format!("{:?}", receipt.finality),
+                    };
+                    self.emitter.emit(TraceEvent::TurnLifecycle(EventBody {
+                        envelope: env.clone(),
+                        payload,
+                    }));
+                }
+                TurnResult::Rejected { reason, at_action } => {
+                    let payload = TurnLifecyclePayload::Rejected {
+                        reason: format!("{}", reason),
+                        at_action: at_action.clone(),
+                    };
+                    self.emitter.emit(TraceEvent::TurnLifecycle(EventBody {
+                        envelope: env.clone(),
+                        payload,
+                    }));
+                }
+                TurnResult::Expired => {
+                    let payload = TurnLifecyclePayload::Expired;
+                    self.emitter.emit(TraceEvent::TurnLifecycle(EventBody {
+                        envelope: env.clone(),
+                        payload,
+                    }));
+                }
+                _ => { /* Pending: no lifecycle emit yet */ }
+            }
+            self.events = self.emitter.snapshot();
         }
 
         result
@@ -1102,6 +1176,99 @@ impl PyanaRuntime {
     /// the canonical sovereign-witness commitment function.
     pub fn cell_state_commitment(&self, cell_id: &CellId) -> Option<[u8; 32]> {
         self.ledger.get(cell_id).map(|c| c.state_commitment())
+    }
+
+    /// Export a minimal snapshot of runtime state (STARBRIDGE-FOLLOWUP-03
+    /// progress on §5.9 / §5.10 / Q4).
+    ///
+    /// Returns a JSON string containing:
+    /// - genesis metadata (factory_vk, current_height, timestamp base)
+    /// - counts of receipts, turns, events, agents, federations
+    /// - placeholder note for the canonical "WitnessedReceipt stream
+    ///   (Vec<Turn> + genesis header)" format required for node ingest and
+    ///   time-travel replay.
+    ///
+    /// This is a **stub surface** for the blocked snapshot format design.
+    /// It uses only in-memory projections (no proving stack, no circuit
+    /// changes). Full bidirectional (export + import that produces a
+    /// live runtime at prior height) awaits the §8 Q4 resolution + §5.9
+    /// format spec. The shape here is intentionally minimal so that
+    /// extension/inspector code can start wiring against the future API
+    /// without waiting for the human cargo session.
+    ///
+    /// Houyhnhnm note: must eventually be a protocol-level stream
+    /// importable by real nodes (not sim-only).
+    pub fn export_runtime_snapshot_stub(&self) -> String {
+        #[derive(Serialize)]
+        struct SnapshotStub {
+            schema: String,
+            exported_at: u64,
+            current_height: u64,
+            num_agents: usize,
+            num_federations: usize,
+            num_receipts: usize,
+            num_turns: usize,
+            num_events: usize,
+            default_factory_vk_hex: String,
+            note: String,
+            // Future: witnessed_receipt_chain: Vec<...> or canonical bytes
+        }
+
+        let now = js_sys_now_secs() as u64;
+        let stub = SnapshotStub {
+            schema: "pyana-runtime-snapshot-v0-stub".to_string(),
+            exported_at: now,
+            current_height: self.current_height,
+            num_agents: self.agents.len(),
+            num_federations: self.federations.len(),
+            num_receipts: self.receipts.len(),
+            num_turns: self.turns.len(),
+            num_events: self.events.events.len(),
+            default_factory_vk_hex: hex_encode(&self.default_factory_vk),
+            note: "PLACEHOLDER: full WitnessedReceipt stream format + import \
+                   pending design resolution (§5.9 + §8 Q4 snapshot-and-replay). \
+                   This stub is safe (no proving stack) and unblocks JS prep. \
+                   See STARBRIDGE-PLAN §5.9/5.10 and SOVEREIGN-WITNESS etc for context. \
+                   Time-travel cursor remains forward-only until format lands."
+                .to_string(),
+        };
+
+        serde_json::to_string_pretty(&stub).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    /// Stub for time-travel / rewind cursor on the InMemoryRuntime
+    /// (STARBRIDGE-FOLLOWUP-03 on §5.10 + Q4).
+    ///
+    /// Currently returns Err with guidance. Recommended path once §5.9
+    /// lands: snapshot at height N, destroy/recreate runtime from the
+    /// snapshot bytes (canonical stream), then replay forward if needed.
+    /// Alternative (Explorer-only) or N parallel runtimes are out of scope
+    /// for the sim core.
+    ///
+    /// `caps.timeTravel` in JS surfaces should remain false until this
+    /// is real. This stub provides the Rust surface + error contract
+    /// for inspector code to target.
+    ///
+    /// Safe: pure control flow, no mutation on success path, no circuit.
+    pub fn time_travel_to_stub(&mut self, target_height: u64) -> Result<(), String> {
+        if target_height > self.current_height {
+            return Err(format!(
+                "time travel only supports rewind (target {target_height} > current {}); \
+                 forward simulation only via advance_height + turns",
+                self.current_height
+            ));
+        }
+        if target_height == self.current_height {
+            return Ok(()); // no-op
+        }
+        Err(format!(
+            "time-travel rewind to {} requires the §5.9 snapshot format + \
+             snapshot-and-replay (see plan §8 Q4 and Houyhnhnm persistence stream). \
+             Current runtime is cumulative-only (advance_height). \
+             Use export_runtime_snapshot_stub() for future compatibility. \
+             (STARBRIDGE-FOLLOWUP-03 stub; no proving stack changes.)",
+            target_height
+        ))
     }
 }
 

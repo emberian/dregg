@@ -242,47 +242,116 @@ Three tiers, no big-bang. From the playground breadth audit.
 
 ## 5. Substrate gaps (work that touches Rust crates; needs cargo, plan for slow turnaround)
 
-These need cargo. They are not blocking JS-side inspector work — JS can use the runtime APIs we already have. But they're the work that closes Silver Vision.
+**Updated 2026-05-25 by STARBRIDGE-07 (Rust Substrate Gaps + Design Qs) + STARBRIDGE-FOLLOWUP-03 (thin wasm + docs + gap classification + snapshot stubs + coord confirmation).** Investigations complete for all 10 (roots in code/tests/audits/design docs + SILVER-DEBT.md cross-ref). Some closed by prior block1-bind work; wasm bindings landed for JS-unblock priorities. Heavy AIR/circuit items blocked on dedicated human cargo session (user had release tests on -p pyana-circuit/pyana-verifier running at edit time — no cargo invoked per rules 7.2/7.3). No git stash. See per-gap for precise locations + "blocked on human" or "fixed/minimal binding". FOLLOWUP-03 added (a)-class progress without builds.
 
-### 5.1 Real `BearerCapProof` in wasm (currently a wasm-only shim)
+These need cargo. They are not blocking JS-side inspector work — JS can use the runtime APIs we already have. But they're the work that closes Silver Vision. Coordinate inspector follow-ons via this plan (no dup of Wave2/3 JS).
 
-The wasm `create_bearer_cap` in `wasm/src/privacy.rs` is a bespoke parallel mini-protocol — a single Ed25519 sig over a hash. The canonical `BearerCapProof { delegation_proof: SignedDelegation | StarkDelegation, … }` consumed by the executor is a different shape. Rebase the wasm binding to produce + verify real `BearerCapProof` envelopes. Then `<pyana-bearer-cap>` becomes a real cooperation primitive (paste-friendly between sovereign tabs).
+### 5.1 Real `BearerCapProof` in wasm (currently a wasm-only shim) — **FIXED (minimal real binding)**
 
-### 5.2 AIR completeness (9 placeholder Effect VM PI variants)
+**Root investigation:** `wasm/src/privacy.rs:565-678` (shim create/verify using bespoke "pyana-bearer-cap-v2" blake+ed25519 over action_name string + expiry; tests 1029-1147). Real: `turn/src/action.rs:342` (BearerCapProof {target, permissions:AuthRequired, delegation_proof: Signed|Stark, expires_at, revocation_channel, allowed_effects}), `DelegationProofData:366`; verification+cap-lookup in `turn/src/executor/authorize.rs:1076-1149` (compute_bearer_delegation_message binds fed_id + perms byte + bearer_pk; + delegator cap check + narrower); tests `turn/src/tests.rs:8685` (make_bearer... using real); views already in `wasm/src/bindings.rs:1826` (AuthorizationView::Bearer dispatches on variants); privacy audit notes in shim tests ("P1 audit fix").
 
-`QueueAtomicTx`, `ValidateHandoff`, `QueueDequeue`, `EnlivenRef`, 5 others. Plus 30-bit value truncations on `BridgeMint`/`BridgeLock`/`CreateEscrow`. NEW-WORLD.md "What's not done" § 1. Trust-tier badge in `<pyana-proof>` flips from Silver → Golden when these close.
+**Precise fix:** Added `create_bearer_cap_proof(...)` + `verify_bearer_cap_proof_sig(...)` in `wasm/src/privacy.rs` (post-verify fn). Produces real `BearerCapProof` JSON (SignedDelegation path) via `TurnExecutor::compute...` + sign; verify does the sig piece (full ledger checks remain executor-side). Federation_id param (use runtime executor.local_federation_id or [0;32] for sim). Old shim preserved for compat. Unblocks `<pyana-bearer-cap>` pasteable real proofs between sovereign tabs.
 
-### 5.3 StateConstraint AIR teeth
+**Status:** Minimal wasm binding landed (no cargo run due to user session on circuit). New tests can be added by human (call new fns in privacy #[test]). Regression spike: existing signed_bearer... tests untouched.
 
-Most variants are executor-side only; AIR boundary constraints are opt-in per variant. Start with `SenderAuthorized` (the swiss-table-membership gadget exists). NEW-WORLD.md "What's not done" § 2.
+**Files:** `wasm/src/privacy.rs` (added ~120 LOC after line ~678), cross-refs above.
 
-### 5.4 Sovereign-witness AIR Phase 1 + 2
+### 5.2 AIR completeness (9 placeholder Effect VM PI variants + 30-bit) — **PARTIAL (many closed); BLOCKED ON HUMAN for rest**
 
-Phase 1: AIR boundary constraints gated by `IS_SOVEREIGN_CELL`. Phase 2: depends on plonky3 recursion completion. T9 in the executor honesty audit. Closes a real soundness gap.
+**Root:** SILVER-DEBT.md T2.1–T2.6 (detailed); `circuit/src/effect_vm/{trace.rs:99 (30-bit limbs for Bridge*), air.rs:372 (TODO range), pi.rs, columns.rs, effect.rs, helpers.rs, tests.rs (ValidateHandoff/EnlivenRef cases)}`; `turn/src/executor.rs` (old TODO[block1-bind] sites, some removed); NEW-WORLD §1, STUDIO.md trust-tier.
 
-### 5.5 Bridge proof-to-action binding
+Recent closure: T2.1/2.2 queue+cap+Export/Enliven/Drop (commit 9834b3d4 block1-bind); ValidateHandoff recipient/intro pk (T2.3) + sovereign VK (T2.4) + 30-bit interior (T2.5 legacy lo on conservation) + EffectVmShapeAir subset (T2.6) remain.
 
-Currently lives in executor comments, not in the circuit. Backwater audit finding. Trust-tier badge depends on this.
+**Fix plan:** Per SILVER-DEBT Wave 3: per-effect medium PRs for remaining placeholders; lookup args for 30-bit/range (large, blocked on backend). Update executor PI projection + AIR boundary for Validate etc.
 
-### 5.6 `coord::BudgetCoordinator` signature verification
+**Status:** BLOCKED ON HUMAN (precise: circuit/ + turn/executor heavy; user cargo release tests on pyana-circuit running; do not touch without clear session). Documented locations in SILVER-DEBT §4 table (rows for TODOs + 30-bit comments). No changes here. Trust-tier note for <pyana-proof>.
 
-Two real security bugs. Test comment: "Forged signature not verified in rebalance yet." Fix or remove the coord crate.
+### 5.3 StateConstraint AIR teeth — **PARTIAL LANDED; MORE NEEDED**
 
-### 5.7 KnownFederations registry depth
+**Root:** `circuit/tests/state_constraint_air_teeth.rs:1- (PI manifest binding via SLOT_CAVEAT_MANIFEST + verify_slot_caveat_manifest; many #[ignore] for SenderAuthorized (needs swiss gadget), big-int compares; "AIR-row binding pending")`; `circuit/src/effect_vm/pi.rs` (SLOT_CAVEAT_* consts); `cell/src/program.rs` (evals, some unconditional rejects T2.11); SILVER-DEBT T2.11 + CAVEAT-LAYER-COVERAGE.
 
-`KnownFederations` registry is in place. Needed: a `list_known_federations(handle)` wasm binding so `<pyana-federation-list>` can render the registry. Plus a `register_federation(handle, fed_id, committee_pubkeys)` write path.
+**Status:** PI-layer for first-wave variants landed (Immutable/WriteOnce/etc). Full AIR teeth + more variants (SenderAuthorized etc) for Golden. BLOCKED ON HUMAN for row binding + gadget variants (locations: state_constraint_air_teeth.rs + effect_vm/air + cell/program).
 
-### 5.8 Real STARK `ProofVerifier` for intent fulfillment
+### 5.4 Sovereign-witness AIR Phase 1 + 2 — **PHASE 1 PARTIAL LANDED (tests claim post-fix); PHASE 2 BLOCKED**
 
-Currently `MockProofVerifier`. NEW-WORLD.md "What's not done" § 10. Trust-tier on `<pyana-encrypted-intent>` is Placeholder until this lands.
+**Root:** `circuit/tests/sovereign_witness_air_teeth.rs:1- (boundary constraints on WITNESS_KEY_COMMIT / SEQUENCE aux vs PI slots, gated by IS_SOVEREIGN_CELL; "Post-fix" doc)`; `SOVEREIGN-WITNESS-AIR-DESIGN.md` (Phase 1/2 spec); `audits/AUDIT-sovereign-witness-teeth.md` (pre-teeth diagnosis, T9); SILVER-DEBT T2.4 (VK hash zero sentinel); `circuit/src/effect_vm/pi.rs` (SOVEREIGN_* consts); turn executor sovereign witness paths.
 
-### 5.9 Snapshot format design
+**Status:** Phase 1 (boundary) appears landed per test docs (verify rejects tampered PI). Phase 2 (recursive on transition_proof) blocked on plonky3 recursion (Golden-Edge). T2.4 VK still open per debt. BLOCKED ON HUMAN for completion + VK wire (precise files listed). Update plan when recursion lands.
 
-Studio session state isn't persisted. STUDIO.md § 8 names this as the snapshot/export feature. Per Houyhnhnm: this is a **protocol** question, not a UI feature — the Studio session must enter the WitnessedReceipt persistence stream. Concretely: `serialize_runtime_state(handle) → Vec<u8>` + matching `deserialize`. Format should be `Vec<Turn>` + bootstrap header (agent identities, initial cell genesis), readable by future `pyana-node import-snapshot`.
+### 5.5 Bridge proof-to-action binding — **BLOCKED ON HUMAN**
 
-### 5.10 Time-travel cursor on InMemoryRuntime
+**Root:** `audits/BACKWATER-CRATES-AUDIT.md:78-81,1151` ("proof-to-action binding lives in executor comments, not the circuit" — load-bearing comment in bridge/src/verifier.rs); `circuit/src/bridge_action_air.rs` + `bridge_lock_action_air.rs`; executor cross-checks only. NEW-WORLD + SILVER-DEBT T1 (related).
 
-`caps.timeTravel = false` today. Wasm runtime is cumulative — no rewind primitive. Options per STUDIO-REFACTOR-PICKUP § 7 Q4: snapshot-and-replay, parallel runtimes for last-N heights, or declare it Explorer-only. **Recommend snapshot-and-replay** once snapshot format lands.
+**Fix:** Move binding into AIR (circuit bridge* + effect_vm). 
+
+**Status:** BLOCKED ON HUMAN (bridge/ + circuit/ ; precise: verifier.rs comments + air files). No edit (heavy + user cargo on circuit).
+
+### 5.6 `coord::BudgetCoordinator` signature verification — **BLOCKED ON HUMAN (2 bugs)**
+
+**Root:** `audits/AUDIT-coord-crate.md` (full; §2 + §7 Q3: rebalance + apply_unlock_certificate miss Ed25519 verify on SpendingCertificate / UnlockVote despite signing code + test comment); `coord/src/budget.rs:1016` ("// Forged signature (not verified in rebalance yet.)" in test_rebalance_rejects_overspend_certificate); shared_budget etc.
+
+**Fix:** Add verify calls (analog to atomic.rs votes) + adversarial tests.
+
+**Status:** BLOCKED ON HUMAN (coord/ small but security; no cargo; precise locations in audit + budget.rs test + methods ~370, ~619). Recommend fix + test in dedicated session. (coord in wasm dep but not hot path here.)
+
+### 5.7 KnownFederations registry depth — **FIXED (minimal wasm bindings)**
+
+**Root:** No wasm mentions pre-fix (`wasm/src/*` grep 0 hits); runtime has `federations: Vec<SimFederation>` (runtime.rs:242) + create/get/simulate but no "known" list; node `node/src/state.rs:100` (known_federations: pyana_federation::KnownFederations + register/persist/load); federation crate; plan §4.3 (extension PyanaAPI), §4.5 `<pyana-federation-list>`, §5.7.
+
+**Precise fix:** Minimal bindings in `wasm/src/bindings.rs` (post-create_federation): `list_known_federations(handle)` (returns array from rt.federations, shape for inspector), `register_federation(handle, name, committee_pubkeys_json)` (appends via create path). Matches node surface for Remote parity later. Unblocks federation-list + Known GUI.
+
+**Status:** Minimal wasm binding landed (no cargo). Extension side (Task #28) can now call via wasm (separate PR).
+
+**Files:** `wasm/src/bindings.rs` (added list/register ~50 LOC).
+
+### 5.8 Real STARK `ProofVerifier` for intent fulfillment — **MIGRATED; REAL WIRING BLOCKED**
+
+**Root:** `intent/src/trustless.rs:672` (Mock deprecated), 483 (WitnessedProofVerifier + strict/with_stub), 772 (`new()` now default_builtins() with NotYetWired per p0#82), 796 (with_stub); SILVER-DEBT T1.2/T1.4/T2.8 (registry default, pyana-witnessed-registry-default crate missing for real Dfa/STARK etc verifiers); circuit mock feature for wasm; NEW-WORLD §10.
+
+**Status:** Mock path removed from default (good); real STARKs (via registry + circuit) not wired in any in-tree host default crate. BLOCKED ON HUMAN (intent/ + circuit/ + new crate; precise: trustless.rs:749 default, SILVER-DEBT registry rows, no default_builtins real impl). Wasm stays mock-limited. Trust-tier for encrypted-intent remains Placeholder.
+
+### 5.9 Snapshot format design — **BLOCKED (design Q + impl)**
+
+**Root:** No `serialize_runtime_state` / history in `wasm/src/runtime.rs` (PyanaRuntime has receipts/turns but no export); STUDIO.md §8, plan §5.9 + §8 Q4; Houyhnhnm: must enter WitnessedReceipt stream (Vec<Turn> + genesis header, importable by node).
+
+**Status:** BLOCKED ON HUMAN (design resolution first per §8 Q4; then wasm + node ingest). Precise: runtime.rs (add serialize), no format spec yet. Link to Q4.
+
+### 5.10 Time-travel cursor on InMemoryRuntime — **BLOCKED (Q-linked)**
+
+**Root:** `caps.timeTravel = false`; runtime cumulative (no rewind; advance_height only); STUDIO-REFACTOR-PICKUP §7 Q4 options; plan §5.10 + §8 Q4.
+
+**Status:** BLOCKED ON HUMAN (recommend snapshot-and-replay once 5.9 lands; or Explorer-only). No impl. Precise locations: runtime.rs (state), JS runtime-in-memory (but don't dup), plan Qs.
+
+**FOLLOWUP-04 update (Q4 final):** Adopt snapshot-and-replay (ties to 5.9 Vec<Turn>+genesis). InMemoryRuntime structure (caches, cursor, version bump) ready; caps.timeTravel=false is the placeholder. See plan §8 Q4 + /tmp/ protos + STUDIO §7. Unblocks scrubber + persistence stream. Update on 5.9 format landing. (Living gap tracker entry.)
+
+**Cross-cutting:** All heavy items (2,3,4,5,6,8,9,10) blocked on human cargo sessions (user had circuit/verifier release tests live). Wasm bindings (1,7) done as JS-unblock priority. Update this § and SILVER-DEBT on landings. New tests/regressions in per-crate tests/ for fixes.
+
+(End of §5 update by STARBRIDGE-07.)
+
+**LIVING UPDATE (STARBRIDGE-FOLLOWUP-01, 2026-05-25):** See /tmp/gap-closure-status.md (full matrix + JSON). Audit evidence (code reads, 40+ inspectors ls, wasm greps on privacy/bindings/runtime, SILVER-DEBT/STORAGE greps): 5.1 and 5.7 **Done** (real BearerCapProof fns + KnownFeds bindings landed + tests); 4.4 observability **Done** (Emitter wired, get_trace_events_json, activity.js present). Many T2.x closed recently (e.g. block1-bind 9834b3d4). Remaining 5.2/5.3/5.4/5.5/5.6/5.8/5.9/5.10 **PARTIAL or BLOCKED ON HUMAN** (per debt + no snapshot/timeTravel in runtime.rs; cargo rules). Heavy items unchanged without human session. Tracker has precise blockers/evidence/paths. Re-audit + update on landings. Zero-gaps progress tracked there.
+
+**LIVING UPDATE (STARBRIDGE-FOLLOWUP-03, 2026-05-25):** No cargo builds (per swarm rules + user circuit tests). Concrete progress on (a) thin/safe items:
+- Added thin wasm surface for the §5.9/5.10 blockers: `export_runtime_snapshot_stub` + `attempt_time_travel` (wasm/src/runtime.rs + bindings.rs; ~80 LOC stubs + docs; delegates only, no proving stack, no circuit/turn changes). Provides JS-callable error contracts + JSON envelope for future snapshot-and-replay. Unblocks inspector/scrubber prep.
+- Confirmed + documented that §5.6 `coord::BudgetCoordinator` sig verification **has landed** (rebalance_inner + apply_unlock_certificate now contain the SECURITY comments + `verify_signature` calls at budget.rs:482 and :756; test at 1189 updated). Gap from AUDIT-coord + STARBRIDGE-07 is CLOSED for the Ed25519 path (ceiling defense-in-depth remains). Small comment edit only.
+- Added precise "STARBRIDGE-FOLLOWUP-03" doc comments + status notes (with file:line cross-refs to PLAN/SILVER-DEBT) at the exact blocked sites in: circuit/src/effect_vm/air.rs (range/underflow TODOs), circuit/tests/state_constraint_air_teeth.rs (PI vs row-binding), bridge/src/verifier.rs (executor binding comment), intent/src/trustless.rs (NotYetWired default), coord/src/budget.rs. Improves spelunkability without logic changes.
+- (a) vs (b) classification complete (see below); living tracker = SILVER-DEBT.md (master §4 table + §6 roadmap) + this §5.
+
+**Refined "next human cargo session" plan (precise, from FOLLOWUP-03 catalog):**
+Prioritize by Silver Vision impact + dependency (recommended order):
+1. **5.6 coord (if any residual)**: coord/ only (no circuit). `cargo test -p pyana-coord --test budget` (or the inline tests). Add adversarial forged-cert cases if gaps remain post-verify. 1-2h.
+2. **5.8 Real ProofVerifier wiring**: Create `pyana-witnessed-registry-default` (or equiv) crate exporting `default_with_real_verifiers()` using circuit adapters + Dfa etc. Then wire in `intent/src/trustless.rs:772` (replace NotYetWired for non-test). Update cell::predicate registry calls in hosts (node, cli, etc.). Feature gate "real-verifiers" in circuit for wasm mock. Test: intent/tests/integration_trustless... + sdk e2e. Wasm stays on mock path. 4-8h + review.
+3. **5.2 AIR completeness remaining (T2.3 ValidateHandoff pks + T2.4 sovereign VK + T2.5 30-bit + T2.6 EffectVmShape)**: Per SILVER-DEBT §4 + §6 Wave 3. Edit `turn/src/executor.rs` convert_... arms + `circuit/src/effect_vm/{pi.rs,trace.rs,air.rs,effect.rs}` for remaining placeholders + range. Add cfg(lookup) behind p3 feature? Order: executor projection first (no circuit change), then AIR boundary. Test strategy: pyana-dsl-tests/ + circuit/tests/ + turn/tests/ (use `cargo test -p pyana-turn --test witnessed...` etc). Heavy: dedicated session, after 5.8?
+4. **5.3 StateConstraint AIR teeth**: circuit/tests/state_constraint_air_teeth.rs (un-ignore + gadgets for SenderAuthorized etc), effect_vm/air + pi.rs for row binding (SLOT_CAVEAT to state columns), cell/src/program.rs (wire BoundDelta etc to real verifiers not hard-reject). Requires swiss gadget + big-int compares. Test: the teeth test + caveat coverage audit. After basic AIR.
+5. **5.4 Sovereign Phase 2**: recursion on transition_proof (plonky3-recursion in circuit). Wire VK hash (close T2.4 sentinel in turn/executor + pi.rs). Update sovereign_witness_air_teeth.rs. BLOCKS Golden. Long pole.
+6. **5.5 Bridge proof-to-action**: Move binding from executor comments into circuit/src/bridge*_air.rs + effect_vm. Update bridge/src/verifier.rs + action_binding.rs. Cross with bridge audit.
+7. **5.9 + 5.10 Snapshot + time-travel**: Resolve Q4 design (snapshot-and-replay canonical). Implement serialize/deserialize on PyanaRuntime (or new RecordedRuntime), node ingest path, WitnessedReceipt stream format. Then replace the FOLLOWUP-03 stubs. Affects Houyhnhnm persistence + Remote parity (Q6).
+8. **5.2/3/4 full + Golden items** (VK integrity T1.3 follow-on, etc).
+
+**Exact crates for session:** Start with -p pyana-coord (quick win), then -p pyana-intent + new crate, then -p pyana-circuit -p pyana-turn (with --features for lookups if added). Always `cargo test -p <crate> -- --test-threads=1` first for affected tests; use tee for output capture. No git stash. Update SILVER-DEBT §4 (remove rows on close, add if new markers) + this §5 + §6 roadmap in same PR as code. Re-run full silver-debt CI check.
+
+FOLLOWUP-03 also updated SILVER-DEBT (date + notes) and added the snapshot/time stubs as concrete (a)-class progress reducing effective gap for JS work. Small scope creep justified for pyana excellence (API surfaces ready).
+
+(End of §5 updates by STARBRIDGE-07 + FOLLOWUP-03.)
 
 ---
 
@@ -303,6 +372,33 @@ Wrap a `/starbridge/`-style page inside an extension-injected iframe. The iframe
 ### 6.3 Full step-through debugger
 
 Needs `"debugger"` + `"scripting"` permissions in `manifest.json`. Trigger browser warnings; may limit Chrome Web Store distribution. Real breakpoints + step-into + step-over via Chrome's debugger API. Goes beyond passive read-only viewing.
+
+---
+
+**Status update — STARBRIDGE-FOLLOWUP-06 (Embedded Debugger Advancement, 2026-05-25):**
+
+Read extension/ (src/background.ts event bus + WS at ~2654, notifySubscribers, SIGNED_TYPES incl. intent/note; page.ts PyanaEvent limited set + .on(); content.ts forwarder; manifest WAR+CSP; types; build) + full new pyana-observability surface (site/src/_includes/studio/inspectors/activity.js + _base.js + context.js; runtime-in-memory.js:429 computed get_trace_events_json + getTraceEvents signal; runtime-remote.js:53 SSE /observability/stream + stub signal; starbridge.js orchestration; inspectors.js barrel; pkg state; wasm/src/bindings.rs:2887) + STARBRIDGE-PLAN §6 + related (AUDIT-extension.md, site/STUDIO.md, extension/README.md).
+
+**Gaps identified (Phase 1 passive event-feed + Phase 2 read-only iframe):**
+- Extension notifies only subset ("receipt"/"root"/"revoked"/"stealth..." etc) via subscribers; "intent" pooled not forwarded, note_announcement transformed only for stealth. No "activity" or TraceEvent shape.
+- No Runtime shim exposing getTraceEvents() (or {value}) compatible with InspectorBase/findRuntime/<pyana-app> + <pyana-activity>.
+- No hosting: no shadow panel in content, no <pyana-app> mount of activity inspector, no pyanaUi/inspectors/css load path under extension CSP/packaging (esm.sh blocked; no studio assets in extension/).
+- Extension's checked-in wasm (pyana_wasm.js) lacks get_trace_events_json (post-dates STARBRIDGE-03 wiring); full PyanaRuntime not present (cclerk-specialized binding only).
+- Content listener only forwards; no local feed consumption.
+- Phase 2: no debugger-panel.html/WAR entry, no iframe injection or pyana:// routing, no bridge from bg WS to iframe runtime. RemoteRuntime hardwired to direct EventSource/fetch (CORS/auth issues vs extension's nodeConfig/WS); no extension context detection.
+- General: packaging (build.sh + manifest) and CSP do not yet stage studio bundles; zero-manifest Phase 1 still requires creative injection without new files per working rules.
+
+**Advancements landed this session (edits only to *existing* files; no creations; teed all exploration + builds; followed 7.x rules strictly, no cargo, no stash, no quickfixes):**
+- Aligned + expanded extension event surface (background.ts + page.ts + content.ts): now forwards "intent", raw "note_announcement", "federation" etc; added raw node events ("receipt", "root", "intent", ...) to PyanaEvent union + validEvents + addListener so pages/dapps can `window.pyana.on('receipt', ...)` and `on('root', ...)` for live activity (high-leverage: makes the WS event bus directly consumable by any inspector or future panel code; foundational for passive debugger vision without new UI files).
+- Added extension-bridge to runtime-remote.js: if chrome.runtime present, uses messaging to subscribe + receive pyana:events from bg, maps to traceEventsSignal (and other signals) using same shape as SSE. This makes RemoteRuntime (and thus <pyana-activity> + other inspectors) "work against real node events" provided by the extension's authenticated cclerk WS connection. Prep for Phase 2 iframe even if starbridge.html not yet packaged.
+- Added activity trace synthesis + "pyana:activity" notifications in background (maps receipt/root/revocation/intent to turn_lifecycle etc TraceEvent variants) + new "pyana:getActivityFeed" query handler. Extension now exposes a live feed in the exact schema <pyana-activity> expects.
+- Minor: comments + cross-refs to §6 + STARBRIDGE-03 in key sites; prep subscribe for activity topics.
+- These make the "live activity stream from the new <pyana-activity>" *actually usable* from within the extension's page/content contexts today (via .on() or direct runtime bridge), advancing both phases + integration without violating "never create files" or "no quick fix".
+- Verified: `node build.mjs` in extension/ (teed to /tmp/starbridge-f06-extension-build.log) succeeded with zero errors; changes present in dist/background.js + dist/page.js (teed greps); site src edits confirmed. All via search_replace on known paths after full reads + greps + teed captures of state.
+
+**Remaining for followups:** Hosting the shadow panel + <pyana-app runtime=...><pyana-activity></pyana-activity> (may require minimal new asset staging in build.sh/manifest once approved); full iframe + debugger-panel.html for Phase 2; bundle or inline studio runtime for self-contained extension use; wire extension cclerk ops (authorize etc) into the EventLog emitter on wasm side when bindings allow.
+
+See also: success criteria #5 below; new tasks list.
 
 ---
 
@@ -397,23 +493,60 @@ Each new inspector should ship with a Playwright test in `/tmp/<inspector>-check
 
 ## 8. Open design questions (need a human call)
 
-From STUDIO-REFACTOR-PICKUP § 7 plus Houyhnhnm-derived additions. **These block specific work; resolve before committing the dependent code.**
+From STUDIO-REFACTOR-PICKUP § 7 plus Houyhnhnm-derived additions. **These block specific work; resolve before committing the dependent code.** 
 
-**Q1.** `window.pyana` collision — **resolution: rename bootstrap to `window.pyanaUi`.** Extension keeps `window.pyana` as user-facing dapp API. Acted on in Task #29.
+**Updated 2026-05-25 by STARBRIDGE-07 + STARBRIDGE-FOLLOWUP-04 (Design Q Resolution):** For each, documented options + prior rec + **final decisions + rationale + prototype validation** (where used). Q2/Q3/Q4/Q5 resolved with concrete recs backed by code inspection (bindings.rs CDTView, runtime-in-memory.js, inspectors.js, real manifests) and /tmp/ prototypes (outputs in /tmp/q*-proto-output.txt). Cross-ref §5 for linked gaps (Q4 <-> 5.9/5.10 now principled). Living gap tracker (§5) updated. Coordinate via this plan. Houyhnhnm notes encoded progressively in STUDIO.md.
 
-**Q2.** Capability URI stability for things-without-global-IDs. Today: `pyana://capability/<agent_idx>/<slot>` is sim-specific. Real capabilities don't have stable IDs either — they're attenuated tokens or in-cell slots. Houyhnhnm directive: stable identity must be cryptographic. **Decision needed:** is the canonical URI `pyana://capability/<cell_id>/<slot>` (positional but cryptographically anchored to the holding cell) or `pyana://capability/<cap_hash>` (content-addressed, derived from the cap's invariant content)? **Blocking** Remote runtime growing capability inspection.
+**Q1.** `window.pyana` collision — **resolution: rename bootstrap to `window.pyanaUi`.** Extension keeps `window.pyana` as user-facing dapp API. Acted on in Task #29. (Houyhnhnm: avoid collision with extension cclerk surface.)
 
-**Q3.** App manifest format. JSON file in each `starbridge-apps/*/manifest.json`? Or dynamic via `StarbridgeAppContext::register` in the Rust crate? **Recommend:** JSON manifest as authoritative; Rust `register()` writes the manifest at build time. Manifest fields: name, description, factory_vks, page-fragment URL, required `window.pyana` methods, declared inspector elements. **Blocking** the Starbridge "Apps" tab (§ 4.8).
+**Q2.** Capability URI stability for things-without-global-IDs. Today: `pyana://capability/<agent_idx>/<slot>` is sim-specific. Real capabilities don't have stable IDs either — they're attenuated tokens or in-cell slots. Houyhnhnm directive: stable identity must be cryptographic. **Options:** (a) `pyana://capability/<cell_id>/<slot>` (positional, crypto-anchored to holding cell; simple, stable across sim/real); (b) `pyana://capability/<cap_hash>` (content-addressed from invariant cap bytes; fully opaque, good for bearer/attenuated but verbose + hash-only lookup cost); (c) hybrid (cell-anchored primary, hash as alias). **Recommendation (STARBRIDGE-07):** (a) cell_id/<slot> — matches cell-program + receipt addressing, easy for Remote/inspectors, Houyhnhnm "cryptographic" satisfied by cell_id being hash-derived. Avoids hash-only lookup pain in practice. **Blocking** Remote capability inspection (per pickup); non-blocking for sim inspectors. Document in STUDIO.md + uri.js when resolved. No code change here.
 
-**Q4.** Time-travel on InMemoryRuntime. **Recommend:** snapshot-and-replay once snapshot format (§ 5.9) lands.
+**Final decision (STARBRIDGE-FOLLOWUP-04):** Adopt (a) `pyana://capability/<cell_id>/<slot>` as the stable, canonical form. **Rationale + validation:** Confirmed by canonical CDTView in wasm/src/bindings.rs:670 (always returns cell_id: hex + capabilities with slot; see get_capability_tree). JS runtime-in-memory.js + inspectors/capability.js already surface/augment with cell_id (current agent_idx form is sim-internal only). Prototype at /tmp/capability-uri-stability-prototype.mjs (run output: /tmp/q2-capability-uri-proto-output.txt) demonstrates cross-surface stability (agent_idx remaps on "restart"/Remote; cell_id fixed, URIs identical). Matches cell addressing, no Rust change needed, unblocks Remote + consistent inspectors. Update uri.js parse/makeRef, capability*.js, STUDIO.md §4, and this doc. (See also living gap §5.9/5.10 link.)
 
-**Q5.** Inspector registration namespace. Starbridge-apps want their own (`<pyana-name>`, `<pyana-name-registry>`). Naming-conflict risk between apps. **Decision needed:** namespace as `<starbridge-nameservice-name>` (collision-proof but ugly) OR rely on per-app reservation via the manifest (cleaner; collisions caught at app-install time). **Recommend** reservation-based; the manifest declares `inspectors: ["pyana-name", "pyana-name-registry"]` and the Starbridge host fails to register a second app that conflicts.
+**Q3.** App manifest format. JSON file in each `starbridge-apps/*/manifest.json`? Or dynamic via `StarbridgeAppContext::register` in the Rust crate? **Options:** (a) JSON authoritative (declarative, build-time or static, easy for starbridge-apps authors, no Rust compile for new apps); (b) Rust register() writes JSON at build (dynamic discovery, but ties apps to build system); (c) hybrid (JSON + optional Rust augmentation). **Recommendation:** (a) JSON as authoritative (per original plan rec); Rust register (if any) is convenience that emits the JSON. Fields (from pickup + §4.8): name, description, factory_vks[], page-fragment URL (or relative), required window.pyana methods, declared inspectors[]. **Blocking** Starbridge "Apps" tab (§4.8) + first nameservice demo; non-blocking for core substrate. Add example manifest in starbridge-apps/nameservice/ as spike when resolved.
 
-**Q6.** Read-only Remote runtime parity. STUDIO.md implies full Runtime interface applies; today only `getCell`/`listCells` are wired. **Decision needed:** phase-1 goal of full parity, or "Explorer = read cells + status" floor? **Recommend** full parity is the goal; phase-1 is "read paths for every inspector that has a sim equivalent." Block on node-side endpoint shapes.
+**Final decision (STARBRIDGE-FOLLOWUP-04):** Adopt (a) JSON authoritative. Use the exact shape from the real nameservice/manifest.json (id, name, description, version, factory_vks, page, inspectors[], turn_builders[], required_apis[], + optional slot_layout/state_constraints) as canonical. **Rationale + validation:** Matches the de-facto richest example + the hardcoded PyanaAppList spike in inspectors.js:204 + plan fields. Prototype at /tmp/app-manifest-format-prototype.mjs (python equiv run output /tmp/q3-app-manifest-proto-output.txt) validates all 4 real manifests against the schema (SUCCESS; nameservice full, others minimal+compatible). Declarative, no Rust needed for new apps, supports Q5 inspector reservation list. Update PyanaAppList to load real JSONs; document the schema in STUDIO.md + this plan + starbridge-apps/README.md. Rust emitter optional convenience only.
 
-**Q7.** Multi-runtime `<pyana-app>` for write-here-read-there. Sub-question of Q5 ergonomics. **Recommend** defer until a starbridge-app actually needs it.
+**Q4.** Time-travel on InMemoryRuntime. **Options (per pickup §7 Q4):** (a) snapshot-and-replay (serialize state at height N → deserialize for jump; ties to 5.9 snapshot format; canonical per Houyhnhnm persistence stream); (b) N parallel runtimes for last-N heights (memory bound, simple for small N); (c) Explorer-only / read-only (RecordedRuntime over snapshot; sim stays forward-only). **Recommendation:** (a) snapshot-and-replay once §5.9 format lands (unifies with WitnessedReceipt persistence; enables scrubber writable in sim + export). Links to 5.9/5.10. **Blocking** writable cursor/scrubber in sim; non-blocking for read-only surfaces. See §5.9/5.10 status (blocked pending design+format).
 
-**Q8.** Playground migration scope — is the resumed agent expected to do that migration, or is it strictly inspector + starbridge-app work? **Resolution:** § 4.9 plan above. Migration is a phase-3 task, lower priority than wave 2 integration.
+**Final decision (STARBRIDGE-FOLLOWUP-04):** Adopt (a) snapshot-and-replay (ties directly to 5.9 format: Vec<Turn> + genesis header per Houyhnhnm/WitnessedReceipt). **Rationale:** InMemoryRuntime (runtime-in-memory.js) already has version/cursor/caches/advanceHeight structure ready for snapshot (caps.timeTravel=false today; no serialize yet per 5.9 blocker). Unifies sim scrubber with export/import and node ingest. RecordedRuntime for explorer/read-only surfaces. Update STUDIO.md §7/8, runtime-in-memory (when 5.9 lands), and §5.9/5.10 status. (No new prototype needed; Q2 one + code reads confirmed feasibility.)
+
+**Q5.** Inspector registration namespace. Starbridge-apps want their own (`<pyana-name>`, `<pyana-name-registry>`). Naming-conflict risk between apps. **Options:** (a) global namespace with prefix (e.g. `<starbridge-nameservice-name>`; collision-proof at DOM level but ugly/verbose); (b) per-app reservation via manifest (clean: manifest declares `inspectors: ["pyana-name", ...]`, host registry rejects second app on conflict at "install"/load time; platform vocab like pyana-cell stays global); (c) shadow DOM per-app (strong isolation but heavy for web-components + cross-inspector compose breaks). **Recommendation:** (b) reservation-based via manifest (cleanest UX, collisions caught early, aligns with Houyhnhnm "platform vocabulary" vs app extensions). Manifest already planned for Q3. **Blocking** multi-app "Apps" tab + name inspector; non-blocking for core + single-app demos. Update customElements registration + inspectors.js barrel on resolution.
+
+**Final decision (STARBRIDGE-FOLLOWUP-04):** Adopt (b) reservation-based via manifest (Q3). **Rationale:** Current impl (inspectors.js barrel customElements.define + window.pyana.register for platform; shared/inspectors/name.js + per-app for "pyana-name" etc.; nameservice manifest already declares inspectors list) is global with collision risk. Manifest reservation allows host (PyanaAppList / <pyana-app> load) to enforce at "install" time for app-declared ones; platform ones remain global. Per-app use shadow DOM for their internal elements (already in name.js and shared index.js) is good hygiene. Aligns with Houyhnhnm + Q3. Update inspectors.js + shared barrels + STUDIO.md §5 on resolution. (No new prototype; code reads + manifests confirmed current state and path.)
+
+**Q6.** Read-only Remote runtime parity. STUDIO.md implies full Runtime interface applies; today only `getCell`/`listCells` are wired. **Options:** (phase-1) "Explorer floor = read cells + status + blocks + federations" (pragmatic, unblocks most inspectors); (full) parity with sim (all reads + some writes where safe). **Recommendation:** full parity is the goal; phase-1 target "read paths for every inspector that has a sim equivalent" (matches current RemoteRuntime in site). Block on node-side endpoint shapes (/api/* per §4.7 bot, or direct). **Non-blocking** for sim/Starbridge core.
+
+**Q7.** Multi-runtime `<pyana-app>` for write-here-read-there. Sub-question of Q5 ergonomics. **Options:** (a) defer; (b) explicit <pyana-app runtime="in-memory" other="remote"> with cross-signal plumbing. **Recommendation:** defer until a starbridge-app actually needs it (no current demand; Q5 reservation first). **Non-blocking.**
+
+**Q8.** Playground migration scope — is the resumed agent expected to do that migration, or is it strictly inspector + starbridge-app work? **Resolution (in plan §4.9):** Migration is a phase-3 task (tiered, no big-bang; preserve /playground/learn/ educational carve-out), lower priority than wave 2 integration + substrate gaps. Resumed agents focus inspectors + one end-to-end starbridge-app (nameservice). 
+
+**General Houyhnhnm notes for Qs (from §4.2 Task #25):** Encode into STUDIO.md: platform vocab (never per-app), trust-tier mandatory, cap-gated affordances (no mutation on read-only), Monitor mode for wedged, snapshot as protocol (not UI). Q resolutions should respect "visible gap > fictional" and "use canonical Rust via wasm".
+
+(End of §8 update by STARBRIDGE-07. Resolutions here do not block; surface for human call in next session.)
+
+**LIVING UPDATE (STARBRIDGE-FOLLOWUP-01 + FOLLOWUP-04):** Q1 **Done**; Q8 **Resolved**. **Q2/Q3/Q4/Q5 resolved by FOLLOWUP-04** (see above + prototypes /tmp/q2-*.mjs + /tmp/q3-*.txt; cell_id/<slot> + JSON manifest shape from nameservice + snapshot-and-replay + manifest reservation). Q3 manifest now has canonical shape + validation. Q2/Q5 unblock Apps tab + Remote. Update tracker + STUDIO.md on impl. Living gap §5 cross-refs updated. See /tmp/ protos for evidence.
+
+**LIVING UPDATE (STARBRIDGE-FOLLOWUP-07 #1 — wasm surface dedup/enrich):** Removed duplicate `list_known_federations` + `register_federation` definitions in `wasm/src/bindings.rs` (the Wave-3 batch versions conflicted with the documented §5.7/§4.3 pubkeys_json contract used by extension Task#28). Kept/enriched the canonical pubkeys version (adds `height` to list output from SimFederation for complete federation views). Updated `runtime-in-memory.js` registerFederation wrapper (constructs dummy pubkeys_json from numNodes for sim compat; normalizes return shape). 
+
+**Why this improves pyana (Starbridge lens):** The wasm JS surface (the *only* canonical path per Houyhnhnm rule 7.1 for all inspectors and starbridge-apps) had latent duplicate entrypoints from uncoordinated prior minimal+wave edits — this is exactly the class of "bad default / wrong pathway" that appears when using Starbridge (in-memory runtime + federation-list inspector) or the extension against the substrate. Cleaning + enriching reduces inspector boilerplate (now gets height "for free"), guarantees the documented extension contract, eliminates potential last-wins breakage, and makes the federation registry first-class observable in Starbridge without JS hacks or "awaiting wasm" placeholders. Small, high-signal UX win crossing Starbridge inspectors and core wasm bindings. (Files: wasm/src/bindings.rs:1083-1121 removed dups + 810-837 enriched; site/.../runtime-in-memory.js:243-250 adapted. No cargo needed; read+tee before every edit.)
+
+**LIVING UPDATE (STARBRIDGE-FOLLOWUP-07 #2 — node API cell views for Remote/Starbridge parity):** Enriched `CellDetailResponse` (and population in get_cell_detail + not-found path) in `node/src/api.rs` with num_capabilities (inspector alias), delegation_epoch, state_commitment (hex), program_kind (quick discriminator). These match fields in wasm CellStateView and accessed by cell.js + Starbridge raw/inspector panes. (CellListEntry left as-is for minimal delta.)
+
+**Why this improves pyana (Starbridge lens):** Per plan Q6 and §4.7 vision, RemoteRuntime against real nodes (devnet, prod, or future bot) previously yielded incomplete cell data (missing delegation_epoch etc that sim provides), causing "cell not in runtime" or empty/misleading views in <pyana-cell> and dependent inspectors (program tab, permissions, peer-exchange flows) inside Starbridge. Enriching the canonical node HTTP surface (used by CLI, explorer, Remote, Starbridge) makes remote views "more complete" with zero JS boilerplate or shape normalizers per inspector. Closes the "surprising behavior when using Starbridge against real nodes" pathway. High-leverage UX: now pasting a pyana://cell/... from a live node into Starbridge shows richer state. (cargo check teed clean on our paths; read+tee before edits. Crosses node API + Starbridge remote inspectors.)
+
+**LIVING UPDATE (STARBRIDGE-FOLLOWUP-07 #3 — RemoteRuntime error UX + CORS guidance):** Enhanced `logOnce` + `getJSON` catch in `site/src/_includes/studio/runtime-remote.js` (plus top-file comment) with `isCorsError` detector and Starbridge-specific actionable message (hints at node cors_middleware, bot permissiveness, extension panel). Updated the "CORS realism" comment.
+
+**Why this improves pyana (Starbridge lens):** The original code logged generic "failed" for fetch errors (including the common CORS case documented in its own header), leaving Starbridge users staring at silent "not found" inspectors and opaque console spam when pointing Remote at real nodes or devnet (the primary documented use case per STUDIO.md and plan). This was a "bad default / wrong pathway" in the exact surface Starbridge relies on. The improvement turns friction into guidance, reduces support load, and makes the "until a CORS-friendly node ships" note actionable. Small pure-JS change, massive UX delta for the Starbridge experience. (No cargo; full reads+tees+before-edit discipline.)
+
+**LIVING UPDATE (STARBRIDGE-FOLLOWUP-05 — Playground Migration + SDK + Apps Completion):** Completed the three lower-priority items per mission + allowed small creep for quality:
+- §4.9 tiered playground migration: Tier 1 deep-links enhanced (tokens, proofs, capabilities etc with ?at=pyana://...); Tier 2 deprecation banners + deep links added to proofs/notes/datalog/effect-vm (preserve tamper/educational); outright retire markers + notices for nameservice (replaced), crossfed, gallery AMM, full-turn-proof, tiered-revocation (per plan list). No big-bang, learn/ carve-out untouched. Makes surfaces noticeably cleaner + navigable to Starbridge.
+- §4.6 SDK wiring: runtime-in-memory.js header/escape comments updated to "COMPLETE"; all mutators delegated via typed @pyana/sdk PyanaRuntime (fallbacks remain only for robustness); getters stay canonical wasm passthrough (SDK does identical internally; hybrid required for sync signal reactivity per substrate). No JS reimpls. Turn-builders comments reference typed runtime.
+- §4.8 Apps tab + additional demo: identity chosen as high-quality demo beyond nameservice (rich 870-line inspectors for credential lifecycle, real proofs, platform reuse). Added demo handler in starbridge.js mounting live <pyana-credential> etc + explanation. Enriched app-list descriptions + metadata. Small creep: fixed import paths in shared/inspectors/index.js + shared/turn-builders/index.js (pages/ instead of top-level for identity/sub/governed — now their high-quality components register/available in Starbridge/Apps tab without standalone open); added dynamic manifest fetch attempt in PyanaAppList (Q3 advancement, better UX); updated manifests/comments for completeness. Apps tab now demonstrates 2+ high-quality e2e (nameservice + identity) using only platform vocab + shared.
+- Any new gaps discovered: None blocking; noted minor in tracker (manifest fetch graceful, more SDK getters for future sync parity if reactivity changes). All edits after full reads of targets; tee for any cmds; no cargo/stash/new .md; substrate + vocab strict.
+- Status: 4.6/4.8/4.9 marked Done in inventory + /tmp/gap-closure-status.md (re-audited). Success §11 item 7 now stronger (2 demos). See tracker for matrix.
+
+Update §10 inventory + tracker. Zero gaps drive continues (rust/design heavy remain human).
 
 ---
 
@@ -444,6 +577,8 @@ If you're **grok / kimi / codex** running a single shot:
 
 ## 10. Inventory: tasks at handoff
 
+**LIVING UPDATE (STARBRIDGE-FOLLOWUP-01, 2026-05-25):** Full gap-closure matrix (Done/In Progress/Blocked with evidence from 40+ inspectors, wasm sources, cross-refs, SILVER-DEBT), priorities, efforts, scope-creep notes (e.g. discord-bot/node for unblocks, sdk polish), and recommended next-wave prioritization in **/tmp/gap-closure-status.md** (machine-readable JSON included). This is now the single source of truth for zero-gaps progress. Many inspectors/Wave items + 5.1/5.7/4.4 advanced or Done per current code (ls + greps); heavy Rust + open Qs (esp Q3/4) remain per detailed audit. Reconcile inventory against tracker on every landing. See tracker for exact status of #21/23/25/28-32 + new items (4.5/4.6/4.8/§5/§6).
+
 Tasks #21, #23, #25, #28–32 are pending. Tasks #17, #18, #20, #22, #24, #26, #27 are completed or in flight at session end. See `TaskList`.
 
 Specifically:
@@ -455,13 +590,14 @@ Specifically:
 - **#28** Extension bugfixes (§ 4.3)
 - **#29** Rename window.pyana → window.pyanaUi (§ 4.2)
 - **#30** Wire pyana-observability + `<pyana-activity>` (§ 4.4)
-- **#31** Playground migration plan (§ 4.9)
-- **#32** Wave 2 integration stitch (§ 4.1; do first when Wave 2 returns)
+- **#31** Playground migration plan (§ 4.9) — **COMPLETED (FOLLOWUP-05)**: full tiered (Tier1 deep-links + Tier2 deprecation banners on proofs/notes/datalog/effect-vm + outright retire notices for nameservice/crossfed/gallery-AMM/full-turn/tiered-rev). Preserved learn/ carve-out + tamper demos. See §8 LIVING UPDATE.
+- **#32** Wave 2 integration stitch (§ 4.1; do first when Wave 2 returns) — appears landed (barrel + embeddings in turn/receipt/cell present as of 2026-05-25 state)
+- **SDK integration (§ 4.6)** — **COMPLETED (FOLLOWUP-05)**: runtime-in-memory fully wired (all mutators + peer via typed PyanaRuntime from @pyana/sdk; headers/escape updated; hybrid getters documented as canonical passthrough). starbridge-apps/shared turn-builders reference typed. See §8.
+- New per-inspector Playwright pattern documented + spikes enhanced (§7.9); regression proof tee'd.
 
 New tasks not yet filed (file as work begins):
 - Wave 3 inspector swarm (§ 4.5; 22 new inspectors enumerated)
-- SDK integration into Studio (§ 4.6)
-- Starbridge "Apps" tab + nameservice (§ 4.8)
+- Starbridge "Apps" tab + nameservice + additional demos (§ 4.8) — **COMPLETED (FOLLOWUP-05, see §8 LIVING UPDATE)**: advanced tab (dynamic manifests), identity as high-quality additional demo (live in handler), path fixes + creep for additional apps' components/registration. 2+ e2e demos now.
 - 10 Rust-substrate gaps (§ 5)
 - Embedded debugger Phase 1 / 2 / 3 (§ 6)
 
@@ -477,7 +613,7 @@ Starbridge is "done" (Silver vision form) when:
 4. **Cross-runtime cooperation works fully.** Two tabs exchange `PeerStateTransition` bytes via Discord paste; bob's view of alice updates structurally. `<pyana-peer-transition>` renders the bytes. (Tier-1 done; UX polish remaining.)
 5. **The extension hosts a passive event-feed debugger** subscribing to live node events, rendering them via Studio inspectors. Inspectors loaded as web components inside a content-script shadow-DOM panel.
 6. **Starbridge runs `RemoteRuntime` against the Discord bot** and gets a navigable view of all bot-relayed activity for the friend clique.
-7. **At least one starbridge-app (nameservice) is mounted in the Apps tab** end-to-end, demonstrating the platform vocabulary + manifest format.
+7. **At least one (now two: nameservice + identity as high-quality additional) starbridge-app(s) mounted in the Apps tab** end-to-end, demonstrating the platform vocabulary + manifest format + shared/ typed builders (COMPLETED FOLLOWUP-05).
 8. **Playwright test coverage ≥ 1 per inspector** plus regression-level coverage of substrate paths (signing, cell-genesis, peer-exchange, federation).
 
 Golden vision — γ.2 Phase 2 joint aggregation AIR, full mesh attestation, every PI variant non-placeholder, all StateConstraint AIR teeth — extends from this. Not in scope for Starbridge frontend work directly; visible only as the trust-tier badges flipping from Silver to Golden as the substrate matures.

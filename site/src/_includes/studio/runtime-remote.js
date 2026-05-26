@@ -19,7 +19,8 @@
  * CORS realism: when used against devnet.pyana.fg-goose.online from a
  * browser-localhost origin the fetches will reject with a CORS error. The
  * runtime still constructs cleanly; signals stay null until the network
- * cooperates. This is the realistic test path until a CORS-friendly node ships.
+ * cooperates. (FOLLOWUP-07: now surfaces actionable guidance in logs for
+ * Starbridge users; see improved logOnce + getJSON catch.)
  */
 
 const POLL_INTERVAL_MS = 5000;
@@ -48,6 +49,55 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
   const cursor = signal(0);
   const events = new EventTarget();
 
+  // Observability live events (Task #30). Same signal shape as InMemoryRuntime.
+  // Populated by SSE consumer below (or empty until /observability/stream connected).
+  const traceEventsSignal = signal({ schema_version: 1, event_count: 0, events: [] });
+  function getTraceEvents() { return traceEventsSignal; }
+
+  // SSE consumer for remote observability stream (broadcast from node).
+  // Uses browser EventSource; pushes parsed JSON log into the signal.
+  let obsEs = null;
+  if (base && typeof EventSource !== 'undefined') {
+    try {
+      obsEs = new EventSource(`${base}/observability/stream`);
+      obsEs.onmessage = (msg) => {
+        try {
+          const data = JSON.parse(msg.data || '{}');
+          traceEventsSignal.value = data;
+        } catch {}
+      };
+      obsEs.onerror = () => { /* keep last good value */ };
+    } catch {}
+  }
+
+  // --- Extension bridge for passive debugger (Phase 1/2, STARBRIDGE-FOLLOWUP-06) ---
+  // When running inside the Pyana Cipherclerk extension (iframe panel, or any
+  // extension page), chrome.runtime is present. We poll the background's
+  // synthesized activity feed (populated from the live WS bus + cclerk ops,
+  // exactly the TraceEvent shape for <pyana-activity>) via "pyana:getActivityFeed".
+  // This lets RemoteRuntime (and all inspectors including activity) work against
+  // *real node events* using the extension's authenticated connection, without
+  // needing direct node /observability/stream (avoids CORS/auth issues).
+  // High-leverage integration: makes the embedded debugger vision real even before
+  // full studio assets are packaged into the extension.
+  let extPollTimer = null;
+  const isExtensionContext = (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage);
+  if (isExtensionContext) {
+    const pollExtFeed = async () => {
+      if (destroyed) return;
+      try {
+        const resp = await new Promise((resolve) => {
+          chrome.runtime.sendMessage({ type: 'pyana:getActivityFeed' }, (r) => resolve(r));
+        });
+        if (resp && resp.result) {
+          traceEventsSignal.value = resp.result;
+        }
+      } catch (e) { /* keep last; background may not be ready */ }
+    };
+    pollExtFeed();
+    extPollTimer = setInterval(pollExtFeed, 2000);  // live enough for debugger feed
+  }
+
   // Cached payloads. Signals are read on demand by callers; we hold the latest
   // successful value here and surface it via per-id signal wrappers.
   let cachedStatus = null;            // last /status response
@@ -71,6 +121,12 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
     console.warn(`[RemoteRuntime] ${key}:`, err && err.message ? err.message : err);
   }
 
+  function isCorsError(err) {
+    if (!err) return false;
+    const m = (err.message || err.toString() || '').toLowerCase();
+    return m.includes('cors') || m.includes('failed to fetch') || (err.name === 'TypeError' && m.includes('fetch'));
+  }
+
   async function getJSON(path) {
     if (destroyed) return null;
     if (!base) return null;
@@ -87,7 +143,14 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
     } catch (err) {
       // AbortError on destroy is expected; swallow silently.
       if (err && err.name === 'AbortError') return null;
-      logOnce(`GET ${path} failed`, err);
+      if (isCorsError(err)) {
+        // High-signal for Starbridge users (the primary RemoteRuntime consumers).
+        logOnce(`GET ${path} CORS_BLOCKED`, new Error(
+          `CORS blocked contacting ${base}. Starbridge Remote against non-local nodes requires the node to allow browser origins (node/src/api.rs cors_middleware currently localhost+extension only; discord-bot is permissive). Workarounds: (1) use the Chrome extension's embedded Starbridge panel, (2) run a local node with relaxed CORS for dev, (3) target the discord-bot HTTP surface. Original err: ${err.message || err}`
+        ));
+      } else {
+        logOnce(`GET ${path} failed`, err);
+      }
       return null;
     }
   }
@@ -182,6 +245,8 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
     if (destroyed) return;
     destroyed = true;
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    if (extPollTimer) { clearInterval(extPollTimer); extPollTimer = null; }
+    if (obsEs) { try { obsEs.close(); } catch {} obsEs = null; }
     try { abort.abort(); } catch { /* noop */ }
   }
 
@@ -196,6 +261,7 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
 
     getCell,
     listCells,
+    getTraceEvents,
 
     // Read-only: all mutations refuse.
     createAgent: notPermitted('createAgent'),

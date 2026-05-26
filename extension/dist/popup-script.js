@@ -64,12 +64,12 @@
   }
   async function loadLog() {
     const stored = await chrome.storage.local.get("pyana_cipherclerk");
-    const cclerk = stored["pyana_cipherclerk"];
-    if (!cclerk || !cclerk.log || cclerk.log.length === 0) {
+    const cc = stored["pyana_cipherclerk"];
+    if (!cc || !cc.log || cc.log.length === 0) {
       logContainer.innerHTML = '<div class="empty">No recent authorizations</div>';
       return;
     }
-    const entries = cclerk.log.slice(-5).reverse();
+    const entries = cc.log.slice(-5).reverse();
     logContainer.innerHTML = entries.map((entry) => {
       const time = new Date(entry.timestamp).toLocaleTimeString();
       const icon = entry.allowed ? "&#x2713;" : "&#x2717;";
@@ -155,12 +155,12 @@
   backupBtn.addEventListener("click", async () => {
     const state = await sendMessage("pyana:getState");
     if (state && state.locked) {
-      alert("Unlock your cclerk first to view the recovery phrase.");
+      alert("Unlock your cipherclerk first to view the recovery phrase.");
       return;
     }
     const mnemonic = await sendMessage("pyana:getMnemonic");
     if (!mnemonic) {
-      alert("No recovery phrase available for this cclerk.");
+      alert("No recovery phrase available for this cipherclerk.");
       return;
     }
     if (mnemonicDisplay.style.display === "block") {

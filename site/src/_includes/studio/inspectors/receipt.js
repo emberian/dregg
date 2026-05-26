@@ -81,6 +81,10 @@ class PyanaReceipt extends InspectorBase {
             <summary style="cursor:pointer;color:var(--fg-dim);font-size:0.82rem;user-select:none;">Proof</summary>
             <pyana-proof uri=${`pyana://receipt/${r.turn_hash}`} mode="default"></pyana-proof>
           </details>
+          <details style="margin-top:var(--s3,8px);">
+            <summary style="cursor:pointer;color:var(--fg-dim);font-size:0.82rem;user-select:none;">Witnessed (Wave 3 cross-embed)</summary>
+            <pyana-witnessed-receipt uri=${`pyana://receipt/${r.turn_hash}`} mode="compact"></pyana-witnessed-receipt>
+          </details>
         </div>`;
     };
 

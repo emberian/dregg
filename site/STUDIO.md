@@ -176,7 +176,7 @@ happens via the active `Runtime` context.
 pyana://cell/<hex32>                  cell by id
 pyana://turn/<hex32>                  turn by hash
 pyana://receipt/<hex32>               receipt by hash
-pyana://capability/<token-id>         capability by id (root or attenuated)
+pyana://capability/<cell_id>/<slot>   capability by stable cell anchor + slot (root or attenuated; cell_id is hash-derived per bindings.rs CDTView). Legacy agent_idx form is sim-internal only. (STARBRIDGE-PLAN §8 Q2 final + /tmp/q2-capability-uri-stability-prototype.mjs)
 pyana://intent/<hex32>                intent by id
 pyana://block/<height-or-hex>         blocklace vertex
 pyana://proof/<hex32>                 STARK proof by content-hash
@@ -280,9 +280,9 @@ A starbridge-app that reimplements any of these inspectors is the **silo
 anti-pattern** (HOUYHNHNM-COMPARISON.md § 7.3; STARBRIDGE-PLAN.md § 1).
 Apps register *additional* inspectors for app-specific protocol objects (e.g.
 `<pyana-name>`, `<pyana-name-registry>` for the nameservice app) via the
-manifest-based registry (STARBRIDGE-PLAN.md § 8 Q3). They do not fork or
+manifest-based registry (STARBRIDGE-PLAN.md § 8 Q3 **final: JSON authoritative per nameservice/manifest.json shape**; validated by /tmp/q3-app-manifest-proto-output.txt). Manifest "inspectors"[] list also enables Q5 reservation (host rejects dups at load). They do not fork or
 shadow existing platform-level elements. The platform vocabulary is the
-meta-program's shared clipboard; forking it creates a new silo.
+meta-program's shared clipboard; forking it creates a new silo. (FOLLOWUP-04)
 
 **Initial inspector set** (matches existing protocol objects):
 

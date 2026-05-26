@@ -7,8 +7,8 @@ use crate::poseidon2::{hash_2_to_1, hash_4_to_1};
 use crate::stark::{BoundaryConstraint, StarkAir};
 
 use super::{
-    AUX_BASE, EFFECT_VM_WIDTH, NUM_EFFECTS, PARAM_BASE, STATE_AFTER_BASE,
-    STATE_BEFORE_BASE, aux_off, param, pi, sel, state,
+    AUX_BASE, EFFECT_VM_WIDTH, NUM_EFFECTS, PARAM_BASE, STATE_AFTER_BASE, STATE_BEFORE_BASE,
+    aux_off, param, pi, sel, state,
 };
 
 /// The Effect VM AIR's shape descriptor (VK v2; see
@@ -374,6 +374,14 @@ impl StarkAir for EffectVmAir {
         // Lasso-style), replace executor-side checks with in-circuit range
         // proofs via a 2^16 lookup table (2 lookups per limb for 30/34 bits).
         //
+        // STARBRIDGE-FOLLOWUP-03 (2026-05-25): This remains BLOCKED ON HUMAN
+        // per STARBRIDGE-PLAN §5.2 (T2.5 / T2.14 in SILVER-DEBT). Precise:
+        // circuit/ + turn/executor heavy; no cargo in this session (user
+        // circuit release tests active). See SILVER-DEBT §4 table rows for
+        // `circuit/src/effect_vm.rs:2305` etc + `air.rs:107` dups. Next
+        // session: add lookup feature behind cfg, wire in EffectVmAir
+        // boundary + effect.rs projection. Test via circuit/tests/...
+        //
         // SECURITY NOTE — Balance underflow protection (o1vm audit finding #3):
         //
         // For outgoing transfers and obligation creation, the constraint is:
@@ -394,6 +402,9 @@ impl StarkAir for EffectVmAir {
         // TODO(underflow): Add proper non-negative range proof via bit
         // decomposition of (old_balance - amount) to prove it fits in 30 bits.
         // This requires 30 aux columns per debit row, or a shared lookup table.
+        //
+        // STARBRIDGE-FOLLOWUP-03: Same blocked status as range-checks above
+        // (§5.2). Executor-side defense is the current Silver posture.
         // ====================================================================
 
         let s_noop = local[sel::NOOP];

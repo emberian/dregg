@@ -1,0 +1,11 @@
+{
+  "id": "identity",
+  "name": "Identity",
+  "description": "Credential issuance and selective disclosure starbridge-app (pyana-native).",
+  "version": "0.1.0",
+  "factory_vks": [],
+  "page": "/starbridge-apps/identity/pages/index.html",
+  "inspectors": [],
+  "turn_builders": [],
+  "required_apis": ["signTurn"]
+}

@@ -678,6 +678,212 @@ pub fn verify_bearer_cap(
 }
 
 // ============================================================================
+// Real BearerCapProof (canonical, for JS-unblocking §5.1)
+// ============================================================================
+//
+// The legacy `create_bearer_cap` / `verify_bearer_cap` above are a
+// standalone shim (blake3 derive "pyana-bearer-cap-v2" over action string).
+// The canonical shape is `pyana_turn::action::BearerCapProof` consumed by
+// `Authorization::Bearer` and `TurnExecutor` (authorize.rs + execute_tree.rs).
+// It binds federation_id, uses `AuthRequired` (not raw action str), supports
+// `SignedDelegation` / `StarkDelegation`, revocation channels, facet masks,
+// and full cap-lookup + expiry + amplification checks inside the executor.
+//
+// These fns produce/verify the *real* envelope (minimal: SignedDelegation
+// path only; Stark path left for future when STARK delegation witnesses land).
+// Federation ID is required (use the runtime's `executor.local_federation_id`
+// or `[0u8;32]` for pure-wasm sim turns; real nodes use their fed id).
+// The resulting JSON can be round-tripped into `AuthorizationView` (already
+// handles the two delegation_proof variants) and fed to action builders
+// that accept `BearerCapProof`.
+//
+// After this, `<pyana-bearer-cap>` inspector can render pasteable real proofs
+// that work in sovereign tab handoffs without shim divergence.
+//
+// See: turn/src/action.rs:342 (BearerCapProof + DelegationProofData),
+// turn/src/executor/authorize.rs:1076 (sig verify + cap lookup),
+// turn/src/tests.rs:8685 (make_bearer_delegation helper),
+// wasm/src/bindings.rs:1826 (AuthorizationView::Bearer).
+// Plan §5.1, STARBRIDGE-PLAN §4.5 bearer inspector.
+
+/// Create a *real* `BearerCapProof` (SignedDelegation variant) usable in
+/// canonical turns / `Authorization::Bearer`.
+///
+/// Returns JSON-serialized BearerCapProof (matches the shape already
+/// surfaced in AuthorizationView and TurnReceipt actions).
+#[wasm_bindgen]
+pub fn create_bearer_cap_proof(
+    delegator_signing_key_hex: &str,
+    target_cell_hex: &str,
+    permissions: &str, // "Signature" | "None" | "Proof" | "Either" (minimal; extend for Custom)
+    bearer_pubkey_hex: &str,
+    expires_at: u64,
+    federation_id_hex: &str,
+) -> Result<JsValue, JsError> {
+    use ed25519_dalek::Signer;
+    use pyana_cell::{AuthRequired, CellId};
+    use pyana_turn::action::{BearerCapProof, DelegationProofData};
+    use pyana_turn::executor::TurnExecutor;
+
+    let signing_seed: Zeroizing<[u8; 32]> =
+        Zeroizing::new(hex_decode_32(delegator_signing_key_hex)?);
+    let target = CellId::from_bytes(hex_decode_32(target_cell_hex)?);
+    let bearer_pk = hex_decode_32(bearer_pubkey_hex)?;
+    let fed_id = hex_decode_32(federation_id_hex)?;
+
+    let auth_req = match permissions {
+        "Signature" => AuthRequired::Signature,
+        "None" => AuthRequired::None,
+        "Proof" => AuthRequired::Proof,
+        "Either" => AuthRequired::Either,
+        "Impossible" => AuthRequired::Impossible,
+        _ => AuthRequired::Signature, // safe default for minimal binding
+    };
+
+    let message = TurnExecutor::compute_bearer_delegation_message(
+        &target, &auth_req, &bearer_pk, expires_at, &fed_id,
+    );
+
+    let signing_key = SigningKey::from_bytes(&signing_seed);
+    let delegator_pk = signing_key.verifying_key().to_bytes();
+    let signature = signing_key.sign(&message).to_bytes();
+
+    let proof = BearerCapProof {
+        target,
+        permissions: auth_req,
+        delegation_proof: DelegationProofData::SignedDelegation {
+            delegator_pk,
+            signature,
+            bearer_pk,
+        },
+        expires_at,
+        revocation_channel: None,
+        allowed_effects: None,
+    };
+
+    Ok(serde_wasm_bindgen::to_value(&proof)?)
+}
+
+/// Sig-only verification of a real BearerCapProof (SignedDelegation path).
+/// Does *not* perform the full executor cap-lookup / revocation / amplification
+/// checks (those require a Ledger snapshot); this is the cryptographic piece
+/// for inspector paste-and-verify UX. Accepts the canonical JSON shape of
+/// BearerCapProof (or a minimal subset for the sig fields).
+/// Returns { signature_valid, expired, valid_for_sig }.
+#[wasm_bindgen]
+pub fn verify_bearer_cap_proof_sig(
+    proof_json: &str,
+    current_time: u64,
+    federation_id_hex: &str,
+) -> Result<JsValue, JsError> {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+    use pyana_cell::AuthRequired;
+    use pyana_cell::CellId;
+    use pyana_turn::action::{BearerCapProof, DelegationProofData};
+    use pyana_turn::executor::TurnExecutor;
+
+    // Deserialize the real type (it derives Deserialize). For minimal
+    // shim-compat we also accept a flat form, but prefer canonical.
+    let proof: BearerCapProof = serde_json::from_str(proof_json)
+        .or_else(|_| {
+            // Fallback: try a minimal flat shape used by legacy callers.
+            #[derive(Deserialize)]
+            struct Flat {
+                target: String,
+                permissions: String,
+                delegator_pk: String,
+                signature: String,
+                bearer_pk: String,
+                expires_at: u64,
+            }
+            let f: Flat = serde_json::from_str(proof_json)?;
+            let auth = match f.permissions.as_str() {
+                "Signature" => AuthRequired::Signature,
+                "None" => AuthRequired::None,
+                _ => AuthRequired::Signature,
+            };
+            let target = CellId::from_bytes(hex_decode_32(&f.target)?);
+            let dpk = hex_decode_32(&f.delegator_pk)?;
+            let sig = hex_decode_64_fallback(&f.signature)?;
+            let bpk = hex_decode_32(&f.bearer_pk)?;
+            Ok(BearerCapProof {
+                target,
+                permissions: auth,
+                delegation_proof: DelegationProofData::SignedDelegation {
+                    delegator_pk: dpk,
+                    signature: sig,
+                    bearer_pk: bpk,
+                },
+                expires_at: f.expires_at,
+                revocation_channel: None,
+                allowed_effects: None,
+            })
+        })
+        .map_err(|e| JsError::new(&format!("cannot parse as BearerCapProof or flat: {e}")))?;
+
+    let fed_id = hex_decode_32(federation_id_hex)?;
+
+    let (delegator_pk, signature, bearer_pk, auth_req, expires) = match &proof.delegation_proof {
+        DelegationProofData::SignedDelegation {
+            delegator_pk,
+            signature,
+            bearer_pk,
+        } => (
+            *delegator_pk,
+            *signature,
+            *bearer_pk,
+            proof.permissions.clone(),
+            proof.expires_at,
+        ),
+        _ => {
+            return Err(JsError::new(
+                "StarkDelegation verify not yet in minimal binding",
+            ));
+        }
+    };
+
+    let message = TurnExecutor::compute_bearer_delegation_message(
+        &proof.target,
+        &auth_req,
+        &bearer_pk,
+        expires,
+        &fed_id,
+    );
+
+    let vk = VerifyingKey::from_bytes(&delegator_pk)
+        .map_err(|e| JsError::new(&format!("bad delegator pk: {e}")))?;
+    let sig = Signature::from_bytes(&signature);
+    let sig_valid = vk.verify_strict(&message, &sig).is_ok();
+    let expired = expires > 0 && current_time > expires;
+
+    #[derive(Serialize)]
+    struct VerifyRealResult {
+        signature_valid: bool,
+        expired: bool,
+        valid_for_sig: bool,
+    }
+    let out = VerifyRealResult {
+        signature_valid: sig_valid,
+        expired,
+        valid_for_sig: sig_valid && !expired,
+    };
+    Ok(serde_wasm_bindgen::to_value(&out)?)
+}
+
+// 64-byte hex decode helper (local to module; avoids name clash).
+fn hex_decode_64_fallback(s: &str) -> Result<[u8; 64], JsError> {
+    if s.len() != 128 {
+        return Err(JsError::new("hex sig must be 128 chars for fallback"));
+    }
+    let mut out = [0u8; 64];
+    for i in 0..64 {
+        out[i] = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16)
+            .map_err(|e| JsError::new(&format!("hex at {i}: {e}")))?;
+    }
+    Ok(out)
+}
+
+// ============================================================================
 // Factory Operations
 // ============================================================================
 

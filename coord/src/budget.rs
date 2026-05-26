@@ -1187,6 +1187,11 @@ mod tests {
             total_spent: 9999,
             debits: vec![],
             signature: [0u8; 64], // Forged; ceiling check fires before sig check.
+                                  // (STARBRIDGE-FOLLOWUP-03: full Ed25519 verify now present in
+                                  // rebalance_inner at the SECURITY comment block; see also
+                                  // apply_unlock_certificate:756. §5.6 gap from AUDIT-coord-crate
+                                  // and STARBRIDGE-07 is CLOSED for the signature path. Test still
+                                  // exercises the ceiling-precedence defense-in-depth.)
         };
 
         // Use rebalance_partial to avoid the incomplete certs check.

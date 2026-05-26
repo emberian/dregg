@@ -8,8 +8,6 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     #[serde(default = "NodeConfig::default")]
     pub node: NodeConfig,
-    #[serde(default = "WalletConfig::default")]
-    pub cclerk: WalletConfig,
     #[serde(default = "OutputConfig::default")]
     pub output: OutputConfig,
 }
@@ -18,12 +16,6 @@ pub struct Config {
 pub struct NodeConfig {
     #[serde(default = "default_node_url")]
     pub url: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WalletConfig {
-    #[serde(default = "default_keyfile")]
-    pub keyfile: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,10 +28,6 @@ fn default_node_url() -> String {
     "http://localhost:8420".to_string()
 }
 
-fn default_keyfile() -> String {
-    "~/.pyana/cipherclerk.key".to_string()
-}
-
 fn default_format() -> String {
     "color".to_string()
 }
@@ -48,14 +36,6 @@ impl Default for NodeConfig {
     fn default() -> Self {
         Self {
             url: default_node_url(),
-        }
-    }
-}
-
-impl Default for WalletConfig {
-    fn default() -> Self {
-        Self {
-            keyfile: default_keyfile(),
         }
     }
 }
@@ -72,7 +52,6 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             node: NodeConfig::default(),
-            cclerk: WalletConfig::default(),
             output: OutputConfig::default(),
         }
     }
@@ -86,6 +65,11 @@ pub fn config_path() -> PathBuf {
 
 impl Config {
     /// Load config from the given path (or default). Missing file => defaults.
+    ///
+    /// On parse failure (corrupt or hand-edited TOML), logs a warning to stderr
+    /// and falls back to safe built-in defaults rather than silently ignoring
+    /// the user's settings. This closes a bad-UX gap where `pyana config set`
+    /// or manual edits could be lost without any indication.
     pub fn load(path: Option<&str>) -> Self {
         let file_path = match path {
             Some(p) => PathBuf::from(p),
@@ -97,8 +81,27 @@ impl Config {
         }
 
         match std::fs::read_to_string(&file_path) {
-            Ok(contents) => toml::from_str(&contents).unwrap_or_default(),
-            Err(_) => Config::default(),
+            Ok(contents) => match toml::from_str(&contents) {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    eprintln!(
+                        "warning: failed to parse config file {}: {}. Using built-in defaults.",
+                        file_path.display(),
+                        e
+                    );
+                    Config::default()
+                }
+            },
+            Err(e) => {
+                if file_path.exists() {
+                    eprintln!(
+                        "warning: failed to read config file {}: {}. Using built-in defaults.",
+                        file_path.display(),
+                        e
+                    );
+                }
+                Config::default()
+            }
         }
     }
 
@@ -126,7 +129,6 @@ pub fn set_value(key: &str, value: &str) -> Result<(), Box<dyn std::error::Error
 
     match key {
         "node.url" => cfg.node.url = value.to_string(),
-        "cclerk.keyfile" => cfg.cclerk.keyfile = value.to_string(),
         "output.format" => {
             if !["color", "plain", "json"].contains(&value) {
                 return Err(format!("Invalid format '{}'. Use: color, plain, json", value).into());
@@ -134,8 +136,11 @@ pub fn set_value(key: &str, value: &str) -> Result<(), Box<dyn std::error::Error
             cfg.output.format = value.to_string();
         }
         _ => {
+            // Note: "cclerk.keyfile" was a legacy/dead setting (never loaded or used
+            // by any CLI command; all cipherclerk ops proxy through the node). It is
+            // no longer accepted to avoid user confusion.
             return Err(format!(
-                "Unknown config key '{}'. Valid keys: node.url, cclerk.keyfile, output.format",
+                "Unknown config key '{}'. Valid keys: node.url, output.format",
                 key
             )
             .into());

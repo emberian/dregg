@@ -3,7 +3,7 @@
 use clap::Subcommand;
 
 use crate::config::Config;
-use crate::output::{Context, format_number};
+use crate::output::{Context, abbrev_hex, format_number};
 
 use super::{get_json, post_json};
 
@@ -23,6 +23,14 @@ pub enum NodeCommand {
 
     /// Force sync with peers.
     Sync,
+
+    /// Fetch blocklace checkpoint (supports new blocklace fast-sync / observability).
+    /// Returns DAG snapshot + ledger snapshot (hex) + integrity hashes.
+    BlocklaceCheckpoint {
+        /// Specific height (default: latest available checkpoint).
+        #[arg(long)]
+        height: Option<u64>,
+    },
 }
 
 pub async fn run(
@@ -35,6 +43,7 @@ pub async fn run(
         NodeCommand::Connect { address } => connect(cfg, ctx, &address).await,
         NodeCommand::Peers => peers(cfg, ctx).await,
         NodeCommand::Sync => sync(cfg, ctx).await,
+        NodeCommand::BlocklaceCheckpoint { height } => blocklace_checkpoint(cfg, ctx, height).await,
     }
 }
 
@@ -160,6 +169,46 @@ async fn sync(cfg: &Config, ctx: &Context) -> Result<(), Box<dyn std::error::Err
     if let Some(h) = new_height {
         ctx.kv("New height", &format_number(h));
     }
+
+    Ok(())
+}
+
+async fn blocklace_checkpoint(
+    cfg: &Config,
+    ctx: &Context,
+    height: Option<u64>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let spinner = ctx.spinner("Fetching blocklace checkpoint...");
+    let path = match height {
+        Some(h) => format!("/api/blocklace/checkpoint?height={}", h),
+        None => "/api/blocklace/checkpoint".to_string(),
+    };
+    let data = get_json(cfg, &path).await.map_err(|e| {
+        spinner.finish_and_clear();
+        format!(
+            "Blocklace checkpoint unavailable: {}. (Node may not have checkpoints yet.)",
+            e
+        )
+    })?;
+    spinner.finish_and_clear();
+
+    if cfg.is_json() {
+        ctx.json_stdout(&data);
+        return Ok(());
+    }
+
+    let h = data["height"].as_u64().unwrap_or(0);
+    let bl_hash = data["blocklace_hash"].as_str().unwrap_or("?");
+    let ld_hash = data["ledger_hash"].as_str().unwrap_or("?");
+
+    ctx.header(&format!(
+        "Blocklace Checkpoint @ height {}",
+        format_number(h)
+    ));
+    ctx.kv("Blocklace hash", &abbrev_hex(bl_hash, 8, 4));
+    ctx.kv("Ledger hash", &abbrev_hex(ld_hash, 8, 4));
+    ctx.info("  Use --json for full DAG + snapshot (large). Supports fast sync for new nodes.");
+    ctx.info("  See node/src/blocklace_sync.rs for checkpoint format.");
 
     Ok(())
 }

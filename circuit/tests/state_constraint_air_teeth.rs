@@ -16,6 +16,13 @@
 //! algebraically) lands in a follow-up commit and is documented as
 //! `#[ignore]`'d here.
 //!
+//! STARBRIDGE-FOLLOWUP-03 (2026-05-25): PI-layer (SLOT_CAVEAT_MANIFEST +
+//! verify_*) for first-wave variants landed (per §5.3). Full teeth +
+//! SenderAuthorized etc (needs swiss gadget + big-int) + row binding
+//! BLOCKED ON HUMAN (circuit/ + cell/program + heavy cargo). Precise
+//! cross-refs: SILVER-DEBT T2.11 + CAVEAT-LAYER-COVERAGE; cell/src/program.rs
+//! BoundDeltaNotWired etc. No changes to teeth logic this session.
+//!
 //! Coverage: one positive + one tamper test per first-wave variant.
 //! First-wave variants are the ones whose enforcement fits the AIR's
 //! existing 4-byte field-element truncation: `Immutable`, `WriteOnce`,

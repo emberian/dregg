@@ -7,6 +7,8 @@ export function initTokens(wasm) {
   container.innerHTML = `
     <div class="section-header">
       <h2>Tokens</h2>
+      <!-- Tier 1 playground migration (§4.9 COMPLETE FOLLOWUP-05): deep-link to Starbridge (coexist during transition) -->
+      <a href="/starbridge.html?at=pyana://token/demo" target="_blank" style="font-size:0.8em;float:right;">Inspect tokens in Starbridge (pyana://token/... deep) →</a>
       <p>
         Pyana tokens are macaroon-style bearer credentials. A root token is minted from a secret key,
         then attenuated by appending caveats that cryptographically restrict scope. Attenuation is

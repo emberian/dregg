@@ -120,7 +120,7 @@ fn build_turn(
         agent,
         nonce,
         call_forest: forest,
-        fee: 0,
+        fee: 300,
         memo: None,
         valid_until: None,
         previous_receipt_hash,
@@ -176,8 +176,8 @@ fn cross_fed_receipt_lift_seam6() {
     let mut ledger_f1 = Ledger::new();
     let cell_a = permissive_cell("A-issuer", 1_000_000);
     let cell_b = permissive_cell("B-registry", 1_000_000);
-    let id_a = cell_a.id;
-    let id_b = cell_b.id;
+    let id_a = cell_a.id();
+    let id_b = cell_b.id();
     ledger_f1.insert_cell(cell_a).unwrap();
     ledger_f1.insert_cell(cell_b).unwrap();
     // Capabilities for F1 operations.
@@ -196,8 +196,8 @@ fn cross_fed_receipt_lift_seam6() {
     let mut ledger_f2 = Ledger::new();
     let cell_c = permissive_cell("C-subscriber", 5_000_000);
     let cell_d = permissive_cell("D-worker", 100_000);
-    let id_c = cell_c.id;
-    let id_d = cell_d.id;
+    let id_c = cell_c.id();
+    let id_d = cell_d.id();
     ledger_f2.insert_cell(cell_c).unwrap();
     ledger_f2.insert_cell(cell_d).unwrap();
     ledger_f2
@@ -348,8 +348,8 @@ fn cross_fed_receipt_lift_seam6() {
     let r4 = execute_or_panic(&executor_f2, &mut ledger_f2, &t4, "t4/D-worker");
     assert_eq!(
         ledger_f2.get(&id_d).unwrap().state.balance(),
-        pre_d_balance + bounty_amount,
-        "t4 must credit D's balance"
+        pre_d_balance + bounty_amount - 300,
+        "t4 must credit D's balance (after paying turn's computron fee)"
     );
     assert_eq!(
         ledger_f2.get(&id_c).unwrap().state.balance(),
@@ -393,6 +393,7 @@ fn cross_fed_receipt_lift_seam6() {
             mock_block_id_f1,
             1, // finality_round
         );
+        ar.threshold = 1; // test uses 1-of-1 for manual AR (see HANDOFF #128)
         ar.receipt_stream_root = Some(f1_stream_root);
         // Sign with node-0's key.
         let seat = fed.canonical.local_seat().unwrap();
@@ -436,6 +437,7 @@ fn cross_fed_receipt_lift_seam6() {
             mock_block_id_f2,
             1,
         );
+        ar.threshold = 1; // test uses 1-of-1 for manual AR (see HANDOFF #128)
         ar.receipt_stream_root = Some(f2_stream_root);
         let seat = fed.canonical.local_seat().unwrap();
         let msg = ar.signing_message();
@@ -556,7 +558,7 @@ fn receipt_lift_own_federation_roundtrip() {
         );
         c.permissions = open_permissions();
         // CellId is derived from (public_key, token_id) not just key bytes.
-        let id = c.id;
+        let id = c.id();
         l.insert_cell(c).unwrap();
         cell_id = id;
         l

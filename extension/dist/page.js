@@ -41,7 +41,21 @@
     if (typeof callback !== "function") {
       throw new TypeError("pyana.on: callback must be a function");
     }
-    const validEvents = ["ready", "authorization", "revoked", "stealthNoteReceived", "privateTransfer", "intentFulfilled", "privacyModeChanged"];
+    const validEvents = [
+      "ready",
+      "authorization",
+      "revoked",
+      "stealthNoteReceived",
+      "privateTransfer",
+      "intentFulfilled",
+      "privacyModeChanged",
+      "receipt",
+      "root",
+      "intent",
+      "note_announcement",
+      "federation",
+      "activity"
+    ];
     if (!validEvents.includes(event)) {
       throw new Error(`pyana.on: unknown event "${event}". Valid: ${validEvents.join(", ")}`);
     }
@@ -151,12 +165,6 @@
     queryBalance() {
       return sendMessage("pyana:queryBalance", {});
     },
-    getNodeConfig() {
-      return sendMessage("pyana:getNodeConfig", {});
-    },
-    setNodeConfig(config) {
-      return sendMessage("pyana:setNodeConfig", { config });
-    },
     shareCapability(cellId) {
       return sendMessage("pyana:shareCapability", { cellId });
     },
@@ -197,6 +205,18 @@
     },
     voteOnProposal(proposalId, approve) {
       return sendMessage("pyana:voteOnProposal", { proposalId, approve });
+    },
+    signTurnV3(turnBytes) {
+      return sendMessage("pyana:signTurnV3", { turnBytes: Array.from(turnBytes) });
+    },
+    registerFederation(federationId, name, committeePubkeys) {
+      return sendMessage("pyana:registerFederation", { federationId, name, committeePubkeys });
+    },
+    listKnownFederations() {
+      return sendMessage("pyana:listKnownFederations", {});
+    },
+    createCapTpDeliveredAuth({ handoffCertB58, introducerPk, senderPk }) {
+      return sendMessage("pyana:createCapTpDeliveredAuth", { handoffCertB58, introducerPk, senderPk });
     },
     on(event, callback) {
       addListener(event, callback);

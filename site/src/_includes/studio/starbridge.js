@@ -403,6 +403,52 @@ function writeUrlState({ at, runtime }) {
       setCurrentUri,
       swapRuntime,
     };
+
+    // Wire the new Apps tab / <pyana-app-list> (STARBRIDGE-PLAN §4.8).
+    // The list reads manifests; "Demo in inspector" for nameservice mounts
+    // the first end-to-end starbridge-app inspectors (which reuse platform
+    // <pyana-cell> + <pyana-capability> and the typed turn-builders).
+    const appListEl = document.getElementById('sb-app-list');
+    if (appListEl) {
+      appListEl.addEventListener('app-demo', (e) => {
+        const { app } = e.detail || {};
+        if (app && app.id === 'nameservice') {
+          inspector.replaceChildren();
+          const demoWrap = document.createElement('div');
+          demoWrap.style.cssText = 'padding:0.5rem;';
+          demoWrap.innerHTML = `
+            <h4 style="margin:0 0 0.5rem;font-size:0.95rem">Nameservice — first e2e starbridge-app demo (§4.8)</h4>
+            <p style="margin:0 0 0.5rem;font-size:0.8rem;color:#555">Registry + detail using new shared inspectors (reusing &lt;pyana-cell&gt; etc.) + typed turn-builders from shared/.</p>
+            <pyana-name-registry uri="pyana://cell/registry-default" page-size="6"></pyana-name-registry>
+            <details style="margin-top:0.6rem;font-size:0.8rem">
+              <summary>Per-name detail (reuses platform inspectors)</summary>
+              <pyana-name uri="pyana://cell/registry-default" name="demo.pyana"></pyana-name>
+            </details>
+            <div style="margin-top:0.5rem;font-size:0.75rem;color:#666">
+              Open full interactive page: <a href="/starbridge-apps/nameservice/pages/index.html" target="_blank">/starbridge-apps/nameservice/pages/index.html</a>
+            </div>
+          `;
+          inspector.appendChild(demoWrap);
+          setStatus('nameservice e2e demo (Apps tab)', 'ready');
+        } else if (app && app.id === 'identity') {
+          inspector.replaceChildren();
+          const demoWrap = document.createElement('div');
+          demoWrap.style.cssText = 'padding:0.5rem;';
+          demoWrap.innerHTML = `
+            <h4 style="margin:0 0 0.5rem;font-size:0.95rem">Identity — high-quality additional starbridge-app demo (§4.8 FOLLOWUP-05)</h4>
+            <p style="margin:0 0 0.5rem;font-size:0.8rem;color:#555">Credential lifecycle using platform vocabulary + app-specific <code>&lt;pyana-credential&gt;</code> inspectors (loaded via shared/ path fix) + typed turn-builders. Reuses &lt;pyana-cell&gt; etc. No new Effects.</p>
+            <pyana-credential uri="pyana://cell/identity-issuer" style="max-width:480px"></pyana-credential>
+            <div style="margin-top:0.5rem;font-size:0.75rem;color:#666">
+              Full interactive: <a href="/starbridge-apps/identity/pages/index.html" target="_blank">/starbridge-apps/identity/pages/index.html</a> (issue/present/verify flows with real proofs).
+            </div>
+          `;
+          inspector.appendChild(demoWrap);
+          setStatus('identity high-quality e2e demo (Apps tab, beyond nameservice)', 'ready');
+        } else if (app) {
+          setStatus(`App: ${app.name} — open standalone for full demo`, 'ready');
+        }
+      });
+    }
   } catch (e) {
     console.error('[starbridge] boot failed:', e);
     setStatus('boot failed: ' + (e?.message || e), 'err');

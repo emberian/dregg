@@ -9,13 +9,15 @@
     "pyana:discoverServices",
     "pyana:resolvePath",
     "pyana:storageQuota",
-    "pyana:federationStatus"
+    "pyana:federationStatus",
+    "pyana:listKnownFederations"
   ]);
   var RESTRICTED_METHODS = /* @__PURE__ */ new Set([
     "pyana:authorize",
     "pyana:provision",
     "pyana:postIntent",
     "pyana:signTurn",
+    "pyana:signTurnV3",
     "pyana:queryBalance",
     "pyana:shareCapability",
     "pyana:acceptCapability",
@@ -24,7 +26,9 @@
     "pyana:storageWrite",
     "pyana:storageRead",
     "pyana:proposeRoutes",
-    "pyana:voteOnProposal"
+    "pyana:voteOnProposal",
+    "pyana:registerFederation",
+    "pyana:createCapTpDeliveredAuth"
   ]);
   var script = document.createElement("script");
   script.src = chrome.runtime.getURL("dist/page.js");

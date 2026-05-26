@@ -1,7 +1,7 @@
 //! Doctor command: system health checks.
 
 use crate::config::Config;
-use crate::output::Context;
+use crate::output::{Context, format_number};
 
 use super::{api_url, get_json, http_client};
 
@@ -21,20 +21,23 @@ pub async fn run(cfg: &Config, ctx: &Context) -> Result<(), Box<dyn std::error::
     // 1. Node reachable.
     checks.push(check_node(cfg).await);
 
-    // 2. Cipherclerk configured.
-    checks.push(check_cclerk(cfg));
-
-    // 3. Federation connected.
+    // 2. Federation connected.
     checks.push(check_federation(cfg).await);
 
-    // 4. Routes committed.
+    // 3. Routes committed.
     checks.push(check_routes(cfg).await);
 
-    // 5. Storage quota.
+    // 4. Storage quota.
     checks.push(check_storage(cfg).await);
 
-    // 6. Shell completions.
+    // 5. Shell completions.
     checks.push(check_completions());
+
+    // 6. Blocklace checkpoints (new feature observability).
+    checks.push(check_blocklace(cfg).await);
+
+    // 7. Receipts / receipt chain health.
+    checks.push(check_receipts(cfg).await);
 
     // Display results.
     let pass_count = checks.iter().filter(|c| c.passed).count();
@@ -84,25 +87,6 @@ async fn check_node(cfg: &Config) -> Check {
             passed: false,
             detail: format!("Node unreachable at {} ({})", cfg.node.url, e),
         },
-    }
-}
-
-fn check_cclerk(cfg: &Config) -> Check {
-    let keyfile = shellexpand::tilde(&cfg.cclerk.keyfile).to_string();
-    let path = std::path::Path::new(&keyfile);
-
-    if path.exists() {
-        Check {
-            name: "cclerk".to_string(),
-            passed: true,
-            detail: format!("Cipherclerk configured ({} exists)", cfg.cclerk.keyfile),
-        }
-    } else {
-        Check {
-            name: "cclerk".to_string(),
-            passed: false,
-            detail: format!("Cipherclerk not found ({} missing)", cfg.cclerk.keyfile),
-        }
     }
 }
 
@@ -226,5 +210,64 @@ fn check_completions() -> Check {
             detail: "Shell completions not found (run: pyana completions <shell> > ...)"
                 .to_string(),
         }
+    }
+}
+
+/// Check for blocklace checkpoint availability (parity with node blocklace_sync + /api/blocklace/checkpoint).
+async fn check_blocklace(cfg: &Config) -> Check {
+    match get_json(cfg, "/api/blocklace/checkpoint").await {
+        Ok(data) => {
+            let h = data["height"].as_u64().unwrap_or(0);
+            if h > 0 {
+                Check {
+                    name: "blocklace".to_string(),
+                    passed: true,
+                    detail: format!(
+                        "Blocklace checkpoint available (height {})",
+                        format_number(h)
+                    ),
+                }
+            } else {
+                Check {
+                    name: "blocklace".to_string(),
+                    passed: true,
+                    detail: "Blocklace: no checkpoints yet (normal for fresh node)".to_string(),
+                }
+            }
+        }
+        Err(_) => Check {
+            name: "blocklace".to_string(),
+            passed: true, // not fatal
+            detail:
+                "Blocklace checkpoints: endpoint not present or node unreachable (OK for basic)"
+                    .to_string(),
+        },
+    }
+}
+
+/// Receipt chain / cipherclerk health (observability + receipts parity).
+async fn check_receipts(cfg: &Config) -> Check {
+    match get_json(cfg, "/cipherclerk").await {
+        Ok(data) => {
+            let rc_len = data["receipt_chain_length"].as_u64().unwrap_or(0);
+            if rc_len > 0 {
+                Check {
+                    name: "receipts".to_string(),
+                    passed: true,
+                    detail: format!("Receipt chain healthy ({} receipts)", format_number(rc_len)),
+                }
+            } else {
+                Check {
+                    name: "receipts".to_string(),
+                    passed: true,
+                    detail: "Receipt chain: empty (fresh cipherclerk)".to_string(),
+                }
+            }
+        }
+        Err(_) => Check {
+            name: "receipts".to_string(),
+            passed: false,
+            detail: "Receipt chain status unavailable (node/cipherclerk unreachable)".to_string(),
+        },
     }
 }

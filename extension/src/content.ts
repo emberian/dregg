@@ -17,6 +17,7 @@ const UNRESTRICTED_METHODS = new Set<MessageType>([
   "pyana:resolvePath",
   "pyana:storageQuota",
   "pyana:federationStatus",
+  "pyana:listKnownFederations",
 ]);
 
 // Methods that require the origin to be in the user-approved allowlist.
@@ -25,6 +26,7 @@ const RESTRICTED_METHODS = new Set<MessageType>([
   "pyana:provision",
   "pyana:postIntent",
   "pyana:signTurn",
+  "pyana:signTurnV3",
   "pyana:queryBalance",
   "pyana:shareCapability",
   "pyana:acceptCapability",
@@ -34,6 +36,8 @@ const RESTRICTED_METHODS = new Set<MessageType>([
   "pyana:storageRead",
   "pyana:proposeRoutes",
   "pyana:voteOnProposal",
+  "pyana:registerFederation",
+  "pyana:createCapTpDeliveredAuth",
 ]);
 
 // Inject page.js with the session nonce as a data attribute.
@@ -115,6 +119,11 @@ window.addEventListener(`pyana:request:${SESSION_NONCE}`, (async (event: Event):
 }) as EventListener);
 
 // Forward event notifications from background -> page.
+// Also the entry point for a future content-script shadow-DOM passive debugger panel
+// (Phase 1 §6): the listener already receives all "pyana:event" (incl. new "activity",
+// "receipt", "root", "intent", "note_announcement", "federation" from STARBRIDGE-FOLLOWUP-06).
+// A shadow panel can read chrome.runtime messages directly here (before or instead of
+// forwarding) and mount <pyana-activity> using a shim runtime exposing getTraceEvents().
 chrome.runtime.onMessage.addListener((
   message: { type: string; event?: string; payload?: unknown },
   _sender: chrome.runtime.MessageSender,

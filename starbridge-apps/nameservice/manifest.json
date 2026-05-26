@@ -1,0 +1,40 @@
+{
+  "id": "nameservice",
+  "name": "Nameservice",
+  "description": "First end-to-end starbridge-app: federation name directory built from pyana-native primitives (FactoryDescriptor, StateConstraints/WriteOnce+Monotonic slot caveats, AppCipherclerk signed Actions). Supports register, renew, transfer, revoke, set-target. Demonstrates slot layout, event topics, and inspector reuse.",
+  "version": "0.1.0",
+  "factory_vks": [
+    "737461726272696467652d6e616d65736572766963652d666163746f72792121"
+  ],
+  "page": "/starbridge-apps/nameservice/pages/index.html",
+  "inspectors": [
+    "pyana-name",
+    "pyana-name-registry",
+    "pyana-name-register-form"
+  ],
+  "turn_builders": [
+    "register_name",
+    "renew_name",
+    "transfer_name",
+    "revoke_name",
+    "set_target_name"
+  ],
+  "required_apis": [
+    "signTurn",
+    "blake3",
+    "cell.readField",
+    "builders.nameservice"
+  ],
+  "slot_layout": {
+    "NAME_HASH_SLOT": 2,
+    "OWNER_HASH_SLOT": 3,
+    "EXPIRY_SLOT": 4,
+    "REVOKED_SLOT": 5,
+    "RESOLVE_TARGET_SLOT": 6
+  },
+  "state_constraints": [
+    "WriteOnce(NAME_HASH_SLOT)",
+    "Monotonic(EXPIRY_SLOT)",
+    "WriteOnce(REVOKED_SLOT)"
+  ]
+}

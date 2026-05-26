@@ -491,6 +491,32 @@ async function deriveKeypairFromMnemonic(
 
 const subscribers = new Map<number, Set<string>>();
 
+// --- Passive event-feed debugger support (Phase 1, §6, STARBRIDGE-FOLLOWUP-06) ---
+// In-memory trace feed in the exact shape expected by <pyana-activity> + getTraceEvents.
+// Populated from node WS events (receipt/root/revocation/intent/note_announcement) +
+// cclerk actions. Exposed via "pyana:activity" notifications and "pyana:getActivityFeed".
+// This makes the live activity stream from the new observability wiring *usable* inside
+// the extension without requiring a full runtime shim in Phase 1.
+let activityFeed: { schema_version: number; event_count: number; events: Array<{ kind: string; envelope: any; payload: any }> } = {
+  schema_version: 1,
+  event_count: 0,
+  events: [],
+};
+
+function pushActivity(kind: string, payload: unknown, envelopeExtras: Record<string, unknown> = {}): void {
+  const env = {
+    timestamp: new Date().toISOString(),
+    seq: activityFeed.event_count,
+    actor: 'extension-cclerk',
+    ...envelopeExtras,
+  };
+  activityFeed.events.push({ kind, envelope: env, payload });
+  activityFeed.event_count = activityFeed.events.length;
+  // Cap to last 200 for memory (live feed, not archive).
+  if (activityFeed.events.length > 200) activityFeed.events.shift();
+  notifySubscribers('activity', activityFeed);
+}
+
 function notifySubscribers(event: string, payload: unknown): void {
   for (const [tabId, events] of subscribers) {
     if (events.has(event)) {
@@ -1047,6 +1073,7 @@ async function authorize(request: AuthorizeRequest): Promise<AuthorizeResult> {
     allowed: true,
     mode,
   });
+  pushActivity('authorization', { auth_kind: mode, action: request.action, resource: request.resource }, { source: 'cclerk' });
   return result;
 }
 
@@ -1726,40 +1753,14 @@ async function signTurn(turnSpec: TurnSpec): Promise<SignTurnResult> {
   }
   if (!cc.secretKey) return { error: "Cipherclerk secret key not available", submitted: false };
 
-  // Require the v3 build_turn export. The old JSON-only fallback produced
-  // non-v3-format turns that the executor rejects post-soundness-sweep.
+  // Hard-error: JSON fallback removed per §4.3 Task #28 item 2 (post-soundness v3 required).
+  // Legacy signTurn(JSON) path produced non-canonical turns rejected by executor.
+  // starbridge-apps must use signTurnV3(turnBytes: Uint8Array) with bytes from
+  // their postcard turn-builders (or the wasm build_turn when bound to V3 surface).
   if (!w.build_turn) {
-    throw new Error("signTurnV3: build_turn export required (v3 message format)");
+    throw new Error("build_turn export required (v3 message format)");
   }
-  const turnData: { turn_id: string; turn_bytes: Uint8Array; signature?: Uint8Array } =
-    w.build_turn(JSON.stringify({
-      sender_pubkey: cc.publicKey,
-      sender_privkey: cc.secretKey,
-      action: turnSpec.action,
-      resource: turnSpec.resource || "*",
-      amount: turnSpec.amount || 0,
-      recipient: turnSpec.recipient || null,
-      metadata: turnSpec.metadata || null,
-      timestamp: Date.now(),
-    }));
-
-  const resp = await nodeRequest(nodeConfig, "/turns/submit", {
-    method: "POST",
-    body: JSON.stringify({
-      turn_id: turnData.turn_id,
-      turn_bytes: Array.from(turnData.turn_bytes),
-      signature: turnData.signature ? Array.from(turnData.signature) : undefined,
-      sender_pubkey: cc.publicKey,
-    }),
-  });
-
-  if (!resp.ok) {
-    return { error: `Failed to submit turn: ${resp.error}`, turnId: turnData.turn_id, submitted: false };
-  }
-
-  cc.log.push({ action: turnSpec.action, resource: turnSpec.resource || "*", allowed: true, timestamp: Date.now(), mode: "turn", turnId: turnData.turn_id });
-  await saveState();
-  return { turnId: turnData.turn_id, submitted: true, nodeResult: resp.data as Record<string, unknown> | undefined };
+  throw new Error("signTurn JSON fallback removed; v3 required. Use pyana.signTurnV3(turnBytes) for postcard-encoded turns from starbridge-apps turn-builders.");
 }
 
 async function queryBalance(): Promise<{ balance?: number; error?: string }> {
@@ -1924,6 +1925,7 @@ function handleOriginPermissionRequest(origin: string, method: string): Promise<
 
 const PAGE_ALLOWED_METHODS = new Set<MessageType>([
   "pyana:authorize", "pyana:isConnected", "pyana:canAuthorize", "pyana:subscribe",
+  "pyana:getActivityFeed",  // Phase 1: live activity feed for <pyana-activity> / debugger
   "pyana:provision", "pyana:postIntent", "pyana:getStealthAddress",
   "pyana:postEncryptedIntent", "pyana:privateTransfer",
   "pyana:createBearerCap", "pyana:verifyBearerCap",
@@ -2047,6 +2049,12 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
         subscribers.get(tabId)!.add(message.event as string);
       }
       return { id: message.id, result: true };
+    }
+
+    // Phase 1 passive debugger: expose the synthesized activity feed (TraceEvent shape)
+    // consumable by <pyana-activity> (or direct .on('activity')) and for RemoteRuntime bridge.
+    case "pyana:getActivityFeed": {
+      return { id: message.id, result: activityFeed };
     }
 
     case "pyana:provisionDecision":
@@ -2795,6 +2803,7 @@ function tryConnect(url: string, onFail: () => void): void {
           await saveState();
         }
         notifySubscribers("revoked", { tokenId: msg.token_id });
+        pushActivity('turn_lifecycle', { phase: 'revoked', token_id: msg.token_id }, { source: 'node-ws' });
         break;
       }
       case "receipt": {
@@ -2802,10 +2811,12 @@ function tryConnect(url: string, onFail: () => void): void {
         cc.receiptChain.push(msg.hash as string);
         await saveState();
         notifySubscribers("receipt", { hash: msg.hash });
+        pushActivity('turn_lifecycle', { phase: 'committed', receipt_hash: msg.hash }, { source: 'node-ws' });
         break;
       }
       case "root": {
         notifySubscribers("root", { height: msg.height, merkle_root: msg.merkle_root });
+        pushActivity('federation', { event: 'root', height: msg.height, merkle_root: msg.merkle_root }, { source: 'node-ws' });
         break;
       }
       case "intent": {
@@ -2813,6 +2824,8 @@ function tryConnect(url: string, onFail: () => void): void {
         if (intent && intent.expiry > Date.now() && !intentPool.has(intent.id)) {
           intentPool.set(intent.id, { intent, receivedAt: Date.now() });
         }
+        notifySubscribers("intent", { intent });
+        pushActivity('turn_lifecycle', { phase: 'intent_received', intent_id: intent?.id, ...intent }, { source: 'node-ws' });
         break;
       }
       case "note_announcement": {
@@ -2844,6 +2857,8 @@ function tryConnect(url: string, onFail: () => void): void {
         cc.stealthNotes.push(note);
         await saveState();
         notifySubscribers("stealthNoteReceived", { note });
+        notifySubscribers("note_announcement", { note_id: msg.note_id, ...msg });
+        pushActivity('bilateral_receipt', { direction: 'inbound', note_id: msg.note_id, amount: msg.amount }, { source: 'node-ws' });
         break;
       }
     }
@@ -2902,6 +2917,7 @@ async function fetchDiscovery(): Promise<void> {
       intentService: federationState.intentService,
       lastUpdated: federationState.lastUpdated,
     });
+    pushActivity('federation', { event: 'discovery_update', ...federationState }, { source: 'extension' });
   } catch (e: unknown) {
     const err = e as Error;
     federationState.fetchError = err.message;

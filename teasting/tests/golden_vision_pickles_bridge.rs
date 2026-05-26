@@ -101,7 +101,7 @@ mod golden_pickles {
         let mut ids = [CellId::from_bytes([0u8; 32]); 5];
         for i in 0..5 {
             let cell = permissive_cell(seeds[i], balances[i]);
-            ids[i] = cell.id;
+            ids[i] = cell.id();
             ledger.insert_cell(cell).unwrap();
         }
         // Grant self-cap and next-cell cap for causal permission checks.
@@ -139,7 +139,7 @@ mod golden_pickles {
             agent,
             nonce,
             call_forest: forest,
-            fee: 0,
+            fee: 300,
             memo: Some(memo.into()),
             valid_until: None,
             previous_receipt_hash,

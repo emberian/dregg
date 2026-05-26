@@ -20,6 +20,12 @@
  * Permission abbreviations (from Rust Debug fmt):
  *   Signature → S   Proof → P   None → N   Impossible → I   Either → E
  *   anything else → first char
+ *
+ * Pattern (FOLLOWUP-09 exemplar): Fully follows InspectorBase + _render + version effect
+ * (see _base.js:21, cell.js:44 in barrel, delegation-graph:386). Data from ledger caps
+ * (wasm bindings:1840 get_delegation_graph); distinct from blocklace/src/delegation.rs
+ * (executor strand delegation for consensus). For caps in receipts/ARs see merkle + predicate
+ * inspectors. Config via federation committee (constitution in blocklace crate).
  */
 
 import { InspectorBase, shortHex } from './_base.js';

@@ -7,6 +7,8 @@ export function initCapabilities(wasm) {
   container.innerHTML = `
     <div class="section-header">
       <h2>Capabilities</h2>
+      <!-- Tier 1 deep-link (§4.9 COMPLETE FOLLOWUP-05) -->
+      <a href="/starbridge.html?at=pyana://capability/demo" target="_blank" style="font-size:0.8em;float:right;">Inspect caps in Starbridge (deep pyana://capability/...) →</a>
       <p>
         Capabilities are delegable, attenuable authorization tokens. A root capability grants
         full access; each delegation can only narrow scope (monotonic attenuation). Revocation

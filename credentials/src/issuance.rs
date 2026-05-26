@@ -194,11 +194,11 @@ pub fn issue(
 
     let attenuated = root
         .attenuate(&att)
-        .map_err(|e: Error| IssuanceError::Backend(e.to_string()))?;
+        .map_err(|e: pyana_token::TokenError| IssuanceError::Backend(e.to_string()))?;
 
     let encoded = attenuated
         .to_encoded()
-        .map_err(|e: Error| IssuanceError::Encoding(e.to_string()))?;
+        .map_err(|e: pyana_token::TokenError| IssuanceError::Encoding(e.to_string()))?;
 
     Ok(Credential {
         encoded,

@@ -23,8 +23,24 @@ PID_DIR="${PID_DIR:-$STATE_DIR/pids}"
 # demo/two-ai-handoff/run.sh build step, or a separate "make build"
 # loop). start_devnet.sh checks that the binary exists and bails with
 # a helpful message if not.
-NODE_BIN="${NODE_BIN:-$REPO_ROOT/target/debug/pyana-node}"
-VERIFIER_BIN="${VERIFIER_BIN:-$REPO_ROOT/target/debug/pyana-verifier}"
+#
+# Ease-by-default: prefer debug (for active dev), fall back to release
+# (common after `cargo build --release`). Operator can still override
+# NODE_BIN/VERIFIER_BIN.
+if [ -z "${NODE_BIN:-}" ]; then
+    if [ -x "$REPO_ROOT/target/debug/pyana-node" ]; then
+        NODE_BIN="$REPO_ROOT/target/debug/pyana-node"
+    elif [ -x "$REPO_ROOT/target/release/pyana-node" ]; then
+        NODE_BIN="$REPO_ROOT/target/release/pyana-node"
+    fi
+fi
+if [ -z "${VERIFIER_BIN:-}" ]; then
+    if [ -x "$REPO_ROOT/target/debug/pyana-verifier" ]; then
+        VERIFIER_BIN="$REPO_ROOT/target/debug/pyana-verifier"
+    elif [ -x "$REPO_ROOT/target/release/pyana-verifier" ]; then
+        VERIFIER_BIN="$REPO_ROOT/target/release/pyana-verifier"
+    fi
+fi
 
 # ── Topology ────────────────────────────────────────────────────────
 #

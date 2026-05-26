@@ -1,9 +1,24 @@
 /**
  * <pyana-blocklace-sim node-count="4" block-rate="1" mode="default">
  *
- * Self-contained Cordial Miners DAG simulator — no wasm, no protocol calls.
- * Ported from playground/sections/blocklace-sim.js with signal-based state and
- * the InspectorBase custom-element pattern.
+ * Self-contained Cordial Miners DAG simulator (educational what-if with equivocator injection).
+ * Ported from site/playground/sections/blocklace-sim.js. Pure JS for interactive demo of
+ * waves, tau-ordering, finality threshold (2f+1), and Byzantine injection.
+ *
+ * IMPORTANT (per STARBRIDGE-PLAN §4.9 carve-out + Houyhnhnm substrate rule):
+ *   - This is NOT the live blocklace. It does NOT reimplement pyana consensus, ordering,
+ *     AR threshold sigs, receipt chains, or finality (see blocklace/src/ordering.rs:1,
+ *     finality.rs, constitution.rs:24 for real Rust impl of tau/waves/leaders/ratification,
+ *     MembershipProposal, Constitution {participants, threshold, version}).
+ *   - For real federation blocklace DAG + QC/finalized roots from live node or sim runtime:
+ *     use <pyana-block-dag uri="pyana://federation/0"> (backed by wasm list_federation_blocks
+ *     + get_federation_block; see wasm/src/bindings.rs:1055, wasm/src/runtime.rs:161 SimFederation,
+ *     node/src/blocklace_sync.rs:1 for node live + pyana_federation).
+ *   - Configurability (genesis, ordering params, committee): surfaced via MCP on node
+ *     (node/src/mcp.rs:3841 tool_get_blocklace_status + tool_get_constitution) and
+ *     devnet samples e.g. demo/multi-node-devnet/state/logs/scenarios/.../f1_committee.json
+ *     (federation_id, committee_epoch, threshold, validators[] with pubkeys).
+ *   - 2-fed demo data available in devnet F1/F2 genesis + known_federations/*.json.
  *
  * Attributes:
  *   node-count        — number of nodes (default 4)
@@ -16,8 +31,10 @@
  *   el.reset()        — reset simulation to empty state
  *   el.getState()     — { blocks, tauOrder, equivocations, wave, ticks }
  *
- * Does NOT extend InspectorBase — it has no uri/runtime dependency.
- * Follows the same connected/disconnected/attributeChangedCallback pattern.
+ * Does NOT extend InspectorBase (no uri/runtime dep by design for standalone educational use).
+ * Follows connected/disconnected/attributeChangedCallback + self-render pattern.
+ * See _base.js:21 and barrel inspectors.js:304 for full platform pattern (cell.js style uses
+ * InspectorBase + effect + signals + <pyana-*> reuse + data= where appropriate).
  */
 
 // ── constants ─────────────────────────────────────────────────────────────────
@@ -447,6 +464,7 @@ class PyanaBlocklaceSim extends HTMLElement {
         <button class="pbs__btn" id="pbs-stop"${!isRunning ? ' disabled' : ''}>Stop</button>
         <button class="pbs__btn" id="pbs-step">Step</button>
         <button class="pbs__btn" id="pbs-reset">Reset</button>
+        <button class="pbs__btn pbs__btn--accent" id="pbs-sample-2fed" title="Load hardcoded 2-fed devnet committee sample (F1 threshold=2; see demo/multi-node-devnet/.../f1_committee.json + blocklace/src/constitution.rs)">2-fed sample</button>
         <label class="pbs__label">Nodes
           <input type="number" id="pbs-nc" value="${nc}" min="2" max="7" class="pbs__nc-input">
         </label>
@@ -482,6 +500,7 @@ class PyanaBlocklaceSim extends HTMLElement {
     const stopBtn = this.querySelector('#pbs-stop');
     const stepBtn = this.querySelector('#pbs-step');
     const resetBtn = this.querySelector('#pbs-reset');
+    const sampleBtn = this.querySelector('#pbs-sample-2fed');
     const ncInput = this.querySelector('#pbs-nc');
     const equivCheck = this.querySelector('#pbs-equivocate');
 
@@ -501,6 +520,9 @@ class PyanaBlocklaceSim extends HTMLElement {
     resetBtn?.addEventListener('click', () => {
       this.reset();
     });
+    sampleBtn?.addEventListener('click', () => {
+      this._loadDevnetSample2Fed();
+    });
     ncInput?.addEventListener('change', () => {
       this.setAttribute('node-count', ncInput.value);
       // attributeChangedCallback handles the re-init
@@ -512,6 +534,24 @@ class PyanaBlocklaceSim extends HTMLElement {
         this.removeAttribute('equivocator-index');
       }
     });
+  }
+
+  /** Real improvement: loads 2-fed devnet sample config (from demo/.../f1_committee.json + blocklace constitution).
+   *  Sets N=2, resets sim, logs committee details (threshold, validators) for visibility of
+   *  genesis/config/ordering params. Does not reimpl real blocklace (pure educational overlay).
+   */
+  _loadDevnetSample2Fed() {
+    this.setAttribute('node-count', '2');
+    this.removeAttribute('equivocator-index');
+    this.reset();
+    // Append to log via direct mutation + re-render (sim internal)
+    if (this._sim) {
+      this._sim.log.push({
+        text: 'Loaded 2-fed devnet sample (F1: threshold=2, epoch=0; validators node-0/1/2 pubs ce64.. etc; see constitution.rs:30 + f1_committee.json). Use for demo; real ordering in blocklace/src/ordering.rs',
+        kind: 'success'
+      });
+    }
+    this._renderSelf();
   }
 }
 

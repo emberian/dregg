@@ -61,7 +61,13 @@ window.addEventListener(`pyana:response:${SESSION_NONCE}`, ((event: CustomEvent)
 // Event system
 // ---------------------------------------------------------------------------
 
-type PyanaEvent = "ready" | "authorization" | "revoked" | "stealthNoteReceived" | "privateTransfer" | "intentFulfilled" | "privacyModeChanged";
+type PyanaEvent = "ready" | "authorization" | "revoked" | "stealthNoteReceived" | "privateTransfer" | "intentFulfilled" | "privacyModeChanged"
+  // Extended for passive event-feed debugger vision (§6 Phase 1, STARBRIDGE-FOLLOWUP-06):
+  // Makes the live WS node activity stream (receipt/root/intent/note_announcement/federation/activity)
+  // directly usable from page/dapp context via window.pyana.on(). Foundational for embedding
+  // <pyana-activity> and other Studio inspectors as the extension's debugger UI. Subscribe
+  // wires through background to the node WS bus (and synthesized activity trace events).
+  | "receipt" | "root" | "intent" | "note_announcement" | "federation" | "activity";
 
 const eventListeners = new Map<string, Set<(payload: unknown) => void>>();
 
@@ -69,7 +75,8 @@ function addListener(event: PyanaEvent, callback: (payload: unknown) => void): v
   if (typeof callback !== "function") {
     throw new TypeError("pyana.on: callback must be a function");
   }
-  const validEvents: PyanaEvent[] = ["ready", "authorization", "revoked", "stealthNoteReceived", "privateTransfer", "intentFulfilled", "privacyModeChanged"];
+  const validEvents: PyanaEvent[] = ["ready", "authorization", "revoked", "stealthNoteReceived", "privateTransfer", "intentFulfilled", "privacyModeChanged",
+    "receipt", "root", "intent", "note_announcement", "federation", "activity"];
   if (!validEvents.includes(event)) {
     throw new Error(`pyana.on: unknown event "${event}". Valid: ${validEvents.join(", ")}`);
   }
@@ -167,8 +174,6 @@ export interface PyanaAPI {
   composeProofs(proofs: Array<{ proofJson: string; publicInputs?: number[] }>, mode: "and" | "or" | "chain" | "aggregate"): Promise<{ composedProof: string; mode: string; inputCount: number; valid: boolean }>;
   signTurn(turnSpec: { action: string; resource?: string; amount?: number; recipient?: string; metadata?: Record<string, unknown> }): Promise<{ turnId?: string; submitted: boolean; error?: string }>;
   queryBalance(): Promise<{ balance?: number; error?: string }>;
-  getNodeConfig(): Promise<{ nodeUrl: string; wssUrl: string; wsUrl: string; devnetKey: string }>;
-  setNodeConfig(config: Partial<{ nodeUrl: string; wssUrl: string; wsUrl: string; devnetKey: string }>): Promise<{ success: boolean; nodeUrl: string }>;
   shareCapability(cellId: string): Promise<{ uri: string; cellId: string; nodeId: string }>;
   acceptCapability(uri: string): Promise<{ refId: string; cellId: string; nodeId: string; permissions: string }>;
   createHandoff(cellId: string, recipientPk: string): Promise<{ certificateHash: string; cellId: string; recipientPk: string }>;
@@ -205,6 +210,7 @@ export interface PyanaAPI {
   createCapTpDeliveredAuth(params: { handoffCertB58: string; introducerPk: string; senderPk: string }): Promise<{ authBytes: number[]; error?: string }>;
   on(event: PyanaEvent, callback: (payload: unknown) => void): void;
   off(event: PyanaEvent, callback: (payload: unknown) => void): void;
+  // NOTE: extended events above enable Phase 1 passive debugger (see §6).
 }
 
 const pyana: PyanaAPI = {
@@ -286,14 +292,6 @@ const pyana: PyanaAPI = {
 
   queryBalance() {
     return sendMessage("pyana:queryBalance", {}) as Promise<{ balance?: number; error?: string }>;
-  },
-
-  getNodeConfig() {
-    return sendMessage("pyana:getNodeConfig", {}) as Promise<{ nodeUrl: string; wssUrl: string; wsUrl: string; devnetKey: string }>;
-  },
-
-  setNodeConfig(config) {
-    return sendMessage("pyana:setNodeConfig", { config }) as Promise<{ success: boolean; nodeUrl: string }>;
   },
 
   shareCapability(cellId) {

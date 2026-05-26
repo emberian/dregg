@@ -241,19 +241,25 @@ if (typeof window !== 'undefined' && window.pyana?.register) {
 // Per-app self-registering imports
 // =========================================================================
 
-// Identity inspectors.
-import('/starbridge-apps/identity/inspectors.js').catch(() => {});
+// Identity inspectors (pages/ for high-quality additional demo; §4.8 FOLLOWUP-05 creep fix).
+import('/starbridge-apps/identity/pages/inspectors.js').catch(() => {});
 
-// Subscription inspectors.
-import('/starbridge-apps/subscription/inspectors.js').catch(() => {});
+// Subscription inspectors (pages/ for additional demo).
+import('/starbridge-apps/subscription/pages/inspectors.js').catch(() => {});
 
 // Nameservice inspectors + turn-builders.
+// Canonical per-app inspectors now in shared/ (STARBRIDGE-PLAN §4.8) — reuses
+// platform <pyana-cell>, <pyana-capability> etc. Legacy pages/ version kept
+// for standalone fragment compatibility.
+import('/starbridge-apps/shared/inspectors/name.js').catch(() => {});
+import('/starbridge-apps/shared/turn-builders/nameservice.js').catch(() => {});
+// Legacy (full form + actions) for /starbridge-apps/nameservice/ standalone page.
 import('/starbridge-apps/nameservice/inspectors.js').catch(() => {});
-import('/starbridge-apps/nameservice/turn-builders.js').catch(() => {});
+import('/starbridge-apps/nameservice/pages/turn-builders.js').catch(() => {});
 
-// Governed-namespace inspectors + turn-builders.
-import('/starbridge-apps/governed-namespace/inspectors.js').catch(() => {});
-import('/starbridge-apps/governed-namespace/turn-builders.js').catch(() => {});
+// Governed-namespace inspectors + turn-builders (pages/ path fix for §4.8).
+import('/starbridge-apps/governed-namespace/pages/inspectors.js').catch(() => {});
+import('/starbridge-apps/governed-namespace/pages/turn-builders.js').catch(() => {});
 
 // =========================================================================
 // JS-side registry mirror

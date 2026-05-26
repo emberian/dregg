@@ -165,30 +165,30 @@
         turnResult.textContent = `${label}\n${JSON.stringify(value, null, 2)}`;
       }
 
-      document.getElementById('btn-create-alice').addEventListener('click', () => {
-        alice = runtime.createAgent('alice', 5000);
+      document.getElementById('btn-create-alice').addEventListener('click', async () => {
+        alice = await runtime.createAgent('alice', 5000);
         console.log('[studio] alice:', alice);
         mintBtn.disabled = false;
         if (alice && bob) transferBtn.disabled = false;
       });
-      document.getElementById('btn-create-bob').addEventListener('click', () => {
-        bob = runtime.createAgent('bob', 0);
+      document.getElementById('btn-create-bob').addEventListener('click', async () => {
+        bob = await runtime.createAgent('bob', 0);
         console.log('[studio] bob:', bob);
         if (alice && bob) transferBtn.disabled = false;
       });
-      document.getElementById('btn-mint').addEventListener('click', () => {
-        const result = runtime.mintToken(alice.agent_index, 'dns', ['read'], 0);
+      document.getElementById('btn-mint').addEventListener('click', async () => {
+        const result = await runtime.mintToken(alice.agent_index, 'dns', ['read'], 0);
         console.log('[studio] mint result:', JSON.stringify(result));
         showResult('agent_mint_token (succeeds — no signing required)', result);
         api.toast('Token minted for Alice');
       });
-      document.getElementById('btn-transfer').addEventListener('click', () => {
+      document.getElementById('btn-transfer').addEventListener('click', async () => {
         // Fee is the per-turn computron budget AND is deducted from balance.
         // Transfer 100 tokens; declare excess=500 so the conservation law
         // accounts for both the transfer amount and the fee burn.
         // (excess=500 tells the executor 500 units are intentionally consumed
         // as the fee, satisfying the "excess not zero at turn end" check.)
-        const result = runtime.executeTurn(
+        const result = await runtime.executeTurn(
           alice.agent_index,
           [{ type: 'transfer', to: bob.cell_id, amount: 100, excess: 500 }],
           500,
@@ -197,8 +197,8 @@
         showResult('execute_turn (transfer)', result);
         api.toast(`Transfer ${result.status}`, result.status === 'committed' ? 'info' : 'err');
       });
-      document.getElementById('btn-advance').addEventListener('click', () => {
-        runtime.advanceHeight(1);
+      document.getElementById('btn-advance').addEventListener('click', async () => {
+        await runtime.advanceHeight(1);
         api.toast('Advanced 1 block');
       });
       document.getElementById('btn-dump').addEventListener('click', () => {
@@ -258,7 +258,7 @@
       let aliceLastCommit = null;
       let bobRegisteredAlice = false;
 
-      pxCopyBtn.addEventListener('click', () => {
+      pxCopyBtn.addEventListener('click', async () => {
         try {
           // Alice's current commitment is the cell's post-state.
           const aliceCellState = runtime.getCell(alice.cell_id).value;
@@ -278,7 +278,7 @@
           const seq = Date.now().toString(16).padStart(16, '0');
           const effectsHash = ('a'.repeat(48) + seq).slice(0, 64);
 
-          const bytes = runtime.createPeerTransition(
+          const bytes = await runtime.createPeerTransition(
             alice.agent_index, oldCommit, newCommit, effectsHash,
           );
           aliceLastCommit = newCommit;
@@ -302,7 +302,7 @@
         }
       });
 
-      pxPasteBtn.addEventListener('click', () => {
+      pxPasteBtn.addEventListener('click', async () => {
         try {
           const b64 = pxPaste.value.trim();
           if (!b64) throw new Error('paste box is empty');
@@ -324,13 +324,13 @@
               : aliceCommit;
             // For our spike Alice always signs (old=current, new=current)
             // so the initial commitment is just current.
-            runtime.registerPeer(
+            await runtime.registerPeer(
               bob.agent_index, alice.cell_id, alicePubkey, aliceCommit,
             );
             bobRegisteredAlice = true;
           }
           const alicePubkey = runtime.getPeerPubkey(alice.agent_index).public_key;
-          const view = runtime.verifyPeerTransition(bob.agent_index, bytes, alicePubkey);
+          const view = await runtime.verifyPeerTransition(bob.agent_index, bytes, alicePubkey);
           pxView.textContent = JSON.stringify(view, null, 2);
           api.toast(`verified — seq=${view.last_sequence}`);
         } catch (e) {

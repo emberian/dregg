@@ -183,6 +183,7 @@ export type MessageType =
   | "pyana:listKnownFederations"
   // CapTP delivered authorization
   | "pyana:createCapTpDeliveredAuth"
+  | "pyana:getActivityFeed"  // Phase 1 debugger: activity feed for <pyana-activity>
   // Internal decision messages
   | "pyana:provisionDecision"
   | "pyana:intentConfirmation"

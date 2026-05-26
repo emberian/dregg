@@ -25,6 +25,12 @@
 //! because the proof's binding to this specific action is ensured by the executor's
 //! fail-closed design (the proof must be presented as part of the action, and only
 //! the action's target cell can accept it).
+//!
+//! STARBRIDGE-FOLLOWUP-03 note (§5.5): This "proof-to-action binding lives
+//! in executor comments, not the circuit" (per BACKWATER-CRATES-AUDIT.md:78-81,1151).
+//! Moving the binding into AIR (circuit bridge_action_air + effect_vm) is
+//! the Golden lift, BLOCKED ON HUMAN + cargo for bridge/ + circuit/. The
+//! current Silver posture (executor cross-checks only) is load-bearing.
 
 use std::sync::Arc;
 

@@ -769,6 +769,12 @@ impl TrustlessIntentEngine {
     /// Tests that depend on the prior permissive-stub behavior should use
     /// [`Self::with_stub_verifier`] (or construct an explicit verifier and
     /// pass it to [`Self::with_verifier`]).
+    ///
+    /// STARBRIDGE-FOLLOWUP-03 (§5.8): Real STARK wiring (pyana-witnessed-registry-default
+    /// crate + circuit adapters for Dfa etc) remains BLOCKED ON HUMAN per
+    /// SILVER-DEBT T1.2/T2.8. `NotYetWiredVerifier` is the correct fail-closed
+    /// default now; wasm stays mock-limited. Precise: trustless.rs:749 default
+    /// + cell/src/predicate.rs NotYetWired entries. No new crate this session.
     pub fn new(decrypt_threshold: usize, num_validators: usize) -> Self {
         let registry = WitnessedPredicateRegistry::default_builtins();
         Self {

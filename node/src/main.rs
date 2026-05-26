@@ -80,6 +80,24 @@ enum Command {
         #[arg(long, default_value = "1000")]
         checkpoint_interval: u64,
 
+        /// Blocklace consensus tuning (safe defaults match historical behavior).
+        /// These remove "wrong way" hard-coded consts and let operators tune
+        /// for devnet (aggressive/fast) vs production (conservative) without
+        /// recompiles. Blocklace is the default engine when peers or full mode.
+        /// Disable path: solo + no peers (or future --solo-only).
+
+        /// Blocklace checkpoint interval in finalized blocks (default 100, matches devnet genesis).
+        #[arg(long, default_value = "100")]
+        blocklace_checkpoint_interval: u64,
+
+        /// Blocklace COD budget (max optimistic outstanding turns; default 8).
+        #[arg(long, default_value = "8")]
+        blocklace_cod_budget: usize,
+
+        /// Blocklace constitution wave timeout in milliseconds (default 10000).
+        #[arg(long, default_value = "10000")]
+        blocklace_wave_timeout_ms: u64,
+
         /// Enable the faucet endpoint (POST /api/faucet).
         /// Only suitable for devnets. Allows anyone to request computrons from the
         /// genesis faucet cell.
@@ -275,6 +293,9 @@ async fn main() {
             federation_size,
             enable_pruning,
             checkpoint_interval,
+            blocklace_checkpoint_interval,
+            blocklace_cod_budget,
+            blocklace_wave_timeout_ms,
             enable_faucet,
             federation_mode,
             consensus,
@@ -292,6 +313,9 @@ async fn main() {
                 federation_size,
                 enable_pruning,
                 checkpoint_interval,
+                blocklace_checkpoint_interval,
+                blocklace_cod_budget,
+                blocklace_wave_timeout_ms,
                 enable_faucet,
                 &federation_mode,
                 &consensus,
@@ -362,6 +386,9 @@ async fn run_node(
     _federation_size: usize,
     enable_pruning: bool,
     checkpoint_interval: u64,
+    blocklace_checkpoint_interval: u64,
+    blocklace_cod_budget: usize,
+    blocklace_wave_timeout_ms: u64,
     enable_faucet: bool,
     federation_mode_str: &str,
     consensus_engine: &str,
@@ -537,6 +564,9 @@ async fn run_node(
         data_dir = %data_path.display(),
         pruning = enable_pruning,
         checkpoint_interval = checkpoint_interval,
+        blocklace_checkpoint_interval,
+        blocklace_cod_budget,
+        blocklace_wave_timeout_ms,
         faucet = enable_faucet,
         federation_mode = if is_solo_mode { "solo" } else { "full" },
         "starting pyana-node"
@@ -570,6 +600,9 @@ async fn run_node(
                         sync_state,
                         gossip_port_copy,
                         auto_approve_joins,
+                        blocklace_checkpoint_interval,
+                        blocklace_cod_budget,
+                        blocklace_wave_timeout_ms,
                     )
                     .await;
                 });
@@ -669,7 +702,12 @@ fn init_node(data_dir: &str) {
     println!("  pyana-node run --data-dir {}", data_dir);
 }
 
-/// Check if the node is running by hitting the status endpoint.
+/// Check if the node is reachable on its HTTP port.
+///
+/// Uses a raw TCP connect (no extra HTTP client dep in the node binary).
+/// This is a basic liveness check only; a full semantic probe of /status
+/// would require an HTTP client. On success we still recommend hitting the
+/// URL to confirm it's a real pyana-node (not another service on the port).
 async fn check_status(port: u16) {
     let url = format!("http://127.0.0.1:{port}/status");
 
@@ -677,11 +715,14 @@ async fn check_status(port: u16) {
     let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), port);
     match tokio::net::TcpStream::connect(addr).await {
         Ok(_) => {
-            println!("pyana-node is running on port {port}");
-            println!("  Status endpoint: {url}");
+            println!("pyana-node port {port} is accepting TCP connections.");
+            println!("  Try the status endpoint for full details: {url}");
+            println!(
+                "  (If another service is bound there, the HTTP response will not be pyana's.)"
+            );
         }
         Err(_) => {
-            println!("pyana-node is NOT running on port {port}");
+            println!("pyana-node is NOT listening on port {port}");
             std::process::exit(1);
         }
     }

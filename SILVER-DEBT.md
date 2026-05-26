@@ -1,10 +1,15 @@
 # SILVER-DEBT.md — pyana's canonical Silver-vs-Golden debt ledger
 
-**Date:** 2026-05-25
+**Date:** 2026-05-25 (STARBRIDGE-FOLLOWUP-03 update)
 **Source audits ingested:** `AIR-SOUNDNESS-AUDIT.md` (ce1e2def, 705 lines),
 `EXECUTOR-VK-AUDIT.md` (793 lines), `HOUYHNHNM-DEEP-CRITIQUE.md` (1a8299eb,
 1635 lines), plus a fresh sweep of `TODO[block1-bind]`, `MockProof*`,
 `with_stubs`, `expand_vk_hash_16_to_32`, and 30-bit-truncation markers.
+**FOLLOWUP-03:** Added thin wasm stubs for snapshot/time-travel (§5.9/5.10),
+confirmed coord sig verifies landed (no new markers), injected precise
+cross-ref comments at blocked sites. No debt rows added/removed (no cargo
+closures of T items); §6 + §0 updated with refined cargo plan. Living
+tracker status also mirrored in STARBRIDGE-PLAN.md §5.
 **Companion docs:** `EXECUTOR-HONESTY-AUDIT.md` (T1-T15 threat ledger),
 `CAVEAT-LAYER-COVERAGE.md` (per-variant evaluator status),
 `PROTOCOL-CATEGORICAL-ANALYSIS.md` (Tier 1/2/3 punch list),
@@ -135,6 +140,15 @@ Production deployments that want real verifiers still need the planned
 SILVER-DEBT as the "get real verifiers wired" story).
 
 ### T3.3 — CLOSED — Custom-effect VK widened to 8 BabyBear felts (2026-05-25, `46a886a5`)
+
+### coord BudgetCoordinator Ed25519 sig verification — CLOSED (STARBRIDGE-FOLLOWUP-03 confirmation, 2026-05-25)
+The rebalance + apply_unlock_certificate paths now perform the `verify_signature`
+calls (with SECURITY comments) against registered silo pubkeys (budget.rs:482,
+:756). Matches the pattern in atomic.rs. The "Forged signature (not verified...)"
+test comment (now ~1189) is updated for defense-in-depth (ceiling fires first).
+Gap from AUDIT-coord-crate §2/§7 + STARBRIDGE-PLAN §5.6 is closed for the
+signature piece. (No new SILVER-DEBT marker row was needed as none existed
+for the missing-verify itself; the tests already exercised error paths.)
 
 `Effect::Custom { program_vk_hash }` carried only 4 BabyBear felts (16
 bytes); `expand_vk_hash_16_to_32` zero-padded the upper 16 bytes. Two
@@ -1237,6 +1251,14 @@ Reflects priorities already established in the source audits
 - T1.10 EXECUTOR-HONESTY-AUDIT modulus disclosure (trivial doc).
 - T3.8 add `(could-catch)` / `(does-catch)` columns to audit (small).
 - This SILVER-DEBT.md + CI enforcement (§5).
+
+**FOLLOWUP-03 (2026-05-25) addendum (no-cargo progress):** coord sig verification
+confirmed landed (see Recently Retired); thin wasm stubs for snapshot/time-travel
+added in wasm/ (reduces effective gap for JS surfaces per pyana excellence
+scope creep); precise doc annotations injected at all §5 heavy sites with
+exact PLAN/SILVER cross-refs + refined cargo order (see STARBRIDGE-PLAN §5
+for the 8-step plan with crate/feature/test commands). No §4 table changes
+(this session performed zero debt-marker closures).
 
 **Wave 2 — Bind what's already in the AIR (2-4 weeks).**
 - T1.5 Temporal boundary binding (medium).
