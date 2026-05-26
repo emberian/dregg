@@ -68,6 +68,9 @@ use crate::turn::{EmittedEvent, Turn, TurnReceipt, TurnResult};
 
 use dregg_dsl_runtime::ProgramRegistry;
 
+pub type RateLimitCounterKey = (CellId, [u8; 32], u64);
+pub type RateLimitSumKey = (CellId, u8, u64);
+
 /// Whether a single `Effect` is a `Burn`, recursing into
 /// `ExerciseViaCapability::inner_effects`. Powers `was_burn` disclosure.
 fn effect_is_burn(e: &Effect) -> bool {
@@ -388,6 +391,13 @@ pub struct TurnExecutor {
     pub current_timestamp: i64,
     /// Current block height for precondition evaluation.
     pub block_height: u64,
+    /// Per-(cell, sender, epoch) mutation counts for `StateConstraint::RateLimit`.
+    ///
+    /// This is executor-local consensus state: it is updated only after a turn
+    /// commits, and read while building `EvalContext` for the next turn.
+    pub rate_limit_counters: Mutex<HashMap<RateLimitCounterKey, u32>>,
+    /// Per-(cell, slot, window) running positive deltas for `RateLimitBySum`.
+    pub rate_limit_sum_counters: Mutex<HashMap<RateLimitSumKey, u64>>,
     /// Optional ZK proof verifier. If None and a cell requires proof auth, the action is rejected.
     pub proof_verifier: Option<Box<dyn ProofVerifier>>,
     /// Optional budget gate (Stingray bounded counter).
@@ -573,6 +583,8 @@ impl TurnExecutor {
             program_registry: ProgramRegistry::new(),
             current_timestamp: 0,
             block_height: 0,
+            rate_limit_counters: Mutex::new(HashMap::new()),
+            rate_limit_sum_counters: Mutex::new(HashMap::new()),
             proof_verifier: None,
             budget_gate: None,
             trusted_federation_roots: Vec::new(),
@@ -613,6 +625,8 @@ impl TurnExecutor {
             program_registry: ProgramRegistry::new(),
             current_timestamp: 0,
             block_height: 0,
+            rate_limit_counters: Mutex::new(HashMap::new()),
+            rate_limit_sum_counters: Mutex::new(HashMap::new()),
             proof_verifier: None,
             budget_gate: Some(Mutex::new(gate)),
             trusted_federation_roots: Vec::new(),
@@ -649,6 +663,8 @@ impl TurnExecutor {
             program_registry: ProgramRegistry::new(),
             current_timestamp: 0,
             block_height: 0,
+            rate_limit_counters: Mutex::new(HashMap::new()),
+            rate_limit_sum_counters: Mutex::new(HashMap::new()),
             proof_verifier: Some(verifier),
             budget_gate: None,
             trusted_federation_roots: Vec::new(),

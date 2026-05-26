@@ -1689,11 +1689,13 @@ fn evaluate_constraint_full(
             let new_val = field_to_u64(&new_state.fields[idx]);
             let old_val = old_state.map(|o| field_to_u64(&o.fields[idx])).unwrap_or(0);
             let delta = new_val.saturating_sub(old_val);
-            if delta > *max_sum_per_epoch {
+            let prior_window_sum = ctx.map(|c| c.sender_epoch_count as u64).unwrap_or(0);
+            let window_sum = prior_window_sum.saturating_add(delta);
+            if window_sum > *max_sum_per_epoch {
                 return violated(
                     constraint,
                     format!(
-                        "slot[{idx}] delta={delta} exceeds max_sum_per_epoch={max_sum_per_epoch}"
+                        "slot[{idx}] window_sum={window_sum} (prior={prior_window_sum}, delta={delta}) exceeds max_sum_per_epoch={max_sum_per_epoch}"
                     ),
                 );
             }
@@ -2165,6 +2167,34 @@ fn field_to_u64(field: &FieldElement) -> u64 {
     let mut bytes = [0u8; 8];
     bytes.copy_from_slice(&field[24..32]);
     u64::from_be_bytes(bytes)
+}
+
+fn field_delta_i128(old: &FieldElement, new: &FieldElement) -> i128 {
+    field_to_u64(new) as i128 - field_to_u64(old) as i128
+}
+
+/// Check one `BoundDelta` pair against concrete local and peer state snapshots.
+///
+/// The ordinary cell-side evaluator still returns `BoundDeltaNotWired` because
+/// it does not have peer state in scope. The executor's multi-cell pass and
+/// system-level tests use this helper once both old/new cell states are known.
+pub fn bound_delta_pair_matches(
+    local_old: &CellState,
+    local_new: &CellState,
+    local_slot: u8,
+    peer_old: &CellState,
+    peer_new: &CellState,
+    peer_slot: u8,
+    relation: DeltaRelation,
+) -> Result<bool, ProgramError> {
+    let local_idx = check_index(local_slot)?;
+    let peer_idx = check_index(peer_slot)?;
+    let local_delta = field_delta_i128(&local_old.fields[local_idx], &local_new.fields[local_idx]);
+    let peer_delta = field_delta_i128(&peer_old.fields[peer_idx], &peer_new.fields[peer_idx]);
+    Ok(match relation {
+        DeltaRelation::Equal => local_delta == peer_delta,
+        DeltaRelation::EqualAndOpposite => local_delta + peer_delta == 0,
+    })
 }
 
 /// Compare two field elements as unsigned big-endian: a >= b.

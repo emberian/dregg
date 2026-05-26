@@ -450,15 +450,40 @@ fn executor_rate_limit_by_sum_delta_over_cap_rejects() {
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on caveat-correctness lane: executor must plumb sender_epoch_count into EvalContext (CAVEAT-LAYER-COVERAGE.md top-5 #3 / §6.2)"]
 fn executor_rate_limit_actually_limits() {
-    // Today: executor supplies sender_epoch_count: 0, so the cell-side check
-    // ctx.sender_epoch_count >= max_per_epoch is always false and the
-    // RateLimit always passes. This test runs `max_per_epoch + 1` turns
-    // and asserts the (cap+1)th is rejected. It will fail until the
-    // caveat-correctness lane lands the per-(cell,sender,epoch) counter
-    // and wires it into the ctx build site.
-    panic!("blocked");
+    let program = CellProgram::Predicate(vec![StateConstraint::RateLimit {
+        max_per_epoch: 2,
+        epoch_duration: 1024,
+    }]);
+    let agent_cell = make_cell_with_program(23, 1000, program);
+    let agent = agent_cell.id();
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(agent_cell).unwrap();
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+
+    let first = build_set_field_turn(agent, 0, 0, field_from_u64(1));
+    let first_result = executor.execute(&first, &mut ledger);
+    let first_hash = match &first_result {
+        TurnResult::Committed { receipt, .. } => receipt.receipt_hash(),
+        other => panic!("first under-cap turn should commit, got: {other:?}"),
+    };
+
+    let mut second = build_set_field_turn(agent, 1, 0, field_from_u64(2));
+    second.previous_receipt_hash = Some(first_hash);
+    let second_result = executor.execute(&second, &mut ledger);
+    let second_hash = match &second_result {
+        TurnResult::Committed { receipt, .. } => receipt.receipt_hash(),
+        other => panic!("second under-cap turn should commit, got: {other:?}"),
+    };
+
+    let mut third = build_set_field_turn(agent, 2, 0, field_from_u64(3));
+    third.previous_receipt_hash = Some(second_hash);
+    let third_result = executor.execute(&third, &mut ledger);
+    assert!(
+        matches!(third_result, TurnResult::Rejected { .. }),
+        "third same-epoch mutation must be rejected at the cap, got: {third_result:?}"
+    );
 }
 
 #[test]
@@ -825,13 +850,81 @@ fn executor_renounced_accepts_when_sender_not_in_set() {
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on caveat-correctness multi-cell-eval + γ.2 Phase 1 wiring (STAGE-7-GAMMA-2-PI-DESIGN.md, CAVEAT-LAYER-COVERAGE.md §1 row 24)"]
 fn executor_bilateral_transfer_with_bound_delta_accepts() {
-    // Two cells, each declaring BoundDelta { peer_cell = other, EqualAndOpposite }.
-    // Transfer 10 from A to B. Executor must:
-    //   1. Evaluate A's CellProgram against the transition (A's bal_lo -= 10).
-    //   2. Evaluate B's CellProgram against the transition (B's bal_lo += 10).
-    //   3. Run the γ.2 cross-cell match loop, confirming the deltas pair.
-    // Until the multi-cell-eval lane lands, this test cannot pass.
-    panic!("blocked");
+    use dregg_cell::program::DeltaRelation;
+
+    let mut a = make_cell_with_program(24, 1000, CellProgram::None);
+    let mut b = make_cell_with_program(25, 1000, CellProgram::None);
+    let a_id = a.id();
+    let b_id = b.id();
+    a.state.fields[0] = field_from_u64(100);
+    b.state.fields[0] = field_from_u64(20);
+    a.program = CellProgram::Predicate(vec![StateConstraint::BoundDelta {
+        local_slot: 0,
+        peer_cell: b_id,
+        peer_slot: 0,
+        delta_relation: DeltaRelation::EqualAndOpposite,
+    }]);
+    b.program = CellProgram::Predicate(vec![StateConstraint::BoundDelta {
+        local_slot: 0,
+        peer_cell: a_id,
+        peer_slot: 0,
+        delta_relation: DeltaRelation::EqualAndOpposite,
+    }]);
+
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(a).unwrap();
+    ledger.insert_cell(b).unwrap();
+
+    let mut forest = CallForest::new();
+    let action = Action {
+        target: a_id,
+        method: symbol("transfer"),
+        args: vec![],
+        authorization: Authorization::Unchecked,
+        preconditions: Default::default(),
+        effects: vec![
+            Effect::SetField {
+                cell: a_id,
+                index: 0,
+                value: field_from_u64(90),
+            },
+            Effect::SetField {
+                cell: b_id,
+                index: 0,
+                value: field_from_u64(30),
+            },
+        ],
+        may_delegate: DelegationMode::None,
+        commitment_mode: Default::default(),
+        balance_change: None,
+        witness_blobs: vec![],
+    };
+    forest.add_root(action);
+    let turn = Turn {
+        agent: a_id,
+        nonce: 0,
+        call_forest: forest,
+        fee: 0,
+        memo: None,
+        valid_until: None,
+        previous_receipt_hash: None,
+        depends_on: vec![],
+        conservation_proof: None,
+        sovereign_witnesses: HashMap::new(),
+        execution_proof: None,
+        execution_proof_cell: None,
+        execution_proof_new_commitment: None,
+        custom_program_proofs: None,
+        effect_binding_proofs: Vec::new(),
+        cross_effect_dependencies: Vec::new(),
+        effect_witness_index_map: Vec::new(),
+    };
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        matches!(result, TurnResult::Committed { .. }),
+        "matching bilateral BoundDelta field transfer must commit, got: {result:?}"
+    );
 }

@@ -1014,4 +1014,10 @@ impl TurnExecutor {
             }
         }
     }
+
+    fn field_to_u64(field: &dregg_cell::FieldElement) -> u64 {
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&field[24..32]);
+        u64::from_be_bytes(bytes)
+    }
 }

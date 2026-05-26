@@ -960,9 +960,39 @@ fn rate_limit_rejects_count_witness_at_cap_when_ctx_count_unset() {
 }
 
 #[test]
-#[ignore = "blocked on caveat-correctness: executor wires per-(cell,sender,epoch) counter into EvalContext.sender_epoch_count (CAVEAT-LAYER-COVERAGE.md §6.2, top-5 #3)"]
 fn rate_limit_executor_honors_counter() {
-    panic!("blocked");
+    let p = single_predicate(StateConstraint::RateLimit {
+        max_per_epoch: 5,
+        epoch_duration: 1024,
+    });
+    let witness_count = 0u32.to_le_bytes();
+    let blobs: [WitnessBlobView<'_>; 1] = [WitnessBlobView {
+        kind: WitnessKindTag::RateLimitCount,
+        bytes: &witness_count,
+    }];
+    let witnesses = WitnessBundle {
+        blobs: &blobs,
+        registry: None,
+    };
+    let ctx = EvalContext {
+        sender: Some([1u8; 32]),
+        sender_epoch_count: 5,
+        ..Default::default()
+    };
+
+    let err = p
+        .evaluate_full(
+            &CellState::default(),
+            None,
+            Some(&ctx),
+            &TransitionMeta::wildcard(),
+            &witnesses,
+        )
+        .expect_err("executor-supplied at-cap counter must override lower witness fallback");
+    assert!(
+        matches!(err, ProgramError::ConstraintViolated { .. }),
+        "expected ConstraintViolated from authoritative ctx counter, got: {err:?}"
+    );
 }
 
 // ===========================================================================
@@ -996,9 +1026,32 @@ fn rate_limit_by_sum_rejects_increment_above_cap() {
 }
 
 #[test]
-#[ignore = "blocked on caveat-correctness: per-(cell, slot, window) running-sum tracker into ctx (CAVEAT-LAYER-COVERAGE.md §1 row 18)"]
 fn rate_limit_by_sum_running_window_enforcement() {
-    panic!("blocked");
+    let p = single_predicate(StateConstraint::RateLimitBySum {
+        slot_index: 0,
+        max_sum_per_epoch: 100,
+        epoch_duration: 1024,
+    });
+    let old = state_with(&[(0, 10)]);
+    let new = state_with(&[(0, 41)]); // delta = 31
+    let mut ctx = EvalContext::minimal(0, 0);
+    ctx.sender_epoch_count = 70; // executor-supplied prior running sum
+    assert_reject_violated(
+        &p,
+        &new,
+        Some(&old),
+        Some(&ctx),
+        "RateLimitBySum rejects when prior window sum plus delta exceeds cap",
+    );
+
+    ctx.sender_epoch_count = 69;
+    assert_accept(
+        &p,
+        &new,
+        Some(&old),
+        Some(&ctx),
+        "RateLimitBySum accepts when prior window sum plus delta equals cap",
+    );
 }
 
 // ===========================================================================
@@ -1302,15 +1355,44 @@ fn bound_delta_returns_sentinel_today() {
 }
 
 #[test]
-#[ignore = "blocked on caveat-correctness multi-cell-eval portion: γ.2 cross-cell wiring (CAVEAT-LAYER-COVERAGE.md §1 row 24, §6.1)"]
 fn bound_delta_accepts_matching_peer_delta() {
-    panic!("blocked");
+    let local_old = state_with(&[(0, 100)]);
+    let local_new = state_with(&[(0, 90)]);
+    let peer_old = state_with(&[(0, 20)]);
+    let peer_new = state_with(&[(0, 30)]);
+    let matches = dregg_cell::program::bound_delta_pair_matches(
+        &local_old,
+        &local_new,
+        0,
+        &peer_old,
+        &peer_new,
+        0,
+        DeltaRelation::EqualAndOpposite,
+    )
+    .expect("valid slot indices");
+    assert!(
+        matches,
+        "local -10 must match peer +10 as equal-and-opposite"
+    );
 }
 
 #[test]
-#[ignore = "blocked on caveat-correctness multi-cell-eval portion: BoundDelta peer-mismatch rejection"]
 fn bound_delta_rejects_mismatched_peer_delta() {
-    panic!("blocked");
+    let local_old = state_with(&[(0, 100)]);
+    let local_new = state_with(&[(0, 90)]);
+    let peer_old = state_with(&[(0, 20)]);
+    let peer_new = state_with(&[(0, 29)]);
+    let matches = dregg_cell::program::bound_delta_pair_matches(
+        &local_old,
+        &local_new,
+        0,
+        &peer_old,
+        &peer_new,
+        0,
+        DeltaRelation::EqualAndOpposite,
+    )
+    .expect("valid slot indices");
+    assert!(!matches, "local -10 must reject peer +9");
 }
 
 // ===========================================================================

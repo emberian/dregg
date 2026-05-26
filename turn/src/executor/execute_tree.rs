@@ -5,6 +5,173 @@
 use super::*;
 
 impl TurnExecutor {
+    pub(crate) fn epoch_for_height(block_height: u64, epoch_duration: u64) -> u64 {
+        block_height / epoch_duration.max(1)
+    }
+
+    fn state_constraint_context_count(
+        &self,
+        cell_id: &CellId,
+        program: &dregg_cell::CellProgram,
+        sender: Option<[u8; 32]>,
+    ) -> u32 {
+        let constraints = match program {
+            dregg_cell::CellProgram::Predicate(constraints) => constraints,
+            _ => return 0,
+        };
+
+        if let Some((max_per_epoch, epoch_duration)) = constraints.iter().find_map(|c| match c {
+            dregg_cell::StateConstraint::RateLimit {
+                max_per_epoch,
+                epoch_duration,
+            } => Some((*max_per_epoch, *epoch_duration)),
+            _ => None,
+        }) {
+            let Some(sender) = sender else {
+                return 0;
+            };
+            let epoch = Self::epoch_for_height(self.block_height, epoch_duration);
+            return self
+                .rate_limit_counters
+                .lock()
+                .unwrap()
+                .get(&(*cell_id, sender, epoch))
+                .copied()
+                .unwrap_or(0)
+                .min(max_per_epoch);
+        }
+
+        if let Some((slot_index, epoch_duration)) = constraints.iter().find_map(|c| match c {
+            dregg_cell::StateConstraint::RateLimitBySum {
+                slot_index,
+                epoch_duration,
+                ..
+            } => Some((*slot_index, *epoch_duration)),
+            _ => None,
+        }) {
+            let epoch = Self::epoch_for_height(self.block_height, epoch_duration);
+            return self
+                .rate_limit_sum_counters
+                .lock()
+                .unwrap()
+                .get(&(*cell_id, slot_index, epoch))
+                .copied()
+                .unwrap_or(0)
+                .min(u32::MAX as u64) as u32;
+        }
+
+        0
+    }
+
+    fn evaluate_cell_program_for_executor(
+        program: &dregg_cell::CellProgram,
+        new_state: &dregg_cell::CellState,
+        old_state: Option<&dregg_cell::CellState>,
+        ctx: &dregg_cell::EvalContext,
+        meta: &dregg_cell::program::TransitionMeta,
+        witnesses: &dregg_cell::program::WitnessBundle<'_>,
+    ) -> Result<(), dregg_cell::ProgramError> {
+        match program {
+            dregg_cell::CellProgram::Predicate(constraints) => {
+                for constraint in constraints {
+                    if matches!(constraint, dregg_cell::StateConstraint::BoundDelta { .. }) {
+                        continue;
+                    }
+                    dregg_cell::CellProgram::Predicate(vec![constraint.clone()]).evaluate_full(
+                        new_state,
+                        old_state,
+                        Some(ctx),
+                        meta,
+                        witnesses,
+                    )?;
+                }
+                Ok(())
+            }
+            _ => program.evaluate_full(new_state, old_state, Some(ctx), meta, witnesses),
+        }
+    }
+
+    fn validate_bound_delta_program(
+        &self,
+        cell_id: &CellId,
+        program: &dregg_cell::CellProgram,
+        old_cell_states: &std::collections::HashMap<CellId, dregg_cell::CellState>,
+        ledger: &Ledger,
+        path: &[usize],
+    ) -> Result<(), (TurnError, Vec<usize>)> {
+        let constraints = match program {
+            dregg_cell::CellProgram::Predicate(constraints) => constraints,
+            _ => return Ok(()),
+        };
+        for constraint in constraints {
+            let dregg_cell::StateConstraint::BoundDelta {
+                local_slot,
+                peer_cell,
+                peer_slot,
+                delta_relation,
+            } = constraint
+            else {
+                continue;
+            };
+            let Some(local_old) = old_cell_states.get(cell_id) else {
+                return Err((
+                    TurnError::ProgramViolation {
+                        cell: *cell_id,
+                        reason: "BoundDelta requires local old state".into(),
+                    },
+                    path.to_vec(),
+                ));
+            };
+            let Some(local_new) = ledger.get(cell_id).map(|c| &c.state) else {
+                return Err((TurnError::CellNotFound { id: *cell_id }, path.to_vec()));
+            };
+            let Some(peer_old) = old_cell_states.get(peer_cell) else {
+                return Err((
+                    TurnError::ProgramViolation {
+                        cell: *cell_id,
+                        reason: format!(
+                            "BoundDelta peer {peer_cell} was not touched by this action"
+                        ),
+                    },
+                    path.to_vec(),
+                ));
+            };
+            let Some(peer_new) = ledger.get(peer_cell).map(|c| &c.state) else {
+                return Err((TurnError::CellNotFound { id: *peer_cell }, path.to_vec()));
+            };
+            let matches = dregg_cell::program::bound_delta_pair_matches(
+                local_old,
+                local_new,
+                *local_slot,
+                peer_old,
+                peer_new,
+                *peer_slot,
+                *delta_relation,
+            )
+            .map_err(|e| {
+                (
+                    TurnError::ProgramViolation {
+                        cell: *cell_id,
+                        reason: e.to_string(),
+                    },
+                    path.to_vec(),
+                )
+            })?;
+            if !matches {
+                return Err((
+                    TurnError::ProgramViolation {
+                        cell: *cell_id,
+                        reason: format!(
+                            "BoundDelta mismatch: local slot {local_slot} did not satisfy {delta_relation:?} against peer {peer_cell} slot {peer_slot}"
+                        ),
+                    },
+                    path.to_vec(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Execute a single tree node and its children recursively.
     ///
     /// Returns Ok(()) on success or Err((TurnError, path)) on failure.
@@ -533,18 +700,21 @@ impl TurnExecutor {
             // sender) counter slot. Until a real counter slot lands
             // (deferred), leave at 0 and let the witness blob (a
             // RateLimitCount blob) supply the count.
+            let sender_epoch_count =
+                self.state_constraint_context_count(cell_id, &touched_cell.program, parent_pk_opt);
             let ctx = dregg_cell::EvalContext {
                 block_height: self.block_height,
                 timestamp: self.current_timestamp,
                 current_epoch: self.block_height.saturating_div(1024),
                 sender: parent_pk_opt,
-                sender_epoch_count: 0,
+                sender_epoch_count,
                 revealed_preimage: None,
             };
-            let result = touched_cell.program.evaluate_full(
+            let result = Self::evaluate_cell_program_for_executor(
+                &touched_cell.program,
                 &touched_cell.state,
                 old_state,
-                Some(&ctx),
+                &ctx,
                 &meta,
                 &witnesses,
             );
@@ -557,6 +727,13 @@ impl TurnExecutor {
                     path,
                 ));
             }
+            self.validate_bound_delta_program(
+                cell_id,
+                &touched_cell.program,
+                &old_cell_states,
+                ledger,
+                &path,
+            )?;
         }
 
         // Suppress unused warning on the legacy alias.
