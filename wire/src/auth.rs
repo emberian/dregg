@@ -51,6 +51,10 @@ impl GossipFilter {
             | WireMessage::PeerAuthResponse { .. }
             | WireMessage::PeerAuthenticated { .. } => true,
             WireMessage::NonMembershipResponse { .. } => true,
+            // Receipt fetch: structured pruning-aware response.
+            // Anonymous peers may query; the response is shaped so a
+            // verifier can validate it without trusting the operator.
+            WireMessage::RequestReceipt { .. } | WireMessage::ReceiptResponse { .. } => true,
 
             // CapTP: Members and CapTpPeers
             WireMessage::CapHello { .. }

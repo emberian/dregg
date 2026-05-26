@@ -90,6 +90,67 @@ impl AuthorizationRequest {
 // Wire Messages
 // =============================================================================
 
+/// The body of a [`WireMessage::ReceiptResponse`]: either the receipt
+/// payload, or a structured reason it is not available locally.
+///
+/// `Present` and the two `Unavailable` variants are *categorically
+/// distinct*. A verifier MUST distinguish "I no longer retain this,
+/// here is the attestation covering it" from "this never existed";
+/// conflating them is the bug houyhnhnm §3.1 (and `HOUYHNHNM-
+/// COMPARISON.md` §5.1) sharpens into a design rule.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReceiptBody {
+    /// The receipt is available; carries the serialized
+    /// `pyana_turn::witnessed_receipt::WitnessedReceipt` (postcard).
+    Present { receipt_bytes: Vec<u8> },
+    /// The receipt is not served locally; the variant explains *why*.
+    Unavailable(ReceiptUnavailable),
+}
+
+/// Why a queried receipt could not be served, in a verifiable shape.
+///
+/// Each variant pins down *what kind of nothing* the responder is
+/// returning. A generic "404" is forbidden by the persistence-as-policy
+/// design: the operator must be able to *prove* the absence is one of
+/// these structured kinds.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReceiptUnavailable {
+    /// The operator's [`pyana_node::config::RetentionPolicy`] pruned
+    /// this receipt; the named [`pyana_cell::lifecycle::ArchivalAttestation`]
+    /// (via its `checkpoint_hash`) covers the height-range that
+    /// includes the requested receipt.
+    ///
+    /// Verifiers should fetch the archive blob from off-chain storage
+    /// using `attestation_checkpoint_hash` and validate it locally.
+    CoveredByAttestedRoot {
+        /// The archival attestation's
+        /// [`pyana_cell::lifecycle::ArchivalAttestation::checkpoint_hash`].
+        attestation_checkpoint_hash: [u8; 32],
+        /// The inclusive low-end of the archived range.
+        archive_start_height: u64,
+        /// The inclusive high-end of the archived range.
+        /// `archive_start_height ≤ height ≤ archive_end_height` MUST
+        /// hold for the requested receipt to be considered covered.
+        archive_end_height: u64,
+        /// `archive_terminal_receipt_hash` from the attestation; the
+        /// live chain's `previous_receipt_hash` at
+        /// `archive_end_height + 1` matches this.
+        archive_terminal_receipt_hash: [u8; 32],
+    },
+
+    /// The receipt never existed: the requested `height` is greater
+    /// than the current tip of the cell's chain, or no such cell exists
+    /// in this federation's view.
+    ///
+    /// Carries the responder's current view of the cell's tip for
+    /// debugging — `None` means the cell is unknown to this operator
+    /// entirely.
+    NeverExisted {
+        /// The responder's current tip height for the cell, if any.
+        current_tip: Option<u64>,
+    },
+}
+
 /// The top-level wire protocol message enum.
 ///
 /// Each variant represents a distinct message type that can be exchanged between
@@ -223,6 +284,48 @@ pub enum WireMessage {
         root: [u8; 32],
         /// Height of the root.
         height: u64,
+    },
+
+    // -------------------------------------------------------------------------
+    // Receipt fetch (persistence-as-policy, per `HOUYHNHNM-COMPARISON.md` §5.1)
+    // -------------------------------------------------------------------------
+    /// Request a single witnessed receipt by cell + height.
+    ///
+    /// The receipt chain is the canonical persistence layer
+    /// (`turn/src/turn.rs` doc header). An operator's
+    /// [`pyana_node::config::RetentionPolicy`] may have pruned the
+    /// hot copy locally; the response will still be *structured* —
+    /// either the receipt bytes, or [`ReceiptUnavailable`] naming the
+    /// attestation that covers the pruned range, or a clean
+    /// not-found marker if the receipt never existed.
+    RequestReceipt {
+        /// The cell whose chain is being queried.
+        cell_id: [u8; 32],
+        /// The receipt-chain height being requested.
+        height: u64,
+    },
+
+    /// Response to a [`WireMessage::RequestReceipt`].
+    ///
+    /// **This is not a 404.** When the operator has pruned the receipt
+    /// per their [`pyana_node::config::RetentionPolicy`], the response
+    /// is [`ReceiptUnavailable::CoveredByAttestedRoot`], which names the
+    /// attested root / archival attestation that covers the requested
+    /// range. The verifier can then go fetch the archive blob from a
+    /// long-term store and validate it against the named commitment.
+    ///
+    /// When the receipt never existed (the chain has not progressed to
+    /// `height`, or the cell does not exist), the response is
+    /// [`ReceiptUnavailable::NeverExisted`] — a categorically different
+    /// shape. Conflating "I had it and I dropped it" with "it never
+    /// happened" is the bug pyana refuses to commit.
+    ReceiptResponse {
+        /// Echo of the requested cell.
+        cell_id: [u8; 32],
+        /// Echo of the requested height.
+        height: u64,
+        /// Either the receipt body, or a structured unavailable reason.
+        body: ReceiptBody,
     },
 
     // -------------------------------------------------------------------------
@@ -487,6 +590,8 @@ impl WireMessage {
             Self::RevocationAck { .. } => "RevocationAck",
             Self::RequestNonMembership { .. } => "RequestNonMembership",
             Self::NonMembershipResponse { .. } => "NonMembershipResponse",
+            Self::RequestReceipt { .. } => "RequestReceipt",
+            Self::ReceiptResponse { .. } => "ReceiptResponse",
             Self::Hello { .. } => "Hello",
             Self::Welcome { .. } => "Welcome",
             Self::CapHello { .. } => "CapHello",
@@ -786,6 +891,34 @@ mod tests {
                 role_tag: 1,
                 authenticated_key: [0x99; 32],
             },
+            WireMessage::RequestReceipt {
+                cell_id: [0xAA; 32],
+                height: 17,
+            },
+            WireMessage::ReceiptResponse {
+                cell_id: [0xAA; 32],
+                height: 17,
+                body: ReceiptBody::Present {
+                    receipt_bytes: vec![0xBE, 0xEF],
+                },
+            },
+            WireMessage::ReceiptResponse {
+                cell_id: [0xAA; 32],
+                height: 4,
+                body: ReceiptBody::Unavailable(ReceiptUnavailable::CoveredByAttestedRoot {
+                    attestation_checkpoint_hash: [0xCA; 32],
+                    archive_start_height: 0,
+                    archive_end_height: 10,
+                    archive_terminal_receipt_hash: [0xCB; 32],
+                }),
+            },
+            WireMessage::ReceiptResponse {
+                cell_id: [0xAA; 32],
+                height: 999,
+                body: ReceiptBody::Unavailable(ReceiptUnavailable::NeverExisted {
+                    current_tip: Some(100),
+                }),
+            },
         ];
 
         for msg in messages {
@@ -822,5 +955,121 @@ mod tests {
         req2.timestamp = 12345;
 
         assert_ne!(req1.digest(), req2.digest());
+    }
+
+    // -------------------------------------------------------------------------
+    // Adversarial tests: persistence-as-policy responses must be structurally
+    // distinguishable and verifiable. The houyhnhnm comparison (§5.1) names
+    // this property; conflating "I pruned it" with "it never happened" is the
+    // bug pyana refuses to commit.
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn archived_and_never_existed_are_structurally_distinct() {
+        // A pruned-but-archived receipt MUST be a categorically different
+        // response shape from a never-existed one. A naive "404" would conflate
+        // them; the protocol requires the structured `Unavailable` variants.
+        let pruned = WireMessage::ReceiptResponse {
+            cell_id: [0xAA; 32],
+            height: 4,
+            body: ReceiptBody::Unavailable(ReceiptUnavailable::CoveredByAttestedRoot {
+                attestation_checkpoint_hash: [0xCA; 32],
+                archive_start_height: 0,
+                archive_end_height: 10,
+                archive_terminal_receipt_hash: [0xCB; 32],
+            }),
+        };
+        let never = WireMessage::ReceiptResponse {
+            cell_id: [0xAA; 32],
+            height: 4,
+            body: ReceiptBody::Unavailable(ReceiptUnavailable::NeverExisted {
+                current_tip: Some(0),
+            }),
+        };
+        // Different bytes on the wire — the verifier can branch on it.
+        let pruned_bytes = postcard::to_stdvec(&pruned).unwrap();
+        let never_bytes = postcard::to_stdvec(&never).unwrap();
+        assert_ne!(pruned_bytes, never_bytes);
+
+        // And after the roundtrip, the structured discriminant survives.
+        let decoded_pruned: WireMessage = postcard::from_bytes(&pruned_bytes).unwrap();
+        let decoded_never: WireMessage = postcard::from_bytes(&never_bytes).unwrap();
+        match decoded_pruned {
+            WireMessage::ReceiptResponse {
+                body:
+                    ReceiptBody::Unavailable(ReceiptUnavailable::CoveredByAttestedRoot {
+                        archive_end_height,
+                        ..
+                    }),
+                ..
+            } => assert_eq!(archive_end_height, 10),
+            other => panic!("expected CoveredByAttestedRoot, got {other:?}"),
+        }
+        match decoded_never {
+            WireMessage::ReceiptResponse {
+                body: ReceiptBody::Unavailable(ReceiptUnavailable::NeverExisted { current_tip }),
+                ..
+            } => assert_eq!(current_tip, Some(0)),
+            other => panic!("expected NeverExisted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn covered_by_attested_root_carries_verifiable_anchor() {
+        // The "I no longer serve this" response MUST carry the attestation
+        // commitment that covers the pruned range — otherwise a verifier
+        // cannot reconstruct the chain. This test checks the commitment
+        // round-trips intact and the range is well-formed.
+        let pruned = WireMessage::ReceiptResponse {
+            cell_id: [0x11; 32],
+            height: 50,
+            body: ReceiptBody::Unavailable(ReceiptUnavailable::CoveredByAttestedRoot {
+                attestation_checkpoint_hash: [0x42; 32],
+                archive_start_height: 0,
+                archive_end_height: 99,
+                archive_terminal_receipt_hash: [0x43; 32],
+            }),
+        };
+        let bytes = postcard::to_stdvec(&pruned).unwrap();
+        let decoded: WireMessage = postcard::from_bytes(&bytes).unwrap();
+        match decoded {
+            WireMessage::ReceiptResponse {
+                height,
+                body:
+                    ReceiptBody::Unavailable(ReceiptUnavailable::CoveredByAttestedRoot {
+                        attestation_checkpoint_hash,
+                        archive_start_height,
+                        archive_end_height,
+                        archive_terminal_receipt_hash,
+                    }),
+                ..
+            } => {
+                // The queried height MUST be inside the covered range; the
+                // verifier checks this before trusting the attestation.
+                assert!(archive_start_height <= height && height <= archive_end_height);
+                // The commitment is preserved; the verifier can look up the
+                // archive blob by this hash.
+                assert_eq!(attestation_checkpoint_hash, [0x42; 32]);
+                assert_eq!(archive_terminal_receipt_hash, [0x43; 32]);
+            }
+            other => panic!("expected CoveredByAttestedRoot, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn present_and_unavailable_dispatch_differently() {
+        // A `Present` receipt cannot deserialize as an `Unavailable`, and
+        // vice versa — the verifier's match arm catches the distinction.
+        let present = ReceiptBody::Present {
+            receipt_bytes: vec![1, 2, 3],
+        };
+        let unavailable = ReceiptBody::Unavailable(ReceiptUnavailable::NeverExisted {
+            current_tip: None,
+        });
+
+        // Tag bytes differ — the postcard discriminant is the first byte.
+        let p_bytes = postcard::to_stdvec(&present).unwrap();
+        let u_bytes = postcard::to_stdvec(&unavailable).unwrap();
+        assert_ne!(p_bytes[0], u_bytes[0]);
     }
 }

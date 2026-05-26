@@ -110,7 +110,8 @@ pub mod prelude {
     };
     pub use crate::message::{
         AuthorizationRequest, Envelope, MAX_NONCE_CACHE_SIZE, MAX_REQUEST_AGE_SECS,
-        PROTOCOL_VERSION, PublicKey, Signature, ThresholdQC, WireMessage, error_codes,
+        PROTOCOL_VERSION, PublicKey, ReceiptBody, ReceiptUnavailable, Signature, ThresholdQC,
+        WireMessage, error_codes,
     };
     pub use crate::server::{
         CapTpState, CapTpTurnDispatcher, ConnectionAuth, MinSizeVerifier, NonceCache, NoopVerifier,

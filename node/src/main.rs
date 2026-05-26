@@ -8,6 +8,7 @@
 
 mod api;
 mod blocklace_sync;
+pub mod config;
 // The old `bridge` module is removed. Cross-group communication now happens
 // via multi_group.rs (unified blocklace cross-references + interest-based dissemination).
 // See: `pyana-node run --groups` for multi-group participation.

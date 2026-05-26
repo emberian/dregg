@@ -2223,6 +2223,7 @@ impl SiloServer {
             WireMessage::PresentToken { .. }
             | WireMessage::RequestAttestedRoot
             | WireMessage::RequestNonMembership { .. }
+            | WireMessage::RequestReceipt { .. }
             | WireMessage::Ping { .. }
             | WireMessage::Pong { .. }
             | WireMessage::Hello { .. }
@@ -2269,6 +2270,7 @@ impl SiloServer {
             | WireMessage::AttestedRootPush { .. }
             | WireMessage::RevocationAck { .. }
             | WireMessage::NonMembershipResponse { .. }
+            | WireMessage::ReceiptResponse { .. }
             | WireMessage::EnlivenResponse { .. }
             | WireMessage::HandoffAccepted { .. }
             | WireMessage::Error { .. } => None,
