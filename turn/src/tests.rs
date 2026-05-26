@@ -7826,7 +7826,39 @@ fn generate_valid_sovereign_proof(
 fn generate_valid_sovereign_proof_with_new_commit(
     _old_commitment: &[u8; 32],
 ) -> (Vec<u8>, [u8; 32]) {
-    use dregg_circuit::effect_vm::{CellState, Effect as VmEffect, pi};
+    let sovereign_id = CellId::derive_raw(&[10u8; 32], &[0u8; 32]);
+    let agent_id = CellId::derive_raw(&[1u8; 32], &[0u8; 32]);
+    let turn = build_transfer_turn_for_proof_test(agent_id, sovereign_id);
+    generate_sovereign_transfer_proof_for_turn(&turn, &sovereign_id, 5000)
+}
+
+fn build_transfer_turn_for_proof_test(agent_id: CellId, sovereign_id: CellId) -> Turn {
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action = ActionBuilder::new_unchecked_for_tests(
+            sovereign_id,
+            "sovereign_execute_proven",
+            agent_id,
+        )
+        .effect(Effect::Transfer {
+            from: sovereign_id,
+            to: agent_id,
+            amount: 100,
+        })
+        .build();
+        builder.add_action(action);
+    }
+    builder.fee(100).build()
+}
+
+fn generate_sovereign_transfer_proof_for_turn(
+    turn: &Turn,
+    proof_cell: &CellId,
+    initial_balance: u64,
+) -> (Vec<u8>, [u8; 32]) {
+    use dregg_circuit::effect_vm::{
+        CellState, Effect as VmEffect, EffectVmContext, generate_effect_vm_trace_ext, pi,
+    };
     use dregg_circuit::stark::{proof_to_bytes, prove};
     use dregg_circuit::{EffectVmAir, generate_effect_vm_trace};
 
@@ -7838,7 +7870,7 @@ fn generate_valid_sovereign_proof_with_new_commit(
     // so that CellState::compute_commitment_4 matches old_commitment's packed felts.
     // For the test (balance=5000, nonce=0, all fields ZERO), the default CellState::new
     // is already consistent.
-    let initial_state = CellState::new(5000, 0);
+    let initial_state = CellState::new(initial_balance, 0);
 
     // Generate a transfer of 100 outgoing.
     let effects = vec![VmEffect::Transfer {
@@ -7846,17 +7878,42 @@ fn generate_valid_sovereign_proof_with_new_commit(
         direction: 1,
     }];
 
-    let (trace, public_inputs) = generate_effect_vm_trace(&initial_state, &effects);
+    let (_shape_trace, shape_public_inputs) = generate_effect_vm_trace(&initial_state, &effects);
 
     // Extract the 4-felt new commitment from PI[NEW_COMMIT_BASE..+4] and pack
     // into 32 bytes using the same format as commitment_4bb_to_bytes.
     let new_commit_4 = [
-        public_inputs[pi::NEW_COMMIT_BASE],
-        public_inputs[pi::NEW_COMMIT_BASE + 1],
-        public_inputs[pi::NEW_COMMIT_BASE + 2],
-        public_inputs[pi::NEW_COMMIT_BASE + 3],
+        shape_public_inputs[pi::NEW_COMMIT_BASE],
+        shape_public_inputs[pi::NEW_COMMIT_BASE + 1],
+        shape_public_inputs[pi::NEW_COMMIT_BASE + 2],
+        shape_public_inputs[pi::NEW_COMMIT_BASE + 3],
     ];
     let new_commitment = TurnExecutor::commitment_4bb_to_bytes(new_commit_4);
+
+    let mut proof_turn = turn.clone();
+    proof_turn.execution_proof = None;
+    proof_turn.execution_proof_cell = Some(*proof_cell);
+    proof_turn.execution_proof_new_commitment = Some(new_commitment);
+    let (turn_hash, effects_hash_global, actor_nonce, previous_receipt_hash) =
+        TurnExecutor::compute_turn_identity_pi(&proof_turn);
+    let mut ctx = EffectVmContext::default();
+    ctx.turn_hash = turn_hash;
+    ctx.effects_hash_global = effects_hash_global;
+    ctx.actor_nonce = actor_nonce;
+    ctx.previous_receipt_hash = previous_receipt_hash;
+    ctx.is_sovereign_cell = true;
+
+    let (trace, mut public_inputs) = generate_effect_vm_trace_ext(&initial_state, &effects, ctx);
+    let schedule = crate::bilateral_schedule::ExpectedBilateral::from_turn(&proof_turn);
+    let counts = schedule.counts_for(proof_cell);
+    let roots = schedule.roots_for(proof_cell, actor_nonce);
+    crate::bilateral_schedule::project_into_pi(&mut public_inputs, &counts, &roots);
+    public_inputs[dregg_circuit::effect_vm::pi::IS_AGENT_CELL] = if proof_cell == &proof_turn.agent
+    {
+        dregg_circuit::field::BabyBear::ONE
+    } else {
+        dregg_circuit::field::BabyBear::ZERO
+    };
 
     let air = EffectVmAir::new(trace.len());
     let proof = prove(&air, &trace, &public_inputs);
@@ -7873,33 +7930,15 @@ fn generate_valid_sovereign_proof_with_new_commit(
 // (it hashed the stored bytes, producing values unrelated to compute_commitment_4).
 #[test]
 fn test_proof_carrying_turn_accepted() {
-    let (mut ledger, agent_id, sovereign_id, old_commitment) =
+    let (mut ledger, agent_id, sovereign_id, _old_commitment) =
         setup_sovereign_cell_for_proof_test();
     let executor = zero_cost_executor();
 
-    // Generate a valid STARK proof (new_commitment is determined by the trace execution).
-    // The proof covers a Transfer of 100 outgoing from sovereign_id.
-    let (proof_bytes, new_commitment) =
-        generate_valid_sovereign_proof_with_new_commit(&old_commitment);
-
     // Build a turn with a Transfer effect matching what the proof proves.
     // The executor computes the Effect VM effects_hash from the turn's effects.
-    let mut builder = TurnBuilder::new(agent_id, 0);
-    {
-        let action = ActionBuilder::new_unchecked_for_tests(
-            sovereign_id,
-            "sovereign_execute_proven",
-            agent_id,
-        )
-        .effect(Effect::Transfer {
-            from: sovereign_id,
-            to: agent_id,
-            amount: 100,
-        })
-        .build();
-        builder.add_action(action);
-    }
-    let mut turn = builder.fee(100).build();
+    let mut turn = build_transfer_turn_for_proof_test(agent_id, sovereign_id);
+    let (proof_bytes, new_commitment) =
+        generate_sovereign_transfer_proof_for_turn(&turn, &sovereign_id, 5000);
 
     // Attach the proof to the turn.
     turn.execution_proof = Some(proof_bytes);
@@ -7947,17 +7986,15 @@ fn test_proof_carrying_turn_wrong_old_commitment() {
         *hasher.finalize().as_bytes()
     };
 
-    // Generate proof with WRONG old_commitment.
-    let proof_bytes = generate_valid_sovereign_proof(
-        &wrong_old_commitment,
-        &new_commitment,
-        &sovereign_id,
-        &effects_hash,
-    );
+    // Generate proof from a different initial state so PI[OLD_COMMIT] does
+    // not match the ledger's stored sovereign commitment.
+    let (proof_bytes, proof_new_commitment) =
+        generate_sovereign_transfer_proof_for_turn(&turn, &sovereign_id, 4999);
+    let _ = (wrong_old_commitment, new_commitment, effects_hash);
 
     turn.execution_proof = Some(proof_bytes);
     turn.execution_proof_cell = Some(sovereign_id);
-    turn.execution_proof_new_commitment = Some(new_commitment);
+    turn.execution_proof_new_commitment = Some(proof_new_commitment);
 
     let result = executor.execute(&turn, &mut ledger);
     assert!(
@@ -7973,15 +8010,10 @@ fn test_proof_carrying_turn_wrong_old_commitment() {
 }
 
 #[test]
-#[ignore = "REVIEW[stage2-canonical-vs-poseidon-mismatch]: trace gen and verifier use different commitment hashing paths"]
 fn test_proof_carrying_turn_wrong_effects_hash() {
     let (mut ledger, agent_id, sovereign_id, old_commitment) =
         setup_sovereign_cell_for_proof_test();
     let executor = zero_cost_executor();
-
-    // Generate a valid proof (Transfer 100 outgoing) and get its actual new_commitment.
-    let (proof_bytes, new_commitment) =
-        generate_valid_sovereign_proof_with_new_commit(&old_commitment);
 
     // Build a turn with a Transfer(100 outgoing) effect from the sovereign cell
     // PLUS a SetField effect. This produces the same delta (delta_mag=100, delta_sign=1)
@@ -8007,6 +8039,9 @@ fn test_proof_carrying_turn_wrong_effects_hash() {
         builder.add_action(action);
     }
     let mut turn = builder.fee(100).build();
+    let (proof_bytes, new_commitment) =
+        generate_sovereign_transfer_proof_for_turn(&turn, &sovereign_id, 5000);
+    let _ = old_commitment;
 
     turn.execution_proof = Some(proof_bytes);
     turn.execution_proof_cell = Some(sovereign_id);
@@ -8371,11 +8406,7 @@ fn test_custom_program_missing_from_registry_rejected() {
 
 /// Test that a sovereign cell WITHOUT a VK hash still uses the default
 /// EffectVmAir (backward compatibility).
-///
-/// REVIEW[stage2-canonical-vs-poseidon-mismatch]: ignored — see comment
-/// at test_proof_carrying_turn_accepted.
 #[test]
-#[ignore = "REVIEW[stage2-canonical-vs-poseidon-mismatch]: trace gen and verifier use different commitment hashing paths"]
 fn test_default_air_still_works_without_vk_hash() {
     // Same as test_proof_carrying_turn_accepted but with the program_registry set.
     let (mut ledger, agent_id, sovereign_id, old_commitment) =
@@ -8384,27 +8415,11 @@ fn test_default_air_still_works_without_vk_hash() {
     let mut executor = zero_cost_executor();
     executor.set_program_registry(dregg_dsl_runtime::ProgramRegistry::new());
 
-    // Generate a valid proof (determines new_commitment from trace execution).
-    let (proof_bytes, new_commitment) =
-        generate_valid_sovereign_proof_with_new_commit(&old_commitment);
-
     // Build a turn with effects matching the proof.
-    let mut builder = TurnBuilder::new(agent_id, 0);
-    {
-        let action = ActionBuilder::new_unchecked_for_tests(
-            sovereign_id,
-            "sovereign_execute_proven",
-            agent_id,
-        )
-        .effect(Effect::Transfer {
-            from: sovereign_id,
-            to: agent_id,
-            amount: 100,
-        })
-        .build();
-        builder.add_action(action);
-    }
-    let mut turn = builder.fee(100).build();
+    let mut turn = build_transfer_turn_for_proof_test(agent_id, sovereign_id);
+    let (proof_bytes, new_commitment) =
+        generate_sovereign_transfer_proof_for_turn(&turn, &sovereign_id, 5000);
+    let _ = old_commitment;
 
     turn.execution_proof = Some(proof_bytes);
     turn.execution_proof_cell = Some(sovereign_id);

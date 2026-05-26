@@ -32,12 +32,14 @@ function renderActiveIntents(intents) {
     return;
   }
   container.innerHTML = intents.map(entry => {
-    const intent = entry.intent;
-    const kindLabel = intent.kind !== undefined ? `kind:${intent.kind}` : 'unknown';
+    const intent = entry.intent || entry;
+    const id = entry.id || intent.id;
+    const kind = intent.kind ?? intent.type;
+    const kindLabel = kind !== undefined ? `kind:${kind}` : 'unknown';
     return `
       <div class="intent-item">
         <div class="intent-item__header">
-          <span class="intent-item__id">${api.shortHash(entry.id, 8, 4)}</span>
+          <span class="intent-item__id">${api.shortHash(id, 8, 4)}</span>
           <span class="intent-item__kind">${kindLabel}</span>
         </div>
         <div class="intent-item__details">

@@ -32,10 +32,11 @@
 //! verifies that the executor enforces the credential gate.
 
 use dregg_app_framework::{AgentCipherclerk, AppCipherclerk, CellId, EmbeddedExecutor};
-use dregg_cell::program::AuthorizedSet;
+use dregg_cell::program::{AuthorizedSet, CellProgram, TransitionCase, TransitionGuard};
 use starbridge_nameservice::{
     build_register_action, build_register_with_credential_action,
-    identity_attested_tier_constraint, identity_attested_witness_predicate, name_hash,
+    identity_attested_tier_constraint, identity_attested_witness_predicate, name_cell_program,
+    name_hash,
 };
 
 // =============================================================================
@@ -49,7 +50,32 @@ fn make_cipherclerk(seed: u8) -> AppCipherclerk {
 fn make_executor_and_cell(cipherclerk: &AppCipherclerk) -> (EmbeddedExecutor, CellId) {
     let executor = EmbeddedExecutor::new(cipherclerk, "default");
     let cell = executor.cell_id();
+    executor.install_program(cell, attested_name_program());
     (executor, cell)
+}
+
+fn attested_name_program() -> CellProgram {
+    use dregg_app_framework::symbol;
+
+    let mut cases = match name_cell_program() {
+        CellProgram::Cases(cases) => cases,
+        CellProgram::Predicate(constraints) => vec![TransitionCase {
+            guard: TransitionGuard::Always,
+            constraints,
+        }],
+        CellProgram::Circuit { .. } => Vec::new(),
+        CellProgram::None => Vec::new(),
+    };
+    cases.push(TransitionCase {
+        guard: TransitionGuard::MethodIs {
+            method: symbol("register_name_attested"),
+        },
+        constraints: vec![identity_attested_tier_constraint(
+            issuer_cell(),
+            schema_commitment(),
+        )],
+    });
+    CellProgram::Cases(cases)
 }
 
 fn issuer_cell() -> CellId {

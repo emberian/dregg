@@ -201,6 +201,8 @@ export interface DreggAPI {
   registerFederation(federationId: string, name: string, committeePubkeys: string[]): Promise<{ success: boolean }>;
   /** List all locally registered federations. */
   listKnownFederations(): Promise<KnownFederation[]>;
+  /** Return the extension-backed live activity feed used by Starbridge. */
+  getActivityFeed(): Promise<{ schema_version: number; event_count: number; events: unknown[] }>;
   /**
    * Build a serialized Authorization::CapTpDelivered envelope for attaching
    * to a turn during a CapTP handoff.
@@ -357,6 +359,10 @@ const dregg: DreggAPI = {
 
   listKnownFederations() {
     return sendMessage("dregg:listKnownFederations", {}) as Promise<KnownFederation[]>;
+  },
+
+  getActivityFeed() {
+    return sendMessage("dregg:getActivityFeed", {}) as Promise<{ schema_version: number; event_count: number; events: unknown[] }>;
   },
 
   createCapTpDeliveredAuth({ handoffCertB58, introducerPk, senderPk }) {

@@ -93,7 +93,7 @@ pub(super) fn convert_turn_effects_to_vm(
                     });
                 }
                 Effect::IncrementNonce { cell } if cell == cell_id => {
-                    // Nonce increment is implicit in the VM (row-to-row).
+                    vm_effects.push(VmEffect::IncrementNonce);
                 }
                 Effect::QueueAllocate {
                     capacity,
@@ -534,8 +534,7 @@ pub(super) fn convert_turn_effects_to_vm(
                     });
                 }
                 Effect::IncrementNonce { cell } if cell == cell_id => {
-                    // No AIR effect needed — nonce increments are implicit
-                    // in the row-to-row continuity. Skip to avoid a NoOp.
+                    vm_effects.push(VmEffect::IncrementNonce);
                 }
                 Effect::BridgeMint { portable_proof } => {
                     // Stage 3: real AIR coverage. Balance credit by the

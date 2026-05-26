@@ -54,6 +54,13 @@ const COPY_DIRS = [
   'old-site',
 ];
 
+// Copy-through directories that live outside site/ but are served by the
+// Studio. starbridge-apps are userspace app surfaces that must work both as
+// standalone end-user pages and as Starbridge-embedded devtools targets.
+const COPY_EXTERNAL_DIRS = [
+  { from: path.join(__dirname, '..', 'starbridge-apps'), to: 'starbridge-apps' },
+];
+
 // Files copied from root-level site assets.
 // `assets/dregg.pdf` is NOT listed: it is built by CI from paper/dregg.typ
 // (see COPY_BUILT_FILES below) and is gitignored. Local builds without typst
@@ -231,6 +238,13 @@ function build() {
     if (fs.existsSync(src)) {
       console.log(`  Copy: ${dir}/`);
       copyDir(src, dst);
+    }
+  }
+
+  for (const { from, to } of COPY_EXTERNAL_DIRS) {
+    if (fs.existsSync(from)) {
+      console.log(`  Copy: ${to}/`);
+      copyDir(from, path.join(DIST, to));
     }
   }
 

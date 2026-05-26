@@ -1708,7 +1708,7 @@ impl TurnExecutor {
                 }
                 public_inputs[pi::HAS_TRANSITION_PROOF] = BabyBear::ONE;
             }
-        } else if let Some(proof_bytes) = execution_proof_bytes {
+        } else if let Some(_proof_bytes) = execution_proof_bytes {
             // Proof-carrying path: the execution_proof IS the transition proof.
             // Owner pubkey is sourced from the sovereign registration if
             // available, else left as sentinel zero (Phase 1.5: registration
@@ -1726,13 +1726,6 @@ impl TurnExecutor {
                 (ledger.last_sovereign_witness_sequence(cell_id) & 0x7FFF_FFFF) as u32,
             );
             public_inputs[pi::IS_SOVEREIGN_CELL] = BabyBear::ONE;
-
-            // Phase 2: bind the inner-proof commitment.
-            let proof_commit = Self::transition_proof_commitment(proof_bytes);
-            for i in 0..pi::SOVEREIGN_TRANSITION_PROOF_COMMITMENT_LEN {
-                public_inputs[pi::SOVEREIGN_TRANSITION_PROOF_COMMITMENT_BASE + i] = proof_commit[i];
-            }
-            public_inputs[pi::HAS_TRANSITION_PROOF] = BabyBear::ONE;
         }
     }
 
@@ -1782,7 +1775,18 @@ impl TurnExecutor {
         use dregg_circuit::poseidon2::hash_4_to_1;
         use dregg_commit::typed::canonical_32_to_felts_4;
 
-        let turn_hash_4 = canonical_32_to_felts_4(&turn.hash());
+        let turn_hash = if turn.execution_proof.is_some() {
+            // A proof cannot commit to a hash that includes its own bytes.
+            // The AIR-bound identity for proof-carrying turns is therefore
+            // the stable pre-proof form: all fields remain bound except the
+            // execution_proof bytes, which are verified directly by this path.
+            let mut proofless = turn.clone();
+            proofless.execution_proof = None;
+            proofless.hash()
+        } else {
+            turn.hash()
+        };
+        let turn_hash_4 = canonical_32_to_felts_4(&turn_hash);
 
         // Canonical-DFS-order collection of the WHOLE call_forest's effects.
         // The order must match what a future cross-cell aggregator (γ.1)

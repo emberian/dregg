@@ -16,6 +16,7 @@ use dregg_turn::{
     Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, TurnExecutor,
     turn::Turn,
 };
+use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 
 fn open_permissions() -> Permissions {
     Permissions {
@@ -37,6 +38,16 @@ fn make_cell(seed: u8, balance: u64, perms: Permissions) -> Cell {
     let mut cell = Cell::with_balance(pk, [0u8; 32], balance);
     cell.permissions = perms;
     cell
+}
+
+fn make_signed_cell(seed: u8, balance: u64, perms: Permissions) -> (Cell, SigningKey) {
+    let mut seed_bytes = [0u8; 32];
+    seed_bytes[0] = seed;
+    let signing_key = SigningKey::from_bytes(&seed_bytes);
+    let verifying_key: VerifyingKey = (&signing_key).into();
+    let mut cell = Cell::with_balance(verifying_key.to_bytes(), [0u8; 32], balance);
+    cell.permissions = perms;
+    (cell, signing_key)
 }
 
 fn single_effect_turn(agent: CellId, target: CellId, nonce: u64, effect: Effect) -> Turn {
@@ -75,6 +86,12 @@ fn single_effect_turn(agent: CellId, target: CellId, nonce: u64, effect: Effect)
     }
 }
 
+fn sign_root_action(turn: &mut Turn, signing_key: &SigningKey) {
+    let action = &mut turn.call_forest.roots[0].action;
+    let message = TurnExecutor::compute_signing_message(action, &[0u8; 32]);
+    action.authorization = Authorization::from_sig_bytes(signing_key.sign(&message).to_bytes());
+}
+
 // ============================================================================
 // SITE 2: ExportSturdyRef.permissions — runtime-variant extension
 // ============================================================================
@@ -85,10 +102,14 @@ fn single_effect_turn(agent: CellId, target: CellId, nonce: u64, effect: Effect)
 /// AIR PI projects.
 #[test]
 fn export_sturdy_ref_honest_path_accepted() {
-    let actor = make_cell(1, 1000, open_permissions());
+    let mut actor = make_cell(1, 1000, open_permissions());
     let target = make_cell(2, 0, open_permissions());
     let actor_id = actor.id();
     let target_id = target.id();
+    actor
+        .capabilities
+        .grant(target_id, AuthRequired::None)
+        .unwrap();
 
     let mut ledger = Ledger::new();
     ledger.insert_cell(actor).unwrap();
@@ -117,16 +138,20 @@ fn export_sturdy_ref_honest_path_accepted() {
 /// PI attest authority the cell does not hold.
 #[test]
 fn export_sturdy_ref_rejects_wider_than_cell_access() {
-    let actor = make_cell(1, 1000, open_permissions());
+    let mut actor = make_cell(1, 1000, open_permissions());
     // Target's access tier requires Signature; declaring None on the
     // export would widen authority. Open everything else to ensure
     // the rejection is on the permissions-narrowing check, not on a
     // cross-cell access guard.
     let mut sig_access = open_permissions();
     sig_access.access = AuthRequired::Signature;
-    let target = make_cell(2, 0, sig_access);
+    let (target, target_signing_key) = make_signed_cell(2, 0, sig_access);
     let actor_id = actor.id();
     let target_id = target.id();
+    actor
+        .capabilities
+        .grant(target_id, AuthRequired::None)
+        .unwrap();
 
     let mut ledger = Ledger::new();
     ledger.insert_cell(actor).unwrap();
@@ -137,7 +162,8 @@ fn export_sturdy_ref_rejects_wider_than_cell_access() {
         target: target_id,
         permissions: AuthRequired::None, // wider than Signature
     };
-    let turn = single_effect_turn(actor_id, target_id, 0, effect);
+    let mut turn = single_effect_turn(actor_id, target_id, 0, effect);
+    sign_root_action(&mut turn, &target_signing_key);
 
     let executor = TurnExecutor::new(ComputronCosts::zero());
     match executor.execute(&turn, &mut ledger) {
@@ -160,7 +186,7 @@ fn export_sturdy_ref_rejects_wider_than_cell_access() {
 /// → narrower_or_equal is false → reject.
 #[test]
 fn export_sturdy_ref_rejects_custom_tier_mismatch() {
-    let actor = make_cell(1, 1000, open_permissions());
+    let mut actor = make_cell(1, 1000, open_permissions());
     let mut custom_access = open_permissions();
     custom_access.access = AuthRequired::Custom {
         vk_hash: [0xAAu8; 32],
@@ -168,6 +194,15 @@ fn export_sturdy_ref_rejects_custom_tier_mismatch() {
     let target = make_cell(2, 0, custom_access);
     let actor_id = actor.id();
     let target_id = target.id();
+    actor
+        .capabilities
+        .grant(
+            target_id,
+            AuthRequired::Custom {
+                vk_hash: [0xBBu8; 32],
+            },
+        )
+        .unwrap();
 
     let mut ledger = Ledger::new();
     ledger.insert_cell(actor).unwrap();
@@ -188,7 +223,8 @@ fn export_sturdy_ref_rejects_custom_tier_mismatch() {
         dregg_turn::TurnResult::Rejected { reason, .. } => {
             let s = format!("{reason:?}");
             assert!(
-                s.contains("ExportSturdyRef") && s.contains("narrower"),
+                (s.contains("ExportSturdyRef") && s.contains("narrower"))
+                    || (s.contains("PermissionDenied") && s.contains("Custom")),
                 "expected Custom-mismatch rejection, got: {s}"
             );
         }

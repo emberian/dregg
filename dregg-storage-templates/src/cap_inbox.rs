@@ -24,20 +24,20 @@
 //! | 2 | `capacity` | `Immutable` | Max in-flight messages. |
 //! | 3 | `min_deposit` | `Immutable` | Anti-spam floor (per-send deposit). |
 //! | 4 | `owner_pk_hash` | `Immutable` | Inbox owner pubkey hash. |
-//! | 5 | `sender_set_root` | `Monotonic` | Merkle root of authorized senders (insertions only). |
+//! | 5 | `sender_set_root` | changes + non-zero on grant_sender | Merkle root of authorized senders. |
 //! | 6 | `total_deposits_held` | per-method | Sum of in-flight deposits. Grows on send; shrinks on dequeue+refund. |
-//! | 7 | `message_root` | `Monotonic` | Ring root over `(seq, payload_commitment)` tuples. |
+//! | 7 | `message_root` | changes + non-zero on send | Ring root over `(seq, payload_commitment)` tuples. |
 //!
 //! ## Operations
 //!
-//! - `send` — head advances by +1; message_root grows; deposit
+//! - `send` — head advances by +1; message_root changes; deposit
 //!   tracker grows. Tail/capacity/min_deposit/owner/sender_set frozen.
 //!   Sender must be in `sender_set_root` (`SenderAuthorized`).
 //! - `dequeue` — tail advances by +1; message_root stays
 //!   (the consumer reads against the existing root). Deposit
 //!   tracker may decrease on refund (encoded as the explicit slot
 //!   write; the executor checks the head/tail bound).
-//! - `grant_sender` — sender_set_root advances; everything else
+//! - `grant_sender` — sender_set_root changes; everything else
 //!   frozen. Owner-cap-gated by the per-cell capability layer.
 //!
 //! ## What this replaces
@@ -65,7 +65,9 @@ use dregg_app_framework::{
     ChildVkStrategy, Effect, Event, FactoryDescriptor, FieldConstraint, FieldElement,
     InspectorDescriptor, StarbridgeAppContext, StateConstraint, canonical_program_vk, symbol,
 };
-use dregg_cell::program::{AuthorizedSet, CellProgram, TransitionCase, TransitionGuard};
+use dregg_cell::program::{
+    AuthorizedSet, CellProgram, SimpleStateConstraint, TransitionCase, TransitionGuard,
+};
 
 use crate::{hex_encode, u64_field};
 
@@ -83,12 +85,12 @@ pub const CAPACITY_SLOT: u8 = 2;
 pub const MIN_DEPOSIT_SLOT: u8 = 3;
 /// Slot 4 — `owner_pk_hash`. Immutable.
 pub const OWNER_PK_HASH_SLOT: u8 = 4;
-/// Slot 5 — `sender_set_root`. Monotonic Merkle root of authorized senders.
+/// Slot 5 — `sender_set_root`. Merkle root of authorized senders.
 pub const SENDER_SET_ROOT_SLOT: u8 = 5;
 /// Slot 6 — `total_deposits_held`. Conservation slot — grows on send,
 /// shrinks only on dequeue+refund.
 pub const TOTAL_DEPOSITS_SLOT: u8 = 6;
-/// Slot 7 — `message_root`. Monotonic root over the ring of
+/// Slot 7 — `message_root`. Root over the ring of
 /// `(seq, payload_commitment)` tuples.
 pub const MESSAGE_ROOT_SLOT: u8 = 7;
 
@@ -128,6 +130,14 @@ pub fn grant_sender_method_symbol() -> [u8; 32] {
     symbol("grant_sender")
 }
 
+fn slot_changed(index: u8) -> StateConstraint {
+    StateConstraint::AnyOf {
+        variants: vec![SimpleStateConstraint::Not(Box::new(
+            SimpleStateConstraint::Immutable { index },
+        ))],
+    }
+}
+
 // =============================================================================
 // CellProgram: operation-scoped Cases
 // =============================================================================
@@ -154,10 +164,14 @@ pub fn cap_inbox_program() -> CellProgram {
                 StateConstraint::Immutable {
                     index: OWNER_PK_HASH_SLOT,
                 },
+                StateConstraint::FieldLteField {
+                    left_index: TAIL_SEQ_SLOT,
+                    right_index: HEAD_SEQ_SLOT,
+                },
             ],
         },
         // ──────────────────────────────────────────────────────────
-        // send: head + 1; message_root advances; total_deposits grows;
+        // send: head + 1; message_root changes; total_deposits grows;
         // tail/sender_set frozen; sender must be in sender_set_root.
         // ──────────────────────────────────────────────────────────
         TransitionCase {
@@ -177,8 +191,10 @@ pub fn cap_inbox_program() -> CellProgram {
                 StateConstraint::Monotonic {
                     index: TOTAL_DEPOSITS_SLOT,
                 },
-                StateConstraint::Monotonic {
+                slot_changed(MESSAGE_ROOT_SLOT),
+                StateConstraint::FieldGte {
                     index: MESSAGE_ROOT_SLOT,
+                    value: u64_field(1),
                 },
                 StateConstraint::SenderAuthorized {
                     set: AuthorizedSet::PublicRoot {
@@ -215,7 +231,7 @@ pub fn cap_inbox_program() -> CellProgram {
             ],
         },
         // ──────────────────────────────────────────────────────────
-        // grant_sender: sender_set_root advances; everything else
+        // grant_sender: sender_set_root changes; everything else
         // frozen. Owner authorization rides on the per-cell
         // capability layer (the action sender must hold the owner cap).
         // ──────────────────────────────────────────────────────────
@@ -224,8 +240,10 @@ pub fn cap_inbox_program() -> CellProgram {
                 method: symbol("grant_sender"),
             },
             constraints: vec![
-                StateConstraint::Monotonic {
+                slot_changed(SENDER_SET_ROOT_SLOT),
+                StateConstraint::FieldGte {
                     index: SENDER_SET_ROOT_SLOT,
+                    value: u64_field(1),
                 },
                 StateConstraint::Immutable {
                     index: HEAD_SEQ_SLOT,
@@ -309,20 +327,20 @@ pub fn cap_inbox_factory_descriptor() -> FactoryDescriptor {
             StateConstraint::Immutable {
                 index: OWNER_PK_HASH_SLOT,
             },
-            // Counters + ring roots grow monotonically across the
-            // cell's lifetime, regardless of which op moved them.
+            StateConstraint::FieldLteField {
+                left_index: TAIL_SEQ_SLOT,
+                right_index: HEAD_SEQ_SLOT,
+            },
+            // Cursors grow monotonically across the cell's lifetime.
+            // Hash roots are constrained by operation-scoped cases.
             StateConstraint::Monotonic {
                 index: HEAD_SEQ_SLOT,
             },
             StateConstraint::Monotonic {
                 index: TAIL_SEQ_SLOT,
             },
-            StateConstraint::Monotonic {
-                index: SENDER_SET_ROOT_SLOT,
-            },
-            StateConstraint::Monotonic {
-                index: MESSAGE_ROOT_SLOT,
-            },
+            // Hash roots are opaque commitments, not ordered integers.
+            // Operation cases constrain when they may change.
         ],
         default_mode: CellMode::Hosted,
         creation_budget: Some(DEFAULT_CREATION_BUDGET),

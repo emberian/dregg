@@ -9,8 +9,8 @@
 //! All operations are proven via the Effect VM STARK. No mocks.
 
 use dregg_circuit::effect_vm::{
-    self, CellState, Effect, EffectVmAir, EffectVmContext, compute_effects_hash, extract_net_delta,
-    generate_effect_vm_trace, generate_effect_vm_trace_ext,
+    self, CellState, Effect, EffectVmAir, EffectVmContext, compute_effects_hash_4,
+    extract_net_delta, generate_effect_vm_trace, generate_effect_vm_trace_ext,
 };
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::poseidon2::{hash_2_to_1, hash_4_to_1, hash_many};
@@ -428,26 +428,21 @@ fn test_governance_vote_updates_route_table() {
 
     // Verify the effects hash binds all three operations.
     // Stage 1 PI layout: EFFECTS_HASH is at indices [8..12] (4 felts).
-    // Use EFFECTS_HASH_LO (index 8) and EFFECTS_HASH_HI (index 9) for the
-    // 2-felt legacy form — compute_effects_hash still returns (lo, hi) at
-    // positions 0 and 1 of the 4-felt block.
-    let (expected_lo, expected_hi) = compute_effects_hash(&effects);
+    // The trace generator writes compute_effects_hash_4 here; position 1 is
+    // an independent squeeze, not the legacy synthetic hi value.
+    let expected_effects_hash = compute_effects_hash_4(&effects);
     assert_eq!(
-        public_inputs[effect_vm::pi::EFFECTS_HASH_LO],
-        expected_lo,
-        "effects hash lo mismatch"
-    );
-    assert_eq!(
-        public_inputs[effect_vm::pi::EFFECTS_HASH_HI],
-        expected_hi,
-        "effects hash hi mismatch"
+        &public_inputs[effect_vm::pi::EFFECTS_HASH_BASE
+            ..effect_vm::pi::EFFECTS_HASH_BASE + effect_vm::pi::EFFECTS_HASH_LEN],
+        expected_effects_hash.as_slice(),
+        "effects hash mismatch"
     );
 
     // Prove all three effects in a single STARK.
     // Must use prove_effects_ext with the same context (approved_handoffs_root[0] = approved_set_root)
     // so the STARK proof's public inputs agree with the trace's PI binding.
     let proof = prove_effects_ext(&initial_state, &effects, ctx);
-    assert_eq!(proof.trace_len, 4); // 3 effects padded to 4
+    assert_eq!(proof.trace_len, trace.len());
     assert!(!proof.query_proofs.is_empty());
 
     // Verify the state commitment changed.

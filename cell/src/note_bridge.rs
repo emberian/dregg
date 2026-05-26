@@ -809,6 +809,15 @@ pub enum BridgePhaseError {
         expected: [u8; 32],
         actual: [u8; 32],
     },
+    /// A later phase changed the source/destination federation pair that
+    /// was established by the Phase-1 lock for this bridge_id.
+    FederationPairMismatch {
+        bridge_id: [u8; 32],
+        expected_src: [u8; 32],
+        expected_dst: [u8; 32],
+        actual_src: [u8; 32],
+        actual_dst: [u8; 32],
+    },
 }
 
 impl core::fmt::Display for BridgePhaseError {
@@ -847,6 +856,9 @@ impl core::fmt::Display for BridgePhaseError {
             BridgePhaseError::BridgeIdMismatch { .. } => {
                 write!(f, "bridge_id mismatch across phases")
             }
+            BridgePhaseError::FederationPairMismatch { .. } => {
+                write!(f, "federation pair mismatch across bridge phases")
+            }
         }
     }
 }
@@ -869,7 +881,7 @@ impl std::error::Error for BridgePhaseError {}
 /// fails monotone-check; once Finalized is logged, Refunded fails too).
 #[derive(Clone, Debug, Default)]
 pub struct BridgePhaseLog {
-    entries: HashMap<[u8; 32], (BridgePhase, [u8; 32])>,
+    entries: HashMap<[u8; 32], (BridgePhase, [u8; 32], [u8; 32], [u8; 32])>,
 }
 
 impl BridgePhaseLog {
@@ -890,7 +902,9 @@ impl BridgePhaseLog {
 
     /// Look up the last recorded phase for a bridge.
     pub fn get(&self, bridge_id: &[u8; 32]) -> Option<(BridgePhase, [u8; 32])> {
-        self.entries.get(bridge_id).copied()
+        self.entries
+            .get(bridge_id)
+            .map(|(phase, body_hash, _, _)| (*phase, *body_hash))
     }
 
     /// Admit a phase envelope.
@@ -923,17 +937,35 @@ impl BridgePhaseLog {
                 if self.entries.contains_key(&bridge_id) {
                     return Err(BridgePhaseError::DuplicateLock { bridge_id });
                 }
-                self.entries
-                    .insert(bridge_id, (BridgePhase::Locked, body_hash));
+                self.entries.insert(
+                    bridge_id,
+                    (
+                        BridgePhase::Locked,
+                        body_hash,
+                        envelope.src_federation,
+                        envelope.dst_federation,
+                    ),
+                );
                 Ok(())
             }
             // Phases 2..4 require a prior entry and a monotone transition.
             phase => {
-                let (last_phase, last_hash) = self
+                let (last_phase, last_hash, src_federation, dst_federation) = self
                     .entries
                     .get(&bridge_id)
                     .copied()
                     .ok_or(BridgePhaseError::UnknownBridge { bridge_id })?;
+                if envelope.src_federation != src_federation
+                    || envelope.dst_federation != dst_federation
+                {
+                    return Err(BridgePhaseError::FederationPairMismatch {
+                        bridge_id,
+                        expected_src: src_federation,
+                        expected_dst: dst_federation,
+                        actual_src: envelope.src_federation,
+                        actual_dst: envelope.dst_federation,
+                    });
+                }
                 if !last_phase.next_valid().contains(&phase) {
                     return Err(BridgePhaseError::NonMonotoneAdvancement {
                         bridge_id,
@@ -951,7 +983,10 @@ impl BridgePhaseLog {
                         });
                     }
                 }
-                self.entries.insert(bridge_id, (phase, body_hash));
+                self.entries.insert(
+                    bridge_id,
+                    (phase, body_hash, src_federation, dst_federation),
+                );
                 Ok(())
             }
         }

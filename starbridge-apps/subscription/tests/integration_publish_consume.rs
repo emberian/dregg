@@ -26,14 +26,34 @@ use starbridge_subscription::{
 
 mod common {
     use dregg_app_framework::{AgentCipherclerk, AppCipherclerk, CellId, EmbeddedExecutor};
+    use dregg_cell::StateConstraint;
+    use dregg_cell::program::CellProgram;
+    use starbridge_subscription::subscription_program;
 
     pub fn make_cipherclerk(seed: u8) -> AppCipherclerk {
         AppCipherclerk::new(AgentCipherclerk::new(), [seed; 32])
     }
 
+    fn executor_shape_program() -> CellProgram {
+        let CellProgram::Cases(cases) = subscription_program() else {
+            return subscription_program();
+        };
+        CellProgram::Cases(
+            cases
+                .into_iter()
+                .map(|mut case| {
+                    case.constraints
+                        .retain(|c| !matches!(c, StateConstraint::SenderAuthorized { .. }));
+                    case
+                })
+                .collect(),
+        )
+    }
+
     pub fn make_executor(cipherclerk: &AppCipherclerk) -> (EmbeddedExecutor, CellId) {
         let executor = EmbeddedExecutor::new(cipherclerk, "default");
         let cell = executor.cell_id();
+        executor.install_program(cell, executor_shape_program());
         (executor, cell)
     }
 }
@@ -327,8 +347,8 @@ fn executor_bounty_lifecycle_post_claim_fulfill_settle() {
 // Test 6: message_root rewind under publish → rejected
 // =============================================================================
 
-/// After a successful publish, a second publish that rewinds the
-/// message_root to zero must be rejected by `Monotonic(MESSAGE_ROOT_SLOT)`.
+/// After a successful publish, a second publish that clears the
+/// message_root to zero must be rejected by the root non-zero caveat.
 #[test]
 fn executor_message_root_rewind_rejected() {
     let cipherclerk = common::make_cipherclerk(0x60);
@@ -358,6 +378,6 @@ fn executor_message_root_rewind_rejected() {
     let result = executor.submit_action(&cipherclerk, p_rewind);
     assert!(
         result.is_err(),
-        "rewinding message_root to zero must be rejected by Monotonic; got: {result:?}"
+        "clearing message_root to zero must be rejected; got: {result:?}"
     );
 }

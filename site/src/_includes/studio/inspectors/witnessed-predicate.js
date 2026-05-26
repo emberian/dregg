@@ -44,15 +44,15 @@ class DreggWitnessedPredicate extends InspectorBase {
       if (lower.includes('dfa')) {
         sub = html`<dregg-dfa data-dfa=${JSON.stringify(wp)} mode="compact"></dregg-dfa>`;
       } else if (lower.includes('temporal')) {
-        sub = html`<span class="dregg-inspector--placeholder">⏳ &lt;dregg-temporal&gt; (Placeholder)</span>`;
+        sub = html`<span class="dregg-inspector--placeholder">&lt;dregg-temporal&gt; awaiting wasm/runtime support (Placeholder)</span>`;
       } else if (lower.includes('blinded') || lower.includes('set')) {
-        sub = html`<span class="dregg-inspector--placeholder">⏳ &lt;dregg-blinded-set&gt; (Placeholder for ${kind})</span>`;
+        sub = html`<span class="dregg-inspector--placeholder">&lt;dregg-blinded-set&gt; awaiting wasm/runtime support (Placeholder for ${kind})</span>`;
       } else if (lower.includes('merkle') || lower.includes('membership')) {
-        sub = html`<span class="dregg-inspector--placeholder">⏳ &lt;dregg-merkle-membership&gt; (Placeholder; see &lt;dregg-merkle-tree&gt;)</span>`;
+        sub = html`<span class="dregg-inspector--placeholder">&lt;dregg-merkle-membership&gt; awaiting runtime proof data (Placeholder; see &lt;dregg-merkle-tree&gt;)</span>`;
       } else if (lower.includes('pedersen')) {
-        sub = html`<span class="dregg-inspector--placeholder">⏳ &lt;dregg-pedersen-commitment&gt; (Placeholder; see stealth value-commit)</span>`;
+        sub = html`<span class="dregg-inspector--placeholder">&lt;dregg-pedersen-commitment&gt; awaiting wasm/runtime support (Placeholder; see stealth value-commit)</span>`;
       } else if (lower.includes('bridge')) {
-        sub = html`<span class="dregg-inspector--placeholder">⏳ BridgePredicate (Placeholder)</span>`;
+        sub = html`<span class="dregg-inspector--placeholder">BridgePredicate awaiting wasm/runtime support (Placeholder)</span>`;
       } else {
         sub = html`<code>${shortHex(wp.commitment || '', 8)}</code> (custom vk: ${shortHex(wp.vk_hash || '', 8)})`;
       }

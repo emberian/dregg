@@ -70,12 +70,12 @@
 //! | Slot | Name | Caveat | Purpose |
 //! |---:|---|---|---|
 //! | 0 | `seq_head` | `MonotonicSequence` (publish-scoped) | Next sequence number a publisher will write. Advanced exactly +1 per publish. Bookmark for consumers. |
-//! | 1 | `seq_tail` | `MonotonicSequence` (consume-scoped) | Next sequence number a consumer will read. Advanced exactly +1 per consume. Invariant: `tail <= head` (verified at the app-builder boundary; head==tail means empty). |
+//! | 1 | `seq_tail` | `MonotonicSequence` (consume-scoped) | Next sequence number a consumer will read. Advanced exactly +1 per consume. Invariant: `tail <= head`. |
 //! | 2 | `capacity` | `Immutable` | Max in-flight messages. Set at creation; never changes. |
-//! | 3 | `authorized_publishers_root` | `Monotonic` | Merkle root over the set of authorized publisher pubkeys. Insertions only (set grows). |
-//! | 4 | `authorized_consumers_root` | `Monotonic` | Merkle root over authorized consumers. Insertions only. |
+//! | 3 | `authorized_publishers_root` | per-method non-zero | Merkle root over the set of authorized publisher pubkeys. |
+//! | 4 | `authorized_consumers_root` | per-method non-zero | Merkle root over authorized consumers. |
 //! | 5 | `owner_pk_hash` | `Immutable` | Hash of the subscription owner's pubkey. Only the owner may grant publishers/consumers. |
-//! | 6 | `message_root` | `Monotonic` | Poseidon2/BLAKE3 root over the (seq, payload_hash) tuples published into the queue. Grows monotonically. |
+//! | 6 | `message_root` | per-method non-zero | Poseidon2/BLAKE3 root over the (seq, payload_hash) tuples published into the queue. |
 //! | 7 | `latest_payload_hash` | per-method | The hash of the most recently published payload. On publish: written. On consume: unchanged. Inspectors read it as the head-of-queue summary. |
 //!
 //! ### Why a `message_root` and not 8 dedicated `message_slot[i]` slots?
@@ -93,8 +93,9 @@
 //! any subsequent attempt to write a different payload at the same
 //! index would have to produce the same root (and so would be
 //! rejected by the consumer's Merkle membership check). The slot-level
-//! `Monotonic { index: 6 }` constraint enforces that the root only
-//! grows; the per-message `WriteOnce` semantic is structural.
+//! caveat only prevents zero-clears because roots are opaque
+//! commitments, not ordered counters; the per-message `WriteOnce`
+//! semantic is structural.
 //!
 //! For deployments that want a tiny, slot-resident message ring (no
 //! off-cell content store), the message_root slot can be replaced by
@@ -111,7 +112,7 @@
 //!
 //! - `publish` — head advances by exactly 1 (`MonotonicSequence`),
 //!   tail must be unchanged (`Immutable { index: 1 }`),
-//!   the message_root must advance (`Monotonic { index: 6 }`),
+//!   the message_root must be non-zero,
 //!   sender must be in `authorized_publishers_root`
 //!   (`SenderAuthorized { set: PublicRoot { set_root_index: 3 } }`),
 //!   roots-of-membership stay frozen on publish.
@@ -174,10 +175,16 @@ pub const PUBLISHERS_ROOT_SLOT: u8 = 3;
 pub const CONSUMERS_ROOT_SLOT: u8 = 4;
 /// Slot 5 — `owner_pk_hash`. Immutable owner identity.
 pub const OWNER_PK_HASH_SLOT: u8 = 5;
-/// Slot 6 — `message_root`. Monotonic root over published (seq, payload_hash) tuples.
+/// Slot 6 — `message_root`. Root over published (seq, payload_hash) tuples.
 pub const MESSAGE_ROOT_SLOT: u8 = 6;
 /// Slot 7 — `latest_payload_hash`. The most recently published payload hash.
 pub const LATEST_PAYLOAD_SLOT: u8 = 7;
+
+fn u64_field(value: u64) -> FieldElement {
+    let mut out = [0u8; 32];
+    out[24..32].copy_from_slice(&value.to_be_bytes());
+    out
+}
 
 // =============================================================================
 // Factory configuration
@@ -253,11 +260,15 @@ pub fn subscription_program() -> CellProgram {
                 StateConstraint::Immutable {
                     index: OWNER_PK_HASH_SLOT,
                 },
+                StateConstraint::FieldLteField {
+                    left_index: SEQ_TAIL_SLOT,
+                    right_index: SEQ_HEAD_SLOT,
+                },
             ],
         },
         // ────────────────────────────────────────────────────────────────
         // publish: head advances by +1; tail, capacity, owner, roots stay
-        // unchanged; message_root advances monotonically; sender must be
+        // unchanged; message_root is set non-zero; sender must be
         // a member of authorized_publishers_root.
         // ────────────────────────────────────────────────────────────────
         TransitionCase {
@@ -277,8 +288,9 @@ pub fn subscription_program() -> CellProgram {
                 StateConstraint::Immutable {
                     index: CONSUMERS_ROOT_SLOT,
                 },
-                StateConstraint::Monotonic {
+                StateConstraint::FieldGte {
                     index: MESSAGE_ROOT_SLOT,
+                    value: u64_field(1),
                 },
                 // The latest_payload slot is overwritten per publish; the
                 // per-message WriteOnce semantic is structurally enforced
@@ -334,8 +346,9 @@ pub fn subscription_program() -> CellProgram {
                 method: symbol("grant_publisher"),
             },
             constraints: vec![
-                StateConstraint::Monotonic {
+                StateConstraint::FieldGte {
                     index: PUBLISHERS_ROOT_SLOT,
+                    value: u64_field(1),
                 },
                 StateConstraint::Immutable {
                     index: SEQ_HEAD_SLOT,
@@ -362,8 +375,9 @@ pub fn subscription_program() -> CellProgram {
                 method: symbol("grant_consumer"),
             },
             constraints: vec![
-                StateConstraint::Monotonic {
+                StateConstraint::FieldGte {
                     index: CONSUMERS_ROOT_SLOT,
+                    value: u64_field(1),
                 },
                 StateConstraint::Immutable {
                     index: SEQ_HEAD_SLOT,
@@ -480,23 +494,17 @@ pub fn subscription_factory_descriptor() -> FactoryDescriptor {
             StateConstraint::Immutable {
                 index: OWNER_PK_HASH_SLOT,
             },
-            // The roots and counters are monotonic across the cell's
-            // lifetime, regardless of which operation moved them. Per-op
-            // cases narrow this further (which op may move which slot).
+            StateConstraint::FieldLteField {
+                left_index: SEQ_TAIL_SLOT,
+                right_index: SEQ_HEAD_SLOT,
+            },
+            // Cursors grow monotonically across the cell's lifetime.
+            // Opaque hash roots are constrained by operation-scoped cases.
             StateConstraint::Monotonic {
                 index: SEQ_HEAD_SLOT,
             },
             StateConstraint::Monotonic {
                 index: SEQ_TAIL_SLOT,
-            },
-            StateConstraint::Monotonic {
-                index: PUBLISHERS_ROOT_SLOT,
-            },
-            StateConstraint::Monotonic {
-                index: CONSUMERS_ROOT_SLOT,
-            },
-            StateConstraint::Monotonic {
-                index: MESSAGE_ROOT_SLOT,
             },
         ],
         default_mode: CellMode::Hosted,
@@ -967,13 +975,7 @@ mod tests {
     #[test]
     fn factory_descriptor_bakes_monotonic_invariants() {
         let d = subscription_factory_descriptor();
-        for slot in [
-            SEQ_HEAD_SLOT,
-            SEQ_TAIL_SLOT,
-            PUBLISHERS_ROOT_SLOT,
-            CONSUMERS_ROOT_SLOT,
-            MESSAGE_ROOT_SLOT,
-        ] {
+        for slot in [SEQ_HEAD_SLOT, SEQ_TAIL_SLOT] {
             assert!(
                 d.state_constraints
                     .iter()
@@ -981,6 +983,14 @@ mod tests {
                 "factory must install Monotonic on slot {slot}"
             );
         }
+        assert!(
+            d.state_constraints.iter().any(|c| matches!(
+                c,
+                StateConstraint::FieldLteField { left_index, right_index }
+                    if *left_index == SEQ_TAIL_SLOT && *right_index == SEQ_HEAD_SLOT
+            )),
+            "factory must install tail <= head invariant"
+        );
     }
 
     #[test]

@@ -221,8 +221,8 @@ fn present_impl(
     }
 
     let att = dregg_token::Attenuation {
-        confine_user: Some(holder_user),
-        features,
+        confine_user: Some(holder_user.clone()),
+        features: features.clone(),
         not_after: credential.not_after,
         apps,
         ..Default::default()
@@ -261,14 +261,22 @@ fn present_impl(
     //
     // Anonymous presentations always use the Poseidon2 path because the
     // blinding-factor mechanism lives only on `prove_real`.
+    let mut proof_request = request.clone();
+    proof_request.user_id = Some(holder_user);
+    for feature in &features {
+        if !proof_request.features.iter().any(|f| f == feature) {
+            proof_request.features.push(feature.clone());
+        }
+    }
+
     let proof = if anonymous {
         builder
-            .prove(request)
+            .prove(&proof_request)
             .map_err(|e| PresentationError::Bridge(format!("{e:?}")))?
     } else {
         let marker = dregg_bridge::present::UnsafeLocalOnlyMarker::i_know_this_is_not_cryptographically_sound();
         builder
-            .prove_local_constraint_check_only(&marker, request)
+            .prove_local_constraint_check_only(&marker, &proof_request)
             .map_err(|e| PresentationError::Bridge(format!("{e:?}")))?
     };
 

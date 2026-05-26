@@ -121,6 +121,9 @@ pub fn compute_effects_hash(effects: &[Effect]) -> (BabyBear, BabyBear) {
             Effect::RefreshDelegation => {
                 hasher_inputs.push(BabyBear::new(29));
             }
+            Effect::IncrementNonce => {
+                hasher_inputs.push(BabyBear::new(53));
+            }
             Effect::RevokeDelegation { child_hash } => {
                 hasher_inputs.push(BabyBear::new(30));
                 hasher_inputs.push(*child_hash);

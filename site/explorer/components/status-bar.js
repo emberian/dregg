@@ -22,7 +22,7 @@ function initConnectionDisplay() {
   bus.on('status:updated', (status) => {
     const el = document.getElementById('nav-height-value');
     if (status && el) {
-      el.textContent = api.formatNumber(status.latest_height);
+      el.textContent = api.formatNumber(api.statusHeight(status));
     }
   });
 }

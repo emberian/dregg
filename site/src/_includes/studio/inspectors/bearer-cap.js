@@ -108,7 +108,7 @@ class DreggBearerCap extends InspectorBase {
                 <dt>permissions</dt><dd>${created.permissions || 'n/a'}</dd>
                 <dt>delegation</dt><dd><code>${(created.delegation_proof && created.delegation_proof.SignedDelegation) ? 'SignedDelegation' : (created.delegation_proof ? 'StarkDelegation' : 'n/a')}</code></dd>
                 <dt>expires_at</dt><dd>${created.expires_at || 0}</dd>
-                <dt>revocation_channel</dt><dd>${created.revocation_channel ? html`<dregg-revocation-channel data=${JSON.stringify({channel_id: created.revocation_channel, active: true})} mode="compact"></dregg-revocation-channel>` : html`<em>none</em>`}</dd>
+                <dt>revocation_channel</dt><dd>${created.revocation_channel ? html`<dregg-revocation-channel data=${JSON.stringify({channel_id: created.revocation_channel})} mode="compact"></dregg-revocation-channel>` : html`<em>none</em>`}</dd>
                 <dt>allowed_effects</dt><dd><code>${created.allowed_effects ? JSON.stringify(created.allowed_effects) : 'unrestricted'}</code></dd>
               ` : html`
                 <dt>token (sig)</dt><dd><code title=${created.bearer_token_hex}>${shortHex(created.bearer_token_hex, 20)}</code></dd>

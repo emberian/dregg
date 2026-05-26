@@ -164,7 +164,7 @@ fn test_partial_fill_produces_residual() {
     let residual = pf.residual_intent.unwrap();
     let rc = residual.fill_constraints.as_ref().unwrap();
     assert_eq!(rc.max_fill_amount, 60);
-    assert_eq!(rc.min_fill_amount, 10); // min preserved since 10 < 60
+    assert_eq!(rc.min_fill_amount, 20); // residual minimum is anti-griefing adjusted
     assert!(!rc.fill_or_kill);
     assert_ne!(residual.id, intent.id, "Residual must have a different ID");
 }

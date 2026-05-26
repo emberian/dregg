@@ -2,30 +2,46 @@
  * Overview view — dashboard with stats cards, recent activity, checkpoint info.
  */
 
-import { bus, state } from '../app.js';
+import { bus, state, navigateTo } from '../app.js';
 import * as api from '../api.js';
 
 export const name = 'overview';
 
 let container = null;
+let latestOverview = { checkpoint: null, blocks: [] };
 
 export function init(el) {
   container = el;
+  wireObjectMap();
+  renderDevnetBrief(state.status, state.checkpoint, state.blocks);
+  renderObjectMap({ intents: state.intents, conditionals: state.conditionals, blocks: state.blocks });
 
   bus.on('status:updated', (status) => {
-    if (state.currentPage === 'overview') renderStats(status);
+    if (state.currentPage !== 'overview') return;
+    renderStats(status);
+    renderDevnetBrief(status, latestOverview.checkpoint, latestOverview.blocks);
   });
 
   bus.on('overview:updated', ({ intents, conditionals, checkpoint, blocks }) => {
     if (state.currentPage !== 'overview') return;
+    latestOverview = { checkpoint, blocks };
+    renderDevnetBrief(state.status, checkpoint, blocks);
+    renderObjectMap({ intents, conditionals, checkpoint, blocks });
     renderIntentStats(intents, conditionals);
     renderCheckpoint(checkpoint);
     renderRecentRoots(blocks);
   });
+
+  bus.on('connection:changed', () => {
+    if (state.currentPage === 'overview') renderDevnetBrief(state.status, latestOverview.checkpoint, latestOverview.blocks);
+  });
 }
 
 export function update(appState) {
-  if (appState.status) renderStats(appState.status);
+  if (appState.status) {
+    renderStats(appState.status);
+    renderDevnetBrief(appState.status, appState.checkpoint, appState.blocks);
+  }
 }
 
 export function destroy() {}
@@ -33,10 +49,10 @@ export function destroy() {}
 function renderStats(status) {
   if (!status) return;
   const el = (id) => document.getElementById(id);
-  el('stat-height').textContent = api.formatNumber(status.latest_height);
-  el('stat-peers').textContent = api.formatNumber(status.peer_count);
-  el('stat-revocations').textContent = api.formatNumber(status.revocation_count);
-  el('stat-notes').textContent = api.formatNumber(status.note_count);
+  el('stat-height').textContent = api.formatNumber(api.statusHeight(status));
+  el('stat-peers').textContent = api.formatNumber(api.statusPeers(status));
+  el('stat-revocations').textContent = api.formatNumber(api.statusRevocations(status));
+  el('stat-notes').textContent = api.formatNumber(api.statusNotes(status));
 }
 
 function renderIntentStats(intents, conditionals) {
@@ -71,15 +87,15 @@ function renderCheckpoint(cp) {
       </div>
       <div class="checkpoint-field">
         <div class="checkpoint-field__label">Ledger Root</div>
-        <div class="checkpoint-field__value checkpoint-field__value--hash">${api.shortHash(cp.ledger_state_root, 12, 6)}</div>
+        <div class="checkpoint-field__value checkpoint-field__value--hash">${api.shortHash(cp.ledger_state_root || cp.merkle_root, 12, 6)}</div>
       </div>
       <div class="checkpoint-field">
         <div class="checkpoint-field__label">Note Tree</div>
-        <div class="checkpoint-field__value checkpoint-field__value--hash">${api.shortHash(cp.note_tree_root, 12, 6)}</div>
+        <div class="checkpoint-field__value checkpoint-field__value--hash">${api.shortHash(cp.note_tree_root || cp.note_root, 12, 6)}</div>
       </div>
       <div class="checkpoint-field">
         <div class="checkpoint-field__label">Nullifier Set</div>
-        <div class="checkpoint-field__value checkpoint-field__value--hash">${api.shortHash(cp.nullifier_set_root, 12, 6)}</div>
+        <div class="checkpoint-field__value checkpoint-field__value--hash">${api.shortHash(cp.nullifier_set_root || cp.nullifier_root, 12, 6)}</div>
       </div>
       <div class="checkpoint-field">
         <div class="checkpoint-field__label">Revocation Tree</div>
@@ -101,11 +117,66 @@ function renderRecentRoots(blocks) {
   }
   const roots = blocks.slice(-10).reverse();
   container.innerHTML = roots.map(r => `
-    <div class="root-item">
+    <button class="root-item root-item--button" type="button" data-root-height="${r.height}">
       <span class="root-item__height">#${r.height}</span>
-      <span class="root-item__hash">${api.shortHash(r.merkle_root, 12, 6)}</span>
+      <span class="root-item__hash">${api.shortHash(api.blockRoot(r), 12, 6)}</span>
       <span class="root-item__sigs">${r.signatures} sigs</span>
       <span class="root-item__time">${api.relativeTime(r.timestamp)}</span>
-    </div>
+    </button>
   `).join('');
+  container.querySelectorAll('[data-root-height]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const height = parseInt(btn.dataset.rootHeight, 10);
+      navigateTo('blocks');
+      bus.emit('search:block', height);
+    });
+  });
+}
+
+function wireObjectMap() {
+  container.querySelectorAll('[data-map-page]').forEach(btn => {
+    btn.addEventListener('click', () => navigateTo(btn.dataset.mapPage));
+  });
+}
+
+function renderDevnetBrief(status, checkpoint, blocks) {
+  const nodeEl = document.getElementById('devnet-node-url');
+  const metaEl = document.getElementById('devnet-node-meta');
+  const heightEl = document.getElementById('devnet-fact-height');
+  const rootEl = document.getElementById('devnet-fact-root');
+  const checkpointEl = document.getElementById('devnet-fact-checkpoint');
+  if (!nodeEl || !metaEl || !heightEl || !rootEl || !checkpointEl) return;
+
+  nodeEl.textContent = api.getNodeUrl();
+  if (!state.connected) {
+    metaEl.textContent = 'No status response from this node.';
+    heightEl.textContent = '--';
+    rootEl.textContent = '--';
+    checkpointEl.textContent = checkpoint?.height ? `#${api.formatNumber(checkpoint.height)}` : '--';
+    return;
+  }
+
+  const peers = api.statusPeers(status);
+  const latestRoot = latestBlock(blocks);
+  metaEl.textContent = `${api.healthLabel(status)} / ${api.formatNumber(peers)} peer${peers === 1 ? '' : 's'} / auto-refresh ${state.autoRefresh ? 'on' : 'off'}`;
+  heightEl.textContent = api.formatNumber(api.statusHeight(status));
+  rootEl.textContent = api.shortHash(api.blockRoot(latestRoot), 12, 6);
+  checkpointEl.textContent = checkpoint?.height ? `#${api.formatNumber(checkpoint.height)}` : '--';
+}
+
+function renderObjectMap({ intents, conditionals, blocks }) {
+  setText('map-blocks-value', blocks?.length ? `${api.formatNumber(blocks.length)} roots` : 'no roots');
+  const intentCount = (intents?.length || 0) + (conditionals?.length || 0);
+  setText('map-turns-value', intentCount ? `${api.formatNumber(intentCount)} queued` : 'pool empty');
+  setText('map-receipts-value', state.receipts?.length ? `${api.formatNumber(state.receipts.length)} receipts` : 'proof chain');
+}
+
+function latestBlock(blocks) {
+  if (!blocks || !blocks.length) return null;
+  return [...blocks].sort((a, b) => (b.height || 0) - (a.height || 0))[0];
+}
+
+function setText(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = value;
 }

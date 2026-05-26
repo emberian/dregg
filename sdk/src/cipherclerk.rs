@@ -4699,41 +4699,35 @@ impl AgentCipherclerk {
             cell_state.state.balance(),
             cell_state.state.nonce() as u32,
         );
-        let (trace, public_inputs) =
+        let (_shape_trace, shape_public_inputs) =
             dregg_circuit::generate_effect_vm_trace(&initial_vm_state, &vm_effects);
 
-        // 6. Extract new commitment from the proof's public inputs (PI[NEW_COMMIT_BASE..+4]).
+        // 6. Extract new commitment from the trace public inputs (PI[NEW_COMMIT_BASE..+4]).
         // Pack all 4 felts into 32 bytes using commitment_4bb_to_bytes — the executor's
         // commitment_to_4bb reads them back the same way and compares against the proof's PI.
         // Using babybear_to_commitment (only 1 felt) caused the stage2-canonical-vs-poseidon
         // mismatch (GitHub #99): the verifier would see all-zero felts[1..3] while the proof
         // carried compute_commitment_4's salted positions 1..3.
         let new_commit_4 = [
-            public_inputs[dregg_circuit::effect_vm::pi::NEW_COMMIT_BASE],
-            public_inputs[dregg_circuit::effect_vm::pi::NEW_COMMIT_BASE + 1],
-            public_inputs[dregg_circuit::effect_vm::pi::NEW_COMMIT_BASE + 2],
-            public_inputs[dregg_circuit::effect_vm::pi::NEW_COMMIT_BASE + 3],
+            shape_public_inputs[dregg_circuit::effect_vm::pi::NEW_COMMIT_BASE],
+            shape_public_inputs[dregg_circuit::effect_vm::pi::NEW_COMMIT_BASE + 1],
+            shape_public_inputs[dregg_circuit::effect_vm::pi::NEW_COMMIT_BASE + 2],
+            shape_public_inputs[dregg_circuit::effect_vm::pi::NEW_COMMIT_BASE + 3],
         ];
         let new_commitment = dregg_turn::TurnExecutor::commitment_4bb_to_bytes(new_commit_4);
 
-        let air = dregg_circuit::EffectVmAir::new(trace.len());
-        let proof = dregg_circuit::stark::prove(&air, &trace, &public_inputs);
-        let proof_bytes = dregg_circuit::stark::proof_to_bytes(&proof);
-
-        // 9. Update local sovereign state.
-        self.sovereign_cells.insert(*cell_id, new_cell_state);
-
-        // 10. Build the turn with execution_proof (no sovereign_witnesses needed).
+        // 7. Build the pre-proof turn identity. The AIR-bound TURN_HASH uses
+        // the proofless form to avoid self-referential proof bytes while still
+        // binding the action forest, target cell, and claimed new commitment.
         let agent_cell = *cell_id;
         let nonce = self.receipt_chain.len() as u64;
-
         let mut forest = dregg_turn::forest::CallForest::new();
         let action = dregg_turn::Action {
             target: agent_cell,
             method: dregg_turn::action::symbol("sovereign_execute_proven"),
             args: Vec::new(),
             authorization: dregg_turn::Authorization::Unchecked,
-            effects,
+            effects: effects.clone(),
             preconditions: dregg_cell::Preconditions::default(),
             may_delegate: dregg_turn::DelegationMode::None,
             commitment_mode: dregg_turn::CommitmentMode::Full,
@@ -4742,7 +4736,7 @@ impl AgentCipherclerk {
         };
         forest.add_root(action);
 
-        let turn = Turn {
+        let mut turn = Turn {
             agent: agent_cell,
             nonce,
             call_forest: forest,
@@ -4753,7 +4747,7 @@ impl AgentCipherclerk {
             depends_on: Vec::new(),
             conservation_proof: None,
             sovereign_witnesses: HashMap::new(), // Empty! Proof covers it.
-            execution_proof: Some(proof_bytes),
+            execution_proof: None,
             execution_proof_cell: Some(*cell_id),
             execution_proof_new_commitment: Some(new_commitment),
             custom_program_proofs: None,
@@ -4761,6 +4755,34 @@ impl AgentCipherclerk {
             cross_effect_dependencies: Vec::new(),
             effect_witness_index_map: Vec::new(),
         };
+
+        let (turn_hash, effects_hash_global, actor_nonce, previous_receipt_hash) =
+            dregg_turn::TurnExecutor::compute_turn_identity_pi(&turn);
+        let mut ctx = dregg_circuit::effect_vm::EffectVmContext::default();
+        ctx.turn_hash = turn_hash;
+        ctx.effects_hash_global = effects_hash_global;
+        ctx.actor_nonce = actor_nonce;
+        ctx.previous_receipt_hash = previous_receipt_hash;
+        ctx.is_sovereign_cell = true;
+
+        let (trace, mut public_inputs) = dregg_circuit::effect_vm::generate_effect_vm_trace_ext(
+            &initial_vm_state,
+            &vm_effects,
+            ctx,
+        );
+        let schedule = dregg_turn::bilateral_schedule::ExpectedBilateral::from_turn(&turn);
+        let counts = schedule.counts_for(cell_id);
+        let roots = schedule.roots_for(cell_id, actor_nonce);
+        dregg_turn::bilateral_schedule::project_into_pi(&mut public_inputs, &counts, &roots);
+        public_inputs[dregg_circuit::effect_vm::pi::IS_AGENT_CELL] =
+            dregg_circuit::field::BabyBear::ONE;
+        let air = dregg_circuit::EffectVmAir::new(trace.len());
+        let proof = dregg_circuit::stark::prove(&air, &trace, &public_inputs);
+        let proof_bytes = dregg_circuit::stark::proof_to_bytes(&proof);
+
+        // 8. Update local sovereign state and attach proof bytes.
+        self.sovereign_cells.insert(*cell_id, new_cell_state);
+        turn.execution_proof = Some(proof_bytes);
 
         Ok(turn)
     }
@@ -4934,8 +4956,7 @@ impl AgentCipherclerk {
                     });
                 }
                 Effect::IncrementNonce { cell } if cell == cell_id => {
-                    // Nonce increment is implicit in the VM (row-to-row nonce+1).
-                    // No explicit effect needed — skip.
+                    vm_effects.push(VmEffect::IncrementNonce);
                 }
 
                 // ================================================================

@@ -32,6 +32,7 @@
 
 use crate::field::{BABYBEAR_P, BabyBear};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 // ============================================================================
 // Extension Field: BabyBear^4
@@ -617,6 +618,90 @@ pub struct QueryProof {
     pub fri_layers: Vec<FriLayerQuery>,
 }
 
+/// Errors raised before or during STARK proof generation.
+///
+/// `prove*` keeps the historical panic-on-error behavior for compatibility.
+/// New tests and production callers that can recover should use `try_prove*`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProveError {
+    InvalidTraceLength {
+        len: usize,
+    },
+    TraceWidthMismatch {
+        row: usize,
+        expected: usize,
+        actual: usize,
+    },
+    DomainTooLarge {
+        domain_size: usize,
+        max_power_of_two_log: u32,
+    },
+    DomainOverflow {
+        trace_len: usize,
+        blowup: usize,
+    },
+    BoundaryRowOutOfBounds {
+        row: usize,
+        trace_len: usize,
+    },
+    BoundaryColumnOutOfBounds {
+        col: usize,
+        width: usize,
+    },
+    ConstraintViolation {
+        trace_row: usize,
+        domain_index: usize,
+        value: ExtElem,
+    },
+}
+
+impl fmt::Display for ProveError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidTraceLength { len } => write!(
+                f,
+                "invalid trace length {len}: trace length must be >= 2 and a power of two"
+            ),
+            Self::TraceWidthMismatch {
+                row,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "trace row {row} has width {actual}, but AIR expects {expected} columns"
+            ),
+            Self::DomainTooLarge {
+                domain_size,
+                max_power_of_two_log,
+            } => write!(
+                f,
+                "domain size {domain_size} exceeds BabyBear root-of-unity limit (2^{max_power_of_two_log})"
+            ),
+            Self::DomainOverflow { trace_len, blowup } => {
+                write!(f, "trace_len * blowup overflow: {trace_len} * {blowup}")
+            }
+            Self::BoundaryRowOutOfBounds { row, trace_len } => write!(
+                f,
+                "boundary constraint row {row} is out of bounds for trace length {trace_len}"
+            ),
+            Self::BoundaryColumnOutOfBounds { col, width } => write!(
+                f,
+                "boundary constraint column {col} is out of bounds for trace width {width}"
+            ),
+            Self::ConstraintViolation {
+                trace_row,
+                domain_index,
+                value,
+            } => write!(
+                f,
+                "Trace constraint non-zero at trace row {trace_row} (domain index {domain_index}): {value:?}. The trace violates AIR constraints and cannot be proven."
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ProveError {}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FriLayerQuery {
     pub query_pos: usize,
@@ -795,7 +880,15 @@ pub fn prove(
     trace: &[Vec<BabyBear>],
     public_inputs: &[BabyBear],
 ) -> StarkProof {
-    prove_full(air, trace, public_inputs, None, &StarkConfig::no_pow())
+    try_prove(air, trace, public_inputs).unwrap_or_else(|e| panic!("{e}"))
+}
+
+pub fn try_prove(
+    air: &dyn StarkAir,
+    trace: &[Vec<BabyBear>],
+    public_inputs: &[BabyBear],
+) -> Result<StarkProof, ProveError> {
+    try_prove_full(air, trace, public_inputs, None, &StarkConfig::no_pow())
 }
 
 /// Prove with an optional context for temporal binding and session isolation.
@@ -805,7 +898,17 @@ pub fn prove_with_context(
     public_inputs: &[BabyBear],
     context: Option<&StarkContext>,
 ) -> StarkProof {
-    prove_full(air, trace, public_inputs, context, &StarkConfig::no_pow())
+    try_prove_with_context(air, trace, public_inputs, context).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// Try proving with an optional context for temporal binding and session isolation.
+pub fn try_prove_with_context(
+    air: &dyn StarkAir,
+    trace: &[Vec<BabyBear>],
+    public_inputs: &[BabyBear],
+    context: Option<&StarkContext>,
+) -> Result<StarkProof, ProveError> {
+    try_prove_full(air, trace, public_inputs, context, &StarkConfig::no_pow())
 }
 
 /// Prove with a config specifying proof-of-work difficulty and other parameters.
@@ -815,7 +918,17 @@ pub fn prove_with_config(
     public_inputs: &[BabyBear],
     config: &StarkConfig,
 ) -> StarkProof {
-    prove_full(air, trace, public_inputs, None, config)
+    try_prove_with_config(air, trace, public_inputs, config).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// Try proving with a config specifying proof-of-work difficulty and other parameters.
+pub fn try_prove_with_config(
+    air: &dyn StarkAir,
+    trace: &[Vec<BabyBear>],
+    public_inputs: &[BabyBear],
+    config: &StarkConfig,
+) -> Result<StarkProof, ProveError> {
+    try_prove_full(air, trace, public_inputs, None, config)
 }
 
 /// Full prove function with both context and config.
@@ -826,11 +939,44 @@ pub fn prove_full(
     context: Option<&StarkContext>,
     config: &StarkConfig,
 ) -> StarkProof {
+    try_prove_full(air, trace, public_inputs, context, config).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// Full non-panicking prove function with both context and config.
+pub fn try_prove_full(
+    air: &dyn StarkAir,
+    trace: &[Vec<BabyBear>],
+    public_inputs: &[BabyBear],
+    context: Option<&StarkContext>,
+    config: &StarkConfig,
+) -> Result<StarkProof, ProveError> {
     let num_rows = trace.len();
     let num_cols = air.width();
-    assert!(num_rows >= 2 && num_rows.is_power_of_two());
+    if num_rows < 2 || !num_rows.is_power_of_two() {
+        return Err(ProveError::InvalidTraceLength { len: num_rows });
+    }
+    for (row_idx, row) in trace.iter().enumerate() {
+        if row.len() != num_cols {
+            return Err(ProveError::TraceWidthMismatch {
+                row: row_idx,
+                expected: num_cols,
+                actual: row.len(),
+            });
+        }
+    }
     let blowup = blowup_for_degree(air.constraint_degree());
-    let domain_size = num_rows * blowup;
+    let domain_size = num_rows
+        .checked_mul(blowup)
+        .ok_or(ProveError::DomainOverflow {
+            trace_len: num_rows,
+            blowup,
+        })?;
+    if domain_size.trailing_zeros() > 27 {
+        return Err(ProveError::DomainTooLarge {
+            domain_size,
+            max_power_of_two_log: 27,
+        });
+    }
     // Use roots of unity for proper Reed-Solomon encoding.
     // trace_points: subgroup of order num_rows (where trace is defined)
     // eval_points: larger subgroup of order domain_size (blowup domain for FRI)
@@ -889,6 +1035,20 @@ pub fn prove_full(
     let alpha = transcript.squeeze_ext_elem();
 
     let boundary_cs = air.boundary_constraints(public_inputs, num_rows);
+    for bc in &boundary_cs {
+        if bc.row >= num_rows {
+            return Err(ProveError::BoundaryRowOutOfBounds {
+                row: bc.row,
+                trace_len: num_rows,
+            });
+        }
+        if bc.col >= num_cols {
+            return Err(ProveError::BoundaryColumnOutOfBounds {
+                col: bc.col,
+                width: num_cols,
+            });
+        }
+    }
 
     let mut constraint_evals: Vec<ExtElem> = Vec::with_capacity(domain_size);
     for i in 0..domain_size {
@@ -946,12 +1106,11 @@ pub fn prove_full(
                 // committing to a zero quotient. A non-zero constraint here means
                 // the trace is invalid and the prover must not generate a proof.
                 if constraint_evals[i] != ExtElem::ZERO {
-                    panic!(
-                        "Trace constraint non-zero at trace row {} (domain index {}): {:?}. The trace violates AIR constraints and cannot be proven.",
-                        i / blowup,
-                        i,
-                        constraint_evals[i]
-                    );
+                    return Err(ProveError::ConstraintViolation {
+                        trace_row: i / blowup,
+                        domain_index: i,
+                        value: constraint_evals[i],
+                    });
                 }
                 quotient_evals.push(ExtElem::ZERO);
             }
@@ -1084,7 +1243,7 @@ pub fn prove_full(
         boundary_query_paths.push(path);
     }
 
-    StarkProof {
+    Ok(StarkProof {
         trace_commitment: trace_tree.root(),
         constraint_commitment: constraint_tree.root(),
         fri_commitments,
@@ -1100,7 +1259,7 @@ pub fn prove_full(
         boundary_query_paths,
         pow_nonce,
         pow_bits: config.pow_bits,
-    }
+    })
 }
 
 fn fri_commit(
@@ -1335,6 +1494,11 @@ pub fn verify_full(
         }
         // Absorb nonce into transcript (must match prover)
         transcript.absorb_bytes(&proof.pow_nonce.to_le_bytes());
+    } else if proof.pow_bits != 0 || proof.pow_nonce != 0 {
+        return Err(format!(
+            "unexpected PoW fields for no-PoW verifier: pow_bits={}, pow_nonce={}",
+            proof.pow_bits, proof.pow_nonce
+        ));
     }
 
     // ====================================================================
@@ -2128,6 +2292,12 @@ pub fn proof_from_bytes(bytes: &[u8]) -> Result<StarkProof, String> {
     } else {
         (0, 0)
     };
+    if pos != bytes.len() {
+        return Err(format!(
+            "trailing bytes after STARK proof: parsed {pos} of {} bytes",
+            bytes.len()
+        ));
+    }
 
     Ok(StarkProof {
         trace_commitment,

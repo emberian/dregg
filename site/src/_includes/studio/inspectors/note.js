@@ -6,10 +6,10 @@
  * URI form: dregg://note/<64-hex commitment>
  * data= form: JSON { commitment, value, asset_type, spent? }
  *
- * Modes: compact | default
+ * Modes: compact | default | lab
  *
- * Uses canonical wasm: create_note, spend_note, get_notes (stubbed for now).
- * No JS crypto reimplementation. Visible placeholders for gaps (get_notes tracking).
+ * Uses canonical wasm: create_note, spend_note, get_notes when present.
+ * No JS crypto reimplementation. Visible placeholders for missing note indexes.
  * Composes <dregg-cell> for owner cell deeplinks when agent known (future).
  *
  * Trust tier: n/a (notes are pre-proof commitments; conservation proved at spend time via turn).
@@ -24,6 +24,7 @@ class DreggNote extends InspectorBase {
     const refAttr = this.getAttribute('uri');
     const dataAttr = this.getAttribute('data');
     const mode = this.getAttribute('mode') || 'default';
+    const agentIndex = Number(this.getAttribute('agent-index') || 0);
 
     if (this._dispose) { this._dispose(); this._dispose = null; }
     this.replaceChildren();
@@ -44,7 +45,7 @@ class DreggNote extends InspectorBase {
     }
 
     const noteSignal = (parsed && this._runtime?.getNotes)
-      ? this._runtime.getNotes(0) // placeholder; real would derive agent from note or param
+      ? this._runtime.getNotes(agentIndex)
       : null;
 
     const root = document.createElement('div');
@@ -54,10 +55,9 @@ class DreggNote extends InspectorBase {
       let note = inlineData;
       if (!note && parsed && noteSignal) {
         const list = noteSignal.value || [];
-        note = list.find(n => n.commitment === parsed.id) || { commitment: parsed.id, value: 0, asset_type: 0, spent: false };
+        note = list.find(n => n.commitment === parsed.id) || null;
       }
       if (!note) {
-        // Demo / empty state with create affordance
         if (mode === 'compact') {
           return html`<span class="dregg-inspector dregg-inspector--compact">note (no data)</span>`;
         }
@@ -65,17 +65,21 @@ class DreggNote extends InspectorBase {
           <div class="dregg-inspector dregg-inspector--note">
             <header>
               <span class="dregg-inspector__kind">note</span>
-              <span style="color:var(--fg-dim);font-size:0.8rem;">(demo — use controls or data=)</span>
+              ${parsed ? html`<code class="dregg-inspector__id" title=${parsed.id}>${shortHex(parsed.id, 24)}</code>` : null}
             </header>
-            ${caps.mutate && wasm ? html`
+            <div style="font-size:0.75rem;color:var(--fg-dim);margin-top:6px;">
+              ${parsed
+                ? html`note not found for agent ${String(agentIndex)}; awaiting runtime note index or use <code>data=</code> with canonical note data.`
+                : html`no note data; provide <code>uri="dregg://note/&lt;commitment&gt;"</code> or <code>data=</code>.`}
+            </div>
+            ${mode === 'lab' && caps.mutate && wasm ? html`
               <div style="margin:8px 0;display:flex;gap:8px;flex-wrap:wrap;">
-                <button data-act="create" style="font-size:0.75rem;padding:2px 6px;">Create Note (demo)</button>
-                <button data-act="spend" style="font-size:0.75rem;padding:2px 6px;">Spend Last (demo)</button>
+                <button data-act="create" style="font-size:0.75rem;padding:2px 6px;">Create note via wasm</button>
               </div>
               <div class="dregg-inspector__note-demo" style="font-size:0.75rem;color:var(--fg-dim);">
-                Notes are commitments. Spend reveals nullifier (prevents double-spend). Full list tracking pending wasm get_notes impl.
+                Lab mode calls canonical wasm helpers and refreshes this inspector; it does not synthesize commitments in JS.
               </div>
-            ` : html`<div style="font-size:0.75rem;color:var(--fg-dim);">read-only runtime — no create/spend</div>`}
+            ` : null}
           </div>`;
       }
 
@@ -88,13 +92,13 @@ class DreggNote extends InspectorBase {
           </span>`;
       }
 
-      const actions = caps.mutate && wasm ? html`
+      const actions = mode === 'lab' && caps.mutate && wasm ? html`
         <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
-          <button data-act="spend" style="font-size:0.75rem;padding:3px 8px;">Spend (reveal nullifier)</button>
-          <button data-act="create" style="font-size:0.75rem;padding:3px 8px;">Create another</button>
+          <button data-act="spend" style="font-size:0.75rem;padding:3px 8px;">Spend via wasm</button>
+          <button data-act="create" style="font-size:0.75rem;padding:3px 8px;">Create another via wasm</button>
         </div>
         <div style="font-size:0.7rem;color:var(--fg-dim);margin-top:4px;">
-          Note: create/spend here are demo calls; real flows use turns + <dregg-turn>.
+          Lab mode only. Production note lifecycle is observed through turns, receipts, and nullifier-set updates.
         </div>
       ` : null;
 
@@ -122,22 +126,22 @@ class DreggNote extends InspectorBase {
       render(h(Component, {}), root);
     });
 
-    // Wire demo buttons (delegated; survives re-render via root listener)
+    // Wire lab buttons (delegated; survives re-render via root listener)
     root.addEventListener('click', (e) => {
       const btn = e.target.closest('button[data-act]');
-      if (!btn || !wasm || !handle) return;
+      if (!btn || !wasm || !handle || mode !== 'lab') return;
       const act = btn.dataset.act;
       if (act === 'create') {
         try {
-          const res = wasm.create_note(handle, 0, 100, 0); // agent 0, value 100, asset 0
-          console.log('[dregg-note] created demo note', res);
+          const res = wasm.create_note(handle, agentIndex, 100, 0);
+          console.log('[dregg-note] created note via wasm', res);
           // trigger re-render via version bump if possible
           if (this._runtime?.version) this._runtime.version.value++;
         } catch (err) { console.warn('[dregg-note] create failed', err); }
       } else if (act === 'spend') {
         try {
-          const res = wasm.spend_note(handle, 0, 100, 0);
-          console.log('[dregg-note] spent demo note', res);
+          const res = wasm.spend_note(handle, agentIndex, 100, 0);
+          console.log('[dregg-note] spent note via wasm', res);
           if (this._runtime?.version) this._runtime.version.value++;
         } catch (err) { console.warn('[dregg-note] spend failed', err); }
       }

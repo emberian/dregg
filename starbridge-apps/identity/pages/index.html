@@ -30,7 +30,7 @@
       Keep these two in sync; a real deployment lifts the constant from
       the Rust crate at build time.
     -->
-    <link rel="stylesheet" href="/_includes/studio/styles.css" />
+    <link rel="stylesheet" href="/assets/style.css" />
     <style>
       .identity-chrome { padding: 1rem 1.5rem; border-bottom: 1px solid var(--border, #ddd); }
       .identity-tabs { display: flex; gap: 1rem; margin: 0.5rem 0 0; }
@@ -95,11 +95,10 @@
         </section>
       </dregg-app>
     </main>
-    <script type="module" src="/pkg/dregg_wasm.js"></script>
-    <script type="module" src="/_includes/studio/runtimes.js"></script>
+    <script type="module" src="/_includes/studio/app-boot.js"></script>
     <script type="module" src="/starbridge-apps/shared/inspectors/index.js"></script>
-    <script type="module" src="/starbridge-apps/identity/inspectors.js"></script>
-    <script type="module" src="/starbridge-apps/identity/turn-builders.js"></script>
+    <script type="module" src="./inspectors.js"></script>
+    <script type="module" src="./turn-builders.js"></script>
     <script type="module">
       // Minimal tab-switcher (keeps the panels thin; logic stays in the
       // web components themselves).

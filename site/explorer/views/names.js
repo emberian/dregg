@@ -15,6 +15,7 @@ export const name = 'names';
 let container = null;
 let cached = null;
 let searchEl, sortEl, filterEl;
+let loadError = '';
 
 export function init(el) {
   container = el;
@@ -43,15 +44,12 @@ export function destroy() {}
 async function load() {
   const prefix = searchEl?.value?.trim() || '';
   const tag    = filterEl?.value || '';
+  loadError = '';
   try {
     cached = await api.listNames({ prefix, tag });
   } catch {
-    cached = null;
-  }
-  if (!cached || !cached.length) {
-    cached = mockNames();
-    if (prefix) cached = cached.filter(n => n.name.startsWith(prefix));
-    if (tag) cached = cached.filter(n => statusOf(n) === tag);
+    cached = [];
+    loadError = 'Nameservice endpoint is unavailable on this node.';
   }
   render();
 }
@@ -59,6 +57,10 @@ async function load() {
 function render() {
   const root = document.getElementById('names-content');
   if (!root) return;
+  if (loadError) {
+    root.innerHTML = `<div class="empty-state">No live nameservice data from this node.<br><span class="ex-hint">${escapeHtml(loadError)}</span></div>`;
+    return;
+  }
   let rows = (cached || []).slice();
   const sort = sortEl?.value || 'name';
   rows.sort((a, b) => {
@@ -133,8 +135,8 @@ async function openDetail(row) {
       </div>
     </dregg-vizzer>
   `;
-  if (window.dregg?.mount) {
-    try { window.dregg.mount(body); } catch (e) { console.warn('[names] mount failed', e); }
+  if (window.dreggUi?.mount) {
+    try { window.dreggUi.mount(body); } catch (e) { console.warn('[names] mount failed', e); }
   }
 }
 
@@ -162,19 +164,4 @@ function escapeAttr(s) { return escapeHtml(s); }
 function debounce(fn, ms) {
   let t = null;
   return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
-}
-
-// =============================================================================
-// Mock data
-// =============================================================================
-function mockNames() {
-  const now = Math.floor(Date.now() / 1000);
-  return [
-    { name: 'alice.dregg',      owner: 'aa11bb22cc33dd44ee55ff6677889900', uri: 'dregg://alice', registered_at: now - 86400 * 30, expires_at: now + 86400 * 30,  tags: ['user'] },
-    { name: 'gallery.app',      owner: 'bbcc11223344556677889900aabbccdd', uri: 'dregg://gallery', registered_at: now - 86400 * 90, expires_at: now + 86400 * 100, tags: ['app', 'production'] },
-    { name: 'devnet.federation',owner: '11223344556677889900aabbccddeeff', uri: 'dregg://federation/devnet', registered_at: now - 86400 * 365, expires_at: now + 86400 * 365, tags: ['federation'] },
-    { name: 'old.example',      owner: '99887766554433221100ffeeddccbbaa', uri: 'dregg://example/old',       registered_at: now - 86400 * 400, expires_at: now - 86400 * 5,   tags: ['user'] },
-    { name: 'dispute.test',     owner: 'ddeeff001122334455667788aabbccdd', uri: 'dregg://test/dispute',      registered_at: now - 86400 * 10,  expires_at: now + 86400 * 100, tags: ['user'], disputed: true },
-    { name: 'renewal.example',  owner: 'cafe1234deadbeef0011223344556677', uri: 'dregg://example/renewal',   registered_at: now - 86400 * 60,  expires_at: now + 86400 * 3,   tags: ['user'] },
-  ];
 }

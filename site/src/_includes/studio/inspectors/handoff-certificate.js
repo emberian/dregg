@@ -28,8 +28,6 @@ class DreggHandoffCertificate extends InspectorBase {
     if (!data && refAttr) {
       try { parsed = parseRef(refAttr); } catch {}
       if (renderParseError(this, refAttr, parsed, 'handoff-certificate')) return;
-      // uri fallback: minimal placeholder shape (full HandoffCertificate oversized; summary is canonical for inspectors)
-      data = { handoff_cert_summary: { nonce: parsed.id, introducer_federation: 'unknown', recipient_pk: 'unknown' } };
     }
 
     const root = document.createElement('div');
@@ -37,7 +35,11 @@ class DreggHandoffCertificate extends InspectorBase {
 
     const Component = () => {
       if (!data) {
-        return html`<div class="dregg-inspector dregg-inspector--empty">no handoff cert data</div>`;
+        return html`
+          <div class="dregg-inspector dregg-inspector--empty">
+            handoff certificate data not available${parsed ? html`: <code>${shortHex(parsed.id, 16)}</code>` : ''};
+            awaiting runtime/wasm binding for full <code>HandoffCertificate</code> lookup.
+          </div>`;
       }
       const cert = data.handoff_cert_summary || data; // support both shapes
 
@@ -65,7 +67,7 @@ class DreggHandoffCertificate extends InspectorBase {
             HandoffCertificate enables 3-party CapTP handoff (introducer → recipient). See Authorization::CapTpDelivered + dregg_captp handoff.
             Paste-friendly compact form: dregg-handoff:... (summary only; full cert oversized by design).
           </div>
-          <div style="font-size:0.6rem;color:#888;margin-top:2px;">(visible placeholder: full cert fields not surfaced in wasm summary)</div>
+          <div style="font-size:0.6rem;color:#888;margin-top:2px;">Full cert fields beyond the summary are shown only when supplied by runtime data.</div>
         </div>`;
     };
 

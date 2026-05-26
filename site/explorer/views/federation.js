@@ -26,14 +26,15 @@ function renderFederation(fedStatus) {
 }
 
 function renderFederationStats(status, blocks, checkpoint) {
-  document.getElementById('fed-stat-nodes').textContent = api.formatNumber((status.peer_count || 0) + 1);
-  document.getElementById('fed-stat-height').textContent = api.formatNumber(status.latest_height);
-  document.getElementById('fed-stat-health').textContent = status.healthy ? 'healthy' : 'degraded';
-  document.getElementById('fed-stat-health').style.color = status.healthy ? 'var(--success)' : 'var(--danger)';
+  document.getElementById('fed-stat-nodes').textContent = api.formatNumber(api.statusPeers(status) + 1);
+  document.getElementById('fed-stat-height').textContent = api.formatNumber(api.statusHeight(status));
+  const health = api.healthLabel(status);
+  document.getElementById('fed-stat-health').textContent = health;
+  document.getElementById('fed-stat-health').style.color = health === 'degraded' ? 'var(--danger)' : 'var(--success)';
 
   if (blocks && blocks.length > 0) {
-    const latest = blocks[blocks.length - 1];
-    document.getElementById('fed-stat-root').textContent = api.shortHash(latest.merkle_root, 8, 4);
+    const latest = [...blocks].sort((a, b) => (b.height || 0) - (a.height || 0))[0];
+    document.getElementById('fed-stat-root').textContent = api.shortHash(api.blockRoot(latest), 8, 4);
   }
 
   renderFederationNodes(status, checkpoint);
@@ -49,7 +50,7 @@ function renderFederationNodes(status, checkpoint) {
       <span class="cell-badge cell-badge--success">active</span>
     </div>
   `;
-  for (let i = 0; i < (status.peer_count || 0); i++) {
+  for (let i = 0; i < api.statusPeers(status); i++) {
     html += `
       <div class="fed-node-item">
         <span class="fed-node-item__icon">&#9679;</span>
@@ -90,7 +91,7 @@ function renderFederationRootHistory(blocks) {
   container.innerHTML = recent.map(r => `
     <div class="root-item">
       <span class="root-item__height">#${r.height}</span>
-      <span class="root-item__hash">${api.shortHash(r.merkle_root, 12, 6)}</span>
+      <span class="root-item__hash">${api.shortHash(api.blockRoot(r), 12, 6)}</span>
       <span class="root-item__sigs">${r.signatures} sigs</span>
       <span class="root-item__time">${api.relativeTime(r.timestamp)}</span>
     </div>

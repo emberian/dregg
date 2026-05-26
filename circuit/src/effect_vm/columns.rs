@@ -62,10 +62,11 @@
 /// CellDestroy, AttenuateCapability — see those variants on `Effect`).
 /// AIR-impl lane (#119): 117 (+ 4 selectors for CellSeal, CellUnseal,
 /// ReceiptArchive, Refusal).
-pub const EFFECT_VM_WIDTH: usize = 117;
+/// IncrementNonce lane: 118 (+ 1 selector for explicit nonce-only turns).
+pub const EFFECT_VM_WIDTH: usize = 118;
 
 /// Number of effect types (selectors).
-pub const NUM_EFFECTS: usize = 53;
+pub const NUM_EFFECTS: usize = 54;
 
 /// Selector column indices.
 pub mod sel {
@@ -235,6 +236,9 @@ pub mod sel {
     /// Distinct from CellSeal by selector alone; distinct from CellDestroy
     /// by the absence of a `cert_hash` requirement in the AIR constraint.
     pub const REFUSAL: usize = 52;
+    /// IncrementNonce: explicit runtime nonce bump. State passthrough except
+    /// for the global nonce tick; selector alone binds intent.
+    pub const INCREMENT_NONCE: usize = 53;
 
     // ---- Stage 7-γ.2 Phase 1.5 (planned): bilateral role selectors ----
     //
@@ -277,7 +281,7 @@ pub mod state {
 }
 
 /// Absolute column indices for state_before.
-pub const STATE_BEFORE_BASE: usize = NUM_EFFECTS; // 53 after #119
+pub const STATE_BEFORE_BASE: usize = NUM_EFFECTS; // selector count after IncrementNonce
 /// Absolute column indices for state_after.
 pub const STATE_AFTER_BASE: usize = STATE_BEFORE_BASE + state::SIZE + NUM_PARAMS; // 53 + 14 + 8 = 75
 /// Effect parameter base column.

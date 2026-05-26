@@ -70,6 +70,7 @@ export function updateState(patch) {
 
 const modules = {};
 let activeView = null;
+const initializedViews = new Set();
 
 /**
  * Register a view module. Module must export:
@@ -103,7 +104,7 @@ export function getView(name) {
 
 export function navigateTo(page) {
   const prev = state.currentPage;
-  if (prev === page) return;
+  if (prev === page && activeView) return;
 
   // Deactivate old
   if (activeView && activeView.destroy) {
@@ -127,9 +128,9 @@ export function navigateTo(page) {
   if (mod) {
     activeView = mod;
     const container = pageEl;
-    if (mod.init && !mod._initialized) {
+    if (mod.init && !initializedViews.has(page)) {
       mod.init(container);
-      mod._initialized = true;
+      initializedViews.add(page);
     }
     if (mod.update) {
       mod.update(state);
@@ -286,6 +287,9 @@ export async function boot() {
     import('./views/apps.js'),
     import('./views/blocklace.js'),
     import('./views/effects.js'),
+    import('./views/queues.js'),
+    import('./views/names.js'),
+    import('./views/delegations.js'),
   ]);
 
   // Register each view module
@@ -311,15 +315,17 @@ export async function boot() {
   });
 
   // Load component modules
-  const [navMod, statusBarMod, searchMod] = await Promise.all([
+  const [navMod, statusBarMod, searchMod, authDialogMod] = await Promise.all([
     import('./components/nav.js'),
     import('./components/status-bar.js'),
     import('./components/search.js'),
+    import('./components/auth-dialog.js'),
   ]);
 
   navMod.init();
   statusBarMod.init();
   searchMod.init();
+  authDialogMod.init();
 
   // Load tweaker modules (they register themselves)
   await Promise.all([

@@ -192,10 +192,14 @@ fn executor_accepts_monotonic_increase() {
     // First turn: 0 → 5 (legal: 5 ≥ 0).
     let turn1 = build_set_field_turn(agent, 0, 0, field_from_u64(5));
     let r1 = executor.execute(&turn1, &mut ledger);
-    assert!(matches!(r1, TurnResult::Committed { .. }), "turn1: {r1:?}");
+    let prev_receipt_hash = match r1 {
+        TurnResult::Committed { receipt, .. } => receipt.receipt_hash(),
+        other => panic!("turn1: {other:?}"),
+    };
 
     // Second turn: 5 → 10 (legal).
-    let turn2 = build_set_field_turn(agent, 1, 0, field_from_u64(10));
+    let mut turn2 = build_set_field_turn(agent, 1, 0, field_from_u64(10));
+    turn2.previous_receipt_hash = Some(prev_receipt_hash);
     let r2 = executor.execute(&turn2, &mut ledger);
     assert!(matches!(r2, TurnResult::Committed { .. }), "turn2: {r2:?}");
 }

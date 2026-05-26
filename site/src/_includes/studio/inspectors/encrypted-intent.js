@@ -9,7 +9,7 @@
  * URI: dregg://encrypted-intent/<id>
  * data=: { intent_id, shares: [{validator, received, share_ct?}], threshold, progress, ... }
  *
- * Modes: compact (progress bar + count) | default (full share grid + reveal demo)
+ * Modes: compact (progress bar + count) | default (full share grid + reveal affordance when wasm supports it)
  *
  * Trust-tier: Placeholder until real STARK verifier for fulfillment (§5.8 blocked).
  * No JS crypto; delegates to wasm.decrypt_share etc when wired.
@@ -41,18 +41,20 @@ class DreggEncryptedIntent extends InspectorBase {
     if (!data && refAttr) {
       try { parsed = parseRef(refAttr); } catch {}
       if (renderParseError(this, refAttr, parsed, 'encrypted-intent')) return;
-      data = { intent_id: parsed.id, shares: [], threshold: 2, progress: 0 };
     }
 
     const root = document.createElement('div');
     this.appendChild(root);
 
-    const demoState = signal({ shares: (data && data.shares) || [], progress: (data && data.progress) || 0, error: null });
+    const viewState = signal({ error: null });
 
     const Component = () => {
-      const s = demoState.value;
-      const intent = data || { intent_id: (parsed && parsed.id) || 'demo-intent', threshold: 2, shares: s.shares };
-      const prog = Math.min(100, Math.floor((s.shares.length / Math.max(1, intent.threshold || 2)) * 100));
+      const s = viewState.value;
+      const intent = data || { intent_id: (parsed && parsed.id) || '', threshold: null, shares: [] };
+      const shares = Array.isArray(intent.shares) ? intent.shares : [];
+      const received = shares.filter(sh => sh && sh.received).length;
+      const threshold = Number(intent.threshold || 0);
+      const prog = threshold > 0 ? Math.min(100, Math.floor((received / threshold) * 100)) : 0;
 
       if (mode === 'compact') {
         return html`
@@ -62,25 +64,28 @@ class DreggEncryptedIntent extends InspectorBase {
             <span style="display:inline-block;width:60px;height:6px;background:#e5e7eb;border-radius:3px;overflow:hidden;">
               <span style="display:block;height:100%;width:${prog}%;background:#3b82f6;"></span>
             </span>
-            ${s.shares.length}/${intent.threshold || 2}
+            ${threshold ? `${received}/${threshold}` : 'awaiting threshold'}
           </span>`;
       }
 
-      const shareRows = (s.shares.length ? s.shares : (intent.shares || [])).map((sh, i) => html`
+      const shareRows = shares.map((sh, i) => html`
         <tr>
           <td><code>${shortHex(sh.validator || 'v' + i, 8)}</code></td>
-          <td>${sh.received ? html`<span style="color:#166534;">✓ received</span>` : html`<span style="color:#b91c1c;">pending</span>`}</td>
+          <td>${sh.received ? html`<span style="color:#166534;">received</span>` : html`<span style="color:#b91c1c;">pending</span>`}</td>
           <td><code>${sh.share_ct ? shortHex(sh.share_ct, 10) : '—'}</code></td>
         </tr>
       `);
 
-      const form = (caps.mutate && wasm) ? html`
+      const revealAvailable = caps.mutate && wasm && typeof wasm.reveal_encrypted_intent === 'function';
+      const form = revealAvailable ? html`
         <div style="margin-top:6px;font-size:0.75rem;">
-          <button data-act="add-share" style="font-size:0.7rem;">Simulate receive share (demo)</button>
           <button data-act="reveal" style="font-size:0.7rem;margin-left:4px;">Attempt reveal</button>
           ${s.error ? html`<div style="color:#b91c1c;">${s.error}</div>` : null}
         </div>
-      ` : html`<div style="font-size:0.7rem;color:var(--fg-dim);">read-only — no reveal</div>`;
+      ` : html`
+        <div style="font-size:0.7rem;color:var(--fg-dim);margin-top:6px;">
+          awaiting wasm32 support for threshold reveal; share rows are read from receipt/runtime data only.
+        </div>`;
 
       return html`
         <div class="dregg-inspector dregg-inspector--eintent">
@@ -89,7 +94,7 @@ class DreggEncryptedIntent extends InspectorBase {
             <code class="dregg-inspector__id">${shortHex(intent.intent_id || '', 20)}</code>
           </header>
           <div style="margin:4px 0;">
-            Progress: ${s.shares.length}/${intent.threshold || 2} shares
+            Progress: ${threshold ? `${received}/${threshold}` : 'awaiting threshold'} shares
             <span style="display:inline-block;width:120px;height:8px;background:#e5e7eb;border-radius:4px;vertical-align:middle;">
               <span style="display:block;height:100%;width:${prog}%;background:#3b82f6;border-radius:4px;"></span>
             </span>
@@ -97,7 +102,7 @@ class DreggEncryptedIntent extends InspectorBase {
           </div>
           <table style="font-size:0.7rem;border-collapse:collapse;">
             <tr><th>validator</th><th>status</th><th>share</th></tr>
-            ${shareRows}
+            ${shareRows.length ? shareRows : html`<tr><td colspan="3" style="color:var(--fg-dim);">awaiting encrypted intent share data from runtime</td></tr>`}
           </table>
           ${form}
           <div style="font-size:0.65rem;color:var(--fg-dim);margin-top:4px;">
@@ -112,19 +117,17 @@ class DreggEncryptedIntent extends InspectorBase {
       const btn = e.target.closest('button[data-act]');
       if (!btn || !wasm) return;
       const act = btn.dataset.act;
-      if (act === 'add-share') {
-        const current = demoState.value.shares || [];
-        const v = 'validator-' + current.length;
-        demoState.value = { ...demoState.value, shares: [...current, { validator: v, received: true, share_ct: 'deadbeef'.repeat(4) }], error: null };
-        if (this._runtime?.version) this._runtime.version.value++;
-      } else if (act === 'reveal') {
+      if (act === 'reveal') {
         try {
-          const res = wasm.reveal_encrypted_intent ? wasm.reveal_encrypted_intent(0, (data && data.intent_id) || 'demo') : { revealed: true, proof: 'demo' };
-          demoState.value = { ...demoState.value, error: null };
-          console.log('[dregg-encrypted-intent] reveal demo', res);
+          if (typeof wasm.reveal_encrypted_intent !== 'function') {
+            throw new Error('reveal_encrypted_intent wasm export is not available');
+          }
+          const res = wasm.reveal_encrypted_intent(0, (data && data.intent_id) || '');
+          viewState.value = { ...viewState.value, error: null };
+          console.log('[dregg-encrypted-intent] reveal result', res);
           if (this._runtime?.version) this._runtime.version.value++;
         } catch (err) {
-          demoState.value = { ...demoState.value, error: 'reveal failed (wasm not fully wired): ' + err };
+          viewState.value = { ...viewState.value, error: 'reveal failed: ' + (err?.message || err) };
         }
       }
     });

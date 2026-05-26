@@ -43,16 +43,7 @@ fn blake3_field(bytes: &[u8]) -> FieldElement {
     *blake3::hash(bytes).as_bytes()
 }
 
-/// Build a 32-byte field element where every byte equals `b`. Used in
-/// transition-shape tests so the test author can manually order base vs
-/// mutated values. `Monotonic` slot-caveats compare bytes big-endian,
-/// so e.g. `byte_field(0x10)` < `byte_field(0x20)` byte-wise. Using
-/// random blake3 digests here would make the ordering inscrutable and
-/// silently flip-flop the constraint that fires first on adversarial
-/// inputs (which is what the `grant_publisher_cannot_advance_head` test
-/// observes — the test wants to assert `Immutable on head`, but a
-/// blake3-shrinking publishers_root would trip `Monotonic` first and
-/// mask the head violation).
+/// Build a 32-byte field element where every byte equals `b`.
 fn byte_field(b: u8) -> FieldElement {
     [b; 32]
 }
@@ -64,14 +55,8 @@ fn base_state(head: u64, tail: u64) -> CellState {
     s.fields[SEQ_HEAD_SLOT as usize] = u64_field(head);
     s.fields[SEQ_TAIL_SLOT as usize] = u64_field(tail);
     s.fields[CAPACITY_SLOT as usize] = u64_field(8);
-    // Roots default to a small non-zero byte-pattern. Picking a low
-    // ordered prefix lets adversarial "decrement" tests pick `[0; 32]`
-    // (strictly smaller, traps Monotonic) and lets positive-shape tests
-    // pick `byte_field(0x20)` (strictly greater, satisfies Monotonic).
-    // blake3 digests of label strings would randomize this ordering and
-    // mask the constraint actually being tested (e.g.
-    // `grant_publisher_cannot_advance_head` expects Immutable-on-head,
-    // not Monotonic-on-root, to fire first).
+    // Roots default to a simple non-zero byte-pattern so zero-clear
+    // adversarial tests isolate the intended root constraint.
     s.fields[PUBLISHERS_ROOT_SLOT as usize] = byte_field(0x10);
     s.fields[CONSUMERS_ROOT_SLOT as usize] = byte_field(0x10);
     s.fields[OWNER_PK_HASH_SLOT as usize] = blake3_field(b"owner-pk-v0");
@@ -81,7 +66,7 @@ fn base_state(head: u64, tail: u64) -> CellState {
     s
 }
 
-/// Apply a publish-shaped transition: head + 1, message_root grows
+/// Apply a publish-shaped transition: head + 1, message_root changes
 /// (folded with the new payload hash), latest_payload set.
 fn publish_new(old: &CellState, payload_hash: FieldElement) -> CellState {
     let mut s = old.clone();
@@ -275,22 +260,21 @@ fn rewriting_latest_payload_under_consume_rejected() {
 
 #[test]
 fn message_root_rewind_under_publish_rejected() {
-    // The publish case has Monotonic on message_root: rewinding the
-    // root (even while advancing head correctly) must be rejected.
+    // The publish case requires a non-zero message root.
     let program = program_without_sender_authorized();
     let old = base_state(0, 0);
     let mut bad_new = publish_new(&old, blake3_field(b"hello"));
-    // Adversarial: write a *zero* root.
+    // Adversarial: write a zero root.
     bad_new.fields[MESSAGE_ROOT_SLOT as usize] = [0u8; 32];
 
     let err = program
         .evaluate_with_meta(&bad_new, Some(&old), None, &publish_meta())
-        .expect_err("message_root decrement under publish must be rejected");
+        .expect_err("zero message_root under publish must be rejected");
     match err {
         ProgramError::ConstraintViolated { constraint, .. } => {
             assert!(
-                matches!(constraint, StateConstraint::Monotonic { index } if index == MESSAGE_ROOT_SLOT),
-                "expected Monotonic violation on message_root, got {constraint:?}"
+                matches!(constraint, StateConstraint::FieldGte { index, .. } if index == MESSAGE_ROOT_SLOT),
+                "expected FieldGte violation on message_root, got {constraint:?}"
             );
         }
         other => panic!("expected ConstraintViolated, got {other:?}"),
@@ -536,8 +520,7 @@ fn grant_consumer_cannot_modify_publishers_root() {
 
 #[test]
 fn grant_publisher_root_decrement_rejected() {
-    // Monotonic on publishers_root: a malicious owner trying to
-    // *remove* a publisher (by writing a smaller root) is rejected.
+    // The grant_publisher case requires a non-zero publishers root.
     let program = program_without_sender_authorized();
     let old = base_state(2, 1);
     let mut bad_new = old.clone();
@@ -549,8 +532,8 @@ fn grant_publisher_root_decrement_rejected() {
     match err {
         ProgramError::ConstraintViolated { constraint, .. } => {
             assert!(
-                matches!(constraint, StateConstraint::Monotonic { index } if index == PUBLISHERS_ROOT_SLOT),
-                "expected Monotonic on publishers root, got {constraint:?}"
+                matches!(constraint, StateConstraint::FieldGte { index, .. } if index == PUBLISHERS_ROOT_SLOT),
+                "expected FieldGte on publishers root, got {constraint:?}"
             );
         }
         other => panic!("expected ConstraintViolated, got {other:?}"),

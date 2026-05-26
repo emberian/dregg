@@ -73,6 +73,19 @@ function writeUrlState({ at, runtime }) {
   const cursorMax  = document.getElementById('sb-cursor-max');
   const treeListEl = document.getElementById('sb-cell-list');
   const cellCount  = document.getElementById('sb-cell-count');
+  const receiptListEl = document.getElementById('sb-receipt-list');
+  const receiptCount = document.getElementById('sb-receipt-count');
+  const intentListEl = document.getElementById('sb-intent-list');
+  const intentCount = document.getElementById('sb-intent-count');
+  const capListEl = document.getElementById('sb-capability-list');
+  const capCount = document.getElementById('sb-capability-count');
+  const fedListEl = document.getElementById('sb-federation-list');
+  const fedCount = document.getElementById('sb-federation-count');
+  const blockListEl = document.getElementById('sb-block-list');
+  const blockCount = document.getElementById('sb-block-count');
+  const activityListEl = document.getElementById('sb-activity-list');
+  const activityCount = document.getElementById('sb-activity-count');
+  const simActions = document.getElementById('sb-sim-actions');
   const inspector  = document.getElementById('sb-inspector');
   const rawEl      = document.getElementById('sb-raw');
   const app        = document.getElementById('sb-app');
@@ -103,6 +116,41 @@ function writeUrlState({ at, runtime }) {
   // Inspector pane: mount a `<dregg-${kind}>` for the current URI, or show a
   // helpful empty/missing-kind message.
   // --------------------------------------------------------------------------
+  function renderAppWorkspace(appMeta) {
+    inspector.replaceChildren();
+    rawEl.textContent = JSON.stringify(appMeta, null, 2);
+    currentUri = `dregg://app/${appMeta.id}`;
+    uriInput.value = currentUri;
+    writeUrlState({ at: currentUri, runtime: currentRuntimeId });
+
+    const shell = document.createElement('div');
+    shell.className = 'sb__app-host';
+    const page = appMeta.page || `/starbridge-apps/${appMeta.id}/pages/index.html`;
+    const registryUri = appMeta.registry_uri || appMeta.registryUri || '';
+    shell.innerHTML = `
+      <div class="sb__app-hostbar">
+        <div>
+          <div class="sb__app-title">${escapeHtml(appMeta.name || appMeta.id)}</div>
+          <div class="sb__app-meta">${escapeHtml(appMeta.description || 'starbridge-app')}</div>
+        </div>
+        <div class="sb__app-actions">
+          ${registryUri ? `<button type="button" class="sb__btn sb__btn--small" data-uri="${escapeHtml(registryUri)}">Inspect registry</button>` : ''}
+          <a class="sb__btn sb__btn--small sb__btn--ghost" href="${escapeHtml(page)}" target="_blank">Standalone</a>
+        </div>
+      </div>
+      <iframe
+        class="sb__app-frame"
+        title="${escapeHtml(appMeta.name || appMeta.id)} app workspace"
+        src="${escapeHtml(page)}"
+      ></iframe>
+    `;
+    shell.querySelector('[data-uri]')?.addEventListener('click', (e) => {
+      setCurrentUri(e.currentTarget.dataset.uri);
+    });
+    inspector.appendChild(shell);
+    setStatus(`app workspace · ${appMeta.name || appMeta.id}`, 'ready');
+  }
+
   function renderInspectorPane(uri) {
     inspector.replaceChildren();
     if (!uri) {
@@ -121,6 +169,10 @@ function writeUrlState({ at, runtime }) {
       inspector.appendChild(err);
       return;
     }
+    if (parsed.kind === 'app') {
+      renderAppWorkspace({ id: parsed.id, name: parsed.id, page: `/starbridge-apps/${parsed.id}/pages/index.html` });
+      return;
+    }
     const tagName = `dregg-${parsed.kind}`;
     if (!customElements.get(tagName)) {
       const err = document.createElement('div');
@@ -134,43 +186,166 @@ function writeUrlState({ at, runtime }) {
     inspector.appendChild(el);
   }
 
+  function escapeHtml(s) {
+    return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[c]);
+  }
+
   // --------------------------------------------------------------------------
-  // Object tree (cells, for now). Re-renders on listCells signal change.
+  // Object tree. Re-renders on runtime signals so Starbridge is a real object
+  // navigator, not just a single inspector mount point.
   // --------------------------------------------------------------------------
-  function bindObjectTree() {
-    if (typeof runtime.listCells !== 'function') {
-      treeListEl.innerHTML = '<li class="sb__list-empty">runtime has no listCells()</li>';
+  function renderTreeList({ listEl, countEl, items, empty, map }) {
+    countEl.textContent = String(items.length);
+    listEl.replaceChildren();
+    if (!items.length) {
+      const li = document.createElement('li');
+      li.className = 'sb__list-empty';
+      li.textContent = empty;
+      listEl.appendChild(li);
       return;
     }
+    for (const [idx, item] of items.entries()) {
+      const mapped = map(item, idx);
+      if (!mapped || !mapped.uri) continue;
+      const li = document.createElement('li');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'sb__list-item';
+      btn.dataset.uri = mapped.uri;
+      btn.textContent = mapped.label;
+      btn.title = mapped.title || mapped.uri;
+      if (currentUri === mapped.uri) btn.setAttribute('aria-current', 'true');
+      btn.addEventListener('click', () => setCurrentUri(mapped.uri));
+      li.appendChild(btn);
+      listEl.appendChild(li);
+    }
+  }
+
+  function bindSignalList({ listEl, countEl, empty, getSignal, normalize, map }) {
+    if (!listEl || !countEl || typeof getSignal !== 'function') return;
+    let sig = null;
+    try { sig = getSignal(); } catch {}
+    if (!sig) {
+      renderTreeList({ listEl, countEl, items: [], empty, map });
+      return;
+    }
+    const stop = api.effect(() => {
+      const raw = sig.value;
+      const items = normalize ? normalize(raw) : (Array.isArray(raw) ? raw : []);
+      renderTreeList({ listEl, countEl, items, empty, map });
+    });
+    teardowns.push(stop);
+  }
+
+  function bindObjectTree() {
     const sig = runtime.listCells();
     const stop = api.effect(() => {
       const cells = sig.value || [];
-      cellCount.textContent = String(cells.length);
-      treeListEl.replaceChildren();
-      if (!cells.length) {
-        const li = document.createElement('li');
-        li.className = 'sb__list-empty';
-        li.textContent = 'no cells yet';
-        treeListEl.appendChild(li);
-        return;
-      }
-      for (const c of cells) {
-        const id = c.cell_id || c.id || (typeof c === 'string' ? c : null);
-        if (!id) continue;
-        const uri = `dregg://cell/${id}`;
-        const li = document.createElement('li');
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'sb__list-item';
-        btn.textContent = `cell ${id.slice(0, 12)}…`;
-        btn.title = id;
-        if (currentUri === uri) btn.setAttribute('aria-current', 'true');
-        btn.addEventListener('click', () => setCurrentUri(uri));
-        li.appendChild(btn);
-        treeListEl.appendChild(li);
-      }
+      renderTreeList({
+        listEl: treeListEl,
+        countEl: cellCount,
+        items: cells,
+        empty: 'no cells yet',
+        map: (c) => {
+          const id = c.cell_id || c.id || (typeof c === 'string' ? c : null);
+          if (!id) return null;
+          return { uri: `dregg://cell/${id}`, label: `cell ${id.slice(0, 12)}…`, title: id };
+        },
+      });
     });
     teardowns.push(stop);
+
+    bindSignalList({
+      listEl: receiptListEl,
+      countEl: receiptCount,
+      empty: 'no receipts yet',
+      getSignal: () => runtime.listReceipts && runtime.listReceipts(),
+      map: (r) => {
+        const id = r.turn_hash || r.receipt_hash || r.hash;
+        if (!id) return null;
+        return {
+          uri: `dregg://receipt/${id}`,
+          label: `receipt ${id.slice(0, 10)}… · ${String(r.action_count ?? 0)} act`,
+          title: id,
+        };
+      },
+    });
+
+    bindSignalList({
+      listEl: intentListEl,
+      countEl: intentCount,
+      empty: 'no intents yet',
+      getSignal: () => runtime.listIntents && runtime.listIntents(),
+      map: (intent, idx) => {
+        const id = intent.intent_id || intent.id || String(intent.intent_index ?? idx);
+        return {
+          uri: `dregg://intent/${id}`,
+          label: `${intent.kind || 'intent'} ${String(id).slice(0, 10)}…`,
+          title: String(id),
+        };
+      },
+    });
+
+    bindSignalList({
+      listEl: capListEl,
+      countEl: capCount,
+      empty: 'no agent-0 capabilities yet',
+      getSignal: () => runtime.listCapabilities && runtime.listCapabilities(0),
+      normalize: (tree) => (tree && Array.isArray(tree.capabilities)) ? tree.capabilities : [],
+      map: (cap, idx) => {
+        const slot = cap.slot ?? idx;
+        return {
+          uri: `dregg://capability/0/${slot}`,
+          label: `slot ${String(slot)} · ${String(cap.permissions || 'cap')}`,
+          title: cap.target || `agent 0 slot ${slot}`,
+        };
+      },
+    });
+
+    bindSignalList({
+      listEl: fedListEl,
+      countEl: fedCount,
+      empty: 'no known federations yet',
+      getSignal: () => runtime.listKnownFederations && runtime.listKnownFederations(),
+      map: (fed, idx) => {
+        const id = fed.fed_index ?? fed.registered_index ?? idx;
+        return {
+          uri: `dregg://federation/${id}`,
+          label: fed.name || fed.federationId || `federation #${id}`,
+          title: fed.federationId || `federation #${id}`,
+        };
+      },
+    });
+
+    bindSignalList({
+      listEl: blockListEl,
+      countEl: blockCount,
+      empty: 'no finalized blocks yet',
+      getSignal: () => runtime.listBlocks && runtime.listBlocks(),
+      map: (block) => {
+        const h = block.height ?? block.block_height ?? 0;
+        return {
+          uri: `dregg://block/${h}`,
+          label: `h=${String(h)} · fed #${String(block.fed_index ?? 0)}`,
+          title: block.block_hash || `height ${h}`,
+        };
+      },
+    });
+
+    bindSignalList({
+      listEl: activityListEl,
+      countEl: activityCount,
+      empty: 'no activity yet',
+      getSignal: () => runtime.getTraceEvents && runtime.getTraceEvents(),
+      normalize: (feed) => Array.isArray(feed?.events) ? feed.events : [],
+      map: (event, idx) => ({
+        uri: 'dregg://activity/feed',
+        label: `${event.kind || event.event_type || 'event'} #${idx}`,
+        title: JSON.stringify(event).slice(0, 180),
+      }),
+    });
   }
 
   // --------------------------------------------------------------------------
@@ -219,12 +394,12 @@ function writeUrlState({ at, runtime }) {
     currentUri = uri || null;
     if (uri) uriInput.value = uri;
     // Refresh tree highlight without rebuilding (cheap path).
-    for (const btn of treeListEl.querySelectorAll('.sb__list-item')) {
+    for (const btn of document.querySelectorAll('.sb__list-item')) {
       btn.removeAttribute('aria-current');
     }
     if (uri) {
-      for (const btn of treeListEl.querySelectorAll('.sb__list-item')) {
-        if (btn.title === uri.replace(/^dregg:\/\/[a-z-]+\//, '')) {
+      for (const btn of document.querySelectorAll('.sb__list-item')) {
+        if (btn.dataset.uri === uri) {
           btn.setAttribute('aria-current', 'true');
         }
       }
@@ -251,6 +426,20 @@ function writeUrlState({ at, runtime }) {
     let sig = null;
     if (parsed.kind === 'cell' && typeof runtime.getCell === 'function') {
       sig = runtime.getCell(parsed.id);
+    } else if (parsed.kind === 'receipt' && typeof runtime.getReceipt === 'function') {
+      sig = runtime.getReceipt(parsed.id);
+    } else if (parsed.kind === 'turn' && typeof runtime.getTurn === 'function') {
+      sig = runtime.getTurn(parsed.id);
+    } else if (parsed.kind === 'intent' && typeof runtime.getIntent === 'function') {
+      sig = runtime.getIntent(parsed.id);
+    } else if (parsed.kind === 'capability' && typeof runtime.getCapability === 'function') {
+      sig = runtime.getCapability(parsed.id, parsed.sub[0]);
+    } else if (parsed.kind === 'federation' && typeof runtime.getFederation === 'function') {
+      sig = runtime.getFederation(parsed.id);
+    } else if (parsed.kind === 'block' && typeof runtime.getBlock === 'function') {
+      sig = runtime.getBlock(parsed.id);
+    } else if (parsed.kind === 'activity' && typeof runtime.getTraceEvents === 'function') {
+      sig = runtime.getTraceEvents();
     }
     if (!sig) {
       rawEl.textContent = `no resolver for kind "${parsed.kind}"`;
@@ -301,6 +490,7 @@ function writeUrlState({ at, runtime }) {
       runtime = await entry.factory(opts);
       currentRuntimeId = id;
       app.runtime = runtime;
+      if (simActions) simActions.hidden = !(runtime.caps && runtime.caps.mutate);
       bindObjectTree();
       bindCursor();
       rebindRawOnly(currentUri);
@@ -404,49 +594,13 @@ function writeUrlState({ at, runtime }) {
       swapRuntime,
     };
 
-    // Wire the new Apps tab / <dregg-app-list> (STARBRIDGE-PLAN §4.8).
-    // The list reads manifests; "Demo in inspector" for nameservice mounts
-    // the first end-to-end starbridge-app inspectors (which reuse platform
-    // <dregg-cell> + <dregg-capability> and the typed turn-builders).
+    // Wire Apps as hosted workspaces. Starbridge is the IDE host; apps are
+    // embedded userspace surfaces with the object tree/raw debugger around them.
     const appListEl = document.getElementById('sb-app-list');
     if (appListEl) {
-      appListEl.addEventListener('app-demo', (e) => {
+      appListEl.addEventListener('app-open', (e) => {
         const { app } = e.detail || {};
-        if (app && app.id === 'nameservice') {
-          inspector.replaceChildren();
-          const demoWrap = document.createElement('div');
-          demoWrap.style.cssText = 'padding:0.5rem;';
-          demoWrap.innerHTML = `
-            <h4 style="margin:0 0 0.5rem;font-size:0.95rem">Nameservice — first e2e starbridge-app demo (§4.8)</h4>
-            <p style="margin:0 0 0.5rem;font-size:0.8rem;color:#555">Registry + detail using new shared inspectors (reusing &lt;dregg-cell&gt; etc.) + typed turn-builders from shared/.</p>
-            <dregg-name-registry uri="dregg://cell/registry-default" page-size="6"></dregg-name-registry>
-            <details style="margin-top:0.6rem;font-size:0.8rem">
-              <summary>Per-name detail (reuses platform inspectors)</summary>
-              <dregg-name uri="dregg://cell/registry-default" name="demo.dregg"></dregg-name>
-            </details>
-            <div style="margin-top:0.5rem;font-size:0.75rem;color:#666">
-              Open full interactive page: <a href="/starbridge-apps/nameservice/pages/index.html" target="_blank">/starbridge-apps/nameservice/pages/index.html</a>
-            </div>
-          `;
-          inspector.appendChild(demoWrap);
-          setStatus('nameservice e2e demo (Apps tab)', 'ready');
-        } else if (app && app.id === 'identity') {
-          inspector.replaceChildren();
-          const demoWrap = document.createElement('div');
-          demoWrap.style.cssText = 'padding:0.5rem;';
-          demoWrap.innerHTML = `
-            <h4 style="margin:0 0 0.5rem;font-size:0.95rem">Identity — high-quality additional starbridge-app demo (§4.8 FOLLOWUP-05)</h4>
-            <p style="margin:0 0 0.5rem;font-size:0.8rem;color:#555">Credential lifecycle using platform vocabulary + app-specific <code>&lt;dregg-credential&gt;</code> inspectors (loaded via shared/ path fix) + typed turn-builders. Reuses &lt;dregg-cell&gt; etc. No new Effects.</p>
-            <dregg-credential uri="dregg://cell/identity-issuer" style="max-width:480px"></dregg-credential>
-            <div style="margin-top:0.5rem;font-size:0.75rem;color:#666">
-              Full interactive: <a href="/starbridge-apps/identity/pages/index.html" target="_blank">/starbridge-apps/identity/pages/index.html</a> (issue/present/verify flows with real proofs).
-            </div>
-          `;
-          inspector.appendChild(demoWrap);
-          setStatus('identity high-quality e2e demo (Apps tab, beyond nameservice)', 'ready');
-        } else if (app) {
-          setStatus(`App: ${app.name} — open standalone for full demo`, 'ready');
-        }
+        if (app) renderAppWorkspace(app);
       });
     }
   } catch (e) {

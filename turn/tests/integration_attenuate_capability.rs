@@ -348,10 +348,11 @@ fn attenuate_chained_narrowing_accepted() {
             narrower_expiry: None,
         },
     );
-    assert!(
-        executor.execute(&t1, &mut ledger).is_committed(),
-        "first narrowing must commit"
-    );
+    let r1 = executor.execute(&t1, &mut ledger);
+    let prev_receipt_hash = match r1 {
+        dregg_turn::TurnResult::Committed { receipt, .. } => receipt.receipt_hash(),
+        other => panic!("first narrowing must commit, got {other:?}"),
+    };
 
     let cap = ledger
         .get(&actor_id)
@@ -362,7 +363,7 @@ fn attenuate_chained_narrowing_accepted() {
     assert_eq!(cap.permissions, AuthRequired::Signature);
 
     // Step 2: Signature → Impossible.
-    let t2 = single_effect_turn(
+    let mut t2 = single_effect_turn(
         actor_id,
         actor_id,
         1,
@@ -374,6 +375,7 @@ fn attenuate_chained_narrowing_accepted() {
             narrower_expiry: None,
         },
     );
+    t2.previous_receipt_hash = Some(prev_receipt_hash);
     assert!(
         executor.execute(&t2, &mut ledger).is_committed(),
         "second narrowing must commit"

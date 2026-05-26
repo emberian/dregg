@@ -11,8 +11,8 @@
  * Aligns with DFA-RATIONALIZATION-DESIGN.md and storage cell-programs (RelayOperator
  * uses DFA caveats for dispatch per Phase 5).
  *
- * Supports compact + default. Editor mode for compile test (uses runtime escape if
- * evaluate/compile binding present; else client-side note).
+ * Supports compact + default. It renders only caller-provided DFA data or future
+ * runtime/wasm DFA bindings; it does not fabricate sample automata.
  */
 
 import { InspectorBase, renderParseError, shortHex } from './_base.js';
@@ -51,7 +51,6 @@ class DreggDfa extends InspectorBase {
             <div class="pdfa__header"><span class="dregg-inspector__kind">dfa</span> ${parsed ? shortHex(parsed.id, 12) : ''}</div>
             <div style="color:var(--fg-dim);font-size:0.8rem;margin:4px 0;">
               awaiting DFA data (data-dfa JSON or wasm compile_dfa / get_dfa binding from dregg_dfa crate).
-              <button class="pbs__btn" style="margin-left:8px;font-size:0.7rem;padding:1px 6px;" id="dfa-load-sample">Load sample (dregg_dfa compiler example)</button>
             </div>
             <div style="font-size:0.7rem;color:var(--fg-dim);">
               Ties to blocklace Constitution.routes_commitment (BLAKE3 of RouteTable). See dfa/{compiler,router}.rs + DFA-RATIONALIZATION-DESIGN.md + blocklace/src/constitution.rs:54.
@@ -114,7 +113,7 @@ class DreggDfa extends InspectorBase {
             ${states.length} states · ${trans.length} transitions (from dregg_dfa::compiler / RouteTable). Use for RelayOperator, PubSubTopicFilter, CapTP pre-filters, governed routing.
           </div>
           ${dfaData.air_fingerprint || dfaData.routes_commitment ? html`<div style="font-size:0.65rem;">commit / AIR: ${shortHex(dfaData.air_fingerprint || dfaData.routes_commitment || '', 10)}</div>` : ''}
-          <div style="font-size:0.65rem;margin-top:2px;color:#6a8070;">Sample or data-dfa from dfa crate; real compile_dfa stub in wasm/bindings.rs:1136 (see dregg_dfa::router::GovernedRouter + blocklace constitution link).</div>
+          <div style="font-size:0.65rem;margin-top:2px;color:#6a8070;">data-dfa should come from the dregg_dfa crate or a runtime route table binding; compile_dfa is a wasm substrate gap.</div>
         </div>`;
     };
 

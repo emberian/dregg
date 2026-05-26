@@ -45,16 +45,21 @@ function hexToBytes(hex) {
 }
 
 /**
- * Strict wasm-only attempt (FOLLOWUP-14 compliance). Never reimplements
- * stealth/DH/blake/pedersen in JS. On fail: returns {stub:true, result: {stub:true, ...dummy_for_display}}
- * + caller must surface visible Placeholder. No protocol sim.
+ * Strict wasm-only attempt. Never reimplements stealth/DH/blake/pedersen in JS.
+ * Missing bindings return a visible Placeholder result; callers must not invent
+ * protocol-looking bytes.
  */
 function tryWasm(fn) {
   try {
     const result = fn();
+    if (result == null) throw new Error('wasm export returned no value');
     return { result, stub: false };
-  } catch {
-    return { result: { stub: true, _note: 'wasm unavailable - placeholder only' }, stub: true };
+  } catch (e) {
+    return {
+      result: null,
+      stub: true,
+      error: e?.message || String(e),
+    };
   }
 }
 
@@ -73,13 +78,13 @@ const PRIVACY_META = {
     label: 'Selective',
     color: '#6a4820',
     textColor: '#d4a060',
-    title: 'Some operations fell back to random stubs — wasm partially available',
+    title: 'Some operations are missing wasm support and are shown as placeholders',
   },
   'Trusted': {
     label: 'Trusted',
     color: '#2a2a4a',
     textColor: '#8888cc',
-    title: 'No wasm available — all data is simulated; not cryptographically verified',
+    title: 'No wasm support for this flow — no cryptographic claim is made',
   },
 };
 
@@ -662,18 +667,22 @@ class DreggStealth extends InspectorBase {
       const result = tw.result || {};
       const stub = tw.stub;
       ds.callCount++;
-      if (stub) ds.stubCount++;
-      const sp = result.spend_pubkey || Array.from(new Uint8Array(32).map((_,i)=>i)); // explicit placeholder, not crypto sim
-      const spp = result.spend_privkey || Array.from(new Uint8Array(32).map((_,i)=>0xAA+i%200));
-      const vp = result.view_pubkey || Array.from(new Uint8Array(32).map((_,i)=>0xBB+i%200));
-      const vpp = result.view_privkey || Array.from(new Uint8Array(32).map((_,i)=>0xCC+i%200));
+      if (stub) {
+        ds.stubCount++;
+        ds.timeline.push({ actor: 'recipient', type: 'warn', text: `derive stealth keys: awaiting wasm32 support (${tw.error || 'missing export'})` });
+        bump();
+        return;
+      }
+      const sp = result.spend_pubkey;
+      const spp = result.spend_privkey;
+      const vp = result.view_pubkey;
+      const vpp = result.view_privkey;
       ds.recipientKeys = {
         spendPub:  new Uint8Array(sp),
         spendPriv: new Uint8Array(spp),
         viewPub:   new Uint8Array(vp),
         viewPriv:  new Uint8Array(vpp),
       };
-      if (stub) ds.timeline.push({ actor: 'recipient', type: 'warn', text: 'derive: wasm stub (Placeholder values - no real X25519)' });
       ds.timeline.push(
         { actor: 'recipient', type: 'success', text: 'derived stealth keys from mnemonic' },
         { actor: '', type: 'info', text: `  view pubkey:  ${bytesToHex(ds.recipientKeys.viewPub).slice(0, 32)}…` },
@@ -689,14 +698,15 @@ class DreggStealth extends InspectorBase {
 
       // Create stealth address
       const { result: addrResult, stub: addrStub } = tryWasm(
-        () => wasm && wasm.create_stealth_address(ds.recipientKeys.spendPub, ds.recipientKeys.viewPub),
-        () => ({
-          one_time_pubkey: Array.from(randomBytes(32)),
-          ephemeral_pubkey: Array.from(randomBytes(32)),
-        })
+        () => wasm && wasm.create_stealth_address(ds.recipientKeys.spendPub, ds.recipientKeys.viewPub)
       );
       ds.callCount++;
-      if (addrStub) ds.stubCount++;
+      if (addrStub) {
+        ds.stubCount++;
+        ds.timeline.push({ actor: 'sender', type: 'warn', text: 'create stealth address: awaiting wasm32 support' });
+        bump();
+        return;
+      }
       ds.stealthAddr = {
         oneTimePubkey:  new Uint8Array(addrResult.one_time_pubkey),
         ephemeralPubkey: new Uint8Array(addrResult.ephemeral_pubkey),
@@ -705,14 +715,15 @@ class DreggStealth extends InspectorBase {
       // Create value commitment
       ds.blinding = randomBytes(32);
       const { result: commitResult, stub: commitStub } = tryWasm(
-        () => wasm && wasm.create_value_commitment(BigInt(ds.amount), ds.blinding),
-        () => ({
-          commitment: Array.from(randomBytes(32)),
-          blinding: Array.from(ds.blinding),
-        })
+        () => wasm && wasm.create_value_commitment(BigInt(ds.amount), ds.blinding)
       );
       ds.callCount++;
-      if (commitStub) ds.stubCount++;
+      if (commitStub) {
+        ds.stubCount++;
+        ds.timeline.push({ actor: 'sender', type: 'warn', text: 'value commitment: awaiting wasm32 support' });
+        bump();
+        return;
+      }
       ds.commitment = new Uint8Array(commitResult.commitment);
 
       // Record announcement
@@ -741,14 +752,19 @@ class DreggStealth extends InspectorBase {
       // Range proof (graceful stub if not available)
       // wasm signature: generate_range_proof(amount, blinding, commitment)
       const { result: rpResult, stub: rpStub } = tryWasm(
-        () => wasm && wasm.generate_range_proof(BigInt(ds.amount), ds.blinding, ds.commitment),
-        () => ({ proof_bytes: Array.from(randomBytes(64)), valid: true, stub: true })
+        () => wasm && wasm.generate_range_proof(BigInt(ds.amount), ds.blinding, ds.commitment)
       );
       ds.callCount++;
-      if (rpStub) ds.stubCount++;
+      if (rpStub) {
+        ds.stubCount++;
+        ds.rangeProof = null;
+        ds.timeline.push({ actor: 'sender', type: 'warn', text: 'range proof: awaiting wasm32 support; no proof bytes generated' });
+        bump();
+        return;
+      }
       ds.rangeProof = {
-        bytes: new Uint8Array(rpResult.proof_bytes || randomBytes(64)),
-        stub: rpStub || !!rpResult.stub,
+        bytes: new Uint8Array(rpResult.proof_bytes || []),
+        stub: !!rpResult.stub,
       };
 
       ds.timeline.push(
@@ -770,11 +786,16 @@ class DreggStealth extends InspectorBase {
           ds.recipientKeys.viewPriv,
           ds.recipientKeys.spendPub,
           JSON.stringify(ds.announcements)
-        ),
-        () => ds.announcements.map((_, i) => i)
+        )
       );
       ds.callCount++;
-      if (scanStub) ds.stubCount++;
+      if (scanStub) {
+        ds.stubCount++;
+        ds.scanResult = null;
+        ds.timeline.push({ actor: 'recipient', type: 'warn', text: 'scan announcements: awaiting wasm32 support; no matches inferred in JS' });
+        bump();
+        return;
+      }
       ds.scanResult = {
         matched: Array.isArray(scanResult) ? scanResult : [],
         stub: scanStub,
@@ -793,41 +814,22 @@ class DreggStealth extends InspectorBase {
 
     const doStep5 = () => {
       if (!ds.commitment) return;
-
-      const changeAmount = 1000 - ds.amount;
-      const changeBlinding = randomBytes(32);
-      const { result: changeResult } = tryWasm(
-        () => wasm && wasm.create_value_commitment(BigInt(changeAmount), changeBlinding),
-        () => ({ commitment: Array.from(randomBytes(32)) })
-      );
-      const changeCommitment = new Uint8Array(changeResult.commitment);
-
-      const inputCommitHex   = bytesToHex(randomBytes(32)); // original 1000 commitment
-      const outputCommitHex1 = bytesToHex(ds.commitment);
-      const outputCommitHex2 = bytesToHex(changeCommitment);
-
-      const { result: conservResult, stub: conservStub } = tryWasm(
-        () => wasm && wasm.verify_conservation_proof(
-          JSON.stringify([inputCommitHex]),
-          JSON.stringify([outputCommitHex1, outputCommitHex2])
-        ),
-        () => ({ valid: false, not_implemented: true, input_count: 1, output_count: 2 })
-      );
+      const conservProbe = tryWasm(() => wasm && wasm.verify_conservation_proof);
       ds.callCount++;
-      if (conservStub || conservResult.not_implemented) ds.stubCount++;
-      ds.conservResult = conservResult;
-
-      const label = conservResult.not_implemented
-        ? 'STUB (not yet implemented)'
-        : (conservResult.valid ? 'VALID' : 'INVALID');
+      ds.stubCount++;
+      ds.conservResult = {
+        valid: false,
+        not_implemented: true,
+        input_count: 0,
+        output_count: 1,
+        reason: conservProbe.stub
+          ? 'verify_conservation_proof wasm export missing'
+          : 'inspector lacks canonical input commitment set for this transfer',
+      };
 
       ds.timeline.push(
-        { actor: 'verifier', type: 'info', text: 'checking conservation proof…' },
-        { actor: '', type: 'info', text: `  input:  1 commitment (original 1000)` },
-        { actor: '', type: 'info', text: `  output: ${ds.amount} to recipient + ${changeAmount} change` },
-        { actor: 'verifier',
-          type: conservResult.valid ? 'success' : conservResult.not_implemented ? 'warn' : 'warn',
-          text: `conservation: ${label} (${conservResult.input_count}→${conservResult.output_count})` },
+        { actor: 'verifier', type: 'warn', text: 'conservation proof: awaiting canonical input/output commitment set from runtime' },
+        { actor: '', type: 'info', text: '  no JS-side commitment set was fabricated' },
       );
       ds.step = 5;
       bump();

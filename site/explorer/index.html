@@ -152,6 +152,66 @@
           <p>Real-time state of the connected dregg node and its federation.</p>
         </div>
 
+        <div class="devnet-brief" id="devnet-brief">
+          <div class="devnet-brief__main">
+            <div class="devnet-brief__eyebrow">Connected node</div>
+            <div class="devnet-brief__title" id="devnet-node-url">--</div>
+            <div class="devnet-brief__meta" id="devnet-node-meta">Waiting for status...</div>
+          </div>
+          <div class="devnet-brief__facts" id="devnet-facts">
+            <div class="devnet-fact">
+              <span class="devnet-fact__label">Height</span>
+              <span class="devnet-fact__value" id="devnet-fact-height">--</span>
+            </div>
+            <div class="devnet-fact">
+              <span class="devnet-fact__label">Latest root</span>
+              <span class="devnet-fact__value devnet-fact__value--hash" id="devnet-fact-root">--</span>
+            </div>
+            <div class="devnet-fact">
+              <span class="devnet-fact__label">Checkpoint</span>
+              <span class="devnet-fact__value" id="devnet-fact-checkpoint">--</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="object-map" id="starbridge-object-map" aria-label="Starbridge object map">
+          <button class="object-map__item" type="button" data-map-page="blocks">
+            <span class="object-map__label">Blocks</span>
+            <span class="object-map__value" id="map-blocks-value">--</span>
+            <span class="object-map__desc">attested roots</span>
+          </button>
+          <button class="object-map__item" type="button" data-map-page="cells">
+            <span class="object-map__label">Cells</span>
+            <span class="object-map__value" id="map-cells-value">ledger agents</span>
+            <span class="object-map__desc">state holders</span>
+          </button>
+          <button class="object-map__item" type="button" data-map-page="turns">
+            <span class="object-map__label">Turns</span>
+            <span class="object-map__value" id="map-turns-value">receipts</span>
+            <span class="object-map__desc">execution input</span>
+          </button>
+          <button class="object-map__item" type="button" data-map-page="receipts">
+            <span class="object-map__label">Receipts</span>
+            <span class="object-map__value" id="map-receipts-value">proof chain</span>
+            <span class="object-map__desc">execution output</span>
+          </button>
+          <button class="object-map__item" type="button" data-map-page="names">
+            <span class="object-map__label">Names</span>
+            <span class="object-map__value">dregg://</span>
+            <span class="object-map__desc">routing names</span>
+          </button>
+          <button class="object-map__item" type="button" data-map-page="queues">
+            <span class="object-map__label">Queues</span>
+            <span class="object-map__value">services</span>
+            <span class="object-map__desc">app ingress</span>
+          </button>
+          <button class="object-map__item" type="button" data-map-page="delegations">
+            <span class="object-map__label">Delegations</span>
+            <span class="object-map__value">authority</span>
+            <span class="object-map__desc">capability flow</span>
+          </button>
+        </div>
+
         <div class="overview-stats" id="overview-stats">
           <div class="stat-card">
             <div class="stat-card__label">Block Height</div>
@@ -558,7 +618,7 @@
 
   <!-- Visualizer modules used by queues / names / delegations views. Each
        module self-registers via defineVisualizer once runtime-bootstrap fires
-       dregg:ready, so order doesn't matter and missing modules degrade to
+       dreggUi:ready, so order doesn't matter and missing modules degrade to
        per-element fallback content. -->
   <script type="module" src="../playground/visualizers/programmable-queue.js"></script>
   <script type="module" src="../playground/visualizers/blinded-queue.js"></script>

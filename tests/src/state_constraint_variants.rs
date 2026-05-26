@@ -763,14 +763,7 @@ fn preimage_gate_missing_preimage_in_ctx_rejects() {
         &new,
         None,
         Some(&ctx),
-        |e| {
-            matches!(
-                e,
-                ProgramError::MissingContextField {
-                    field: "revealed_preimage"
-                }
-            )
-        },
+        |e| matches!(e, ProgramError::PreimageWitnessMissing),
         "PreimageGate missing preimage",
     );
 }

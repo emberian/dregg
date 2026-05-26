@@ -71,6 +71,11 @@ pub enum Effect {
     /// epoch lives off-trace); selector alone records the intent. State
     /// passthrough.
     RefreshDelegation,
+    /// IncrementNonce: explicit runtime nonce bump. The nonce transition is
+    /// the global non-NoOp row invariant; this selector binds that the row is
+    /// specifically an IncrementNonce effect rather than padding or another
+    /// passthrough sibling.
+    IncrementNonce,
     /// RevokeDelegation: invalidate a child cell's delegation. State
     /// passthrough; `child_hash` binds the target cell into effects_hash.
     RevokeDelegation { child_hash: BabyBear },

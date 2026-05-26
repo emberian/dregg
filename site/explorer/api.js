@@ -240,6 +240,55 @@ export function shortHash(hash, prefixLen = 8, suffixLen = 4) {
   return `${hash.slice(0, prefixLen)}...${hash.slice(-suffixLen)}`;
 }
 
+function firstValue(obj, keys, fallback = undefined) {
+  for (const key of keys) {
+    const value = obj?.[key];
+    if (value !== undefined && value !== null && value !== '') return value;
+  }
+  return fallback;
+}
+
+function asNumber(value, fallback = null) {
+  if (value === null || value === undefined || value === '') return fallback;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/** Latest committed height from current and older node status payloads. */
+export function statusHeight(status) {
+  return asNumber(firstValue(status, ['latest_height', 'height', 'block_height'], null));
+}
+
+/** Connected peers reported by the node. */
+export function statusPeers(status) {
+  return asNumber(firstValue(status, ['peer_count', 'peers'], 0), 0);
+}
+
+/** Revocation count from current and older node status payloads. */
+export function statusRevocations(status) {
+  return asNumber(firstValue(status, ['revocation_count', 'revocations'], 0), 0);
+}
+
+/** Note count from current and older node status payloads. */
+export function statusNotes(status) {
+  return asNumber(firstValue(status, ['note_count', 'notes'], 0), 0);
+}
+
+/** Attested-root hash from current and older root payloads. */
+export function blockRoot(block) {
+  return firstValue(block, ['merkle_root', 'root', 'ledger_state_root', 'hash'], null);
+}
+
+/** Human status for nodes that do not yet expose an explicit healthy flag. */
+export function healthLabel(status) {
+  if (!status) return 'unknown';
+  if (status.healthy === true) return 'healthy';
+  if (status.healthy === false) return 'degraded';
+  if (typeof status.status === 'string') return status.status;
+  if (statusHeight(status) !== null) return 'responding';
+  return 'unknown';
+}
+
 /** Format a Unix timestamp as relative time. */
 export function relativeTime(ts) {
   if (!ts) return '--';

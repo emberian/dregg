@@ -17,29 +17,27 @@
 //!
 //! | Slot | Name | Caveat | Purpose |
 //! |---:|---|---|---|
-//! | 0 | `commitments_root` | `Monotonic` (add-scoped) | Root over blinded item commitments. |
-//! | 1 | `nullifier_root` | `Monotonic` (consume-scoped) | Root over spent-item nullifiers. |
+//! | 0 | `commitments_root` | changes + non-zero on add | Root over blinded item commitments. |
+//! | 1 | `nullifier_root` | changes + non-zero on consume | Root over spent-item nullifiers. |
 //! | 2 | `capacity` | `Immutable` | Max in-flight items. |
 //! | 3 | `consumer_pk_hash` | `Immutable` | Consumer identity. |
-//! | 4 | `commitment_count` | `Monotonic` (add-scoped) | Number of items added. |
-//! | 5 | `nullifier_count` | `Monotonic` (consume-scoped) | Number of items spent. |
+//! | 4 | `commitment_count` | `MonotonicSequence` (add-scoped) | Number of items added. |
+//! | 5 | `nullifier_count` | `MonotonicSequence` (consume-scoped) | Number of items spent. |
 //! | 6 | `spend_air_vk_commitment` | `Immutable` | VK of the registered spend AIR. |
 //! | 7 | `queue_id_hash` | `Immutable` | Stable identity. |
 //!
-//! Per §3.4: the spent-count-never-exceeds-added-count check
-//! (`slot[5] <= slot[4]`) requires a cross-slot comparison the
-//! 21-variant vocabulary doesn't include. The v1 expression here is a
-//! `Custom` predicate; the v2 lift is the proposed `FieldLteOther`
-//! variant (Open Q §7.2). The template lands the v1 shape; downstream
-//! Custom predicates are app-extensibility per
-//! `PREDICATE-INVENTORY.md §10.6`.
+//! Per §3.4: the spent-count-never-exceeds-added-count check is
+//! `FieldLteField { left_index: nullifier_count, right_index:
+//! commitment_count }`. Roots are opaque commitments, so operation
+//! cases require them to change and be non-zero rather than modeling
+//! them as ordered integers.
 //!
 //! ## Operations
 //!
-//! - `add` — commitments_root + commitment_count grow; nullifier
+//! - `add` — commitments_root changes and commitment_count advances; nullifier
 //!   side frozen. Producer-cap-gated (no `SenderAuthorized` at this
 //!   layer — the producer cap is the authority).
-//! - `consume` — nullifier_root + nullifier_count grow; commitments
+//! - `consume` — nullifier_root changes and nullifier_count advances; commitments
 //!   side frozen. Action carries the spend proof and the nullifier;
 //!   `Witnessed { Custom { vk_hash } }` invokes the registered
 //!   verifier against the proof and the snapshotted
@@ -80,7 +78,7 @@ use dregg_app_framework::{
     InspectorDescriptor, StarbridgeAppContext, StateConstraint, canonical_program_vk, symbol,
 };
 use dregg_cell::predicate::{InputRef, WitnessedPredicate};
-use dregg_cell::program::{CellProgram, TransitionCase, TransitionGuard};
+use dregg_cell::program::{CellProgram, SimpleStateConstraint, TransitionCase, TransitionGuard};
 
 use crate::{hex_encode, u64_field};
 
@@ -137,6 +135,14 @@ pub fn consume_method_symbol() -> [u8; 32] {
     symbol("consume")
 }
 
+fn slot_changed(index: u8) -> StateConstraint {
+    StateConstraint::AnyOf {
+        variants: vec![SimpleStateConstraint::Not(Box::new(
+            SimpleStateConstraint::Immutable { index },
+        ))],
+    }
+}
+
 // =============================================================================
 // CellProgram
 // =============================================================================
@@ -160,20 +166,27 @@ pub fn blinded_queue_program() -> CellProgram {
                 StateConstraint::Immutable {
                     index: QUEUE_ID_HASH_SLOT,
                 },
+                StateConstraint::FieldLteField {
+                    left_index: NULLIFIER_COUNT_SLOT,
+                    right_index: COMMITMENT_COUNT_SLOT,
+                },
             ],
         },
-        // add: commitments_root + commitment_count grow; nullifier
-        // side frozen. Producer-cap-gated.
+        // add: commitments_root changes to a non-zero commitment and
+        // commitment_count advances by exactly one; nullifier side frozen.
+        // Producer-cap-gated.
         TransitionCase {
             guard: TransitionGuard::MethodIs {
                 method: symbol("add"),
             },
             constraints: vec![
-                StateConstraint::Monotonic {
+                slot_changed(COMMITMENTS_ROOT_SLOT),
+                StateConstraint::FieldGte {
                     index: COMMITMENTS_ROOT_SLOT,
+                    value: u64_field(1),
                 },
-                StateConstraint::Monotonic {
-                    index: COMMITMENT_COUNT_SLOT,
+                StateConstraint::MonotonicSequence {
+                    seq_index: COMMITMENT_COUNT_SLOT,
                 },
                 StateConstraint::Immutable {
                     index: NULLIFIER_ROOT_SLOT,
@@ -183,8 +196,9 @@ pub fn blinded_queue_program() -> CellProgram {
                 },
             ],
         },
-        // consume: nullifier_root + nullifier_count grow;
-        // commitments side frozen. Action carries the spend proof
+        // consume: nullifier_root changes to a non-zero commitment and
+        // nullifier_count advances by exactly one; commitments side frozen.
+        // Action carries the spend proof
         // (witness index 1) and the nullifier (witness index 0); the
         // `Witnessed` constraint invokes the registered Custom
         // verifier against (commitments_root, nullifier, proof).
@@ -193,11 +207,13 @@ pub fn blinded_queue_program() -> CellProgram {
                 method: symbol("consume"),
             },
             constraints: vec![
-                StateConstraint::Monotonic {
+                slot_changed(NULLIFIER_ROOT_SLOT),
+                StateConstraint::FieldGte {
                     index: NULLIFIER_ROOT_SLOT,
+                    value: u64_field(1),
                 },
-                StateConstraint::Monotonic {
-                    index: NULLIFIER_COUNT_SLOT,
+                StateConstraint::MonotonicSequence {
+                    seq_index: NULLIFIER_COUNT_SLOT,
                 },
                 StateConstraint::Immutable {
                     index: COMMITMENTS_ROOT_SLOT,
@@ -308,11 +324,9 @@ pub fn blinded_queue_factory_descriptor() -> FactoryDescriptor {
             StateConstraint::Immutable {
                 index: QUEUE_ID_HASH_SLOT,
             },
-            StateConstraint::Monotonic {
-                index: COMMITMENTS_ROOT_SLOT,
-            },
-            StateConstraint::Monotonic {
-                index: NULLIFIER_ROOT_SLOT,
+            StateConstraint::FieldLteField {
+                left_index: NULLIFIER_COUNT_SLOT,
+                right_index: COMMITMENT_COUNT_SLOT,
             },
             StateConstraint::Monotonic {
                 index: COMMITMENT_COUNT_SLOT,

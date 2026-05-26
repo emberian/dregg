@@ -2,7 +2,7 @@
 //!
 //! Drives the full `send → dequeue` lifecycle:
 //!
-//! 1. `send` N messages (head advances, message_root grows, deposits grow).
+//! 1. `send` N messages (head advances, message_root changes, deposits grow).
 //! 2. Attempt a `dequeue` that also advances head — reject (Immutable on head
 //!    during dequeue).
 //! 3. Perform a legal `dequeue` series (tail catches up to head).
@@ -78,7 +78,7 @@ fn make_base_cell() -> CellState {
     s
 }
 
-/// Apply a `send`: head+1, deposits grow, ring root grows.
+/// Apply a `send`: head+1, deposits grow, ring root changes.
 fn apply_send(old: &CellState, deposit: u64, payload_tag: &[u8]) -> CellState {
     let mut s = old.clone();
     let head = u64_from_field(&s.fields[HEAD_SEQ_SLOT as usize]);
@@ -130,6 +130,27 @@ fn send_n_messages_head_advances() {
         state = new;
     }
     assert_eq!(u64_from_field(&state.fields[HEAD_SEQ_SLOT as usize]), 4);
+}
+
+#[test]
+fn send_without_message_root_change_rejected() {
+    let p = strip_executor_constraints(cap_inbox_program());
+    let old = make_base_cell();
+
+    let mut bad = old.clone();
+    bad.fields[HEAD_SEQ_SLOT as usize] = u64_field(1);
+    bad.fields[TOTAL_DEPOSITS_SLOT as usize] = u64_field(100);
+
+    let err = p
+        .evaluate_with_meta(&bad, Some(&old), None, &method_meta("send"))
+        .expect_err("send without message_root change must be rejected");
+    match err {
+        ProgramError::ConstraintViolated {
+            constraint: StateConstraint::Immutable { index },
+            ..
+        } => assert_eq!(index, MESSAGE_ROOT_SLOT),
+        other => panic!("expected negated Immutable on message_root, got {other:?}"),
+    }
 }
 
 #[test]
@@ -213,11 +234,39 @@ fn dequeue_that_decrements_tail_rejected() {
 }
 
 #[test]
+fn dequeue_past_head_rejected() {
+    let p = strip_executor_constraints(cap_inbox_program());
+
+    let mut state = make_base_cell();
+    state = apply_send(&state, 100, b"msg-0");
+    state = apply_dequeue(&state);
+
+    let bad = apply_dequeue(&state);
+    let err = p
+        .evaluate_with_meta(&bad, Some(&state), None, &method_meta("dequeue"))
+        .expect_err("tail must not advance past head");
+    match err {
+        ProgramError::ConstraintViolated {
+            constraint:
+                StateConstraint::FieldLteField {
+                    left_index,
+                    right_index,
+                },
+            ..
+        } => {
+            assert_eq!(left_index, TAIL_SEQ_SLOT);
+            assert_eq!(right_index, HEAD_SEQ_SLOT);
+        }
+        other => panic!("expected FieldLteField tail_seq <= head_seq, got {other:?}"),
+    }
+}
+
+#[test]
 fn grant_sender_does_not_advance_head_or_tail_or_deposits() {
     let p = strip_executor_constraints(cap_inbox_program());
     let old = make_base_cell();
 
-    // grant_sender: only sender_set_root advances.
+    // grant_sender: only sender_set_root changes.
     let mut new = old.clone();
     new.fields[SENDER_SET_ROOT_SLOT as usize] = blake3_field(b"expanded-set");
 
@@ -236,6 +285,24 @@ fn grant_sender_does_not_advance_head_or_tail_or_deposits() {
         new.fields[TOTAL_DEPOSITS_SLOT as usize],
         old.fields[TOTAL_DEPOSITS_SLOT as usize]
     );
+}
+
+#[test]
+fn grant_sender_without_sender_root_change_rejected() {
+    let p = strip_executor_constraints(cap_inbox_program());
+    let old = make_base_cell();
+    let new = old.clone();
+
+    let err = p
+        .evaluate_with_meta(&new, Some(&old), None, &method_meta("grant_sender"))
+        .expect_err("grant_sender without sender_set_root change must be rejected");
+    match err {
+        ProgramError::ConstraintViolated {
+            constraint: StateConstraint::Immutable { index },
+            ..
+        } => assert_eq!(index, SENDER_SET_ROOT_SLOT),
+        other => panic!("expected negated Immutable on sender_set_root, got {other:?}"),
+    }
 }
 
 #[test]

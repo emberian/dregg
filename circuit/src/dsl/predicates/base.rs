@@ -3,7 +3,7 @@
 //! Proves comparison predicates over a private attribute bound to a fact commitment:
 //! GTE, LTE, GT, LT, NEQ, InRangeLow, InRangeHigh.
 //!
-//! Trace width: 43 columns. Public inputs: [threshold, fact_commitment].
+//! Trace width: 51 columns. Public inputs: [threshold, fact_commitment, op_tag].
 
 use crate::field::{BABYBEAR_P, BabyBear};
 use crate::poseidon2;
@@ -33,12 +33,21 @@ pub const DERIVATION_FLAG: usize = STATE_ROOT + 1; // 39
 pub const BLINDING_ACTIVE_FLAG: usize = DERIVATION_FLAG + 1; // 40
 pub const BLINDING_INVERSE: usize = BLINDING_ACTIVE_FLAG + 1; // 41
 pub const ZERO_PAD: usize = BLINDING_INVERSE + 1; // 42
-pub const TRACE_WIDTH: usize = ZERO_PAD + 1; // 43
+pub const OP_TAG: usize = ZERO_PAD + 1; // 43
+pub const OP_GTE: usize = OP_TAG + 1; // 44
+pub const OP_LTE: usize = OP_GTE + 1; // 45
+pub const OP_GT: usize = OP_LTE + 1; // 46
+pub const OP_LT: usize = OP_GT + 1; // 47
+pub const OP_NEQ: usize = OP_LT + 1; // 48
+pub const OP_IN_RANGE_LOW: usize = OP_NEQ + 1; // 49
+pub const OP_IN_RANGE_HIGH: usize = OP_IN_RANGE_LOW + 1; // 50
+pub const TRACE_WIDTH: usize = OP_IN_RANGE_HIGH + 1; // 51
 
 /// Public input indices.
 pub const PI_THRESHOLD: usize = 0;
 pub const PI_FACT_COMMITMENT: usize = 1;
-pub const PUBLIC_INPUT_COUNT: usize = 2;
+pub const PI_OP_TAG: usize = 2;
+pub const PUBLIC_INPUT_COUNT: usize = 3;
 
 /// Predicate types supported by the DSL circuit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -50,6 +59,32 @@ pub enum PredicateOp {
     Neq,
     InRangeLow,
     InRangeHigh,
+}
+
+impl PredicateOp {
+    pub fn tag(self) -> u32 {
+        match self {
+            PredicateOp::Gte => 1,
+            PredicateOp::Lte => 2,
+            PredicateOp::Gt => 3,
+            PredicateOp::Lt => 4,
+            PredicateOp::Neq => 5,
+            PredicateOp::InRangeLow => 6,
+            PredicateOp::InRangeHigh => 7,
+        }
+    }
+
+    fn selector_col(self) -> usize {
+        match self {
+            PredicateOp::Gte => OP_GTE,
+            PredicateOp::Lte => OP_LTE,
+            PredicateOp::Gt => OP_GT,
+            PredicateOp::Lt => OP_LT,
+            PredicateOp::Neq => OP_NEQ,
+            PredicateOp::InRangeLow => OP_IN_RANGE_LOW,
+            PredicateOp::InRangeHigh => OP_IN_RANGE_HIGH,
+        }
+    }
 }
 
 /// Backward-compatible alias for `PredicateOp` (previously `PredicateType` in `predicate_air`).
@@ -156,6 +191,26 @@ pub fn predicate_descriptor() -> CircuitDescriptor {
         index: ZERO_PAD,
         kind: ColumnKind::Value,
     });
+    columns.push(ColumnDef {
+        name: "op_tag".into(),
+        index: OP_TAG,
+        kind: ColumnKind::Value,
+    });
+    for (name, index) in [
+        ("op_gte", OP_GTE),
+        ("op_lte", OP_LTE),
+        ("op_gt", OP_GT),
+        ("op_lt", OP_LT),
+        ("op_neq", OP_NEQ),
+        ("op_in_range_low", OP_IN_RANGE_LOW),
+        ("op_in_range_high", OP_IN_RANGE_HIGH),
+    ] {
+        columns.push(ColumnDef {
+            name: name.into(),
+            index,
+            kind: ColumnKind::Selector,
+        });
+    }
 
     let mut constraints = Vec::new();
 
@@ -171,7 +226,179 @@ pub fn predicate_descriptor() -> CircuitDescriptor {
         pi_index: PI_FACT_COMMITMENT,
     });
 
-    // C3: neq_flag is binary
+    // C3: op_tag matches public input
+    constraints.push(ConstraintExpr::PiBinding {
+        col: OP_TAG,
+        pi_index: PI_OP_TAG,
+    });
+
+    // C4: operation selectors are one-hot and op_tag is their weighted sum.
+    let op_cols = [
+        OP_GTE,
+        OP_LTE,
+        OP_GT,
+        OP_LT,
+        OP_NEQ,
+        OP_IN_RANGE_LOW,
+        OP_IN_RANGE_HIGH,
+    ];
+    for col in op_cols {
+        constraints.push(ConstraintExpr::Binary { col });
+    }
+    constraints.push(ConstraintExpr::Polynomial {
+        terms: vec![
+            PolyTerm {
+                coeff: BabyBear::ONE,
+                col_indices: vec![OP_GTE],
+            },
+            PolyTerm {
+                coeff: BabyBear::ONE,
+                col_indices: vec![OP_LTE],
+            },
+            PolyTerm {
+                coeff: BabyBear::ONE,
+                col_indices: vec![OP_GT],
+            },
+            PolyTerm {
+                coeff: BabyBear::ONE,
+                col_indices: vec![OP_LT],
+            },
+            PolyTerm {
+                coeff: BabyBear::ONE,
+                col_indices: vec![OP_NEQ],
+            },
+            PolyTerm {
+                coeff: BabyBear::ONE,
+                col_indices: vec![OP_IN_RANGE_LOW],
+            },
+            PolyTerm {
+                coeff: BabyBear::ONE,
+                col_indices: vec![OP_IN_RANGE_HIGH],
+            },
+            PolyTerm {
+                coeff: neg_one,
+                col_indices: vec![],
+            },
+        ],
+    });
+    constraints.push(ConstraintExpr::Polynomial {
+        terms: vec![
+            PolyTerm {
+                coeff: BabyBear::ONE,
+                col_indices: vec![OP_TAG],
+            },
+            PolyTerm {
+                coeff: BabyBear::new(BABYBEAR_P - PredicateOp::Gte.tag()),
+                col_indices: vec![OP_GTE],
+            },
+            PolyTerm {
+                coeff: BabyBear::new(BABYBEAR_P - PredicateOp::Lte.tag()),
+                col_indices: vec![OP_LTE],
+            },
+            PolyTerm {
+                coeff: BabyBear::new(BABYBEAR_P - PredicateOp::Gt.tag()),
+                col_indices: vec![OP_GT],
+            },
+            PolyTerm {
+                coeff: BabyBear::new(BABYBEAR_P - PredicateOp::Lt.tag()),
+                col_indices: vec![OP_LT],
+            },
+            PolyTerm {
+                coeff: BabyBear::new(BABYBEAR_P - PredicateOp::Neq.tag()),
+                col_indices: vec![OP_NEQ],
+            },
+            PolyTerm {
+                coeff: BabyBear::new(BABYBEAR_P - PredicateOp::InRangeLow.tag()),
+                col_indices: vec![OP_IN_RANGE_LOW],
+            },
+            PolyTerm {
+                coeff: BabyBear::new(BABYBEAR_P - PredicateOp::InRangeHigh.tag()),
+                col_indices: vec![OP_IN_RANGE_HIGH],
+            },
+        ],
+    });
+
+    // C5: diff semantics are gated by the claimed predicate operation.
+    let value_minus_threshold_terms = vec![
+        PolyTerm {
+            coeff: BabyBear::ONE,
+            col_indices: vec![DIFF],
+        },
+        PolyTerm {
+            coeff: neg_one,
+            col_indices: vec![PRIVATE_VALUE],
+        },
+        PolyTerm {
+            coeff: BabyBear::ONE,
+            col_indices: vec![THRESHOLD],
+        },
+    ];
+    let threshold_minus_value_terms = vec![
+        PolyTerm {
+            coeff: BabyBear::ONE,
+            col_indices: vec![DIFF],
+        },
+        PolyTerm {
+            coeff: BabyBear::ONE,
+            col_indices: vec![PRIVATE_VALUE],
+        },
+        PolyTerm {
+            coeff: neg_one,
+            col_indices: vec![THRESHOLD],
+        },
+    ];
+    let value_minus_threshold_minus_one_terms = {
+        let mut terms = value_minus_threshold_terms.clone();
+        terms.push(PolyTerm {
+            coeff: BabyBear::ONE,
+            col_indices: vec![],
+        });
+        terms
+    };
+    let threshold_minus_value_minus_one_terms = {
+        let mut terms = threshold_minus_value_terms.clone();
+        terms.push(PolyTerm {
+            coeff: BabyBear::ONE,
+            col_indices: vec![],
+        });
+        terms
+    };
+    for selector_col in [OP_GTE, OP_NEQ, OP_IN_RANGE_LOW] {
+        constraints.push(ConstraintExpr::Gated {
+            selector_col,
+            inner: Box::new(ConstraintExpr::Polynomial {
+                terms: value_minus_threshold_terms.clone(),
+            }),
+        });
+    }
+    for selector_col in [OP_LTE, OP_IN_RANGE_HIGH] {
+        constraints.push(ConstraintExpr::Gated {
+            selector_col,
+            inner: Box::new(ConstraintExpr::Polynomial {
+                terms: threshold_minus_value_terms.clone(),
+            }),
+        });
+    }
+    constraints.push(ConstraintExpr::Gated {
+        selector_col: OP_GT,
+        inner: Box::new(ConstraintExpr::Polynomial {
+            terms: value_minus_threshold_minus_one_terms,
+        }),
+    });
+    constraints.push(ConstraintExpr::Gated {
+        selector_col: OP_LT,
+        inner: Box::new(ConstraintExpr::Polynomial {
+            terms: threshold_minus_value_minus_one_terms,
+        }),
+    });
+
+    // C6: neq_flag must match the selected operation.
+    constraints.push(ConstraintExpr::Equality {
+        col_a: NEQ_FLAG,
+        col_b: OP_NEQ,
+    });
+
+    // C7: neq_flag is binary
     constraints.push(ConstraintExpr::Binary { col: NEQ_FLAG });
 
     // C4: Each diff_bit is binary (gated by NOT neq_flag)
@@ -357,6 +584,8 @@ pub fn generate_predicate_trace_full(
     row[PRIVATE_VALUE] = witness.private_value;
     row[THRESHOLD] = witness.threshold;
     row[FACT_COMMITMENT] = witness.fact_commitment;
+    row[OP_TAG] = BabyBear::new(witness.predicate_type.tag());
+    row[witness.predicate_type.selector_col()] = BabyBear::ONE;
 
     // Compute diff based on operation (using inner u32 for wrapping arithmetic).
     let pv = witness.private_value.0;
@@ -368,17 +597,18 @@ pub fn generate_predicate_trace_full(
         PredicateOp::Lt => th.wrapping_sub(pv).wrapping_sub(1),
         PredicateOp::Neq => pv.wrapping_sub(th),
     };
-    row[DIFF] = BabyBear::new(diff);
 
     match witness.predicate_type {
         PredicateOp::Neq => {
+            let diff_field = witness.private_value - witness.threshold;
+            row[DIFF] = diff_field;
             row[NEQ_FLAG] = BabyBear::ONE;
-            let diff_field = BabyBear::new(diff);
             if let Some(inv) = diff_field.inverse() {
                 row[NEQ_INVERSE] = inv;
             }
         }
         _ => {
+            row[DIFF] = BabyBear::new(diff);
             row[NEQ_FLAG] = BabyBear::ZERO;
             for i in 0..NUM_DIFF_BITS {
                 row[DIFF_BITS_START + i] = BabyBear::new((diff >> i) & 1);
@@ -413,7 +643,11 @@ pub fn generate_predicate_trace_full(
 
     row[ZERO_PAD] = BabyBear::ZERO;
 
-    let public_inputs = vec![witness.threshold, witness.fact_commitment];
+    let public_inputs = vec![
+        witness.threshold,
+        witness.fact_commitment,
+        BabyBear::new(witness.predicate_type.tag()),
+    ];
 
     // Pad to 2 rows (minimum for STARK).
     let trace = vec![row.clone(), row];
@@ -520,7 +754,7 @@ pub fn verify_predicate_dsl(
     }
     let descriptor = predicate_descriptor();
     let circuit = DslCircuit::new(descriptor);
-    let pi = vec![threshold, fact_commitment];
+    let pi = vec![threshold, fact_commitment, BabyBear::new(proof.op.tag())];
     stark::verify(&circuit, &proof.stark_proof, &pi)
 }
 

@@ -154,12 +154,8 @@ import './inspectors/stealth-address.js';
 
 // --- <dregg-app-list> (Apps tab for /starbridge/, STARBRIDGE-PLAN §4.8) ---
 // Reads manifests from starbridge-apps/* (created as part of this task).
-// Renders cards. Selecting the nameservice demonstrates the first
-// end-to-end: loads its typed turn-builders + per-app inspectors
-// (which reuse <dregg-cell>, <dregg-capability> etc.).
-// For demo, clicking "Demo" on nameservice renders a live
-// <dregg-name-registry> + <dregg-name> example in the inspector pane
-// (via custom event the page orchestrator can listen to).
+// Renders cards. Selecting an app asks the Starbridge host to embed that
+// userspace app in the workspace while keeping the IDE panes around it.
 
 class DreggAppList extends HTMLElement {
   constructor() {
@@ -170,44 +166,43 @@ class DreggAppList extends HTMLElement {
   connectedCallback() { this.loadAndRender(); }
   async loadAndRender() {
     this._loading = true;
-    // Static manifests (Q3 shape per STUDIO-REFACTOR-PICKUP §7).
-    // §4.8: dynamic fetch attempted in load for manifest-driven (creep); hardcoded fallback.
-    // In a real build these could be fetched from /starbridge-apps/*/manifest.json
-    // served statically. Hardcoded here for robustness across runtimes.
-    this._apps = [
-      {
+    const ids = ['nameservice', 'identity', 'governed-namespace', 'subscription'];
+    const fallback = {
+      nameservice: {
         id: 'nameservice',
         name: 'Nameservice',
-        description: 'Federation name directory — first e2e starbridge-app demo. Slot caveats + signed turns.',
+        description: 'Federation name directory built from dregg-native primitives.',
         page: '/starbridge-apps/nameservice/pages/index.html',
-        factory_vks: ['737461726272696467652d6e616d65736572766963652d666163746f72792121'],
-        inspectors: ['dregg-name', 'dregg-name-registry'],
       },
-      {
+      identity: {
         id: 'identity',
         name: 'Identity',
-        description: 'Credential issuance & selective disclosure (high-quality additional starbridge-app demo §4.8; now loads via shared/ fix).',
+        description: 'Credential issuance and selective disclosure.',
         page: '/starbridge-apps/identity/pages/index.html',
-        factory_vks: [],
-        inspectors: ['dregg-credential', 'dregg-credential-issue-form'],
       },
-      {
+      'governed-namespace': {
         id: 'governed-namespace',
         name: 'Governed Namespace',
         description: 'Governance tables and proposals.',
         page: '/starbridge-apps/governed-namespace/pages/index.html',
-        factory_vks: [],
-        inspectors: [],
       },
-      {
+      subscription: {
         id: 'subscription',
         name: 'Subscription',
-        description: 'Pub/sub + capability subscriptions (additional high-quality starbridge-app demo §4.8).',
+        description: 'Pub/sub topic and capability subscription app.',
         page: '/starbridge-apps/subscription/pages/index.html',
-        factory_vks: [],
-        inspectors: [],
       },
-    ];
+    };
+    const loaded = await Promise.all(ids.map(async (id) => {
+      try {
+        const resp = await fetch(`/starbridge-apps/${id}/manifest.json`, { headers: { Accept: 'application/json' } });
+        if (!resp.ok) throw new Error(String(resp.status));
+        return await resp.json();
+      } catch {
+        return fallback[id];
+      }
+    }));
+    this._apps = loaded.filter(Boolean);
     this._loading = false;
     this.render();
     // Update count in host page if present (the starbridge tree count).
@@ -232,31 +227,16 @@ class DreggAppList extends HTMLElement {
         <div style="font-weight:600">${escapeHtml(app.name)}</div>
         <div style="color:#555;font-size:0.75rem;margin:0.2rem 0;">${escapeHtml(app.description)}</div>
         <div style="display:flex;gap:0.3rem;flex-wrap:wrap;">
-          <button data-act="demo" style="font-size:0.7rem;padding:0.15rem 0.4rem;">Demo in inspector</button>
-          <a href="${app.page}" target="_blank" style="font-size:0.7rem;color:#25439a;">Open standalone page →</a>
+          <button data-act="open" style="font-size:0.7rem;padding:0.15rem 0.4rem;">Open in workspace</button>
+          <a href="${app.page}" target="_blank" style="font-size:0.7rem;color:#25439a;">Standalone</a>
         </div>
       `;
-      const btn = card.querySelector('[data-act=demo]');
+      const btn = card.querySelector('[data-act=open]');
       btn?.addEventListener('click', () => {
-        // For the nameservice first demo: dispatch so starbridge.js can mount live components.
-        this.dispatchEvent(new CustomEvent('app-demo', {
+        this.dispatchEvent(new CustomEvent('app-open', {
           bubbles: true,
           detail: { app }
         }));
-        // Also directly render a live nameservice example in this element's parent inspector context if possible.
-        if (app.id === 'nameservice') {
-          // Quick in-card preview using the newly wired per-app inspectors (reuse platform ones).
-          const preview = document.createElement('div');
-          preview.style.cssText = 'margin-top:0.3rem;border-top:1px dashed #ccc;padding-top:0.3rem;';
-          preview.innerHTML = `
-            <div style="font-size:0.7rem;color:#666;margin-bottom:0.2rem;">Live nameservice preview (reuses &lt;dregg-cell&gt; etc.):</div>
-            <dregg-name-registry uri="dregg://cell/registry-default" page-size="5"></dregg-name-registry>
-          `;
-          // Avoid stacking many previews
-          card.querySelectorAll('.dregg-preview').forEach(n => n.remove());
-          preview.className = 'dregg-preview';
-          card.appendChild(preview);
-        }
       });
       wrap.appendChild(card);
     });
@@ -273,8 +253,8 @@ function escapeHtml(s) {
 if (typeof customElements !== 'undefined' && !customElements.get('dregg-app-list')) {
   customElements.define('dregg-app-list', DreggAppList);
 }
-if (typeof window !== 'undefined' && window.dregg?.register) {
-  window.dregg.register('dregg-app-list', DreggAppList);
+if (typeof window !== 'undefined' && window.dreggUi?.register) {
+  window.dreggUi.register('dregg-app-list', DreggAppList);
 }
 
 // Ensure the first starbridge-app per-app inspectors (name.js) are available

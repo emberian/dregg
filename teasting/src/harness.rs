@@ -12,7 +12,7 @@
 //! follows the demo/sdk-consensus pattern: nodes propose blocks, gossip them to
 //! online peers, and `tau` produces a total order.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use dregg_blocklace::finality::{Blocklace, Payload};
@@ -192,9 +192,9 @@ impl SimFederation {
     /// Steps:
     /// 1. Each online node proposes a block carrying its pending revocations.
     /// 2. All proposed blocks are gossiped to all online peers.
-    /// 3. Each online node adds an Ack block referencing the received proposals.
-    /// 4. Ack blocks are gossiped.
-    /// 5. `tau` ordering is computed on node 0's view.
+    /// 3. Online nodes add enough Ack layers to complete a tau wave.
+    /// 4. Ack blocks are gossiped after each layer.
+    /// 5. `tau` ordering is computed on an online node's view.
     /// 6. If `tau` finalizes any blocks, their payloads are applied as
     ///    revocations to all online nodes and `attested_root` is updated.
     pub fn run_consensus_round(&mut self) -> bool {
@@ -220,7 +220,10 @@ impl SimFederation {
             }
         }
 
-        if proposed.is_empty() {
+        let has_existing_blocks = online_indices
+            .iter()
+            .any(|&i| !self.nodes[i].blocklace.is_empty());
+        if proposed.is_empty() && !has_existing_blocks {
             return false;
         }
 
@@ -233,28 +236,29 @@ impl SimFederation {
             }
         }
 
-        // Each online node acknowledges received proposals.
-        let mut acks: Vec<(usize, dregg_blocklace::finality::Block)> = Vec::new();
-        for &i in &online_indices {
-            let ack = self.nodes[i].blocklace.add_block(Payload::Ack);
-            acks.push((i, ack));
-        }
+        // Default tau uses wavelength=3. A data/proposal layer plus two ack
+        // layers gives the wave-end blocks needed for super-ratification. If
+        // this call is only advancing previously proposed data, the ack layers
+        // still create the missing wave depth without duplicating payloads.
+        for _ in 0..2 {
+            let mut acks: Vec<(usize, dregg_blocklace::finality::Block)> = Vec::new();
+            for &i in &online_indices {
+                let ack = self.nodes[i].blocklace.add_block(Payload::Ack);
+                acks.push((i, ack));
+            }
 
-        // Gossip ack blocks to all online peers.
-        for (src, ack) in &acks {
-            for &dst in &online_indices {
-                if dst != *src {
-                    let _ = self.nodes[dst].blocklace.receive_block(ack.clone());
+            for (src, ack) in &acks {
+                for &dst in &online_indices {
+                    if dst != *src {
+                        let _ = self.nodes[dst].blocklace.receive_block(ack.clone());
+                    }
                 }
             }
         }
 
         // Build the ordering blocklace from node 0's view and run `tau`.
         let leader_idx = online_indices[0];
-        let participants: Vec<[u8; 32]> = online_indices
-            .iter()
-            .map(|&i| self.nodes[i].pub_bytes)
-            .collect();
+        let participants: Vec<[u8; 32]> = self.nodes.iter().map(|node| node.pub_bytes).collect();
 
         let ordering_lace = build_ordering_blocklace(&self.nodes[leader_idx].blocklace);
         let finalized_ids = dregg_blocklace::ordering::tau(&ordering_lace, &participants);
@@ -422,10 +426,37 @@ fn build_ordering_blocklace(finality_lace: &Blocklace) -> dregg_blocklace::Block
         }
     }
 
-    // Sort by (seq, creator) for deterministic insertion order.
-    all.sort_by(|(_, a), (_, b)| a.seq.cmp(&b.seq).then_with(|| a.creator.cmp(&b.creator)));
+    let all_ids: HashSet<_> = all.iter().map(|(id, _)| *id).collect();
+    all.sort_by(|(aid, a), (bid, b)| {
+        a.seq
+            .cmp(&b.seq)
+            .then_with(|| a.creator.cmp(&b.creator))
+            .then_with(|| aid.cmp(bid))
+    });
+    let mut pending: VecDeque<_> = all.into();
 
-    for (fid, block) in all {
+    while let Some((fid, block)) = pending.pop_front() {
+        debug_assert!(
+            block.predecessors.iter().all(|p| all_ids.contains(p)),
+            "collected finality block is missing a predecessor from the reachable closure"
+        );
+        let ready = block.predecessors.iter().all(|p| f2o.contains_key(p));
+        if !ready {
+            pending.push_back((fid, block));
+            if pending.iter().all(|(_, b)| {
+                b.predecessors
+                    .iter()
+                    .any(|p| all_ids.contains(p) && !f2o.contains_key(p))
+            }) {
+                debug_assert!(
+                    false,
+                    "finality blocklace contains a predecessor cycle or missing closure"
+                );
+                break;
+            }
+            continue;
+        }
+
         let predecessors: Vec<dregg_blocklace::BlockId> = block
             .predecessors
             .iter()

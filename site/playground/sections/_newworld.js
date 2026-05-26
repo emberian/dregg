@@ -8,12 +8,12 @@ let readyPromise = null;
 export function whenRuntime() {
   if (readyPromise) return readyPromise;
   readyPromise = new Promise(resolve => {
-    if (window.dregg) return resolve(window.dregg);
-    window.addEventListener('dregg:ready', e => resolve(e.detail), { once: true });
+    if (window.dreggUi) return resolve(window.dreggUi);
+    window.addEventListener('dreggUi:ready', e => resolve(e.detail), { once: true });
     // If after 4 seconds the runtime never fires, surface a noop so sections
     // at least render their fallback content.
     setTimeout(() => {
-      if (!window.dregg) {
+      if (!window.dreggUi) {
         console.warn('[dregg] runtime not ready after 4s — sections will use fallback content.');
         resolve(null);
       }

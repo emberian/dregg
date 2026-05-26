@@ -48,7 +48,7 @@ function renderBlocksTable(blocks) {
         ${sorted.map(b => `
           <tr data-height="${b.height}">
             <td class="cell-number">${api.formatNumber(b.height)}</td>
-            <td class="cell-hash">${api.shortHash(b.merkle_root, 12, 6)}</td>
+            <td class="cell-hash">${api.shortHash(api.blockRoot(b), 12, 6)}</td>
             <td>${b.signatures}</td>
             <td>${api.relativeTime(b.timestamp)}</td>
           </tr>
@@ -74,7 +74,7 @@ function renderBlockDetail(block) {
       <span class="detail-grid__label">Height</span>
       <span class="detail-grid__value detail-grid__value--highlight">${api.formatNumber(block.height)}</span>
       <span class="detail-grid__label">Merkle Root</span>
-      <span class="detail-grid__value detail-grid__value--hash">${block.merkle_root}</span>
+      <span class="detail-grid__value detail-grid__value--hash">${api.blockRoot(block) || '--'}</span>
       <span class="detail-grid__label">Signatures</span>
       <span class="detail-grid__value">${block.signatures}</span>
       <span class="detail-grid__label">Timestamp</span>

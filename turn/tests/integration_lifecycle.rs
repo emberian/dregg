@@ -194,13 +194,21 @@ fn lifecycle_seal_then_unseal_restores_live() {
             reason: [0x01; 32],
         }],
     );
-    assert!(executor.execute(&seal_turn, &mut ledger).is_committed());
+    let seal_result = executor.execute(&seal_turn, &mut ledger);
+    let seal_receipt_hash = match seal_result {
+        dregg_turn::TurnResult::Committed { receipt, .. } => receipt.receipt_hash(),
+        other => panic!("seal must commit; got {other:?}"),
+    };
     assert!(ledger.get(&cell_id).unwrap().lifecycle.is_sealed());
 
     // Unseal.
-    let unseal_turn = bare_turn(cell_id, 1, vec![Effect::CellUnseal { target: cell_id }]);
+    let mut unseal_turn = bare_turn(cell_id, 1, vec![Effect::CellUnseal { target: cell_id }]);
+    unseal_turn.previous_receipt_hash = Some(seal_receipt_hash);
     let result = executor.execute(&unseal_turn, &mut ledger);
-    assert!(result.is_committed(), "unseal must commit; got {result:?}");
+    let unseal_receipt_hash = match result {
+        dregg_turn::TurnResult::Committed { receipt, .. } => receipt.receipt_hash(),
+        other => panic!("unseal must commit; got {other:?}"),
+    };
 
     let cell = ledger.get(&cell_id).unwrap();
     assert_eq!(
@@ -210,7 +218,7 @@ fn lifecycle_seal_then_unseal_restores_live() {
     );
 
     // Effects accepted again after unseal.
-    let set_turn = bare_turn(
+    let mut set_turn = bare_turn(
         cell_id,
         2,
         vec![Effect::SetField {
@@ -219,6 +227,7 @@ fn lifecycle_seal_then_unseal_restores_live() {
             value: [0x42; 32],
         }],
     );
+    set_turn.previous_receipt_hash = Some(unseal_receipt_hash);
     let result = executor.execute(&set_turn, &mut ledger);
     assert!(
         result.is_committed(),

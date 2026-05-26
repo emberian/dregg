@@ -15,8 +15,11 @@ use dregg_token::{AuthRequest, AuthToken};
 
 fn fixture_issuer() -> IssuerKeys {
     IssuerKeys::new(
-        [42u8; 32],
-        [7u8; 32],
+        [11u8; 32],
+        [
+            33, 181, 62, 99, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0,
+        ],
         b"test-issuer-kid",
         "credentials-test",
     )
@@ -36,6 +39,34 @@ fn fixture_attributes() -> CredentialAttributes {
         .with("kyc_level", AttrValue::Integer(2))
 }
 
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
+
+fn credential_request(holder: [u8; 32]) -> AuthRequest {
+    AuthRequest {
+        user_id: Some(hex_encode(&holder)),
+        features: vec![
+            "schema:test-schema-v1".into(),
+            format!("age:{}", hex_encode(&AttrValue::Integer(25).to_fact_term())),
+            format!(
+                "country:{}",
+                hex_encode(&AttrValue::Text("US".into()).to_fact_term())
+            ),
+            format!(
+                "kyc_level:{}",
+                hex_encode(&AttrValue::Integer(2).to_fact_term())
+            ),
+        ],
+        now: Some(1_700_000_000),
+        ..Default::default()
+    }
+}
+
 #[test]
 fn issue_present_verify_roundtrip() {
     let issuer = fixture_issuer();
@@ -48,10 +79,13 @@ fn issue_present_verify_roundtrip() {
 
     // The credential token round-trips through the macaroon encoding.
     let token = cred.token().expect("token reconstruction must succeed");
-    assert_eq!(
-        token.verify(&AuthRequest::default()).err().is_none(),
-        true,
-        "root token must verify against default request"
+    assert!(
+        token.verify(&AuthRequest::default()).is_err(),
+        "credential token is holder/attribute-confined and must reject an unscoped request"
+    );
+    assert!(
+        token.verify(&credential_request(holder)).is_ok(),
+        "credential token must verify against its holder and issued attributes"
     );
 
     // Present with selective disclosure of `country`.

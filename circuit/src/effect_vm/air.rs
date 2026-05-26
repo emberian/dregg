@@ -873,6 +873,7 @@ impl StarkAir for EffectVmAir {
         for s_sel_idx in [
             sel::CREATE_SEAL_PAIR,
             sel::REFRESH_DELEGATION,
+            sel::INCREMENT_NONCE,
             sel::REVOKE_DELEGATION,
             sel::CREATE_CELL,
             sel::SPAWN_WITH_DELEGATION,
@@ -1110,12 +1111,30 @@ impl StarkAir for EffectVmAir {
         // must understand that Custom effects are only as secure as their external
         // verification implementation.
         //
-        // Constraints: all state columns unchanged (same as NoOp for state).
-        for i in 0..state::SIZE {
-            let c = s_custom * (local[STATE_AFTER_BASE + i] - local[STATE_BEFORE_BASE + i]);
+        // Constraints: semantic state passthrough. `nonce` still ticks via
+        // the global nonce constraint below, and `state_commit` is recomputed
+        // from the post-state, so neither can be equality-constrained here.
+        let c_custom_bal_lo = s_custom * (new_bal_lo - old_bal_lo);
+        combined = combined + alpha_pow * c_custom_bal_lo;
+        alpha_pow = alpha_pow * alpha;
+        let c_custom_bal_hi = s_custom * (new_bal_hi - old_bal_hi);
+        combined = combined + alpha_pow * c_custom_bal_hi;
+        alpha_pow = alpha_pow * alpha;
+        let c_custom_cap = s_custom * (new_cap_root - old_cap_root);
+        combined = combined + alpha_pow * c_custom_cap;
+        alpha_pow = alpha_pow * alpha;
+        for i in 0..8 {
+            let c = s_custom
+                * (local[STATE_AFTER_BASE + state::FIELD_BASE + i]
+                    - local[STATE_BEFORE_BASE + state::FIELD_BASE + i]);
             combined = combined + alpha_pow * c;
             alpha_pow = alpha_pow * alpha;
         }
+        let c_custom_reserved = s_custom
+            * (local[STATE_AFTER_BASE + state::RESERVED]
+                - local[STATE_BEFORE_BASE + state::RESERVED]);
+        combined = combined + alpha_pow * c_custom_reserved;
+        alpha_pow = alpha_pow * alpha;
 
         // ====================================================================
 
@@ -1311,13 +1330,29 @@ impl StarkAir for EffectVmAir {
             alpha_pow = alpha_pow * alpha;
         }
 
-        // -- CreateCellFromFactory: state flows through unchanged --
+        // -- CreateCellFromFactory: semantic state passthrough; nonce ticks --
         let s_factory = local[sel::CREATE_CELL_FROM_FACTORY];
-        for i in 0..state::SIZE {
-            let c = s_factory * (local[STATE_AFTER_BASE + i] - local[STATE_BEFORE_BASE + i]);
+        let c_factory_bal_lo = s_factory * (new_bal_lo - old_bal_lo);
+        combined = combined + alpha_pow * c_factory_bal_lo;
+        alpha_pow = alpha_pow * alpha;
+        let c_factory_bal_hi = s_factory * (new_bal_hi - old_bal_hi);
+        combined = combined + alpha_pow * c_factory_bal_hi;
+        alpha_pow = alpha_pow * alpha;
+        let c_factory_cap = s_factory * (new_cap_root - old_cap_root);
+        combined = combined + alpha_pow * c_factory_cap;
+        alpha_pow = alpha_pow * alpha;
+        for i in 0..8 {
+            let c = s_factory
+                * (local[STATE_AFTER_BASE + state::FIELD_BASE + i]
+                    - local[STATE_BEFORE_BASE + state::FIELD_BASE + i]);
             combined = combined + alpha_pow * c;
             alpha_pow = alpha_pow * alpha;
         }
+        let c_factory_reserved = s_factory
+            * (local[STATE_AFTER_BASE + state::RESERVED]
+                - local[STATE_BEFORE_BASE + state::RESERVED]);
+        combined = combined + alpha_pow * c_factory_reserved;
+        alpha_pow = alpha_pow * alpha;
 
         // ====================================================================
         // CapTP Effects (provable CapTP operations)

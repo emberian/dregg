@@ -2,7 +2,7 @@
  * Visualizer base — small utilities every visualizer module is encouraged
  * to use so the look-and-feel stays coherent.
  *
- * Import this *after* `runtime-bootstrap.js` has fired the `dregg:ready`
+ * Import this *after* `runtime-bootstrap.js` has fired the `dreggUi:ready`
  * event:
  *
  *   import { defineVisualizer, useStepper } from '/_includes/visualizer-base.js';

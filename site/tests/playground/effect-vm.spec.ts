@@ -9,6 +9,7 @@ test.describe('Playground Effect VM', () => {
     await page.goto('/playground/');
     await page.waitForSelector('.pg-nav__item.active');
     // Navigate to Effect VM section
+    await page.click('[data-scenario="proving"]');
     await page.click('[data-section="effect-vm"]');
     await expect(page.locator('#section-effect-vm')).toHaveClass(/active/);
   });

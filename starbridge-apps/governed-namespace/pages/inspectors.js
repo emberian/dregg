@@ -891,8 +891,8 @@ const COMPONENTS = {
 if (typeof customElements !== 'undefined') {
   for (const [tag, ctor] of Object.entries(COMPONENTS)) {
     if (!customElements.get(tag)) customElements.define(tag, ctor);
-    if (typeof window !== 'undefined' && window.dregg?.register) {
-      window.dregg.register(tag, ctor);
+    if (typeof window !== 'undefined' && window.dreggUi?.register) {
+      window.dreggUi.register(tag, ctor);
     }
   }
 }

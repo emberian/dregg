@@ -937,11 +937,9 @@ mod tests {
         let (trace, pi) = generate_dispute_trace(&t);
         let circuit = dispute_dsl_circuit();
 
-        let proof = stark::prove(&circuit, &trace, &pi);
-        let result = stark::verify(&circuit, &proof, &pi);
         assert!(
-            result.is_err(),
-            "STARK must reject resolution without arbiter signature"
+            stark::try_prove(&circuit, &trace, &pi).is_err(),
+            "STARK prover must reject resolution without arbiter signature"
         );
     }
 

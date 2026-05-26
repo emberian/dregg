@@ -1,6 +1,27 @@
 import { test, expect } from '@playwright/test';
 import { mockPlaygroundDiscovery, blockWebSockets, blockWasm } from '../mocks/api';
 
+const scenarioForSection: Record<string, string> = {
+  overview: 'foundations',
+  tokens: 'foundations',
+  proofs: 'foundations',
+  merkle: 'foundations',
+  datalog: 'foundations',
+  notes: 'foundations',
+  capabilities: 'foundations',
+  crossfed: 'federation',
+  sovereign: 'federation',
+  bearer: 'federation',
+  factories: 'federation',
+  'effect-vm': 'proving',
+  'blocklace-sim': 'proving',
+};
+
+async function openSection(page, section: string) {
+  await page.click(`[data-scenario="${scenarioForSection[section]}"]`);
+  await page.click(`[data-section="${section}"]`);
+}
+
 test.describe('Playground Sections', () => {
   test.beforeEach(async ({ page }) => {
     await mockPlaygroundDiscovery(page);
@@ -32,6 +53,30 @@ test.describe('Playground Sections', () => {
     await expect(page.locator('#section-overview')).toHaveClass(/active/);
   });
 
+  test('scenario tabs filter the demo list', async ({ page }) => {
+    await expect(page.locator('[data-scenario="foundations"]')).toHaveClass(/active/);
+    await expect(page.locator('[data-section="tokens"]')).toBeVisible();
+    await expect(page.locator('[data-section="effect-vm"]')).toBeHidden();
+
+    await page.click('[data-scenario="proving"]');
+    await expect(page.locator('[data-scenario="proving"]')).toHaveClass(/active/);
+    await expect(page.locator('[data-section="effect-vm"]')).toBeVisible();
+    await expect(page.locator('[data-section="tokens"]')).toBeHidden();
+    await expect(page.locator('#section-effect-vm')).toHaveClass(/active/);
+  });
+
+  test('hash navigation opens the owning scenario tab', async ({ page }) => {
+    await page.goto('/playground/#marketplace');
+    await page.waitForFunction(() => {
+      const tab = document.querySelector('[data-scenario="apps"]');
+      return tab && tab.classList.contains('active');
+    });
+
+    await expect(page.locator('[data-scenario="apps"]')).toHaveClass(/active/);
+    await expect(page.locator('[data-section="marketplace"]')).toBeVisible();
+    await expect(page.locator('#section-marketplace')).toHaveClass(/active/);
+  });
+
   test('nav items switch sections on click', async ({ page }) => {
     // Click tokens nav
     await page.click('[data-section="tokens"]');
@@ -55,7 +100,7 @@ test.describe('Playground Sections', () => {
     ];
 
     for (const section of sections) {
-      await page.click(`[data-section="${section}"]`);
+      await openSection(page, section);
       await expect(page.locator(`#section-${section}`)).toHaveClass(/active/);
     }
 

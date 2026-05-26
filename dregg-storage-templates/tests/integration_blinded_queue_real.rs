@@ -4,8 +4,8 @@
 //! path for a composed `add`/`consume` flow:
 //!
 //! 1. Start from a valid initial state.
-//! 2. Add N items (each advancing `commitment_count` + `commitments_root`).
-//! 3. Verify the `commitment_count` grows monotonically.
+//! 2. Add N items (each advancing `commitment_count` exactly once and changing `commitments_root`).
+//! 3. Verify the `commitment_count` advances sequentially.
 //! 4. Attempt to add while falsely claiming `commitment_count` stayed flat — reject.
 //! 5. Consume an item (nullifier grows; commitments side frozen).
 //! 6. Attempt to consume while allowing `commitments_root` to change — reject.
@@ -145,13 +145,13 @@ fn add_n_items_commitment_count_grows_monotonically() {
 #[test]
 fn add_with_flat_count_rejected() {
     // An add whose commitment_count stays the same as before violates
-    // Monotonic on COMMITMENT_COUNT_SLOT.
+    // MonotonicSequence on COMMITMENT_COUNT_SLOT.
     let p = strip_executor_constraints(blinded_queue_program());
     let old = base_state();
     // Build a state that changes the root but leaves the count unchanged.
     let mut bad = old.clone();
     bad.fields[COMMITMENTS_ROOT_SLOT as usize] = blake3_field(b"attacker-root");
-    // commitment_count stays 0 — violates Monotonic.
+    // commitment_count stays 0 — violates MonotonicSequence.
     let err = p
         .evaluate_with_meta(&bad, Some(&old), None, &method_meta("add"))
         .expect_err("add without count increment must be rejected");
@@ -159,6 +159,26 @@ fn add_with_flat_count_rejected() {
         matches!(err, ProgramError::ConstraintViolated { .. }),
         "expected ConstraintViolated, got {err:?}"
     );
+}
+
+#[test]
+fn add_without_commitments_root_change_rejected() {
+    let p = strip_executor_constraints(blinded_queue_program());
+    let old = base_state();
+
+    let mut bad = old.clone();
+    bad.fields[COMMITMENT_COUNT_SLOT as usize] = u64_field(1);
+
+    let err = p
+        .evaluate_with_meta(&bad, Some(&old), None, &method_meta("add"))
+        .expect_err("add without commitments_root change must be rejected");
+    match err {
+        ProgramError::ConstraintViolated {
+            constraint: StateConstraint::Immutable { index },
+            ..
+        } => assert_eq!(index, COMMITMENTS_ROOT_SLOT),
+        other => panic!("expected negated Immutable on commitments_root, got {other:?}"),
+    }
 }
 
 #[test]
@@ -241,6 +261,36 @@ fn consume_that_decrements_nullifier_count_rejected() {
         matches!(err, ProgramError::ConstraintViolated { .. }),
         "expected ConstraintViolated, got {err:?}"
     );
+}
+
+#[test]
+fn consume_past_commitment_count_rejected() {
+    let p = strip_executor_constraints(blinded_queue_program());
+
+    let mut state = base_state();
+    state = apply_add(&state, b"item-0");
+    state = apply_consume(&state, b"null-0");
+
+    let bad = apply_consume(&state, b"null-1");
+    let err = p
+        .evaluate_with_meta(&bad, Some(&state), None, &method_meta("consume"))
+        .expect_err("nullifier_count must not exceed commitment_count");
+    match err {
+        ProgramError::ConstraintViolated {
+            constraint:
+                StateConstraint::FieldLteField {
+                    left_index,
+                    right_index,
+                },
+            ..
+        } => {
+            assert_eq!(left_index, NULLIFIER_COUNT_SLOT);
+            assert_eq!(right_index, COMMITMENT_COUNT_SLOT);
+        }
+        other => {
+            panic!("expected FieldLteField nullifier_count <= commitment_count, got {other:?}")
+        }
+    }
 }
 
 #[test]

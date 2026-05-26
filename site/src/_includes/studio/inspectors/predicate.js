@@ -101,7 +101,7 @@ class DreggPredicate extends InspectorBase {
     // (editor mode with no runtime — just a wasm global).
     super.connectedCallback().catch(() => {
       // No <dregg-app> ancestor in standalone use; render anyway with
-      // direct wasm access from window.dregg if available.
+      // direct wasm access from the Studio runtime API if available.
       this._runtime = null;
       this._api = window.dreggUi || null;
       this._render();
@@ -302,7 +302,6 @@ class DreggPredicate extends InspectorBase {
     // ── Evaluate logic ─────────────────────────────────────────────────────
     const getWasm = () => {
       if (this._runtime && this._runtime._wasm) return this._runtime._wasm;
-      if (window.dregg) return window.dregg;
       return null;
     };
 

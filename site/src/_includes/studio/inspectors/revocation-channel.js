@@ -1,8 +1,8 @@
 /**
  * <dregg-revocation-channel uri="dregg://revocation-channel/<id-hex>">
  *
- * Per-channel state + list (via list_revocation_channels stub + is_channel_active).
- * Create/trip affordances when mutate.
+ * Per-channel state + list via runtime.listRevocationChannels().
+ * Lab create/trip affordances only appear with mode="lab" and mutate runtime.
  *
  * Replaces tiered-revocation playground bits (retired).
  * Canonical: create_revocation_channel, trip_revocation_channel, is_channel_active.
@@ -23,7 +23,7 @@ class DreggRevocationChannel extends InspectorBase {
 
     const wasm = this._runtime?._wasm || null;
     const handle = this._runtime?._handle;
-    const caps = this._runtime?.caps || { mutate: true };
+    const caps = this._runtime?.caps || { mutate: false };
 
     let parsed = null;
     let inline = null;
@@ -44,7 +44,7 @@ class DreggRevocationChannel extends InspectorBase {
       let ch = inline;
       if (!ch && parsed) {
         const list = (listSignal && listSignal.value) || [];
-        ch = list.find(c => c.channel_id === parsed.id) || { channel_id: parsed.id, active: true };
+        ch = list.find(c => c.channel_id === parsed.id) || null;
       }
       if (!ch && mode === 'compact') {
         return html`<span class="dregg-inspector dregg-inspector--compact">revocation-channel</span>`;
@@ -53,22 +53,31 @@ class DreggRevocationChannel extends InspectorBase {
         return html`
           <div class="dregg-inspector dregg-inspector--revchan">
             <header><span class="dregg-inspector__kind">revocation-channel</span></header>
-            <div style="font-size:0.8rem;color:var(--fg-dim);">No channel data. Use create affordance or data=.</div>
-            ${caps.mutate && wasm ? html`<button data-act="create" style="margin-top:6px;font-size:0.75rem;">Create Channel (agent 0)</button>` : null}
+            <div style="font-size:0.8rem;color:var(--fg-dim);">
+              ${parsed
+                ? html`channel not found in this runtime: <code>${shortHex(parsed.id, 16)}</code>`
+                : html`no channel data; provide <code>uri=</code> or <code>data=</code>.`}
+            </div>
+            ${mode === 'lab' && caps.mutate && wasm ? html`<button data-act="create" style="margin-top:6px;font-size:0.75rem;">Create channel via wasm</button>` : null}
           </div>`;
       }
 
-      const status = ch.active ? html`<span style="color:#166534;">ACTIVE</span>` : html`<span style="color:#b91c1c;">TRIPPED</span>`;
+      const status = ch.active === true
+        ? html`<span style="color:#166534;">ACTIVE</span>`
+        : ch.active === false
+          ? html`<span style="color:#b91c1c;">TRIPPED</span>`
+          : html`<span style="color:var(--fg-dim);">unknown; awaiting channel state</span>`;
 
       if (mode === 'compact') {
+        const stateLabel = ch.active === true ? 'active' : ch.active === false ? 'tripped' : 'state unknown';
         return html`
           <span class="dregg-inspector dregg-inspector--compact">
-            <code>${shortHex(ch.channel_id)}</code> ${ch.active ? 'active' : 'tripped'}
+            <code>${shortHex(ch.channel_id)}</code> ${stateLabel}
           </span>`;
       }
 
-      const tripBtn = (caps.mutate && wasm && ch.active) ? html`
-        <button data-act="trip" style="font-size:0.75rem;padding:2px 6px;">Trip Channel</button>
+      const tripBtn = (mode === 'lab' && caps.mutate && wasm && ch.active) ? html`
+        <button data-act="trip" style="font-size:0.75rem;padding:2px 6px;">Trip via wasm</button>
       ` : null;
 
       return html`
@@ -92,7 +101,7 @@ class DreggRevocationChannel extends InspectorBase {
 
     root.addEventListener('click', (e) => {
       const btn = e.target.closest('button[data-act]');
-      if (!btn || !wasm || !handle) return;
+      if (!btn || !wasm || !handle || mode !== 'lab') return;
       const act = btn.dataset.act;
       if (act === 'create') {
         try {

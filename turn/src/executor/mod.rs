@@ -285,6 +285,7 @@ pub fn project_slot_caveat_manifest(
             }
             // Deferred — no AIR teeth in Block 3 first wave.
             dregg_cell::StateConstraint::SumEquals { .. }
+            | dregg_cell::StateConstraint::FieldLteField { .. }
             | dregg_cell::StateConstraint::BoundedBy { .. }
             | dregg_cell::StateConstraint::FieldDeltaInRange { .. }
             | dregg_cell::StateConstraint::FieldGteHeight { .. }

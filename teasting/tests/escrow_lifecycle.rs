@@ -63,6 +63,9 @@ fn exec_turn(
 ) -> TurnResult {
     let mut builder = TurnBuilder::new(agent, nonce);
     builder.set_fee(fee);
+    if let Some(prev) = executor.get_last_receipt_hash(&agent) {
+        builder.set_previous_receipt_hash(prev);
+    }
     let mut ab = ActionBuilder::new_unchecked_for_tests(agent, "escrow-op", agent);
     for e in effects {
         ab = ab.effect(e);

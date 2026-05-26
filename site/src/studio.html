@@ -112,7 +112,7 @@
 
 <script type="module" src="/_includes/runtime-bootstrap.js"></script>
 <script type="module">
-  // Wait for the bootstrap to fire dregg:ready, then init wasm and the runtime.
+  // Wait for the bootstrap to fire dreggUi:ready, then init wasm and the runtime.
   function ready() {
     return new Promise(resolve => {
       if (window.dreggUi) return resolve(window.dreggUi);

@@ -387,17 +387,12 @@ fn test_dfa_tampered_trace_fails_verification() {
     public_inputs[PI_FINAL_STATE] = last_row[COL_NEXT_STATE];
     public_inputs[PI_ROUTE_COMMITMENT] = last_row[COL_RUNNING_HASH];
 
-    // The proof should still be generated (the prover doesn't check constraints).
+    // Invalid traces now fail during proving: the prover refuses to commit a
+    // trace whose transition constraints are already non-zero on trace rows.
     let air = DfaRoutingAir::new(trace.len());
-    let proof = stark::prove(&air, &trace, &public_inputs);
-
-    // But verification should FAIL because:
-    // - Row 1's table_entry_hash doesn't match hash_4_to_1(1, 1, 1, 0)
-    //   (we left the original hash which was for transition (1, 1, 2, 0))
-    let result = stark::verify(&air, &proof, &public_inputs);
     assert!(
-        result.is_err(),
-        "Tampered DFA trace should fail STARK verification"
+        stark::try_prove(&air, &trace, &public_inputs).is_err(),
+        "Tampered DFA trace should fail STARK proving"
     );
 }
 

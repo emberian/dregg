@@ -122,43 +122,171 @@ function updateNavBadges() {
 // Navigation
 // ============================================================================
 
+const PLAYGROUND_SCENARIOS = [
+  {
+    id: 'foundations',
+    label: 'Foundations',
+    lede: 'Core browser-local primitives: tokens, proofs, commitments, policy, notes, and delegation.',
+    starbridgeHref: '/starbridge.html?at=dregg://token/demo',
+    starbridgeLabel: 'Open token demo in Starbridge',
+    sections: ['overview', 'tokens', 'proofs', 'merkle', 'datalog', 'notes', 'capabilities'],
+  },
+  {
+    id: 'federation',
+    label: 'Federation',
+    lede: 'Federated turns, sovereign exits, bearer capabilities, factories, and private transfer flows.',
+    starbridgeHref: '/starbridge.html?at=dregg://federation/0',
+    starbridgeLabel: 'Open federation in Starbridge',
+    sections: ['crossfed', 'sovereign', 'bearer', 'factories', 'private-transfers', 'composition'],
+  },
+  {
+    id: 'apps',
+    label: 'Apps',
+    lede: 'Mostly self-contained application demos that compose the lower-level primitives.',
+    starbridgeHref: '/starbridge.html?at=dregg://app/nameservice',
+    starbridgeLabel: 'Open app demo in Starbridge',
+    sections: ['gallery', 'federation', 'marketplace', 'nameservice', 'delegation-v2'],
+  },
+  {
+    id: 'proving',
+    label: 'Proving',
+    lede: 'Effect traces, blocklace simulation, proof composition, revocation, circuit design, and sandboxing.',
+    starbridgeHref: '/starbridge.html?at=dregg://turn/demo',
+    starbridgeLabel: 'Open turn demo in Starbridge',
+    sections: ['effect-vm', 'blocklace-sim', 'full-turn-proof', 'tiered-revocation', 'circuit-playground', 'sandbox'],
+  },
+  {
+    id: 'queues',
+    label: 'Queues',
+    lede: 'Queue, inbox, ring-trade, and batch execution demos with their own visualizers.',
+    starbridgeHref: '/starbridge.html?at=dregg://queue/demo',
+    starbridgeLabel: 'Open queue demo in Starbridge',
+    sections: ['blinded-queues', 'programmable-queues', 'ring-trades', 'inboxes', 'batch-executor'],
+  },
+];
+
+const SCENARIO_BY_SECTION = new Map(
+  PLAYGROUND_SCENARIOS.flatMap(scenario =>
+    scenario.sections.map(sectionId => [sectionId, scenario.id])
+  )
+);
+
+let activeScenarioId = PLAYGROUND_SCENARIOS[0].id;
+
 function setupNavigation() {
   const items = document.querySelectorAll('.pg-nav__item');
   const sections = document.querySelectorAll('.pg-section');
 
+  setupScenarioTabs();
+
   items.forEach(item => {
     item.addEventListener('click', () => {
       const sectionId = item.dataset.section;
-      items.forEach(i => i.classList.remove('active'));
-      sections.forEach(s => s.classList.remove('active'));
-      item.classList.add('active');
-      document.getElementById(`section-${sectionId}`).classList.add('active');
-      history.replaceState(null, '', `#${sectionId}`);
+      activateSection(sectionId);
     });
   });
 
   // Handle hash-based navigation on load
   const hash = location.hash.slice(1);
   if (hash) {
-    const target = document.querySelector(`[data-section="${hash}"]`);
-    if (target) {
-      items.forEach(i => i.classList.remove('active'));
-      sections.forEach(s => s.classList.remove('active'));
-      target.classList.add('active');
-      document.getElementById(`section-${hash}`).classList.add('active');
-    }
+    activateSection(hash, { replaceHash: false });
+  } else {
+    activateSection('overview', { replaceHash: false });
+  }
+
+  window.addEventListener('hashchange', () => {
+    const nextHash = location.hash.slice(1);
+    if (nextHash) activateSection(nextHash, { replaceHash: false });
+  });
+}
+
+function setupScenarioTabs() {
+  const root = document.getElementById('pg-scenarios');
+  if (!root) return;
+
+  root.innerHTML = `
+    <div class="pg-scenarios__eyebrow">Scenarios</div>
+    <div class="pg-scenarios__tabs" role="tablist" aria-label="Playground scenarios">
+      ${PLAYGROUND_SCENARIOS.map(scenario => `
+        <button
+          class="pg-scenarios__tab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          data-scenario="${scenario.id}"
+        >${scenario.label}</button>
+      `).join('')}
+    </div>
+    <div class="pg-scenarios__summary" id="pg-scenario-summary"></div>
+  `;
+
+  root.querySelectorAll('[data-scenario]').forEach(tab => {
+    tab.addEventListener('click', () => {
+      const scenarioId = tab.dataset.scenario;
+      const scenario = PLAYGROUND_SCENARIOS.find(s => s.id === scenarioId);
+      if (!scenario) return;
+      setActiveScenario(scenarioId);
+      activateSection(scenario.sections[0]);
+    });
+  });
+}
+
+function setActiveScenario(scenarioId) {
+  const scenario = PLAYGROUND_SCENARIOS.find(s => s.id === scenarioId) || PLAYGROUND_SCENARIOS[0];
+  activeScenarioId = scenario.id;
+  const sectionSet = new Set(scenario.sections);
+
+  document.querySelectorAll('.pg-scenarios__tab').forEach(tab => {
+    const selected = tab.dataset.scenario === scenario.id;
+    tab.classList.toggle('active', selected);
+    tab.setAttribute('aria-selected', selected ? 'true' : 'false');
+  });
+
+  document.querySelectorAll('.pg-nav__item').forEach(item => {
+    item.hidden = !sectionSet.has(item.dataset.section);
+  });
+
+  const summary = document.getElementById('pg-scenario-summary');
+  if (summary) {
+    summary.innerHTML = `
+      <p>${scenario.lede}</p>
+      <a href="${scenario.starbridgeHref}" target="_blank" rel="noreferrer">${scenario.starbridgeLabel}</a>
+    `;
+  }
+
+  const hint = document.getElementById('pg-nav-hint');
+  if (hint) {
+    hint.textContent = `${scenario.label}: ${scenario.sections.length} demos`;
   }
 }
 
-export function navigateTo(sectionId) {
+function activateSection(sectionId, options = {}) {
+  const { replaceHash = true } = options;
   const items = document.querySelectorAll('.pg-nav__item');
   const sections = document.querySelectorAll('.pg-section');
+  const section = document.getElementById(`section-${sectionId}`);
+  if (!section) return false;
+
+  const scenarioId = SCENARIO_BY_SECTION.get(sectionId);
+  if (scenarioId && scenarioId !== activeScenarioId) {
+    setActiveScenario(scenarioId);
+  } else if (!document.querySelector('.pg-scenarios__tab.active')) {
+    setActiveScenario(activeScenarioId);
+  }
+
   items.forEach(i => i.classList.remove('active'));
   sections.forEach(s => s.classList.remove('active'));
   const target = document.querySelector(`[data-section="${sectionId}"]`);
   if (target) target.classList.add('active');
-  document.getElementById(`section-${sectionId}`).classList.add('active');
-  history.replaceState(null, '', `#${sectionId}`);
+  section.classList.add('active');
+  if (replaceHash) {
+    history.replaceState(null, '', `#${sectionId}`);
+  }
+  return true;
+}
+
+export function navigateTo(sectionId) {
+  activateSection(sectionId);
 }
 
 // ============================================================================

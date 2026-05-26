@@ -7,7 +7,7 @@
  * Visualizer reuse: the detail panel embeds a `<dregg-vizzer>` element per
  * family (`programmable-queue`, `blinded-queue`, `inbox-lifecycle`); the
  * matching modules are loaded as <script type="module"> from explorer
- * index.html and self-register via runtime-bootstrap's `dregg:ready` event.
+ * index.html and self-register via runtime-bootstrap's `dreggUi:ready` event.
  */
 
 import { bus, state } from '../app.js';
@@ -19,6 +19,7 @@ export const name = 'queues';
 let container = null;
 let activeTab = 'programmable';
 let cachedSummaries = { programmable: null, blinded: null, inbox: null };
+let loadError = '';
 
 export function init(el) {
   container = el;
@@ -60,7 +61,17 @@ function switchTab(tab) {
 }
 
 async function load() {
-  const services = await api.listServices().catch(() => []);
+  let services = [];
+  loadError = '';
+  try {
+    services = await api.listServices();
+  } catch (e) {
+    cachedSummaries = { programmable: [], blinded: [], inbox: [] };
+    loadError = e?.message || 'Service registry endpoint is unavailable.';
+    render();
+    return;
+  }
+
   // Pull summaries for each family in parallel — fail-soft per service.
   cachedSummaries.programmable = await Promise.all(services.map(s =>
     api.getProgrammableQueue(svcName(s)).catch(() => null).then(d => withServiceName(d, s, 'programmable'))
@@ -72,13 +83,8 @@ async function load() {
     api.getInboxQueue(svcName(s)).catch(() => null).then(d => withServiceName(d, s, 'inbox'))
   ));
 
-  // If everything is null, fall back to mock so the view is still useful.
   for (const k of Object.keys(cachedSummaries)) {
-    if (!cachedSummaries[k] || cachedSummaries[k].every(x => x === null)) {
-      cachedSummaries[k] = mockSummaries(k);
-    } else {
-      cachedSummaries[k] = cachedSummaries[k].filter(Boolean);
-    }
+    cachedSummaries[k] = (cachedSummaries[k] || []).filter(Boolean);
   }
   render();
 }
@@ -92,9 +98,13 @@ function withServiceName(data, s, family) {
 function render() {
   const root = document.getElementById('queues-content');
   if (!root) return;
+  if (loadError) {
+    root.innerHTML = `<div class="empty-state">No live queue data from this node.<br><span class="ex-hint">${escapeHtml(loadError)}</span></div>`;
+    return;
+  }
   const rows = cachedSummaries[activeTab] || [];
   if (!rows.length) {
-    root.innerHTML = '<div class="dregg-empty">No queues found for this family.</div>';
+    root.innerHTML = '<div class="empty-state">No queues reported for this family.</div>';
     return;
   }
   root.innerHTML = `
@@ -174,8 +184,8 @@ function openDetail(row) {
   `;
 
   // Re-mount visualizers in this newly-injected subtree.
-  if (window.dregg?.mount) {
-    try { window.dregg.mount(body); } catch (e) { console.warn('[queues] mount failed', e); }
+  if (window.dreggUi?.mount) {
+    try { window.dreggUi.mount(body); } catch (e) { console.warn('[queues] mount failed', e); }
   }
 
   document.getElementById('queue-load-entries')?.addEventListener('click', () => loadEntries(row));
@@ -236,23 +246,3 @@ function escapeHtml(s) {
   }[c]));
 }
 function escapeAttr(s) { return escapeHtml(s); }
-
-// =============================================================================
-// Mock data (used when no endpoints respond — keeps the view useful offline).
-// =============================================================================
-function mockSummaries(family) {
-  if (family === 'programmable') return [
-    { service: 'marketplace', name: 'orders',     depth: 142, root: '5b8a5a4f7c0d8b1e2f3a4b5c6d7e8f90', vk_hash: 'aa11bb22cc33dd44', family },
-    { service: 'gallery',     name: 'bids',       depth: 31,  root: '9bb87a5e6a7c8d9e0f1234567890abcd', vk_hash: 'cc77dd88ee99ffaa', family },
-    { service: 'lending',     name: 'liquidations', depth: 4, root: 'd4685c11223344556677889900112233', vk_hash: 'ff00112233445566', family },
-  ];
-  if (family === 'blinded') return [
-    { service: 'private-transfers', name: 'commitments', leaves_count: 1024, nullifier_count: 512, root: '7aab6fdeadbeefcafe123456', family },
-    { service: 'gallery',           name: 'sealed-bids', leaves_count: 16,   nullifier_count: 0,   root: 'feedfacecafebabe000ddead', family },
-  ];
-  if (family === 'inbox') return [
-    { service: 'mail',     name: 'inbox', depth: 7, deposit_min: 100, ttl_secs: 86400, root: 'aabbccddeeff001122334455', family },
-    { service: 'chat-mvp', name: 'inbox', depth: 0, deposit_min: 10,  ttl_secs: 3600,  root: '0000000000000000', family },
-  ];
-  return [];
-}

@@ -852,8 +852,8 @@ for (const [tag, ctor] of Object.entries(COMPONENTS)) {
   if (typeof customElements !== 'undefined' && !customElements.get(tag)) {
     customElements.define(tag, ctor);
   }
-  if (typeof window !== 'undefined' && window.dregg?.register) {
-    window.dregg.register(tag, ctor);
+  if (typeof window !== 'undefined' && window.dreggUi?.register) {
+    window.dreggUi.register(tag, ctor);
   }
 }
 

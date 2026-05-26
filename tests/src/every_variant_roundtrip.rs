@@ -41,7 +41,9 @@ use dregg_cell::{
     AuthRequired, CapabilityRef, Cell, CellId, CellMode, Ledger, NoteCommitment, Nullifier,
     Permissions, Preconditions, SealedBox, ValueCommitmentBytes, factory::FactoryCreationParams,
 };
-use dregg_circuit::{CellState as VmCellState, EffectVmAir, generate_effect_vm_trace, stark};
+use dregg_circuit::effect_vm::{Effect as VmEffect, EffectVmContext, generate_effect_vm_trace_ext};
+use dregg_circuit::poseidon2::hash_2_to_1;
+use dregg_circuit::{CellState as VmCellState, EffectVmAir, stark};
 use dregg_sdk::AgentCipherclerk;
 use dregg_turn::action::{BearerCapProof, DelegationProofData, QueueTxOp, symbol};
 use dregg_turn::conditional::ProofCondition;
@@ -460,7 +462,7 @@ fn all_effect_variants() -> Vec<Variant> {
         Variant {
             label: "QueuePipelineStep",
             effect: Effect::QueuePipelineStep {
-                pipeline_id: [0u8; 32],
+                pipeline_id: [7u8; 32],
                 source: cell_b,
                 sinks: vec![cell_c],
             },
@@ -949,9 +951,7 @@ fn prove_and_verify_variant(
     initial_state: &VmCellState,
     effect: &Effect,
 ) -> Result<(), String> {
-    use dregg_circuit::effect_vm::Effect as VmEffect;
-
-    let projected = AgentCipherclerk::convert_effects_to_vm(cell_id, &[effect.clone()]);
+    let mut projected = AgentCipherclerk::convert_effects_to_vm(cell_id, &[effect.clone()]);
 
     // If the projection is all-NoOp, the AIR has nothing meaningful to
     // verify for this variant. Tag as KNOWN_PENDING.
@@ -959,10 +959,66 @@ fn prove_and_verify_variant(
         return Err(format!("KNOWN_PENDING: variant projects to all-NoOp"));
     }
 
-    let (trace, public_inputs) = generate_effect_vm_trace(initial_state, &projected);
+    let mut proof_state = initial_state.clone();
+    let mut ctx = EffectVmContext::default();
+    ctx.actor_nonce = proof_state.nonce as u64;
+    prepare_variant_proof_fixture(&mut proof_state, &mut projected, &mut ctx);
+
+    let (trace, public_inputs) = generate_effect_vm_trace_ext(&proof_state, &projected, ctx);
     let air = EffectVmAir::new(trace.len());
     let proof = stark::prove(&air, &trace, &public_inputs);
     stark::verify(&air, &proof, &public_inputs).map_err(|e| format!("verify failed: {}", e))
+}
+
+fn prepare_variant_proof_fixture(
+    initial_state: &mut VmCellState,
+    projected: &mut [VmEffect],
+    ctx: &mut EffectVmContext,
+) {
+    for effect in projected {
+        match effect {
+            VmEffect::Unseal { field_idx, .. } => {
+                initial_state.sealed_field_mask |= 1u32 << *field_idx;
+            }
+            VmEffect::AtomicQueueTx {
+                combined_old_root, ..
+            } => {
+                initial_state.fields[4] = *combined_old_root;
+            }
+            VmEffect::PipelineStep {
+                source_old_root, ..
+            } => {
+                initial_state.fields[4] = *source_old_root;
+            }
+            VmEffect::DropRef {
+                current_refcount, ..
+            } => {
+                if *current_refcount == 0 {
+                    *current_refcount = 1;
+                }
+                initial_state.fields[5] = dregg_circuit::field::BabyBear::new(*current_refcount);
+            }
+            VmEffect::ValidateHandoff {
+                certificate_hash,
+                recipient_pk,
+                introducer_pk,
+                ..
+            } => {
+                let pks = hash_2_to_1(*recipient_pk, *introducer_pk);
+                let leaf = hash_2_to_1(*certificate_hash, pks);
+                ctx.approved_handoffs_root[0] =
+                    hash_2_to_1(leaf, dregg_circuit::field::BabyBear::ZERO);
+            }
+            _ => {}
+        }
+    }
+
+    initial_state.state_commitment = VmCellState::compute_commitment(
+        initial_state.balance,
+        initial_state.nonce,
+        &initial_state.fields,
+        initial_state.capability_root,
+    );
 }
 
 #[derive(Debug)]

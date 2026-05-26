@@ -13,6 +13,7 @@ export const name = 'delegations';
 let container = null;
 let cached = null;
 let searchEl;
+let loadError = '';
 
 export function init(el) {
   container = el;
@@ -34,13 +35,11 @@ export function destroy() {}
 
 async function load() {
   const q = searchEl?.value?.trim() || '';
+  loadError = '';
   try { cached = await api.listDelegations({ q }); }
-  catch { cached = null; }
-  if (!cached || !cached.length) {
-    cached = mockDelegations();
-    if (q) cached = cached.filter(d =>
-      d.delegator.includes(q) || d.delegatee.includes(q) || (d.cap_id || '').includes(q)
-    );
+  catch {
+    cached = [];
+    loadError = 'Delegation endpoint is unavailable on this node.';
   }
   render();
 }
@@ -48,6 +47,10 @@ async function load() {
 function render() {
   const root = document.getElementById('delegations-content');
   if (!root) return;
+  if (loadError) {
+    root.innerHTML = `<div class="empty-state">No live delegation data from this node.<br><span class="ex-hint">${escapeHtml(loadError)}</span></div>`;
+    return;
+  }
   if (!cached || !cached.length) {
     root.innerHTML = '<div class="dregg-empty">No delegations found.</div>';
     return;
@@ -125,8 +128,8 @@ async function openDetail(row) {
       </div>
     </dregg-vizzer>
   `;
-  if (window.dregg?.mount) {
-    try { window.dregg.mount(body); } catch (e) { console.warn('[delegations] mount failed', e); }
+  if (window.dreggUi?.mount) {
+    try { window.dreggUi.mount(body); } catch (e) { console.warn('[delegations] mount failed', e); }
   }
 }
 
@@ -153,43 +156,4 @@ function escapeAttr(s) { return escapeHtml(s); }
 function debounce(fn, ms) {
   let t = null;
   return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
-}
-
-// =============================================================================
-// Mock data
-// =============================================================================
-function mockDelegations() {
-  const now = Math.floor(Date.now() / 1000);
-  return [
-    {
-      id: 'd-001',
-      delegator: 'aa11bb22cc33dd44ee55ff66',
-      delegatee: 'bb22cc33dd44ee55ff667788',
-      cap_id:    'cap-gallery-bid',
-      caveats:   ['amount<=100', 'until=2026-12-31'],
-      authority_policy: 'attenuated',
-      envelope_hash: '5b8a5a4f7c0d8b1e2f3a4b5c6d7e8f90deadbeefcafe0011',
-      signed_at: now - 86400 * 3,
-    },
-    {
-      id: 'd-002',
-      delegator: 'ccddeeff00112233445566778899aabb',
-      delegatee: 'ddee0011223344556677889900aabbcc',
-      cap_id:    'cap-vault-withdraw',
-      caveats:   ['multisig_required'],
-      authority_policy: 'restricted',
-      envelope_hash: '9bb87a5e6a7c8d9e0f1234567890abcdfeedfacecafebabe',
-      signed_at: now - 86400 * 14,
-    },
-    {
-      id: 'd-003',
-      delegator: 'feedfacecafebabe0123456789abcdef',
-      delegatee: '0123456789abcdef0123456789abcdef',
-      cap_id:    'cap-nameservice-register',
-      caveats:   [],
-      authority_policy: 'full',
-      envelope_hash: 'd4685c11223344556677889900112233aabbccddeeff0011',
-      signed_at: now - 86400 * 60,
-    },
-  ];
 }

@@ -406,9 +406,10 @@ mod tests {
         let trace = vec![row.clone(), row];
 
         let circuit = sovereign_transition_dsl_circuit();
-        let proof = stark::prove(&circuit, &trace, &public_inputs);
-        let result = stark::verify(&circuit, &proof, &public_inputs);
-        assert!(result.is_err(), "Invalid trace should not verify");
+        assert!(
+            stark::try_prove(&circuit, &trace, &public_inputs).is_err(),
+            "Invalid trace should not prove"
+        );
     }
 
     #[test]

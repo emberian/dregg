@@ -8,8 +8,10 @@
  */
 import { createInMemoryRuntime } from './runtime-in-memory.js';
 import { createRemoteRuntime } from './runtime-remote.js';
+import { createExtensionRuntime } from './runtime-extension.js';
 
 export const RUNTIME_KINDS = {
   'in-memory': { label: 'In-browser (wasm)', factory: createInMemoryRuntime },
+  'extension': { label: 'Cipherclerk extension', factory: createExtensionRuntime },
   'remote': { label: 'Remote (live node)', factory: createRemoteRuntime },
 };

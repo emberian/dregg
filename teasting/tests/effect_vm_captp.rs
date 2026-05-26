@@ -8,8 +8,11 @@
 //! - Multi-effect turns mixing CapTP + Transfer effects produce a single valid proof
 //! - Tampering with the swiss number in a proof causes verification FAILURE
 
-use dregg_circuit::effect_vm::{AUX_BASE, STATE_AFTER_BASE, state};
-use dregg_circuit::stark::{StarkAir, prove, verify};
+use dregg_circuit::effect_vm::{
+    AUX_BASE, EffectVmContext, STATE_AFTER_BASE, generate_effect_vm_trace_ext, state,
+};
+use dregg_circuit::poseidon2::hash_2_to_1;
+use dregg_circuit::stark::{StarkAir, prove, try_prove, verify};
 use dregg_circuit::{
     BabyBear, CellState, Effect, EffectVmAir, compute_effects_hash, extract_net_delta,
     generate_effect_vm_trace,
@@ -331,12 +334,10 @@ fn test_tampered_swiss_number_verification_fails() {
     trace[0][AUX_BASE] = BabyBear::new(0xBAD_CAFE);
 
     let air = EffectVmAir::new(trace.len());
-    let proof = prove(&air, &trace, &public_inputs);
-    let result = verify(&air, &proof, &public_inputs);
 
     assert!(
-        result.is_err(),
-        "Tampered swiss number should cause verification failure"
+        try_prove(&air, &trace, &public_inputs).is_err(),
+        "Tampered swiss number should be rejected before proof generation"
     );
 }
 
@@ -462,15 +463,23 @@ fn test_validate_handoff_proof_valid() {
     let _harness = quick_federation();
 
     let state = CellState::new(5000, 0);
+    let cert_hash = BabyBear::new(0xCE87);
+    let recipient_pk = BabyBear::new(0x8EC1);
+    let introducer_pk = BabyBear::new(0x1117);
+    let pks = hash_2_to_1(recipient_pk, introducer_pk);
+    let leaf = hash_2_to_1(cert_hash, pks);
+    let approved_set_root = hash_2_to_1(leaf, BabyBear::ZERO);
 
     let effects = vec![Effect::ValidateHandoff {
-        certificate_hash: BabyBear::new(0xCE87),
-        recipient_pk: BabyBear::new(0x8EC1),
-        introducer_pk: BabyBear::new(0x1117),
-        approved_set_root: BabyBear::new(0xA998),
+        certificate_hash: cert_hash,
+        recipient_pk,
+        introducer_pk,
+        approved_set_root,
     }];
 
-    let (trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
+    let mut context = EffectVmContext::default();
+    context.approved_handoffs_root[0] = approved_set_root;
+    let (trace, public_inputs) = generate_effect_vm_trace_ext(&state, &effects, context);
     let air = EffectVmAir::new(trace.len());
 
     // Verify constraints.

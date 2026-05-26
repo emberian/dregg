@@ -10,7 +10,7 @@
  * URI: dregg://attenuated-token/<token-id or root>
  * data=: JSON { root_token, chain: [{attenuator, restrictions, ...}] , ... }
  *
- * Modes: compact | default | demo (interactive attenuate)
+ * Modes: compact | default | lab (interactive attenuate when wasm supports it)
  *
  * Platform vocabulary: reuses <dregg-bearer-cap> concepts, <dregg-caveat> future.
  * No JS reimpl of macaroon/biscuit crypto — delegates to wasm.
@@ -32,7 +32,7 @@ class DreggAttenuatedToken extends InspectorBase {
     this.replaceChildren();
 
     const wasm = this._runtime?._wasm || null;
-    const caps = this._runtime?.caps || { mutate: true };
+    const caps = this._runtime?.caps || { mutate: false };
 
     let parsed = null;
     let data = null;
@@ -42,18 +42,23 @@ class DreggAttenuatedToken extends InspectorBase {
     if (!data && refAttr) {
       try { parsed = parseRef(refAttr); } catch {}
       if (renderParseError(this, refAttr, parsed, 'attenuated-token')) return;
-      data = { root_token: parsed.id, chain: [] };
     }
 
     const root = document.createElement('div');
     this.appendChild(root);
 
-    // Demo state for interactive attenuation (no crypto in JS)
-    const demoState = signal({ lastAttenuated: null, chain: [], error: null });
+    const viewState = signal({ error: null });
 
     const Component = () => {
-      const s = demoState.value;
-      const tok = data || s.lastAttenuated || { root_token: (parsed && parsed.id) || 'demo-root', chain: s.chain || [] };
+      const s = viewState.value;
+      const tok = data || null;
+      if (!tok) {
+        return html`
+          <div class="dregg-inspector dregg-inspector--empty">
+            attenuated token data not available${parsed ? html`: <code>${shortHex(parsed.id, 16)}</code>` : ''};
+            awaiting runtime/wasm support for held-token lookup.
+          </div>`;
+      }
 
       if (mode === 'compact') {
         const len = (tok.chain || []).length;
@@ -81,14 +86,15 @@ class DreggAttenuatedToken extends InspectorBase {
           </div>`
         : html`<div style="font-size:0.75rem;color:var(--fg-dim);">No attenuations yet (root token).</div>`;
 
-      const form = (caps.mutate && wasm) ? html`
+      const attenuateAvailable = mode === 'lab' && caps.mutate && wasm && (wasm.cipherclerk_attenuate || wasm.attenuate_token);
+      const form = attenuateAvailable ? html`
         <div style="border-top:1px solid var(--line);margin-top:8px;padding-top:6px;font-size:0.75rem;">
-          <div><strong>Demo attenuate (uses wasm token backend if exposed)</strong></div>
+          <div><strong>Lab attenuate via wasm token backend</strong></div>
           <input id="at-restrict" placeholder='e.g. {"kind":"time","until":123456}' style="width:260px;font-family:var(--mono);font-size:0.7rem;" />
           <button data-act="attenuate" style="font-size:0.7rem;margin-left:4px;">Attenuate</button>
           ${s.error ? html`<div style="color:#b91c1c;font-size:0.65rem;">${s.error}</div>` : null}
         </div>
-      ` : null;
+      ` : html`<div style="font-size:0.65rem;color:var(--fg-dim);margin-top:4px;">awaiting first-class held-token attenuation runtime API</div>`;
 
       return html`
         <div class="dregg-inspector dregg-inspector--attoken">
@@ -113,19 +119,19 @@ class DreggAttenuatedToken extends InspectorBase {
 
     root.addEventListener('click', (e) => {
       const btn = e.target.closest('button[data-act]');
-      if (!btn || !wasm) return;
+      if (!btn || !wasm || mode !== 'lab') return;
       if (btn.dataset.act === 'attenuate') {
         try {
           const restrictStr = root.querySelector('#at-restrict')?.value?.trim() || '{}';
           let restrictions = {};
           try { restrictions = JSON.parse(restrictStr); } catch {}
-          // Prefer cipherclerk if present, else token shim (demo only; real via turns)
-          const res = (wasm.cipherclerk_attenuate || wasm.attenuate_token || ((h, r) => ({ root: h, chain: [r] })))( /* handle? */ 0, restrictions);
-          const newChain = [...(demoState.value.chain || []), { attenuator: 'demo', restrictions }];
-          demoState.value = { ...demoState.value, lastAttenuated: { root_token: (data && data.root_token) || 'demo', chain: newChain }, chain: newChain, error: null };
+          const attenuate = wasm.cipherclerk_attenuate || wasm.attenuate_token;
+          if (!attenuate) throw new Error('attenuation wasm export is not available');
+          attenuate(0, restrictions);
+          viewState.value = { ...viewState.value, error: null };
           if (this._runtime?.version) this._runtime.version.value++;
         } catch (err) {
-          demoState.value = { ...demoState.value, error: String(err) };
+          viewState.value = { ...viewState.value, error: String(err) };
         }
       }
     });

@@ -5,7 +5,7 @@
 
 use dregg_storage::inbox::InboxMessage;
 use dregg_storage::operator::{DeliveryDispute, DisputeOutcome, RelayOperator};
-use dregg_storage::queue::verify_dequeue_proof;
+use dregg_storage::queue::{empty_queue_root, verify_dequeue_proof};
 use dregg_storage::relay::RelayError;
 use dregg_teasting::harness::SimulationHarness;
 
@@ -47,7 +47,7 @@ fn operator_bonds_and_hosts_inbox_healthy() {
 
     // Inbox root should be empty.
     let root = operator.inbox_root(&owner).unwrap();
-    assert_eq!(root, *blake3::hash(b"empty_queue").as_bytes());
+    assert_eq!(root, empty_queue_root());
 }
 
 // ---------------------------------------------------------------------------
@@ -69,7 +69,7 @@ fn sender_enqueues_to_hosted_inbox() {
         .unwrap();
 
     // Root changed from empty.
-    assert_ne!(new_root, *blake3::hash(b"empty_queue").as_bytes());
+    assert_ne!(new_root, empty_queue_root());
     assert_eq!(operator.total_pending(), 1);
     assert_eq!(operator.inbox_root(&owner).unwrap(), new_root);
 }
@@ -112,10 +112,7 @@ fn owner_drains_inbox_with_proofs() {
 
     // Queue is now empty.
     assert_eq!(operator.total_pending(), 0);
-    assert_eq!(
-        operator.inbox_root(&owner).unwrap(),
-        *blake3::hash(b"empty_queue").as_bytes()
-    );
+    assert_eq!(operator.inbox_root(&owner).unwrap(), empty_queue_root());
 }
 
 // ---------------------------------------------------------------------------

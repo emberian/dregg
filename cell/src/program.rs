@@ -566,6 +566,7 @@ impl StateConstraint {
 ///
 /// **21 variants total** per `SLOT-CAVEATS-EVALUATION.md` §7.6:
 /// - 4 static post-state: `FieldEquals`, `FieldGte`, `FieldLte`, `SumEquals`
+/// - 1 cross-slot post-state: `FieldLteField`
 /// - 3 immutability/once: `Immutable`, `WriteOnce`, `StrictMonotonic`
 /// - 3 transition: `Monotonic`, `FieldDelta`, `FieldDeltaInRange`
 /// - 2 height-bound: `FieldGteHeight`, `FieldLteHeight`
@@ -601,6 +602,9 @@ pub enum StateConstraint {
     FieldGte { index: u8, value: FieldElement },
     /// Field at index must be <= value (unsigned big-endian comparison).
     FieldLte { index: u8, value: FieldElement },
+    /// Field at `left_index` must be <= field at `right_index` in the same
+    /// post-state. Queue-like programs use this to enforce tail <= head.
+    FieldLteField { left_index: u8, right_index: u8 },
     /// Sum of fields at indices must equal value (intra-cell conservation).
     /// Fields are interpreted as big-endian u64 in the last 8 bytes.
     SumEquals {
@@ -1203,6 +1207,20 @@ fn evaluate_constraint_full(
             let idx = check_index(*index)?;
             if !field_lte(&new_state.fields[idx], value) {
                 return violated(constraint, format!("field[{idx}] > maximum value"));
+            }
+            Ok(())
+        }
+        StateConstraint::FieldLteField {
+            left_index,
+            right_index,
+        } => {
+            let left = check_index(*left_index)?;
+            let right = check_index(*right_index)?;
+            if !field_lte(&new_state.fields[left], &new_state.fields[right]) {
+                return violated(
+                    constraint,
+                    format!("field[{left}] > field[{right}] in post-state"),
+                );
             }
             Ok(())
         }

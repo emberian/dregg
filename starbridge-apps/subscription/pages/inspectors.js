@@ -672,7 +672,7 @@ const COMPONENTS = {
 if (typeof window !== 'undefined' && typeof customElements !== 'undefined') {
   for (const [tag, ctor] of Object.entries(COMPONENTS)) {
     if (!customElements.get(tag)) customElements.define(tag, ctor);
-    window.dregg?.register?.(tag, ctor);
+    window.dreggUi?.register?.(tag, ctor);
   }
 }
 

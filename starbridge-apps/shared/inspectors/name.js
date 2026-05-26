@@ -105,12 +105,16 @@ class DreggNameElement extends HTMLElement {
         <div class="dregg-name-meta">uri: <code>${escapeHtml(uri)}</code></div>
         <div class="dregg-name-embed">
           <!-- Reuse the platform cell inspector (full fidelity, including program + caps) -->
-          <dregg-cell uri="${escapeHtml(uri)}" mode="default"></dregg-cell>
+          <dregg-app data-embedded-runtime>
+            <dregg-cell uri="${escapeHtml(uri)}" mode="default"></dregg-cell>
+          </dregg-app>
         </div>
         <div class="dregg-name-meta">name-hash slot ${NAME_HASH_SLOT}, owner ${OWNER_HASH_SLOT}, expiry ${EXPIRY_SLOT}, revoked ${REVOKED_SLOT}, target ${RESOLVE_TARGET_SLOT}</div>
         ${tip != null ? `<div class="dregg-name-meta">tip height: ${tip}</div>` : ''}
       </div>
     `;
+    const app = this.shadowRoot.querySelector('dregg-app[data-embedded-runtime]');
+    if (app && window.__starbridgeAppRuntime) app.runtime = window.__starbridgeAppRuntime;
   }
 }
 
@@ -236,8 +240,8 @@ for (const tag of TAGS) {
   if (typeof customElements !== 'undefined' && !customElements.get(tag)) {
     customElements.define(tag, Ctor);
   }
-  if (typeof window !== 'undefined' && window.dregg?.register) {
-    window.dregg.register(tag, Ctor);
+  if (typeof window !== 'undefined' && window.dreggUi?.register) {
+    window.dreggUi.register(tag, Ctor);
   }
 }
 

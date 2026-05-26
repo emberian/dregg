@@ -20,6 +20,15 @@ test.describe('Explorer Views', () => {
     await expect(page.locator('.stat-card__label').first()).toBeVisible();
   });
 
+  test('overview summarizes live node state and links object routes', async ({ page }) => {
+    await expect(page.locator('#devnet-node-url')).toContainText('devnet.dregg');
+    await expect(page.locator('#devnet-fact-height')).toHaveText('42');
+    await expect(page.locator('#map-blocks-value')).toHaveText('3 roots');
+
+    await page.click('[data-map-page="blocks"]');
+    await expect(page.locator('#page-blocks')).toHaveClass(/active/);
+  });
+
   test('blocks view shows block list with mock data', async ({ page }) => {
     await page.click('[data-page="blocks"]');
     await expect(page.locator('#page-blocks')).toHaveClass(/active/);
@@ -65,7 +74,7 @@ test.describe('Explorer Views', () => {
 
     // App cards should be visible
     const appCards = page.locator('.app-card');
-    await expect(appCards).toHaveCount(6);
+    await expect(appCards).toHaveCount(7);
 
     // Cards should have names
     await expect(page.locator('.app-card__name').first()).toBeVisible();

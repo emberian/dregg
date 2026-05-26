@@ -32,7 +32,7 @@
       production cell-program VK; this file must be regenerated to
       match.
     -->
-    <link rel="stylesheet" href="/_includes/studio/styles.css" />
+    <link rel="stylesheet" href="/assets/style.css" />
     <style>
       body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 960px; }
       header { border-bottom: 1px solid #ddd; padding-bottom: 1rem; margin-bottom: 1rem; }
@@ -85,9 +85,8 @@
       Slot caveats: WriteOnce on NAME_HASH and REVOKED, Monotonic on
       EXPIRY. See <code>src/lib.rs</code> for the full descriptor.
     </footer>
-    <!-- The in-browser dregg node + the shared Studio chrome. -->
-    <script type="module" src="/pkg/dregg_wasm.js"></script>
-    <script type="module" src="/_includes/studio/runtimes.js"></script>
+    <!-- The shared Studio app boot attaches a real <dregg-app> runtime context. -->
+    <script type="module" src="/_includes/studio/app-boot.js"></script>
     <!-- The shared inspector registry lazy-imports this app's
          inspectors and turn-builders (now canonical typed versions in
          shared/ per §4.8), plus the legacy full impl for standalone.

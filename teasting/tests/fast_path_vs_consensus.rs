@@ -432,7 +432,8 @@ fn test_both_paths_deterministic() {
 
     let turn_consensus = make_self_write_turn(alice_id_consensus);
     // Even though this could go fast-path, we simulate consensus by calling the executor directly.
-    let result_consensus = executor.execute(&turn_consensus, &mut ledger_consensus);
+    let consensus_executor = TurnExecutor::new(ComputronCosts::zero());
+    let result_consensus = consensus_executor.execute(&turn_consensus, &mut ledger_consensus);
     assert!(
         result_consensus.is_committed(),
         "consensus-path should commit, got: {result_consensus:?}"

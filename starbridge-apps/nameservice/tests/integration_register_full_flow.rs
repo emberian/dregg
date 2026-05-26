@@ -28,6 +28,7 @@ use starbridge_nameservice::{
 
 mod common {
     use dregg_app_framework::{AgentCipherclerk, AppCipherclerk, CellId, EmbeddedExecutor};
+    use starbridge_nameservice::name_cell_program;
 
     pub fn make_cipherclerk(seed: u8) -> AppCipherclerk {
         AppCipherclerk::new(AgentCipherclerk::new(), [seed; 32])
@@ -47,6 +48,7 @@ mod common {
         // Use the executor's own cell as the registry cell so it already
         // exists in the ledger at construction time.
         let cell = executor.cell_id();
+        executor.install_program(cell, name_cell_program());
         (executor, cell)
     }
 }

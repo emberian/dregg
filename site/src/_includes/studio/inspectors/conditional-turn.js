@@ -2,10 +2,11 @@
  * <dregg-conditional-turn uri="dregg://conditional-turn/<id>">
  *
  * Pending conditional turns + ProofCondition view.
- * Uses get_pending_conditionals (real vec) + submit_conditional.
+ * Uses runtime.listPendingConditionals(). Lab submit affordance only appears
+ * with mode="lab" and mutate runtime.
  *
  * Compact: id + kind + timeout
- * Default: full + condition details + timeout simulation note.
+ * Default: full + condition details.
  */
 
 import { parseRef } from '../uri.js';
@@ -23,7 +24,7 @@ class DreggConditionalTurn extends InspectorBase {
 
     const wasm = this._runtime?._wasm || null;
     const handle = this._runtime?._handle;
-    const caps = this._runtime?.caps || { mutate: true };
+    const caps = this._runtime?.caps || { mutate: false };
 
     let parsed = null;
     let inline = null;
@@ -44,7 +45,7 @@ class DreggConditionalTurn extends InspectorBase {
       let cond = inline;
       if (!cond && parsed) {
         const list = (listSignal && listSignal.value) || [];
-        cond = list.find(c => c.id === parsed.id) || { id: parsed.id, timeout_height: 0, submitted_height: 0, condition_kind: 'Unknown' };
+        cond = list.find(c => c.id === parsed.id) || null;
       }
       if (!cond && mode === 'compact') {
         return html`<span class="dregg-inspector dregg-inspector--compact">conditional-turn</span>`;
@@ -53,8 +54,12 @@ class DreggConditionalTurn extends InspectorBase {
         return html`
           <div class="dregg-inspector dregg-inspector--condturn">
             <header><span class="dregg-inspector__kind">conditional-turn</span></header>
-            <div style="font-size:0.8rem;color:var(--fg-dim);">No pending conditionals (or list stub). Submit via demo or data=.</div>
-            ${caps.mutate && wasm ? html`<button data-act="submit-demo" style="margin-top:6px;font-size:0.75rem;">Submit demo conditional (HashPreimage)</button>` : null}
+            <div style="font-size:0.8rem;color:var(--fg-dim);">
+              ${parsed
+                ? html`conditional turn not found in this runtime: <code>${shortHex(parsed.id, 16)}</code>`
+                : html`no pending conditional data; provide <code>uri=</code> or <code>data=</code>.`}
+            </div>
+            ${mode === 'lab' && caps.mutate && wasm ? html`<button data-act="submit-demo" style="margin-top:6px;font-size:0.75rem;">Submit HashPreimage via wasm</button>` : null}
           </div>`;
       }
 
@@ -88,10 +93,9 @@ class DreggConditionalTurn extends InspectorBase {
 
     root.addEventListener('click', (e) => {
       const btn = e.target.closest('button[data-act]');
-      if (!btn || !wasm || !handle) return;
+      if (!btn || !wasm || !handle || mode !== 'lab') return;
       if (btn.dataset.act === 'submit-demo') {
         try {
-          // Minimal demo submit: empty effects, simple condition, short timeout
           const condJson = JSON.stringify({ kind: 'HashPreimage', hash: '00'.repeat(32) });
           const actionsJson = JSON.stringify([]);
           const res = wasm.submit_conditional(handle, 0, actionsJson, 0, condJson, 10);

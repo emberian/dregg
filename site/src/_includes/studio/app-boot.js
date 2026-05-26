@@ -1,0 +1,134 @@
+/**
+ * starbridge-app boot layer.
+ *
+ * End-user app pages mount ordinary <dregg-app> elements, then this module
+ * attaches the same Studio runtime context Starbridge uses. It also exposes a
+ * small local-preview bridge on window.dregg when the Cipherclerk extension is
+ * absent, without replacing the extension-owned API when it is present.
+ */
+
+import '/_includes/runtime-bootstrap.js';
+import './context.js';
+import './inspectors.js';
+import { createInMemoryRuntime } from './runtime-in-memory.js';
+
+function whenDreggUi() {
+  return new Promise(resolve => {
+    if (window.dreggUi) return resolve(window.dreggUi);
+    window.addEventListener('dreggUi:ready', e => resolve(e.detail), { once: true });
+  });
+}
+
+function hexFromBytes(bytes) {
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function installPreviewBridge(runtime, wasm) {
+  window.__starbridgeAppRuntime = runtime;
+  if (window.dregg && Object.isFrozen(window.dregg)) {
+    return window.dregg;
+  }
+  const api = window.dregg || {};
+  if (!window.dregg) window.dregg = api;
+
+  try { api.__starbridgeRuntime = runtime; } catch {}
+
+  if (!api.blockHeight) {
+    api.blockHeight = async () => Number(runtime.cursor?.value || 0);
+  }
+  if (!api.readCell) {
+    api.readCell = async (uri) => {
+      const id = String(uri || '').replace(/^dregg:\/\/cell\//, '');
+      return runtime.getCell(id).value;
+    };
+  }
+  api.cell ||= {};
+  if (!api.cell.readField) {
+    api.cell.readField = async (cellIdOrUri, slot) => {
+      const id = String(cellIdOrUri || '').replace(/^dregg:\/\/cell\//, '');
+      const cell = runtime.getCell(id).value;
+      const fields = cell?.fields || cell?.state_fields || cell?.slots || [];
+      return fields[Number(slot)] ?? null;
+    };
+  }
+  if (!api.blake3 && wasm?.blake3_hash) {
+    api.blake3 = async (input) => {
+      const text = input instanceof Uint8Array
+        ? new TextDecoder().decode(input)
+        : String(input ?? '');
+      const hex = wasm.blake3_hash(text);
+      const out = new Uint8Array(hex.length / 2);
+      for (let i = 0; i < out.length; i += 1) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+      return out;
+    };
+  }
+  if (!api.signTurn) {
+    api.signTurn = async () => ({
+      submitted: false,
+      error: 'Cipherclerk extension signTurn is not available; local preview is read-only.',
+    });
+  }
+  api.nameservice ||= {};
+  if (!api.nameservice.listEntries) {
+    api.nameservice.listEntries = async () => [];
+  }
+
+  return api;
+}
+
+function installDevtoolsLink(appEl) {
+  const uri = appEl.getAttribute('registry-uri') || appEl.getAttribute('uri') || '';
+  const href = uri ? `/starbridge/?at=${encodeURIComponent(uri)}` : '/starbridge/';
+  const link = document.createElement('a');
+  link.className = 'starbridge-devtools-link';
+  link.href = href;
+  link.textContent = 'Open in Starbridge';
+  link.setAttribute('aria-label', 'Open this app runtime in Starbridge');
+  link.style.cssText = [
+    'position:fixed',
+    'right:16px',
+    'bottom:16px',
+    'z-index:50',
+    'padding:7px 10px',
+    'border:1px solid #888',
+    'border-radius:4px',
+    'background:#111',
+    'color:#fff',
+    'font:12px ui-monospace,monospace',
+    'text-decoration:none',
+  ].join(';');
+  document.body.appendChild(link);
+}
+
+async function boot() {
+  const api = await whenDreggUi();
+  const wasm = await import('/pkg/dregg_wasm.js');
+  await wasm.default();
+
+  const runtimes = new Map();
+  const apps = Array.from(document.querySelectorAll('dregg-app'));
+  for (const appEl of apps) {
+    const runtimeKind = appEl.getAttribute('runtime') || 'in-memory';
+    if (runtimeKind !== 'in-memory') {
+      console.warn(`[starbridge-app] runtime "${runtimeKind}" awaits app-boot support; using in-memory`);
+    }
+    const runtime = await createInMemoryRuntime({ wasm, signals: api });
+    appEl.runtime = runtime;
+    runtimes.set(appEl, runtime);
+    installPreviewBridge(runtime, wasm);
+  }
+
+  const first = apps[0];
+  if (first) installDevtoolsLink(first);
+
+  window.__starbridgeApp = {
+    apps,
+    runtimes,
+    wasm,
+    hexFromBytes,
+  };
+}
+
+boot().catch((e) => {
+  console.error('[starbridge-app] boot failed', e);
+});

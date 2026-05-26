@@ -7,6 +7,7 @@
 use crate::derivation_air::{
     CircuitRule, DERIVATION_AIR_WIDTH, DerivationWitness, compute_policy_root,
 };
+use crate::dsl::derivation::MULTI_STEP_DSL_WIDTH;
 use crate::field::BabyBear;
 use crate::poseidon2::hash_2_to_1;
 use crate::stark::{self, StarkProof};
@@ -134,7 +135,7 @@ impl MultiStepDerivationAir {
 
 impl crate::constraint_prover::Air for MultiStepDerivationAir {
     fn trace_width(&self) -> usize {
-        MULTI_STEP_AIR_WIDTH
+        MULTI_STEP_DSL_WIDTH
     }
     fn num_public_inputs(&self) -> usize {
         6
@@ -176,7 +177,7 @@ impl MultiStepStarkAir {
 
 impl crate::stark::StarkAir for MultiStepStarkAir {
     fn width(&self) -> usize {
-        MULTI_STEP_AIR_WIDTH
+        MULTI_STEP_DSL_WIDTH
     }
     fn constraint_degree(&self) -> usize {
         3

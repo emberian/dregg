@@ -271,6 +271,7 @@
 /* ---------- center inspector ---------- */
 .sb__inspector {
   min-height: 100px;
+  height: 100%;
 }
 .sb__inspector-empty {
   color: var(--fg-dim);
@@ -279,6 +280,52 @@
   border-radius: 6px;
   text-align: center;
   font-size: 0.85rem;
+}
+
+.sb__app-host {
+  display: grid;
+  grid-template-rows: auto minmax(420px, 1fr);
+  gap: var(--s3);
+  min-height: 100%;
+}
+.sb__app-hostbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding: var(--s3);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-raised);
+}
+.sb__app-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+.sb__app-meta {
+  margin-top: 2px;
+  color: var(--fg-dim);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+.sb__app-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+.sb__app-actions .sb__btn--small {
+  width: auto;
+  margin-bottom: 0;
+  text-align: center;
+}
+.sb__app-frame {
+  width: 100%;
+  min-height: 520px;
+  height: 100%;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #fff;
 }
 
 /* ---------- right raw json ---------- */

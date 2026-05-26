@@ -2,7 +2,7 @@
 //
 // Inspector registry for starbridge-apps. Each app contributes its
 // domain inspectors (web components published as ES modules — see
-// site/STUDIO.md §6) and registers them via `window.dregg.register`.
+// site/STUDIO.md §6) and registers them via the Studio registry when present.
 //
 // This module also publishes two cross-app primitive components:
 //
@@ -232,9 +232,9 @@ if (typeof customElements !== 'undefined') {
   }
 }
 
-if (typeof window !== 'undefined' && window.dregg?.register) {
-  window.dregg.register('dregg-token-cap', DreggTokenCapElement);
-  window.dregg.register('dregg-status-bar', DreggStatusBarElement);
+if (typeof window !== 'undefined' && window.dreggUi?.register) {
+  window.dreggUi.register('dregg-token-cap', DreggTokenCapElement);
+  window.dreggUi.register('dregg-status-bar', DreggStatusBarElement);
 }
 
 // =========================================================================
@@ -254,7 +254,7 @@ import('/starbridge-apps/subscription/pages/inspectors.js').catch(() => {});
 import('/starbridge-apps/shared/inspectors/name.js').catch(() => {});
 import('/starbridge-apps/shared/turn-builders/nameservice.js').catch(() => {});
 // Legacy (full form + actions) for /starbridge-apps/nameservice/ standalone page.
-import('/starbridge-apps/nameservice/inspectors.js').catch(() => {});
+import('/starbridge-apps/nameservice/pages/inspectors.js').catch(() => {});
 import('/starbridge-apps/nameservice/pages/turn-builders.js').catch(() => {});
 
 // Governed-namespace inspectors + turn-builders (pages/ path fix for §4.8).
@@ -272,8 +272,8 @@ export const registry = {
 export function register(app, tag, component) {
   if (!registry[app]) registry[app] = {};
   registry[app][tag] = component;
-  if (typeof window !== 'undefined' && window.dregg?.register) {
-    window.dregg.register(tag, component);
+  if (typeof window !== 'undefined' && window.dreggUi?.register) {
+    window.dreggUi.register(tag, component);
   }
 }
 

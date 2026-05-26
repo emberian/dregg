@@ -424,6 +424,7 @@ pub fn generate_effect_vm_trace_ext(
             Effect::SetVerificationKey { .. } => sel::SET_VERIFICATION_KEY,
             Effect::CreateSealPair { .. } => sel::CREATE_SEAL_PAIR,
             Effect::RefreshDelegation => sel::REFRESH_DELEGATION,
+            Effect::IncrementNonce => sel::INCREMENT_NONCE,
             Effect::RevokeDelegation { .. } => sel::REVOKE_DELEGATION,
             Effect::CreateCell { .. } => sel::CREATE_CELL,
             Effect::SpawnWithDelegation { .. } => sel::SPAWN_WITH_DELEGATION,
@@ -543,6 +544,11 @@ pub fn generate_effect_vm_trace_ext(
             }
             Effect::RefreshDelegation => {
                 // No params; selector alone records the intent.
+                new_state.nonce += 1;
+            }
+            Effect::IncrementNonce => {
+                // Explicit nonce-only runtime effect. The selector distinguishes
+                // it from delegation refresh and other passthrough siblings.
                 new_state.nonce += 1;
             }
             Effect::RevokeDelegation { child_hash } => {
