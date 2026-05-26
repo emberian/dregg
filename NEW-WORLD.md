@@ -125,6 +125,10 @@ For sovereign cells that don't want federation in the trust path: `cell::peer_ex
 
 This is the **federation-bypass** primitive. Alice and Bob can interact directly with their own cells without a federation knowing. The post-soundness-sweep `SovereignCellWitness` shape now matches `PeerStateTransition` (Ed25519 + sequence + optional STARK) — the same shape serves both the federation-mediated sovereign turns and the federation-bypass peer exchange.
 
+### Persistence: receipts are the stream
+
+Per `HOUYHNHNM-COMPARISON.md`'s closing reframe: **the WitnessedReceipt chain IS pyana's persistence layer.** Not an auxiliary log, not a sidecar — the canonical, source-of-truth stream. The `pyana_persist` on-disk database is a *cache* of state derived from this stream; given the receipt chain alone, any verifier can re-derive the cell's state at any tip. Operator-side retention is therefore a *policy on the persistence stream*, not a policy on a database: `pyana_node::config::RetentionPolicy` (default `Forever`) declares which suffix this operator commits to *serving*, and the wire-level `WireMessage::RequestReceipt` / `ReceiptResponse` returns a structured "covered by archival attestation X" response — never a bare 404 — when the hot tail has been pruned. This is the houyhnhnm "persistence-is-policy" framing put on a cryptographic substrate: the persistence stream is *the* thing the operator hosts, and the rest is cache.
+
 ## Boundary discipline
 
 `BOUNDARIES.md` names 14 boundaries with a unified vocabulary:

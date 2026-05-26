@@ -416,6 +416,22 @@ everyone (verifier-side, public PI); the bundle's audience is
 the prover plus whoever the prover chose to share with. No
 mechanism enforces or even names this.
 
+**Reframe (2026-05-25).** Per `HOUYHNHNM-COMPARISON.md`'s closing
+insight, the WitnessedReceipt chain *is* pyana's canonical persistence
+stream — not an auxiliary observability log. State is *derived* from
+the receipt stream; the persistent database (`pyana_persist`) is a
+cache. This reframes the scope-1/scope-2 boundary as a *replication-
+of-persistence* boundary: scope-2 holders can reconstruct the
+persistence layer from the wire; scope-1 holders can only verify it.
+The operator-side retention discipline (`pyana_node::config::
+RetentionPolicy`, default `Forever`) declares which suffix of the
+canonical stream this operator commits to *serving*, and the wire-
+level `WireMessage::RequestReceipt` / `ReceiptResponse` carries the
+"I pruned this; here is the attestation that covers it" shape so
+cross-member queries remain answerable without conflating
+"never-existed" with "I-dropped-it." See `turn/src/turn.rs` module
+docs.
+
 ### §2.8. `peer_exchange` two-party vs world
 
 **Boundary.** Bilateral state transitions between two sovereign

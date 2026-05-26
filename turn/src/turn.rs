@@ -2,6 +2,40 @@
 //!
 //! A Turn wraps a CallForest with metadata: who initiated it, replay protection
 //! via nonce, fee payment, and optional memo/expiration.
+//!
+//! # Receipts as persistence layer
+//!
+//! Per `HOUYHNHNM-COMPARISON.md`'s "wait, this changes things" insight
+//! (closing section): **the `WitnessedReceipt` chain rooted at each
+//! turn IS pyana's persistence layer.** It is *not* an auxiliary
+//! observability log. State is recoverable by replaying receipts; the
+//! ledger snapshot at any tip is *derived* from the receipt stream;
+//! `pyana_persist`'s on-disk structures are caches over this canonical
+//! source.
+//!
+//! Concretely:
+//!
+//! - Every state transition that an executor applies emits a
+//!   [`crate::witnessed_receipt::WitnessedReceipt`] whose
+//!   `previous_receipt_hash` chain-links it to the prior receipt for
+//!   the same cell. The chain *is* the cell's history.
+//! - A verifier replaying the chain re-derives the cell's state. The
+//!   on-disk snapshot is a memoization, not the source of truth.
+//! - When an operator prunes the hot tail (per
+//!   [`pyana_node::config::RetentionPolicy`]), they substitute an
+//!   [`pyana_cell::lifecycle::ArchivalAttestation`] for the pruned
+//!   prefix — the persistence stream is *still complete*, just
+//!   summarized at the cut point.
+//!
+//! This framing reverses what one might naively assume about the
+//! relationship between the receipt chain and "the database." The
+//! database is the cache; the receipt chain is the truth.
+//!
+//! See `NEW-WORLD.md` ("Persistence: receipts are the stream") and
+//! `BOUNDARIES.md` for the persistence-as-policy boundary; see
+//! `pyana_node::config::RetentionPolicy` and
+//! `pyana_wire::message::WireMessage::RequestReceipt` for the wire and
+//! operator-side shapes that fall out of this reframe.
 
 use std::collections::HashMap;
 
