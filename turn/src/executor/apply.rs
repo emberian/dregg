@@ -3096,6 +3096,16 @@ impl TurnExecutor {
         token_id: &[u8; 32],
         params: &dregg_cell::factory::FactoryCreationParams,
     ) -> Result<(), (TurnError, Vec<usize>)> {
+        if params.owner_pubkey != *owner_pubkey {
+            return Err((
+                TurnError::InvalidEffect {
+                    reason: "factory creation owner_pubkey must match params.owner_pubkey"
+                        .to_string(),
+                },
+                path.to_vec(),
+            ));
+        }
+
         // Validate the factory exists in the registry and the creation is within
         // the factory's declared constraints (program VK, capabilities, fields, mode, budget).
         //

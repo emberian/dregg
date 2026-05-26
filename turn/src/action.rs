@@ -46,6 +46,20 @@ pub fn symbol(name: &str) -> Symbol {
     *blake3::hash(name.as_bytes()).as_bytes()
 }
 
+fn hash_auth_required(hasher: &mut blake3::Hasher, auth: &AuthRequired) {
+    match auth {
+        AuthRequired::None => hasher.update(&[0u8]),
+        AuthRequired::Signature => hasher.update(&[1u8]),
+        AuthRequired::Proof => hasher.update(&[2u8]),
+        AuthRequired::Either => hasher.update(&[3u8]),
+        AuthRequired::Impossible => hasher.update(&[4u8]),
+        AuthRequired::Custom { vk_hash } => {
+            hasher.update(&[5u8]);
+            hasher.update(vk_hash)
+        }
+    };
+}
+
 /// A single operation in the call forest.
 ///
 /// Analogous to Mina's AccountUpdate: targets a cell, performs a method,
@@ -2092,6 +2106,22 @@ impl Effect {
                     hasher.update(&val.to_le_bytes());
                 }
                 hasher.update(&(params.initial_caps.len() as u64).to_le_bytes());
+                for cap in &params.initial_caps {
+                    match &cap.target {
+                        dregg_cell::factory::CapTarget::SelfCell => {
+                            hasher.update(&[0u8]);
+                        }
+                        dregg_cell::factory::CapTarget::Specific(id) => {
+                            hasher.update(&[1u8]);
+                            hasher.update(id.as_bytes());
+                        }
+                        dregg_cell::factory::CapTarget::Any => {
+                            hasher.update(&[2u8]);
+                        }
+                    }
+                    hash_auth_required(&mut hasher, &cap.max_permissions);
+                    hasher.update(&[cap.attenuatable as u8]);
+                }
                 hasher.update(&params.owner_pubkey);
             }
             Effect::QueueAllocate {
@@ -2607,6 +2637,51 @@ mod linearity_tests {
         let mut k = [0u8; 32];
         k[0] = byte;
         CellId::derive_raw(&k, &[0u8; 32])
+    }
+
+    #[test]
+    fn create_cell_from_factory_hash_binds_initial_cap_contents() {
+        let mut cap_a_target = [0u8; 32];
+        cap_a_target[0] = 0xA0;
+        let mut cap_b_target = [0u8; 32];
+        cap_b_target[0] = 0xB0;
+
+        let base_params = dregg_cell::FactoryCreationParams {
+            mode: dregg_cell::CellMode::Hosted,
+            program_vk: None,
+            initial_fields: vec![],
+            initial_caps: vec![dregg_cell::factory::CapGrant {
+                target: dregg_cell::factory::CapTarget::Specific(CellId(cap_a_target)),
+                max_permissions: AuthRequired::Signature,
+                attenuatable: true,
+            }],
+            owner_pubkey: [1u8; 32],
+        };
+        let mut tampered_params = base_params.clone();
+        tampered_params.initial_caps[0] = dregg_cell::factory::CapGrant {
+            target: dregg_cell::factory::CapTarget::Specific(CellId(cap_b_target)),
+            max_permissions: AuthRequired::None,
+            attenuatable: false,
+        };
+
+        let honest = Effect::CreateCellFromFactory {
+            factory_vk: [2u8; 32],
+            owner_pubkey: [1u8; 32],
+            token_id: [3u8; 32],
+            params: base_params,
+        };
+        let tampered = Effect::CreateCellFromFactory {
+            factory_vk: [2u8; 32],
+            owner_pubkey: [1u8; 32],
+            token_id: [3u8; 32],
+            params: tampered_params,
+        };
+
+        assert_ne!(
+            honest.hash(),
+            tampered.hash(),
+            "initial capability contents, not only their count, must be effect-hash-bound"
+        );
     }
 
     #[test]

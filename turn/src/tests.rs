@@ -212,6 +212,49 @@ fn test_simple_transfer() {
     assert_eq!(target.state.balance(), 500 + 200);
 }
 
+#[test]
+fn create_cell_from_factory_rejects_owner_param_divergence() {
+    let (mut ledger, agent_id, _) = setup_two_open_cells(1000, 0);
+    let mut executor = zero_cost_executor();
+    let factory = dregg_cell::FactoryDescriptor {
+        factory_vk: [0xF0; 32],
+        child_program_vk: None,
+        child_vk_strategy: None,
+        allowed_cap_templates: vec![],
+        field_constraints: vec![],
+        state_constraints: vec![],
+        default_mode: dregg_cell::CellMode::Hosted,
+        creation_budget: None,
+    };
+    let factory_vk = executor.deploy_factory(factory);
+
+    let effect_owner = [0x11; 32];
+    let params_owner = [0x22; 32];
+    let params = dregg_cell::FactoryCreationParams {
+        mode: dregg_cell::CellMode::Hosted,
+        program_vk: None,
+        initial_fields: vec![],
+        initial_caps: vec![],
+        owner_pubkey: params_owner,
+    };
+    let action = ActionBuilder::new_unchecked_for_tests(agent_id, "factory_create", agent_id)
+        .effect_create_cell_from_factory(factory_vk, effect_owner, [0x33; 32], params)
+        .build();
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    builder.add_action(action);
+
+    let result = executor.execute(&builder.fee(0).build(), &mut ledger);
+    assert!(result.is_rejected());
+    let (error, _) = result.unwrap_rejected();
+    match error {
+        TurnError::InvalidEffect { reason } => assert!(
+            reason.contains("owner_pubkey must match params.owner_pubkey"),
+            "unexpected rejection reason: {reason}"
+        ),
+        other => panic!("expected InvalidEffect, got {other:?}"),
+    }
+}
+
 // =============================================================================
 // Test: Multi-action turn with children (delegation)
 // =============================================================================
