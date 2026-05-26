@@ -83,7 +83,9 @@ mod sw_sig_serde {
 ///     commitment for cell_id` (anchors the pre-state).
 ///  2. Ed25519 `signature` over the canonical signing message verifies
 ///     against `cell_state.public_key()` (binds the transition to the
-///     cell's owning key — closes the "any-snooper-can-resubmit" gap).
+///     cell's owning key and, for nonzero federation ids, to the local
+///     federation — closes the "any-snooper-can-resubmit" and
+///     cross-federation replay gaps).
 ///  3. `sequence == ledger.last_sovereign_witness_sequence(cell_id) + 1`
 ///     (per-cell monotonic, no gaps; closes the replay gap even if a
 ///     future hypothetical commitment collision were ever found).
@@ -126,10 +128,14 @@ pub struct SovereignCellWitness {
 }
 
 impl SovereignCellWitness {
-    /// Canonical signing message layout:
+    /// Legacy canonical signing message layout for the zero-federation
+    /// compatibility path:
     ///   "dregg-sovereign-witness-v1:" ||
     ///   cell_id || old_commitment || new_commitment || effects_hash ||
     ///   timestamp (8 LE) || sequence (8 LE)
+    ///
+    /// New federation-aware callers should use
+    /// [`SovereignCellWitness::signing_message_for_federation`].
     pub fn signing_message(
         cell_id: &CellId,
         old_commitment: &[u8; 32],
@@ -141,6 +147,48 @@ impl SovereignCellWitness {
         const DOMAIN: &[u8] = b"dregg-sovereign-witness-v1:";
         let mut msg = Vec::with_capacity(DOMAIN.len() + 32 + 32 + 32 + 32 + 8 + 8);
         msg.extend_from_slice(DOMAIN);
+        msg.extend_from_slice(cell_id.as_bytes());
+        msg.extend_from_slice(old_commitment);
+        msg.extend_from_slice(new_commitment);
+        msg.extend_from_slice(effects_hash);
+        msg.extend_from_slice(&timestamp.to_le_bytes());
+        msg.extend_from_slice(&sequence.to_le_bytes());
+        msg
+    }
+
+    /// Canonical federation-bound signing message layout:
+    ///   "dregg-sovereign-witness-v2:" ||
+    ///   federation_id || cell_id || old_commitment || new_commitment ||
+    ///   effects_hash || timestamp (8 LE) || sequence (8 LE)
+    ///
+    /// The all-zero federation id intentionally preserves the historical v1
+    /// message so default-federation tests and old local-only tooling keep
+    /// using the same bytes. Configured federations get a domain-separated v2
+    /// message that cannot be replayed under another federation id.
+    pub fn signing_message_for_federation(
+        federation_id: &[u8; 32],
+        cell_id: &CellId,
+        old_commitment: &[u8; 32],
+        new_commitment: &[u8; 32],
+        effects_hash: &[u8; 32],
+        timestamp: i64,
+        sequence: u64,
+    ) -> Vec<u8> {
+        if *federation_id == [0u8; 32] {
+            return Self::signing_message(
+                cell_id,
+                old_commitment,
+                new_commitment,
+                effects_hash,
+                timestamp,
+                sequence,
+            );
+        }
+
+        const DOMAIN: &[u8] = b"dregg-sovereign-witness-v2:";
+        let mut msg = Vec::with_capacity(DOMAIN.len() + 32 + 32 + 32 + 32 + 32 + 8 + 8);
+        msg.extend_from_slice(DOMAIN);
+        msg.extend_from_slice(federation_id);
         msg.extend_from_slice(cell_id.as_bytes());
         msg.extend_from_slice(old_commitment);
         msg.extend_from_slice(new_commitment);

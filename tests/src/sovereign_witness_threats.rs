@@ -20,14 +20,14 @@
 use std::collections::HashMap;
 
 use dregg_cell::{
-    AuthRequired, Cell, CellId, CellProgram, Ledger, Permissions, StateConstraint, field_from_u64,
+    field_from_u64, AuthRequired, Cell, CellId, CellProgram, Ledger, Permissions, StateConstraint,
 };
-use dregg_turn::action::{WitnessBlob, symbol};
+use dregg_turn::action::{symbol, WitnessBlob};
 use dregg_turn::{
     Action, ActionBuilder, Authorization, CallForest, ComputronCosts, DelegationMode, Effect,
     SovereignCellWitness, Turn, TurnBuilder, TurnError, TurnExecutor, TurnResult,
 };
-use dregg_types::{SigningKey, sign};
+use dregg_types::{sign, SigningKey};
 
 fn permissive_cell(seed: u8, balance: u64) -> Cell {
     let mut pk = [0u8; 32];
@@ -187,10 +187,29 @@ fn signed_sovereign_witness(
     effects_hash: [u8; 32],
     sequence: u64,
 ) -> SovereignCellWitness {
+    signed_sovereign_witness_for_federation(
+        &[0u8; 32],
+        cell,
+        signing_key,
+        old_commitment,
+        effects_hash,
+        sequence,
+    )
+}
+
+fn signed_sovereign_witness_for_federation(
+    federation_id: &[u8; 32],
+    cell: &Cell,
+    signing_key: &SigningKey,
+    old_commitment: [u8; 32],
+    effects_hash: [u8; 32],
+    sequence: u64,
+) -> SovereignCellWitness {
     let cell_id = cell.id();
     let new_commitment = [0u8; 32];
     let timestamp = 0;
-    let message = SovereignCellWitness::signing_message(
+    let message = SovereignCellWitness::signing_message_for_federation(
+        federation_id,
         &cell_id,
         &old_commitment,
         &new_commitment,
@@ -809,9 +828,61 @@ fn sovereign_with_preimage_gate_requires_both_witnesses() {
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on sovereign-witness AIR teeth + cross-federation: sovereign witness signed for federation F1 presented in F2 must reject; the witness payload includes federation_id (per AUDIT-federation.md F1/F2 closure expectation)"]
 fn sovereign_witness_cross_federation_replay_rejects() {
-    panic!("blocked");
+    let fed_a = [0xA1u8; 32];
+    let fed_b = [0xB2u8; 32];
+    let (mut ledger, agent_id, sovereign_id, sovereign, signing_key, old_commitment) =
+        sovereign_fixture(15);
+
+    let msg_a = SovereignCellWitness::signing_message_for_federation(
+        &fed_a,
+        &sovereign_id,
+        &old_commitment,
+        &[0u8; 32],
+        &[0u8; 32],
+        0,
+        1,
+    );
+    let msg_b = SovereignCellWitness::signing_message_for_federation(
+        &fed_b,
+        &sovereign_id,
+        &old_commitment,
+        &[0u8; 32],
+        &[0u8; 32],
+        0,
+        1,
+    );
+    assert_ne!(
+        msg_a, msg_b,
+        "sovereign witness signing message must bind federation_id"
+    );
+
+    let witness = signed_sovereign_witness_for_federation(
+        &fed_a,
+        &sovereign,
+        &signing_key,
+        old_commitment,
+        [0u8; 32],
+        1,
+    );
+    let mut witnesses = HashMap::new();
+    witnesses.insert(sovereign_id, witness);
+    let turn = set_field_turn(agent_id, sovereign_id, witnesses);
+
+    let mut executor = TurnExecutor::new(ComputronCosts::zero());
+    executor.set_local_federation_id(fed_b);
+    let result = executor.execute(&turn, &mut ledger);
+
+    assert!(
+        matches!(
+            &result,
+            TurnResult::Rejected {
+                reason: TurnError::InvalidEffect { reason },
+                ..
+            } if reason.contains("signature invalid")
+        ),
+        "sovereign witness signed for fed A must reject at fed B, got: {result:?}"
+    );
 }
 
 // ===========================================================================

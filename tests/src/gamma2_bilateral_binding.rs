@@ -21,9 +21,12 @@
 //! demonstrate the verifier schedule checks without paying proving cost.
 
 use dregg_cell::{AuthRequired, CapabilityRef, CellId};
-use dregg_turn::{ActionBuilder, Turn, TurnBuilder, TurnReceipt};
+use dregg_turn::{
+    bilateral_schedule::{derive_intro_id, derive_intro_id_for_federation},
+    ActionBuilder, Turn, TurnBuilder, TurnReceipt,
+};
 use dregg_verifier::{
-    BilateralBundle, BilateralEntry, fabricate_witnessed_receipt, verify_bilateral_bundle,
+    fabricate_witnessed_receipt, verify_bilateral_bundle, BilateralBundle, BilateralEntry,
 };
 
 // ---------------------------------------------------------------------------
@@ -363,9 +366,53 @@ fn trilateral_introduce_permissions_bit_tamper_rejects() {
 }
 
 #[test]
-#[ignore = "blocked on γ.2 Phase 1 cross-federation extension (§1.3): federation_id appended to Introduce preimage"]
 fn cross_federation_introduce_includes_federation_id_in_intro_id_preimage() {
-    panic!("blocked");
+    let introducer = CellId([0xA1; 32]);
+    let recipient = CellId([0xB2; 32]);
+    let target = CellId([0xC3; 32]);
+    let fed_a = [0xFA; 32];
+    let fed_b = [0xFB; 32];
+
+    let legacy = derive_intro_id(
+        &introducer,
+        &recipient,
+        &target,
+        &AuthRequired::Signature,
+        7,
+    );
+    let zero_fed = derive_intro_id_for_federation(
+        &[0u8; 32],
+        &introducer,
+        &recipient,
+        &target,
+        &AuthRequired::Signature,
+        7,
+    );
+    assert_eq!(
+        legacy, zero_fed,
+        "zero federation id must preserve existing local intro_id derivation"
+    );
+
+    let id_a = derive_intro_id_for_federation(
+        &fed_a,
+        &introducer,
+        &recipient,
+        &target,
+        &AuthRequired::Signature,
+        7,
+    );
+    let id_b = derive_intro_id_for_federation(
+        &fed_b,
+        &introducer,
+        &recipient,
+        &target,
+        &AuthRequired::Signature,
+        7,
+    );
+    assert_ne!(
+        id_a, id_b,
+        "same Introduce surface data under two federations must derive distinct intro_id values"
+    );
 }
 
 // ===========================================================================

@@ -471,7 +471,8 @@ impl TurnExecutor {
                     };
                 }
             };
-            let message = crate::turn::SovereignCellWitness::signing_message(
+            let message = crate::turn::SovereignCellWitness::signing_message_for_federation(
+                &self.local_federation_id,
                 cell_id,
                 &witness.old_commitment,
                 &witness.new_commitment,
@@ -765,6 +766,8 @@ impl TurnExecutor {
             turn.fee,
         );
 
+        self.record_state_constraint_counters(turn, ledger, &journal);
+
         // Phase 4: Compute receipt.
         let post_state_hash = ledger.root();
         let effects_hash = self.compute_effects_hash(&all_effects_hashes);
@@ -925,5 +928,90 @@ impl TurnExecutor {
         }
 
         Ok(())
+    }
+
+    fn record_state_constraint_counters(
+        &self,
+        turn: &Turn,
+        ledger: &Ledger,
+        journal: &LedgerJournal,
+    ) {
+        let Some(sender) = ledger.get(&turn.agent).map(|cell| *cell.public_key()) else {
+            return;
+        };
+
+        let mut mutated_cells = std::collections::HashSet::<CellId>::new();
+        let mut first_field_old =
+            std::collections::HashMap::<(CellId, usize), dregg_cell::FieldElement>::new();
+        for entry in journal.entries() {
+            match entry {
+                crate::journal::JournalEntry::SetField {
+                    cell,
+                    index,
+                    old_value,
+                } => {
+                    mutated_cells.insert(*cell);
+                    first_field_old.entry((*cell, *index)).or_insert(*old_value);
+                }
+                crate::journal::JournalEntry::SetBalance { cell, .. }
+                | crate::journal::JournalEntry::SetNonce { cell, .. }
+                | crate::journal::JournalEntry::SetPermissions { cell, .. }
+                | crate::journal::JournalEntry::SetVerificationKey { cell, .. }
+                | crate::journal::JournalEntry::SetDelegation { cell, .. }
+                | crate::journal::JournalEntry::SetDelegationEpoch { cell, .. }
+                | crate::journal::JournalEntry::SetProvedState { cell, .. }
+                | crate::journal::JournalEntry::GrantCapability { cell, .. }
+                | crate::journal::JournalEntry::RevokeCapability { cell, .. }
+                | crate::journal::JournalEntry::CreateCell { cell }
+                | crate::journal::JournalEntry::SetLifecycle { cell, .. }
+                | crate::journal::JournalEntry::AttenuateCapability { cell, .. } => {
+                    mutated_cells.insert(*cell);
+                }
+                _ => {}
+            }
+        }
+
+        for cell_id in mutated_cells {
+            let Some(cell) = ledger.get(&cell_id) else {
+                continue;
+            };
+            let dregg_cell::CellProgram::Predicate(constraints) = &cell.program else {
+                continue;
+            };
+            for constraint in constraints {
+                match constraint {
+                    dregg_cell::StateConstraint::RateLimit { epoch_duration, .. } => {
+                        let epoch = Self::epoch_for_height(self.block_height, *epoch_duration);
+                        let mut counters = self.rate_limit_counters.lock().unwrap();
+                        let counter = counters.entry((cell_id, sender, epoch)).or_insert(0);
+                        *counter = counter.saturating_add(1);
+                    }
+                    dregg_cell::StateConstraint::RateLimitBySum {
+                        slot_index,
+                        epoch_duration,
+                        ..
+                    } => {
+                        let idx = *slot_index as usize;
+                        let Some(old_value) = first_field_old.get(&(cell_id, idx)) else {
+                            continue;
+                        };
+                        let Some(new_value) = cell.state.fields.get(idx) else {
+                            continue;
+                        };
+                        let old = Self::field_to_u64(old_value);
+                        let new = Self::field_to_u64(new_value);
+                        let delta = new.saturating_sub(old);
+                        if delta == 0 {
+                            continue;
+                        }
+                        let epoch = Self::epoch_for_height(self.block_height, *epoch_duration);
+                        let mut counters = self.rate_limit_sum_counters.lock().unwrap();
+                        let counter = counters.entry((cell_id, *slot_index, epoch)).or_insert(0);
+                        *counter = counter.saturating_add(delta);
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 }

@@ -56,6 +56,7 @@ use dregg_types::CellId;
 const TRANSFER_DOMAIN: &[u8] = b"dregg-transfer-id-v1";
 const GRANT_DOMAIN: &[u8] = b"dregg-grant-id-v1";
 const INTRO_DOMAIN: &[u8] = b"dregg-intro-id-v1";
+const INTRO_FEDERATION_DOMAIN: &[u8] = b"dregg-intro-id-v2-fed";
 
 // Distinct accumulator-update salts per kind/direction. Each ensures that
 // (e.g.) an outbound transfer accumulator cannot be confused with an inbound
@@ -213,6 +214,37 @@ pub fn derive_intro_id(
     payload.extend_from_slice(&permissions_to_bits(permissions).to_be_bytes());
     payload.extend_from_slice(&actor_nonce.to_be_bytes());
     poseidon2_id_from_bytes(INTRO_DOMAIN, &payload)
+}
+
+/// Compute `intro_id` with explicit federation binding.
+///
+/// For the zero federation id this preserves the historical v1 derivation so
+/// existing local-only bilateral schedules remain stable. For nonzero
+/// federation ids, the preimage is domain-separated and appends
+/// `federation_id` to the canonical v1 surface data:
+///
+/// `intro_id = Poseidon2("dregg-intro-id-v2-fed" || introducer || recipient || target ||
+///                       permissions_bits || nonce_be || federation_id)`
+pub fn derive_intro_id_for_federation(
+    federation_id: &[u8; 32],
+    introducer: &CellId,
+    recipient: &CellId,
+    target: &CellId,
+    permissions: &AuthRequired,
+    actor_nonce: u64,
+) -> [BabyBear; 4] {
+    if *federation_id == [0u8; 32] {
+        return derive_intro_id(introducer, recipient, target, permissions, actor_nonce);
+    }
+
+    let mut payload = Vec::with_capacity(140);
+    payload.extend_from_slice(introducer.as_bytes());
+    payload.extend_from_slice(recipient.as_bytes());
+    payload.extend_from_slice(target.as_bytes());
+    payload.extend_from_slice(&permissions_to_bits(permissions).to_be_bytes());
+    payload.extend_from_slice(&actor_nonce.to_be_bytes());
+    payload.extend_from_slice(federation_id);
+    poseidon2_id_from_bytes(INTRO_FEDERATION_DOMAIN, &payload)
 }
 
 // ---------------------------------------------------------------------------
