@@ -45,7 +45,7 @@
 //!
 //! 1. [`subscription_factory_descriptor`] — the `FactoryDescriptor`
 //!    pinning the constructor contract: slot layout, immutable
-//!    capacity + owner, monotonic head/tail/roots, plus the
+//!    capacity + owner, monotonic head/tail, opaque root commitments, plus the
 //!    operation-scoped state constraints via [`subscription_program`].
 //! 2. [`subscription_program`] — the `CellProgram::Cases(_)` value
 //!    that the descriptor bakes in. Exported separately so tests can
@@ -112,7 +112,7 @@
 //!
 //! - `publish` — head advances by exactly 1 (`MonotonicSequence`),
 //!   tail must be unchanged (`Immutable { index: 1 }`),
-//!   the message_root must be non-zero,
+//!   the message_root must change and be non-zero,
 //!   sender must be in `authorized_publishers_root`
 //!   (`SenderAuthorized { set: PublicRoot { set_root_index: 3 } }`),
 //!   roots-of-membership stay frozen on publish.
@@ -122,8 +122,8 @@
 //!   (`SenderAuthorized { set: PublicRoot { set_root_index: 4 } }`),
 //!   message_root + latest_payload_hash stay frozen, membership
 //!   roots frozen.
-//! - `grant_publisher` — `authorized_publishers_root` advances
-//!   (`Monotonic { index: 3 }`); head, tail, capacity, owner, msg
+//! - `grant_publisher` — `authorized_publishers_root` changes
+//!   and is non-zero; head, tail, capacity, owner, msg
 //!   root, latest payload, and the consumers root all immutable.
 //!   The owner authorization is enforced by the per-cell capability
 //!   layer (action sender is the owner of the cell).
@@ -158,6 +158,7 @@ use dregg_app_framework::{
     InspectorDescriptor, StarbridgeAppContext, StateConstraint, TransitionCase, TransitionGuard,
     canonical_program_vk, hex_encode_32, symbol,
 };
+use dregg_cell::program::SimpleStateConstraint;
 
 // =============================================================================
 // Slot layout
@@ -233,6 +234,14 @@ pub fn grant_consumer_method_symbol() -> [u8; 32] {
     symbol("grant_consumer")
 }
 
+fn slot_changed(index: u8) -> StateConstraint {
+    StateConstraint::AnyOf {
+        variants: vec![SimpleStateConstraint::Not(Box::new(
+            SimpleStateConstraint::Immutable { index },
+        ))],
+    }
+}
+
 // =============================================================================
 // CellProgram: operation-scoped Cases
 // =============================================================================
@@ -268,7 +277,7 @@ pub fn subscription_program() -> CellProgram {
         },
         // ────────────────────────────────────────────────────────────────
         // publish: head advances by +1; tail, capacity, owner, roots stay
-        // unchanged; message_root is set non-zero; sender must be
+        // unchanged; message_root changes and is non-zero; sender must be
         // a member of authorized_publishers_root.
         // ────────────────────────────────────────────────────────────────
         TransitionCase {
@@ -288,6 +297,7 @@ pub fn subscription_program() -> CellProgram {
                 StateConstraint::Immutable {
                     index: CONSUMERS_ROOT_SLOT,
                 },
+                slot_changed(MESSAGE_ROOT_SLOT),
                 StateConstraint::FieldGte {
                     index: MESSAGE_ROOT_SLOT,
                     value: u64_field(1),
@@ -338,7 +348,7 @@ pub fn subscription_program() -> CellProgram {
             ],
         },
         // ────────────────────────────────────────────────────────────────
-        // grant_publisher: publishers_root advances; everything else frozen.
+        // grant_publisher: publishers_root changes; everything else frozen.
         // Owner authorization rides on the per-cell capability layer.
         // ────────────────────────────────────────────────────────────────
         TransitionCase {
@@ -346,6 +356,7 @@ pub fn subscription_program() -> CellProgram {
                 method: symbol("grant_publisher"),
             },
             constraints: vec![
+                slot_changed(PUBLISHERS_ROOT_SLOT),
                 StateConstraint::FieldGte {
                     index: PUBLISHERS_ROOT_SLOT,
                     value: u64_field(1),
@@ -375,6 +386,7 @@ pub fn subscription_program() -> CellProgram {
                 method: symbol("grant_consumer"),
             },
             constraints: vec![
+                slot_changed(CONSUMERS_ROOT_SLOT),
                 StateConstraint::FieldGte {
                     index: CONSUMERS_ROOT_SLOT,
                     value: u64_field(1),
@@ -425,8 +437,8 @@ pub fn subscription_program() -> CellProgram {
 /// - `state_constraints` (perpetual / Lane G slot caveats): the
 ///   `Immutable` invariants flattened from
 ///   [`subscription_program`]'s `Always` case plus the cell-wide
-///   `Monotonic` invariants for head, tail, the membership roots,
-///   and the message root. The full operation-scoped shape is bound
+///   `Monotonic` invariants for head and tail. Opaque hash roots are
+///   constrained by operation-scoped cases. The full operation-scoped shape is bound
 ///   by `child_program_vk` (which is the VK of an AIR that enforces
 ///   [`subscription_program`]).
 ///
@@ -524,7 +536,7 @@ pub fn factory_descriptors() -> Vec<FactoryDescriptor> {
 /// Build the on-ledger [`Action`] that records a `publish`.
 ///
 /// The action carries three `SetField` effects (head advances,
-/// message_root advances, latest_payload slot updated) plus an
+/// message_root changes, latest_payload slot updated) plus an
 /// `EmitEvent("subscription-published", ...)` for off-chain
 /// indexers. The cipherclerk's `make_action` produces a real
 /// `Authorization::Signature(..)`; the executor checks the
@@ -626,7 +638,7 @@ pub fn build_consume_action(
 /// Build the on-ledger [`Action`] that adds a new publisher to the
 /// authorized-publishers set.
 ///
-/// The action carries one `SetField` (the publishers_root advances
+/// The action carries one `SetField` (the publishers_root changes
 /// to a new root that includes `new_publisher_pk`) plus an
 /// `EmitEvent("subscription-publisher-granted", ...)` for indexers.
 /// Per the `grant_publisher` case, every other slot stays frozen on

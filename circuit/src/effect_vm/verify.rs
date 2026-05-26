@@ -7,7 +7,7 @@
 
 use crate::field::BabyBear;
 
-use super::{pi, split_u64, CellState};
+use super::{CellState, pi, split_u64};
 
 /// Verify that balance limbs in a CellState are within valid ranges.
 ///

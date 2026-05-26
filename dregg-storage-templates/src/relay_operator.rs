@@ -58,9 +58,9 @@
 //!   `EmitEvent` data is the carrier, optionally encrypted).
 
 use dregg_app_framework::{
-    canonical_program_vk, symbol, Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate,
-    CellId, CellMode, ChildVkStrategy, Effect, Event, FactoryDescriptor, FieldConstraint,
-    FieldElement, InspectorDescriptor, StarbridgeAppContext, StateConstraint,
+    Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellId, CellMode,
+    ChildVkStrategy, Effect, Event, FactoryDescriptor, FieldConstraint, FieldElement,
+    InspectorDescriptor, StarbridgeAppContext, StateConstraint, canonical_program_vk, symbol,
 };
 use dregg_cell::predicate::{InputRef, WitnessedPredicate};
 use dregg_cell::program::{

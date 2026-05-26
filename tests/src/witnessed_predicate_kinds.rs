@@ -38,7 +38,8 @@ fn wp(kind: WitnessedPredicateKind) -> WitnessedPredicate {
 }
 
 struct ExactSenderVerifier {
-    vk_hash: [u8; 32],
+    kind: WitnessedPredicateKind,
+    name: &'static str,
     expected_commitment: [u8; 32],
     expected_sender: [u8; 32],
     expected_proof: &'static [u8],
@@ -46,13 +47,11 @@ struct ExactSenderVerifier {
 
 impl WitnessedPredicateVerifier for ExactSenderVerifier {
     fn name(&self) -> &'static str {
-        "exact-sender-test-verifier"
+        self.name
     }
 
     fn kind(&self) -> WitnessedPredicateKind {
-        WitnessedPredicateKind::Custom {
-            vk_hash: self.vk_hash,
-        }
+        self.kind
     }
 
     fn verify(
@@ -103,12 +102,29 @@ fn exact_sender_registry(
     registry.register_custom(
         vk_hash,
         Arc::new(ExactSenderVerifier {
-            vk_hash,
+            kind: WitnessedPredicateKind::Custom { vk_hash },
+            name: "exact-custom-test-verifier",
             expected_commitment,
             expected_sender,
             expected_proof,
         }),
     );
+    registry
+}
+
+fn exact_dfa_registry(
+    expected_commitment: [u8; 32],
+    expected_sender: [u8; 32],
+    expected_proof: &'static [u8],
+) -> WitnessedPredicateRegistry {
+    let mut registry = WitnessedPredicateRegistry::empty();
+    registry.register_builtin(Arc::new(ExactSenderVerifier {
+        kind: WitnessedPredicateKind::Dfa,
+        name: "exact-dfa-test-verifier",
+        expected_commitment,
+        expected_sender,
+        expected_proof,
+    }));
     registry
 }
 
@@ -156,15 +172,44 @@ fn dfa_predicate_with_valid_proof_accepts_through_executor() {
 }
 
 #[test]
-#[ignore = "blocked on registry dispatch: Dfa with tampered route-table-root rejects"]
 fn dfa_predicate_with_tampered_proof_rejects() {
-    panic!("blocked");
+    let commitment = [1u8; 32];
+    let sender = [0xA5u8; 32];
+    let registry = exact_dfa_registry(commitment, sender, b"valid-dfa-proof");
+    let predicate = WitnessedPredicate::dfa(commitment, InputRef::Sender, 0);
+    let err = registry
+        .verify(
+            &predicate,
+            &PredicateInput::Sender(&sender),
+            b"tampered-proof",
+        )
+        .expect_err("registered Dfa verifier must reject non-matching proof bytes");
+
+    assert!(matches!(err, WitnessedPredicateError::Rejected { .. }));
 }
 
 #[test]
-#[ignore = "blocked on registry dispatch: Dfa with invalid input rejects"]
 fn dfa_predicate_with_invalid_input_rejects() {
-    panic!("blocked");
+    let commitment = [1u8; 32];
+    let sender = [0xA5u8; 32];
+    let registry = exact_dfa_registry(commitment, sender, b"valid-dfa-proof");
+    let predicate = WitnessedPredicate::dfa(commitment, InputRef::Sender, 0);
+    let err = registry
+        .verify(
+            &predicate,
+            &PredicateInput::Bytes(b"not-a-sender"),
+            b"valid-dfa-proof",
+        )
+        .expect_err("registered Dfa verifier must reject an unexpected input shape");
+
+    assert!(matches!(
+        err,
+        WitnessedPredicateError::InputShapeMismatch {
+            kind_name: "exact-dfa-test-verifier",
+            expected: "Sender",
+            actual: "non-Sender",
+        }
+    ));
 }
 
 // ===========================================================================

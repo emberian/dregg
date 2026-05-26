@@ -107,6 +107,17 @@ fn make_transfer_turn(alice: CellId, bob: CellId, amount: u64, nonce: u64) -> Tu
     builder.fee(0).build()
 }
 
+fn make_transfer_ring_turn(a: CellId, b: CellId, c: CellId, nonce: u64) -> Turn {
+    let mut builder = TurnBuilder::new(a, nonce);
+    let action = ActionBuilder::new_unchecked_for_tests(a, "ring", a)
+        .effect_transfer(a, b, 10)
+        .effect_transfer(b, c, 20)
+        .effect_transfer(c, a, 30)
+        .build();
+    builder.add_action(action);
+    builder.fee(0).build()
+}
+
 fn make_grant_turn(alice: CellId, bob: CellId, target: CellId, nonce: u64) -> Turn {
     let mut builder = TurnBuilder::new(alice, nonce);
     let action = ActionBuilder::new_unchecked_for_tests(alice, "grant", alice)
@@ -349,17 +360,32 @@ fn cross_federation_introduce_includes_federation_id_in_intro_id_preimage() {
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on γ.2 Phase 2 (joint aggregation AIR sketch) — three-cell ring of bilateral effects"]
 fn three_cell_ring_transfer_all_pairings_bound() {
-    // A→B, B→C, C→A; three transfer_ids must each match across their two
-    // touched cells; off-AIR verifier walks each pair.
-    panic!("blocked");
+    let a = CellId([0xA1; 32]);
+    let b = CellId([0xB2; 32]);
+    let c = CellId([0xC3; 32]);
+    let turn = make_transfer_ring_turn(a, b, c, 7);
+    let bundle = fabricated_bundle(&turn, &[a, b, c]);
+
+    let verdict = verify_bilateral_bundle(&bundle);
+    assert!(verdict.verified, "honest ring bundle: {verdict:?}");
+    assert_eq!(verdict.transfer_count, 3);
+    assert_eq!(verdict.entry_count, 3);
 }
 
 #[test]
-#[ignore = "blocked on γ.2 Phase 2: ring with one tampered transfer_id (between any two cells) rejects"]
 fn three_cell_ring_with_tampered_pair_rejects() {
-    panic!("blocked");
+    use dregg_circuit::effect_vm::pi;
+
+    let a = CellId([0xA1; 32]);
+    let b = CellId([0xB2; 32]);
+    let c = CellId([0xC3; 32]);
+    let turn = make_transfer_ring_turn(a, b, c, 7);
+    let mut bundle = fabricated_bundle(&turn, &[a, b, c]);
+    bundle.entries[2].witnessed_receipt.public_inputs[pi::INCOMING_TRANSFER_ROOT_BASE] ^= 1;
+
+    let verdict = verify_bilateral_bundle(&bundle);
+    assert!(!verdict.verified, "tampered ring pair must reject");
 }
 
 // ===========================================================================

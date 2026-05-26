@@ -13,7 +13,7 @@
 //! 2. Non-authorized publisher → rejected (`SenderAuthorized`).
 //! 3. Non-authorized consumer → rejected.
 //! 4. Rewrite a message slot → rejected (`WriteOnce`-shaped via
-//!    `Immutable` under `consume` and `Monotonic` under `publish`).
+//!    `Immutable` under `consume` and changed+non-zero root on `publish`).
 //! 5. Decrement head or tail → rejected (`MonotonicSequence`).
 //! 6. Write past capacity → rejected (the head's exact +1 increment
 //!    plus the cap check at the cclerk layer; the message_root must
@@ -281,6 +281,25 @@ fn message_root_rewind_under_publish_rejected() {
     }
 }
 
+#[test]
+fn publish_must_change_message_root() {
+    let program = program_without_sender_authorized();
+    let old = base_state(0, 0);
+    let mut bad_new = publish_new(&old, blake3_field(b"hello"));
+    bad_new.fields[MESSAGE_ROOT_SLOT as usize] = old.fields[MESSAGE_ROOT_SLOT as usize];
+
+    let err = program
+        .evaluate_with_meta(&bad_new, Some(&old), None, &publish_meta())
+        .expect_err("publish without a message_root change must be rejected");
+    match err {
+        ProgramError::ConstraintViolated {
+            constraint: StateConstraint::Immutable { index },
+            ..
+        } => assert_eq!(index, MESSAGE_ROOT_SLOT),
+        other => panic!("expected negated Immutable on message_root, got {other:?}"),
+    }
+}
+
 // ─── 4. Decrement head or tail → rejected ──────────────────────────────
 
 #[test]
@@ -456,15 +475,13 @@ fn unknown_method_default_denied() {
     );
 }
 
-// ─── 7. Grant operations: scoping + monotonic root growth ──────────────
+// ─── 7. Grant operations: scoping + opaque-root changes ────────────────
 
 #[test]
 fn legal_grant_publisher_passes_slot_shape() {
     let program = program_without_sender_authorized();
     let old = base_state(2, 1);
     let mut new = old.clone();
-    // `byte_field(0x20)` > base's `byte_field(0x10)` byte-wise, so Monotonic
-    // on `PUBLISHERS_ROOT_SLOT` is satisfied. See `base_state` rationale.
     new.fields[PUBLISHERS_ROOT_SLOT as usize] = byte_field(0x20);
 
     let r = program.evaluate_with_meta(&new, Some(&old), None, &grant_publisher_meta());
@@ -472,13 +489,28 @@ fn legal_grant_publisher_passes_slot_shape() {
 }
 
 #[test]
+fn grant_publisher_must_change_publishers_root() {
+    let program = program_without_sender_authorized();
+    let old = base_state(2, 1);
+    let new = old.clone();
+
+    let err = program
+        .evaluate_with_meta(&new, Some(&old), None, &grant_publisher_meta())
+        .expect_err("grant_publisher without publishers_root change must be rejected");
+    match err {
+        ProgramError::ConstraintViolated {
+            constraint: StateConstraint::Immutable { index },
+            ..
+        } => assert_eq!(index, PUBLISHERS_ROOT_SLOT),
+        other => panic!("expected negated Immutable on publishers root, got {other:?}"),
+    }
+}
+
+#[test]
 fn grant_publisher_cannot_advance_head() {
     let program = program_without_sender_authorized();
     let old = base_state(2, 1);
     let mut bad_new = old.clone();
-    // Use an ordered-greater root so Monotonic passes — the adversarial
-    // signal we want to surface is `Immutable on head`, not the
-    // accidental Monotonic-on-root that random blake3 would cause.
     bad_new.fields[PUBLISHERS_ROOT_SLOT as usize] = byte_field(0x20);
     // Adversarial: also advance head.
     bad_new.fields[SEQ_HEAD_SLOT as usize] = u64_field(3);
@@ -502,8 +534,7 @@ fn grant_consumer_cannot_modify_publishers_root() {
     let mut bad_new = old.clone();
     // CONSUMERS_ROOT advances legitimately under grant_consumer.
     bad_new.fields[CONSUMERS_ROOT_SLOT as usize] = byte_field(0x20);
-    // Adversarial: also change the publishers root (still ordered-greater
-    // so the violation we surface is Immutable, not Monotonic).
+    // Adversarial: also change the publishers root.
     bad_new.fields[PUBLISHERS_ROOT_SLOT as usize] = byte_field(0x20);
 
     let err = program
@@ -549,4 +580,22 @@ fn legal_grant_consumer_passes_slot_shape() {
 
     let r = program.evaluate_with_meta(&new, Some(&old), None, &grant_consumer_meta());
     assert!(r.is_ok(), "legal grant_consumer must pass: {r:?}");
+}
+
+#[test]
+fn grant_consumer_must_change_consumers_root() {
+    let program = program_without_sender_authorized();
+    let old = base_state(2, 1);
+    let new = old.clone();
+
+    let err = program
+        .evaluate_with_meta(&new, Some(&old), None, &grant_consumer_meta())
+        .expect_err("grant_consumer without consumers_root change must be rejected");
+    match err {
+        ProgramError::ConstraintViolated {
+            constraint: StateConstraint::Immutable { index },
+            ..
+        } => assert_eq!(index, CONSUMERS_ROOT_SLOT),
+        other => panic!("expected negated Immutable on consumers root, got {other:?}"),
+    }
 }

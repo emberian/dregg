@@ -8,6 +8,9 @@ use serenity::all::{
     ModalInteraction,
 };
 
+use dregg_app_framework::{CellId, field_from_bytes};
+use starbridge_nameservice::{build_register_action, build_set_target_action};
+
 use crate::BotState;
 use crate::cipherclerk::{UserCipherclerk, sign_legacy};
 use crate::db::IdentityMode;
@@ -360,6 +363,8 @@ fn button(id: &str, label: &str, style: ButtonStyle) -> CreateButton {
 fn name_register_modal() -> CreateModal {
     CreateModal::new(ID_NAME_REGISTER, "Register Name").components(vec![
         short_row(short_input("name", "Name", "alice").max_length(80)),
+        short_row(short_input("registry_cell", "Registry cell id", "64 hex chars").max_length(64)),
+        short_row(short_input("expiry_height", "Expiry height", "1000000").max_length(20)),
         short_row(
             short_input(
                 "target",
@@ -458,37 +463,84 @@ fn short_row(input: CreateInputText) -> CreateActionRow {
 }
 
 async fn submit_name_register(modal: &ModalInteraction, state: &BotState) -> CreateEmbed {
-    let Some(guild_id) = modal.guild_id.map(|id| id.get()) else {
-        return embeds::warning_embed("Guild Required", "Names must be registered in a server.");
-    };
     let name = modal_value(modal, "name");
+    let registry_cell_hex = modal_value(modal, "registry_cell");
+    let expiry_height = match modal_value(modal, "expiry_height").parse::<u64>() {
+        Ok(value) => value,
+        Err(_) => {
+            return embeds::warning_embed(
+                "Invalid Expiry",
+                "Expiry height must be an unsigned integer.",
+            );
+        }
+    };
     let target = modal_value(modal, "target");
     let owner = match user_cell(modal.user.id.get(), state).await {
         Ok(cell) => cell,
         Err(embed) => return embed,
     };
+    if let Err(embed) = hosted_user_cell(modal.user.id.get(), state).await {
+        return embed;
+    }
 
-    let mut body = serde_json::json!({
-        "guild_id": guild_id,
-        "name": name,
-        "owner": owner,
-    });
+    let registry_cell = match parse_cell_id(&registry_cell_hex) {
+        Ok(cell) => cell,
+        Err(embed) => return embed,
+    };
+    let owner_bytes = match parse_cell_bytes(&owner) {
+        Ok(bytes) => bytes,
+        Err(embed) => return embed,
+    };
+
+    let cclerk = UserCipherclerk::derive(
+        &state.config.bot_secret,
+        modal.user.id.get(),
+        state.federation_id_bytes,
+    );
+    let mut actions = vec![build_register_action(
+        &cclerk.app,
+        registry_cell,
+        &name,
+        owner_bytes,
+        expiry_height,
+    )];
     if !target.is_empty() {
-        body["target"] = serde_json::json!(target);
+        actions.push(build_set_target_action(
+            &cclerk.app,
+            registry_cell,
+            &name,
+            field_from_bytes(target.as_bytes()),
+        ));
     }
 
     match state
         .devnet
-        .client()
-        .post(format!("{}/names/register", state.config.devnet_url))
-        .json(&body)
-        .send()
+        .submit_app_actions(
+            &cclerk,
+            actions,
+            Some(format!("discord:nameservice:register:{name}")),
+        )
         .await
     {
-        Ok(resp) if resp.status().is_success() => embeds::success_embed("Name Registered")
+        Ok(result) if result.accepted => embeds::success_embed("Name Registered")
             .field("Name", name, true)
-            .field("Owner", short_cell(&owner), true),
-        Ok(resp) => embeds::error_embed("Registration Failed", &response_text(resp).await),
+            .field("Owner", short_cell(&owner), true)
+            .field("Registry", short_cell(&registry_cell_hex), true)
+            .field(
+                "Turn",
+                result
+                    .turn_hash
+                    .map(|hash| format!("`{hash}`"))
+                    .unwrap_or_else(|| "`unknown`".to_string()),
+                false,
+            ),
+        Ok(result) => embeds::error_embed(
+            "Registration Rejected",
+            result
+                .error
+                .as_deref()
+                .unwrap_or("node rejected the signed turn"),
+        ),
         Err(e) => embeds::error_embed("Node Unreachable", &e.to_string()),
     }
 }
@@ -825,6 +877,22 @@ fn value_to_string(value: Option<&serde_json::Value>) -> String {
         Some(value) if !value.is_null() => value.to_string(),
         _ => String::new(),
     }
+}
+
+fn parse_cell_id(value: &str) -> Result<CellId, CreateEmbed> {
+    parse_cell_bytes(value).map(CellId)
+}
+
+fn parse_cell_bytes(value: &str) -> Result<[u8; 32], CreateEmbed> {
+    let bytes = hex::decode(value).map_err(|_| {
+        embeds::warning_embed(
+            "Invalid Cell",
+            "Cell IDs must be 64 lowercase hex characters.",
+        )
+    })?;
+    bytes.try_into().map_err(|_| {
+        embeds::warning_embed("Invalid Cell", "Cell IDs must decode to exactly 32 bytes.")
+    })
 }
 
 fn short_cell(cell: &str) -> String {

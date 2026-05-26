@@ -12,9 +12,9 @@
 
 use dregg_cell::note::{NoteCommitment, Nullifier};
 use dregg_cell::note_bridge::{
-    cancel_bridge, compute_bridge_id, create_portable_note, initiate_bridge, verify_portable_note,
     BridgeError, BridgePhase, BridgePhaseLog, BridgeReceiptEnvelope, BridgedNullifierSet,
-    PendingBridgeSet,
+    PendingBridgeSet, cancel_bridge, compute_bridge_id, create_portable_note, initiate_bridge,
+    verify_portable_note,
 };
 use dregg_federation::FederationReceiptBody;
 use dregg_turn::bilateral_schedule::derive_transfer_id;

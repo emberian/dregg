@@ -21,6 +21,8 @@
 //! - [`AppCipherclerk::make_turn`] — wrap a signed action in a Turn with
 //!   sane defaults (nonce/forest hash filled by the executor path).
 //! - [`AppCipherclerk::sign_action`] — re-sign a pre-built action.
+//! - [`AppCipherclerk::sign_turn`] — sign a fully assembled Turn for a remote
+//!   executor.
 //!
 //! ## What apps cannot do through this handle
 //!
@@ -49,7 +51,7 @@
 
 use std::sync::{Arc, Mutex, RwLock};
 
-use dregg_sdk::{AgentCipherclerk, AgentRuntime};
+use dregg_sdk::{AgentCipherclerk, AgentRuntime, SignedTurn};
 use dregg_turn::action::{Action, Effect};
 use dregg_turn::{Turn, TurnReceipt};
 use dregg_types::{CellId, PublicKey};
@@ -189,6 +191,15 @@ impl AppCipherclerk {
     pub fn make_turn_with_actions(&self, actions: Vec<Action>) -> Turn {
         self.read()
             .make_turn_with_actions_for(&self.domain, actions)
+    }
+
+    /// Sign a fully assembled [`Turn`] for remote submission.
+    ///
+    /// App code still constructs actions through the narrow framework surface;
+    /// this method only covers the final transport envelope used by remote node
+    /// APIs such as `/turns/submit`.
+    pub fn sign_turn(&self, turn: &Turn) -> SignedTurn {
+        self.read().sign_turn(turn)
     }
 
     /// Build a signed [`Turn`] that mints a new cell from a deployed

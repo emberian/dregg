@@ -1155,6 +1155,17 @@ function writeUrlState({ at, runtime }) {
     for (const tab of document.querySelectorAll('[data-tool]')) {
       tab.addEventListener('click', () => selectWorkbenchTool(tab.dataset.tool || 'raw'));
     }
+    rawFilter?.addEventListener('input', renderRawText);
+    rawCopyBtn?.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(rawText);
+        setStatus('raw copied', 'ready');
+        consoleLog('raw copied', 'ok');
+      } catch (err) {
+        setStatus('copy failed: ' + (err?.message || err), 'err');
+        consoleLog('copy failed: ' + (err?.message || err), 'err');
+      }
+    });
     consoleForm?.addEventListener('submit', async (e) => {
       e.preventDefault();
       const raw = consoleInput?.value || '';

@@ -149,7 +149,12 @@ const STARBRIDGE_APPS: &[StarbridgeAppView] = &[
             "revoke_name",
             "set_target_name",
         ],
-        required_apis: &["signTurn", "blake3", "cell.readField", "builders.nameservice"],
+        required_apis: &[
+            "signTurn",
+            "blake3",
+            "cell.readField",
+            "builders.nameservice",
+        ],
     },
     StarbridgeAppView {
         id: "governed-namespace",
@@ -173,12 +178,7 @@ const STARBRIDGE_APPS: &[StarbridgeAppView] = &[
         page: "/starbridge-apps/subscription/pages/index.html",
         factory_vks: &["737461726272696467652d737562736372697074696f6e2d666163746f727921"],
         inspectors: &["dregg-subscription", "dregg-subscription-feed"],
-        turn_builders: &[
-            "publish",
-            "consume",
-            "grant_publisher",
-            "grant_consumer",
-        ],
+        turn_builders: &["publish", "consume", "grant_publisher", "grant_consumer"],
         required_apis: &["signTurn"],
     },
 ];
@@ -364,13 +364,17 @@ async fn get_app(Path(id): Path<String>) -> Result<Json<StarbridgeAppView>, Http
 async fn recent_activity(
     State(state): State<Arc<BotState>>,
 ) -> Result<Json<Vec<StarbridgeActivityView>>, HttpError> {
-    let activity = state.db.get_recent_starbridge_activity(50).await.map_err(|e| {
-        warn!(error = %e, "failed to load recent starbridge activity");
-        HttpError {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            message: "local activity store unavailable".to_string(),
-        }
-    })?;
+    let activity = state
+        .db
+        .get_recent_starbridge_activity(50)
+        .await
+        .map_err(|e| {
+            warn!(error = %e, "failed to load recent starbridge activity");
+            HttpError {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                message: "local activity store unavailable".to_string(),
+            }
+        })?;
     Ok(Json(activity.into_iter().map(activity_view).collect()))
 }
 

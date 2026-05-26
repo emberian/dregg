@@ -32,7 +32,7 @@ use std::convert::Infallible;
 use subtle::ConstantTimeEq;
 use tokio::sync::Mutex;
 
-use dregg_sdk::{Attenuation, AuthRequest, CellId};
+use dregg_sdk::{Attenuation, AuthRequest, CellId, SignedTurn};
 use dregg_turn::{CallForest, Turn};
 
 use crate::state::{CommittedEvent, NodeEvent, NodeState};
@@ -125,6 +125,15 @@ pub struct SubmitTurnRequest {
 pub struct SubmitTurnResponse {
     pub accepted: bool,
     pub turn_hash: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct SubmitSignedTurnResponse {
+    pub accepted: bool,
+    pub turn_hash: Option<String>,
+    pub signer: Option<String>,
+    pub action_count: usize,
+    pub error: Option<String>,
 }
 
 // =============================================================================
@@ -1019,6 +1028,15 @@ pub fn router(
                 }
             }),
         )
+        .route(
+            "/turns/submit",
+            post({
+                let limiter = turn_limiter.clone();
+                move |connect_info, state, body| {
+                    post_submit_signed_turn(connect_info, state, body, limiter)
+                }
+            }),
+        )
         .route("/turns/encryption-key", get(get_turn_encryption_key))
         .route("/turn/submit-conditional", post(post_submit_conditional))
         .route("/turn/resolve-conditional", post(post_resolve_conditional))
@@ -1068,6 +1086,15 @@ pub fn router(
             }),
         )
         .route("/api/turns/bearer-auth", post(post_bearer_auth))
+        .route(
+            "/api/turns/submit-signed",
+            post({
+                let limiter = turn_limiter.clone();
+                move |connect_info, state, body| {
+                    post_submit_signed_turn(connect_info, state, body, limiter)
+                }
+            }),
+        )
         .route("/api/turns/fast-path", post(post_fast_path_lock))
         .route("/api/turns/certificate", post(post_fast_path_certificate))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
@@ -1396,6 +1423,161 @@ async fn post_submit_turn(
             Ok(Json(SubmitTurnResponse {
                 accepted: false,
                 turn_hash: None,
+            }))
+        }
+    }
+}
+
+/// POST /turns/submit — accept a caller-signed canonical `SignedTurn`.
+///
+/// Wire format: `Content-Type: application/octet-stream`, body =
+/// `postcard::to_stdvec(&dregg_sdk::SignedTurn)`. This is the remote ingress
+/// used by rich clients that build app actions with `AppCipherclerk` and need
+/// the node to execute, gossip, and order them without re-signing as the node.
+async fn post_submit_signed_turn(
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    State(state): State<NodeState>,
+    body: axum::body::Bytes,
+    limiter: RateLimiter,
+) -> Result<Json<SubmitSignedTurnResponse>, StatusCode> {
+    if !limiter.check(addr.ip()).await {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    crate::metrics::inc_turns_submitted();
+    let start = Instant::now();
+
+    let signed: SignedTurn = match postcard::from_bytes(&body) {
+        Ok(turn) => turn,
+        Err(_) => return Err(StatusCode::BAD_REQUEST),
+    };
+
+    let turn_hash_bytes = signed.turn.hash();
+    if !signed.signer.verify(&turn_hash_bytes, &signed.signature) {
+        return Ok(Json(SubmitSignedTurnResponse {
+            accepted: false,
+            turn_hash: Some(hex_encode(&turn_hash_bytes)),
+            signer: Some(hex_encode(&signed.signer.0)),
+            action_count: signed.turn.call_forest.action_count(),
+            error: Some("invalid turn signature".to_string()),
+        }));
+    }
+
+    let turn_hash = hex_encode(&turn_hash_bytes);
+    let signer = hex_encode(&signed.signer.0);
+    let agent = hex_encode(&signed.turn.agent.0);
+    let action_count = signed.turn.call_forest.action_count();
+    let signed_for_gossip = signed.clone();
+
+    let mut s = state.write().await;
+    if !s.unlocked {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    let exec_result = executor.execute(&signed.turn, &mut s.ledger);
+
+    match exec_result {
+        dregg_turn::TurnResult::Committed { mut receipt, .. } => {
+            crate::metrics::inc_turns_executed("committed");
+            crate::metrics::record_turn_execution_duration(start.elapsed().as_secs_f64());
+            crate::metrics::set_ledger_cell_count(s.ledger.len() as f64);
+
+            if let Some(ref mut solo) = s.solo_consensus {
+                if solo.is_solo {
+                    receipt.finality = dregg_turn::Finality::Tentative;
+                    let height = solo.height;
+                    let _ = solo
+                        .nullifier_log
+                        .insert(turn_hash_bytes, turn_hash_bytes, height);
+                    solo.advance_height();
+                }
+            }
+
+            if let Err(err) = s.cclerk.append_receipt(receipt) {
+                crate::metrics::inc_turns_executed("rejected");
+                drop(s);
+                return Ok(Json(SubmitSignedTurnResponse {
+                    accepted: false,
+                    turn_hash: Some(turn_hash),
+                    signer: Some(signer),
+                    action_count,
+                    error: Some(format!("receipt chain mismatch: {err}")),
+                }));
+            }
+
+            let current_height = s
+                .store
+                .latest_attested_root()
+                .ok()
+                .flatten()
+                .map(|r| r.height)
+                .unwrap_or(0);
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            s.push_event(CommittedEvent {
+                height: current_height,
+                turn_hash: turn_hash.clone(),
+                cell_id: agent,
+                effects: vec![format!("signed_turn:{action_count}")],
+                timestamp,
+            });
+
+            let turn_data = postcard::to_stdvec(&signed_for_gossip)
+                .expect("SignedTurn serialization after successful decode");
+
+            drop(s);
+
+            state.emit(crate::state::NodeEvent::Receipt {
+                hash: turn_hash.clone(),
+            });
+
+            let turn_data_for_gossip = turn_data.clone();
+            if let Some(gossip) = state.gossip().await {
+                let hash = turn_hash_bytes;
+                tokio::spawn(async move {
+                    gossip.gossip_turn(hash, turn_data_for_gossip).await;
+                });
+            }
+
+            if let Some(blocklace) = state.blocklace().await {
+                let state_for_blocklace = state.clone();
+                tokio::spawn(async move {
+                    blocklace.submit_turn(&state_for_blocklace, turn_data).await;
+                });
+            }
+
+            Ok(Json(SubmitSignedTurnResponse {
+                accepted: true,
+                turn_hash: Some(turn_hash),
+                signer: Some(signer),
+                action_count,
+                error: None,
+            }))
+        }
+        dregg_turn::TurnResult::Rejected { reason, .. } => {
+            crate::metrics::inc_turns_executed("rejected");
+            crate::metrics::record_turn_execution_duration(start.elapsed().as_secs_f64());
+            drop(s);
+            Ok(Json(SubmitSignedTurnResponse {
+                accepted: false,
+                turn_hash: Some(turn_hash),
+                signer: Some(signer),
+                action_count,
+                error: Some(format!("rejected: {reason}")),
+            }))
+        }
+        _ => {
+            crate::metrics::inc_turns_executed("rejected");
+            drop(s);
+            Ok(Json(SubmitSignedTurnResponse {
+                accepted: false,
+                turn_hash: Some(turn_hash),
+                signer: Some(signer),
+                action_count,
+                error: Some("turn did not commit".to_string()),
             }))
         }
     }

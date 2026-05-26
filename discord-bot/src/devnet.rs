@@ -1,5 +1,8 @@
 //! Client for the dregg devnet API.
 
+use crate::cipherclerk::UserCipherclerk;
+use dregg_sdk::SignedTurn;
+use dregg_turn::Action;
 use serde::Deserialize;
 
 /// Client for communicating with the dregg devnet.
@@ -108,6 +111,15 @@ pub struct ExplorerStats {
     pub active_auctions: u64,
     pub federation_nodes_up: u32,
     pub federation_nodes_total: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SubmitSignedTurnResult {
+    pub accepted: bool,
+    pub turn_hash: Option<String>,
+    pub signer: Option<String>,
+    pub action_count: usize,
+    pub error: Option<String>,
 }
 
 // ─── Gallery response types ────────────────────────────────────────────────
@@ -223,6 +235,78 @@ impl DevnetClient {
     /// Get a reference to the underlying HTTP client (for custom endpoint calls).
     pub fn client(&self) -> &reqwest::Client {
         &self.client
+    }
+
+    /// Submit a caller-signed canonical dregg turn to the node.
+    pub async fn submit_signed_turn(
+        &self,
+        signed: &SignedTurn,
+    ) -> Result<SubmitSignedTurnResult, DevnetError> {
+        let url = format!("{}/api/turns/submit-signed", self.base_url);
+        let body = postcard::to_stdvec(signed)
+            .map_err(|e| DevnetError::Api(format!("failed to encode signed turn: {e}")))?;
+        let resp = self
+            .client
+            .post(&url)
+            .header("content-type", "application/octet-stream")
+            .body(body)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let msg = resp.text().await.unwrap_or_default();
+            return Err(DevnetError::Api(msg));
+        }
+        Ok(resp.json().await?)
+    }
+
+    /// Build, sign, and submit a Starbridge app action from a hosted bot cclerk.
+    pub async fn submit_app_action(
+        &self,
+        cclerk: &UserCipherclerk,
+        action: Action,
+        memo: Option<String>,
+    ) -> Result<SubmitSignedTurnResult, DevnetError> {
+        self.submit_app_actions(cclerk, vec![action], memo).await
+    }
+
+    /// Build, sign, and submit an atomic set of Starbridge app actions.
+    pub async fn submit_app_actions(
+        &self,
+        cclerk: &UserCipherclerk,
+        actions: Vec<Action>,
+        memo: Option<String>,
+    ) -> Result<SubmitSignedTurnResult, DevnetError> {
+        if actions.is_empty() {
+            return Err(DevnetError::Api(
+                "cannot submit an empty action set".to_string(),
+            ));
+        }
+
+        let mut turn = if actions.len() == 1 {
+            cclerk
+                .app
+                .make_turn(actions.into_iter().next().expect("checked non-empty"))
+        } else {
+            cclerk.app.make_turn_with_actions(actions)
+        };
+        turn.memo = memo;
+        turn.nonce = self
+            .fetch_cell_nonce(cclerk.cell_id_hex())
+            .await
+            .unwrap_or(0);
+
+        let signed = cclerk.app.sign_turn(&turn);
+        self.submit_signed_turn(&signed).await
+    }
+
+    async fn fetch_cell_nonce(&self, cell_id: &str) -> Result<u64, DevnetError> {
+        let url = format!("{}/api/cell/{cell_id}", self.base_url);
+        let resp = self.client.get(&url).send().await?;
+        if !resp.status().is_success() {
+            return Err(DevnetError::Api(format!("status {}", resp.status())));
+        }
+        let value: serde_json::Value = resp.json().await?;
+        Ok(value.get("nonce").and_then(|v| v.as_u64()).unwrap_or(0))
     }
 
     /// Get events since a given block height (for the activity feed poller).

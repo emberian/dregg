@@ -19,9 +19,9 @@
 //!    hard reject).
 
 use dregg_app_framework::symbol;
+use dregg_cell::StateConstraint;
 use dregg_cell::program::{CellProgram, ProgramError, TransitionMeta};
 use dregg_cell::state::{CellState, FieldElement};
-use dregg_cell::StateConstraint;
 
 use dregg_storage_templates::{
     blinded_queue, cap_inbox, programmable_queue, pubsub_topic, relay_operator,

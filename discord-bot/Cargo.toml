@@ -7,6 +7,7 @@ description = "Discord bot for the dregg devnet — custodial AppCipherclerk han
 [dependencies]
 blake3 = "1"
 hex = "0.4"
+postcard = { version = "1", features = ["use-std"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -35,6 +36,8 @@ futures-util = { version = "0.3" }
 # SDK's AgentCipherclerk and gives us federation-bound action signing.
 dregg-app-framework = { path = "../app-framework" }
 dregg-sdk = { path = "../sdk" }
+dregg-turn = { path = "../turn" }
+starbridge-nameservice = { path = "../starbridge-apps/nameservice" }
 # CapTP integration — the bot is a dregg capability peer.
 dregg-captp = { path = "../captp" }
 dregg-storage = { path = "../storage" }
