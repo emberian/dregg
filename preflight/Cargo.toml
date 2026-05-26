@@ -32,15 +32,14 @@ serde_json = "1"
 toml = "0.8"
 
 # App crates — exercised by preflight app integration checks.
-# Gallery depends on pyana-app-framework -> pyana-sdk.
-# The `custom_program_proofs` field blocker is resolved (Turn now has the field).
-# Feature gate retained so preflight can still compile incrementally without apps.
-# Note: amm, lending, orderbook, stablecoin, dao-treasury, prediction-market
-# were retired in the apps/ → starbridge-apps/ migration (see STARBRIDGE-APPS-PLAN.md §4.1).
-pyana-gallery = { path = "../apps/gallery", optional = true }
-
-# These app crates do NOT depend on pyana-sdk and compile fine.
-#pyana-identity = { path = "../apps/identity" }
+#
+# apps/gallery and apps/identity were both retired in the apps/ → starbridge-apps/
+# migration (STARBRIDGE-APPS-PLAN.md §4.1). Their starbridge-apps equivalents
+# (starbridge-identity, etc.) use a different public API; the preflight checks
+# that exercised them are retired in preflight/src/checks/apps.rs.
+#
+# When a starbridge-apps integration check is added, add the dep here:
+#   starbridge-identity = { path = "../starbridge-apps/identity", optional = true }
 
 blake3 = "1"
 curve25519-dalek = { version = "4", features = ["alloc"] }
@@ -50,10 +49,7 @@ postcard = { version = "1", features = ["use-std"] }
 tokio = { version = "1", features = ["full"] }
 
 [features]
-default = ["apps-sdk"]
-# Enable app crates that depend on pyana-sdk (via pyana-app-framework).
-# Disable this feature when pyana-sdk is broken to still run lending/identity checks.
-apps-sdk = ["dep:pyana-gallery"]
+default = []
 
 [lints]
 workspace = true
