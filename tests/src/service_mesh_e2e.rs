@@ -9,8 +9,8 @@
 //! All operations are proven via the Effect VM STARK. No mocks.
 
 use pyana_circuit::effect_vm::{
-    self, CellState, Effect, EffectVmAir, compute_effects_hash, extract_net_delta,
-    generate_effect_vm_trace,
+    self, CellState, Effect, EffectVmAir, EffectVmContext, compute_effects_hash, extract_net_delta,
+    generate_effect_vm_trace, generate_effect_vm_trace_ext,
 };
 use pyana_circuit::field::BabyBear;
 use pyana_circuit::poseidon2::{hash_2_to_1, hash_4_to_1, hash_many};
@@ -56,7 +56,18 @@ fn vote_commitment(voter: BabyBear, proposal: BabyBear, weight: u32) -> BabyBear
 
 /// Prove effects and return the STARK proof.
 fn prove_effects(initial_state: &CellState, effects: &[Effect]) -> StarkProof {
-    let (trace, public_inputs) = generate_effect_vm_trace(initial_state, effects);
+    let mut ctx = EffectVmContext::default();
+    ctx.actor_nonce = initial_state.nonce as u64;
+    prove_effects_ext(initial_state, effects, ctx)
+}
+
+/// Prove effects with an explicit context and return the STARK proof.
+fn prove_effects_ext(
+    initial_state: &CellState,
+    effects: &[Effect],
+    ctx: EffectVmContext,
+) -> StarkProof {
+    let (trace, public_inputs) = generate_effect_vm_trace_ext(initial_state, effects, ctx);
     let air = EffectVmAir::new(trace.len());
     let proof = stark::prove(&air, &trace, &public_inputs);
     let result = stark::verify(&air, &proof, &public_inputs);
@@ -332,7 +343,22 @@ fn test_governance_vote_updates_route_table() {
     let certificate_hash = hash_2_to_1(proposal_hash, new_route_entry);
     let recipient_pk = BabyBear::new(0xCC01);
     let introducer_pk = BabyBear::new(0xDD02);
-    let approved_set_root = hash_2_to_1(certificate_hash, BabyBear::new(0xA55E));
+
+    // Compute the Merkle root that the trace generator will actually use.
+    //
+    // The trace generator hard-codes sibling = BabyBear::ZERO (no federation
+    // mirror oracle in tests). The AIR constraint requires:
+    //   leaf = hash(cert_hash, hash(recipient_pk, introducer_pk))
+    //   chosen = hash(leaf, sibling)
+    //   chosen == approved_set_root == PI[APPROVED_HANDOFFS_BASE]
+    //
+    // For the STARK to verify, all three values must agree. We compute the
+    // expected leaf/chosen here and thread `chosen` into both the Effect and
+    // the EffectVmContext so the trace, PI, and AIR constraint all match.
+    let pks = hash_2_to_1(recipient_pk, introducer_pk);
+    let handoff_leaf = hash_2_to_1(certificate_hash, pks);
+    let handoff_sibling = BabyBear::ZERO; // matches the trace generator's hardcoded value
+    let approved_set_root = hash_2_to_1(handoff_leaf, handoff_sibling);
 
     // Initial state: field[0] = old_route_table, field[1] = previous vote root.
     let mut initial_state = CellState::new(100_000, 0);
@@ -352,6 +378,9 @@ fn test_governance_vote_updates_route_table() {
             value: new_route_table,
         },
         // Step 3: Validate handoff for the new routing entry.
+        // approved_set_root is ignored by the trace generator (it reads from
+        // context.approved_handoffs_root[0] instead). We pass the computed
+        // chosen value here for documentation clarity.
         Effect::ValidateHandoff {
             certificate_hash,
             recipient_pk,
@@ -360,7 +389,13 @@ fn test_governance_vote_updates_route_table() {
         },
     ];
 
-    let (trace, public_inputs) = generate_effect_vm_trace(&initial_state, &effects);
+    // Use generate_effect_vm_trace_ext to supply the correct approved_handoffs_root.
+    // The trace generator writes context.approved_handoffs_root[0] into the PI and
+    // into the PARAM slot; the AIR then enforces chosen == approved_root == PI value.
+    let mut ctx = EffectVmContext::default();
+    ctx.actor_nonce = initial_state.nonce as u64;
+    ctx.approved_handoffs_root[0] = approved_set_root;
+    let (trace, public_inputs) = generate_effect_vm_trace_ext(&initial_state, &effects, ctx);
 
     // Verify step 1: vote_root stored in field[1].
     let vote_row = &trace[0];
@@ -409,7 +444,9 @@ fn test_governance_vote_updates_route_table() {
     );
 
     // Prove all three effects in a single STARK.
-    let proof = prove_effects(&initial_state, &effects);
+    // Must use prove_effects_ext with the same context (approved_handoffs_root[0] = approved_set_root)
+    // so the STARK proof's public inputs agree with the trace's PI binding.
+    let proof = prove_effects_ext(&initial_state, &effects, ctx);
     assert_eq!(proof.trace_len, 4); // 3 effects padded to 4
     assert!(!proof.query_proofs.is_empty());
 
