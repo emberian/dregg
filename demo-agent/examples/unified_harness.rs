@@ -1107,25 +1107,6 @@ fn run_multi_silo_budget() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[cfg(any())] // disabled: API drift — Federation::new no longer accepts &[&str]; needs port to verifier_only(members, epoch, threshold)
-fn run_federation_bootstrap(federation: &SharedFederation) -> Result<(), Box<dyn Error>> {
-    assert!(federation.genesis_root.has_quorum());
-    assert!(federation.genesis_root.is_valid(&federation.members));
-
-    let mut fed = Federation::new(&["node-a", "node-b", "node-c"]);
-    let token = fed.mint_token(0, "harness-test");
-    fed.submit_revocation(0, &token.id);
-    let _ = fed.run_consensus_round().unwrap();
-    assert!(fed.roots_agree());
-
-    let attested = fed.nodes[0].get_attested_root().unwrap();
-    // Verify the attested root has enough signatures or a threshold QC
-    assert!(
-        attested.quorum_signatures.len() >= attested.threshold || attested.threshold_qc.is_some()
-    );
-    Ok(())
-}
-
 fn run_cipherclerk_lifecycle() -> Result<(), Box<dyn Error>> {
     use pyana_sdk::AgentCipherclerk;
     let mut cclerk = AgentCipherclerk::new();
