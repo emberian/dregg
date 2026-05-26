@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 
 use thiserror::Error;
 
-use pyana_token::{Attenuation, MacaroonToken};
+use pyana_token::{Attenuation, AuthToken, MacaroonToken};
 
 use crate::schema::{AttrValue, AttributeAttenuation, CredentialAttributes, CredentialSchema};
 
@@ -194,11 +194,11 @@ pub fn issue(
 
     let attenuated = root
         .attenuate(&att)
-        .map_err(|e| IssuanceError::Backend(e.to_string()))?;
+        .map_err(|e: Error| IssuanceError::Backend(e.to_string()))?;
 
     let encoded = attenuated
         .to_encoded()
-        .map_err(|e| IssuanceError::Encoding(e.to_string()))?;
+        .map_err(|e: Error| IssuanceError::Encoding(e.to_string()))?;
 
     Ok(Credential {
         encoded,

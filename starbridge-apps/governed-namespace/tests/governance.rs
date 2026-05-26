@@ -40,7 +40,7 @@
 use pyana_app_framework::symbol;
 use pyana_cell::StateConstraint;
 use pyana_cell::program::{CellProgram, ProgramError, TransitionMeta};
-use pyana_cell::state::{CellState, FIELD_ZERO, FieldElement};
+use pyana_cell::state::{CellState, FIELD_ZERO};
 
 use starbridge_governed_namespace::{
     DISPUTE_WINDOW_HEIGHT_SLOT, GOVERNANCE_COMMITTEE_ROOT_SLOT, PENDING_PROPOSAL_ROOT_SLOT,
