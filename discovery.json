@@ -1,12 +1,12 @@
 {
   "gateway": {
-    "url": "https://pyana.commonquant.com",
-    "ws": "wss://pyana.commonquant.com/ws",
-    "api": "https://pyana.commonquant.com/api",
-    "gossip": "pyana.commonquant.com:9420"
+    "url": "https://dregg.commonquant.com",
+    "ws": "wss://dregg.commonquant.com/ws",
+    "api": "https://dregg.commonquant.com/api",
+    "gossip": "dregg.commonquant.com:9420"
   },
   "federation": [],
   "intent_service": null,
-  "updated_at": "2026-05-26T15:01:17Z",
-  "commit": "d03c0955bba6fca1ef0c2d16a1536a2a7a28f1b4"
+  "updated_at": "2026-05-26T16:29:26Z",
+  "commit": "7ee4abf809149861c9b170c1ea1a8c7a70e3fc40"
 }
