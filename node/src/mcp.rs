@@ -1028,7 +1028,7 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "pyana_register_service",
-            description: "Register a service entry at a named path on a starbridge-governed-namespace cell via the canonical builder. Wraps `starbridge_governed_namespace::build_register_service_action`. The underlying action is event-only (EmitEvent('service-registered', [path_hash, target])); to anchor an Effect-VM proof, we project the path_hash into a synthetic SetField at slot 0 — see ARC notes in tool body. Receipt carries STARK proof binding the synthesised row.",
+            description: "Register a service entry at a named path on a starbridge-governed-namespace cell via the canonical builder. Wraps `starbridge_governed_namespace::build_register_service_action`. The underlying action is event-only (EmitEvent('service-registered', [path_hash, target])); the EffectVmAir carries a canonical EmitEvent row variant (#110) so the STARK proof binds the actual (topic_hash, payload_hash) of the emitted event into PI[EMIT_EVENT_TOPIC_HASH] / PI[EMIT_EVENT_PAYLOAD_HASH]. No synthesised state mutation is required.",
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -5714,29 +5714,16 @@ async fn tool_register_service(params: &Value, state: &NodeState) -> McpToolResu
     let temp = temp_app_cclerk();
     let action = sb_build_register_service_action(&temp, namespace_cell, &path, target_cell);
 
-    // The underlying action emits one `EmitEvent("service-registered",
-    // [path_hash, target_field])` and NO `SetField`. The EffectVmAir has
-    // no `EmitEvent` row variant, so directly projecting the action's
-    // effects yields an empty vm_effects list (no proof). To anchor a
-    // STARK proof to this turn we synthesise a single `SetField` carrying
-    // the path_hash's first 4 bytes as the value — this binds the
-    // registered path into the proof's public inputs even though the
-    // executor did not actually mutate any slot.
-    //
-    // **This is a documented coverage gap**: a real
-    // `EffectVmAir::EmitEvent` row would let us prove the event was
-    // emitted with the canonical (path_hash, target) data. Until that
-    // AIR row lands, the synthetic `SetField` is a structural
-    // placeholder — `replay-chain` still verifies the STARK against
-    // the AIR contract, but the proof's link to the event is via the
-    // synthesised value, not via a true on-cell mutation.
+    // Closes #110: the underlying action emits one
+    // `EmitEvent("service-registered", [path_hash, target_field])`. The
+    // EffectVmAir now carries a real `EmitEvent` row variant with
+    // canonical (topic_hash, payload_hash) binding, so the bridge in
+    // `turn/src/executor/effect_vm_bridge.rs` projects the runtime
+    // Event directly — no synthesised SetField is required. The proof's
+    // PI surface (EMIT_EVENT_TOPIC_HASH / EMIT_EVENT_PAYLOAD_HASH) ties
+    // the STARK to the actual emitted event.
     let path_hash = *blake3::hash(path.as_bytes()).as_bytes();
-    let mut le4 = [0u8; 4];
-    le4.copy_from_slice(&path_hash[..4]);
-    let extra_vm = vec![pyana_circuit::effect_vm::Effect::SetField {
-        field_idx: 0,
-        value: pyana_circuit::BabyBear::new(u32::from_le_bytes(le4)),
-    }];
+    let extra_vm: Vec<pyana_circuit::effect_vm::Effect> = Vec::new();
 
     let mut links = serde_json::Map::new();
     links.insert(
@@ -5748,15 +5735,6 @@ async fn tool_register_service(params: &Value, state: &NodeState) -> McpToolResu
     links.insert(
         "target_cell".into(),
         Value::String(hex_encode(&target_cell.0)),
-    );
-    links.insert(
-        "synthesized_vm_setfield_note".into(),
-        Value::String(
-            "register_service action emits only EmitEvent; a synthetic Effect-VM SetField row \
-            (slot 0, value=u32(path_hash[0..4]) LE) is added so the proof remains non-empty. \
-            See ARC notes in tool body for the documented coverage gap."
-                .into(),
-        ),
     );
 
     run_starbridge_action(
@@ -6168,13 +6146,14 @@ mod tests {
         let j = extract_json(&result);
         assert_proof_populated("register_service", &j);
         assert_eq!(j.get("path").and_then(|v| v.as_str()), Some("/alice.dev"));
-        // The synthesized-row note must be present so reviewers see the
-        // documented coverage gap.
+        // #110: the synthesized-row note is gone — the AIR now carries a
+        // real EmitEvent variant with canonical (topic_hash, payload_hash)
+        // binding, so register_service projects directly and no workaround
+        // marker is surfaced.
         assert!(
-            j.get("synthesized_vm_setfield_note")
-                .and_then(|v| v.as_str())
-                .is_some(),
-            "register_service must surface the documented coverage-gap note"
+            j.get("synthesized_vm_setfield_note").is_none(),
+            "register_service must NOT surface the legacy coverage-gap note \
+             once #110 lands a real AIR EmitEvent variant"
         );
     }
 
