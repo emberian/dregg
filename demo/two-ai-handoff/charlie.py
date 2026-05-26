@@ -70,8 +70,100 @@ def run_proc(argv: list[str], stdin: str | None = None, timeout: int = 120) -> t
     return proc.returncode, stdout, stderr
 
 
+def _hex_to_bytes32(h: str) -> list[int]:
+    """Decode a 64-char hex string to a list of 32 ints (u8 array)."""
+    b = bytes.fromhex(h)
+    if len(b) != 32:
+        raise ValueError(f"expected 32 bytes, got {len(b)} from hex '{h[:16]}…'")
+    return list(b)
+
+
+def _load_receipt_snapshot(state_dir: Path, name: str) -> dict | None:
+    """Load TurnReceipt fields from the companion output files written by alice/bob.
+
+    alice writes alice.out.json  → receipt_chain.receipts[0] for the grant turn.
+    bob writes   bob.exercise.json → receipt_chain.receipts[0] for the exercise turn.
+
+    Returns a dict with keys matching TurnReceipt serde field names, or None if
+    the companion file is absent.
+    """
+    companion_map = {
+        "grant":    state_dir / "alice.out.json",
+        "exercise": state_dir / "bob.exercise.json",
+    }
+    companion = companion_map.get(name)
+    if companion is None or not companion.exists():
+        return None
+    try:
+        data = json.loads(companion.read_text())
+        receipts = data.get("receipt_chain", {}).get("receipts", [])
+        if not receipts:
+            return None
+        r = receipts[0]
+        # turn_hash is the canonical 64-char hex; convert to [u8; 32].
+        turn_hash_hex = r.get("turn_hash", "") or ""
+        if not turn_hash_hex:
+            return None
+        return {
+            "turn_hash_hex": turn_hash_hex,
+            "timestamp":     r.get("timestamp", 0),
+            "action_count":  r.get("action_count", 1),
+            "computrons_used": r.get("computrons_used", 0),
+        }
+    except Exception:
+        return None
+
+
+def _make_turn_receipt(name: str, state_dir: Path) -> dict:
+    """Build a TurnReceipt-compatible JSON object for a ReplayEntry.receipt field.
+
+    TurnReceipt requires turn_hash, forest_hash, pre_state_hash, post_state_hash,
+    timestamp, effects_hash, computrons_used, action_count, previous_receipt_hash,
+    and agent.  For the demo proofs these are all-zero except the fields we can
+    recover from the companion output files (turn_hash, timestamp, counts).
+
+    The verifier's check_receipt_pi_binding cross-checks PI[TURN_HASH_BASE..+4]
+    against receipt.turn_hash — so getting turn_hash right is the critical field.
+    """
+    snap = _load_receipt_snapshot(state_dir, name)
+    if snap and snap.get("turn_hash_hex"):
+        turn_hash = _hex_to_bytes32(snap["turn_hash_hex"])
+        timestamp = int(snap.get("timestamp", 0))
+        action_count = int(snap.get("action_count", 1))
+        computrons_used = int(snap.get("computrons_used", 0))
+    else:
+        # Fallback: all-zero turn_hash.  The verifier will likely reject PI
+        # binding unless the proof was also generated with a zero turn_hash.
+        turn_hash = _zeros32()
+        timestamp = 0
+        action_count = 1
+        computrons_used = 0
+
+    return {
+        # Required TurnReceipt fields (no serde(default)):
+        "turn_hash":            turn_hash,
+        "forest_hash":          _zeros32(),
+        "pre_state_hash":       _zeros32(),
+        "post_state_hash":      _zeros32(),
+        "timestamp":            timestamp,
+        "effects_hash":         _zeros32(),
+        "computrons_used":      computrons_used,
+        "action_count":         action_count,
+        "previous_receipt_hash": None,
+        # agent: CellId([u8;32]) — zero for demo proofs
+        "agent":                _zeros32(),
+        # serde(default) fields — omit to use defaults
+    }
+
+
 def build_witnessed_chain(state_dir: Path) -> list[dict]:
-    """Build a v1 WitnessedReceipt chain from the per-turn proof artifacts."""
+    """Build a v1 WitnessedReceipt chain from the per-turn proof artifacts.
+
+    Each ReplayEntry.receipt must deserialize as a full TurnReceipt.  Previous
+    versions emitted only {"source": "…"} which caused the verifier to reject
+    with "missing field 'turn_hash'".  We now load turn_hash and metadata from
+    the companion output files written by alice.py / bob.py.
+    """
     chain: list[dict] = []
     for name, fname in [("grant", "grant.proof.json"), ("exercise", "exercise.proof.json")]:
         path = state_dir / fname
@@ -86,6 +178,8 @@ def build_witnessed_chain(state_dir: Path) -> list[dict]:
         trace_rows = artifact.get("trace_rows") or []
         witness_hash_hex = artifact.get("witness_hash_hex") or ""
 
+        receipt = _make_turn_receipt(name, state_dir)
+
         if trace_rows and witness_hash_hex:
             witness_bundle = {
                 "trace_rows": [[int(c) for c in row] for row in trace_rows],
@@ -93,7 +187,7 @@ def build_witnessed_chain(state_dir: Path) -> list[dict]:
             }
             witness_hash = list(bytes.fromhex(witness_hash_hex))
             chain.append({
-                "receipt": {"source": artifact.get("source", name)},
+                "receipt": receipt,
                 "proof_bytes": proof_bytes,
                 "public_inputs": [int(v) for v in pi],
                 "witness_bundle": witness_bundle,
@@ -101,7 +195,7 @@ def build_witnessed_chain(state_dir: Path) -> list[dict]:
             })
         else:
             chain.append({
-                "receipt": {"source": artifact.get("source", name)},
+                "receipt": receipt,
                 "proof_bytes": proof_bytes,
                 "public_inputs": [int(v) for v in pi],
                 "witness_hash": _zeros32(),
