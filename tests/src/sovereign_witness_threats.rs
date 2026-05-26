@@ -13,9 +13,76 @@
 //!   3. Wire-malleability: turn v3 signing message must cover sovereign
 //!      witnesses so tamper-then-sign fails.
 //!
-//! All currently `#[ignore]`d on the sovereign-witness AIR teeth lane.
+//! AIR-transition tests remain `#[ignore]`d on the sovereign-witness teeth
+//! lane. Executor and wire-hash checks below are live when the implementation
+//! already exposes the defense.
 
-use dregg_cell::CellId;
+use std::collections::HashMap;
+
+use dregg_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
+use dregg_turn::{
+    ActionBuilder, ComputronCosts, SovereignCellWitness, Turn, TurnBuilder, TurnError,
+    TurnExecutor, TurnResult,
+};
+
+fn permissive_cell(seed: u8, balance: u64) -> Cell {
+    let mut pk = [0u8; 32];
+    pk[0] = seed;
+    pk[31] = seed.wrapping_mul(31);
+    let mut cell = Cell::with_balance(pk, [0u8; 32], balance);
+    cell.permissions = Permissions {
+        send: AuthRequired::None,
+        receive: AuthRequired::None,
+        set_state: AuthRequired::None,
+        set_permissions: AuthRequired::None,
+        set_verification_key: AuthRequired::None,
+        increment_nonce: AuthRequired::None,
+        delegate: AuthRequired::None,
+        access: AuthRequired::None,
+    };
+    cell
+}
+
+fn turn_with_witnesses(agent: CellId, witnesses: HashMap<CellId, SovereignCellWitness>) -> Turn {
+    Turn {
+        agent,
+        nonce: 0,
+        call_forest: dregg_turn::CallForest::new(),
+        fee: 0,
+        memo: None,
+        valid_until: None,
+        previous_receipt_hash: None,
+        depends_on: vec![],
+        conservation_proof: None,
+        sovereign_witnesses: witnesses,
+        execution_proof: None,
+        execution_proof_cell: None,
+        execution_proof_new_commitment: None,
+        custom_program_proofs: None,
+        effect_binding_proofs: Vec::new(),
+        cross_effect_dependencies: Vec::new(),
+        effect_witness_index_map: Vec::new(),
+    }
+}
+
+fn dummy_sovereign_witness(
+    cell: Cell,
+    effects_hash: [u8; 32],
+    sequence: u64,
+) -> SovereignCellWitness {
+    let cell_id = cell.id();
+    SovereignCellWitness {
+        cell_id,
+        old_commitment: [0xAA; 32],
+        new_commitment: [0xBB; 32],
+        effects_hash,
+        timestamp: 0,
+        sequence,
+        signature: [0xAB; 64],
+        cell_state: cell,
+        transition_proof: None,
+    }
+}
 
 // ===========================================================================
 // Phase 1: legal witness path
@@ -48,11 +115,44 @@ fn sovereign_witness_sequence_regression_rejects() {
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on T9 (EXECUTOR-HONESTY-AUDIT.md T9): a turn against a sovereign cell with NO witness must reject"]
 fn sovereign_cell_turn_without_witness_rejects() {
-    // The whole point of sovereign cells is they can only mutate when the
-    // owner signs a witness; a turn omitting the witness must reject.
-    panic!("blocked");
+    let mut ledger = Ledger::new();
+    let agent = permissive_cell(1, 1_000);
+    let agent_id = agent.id();
+    ledger.insert_cell(agent).unwrap();
+
+    let sovereign = permissive_cell(2, 500);
+    let sovereign_id = sovereign.id();
+    ledger
+        .register_sovereign_cell(sovereign_id, sovereign.state_commitment())
+        .unwrap();
+
+    ledger
+        .get_mut(&agent_id)
+        .unwrap()
+        .capabilities
+        .grant(sovereign_id, AuthRequired::None);
+
+    let action = ActionBuilder::new_unchecked_for_tests(sovereign_id, "set_field", agent_id)
+        .effect_set_field(sovereign_id, 0, [1u8; 32])
+        .build();
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    builder.add_action(action);
+    let turn = builder.fee(0).build();
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let result = executor.execute(&turn, &mut ledger);
+
+    assert!(
+        matches!(
+            &result,
+            TurnResult::Rejected {
+                reason: TurnError::SovereignWitnessRequired { cell },
+                ..
+            } if *cell == sovereign_id
+        ),
+        "sovereign mutation without witness must reject, got: {result:?}"
+    );
 }
 
 #[test]
@@ -69,14 +169,48 @@ fn air_proof_constrains_sovereign_witness_to_transition() {
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on turn-canonical-signing-message audit: v3 signing message MUST cover sovereign_witnesses field (Turn::hash currently checks Turn::sovereign_witnesses, audit per EXECUTOR-HONESTY-AUDIT.md)"]
 fn signing_message_covers_sovereign_witness_payload() {
-    // 1. Sign a turn with witness W.
-    // 2. Replace W with W' in the on-the-wire envelope (same shape, different
-    //    payload bytes).
-    // 3. Verifier MUST reject — the signature is over the hash that includes
-    //    the witness bytes.
-    panic!("blocked");
+    let agent = CellId([1u8; 32]);
+    let cell = permissive_cell(3, 0);
+    let cell_id = cell.id();
+
+    let mut witnesses_a = HashMap::new();
+    witnesses_a.insert(
+        cell_id,
+        dummy_sovereign_witness(cell.clone(), [0x11; 32], 1),
+    );
+    let turn_a = turn_with_witnesses(agent, witnesses_a);
+
+    let mut witnesses_b = HashMap::new();
+    witnesses_b.insert(cell_id, dummy_sovereign_witness(cell, [0x22; 32], 1));
+    let turn_b = turn_with_witnesses(agent, witnesses_b);
+
+    assert_ne!(
+        turn_a.hash(),
+        turn_b.hash(),
+        "Turn::hash must change when sovereign witness payload bytes change"
+    );
+
+    let msg_a = SovereignCellWitness::signing_message(
+        &cell_id,
+        &[0xAA; 32],
+        &[0xBB; 32],
+        &[0x11; 32],
+        0,
+        1,
+    );
+    let msg_b = SovereignCellWitness::signing_message(
+        &cell_id,
+        &[0xAA; 32],
+        &[0xBB; 32],
+        &[0x22; 32],
+        0,
+        1,
+    );
+    assert_ne!(
+        msg_a, msg_b,
+        "sovereign witness signing message must bind effects_hash payload"
+    );
 }
 
 #[test]
@@ -189,35 +323,9 @@ fn sovereign_witness_cross_federation_replay_rejects() {
 
 #[test]
 fn sovereign_witnesses_field_is_covered_by_turn_hash() {
-    use dregg_cell::Cell;
-    use dregg_cell::CellId;
-    use dregg_turn::SovereignCellWitness;
-    use dregg_turn::Turn;
-    use std::collections::HashMap;
-
     let agent = CellId([1u8; 32]);
 
-    let make_turn = |witnesses: HashMap<CellId, SovereignCellWitness>| Turn {
-        agent,
-        nonce: 0,
-        call_forest: dregg_turn::CallForest::new(),
-        fee: 0,
-        memo: None,
-        valid_until: None,
-        previous_receipt_hash: None,
-        depends_on: vec![],
-        conservation_proof: None,
-        sovereign_witnesses: witnesses,
-        execution_proof: None,
-        execution_proof_cell: None,
-        execution_proof_new_commitment: None,
-        custom_program_proofs: None,
-        effect_binding_proofs: Vec::new(),
-        cross_effect_dependencies: Vec::new(),
-        effect_witness_index_map: Vec::new(),
-    };
-
-    let empty = make_turn(HashMap::new());
+    let empty = turn_with_witnesses(agent, HashMap::new());
 
     // Construct a non-empty witness — bytes only need to differ from the
     // default for the hash check (we're NOT validating the witness's
@@ -238,7 +346,7 @@ fn sovereign_witnesses_field_is_covered_by_turn_hash() {
         transition_proof: None,
     };
     witnesses.insert(cell_id, w);
-    let with_witness = make_turn(witnesses);
+    let with_witness = turn_with_witnesses(agent, witnesses);
 
     assert_ne!(
         empty.hash(),

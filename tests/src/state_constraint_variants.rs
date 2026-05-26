@@ -25,10 +25,11 @@
 
 #![allow(clippy::field_reassign_with_default)]
 
-use dregg_cell::predicate::WitnessedPredicate;
+use dregg_cell::predicate::{WitnessedPredicate, WitnessedPredicateRegistry};
 use dregg_cell::program::{
     AuthorizedSet, CustomDescriptor, DeltaRelation, HashKind, ReadSet, SimpleStateConstraint,
-    TransitionCase, TransitionGuard, TransitionMeta,
+    TransitionCase, TransitionGuard, TransitionMeta, WitnessBlobView, WitnessBundle,
+    WitnessKindTag,
 };
 use dregg_cell::{
     CellProgram, CellState, EFFECT_SET_FIELD, EvalContext, FIELD_ZERO, FieldElement, InputRef,
@@ -1004,9 +1005,37 @@ fn witnessed_returns_sentinel_today() {
 }
 
 #[test]
-#[ignore = "blocked on caveat-correctness lane: WitnessedPredicateRegistry dispatch for Dfa kind (CAVEAT-LAYER-COVERAGE.md §6.6)"]
 fn witnessed_dfa_with_valid_proof_accepts() {
-    panic!("blocked");
+    let p = single_predicate(StateConstraint::Witnessed {
+        wp: WitnessedPredicate::dfa([1u8; 32], InputRef::Sender, 0),
+    });
+    let registry = WitnessedPredicateRegistry::with_stubs();
+    let proof = b"stub-dfa-proof";
+    let blobs: [WitnessBlobView<'_>; 1] = [WitnessBlobView {
+        kind: WitnessKindTag::ProofBytes,
+        bytes: proof,
+    }];
+    let witnesses = WitnessBundle {
+        blobs: &blobs,
+        registry: Some(&registry),
+    };
+    let new = CellState::default();
+    let ctx = EvalContext {
+        sender: Some([0xA5u8; 32]),
+        ..Default::default()
+    };
+
+    let result = p.evaluate_full(
+        &new,
+        None,
+        Some(&ctx),
+        &TransitionMeta::wildcard(),
+        &witnesses,
+    );
+    assert!(
+        result.is_ok(),
+        "Dfa plumbing should accept non-empty proof via explicit stub registry, got: {result:?}"
+    );
 }
 
 #[test]
@@ -1016,9 +1045,45 @@ fn witnessed_dfa_with_tampered_proof_rejects() {
 }
 
 #[test]
-#[ignore = "blocked on caveat-correctness lane: registry unknown-kind lookup failure"]
 fn witnessed_unknown_kind_rejects() {
-    panic!("blocked");
+    let p = single_predicate(StateConstraint::Witnessed {
+        wp: WitnessedPredicate::custom([0xEEu8; 32], [0xC0u8; 32], InputRef::Sender, 0),
+    });
+    let registry = WitnessedPredicateRegistry::empty();
+    let proof = b"custom-proof";
+    let blobs: [WitnessBlobView<'_>; 1] = [WitnessBlobView {
+        kind: WitnessKindTag::ProofBytes,
+        bytes: proof,
+    }];
+    let witnesses = WitnessBundle {
+        blobs: &blobs,
+        registry: Some(&registry),
+    };
+    let new = CellState::default();
+    let ctx = EvalContext {
+        sender: Some([0xA5u8; 32]),
+        ..Default::default()
+    };
+
+    let err = p
+        .evaluate_full(
+            &new,
+            None,
+            Some(&ctx),
+            &TransitionMeta::wildcard(),
+            &witnesses,
+        )
+        .expect_err("unknown custom witnessed predicate kind must reject");
+    assert!(
+        matches!(
+            err,
+            ProgramError::WitnessedPredicateRejected {
+                kind_name: "Custom",
+                ..
+            }
+        ),
+        "expected WitnessedPredicateRejected(Custom), got: {err:?}"
+    );
 }
 
 // ===========================================================================

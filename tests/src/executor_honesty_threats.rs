@@ -13,9 +13,10 @@
 use std::collections::HashMap;
 
 use dregg_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
-use dregg_turn::action::{symbol, Action, Authorization, BearerCapProof, DelegationProofData};
+use dregg_turn::action::{Action, Authorization, BearerCapProof, DelegationProofData, symbol};
 use dregg_turn::{
-    CallForest, ComputronCosts, DelegationMode, Effect, Turn, TurnExecutor, TurnResult,
+    CallForest, ComputronCosts, DelegationMode, Effect, Turn, TurnExecutor, TurnReceipt,
+    TurnResult, VerifyError, sign_receipt, verify_receipt_chain_with_keys,
 };
 
 // ---------------------------------------------------------------------------
@@ -96,6 +97,59 @@ fn effect_vm_rejects_tampered_pi(pi_index: usize, label: &str) {
         dregg_circuit::stark::verify(&air, &proof, &tampered).is_err(),
         "Effect VM verifier accepted a proof after tampering PI[{pi_index}] ({label})"
     );
+}
+
+fn sample_receipt(
+    agent: CellId,
+    turn_hash: [u8; 32],
+    previous_receipt_hash: Option<[u8; 32]>,
+) -> TurnReceipt {
+    TurnReceipt {
+        turn_hash,
+        forest_hash: [0x11u8; 32],
+        pre_state_hash: [0x22u8; 32],
+        post_state_hash: [0x33u8; 32],
+        timestamp: 1_700_000_000,
+        effects_hash: [0x44u8; 32],
+        computrons_used: 7,
+        action_count: 1,
+        previous_receipt_hash,
+        agent,
+        federation_id: [0x55u8; 32],
+        routing_directives: vec![],
+        introduction_exports: vec![],
+        derivation_records: vec![],
+        emitted_events: vec![],
+        executor_signature: None,
+        finality: Default::default(),
+        was_encrypted: false,
+        was_burn: false,
+    }
+}
+
+fn replay_entry_with_receipt_pi(receipt: TurnReceipt) -> dregg_verifier::ReplayEntry {
+    use dregg_circuit::effect_vm::pi;
+    use dregg_commit::typed::canonical_32_to_felts_4;
+
+    let mut public_inputs = vec![0u32; pi::BASE_COUNT];
+    let turn_hash = canonical_32_to_felts_4(&receipt.turn_hash);
+    for i in 0..pi::TURN_HASH_LEN {
+        public_inputs[pi::TURN_HASH_BASE + i] = turn_hash[i].as_u32();
+    }
+    let previous = canonical_32_to_felts_4(&receipt.previous_receipt_hash.unwrap_or([0u8; 32]));
+    for i in 0..pi::PREVIOUS_RECEIPT_HASH_LEN {
+        public_inputs[pi::PREVIOUS_RECEIPT_HASH_BASE + i] = previous[i].as_u32();
+    }
+    public_inputs[pi::IS_AGENT_CELL] = 1;
+
+    dregg_verifier::ReplayEntry {
+        receipt,
+        proof_bytes: vec![],
+        public_inputs,
+        witness_bundle: None,
+        witness_hash: [0u8; 32],
+        aggregate_membership: None,
+    }
 }
 
 // ===========================================================================
@@ -237,9 +291,74 @@ fn t5_air_rejects_proof_with_wrong_nonce_pi() {
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on EXECUTOR-HONESTY-AUDIT.md T6 open question: canonical signing message must include federation_id"]
 fn t6_signed_turn_for_federation_a_rejects_on_federation_b() {
-    panic!("blocked");
+    let agent = CellId([6u8; 32]);
+    let target = CellId([7u8; 32]);
+    let action = Action {
+        target,
+        method: symbol("transfer"),
+        args: vec![b"demo".to_vec()],
+        authorization: Authorization::Unchecked,
+        preconditions: Default::default(),
+        effects: vec![Effect::Transfer {
+            from: agent,
+            to: target,
+            amount: 3,
+        }],
+        may_delegate: DelegationMode::None,
+        commitment_mode: Default::default(),
+        balance_change: Some(-3),
+        witness_blobs: vec![],
+    };
+    let federation_a = [0xA6u8; 32];
+    let federation_b = [0xB6u8; 32];
+
+    assert_ne!(
+        TurnExecutor::compute_signing_message(&action, &federation_a),
+        TurnExecutor::compute_signing_message(&action, &federation_b),
+        "full action signatures must bind federation_id"
+    );
+    assert_ne!(
+        TurnExecutor::compute_partial_signing_message(&action, 0, &federation_a, 42),
+        TurnExecutor::compute_partial_signing_message(&action, 0, &federation_b, 42),
+        "partial action signatures must bind federation_id"
+    );
+    assert_ne!(
+        TurnExecutor::compute_bearer_delegation_message(
+            &target,
+            &AuthRequired::Signature,
+            &[0x11u8; 32],
+            99,
+            &federation_a,
+        ),
+        TurnExecutor::compute_bearer_delegation_message(
+            &target,
+            &AuthRequired::Signature,
+            &[0x11u8; 32],
+            99,
+            &federation_b,
+        ),
+        "bearer delegation signatures must bind federation_id"
+    );
+    assert_ne!(
+        Authorization::captp_delivered_signing_message_for_federation(
+            &federation_a,
+            &[0x22u8; 32],
+            &agent,
+            &target,
+            42,
+            &action.effects,
+        ),
+        Authorization::captp_delivered_signing_message_for_federation(
+            &federation_b,
+            &[0x22u8; 32],
+            &agent,
+            &target,
+            42,
+            &action.effects,
+        ),
+        "CapTP delivery signatures must bind federation_id"
+    );
 }
 
 // ===========================================================================
@@ -247,15 +366,42 @@ fn t6_signed_turn_for_federation_a_rejects_on_federation_b() {
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on EXECUTOR-HONESTY-AUDIT.md T7: a receipt signed by a non-executor key must reject"]
 fn t7_receipt_signed_by_wrong_key_rejects() {
-    panic!("blocked");
+    let agent = CellId([0x71u8; 32]);
+    let mut receipt = sample_receipt(agent, [0x72u8; 32], None);
+    let signing_seed = [0x73u8; 32];
+    receipt.executor_signature = Some(sign_receipt(&receipt, &signing_seed));
+
+    let trusted_wrong_executor = dregg_types::SigningKey::from_bytes(&[0x74u8; 32])
+        .public_key()
+        .0;
+    let err = verify_receipt_chain_with_keys(&[receipt], &[trusted_wrong_executor])
+        .expect_err("receipt signed by an untrusted executor key must reject");
+    assert!(matches!(err, VerifyError::ExecutorSignatureInvalid { .. }));
 }
 
 #[test]
-#[ignore = "blocked on T7 tail: receipt must explicitly name the executor whose key is verified"]
 fn t7_receipt_carries_executor_identity() {
-    panic!("blocked");
+    // Current receipt identity is verifier-side: the receipt carries an
+    // executor_signature, and the verifier accepts it only under the trusted
+    // executor key that produced that signature.
+    let agent = CellId([0x75u8; 32]);
+    let mut receipt = sample_receipt(agent, [0x76u8; 32], None);
+    let signing_seed = [0x77u8; 32];
+    receipt.executor_signature = Some(sign_receipt(&receipt, &signing_seed));
+
+    let signer_pk = dregg_types::SigningKey::from_bytes(&signing_seed)
+        .public_key()
+        .0;
+    let other_pk = dregg_types::SigningKey::from_bytes(&[0x78u8; 32])
+        .public_key()
+        .0;
+
+    verify_receipt_chain_with_keys(&[receipt.clone()], &[signer_pk])
+        .expect("receipt must verify against the executor key that signed it");
+    let err = verify_receipt_chain_with_keys(&[receipt], &[other_pk])
+        .expect_err("receipt verifier identity is the trusted executor key set");
+    assert!(matches!(err, VerifyError::ExecutorSignatureInvalid { .. }));
 }
 
 // ===========================================================================
@@ -263,9 +409,21 @@ fn t7_receipt_carries_executor_identity() {
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on stage7-cont trace-side binding of PREVIOUS_RECEIPT_HASH (EXECUTOR-HONESTY-AUDIT.md T8)"]
 fn t8_verifier_rejects_fake_previous_receipt_hash() {
-    panic!("blocked");
+    let agent = CellId([0x81u8; 32]);
+    let mut prior = sample_receipt(agent, [0x82u8; 32], None);
+    prior.post_state_hash = [0x83u8; 32];
+
+    let forged_previous = [0x84u8; 32];
+    let receipt = sample_receipt(agent, [0x85u8; 32], Some(forged_previous));
+    let entry = replay_entry_with_receipt_pi(receipt);
+
+    let reason = dregg_verifier::check_receipt_pi_binding(&entry, Some(prior.receipt_hash()))
+        .expect("chain-walk must reject a fake previous_receipt_hash");
+    assert!(
+        reason.contains("chain-walk"),
+        "expected chain-walk rejection, got: {reason}"
+    );
 }
 
 // ===========================================================================
@@ -328,12 +486,18 @@ fn t10_captp_variants_use_real_merkle_membership() {
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on EXECUTOR-HONESTY-AUDIT.md T11 confirmation: verifier requires TURN_HASH PI matches the receipt's claimed turn_hash"]
 fn t11_stale_proof_replay_rejected_by_verifier() {
-    // Build proof P_1 for Turn_1, then submit a receipt that claims to be
-    // for Turn_2 but attaches P_1. Verifier must reject — TURN_HASH PI
-    // mismatch.
-    panic!("blocked");
+    let agent = CellId([0xA1u8; 32]);
+    let receipt = sample_receipt(agent, [0xA2u8; 32], None);
+    let mut entry = replay_entry_with_receipt_pi(receipt);
+    entry.public_inputs[dregg_circuit::effect_vm::pi::TURN_HASH_BASE] ^= 0x01;
+
+    let reason = dregg_verifier::check_receipt_pi_binding(&entry, None)
+        .expect("stale proof PI must reject when TURN_HASH no longer matches receipt");
+    assert!(
+        reason.contains("TURN_HASH_BASE"),
+        "expected TURN_HASH_BASE rejection, got: {reason}"
+    );
 }
 
 // ===========================================================================
@@ -361,9 +525,24 @@ fn t13_remote_stub_with_id_cannot_mint_arbitrary_cell_ids() {
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on protocol requirement: a receipt without a proof must be invalid at the wire level (not merely unverifiable)"]
 fn t14_receipt_without_proof_rejected_at_wire_level() {
-    panic!("blocked");
+    let agent = CellId([0xE1u8; 32]);
+    let receipt = sample_receipt(agent, [0xE2u8; 32], None);
+    let entry = replay_entry_with_receipt_pi(receipt);
+
+    let out = dregg_verifier::replay_chain(&[entry]);
+    assert!(!out.overall_verified, "empty proof bytes must not verify");
+    assert_eq!(out.first_failure, Some(0));
+    assert!(
+        matches!(
+            &out.per_entry[0],
+            dregg_verifier::ReplayVerdict::Rejected { reason }
+                if reason.contains("STARK verify failed")
+                    && reason.contains("deserial")
+        ),
+        "missing wire proof must be a hard rejection, got: {:?}",
+        out.per_entry[0]
+    );
 }
 
 #[test]
@@ -410,9 +589,28 @@ fn cross_cutting_canonical_signing_message_fields() {
 }
 
 #[test]
-#[ignore = "blocked on T-cross-cutting #3: verifier walks every PI and checks it (not just deserialized)"]
 fn cross_cutting_verifier_checks_all_pi() {
-    panic!("blocked");
+    let agent = CellId([0xC1u8; 32]);
+    let base = sample_receipt(agent, [0xC2u8; 32], Some([0xC3u8; 32]));
+
+    let mut turn_hash_tamper = replay_entry_with_receipt_pi(base.clone());
+    turn_hash_tamper.public_inputs[dregg_circuit::effect_vm::pi::TURN_HASH_BASE] ^= 0x01;
+    let reason = dregg_verifier::check_receipt_pi_binding(&turn_hash_tamper, None)
+        .expect("TURN_HASH PI mismatch must reject");
+    assert!(reason.contains("TURN_HASH_BASE"));
+
+    let mut previous_hash_tamper = replay_entry_with_receipt_pi(base.clone());
+    previous_hash_tamper.public_inputs[dregg_circuit::effect_vm::pi::PREVIOUS_RECEIPT_HASH_BASE] ^=
+        0x01;
+    let reason = dregg_verifier::check_receipt_pi_binding(&previous_hash_tamper, None)
+        .expect("PREVIOUS_RECEIPT_HASH PI mismatch must reject");
+    assert!(reason.contains("PREVIOUS_RECEIPT_HASH_BASE"));
+
+    let mut agent_cell_tamper = replay_entry_with_receipt_pi(base);
+    agent_cell_tamper.public_inputs[dregg_circuit::effect_vm::pi::IS_AGENT_CELL] = 0;
+    let reason = dregg_verifier::check_receipt_pi_binding(&agent_cell_tamper, None)
+        .expect("IS_AGENT_CELL PI mismatch must reject");
+    assert!(reason.contains("IS_AGENT_CELL"));
 }
 
 // ===========================================================================
