@@ -25,7 +25,12 @@
 
 #![allow(clippy::field_reassign_with_default)]
 
-use dregg_cell::predicate::{WitnessedPredicate, WitnessedPredicateRegistry};
+use std::sync::Arc;
+
+use dregg_cell::predicate::{
+    PredicateInput, WitnessedPredicate, WitnessedPredicateError, WitnessedPredicateKind,
+    WitnessedPredicateRegistry, WitnessedPredicateVerifier,
+};
 use dregg_cell::program::{
     AuthorizedSet, CustomDescriptor, DeltaRelation, HashKind, ReadSet, SimpleStateConstraint,
     TransitionCase, TransitionGuard, TransitionMeta, WitnessBlobView, WitnessBundle,
@@ -60,6 +65,77 @@ fn state_raw_with(field_values: &[(usize, FieldElement)]) -> CellState {
 /// Build a `Predicate(Vec<_>)` program out of a single constraint.
 fn single_predicate(c: StateConstraint) -> CellProgram {
     CellProgram::Predicate(vec![c])
+}
+
+struct ExactSenderVerifier {
+    kind: WitnessedPredicateKind,
+    name: &'static str,
+    expected_commitment: [u8; 32],
+    expected_sender: [u8; 32],
+    expected_proof: &'static [u8],
+}
+
+impl WitnessedPredicateVerifier for ExactSenderVerifier {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn kind(&self) -> WitnessedPredicateKind {
+        self.kind
+    }
+
+    fn verify(
+        &self,
+        commitment: &[u8; 32],
+        input: &PredicateInput<'_>,
+        proof_bytes: &[u8],
+    ) -> Result<(), WitnessedPredicateError> {
+        if commitment != &self.expected_commitment {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "commitment mismatch".into(),
+            });
+        }
+        match input {
+            PredicateInput::Sender(sender) if *sender == &self.expected_sender => {}
+            PredicateInput::Sender(_) => {
+                return Err(WitnessedPredicateError::Rejected {
+                    kind_name: self.name(),
+                    reason: "sender mismatch".into(),
+                });
+            }
+            _ => {
+                return Err(WitnessedPredicateError::InputShapeMismatch {
+                    kind_name: self.name(),
+                    expected: "Sender",
+                    actual: "non-Sender",
+                });
+            }
+        }
+        if proof_bytes != self.expected_proof {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "proof mismatch".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+fn exact_dfa_registry(
+    expected_commitment: [u8; 32],
+    expected_sender: [u8; 32],
+    expected_proof: &'static [u8],
+) -> WitnessedPredicateRegistry {
+    let mut registry = WitnessedPredicateRegistry::empty();
+    registry.register_builtin(Arc::new(ExactSenderVerifier {
+        kind: WitnessedPredicateKind::Dfa,
+        name: "exact-dfa-state-constraint-test-verifier",
+        expected_commitment,
+        expected_sender,
+        expected_proof,
+    }));
+    registry
 }
 
 /// Assert that the program accepts the transition.
@@ -1039,9 +1115,47 @@ fn witnessed_dfa_with_valid_proof_accepts() {
 }
 
 #[test]
-#[ignore = "blocked on caveat-correctness lane: Witnessed tampering rejection"]
 fn witnessed_dfa_with_tampered_proof_rejects() {
-    panic!("blocked");
+    let commitment = [1u8; 32];
+    let sender = [0xA5u8; 32];
+    let p = single_predicate(StateConstraint::Witnessed {
+        wp: WitnessedPredicate::dfa(commitment, InputRef::Sender, 0),
+    });
+    let registry = exact_dfa_registry(commitment, sender, b"valid-dfa-proof");
+    let proof = b"tampered-dfa-proof";
+    let blobs: [WitnessBlobView<'_>; 1] = [WitnessBlobView {
+        kind: WitnessKindTag::ProofBytes,
+        bytes: proof,
+    }];
+    let witnesses = WitnessBundle {
+        blobs: &blobs,
+        registry: Some(&registry),
+    };
+    let new = CellState::default();
+    let ctx = EvalContext {
+        sender: Some(sender),
+        ..Default::default()
+    };
+
+    let err = p
+        .evaluate_full(
+            &new,
+            None,
+            Some(&ctx),
+            &TransitionMeta::wildcard(),
+            &witnesses,
+        )
+        .expect_err("Dfa verifier must reject mismatched proof bytes");
+    assert!(
+        matches!(
+            err,
+            ProgramError::WitnessedPredicateRejected {
+                kind_name: "exact-dfa-state-constraint-test-verifier",
+                ..
+            }
+        ),
+        "expected WitnessedPredicateRejected(exact dfa verifier), got: {err:?}"
+    );
 }
 
 #[test]
