@@ -39,5 +39,10 @@
     "The two committees are extracted from the genesis.json files at scenario time (validators stripped of xmss_root). This matches what register-federation writes."
   ],
 
+  "synthetic_warnings_schema": {
+    "_description": "Informational only. result.json carries a 'synthetic_warnings' array populated at runtime by synthetic_warn() calls in the scenario. CI can detect synthetic-true paths via `jq '.synthetic_warnings | length > 0'` or `jq '.synthetic_warnings[]'`. These entries do not affect must_pass / must_not_pass evaluation.",
+    "known_synthetic_assertions": []
+  },
+
   "improve_dont_degrade": "All previous infrastructure assertions (both_federations_responding, F*_exposes_federation_roots) are retained in must_pass. The eight new real assertions (MCP cells + cap + bilateral + bundle + two verifier outcomes) are in must_pass. No assertion was weakened or moved to scaffold_only/must_not_pass. When the blocked lanes land, add 'captp_deliver_used_on_F2', 'real_signed_attested_roots_in_bundle', 'handoff_cert_produced_by_node' etc. to must_pass and tighten the tampered case to a specific error code or sub-flag in the verdict."
 }

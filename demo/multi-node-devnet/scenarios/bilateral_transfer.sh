@@ -211,7 +211,7 @@ if [ "$ALICE_AMOUNT_TAMPER" != "$BILATERAL_CANONICAL_AMOUNT" ]; then
 else
     record bilateral_pair_amount_mismatch_detectable false
 fi
-devnet_warn "bilateral_pair_amount_mismatch_detectable: SYNTHETIC (99 != 100 arithmetic, not real pair-verifier)"
+synthetic_warn "bilateral_pair_amount_mismatch_detectable: SYNTHETIC (99 != 100 arithmetic, not real pair-verifier)"
 
 # ── 6: probe /turns endpoint shape on F2 (the executing federation) ─
 # Without a signed turn the endpoint will reject (auth), but it should
@@ -244,7 +244,9 @@ fi
         printf '    "%s": %s' "$k" "${RESULTS[$k]}"
     done
     echo
-    echo "  }"
+    echo "  },"
+    emit_synthetic_warnings_json
+    echo
     echo "}"
 } > "$RESULT_FILE"
 

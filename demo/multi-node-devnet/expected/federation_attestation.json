@@ -34,5 +34,10 @@
     "The descriptor exchange is bilateral by file copy at startup; production cross-federation discovery is out of scope."
   ],
 
+  "synthetic_warnings_schema": {
+    "_description": "Informational only. result.json carries a 'synthetic_warnings' array populated at runtime by synthetic_warn() calls in the scenario. CI can detect synthetic-true paths via `jq '.synthetic_warnings | length > 0'` or `jq '.synthetic_warnings[]'`. These entries do not affect must_pass / must_not_pass evaluation.",
+    "known_synthetic_assertions": []
+  },
+
   "improve_dont_degrade": "When lane D lands, add to must_pass: attested_root_signature_verifies_against_committee, attested_root_carries_blocklace_finality, attested_root_federation_id_binding_holds. Add to must_not_pass: equivocating_federation_two_roots_same_height_undetected, federation_receipt_with_tampered_id_accepted, stale_committee_epoch_receipt_accepted_after_rotation."
 }

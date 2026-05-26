@@ -31,5 +31,10 @@
     "F1_committee_threshold_at_least_2 is asserted against genesis.json's threshold field. The genesis derives this from quorum_threshold(N=3) = 3, which is correct for full-BFT mode; solo mode uses threshold=1 at runtime regardless. When solo mode is replaced with full mode (FEDERATION_MODE=full to start_devnet.sh), this assertion exercises the BFT path."
   ],
 
+  "synthetic_warnings_schema": {
+    "_description": "Informational only. result.json carries a 'synthetic_warnings' array populated at runtime by synthetic_warn() calls in the scenario. CI can detect synthetic-true paths via `jq '.synthetic_warnings | length > 0'` or `jq '.synthetic_warnings[]'`. These entries do not affect must_pass / must_not_pass evaluation.",
+    "known_synthetic_assertions": []
+  },
+
   "improve_dont_degrade": "When the intent lane integrates end-to-end, add to must_pass: trustless_intent_accepted_under_threshold_decrypt_quorum, decrypted_action_routed_to_F2, F2_cell_settled_with_correct_amount, settlement_receipt_links_to_F1_intent_hash. Add to must_not_pass: subquorum_decryption_accepted, intent_targeting_wrong_federation_settled, intent_replayed_on_F1_after_settlement_re_executes."
 }

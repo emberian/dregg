@@ -31,5 +31,10 @@
     "#88 strengthened (2026-05-25): sovereign_witness_self_verifies_without_committee replaced unconditional true with a Python Ed25519 sign+verify cycle (PyCA cryptography or nacl). Signs a canonical witness message (pyana-sovereign-witness-v1 || cell_id || prev_state || post_state || sequence), verifies it, then confirms a tampered message (wrong sequence byte) is rejected. Records false if neither crypto library is available. Remaining weaknesses: peer_exchange_id_derivation_deterministic and sovereign_witness_sequence_monotonic_strict are still synthetic (PREV=0/POST=1 hardcoded); F1_ledger_unchanged_by_idle_observation can race on solo-mode nodes."
   ],
 
+  "synthetic_warnings_schema": {
+    "_description": "Informational only. result.json carries a 'synthetic_warnings' array populated at runtime by synthetic_warn() calls in the scenario. CI can detect synthetic-true paths via `jq '.synthetic_warnings | length > 0'` or `jq '.synthetic_warnings[]'`. These entries do not affect must_pass / must_not_pass evaluation.",
+    "known_synthetic_assertions": []
+  },
+
   "improve_dont_degrade": "When the sovereign-witness AIR teeth land, the must_not_pass list grows: sovereign_witness_skipped_for_sovereign_transition_accepts, sovereign_witness_with_sequence_regression_accepts, sovereign_witness_signing_message_tampered_accepts, sovereign_witness_cross_cell_reuse_accepts, sovereign_witness_signed_under_old_key_after_rotation_accepts, sovereign_witness_with_equal_sequence_accepts. Each is a receipts-alone negative test."
 }

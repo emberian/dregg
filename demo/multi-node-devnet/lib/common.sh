@@ -114,6 +114,45 @@ devnet_warn()  { printf '         %s %s\n' "$(color_yel '~~')" "$*"; }
 devnet_fail()  { printf '         %s %s\n' "$(color_red FAIL)" "$*"; }
 devnet_dim()   { printf '         %s\n' "$(color_dim "$*")"; }
 
+# Synthetic-warning accumulator. Scenarios source this file, so
+# SYNTHETIC_WARNINGS is a single global array visible to every
+# sourcing script. Use synthetic_warn() instead of a bare devnet_warn()
+# whenever an assertion passes on synthetic constants rather than live
+# devnet data — the array is flushed into result.json as
+# "synthetic_warnings": [...] so CI can distinguish synthetic-true from
+# live-true via `jq '.synthetic_warnings | length'`.
+SYNTHETIC_WARNINGS=()
+synthetic_warn() {
+    local msg="$*"
+    devnet_warn "$msg"
+    SYNTHETIC_WARNINGS+=("$msg")
+}
+
+# Emit the synthetic_warnings JSON array fragment (no trailing comma).
+# Caller is responsible for surrounding context in the result.json block.
+emit_synthetic_warnings_json() {
+    local i n
+    n=${#SYNTHETIC_WARNINGS[@]}
+    printf '  "synthetic_warnings": ['
+    if [ "$n" -eq 0 ]; then
+        printf ']'
+        return
+    fi
+    printf '\n'
+    for (( i=0; i<n; i++ )); do
+        # Escape backslashes and double-quotes for JSON string safety.
+        local escaped
+        escaped="${SYNTHETIC_WARNINGS[$i]//\\/\\\\}"
+        escaped="${escaped//\"/\\\"}"
+        if [ $((i + 1)) -lt "$n" ]; then
+            printf '    "%s",\n' "$escaped"
+        else
+            printf '    "%s"\n' "$escaped"
+        fi
+    done
+    printf '  ]'
+}
+
 # Wait for a TCP port to accept connections. $1 = port, $2 = max-secs.
 wait_for_port() {
     local port="$1" max_secs="${2:-20}"

@@ -34,5 +34,12 @@
     "#88 strengthened (2026-05-25): bilateral_pair_direction_complement_holds and bilateral_pair_amount_agrees now gate on devnet liveness (f2_status) rather than passing on hardcoded ALICE_DIR/BOB_DIR=1/0 constants. When the devnet is not responding both assertions record false. When running, a probe to /turns/peer-exchange confirms the route is present and the pair JSON carries the canonical direction/amount encoding. True γ.2 PI extraction (alice_stub_proof.json, bob_proof.json) remains blocked-on γ.2 Phase 1."
   ],
 
-  "improve_dont_degrade": "When γ.2 Phase 1 lands, expand must_pass with: bob_proof_verifies_against_per_cell_AIR, alice_stub_proof_verifies_against_per_cell_AIR, pair_PI_transfer_ids_equal_under_AIR_PI_layout, federation_id_in_signing_message_is_F2_for_both_rows. Add to must_not_pass: pair_with_swapped_direction_bits_accepts, pair_with_different_transfer_ids_accepts, pair_with_federation_id_F1_in_one_row_accepts."
+  "synthetic_warnings_schema": {
+    "_description": "Informational only. result.json carries a 'synthetic_warnings' array populated at runtime by synthetic_warn() calls in the scenario. CI can detect synthetic-true paths via `jq '.synthetic_warnings | length > 0'` or `jq '.synthetic_warnings[]'`. These entries do not affect must_pass / must_not_pass evaluation.",
+    "known_synthetic_assertions": [
+      "bilateral_pair_amount_mismatch_detectable: SYNTHETIC (99 != 100 arithmetic, not real pair-verifier)"
+    ]
+  },
+
+  "improve_dont_degrade": "When γ.2 Phase 1 lands, expand must_pass with: bob_proof_verifies_against_per_cell_AIR, alice_stub_proof_verifies_against_per_cell_AIR, pair_PI_transfer_ids_equal_under_AIR_PI_layout, federation_id_in_signing_message_is_F2_for_both_rows. Add to must_not_pass: pair_with_swapped_direction_bits_accepts, pair_with_different_transfer_ids_accepts, pair_with_federation_id_F1_in_one_row_accepts. Remove the bilateral_pair_amount_mismatch_detectable entry from known_synthetic_assertions once the off-AIR pair verifier enforces it."
 }

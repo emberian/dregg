@@ -553,7 +553,9 @@ fi
         printf '    "%s": %s' "$k" "${RESULTS[$k]}"
     done
     echo
-    echo "  }"
+    echo "  },"
+    emit_synthetic_warnings_json
+    echo
     echo "}"
 } > "$RESULT_FILE"
 
