@@ -2,6 +2,7 @@
 
 use pyana_cell::{CellId, Ledger};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 use crate::action::Effect;
 use crate::journal::LedgerJournal;
@@ -878,6 +879,12 @@ impl TurnExecutor {
         // ====================================================================
         let mut journal = LedgerJournal::with_capacity(16);
         let mut hosted_deltas: Vec<i64> = Vec::with_capacity(mixed_turn.hosted_actions.len());
+        // Tracks the true per-cell balance change across ALL hosted actions for
+        // the cross-domain conservation check. Unlike `hosted_deltas` (which is
+        // per-action and only reflects effects targeting that action's cell),
+        // this map accounts for every cell touched by any effect (e.g. the `to`
+        // side of a Transfer from another action).
+        let mut hosted_cell_deltas: HashMap<CellId, i64> = HashMap::new();
         // Parallel to hosted_actions: (cell_id, pre_state_commitment,
         // post_state_commitment, vk_hash, was_burn). Captured around each
         // action's effect application so the per-cell pre/post pair is
@@ -973,6 +980,8 @@ impl TurnExecutor {
                     if to == &action.target {
                         net_delta += *amount as i64;
                     }
+                    *hosted_cell_deltas.entry(*from).or_insert(0) -= *amount as i64;
+                    *hosted_cell_deltas.entry(*to).or_insert(0) += *amount as i64;
                 }
                 // Burn is non-conservation: it removes supply from the
                 // target slot. Track its contribution to the per-cell
@@ -982,6 +991,7 @@ impl TurnExecutor {
                         net_delta -= *amount as i64;
                         action_was_burn = true;
                     }
+                    *hosted_cell_deltas.entry(*target).or_insert(0) -= *amount as i64;
                 }
                 if let Err((err, _)) = self.apply_effect(
                     effect,
@@ -1022,8 +1032,8 @@ impl TurnExecutor {
         }
 
         // Cross-domain conservation: sovereign + hosted must sum to zero.
-        let total_delta: i64 =
-            sovereign_deltas.iter().sum::<i64>() + hosted_deltas.iter().sum::<i64>();
+        let hosted_total: i64 = hosted_cell_deltas.values().sum();
+        let total_delta: i64 = sovereign_deltas.iter().sum::<i64>() + hosted_total;
         if total_delta != 0 {
             // Roll back ALL hosted mutations before returning.
             journal.rollback(

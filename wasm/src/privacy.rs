@@ -801,42 +801,40 @@ pub fn verify_bearer_cap_proof_sig(
 
     // Deserialize the real type (it derives Deserialize). For minimal
     // shim-compat we also accept a flat form, but prefer canonical.
-    let proof: BearerCapProof = serde_json::from_str(proof_json)
-        .or_else(|_| {
-            // Fallback: try a minimal flat shape used by legacy callers.
-            #[derive(Deserialize)]
-            struct Flat {
-                target: String,
-                permissions: String,
-                delegator_pk: String,
-                signature: String,
-                bearer_pk: String,
-                expires_at: u64,
-            }
-            let f: Flat = serde_json::from_str(proof_json)?;
-            let auth = match f.permissions.as_str() {
-                "Signature" => AuthRequired::Signature,
-                "None" => AuthRequired::None,
-                _ => AuthRequired::Signature,
-            };
-            let target = CellId::from_bytes(hex_decode_32(&f.target)?);
-            let dpk = hex_decode_32(&f.delegator_pk)?;
-            let sig = hex_decode_64_fallback(&f.signature)?;
-            let bpk = hex_decode_32(&f.bearer_pk)?;
-            Ok(BearerCapProof {
-                target,
-                permissions: auth,
-                delegation_proof: DelegationProofData::SignedDelegation {
-                    delegator_pk: dpk,
-                    signature: sig,
-                    bearer_pk: bpk,
-                },
-                expires_at: f.expires_at,
-                revocation_channel: None,
-                allowed_effects: None,
-            })
+    let proof: BearerCapProof = serde_json::from_str(proof_json).or_else(|_| {
+        // Fallback: try a minimal flat shape used by legacy callers.
+        #[derive(Deserialize)]
+        struct Flat {
+            target: String,
+            permissions: String,
+            delegator_pk: String,
+            signature: String,
+            bearer_pk: String,
+            expires_at: u64,
+        }
+        let f: Flat = serde_json::from_str(proof_json)?;
+        let auth = match f.permissions.as_str() {
+            "Signature" => AuthRequired::Signature,
+            "None" => AuthRequired::None,
+            _ => AuthRequired::Signature,
+        };
+        let target = CellId::from_bytes(hex_decode_32(&f.target)?);
+        let dpk = hex_decode_32(&f.delegator_pk)?;
+        let sig = hex_decode_64_fallback(&f.signature)?;
+        let bpk = hex_decode_32(&f.bearer_pk)?;
+        Ok::<BearerCapProof, JsError>(BearerCapProof {
+            target,
+            permissions: auth,
+            delegation_proof: DelegationProofData::SignedDelegation {
+                delegator_pk: dpk,
+                signature: sig,
+                bearer_pk: bpk,
+            },
+            expires_at: f.expires_at,
+            revocation_channel: None,
+            allowed_effects: None,
         })
-        .map_err(|e| JsError::new(&format!("cannot parse as BearerCapProof or flat: {e}")))?;
+    })?;
 
     let fed_id = hex_decode_32(federation_id_hex)?;
 

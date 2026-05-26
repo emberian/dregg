@@ -836,7 +836,7 @@ pub fn list_known_federations(handle: usize) -> Result<JsValue, JsError> {
                 }
             })
             .collect();
-        Ok(serde_wasm_bindgen::to_value(&list)?)
+        Ok(serde_wasm_bindgen::to_value(&list).map_err(|e| e.to_string())?)
     })
 }
 
@@ -851,7 +851,7 @@ pub fn register_federation(
 ) -> Result<JsValue, JsError> {
     with_runtime(handle, |rt| {
         let keys: Vec<String> = serde_json::from_str(committee_pubkeys_json)
-            .map_err(|e| JsError::new(&format!("bad pubkeys json: {e}")))?;
+            .map_err(|e| format!("bad pubkeys json: {e}"))?;
         let n = keys.len().max(1);
         let idx = rt.create_federation(name, n);
         #[derive(Serialize)]
@@ -862,7 +862,8 @@ pub fn register_federation(
         Ok(serde_wasm_bindgen::to_value(&RegResult {
             registered_index: idx,
             name: name.to_string(),
-        })?)
+        })
+        .map_err(|e| e.to_string())?)
     })
 }
 
@@ -1146,7 +1147,7 @@ pub fn compile_dfa(pattern_json: &str) -> Result<JsValue, JsError> {
         transitions: 0,
         note: "dfa wasm binding pending DFA-RATIONALIZATION + dfa feature gate",
     })
-    .map_err(|e| e.to_string())
+    .map_err(|e| JsError::new(&e.to_string()))
 }
 
 // ============================================================================
@@ -2918,7 +2919,7 @@ pub fn get_trace_events_json(handle: usize) -> Result<JsValue, JsError> {
 /// Safe thin binding (delegates only; no new crypto, no circuit).
 #[wasm_bindgen]
 pub fn export_runtime_snapshot_stub(handle: usize) -> Result<String, JsError> {
-    with_runtime_ref(handle, |rt| rt.export_runtime_snapshot_stub())
+    with_runtime_ref(handle, |rt| Ok(rt.export_runtime_snapshot_stub()))
 }
 
 /// Attempt time-travel rewind on the sim runtime (STARBRIDGE-FOLLOWUP-03

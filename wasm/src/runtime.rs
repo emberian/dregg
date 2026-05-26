@@ -14,6 +14,8 @@ use std::collections::HashMap;
 use serde::Serialize;
 use zeroize::Zeroizing;
 
+use crate::{hex_encode, js_sys_now_secs};
+
 use pyana_cell::CellMode;
 use pyana_cell::factory::{FactoryCreationParams, FactoryDescriptor};
 use pyana_cell::{
@@ -352,9 +354,7 @@ impl PyanaRuntime {
         let local_seat = local_sk.map(|sk| LocalSeat {
             index: 0,
             signing_key: sk,
-            // bls_secret is only present when the federation crate's `runtime`
-            // feature is enabled (native builds). The wasm crate disables that
-            // feature; omit the field so the struct literal compiles either way.
+            bls_secret: None,
         });
         let federation = Federation::from_committee(members, 0, threshold, None, local_seat);
 
@@ -1223,7 +1223,7 @@ impl PyanaRuntime {
             num_federations: self.federations.len(),
             num_receipts: self.receipts.len(),
             num_turns: self.turns.len(),
-            num_events: self.events.events.len(),
+            num_events: self.events.len(),
             default_factory_vk_hex: hex_encode(&self.default_factory_vk),
             note: "PLACEHOLDER: full WitnessedReceipt stream format + import \
                    pending design resolution (§5.9 + §8 Q4 snapshot-and-replay). \

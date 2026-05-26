@@ -31,7 +31,6 @@ use crate::threshold::FederationCommittee;
 use crate::types::PublicKey;
 use pyana_types::FederationId;
 
-#[cfg(feature = "runtime")]
 use crate::threshold::MemberSecret;
 
 // =============================================================================
@@ -51,7 +50,6 @@ pub struct LocalSeat {
     /// Local Ed25519 signing key.
     pub signing_key: pyana_types::SigningKey,
     /// Local BLS member secret, present when `bls_committee.is_some()`.
-    #[cfg(feature = "runtime")]
     pub bls_secret: Option<MemberSecret>,
 }
 
@@ -541,7 +539,6 @@ mod tests {
         let seat = LocalSeat {
             index: 0,
             signing_key: sk_a,
-            #[cfg(feature = "runtime")]
             bls_secret: None,
         };
         let local_fed = Arc::new(Federation::from_committee(

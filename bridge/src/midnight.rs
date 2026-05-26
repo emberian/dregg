@@ -72,7 +72,7 @@ impl FederationAttestation {
     /// Returns true if the signature is valid for the message_hash under the
     /// provided public key. For production, the caller should look up the
     /// correct key by `self.epoch`.
-    pub fn verify(&self, expected_pubkey: &[u8; 32]) -> bool {
+    pub fn verify(&self, expected_pubkey: &[u8]) -> bool {
         use ed25519_dalek::{Signature, VerifyingKey};
 
         if self.federation_pubkey.len() != 32 {
@@ -81,13 +81,20 @@ impl FederationAttestation {
         if self.signature.len() != 64 {
             return false;
         }
-
-        // Check the pubkey matches the expected one for this epoch.
-        if self.federation_pubkey.as_slice() != expected_pubkey.as_slice() {
+        if expected_pubkey.len() != 32 {
             return false;
         }
 
-        let Ok(vk) = VerifyingKey::from_bytes(expected_pubkey) else {
+        // Check the pubkey matches the expected one for this epoch.
+        if self.federation_pubkey.as_slice() != expected_pubkey {
+            return false;
+        }
+
+        let expected_pubkey_array: &[u8; 32] = match expected_pubkey.try_into() {
+            Ok(arr) => arr,
+            Err(_) => return false,
+        };
+        let Ok(vk) = VerifyingKey::from_bytes(expected_pubkey_array) else {
             return false;
         };
 

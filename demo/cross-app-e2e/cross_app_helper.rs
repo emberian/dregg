@@ -85,11 +85,11 @@ use serde::{Deserialize, Serialize};
 
 use pyana_app_framework::{AgentCipherclerk, AppCipherclerk, CellId, EmbeddedExecutor};
 use pyana_cell::program::AuthorizedSet;
-use pyana_credentials::{AttrValue, CredentialAttributes, IssuerKeys, issue, kyc_schema};
+use pyana_credentials::{AttrValue, CredentialAttributes, CredentialSchema, IssuerKeys, issue};
 use pyana_turn::TurnReceipt;
 use starbridge_governed_namespace::build_register_service_action;
 use starbridge_identity::{
-    build_issue_credential_action, schema_commitment as identity_schema_commitment,
+    build_issue_credential_action, kyc_schema, schema_commitment as identity_schema_commitment,
 };
 use starbridge_nameservice::build_register_with_credential_action;
 use starbridge_subscription::{

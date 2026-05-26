@@ -518,7 +518,7 @@ fn run_graph(executor: &TurnExecutor, ledger: &mut Ledger, ids: [CellId; 5]) -> 
 fn silver_vision_graph_e2e() {
     // ── Stage 1: causal execution ─────────────────────────────────────
     let (mut ledger, ids) = make_graph_ledger();
-    let executor = TurnExecutor::new(ComputronCosts::default_costs());
+    let mut executor = TurnExecutor::new(ComputronCosts::default_costs());
 
     // Exercise the (now-fixed) fee share path + consistency in Silver Vision:
     // set proposer/treasury so shares (50%/30%) appear in per-step post_state_hash,
@@ -628,7 +628,7 @@ fn silver_vision_graph_e2e() {
     let mut replay_treas = permissive_cell("fee-treasury-silver", 0);
     let replay_treas_id = replay_treas.id();
     replay_ledger.insert_cell(replay_treas).unwrap();
-    let replay_executor = TurnExecutor::new(ComputronCosts::default_costs());
+    let mut replay_executor = TurnExecutor::new(ComputronCosts::default_costs());
     replay_executor.set_proposer_cell(replay_prop_id);
     replay_executor.set_treasury_cell(replay_treas_id);
     for step in &steps {

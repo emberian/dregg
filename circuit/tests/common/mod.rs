@@ -18,7 +18,7 @@ pub fn make_state(balance: u64) -> CellState {
     CellState::new(balance, 0)
 }
 
-pub fn make_state_with_nonce(balance: u64, nonce: u64) -> CellState {
+pub fn make_state_with_nonce(balance: u64, nonce: u32) -> CellState {
     CellState::new(balance, nonce)
 }
 

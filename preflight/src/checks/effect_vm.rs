@@ -300,6 +300,10 @@ fn check_custom_dispatch() -> Result<(), String> {
         BabyBear::new(22),
         BabyBear::new(33),
         BabyBear::new(44),
+        BabyBear::new(0),
+        BabyBear::new(0),
+        BabyBear::new(0),
+        BabyBear::new(0),
     ];
     let proof_commitment = [
         BabyBear::new(55),
