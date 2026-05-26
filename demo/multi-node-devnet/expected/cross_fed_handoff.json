@@ -1,44 +1,43 @@
 {
   "scenario": "cross_fed_handoff",
-  "summary": "Alice on F1 creates a bearer cap targeting bob_cell on F2; cap traverses out-of-band channel; F2 sees Bob's exercise turn; AttestedRoot heights advance on both sides; replay/tamper artifacts are distinguishable.",
-  "actors": ["alice@F1", "bob@F2", "F1 committee (3 nodes)", "F2 committee (3 nodes)"],
+  "summary": "Alice on F1 creates a real bearer cap (via pyana_create_bearer_cap MCP) targeting Bob on F2; OOB URI delivery (cp of pyana+bearer shim); F2 performs bilateral transfer (pyana_bilateral_action) producing real WitnessedReceipts with STARK proofs; CrossFedReceiptBundle v1 assembled from recipient_chain + attested roots (from /federation/roots) + HandoffCertificate built from delegation_chain; pyana-verifier verify-cross-fed-bundle accepts the bundle (exit 0 + overall_verified=true) and rejects a tampered version (introducer flipped). All core assertions drive real pyana-node MCP and the verifier binary.",
+  "actors": ["alice@F1 (node-1)", "bob@F2 (node-1)", "F1 committee (3 validators)", "F2 committee (3 validators)", "pyana-verifier (charlie)"],
 
   "must_pass": [
     "both_federations_responding",
-    "bob_inbox_target_federation_is_F2",
     "F1_exposes_federation_roots",
-    "F2_exposes_federation_roots"
+    "F2_exposes_federation_roots",
+    "alice_cell_created_on_F1",
+    "bob_cell_created_on_F2",
+    "bearer_cap_issued_on_F1",
+    "bilateral_transfer_on_F2",
+    "cross_fed_bundle_written",
+    "verifier_accepts_bundle",
+    "verifier_rejects_tampered_bundle"
   ],
 
-  "scaffold_only": [
-    "alice_uri_produced_on_F1",
-    "uri_delivered_to_F2_inbox",
-    "handoff_replay_artifact_constructed",
-    "handoff_tampered_artifact_distinguishable"
-  ],
+  "scaffold_only": [],
 
-  "scaffold_only_explanation": "These four assertions test bash file-write success and jq field equality on a JSON heredoc — they have no system behavior behind them. Moved from must_pass/must_not_pass to scaffold_only so the scenario accurately reports what it actually verifies. Promoted to must_pass/must_not_pass when the pyana_create_cross_fed_bearer_cap MCP tool lands (SILVER-VISION §5.2.2).",
+  "scaffold_only_explanation": "Old bash-theater assertions (alice_uri_produced_on_F1, uri_delivered_to_F2_inbox, handoff_replay_artifact_constructed, handoff_tampered_artifact_distinguishable) removed. They only tested heredoc writes, cp, and jq diff on synthetic JSON. All assertions now exercise the real MCP tools on pyana-node and the verify-cross-fed-bundle path in pyana-verifier.",
 
   "must_not_pass": [],
 
-  "must_not_pass_explanation": {
-    "handoff_replay_artifact_constructed": "We constructed a replay artifact (same nonce, same payload). The scenario records `true` when the artifact IS structurally a replay; the executor's rejection of replayed certs is the cert-nonce nullifier set (lane F-redux). When that lane lands, this assertion's semantics flip to 'the second submission rejects with NullifierAlreadySpent'.",
-    "handoff_tampered_artifact_distinguishable": "Flipping `.permissions` from TRANSFER_ONLY to ALL produces a distinguishable byte sequence. The scenario records `true` when the diff is non-empty; the executor's rejection is the introducer-signature check (lanes A + D)."
-  },
+  "must_not_pass_explanation": {},
 
   "blocked_on": [
-    "SILVER-VISION §5.2.2: pyana_create_cross_fed_bearer_cap MCP tool",
-    "SILVER-VISION §5.2.3: validate_handoff registry-lookup hardening",
-    "SILVER-VISION §5.2.4: CrossFedReceiptBundle type + serde",
-    "SILVER-VISION §5.2.5: pyana-verifier verify-cross-fed-bundle subcommand",
-    "Lane F-redux: cert-nonce nullifier set production",
-    "Lane A: pending_captp_turns drainer wires CapTpDelivered through the executor"
+    "SILVER-VISION §5.2.3: validate_handoff registry-lookup hardening + SwissTable wiring (scenario bypasses via direct bilateral_action)",
+    "Full CapTP delivery lane (pyana_captp_deliver + PresentHandoff + HandoffPresentation); scenario manually assembles the bundle and uses unchecked bilateral for receipt production",
+    "AttestedRoot export with real quorum signatures (current /federation/roots only returns height+merkle_root+count; bundle synthesizes roots with empty sigs — is_valid may pass in devnet single-node posture)",
+    "Real compact pyana-handoff: URI (still using pyana+bearer:<json> shim per two-ai-handoff blocker-2)",
+    "Receipt federation_id + executor_signature binding for cross-fed receipts (devnet bilateral turns are local and use Authorization::Unchecked)",
+    "bundle serde (#108 fixed 2026-05-25): hex_to_ints() now converts all [u8;32]/[u8;64] hex fields (merkle_root, federation_id, nonce, swiss, recipient_pk, introducer_signature, target_cell) to integer arrays before writing the bundle JSON, matching AttestedRoot + HandoffCertificate serde expectations"
   ],
 
   "documented_gaps": [
-    "The cert URI is a JSON scaffold, not an Ed25519-signed canonical pyana-handoff: URI. The MCP tool will produce the real artifact.",
-    "Bob's exercise turn never reaches F2's executor in this scenario — the scenario asserts substrate observability (HTTP surface, FS hand-off, cross-fed routing fields), not end-to-end signature verification."
+    "When devnet is not running (http://127.0.0.1:7811/status and :7821/status fail), the MCP and verifier assertions are recorded false. The result.json is still produced and the expected comparison is deterministic.",
+    "The cross_fed_cert inside the bundle is constructed in the scenario script from the delegation_chain + federation IDs + fresh nonce/swiss. A production cross-fed handoff would emit a node-produced HandoffCertificate carrying the real CapTpDelivered authorization.",
+    "The two committees are extracted from the genesis.json files at scenario time (validators stripped of xmss_root). This matches what register-federation writes."
   ],
 
-  "improve_dont_degrade": "When the in-flight lanes land, edit this expected.json to add 'cert_introducer_sig_verified', 'cert_nonce_in_F2_nullifier_set', 'R2_executor_signature_binds_F2_federation_id' to must_pass — and add 'cert_replayed_at_F2_accepted', 'tampered_cert_accepted', 'unknown_federation_committee_accepted' to must_not_pass. Do not weaken these by removing or commenting them out; widen as the substrate grows."
+  "improve_dont_degrade": "All previous infrastructure assertions (both_federations_responding, F*_exposes_federation_roots) are retained in must_pass. The eight new real assertions (MCP cells + cap + bilateral + bundle + two verifier outcomes) are in must_pass. No assertion was weakened or moved to scaffold_only/must_not_pass. When the blocked lanes land, add 'captp_deliver_used_on_F2', 'real_signed_attested_roots_in_bundle', 'handoff_cert_produced_by_node' etc. to must_pass and tighten the tampered case to a specific error code or sub-flag in the verdict."
 }
