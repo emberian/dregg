@@ -34,8 +34,10 @@
 //!   `Witnessed { Dfa }`. The actual cross-cell dispatch (to the
 //!   target inbox) rides on a follow-on `Effect` set in the same
 //!   action — out of scope for this template's cell program.
-//! - `slash` — `bond_amount` decreases iff `dispute_count`
-//!   advanced (encoded as `BoundedBy { index: 0, witness_index: 7 }`).
+//! - `slash` — `bond_amount` decreases only while
+//!   `dispute_count` advances by exactly one (encoded as
+//!   `BoundedBy { index: 0, witness_index: 7 }` plus
+//!   `FieldDelta { index: 7, delta: 1 }`).
 //!   The accompanying `Effect::Transfer` to a governance treasury is
 //!   the cclerk-side composition; the cell program enforces the
 //!   "no-drain-without-dispute" invariant.
@@ -240,11 +242,10 @@ pub fn relay_operator_program_with(max_bytes_per_epoch: u64, epoch_duration: u64
                 },
             ],
         },
-        // slash: bond_amount decreases iff dispute_count advances.
-        // The BoundedBy variant encodes "bond may only move if slot[7]
-        // is non-zero in new_state" — combined with Monotonic on
-        // slot 7 this enforces "bond decrement requires a dispute
-        // event."
+        // slash: bond_amount changes only while dispute_count advances.
+        // BoundedBy alone only checks that slot[7] is non-zero; the
+        // exact +1 FieldDelta is the operation-scoped proof that this
+        // slash consumed a fresh dispute event.
         TransitionCase {
             guard: TransitionGuard::MethodIs {
                 method: symbol("slash"),
@@ -254,8 +255,9 @@ pub fn relay_operator_program_with(max_bytes_per_epoch: u64, epoch_duration: u64
                     index: BOND_AMOUNT_SLOT,
                     witness_index: DISPUTE_COUNT_SLOT,
                 },
-                StateConstraint::Monotonic {
+                StateConstraint::FieldDelta {
                     index: DISPUTE_COUNT_SLOT,
+                    delta: u64_field(1),
                 },
                 // Bond floor: bond_amount must stay >= bond_min.
                 // Per §3.5 this is expressed as FieldGte at the slot
@@ -597,7 +599,8 @@ mod tests {
     fn slash_case_carries_bounded_by() {
         // The slash case enforces "bond may only decrement if
         // dispute_count advanced" — encoded as BoundedBy { index:
-        // BOND_AMOUNT, witness_index: DISPUTE_COUNT }.
+        // BOND_AMOUNT, witness_index: DISPUTE_COUNT } plus an exact
+        // FieldDelta on dispute_count.
         let cases = match relay_operator_program() {
             CellProgram::Cases(c) => c,
             _ => panic!(),
@@ -615,6 +618,16 @@ mod tests {
         assert!(
             has_bounded,
             "slash must declare BoundedBy {{ bond_amount, dispute_count }}"
+        );
+        let has_exact_dispute_delta = slash.constraints.iter().any(|c| {
+            matches!(c,
+                StateConstraint::FieldDelta { index, delta }
+                if *index == DISPUTE_COUNT_SLOT && *delta == u64_field(1)
+            )
+        });
+        assert!(
+            has_exact_dispute_delta,
+            "slash must advance dispute_count by exactly one"
         );
     }
 

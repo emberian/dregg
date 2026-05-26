@@ -731,4 +731,23 @@ mod relay_operator_tests {
             .expect_err("dispute_count rewind must be rejected");
         assert!(matches!(err, ProgramError::ConstraintViolated { .. }));
     }
+
+    #[test]
+    fn slash_requires_fresh_dispute_count_increment() {
+        let p = strip_witness_constraints(relay_operator_program());
+        let mut old = base_state();
+        old.fields[DISPUTE_COUNT_SLOT as usize] = u64_field(3);
+
+        let mut bad = old.clone();
+        bad.fields[BOND_AMOUNT_SLOT as usize] = u64_field(5_000);
+        // BoundedBy would consider this armed because the witness slot
+        // is non-zero. The slash case must still reject because this
+        // slash did not advance the dispute counter.
+        bad.fields[DISPUTE_COUNT_SLOT as usize] = u64_field(3);
+
+        let err = p
+            .evaluate_with_meta(&bad, Some(&old), None, &method_meta("slash"))
+            .expect_err("slash must require a fresh dispute_count increment");
+        assert!(matches!(err, ProgramError::ConstraintViolated { .. }));
+    }
 }

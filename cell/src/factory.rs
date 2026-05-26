@@ -186,8 +186,10 @@ impl ChildVkStrategy {
             CellMode::Sovereign => 1u8,
         };
         hasher.update(&[mode_byte]);
-        hasher.update(&(params.initial_fields.len() as u64).to_le_bytes());
-        for (idx, val) in &params.initial_fields {
+        let mut initial_fields = params.initial_fields.clone();
+        initial_fields.sort_unstable_by_key(|(idx, _)| *idx);
+        hasher.update(&(initial_fields.len() as u64).to_le_bytes());
+        for (idx, val) in &initial_fields {
             hasher.update(&idx.to_le_bytes());
             hasher.update(&val.to_le_bytes());
         }
@@ -369,6 +371,18 @@ impl FactoryDescriptor {
     ///
     /// Returns `Ok(())` if all constraints pass, or an error describing the violation.
     pub fn validate_creation(&self, params: &FactoryCreationParams) -> Result<(), FactoryError> {
+        // Creation fields are applied by slot. Duplicate slot entries
+        // would let one value satisfy a descriptor constraint while a
+        // later value overwrites the actual created cell state.
+        let mut seen_fields = std::collections::BTreeSet::new();
+        for (field_index, _) in &params.initial_fields {
+            if !seen_fields.insert(*field_index) {
+                return Err(FactoryError::DuplicateInitialField {
+                    field_index: *field_index,
+                });
+            }
+        }
+
         // Check child program VK using strategy if present, else legacy check.
         match &self.child_vk_strategy {
             Some(strategy) => {
@@ -757,6 +771,8 @@ pub enum FactoryError {
         claimed: Option<[u8; 32]>,
         set_size: usize,
     },
+    /// Creation params supplied more than one initial value for the same field.
+    DuplicateInitialField { field_index: u32 },
 }
 
 impl std::fmt::Display for FactoryError {
@@ -816,6 +832,13 @@ impl std::fmt::Display for FactoryError {
                     set_size
                 )
             }
+            FactoryError::DuplicateInitialField { field_index } => {
+                write!(
+                    f,
+                    "duplicate initial field value supplied for field {}",
+                    field_index
+                )
+            }
         }
     }
 }
@@ -844,7 +867,7 @@ impl FactoryRegistry {
     /// Returns the factory VK hash as an identifier.
     pub fn deploy(&mut self, descriptor: FactoryDescriptor) -> [u8; 32] {
         let vk = descriptor.factory_vk;
-        self.descriptors.insert(vk, descriptor);
+        self.descriptors.entry(vk).or_insert(descriptor);
         vk
     }
 
@@ -965,6 +988,23 @@ mod tests {
     }
 
     #[test]
+    fn test_deploy_factory_is_constructor_immutable() {
+        let mut registry = FactoryRegistry::new();
+        let original = worker_factory_descriptor();
+        let vk = registry.deploy(original.clone());
+
+        let mut replacement = original.clone();
+        replacement.child_program_vk = Some([0xFF; 32]);
+        registry.deploy(replacement);
+
+        assert_eq!(
+            registry.get(&vk),
+            Some(&original),
+            "deploying the same factory_vk twice must not rewrite the constructor contract"
+        );
+    }
+
+    #[test]
     fn test_valid_creation() {
         let desc = worker_factory_descriptor();
         let coordinator_id = CellId::derive_raw(&[1u8; 32], &[0u8; 32]);
@@ -1044,6 +1084,26 @@ mod tests {
         };
         let err = desc.validate_creation(&params).unwrap_err();
         assert!(matches!(err, FactoryError::FieldConstraintViolation { .. }));
+    }
+
+    #[test]
+    fn test_duplicate_initial_field_rejected_before_overwrite() {
+        let desc = worker_factory_descriptor();
+        let params = FactoryCreationParams {
+            mode: CellMode::Hosted,
+            program_vk: Some(test_child_vk()),
+            // The first value satisfies field 0 == 42; a later apply
+            // pass would overwrite slot 0 with 99 if duplicates were
+            // accepted.
+            initial_fields: vec![(0, 42), (1, 50), (0, 99)],
+            initial_caps: vec![],
+            owner_pubkey: [2u8; 32],
+        };
+        let err = desc.validate_creation(&params).unwrap_err();
+        assert!(matches!(
+            err,
+            FactoryError::DuplicateInitialField { field_index: 0 }
+        ));
     }
 
     #[test]
@@ -1311,6 +1371,27 @@ mod tests {
             ChildVkStrategy::compute_param_hash(&params_a),
             ChildVkStrategy::compute_param_hash(&params_b),
             "derived child VK params must bind the child owner key"
+        );
+    }
+
+    #[test]
+    fn test_param_hash_canonicalizes_field_order() {
+        let params_a = FactoryCreationParams {
+            mode: CellMode::Hosted,
+            program_vk: None,
+            initial_fields: vec![(2, 20), (0, 1), (1, 10)],
+            initial_caps: vec![],
+            owner_pubkey: [5u8; 32],
+        };
+        let params_b = FactoryCreationParams {
+            initial_fields: vec![(0, 1), (1, 10), (2, 20)],
+            ..params_a.clone()
+        };
+
+        assert_eq!(
+            ChildVkStrategy::compute_param_hash(&params_a),
+            ChildVkStrategy::compute_param_hash(&params_b),
+            "field order must not mint distinct derived VKs for identical created state"
         );
     }
 

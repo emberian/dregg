@@ -310,6 +310,14 @@ pub fn cap_inbox_factory_descriptor() -> FactoryDescriptor {
                 min: 1,
                 max: 1_000_000,
             },
+            // Anti-spam floor must be present at creation; an inbox
+            // with a zero deposit floor silently disables the deposit
+            // accounting promised by the template.
+            FieldConstraint::Range {
+                field_index: MIN_DEPOSIT_SLOT as u32,
+                min: 1,
+                max: 1_000_000_000,
+            },
             // Owner must be non-zero.
             FieldConstraint::NonZero {
                 field_index: OWNER_PK_HASH_SLOT as u32,
@@ -663,5 +671,35 @@ mod tests {
         assert_eq!(s[MESSAGE_ROOT_SLOT as usize], [0u8; 32]);
         assert_eq!(s[OWNER_PK_HASH_SLOT as usize], [1u8; 32]);
         assert_eq!(s[SENDER_SET_ROOT_SLOT as usize], [2u8; 32]);
+    }
+
+    #[test]
+    fn descriptor_rejects_zero_min_deposit_at_creation() {
+        let d = cap_inbox_factory_descriptor();
+        let params = dregg_cell::FactoryCreationParams {
+            mode: CellMode::Hosted,
+            program_vk: d.child_program_vk,
+            initial_fields: vec![
+                (HEAD_SEQ_SLOT as u32, 0),
+                (TAIL_SEQ_SLOT as u32, 0),
+                (TOTAL_DEPOSITS_SLOT as u32, 0),
+                (CAPACITY_SLOT as u32, 64),
+                (MIN_DEPOSIT_SLOT as u32, 0),
+                (OWNER_PK_HASH_SLOT as u32, 1),
+            ],
+            initial_caps: vec![],
+            owner_pubkey: [9u8; 32],
+        };
+
+        let err = d
+            .validate_creation(&params)
+            .expect_err("zero min_deposit must not satisfy CapInbox creation");
+        assert!(matches!(
+            err,
+            dregg_cell::FactoryError::FieldConstraintViolation {
+                field_index,
+                ..
+            } if field_index == MIN_DEPOSIT_SLOT as u32
+        ));
     }
 }

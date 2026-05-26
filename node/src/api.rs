@@ -3,7 +3,7 @@
 //! Serves a localhost-only API that the browser extension cipherclerk talks to.
 //! All handlers access shared [`NodeState`] via Axum's state extraction.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -106,6 +106,8 @@ pub struct TokenInfo {
 
 #[derive(Serialize)]
 pub struct ReceiptInfo {
+    pub chain_index: u64,
+    pub chain_head: bool,
     pub receipt_hash: String,
     pub turn_hash: String,
     pub agent: String,
@@ -1110,6 +1112,16 @@ pub fn router(
                 }
             }),
         )
+        .route(
+            "/api/turns/submit-encrypted",
+            post({
+                let limiter = turn_limiter.clone();
+                move |connect_info, state, body| {
+                    post_submit_encrypted_turn(connect_info, state, body, limiter)
+                }
+            }),
+        )
+        .route("/api/turns/encryption-key", get(get_turn_encryption_key))
         .route("/api/turns/fast-path", post(post_fast_path_lock))
         .route("/api/turns/certificate", post(post_fast_path_certificate))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
@@ -1274,12 +1286,19 @@ async fn get_tokens(State(state): State<NodeState>) -> Json<Vec<TokenInfo>> {
 
 async fn get_receipts(State(state): State<NodeState>) -> Json<Vec<ReceiptInfo>> {
     let s = state.read().await;
-    let chain = s.cclerk.receipt_chain();
-    let receipts: Vec<ReceiptInfo> = chain
+    Json(receipt_infos_from_chain(s.cclerk.receipt_chain(), 50))
+}
+
+fn receipt_infos_from_chain(chain: &[dregg_turn::TurnReceipt], limit: usize) -> Vec<ReceiptInfo> {
+    let chain_len = chain.len();
+    chain
         .iter()
+        .enumerate()
         .rev()
-        .take(50)
-        .map(|r| ReceiptInfo {
+        .take(limit)
+        .map(|(idx, r)| ReceiptInfo {
+            chain_index: idx as u64,
+            chain_head: idx + 1 == chain_len,
             receipt_hash: hex_encode(&r.receipt_hash()),
             turn_hash: hex_encode(&r.turn_hash),
             agent: hex_encode(&r.agent.0),
@@ -1295,8 +1314,17 @@ async fn get_receipts(State(state): State<NodeState>) -> Json<Vec<ReceiptInfo>> 
             has_proof: r.executor_signature.is_some(),
             executor_signed: r.executor_signature.is_some(),
         })
-        .collect();
-    Json(receipts)
+        .collect()
+}
+
+fn seed_executor_receipt_head(
+    executor: &dregg_turn::TurnExecutor,
+    agent: CellId,
+    previous_receipt_hash: Option<[u8; 32]>,
+) {
+    if let Some(head) = previous_receipt_hash {
+        executor.set_last_receipt_hash(agent, head);
+    }
 }
 
 fn push_committed_event(
@@ -1371,6 +1399,7 @@ async fn post_submit_turn(
     let default_token_id = *blake3::hash(b"default").as_bytes();
     let agent_bytes = dregg_cell::CellId::derive_raw(&s.cclerk.public_key().0, &default_token_id).0;
     let agent = hex_encode(&agent_bytes);
+    let previous_receipt_hash = s.cclerk.receipt_chain().last().map(|r| r.receipt_hash());
     let turn = Turn {
         agent: CellId(agent_bytes),
         nonce: req.nonce,
@@ -1379,7 +1408,7 @@ async fn post_submit_turn(
         valid_until: None,
         call_forest: CallForest::new(),
         depends_on: vec![],
-        previous_receipt_hash: None,
+        previous_receipt_hash,
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
         execution_proof: None,
@@ -1398,6 +1427,7 @@ async fn post_submit_turn(
 
     // Execute the turn locally FIRST.
     let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    seed_executor_receipt_head(&executor, turn.agent, previous_receipt_hash);
     let exec_result = executor.execute(&turn, &mut s.ledger);
 
     match exec_result {
@@ -1421,9 +1451,14 @@ async fn post_submit_turn(
                 }
             }
 
-            s.cclerk
-                .append_receipt(receipt)
-                .expect("local executor and cclerk chains must agree; divergence is a serious bug");
+            if let Err(err) = s.cclerk.append_receipt(receipt) {
+                crate::metrics::inc_turns_executed("rejected");
+                drop(s);
+                return Ok(Json(SubmitTurnResponse {
+                    accepted: false,
+                    turn_hash: Some(format!("receipt chain mismatch: {err}")),
+                }));
+            }
 
             push_committed_event(
                 &mut s,
@@ -1556,6 +1591,7 @@ async fn post_submit_signed_turn(
     }
 
     let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    seed_executor_receipt_head(&executor, signed.turn.agent, expected_prev);
     let exec_result = executor.execute(&signed.turn, &mut s.ledger);
 
     match exec_result {
@@ -1724,6 +1760,8 @@ async fn post_submit_encrypted_turn(
     let sealer_secret = s.cclerk.derive_symmetric_key(TURN_UNSEALER_DOMAIN);
 
     let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    let expected_prev = s.cclerk.receipt_chain().last().map(|r| r.receipt_hash());
+    seed_executor_receipt_head(&executor, encrypted.agent, expected_prev);
 
     let result = executor.apply_encrypted_turn(&encrypted, &sealer_secret, &mut s.ledger);
 
@@ -1751,9 +1789,15 @@ async fn post_submit_encrypted_turn(
             let turn_hash = hex_encode(&turn_hash_bytes);
             let agent = hex_encode(&receipt.agent.0);
             let was_encrypted = receipt.was_encrypted;
-            s.cclerk
-                .append_receipt(receipt)
-                .expect("local executor and cclerk chains must agree; divergence is a serious bug");
+            if let Err(err) = s.cclerk.append_receipt(receipt) {
+                crate::metrics::inc_turns_executed("rejected");
+                drop(s);
+                return Ok(Json(SubmitEncryptedTurnResponse {
+                    accepted: false,
+                    turn_hash: Some(format!("receipt chain mismatch: {err}")),
+                    was_encrypted: false,
+                }));
+            }
 
             push_committed_event(
                 &mut s,
@@ -1802,7 +1846,7 @@ async fn get_cell(
     Ok(Json(CellResponse {
         id,
         found,
-        balance: None,
+        balance: s.ledger.get(&cell_id).map(|cell| cell.state.balance()),
     }))
 }
 
@@ -2095,19 +2139,33 @@ async fn get_events(
     let limit = params.limit.unwrap_or(50).min(200);
 
     let s = state.read().await;
-    let events: Vec<CommittedEvent> = s
-        .event_log
-        .iter()
-        .filter(|e| match since_height {
-            // Keep the initial cursor useful for callers that start from zero,
-            // then treat non-zero cursors as exclusive to avoid repeat posts.
-            Some(0) | None => true,
-            Some(height) => e.height > height,
-        })
-        .take(limit)
-        .cloned()
-        .collect();
-    Json(events)
+    Json(select_committed_events(&s.event_log, since_height, limit))
+}
+
+fn select_committed_events(
+    log: &VecDeque<CommittedEvent>,
+    since_height: Option<u64>,
+    limit: usize,
+) -> Vec<CommittedEvent> {
+    if limit == 0 {
+        return Vec::new();
+    }
+
+    match since_height {
+        Some(height) if height > 0 => log
+            .iter()
+            .filter(|event| event.height > height)
+            .take(limit)
+            .cloned()
+            .collect(),
+        // First-time pollers need the latest retained activity, not the oldest
+        // entries in the ring buffer. Keep chronological order so clients can
+        // advance their cursor to the last returned height.
+        _ => {
+            let skip = log.len().saturating_sub(limit);
+            log.iter().skip(skip).cloned().collect()
+        }
+    }
 }
 
 /// GET /observability/stream — SSE live feed of dregg-observability events
@@ -3823,7 +3881,8 @@ async fn post_faucet(
 
     // Ensure the recipient cell exists. With a public key, create the
     // canonical hosted cell; otherwise preserve the pre-derived id as a stub.
-    if s.ledger.get(&recipient_cell_id).is_none() {
+    let recipient_created = s.ledger.get(&recipient_cell_id).is_none();
+    if recipient_created {
         let recipient_cell = match recipient_public_key {
             Some(pk) => {
                 let default_token_id = *blake3::hash(b"default").as_bytes();
@@ -3834,10 +3893,20 @@ async fn post_faucet(
         let _ = s.ledger.insert_cell(recipient_cell);
     }
 
+    let tx_hash = compute_faucet_activity_hash(&recipient_cell_id, req.amount);
+
     if req.amount == 0 {
+        if recipient_created {
+            push_committed_event(
+                &mut s,
+                tx_hash.clone(),
+                req.recipient.clone(),
+                vec!["faucet_materialized_cell".to_string()],
+            );
+        }
         return Ok(Json(FaucetResponse {
             success: true,
-            tx_hash: None,
+            tx_hash: Some(tx_hash),
             amount: 0,
             error: None,
         }));
@@ -3852,17 +3921,12 @@ async fn post_faucet(
 
     match s.ledger.apply_delta(&delta) {
         Ok(()) => {
-            // Compute a simple tx hash for the response.
-            let mut hasher = blake3::Hasher::new();
-            hasher.update(&faucet_cell_id.0);
-            hasher.update(&recipient_bytes);
-            hasher.update(&req.amount.to_le_bytes());
-            let now_nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos() as u64;
-            hasher.update(&now_nanos.to_le_bytes());
-            let tx_hash = hex_encode(hasher.finalize().as_bytes());
+            push_committed_event(
+                &mut s,
+                tx_hash.clone(),
+                req.recipient.clone(),
+                vec![format!("faucet_transfer:{}", req.amount)],
+            );
 
             Ok(Json(FaucetResponse {
                 success: true,
@@ -3878,6 +3942,19 @@ async fn post_faucet(
             error: Some(format!("transfer failed: {e}")),
         })),
     }
+}
+
+fn compute_faucet_activity_hash(recipient: &dregg_cell::CellId, amount: u64) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"dregg-node-faucet-activity-v1");
+    hasher.update(&recipient.0);
+    hasher.update(&amount.to_le_bytes());
+    let now_nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64;
+    hasher.update(&now_nanos.to_le_bytes());
+    hex_encode(hasher.finalize().as_bytes())
 }
 
 // =============================================================================
@@ -4614,7 +4691,7 @@ mod tests {
     use dregg_coord::{AtomicForest, Coordinator, Decision, Vote};
     use dregg_turn::ComputronCosts;
     use dregg_turn::action::{Action, Authorization, CommitmentMode, DelegationMode};
-    use std::collections::HashMap;
+    use std::collections::{HashMap, VecDeque};
     use std::time::{Duration, Instant};
 
     /// Helper: create a deterministic key pair for testing.
@@ -4640,6 +4717,87 @@ mod tests {
         };
         forest.add_root(action);
         AtomicForest::new(participants, forest, vec![], cell_id, 0)
+    }
+
+    fn test_event(height: u64) -> CommittedEvent {
+        CommittedEvent {
+            height,
+            turn_hash: format!("turn-{height}"),
+            cell_id: format!("cell-{height}"),
+            effects: vec![format!("effect-{height}")],
+            timestamp: height as i64,
+        }
+    }
+
+    #[test]
+    fn events_initial_cursor_returns_latest_retained_activity() {
+        let log: VecDeque<_> = (1..=5).map(test_event).collect();
+        let selected = select_committed_events(&log, Some(0), 2);
+        let heights: Vec<_> = selected.iter().map(|event| event.height).collect();
+        assert_eq!(
+            heights,
+            vec![4, 5],
+            "first-time pollers must see recent activity, not the oldest retained events"
+        );
+    }
+
+    #[test]
+    fn events_nonzero_cursor_is_exclusive_and_chronological() {
+        let log: VecDeque<_> = (1..=5).map(test_event).collect();
+        let selected = select_committed_events(&log, Some(2), 2);
+        let heights: Vec<_> = selected.iter().map(|event| event.height).collect();
+        assert_eq!(
+            heights,
+            vec![3, 4],
+            "catch-up cursors must return the earliest unseen events so clients do not skip"
+        );
+    }
+
+    #[test]
+    fn receipt_infos_expose_chain_position_and_head() {
+        let mut chain = Vec::new();
+        for idx in 0..3 {
+            let previous_receipt_hash = chain
+                .last()
+                .map(|receipt: &dregg_turn::TurnReceipt| receipt.receipt_hash());
+            chain.push(dregg_turn::TurnReceipt {
+                turn_hash: [idx as u8; 32],
+                agent: CellId([0xA0 + idx as u8; 32]),
+                previous_receipt_hash,
+                ..Default::default()
+            });
+        }
+
+        let infos = receipt_infos_from_chain(&chain, 50);
+        assert_eq!(infos.len(), 3);
+        assert_eq!(infos[0].chain_index, 2);
+        assert!(infos[0].chain_head);
+        assert_eq!(infos[1].chain_index, 1);
+        assert!(!infos[1].chain_head);
+        assert_eq!(infos[2].chain_index, 0);
+        assert!(!infos[2].chain_head);
+    }
+
+    #[test]
+    fn submit_handlers_seed_executor_with_committed_receipt_head() {
+        let executor = dregg_turn::TurnExecutor::new(ComputronCosts::default());
+        let agent = CellId([0x42; 32]);
+        let head = [0xAB; 32];
+
+        assert_eq!(executor.get_last_receipt_hash(&agent), None);
+        seed_executor_receipt_head(&executor, agent, Some(head));
+        assert_eq!(
+            executor.get_last_receipt_hash(&agent),
+            Some(head),
+            "fresh per-request executors must inherit the node's committed receipt head"
+        );
+    }
+
+    #[test]
+    fn faucet_activity_hash_is_hex_tx_sized() {
+        let tx = compute_faucet_activity_hash(&dregg_cell::CellId([0xC0; 32]), 0);
+        assert_eq!(tx.len(), 64);
+        assert!(tx.chars().all(|ch| ch.is_ascii_hexdigit()));
     }
 
     #[test]

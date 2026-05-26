@@ -26,7 +26,8 @@
 use serde::{Deserialize, Serialize};
 
 use dregg_federation::CrossFedReceiptBundle;
-use dregg_types::PublicKey;
+use dregg_federation::receipt::FederationReceipt;
+use dregg_types::{AttestedRoot, PublicKey};
 
 use crate::{AUTO_DETECT_VK_HASH, ReplayChainOutput, exit_code, verify_effect_vm_proof};
 
@@ -190,6 +191,21 @@ pub fn verify_cross_fed_bundle(
         Err(e) => return CrossFedVerdict::rejection(format!("recipient fed_id: {e}")),
     };
 
+    if bundle.recipient_chain.is_empty() {
+        return CrossFedVerdict::rejection("recipient_chain is empty");
+    }
+
+    if let Err(reason) =
+        verify_committee_descriptor_id("issuer committee", issuer_committee, &issuer_keys)
+    {
+        return CrossFedVerdict::rejection(reason);
+    }
+    if let Err(reason) =
+        verify_committee_descriptor_id("recipient committee", recipient_committee, &recipient_keys)
+    {
+        return CrossFedVerdict::rejection(reason);
+    }
+
     let mut verdict = CrossFedVerdict {
         cert_introducer_sig_verified: false,
         effect_vm_proof_verified: false,
@@ -204,6 +220,28 @@ pub fn verify_cross_fed_bundle(
         replay_detail: None,
         overall_verified: false,
     };
+
+    if let Err(reason) = verify_attested_root_against_descriptor(
+        "F1 AttestedRoot",
+        &bundle.issuer_attested_root,
+        issuer_committee,
+        &issuer_keys,
+        issuer_fed_id,
+    ) {
+        verdict.summary = reason;
+        return verdict;
+    }
+
+    if let Err(reason) = verify_attested_root_against_descriptor(
+        "F2 AttestedRoot",
+        &bundle.recipient_attested_root,
+        recipient_committee,
+        &recipient_keys,
+        recipient_fed_id,
+    ) {
+        verdict.summary = reason;
+        return verdict;
+    }
 
     // (1) Cert introducer signature.
     // The cert's `introducer` field MUST equal the issuer's federation_id,
@@ -226,6 +264,15 @@ pub fn verify_cross_fed_bundle(
     if !verdict.cert_introducer_sig_verified {
         verdict.summary = "cert introducer signature did not verify under any issuer pubkey".into();
         return verdict;
+    }
+
+    for (i, wr) in bundle.recipient_chain.iter().enumerate() {
+        if wr.witness_bundle.is_none() {
+            verdict.summary = format!(
+                "recipient_chain[{i}] has no witness_bundle; cross-fed verification requires scope-2 replay material"
+            );
+            return verdict;
+        }
     }
 
     // (2) STARK proof verifies for every receipt.
@@ -264,16 +311,22 @@ pub fn verify_cross_fed_bundle(
     verdict.replay_detail = Some(replay);
 
     // (4) F1 AttestedRoot.
-    verdict.attested_root_f1_verified = bundle.issuer_attested_root.is_valid(&issuer_keys);
-    if !verdict.attested_root_f1_verified {
-        verdict.summary = "F1 AttestedRoot did not verify under issuer committee".into();
-        return verdict;
-    }
+    verdict.attested_root_f1_verified = true;
 
     // (5) F2 AttestedRoot.
-    verdict.attested_root_f2_verified = bundle.recipient_attested_root.is_valid(&recipient_keys);
-    if !verdict.attested_root_f2_verified {
-        verdict.summary = "F2 AttestedRoot did not verify under recipient committee".into();
+    verdict.attested_root_f2_verified = true;
+
+    let receipt_hashes: Vec<[u8; 32]> = bundle
+        .recipient_chain
+        .iter()
+        .map(|wr| wr.receipt.receipt_hash())
+        .collect();
+    if !bundle
+        .recipient_attested_root
+        .verify_receipt_stream(&receipt_hashes)
+    {
+        verdict.summary =
+            "F2 AttestedRoot receipt_stream_root does not match recipient_chain receipts".into();
         return verdict;
     }
 
@@ -281,19 +334,22 @@ pub fn verify_cross_fed_bundle(
     verdict.attested_root_f2_blocklace_bound =
         bundle.recipient_attested_root.blocklace_block_id.is_some()
             && bundle.recipient_attested_root.finality_round.is_some();
-    // Note: not required for `overall_verified` to be true in the v1
-    // demo (a single-node devnet's AttestedRoot may carry None when the
-    // blocklace lift seam isn't fully wired). The flag is reported so
-    // demo asserts can observe progress.
+    if !verdict.attested_root_f2_blocklace_bound {
+        verdict.summary = "F2 AttestedRoot lacks blocklace_block_id/finality_round binding".into();
+        return verdict;
+    }
+
+    let tail = bundle
+        .recipient_chain
+        .last()
+        .expect("recipient_chain emptiness checked above");
 
     // (6) FederationReceipt over F2's body, if present.
     if let Some(ref fr) = bundle.recipient_federation_receipt {
-        // We can do the Votes path without the BLS committee. For the
-        // Threshold path the verifier would need a `FederationCommittee`
-        // (BLS), which we don't carry in the demo descriptor. The demo
-        // emits Votes-flavored receipts (single-node, n=1) so we exercise
-        // the Ed25519 path here; threshold-flavored receipts get a
-        // structural-only pass.
+        // We can do the Votes path without the BLS committee. The Threshold
+        // path requires a `FederationCommittee` (BLS), which this standalone
+        // descriptor does not carry, so `FederationReceipt::verify` rejects it
+        // instead of treating opaque bytes as a cryptographic proof.
         verdict.federation_receipt_f2_verified = fr.verify(
             None,
             &recipient_keys,
@@ -303,6 +359,11 @@ pub fn verify_cross_fed_bundle(
         if !verdict.federation_receipt_f2_verified {
             verdict.summary =
                 "F2 FederationReceipt did not verify under recipient committee".into();
+            return verdict;
+        }
+        if let Err(reason) = federation_receipt_matches_tail(fr, &tail.receipt) {
+            verdict.summary = reason;
+            verdict.federation_receipt_f2_verified = false;
             return verdict;
         }
     }
@@ -317,10 +378,6 @@ pub fn verify_cross_fed_bundle(
         return verdict;
     }
     // The tail receipt's federation_id must equal F2.
-    let Some(tail) = bundle.recipient_chain.last() else {
-        verdict.summary = "recipient_chain is empty".into();
-        return verdict;
-    };
     if tail.receipt.federation_id != recipient_fed_id {
         verdict.summary = format!(
             "tail receipt.federation_id ({}) != recipient.federation_id ({})",
@@ -330,7 +387,7 @@ pub fn verify_cross_fed_bundle(
         return verdict;
     }
     verdict.cross_link_cert_to_receipt = true;
-    verdict.executor_signature_includes_federation_id = true;
+    verdict.executor_signature_includes_federation_id = tail.receipt.executor_signature.is_some();
 
     verdict.overall_verified = verdict.cert_introducer_sig_verified
         && verdict.effect_vm_proof_verified
@@ -338,13 +395,132 @@ pub fn verify_cross_fed_bundle(
         && verdict.attested_root_f1_verified
         && verdict.attested_root_f2_verified
         && verdict.federation_receipt_f2_verified
-        && verdict.cross_link_cert_to_receipt;
+        && verdict.cross_link_cert_to_receipt
+        && verdict.attested_root_f2_blocklace_bound;
     verdict.summary = if verdict.overall_verified {
         "cross-fed bundle verified end-to-end".into()
     } else {
         "cross-fed bundle: at least one check failed".into()
     };
     verdict
+}
+
+fn verify_committee_descriptor_id(
+    role: &str,
+    descriptor: &CommitteeDescriptor,
+    keys: &[PublicKey],
+) -> Result<(), String> {
+    let declared = descriptor.federation_id_bytes()?;
+    let derived =
+        dregg_federation::derive_federation_id_with_epoch(keys, descriptor.committee_epoch);
+    if declared != derived {
+        return Err(format!(
+            "{role}: federation_id ({}) does not derive from validator keys at epoch {} ({})",
+            hex::encode(declared),
+            descriptor.committee_epoch,
+            hex::encode(derived)
+        ));
+    }
+    Ok(())
+}
+
+fn verify_attested_root_against_descriptor(
+    role: &str,
+    root: &AttestedRoot,
+    descriptor: &CommitteeDescriptor,
+    keys: &[PublicKey],
+    expected_federation_id: [u8; 32],
+) -> Result<(), String> {
+    if keys.is_empty() {
+        return Err(format!("{role}: committee has no validators"));
+    }
+    if descriptor.threshold == 0 {
+        return Err(format!("{role}: committee threshold must be non-zero"));
+    }
+    if descriptor.threshold > keys.len() {
+        return Err(format!(
+            "{role}: committee threshold {} exceeds validator count {}",
+            descriptor.threshold,
+            keys.len()
+        ));
+    }
+    if root.threshold != descriptor.threshold {
+        return Err(format!(
+            "{role}: root threshold {} != descriptor threshold {}",
+            root.threshold, descriptor.threshold
+        ));
+    }
+    if root.federation_id.0 != expected_federation_id {
+        return Err(format!(
+            "{role}: root.federation_id ({}) != descriptor.federation_id ({})",
+            hex::encode(root.federation_id.0),
+            hex::encode(expected_federation_id)
+        ));
+    }
+    if root.threshold_qc.is_some() && root.quorum_signatures.is_empty() {
+        return Err(format!(
+            "{role}: threshold_qc is present but this verifier was not given a BLS committee; Ed25519 quorum_signatures are required"
+        ));
+    }
+    if !verify_attested_root_ed25519(root, keys) {
+        return Err(format!(
+            "{role}: Ed25519 quorum signatures did not verify under descriptor committee"
+        ));
+    }
+    Ok(())
+}
+
+fn verify_attested_root_ed25519(root: &AttestedRoot, known_keys: &[PublicKey]) -> bool {
+    if root.threshold == 0 || root.threshold > known_keys.len() {
+        return false;
+    }
+    if root.quorum_signatures.len() < root.threshold {
+        return false;
+    }
+
+    let message = root.signing_message();
+    let mut seen = std::collections::HashSet::new();
+    let mut valid = 0usize;
+    for (pubkey, signature) in &root.quorum_signatures {
+        if !known_keys.contains(pubkey) {
+            return false;
+        }
+        if !pubkey.verify(&message, signature) {
+            return false;
+        }
+        if seen.insert(pubkey.0) {
+            valid += 1;
+        }
+    }
+    valid >= root.threshold
+}
+
+fn federation_receipt_matches_tail(
+    receipt: &FederationReceipt,
+    tail: &dregg_turn::TurnReceipt,
+) -> Result<(), String> {
+    let body = &receipt.body;
+    if body.turn_hash != tail.turn_hash {
+        return Err("F2 FederationReceipt body.turn_hash does not match tail receipt".into());
+    }
+    if body.agent != tail.agent {
+        return Err("F2 FederationReceipt body.agent does not match tail receipt".into());
+    }
+    if body.pre_state_hash != tail.pre_state_hash {
+        return Err("F2 FederationReceipt body.pre_state_hash does not match tail receipt".into());
+    }
+    if body.post_state_hash != tail.post_state_hash {
+        return Err("F2 FederationReceipt body.post_state_hash does not match tail receipt".into());
+    }
+    if body.effects_hash != tail.effects_hash {
+        return Err("F2 FederationReceipt body.effects_hash does not match tail receipt".into());
+    }
+    if body.previous_receipt_hash != tail.previous_receipt_hash {
+        return Err(
+            "F2 FederationReceipt body.previous_receipt_hash does not match tail receipt".into(),
+        );
+    }
+    Ok(())
 }
 
 /// Translate a `dregg_turn::WitnessedReceipt` into a `ReplayEntry` for
@@ -409,6 +585,17 @@ mod tests {
     }
 
     #[test]
+    fn committee_descriptor_federation_id_must_derive_from_keys() {
+        let desc = sample_committee([0xAA; 32]);
+        let keys = desc.pubkeys().unwrap();
+
+        let err = verify_committee_descriptor_id("committee", &desc, &keys)
+            .expect_err("descriptor must not claim an arbitrary federation_id");
+
+        assert!(err.contains("does not derive"), "{err}");
+    }
+
+    #[test]
     fn version_mismatch_rejected() {
         // Manually craft a bundle with version 0 to ensure the check fires.
         let mut b = sample_bundle();
@@ -417,6 +604,97 @@ mod tests {
         let v = verify_cross_fed_bundle(&b, &desc, &desc);
         assert!(!v.overall_verified);
         assert!(v.summary.contains("version"));
+    }
+
+    #[test]
+    fn empty_recipient_chain_rejected_before_claiming_scope2() {
+        let mut b = sample_bundle();
+        b.recipient_chain.clear();
+        let desc = sample_committee([0xAA; 32]);
+
+        let v = verify_cross_fed_bundle(&b, &desc, &desc);
+
+        assert!(!v.overall_verified);
+        assert!(v.summary.contains("recipient_chain is empty"));
+        assert!(!v.witness_chain_replay_verified);
+    }
+
+    #[test]
+    fn attested_root_descriptor_rejects_zero_threshold() {
+        let mut desc = sample_committee([0xAA; 32]);
+        desc.threshold = 0;
+        let keys = desc.pubkeys().unwrap();
+        let mut root = AttestedRoot::new_legacy([1; 32], 1, 1_700_000_000, vec![], None, 0);
+        root.federation_id = dregg_types::FederationId([0xAA; 32]);
+
+        let err = verify_attested_root_against_descriptor("root", &root, &desc, &keys, [0xAA; 32])
+            .expect_err("zero-threshold committee must not verify");
+
+        assert!(err.contains("threshold must be non-zero"), "{err}");
+    }
+
+    #[test]
+    fn attested_root_descriptor_rejects_federation_id_mismatch() {
+        let desc = sample_committee([0xAA; 32]);
+        let keys = desc.pubkeys().unwrap();
+        let mut root = AttestedRoot::new_legacy([1; 32], 1, 1_700_000_000, vec![], None, 1);
+        root.federation_id = dregg_types::FederationId([0xBB; 32]);
+
+        let err = verify_attested_root_against_descriptor("root", &root, &desc, &keys, [0xAA; 32])
+            .expect_err("root signed for another federation must not verify");
+
+        assert!(err.contains("root.federation_id"), "{err}");
+    }
+
+    #[test]
+    fn attested_root_descriptor_rejects_structural_threshold_qc_without_ed25519_quorum() {
+        let desc = sample_committee([0xAA; 32]);
+        let keys = desc.pubkeys().unwrap();
+        let mut root = AttestedRoot::new_legacy(
+            [1; 32],
+            1,
+            1_700_000_000,
+            vec![],
+            Some(dregg_types::ThresholdQC(vec![0xAB; 48])),
+            1,
+        );
+        root.federation_id = dregg_types::FederationId([0xAA; 32]);
+
+        let err = verify_attested_root_against_descriptor("root", &root, &desc, &keys, [0xAA; 32])
+            .expect_err("opaque threshold QC alone must not be accepted as crypto proof");
+
+        assert!(err.contains("BLS committee"), "{err}");
+    }
+
+    #[test]
+    fn federation_receipt_body_must_match_tail_receipt() {
+        use dregg_federation::receipt::{FederationReceipt, FederationReceiptBody, ReceiptQc};
+        use dregg_types::{PublicKey, Signature};
+
+        let tail = sample_turn_receipt();
+        let body = FederationReceiptBody {
+            turn_hash: tail.turn_hash,
+            block_height: 7,
+            block_hash: [0x44; 32],
+            agent: tail.agent,
+            nonce: 0,
+            pre_state_hash: tail.pre_state_hash,
+            post_state_hash: tail.post_state_hash,
+            effects_hash: [0xEE; 32],
+            previous_receipt_hash: tail.previous_receipt_hash,
+        };
+        let fr = FederationReceipt {
+            version: FederationReceipt::VERSION,
+            federation_id: tail.federation_id,
+            committee_epoch: 0,
+            body,
+            qc: ReceiptQc::Votes(vec![(PublicKey([0u8; 32]), Signature([0u8; 64]))]),
+        };
+
+        let err = federation_receipt_matches_tail(&fr, &tail)
+            .expect_err("mismatched effects_hash must not certify tail receipt");
+
+        assert!(err.contains("effects_hash"), "{err}");
     }
 
     // -- Test helpers --
@@ -432,28 +710,10 @@ mod tests {
         }
     }
 
-    fn sample_bundle() -> CrossFedReceiptBundle {
-        use dregg_captp::FederationId;
-        use dregg_cell::AuthRequired;
-        use dregg_turn::WitnessedReceipt;
-        use dregg_turn::turn::TurnReceipt;
-        use dregg_types::{AttestedRoot, CellId, generate_keypair};
+    fn sample_turn_receipt() -> dregg_turn::turn::TurnReceipt {
+        use dregg_types::CellId;
 
-        let (sk, _pk) = generate_keypair();
-        let cert = dregg_captp::handoff::HandoffCertificate::create(
-            &sk,
-            FederationId([0xAA; 32]),
-            FederationId([0xBB; 32]),
-            CellId([0xCC; 32]),
-            [0xDD; 32],
-            AuthRequired::Signature,
-            None,
-            None,
-            None,
-            [0xEE; 32],
-        );
-
-        let receipt = TurnReceipt {
+        dregg_turn::turn::TurnReceipt {
             turn_hash: [1u8; 32],
             forest_hash: [2u8; 32],
             pre_state_hash: [3u8; 32],
@@ -473,7 +733,30 @@ mod tests {
             finality: Default::default(),
             was_encrypted: false,
             was_burn: false,
-        };
+        }
+    }
+
+    fn sample_bundle() -> CrossFedReceiptBundle {
+        use dregg_captp::FederationId;
+        use dregg_cell::AuthRequired;
+        use dregg_turn::WitnessedReceipt;
+        use dregg_types::{AttestedRoot, CellId, generate_keypair};
+
+        let (sk, _pk) = generate_keypair();
+        let cert = dregg_captp::handoff::HandoffCertificate::create(
+            &sk,
+            FederationId([0xAA; 32]),
+            FederationId([0xBB; 32]),
+            CellId([0xCC; 32]),
+            [0xDD; 32],
+            AuthRequired::Signature,
+            None,
+            None,
+            None,
+            [0xEE; 32],
+        );
+
+        let receipt = sample_turn_receipt();
         let wr = WitnessedReceipt::from_components(receipt, vec![0u8; 8], vec![1, 2, 3], None);
         CrossFedReceiptBundle::new(
             vec![wr],

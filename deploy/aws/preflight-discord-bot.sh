@@ -31,11 +31,19 @@ if ! jq -e '.healthy == true' >/dev/null <<<"$status"; then
   echo "node is reachable but not healthy: $status" >&2
   exit 1
 fi
+if ! jq -e '(.public_key | type == "string" and length == 64)' >/dev/null <<<"$status"; then
+  echo "node status is missing a 32-byte public_key: $status" >&2
+  exit 1
+fi
 
 echo "checking node explorer receipts surface..."
 receipts="$(curl -fsS "$NODE_URL/api/receipts")"
 if ! jq -e 'type == "array"' >/dev/null <<<"$receipts"; then
   echo "node /api/receipts did not return a JSON array: $receipts" >&2
+  exit 1
+fi
+if ! jq -e 'all(.[]; (.receipt_hash | type == "string" and length == 64) and (.turn_hash | type == "string" and length == 64) and (.chain_index | type == "number") and (.chain_head | type == "boolean"))' >/dev/null <<<"$receipts"; then
+  echo "node /api/receipts returned entries without chain/hash fields: $receipts" >&2
   exit 1
 fi
 
@@ -45,12 +53,21 @@ if ! jq -e 'type == "array"' >/dev/null <<<"$events"; then
   echo "node /api/events did not return a JSON array: $events" >&2
   exit 1
 fi
+if ! jq -e 'all(.[]; (.height | type == "number") and (.turn_hash | type == "string") and (.cell_id | type == "string") and (.effects | type == "array") and (.timestamp | type == "number"))' >/dev/null <<<"$events"; then
+  echo "node /api/events returned entries without committed-event fields: $events" >&2
+  exit 1
+fi
 
 echo "checking node auth/unlock..."
 if [[ -n "$DEVNET_API_TOKEN" ]]; then
   cipherclerk="$(curl -fsS -H "Authorization: Bearer $DEVNET_API_TOKEN" "$NODE_URL/cipherclerk")"
   if ! jq -e '.unlocked == true' >/dev/null <<<"$cipherclerk"; then
     echo "node cipherclerk is not unlocked: $cipherclerk" >&2
+    exit 1
+  fi
+  encryption_key="$(curl -fsS -H "Authorization: Bearer $DEVNET_API_TOKEN" "$NODE_URL/api/turns/encryption-key")"
+  if ! jq -e '(.executor_x25519_public | type == "string" and length == 64) and (.derivation_domain == "dregg-turn-unsealer-v1")' >/dev/null <<<"$encryption_key"; then
+    echo "node encrypted-turn key discovery is not wired: $encryption_key" >&2
     exit 1
   fi
 else
