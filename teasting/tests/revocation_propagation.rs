@@ -95,7 +95,6 @@ fn test_revocation_persists_across_rounds() {
 /// Revocation after node crash and recovery: recovered node should know about revocations
 /// that happened while it was down.
 #[test]
-#[ignore = "TODO: implement state sync for recovered nodes"]
 fn test_revocation_after_recovery() {
     let mut harness = quick_federation();
 
@@ -108,23 +107,22 @@ fn test_revocation_after_recovery() {
         .submit_revocation(0, "revoked-while-down");
     drive_to_finalization(&mut harness, 0, 5).unwrap();
 
-    // Recover node 3.
+    // Recover node 3.  recover_node() replays the federation-wide all_revoked
+    // set into the rejoining node, so it immediately learns about revocations
+    // that happened while it was offline — no additional consensus round needed
+    // for the missed entries.
     harness.federation_mut(0).recover_node(3);
 
-    // TODO: After recovery, node 3 should sync and learn about the revocation.
-    // This requires a state sync protocol that replays missed blocks.
-    // Currently the simplified federation may not support this.
-
-    // Run another round to trigger sync.
+    // Run another round to trigger sync for post-recovery revocations.
     harness
         .federation_mut(0)
         .submit_revocation(1, "trigger-sync");
     drive_to_finalization(&mut harness, 0, 5).unwrap();
 
     // Node 3 should now know about both revocations.
-    // let fed = harness.federation(0);
-    // assert!(fed.is_revoked(3, "revoked-while-down"));
-    // assert!(fed.is_revoked(3, "trigger-sync"));
+    let fed = harness.federation(0);
+    assert!(fed.is_revoked(3, "revoked-while-down"), "node 3 must know about revocation missed while offline");
+    assert!(fed.is_revoked(3, "trigger-sync"), "node 3 must know about post-recovery revocation");
 }
 
 /// Double-revocation: revoking an already-revoked token is idempotent.
