@@ -16,11 +16,15 @@
 //!   - permissions-bit tamper on `Introduce` → AIR reject;
 //!   - federation-id binding across cross-federation `Introduce` (§1.3 tail).
 //!
-//! Most are `#[ignore]`d on γ.2 wiring — the PI fields exist on the design
-//! doc but Phase 1 lands the off-AIR verifier independently from any
-//! Phase 2 joint-aggregation AIR.
+//! AIR-side γ.2 tests remain `#[ignore]`d until trace-to-PI binding lands.
+//! Phase 1 off-AIR verifier tests below use fabricated WR public inputs to
+//! demonstrate the verifier schedule checks without paying proving cost.
 
-use dregg_cell::CellId;
+use dregg_cell::{AuthRequired, CapabilityRef, CellId};
+use dregg_turn::{ActionBuilder, Turn, TurnBuilder, TurnReceipt};
+use dregg_verifier::{
+    BilateralBundle, BilateralEntry, fabricate_witnessed_receipt, verify_bilateral_bundle,
+};
 
 // ---------------------------------------------------------------------------
 // Canonical id derivations (testable today: pure-public-data functions)
@@ -68,6 +72,92 @@ fn intro_id_preimage(
     v.extend_from_slice(&permissions_bits.to_be_bytes());
     v.extend_from_slice(&introducer_nonce.to_be_bytes());
     v
+}
+
+fn dummy_receipt(agent: CellId) -> TurnReceipt {
+    TurnReceipt {
+        turn_hash: [0u8; 32],
+        forest_hash: [0u8; 32],
+        pre_state_hash: [0u8; 32],
+        post_state_hash: [0u8; 32],
+        timestamp: 0,
+        effects_hash: [0u8; 32],
+        computrons_used: 0,
+        action_count: 0,
+        previous_receipt_hash: None,
+        agent,
+        federation_id: [0u8; 32],
+        routing_directives: vec![],
+        introduction_exports: vec![],
+        derivation_records: vec![],
+        emitted_events: vec![],
+        executor_signature: None,
+        finality: Default::default(),
+        was_encrypted: false,
+        was_burn: false,
+    }
+}
+
+fn make_transfer_turn(alice: CellId, bob: CellId, amount: u64, nonce: u64) -> Turn {
+    let mut builder = TurnBuilder::new(alice, nonce);
+    let action = ActionBuilder::new_unchecked_for_tests(alice, "transfer", alice)
+        .effect_transfer(alice, bob, amount)
+        .build();
+    builder.add_action(action);
+    builder.fee(0).build()
+}
+
+fn make_grant_turn(alice: CellId, bob: CellId, target: CellId, nonce: u64) -> Turn {
+    let mut builder = TurnBuilder::new(alice, nonce);
+    let action = ActionBuilder::new_unchecked_for_tests(alice, "grant", alice)
+        .effect_grant_capability(
+            alice,
+            bob,
+            CapabilityRef {
+                target,
+                slot: 0,
+                permissions: AuthRequired::Signature,
+                expires_at: None,
+                breadstuff: None,
+                allowed_effects: None,
+            },
+        )
+        .build();
+    builder.add_action(action);
+    builder.fee(0).build()
+}
+
+fn make_intro_turn(
+    introducer: CellId,
+    recipient: CellId,
+    target: CellId,
+    permissions: AuthRequired,
+    nonce: u64,
+) -> Turn {
+    let mut builder = TurnBuilder::new(introducer, nonce);
+    let action = ActionBuilder::new_unchecked_for_tests(introducer, "introduce", introducer)
+        .effect_introduce(introducer, recipient, target, permissions)
+        .build();
+    builder.add_action(action);
+    builder.fee(0).build()
+}
+
+fn fabricated_bundle(turn: &Turn, cells: &[CellId]) -> BilateralBundle {
+    BilateralBundle {
+        turn: turn.clone(),
+        entries: cells
+            .iter()
+            .map(|cell_id| BilateralEntry {
+                cell_id: *cell_id,
+                witnessed_receipt: fabricate_witnessed_receipt(
+                    turn,
+                    cell_id,
+                    dummy_receipt(turn.agent),
+                ),
+            })
+            .collect(),
+        unilateral_attestations: std::collections::BTreeMap::new(),
+    }
 }
 
 // ===========================================================================
@@ -151,25 +241,35 @@ fn intro_id_preimage_changes_with_permissions_bits() {
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on γ.2 Phase 1 PI extension: per-cell proof exposes transfer_id at canonical PI offset, off-AIR verifier joins sender + receiver"]
 fn bilateral_transfer_happy_path_two_cells_verify_matched_transfer_id() {
-    // 1. Build A=sender + B=receiver cells.
-    // 2. Submit Transfer(A→B, 10) turn at A's nonce=7.
-    // 3. Produce per-cell proofs for A and B (executor's per-cell projection).
-    // 4. Run the off-AIR γ.2 verifier; it must:
-    //      - compute transfer_id = Poseidon2(transfer_id_preimage(A, B, 10, 7))
-    //      - assert PI[TRANSFER_ID_BASE..+4] on A's proof equals it
-    //      - assert PI[TRANSFER_ID_BASE..+4] on B's proof equals it
-    //      - assert A's direction-bit = 1 (outflow), B's = 0 (inflow).
-    panic!("blocked");
+    let alice = CellId([0xA1; 32]);
+    let bob = CellId([0xB2; 32]);
+    let turn = make_transfer_turn(alice, bob, 10, 7);
+    let bundle = fabricated_bundle(&turn, &[alice, bob]);
+
+    let verdict = verify_bilateral_bundle(&bundle);
+    assert!(verdict.verified, "honest transfer bundle: {verdict:?}");
+    assert_eq!(verdict.transfer_count, 1);
+    assert_eq!(verdict.entry_count, 2);
 }
 
 #[test]
-#[ignore = "blocked on γ.2 Phase 1: sender outgoing disagrees with receiver incoming → off-AIR verifier rejects"]
 fn sender_outflow_vs_receiver_inflow_mismatch_rejects() {
-    // E.g., A's projection says amount=10, B's says amount=11 → off-AIR
-    // verifier sees mismatched transfer_id and rejects.
-    panic!("blocked");
+    use dregg_circuit::effect_vm::pi;
+
+    let alice = CellId([0xA1; 32]);
+    let bob = CellId([0xB2; 32]);
+    let turn = make_transfer_turn(alice, bob, 10, 7);
+    let mut bundle = fabricated_bundle(&turn, &[alice, bob]);
+    bundle.entries[1].witnessed_receipt.public_inputs[pi::INCOMING_TRANSFER_ROOT_BASE] ^= 1;
+
+    let verdict = verify_bilateral_bundle(&bundle);
+    assert!(!verdict.verified, "receiver mismatch must reject");
+    assert!(
+        verdict.reason.contains("incoming_transfer") || verdict.reason.contains("root"),
+        "expected transfer root mismatch, got: {}",
+        verdict.reason
+    );
 }
 
 #[test]
@@ -182,31 +282,60 @@ fn tampered_transfer_id_in_pi_rejected_by_air() {
 }
 
 #[test]
-#[ignore = "blocked on γ.2 Phase 1: GrantCapability bilateral binding"]
 fn bilateral_grant_happy_path_two_cells() {
-    // grantor + grantee proofs must both expose grant_id; off-AIR verifier
-    // joins.
-    panic!("blocked");
+    let alice = CellId([0xA1; 32]);
+    let bob = CellId([0xB2; 32]);
+    let target = CellId([0xC3; 32]);
+    let turn = make_grant_turn(alice, bob, target, 7);
+    let bundle = fabricated_bundle(&turn, &[alice, bob]);
+
+    let verdict = verify_bilateral_bundle(&bundle);
+    assert!(verdict.verified, "honest grant bundle: {verdict:?}");
+    assert_eq!(verdict.grant_count, 1);
 }
 
 #[test]
-#[ignore = "blocked on γ.2 Phase 1: GrantCapability tampered cap_entry"]
 fn bilateral_grant_tampered_cap_entry_rejects() {
-    panic!("blocked");
+    use dregg_circuit::effect_vm::pi;
+
+    let alice = CellId([0xA1; 32]);
+    let bob = CellId([0xB2; 32]);
+    let target = CellId([0xC3; 32]);
+    let turn = make_grant_turn(alice, bob, target, 7);
+    let mut bundle = fabricated_bundle(&turn, &[alice, bob]);
+    bundle.entries[1].witnessed_receipt.public_inputs[pi::INCOMING_GRANT_ROOT_BASE] ^= 1;
+
+    let verdict = verify_bilateral_bundle(&bundle);
+    assert!(!verdict.verified, "grant-root tamper must reject");
 }
 
 #[test]
-#[ignore = "blocked on γ.2 Phase 1: Introduce trilateral binding"]
 fn trilateral_introduce_happy_path_three_cells() {
-    // introducer + recipient + target all expose intro_id; off-AIR verifier
-    // joins the three proofs on intro_id agreement.
-    panic!("blocked");
+    let alice = CellId([0xA1; 32]);
+    let bob = CellId([0xB2; 32]);
+    let carol = CellId([0xC3; 32]);
+    let turn = make_intro_turn(alice, bob, carol, AuthRequired::Signature, 7);
+    let bundle = fabricated_bundle(&turn, &[alice, bob, carol]);
+
+    let verdict = verify_bilateral_bundle(&bundle);
+    assert!(verdict.verified, "honest introduce bundle: {verdict:?}");
+    assert_eq!(verdict.introduce_count, 1);
+    assert_eq!(verdict.entry_count, 3);
 }
 
 #[test]
-#[ignore = "blocked on γ.2 Phase 1: Introduce permissions_bits tamper"]
 fn trilateral_introduce_permissions_bit_tamper_rejects() {
-    panic!("blocked");
+    use dregg_circuit::effect_vm::pi;
+
+    let alice = CellId([0xA1; 32]);
+    let bob = CellId([0xB2; 32]);
+    let carol = CellId([0xC3; 32]);
+    let turn = make_intro_turn(alice, bob, carol, AuthRequired::Signature, 7);
+    let mut bundle = fabricated_bundle(&turn, &[alice, bob, carol]);
+    bundle.entries[1].witnessed_receipt.public_inputs[pi::INTRO_AS_RECIPIENT_ROOT_BASE] ^= 1;
+
+    let verdict = verify_bilateral_bundle(&bundle);
+    assert!(!verdict.verified, "permissions/root tamper must reject");
 }
 
 #[test]

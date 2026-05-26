@@ -13,24 +13,24 @@
 //! a slot_index, swapping a param — surfaces as a verifier-side
 //! rejection without touching the underlying STARK. AIR-row binding
 //! (pinning state_before/state_after columns to the manifest entries
-//! algebraically) lands in a follow-up commit and is documented as
-//! `#[ignore]`'d here.
+//! algebraically) lands in a follow-up commit; the remaining ignored
+//! sketches below are the variants that still need membership gadgets.
 //!
 //! STARBRIDGE-FOLLOWUP-03 (2026-05-25): PI-layer (SLOT_CAVEAT_MANIFEST +
 //! verify_*) for first-wave variants landed (per §5.3). Full teeth +
 //! SenderAuthorized etc (needs swiss gadget + big-int) + row binding
 //! BLOCKED ON HUMAN (circuit/ + cell/program + heavy cargo). Precise
 //! cross-refs: SILVER-DEBT T2.11 + CAVEAT-LAYER-COVERAGE; cell/src/program.rs
-//! BoundDeltaNotWired etc. No changes to teeth logic this session.
+//! BoundDeltaNotWired etc.
 //!
-//! Coverage: one positive + one tamper test per first-wave variant.
-//! First-wave variants are the ones whose enforcement fits the AIR's
+//! Coverage: one positive + one tamper test per verifier-enforced scalar
+//! variant. First-wave variants are the ones whose enforcement fits the AIR's
 //! existing 4-byte field-element truncation: `Immutable`, `WriteOnce`,
 //! `FieldDelta`, `MonotonicSequence`, `FieldEquals`, `TemporalGate`.
-//! Variants needing 32-byte big-endian compare (`Monotonic`,
-//! `StrictMonotonic`, `FieldGte`, `FieldLte`) or Merkle/set-membership
-//! gadgets (`SenderAuthorized`, `AllowedTransitions`) declare
-//! `#[ignore]`'d sketches until the AIR state expands.
+//! Scalar ordering variants (`Monotonic`, `StrictMonotonic`, `FieldGte`,
+//! `FieldLte`) are enforced over the verifier-visible 4-byte BabyBear slot
+//! view. Merkle/set-membership gadgets (`SenderAuthorized`,
+//! `AllowedTransitions`) remain `#[ignore]`'d sketches until those AIRs land.
 
 use dregg_circuit::effect_vm::pi;
 use dregg_circuit::effect_vm::{
@@ -376,22 +376,144 @@ fn extract_roundtrips_entries() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Deferred — variants that need 32-byte field-element fidelity, Merkle
-// gadgets, or set-membership AIRs.
+// Scalar ordering variants over the verifier-visible 4-byte slot view.
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
-#[ignore = "Monotonic on 32B big-endian: needs full 32-byte AIR state per slot (Block 3 second wave)"]
 fn monotonic_accepts_non_decrease() {
-    // When the AIR state widens to 4-felt per slot, the verifier can
-    // re-implement the big-endian byte-compare honestly here. Until
-    // then, manifest entries with this tag are accepted at the
-    // PI-shape layer and enforced executor-side only.
+    let entry = SlotCaveatEntry {
+        type_tag: pi::SLOT_CAVEAT_TAG_MONOTONIC,
+        slot_index: 6,
+        params: [BabyBear::ZERO; 4],
+    };
+    let public_inputs = pi_with_manifest(&[entry]);
+    let initial = fields_with(6, 42);
+    let final_ = fields_with(6, 42);
+    let result = verify_slot_caveat_manifest(&public_inputs, &initial, &final_, 0);
+    assert!(result.is_ok(), "non-decrease must pass: {result:?}");
 }
 
 #[test]
-#[ignore = "StrictMonotonic on 32B: same blocker as Monotonic"]
-fn strict_monotonic_rejects_equal() {}
+fn monotonic_rejects_decrease() {
+    let entry = SlotCaveatEntry {
+        type_tag: pi::SLOT_CAVEAT_TAG_MONOTONIC,
+        slot_index: 6,
+        params: [BabyBear::ZERO; 4],
+    };
+    let public_inputs = pi_with_manifest(&[entry]);
+    let initial = fields_with(6, 42);
+    let final_ = fields_with(6, 41);
+    let result = verify_slot_caveat_manifest(&public_inputs, &initial, &final_, 0);
+    assert!(result.is_err(), "decrease must reject");
+}
+
+#[test]
+fn strict_monotonic_accepts_increase() {
+    let entry = SlotCaveatEntry {
+        type_tag: pi::SLOT_CAVEAT_TAG_STRICT_MONOTONIC,
+        slot_index: 6,
+        params: [BabyBear::ZERO; 4],
+    };
+    let public_inputs = pi_with_manifest(&[entry]);
+    let initial = fields_with(6, 42);
+    let final_ = fields_with(6, 43);
+    let result = verify_slot_caveat_manifest(&public_inputs, &initial, &final_, 0);
+    assert!(result.is_ok(), "strict increase must pass: {result:?}");
+}
+
+#[test]
+fn strict_monotonic_rejects_equal() {
+    let entry = SlotCaveatEntry {
+        type_tag: pi::SLOT_CAVEAT_TAG_STRICT_MONOTONIC,
+        slot_index: 6,
+        params: [BabyBear::ZERO; 4],
+    };
+    let public_inputs = pi_with_manifest(&[entry]);
+    let initial = fields_with(6, 42);
+    let final_ = fields_with(6, 42);
+    let result = verify_slot_caveat_manifest(&public_inputs, &initial, &final_, 0);
+    assert!(result.is_err(), "equal value must reject");
+}
+
+#[test]
+fn field_gte_accepts_greater_or_equal() {
+    let entry = SlotCaveatEntry {
+        type_tag: pi::SLOT_CAVEAT_TAG_FIELD_GTE,
+        slot_index: 7,
+        params: [
+            BabyBear::new(100),
+            BabyBear::ZERO,
+            BabyBear::ZERO,
+            BabyBear::ZERO,
+        ],
+    };
+    let public_inputs = pi_with_manifest(&[entry]);
+    let initial = [BabyBear::ZERO; 8];
+    let final_ = fields_with(7, 100);
+    let result = verify_slot_caveat_manifest(&public_inputs, &initial, &final_, 0);
+    assert!(result.is_ok(), "gte equal bound must pass: {result:?}");
+}
+
+#[test]
+fn field_gte_rejects_less() {
+    let entry = SlotCaveatEntry {
+        type_tag: pi::SLOT_CAVEAT_TAG_FIELD_GTE,
+        slot_index: 7,
+        params: [
+            BabyBear::new(100),
+            BabyBear::ZERO,
+            BabyBear::ZERO,
+            BabyBear::ZERO,
+        ],
+    };
+    let public_inputs = pi_with_manifest(&[entry]);
+    let initial = [BabyBear::ZERO; 8];
+    let final_ = fields_with(7, 99);
+    let result = verify_slot_caveat_manifest(&public_inputs, &initial, &final_, 0);
+    assert!(result.is_err(), "value below lower bound must reject");
+}
+
+#[test]
+fn field_lte_accepts_less_or_equal() {
+    let entry = SlotCaveatEntry {
+        type_tag: pi::SLOT_CAVEAT_TAG_FIELD_LTE,
+        slot_index: 7,
+        params: [
+            BabyBear::new(100),
+            BabyBear::ZERO,
+            BabyBear::ZERO,
+            BabyBear::ZERO,
+        ],
+    };
+    let public_inputs = pi_with_manifest(&[entry]);
+    let initial = [BabyBear::ZERO; 8];
+    let final_ = fields_with(7, 100);
+    let result = verify_slot_caveat_manifest(&public_inputs, &initial, &final_, 0);
+    assert!(result.is_ok(), "lte equal bound must pass: {result:?}");
+}
+
+#[test]
+fn field_lte_rejects_greater() {
+    let entry = SlotCaveatEntry {
+        type_tag: pi::SLOT_CAVEAT_TAG_FIELD_LTE,
+        slot_index: 7,
+        params: [
+            BabyBear::new(100),
+            BabyBear::ZERO,
+            BabyBear::ZERO,
+            BabyBear::ZERO,
+        ],
+    };
+    let public_inputs = pi_with_manifest(&[entry]);
+    let initial = [BabyBear::ZERO; 8];
+    let final_ = fields_with(7, 101);
+    let result = verify_slot_caveat_manifest(&public_inputs, &initial, &final_, 0);
+    assert!(result.is_err(), "value above upper bound must reject");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Deferred — variants that need Merkle gadgets or set-membership AIRs.
+// ─────────────────────────────────────────────────────────────────────
 
 #[test]
 #[ignore = "SenderAuthorized PublicRoot: needs Merkle-membership gadget bound to slot[set_root_index]"]
@@ -404,7 +526,3 @@ fn sender_authorized_blinded_accepts_non_revoked() {}
 #[test]
 #[ignore = "AllowedTransitions: needs Merkle-membership of (old,new) tuple in precomputed root"]
 fn allowed_transitions_accepts_listed_pair() {}
-
-#[test]
-#[ignore = "FieldGte/Lte on 32B big-endian: needs full 32-byte AIR state per slot"]
-fn field_gte_accepts_greater_or_equal() {}

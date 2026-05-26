@@ -180,6 +180,89 @@ fn mix_static_contextual_and_transition_constraints() {
 }
 
 // ===========================================================================
+// Rate / window-sum composition
+// ===========================================================================
+
+#[test]
+fn rate_limit_composes_with_temporal_gate_and_monotonic() {
+    // Composes:
+    //   TemporalGate(height in [10, 20])   [contextual]
+    //   RateLimit(max 2 per epoch)         [contextual rate cap]
+    //   Monotonic(slot 0)                  [transition]
+    let p = CellProgram::Predicate(vec![
+        StateConstraint::TemporalGate {
+            not_before: Some(10),
+            not_after: Some(20),
+        },
+        StateConstraint::RateLimit {
+            max_per_epoch: 2,
+            epoch_duration: 16,
+        },
+        StateConstraint::Monotonic { index: 0 },
+    ]);
+    let old = state_with(&[(0, 10)]);
+    let new = state_with(&[(0, 11)]);
+
+    let mut ctx = EvalContext::minimal(15, 0);
+    ctx.sender = Some([7u8; 32]);
+    ctx.sender_epoch_count = 1;
+    assert!(
+        p.evaluate(&new, Some(&old), Some(&ctx)).is_ok(),
+        "inside window, under rate cap, and monotonic"
+    );
+
+    let mut at_cap = ctx.clone();
+    at_cap.sender_epoch_count = 2;
+    assert!(
+        p.evaluate(&new, Some(&old), Some(&at_cap)).is_err(),
+        "rate cap must reject even when temporal and monotonic constraints hold"
+    );
+
+    let decreasing = state_with(&[(0, 9)]);
+    assert!(
+        p.evaluate(&decreasing, Some(&old), Some(&ctx)).is_err(),
+        "monotonic must reject even when temporal and rate constraints hold"
+    );
+}
+
+#[test]
+fn rate_limit_by_sum_composes_with_conservation() {
+    // Composes:
+    //   RateLimitBySum(slot 0 delta <= 25)         [window-sum approximation]
+    //   SumEqualsAcross(input 0, output 1)         [intra-cell conservation]
+    let p = CellProgram::Predicate(vec![
+        StateConstraint::RateLimitBySum {
+            slot_index: 0,
+            max_sum_per_epoch: 25,
+            epoch_duration: 64,
+        },
+        StateConstraint::SumEqualsAcross {
+            input_fields: vec![0],
+            output_fields: vec![1],
+        },
+    ]);
+    let old = state_with(&[(0, 100), (1, 0)]);
+
+    let balanced_under_cap = state_with(&[(0, 120), (1, 20)]);
+    assert!(
+        p.evaluate(&balanced_under_cap, Some(&old), None).is_ok(),
+        "slot-0 delta is under cap and conservation holds"
+    );
+
+    let balanced_over_cap = state_with(&[(0, 140), (1, 40)]);
+    assert!(
+        p.evaluate(&balanced_over_cap, Some(&old), None).is_err(),
+        "window-sum cap must reject even when conservation holds"
+    );
+
+    let unbalanced_under_cap = state_with(&[(0, 120), (1, 19)]);
+    assert!(
+        p.evaluate(&unbalanced_under_cap, Some(&old), None).is_err(),
+        "conservation must reject even when the window-sum cap holds"
+    );
+}
+
+// ===========================================================================
 // Conservation + AllowedTransitions state-machine
 // ===========================================================================
 

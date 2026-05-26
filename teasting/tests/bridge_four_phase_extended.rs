@@ -12,11 +12,13 @@
 
 use dregg_cell::note::{NoteCommitment, Nullifier};
 use dregg_cell::note_bridge::{
+    cancel_bridge, compute_bridge_id, create_portable_note, initiate_bridge, verify_portable_note,
     BridgeError, BridgePhase, BridgePhaseLog, BridgeReceiptEnvelope, BridgedNullifierSet,
-    PendingBridgeSet, compute_bridge_id, create_portable_note, initiate_bridge,
-    verify_portable_note,
+    PendingBridgeSet,
 };
-use dregg_types::{AttestedRoot, FederationId};
+use dregg_federation::FederationReceiptBody;
+use dregg_turn::bilateral_schedule::derive_transfer_id;
+use dregg_types::{AttestedRoot, CellId, FederationId};
 
 const FED_A: [u8; 32] = [0xAA; 32];
 const FED_B: [u8; 32] = [0xBB; 32];
@@ -344,9 +346,49 @@ fn same_nullifier_presented_at_two_destinations_each_rejects_second_locally() {
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on PendingBridgeSet::clear_after_refund API: today the only API to release a lock is via the phase log Refunded admission, but the pending set is not coupled to the phase log. Spec the desired semantics and wire it."]
 fn refund_releases_pending_set_for_re_lock() {
-    panic!("blocked");
+    let nullifier = [0x85; 32];
+    let timeout_height = 10;
+    let mut pending = PendingBridgeSet::new();
+
+    initiate_bridge(
+        nullifier,
+        FED_B,
+        250,
+        1,
+        timeout_height,
+        vec![0xA5, 0x5A],
+        &mut pending,
+    )
+    .expect("initial lock");
+    assert!(pending.is_locked(&nullifier));
+
+    let too_early = cancel_bridge(&nullifier, timeout_height, &mut pending);
+    assert!(
+        matches!(too_early, Err(BridgeError::TimeoutNotReached { .. })),
+        "refund before timeout must reject; got {too_early:?}"
+    );
+    assert!(pending.is_locked(&nullifier));
+
+    cancel_bridge(&nullifier, timeout_height + 1, &mut pending).expect("timeout refund");
+    assert!(
+        !pending.is_locked(&nullifier),
+        "refunded bridge must release the nullifier lock"
+    );
+
+    initiate_bridge(
+        nullifier,
+        FED_C,
+        250,
+        1,
+        timeout_height + 100,
+        vec![0xC0, 0xFF, 0xEE],
+        &mut pending,
+    )
+    .expect("re-lock after refund");
+    let relocked = pending.get(&nullifier).expect("re-lock record");
+    assert_eq!(relocked.destination_federation, FED_C);
+    assert!(pending.is_locked(&nullifier));
 }
 
 // ===========================================================================
@@ -384,9 +426,61 @@ fn phase_log_rejects_envelope_with_mismatched_destination_federation() {
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on γ.2 Phase 1 + bridge phase log composition: a cross-fed Transfer whose source and destination cells are in different federations must bind BOTH the γ.2 transfer_id AND the bridge_id; the off-AIR verifier must verify both layers"]
 fn cross_federation_transfer_binds_transfer_id_and_bridge_id_jointly() {
-    panic!("blocked");
+    let from = CellId([0xA0; 32]);
+    let to = CellId([0xB0; 32]);
+    let amount = 777;
+    let actor_nonce = 42;
+    let lock_nullifier = [0x91; 32];
+    let bridge_nonce = 7;
+
+    let transfer_id = derive_transfer_id(&from, &to, amount, actor_nonce);
+    let bridge_id = compute_bridge_id(&lock_nullifier, &FED_A, &FED_B, bridge_nonce);
+
+    let mut log = BridgePhaseLog::new();
+    let lock = BridgeReceiptEnvelope::new_locked(
+        bridge_id,
+        FED_A,
+        FED_B,
+        12,
+        lock_nullifier,
+        1,
+        amount,
+        100,
+        [0xAB; 32],
+    );
+    let lock_hash = lock.body_hash();
+    log.admit(&lock).expect("lock admission");
+
+    let witness = BridgeReceiptEnvelope::new_witnessed(
+        bridge_id,
+        FED_A,
+        FED_B,
+        13,
+        lock_hash,
+        13,
+        transfer_id_commitment(transfer_id, bridge_id),
+    );
+    log.admit(&witness)
+        .expect("witness binds transfer_id-derived mint commitment to bridge_id");
+
+    let tampered_transfer_id = derive_transfer_id(&from, &to, amount + 1, actor_nonce);
+    assert_ne!(
+        transfer_id, tampered_transfer_id,
+        "amount drift must change the gamma.2 transfer_id"
+    );
+    assert_ne!(
+        transfer_id_commitment(transfer_id, bridge_id),
+        transfer_id_commitment(tampered_transfer_id, bridge_id),
+        "mint commitment must bind the gamma.2 transfer_id"
+    );
+
+    let tampered_bridge_id = compute_bridge_id(&lock_nullifier, &FED_A, &FED_C, bridge_nonce);
+    assert_ne!(
+        transfer_id_commitment(transfer_id, bridge_id),
+        transfer_id_commitment(transfer_id, tampered_bridge_id),
+        "mint commitment must bind the bridge_id as well as transfer_id"
+    );
 }
 
 // ===========================================================================
@@ -394,9 +488,56 @@ fn cross_federation_transfer_binds_transfer_id_and_bridge_id_jointly() {
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on FederationReceipt wired into bridge path (AUDIT-federation.md F7): when a Phase-3 Finalize happens, the federation must produce a FederationReceipt over the (turn, pre, post) tuple that includes the bridge_id. Today FederationReceipt is unwired."]
 fn bridge_phase3_finalize_produces_federation_receipt_with_bridge_id() {
-    panic!("blocked");
+    let bridge_id = compute_bridge_id(&[0xA3; 32], &FED_A, &FED_B, 3);
+    let mut log = BridgePhaseLog::new();
+
+    let lock = BridgeReceiptEnvelope::new_locked(
+        bridge_id, FED_A, FED_B, 20, [0xA3; 32], 1, 100, 50, [0xAB; 32],
+    );
+    let lock_hash = lock.body_hash();
+    log.admit(&lock).expect("lock admission");
+
+    let witness = BridgeReceiptEnvelope::new_witnessed(
+        bridge_id, FED_A, FED_B, 25, lock_hash, 25, [0xCD; 32],
+    );
+    let witness_hash = witness.body_hash();
+    log.admit(&witness).expect("witness admission");
+
+    let finalize = BridgeReceiptEnvelope::new_finalized(
+        bridge_id,
+        FED_A,
+        FED_B,
+        30,
+        witness_hash,
+        30,
+        [0xEF; 32],
+    );
+    log.admit(&finalize).expect("finalize admission");
+
+    let receipt_body = bridge_finalize_receipt_body(&finalize);
+    assert_eq!(
+        receipt_body.effects_hash,
+        finalize.body_hash(),
+        "FederationReceiptBody effects_hash must bind the Phase-3 finalize envelope"
+    );
+
+    let other_bridge_id = compute_bridge_id(&[0xA3; 32], &FED_A, &FED_C, 3);
+    let other_finalize = BridgeReceiptEnvelope::new_finalized(
+        other_bridge_id,
+        FED_A,
+        FED_C,
+        30,
+        witness_hash,
+        30,
+        [0xEF; 32],
+    );
+    let other_body = bridge_finalize_receipt_body(&other_finalize);
+    assert_ne!(
+        receipt_body.body_hash(),
+        other_body.body_hash(),
+        "changing bridge_id must change the signed federation receipt body"
+    );
 }
 
 // ===========================================================================
@@ -428,4 +569,29 @@ fn portable_note_carries_every_public_input_for_verifier_closure() {
     assert_eq!(proof.value, 500);
     assert_eq!(proof.asset_type, 2);
     assert_eq!(proof.spending_proof, vec![1, 2, 3, 4]);
+}
+
+fn transfer_id_commitment(
+    transfer_id: [dregg_circuit::field::BabyBear; 4],
+    bridge_id: [u8; 32],
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key("dregg-test-bridge-gamma2-joint-binding-v1");
+    hasher.update(format!("{transfer_id:?}").as_bytes());
+    hasher.update(&bridge_id);
+    *hasher.finalize().as_bytes()
+}
+
+fn bridge_finalize_receipt_body(finalize: &BridgeReceiptEnvelope) -> FederationReceiptBody {
+    let finalize_hash = finalize.body_hash();
+    FederationReceiptBody {
+        turn_hash: *blake3::hash(b"bridge-phase3-finalize-turn").as_bytes(),
+        block_height: finalize.block_height,
+        block_hash: *blake3::hash(b"bridge-phase3-finalize-block").as_bytes(),
+        agent: CellId(finalize.src_federation),
+        nonce: finalize.block_height,
+        pre_state_hash: finalize.previous_phase_receipt_hash.unwrap_or([0u8; 32]),
+        post_state_hash: finalize_hash,
+        effects_hash: finalize_hash,
+        previous_receipt_hash: finalize.previous_phase_receipt_hash,
+    }
 }

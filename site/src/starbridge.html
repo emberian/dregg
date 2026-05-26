@@ -117,11 +117,16 @@
       <section class="sb__pane sb__pane--raw" aria-label="Workbench output">
         <div class="sb__pane-head">
           <h2 class="sb__pane-title">Workbench</h2>
-          <div class="sb__tool-tabs" role="tablist" aria-label="Workbench tools">
-            <button id="sb-tool-raw" type="button" role="tab" aria-selected="true" data-tool="raw">Raw</button>
-            <button id="sb-tool-console" type="button" role="tab" aria-selected="false" data-tool="console">Console</button>
+          <div class="sb__pane-head-actions">
+            <button id="sb-raw-copy" class="sb__icon-btn" type="button" title="Copy raw JSON">Copy</button>
+            <div class="sb__tool-tabs" role="tablist" aria-label="Workbench tools">
+              <button id="sb-tool-raw" type="button" role="tab" aria-selected="true" data-tool="raw">Raw</button>
+              <button id="sb-tool-console" type="button" role="tab" aria-selected="false" data-tool="console">Console</button>
+            </div>
           </div>
         </div>
+        <input id="sb-raw-filter" class="sb__raw-filter" type="search"
+               autocomplete="off" spellcheck="false" placeholder="filter raw JSON" />
         <pre id="sb-raw" class="sb__raw">no object selected</pre>
         <section id="sb-console" class="sb__console" hidden>
           <div id="sb-console-output" class="sb__console-output" aria-live="polite"></div>

@@ -1,0 +1,725 @@
+<layout src="_layouts/default.html">
+<title>Playground - <code>dregg</code></title>
+
+<style>
+  .pg-world {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: var(--s6) var(--s5) var(--s7);
+  }
+
+  .pg-world__head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
+    gap: var(--s5);
+    align-items: end;
+    padding-bottom: var(--s5);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .pg-world__eyebrow,
+  .pg-panel__eyebrow,
+  .pg-stat__label,
+  .pg-flow__meta,
+  .pg-log__time {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .pg-world__eyebrow {
+    color: var(--accent-bright);
+    margin-bottom: var(--s3);
+  }
+
+  .pg-world__head h1 {
+    max-width: 14ch;
+    margin-bottom: var(--s4);
+  }
+
+  .pg-world__sub {
+    max-width: 68ch;
+    font-size: 1.02rem;
+  }
+
+  .pg-world__status {
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r3);
+    background: var(--bg-raised);
+    padding: var(--s4);
+  }
+
+  .pg-world__status h2 {
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    color: var(--fg-dim);
+    margin-bottom: var(--s3);
+  }
+
+  .pg-world__meter {
+    height: 8px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--bg-inset);
+    border: 1px solid var(--line);
+  }
+
+  .pg-world__meter span {
+    display: block;
+    width: 76%;
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--info), var(--warm));
+  }
+
+  .pg-world__status-row {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--s3);
+    margin-top: var(--s3);
+    color: var(--fg-dim);
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+  }
+
+  .pg-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s2);
+    margin: var(--s5) 0;
+  }
+
+  .pg-tab {
+    border: 1px solid var(--line);
+    border-radius: var(--r2);
+    background: var(--bg-raised);
+    color: var(--fg-dim);
+    padding: 10px 13px;
+    font: 600 0.82rem var(--font-mono);
+    cursor: pointer;
+    transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease), background var(--dur) var(--ease);
+  }
+
+  .pg-tab:hover {
+    color: var(--chalk);
+    border-color: var(--line-strong);
+  }
+
+  .pg-tab[aria-selected="true"] {
+    color: var(--accent-bright);
+    border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+    background: var(--accent-soft);
+  }
+
+  .pg-stage {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 300px;
+    gap: var(--s5);
+    align-items: start;
+  }
+
+  .pg-panel {
+    min-height: 560px;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r3);
+    background: var(--bg-raised);
+    overflow: hidden;
+  }
+
+  .pg-panel__header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--s4);
+    align-items: start;
+    padding: var(--s5);
+    border-bottom: 1px solid var(--line);
+    background: color-mix(in srgb, var(--bg-inset) 52%, transparent);
+  }
+
+  .pg-panel__eyebrow {
+    color: var(--warm-bright);
+    margin-bottom: var(--s2);
+  }
+
+  .pg-panel__header h2 {
+    margin-bottom: var(--s3);
+  }
+
+  .pg-panel__summary {
+    max-width: 62ch;
+  }
+
+  .pg-panel__badge {
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 4px 10px;
+    color: var(--fg-dim);
+    background: var(--bg-inset);
+    font: 0.72rem var(--font-mono);
+    white-space: nowrap;
+  }
+
+  .pg-panel__body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 240px;
+    gap: var(--s4);
+    padding: var(--s5);
+  }
+
+  .pg-flow {
+    display: grid;
+    gap: var(--s3);
+  }
+
+  .pg-flow__step {
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr) auto;
+    gap: var(--s3);
+    align-items: center;
+    border: 1px solid var(--line);
+    border-radius: var(--r2);
+    background: var(--bg-inset);
+    padding: var(--s3);
+  }
+
+  .pg-flow__step[data-state="done"] {
+    border-color: color-mix(in srgb, var(--success) 45%, var(--line));
+    background: color-mix(in srgb, var(--success-soft) 60%, var(--bg-inset));
+  }
+
+  .pg-flow__step[data-state="active"] {
+    border-color: color-mix(in srgb, var(--warm) 55%, var(--line));
+    background: color-mix(in srgb, var(--warm-soft) 70%, var(--bg-inset));
+  }
+
+  .pg-flow__index {
+    width: 30px;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--bg-raised);
+    color: var(--fg-dim);
+    font: 700 0.75rem var(--font-mono);
+  }
+
+  .pg-flow__title {
+    color: var(--chalk);
+    font-weight: 650;
+    line-height: 1.3;
+  }
+
+  .pg-flow__meta {
+    color: var(--fg-muted);
+    margin-top: 2px;
+  }
+
+  .pg-flow__proof {
+    color: var(--accent-bright);
+    font: 0.78rem var(--font-mono);
+  }
+
+  .pg-demo {
+    border: 1px solid var(--line);
+    border-radius: var(--r2);
+    background: var(--bg-inset);
+    padding: var(--s4);
+  }
+
+  .pg-demo h3 {
+    font: 700 0.82rem var(--font-mono);
+    color: var(--fg);
+    margin-bottom: var(--s3);
+  }
+
+  .pg-demo__controls {
+    display: grid;
+    gap: var(--s3);
+  }
+
+  .pg-field {
+    display: grid;
+    gap: 5px;
+    color: var(--fg-dim);
+    font: 0.72rem var(--font-mono);
+  }
+
+  .pg-field input,
+  .pg-field select {
+    width: 100%;
+    min-height: 36px;
+    border: 1px solid var(--line);
+    border-radius: var(--r2);
+    background: var(--bg-raised);
+    color: var(--fg);
+    padding: 7px 9px;
+    font: 0.82rem var(--font-mono);
+  }
+
+  .pg-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s2);
+    margin-top: var(--s3);
+  }
+
+  .pg-btn {
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r2);
+    background: var(--accent);
+    color: var(--void);
+    padding: 9px 12px;
+    font: 700 0.78rem var(--font-mono);
+    cursor: pointer;
+  }
+
+  .pg-btn:hover {
+    background: var(--accent-bright);
+  }
+
+  .pg-btn[data-variant="ghost"] {
+    background: transparent;
+    color: var(--fg-dim);
+  }
+
+  .pg-btn[data-variant="ghost"]:hover {
+    color: var(--chalk);
+    border-color: var(--accent);
+  }
+
+  .pg-side {
+    display: grid;
+    gap: var(--s4);
+  }
+
+  .pg-stat {
+    border: 1px solid var(--line);
+    border-radius: var(--r2);
+    background: var(--bg-raised);
+    padding: var(--s4);
+  }
+
+  .pg-stat__label {
+    color: var(--fg-muted);
+    margin-bottom: var(--s2);
+  }
+
+  .pg-stat__value {
+    color: var(--chalk);
+    font: 1.35rem var(--font-mono);
+  }
+
+  .pg-stat__detail {
+    margin-top: var(--s2);
+    color: var(--fg-dim);
+    font-size: 0.86rem;
+  }
+
+  .pg-log {
+    border: 1px solid var(--line);
+    border-radius: var(--r2);
+    background: var(--bg-inset);
+    padding: var(--s4);
+  }
+
+  .pg-log h2 {
+    font: 700 0.82rem var(--font-mono);
+    margin-bottom: var(--s3);
+  }
+
+  .pg-log__list {
+    display: grid;
+    gap: var(--s2);
+  }
+
+  .pg-log__item {
+    border-left: 2px solid var(--line-strong);
+    padding-left: var(--s3);
+    color: var(--fg-dim);
+    font-size: 0.86rem;
+  }
+
+  .pg-log__item[data-kind="ok"] {
+    border-color: var(--success);
+  }
+
+  .pg-log__item[data-kind="warn"] {
+    border-color: var(--warm);
+  }
+
+  .pg-log__time {
+    display: block;
+    color: var(--fg-muted);
+    margin-bottom: 2px;
+  }
+
+  .pg-world__note {
+    margin-top: var(--s5);
+    color: var(--fg-muted);
+    font-size: 0.9rem;
+  }
+
+  @media (max-width: 960px) {
+    .pg-world__head,
+    .pg-stage,
+    .pg-panel__body {
+      grid-template-columns: 1fr;
+    }
+
+    .pg-panel__header {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .pg-world {
+      padding: var(--s5) var(--s4) var(--s6);
+    }
+
+    .pg-tabs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .pg-tab {
+      text-align: left;
+    }
+
+    .pg-flow__step {
+      grid-template-columns: 30px minmax(0, 1fr);
+    }
+
+    .pg-flow__proof {
+      grid-column: 2;
+    }
+  }
+</style>
+
+<main class="pg-world" data-playground>
+  <header class="pg-world__head">
+    <div>
+      <div class="pg-world__eyebrow">Dragon's Egg playground</div>
+      <h1>Scenario tabs for the complete dregg world.</h1>
+      <p class="pg-world__sub">
+        Pick a demo and run a compact version of the flow: capabilities, private notes,
+        federation turns, blinded queues, names, proofs, and handoff all stay visible as
+        one coherent system.
+      </p>
+    </div>
+    <aside class="pg-world__status" aria-label="Runtime readiness">
+      <h2>Local runtime surface</h2>
+      <div class="pg-world__meter" aria-hidden="true"><span></span></div>
+      <div class="pg-world__status-row">
+        <span>mode</span>
+        <span>browser demo</span>
+      </div>
+      <div class="pg-world__status-row">
+        <span>network</span>
+        <span>offline-safe</span>
+      </div>
+      <div class="pg-world__status-row">
+        <span>proof view</span>
+        <span id="pg-proof-count">0 receipts</span>
+      </div>
+    </aside>
+  </header>
+
+  <nav class="pg-tabs" role="tablist" aria-label="Playground scenarios"></nav>
+
+  <section class="pg-stage">
+    <article class="pg-panel" aria-live="polite"></article>
+
+    <aside class="pg-side" aria-label="Scenario state">
+      <div class="pg-stat">
+        <div class="pg-stat__label">Current federation</div>
+        <div class="pg-stat__value" id="pg-fed">garden-0</div>
+        <div class="pg-stat__detail">3 validators, one gateway, local receipts</div>
+      </div>
+      <div class="pg-stat">
+        <div class="pg-stat__label">Capabilities</div>
+        <div class="pg-stat__value" id="pg-caps">4</div>
+        <div class="pg-stat__detail" id="pg-cap-detail">dns/read, notes/send, queue/consume</div>
+      </div>
+      <div class="pg-stat">
+        <div class="pg-stat__label">Private notes</div>
+        <div class="pg-stat__value" id="pg-notes">2</div>
+        <div class="pg-stat__detail">one spendable, one pending scan</div>
+      </div>
+      <div class="pg-log">
+        <h2>Scenario log</h2>
+        <div class="pg-log__list" id="pg-log"></div>
+      </div>
+    </aside>
+  </section>
+
+  <p class="pg-world__note">
+    This page is intentionally self-contained and lightweight. The full copy-through playground
+    remains available at <a href="/playground/">/playground/</a> while this source page can be
+    built as <code>/playground.html</code>.
+  </p>
+</main>
+
+<script>
+(() => {
+  const scenarios = [
+    {
+      id: 'turn',
+      label: 'Federation Turn',
+      eyebrow: 'Consensus path',
+      title: 'Submit a capability-scoped turn',
+      badge: 'receipt chain',
+      summary: 'A cell uses a narrowed capability, submits a turn to a federation, and receives a receipt tied to the new state root.',
+      caps: 4,
+      notes: 2,
+      fed: 'garden-0',
+      capDetail: 'dns/read, cell/write, turn/submit',
+      fields: [
+        { id: 'actor', label: 'cell', value: 'alice.cell' },
+        { id: 'action', label: 'action', value: 'publish name record' },
+      ],
+      buttons: [
+        { label: 'Submit turn', event: 'turn submitted, policy satisfied', kind: 'ok' },
+        { label: 'Attenuate cap', event: 'capability narrowed to dns/read for alice.cell', kind: 'warn' },
+      ],
+      steps: [
+        ['Select cell', 'agent key signs action envelope', 'ed25519'],
+        ['Check caveats', 'datalog grants dns/read and cell/write', 'policy'],
+        ['Execute turn', 'federation applies deterministic transition', 'state root'],
+        ['Issue receipt', 'receipt binds action hash to block height', 'blake3'],
+      ],
+    },
+    {
+      id: 'transfer',
+      label: 'Private Transfer',
+      eyebrow: 'Private value',
+      title: 'Move value through stealth notes',
+      badge: 'amount hidden',
+      summary: 'Sender creates a one-time address, commits the amount, publishes a nullifier, and proves conservation without disclosing balances.',
+      caps: 3,
+      notes: 3,
+      fed: 'market-2',
+      capDetail: 'notes/send, notes/scan, notes/claim',
+      fields: [
+        { id: 'recipient', label: 'recipient', value: 'bob.viewkey' },
+        { id: 'amount', label: 'amount', value: '500' },
+      ],
+      buttons: [
+        { label: 'Create note', event: 'stealth note committed and queued for scan', kind: 'ok' },
+        { label: 'Scan inbox', event: 'recipient detected one spendable note', kind: 'ok' },
+      ],
+      steps: [
+        ['Derive address', 'ephemeral key creates one-time destination', 'x25519'],
+        ['Commit value', 'amount and blinding become a private note', 'pedersen'],
+        ['Publish nullifier', 'old note cannot be spent twice', 'nullifier'],
+        ['Prove conservation', 'inputs equal outputs plus fee', 'stark'],
+      ],
+    },
+    {
+      id: 'queue',
+      label: 'Blinded Queue',
+      eyebrow: 'Fair ordering',
+      title: 'Commit, reveal, and consume an order',
+      badge: 'replay rejected',
+      summary: 'Orders enter as commitments, reveal only when eligible, and consume exactly once through a nullifier set.',
+      caps: 2,
+      notes: 1,
+      fed: 'exchange-1',
+      capDetail: 'queue/commit, queue/consume',
+      fields: [
+        { id: 'payload', label: 'payload', value: 'BUY 100 ABC @ 0.5 XYZ' },
+        { id: 'lane', label: 'lane', value: 'batch-auction' },
+      ],
+      buttons: [
+        { label: 'Commit order', event: 'order hidden behind salted commitment', kind: 'ok' },
+        { label: 'Try replay', event: 'consume rejected: nullifier already published', kind: 'warn' },
+      ],
+      steps: [
+        ['Commit payload', 'salted hash enters the queue', 'blake3'],
+        ['Reveal opening', 'payload becomes eligible for matching', 'opening'],
+        ['Consume ticket', 'nullifier is recorded by batch executor', 'set'],
+        ['Settle batch', 'matched intents produce receipts', 'batch proof'],
+      ],
+    },
+    {
+      id: 'name',
+      label: 'Nameservice',
+      eyebrow: 'Application surface',
+      title: 'Register and resolve a dregg name',
+      badge: 'admin-gated',
+      summary: 'A nameservice app composes admin authorization, capability checks, reverse lookup, and receipt-backed updates.',
+      caps: 5,
+      notes: 2,
+      fed: 'apps-0',
+      capDetail: 'name/admin, name/write, name/read',
+      fields: [
+        { id: 'name', label: 'name', value: 'alice.dregg' },
+        { id: 'target', label: 'service id', value: 'svc_71e9' },
+      ],
+      buttons: [
+        { label: 'Register name', event: 'alice.dregg registered with admin capability', kind: 'ok' },
+        { label: 'Resolve name', event: 'alice.dregg resolved to svc_71e9', kind: 'ok' },
+      ],
+      steps: [
+        ['Present admin cap', 'root authority attenuates name/write', 'macaroon'],
+        ['Check squatting rule', 'datalog rejects occupied names', 'policy'],
+        ['Write record', 'forward and reverse maps update together', 'cell state'],
+        ['Return receipt', 'resolver can cache by state root', 'receipt'],
+      ],
+    },
+    {
+      id: 'handoff',
+      label: 'Cap Handoff',
+      eyebrow: 'Peer handoff',
+      title: 'Move authority across a boundary',
+      badge: 'paste-safe',
+      summary: 'An introducer wraps a capability for a recipient, signs a handoff certificate, and lets the recipient verify it offline.',
+      caps: 6,
+      notes: 2,
+      fed: 'bridge-3',
+      capDetail: 'captp/deliver, bridge/receive, app/open',
+      fields: [
+        { id: 'to', label: 'recipient', value: 'bob.device' },
+        { id: 'scope', label: 'scope', value: 'app/open:marketplace' },
+      ],
+      buttons: [
+        { label: 'Create handoff', event: 'handoff certificate signed for bob.device', kind: 'ok' },
+        { label: 'Verify offline', event: 'recipient verified issuer chain and caveats', kind: 'ok' },
+      ],
+      steps: [
+        ['Select authority', 'source cap is narrowed before export', 'attenuation'],
+        ['Bind recipient', 'certificate names target device key', 'signature'],
+        ['Paste bundle', 'compact handoff travels through chat or QR', 'base58'],
+        ['Install cap', 'recipient stores verified delegated authority', 'cipherclerk'],
+      ],
+    },
+  ];
+
+  const root = document.querySelector('[data-playground]');
+  const tabs = root.querySelector('.pg-tabs');
+  const panel = root.querySelector('.pg-panel');
+  const log = root.querySelector('#pg-log');
+  const state = {
+    active: scenarios[0].id,
+    receipts: 0,
+    events: [
+      { kind: 'ok', text: 'playground scenario world loaded' },
+      { kind: 'warn', text: 'using deterministic browser demo state' },
+    ],
+  };
+
+  function esc(value) {
+    return String(value).replace(/[&<>"']/g, ch => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    }[ch]));
+  }
+
+  function activeScenario() {
+    return scenarios.find(s => s.id === state.active) || scenarios[0];
+  }
+
+  function writeEvent(text, kind) {
+    state.receipts += kind === 'ok' ? 1 : 0;
+    state.events = [{ text, kind }, ...state.events].slice(0, 6);
+    renderSide(activeScenario());
+  }
+
+  function renderTabs() {
+    tabs.innerHTML = scenarios.map(s => `
+      <button class="pg-tab" type="button" role="tab" aria-selected="${s.id === state.active ? 'true' : 'false'}" data-tab="${esc(s.id)}">
+        ${esc(s.label)}
+      </button>
+    `).join('');
+
+    tabs.querySelectorAll('[data-tab]').forEach(button => {
+      button.addEventListener('click', () => {
+        state.active = button.dataset.tab;
+        render();
+      });
+    });
+  }
+
+  function renderPanel(scenario) {
+    panel.innerHTML = `
+      <header class="pg-panel__header">
+        <div>
+          <div class="pg-panel__eyebrow">${esc(scenario.eyebrow)}</div>
+          <h2>${esc(scenario.title)}</h2>
+          <p class="pg-panel__summary">${esc(scenario.summary)}</p>
+        </div>
+        <span class="pg-panel__badge">${esc(scenario.badge)}</span>
+      </header>
+      <div class="pg-panel__body">
+        <div class="pg-flow">
+          ${scenario.steps.map((step, index) => `
+            <div class="pg-flow__step" data-state="${index === 0 ? 'done' : index === 1 ? 'active' : 'idle'}">
+              <div class="pg-flow__index">${index + 1}</div>
+              <div>
+                <div class="pg-flow__title">${esc(step[0])}</div>
+                <div class="pg-flow__meta">${esc(step[1])}</div>
+              </div>
+              <div class="pg-flow__proof">${esc(step[2])}</div>
+            </div>
+          `).join('')}
+        </div>
+        <form class="pg-demo">
+          <h3>Run compact demo</h3>
+          <div class="pg-demo__controls">
+            ${scenario.fields.map(field => `
+              <label class="pg-field">
+                ${esc(field.label)}
+                <input name="${esc(field.id)}" value="${esc(field.value)}" spellcheck="false">
+              </label>
+            `).join('')}
+          </div>
+          <div class="pg-actions">
+            ${scenario.buttons.map((button, index) => `
+              <button class="pg-btn" type="button" data-action="${index}" ${index === 1 ? 'data-variant="ghost"' : ''}>
+                ${esc(button.label)}
+              </button>
+            `).join('')}
+          </div>
+        </form>
+      </div>
+    `;
+
+    panel.querySelectorAll('[data-action]').forEach(button => {
+      button.addEventListener('click', () => {
+        const action = scenario.buttons[Number(button.dataset.action)];
+        writeEvent(action.event, action.kind);
+      });
+    });
+  }
+
+  function renderSide(scenario) {
+    root.querySelector('#pg-fed').textContent = scenario.fed;
+    root.querySelector('#pg-caps').textContent = String(scenario.caps);
+    root.querySelector('#pg-notes').textContent = String(scenario.notes);
+    root.querySelector('#pg-cap-detail').textContent = scenario.capDetail;
+    root.querySelector('#pg-proof-count').textContent = `${state.receipts} receipts`;
+    log.innerHTML = state.events.map((event, index) => `
+      <div class="pg-log__item" data-kind="${esc(event.kind)}">
+        <span class="pg-log__time">t+${String(index).padStart(2, '0')}</span>
+        ${esc(event.text)}
+      </div>
+    `).join('');
+  }
+
+  function render() {
+    const scenario = activeScenario();
+    renderTabs();
+    renderPanel(scenario);
+    renderSide(scenario);
+  }
+
+  render();
+})();
+</script>
+
+</layout>

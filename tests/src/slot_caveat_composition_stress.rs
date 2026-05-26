@@ -182,6 +182,110 @@ fn predicate_all_honest_variants_one_violation_rejects_whole_program() {
 }
 
 // ===========================================================================
+// Rate / window-sum caveats inside long conjunctions
+// ===========================================================================
+
+#[test]
+fn predicate_long_conjunction_with_rate_limit_and_window_sum_accepts_under_caps() {
+    // Layout:
+    //   slot 0: static product/state marker
+    //   slot 1: monotonic counter
+    //   slot 2: per-window sum source
+    //   slot 3: AnyOf dispatch marker
+    let program = CellProgram::Predicate(vec![
+        StateConstraint::FieldEquals {
+            index: 0,
+            value: field_from_u64(1),
+        },
+        StateConstraint::Monotonic { index: 1 },
+        StateConstraint::RateLimit {
+            max_per_epoch: 5,
+            epoch_duration: 32,
+        },
+        StateConstraint::RateLimitBySum {
+            slot_index: 2,
+            max_sum_per_epoch: 50,
+            epoch_duration: 32,
+        },
+        StateConstraint::TemporalGate {
+            not_before: Some(10),
+            not_after: Some(100),
+        },
+        StateConstraint::AnyOf {
+            variants: vec![
+                SimpleStateConstraint::FieldEquals {
+                    index: 3,
+                    value: field_from_u64(7),
+                },
+                SimpleStateConstraint::FieldEquals {
+                    index: 3,
+                    value: field_from_u64(9),
+                },
+            ],
+        },
+    ]);
+
+    let old = state_with(&[(1, 10), (2, 100)]);
+    let new = state_with(&[(0, 1), (1, 11), (2, 130), (3, 7)]);
+    let mut ctx = ctx_at(50, 0);
+    ctx.sender = Some([8u8; 32]);
+    ctx.sender_epoch_count = 4;
+
+    let result = program.evaluate(&new, Some(&old), Some(&ctx));
+    assert!(
+        result.is_ok(),
+        "rate, window-sum, temporal, transition, and AnyOf conjuncts should all accept; got {result:?}"
+    );
+}
+
+#[test]
+fn predicate_long_conjunction_with_rate_limit_and_window_sum_rejects_each_cap() {
+    let program = CellProgram::Predicate(vec![
+        StateConstraint::FieldEquals {
+            index: 0,
+            value: field_from_u64(1),
+        },
+        StateConstraint::Monotonic { index: 1 },
+        StateConstraint::RateLimit {
+            max_per_epoch: 5,
+            epoch_duration: 32,
+        },
+        StateConstraint::RateLimitBySum {
+            slot_index: 2,
+            max_sum_per_epoch: 50,
+            epoch_duration: 32,
+        },
+        StateConstraint::TemporalGate {
+            not_before: Some(10),
+            not_after: Some(100),
+        },
+    ]);
+
+    let old = state_with(&[(1, 10), (2, 100)]);
+    let new = state_with(&[(0, 1), (1, 11), (2, 130)]);
+    let mut at_rate_cap = ctx_at(50, 0);
+    at_rate_cap.sender = Some([8u8; 32]);
+    at_rate_cap.sender_epoch_count = 5;
+    assert!(
+        program
+            .evaluate(&new, Some(&old), Some(&at_rate_cap))
+            .is_err(),
+        "RateLimit must reject the whole conjunction at the per-epoch cap"
+    );
+
+    let over_window_sum = state_with(&[(0, 1), (1, 11), (2, 151)]);
+    let mut under_rate_cap = ctx_at(50, 0);
+    under_rate_cap.sender = Some([8u8; 32]);
+    under_rate_cap.sender_epoch_count = 4;
+    assert!(
+        program
+            .evaluate(&over_window_sum, Some(&old), Some(&under_rate_cap))
+            .is_err(),
+        "RateLimitBySum must reject the whole conjunction above the per-window delta cap"
+    );
+}
+
+// ===========================================================================
 // AnyOf disjunction stress
 // ===========================================================================
 

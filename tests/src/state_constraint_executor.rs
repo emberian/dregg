@@ -274,6 +274,58 @@ fn executor_temporal_gate_inside_window_accepts() {
     assert!(matches!(r, TurnResult::Committed { .. }), "got: {r:?}");
 }
 
+#[test]
+fn executor_rate_limit_count_witness_under_cap_accepts() {
+    let program = CellProgram::Predicate(vec![StateConstraint::RateLimit {
+        max_per_epoch: 3,
+        epoch_duration: 1024,
+    }]);
+    let agent_cell = make_cell_with_program(17, 1000, program);
+    let agent = agent_cell.id();
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(agent_cell).unwrap();
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let turn = build_set_field_turn_with_witnesses(
+        agent,
+        0,
+        0,
+        field_from_u64(1),
+        vec![WitnessBlob::rate_limit_count(2)],
+    );
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        matches!(result, TurnResult::Committed { .. }),
+        "expected executor to thread under-cap RateLimitCount witness, got: {result:?}"
+    );
+}
+
+#[test]
+fn executor_rate_limit_count_witness_at_cap_rejects() {
+    let program = CellProgram::Predicate(vec![StateConstraint::RateLimit {
+        max_per_epoch: 3,
+        epoch_duration: 1024,
+    }]);
+    let agent_cell = make_cell_with_program(18, 1000, program);
+    let agent = agent_cell.id();
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(agent_cell).unwrap();
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let turn = build_set_field_turn_with_witnesses(
+        agent,
+        0,
+        0,
+        field_from_u64(1),
+        vec![WitnessBlob::rate_limit_count(3)],
+    );
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        matches!(result, TurnResult::Rejected { .. }),
+        "expected executor to reject at-cap RateLimitCount witness, got: {result:?}"
+    );
+}
+
 // ===========================================================================
 // Placeholder-context regressions (CAVEAT-LAYER-COVERAGE.md §6.2)
 // ===========================================================================

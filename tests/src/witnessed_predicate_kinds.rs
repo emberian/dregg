@@ -2,22 +2,25 @@
 //! `MerkleMembership`, `BlindedSet`, `BridgePredicate`, `PedersenEquality`,
 //! `Custom`.
 //!
-//! Layer: registry dispatch + verifier invocation. Per
-//! CAVEAT-LAYER-COVERAGE.md §5 the registry shape exists, the six built-in
-//! verifiers exist in `circuit::*` (Dfa, Temporal, MerkleMembership,
-//! BlindedSet, BridgePredicate, PedersenEquality), but **the executor's
-//! cell-program call site does not consult the registry today**. So the
-//! positive paths are all `#[ignore]`d on the caveat-correctness lane.
+//! Layer: registry dispatch + verifier invocation. The executor/evaluator
+//! call site now accepts a `WitnessedPredicateRegistry`; built-in AIR-backed
+//! verifiers still require host installation from the upstream circuit crates.
+//! Tests that use `with_stubs()` are explicit plumbing demos, not
+//! cryptographic acceptance claims.
 //!
 //! Three categories per kind:
 //!   1. Positive — predicate verifies, transition accepted.
 //!   2. Adversarial — tampered proof / wrong commitment rejected.
 //!   3. Registry lookup — unknown kind rejected.
 
+use std::sync::Arc;
+
 use dregg_cell::predicate::{
-    WitnessedPredicate, WitnessedPredicateKind, WitnessedPredicateRegistry,
+    PredicateInput, WitnessedPredicate, WitnessedPredicateError, WitnessedPredicateKind,
+    WitnessedPredicateRegistry, WitnessedPredicateVerifier,
 };
-use dregg_cell::{InputRef, ProgramError};
+use dregg_cell::program::{TransitionMeta, WitnessBlobView, WitnessBundle, WitnessKindTag};
+use dregg_cell::{CellProgram, CellState, EvalContext, InputRef, ProgramError, StateConstraint};
 
 // ---------------------------------------------------------------------------
 // Helpers / shared concerns
@@ -34,6 +37,81 @@ fn wp(kind: WitnessedPredicateKind) -> WitnessedPredicate {
     }
 }
 
+struct ExactSenderVerifier {
+    vk_hash: [u8; 32],
+    expected_commitment: [u8; 32],
+    expected_sender: [u8; 32],
+    expected_proof: &'static [u8],
+}
+
+impl WitnessedPredicateVerifier for ExactSenderVerifier {
+    fn name(&self) -> &'static str {
+        "exact-sender-test-verifier"
+    }
+
+    fn kind(&self) -> WitnessedPredicateKind {
+        WitnessedPredicateKind::Custom {
+            vk_hash: self.vk_hash,
+        }
+    }
+
+    fn verify(
+        &self,
+        commitment: &[u8; 32],
+        input: &PredicateInput<'_>,
+        proof_bytes: &[u8],
+    ) -> Result<(), WitnessedPredicateError> {
+        if commitment != &self.expected_commitment {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "commitment mismatch".into(),
+            });
+        }
+        match input {
+            PredicateInput::Sender(sender) if *sender == &self.expected_sender => {}
+            PredicateInput::Sender(_) => {
+                return Err(WitnessedPredicateError::Rejected {
+                    kind_name: self.name(),
+                    reason: "sender mismatch".into(),
+                });
+            }
+            _ => {
+                return Err(WitnessedPredicateError::InputShapeMismatch {
+                    kind_name: self.name(),
+                    expected: "Sender",
+                    actual: "non-Sender",
+                });
+            }
+        }
+        if proof_bytes != self.expected_proof {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "proof mismatch".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+fn exact_sender_registry(
+    vk_hash: [u8; 32],
+    expected_commitment: [u8; 32],
+    expected_sender: [u8; 32],
+    expected_proof: &'static [u8],
+) -> WitnessedPredicateRegistry {
+    let mut registry = WitnessedPredicateRegistry::empty();
+    registry.register_custom(
+        vk_hash,
+        Arc::new(ExactSenderVerifier {
+            vk_hash,
+            expected_commitment,
+            expected_sender,
+            expected_proof,
+        }),
+    );
+    registry
+}
+
 // ===========================================================================
 // Dfa
 // ===========================================================================
@@ -46,9 +124,35 @@ fn dfa_predicate_constructor_round_trip() {
 }
 
 #[test]
-#[ignore = "blocked on caveat-correctness registry dispatch: executor must call WitnessedPredicateRegistry::verify for Dfa kind (CAVEAT-LAYER-COVERAGE.md §5, §6.6)"]
 fn dfa_predicate_with_valid_proof_accepts_through_executor() {
-    panic!("blocked");
+    let registry = WitnessedPredicateRegistry::with_stubs();
+    let proof = b"stub-dfa-proof";
+    let blobs: [WitnessBlobView<'_>; 1] = [WitnessBlobView {
+        kind: WitnessKindTag::ProofBytes,
+        bytes: proof,
+    }];
+    let witnesses = WitnessBundle {
+        blobs: &blobs,
+        registry: Some(&registry),
+    };
+    let program = CellProgram::Predicate(vec![StateConstraint::Witnessed {
+        wp: WitnessedPredicate::dfa([1u8; 32], InputRef::Sender, 0),
+    }]);
+    let state = CellState::default();
+    let ctx = EvalContext {
+        sender: Some([0xA5u8; 32]),
+        ..Default::default()
+    };
+
+    program
+        .evaluate_full(
+            &state,
+            None,
+            Some(&ctx),
+            &TransitionMeta::wildcard(),
+            &witnesses,
+        )
+        .expect("Dfa plumbing accepts non-empty proof via explicit stub registry");
 }
 
 #[test]
@@ -194,15 +298,38 @@ fn custom_predicate_constructor_carries_vk_hash() {
 }
 
 #[test]
-#[ignore = "blocked on registry dispatch: custom-AIR vk-hash lookup + verifier invocation"]
 fn custom_predicate_with_registered_verifier_accepts() {
-    panic!("blocked");
+    let vk_hash = [9u8; 32];
+    let commitment = [0xC0u8; 32];
+    let sender = [0x5Eu8; 32];
+    let registry = exact_sender_registry(vk_hash, commitment, sender, b"valid-custom-proof");
+    let predicate = WitnessedPredicate::custom(vk_hash, commitment, InputRef::Sender, 0);
+
+    registry
+        .verify(
+            &predicate,
+            &PredicateInput::Sender(&sender),
+            b"valid-custom-proof",
+        )
+        .expect("registered custom verifier accepts matching commitment/input/proof");
 }
 
 #[test]
-#[ignore = "blocked on registry dispatch: unknown custom vk_hash → registry miss → reject"]
 fn custom_predicate_with_unregistered_vk_rejects() {
-    panic!("blocked");
+    let vk_hash = [0xAAu8; 32];
+    let predicate = WitnessedPredicate::custom(vk_hash, [0xC0u8; 32], InputRef::Sender, 0);
+    let registry = WitnessedPredicateRegistry::empty();
+    let sender = [0x5Eu8; 32];
+    let err = registry
+        .verify(&predicate, &PredicateInput::Sender(&sender), b"proof")
+        .expect_err("unregistered custom vk_hash must reject");
+
+    assert!(matches!(
+        err,
+        WitnessedPredicateError::KindNotRegistered {
+            kind: WitnessedPredicateKind::Custom { vk_hash: got }
+        } if got == vk_hash
+    ));
 }
 
 // ===========================================================================
@@ -211,21 +338,46 @@ fn custom_predicate_with_unregistered_vk_rejects() {
 
 #[test]
 fn registry_returns_error_for_unknown_kind() {
-    // The registry's built-in coverage today is stub-only; the API is
-    // present even though the executor's program-eval site doesn't call
-    // it. Sanity-check the unknown-kind path so a future executor wire-up
-    // surfaces the same kind of error.
-    let _registry = WitnessedPredicateRegistry::with_stubs();
-    let _ = wp(WitnessedPredicateKind::Custom { vk_hash: [0u8; 32] });
-    // The actual `verify` API surface is exercised in the unit tests of
-    // the cell crate; this test exists to document the intent and pin the
-    // kind tag.
+    let registry = WitnessedPredicateRegistry::with_stubs();
+    let unknown = wp(WitnessedPredicateKind::Custom { vk_hash: [0u8; 32] });
+    let sender = [0x5Eu8; 32];
+    let err = registry
+        .verify(&unknown, &PredicateInput::Sender(&sender), b"proof")
+        .expect_err("stub builtins do not register arbitrary custom vk_hashes");
+
+    assert!(matches!(
+        err,
+        WitnessedPredicateError::KindNotRegistered {
+            kind: WitnessedPredicateKind::Custom { vk_hash: [0u8; 32] }
+        }
+    ));
 }
 
 #[test]
-#[ignore = "blocked on registry dispatch: register_custom + verify_through_registry round trip"]
 fn registry_round_trip_for_registered_custom_verifier() {
-    panic!("blocked");
+    let vk_hash = [0x44u8; 32];
+    let commitment = [0xC4u8; 32];
+    let sender = [0x5Eu8; 32];
+    let registry = exact_sender_registry(vk_hash, commitment, sender, b"valid-custom-proof");
+    let predicate = WitnessedPredicate::custom(vk_hash, commitment, InputRef::Sender, 0);
+
+    assert!(
+        registry
+            .get(WitnessedPredicateKind::Custom { vk_hash })
+            .is_some(),
+        "registered verifier must be discoverable by custom vk_hash"
+    );
+    registry
+        .verify(
+            &predicate,
+            &PredicateInput::Sender(&sender),
+            b"valid-custom-proof",
+        )
+        .expect("registered verifier accepts its exact proof");
+    let err = registry
+        .verify(&predicate, &PredicateInput::Sender(&sender), b"tampered-proof")
+        .expect_err("registered verifier must reject a non-matching proof");
+    assert!(matches!(err, WitnessedPredicateError::Rejected { .. }));
 }
 
 // ===========================================================================
@@ -233,13 +385,44 @@ fn registry_round_trip_for_registered_custom_verifier() {
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on AUTHORIZATION-CUSTOM-DESIGN: predicate.input_ref = SigningMessage must reject outside Auth context"]
 fn signing_message_input_ref_rejects_in_slot_caveat_context() {
     // Per cell::predicate docs (InputRef::SigningMessage): "surfaces that
     // evaluate WitnessedPredicate outside an action-authorization context
     // (slot caveats, preconditions) must reject this variant as
     // shape-mismatch."
-    panic!("blocked");
+    let vk_hash = [0x55u8; 32];
+    let commitment = [0xC5u8; 32];
+    let registry = exact_sender_registry(vk_hash, commitment, [0x5Eu8; 32], b"proof");
+    let proof = b"proof";
+    let blobs: [WitnessBlobView<'_>; 1] = [WitnessBlobView {
+        kind: WitnessKindTag::ProofBytes,
+        bytes: proof,
+    }];
+    let witnesses = WitnessBundle {
+        blobs: &blobs,
+        registry: Some(&registry),
+    };
+    let program = CellProgram::Predicate(vec![StateConstraint::Witnessed {
+        wp: WitnessedPredicate::custom(vk_hash, commitment, InputRef::SigningMessage, 0),
+    }]);
+    let state = CellState::default();
+
+    let err = program
+        .evaluate_full(
+            &state,
+            None,
+            None,
+            &TransitionMeta::wildcard(),
+            &witnesses,
+        )
+        .expect_err("SigningMessage input has no slot-caveat source");
+    assert!(matches!(
+        err,
+        ProgramError::WitnessedPredicateRejected {
+            kind_name: "Custom",
+            ..
+        }
+    ));
 }
 
 // ===========================================================================

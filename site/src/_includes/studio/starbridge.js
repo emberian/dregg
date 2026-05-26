@@ -97,6 +97,8 @@ function writeUrlState({ at, runtime }) {
   const inspector  = document.getElementById('sb-inspector');
   const workspaceTitle = document.getElementById('sb-workspace-title');
   const rawEl      = document.getElementById('sb-raw');
+  const rawFilter = document.getElementById('sb-raw-filter');
+  const rawCopyBtn = document.getElementById('sb-raw-copy');
   const consoleEl = document.getElementById('sb-console');
   const consoleOut = document.getElementById('sb-console-output');
   const consoleForm = document.getElementById('sb-console-form');
@@ -116,6 +118,7 @@ function writeUrlState({ at, runtime }) {
   let currentUri = null;
   let kinds = null;
   const appCatalog = new Map();
+  let rawText = 'no object selected';
   let labBusy = 0;
   const labState = {
     alice: null,
@@ -187,6 +190,22 @@ function writeUrlState({ at, runtime }) {
       name: id.replace(/-/g, ' '),
       page: `/starbridge-apps/${id}/pages/index.html`,
     };
+  }
+
+  function setRawText(text) {
+    rawText = String(text ?? '');
+    renderRawText();
+  }
+
+  function renderRawText() {
+    if (!rawEl) return;
+    const filter = rawFilter?.value.trim().toLowerCase() || '';
+    if (!filter) {
+      rawEl.textContent = rawText;
+      return;
+    }
+    const lines = rawText.split('\n').filter((line) => line.toLowerCase().includes(filter));
+    rawEl.textContent = lines.length ? lines.join('\n') : 'no matching lines';
   }
 
   function readArraySignal(read) {
@@ -341,7 +360,7 @@ function writeUrlState({ at, runtime }) {
     if (appMeta?.id) appCatalog.set(appMeta.id, appMeta);
     inspector.replaceChildren();
     if (workspaceTitle) workspaceTitle.textContent = 'Program';
-    rawEl.textContent = JSON.stringify(appMeta, null, 2);
+    setRawText(JSON.stringify(appMeta, null, 2));
     currentUri = `dregg://app/${appMeta.id}`;
     uriInput.value = currentUri;
     writeUrlState({ at: currentUri, runtime: currentRuntimeId });
@@ -430,61 +449,74 @@ function writeUrlState({ at, runtime }) {
 
   function renderDashboard() {
     const counts = currentCounts();
+    const recent = [];
+    for (const cell of readArraySignal(() => runtime?.listCells?.().value).slice(-4).reverse()) {
+      const id = cell.cell_id || cell.id || (typeof cell === 'string' ? cell : '');
+      if (id) recent.push({ uri: `dregg://cell/${id}`, label: `cell ${id.slice(0, 12)}`, kind: 'Cell' });
+    }
+    for (const receipt of readArraySignal(() => runtime?.listReceipts?.().value).slice(-3).reverse()) {
+      const id = receipt.turn_hash || receipt.receipt_hash || receipt.hash || '';
+      if (id) recent.push({ uri: `dregg://receipt/${id}`, label: `receipt ${id.slice(0, 12)}`, kind: 'Receipt' });
+    }
+    for (const block of readArraySignal(() => runtime?.listBlocks?.().value).slice(-2).reverse()) {
+      const h = block.height ?? block.block_height ?? 0;
+      const fedIndex = block.fed_index ?? 0;
+      recent.push({ uri: `dregg://block/${fedIndex}/${h}`, label: `h=${h} fed #${fedIndex}`, kind: 'Block' });
+    }
+    const recentHtml = recent.length
+      ? recent.slice(0, 8).map((item) => `
+          <button type="button" class="sb__workbench-row" data-uri="${escapeHtml(item.uri)}">
+            <span>${escapeHtml(item.kind)}</span>
+            <strong>${escapeHtml(item.label)}</strong>
+          </button>
+        `).join('')
+      : '<div class="sb__workbench-empty">No runtime objects yet</div>';
     const panel = document.createElement('div');
     panel.className = 'sb__dashboard';
     panel.innerHTML = `
-      <section class="sb__hero">
-        <div>
-          <div class="sb__eyebrow">Starbridge workspace</div>
-          <h2>Dragon's Egg workbench</h2>
-        </div>
+      <section class="sb__workbench-status" aria-label="Runtime summary">
         <div class="sb__runtime-card">
-          <span>${escapeHtml(runtimeLabel())}</span>
-          <strong>${escapeHtml(currentRuntimeId || 'boot')}</strong>
+          <span>Runtime</span>
+          <strong>${escapeHtml(runtimeLabel())}</strong>
+          <code>${escapeHtml(currentRuntimeId || 'boot')}</code>
         </div>
-      </section>
-      <section class="sb__metric-grid" aria-label="Runtime summary">
         <div class="sb__metric"><span>Cells</span><strong>${counts.cells}</strong></div>
         <div class="sb__metric"><span>Receipts</span><strong>${counts.receipts}</strong></div>
         <div class="sb__metric"><span>Intents</span><strong>${counts.intents}</strong></div>
         <div class="sb__metric"><span>Activity</span><strong>${counts.activities}</strong></div>
       </section>
-      <section class="sb__flow-grid" aria-label="Quick flows">
-        <button type="button" class="sb__flow" data-flow="seed">
-          <span>Seed world</span>
-          <strong>alice + bob</strong>
-        </button>
-        <button type="button" class="sb__flow" data-flow="transfer">
-          <span>Execute turn</span>
-          <strong>transfer + receipt</strong>
-        </button>
-        <button type="button" class="sb__flow" data-flow="federation">
-          <span>Consensus</span>
-          <strong>federation block</strong>
-        </button>
-        <button type="button" class="sb__flow" data-flow="intent">
-          <span>Intent market</span>
-          <strong>storage need</strong>
-        </button>
-      </section>
-      <section class="sb__landing-split">
-        <div>
-          <h3>System programs</h3>
-          <div class="sb__landing-actions">
-            <button type="button" class="sb__btn sb__btn--ghost" data-open-app="nameservice">Nameservice</button>
-            <button type="button" class="sb__btn sb__btn--ghost" data-open-app="identity">Identity</button>
-            <button type="button" class="sb__btn sb__btn--ghost" data-open-app="governed-namespace">Namespace</button>
-            <button type="button" class="sb__btn sb__btn--ghost" data-open-app="subscription">Subscription</button>
-            <button type="button" class="sb__btn sb__btn--ghost" data-open-activity>Activity feed</button>
-            <button type="button" class="sb__btn sb__btn--ghost" data-open-console>Console</button>
+      <section class="sb__workbench-grid">
+        <div class="sb__workbench-panel sb__workbench-panel--programs">
+          <h3>System Programs</h3>
+          <div class="sb__program-grid">
+            <button type="button" class="sb__program" data-open-app="nameservice"><span>NS</span><strong>Nameservice</strong></button>
+            <button type="button" class="sb__program" data-open-app="identity"><span>ID</span><strong>Identity</strong></button>
+            <button type="button" class="sb__program" data-open-app="governed-namespace"><span>GN</span><strong>Namespace</strong></button>
+            <button type="button" class="sb__program" data-open-app="subscription"><span>SUB</span><strong>Subscription</strong></button>
+            <button type="button" class="sb__program" data-open-activity><span>ACT</span><strong>Activity</strong></button>
+            <button type="button" class="sb__program" data-open-console><span>&gt;</span><strong>Console</strong></button>
           </div>
         </div>
-        <div>
-          <h3>Direct inspect</h3>
+        <div class="sb__workbench-panel">
+          <h3>Scripts</h3>
+          <div class="sb__script-grid">
+            <button type="button" class="sb__flow" data-flow="seed"><span>Seed</span><strong>alice + bob</strong></button>
+            <button type="button" class="sb__flow" data-flow="transfer"><span>Turn</span><strong>transfer + receipt</strong></button>
+            <button type="button" class="sb__flow" data-flow="federation"><span>Consensus</span><strong>federation block</strong></button>
+            <button type="button" class="sb__flow" data-flow="intent"><span>Intent</span><strong>storage need</strong></button>
+          </div>
+        </div>
+        <div class="sb__workbench-panel">
+          <h3>Recent Objects</h3>
+          <div class="sb__recent-list">${recentHtml}</div>
+        </div>
+        <div class="sb__workbench-panel">
+          <h3>Direct Inspect</h3>
           <form class="sb__inline-form" data-uri-form>
-            <input class="sb__input" name="uri" placeholder="dregg://cell/…" autocomplete="off" spellcheck="false">
+            <input class="sb__input" name="uri" placeholder="dregg://cell/..." autocomplete="off" spellcheck="false">
             <button class="sb__btn" type="submit">Inspect</button>
           </form>
+          <button type="button" class="sb__btn sb__btn--ghost sb__palette-inline" data-open-palette>Palette</button>
         </div>
       </section>
     `;
@@ -499,6 +531,10 @@ function writeUrlState({ at, runtime }) {
     });
     for (const btn of panel.querySelectorAll('[data-open-app]')) {
       btn.addEventListener('click', () => renderAppWorkspace(appMetaFor(btn.dataset.openApp)));
+    }
+    panel.querySelector('[data-open-palette]')?.addEventListener('click', () => openPalette());
+    for (const btn of panel.querySelectorAll('[data-uri]')) {
+      btn.addEventListener('click', () => setCurrentUri(btn.dataset.uri));
     }
     panel.querySelector('[data-uri-form]')?.addEventListener('submit', (e) => {
       e.preventDefault();
@@ -937,7 +973,7 @@ function writeUrlState({ at, runtime }) {
       const t = rawTeardowns.pop();
       try { t(); } catch {}
     }
-    rawEl.textContent = 'no object selected';
+    setRawText('no object selected');
     if (!uri || !runtime) return;
     let parsed;
     try { parsed = parseRef(uri); } catch { return; }
@@ -962,24 +998,24 @@ function writeUrlState({ at, runtime }) {
       sig = runtime.getTraceEvents();
     } else if (parsed.kind === 'app') {
       const appMeta = appCatalog.get(parsed.id) || { id: parsed.id, page: `/starbridge-apps/${parsed.id}/pages/index.html` };
-      rawEl.textContent = JSON.stringify(appMeta, null, 2);
+      setRawText(JSON.stringify(appMeta, null, 2));
       return;
     }
     if (!sig) {
-      rawEl.textContent = `no resolver for kind "${parsed.kind}"`;
+      setRawText(`no resolver for kind "${parsed.kind}"`);
       return;
     }
     const stop = api.effect(() => {
       const v = sig.value;
       if (v == null) {
-        rawEl.textContent = 'no object loaded (not in this runtime)';
+        setRawText('no object loaded (not in this runtime)');
         return;
       }
       try {
-        rawEl.textContent = JSON.stringify(v, (_, val) =>
-          typeof val === 'bigint' ? val.toString() : val, 2);
+        setRawText(JSON.stringify(v, (_, val) =>
+          typeof val === 'bigint' ? val.toString() : val, 2));
       } catch (e) {
-        rawEl.textContent = '/* unserializable: ' + e.message + ' */';
+        setRawText('/* unserializable: ' + e.message + ' */');
       }
     });
     rawTeardowns.push(stop);
