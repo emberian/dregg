@@ -171,9 +171,9 @@ fn topic_name(sym: &pyana_turn::action::Symbol) -> String {
         "subscription-publisher-granted",
         "subscription-consumer-granted",
     ];
-    for name in KNOWN {
+    for name in KNOWN.iter().copied() {
         if pyana_turn::action::symbol(name) == *sym {
-            return (*name).into();
+            return name.into();
         }
     }
     hex_encode(sym)
