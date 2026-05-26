@@ -2470,3 +2470,156 @@ impl Event {
         Self { topic, data }
     }
 }
+
+// =============================================================================
+// LinearityClass tests
+// =============================================================================
+//
+// Per `HOUYHNHNM-COMPARISON.md` §4.3, §8.2: the conservation question must
+// have a typed, *forced* answer. These tests assert the contract:
+//
+//   * Conservative effects declare they need a paired sibling (the
+//     executor's conservation checker dispatches off this).
+//   * Disclosed non-conservation (Generative / Annihilative) is named
+//     `is_disclosed_non_conservation()` and reachable for Mint / Burn.
+//   * Neutral effects don't claim conservation they don't enforce.
+//
+// The `linearity()` method itself is exhaustive at compile time; adding a
+// new `Effect` variant without answering the linearity question is a
+// `rustc` error, not a runtime surprise.
+#[cfg(test)]
+mod linearity_tests {
+    use super::*;
+
+    fn cid(byte: u8) -> CellId {
+        let mut k = [0u8; 32];
+        k[0] = byte;
+        CellId::derive_raw(&k, &[0u8; 32])
+    }
+
+    #[test]
+    fn transfer_is_conservative_and_requires_sibling() {
+        // Adversarial framing: a Transfer claims Conservative linearity,
+        // which the executor's conservation checker reads as
+        // "demand a paired credit on the receive side."
+        let e = Effect::Transfer {
+            from: cid(1),
+            to: cid(2),
+            amount: 7,
+        };
+        assert_eq!(e.linearity(), LinearityClass::Conservative);
+        assert!(e.linearity().requires_paired_sibling());
+        assert!(!e.linearity().is_disclosed_non_conservation());
+    }
+
+    #[test]
+    fn mint_without_paired_burn_is_generative_not_conservative() {
+        // **Adversarial:** an `Effect::CreateCell` / mint-like move is
+        // *generative* — the conservation checker MUST NOT require a
+        // paired sibling, but the operator MUST be authorized to mint
+        // (caught elsewhere). If we accidentally tagged CreateCell as
+        // `Conservative`, the checker would reject every legitimate
+        // genesis-style mint. If we accidentally tagged it `Neutral`,
+        // the operator could mint without disclosure.
+        let e = Effect::CreateCell {
+            public_key: [0; 32],
+            token_id: [0; 32],
+            balance: 1_000_000,
+        };
+        assert_eq!(e.linearity(), LinearityClass::Generative);
+        assert!(!e.linearity().requires_paired_sibling());
+        assert!(e.linearity().is_disclosed_non_conservation());
+        // Equivalent for SpawnWithDelegation: a fresh-child mint must
+        // also be generative.
+        let e2 = Effect::SpawnWithDelegation {
+            child_public_key: [0; 32],
+            child_token_id: [0; 32],
+            max_staleness: 0,
+        };
+        assert_eq!(e2.linearity(), LinearityClass::Generative);
+    }
+
+    #[test]
+    fn burn_is_annihilative_and_disclosed() {
+        // **Adversarial:** Burn's disclosure (`was_burn`) is bound into
+        // `receipt_hash`. If LinearityClass::Burn were mis-tagged as
+        // `Neutral`, the executor would not know to *require* the
+        // disclosure flag; mis-tagging as `Conservative` would make the
+        // checker demand a paired credit that doesn't exist. The only
+        // correct tag is `Annihilative`.
+        let e = Effect::Burn {
+            target: cid(3),
+            slot: 0,
+            amount: 42,
+        };
+        assert_eq!(e.linearity(), LinearityClass::Annihilative);
+        assert!(!e.linearity().requires_paired_sibling());
+        assert!(e.linearity().is_disclosed_non_conservation());
+    }
+
+    #[test]
+    fn terminal_effects_dont_require_pairing() {
+        // Revoke, Destroy, DropRef are one-way; they MUST NOT trip the
+        // "demand a paired sibling" branch.
+        let revoke = Effect::RevokeCapability {
+            cell: cid(1),
+            slot: 0,
+        };
+        let drop_ref = Effect::DropRef { ref_id: [0; 32] };
+        for e in [revoke, drop_ref] {
+            assert_eq!(e.linearity(), LinearityClass::Terminal);
+            assert!(!e.linearity().requires_paired_sibling());
+            assert!(!e.linearity().is_disclosed_non_conservation());
+        }
+    }
+
+    #[test]
+    fn monotonic_counters_are_neither_conservative_nor_disclosed() {
+        let e = Effect::IncrementNonce { cell: cid(4) };
+        assert_eq!(e.linearity(), LinearityClass::Monotonic);
+        assert!(!e.linearity().requires_paired_sibling());
+        assert!(!e.linearity().is_disclosed_non_conservation());
+    }
+
+    #[test]
+    fn neutral_effects_have_no_resource_delta() {
+        // SetField on a cell-local slot has no resource delta from the
+        // ledger's POV — the cell's own program may enforce a delta,
+        // but the universal conservation checker doesn't see one here.
+        let e = Effect::SetField {
+            cell: cid(5),
+            index: 0,
+            value: [0; 32],
+        };
+        assert_eq!(e.linearity(), LinearityClass::Neutral);
+        assert!(!e.linearity().requires_paired_sibling());
+        assert!(!e.linearity().is_disclosed_non_conservation());
+    }
+
+    #[test]
+    fn disclosed_predicate_is_only_generative_and_annihilative() {
+        // The disclosed-non-conservation set MUST be exactly Generative
+        // ∪ Annihilative. Conservation-respecting variants (Conservative,
+        // Monotonic, Terminal, Neutral) MUST NOT be flagged as
+        // disclosed non-conservation; doing so would prompt the
+        // executor to expect a `was_burn`/`was_mint` flag that isn't
+        // there and reject legitimate turns.
+        for c in [
+            LinearityClass::Conservative,
+            LinearityClass::Monotonic,
+            LinearityClass::Terminal,
+            LinearityClass::Neutral,
+        ] {
+            assert!(
+                !c.is_disclosed_non_conservation(),
+                "{c:?} must not be a disclosed non-conservation class"
+            );
+        }
+        for c in [LinearityClass::Generative, LinearityClass::Annihilative] {
+            assert!(
+                c.is_disclosed_non_conservation(),
+                "{c:?} must be a disclosed non-conservation class"
+            );
+        }
+    }
+}
