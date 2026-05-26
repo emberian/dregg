@@ -84,7 +84,7 @@ fn executor_grant_publisher_then_publish_emits_subscription_published_event() {
     let new_pub_root = blake3_field(b"publishers-root-v1");
     let publisher_pk = [0x11u8; 32];
 
-    // Step 1: grant_publisher (root advances from zero to v1).
+    // Step 1: grant_publisher (root changes from zero to v1).
     let grant_action =
         build_grant_publisher_action(&cipherclerk, sub_cell, new_pub_root, publisher_pk);
     let grant_receipt = executor

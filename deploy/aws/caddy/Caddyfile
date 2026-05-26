@@ -1,4 +1,4 @@
-devnet.dregg.fg-goose.online {
+devnet.dregg.fg-goose.online, dregg.fg-goose.online {
     # HTTP API
     handle /api/* {
         reverse_proxy localhost:8420

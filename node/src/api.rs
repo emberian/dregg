@@ -1463,6 +1463,18 @@ async fn post_submit_signed_turn(
         }));
     }
 
+    let default_token_id = *blake3::hash(b"default").as_bytes();
+    let expected_agent = dregg_cell::CellId::derive_raw(&signed.signer.0, &default_token_id);
+    if signed.turn.agent != expected_agent {
+        return Ok(Json(SubmitSignedTurnResponse {
+            accepted: false,
+            turn_hash: Some(hex_encode(&turn_hash_bytes)),
+            signer: Some(hex_encode(&signed.signer.0)),
+            action_count: signed.turn.call_forest.action_count(),
+            error: Some("turn agent does not match signer default cell".to_string()),
+        }));
+    }
+
     let turn_hash = hex_encode(&turn_hash_bytes);
     let signer = hex_encode(&signed.signer.0);
     let agent = hex_encode(&signed.turn.agent.0);
@@ -1472,6 +1484,19 @@ async fn post_submit_signed_turn(
     let mut s = state.write().await;
     if !s.unlocked {
         return Err(StatusCode::FORBIDDEN);
+    }
+
+    let expected_prev = s.cclerk.receipt_chain().last().map(|r| r.receipt_hash());
+    if let Some(claimed_prev) = signed.turn.previous_receipt_hash {
+        if Some(claimed_prev) != expected_prev {
+            return Ok(Json(SubmitSignedTurnResponse {
+                accepted: false,
+                turn_hash: Some(turn_hash),
+                signer: Some(signer),
+                action_count,
+                error: Some("receipt chain mismatch".to_string()),
+            }));
+        }
     }
 
     let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());

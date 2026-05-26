@@ -583,9 +583,70 @@ fn cross_cutting_all_pi_fields_trace_bound() {
 }
 
 #[test]
-#[ignore = "blocked on T-cross-cutting #2: canonical signing message contains {domain, federation_id, actor_id, nonce, effects_hash, previous_receipt_hash}"]
 fn cross_cutting_canonical_signing_message_fields() {
-    panic!("blocked");
+    let agent = CellId([0xD1u8; 32]);
+    let target = CellId([0xD2u8; 32]);
+    let previous_receipt_hash = [0xD3u8; 32];
+    let effects = vec![Effect::Transfer {
+        from: agent,
+        to: target,
+        amount: 5,
+    }];
+    let mut turn = one_action_turn(agent, 17, effects.clone());
+    turn.previous_receipt_hash = Some(previous_receipt_hash);
+
+    let base_turn_hash = turn.hash();
+    let mut base = sample_receipt(agent, base_turn_hash, Some(previous_receipt_hash));
+    base.effects_hash = *blake3::hash(&effects[0].hash()).as_bytes();
+    base.federation_id = [0xD4u8; 32];
+
+    let message = base.canonical_executor_signed_message();
+    assert!(
+        message.starts_with(b"executor-receipt-sig-v3:"),
+        "executor receipt signatures must use the v3 domain separator"
+    );
+
+    let mut changed_federation = base.clone();
+    changed_federation.federation_id = [0xE4u8; 32];
+    assert_ne!(
+        message,
+        changed_federation.canonical_executor_signed_message(),
+        "canonical executor signing message must bind federation_id"
+    );
+
+    let mut changed_actor = base.clone();
+    changed_actor.agent = CellId([0xE1u8; 32]);
+    assert_ne!(
+        message,
+        changed_actor.canonical_executor_signed_message(),
+        "canonical executor signing message must bind actor_id"
+    );
+
+    let mut changed_nonce_turn = turn.clone();
+    changed_nonce_turn.nonce += 1;
+    let mut changed_nonce = base.clone();
+    changed_nonce.turn_hash = changed_nonce_turn.hash();
+    assert_ne!(
+        message,
+        changed_nonce.canonical_executor_signed_message(),
+        "canonical executor signing message must bind nonce via receipt.turn_hash"
+    );
+
+    let mut changed_effects = base.clone();
+    changed_effects.effects_hash = [0xE5u8; 32];
+    assert_ne!(
+        message,
+        changed_effects.canonical_executor_signed_message(),
+        "canonical executor signing message must bind effects_hash"
+    );
+
+    let mut changed_previous = base;
+    changed_previous.previous_receipt_hash = Some([0xE3u8; 32]);
+    assert_ne!(
+        message,
+        changed_previous.canonical_executor_signed_message(),
+        "canonical executor signing message must bind previous_receipt_hash"
+    );
 }
 
 #[test]

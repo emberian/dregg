@@ -487,13 +487,40 @@ fn five_cell_ring_all_pairs_bound() {
 }
 
 #[test]
-#[ignore = "blocked on γ.2 Phase 1: BoundDelta with DeltaRelation::EqualAndOpposite on bilateral pair must agree on amount AND on sender_nonce derivation order"]
 fn bilateral_bound_delta_disagreement_on_nonce_rejects() {
-    // Subtle attack: A's projection uses sender_nonce=7, B's uses
-    // sender_nonce=8 (each side claims a different nonce in its trace).
-    // The γ.2 verifier must detect the disagreement because transfer_id
-    // depends on sender_nonce.
-    panic!("blocked");
+    let alice = CellId([0xA1; 32]);
+    let bob = CellId([0xB2; 32]);
+    let real_turn = make_transfer_turn(alice, bob, 10, 7);
+    let nonce_lie_turn = make_transfer_turn(alice, bob, 10, 8);
+
+    let bundle = BilateralBundle {
+        turn: real_turn.clone(),
+        entries: vec![
+            BilateralEntry {
+                cell_id: alice,
+                witnessed_receipt: fabricate_witnessed_receipt(
+                    &real_turn,
+                    &alice,
+                    dummy_receipt(alice),
+                ),
+            },
+            BilateralEntry {
+                cell_id: bob,
+                witnessed_receipt: fabricate_witnessed_receipt(
+                    &nonce_lie_turn,
+                    &bob,
+                    dummy_receipt(alice),
+                ),
+            },
+        ],
+        unilateral_attestations: std::collections::BTreeMap::new(),
+    };
+
+    let verdict = verify_bilateral_bundle(&bundle);
+    assert!(
+        !verdict.verified,
+        "nonce-derived transfer_id mismatch must reject"
+    );
 }
 
 #[test]
@@ -507,15 +534,71 @@ fn bilateral_with_layered_slot_caveats_evaluation_order() {
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on γ.2 Phase 1: per-cell direction_bit (1=outflow, 0=inflow) bound in PI; A claims outflow, B's projection ALSO claims outflow (i.e. B's projection says it sent to A) — off-AIR verifier must detect the direction mismatch"]
 fn direction_bit_both_outflow_rejects() {
-    panic!("blocked");
+    let alice = CellId([0xA1; 32]);
+    let bob = CellId([0xB2; 32]);
+    let real_turn = make_transfer_turn(alice, bob, 10, 7);
+    let reversed_turn = make_transfer_turn(bob, alice, 10, 7);
+
+    let bundle = BilateralBundle {
+        turn: real_turn.clone(),
+        entries: vec![
+            BilateralEntry {
+                cell_id: alice,
+                witnessed_receipt: fabricate_witnessed_receipt(
+                    &real_turn,
+                    &alice,
+                    dummy_receipt(alice),
+                ),
+            },
+            BilateralEntry {
+                cell_id: bob,
+                witnessed_receipt: fabricate_witnessed_receipt(
+                    &reversed_turn,
+                    &bob,
+                    dummy_receipt(alice),
+                ),
+            },
+        ],
+        unilateral_attestations: std::collections::BTreeMap::new(),
+    };
+
+    let verdict = verify_bilateral_bundle(&bundle);
+    assert!(!verdict.verified, "receiver claiming outflow must reject");
 }
 
 #[test]
-#[ignore = "blocked on γ.2 Phase 1: direction bit tamper — A says inflow when it was actually outflow; transfer_id matches B's but direction reversed"]
 fn direction_bit_inverted_on_sender_rejects() {
-    panic!("blocked");
+    let alice = CellId([0xA1; 32]);
+    let bob = CellId([0xB2; 32]);
+    let real_turn = make_transfer_turn(alice, bob, 10, 7);
+    let reversed_turn = make_transfer_turn(bob, alice, 10, 7);
+
+    let bundle = BilateralBundle {
+        turn: real_turn.clone(),
+        entries: vec![
+            BilateralEntry {
+                cell_id: alice,
+                witnessed_receipt: fabricate_witnessed_receipt(
+                    &reversed_turn,
+                    &alice,
+                    dummy_receipt(alice),
+                ),
+            },
+            BilateralEntry {
+                cell_id: bob,
+                witnessed_receipt: fabricate_witnessed_receipt(
+                    &real_turn,
+                    &bob,
+                    dummy_receipt(alice),
+                ),
+            },
+        ],
+        unilateral_attestations: std::collections::BTreeMap::new(),
+    };
+
+    let verdict = verify_bilateral_bundle(&bundle);
+    assert!(!verdict.verified, "sender claiming inflow must reject");
 }
 
 // ===========================================================================

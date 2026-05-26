@@ -1148,13 +1148,15 @@ fn witnessed_dfa_with_tampered_proof_rejects() {
         .expect_err("Dfa verifier must reject mismatched proof bytes");
     assert!(
         matches!(
-            err,
+            &err,
             ProgramError::WitnessedPredicateRejected {
-                kind_name: "exact-dfa-state-constraint-test-verifier",
+                kind_name: "Dfa",
+                reason,
                 ..
-            }
+            } if reason.contains("exact-dfa-state-constraint-test-verifier")
+                && reason.contains("proof mismatch")
         ),
-        "expected WitnessedPredicateRejected(exact dfa verifier), got: {err:?}"
+        "expected WitnessedPredicateRejected(Dfa) from exact verifier, got: {err:?}"
     );
 }
 

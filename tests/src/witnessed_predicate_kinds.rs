@@ -20,7 +20,10 @@ use dregg_cell::predicate::{
     WitnessedPredicateRegistry, WitnessedPredicateVerifier,
 };
 use dregg_cell::program::{TransitionMeta, WitnessBlobView, WitnessBundle, WitnessKindTag};
-use dregg_cell::{CellProgram, CellState, EvalContext, InputRef, ProgramError, StateConstraint};
+use dregg_cell::{
+    CellProgram, CellState, EvalContext, InputRef, MerkleMembershipProof, Nullifier, ProgramError,
+    StateConstraint,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers / shared concerns
@@ -126,6 +129,102 @@ fn exact_dfa_registry(
         expected_proof,
     }));
     registry
+}
+
+struct NullifierMerkleMembershipVerifier;
+
+impl WitnessedPredicateVerifier for NullifierMerkleMembershipVerifier {
+    fn name(&self) -> &'static str {
+        "nullifier-merkle-membership-test-verifier"
+    }
+
+    fn kind(&self) -> WitnessedPredicateKind {
+        WitnessedPredicateKind::MerkleMembership
+    }
+
+    fn verify(
+        &self,
+        commitment: &[u8; 32],
+        input: &PredicateInput<'_>,
+        proof_bytes: &[u8],
+    ) -> Result<(), WitnessedPredicateError> {
+        let sender = match input {
+            PredicateInput::Sender(sender) => *sender,
+            _ => {
+                return Err(WitnessedPredicateError::InputShapeMismatch {
+                    kind_name: self.name(),
+                    expected: "Sender",
+                    actual: "non-Sender",
+                });
+            }
+        };
+        let proof: MerkleMembershipProof =
+            postcard::from_bytes(proof_bytes).map_err(|e| WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: format!("could not decode MerkleMembershipProof: {e}"),
+            })?;
+        if proof.element.0 != *sender {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "membership proof element does not match sender".into(),
+            });
+        }
+        if !verify_nullifier_membership_proof(&proof, commitment) {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "membership path does not resolve to commitment root".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+fn merkle_membership_registry() -> WitnessedPredicateRegistry {
+    let mut registry = WitnessedPredicateRegistry::empty();
+    registry.register_builtin(Arc::new(NullifierMerkleMembershipVerifier));
+    registry
+}
+
+fn nullifier_leaf_hash(data: &[u8; 32]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key("dregg-nullifier-leaf v1");
+    hasher.update(data);
+    *hasher.finalize().as_bytes()
+}
+
+fn nullifier_node_hash(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key("dregg-nullifier-node v1");
+    hasher.update(left);
+    hasher.update(right);
+    *hasher.finalize().as_bytes()
+}
+
+fn verify_nullifier_membership_proof(proof: &MerkleMembershipProof, root: &[u8; 32]) -> bool {
+    let mut current = nullifier_leaf_hash(&proof.element.0);
+    let mut idx = proof.index;
+    for sibling in &proof.siblings {
+        current = if idx % 2 == 0 {
+            nullifier_node_hash(&current, sibling)
+        } else {
+            nullifier_node_hash(sibling, &current)
+        };
+        idx /= 2;
+    }
+    current == *root
+}
+
+fn two_leaf_nullifier_membership_fixture() -> ([u8; 32], Nullifier, Vec<u8>) {
+    let member = Nullifier([0x11u8; 32]);
+    let neighbor = Nullifier([0x22u8; 32]);
+    let member_leaf = nullifier_leaf_hash(&member.0);
+    let neighbor_leaf = nullifier_leaf_hash(&neighbor.0);
+    let root = nullifier_node_hash(&member_leaf, &neighbor_leaf);
+    let proof = MerkleMembershipProof {
+        element: member,
+        index: 0,
+        siblings: vec![neighbor_leaf],
+    };
+    let proof_bytes = postcard::to_allocvec(&proof).expect("serialize membership proof");
+    (root, member, proof_bytes)
 }
 
 // ===========================================================================
@@ -247,15 +346,28 @@ fn merkle_membership_predicate_constructor() {
 }
 
 #[test]
-#[ignore = "blocked on registry dispatch: MerklePoseidon2StarkAir wiring (CAVEAT-LAYER-COVERAGE.md §5)"]
 fn merkle_membership_with_valid_path_accepts() {
-    panic!("blocked");
+    let (root, member, proof_bytes) = two_leaf_nullifier_membership_fixture();
+    let registry = merkle_membership_registry();
+    let predicate = WitnessedPredicate::merkle_membership(root, InputRef::Sender, 0);
+
+    registry
+        .verify(&predicate, &PredicateInput::Sender(&member.0), &proof_bytes)
+        .expect("valid nullifier Merkle membership proof accepts");
 }
 
 #[test]
-#[ignore = "blocked on registry dispatch: Merkle membership with wrong root rejects"]
 fn merkle_membership_with_wrong_root_rejects() {
-    panic!("blocked");
+    let (root, member, proof_bytes) = two_leaf_nullifier_membership_fixture();
+    let registry = merkle_membership_registry();
+    let mut wrong_root = root;
+    wrong_root[0] ^= 0xFF;
+    let predicate = WitnessedPredicate::merkle_membership(wrong_root, InputRef::Sender, 0);
+    let err = registry
+        .verify(&predicate, &PredicateInput::Sender(&member.0), &proof_bytes)
+        .expect_err("wrong Merkle root must reject");
+
+    assert!(matches!(err, WitnessedPredicateError::Rejected { .. }));
 }
 
 #[test]

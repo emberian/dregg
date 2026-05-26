@@ -33,7 +33,7 @@
       <p>Publisher/consumer message queues whose invariants
          (<code>MonotonicSequence</code> on head/tail,
          <code>Immutable</code> on capacity + owner,
-         <code>Monotonic</code> on roots + message_root,
+         changed + non-zero opaque roots,
          <code>SenderAuthorized</code> against published publisher /
          consumer sets) live in a
          <code>FactoryDescriptor</code> in

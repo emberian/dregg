@@ -6,6 +6,10 @@
 <main class="sb">
   <header class="sb__topbar">
     <div class="sb__topbar-row">
+      <div class="sb__brand" aria-label="Starbridge">
+        <strong>Starbridge</strong>
+        <span>Dragon's Egg Workbench</span>
+      </div>
       <label class="sb__field">
         <span class="sb__field-label">Runtime</span>
         <select id="sb-runtime" class="sb__select" aria-label="Runtime">
@@ -18,9 +22,13 @@
                placeholder="dregg://cell/abc123…" autocomplete="off"
                spellcheck="false">
       </label>
+      <button id="sb-nav-back" class="sb__icon-btn" type="button" title="Back" disabled>Back</button>
+      <button id="sb-nav-forward" class="sb__icon-btn" type="button" title="Forward" disabled>Forward</button>
       <button id="sb-go" class="sb__btn">Go</button>
       <button id="sb-palette-open" class="sb__btn sb__btn--ghost" title="Open command palette">Palette</button>
       <button id="sb-snapshot" class="sb__btn sb__btn--ghost" title="Export snapshot">Snapshot</button>
+      <button id="sb-toggle-map" class="sb__icon-btn" type="button" title="Toggle system map">Map</button>
+      <button id="sb-toggle-workbench" class="sb__icon-btn" type="button" title="Toggle workbench pane">Tools</button>
       <div id="sb-status" class="sb__status" data-state="boot">booting</div>
     </div>
     <div id="sb-runtime-config" class="sb__topbar-row sb__topbar-row--config" hidden>
@@ -110,7 +118,16 @@
       </aside>
 
       <section class="sb__pane sb__pane--inspector" aria-label="Workspace">
-        <h2 id="sb-workspace-title" class="sb__pane-title">Workspace</h2>
+        <div class="sb__workspace-head">
+          <div>
+            <h2 id="sb-workspace-title" class="sb__pane-title">Workspace</h2>
+            <div id="sb-current-uri" class="sb__current-uri">no object selected</div>
+          </div>
+          <div class="sb__workspace-actions">
+            <span id="sb-current-kind" class="sb__context-pill">Dashboard</span>
+            <button id="sb-copy-uri" class="sb__icon-btn" type="button" disabled>Copy URI</button>
+          </div>
+        </div>
         <div id="sb-inspector" class="sb__inspector"></div>
       </section>
 
@@ -122,6 +139,7 @@
             <div class="sb__tool-tabs" role="tablist" aria-label="Workbench tools">
               <button id="sb-tool-raw" type="button" role="tab" aria-selected="true" data-tool="raw">Raw</button>
               <button id="sb-tool-console" type="button" role="tab" aria-selected="false" data-tool="console">Console</button>
+              <button id="sb-tool-activity" type="button" role="tab" aria-selected="false" data-tool="activity">Activity</button>
             </div>
           </div>
         </div>
@@ -136,6 +154,13 @@
                    autocomplete="off" spellcheck="false"
                    placeholder="help, seed, transfer, app nameservice, inspect dregg://…" />
           </form>
+        </section>
+        <section id="sb-activity" class="sb__activity" hidden>
+          <div class="sb__activity-head">
+            <span>Runtime activity</span>
+            <button id="sb-activity-refresh" class="sb__icon-btn" type="button">Refresh</button>
+          </div>
+          <div id="sb-activity-list-pane" class="sb__activity-list"></div>
         </section>
       </section>
     </div>

@@ -8,7 +8,7 @@
  */
 
 import { parseRef } from '../uri.js';
-import { InspectorBase, renderParseError, shortHex } from './_base.js';
+import { InspectorBase, dreggCodeLink, emptyState, renderParseError, shortHex } from './_base.js';
 
 class DreggTurn extends InspectorBase {
   _render() {
@@ -29,7 +29,12 @@ class DreggTurn extends InspectorBase {
 
     const Component = () => {
       const t = sig.value;
-      if (!t) return html`<div class="dregg-inspector dregg-inspector--empty">turn not found: <code>${shortHex(parsed.id, 16)}</code></div>`;
+      if (!t) return emptyState(
+        html,
+        'Turn not found',
+        html`No receipt-backed turn is present for <code>${shortHex(parsed.id, 16)}</code> in this runtime.`,
+        [dreggCodeLink(html, `dregg://receipt/${parsed.id}`, 'check matching receipt')],
+      );
       if (mode === 'compact') {
         return html`
           <span class="dregg-inspector dregg-inspector--compact">
@@ -46,11 +51,14 @@ class DreggTurn extends InspectorBase {
             <ul style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:4px;">
               ${actions.map((a, i) => {
                 const authJson = a.authorization ? JSON.stringify(a.authorization) : null;
+                const targetUri = a.target_cell ? `dregg://cell/${a.target_cell}` : null;
                 return html`
-                  <li style="display:flex;align-items:center;gap:6px;">
-                    <span style="color:var(--fg-dim);font-size:0.75rem;min-width:1.4em;">${String(i)}.</span>
-                    <code style="font-size:0.78rem;" title=${a.target_cell || ''}>${shortHex(a.target_cell, 10)}</code>
-                    <span style="color:var(--fg-dim);font-size:0.78rem;">${shortHex(a.method, 8)}</span>
+                  <li class="dregg-inspector__action-row">
+                    <span class="dregg-inspector__action-index">${String(i)}.</span>
+                    ${targetUri
+                      ? dreggCodeLink(html, targetUri, shortHex(a.target_cell, 10), a.target_cell)
+                      : html`<code title=${a.target_cell || ''}>${shortHex(a.target_cell, 10)}</code>`}
+                    <span class="dregg-inspector__action-method">${shortHex(a.method, 8)}</span>
                     ${authJson
                       ? html`<dregg-authorization data=${authJson} mode="compact"></dregg-authorization>`
                       : null}
@@ -65,9 +73,10 @@ class DreggTurn extends InspectorBase {
           <header>
             <span class="dregg-inspector__kind">turn</span>
             <code class="dregg-inspector__id" title=${parsed.id}>${shortHex(parsed.id, 24)}</code>
+            <span class="dregg-inspector__meta">${String(t.action_count)} effects · ${String(t.computrons_used)} computrons</span>
           </header>
           <dl class="dregg-inspector__kv">
-            <dt>turn hash</dt><dd><code>${t.turn_hash}</code></dd>
+            <dt>turn hash</dt><dd>${dreggCodeLink(html, `dregg://turn/${t.turn_hash}`, shortHex(t.turn_hash, 24), t.turn_hash)}</dd>
             <dt>effects</dt><dd>${String(t.action_count)}</dd>
             <dt>computrons</dt><dd>${String(t.computrons_used)}</dd>
             <dt>timestamp</dt><dd>${String(t.timestamp)}</dd>
@@ -78,7 +87,10 @@ class DreggTurn extends InspectorBase {
             </dd>
             ${actionList}
             <dt>receipt</dt>
-            <dd><dregg-receipt uri=${`dregg://receipt/${t.turn_hash}`} mode="compact"></dregg-receipt></dd>
+            <dd>
+              ${dreggCodeLink(html, `dregg://receipt/${t.turn_hash}`, 'open receipt')}
+              <dregg-receipt uri=${`dregg://receipt/${t.turn_hash}`} mode="compact"></dregg-receipt>
+            </dd>
           </dl>
           <details style="margin-top:var(--s3,8px);">
             <summary style="cursor:pointer;color:var(--fg-dim);font-size:0.82rem;user-select:none;">Trace</summary>

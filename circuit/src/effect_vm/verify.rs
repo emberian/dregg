@@ -193,8 +193,8 @@ pub fn verify_slot_caveat_manifest(
         }
         let p0 = public_inputs[base + 2];
         let p1 = public_inputs[base + 3];
-        let _p2 = public_inputs[base + 4];
-        let _p3 = public_inputs[base + 5];
+        let p2 = public_inputs[base + 4];
+        let p3 = public_inputs[base + 5];
         let old_v = initial_fields[slot_idx];
         let new_v = final_fields[slot_idx];
         match tag {
@@ -296,14 +296,28 @@ pub fn verify_slot_caveat_manifest(
                     ));
                 }
             }
-            // Variants whose enforcement needs context outside the 4-byte
-            // state-column form (set-membership, transition tables, etc.)
-            // accept the manifest entry at this layer and defer to the
-            // executor/verifier schedule. They still round-trip through PI
-            // for shape honesty, and malformed entries are rejected above.
-            t if t == pi::SLOT_CAVEAT_TAG_SENDER_AUTHORIZED
-                || t == pi::SLOT_CAVEAT_TAG_ALLOWED_TRANSITIONS =>
-            {
+            t if t == pi::SLOT_CAVEAT_TAG_ALLOWED_TRANSITIONS => {
+                // Bounded AIR-teeth lane: singleton transition table.
+                //
+                // params = [count=1, allowed_old, allowed_new, reserved=0].
+                // Larger transition tables still need a real table/Merkle
+                // membership gadget and are omitted by production projection.
+                if p0 != BabyBear::ONE || p3 != BabyBear::ZERO {
+                    return Err(format!(
+                        "slot-caveat[{i}] AllowedTransitions on slot {slot_idx}: unsupported manifest encoding"
+                    ));
+                }
+                if old_v != p1 || new_v != p2 {
+                    return Err(format!(
+                        "slot-caveat[{i}] AllowedTransitions on slot {slot_idx}: ({old_v:?}, {new_v:?}) not equal to listed pair ({p1:?}, {p2:?})"
+                    ));
+                }
+            }
+            // SenderAuthorized needs sender identity plus Merkle/blinded-set
+            // witness verification context. The Effect-VM manifest only carries
+            // the declaration shape, so production enforcement remains in the
+            // witnessed-predicate executor path.
+            t if t == pi::SLOT_CAVEAT_TAG_SENDER_AUTHORIZED => {
                 // Defer.
             }
             other => {

@@ -46,10 +46,10 @@ content-store for the (off-slot) message payloads.
 | 0 | `seq_head` | `Monotonic` | `MonotonicSequence` under `publish`; `Immutable` under `consume` / `grant_*` |
 | 1 | `seq_tail` | `Monotonic` | `MonotonicSequence` under `consume`; `Immutable` under `publish` / `grant_*` |
 | 2 | `capacity` | `Immutable` | (frozen everywhere) |
-| 3 | `authorized_publishers_root` | `Monotonic` | `Monotonic` under `grant_publisher`; `Immutable` everywhere else |
-| 4 | `authorized_consumers_root` | `Monotonic` | `Monotonic` under `grant_consumer`; `Immutable` everywhere else |
+| 3 | `authorized_publishers_root` | opaque commitment | changed + non-zero under `grant_publisher`; `Immutable` everywhere else |
+| 4 | `authorized_consumers_root` | opaque commitment | changed + non-zero under `grant_consumer`; `Immutable` everywhere else |
 | 5 | `owner_pk_hash` | `Immutable` | (frozen everywhere) |
-| 6 | `message_root` | `Monotonic` | `Monotonic` under `publish`; `Immutable` under `consume` / `grant_*` |
+| 6 | `message_root` | opaque commitment | changed + non-zero under `publish`; `Immutable` under `consume` / `grant_*` |
 | 7 | `latest_payload_hash` | — | overwritten under `publish`; `Immutable` under `consume` / `grant_*` |
 
 ### Why `message_root` (a root commitment) and not per-message slots?
@@ -66,9 +66,10 @@ The `WriteOnce`-at-the-individual-message-level semantic still holds
 — it's structurally enforced by the root: once `(i, payload_hash)` has
 been folded into the root, the root commits to that payload at
 position `i`, and a forgery would have to produce the same root
-(rejected by the consumer's Merkle membership check). The slot-level
-`Monotonic { index: 6 }` constraint enforces only that the root
-grows.
+(rejected by the consumer's Merkle membership check). At the slot
+level, the program treats roots as opaque commitments: the operation
+that owns a root requires it to change and remain non-zero, while all
+other operations freeze it.
 
 For deployments where the message ring is tiny and slot-resident (no
 off-cell store), the `message_root` slot can be replaced by a fixed
@@ -96,7 +97,7 @@ Effects: three `SetField` (slots 0, 6, 7) + one `EmitEvent`. The
 publish-case constraints enforce:
 - head advances by exactly +1 (`MonotonicSequence`);
 - tail is immutable (no co-advance bypass);
-- message_root advances monotonically;
+- message_root changes and remains non-zero;
 - sender is in `authorized_publishers_root` (`SenderAuthorized`);
 - membership roots stay frozen.
 
@@ -131,8 +132,7 @@ let action = build_grant_publisher_action(
 
 Effects: one `SetField` (slot 3 or 4) + one `EmitEvent`. The grant-case
 constraints enforce:
-- the targeted membership root advances monotonically (insertions
-  only; no revoke-by-rewrite);
+- the targeted membership root changes and remains non-zero;
 - every other slot stays frozen.
 
 The "only owner may grant" rule rides on the per-cell capability
@@ -152,7 +152,8 @@ against hand-rolled `(old, new, meta)` triples, covering:
   one).
 - **Rewrite of `message_root` under `consume`** → rejected (`Immutable`).
 - **Rewrite of `latest_payload` under `consume`** → rejected.
-- **Rewind of `message_root` under `publish`** → rejected (`Monotonic`).
+- **No-op or zero `message_root` under `publish`** → rejected
+  (changed+non-zero opaque-root invariant).
 - **Head / tail decrement** → rejected (`MonotonicSequence`).
 - **Head `+= 2`** → rejected (`MonotonicSequence` requires exactly `+1`).
 - **Publish advances tail** → rejected (`Immutable` on slot 1 in the
@@ -163,8 +164,8 @@ against hand-rolled `(old, new, meta)` triples, covering:
 - **Unknown method symbol** → rejected (`NoTransitionCaseMatched` —
   Cav-Codex Block 4 default-deny).
 - **`grant_consumer` touches publishers root** → rejected.
-- **`grant_publisher` rewinds publishers root** → rejected
-  (`Monotonic`).
+- **`grant_publisher` leaves publishers root unchanged or zeroes it** →
+  rejected (changed+non-zero opaque-root invariant).
 
 Run:
 

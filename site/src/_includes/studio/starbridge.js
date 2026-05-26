@@ -63,10 +63,15 @@ function writeUrlState({ at, runtime }) {
 // Main.
 // ----------------------------------------------------------------------------
 (async function main() {
+  const rootEl     = document.querySelector('.sb');
   const statusEl   = document.getElementById('sb-status');
   const pickerEl   = document.getElementById('sb-runtime');
   const uriInput   = document.getElementById('sb-uri');
   const goBtn      = document.getElementById('sb-go');
+  const navBackBtn = document.getElementById('sb-nav-back');
+  const navForwardBtn = document.getElementById('sb-nav-forward');
+  const toggleMapBtn = document.getElementById('sb-toggle-map');
+  const toggleWorkbenchBtn = document.getElementById('sb-toggle-workbench');
   const snapBtn    = document.getElementById('sb-snapshot');
   const paletteOpenBtn = document.getElementById('sb-palette-open');
   const paletteEl = document.getElementById('sb-palette');
@@ -96,6 +101,9 @@ function writeUrlState({ at, runtime }) {
   const simActions = document.getElementById('sb-sim-actions');
   const inspector  = document.getElementById('sb-inspector');
   const workspaceTitle = document.getElementById('sb-workspace-title');
+  const currentUriEl = document.getElementById('sb-current-uri');
+  const currentKindEl = document.getElementById('sb-current-kind');
+  const copyUriBtn = document.getElementById('sb-copy-uri');
   const rawEl      = document.getElementById('sb-raw');
   const rawFilter = document.getElementById('sb-raw-filter');
   const rawCopyBtn = document.getElementById('sb-raw-copy');
@@ -103,6 +111,9 @@ function writeUrlState({ at, runtime }) {
   const consoleOut = document.getElementById('sb-console-output');
   const consoleForm = document.getElementById('sb-console-form');
   const consoleInput = document.getElementById('sb-console-input');
+  const activityEl = document.getElementById('sb-activity');
+  const activityPane = document.getElementById('sb-activity-list-pane');
+  const activityRefreshBtn = document.getElementById('sb-activity-refresh');
   const app        = document.getElementById('sb-app');
 
   function setStatus(text, state) {
@@ -120,6 +131,10 @@ function writeUrlState({ at, runtime }) {
   const appCatalog = new Map();
   let rawText = 'no object selected';
   let labBusy = 0;
+  let navApplying = false;
+  const localActivity = [];
+  const navHistory = [];
+  let navIndex = -1;
   const labState = {
     alice: null,
     bob: null,
@@ -127,6 +142,33 @@ function writeUrlState({ at, runtime }) {
     lastTransfer: null,
     lastIntent: null,
   };
+
+  function readShellLayout() {
+    try {
+      return JSON.parse(localStorage.getItem('starbridge.shell.layout') || '{}');
+    } catch {
+      return {};
+    }
+  }
+
+  function writeShellLayout(next) {
+    try { localStorage.setItem('starbridge.shell.layout', JSON.stringify(next)); } catch {}
+  }
+
+  function applyShellLayout(next = readShellLayout()) {
+    if (!rootEl) return;
+    rootEl.dataset.map = next.map === 'hidden' ? 'hidden' : 'visible';
+    rootEl.dataset.workbench = next.workbench === 'hidden' ? 'hidden' : 'visible';
+    if (toggleMapBtn) toggleMapBtn.setAttribute('aria-pressed', rootEl.dataset.map !== 'hidden' ? 'true' : 'false');
+    if (toggleWorkbenchBtn) toggleWorkbenchBtn.setAttribute('aria-pressed', rootEl.dataset.workbench !== 'hidden' ? 'true' : 'false');
+  }
+
+  function toggleShellPane(key) {
+    const next = readShellLayout();
+    next[key] = next[key] === 'hidden' ? 'visible' : 'hidden';
+    writeShellLayout(next);
+    applyShellLayout(next);
+  }
 
   // Per-runtime teardown of effects we owned. Cleared and rebuilt on swap.
   const teardowns = [];
@@ -166,13 +208,18 @@ function writeUrlState({ at, runtime }) {
   }
 
   function selectWorkbenchTool(tool) {
-    const showConsole = tool === 'console';
-    if (rawEl) rawEl.hidden = showConsole;
-    if (consoleEl) consoleEl.hidden = !showConsole;
+    const selected = ['raw', 'console', 'activity'].includes(tool) ? tool : 'raw';
+    const showRaw = selected === 'raw';
+    if (rawEl) rawEl.hidden = !showRaw;
+    if (rawFilter) rawFilter.hidden = !showRaw;
+    if (rawCopyBtn) rawCopyBtn.hidden = !showRaw;
+    if (consoleEl) consoleEl.hidden = selected !== 'console';
+    if (activityEl) activityEl.hidden = selected !== 'activity';
     for (const btn of document.querySelectorAll('[data-tool]')) {
-      btn.setAttribute('aria-selected', btn.dataset.tool === tool ? 'true' : 'false');
+      btn.setAttribute('aria-selected', btn.dataset.tool === selected ? 'true' : 'false');
     }
-    if (showConsole) queueMicrotask(() => consoleInput?.focus());
+    if (selected === 'console') queueMicrotask(() => consoleInput?.focus());
+    if (selected === 'activity') renderActivityPane();
   }
 
   function consoleLog(message, kind = 'info') {
@@ -184,12 +231,31 @@ function writeUrlState({ at, runtime }) {
     consoleOut.scrollTop = consoleOut.scrollHeight;
   }
 
+  function logActivity(kind, label, detail = {}) {
+    localActivity.unshift({
+      source: 'starbridge',
+      kind,
+      label,
+      detail,
+      at: new Date().toISOString(),
+      uri: currentUri,
+    });
+    localActivity.splice(80);
+    if (activityEl && !activityEl.hidden) renderActivityPane();
+  }
+
   function appMetaFor(id) {
     return appCatalog.get(id) || {
       id,
       name: id.replace(/-/g, ' '),
       page: `/starbridge-apps/${id}/pages/index.html`,
     };
+  }
+
+  function openAppWorkspace(appMeta) {
+    if (!appMeta?.id) return;
+    appCatalog.set(appMeta.id, appMeta);
+    setCurrentUri(`dregg://app/${appMeta.id}`);
   }
 
   function setRawText(text) {
@@ -217,6 +283,92 @@ function writeUrlState({ at, runtime }) {
     }
   }
 
+  function rememberNavigation(uri) {
+    if (navApplying) return;
+    const key = uri || '';
+    if (navHistory[navIndex] === key) {
+      updateNavButtons();
+      return;
+    }
+    navHistory.splice(navIndex + 1);
+    navHistory.push(key);
+    navIndex = navHistory.length - 1;
+    updateNavButtons();
+  }
+
+  function updateNavButtons() {
+    if (navBackBtn) navBackBtn.disabled = navIndex <= 0;
+    if (navForwardBtn) navForwardBtn.disabled = navIndex < 0 || navIndex >= navHistory.length - 1;
+  }
+
+  function updateCurrentContext(uri) {
+    if (!uri) {
+      if (currentUriEl) currentUriEl.textContent = 'no object selected';
+      if (currentKindEl) currentKindEl.textContent = 'Dashboard';
+      if (copyUriBtn) copyUriBtn.disabled = true;
+      return;
+    }
+    let label = 'Object';
+    try {
+      const parsed = parseRef(uri);
+      label = parsed.kind ? parsed.kind[0].toUpperCase() + parsed.kind.slice(1) : 'Object';
+    } catch {}
+    if (currentUriEl) currentUriEl.textContent = uri;
+    if (currentKindEl) currentKindEl.textContent = label;
+    if (copyUriBtn) copyUriBtn.disabled = false;
+  }
+
+  function jumpNavigation(delta) {
+    const next = navIndex + delta;
+    if (next < 0 || next >= navHistory.length) return;
+    navApplying = true;
+    navIndex = next;
+    setCurrentUri(navHistory[navIndex] || null);
+    navApplying = false;
+    updateNavButtons();
+  }
+
+  function activityEvents() {
+    let runtimeEvents = [];
+    try {
+      const feed = runtime?.getTraceEvents?.().value;
+      runtimeEvents = Array.isArray(feed?.events) ? feed.events : [];
+    } catch {
+      runtimeEvents = [];
+    }
+    return [...localActivity, ...runtimeEvents.map((event) => ({ source: 'runtime', ...event }))];
+  }
+
+  function renderActivityPane() {
+    if (!activityPane) return;
+    const events = activityEvents();
+    activityPane.replaceChildren();
+    if (!events.length) {
+      const empty = document.createElement('div');
+      empty.className = 'sb__activity-empty';
+      empty.textContent = 'No activity yet';
+      activityPane.appendChild(empty);
+      return;
+    }
+    for (const [idx, event] of events.slice(0, 80).entries()) {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'sb__activity-row';
+      const kind = event.kind || event.event_type || event.type || 'event';
+      const label = event.label || event.message || event.cell_id || event.turn_hash || event.receipt_hash || `event ${events.length - idx}`;
+      row.innerHTML = `
+        <span>${escapeHtml(kind)}</span>
+        <strong>${escapeHtml(label)}</strong>
+        <code>${escapeHtml(safeJson(event).slice(0, 160))}</code>
+      `;
+      row.addEventListener('click', () => {
+        setRawText(safeJson(event, 2));
+        selectWorkbenchTool('raw');
+      });
+      activityPane.appendChild(row);
+    }
+  }
+
   function paletteItems() {
     const items = [
       { group: 'Scripts', label: 'Seed alice + bob', detail: 'Create starter agents', run: seedWorld },
@@ -225,8 +377,9 @@ function writeUrlState({ at, runtime }) {
       { group: 'Scripts', label: 'Post storage intent', detail: 'Publish a storage need intent', run: postIntentFlow },
       { group: 'Workbench', label: 'Open console', detail: 'Switch right pane to console', run: () => selectWorkbenchTool('console') },
       { group: 'Workbench', label: 'Open raw view', detail: 'Switch right pane to raw JSON', run: () => selectWorkbenchTool('raw') },
+      { group: 'Workbench', label: 'Open activity', detail: 'Show runtime event feed', run: () => selectWorkbenchTool('activity') },
       { group: 'Workbench', label: 'Export snapshot', detail: 'Download runtime JSON snapshot', run: exportSnapshot },
-      { group: 'Workbench', label: 'Activity feed', detail: 'Inspect runtime activity', run: () => setCurrentUri('dregg://activity/feed') },
+      { group: 'Workbench', label: 'Inspect activity feed', detail: 'Open activity inspector URI', run: () => setCurrentUri('dregg://activity/feed') },
     ];
 
     for (const id of ['nameservice', 'identity', 'governed-namespace', 'subscription']) {
@@ -235,7 +388,7 @@ function writeUrlState({ at, runtime }) {
         group: 'Programs',
         label: appMeta.name || id,
         detail: `Open ${id}`,
-        run: () => renderAppWorkspace(appMetaFor(id)),
+        run: () => openAppWorkspace(appMetaFor(id)),
       });
     }
     for (const id of Object.keys(kinds || {})) {
@@ -360,6 +513,7 @@ function writeUrlState({ at, runtime }) {
     if (appMeta?.id) appCatalog.set(appMeta.id, appMeta);
     inspector.replaceChildren();
     if (workspaceTitle) workspaceTitle.textContent = 'Program';
+    updateCurrentContext(`dregg://app/${appMeta.id}`);
     setRawText(JSON.stringify(appMeta, null, 2));
     currentUri = `dregg://app/${appMeta.id}`;
     uriInput.value = currentUri;
@@ -406,6 +560,7 @@ function writeUrlState({ at, runtime }) {
     });
     inspector.appendChild(shell);
     setStatus(`app workspace · ${appMeta.name || appMeta.id}`, 'ready');
+    logActivity('program', `opened ${appMeta.name || appMeta.id}`, { app: appMeta.id, page });
   }
 
   function renderInspectorPane(uri) {
@@ -425,7 +580,7 @@ function writeUrlState({ at, runtime }) {
       return;
     }
     if (parsed.kind === 'app') {
-      renderAppWorkspace({ id: parsed.id, name: parsed.id, page: `/starbridge-apps/${parsed.id}/pages/index.html` });
+      renderAppWorkspace(appMetaFor(parsed.id));
       return;
     }
     const tagName = `dregg-${parsed.kind}`;
@@ -445,6 +600,22 @@ function writeUrlState({ at, runtime }) {
     return String(s ?? '').replace(/[&<>"']/g, (c) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
     })[c]);
+  }
+
+  function safeJson(value, spaces = 0) {
+    const seen = new WeakSet();
+    try {
+      return JSON.stringify(value, (_, val) => {
+        if (typeof val === 'bigint') return val.toString();
+        if (val && typeof val === 'object') {
+          if (seen.has(val)) return '[circular]';
+          seen.add(val);
+        }
+        return val;
+      }, spaces);
+    } catch (e) {
+      return `/* unserializable: ${e.message} */`;
+    }
   }
 
   function renderDashboard() {
@@ -525,12 +696,13 @@ function writeUrlState({ at, runtime }) {
     panel.querySelector('[data-flow="federation"]')?.addEventListener('click', createFederationFlow);
     panel.querySelector('[data-flow="intent"]')?.addEventListener('click', postIntentFlow);
     panel.querySelector('[data-open-activity]')?.addEventListener('click', () => setCurrentUri('dregg://activity/feed'));
+    panel.querySelector('[data-open-activity]')?.addEventListener('click', () => selectWorkbenchTool('activity'));
     panel.querySelector('[data-open-console]')?.addEventListener('click', () => {
       selectWorkbenchTool('console');
       consoleLog('console ready. try: help, seed, transfer, fed, intent, app nameservice', 'ok');
     });
     for (const btn of panel.querySelectorAll('[data-open-app]')) {
-      btn.addEventListener('click', () => renderAppWorkspace(appMetaFor(btn.dataset.openApp)));
+      btn.addEventListener('click', () => openAppWorkspace(appMetaFor(btn.dataset.openApp)));
     }
     panel.querySelector('[data-open-palette]')?.addEventListener('click', () => openPalette());
     for (const btn of panel.querySelectorAll('[data-uri]')) {
@@ -699,6 +871,15 @@ function writeUrlState({ at, runtime }) {
         title: JSON.stringify(event).slice(0, 180),
       }),
     });
+
+    if (typeof runtime.getTraceEvents === 'function') {
+      const sig = runtime.getTraceEvents();
+      const stop = api.effect(() => {
+        sig.value;
+        if (activityEl && !activityEl.hidden) renderActivityPane();
+      });
+      teardowns.push(stop);
+    }
   }
 
   // --------------------------------------------------------------------------
@@ -765,8 +946,13 @@ function writeUrlState({ at, runtime }) {
   // --------------------------------------------------------------------------
   function setCurrentUri(uri) {
     currentUri = uri || null;
+    updateCurrentContext(currentUri);
     if (uri) uriInput.value = uri;
-    if (uri) consoleLog(`inspect ${uri}`, 'cmd');
+    else uriInput.value = '';
+    if (uri) {
+      consoleLog(`inspect ${uri}`, 'cmd');
+      logActivity('inspect', uri, { runtime: currentRuntimeId });
+    }
     // Refresh tree highlight without rebuilding (cheap path).
     for (const btn of document.querySelectorAll('.sb__list-item')) {
       btn.removeAttribute('aria-current');
@@ -783,6 +969,7 @@ function writeUrlState({ at, runtime }) {
     // sub-teardown list so we don't kill the tree+cursor effects.
     rebindRawOnly(uri);
     writeUrlState({ at: uri, runtime: currentRuntimeId });
+    rememberNavigation(uri);
   }
 
   async function runLab(label, fn) {
@@ -791,10 +978,12 @@ function writeUrlState({ at, runtime }) {
     setLabButtonsDisabled(true);
     setStatus(`${label}…`, 'boot');
     consoleLog(`run ${label}`, 'cmd');
+    logActivity('script', `started ${label}`, { runtime: currentRuntimeId });
     try {
       const result = await fn();
       setStatus(`ready · ${runtimeLabel()}`, 'ready');
       consoleLog(`${label} complete`, 'ok');
+      logActivity('script', `completed ${label}`, { result });
       return result;
     } catch (err) {
       console.warn(`[starbridge] ${label} failed:`, err);
@@ -901,7 +1090,7 @@ function writeUrlState({ at, runtime }) {
     switch (cmd.toLowerCase()) {
       case 'help':
       case '?':
-        consoleLog('commands: help, status, seed, transfer, fed, intent, app <id>, inspect <uri>, runtime <id>, raw, clear, snapshot', 'ok');
+        consoleLog('commands: help, status, seed, transfer, fed, intent, app <id>, inspect <uri>, runtime <id>, raw, console, activity, clear, snapshot', 'ok');
         break;
       case 'status': {
         const counts = currentCounts();
@@ -926,7 +1115,7 @@ function writeUrlState({ at, runtime }) {
       case 'app':
       case 'open': {
         const id = rest || 'nameservice';
-        renderAppWorkspace(appMetaFor(id));
+        openAppWorkspace(appMetaFor(id));
         consoleLog(`opened app ${id}`, 'ok');
         break;
       }
@@ -940,6 +1129,10 @@ function writeUrlState({ at, runtime }) {
         break;
       case 'console':
         selectWorkbenchTool('console');
+        break;
+      case 'activity':
+      case 'events':
+        selectWorkbenchTool('activity');
         break;
       case 'snapshot':
         exportSnapshot();
@@ -1076,6 +1269,7 @@ function writeUrlState({ at, runtime }) {
 
     setStatus('loading inspectors…', 'boot');
     await import('/_includes/studio/inspectors.js');
+    applyShellLayout();
 
     kinds = await loadRuntimeKinds();
     if (remoteUrlInput) {
@@ -1117,6 +1311,19 @@ function writeUrlState({ at, runtime }) {
       updateRuntimeConfigVisibility();
       swapRuntime(pickerEl.value);
     });
+    toggleMapBtn?.addEventListener('click', () => toggleShellPane('map'));
+    toggleWorkbenchBtn?.addEventListener('click', () => toggleShellPane('workbench'));
+    copyUriBtn?.addEventListener('click', async () => {
+      if (!currentUri) return;
+      try {
+        await navigator.clipboard.writeText(currentUri);
+        setStatus('URI copied', 'ready');
+        consoleLog(`copied ${currentUri}`, 'ok');
+        logActivity('copy', `copied ${currentUri}`, { uri: currentUri });
+      } catch (err) {
+        setStatus('copy failed: ' + (err?.message || err), 'err');
+      }
+    });
     connectBtn?.addEventListener('click', () => {
       if (remoteUrlInput && window.localStorage) {
         localStorage.setItem('dregg.remote.baseUrl', remoteUrlInput.value.trim());
@@ -1147,6 +1354,8 @@ function writeUrlState({ at, runtime }) {
     uriInput.addEventListener('keydown', e => {
       if (e.key === 'Enter') { e.preventDefault(); commitUri(); }
     });
+    navBackBtn?.addEventListener('click', () => jumpNavigation(-1));
+    navForwardBtn?.addEventListener('click', () => jumpNavigation(1));
 
     snapBtn.addEventListener('click', () => {
       exportSnapshot();
@@ -1155,6 +1364,7 @@ function writeUrlState({ at, runtime }) {
     for (const tab of document.querySelectorAll('[data-tool]')) {
       tab.addEventListener('click', () => selectWorkbenchTool(tab.dataset.tool || 'raw'));
     }
+    activityRefreshBtn?.addEventListener('click', renderActivityPane);
     rawFilter?.addEventListener('input', renderRawText);
     rawCopyBtn?.addEventListener('click', async () => {
       try {
@@ -1247,7 +1457,7 @@ function writeUrlState({ at, runtime }) {
     if (appListEl) {
       appListEl.addEventListener('app-open', (e) => {
         const { app } = e.detail || {};
-        if (app) renderAppWorkspace(app);
+        if (app) openAppWorkspace(app);
       });
     }
   } catch (e) {
