@@ -6,7 +6,7 @@
 
 == Bridge Architecture
 
-Dregg connects to external chains via _proof translation_---not consensus bridging. Each bridge converts a Dregg STARK proof into a format the remote chain can verify natively. No relay committee, no multi-sig, no trusted oracle. The remote chain verifies a mathematical proof of Dregg state validity.
+Dragon's Egg connects to external chains via _proof translation_---not consensus bridging. Each bridge converts a Dregg STARK proof into a format the remote chain can verify natively. No relay committee, no multi-sig, no trusted oracle. The remote chain verifies a mathematical proof of Dregg state validity.
 
 The bridge's portable note proof `PortableNoteProof` has public inputs `(nullifier, attested_source_root, destination_federation, value, asset_type)`. The `destination_federation` field is now both surfaced in PI *and algebraically bound* by the AIR (closes threat T6 from the executor-honesty audit and `AUDIT-nullifiers.md §5`). A proof addressed to federation A cannot be replayed at federation B.
 

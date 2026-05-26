@@ -6,9 +6,9 @@
 
 == Thesis
 
-seL4 provides hardware-enforced capability isolation for processes on a single machine. Dregg provides cryptographically-enforced capability isolation for agents across a network, using ZK proofs where seL4 uses hardware rings. The result is a coordination substrate for AI agents: not a chatbot wrapper or an API gateway, but the runtime environment in which AI agents exist as first-class entities with identity, memory, authority, economic relationships, and auditable histories.
+seL4 provides hardware-enforced capability isolation for processes on a single machine. Dragon's Egg provides cryptographically-enforced capability isolation for agents across a network, using ZK proofs where seL4 uses hardware rings. The result is a coordination substrate for AI agents: not a chatbot wrapper or an API gateway, but the runtime environment in which AI agents exist as first-class entities with identity, memory, authority, economic relationships, and auditable histories.
 
-== The seL4/Dregg Structural Correspondence
+== The seL4/Dragon's Egg Structural Correspondence
 
 #figure(
   table(
@@ -120,7 +120,7 @@ The intent engine implements a market for AI labor:
     [Revocation is "rotate the key"], [CDT-style revocation, epoch, channels],
     [No economic model beyond pay-per-call], [Notes, budgets, conditional turns, bonds],
   ),
-  caption: [API-key systems implement authentication ("who are you?"). Dregg implements authorization ("what can you do, who gave you that authority, and can they take it back?").],
+  caption: [API-key systems implement authentication ("who are you?"). Dragon's Egg implements authorization ("what can you do, who gave you that authority, and can they take it back?").],
 )
 
 == Capability Patterns for AI

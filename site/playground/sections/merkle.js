@@ -8,7 +8,7 @@ export function initMerkle(wasm) {
     <div class="section-header">
       <h2>Merkle Trees</h2>
       <p>
-        Dregg uses 4-ary BLAKE3 Merkle trees for state commitments. A single root hash
+        Dragon's Egg uses 4-ary BLAKE3 Merkle trees for state commitments. A single root hash
         commits to all leaves. You can prove that a specific leaf is in the tree (membership)
         or that a leaf is NOT in the tree (absence) — both with logarithmic-sized proofs.
       </p>

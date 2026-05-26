@@ -1,4 +1,4 @@
-// Dregg Cipherclerk Recovery — handles mnemonic input validation and cipherclerk restore.
+// Dragon's Egg Cipherclerk Recovery — handles mnemonic input validation and cipherclerk restore.
 
 const wordGrid = document.getElementById('wordGrid');
 const pasteBtn = document.getElementById('pasteBtn');

@@ -13,7 +13,7 @@ export function initCrossfed(wasm) {
         <a href="/starbridge.html?at=dregg://federation/0" target="_blank">Open live federation in Starbridge →</a>
       </div>
       <p>
-        Dregg federations are independent authorization domains. Cross-federation operations
+        Dragon's Egg federations are independent authorization domains. Cross-federation operations
         bridge notes, tokens, and capabilities across boundaries using conditional turns and
         intent matching. This is how dregg composes — multiple organizations can cooperate
         without sharing their internal state.

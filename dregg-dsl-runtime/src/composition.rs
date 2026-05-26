@@ -1368,7 +1368,7 @@ mod tests {
         let composed = compose_and(&mem, &pred, &[(0, 0)]);
 
         let circuit = ComposedDslCircuit::new(composed.clone());
-        let width = circuit.total_width();
+        let _width = circuit.total_width();
 
         let shared = vec![BabyBear::new(42)];
         let (mut trace, pi) = generate_and_trace(

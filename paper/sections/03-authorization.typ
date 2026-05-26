@@ -6,7 +6,7 @@
 
 == Multi-Modal Authorization
 
-Dregg supports six authorization modes, each suited to a different trust context:
+Dragon's Egg supports six authorization modes, each suited to a different trust context:
 
 #figure(
   table(
@@ -129,7 +129,7 @@ What the unification does *not* absorb: per-action static preconditions (`SlotEq
 
 In seL4 @sel4, every capability exists in a _Capability Derivation Tree_ (CDT): a tree rooted at the original untyped memory capability, where each child is derived from its parent. The kernel traverses this tree synchronously to revoke an entire subtree in $O(n)$ time.
 
-Dregg maintains a distributed analog. Each delegation step records:
+Dragon's Egg maintains a distributed analog. Each delegation step records:
 
 $ "DelegationEdge" = ("parent": "CapHash", "child": "CapHash", "attenuation": Delta, "epoch": "u64") $
 
@@ -152,7 +152,7 @@ These edges form a tree committed to a Merkle structure. The CDT is not enforced
   caption: [CDT duality: seL4 ENFORCES the tree; Dregg PROVES the tree.],
 )
 
-In seL4, revocation is authoritative because the kernel IS the tree---traversal and deletion are the same operation. In Dregg, the tree is a claim that anyone can verify: the delegator proves their capability descends from a valid root, and the revoker proves non-membership in the current valid set.
+In seL4, revocation is authoritative because the kernel IS the tree---traversal and deletion are the same operation. In Dragon's Egg, the tree is a claim that anyone can verify: the delegator proves their capability descends from a valid root, and the revoker proves non-membership in the current valid set.
 
 === Delegation: Snapshot + Refresh
 
@@ -164,7 +164,7 @@ The child acts offline using the snapshot. Acceptors (remote verifiers) reject p
 
 === RevocationChannel: Opt-in Synchrony
 
-For applications requiring instant revocation, Dregg provides an opt-in synchrony primitive: the _RevocationChannel_. A capability enrolled in a RevocationChannel is checked against a real-time revocation feed before acceptance. This restores seL4-like instant revocation at the cost of requiring channel liveness.
+For applications requiring instant revocation, Dragon's Egg provides an opt-in synchrony primitive: the _RevocationChannel_. A capability enrolled in a RevocationChannel is checked against a real-time revocation feed before acceptance. This restores seL4-like instant revocation at the cost of requiring channel liveness.
 
 #figure(
   table(
@@ -230,7 +230,7 @@ Nameservice resolution is a form of authorization: resolving a name yields a cap
 
 == Sealer/Unsealer Pairs
 
-E's sealer/unsealer primitive enables rights amplification: the sealer encrypts data that only the unsealer holder can read. Dregg implements this with X25519 Diffie-Hellman + ChaCha20-Poly1305 AEAD + a BLAKE3 commitment binding `(cap_hash, ephemeral_public, nonce)`. Each seal uses a fresh ephemeral X25519 keypair, providing per-message sender-side forward secrecy. The recipient's `unsealer_secret` is the long-term secret; compromise of `unsealer_secret` decrypts all prior sealed boxes to that pair.
+E's sealer/unsealer primitive enables rights amplification: the sealer encrypts data that only the unsealer holder can read. Dragon's Egg implements this with X25519 Diffie-Hellman + ChaCha20-Poly1305 AEAD + a BLAKE3 commitment binding `(cap_hash, ephemeral_public, nonce)`. Each seal uses a fresh ephemeral X25519 keypair, providing per-message sender-side forward secrecy. The recipient's `unsealer_secret` is the long-term secret; compromise of `unsealer_secret` decrypts all prior sealed boxes to that pair.
 
 === Boundary contract
 

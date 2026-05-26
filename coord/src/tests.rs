@@ -623,7 +623,7 @@ mod coordinator_tests {
             TEST_MAX_BUDGET,
             participant_keys,
         );
-        let prop_msg = coord.propose(af.clone()).unwrap();
+        let _prop_msg = coord.propose(af.clone()).unwrap();
 
         // Try to propose again while already proposing.
         let err = coord.propose(af).unwrap_err();
@@ -761,7 +761,7 @@ mod coordinator_tests {
             TEST_MAX_BUDGET,
             participant_keys,
         );
-        let prop_msg = coord.propose(af).unwrap();
+        let _prop_msg = coord.propose(af).unwrap();
 
         // Unknown node votes.
         let err = coord
@@ -865,7 +865,7 @@ mod coordinator_tests {
             TEST_MAX_BUDGET,
             participant_keys,
         );
-        let prop_msg = coord.propose(af).unwrap();
+        let _prop_msg = coord.propose(af).unwrap();
         assert!(matches!(coord.state, CoordinatorState::Proposing { .. }));
 
         coord.reset();
@@ -883,7 +883,7 @@ mod coordinator_tests {
             TEST_MAX_BUDGET,
             participant_keys,
         );
-        let prop_msg = coord.propose(af.clone()).unwrap();
+        let _prop_msg = coord.propose(af.clone()).unwrap();
 
         // Fabricate a bad signature (all zeros).
         let bad_sig = [0u8; 64];

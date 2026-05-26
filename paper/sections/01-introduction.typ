@@ -16,7 +16,7 @@ Existing approaches each fail along a different axis:
 
 == The thesis: proof-carrying capability mesh
 
-Dregg frames the answer as a single shape---a *proof-carrying capability mesh*. The kernel of the system is:
+Dragon's Egg frames the answer as a single shape---a *proof-carrying capability mesh*. The kernel of the system is:
 
 + *OCapN-lineage Capability Transport Protocol* between sovereign cells (vats), with sturdy references, distributed garbage collection, three-party handoff, promise pipelining, and store-and-forward.
 + *Effect VM execution* that batches per-turn effects into a single STARK over a real BabyBear AIR (currently $tilde$151 columns after Stage 7-$gamma$.0 + $gamma$.2 Phase 1 + sovereign-witness Phase 1).
@@ -27,7 +27,7 @@ Dregg frames the answer as a single shape---a *proof-carrying capability mesh*. 
 + *Trustless intent matching* with real threshold-encrypted intent pool (Shamir over GF(256) + ChaCha20-Poly1305).
 + *Federation bypass via `peer_exchange`*: two sovereign cells can directly exchange signed (optionally STARK-attested) state transitions without ever touching consensus, then promote to federation order on reconnect.
 
-The thesis under this shape: any security invariant maintained synchronously by a kernel can be maintained asynchronously by a proof system, trading latency for distribution. The "kernel" in Dregg is not a process or a service but a *constraint family*---the AIR plus the predicate registry plus the canonical-message signing discipline. That constraint family is the thing every party trusts; everything else is replaceable.
+The thesis under this shape: any security invariant maintained synchronously by a kernel can be maintained asynchronously by a proof system, trading latency for distribution. The "kernel" in Dragon's Egg is not a process or a service but a *constraint family*---the AIR plus the predicate registry plus the canonical-message signing discipline. That constraint family is the thing every party trusts; everything else is replaceable.
 
 == Two visions, one runtime
 
@@ -41,7 +41,7 @@ The handoff between the two visions is structural: Silver produces real `Witness
 
 == Contributions
 
-Dregg's contributions span six architectural layers:
+Dragon's Egg's contributions span six architectural layers:
 
 *Authorization and Privacy:* (1) proving monotonic attenuation of a bearer token chain in zero knowledge; (2) a distributed CDT that replaces kernel enforcement with cryptographic proof; (3) multi-modal authorization (`Signature`, `Proof`, `Breadstuff`, `Bearer`, `CapTpDelivered`, and the new `Authorization::Custom { predicate: WitnessedPredicate }` for app-defined modes); (4) a 21+ variant `StateConstraint` predicate vocabulary unified with witness-attached predicates under `WitnessedPredicate` with kind registry (`Dfa`, `Temporal`, `MerkleMembership`, `BlindedMembership`, `BridgePredicate`, `PedersenEquality`, `Custom { vk_hash }`); (5) a 14-boundary vocabulary (BOUNDARIES.md) for cleartext-inside / commitment-inside / acceptance-inside / out-of-band populations.
 

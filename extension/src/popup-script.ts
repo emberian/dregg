@@ -1,5 +1,5 @@
 /**
- * Popup script for the Dregg cipherclerk extension UI.
+ * Popup script for the Dragon's Egg cipherclerk extension UI.
  * Communicates with the background service worker via chrome.runtime.sendMessage.
  */
 

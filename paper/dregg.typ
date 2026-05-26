@@ -1,5 +1,5 @@
 // =============================================================================
-// Dregg: A Distributed Object-Capability Runtime
+// Dragon's Egg: A Distributed Object-Capability Runtime
 // with Zero-Knowledge Authorization and Proof-Carrying State
 // =============================================================================
 
@@ -67,7 +67,7 @@
 
 #heading(level: 1, numbering: none)[Abstract]
 
-We present Dregg, a *proof-carrying capability mesh*: a distributed object-capability runtime in which sovereign cells---isolated agents owning their own state---communicate via atomic message turns, delegate authority through attenuated capability chains, and attest both authorization and state transition algebraically. The kernel is an OCapN-lineage Capability Transport Protocol (CapTP) for cross-vat invocation, an Effect VM that batches per-turn effects into a single STARK over a real BabyBear AIR, federated BFT consensus over a blocklace DAG with constant-size BLS threshold attestation, cross-cell algebraic binding via canonical bilateral identifiers, programmable predicates declaring per-cell invariants, trustless intent matching with real threshold decryption, and federation-bypass via direct sovereign-cell `peer_exchange` for partition-tolerant operation.
+We present Dragon's Egg, a *proof-carrying capability mesh*: a distributed object-capability runtime in which sovereign cells---isolated agents owning their own state---communicate via atomic message turns, delegate authority through attenuated capability chains, and attest both authorization and state transition algebraically. The kernel is an OCapN-lineage Capability Transport Protocol (CapTP) for cross-vat invocation, an Effect VM that batches per-turn effects into a single STARK over a real BabyBear AIR, federated BFT consensus over a blocklace DAG with constant-size BLS threshold attestation, cross-cell algebraic binding via canonical bilateral identifiers, programmable predicates declaring per-cell invariants, trustless intent matching with real threshold decryption, and federation-bypass via direct sovereign-cell `peer_exchange` for partition-tolerant operation.
 
 Cells are sovereign by default: the federation persists only a 32-byte state commitment per cell, never the cell's interior state. Authority is bearer-shaped (swiss numbers, handoff certificates) and faceted (EffectMask with monotonic narrowing); delegation is monotone (capability attenuation) and provable (the Capability Derivation Tree exists as proof structure, not kernel data structure). The runtime implements E-style distributed object semantics---promise pipelining via eventual references, three-party introduction, sealer/unsealer pairs for partition-tolerant offline transfer, and EROS-style factories for constrained cell creation with computable child verification keys.
 

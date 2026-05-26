@@ -82,7 +82,7 @@ pub struct FactIndex(pub usize);
 
 /// Verification mode selector for authorization presentation.
 ///
-/// Dregg supports three verification modes with progressive privacy guarantees:
+/// Dragon's Egg supports three verification modes with progressive privacy guarantees:
 ///
 /// - **Trusted**: Local Datalog evaluation, full visibility, ~8us.
 /// - **SelectiveDisclosure**: STARK proof with chosen facts revealed, ~200ms.

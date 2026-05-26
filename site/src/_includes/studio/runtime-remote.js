@@ -71,7 +71,7 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
   }
 
   // --- Extension bridge for passive debugger (Phase 1/2, STARBRIDGE-FOLLOWUP-06) ---
-  // When running inside the Dregg Cipherclerk extension (iframe panel, or any
+  // When running inside the Dragon's Egg Cipherclerk extension (iframe panel, or any
   // extension page), chrome.runtime is present. We poll the background's
   // synthesized activity feed (populated from the live WS bus + cclerk ops,
   // exactly the TraceEvent shape for <dregg-activity>) via "dregg:getActivityFeed".

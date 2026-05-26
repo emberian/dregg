@@ -4,7 +4,7 @@
 
 = Conclusion
 
-Dregg demonstrates that object-capability authorization is naturally structured as incrementally verifiable computation, and that this structure scales from a credential system to a full distributed object runtime---*a proof-carrying capability mesh*---with zero-knowledge privacy, E-style messaging, proof-carrying state, sovereign cell ownership, and algebraically-bound cross-cell composition.
+Dragon's Egg demonstrates that object-capability authorization is naturally structured as incrementally verifiable computation, and that this structure scales from a credential system to a full distributed object runtime---*a proof-carrying capability mesh*---with zero-knowledge privacy, E-style messaging, proof-carrying state, sovereign cell ownership, and algebraically-bound cross-cell composition.
 
 The Capability Derivation Tree duality (kernel-enforced vs. proof-carried) suggests a broader principle: any security invariant maintained synchronously by a kernel can be maintained asynchronously by a proof system, trading latency for distribution. The RevocationChannel spectrum (from bearer-token impunity to kernel-like instant revocation) makes this tradeoff explicit and application-selectable.
 
@@ -22,7 +22,7 @@ The economic model demonstrates that federated validation is viable without infl
 
 The 14-boundary vocabulary (BOUNDARIES.md) makes the implicit, plural, per-subsystem boundaries that already exist in the codebase *explicit*. A `FieldVisibility::Committed` slot is commitment-inside external readers but cleartext-inside the host executor; a sovereign-cell-in-witness-mode is cleartext-inside the executor for the duration of the turn but commitment-inside the federation's persistent storage. Naming the boundary is the precondition to noticing when it slips.
 
-The agent substrate provides a "home for AI"---not a physical location but the set of invariants, protocols, and economic structures that allow autonomous agents to coexist productively without requiring blind trust. Dregg provides these invariants at the protocol level, making them as inescapable for networked agents as seL4's capability checks are for local processes.
+The agent substrate provides a "home for AI"---not a physical location but the set of invariants, protocols, and economic structures that allow autonomous agents to coexist productively without requiring blind trust. Dragon's Egg provides these invariants at the protocol level, making them as inescapable for networked agents as seL4's capability checks are for local processes.
 
 == The two visions
 

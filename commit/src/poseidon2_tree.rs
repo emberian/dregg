@@ -543,7 +543,7 @@ mod tests {
     #[test]
     #[ignore = "REVIEW[stage2-canonical-vs-poseidon-mismatch]: note spending PI layout regressed in Stage 1; needs end-to-end realignment"]
     fn end_to_end_note_spending_stark_from_real_tree() {
-        use dregg_circuit::note_spending_air::{NoteSpendingAir, NoteSpendingWitness};
+        use dregg_circuit::note_spending_air::NoteSpendingWitness;
         use dregg_circuit::poseidon2::hash_many;
         use dregg_dsl_runtime::note_spending::{prove_note_spend, verify_note_spend};
 

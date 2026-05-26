@@ -1,4 +1,4 @@
-// Dregg cipherclerk background service worker.
+// Dragon's Egg cipherclerk background service worker.
 // Manages cipherclerk state, evaluates authorization, generates proofs via WASM.
 
 const LEGACY_STORAGE_KEY = 'dregg_cipherclerk';

@@ -10,7 +10,7 @@ Sovereign cells generate their own STARK proofs---but proof generation is comput
 
 == The Trust Spectrum
 
-Execution trust in Dregg exists on a spectrum:
+Execution trust in Dragon's Egg exists on a spectrum:
 
 #figure(
   table(

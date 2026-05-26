@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Dregg Site Build Script
+ * Dragon's Egg Site Build Script
  * Minimal. No frameworks. Just processing.
  */
 
@@ -142,10 +142,10 @@ function processLayouts(content, currentFile) {
   layout = processIncludes(layout, path.relative(SRC, p));
 
   // Extract a per-page <title> from the page body so the layout can hoist it
-  // into <head>. Pages declare it as `<title>Foo — Dregg</title>` anywhere
+  // into <head>. Pages declare it as `<title>Foo — Dragon's Egg</title>` anywhere
   // inside the layout slot; the build strips it out and substitutes it into
-  // `{{ title }}` in the layout. Pages without a title fall back to "Dregg".
-  let pageTitle = 'Dregg';
+  // `{{ title }}` in the layout. Pages without a title fall back to "Dragon's Egg".
+  let pageTitle = 'Dragon\'s Egg';
   let innerWithoutTitle = inner;
   const titleMatch = inner.match(/<title>([\s\S]*?)<\/title>/);
   if (titleMatch) {
@@ -216,7 +216,7 @@ function buildCss() {
 }
 
 function build() {
-  console.log('Building Dregg site...\n');
+  console.log('Building Dragon\'s Egg site...\n');
 
   // Clean dist
   if (fs.existsSync(DIST)) {

@@ -125,7 +125,7 @@ Any single existing member can unilaterally add new members. Optimized for small
 
 == Interest-Based Dissemination
 
-In a unified blocklace with many strands, transmitting every block to every node is prohibitive. Dregg uses _subscriptions_ to filter dissemination. A `Subscription` declares which strands a node wants to receive (direct subscriptions, referenced closure, causal depth). The dissemination protocol (Cordial Dissemination) respects subscriptions: a node pushes blocks only to peers whose subscription includes the block's creator. Bandwidth drops from $O(|"strands"|)$ to $O(|"subscription"|)$ per node while preserving causal closure for ordering.
+In a unified blocklace with many strands, transmitting every block to every node is prohibitive. Dragon's Egg uses _subscriptions_ to filter dissemination. A `Subscription` declares which strands a node wants to receive (direct subscriptions, referenced closure, causal depth). The dissemination protocol (Cordial Dissemination) respects subscriptions: a node pushes blocks only to peers whose subscription includes the block's creator. Bandwidth drops from $O(|"strands"|)$ to $O(|"subscription"|)$ per node while preserving causal closure for ordering.
 
 == Strand-Based Addressing
 

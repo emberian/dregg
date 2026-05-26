@@ -6,7 +6,7 @@
 
 == From Matching to Solving
 
-Traditional order books match pairs: buyer meets seller. Dregg's intent engine generalizes this to _constraint satisfaction over arbitrary capability exchanges_. An intent declares what a cell wants and what it offers; the solver finds valid combinations---including multi-party ring trades where no bilateral match exists.
+Traditional order books match pairs: buyer meets seller. Dragon's Egg's intent engine generalizes this to _constraint satisfaction over arbitrary capability exchanges_. An intent declares what a cell wants and what it offers; the solver finds valid combinations---including multi-party ring trades where no bilateral match exists.
 
 == Intent Structure
 
@@ -155,7 +155,7 @@ The winning solution generates a single compound turn:
     [MEV extraction], [Open competition + challenge], [MEV-Share: proposer auction],
     [Atomicity], [Compound turn], [Serai: cross-chain atomic],
   ),
-  caption: [Trustless protocol comparison. Dregg replaces hardware trust (SGX), reputation (CoW), and visibility (Anoma) with cryptographic proofs.],
+  caption: [Trustless protocol comparison. Dragon's Egg replaces hardware trust (SGX), reputation (CoW), and visibility (Anoma) with cryptographic proofs.],
 )
 
 == Partial Fills and Residuals

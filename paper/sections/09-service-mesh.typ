@@ -6,7 +6,7 @@
 
 == Design Goals
 
-Capability systems excel at access control but traditionally lack discoverability: if you don't already hold a capability, how do you find one? Dregg's service mesh provides governed discovery without compromising the capability model. The three primitives---mount, discover, resolve---build atop DFA-based routing and constitutional governance to provide namespace-level access control provable via STARK lookup tables.
+Capability systems excel at access control but traditionally lack discoverability: if you don't already hold a capability, how do you find one? Dragon's Egg's service mesh provides governed discovery without compromising the capability model. The three primitives---mount, discover, resolve---build atop DFA-based routing and constitutional governance to provide namespace-level access control provable via STARK lookup tables.
 
 == DFA Routing as a First-Class Userspace Caveat
 

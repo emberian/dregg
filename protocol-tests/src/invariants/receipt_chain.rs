@@ -14,11 +14,11 @@
 //! - Removing or swapping any non-endpoint receipt must break verification.
 
 use crate::Invariant;
-use crate::generators::turn::build_no_op_turn;
+use crate::generators::{build_no_op_turn, build_open_ledger, LedgerSpec};
 
 use proptest::prelude::*;
 use dregg_turn::{
-    TurnExecutor, TurnReceipt, TurnResult,
+    ComputronCosts, TurnExecutor, TurnReceipt, TurnResult, verify_receipt_chain,
 };
 
 pub struct ReceiptChain;

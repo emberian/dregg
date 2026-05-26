@@ -10,8 +10,8 @@
 
 use crate::Invariant;
 use proptest::prelude::*;
+use dregg_cell::{CellProgram, CellState, StateConstraint, field_from_u64};
 use dregg_cell::program::SimpleStateConstraint;
-use dregg_cell::field_from_u64;
 
 pub struct AnyOfDisjunction;
 impl Invariant for AnyOfDisjunction {

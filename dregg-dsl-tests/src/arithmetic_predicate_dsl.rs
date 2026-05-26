@@ -9,7 +9,7 @@ pub use dregg_dsl_runtime::predicates::arithmetic::*;
 mod tests {
     use super::*;
     use dregg_circuit::field::BabyBear;
-    use dregg_circuit::stark::{self, StarkAir};
+    use dregg_circuit::stark::StarkAir;
     use dregg_dsl_runtime::circuit::DslCircuit;
 
     fn test_commitment() -> BabyBear {

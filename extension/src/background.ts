@@ -1,5 +1,5 @@
 /**
- * Dregg cipherclerk background service worker (TypeScript).
+ * Dragon's Egg cipherclerk background service worker (TypeScript).
  * Manages cipherclerk state (signing keys, capability tokens, receipt chain),
  * evaluates authorization, and generates proofs via WASM.
  */

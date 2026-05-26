@@ -1,4 +1,4 @@
-// Settings page script for Dregg Cipherclerk node configuration.
+// Settings page script for Dragon's Egg Cipherclerk node configuration.
 
 const NODE_CONFIG_KEY = 'dregg_node_config';
 const DEFAULT_NODE_URL = 'https://devnet.dregg.fg-goose.online';

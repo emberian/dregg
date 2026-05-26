@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build, validate, and package the Dregg Cipherclerk extension.
+# Build, validate, and package the Dragon's Egg Cipherclerk extension.
 #
 # Usage:
 #   ./build.sh          — Build WASM + validate + package

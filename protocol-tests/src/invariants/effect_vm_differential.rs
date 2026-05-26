@@ -37,11 +37,13 @@ use dregg_circuit::effect_vm::{
 };
 use dregg_circuit::field::BabyBear;
 use dregg_turn::{
-    Action, Authorization, CallForest, DelegationMode, Effect,
+    Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect,
+    TurnExecutor, TurnResult,
     turn::Turn,
 };
 
 use crate::generators::cell::{LedgerSpec, build_open_ledger};
+use dregg_cell::Permissions;
 
 // =====================================================================
 // Shared helpers
@@ -667,7 +669,7 @@ fn differential_grant_cap() {
     let cap = dregg_cell::CapabilityRef {
         target,
         slot: 0,
-        permissions: AuthNone,
+        permissions: AuthRequired::None,
         breadstuff: None,
         expires_at: None,
         allowed_effects: None,
@@ -772,13 +774,13 @@ fn differential_set_permissions_passthrough_gap() {
     // Build a permissions that differs from the wide-open default.
     let new_perms = Permissions {
         send: AuthRequired::Signature,
-        receive: AuthNone,
-        set_state: AuthNone,
-        set_permissions: AuthNone,
-        set_verification_key: AuthNone,
-        increment_nonce: AuthNone,
-        delegate: AuthNone,
-        access: AuthNone,
+        receive: AuthRequired::None,
+        set_state: AuthRequired::None,
+        set_permissions: AuthRequired::None,
+        set_verification_key: AuthRequired::None,
+        increment_nonce: AuthRequired::None,
+        delegate: AuthRequired::None,
+        access: AuthRequired::None,
     };
     let effect = Effect::SetPermissions {
         cell: actor,
@@ -1172,7 +1174,7 @@ fn differential_introduce_passthrough() {
         introducer: actor,
         recipient,
         target,
-        permissions: AuthNone,
+        permissions: AuthRequired::None,
     };
     let turn = one_effect_turn(actor, nonce, effect);
     let claim = air_claim(actor_cell, &turn);

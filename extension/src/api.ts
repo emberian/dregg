@@ -1,5 +1,5 @@
 /**
- * Typed HTTP client helpers for communicating with the Dregg node.
+ * Typed HTTP client helpers for communicating with the Dragon's Egg node.
  */
 
 import type { NodeConfig, NodeRequestResult } from "./types";

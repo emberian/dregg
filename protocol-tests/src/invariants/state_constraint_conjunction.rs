@@ -11,7 +11,7 @@
 
 use crate::Invariant;
 use proptest::prelude::*;
-use dregg_cell::{StateConstraint, field_from_u64};
+use dregg_cell::{CellProgram, CellState, StateConstraint, field_from_u64};
 
 pub struct StateConstraintConjunction;
 impl Invariant for StateConstraintConjunction {

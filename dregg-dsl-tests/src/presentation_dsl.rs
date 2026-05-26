@@ -737,7 +737,7 @@ mod tests {
         // Verify that removing a valid flag causes constraint failure
         let composed = composed_dual_membership();
         let circuit = dregg_dsl_runtime::ComposedDslCircuit::new(composed.clone());
-        let width = circuit.total_width();
+        let _width = circuit.total_width();
 
         let shared = vec![BabyBear::new(42)];
         let proof_hashes = vec![BabyBear::new(111), BabyBear::new(222)];

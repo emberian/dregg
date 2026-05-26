@@ -14,7 +14,7 @@ use dregg_sdk::{AgentCipherclerk, AgentRuntime, Attenuation, AuthRequest, Effect
 use std::sync::{Arc, RwLock};
 
 fn main() {
-    println!("=== Dregg Agent SDK Demo ===\n");
+    println!("=== Dragon's Egg Agent SDK Demo ===\n");
 
     // -------------------------------------------------------------------------
     // Step 1: Create an agent cipherclerk with a fresh Ed25519 identity.

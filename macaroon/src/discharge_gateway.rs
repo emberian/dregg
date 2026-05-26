@@ -24,7 +24,7 @@ use zeroize::Zeroize;
 
 use crate::caveat_3p::ThirdPartyCaveat;
 use crate::crypto;
-use crate::macaroon::{Macaroon, create_discharge};
+use crate::macaroon::create_discharge;
 
 // =============================================================================
 // Core types
@@ -661,7 +661,7 @@ impl Drop for DischargeGateway {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::CaveatSet;
+    use crate::{Macaroon, CaveatSet};
 
     /// Helper: create a macaroon with a 3P caveat targeting our gateway.
     fn setup_3p_macaroon(root_key: &[u8; 32], shared_key: &[u8; 32], location: &str) -> Macaroon {

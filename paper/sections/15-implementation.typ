@@ -40,7 +40,7 @@ The system is implemented in approximately 400k lines of Rust across $tilde$45 w
     [`dregg-dsl`], [Constraint DSL proc macros (multi-backend: AIR, Kimchi, Plonky3, ZKIR, SP1, Rust evaluator)], [syn, quote],
     [`dregg-dsl-runtime`], [DSL runtime: composition, verification, `WitnessedPredicateRegistry`], [circuit],
     [`dregg-dsl-tests`], [DSL integration tests and examples], [dregg-dsl],
-    [`app-framework`], [Shared framework for Dregg applications: `EmbeddedExecutor`, `StarbridgeAppContext`, `AppCipherclerk` consumer], [sdk, node],
+    [`app-framework`], [Shared framework for Dragon's Egg applications: `EmbeddedExecutor`, `StarbridgeAppContext`, `AppCipherclerk` consumer], [sdk, node],
     [`discharge-gateway`], [Third-party caveat discharge service], [token, wire],
     [`verifier`], [Standalone `dregg-verifier` binary: per-cell STARK verify, `bilateral-pair` ($gamma$.2 cross-cell), `replay-chain` ($"WitnessedReceipt"$ chain), `verify-bundle` (scope-2)], [circuit, turn],
     [`teasting`], [Test assertions and property-based helpers], [proptest],

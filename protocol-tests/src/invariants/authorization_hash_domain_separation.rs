@@ -12,7 +12,7 @@
 use crate::Invariant;
 use proptest::prelude::*;
 use dregg_cell::CellId;
-use dregg_turn::DelegationMode;
+use dregg_turn::{BearerCapProof, DelegationMode, DelegationProofData};
 use dregg_turn::action::{Action, Authorization};
 
 pub struct AuthorizationHashDomainSeparation;

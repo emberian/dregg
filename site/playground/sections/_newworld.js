@@ -117,7 +117,7 @@ export function randomBytes(n) {
 }
 
 /** BLAKE3-compatible commitment via the dregg wasm pkg `compute_merkle_root`.
- *  Dregg's storage layer uses 4-ary BLAKE3 merkle commitments; a single-leaf
+ *  Dragon's Egg's storage layer uses 4-ary BLAKE3 merkle commitments; a single-leaf
  *  root is exactly `BLAKE3(leaf || ":0")`. We don't need to round-trip the
  *  exact internal serialization to get a deterministic, BLAKE3-derived
  *  32-byte commitment for visualization purposes.

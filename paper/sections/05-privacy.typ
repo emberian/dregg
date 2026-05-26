@@ -4,11 +4,11 @@
 
 = Privacy Architecture
 
-Dregg provides zero-knowledge authorization proofs where a prover demonstrates "I hold a valid attenuated capability chain from a federation-registered issuer that satisfies your request" without revealing the chain, intermediate states, or other capabilities. The privacy story spans many subsystems; the *boundary discipline* (@sec-boundary-discipline) is the vocabulary the codebase uses to keep them honest.
+Dragon's Egg provides zero-knowledge authorization proofs where a prover demonstrates "I hold a valid attenuated capability chain from a federation-registered issuer that satisfies your request" without revealing the chain, intermediate states, or other capabilities. The privacy story spans many subsystems; the *boundary discipline* (@sec-boundary-discipline) is the vocabulary the codebase uses to keep them honest.
 
 == Boundary Discipline <sec-boundary-discipline>
 
-Cryptographic distributed systems organize around two populations: those who know a datum *by construction* (because they generated it, hold the private key, ran the prover) and those who relate to that datum through some interface (verify a signature, check membership in a set, decode a ciphertext, accept a proof). In Dregg, that boundary is *implicit, plural, and per-subsystem*. The codebase names fourteen boundaries explicitly (see BOUNDARIES.md) and adopts a four-label vocabulary that every public type with a privacy story documents:
+Cryptographic distributed systems organize around two populations: those who know a datum *by construction* (because they generated it, hold the private key, ran the prover) and those who relate to that datum through some interface (verify a signature, check membership in a set, decode a ciphertext, accept a proof). In Dragon's Egg, that boundary is *implicit, plural, and per-subsystem*. The codebase names fourteen boundaries explicitly (see BOUNDARIES.md) and adopts a four-label vocabulary that every public type with a privacy story documents:
 
 #figure(
   table(
@@ -37,7 +37,7 @@ These labels do not aggregate into a global trust level. The discipline is edito
 
 === The fourteen boundaries
 
-Dregg's boundaries, enumerated:
+Dragon's Egg's boundaries, enumerated:
 
 #figure(
   table(
@@ -59,7 +59,7 @@ Dregg's boundaries, enumerated:
     [CapTP session participants], [Two peers in a `CapSession`], [Session epoch + TLS confidentiality],
     [`Authorization::CapTpDelivered` cert vs anyone], [Cert recipient (`recipient_pk` holder)], [Introducer Ed25519 sig + recipient Ed25519 sig + `KnownFederations`],
   ),
-  caption: [The 14 boundaries in Dregg. Each carries a per-subsystem boundary contract (per BOUNDARIES.md).],
+  caption: [The 14 boundaries in Dragon's Egg. Each carries a per-subsystem boundary contract (per BOUNDARIES.md).],
 )
 
 === Boundary composition
@@ -211,7 +211,7 @@ This achieves "issuer-revocable, verifier-unlinkable"---the strongest achievable
     [Verify time], [$tilde$30ms], [$tilde$5ms], [$tilde$50ms], [$tilde$10ms],
     [Programmable policy], [No], [No], [Limited], [Full Datalog + `WitnessedPredicate`],
   ),
-  caption: [Privacy comparison. Dregg trades larger proofs for post-quantum security, programmable policy, and issuer anonymity.],
+  caption: [Privacy comparison. Dragon's Egg trades larger proofs for post-quantum security, programmable policy, and issuer anonymity.],
 )
 
 == Privacy Migration Path
@@ -269,7 +269,7 @@ Proofs may reference any recent Merkle root (not only the latest), with a slidin
 
 == Private Vickrey Auction (4-Phase Protocol)
 
-Dregg implements a fully private Vickrey auction where no party learns any bid value, the payment amount, or the winner's identity. The protocol uses Pedersen commitments, threshold-encrypted bid revelation (via real `federation::threshold_decrypt`), garbled circuit evaluation, oblivious transfer, ring proofs, and stealth addresses:
+Dragon's Egg implements a fully private Vickrey auction where no party learns any bid value, the payment amount, or the winner's identity. The protocol uses Pedersen commitments, threshold-encrypted bid revelation (via real `federation::threshold_decrypt`), garbled circuit evaluation, oblivious transfer, ring proofs, and stealth addresses:
 
 + *Bid commitment*: $C_i = b_i dot G + r_i dot H$ with STARK range proof.
 + *Threshold-encrypted bid revelation*: bidders encrypt openings under the federation's threshold public key; $t$-of-$n$ decryption required.

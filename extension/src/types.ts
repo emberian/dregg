@@ -1,5 +1,5 @@
 /**
- * Shared type definitions for the Dregg extension message protocol.
+ * Shared type definitions for the Dragon's Egg extension message protocol.
  *
  * These types ensure end-to-end type safety between page.ts <-> content.ts <-> background.ts.
  * Where possible, types are imported from/aligned with the ts-sdk definitions.

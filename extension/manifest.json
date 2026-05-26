@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Dregg Cipherclerk",
+  "name": "Dragon's Egg Cipherclerk",
   "version": "0.1.0",
   "description": "Capability-based cipherclerk for dregg: manages signing keys, authorization tokens, and capability handles with zero-knowledge proofs",
   "permissions": ["storage", "activeTab", "contextMenus"],

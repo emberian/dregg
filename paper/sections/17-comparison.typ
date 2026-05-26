@@ -51,7 +51,7 @@ Ethereum achieves global consensus over shared state. Dregg differs fundamentall
     [Proof system], [Multi-backend (STARK, Pickles, SP1)], [SNARK-focused (Halo2)],
     [Governance], [Per-group constitutional/open/invite], [Protocol-level governance],
   ),
-  caption: [Dregg vs. Anoma. Both are intent-centric; they differ on trust model, privacy, and state ownership.],
+  caption: [Dragon's Egg vs. Anoma. Both are intent-centric; they differ on trust model, privacy, and state ownership.],
 )
 
 The deepest architectural difference: Anoma's resource machine operates over _shared mutable state_ (resources consumed and produced atomically). Dregg's cells are _sovereign_---each cell owns its state exclusively, and coordination happens via proof exchange rather than shared-state consensus. This makes Dregg naturally suited to privacy (cells never reveal state to the network) but requires more complex coordination protocols for multi-party operations.
@@ -109,5 +109,5 @@ Zcash pioneered shielded transactions with SNARK proofs. Dregg adapts the note/n
     [Multi-backend], [8 backends], [1 (Halo2)], [1 (EVM)], [1 (Groth16)], [N/A],
     [EVM interop], [SP1/Groth16], [Planned], [Native], [No], [N/A],
   ),
-  caption: [System positioning. Dregg combines capability-based authority with zero-knowledge privacy, sovereign state ownership, intent-centric solving, and federated distribution.],
+  caption: [System positioning. Dragon's Egg combines capability-based authority with zero-knowledge privacy, sovereign state ownership, intent-centric solving, and federated distribution.],
 )

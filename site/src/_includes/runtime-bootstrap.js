@@ -1,5 +1,5 @@
 /**
- * Dregg runtime bootstrap.
+ * Dragon's Egg runtime bootstrap.
  *
  * Loads Preact + signals + htm from CDN, exposes `window.dreggUi` for Studio
  * use, and mounts every `<[data-vizzer]>` element on the page once

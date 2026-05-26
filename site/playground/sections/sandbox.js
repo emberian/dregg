@@ -85,7 +85,7 @@ console.log('Token:', minted.token.slice(0, 40) + '...');
   const clearBtn = container.querySelector('#sb-clear');
   const scenarioSelect = container.querySelector('#sb-scenarios');
 
-  // Dregg API wrapper (gracefully handles missing optional exports)
+  // Dragon's Egg API wrapper (gracefully handles missing optional exports)
   const dregg = {
     generateRootKey: () => wasm.generate_root_key(),
     mintToken: (keyBytes, location) => wasm.mint_token(keyBytes, location),

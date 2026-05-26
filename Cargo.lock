@@ -2625,6 +2625,980 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
+name = "dregg-app-framework"
+version = "0.1.0"
+dependencies = [
+ "axum 0.8.9",
+ "base64 0.22.1",
+ "blake3",
+ "dregg-captp",
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-intent",
+ "dregg-sdk",
+ "dregg-storage",
+ "dregg-turn",
+ "dregg-types",
+ "ed25519-dalek",
+ "http",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tower 0.5.3",
+ "tower-http 0.6.11",
+]
+
+[[package]]
+name = "dregg-audit"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-commit",
+ "serde",
+]
+
+[[package]]
+name = "dregg-blocklace"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-types",
+ "ed25519-dalek",
+ "postcard",
+ "proptest",
+ "rand 0.8.6",
+ "serde",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "dregg-bridge"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "criterion",
+ "dregg-bridge",
+ "dregg-circuit",
+ "dregg-commit",
+ "dregg-dsl-runtime",
+ "dregg-macaroon",
+ "dregg-token",
+ "dregg-trace",
+ "dregg-turn",
+ "ed25519-dalek",
+ "getrandom 0.3.4",
+ "postcard",
+ "serde",
+ "tokio",
+]
+
+[[package]]
+name = "dregg-captp"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "bs58",
+ "dregg-cell",
+ "dregg-types",
+ "getrandom 0.3.4",
+ "postcard",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "dregg-cell"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "bulletproofs",
+ "chacha20poly1305",
+ "curve25519-dalek",
+ "dregg-circuit",
+ "dregg-commit",
+ "dregg-dsl-runtime",
+ "dregg-types",
+ "ed25519-dalek",
+ "getrandom 0.3.4",
+ "merlin",
+ "postcard",
+ "proptest",
+ "serde",
+ "serde_json",
+ "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
+name = "dregg-circuit"
+version = "0.1.0"
+dependencies = [
+ "ark-ec",
+ "ark-ff 0.5.0",
+ "ark-poly",
+ "binius_circuits",
+ "binius_core",
+ "binius_field",
+ "binius_hal",
+ "binius_hash",
+ "binius_macros",
+ "binius_math",
+ "binius_utils",
+ "blake3",
+ "bumpalo",
+ "criterion",
+ "dregg-bridge",
+ "dregg-cell",
+ "dregg-dsl",
+ "dregg-dsl-runtime",
+ "dregg-token",
+ "dregg-trace",
+ "dregg-turn",
+ "getrandom 0.3.4",
+ "groestl",
+ "groupmap",
+ "itertools 0.14.0",
+ "kimchi",
+ "mina-curves",
+ "mina-poseidon",
+ "p3-air 0.5.1",
+ "p3-baby-bear 0.5.1",
+ "p3-batch-stark",
+ "p3-challenger 0.5.1",
+ "p3-circuit",
+ "p3-circuit-prover",
+ "p3-commit 0.5.1",
+ "p3-dft 0.5.1",
+ "p3-field 0.5.1",
+ "p3-fri 0.5.1",
+ "p3-lookup",
+ "p3-matrix 0.5.1",
+ "p3-mds 0.5.1",
+ "p3-merkle-tree 0.5.1",
+ "p3-monty-31",
+ "p3-poseidon2 0.5.1",
+ "p3-poseidon2-circuit-air",
+ "p3-recursion",
+ "p3-symmetric 0.5.1",
+ "p3-uni-stark 0.5.1",
+ "p3-util 0.5.1",
+ "poly-commitment",
+ "postcard",
+ "rand 0.10.1",
+ "rand_core 0.6.4",
+ "rmp-serde",
+ "serde",
+ "sp1-sdk",
+ "tracing",
+]
+
+[[package]]
+name = "dregg-cli"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "bs58",
+ "clap",
+ "clap_complete",
+ "comfy-table",
+ "console",
+ "dialoguer",
+ "dirs",
+ "indicatif",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "shellexpand",
+ "tokio",
+ "toml",
+ "urlencoding",
+]
+
+[[package]]
+name = "dregg-commit"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-circuit",
+ "dregg-dsl-runtime",
+ "serde",
+]
+
+[[package]]
+name = "dregg-coord"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-blocklace",
+ "dregg-cell",
+ "dregg-turn",
+ "dregg-types",
+ "ed25519-dalek",
+ "serde",
+]
+
+[[package]]
+name = "dregg-credentials"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-bridge",
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-commit",
+ "dregg-macaroon",
+ "dregg-token",
+ "dregg-trace",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "dregg-demo"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-captp",
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-commit",
+ "dregg-credentials",
+ "dregg-federation",
+ "dregg-turn",
+ "dregg-types",
+ "dregg-verifier",
+ "ed25519-dalek",
+ "getrandom 0.3.4",
+ "hex",
+ "postcard",
+ "serde",
+ "serde_json",
+ "starbridge-governed-namespace",
+ "starbridge-identity",
+ "starbridge-nameservice",
+ "starbridge-subscription",
+]
+
+[[package]]
+name = "dregg-demo-agent"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-bridge",
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-commit",
+ "dregg-coord",
+ "dregg-dsl-runtime",
+ "dregg-federation",
+ "dregg-intent",
+ "dregg-sdk",
+ "dregg-token",
+ "dregg-trace",
+ "dregg-turn",
+ "dregg-types",
+ "ed25519-dalek",
+ "getrandom 0.3.4",
+ "postcard",
+ "serde_json",
+]
+
+[[package]]
+name = "dregg-dfa"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-federation",
+ "postcard",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "dregg-directory"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-cell",
+ "dregg-dfa",
+ "dregg-types",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "dregg-discharge-gateway"
+version = "0.1.0"
+dependencies = [
+ "axum 0.8.9",
+ "base64 0.22.1",
+ "clap",
+ "dregg-macaroon",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber 0.3.23",
+]
+
+[[package]]
+name = "dregg-discord-bot"
+version = "0.1.0"
+dependencies = [
+ "axum 0.8.9",
+ "blake3",
+ "dregg-app-framework",
+ "dregg-captp",
+ "dregg-sdk",
+ "dregg-storage",
+ "futures-util",
+ "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serenity",
+ "sqlx",
+ "tokio",
+ "tower-http 0.5.2",
+ "tracing",
+ "tracing-subscriber 0.3.23",
+ "zeroize",
+]
+
+[[package]]
+name = "dregg-dsl"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "dregg-dsl-differential"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-circuit",
+ "dregg-dsl",
+ "dregg-dsl-runtime",
+ "serde_json",
+]
+
+[[package]]
+name = "dregg-dsl-runtime"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-circuit",
+ "p3-air 0.5.1",
+ "p3-baby-bear 0.5.1",
+ "p3-challenger 0.5.1",
+ "p3-commit 0.5.1",
+ "p3-dft 0.5.1",
+ "p3-field 0.5.1",
+ "p3-fri 0.5.1",
+ "p3-matrix 0.5.1",
+ "p3-merkle-tree 0.5.1",
+ "p3-symmetric 0.5.1",
+ "p3-uni-stark 0.5.1",
+ "p3-util 0.5.1",
+ "postcard",
+ "rmp-serde",
+ "serde",
+]
+
+[[package]]
+name = "dregg-dsl-tests"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-circuit",
+ "dregg-dsl",
+ "dregg-dsl-runtime",
+]
+
+[[package]]
+name = "dregg-federation"
+version = "0.1.0"
+dependencies = [
+ "ark-ff 0.5.0",
+ "ark-serialize 0.5.0",
+ "ark-std 0.5.0",
+ "blake3",
+ "criterion",
+ "crossbeam-channel",
+ "dregg-captp",
+ "dregg-cell",
+ "dregg-commit",
+ "dregg-hints",
+ "dregg-turn",
+ "dregg-types",
+ "ed25519-dalek",
+ "getrandom 0.3.4",
+ "hex",
+ "postcard",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "dregg-hints"
+version = "0.0.5"
+dependencies = [
+ "ark-bls12-381",
+ "ark-crypto-primitives",
+ "ark-ec",
+ "ark-ff 0.5.0",
+ "ark-poly",
+ "ark-poly-commit",
+ "ark-serialize 0.5.0",
+ "ark-std 0.5.0",
+ "bincode 2.0.1",
+ "criterion",
+ "hex",
+ "lockstitch",
+ "once_cell",
+ "rayon",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "zeroize",
+]
+
+[[package]]
+name = "dregg-intent"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "curve25519-dalek",
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-commit",
+ "dregg-dfa",
+ "dregg-federation",
+ "dregg-token",
+ "dregg-trace",
+ "dregg-turn",
+ "getrandom 0.3.4",
+ "globset",
+ "postcard",
+ "serde",
+ "serde_json",
+ "x25519-dalek",
+]
+
+[[package]]
+name = "dregg-macaroon"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chacha20poly1305",
+ "criterion",
+ "getrandom 0.3.4",
+ "hmac 0.12.1",
+ "rmp-serde",
+ "serde",
+ "sha2 0.10.9",
+ "subtle",
+ "thiserror 2.0.18",
+ "zeroize",
+]
+
+[[package]]
+name = "dregg-net"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "bytes",
+ "dregg-types",
+ "postcard",
+ "quinn",
+ "rand 0.9.4",
+ "rcgen",
+ "ring",
+ "rustls 0.23.40",
+ "serde",
+ "tokio",
+ "tracing",
+ "tracing-subscriber 0.3.23",
+]
+
+[[package]]
+name = "dregg-node"
+version = "0.1.0"
+dependencies = [
+ "argon2",
+ "ark-serialize 0.5.0",
+ "ark-std 0.5.0",
+ "axum 0.8.9",
+ "base64 0.22.1",
+ "blake3",
+ "chacha20poly1305",
+ "clap",
+ "dregg-app-framework",
+ "dregg-blocklace",
+ "dregg-captp",
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-commit",
+ "dregg-coord",
+ "dregg-credentials",
+ "dregg-dsl-runtime",
+ "dregg-federation",
+ "dregg-intent",
+ "dregg-macaroon",
+ "dregg-net",
+ "dregg-persist",
+ "dregg-sdk",
+ "dregg-storage",
+ "dregg-turn",
+ "dregg-types",
+ "ed25519-dalek",
+ "futures-util",
+ "getrandom 0.3.4",
+ "http-body-util",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "postcard",
+ "quinn",
+ "rustls 0.23.40",
+ "serde",
+ "serde_json",
+ "starbridge-governed-namespace",
+ "starbridge-identity",
+ "starbridge-nameservice",
+ "starbridge-subscription",
+ "subtle",
+ "tempfile",
+ "tokio",
+ "tower 0.5.3",
+ "tracing",
+ "tracing-subscriber 0.3.23",
+ "uuid",
+ "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
+name = "dregg-observability"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-captp",
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-federation",
+ "dregg-turn",
+ "dregg-types",
+ "hex",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "dregg-persist"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "chacha20poly1305",
+ "dregg-audit",
+ "dregg-blocklace",
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-commit",
+ "dregg-federation",
+ "dregg-types",
+ "ed25519-dalek",
+ "getrandom 0.3.4",
+ "postcard",
+ "redb",
+ "serde",
+ "subtle",
+ "tempfile",
+]
+
+[[package]]
+name = "dregg-preflight"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "curve25519-dalek",
+ "dregg-blocklace",
+ "dregg-bridge",
+ "dregg-captp",
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-commit",
+ "dregg-federation",
+ "dregg-intent",
+ "dregg-sdk",
+ "dregg-storage",
+ "dregg-token",
+ "dregg-turn",
+ "dregg-types",
+ "dregg-wire",
+ "ed25519-dalek",
+ "getrandom 0.3.4",
+ "postcard",
+ "serde_json",
+ "tokio",
+ "toml",
+]
+
+[[package]]
+name = "dregg-protocol-tests"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-turn",
+ "dregg-types",
+ "ed25519-dalek",
+ "postcard",
+ "proptest",
+ "serde",
+]
+
+[[package]]
+name = "dregg-rbg"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-cell",
+ "dregg-types",
+]
+
+[[package]]
+name = "dregg-sdk"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "blake3",
+ "curve25519-dalek",
+ "dregg-bridge",
+ "dregg-captp",
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-commit",
+ "dregg-dsl-runtime",
+ "dregg-dsl-tests",
+ "dregg-intent",
+ "dregg-macaroon",
+ "dregg-token",
+ "dregg-trace",
+ "dregg-turn",
+ "dregg-types",
+ "dregg-wire",
+ "ed25519-dalek",
+ "getrandom 0.3.4",
+ "hmac 0.12.1",
+ "pbkdf2",
+ "postcard",
+ "reqwest",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
+name = "dregg-sdk-consensus-demo"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-blocklace",
+ "dregg-captp",
+ "dregg-cell",
+ "dregg-federation",
+ "dregg-sdk",
+ "dregg-token",
+ "dregg-turn",
+ "dregg-types",
+ "dregg-wire",
+ "ed25519-dalek",
+ "postcard",
+]
+
+[[package]]
+name = "dregg-secrets"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "base64 0.22.1",
+ "directories",
+ "getrandom 0.3.4",
+ "keyring",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "zeroize",
+]
+
+[[package]]
+name = "dregg-storage"
+version = "0.1.0"
+dependencies = [
+ "ark-bn254",
+ "ark-ec",
+ "ark-ff 0.5.0",
+ "ark-poly",
+ "ark-serialize 0.5.0",
+ "ark-std 0.5.0",
+ "blake3",
+ "dregg-cell",
+ "dregg-circuit",
+ "poly-commitment",
+ "serde",
+]
+
+[[package]]
+name = "dregg-storage-templates"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "dregg-teasting"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "curve25519-dalek",
+ "dregg-blocklace",
+ "dregg-bridge",
+ "dregg-captp",
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-commit",
+ "dregg-coord",
+ "dregg-dsl-runtime",
+ "dregg-federation",
+ "dregg-intent",
+ "dregg-macaroon",
+ "dregg-net",
+ "dregg-persist",
+ "dregg-sdk",
+ "dregg-storage",
+ "dregg-token",
+ "dregg-turn",
+ "dregg-types",
+ "dregg-verifier",
+ "dregg-wire",
+ "ed25519-dalek",
+ "getrandom 0.3.4",
+ "postcard",
+ "serde",
+ "tokio",
+ "tracing",
+ "tracing-subscriber 0.3.23",
+]
+
+[[package]]
+name = "dregg-tests"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-bridge",
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-dsl-runtime",
+ "dregg-sdk",
+ "dregg-token",
+ "dregg-turn",
+ "dregg-types",
+ "getrandom 0.3.4",
+ "postcard",
+ "proptest",
+]
+
+[[package]]
+name = "dregg-token"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "biscuit-auth",
+ "blake3",
+ "criterion",
+ "dregg-commit",
+ "dregg-macaroon",
+ "dregg-trace",
+ "ed25519-dalek",
+ "getrandom 0.3.4",
+ "globset",
+ "rand 0.9.4",
+ "rmp-serde",
+ "scalable_cuckoo_filter",
+ "serde",
+ "thiserror 2.0.18",
+ "zeroize",
+]
+
+[[package]]
+name = "dregg-tokenizer"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chacha20poly1305",
+ "criterion",
+ "directories",
+ "getrandom 0.3.4",
+ "postcard",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
+name = "dregg-trace"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "dregg-turn"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "chacha20poly1305",
+ "curve25519-dalek",
+ "dregg-captp",
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-commit",
+ "dregg-dsl-runtime",
+ "dregg-types",
+ "ed25519-dalek",
+ "getrandom 0.3.4",
+ "hex",
+ "postcard",
+ "proptest",
+ "serde",
+ "serde_json",
+ "tracing",
+ "x25519-dalek",
+]
+
+[[package]]
+name = "dregg-types"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "ed25519-dalek",
+ "getrandom 0.3.4",
+ "postcard",
+ "serde",
+ "zeroize",
+]
+
+[[package]]
+name = "dregg-verifier"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-captp",
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-commit",
+ "dregg-federation",
+ "dregg-turn",
+ "dregg-types",
+ "hex",
+ "postcard",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "dregg-wasm"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "clear_on_drop",
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-commit",
+ "dregg-coord",
+ "dregg-federation",
+ "dregg-intent",
+ "dregg-macaroon",
+ "dregg-observability",
+ "dregg-sdk",
+ "dregg-token",
+ "dregg-trace",
+ "dregg-turn",
+ "dregg-types",
+ "ed25519-dalek",
+ "getrandom 0.2.17",
+ "getrandom 0.3.4",
+ "getrandom 0.4.2",
+ "js-sys",
+ "lockstitch",
+ "postcard",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_json",
+ "wasm-bindgen",
+ "web-sys",
+ "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
+name = "dregg-wire"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "criterion",
+ "dregg-bridge",
+ "dregg-captp",
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-commit",
+ "dregg-dfa",
+ "dregg-dsl-runtime",
+ "dregg-federation",
+ "dregg-persist",
+ "dregg-token",
+ "dregg-turn",
+ "dregg-types",
+ "ed25519-dalek",
+ "getrandom 0.3.4",
+ "postcard",
+ "rustls-pemfile",
+ "serde",
+ "tokio",
+ "tokio-rustls 0.26.4",
+ "tracing",
+]
+
+[[package]]
 name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6157,980 +7131,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52c2c1bf36ddb1a1c396b3601a3cec27c2462e45f07c386894ec3ccf5332bd16"
 dependencies = [
  "prost 0.13.5",
-]
-
-[[package]]
-name = "dregg-app-framework"
-version = "0.1.0"
-dependencies = [
- "axum 0.8.9",
- "base64 0.22.1",
- "blake3",
- "ed25519-dalek",
- "http",
- "dregg-captp",
- "dregg-cell",
- "dregg-circuit",
- "dregg-intent",
- "dregg-sdk",
- "dregg-storage",
- "dregg-turn",
- "dregg-types",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tower 0.5.3",
- "tower-http 0.6.11",
-]
-
-[[package]]
-name = "dregg-audit"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "dregg-commit",
- "serde",
-]
-
-[[package]]
-name = "dregg-blocklace"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "ed25519-dalek",
- "postcard",
- "proptest",
- "dregg-types",
- "rand 0.8.6",
- "serde",
- "thiserror 2.0.18",
- "tracing",
-]
-
-[[package]]
-name = "dregg-bridge"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "criterion",
- "ed25519-dalek",
- "getrandom 0.3.4",
- "postcard",
- "dregg-bridge",
- "dregg-circuit",
- "dregg-commit",
- "dregg-dsl-runtime",
- "dregg-macaroon",
- "dregg-token",
- "dregg-trace",
- "dregg-turn",
- "serde",
- "tokio",
-]
-
-[[package]]
-name = "dregg-captp"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "bs58",
- "getrandom 0.3.4",
- "postcard",
- "dregg-cell",
- "dregg-types",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "dregg-cell"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "bulletproofs",
- "chacha20poly1305",
- "curve25519-dalek",
- "ed25519-dalek",
- "getrandom 0.3.4",
- "merlin",
- "postcard",
- "proptest",
- "dregg-circuit",
- "dregg-commit",
- "dregg-dsl-runtime",
- "dregg-types",
- "serde",
- "serde_json",
- "x25519-dalek",
- "zeroize",
-]
-
-[[package]]
-name = "dregg-circuit"
-version = "0.1.0"
-dependencies = [
- "ark-ec",
- "ark-ff 0.5.0",
- "ark-poly",
- "binius_circuits",
- "binius_core",
- "binius_field",
- "binius_hal",
- "binius_hash",
- "binius_macros",
- "binius_math",
- "binius_utils",
- "blake3",
- "bumpalo",
- "criterion",
- "getrandom 0.3.4",
- "groestl",
- "groupmap",
- "itertools 0.14.0",
- "kimchi",
- "mina-curves",
- "mina-poseidon",
- "p3-air 0.5.1",
- "p3-baby-bear 0.5.1",
- "p3-batch-stark",
- "p3-challenger 0.5.1",
- "p3-circuit",
- "p3-circuit-prover",
- "p3-commit 0.5.1",
- "p3-dft 0.5.1",
- "p3-field 0.5.1",
- "p3-fri 0.5.1",
- "p3-lookup",
- "p3-matrix 0.5.1",
- "p3-mds 0.5.1",
- "p3-merkle-tree 0.5.1",
- "p3-monty-31",
- "p3-poseidon2 0.5.1",
- "p3-poseidon2-circuit-air",
- "p3-recursion",
- "p3-symmetric 0.5.1",
- "p3-uni-stark 0.5.1",
- "p3-util 0.5.1",
- "poly-commitment",
- "postcard",
- "dregg-bridge",
- "dregg-cell",
- "dregg-dsl",
- "dregg-dsl-runtime",
- "dregg-token",
- "dregg-trace",
- "dregg-turn",
- "rand 0.10.1",
- "rand_core 0.6.4",
- "rmp-serde",
- "serde",
- "sp1-sdk",
- "tracing",
-]
-
-[[package]]
-name = "dregg-cli"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "bs58",
- "clap",
- "clap_complete",
- "comfy-table",
- "console",
- "dialoguer",
- "dirs",
- "indicatif",
- "reqwest",
- "serde",
- "serde_json",
- "shellexpand",
- "tokio",
- "toml",
- "urlencoding",
-]
-
-[[package]]
-name = "dregg-commit"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "dregg-circuit",
- "dregg-dsl-runtime",
- "serde",
-]
-
-[[package]]
-name = "dregg-coord"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "ed25519-dalek",
- "dregg-blocklace",
- "dregg-cell",
- "dregg-turn",
- "dregg-types",
- "serde",
-]
-
-[[package]]
-name = "dregg-credentials"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "dregg-bridge",
- "dregg-cell",
- "dregg-circuit",
- "dregg-commit",
- "dregg-macaroon",
- "dregg-token",
- "dregg-trace",
- "serde",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "dregg-demo"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "ed25519-dalek",
- "getrandom 0.3.4",
- "hex",
- "postcard",
- "dregg-app-framework",
- "dregg-captp",
- "dregg-cell",
- "dregg-circuit",
- "dregg-commit",
- "dregg-credentials",
- "dregg-federation",
- "dregg-turn",
- "dregg-types",
- "dregg-verifier",
- "serde",
- "serde_json",
- "starbridge-governed-namespace",
- "starbridge-identity",
- "starbridge-nameservice",
- "starbridge-subscription",
-]
-
-[[package]]
-name = "dregg-demo-agent"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "ed25519-dalek",
- "getrandom 0.3.4",
- "postcard",
- "dregg-bridge",
- "dregg-cell",
- "dregg-circuit",
- "dregg-commit",
- "dregg-coord",
- "dregg-dsl-runtime",
- "dregg-federation",
- "dregg-intent",
- "dregg-sdk",
- "dregg-token",
- "dregg-trace",
- "dregg-turn",
- "dregg-types",
- "serde_json",
-]
-
-[[package]]
-name = "dregg-dfa"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "postcard",
- "dregg-federation",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "dregg-directory"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "dregg-cell",
- "dregg-dfa",
- "dregg-types",
- "serde",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "dregg-discharge-gateway"
-version = "0.1.0"
-dependencies = [
- "axum 0.8.9",
- "base64 0.22.1",
- "clap",
- "dregg-macaroon",
- "serde",
- "serde_json",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber 0.3.23",
-]
-
-[[package]]
-name = "dregg-discord-bot"
-version = "0.1.0"
-dependencies = [
- "axum 0.8.9",
- "blake3",
- "futures-util",
- "hex",
- "dregg-app-framework",
- "dregg-captp",
- "dregg-sdk",
- "dregg-storage",
- "reqwest",
- "serde",
- "serde_json",
- "serenity",
- "sqlx",
- "tokio",
- "tower-http 0.5.2",
- "tracing",
- "tracing-subscriber 0.3.23",
- "zeroize",
-]
-
-[[package]]
-name = "dregg-dsl"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
-name = "dregg-dsl-differential"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "dregg-circuit",
- "dregg-dsl",
- "dregg-dsl-runtime",
- "serde_json",
-]
-
-[[package]]
-name = "dregg-dsl-runtime"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "p3-air 0.5.1",
- "p3-baby-bear 0.5.1",
- "p3-challenger 0.5.1",
- "p3-commit 0.5.1",
- "p3-dft 0.5.1",
- "p3-field 0.5.1",
- "p3-fri 0.5.1",
- "p3-matrix 0.5.1",
- "p3-merkle-tree 0.5.1",
- "p3-symmetric 0.5.1",
- "p3-uni-stark 0.5.1",
- "p3-util 0.5.1",
- "postcard",
- "dregg-circuit",
- "rmp-serde",
- "serde",
-]
-
-[[package]]
-name = "dregg-dsl-tests"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "dregg-circuit",
- "dregg-dsl",
- "dregg-dsl-runtime",
-]
-
-[[package]]
-name = "dregg-federation"
-version = "0.1.0"
-dependencies = [
- "ark-ff 0.5.0",
- "ark-serialize 0.5.0",
- "ark-std 0.5.0",
- "blake3",
- "criterion",
- "crossbeam-channel",
- "ed25519-dalek",
- "getrandom 0.3.4",
- "hex",
- "postcard",
- "dregg-captp",
- "dregg-cell",
- "dregg-commit",
- "dregg-hints",
- "dregg-turn",
- "dregg-types",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "dregg-hints"
-version = "0.0.5"
-dependencies = [
- "ark-bls12-381",
- "ark-crypto-primitives",
- "ark-ec",
- "ark-ff 0.5.0",
- "ark-poly",
- "ark-poly-commit",
- "ark-serialize 0.5.0",
- "ark-std 0.5.0",
- "bincode 2.0.1",
- "criterion",
- "hex",
- "lockstitch",
- "once_cell",
- "rayon",
- "serde",
- "serde_json",
- "serde_with",
- "zeroize",
-]
-
-[[package]]
-name = "dregg-intent"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "curve25519-dalek",
- "getrandom 0.3.4",
- "globset",
- "postcard",
- "dregg-cell",
- "dregg-circuit",
- "dregg-commit",
- "dregg-dfa",
- "dregg-federation",
- "dregg-token",
- "dregg-trace",
- "dregg-turn",
- "serde",
- "serde_json",
- "x25519-dalek",
-]
-
-[[package]]
-name = "dregg-macaroon"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "chacha20poly1305",
- "criterion",
- "getrandom 0.3.4",
- "hmac 0.12.1",
- "rmp-serde",
- "serde",
- "sha2 0.10.9",
- "subtle",
- "thiserror 2.0.18",
- "zeroize",
-]
-
-[[package]]
-name = "dregg-net"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "bytes",
- "postcard",
- "dregg-types",
- "quinn",
- "rand 0.9.4",
- "rcgen",
- "ring",
- "rustls 0.23.40",
- "serde",
- "tokio",
- "tracing",
- "tracing-subscriber 0.3.23",
-]
-
-[[package]]
-name = "dregg-node"
-version = "0.1.0"
-dependencies = [
- "argon2",
- "ark-serialize 0.5.0",
- "ark-std 0.5.0",
- "axum 0.8.9",
- "base64 0.22.1",
- "blake3",
- "chacha20poly1305",
- "clap",
- "ed25519-dalek",
- "futures-util",
- "getrandom 0.3.4",
- "http-body-util",
- "metrics",
- "metrics-exporter-prometheus",
- "postcard",
- "dregg-app-framework",
- "dregg-blocklace",
- "dregg-captp",
- "dregg-cell",
- "dregg-circuit",
- "dregg-commit",
- "dregg-coord",
- "dregg-credentials",
- "dregg-dsl-runtime",
- "dregg-federation",
- "dregg-intent",
- "dregg-macaroon",
- "dregg-net",
- "dregg-persist",
- "dregg-sdk",
- "dregg-storage",
- "dregg-turn",
- "dregg-types",
- "quinn",
- "rustls 0.23.40",
- "serde",
- "serde_json",
- "starbridge-governed-namespace",
- "starbridge-identity",
- "starbridge-nameservice",
- "starbridge-subscription",
- "subtle",
- "tempfile",
- "tokio",
- "tower 0.5.3",
- "tracing",
- "tracing-subscriber 0.3.23",
- "uuid",
- "x25519-dalek",
- "zeroize",
-]
-
-[[package]]
-name = "dregg-observability"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "hex",
- "dregg-captp",
- "dregg-cell",
- "dregg-circuit",
- "dregg-federation",
- "dregg-turn",
- "dregg-types",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "dregg-persist"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "chacha20poly1305",
- "ed25519-dalek",
- "getrandom 0.3.4",
- "postcard",
- "dregg-audit",
- "dregg-blocklace",
- "dregg-cell",
- "dregg-circuit",
- "dregg-commit",
- "dregg-federation",
- "dregg-types",
- "redb",
- "serde",
- "subtle",
- "tempfile",
-]
-
-[[package]]
-name = "dregg-preflight"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "curve25519-dalek",
- "ed25519-dalek",
- "getrandom 0.3.4",
- "postcard",
- "dregg-blocklace",
- "dregg-bridge",
- "dregg-captp",
- "dregg-cell",
- "dregg-circuit",
- "dregg-commit",
- "dregg-federation",
- "dregg-intent",
- "dregg-sdk",
- "dregg-storage",
- "dregg-token",
- "dregg-turn",
- "dregg-types",
- "dregg-wire",
- "serde_json",
- "tokio",
- "toml",
-]
-
-[[package]]
-name = "dregg-protocol-tests"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "ed25519-dalek",
- "postcard",
- "proptest",
- "dregg-cell",
- "dregg-circuit",
- "dregg-turn",
- "dregg-types",
- "serde",
-]
-
-[[package]]
-name = "dregg-rbg"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "dregg-cell",
- "dregg-types",
-]
-
-[[package]]
-name = "dregg-sdk"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "base64 0.22.1",
- "blake3",
- "curve25519-dalek",
- "ed25519-dalek",
- "getrandom 0.3.4",
- "hmac 0.12.1",
- "pbkdf2",
- "postcard",
- "dregg-bridge",
- "dregg-captp",
- "dregg-cell",
- "dregg-circuit",
- "dregg-commit",
- "dregg-dsl-runtime",
- "dregg-dsl-tests",
- "dregg-intent",
- "dregg-macaroon",
- "dregg-token",
- "dregg-trace",
- "dregg-turn",
- "dregg-types",
- "dregg-wire",
- "reqwest",
- "rmp-serde",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "x25519-dalek",
- "zeroize",
-]
-
-[[package]]
-name = "dregg-sdk-consensus-demo"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "ed25519-dalek",
- "postcard",
- "dregg-blocklace",
- "dregg-captp",
- "dregg-cell",
- "dregg-federation",
- "dregg-sdk",
- "dregg-token",
- "dregg-turn",
- "dregg-types",
- "dregg-wire",
-]
-
-[[package]]
-name = "dregg-secrets"
-version = "0.1.0"
-dependencies = [
- "aes-gcm",
- "base64 0.22.1",
- "directories",
- "getrandom 0.3.4",
- "keyring",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "zeroize",
-]
-
-[[package]]
-name = "dregg-storage"
-version = "0.1.0"
-dependencies = [
- "ark-bn254",
- "ark-ec",
- "ark-ff 0.5.0",
- "ark-poly",
- "ark-serialize 0.5.0",
- "ark-std 0.5.0",
- "blake3",
- "poly-commitment",
- "dregg-cell",
- "dregg-circuit",
- "serde",
-]
-
-[[package]]
-name = "dregg-storage-templates"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "dregg-app-framework",
- "dregg-cell",
- "dregg-types",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "dregg-teasting"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "curve25519-dalek",
- "ed25519-dalek",
- "getrandom 0.3.4",
- "postcard",
- "dregg-blocklace",
- "dregg-bridge",
- "dregg-captp",
- "dregg-cell",
- "dregg-circuit",
- "dregg-commit",
- "dregg-coord",
- "dregg-dsl-runtime",
- "dregg-federation",
- "dregg-intent",
- "dregg-macaroon",
- "dregg-net",
- "dregg-persist",
- "dregg-sdk",
- "dregg-storage",
- "dregg-token",
- "dregg-turn",
- "dregg-types",
- "dregg-verifier",
- "dregg-wire",
- "serde",
- "tokio",
- "tracing",
- "tracing-subscriber 0.3.23",
-]
-
-[[package]]
-name = "dregg-tests"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "getrandom 0.3.4",
- "postcard",
- "proptest",
- "dregg-bridge",
- "dregg-cell",
- "dregg-circuit",
- "dregg-dsl-runtime",
- "dregg-sdk",
- "dregg-token",
- "dregg-turn",
- "dregg-types",
-]
-
-[[package]]
-name = "dregg-token"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "biscuit-auth",
- "blake3",
- "criterion",
- "ed25519-dalek",
- "getrandom 0.3.4",
- "globset",
- "dregg-commit",
- "dregg-macaroon",
- "dregg-trace",
- "rand 0.9.4",
- "rmp-serde",
- "scalable_cuckoo_filter",
- "serde",
- "thiserror 2.0.18",
- "zeroize",
-]
-
-[[package]]
-name = "dregg-tokenizer"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "chacha20poly1305",
- "criterion",
- "directories",
- "getrandom 0.3.4",
- "postcard",
- "serde",
- "thiserror 2.0.18",
- "tokio",
- "x25519-dalek",
- "zeroize",
-]
-
-[[package]]
-name = "dregg-trace"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "dregg-turn"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "chacha20poly1305",
- "curve25519-dalek",
- "ed25519-dalek",
- "getrandom 0.3.4",
- "hex",
- "postcard",
- "proptest",
- "dregg-captp",
- "dregg-cell",
- "dregg-circuit",
- "dregg-commit",
- "dregg-dsl-runtime",
- "dregg-types",
- "serde",
- "serde_json",
- "tracing",
- "x25519-dalek",
-]
-
-[[package]]
-name = "dregg-types"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "ed25519-dalek",
- "getrandom 0.3.4",
- "postcard",
- "serde",
- "zeroize",
-]
-
-[[package]]
-name = "dregg-verifier"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "hex",
- "postcard",
- "dregg-captp",
- "dregg-cell",
- "dregg-circuit",
- "dregg-commit",
- "dregg-federation",
- "dregg-turn",
- "dregg-types",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "dregg-wasm"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "clear_on_drop",
- "ed25519-dalek",
- "getrandom 0.2.17",
- "getrandom 0.3.4",
- "getrandom 0.4.2",
- "js-sys",
- "lockstitch",
- "postcard",
- "dregg-cell",
- "dregg-circuit",
- "dregg-commit",
- "dregg-coord",
- "dregg-federation",
- "dregg-intent",
- "dregg-macaroon",
- "dregg-observability",
- "dregg-sdk",
- "dregg-token",
- "dregg-trace",
- "dregg-turn",
- "dregg-types",
- "serde",
- "serde-wasm-bindgen",
- "serde_json",
- "wasm-bindgen",
- "web-sys",
- "x25519-dalek",
- "zeroize",
-]
-
-[[package]]
-name = "dregg-wire"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "criterion",
- "ed25519-dalek",
- "getrandom 0.3.4",
- "postcard",
- "dregg-bridge",
- "dregg-captp",
- "dregg-cell",
- "dregg-circuit",
- "dregg-commit",
- "dregg-dfa",
- "dregg-dsl-runtime",
- "dregg-federation",
- "dregg-persist",
- "dregg-token",
- "dregg-turn",
- "dregg-types",
- "rustls-pemfile",
- "serde",
- "tokio",
- "tokio-rustls 0.26.4",
- "tracing",
 ]
 
 [[package]]

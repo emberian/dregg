@@ -8,7 +8,7 @@
 
 === 4-ary Merkle Trees
 
-Dregg uses quaternary Merkle trees: each internal node hashes 4 children via $"Poseidon2"(c_0, c_1, c_2, c_3)$ over BabyBear (width 8, $alpha = 7$, 8 external + 22 internal rounds). The 4-ary structure halves tree height relative to binary trees.
+Dragon's Egg uses quaternary Merkle trees: each internal node hashes 4 children via $"Poseidon2"(c_0, c_1, c_2, c_3)$ over BabyBear (width 8, $alpha = 7$, 8 external + 22 internal rounds). The 4-ary structure halves tree height relative to binary trees.
 
 === Multi-Hash Roots
 
@@ -413,7 +413,7 @@ Phase 2 recurses into the optional `transition_proof: Option<Vec<u8>>` on the wi
 
 == Proof Backend Agility: The Constraint DSL
 
-Rather than manually implementing circuits for each proof system, Dregg provides a constraint DSL (`#[dregg_caveat]` and `#[dregg_effect]` proc macros) that compiles a single `CircuitDescriptor` into 8 code generation backends:
+Rather than manually implementing circuits for each proof system, Dragon's Egg provides a constraint DSL (`#[dregg_caveat]` and `#[dregg_effect]` proc macros) that compiles a single `CircuitDescriptor` into 8 code generation backends:
 
 #figure(
   table(
