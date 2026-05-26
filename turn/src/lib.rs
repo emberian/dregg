@@ -94,8 +94,8 @@ pub use action::{
 };
 pub use budget_gate::{BudgetGate, BudgetSlice};
 pub use builder::{
-    ActionBuilder, Authorized, Bearer, Breadstuff, LegacyActionBuilder, NeedsAuth, Proved, Signed,
-    TurnBuilder, UncheckedOptIn,
+    ActionBuilder, Authorized, Bearer, Breadstuff, NeedsAuth, Proved, Signed, TurnBuilder,
+    UncheckedOptIn,
 };
 pub use composer::{ComposeError, ComposedTurn, SignedFragment, TurnComposer};
 pub use conditional::{

@@ -225,8 +225,9 @@ pub struct TurnBuilder {
     /// Per-action declared excess deltas, parallel to `actions` (for
     /// conservation derivation summing).
     declared_excesses: Vec<i64>,
-    /// Legacy `&mut`-style ActionBuilders accumulated via `.action()`. Drained
-    /// into `actions` at `.build()` time.
+    /// Crate-private legacy builders accumulated via the deprecated `.action()`
+    /// method. Drained into `actions` at `.build()` time. No external callers
+    /// remain; this field will be removed when `LegacyActionBuilder` is deleted.
     legacy_action_builders: Vec<LegacyActionBuilder>,
 }
 
@@ -311,18 +312,15 @@ impl TurnBuilder {
         self
     }
 
-    /// Legacy entry point preserved for backwards compatibility with existing
-    /// callers. Returns a mutable handle to a `LegacyActionBuilder` that uses
-    /// the unchecked authorization path. **This path is for migration
-    /// scaffolding only**: it goes through the typestate's
-    /// `new_unchecked_for_tests` and the resulting actions carry
-    /// `Authorization::Unchecked`. New code must call `add_action` with a
-    /// real authorized builder instead.
-    ///
-    /// This method exists exclusively so the broad migration of existing
-    /// callers can be staged across commits without an atomic rewrite of
-    /// every test. Production paths must not rely on it.
-    pub fn action(&mut self, target: CellId, method: &str) -> &mut LegacyActionBuilder {
+    /// Legacy entry point — all external callers have been migrated to
+    /// [`TurnBuilder::add_action`]. This method and [`LegacyActionBuilder`]
+    /// are now crate-private. Use `add_action` with a typestate
+    /// [`ActionBuilder`] instead.
+    #[deprecated(
+        since = "0.0.0",
+        note = "All callers migrated. Use add_action with ActionBuilder instead."
+    )]
+    pub(crate) fn action(&mut self, target: CellId, method: &str) -> &mut LegacyActionBuilder {
         self.legacy_action_builders
             .push(LegacyActionBuilder::new(target, method));
         self.legacy_action_builders.last_mut().unwrap()
@@ -430,21 +428,7 @@ impl TurnBuilder {
         total
     }
 
-    // Legacy field — kept private and only writable through `.action(...)`.
-    // We declare it via `default()` in `new()` indirectly via init-on-write.
 }
-
-// SAFETY: TurnBuilder.legacy_action_builders cannot be initialized in `new()`
-// because that would mean splitting `Vec`. We use a re-entrant approach:
-// stash the legacy builders in the struct itself via a separate field.
-impl TurnBuilder {
-    /// Initialized lazily; see `action()`.
-    #[allow(dead_code)]
-    fn ensure_legacy(&mut self) {}
-}
-
-// Add the legacy field via a second declaration — Rust doesn't allow this, so
-// we instead include it in the original struct. Rewriting:
 
 // ─── ActionBuilder<S> — typestate-bearing builder ─────────────────────────────
 
@@ -1183,7 +1167,12 @@ impl<S: Authorized> ActionBuilder<S> {
 /// New code should use the typestate [`ActionBuilder`] directly. This type
 /// always produces actions with `Authorization::Unchecked` and is intended
 /// only for tests/benches that have not yet been migrated.
-pub struct LegacyActionBuilder {
+///
+/// All external call sites have been migrated to [`ActionBuilder`]. This type
+/// is now crate-private; it will be deleted in a follow-up cleanup once
+/// `TurnBuilder::action()` and `TurnBuilder::legacy_action_builders` are
+/// fully excised.
+pub(crate) struct LegacyActionBuilder {
     target: CellId,
     method: String,
     args: Vec<FieldElement>,
