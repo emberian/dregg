@@ -445,6 +445,36 @@ fn executor_rejects_cell_declaring_witnessed_variant_today() {
 }
 
 #[test]
+fn executor_witnessed_dfa_with_stub_registry_accepts() {
+    use dregg_cell::InputRef;
+    use dregg_cell::WitnessedPredicateRegistry;
+    use dregg_cell::predicate::WitnessedPredicate;
+
+    let program = CellProgram::Predicate(vec![StateConstraint::Witnessed {
+        wp: WitnessedPredicate::dfa([1u8; 32], InputRef::Sender, 0),
+    }]);
+    let agent_cell = make_cell_with_program(19, 1000, program);
+    let agent = agent_cell.id();
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(agent_cell).unwrap();
+
+    let executor = TurnExecutor::new(ComputronCosts::zero())
+        .with_witnessed_registry(WitnessedPredicateRegistry::with_stubs());
+    let turn = build_set_field_turn_with_witnesses(
+        agent,
+        0,
+        0,
+        field_from_u64(1),
+        vec![WitnessBlob::proof(b"stub-dfa-proof".to_vec())],
+    );
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        matches!(result, TurnResult::Committed { .. }),
+        "expected executor to route Witnessed DFA through explicit stub registry, got: {result:?}"
+    );
+}
+
+#[test]
 fn executor_rejects_cell_declaring_custom_variant_today() {
     use dregg_cell::program::{CustomDescriptor, ReadSet};
     let program = CellProgram::Predicate(vec![StateConstraint::Custom {
@@ -484,13 +514,39 @@ fn executor_rejects_cell_declaring_bound_delta_variant_today() {
 }
 
 // ===========================================================================
-// SenderAuthorized — needs sender + Merkle witness; today structural only
+// SenderAuthorized — needs sender + membership witness registry
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on caveat-correctness lane: executor wires MerkleMembership witness through WitnessedPredicateRegistry (CAVEAT-LAYER-COVERAGE.md §1 row 15)"]
 fn executor_sender_authorized_with_membership_witness_accepts() {
-    panic!("blocked");
+    use dregg_cell::WitnessedPredicateRegistry;
+    use dregg_cell::program::AuthorizedSet;
+
+    let set_root = [0x31u8; 32];
+    let program = CellProgram::Predicate(vec![StateConstraint::SenderAuthorized {
+        set: AuthorizedSet::PublicRoot { set_root_index: 0 },
+    }]);
+    let agent_cell = make_cell_with_program(20, 1000, program);
+    let agent = agent_cell.id();
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(agent_cell).unwrap();
+
+    let executor = TurnExecutor::new(ComputronCosts::zero())
+        .with_witnessed_registry(WitnessedPredicateRegistry::with_stubs());
+    let turn = build_set_field_turn_with_witnesses(
+        agent,
+        0,
+        0,
+        set_root,
+        vec![WitnessBlob::merkle_path(
+            b"stub-merkle-membership-proof".to_vec(),
+        )],
+    );
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        matches!(result, TurnResult::Committed { .. }),
+        "expected executor to route SenderAuthorized Merkle witness through explicit stub registry, got: {result:?}"
+    );
 }
 
 #[test]

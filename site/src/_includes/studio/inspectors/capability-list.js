@@ -4,7 +4,7 @@
  * Reads `get_capability_tree(handle, agent_index)` from wasm.
  */
 
-import { InspectorBase, shortHex } from './_base.js';
+import { InspectorBase, dreggCodeLink, emptyState, shortHex } from './_base.js';
 
 class DreggCapabilityList extends InspectorBase {
   static get observedAttributes() { return ['uri', 'mode', 'agent']; }
@@ -25,22 +25,37 @@ class DreggCapabilityList extends InspectorBase {
 
     const Component = () => {
       const tree = sig.value;
-      if (!tree) return html`<div class="dregg-inspector dregg-inspector--empty">no capability tree for agent #${agentIdx}</div>`;
+      if (!tree) return emptyState(
+        html,
+        'No capability tree',
+        html`Agent <code>#${agentIdx}</code> is not available in this runtime.`,
+      );
       const caps = tree.capabilities || [];
       if (!caps.length) return html`
         <div class="dregg-inspector dregg-inspector--cell-list">
           <header>0 capabilities (agent ${tree.agent_name || `#${agentIdx}`})</header>
+          <div class="dregg-inspector dregg-inspector--empty">
+            <div class="dregg-inspector__empty-title">No capabilities held</div>
+            <div class="dregg-inspector__empty-body">
+              ${tree.cell_id
+                ? html`Holder cell ${dreggCodeLink(html, `dregg://cell/${tree.cell_id}`, shortHex(tree.cell_id, 16), tree.cell_id)} has no delegated capability slots.`
+                : html`This agent has no delegated capability slots.`}
+            </div>
+          </div>
         </div>`;
       return html`
         <div class="dregg-inspector dregg-inspector--cell-list">
           <header>
             ${caps.length} capabilit${caps.length === 1 ? 'y' : 'ies'}
             · ${tree.agent_name || `agent #${agentIdx}`}
-            · cell <code title=${tree.cell_id}>${shortHex(tree.cell_id)}</code>
+            · cell ${tree.cell_id ? dreggCodeLink(html, `dregg://cell/${tree.cell_id}`, shortHex(tree.cell_id), tree.cell_id) : html`<span class="dregg-inspector__meta">unavailable</span>`}
           </header>
           <ul>
             ${caps.map(c => html`
-              <li><dregg-capability uri=${`dregg://capability/${agentIdx}/${c.slot}`} mode="compact"></dregg-capability></li>
+              <li>
+                ${dreggCodeLink(html, `dregg://capability/${agentIdx}/${c.slot}`, 'open')}
+                <dregg-capability uri=${`dregg://capability/${agentIdx}/${c.slot}`} mode="compact"></dregg-capability>
+              </li>
             `)}
           </ul>
         </div>`;

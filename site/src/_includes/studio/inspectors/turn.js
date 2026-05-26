@@ -48,7 +48,7 @@ class DreggTurn extends InspectorBase {
         ? html`
           <dt>actions</dt>
           <dd>
-            <ul style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:4px;">
+            <ul class="dregg-inspector__action-list">
               ${actions.map((a, i) => {
                 const authJson = a.authorization ? JSON.stringify(a.authorization) : null;
                 const targetUri = a.target_cell ? `dregg://cell/${a.target_cell}` : null;

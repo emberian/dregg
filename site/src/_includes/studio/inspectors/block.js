@@ -17,7 +17,7 @@
  */
 
 import { parseRef } from '../uri.js';
-import { InspectorBase, renderParseError, shortHex } from './_base.js';
+import { InspectorBase, dreggCodeLink, emptyState, renderParseError, shortHex } from './_base.js';
 
 class DreggBlock extends InspectorBase {
   _render() {
@@ -43,7 +43,12 @@ class DreggBlock extends InspectorBase {
 
     const Component = () => {
       const b = sig.value;
-      if (!b) return html`<div class="dregg-inspector dregg-inspector--empty">block at height ${height} not in JS log (no wasm getter available)</div>`;
+      if (!b) return emptyState(
+        html,
+        'Block not found',
+        html`No block at height <code>${height}</code> is present in the local JS block log for federation <code>#${fedIndex}</code>.`,
+        [dreggCodeLink(html, `dregg://federation/${fedIndex}`, 'open federation')],
+      );
       if (mode === 'compact') {
         return html`
           <span class="dregg-inspector dregg-inspector--compact">
@@ -57,10 +62,11 @@ class DreggBlock extends InspectorBase {
           <header>
             <span class="dregg-inspector__kind">block</span>
             <code class="dregg-inspector__id">height ${String(b.height)}</code>
+            <span class="dregg-inspector__meta">fed #${String(b.fed_index)} · ${String(b.events?.length || 0)} events</span>
           </header>
           <dl class="dregg-inspector__kv">
             <dt>height</dt><dd>${String(b.height)}</dd>
-            <dt>federation</dt><dd>#${String(b.fed_index)}</dd>
+            <dt>federation</dt><dd>${dreggCodeLink(html, `dregg://federation/${b.fed_index}`, `#${String(b.fed_index)}`)}</dd>
             <dt>block hash</dt><dd><code>${b.block_hash}</code></dd>
             <dt>events</dt><dd>${b.events?.length
               ? html`<code>${b.events.length} event${b.events.length === 1 ? '' : 's'}</code>`

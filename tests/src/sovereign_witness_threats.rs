@@ -24,6 +24,7 @@ use dregg_turn::{
     ActionBuilder, ComputronCosts, SovereignCellWitness, Turn, TurnBuilder, TurnError,
     TurnExecutor, TurnResult,
 };
+use dregg_types::{SigningKey, sign};
 
 fn permissive_cell(seed: u8, balance: u64) -> Cell {
     let mut pk = [0u8; 32];
@@ -41,6 +42,23 @@ fn permissive_cell(seed: u8, balance: u64) -> Cell {
         access: AuthRequired::None,
     };
     cell
+}
+
+fn signing_cell(seed: u8, balance: u64) -> (Cell, SigningKey) {
+    let seed_bytes = [seed; 32];
+    let signing_key = SigningKey::from_bytes(&seed_bytes);
+    let mut cell = Cell::with_balance(*signing_key.public_key().as_bytes(), [0u8; 32], balance);
+    cell.permissions = Permissions {
+        send: AuthRequired::None,
+        receive: AuthRequired::None,
+        set_state: AuthRequired::None,
+        set_permissions: AuthRequired::None,
+        set_verification_key: AuthRequired::None,
+        increment_nonce: AuthRequired::None,
+        delegate: AuthRequired::None,
+        access: AuthRequired::None,
+    };
+    (cell, signing_key)
 }
 
 fn turn_with_witnesses(agent: CellId, witnesses: HashMap<CellId, SovereignCellWitness>) -> Turn {
@@ -65,6 +83,21 @@ fn turn_with_witnesses(agent: CellId, witnesses: HashMap<CellId, SovereignCellWi
     }
 }
 
+fn set_field_turn(
+    agent: CellId,
+    target: CellId,
+    witnesses: HashMap<CellId, SovereignCellWitness>,
+) -> Turn {
+    let action = ActionBuilder::new_unchecked_for_tests(target, "set_field", agent)
+        .effect_set_field(target, 0, [1u8; 32])
+        .build();
+    let mut builder = TurnBuilder::new(agent, 0);
+    builder.add_action(action);
+    let mut turn = builder.fee(0).build();
+    turn.sovereign_witnesses = witnesses;
+    turn
+}
+
 fn dummy_sovereign_witness(
     cell: Cell,
     effects_hash: [u8; 32],
@@ -84,6 +117,65 @@ fn dummy_sovereign_witness(
     }
 }
 
+fn signed_sovereign_witness(
+    cell: &Cell,
+    signing_key: &SigningKey,
+    old_commitment: [u8; 32],
+    effects_hash: [u8; 32],
+    sequence: u64,
+) -> SovereignCellWitness {
+    let cell_id = cell.id();
+    let new_commitment = [0u8; 32];
+    let timestamp = 0;
+    let message = SovereignCellWitness::signing_message(
+        &cell_id,
+        &old_commitment,
+        &new_commitment,
+        &effects_hash,
+        timestamp,
+        sequence,
+    );
+    SovereignCellWitness {
+        cell_id,
+        old_commitment,
+        new_commitment,
+        effects_hash,
+        timestamp,
+        sequence,
+        signature: sign(signing_key, &message).0,
+        cell_state: cell.clone(),
+        transition_proof: None,
+    }
+}
+
+fn sovereign_fixture(seed: u8) -> (Ledger, CellId, CellId, Cell, SigningKey, [u8; 32]) {
+    let mut ledger = Ledger::new();
+    let agent = permissive_cell(1, 1_000);
+    let agent_id = agent.id();
+    ledger.insert_cell(agent).unwrap();
+
+    let (sovereign, signing_key) = signing_cell(seed, 500);
+    let sovereign_id = sovereign.id();
+    let old_commitment = sovereign.state_commitment();
+    ledger
+        .register_sovereign_cell(sovereign_id, old_commitment)
+        .unwrap();
+    ledger
+        .get_mut(&agent_id)
+        .unwrap()
+        .capabilities
+        .grant(sovereign_id, AuthRequired::None);
+
+    (
+        ledger,
+        agent_id,
+        sovereign_id,
+        sovereign,
+        signing_key,
+        old_commitment,
+    )
+}
+
 // ===========================================================================
 // Phase 1: legal witness path
 // ===========================================================================
@@ -97,9 +189,26 @@ fn sovereign_witness_with_legal_key_accepts() {
 }
 
 #[test]
-#[ignore = "blocked on sovereign-witness AIR teeth: tampered key (witness signed by a different key) must reject"]
 fn sovereign_witness_with_tampered_key_rejects() {
-    panic!("blocked");
+    let (mut ledger, agent_id, sovereign_id, sovereign, _real_key, old_commitment) =
+        sovereign_fixture(2);
+    let wrong_key = SigningKey::from_bytes(&[99u8; 32]);
+    let witness = signed_sovereign_witness(&sovereign, &wrong_key, old_commitment, [0u8; 32], 1);
+    let mut witnesses = HashMap::new();
+    witnesses.insert(sovereign_id, witness);
+    let turn = set_field_turn(agent_id, sovereign_id, witnesses);
+
+    let result = TurnExecutor::new(ComputronCosts::zero()).execute(&turn, &mut ledger);
+    assert!(
+        matches!(
+            &result,
+            TurnResult::Rejected {
+                reason: TurnError::InvalidEffect { reason },
+                ..
+            } if reason.contains("signature")
+        ),
+        "sovereign witness signed by the wrong key must reject, got: {result:?}"
+    );
 }
 
 #[test]
@@ -262,9 +371,27 @@ fn sovereign_witness_after_key_rotation_old_key_rejects() {
 }
 
 #[test]
-#[ignore = "blocked on sovereign-witness AIR teeth: witness with VALID signature but stale sequence (==current, not >) must reject — sequence must strictly increase per Phase 1 design"]
 fn sovereign_witness_equal_sequence_rejects() {
-    panic!("blocked");
+    let (mut ledger, agent_id, sovereign_id, sovereign, signing_key, old_commitment) =
+        sovereign_fixture(3);
+    ledger.bump_sovereign_witness_sequence(&sovereign_id, 1);
+
+    let witness = signed_sovereign_witness(&sovereign, &signing_key, old_commitment, [0u8; 32], 1);
+    let mut witnesses = HashMap::new();
+    witnesses.insert(sovereign_id, witness);
+    let turn = set_field_turn(agent_id, sovereign_id, witnesses);
+
+    let result = TurnExecutor::new(ComputronCosts::zero()).execute(&turn, &mut ledger);
+    assert!(
+        matches!(
+            &result,
+            TurnResult::Rejected {
+                reason: TurnError::InvalidEffect { reason },
+                ..
+            } if reason.contains("sequence")
+        ),
+        "sovereign witness with sequence equal to current must reject, got: {result:?}"
+    );
 }
 
 #[test]

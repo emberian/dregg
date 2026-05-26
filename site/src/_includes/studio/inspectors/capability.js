@@ -11,7 +11,7 @@
  */
 
 import { parseRef } from '../uri.js';
-import { InspectorBase, renderParseError, shortHex } from './_base.js';
+import { InspectorBase, dreggCodeLink, emptyState, renderParseError, shortHex } from './_base.js';
 
 class DreggCapability extends InspectorBase {
   _render() {
@@ -39,12 +39,18 @@ class DreggCapability extends InspectorBase {
 
     const Component = () => {
       const c = sig.value;
-      if (!c) return html`<div class="dregg-inspector dregg-inspector--empty">capability not found: agent ${agentIdx} slot ${slotOrIdx}</div>`;
+      if (!c) return emptyState(
+        html,
+        'Capability not found',
+        html`Agent <code>#${agentIdx}</code> does not currently expose a capability at slot <code>${slotOrIdx}</code>.`,
+      );
       if (mode === 'compact') {
         return html`
           <span class="dregg-inspector dregg-inspector--compact">
             <code>slot ${String(c.slot)}</code>
-            · target <code title=${c.target}>${shortHex(c.target)}</code>
+            · target ${c.target
+              ? dreggCodeLink(html, `dregg://cell/${c.target}`, shortHex(c.target), c.target)
+              : html`<span class="dregg-inspector__meta">unavailable</span>`}
             · ${c.permissions}
           </span>`;
       }
@@ -53,11 +59,12 @@ class DreggCapability extends InspectorBase {
           <header>
             <span class="dregg-inspector__kind">capability</span>
             <code class="dregg-inspector__id">agent #${String(c.agent_index)} · slot ${String(c.slot)}</code>
+            <span class="dregg-inspector__meta">${c.permissions || 'no permissions'}</span>
           </header>
           <dl class="dregg-inspector__kv">
             <dt>agent</dt><dd>${c.agent_name || `#${String(c.agent_index)}`}</dd>
-            <dt>holder cell</dt><dd><code title=${c.cell_id}>${shortHex(c.cell_id, 24)}</code></dd>
-            <dt>target cell</dt><dd><code title=${c.target}>${shortHex(c.target, 24)}</code></dd>
+            <dt>holder cell</dt><dd>${c.cell_id ? dreggCodeLink(html, `dregg://cell/${c.cell_id}`, shortHex(c.cell_id, 24), c.cell_id) : html`<span class="dregg-inspector__meta">unavailable</span>`}</dd>
+            <dt>target cell</dt><dd>${c.target ? dreggCodeLink(html, `dregg://cell/${c.target}`, shortHex(c.target, 24), c.target) : html`<span class="dregg-inspector__meta">unavailable</span>`}</dd>
             <dt>permissions</dt><dd><code>${c.permissions}</code></dd>
             <dt>breadstuff</dt><dd>${c.has_breadstuff ? 'attached' : 'none'}</dd>
           </dl>

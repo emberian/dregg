@@ -642,18 +642,78 @@ fn sender_authorized_requires_context_sender() {
 }
 
 #[test]
-#[ignore = "blocked on caveat-correctness: Merkle/blinded-set witness dispatch through WitnessedPredicateRegistry; cell-side evaluator is structural-only (CAVEAT-LAYER-COVERAGE.md §1 row 15)"]
 fn sender_authorized_blinded_set_with_valid_witness_accepts() {
-    // Will be enabled once the executor wires WitnessedPredicateRegistry
-    // into the SenderAuthorized arm and the cell-side evaluator dispatches
-    // BlindedSet through it.
-    panic!("blocked");
+    let commitment = [0xABu8; 32];
+    let p = single_predicate(StateConstraint::SenderAuthorized {
+        set: AuthorizedSet::BlindedSet { commitment },
+    });
+    let registry = WitnessedPredicateRegistry::with_stubs();
+    let proof = b"stub-blinded-set-proof";
+    let blobs: [WitnessBlobView<'_>; 1] = [WitnessBlobView {
+        kind: WitnessKindTag::ProofBytes,
+        bytes: proof,
+    }];
+    let witnesses = WitnessBundle {
+        blobs: &blobs,
+        registry: Some(&registry),
+    };
+    let ctx = EvalContext {
+        sender: Some([0x05u8; 32]),
+        ..Default::default()
+    };
+
+    let result = p.evaluate_full(
+        &CellState::default(),
+        None,
+        Some(&ctx),
+        &TransitionMeta::wildcard(),
+        &witnesses,
+    );
+    assert!(
+        result.is_ok(),
+        "SenderAuthorized BlindedSet should dispatch through explicit stub registry, got: {result:?}"
+    );
 }
 
 #[test]
-#[ignore = "blocked on caveat-correctness: BlindedSet non-revocation proof tampering rejection"]
 fn sender_authorized_blinded_set_with_tampered_witness_rejects() {
-    panic!("blocked");
+    let commitment = [0xABu8; 32];
+    let p = single_predicate(StateConstraint::SenderAuthorized {
+        set: AuthorizedSet::BlindedSet { commitment },
+    });
+    let registry = WitnessedPredicateRegistry::with_stubs();
+    let blobs: [WitnessBlobView<'_>; 1] = [WitnessBlobView {
+        kind: WitnessKindTag::ProofBytes,
+        bytes: b"",
+    }];
+    let witnesses = WitnessBundle {
+        blobs: &blobs,
+        registry: Some(&registry),
+    };
+    let ctx = EvalContext {
+        sender: Some([0x05u8; 32]),
+        ..Default::default()
+    };
+
+    let err = p
+        .evaluate_full(
+            &CellState::default(),
+            None,
+            Some(&ctx),
+            &TransitionMeta::wildcard(),
+            &witnesses,
+        )
+        .expect_err("empty BlindedSet proof must reject");
+    assert!(
+        matches!(
+            err,
+            ProgramError::WitnessedPredicateRejected {
+                kind_name: "BlindedSet",
+                ..
+            }
+        ),
+        "expected WitnessedPredicateRejected(BlindedSet), got: {err:?}"
+    );
 }
 
 // ===========================================================================
@@ -725,6 +785,76 @@ fn rate_limit_rejects_at_or_above_threshold_when_ctx_supplied() {
     ctx.sender = Some([1u8; 32]);
     ctx.sender_epoch_count = 5;
     assert_reject_violated(&p, &new, None, Some(&ctx), "RateLimit at threshold");
+}
+
+#[test]
+fn rate_limit_accepts_count_witness_when_ctx_count_unset() {
+    let p = single_predicate(StateConstraint::RateLimit {
+        max_per_epoch: 5,
+        epoch_duration: 1024,
+    });
+    let count = 4u32.to_le_bytes();
+    let blobs: [WitnessBlobView<'_>; 1] = [WitnessBlobView {
+        kind: WitnessKindTag::RateLimitCount,
+        bytes: &count,
+    }];
+    let witnesses = WitnessBundle {
+        blobs: &blobs,
+        registry: None,
+    };
+    let ctx = EvalContext {
+        sender: Some([1u8; 32]),
+        sender_epoch_count: 0,
+        ..Default::default()
+    };
+
+    let result = p.evaluate_full(
+        &CellState::default(),
+        None,
+        Some(&ctx),
+        &TransitionMeta::wildcard(),
+        &witnesses,
+    );
+    assert!(
+        result.is_ok(),
+        "RateLimit should accept under-cap RateLimitCount witness, got: {result:?}"
+    );
+}
+
+#[test]
+fn rate_limit_rejects_count_witness_at_cap_when_ctx_count_unset() {
+    let p = single_predicate(StateConstraint::RateLimit {
+        max_per_epoch: 5,
+        epoch_duration: 1024,
+    });
+    let count = 5u32.to_le_bytes();
+    let blobs: [WitnessBlobView<'_>; 1] = [WitnessBlobView {
+        kind: WitnessKindTag::RateLimitCount,
+        bytes: &count,
+    }];
+    let witnesses = WitnessBundle {
+        blobs: &blobs,
+        registry: None,
+    };
+    let ctx = EvalContext {
+        sender: Some([1u8; 32]),
+        sender_epoch_count: 0,
+        ..Default::default()
+    };
+
+    let err = p
+        .evaluate_full(
+            &CellState::default(),
+            None,
+            Some(&ctx),
+            &TransitionMeta::wildcard(),
+            &witnesses,
+        )
+        .expect_err("at-cap RateLimitCount witness must reject");
+    assert!(
+        matches!(err, ProgramError::ConstraintViolated { .. }),
+        "expected ConstraintViolated, got: {err:?}"
+    );
 }
 
 #[test]

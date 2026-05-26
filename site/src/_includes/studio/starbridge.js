@@ -375,9 +375,9 @@ function writeUrlState({ at, runtime }) {
       { group: 'Scripts', label: 'Run transfer turn', detail: 'Transfer from alice to bob', run: runTransferFlow },
       { group: 'Scripts', label: 'Create federation block', detail: 'Finalize a local federation block', run: createFederationFlow },
       { group: 'Scripts', label: 'Post storage intent', detail: 'Publish a storage need intent', run: postIntentFlow },
-      { group: 'Workbench', label: 'Open console', detail: 'Switch right pane to console', run: () => selectWorkbenchTool('console') },
-      { group: 'Workbench', label: 'Open raw view', detail: 'Switch right pane to raw JSON', run: () => selectWorkbenchTool('raw') },
-      { group: 'Workbench', label: 'Open activity', detail: 'Show runtime event feed', run: () => selectWorkbenchTool('activity') },
+      { group: 'Workbench', label: 'Open console', detail: 'Switch right pane to console', priority: 8, run: () => selectWorkbenchTool('console') },
+      { group: 'Workbench', label: 'Open raw view', detail: 'Switch right pane to raw JSON', priority: 8, run: () => selectWorkbenchTool('raw') },
+      { group: 'Workbench', label: 'Open activity', detail: 'Show runtime event feed', priority: 10, run: () => selectWorkbenchTool('activity') },
       { group: 'Workbench', label: 'Export snapshot', detail: 'Download runtime JSON snapshot', run: exportSnapshot },
       { group: 'Workbench', label: 'Inspect activity feed', detail: 'Open activity inspector URI', run: () => setCurrentUri('dregg://activity/feed') },
     ];
@@ -450,7 +450,7 @@ function writeUrlState({ at, runtime }) {
     const matches = paletteItems()
       .map((item) => ({ item, score: paletteScore(item, query) }))
       .filter((entry) => entry.score > 0)
-      .sort((a, b) => b.score - a.score || a.item.group.localeCompare(b.item.group) || a.item.label.localeCompare(b.item.label))
+      .sort((a, b) => b.score - a.score || (b.item.priority || 0) - (a.item.priority || 0) || a.item.group.localeCompare(b.item.group) || a.item.label.localeCompare(b.item.label))
       .slice(0, 18);
     paletteList.replaceChildren();
     if (!matches.length) {
@@ -1460,6 +1460,12 @@ function writeUrlState({ at, runtime }) {
         if (app) openAppWorkspace(app);
       });
     }
+    app.addEventListener('dregg:navigate', (e) => {
+      const uri = e.detail?.uri;
+      if (!uri || !isRef(uri)) return;
+      e.preventDefault();
+      setCurrentUri(uri);
+    });
   } catch (e) {
     console.error('[starbridge] boot failed:', e);
     setStatus('boot failed: ' + (e?.message || e), 'err');

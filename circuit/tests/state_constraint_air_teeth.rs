@@ -28,9 +28,9 @@
 //! existing 4-byte field-element truncation: `Immutable`, `WriteOnce`,
 //! `FieldDelta`, `MonotonicSequence`, `FieldEquals`, `TemporalGate`.
 //! Scalar ordering variants (`Monotonic`, `StrictMonotonic`, `FieldGte`,
-//! `FieldLte`) are enforced over the verifier-visible 4-byte BabyBear slot
-//! view. Merkle/set-membership gadgets (`SenderAuthorized`,
-//! `AllowedTransitions`) remain `#[ignore]`'d sketches until those AIRs land.
+//! `FieldLte`) and singleton `AllowedTransitions` tables are enforced over
+//! the verifier-visible 4-byte BabyBear slot view. Sender set-membership
+//! gadgets remain `#[ignore]`'d sketches until those AIRs land.
 
 use dregg_circuit::effect_vm::pi;
 use dregg_circuit::effect_vm::{
@@ -512,17 +512,72 @@ fn field_lte_rejects_greater() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Deferred — variants that need Merkle gadgets or set-membership AIRs.
+// Singleton AllowedTransitions over the verifier-visible 4-byte slot view.
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
-#[ignore = "SenderAuthorized PublicRoot: needs Merkle-membership gadget bound to slot[set_root_index]"]
+fn allowed_transitions_accepts_listed_pair() {
+    let entry = SlotCaveatEntry {
+        type_tag: pi::SLOT_CAVEAT_TAG_ALLOWED_TRANSITIONS,
+        slot_index: 7,
+        params: [
+            BabyBear::ONE,
+            BabyBear::new(1),
+            BabyBear::new(2),
+            BabyBear::ZERO,
+        ],
+    };
+    let public_inputs = pi_with_manifest(&[entry]);
+    let initial = fields_with(7, 1);
+    let final_ = fields_with(7, 2);
+    let result = verify_slot_caveat_manifest(&public_inputs, &initial, &final_, 0);
+    assert!(result.is_ok(), "listed transition must pass: {result:?}");
+}
+
+#[test]
+fn allowed_transitions_rejects_unlisted_pair() {
+    let entry = SlotCaveatEntry {
+        type_tag: pi::SLOT_CAVEAT_TAG_ALLOWED_TRANSITIONS,
+        slot_index: 7,
+        params: [
+            BabyBear::ONE,
+            BabyBear::new(1),
+            BabyBear::new(2),
+            BabyBear::ZERO,
+        ],
+    };
+    let public_inputs = pi_with_manifest(&[entry]);
+    let initial = fields_with(7, 1);
+    let final_ = fields_with(7, 3);
+    let result = verify_slot_caveat_manifest(&public_inputs, &initial, &final_, 0);
+    assert!(result.is_err(), "unlisted transition must reject");
+}
+
+#[test]
+fn allowed_transitions_rejects_unsupported_manifest_encoding() {
+    let entry = SlotCaveatEntry {
+        type_tag: pi::SLOT_CAVEAT_TAG_ALLOWED_TRANSITIONS,
+        slot_index: 7,
+        params: [BabyBear::ZERO; 4],
+    };
+    let public_inputs = pi_with_manifest(&[entry]);
+    let initial = fields_with(7, 1);
+    let final_ = fields_with(7, 2);
+    let result = verify_slot_caveat_manifest(&public_inputs, &initial, &final_, 0);
+    assert!(
+        result.is_err(),
+        "malformed AllowedTransitions manifest must reject"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Deferred — variants that need sender membership witness context.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+#[ignore = "SenderAuthorized PublicRoot: needs sender identity plus Merkle-membership witness context"]
 fn sender_authorized_accepts_member() {}
 
 #[test]
-#[ignore = "SenderAuthorized BlindedSet: needs non-revocation accumulator AIR"]
+#[ignore = "SenderAuthorized BlindedSet: needs sender identity plus blinded-set/non-revocation witness context"]
 fn sender_authorized_blinded_accepts_non_revoked() {}
-
-#[test]
-#[ignore = "AllowedTransitions: needs Merkle-membership of (old,new) tuple in precomputed root"]
-fn allowed_transitions_accepts_listed_pair() {}

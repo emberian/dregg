@@ -145,8 +145,8 @@ fn estimate_authorization_cost(auth: &Authorization, costs: &ComputronCosts) -> 
 /// constraint. Constraints whose AIR teeth aren't yet implemented
 /// (Custom, Witnessed, BoundDelta, FieldGteHeight, FieldLteHeight,
 /// FieldDeltaInRange, RateLimit, RateLimitBySum, BoundedBy,
-/// PreimageGate, MonotonicSequence-on-32B-state, AnyOf,
-/// SumEqualsAcross, SumEquals, CapabilityUniqueness, TemporalPredicate)
+/// PreimageGate, multi-pair AllowedTransitions, AnyOf, SumEqualsAcross,
+/// SumEquals, CapabilityUniqueness, TemporalPredicate)
 /// are skipped at projection time; they still evaluate
 /// executor-side, but the proof carries no manifest entry that
 /// binds them — see `SLOT-CAVEATS-DESIGN.md` §4 ("AIR enforcement is
@@ -276,13 +276,23 @@ pub fn project_slot_caveat_manifest(
                     params: [BabyBear::ZERO; 4],
                 })
             }
-            dregg_cell::StateConstraint::AllowedTransitions { slot_index, .. } => {
+            dregg_cell::StateConstraint::AllowedTransitions {
+                slot_index,
+                allowed,
+            } if allowed.len() == 1 => {
+                let (old_v, new_v) = &allowed[0];
                 Some(SlotCaveatEntry {
                     type_tag: pi::SLOT_CAVEAT_TAG_ALLOWED_TRANSITIONS,
                     slot_index: *slot_index,
-                    params: [BabyBear::ZERO; 4],
+                    params: [
+                        BabyBear::ONE,
+                        fe_to_bb(old_v),
+                        fe_to_bb(new_v),
+                        BabyBear::ZERO,
+                    ],
                 })
             }
+            dregg_cell::StateConstraint::AllowedTransitions { .. } => None,
             // Deferred — no AIR teeth in Block 3 first wave.
             dregg_cell::StateConstraint::SumEquals { .. }
             | dregg_cell::StateConstraint::FieldLteField { .. }

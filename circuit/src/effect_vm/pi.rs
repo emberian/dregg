@@ -331,10 +331,10 @@ pub const VK_PI_LAYOUT_VERSION: u32 = 2;
 /// `SLOT_CAVEAT_ENTRY_SIZE` felts each, prefixed by a single-felt
 /// count. Unused entries are zero-padded. Each entry is a 6-felt
 /// tuple: `[type_tag, slot_index, p0, p1, p2, p3]`. Variants with
-/// fewer than 4 numeric parameters leave trailing felts at zero;
-/// variants whose parameters don't fit (e.g. `AllowedTransitions`
-/// with a variable-length transition list) carry a 32B→4-felt
-/// commitment in `(p0, p1, p2, p3)`.
+/// fewer than 4 numeric parameters leave trailing felts at zero.
+/// Singleton `AllowedTransitions` entries use
+/// `[count=1, allowed_old, allowed_new, 0]`; larger transition tables
+/// need a table/Merkle membership gadget and are not projected.
 ///
 /// Type tags (kept in sync with `dregg_cell::program::StateConstraint`):
 pub const SLOT_CAVEAT_COUNT: usize = 101;

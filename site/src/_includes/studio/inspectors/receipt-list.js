@@ -7,7 +7,7 @@
  * `get_receipts_for_agent(handle, agent_idx)` getter.
  */
 
-import { InspectorBase } from './_base.js';
+import { InspectorBase, dreggCodeLink, emptyState } from './_base.js';
 
 class DreggReceiptList extends InspectorBase {
   static get observedAttributes() { return ['uri', 'mode', 'agent']; }
@@ -24,13 +24,22 @@ class DreggReceiptList extends InspectorBase {
 
     const Component = () => {
       const rs = sig.value || [];
-      if (!rs.length) return html`<div class="dregg-inspector dregg-inspector--empty">no receipts yet</div>`;
+      if (!rs.length) return emptyState(
+        html,
+        'No receipts yet',
+        agentIdx != null
+          ? html`Agent <code>#${agentIdx}</code> has no committed receipts in the current chain view.`
+          : html`Execute a turn to populate the receipt chain.`,
+      );
       return html`
         <div class="dregg-inspector dregg-inspector--cell-list">
           <header>${rs.length} receipt${rs.length === 1 ? '' : 's'}${agentIdx != null ? ` (agent #${agentIdx})` : ''}</header>
           <ul>
             ${rs.map(r => html`
-              <li><dregg-receipt uri=${`dregg://receipt/${r.turn_hash}`} mode="compact"></dregg-receipt></li>
+              <li>
+                ${dreggCodeLink(html, `dregg://receipt/${r.turn_hash}`, 'open')}
+                <dregg-receipt uri=${`dregg://receipt/${r.turn_hash}`} mode="compact"></dregg-receipt>
+              </li>
             `)}
           </ul>
         </div>`;
