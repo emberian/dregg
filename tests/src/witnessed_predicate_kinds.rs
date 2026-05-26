@@ -348,8 +348,8 @@ fn registry_returns_error_for_unknown_kind() {
     assert!(matches!(
         err,
         WitnessedPredicateError::KindNotRegistered {
-            kind: WitnessedPredicateKind::Custom { vk_hash: [0u8; 32] }
-        }
+            kind: WitnessedPredicateKind::Custom { vk_hash }
+        } if vk_hash == [0u8; 32]
     ));
 }
 
@@ -375,7 +375,11 @@ fn registry_round_trip_for_registered_custom_verifier() {
         )
         .expect("registered verifier accepts its exact proof");
     let err = registry
-        .verify(&predicate, &PredicateInput::Sender(&sender), b"tampered-proof")
+        .verify(
+            &predicate,
+            &PredicateInput::Sender(&sender),
+            b"tampered-proof",
+        )
         .expect_err("registered verifier must reject a non-matching proof");
     assert!(matches!(err, WitnessedPredicateError::Rejected { .. }));
 }
@@ -408,13 +412,7 @@ fn signing_message_input_ref_rejects_in_slot_caveat_context() {
     let state = CellState::default();
 
     let err = program
-        .evaluate_full(
-            &state,
-            None,
-            None,
-            &TransitionMeta::wildcard(),
-            &witnesses,
-        )
+        .evaluate_full(&state, None, None, &TransitionMeta::wildcard(), &witnesses)
         .expect_err("SigningMessage input has no slot-caveat source");
     assert!(matches!(
         err,
