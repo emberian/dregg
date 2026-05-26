@@ -55,6 +55,114 @@ moralizing. Settled design questions live in §7.
 
 ---
 
+## §0. Recently Retired (session 2026-05-25)
+
+Items closed during the 2026-05-25 session. Moved here from §1/§2/§3.
+Commit SHAs are the primary closure evidence; re-open if a later audit
+finds the marker is back.
+
+### T1.5 — CLOSED — Temporal AIR boundary binding (2026-05-25, `df122d4c`)
+
+`TemporalPredicateAir::boundary_constraints` previously bound only
+`ACCUMULATOR` and `STEP_INDEX`. `THRESHOLD`, `VALUE`, `STATE_ROOT_INITIAL`,
+`STATE_ROOT_FINAL` were plain serde fields — a prover could forge any
+threshold + state-root and the wrapper accepted.
+
+**Fix:** Boundary constraints now pin `THRESHOLD` to `PI[1]`,
+`STATE_ROOT[0]` to `PI[2]`, `STATE_ROOT[N-1]` to `PI[3]`.
+`verify_temporal_predicate` reconstructs PIs from caller-supplied
+parameters, not from `proof.<field>`. Adversarial test confirms forged
+threshold rejected.
+
+### T1.6 — CLOSED — Executor signature covers full receipt_hash (2026-05-25, `e0fe3316`)
+
+The v2 signed message covered only `turn_hash + pre/post_state +
+timestamp + federation_id + agent`. Fields `was_encrypted`, `finality`,
+`effects_hash`, `previous_receipt_hash`, `routing_directives`,
+`derivation_records`, `emitted_events` were outside the signature but
+inside `receipt_hash`.
+
+**Fix:** Promoted to `executor-receipt-sig-v3:`; the signed preimage is
+now the full `receipt_hash` bytes. Downstream verifiers updated. The
+v2 domain separator is removed; no migration path (all receipts must be
+re-signed by the live executor on resync).
+
+### T2.1 (partial) + T2.2 — CLOSED — block1-bind queue/capability placeholders (2026-05-25, `9834b3d4`)
+
+`convert_turn_effects_to_vm` arms for `QueueEnqueue`, `QueueDequeue`,
+`QueueResize`, `QueueAtomicTx`, `ExportSturdyRef`, `EnlivenRef`, and
+`DropRef` previously projected zero/synthetic placeholder values into
+`VmEffect`. The proof attested vacuous queue-length, refcount, and
+permissions; soundness depended entirely on the executor's `apply_effect`
+cross-check.
+
+**Fix:** All seven arms now source real ledger values — queue capacity,
+head hash, combined old root, permissions mask, export counter, and
+current refcount — at `convert_turn_effects_to_vm` time. Every
+`TODO[block1-bind]` at these sites is removed from source.
+
+`ValidateHandoff` recipient/introducer pk placeholders (T2.3) remain
+open — a follow-on PR carries that closure.
+
+### T2.7 — CLOSED (Silver-Sound interim) — NonMembership adjacency_tag commitment-bound (2026-05-25, `5d557969`)
+
+`SortedNeighborNonMembershipVerifier` accepted `adjacency_tag =
+[0xFE;32]` (public constant) so anyone could forge a non-membership
+proof against any set by choosing `lower=0x00…, upper=0xFF…,
+tag=0xFE…`.
+
+**Fix (Silver-Sound):** `adjacency_tag` is now derived as
+`BLAKE3("pyana-nonmember-adj-v1" || set_commitment || lower || upper)` —
+commitment-bound per `(set, lower, upper)` triple. The public constant
+is gone; the forged-tag attack is closed at the Silver level. A full
+Merkle adjacency AIR proof (the Golden lift) remains on the roadmap.
+
+### T2.8 — CLOSED — `default_builtins()` now uses `NotYetWiredVerifier` (2026-05-25, `c86aecd7`)
+
+Previously `default_builtins()` called `Self::with_stubs()` — i.e.,
+installed `StubVerifier` for every kind, which accepted any non-empty
+proof bytes. An executor using `default_builtins()` silently accepted
+forged `WitnessedPredicate` proofs for Dfa, Temporal, MerkleMembership,
+BlindedSet, BridgePredicate, and PedersenEquality.
+
+**Fix:** `default_builtins()` now installs `NotYetWiredVerifier` for all
+six kinds. Every call to a non-wired kind returns a hard error. Honest
+fail-closed posture. The registry comment documents the old permissive
+behavior explicitly so future readers understand the change.
+
+Production deployments that want real verifiers still need the planned
+`pyana-witnessed-registry-default` crate (T1.4/T2.8 remains in
+SILVER-DEBT as the "get real verifiers wired" story).
+
+### T3.3 — CLOSED — Custom-effect VK widened to 8 BabyBear felts (2026-05-25, `46a886a5`)
+
+`Effect::Custom { program_vk_hash }` carried only 4 BabyBear felts (16
+bytes); `expand_vk_hash_16_to_32` zero-padded the upper 16 bytes. Two
+VKs colliding on the low 16 bytes (~2^64 work) dispatched to the same
+handler — 80-bit effective security.
+
+**Fix:** The AIR's custom-effect PI is widened to 8 BabyBear elements
+(32 bytes); `expand_vk_hash_16_to_32` is deleted from source. Security
+matches the 128-bit BLAKE3 baseline everywhere else.
+
+### T1.3 — PARTIAL — VK integrity at SetVerificationKey boundary (2026-05-25, `08e01ea7`)
+
+The cell's `VerificationKey::from_parts` accepted arbitrary `(hash, data)`
+with no `blake3(data) == hash` check. `executor.rs` called it at the
+`SetVerificationKey` apply site with whatever the actor supplied.
+
+**Fix:** `VerificationKey::from_parts_checked` added for untrusted-input
+paths; `SetVerificationKey` apply now calls it and returns
+`VerificationKeyIntegrityError` on mismatch. The internal
+`from_parts` fast-path (for deserialization where the caller has already
+validated) remains — it now carries a doc comment marking untrusted-input
+sites as `#[cfg(debug_assertions)]`-assertable. The `new` constructor
+still uses raw BLAKE3 (not `canonical_vk_v2`); the full v2 layered
+invariant is a follow-on (see SILVER-DEBT §1 T1.3 original entry, still
+tracking the `new` + v2 gap).
+
+---
+
 ## §1. Tier 1: Marketing-vs-code lies
 
 Each entry: the claim (with source), the code reality (with file:line),
