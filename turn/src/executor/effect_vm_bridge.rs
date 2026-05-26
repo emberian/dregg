@@ -451,16 +451,46 @@ pub(super) fn convert_turn_effects_to_vm(
                     });
                 }
                 Effect::EmitEvent { cell, event } if cell == cell_id => {
-                    // Stage 3: real AIR coverage. event_hash binds the
-                    // topic + data into effects_hash; no state changes.
-                    let mut hasher = blake3::Hasher::new();
-                    hasher.update(&event.topic);
+                    // Stage 3 + #110: real AIR coverage with canonical
+                    // (topic_hash, payload_hash) binding. Each 32-byte
+                    // BLAKE3 hash projects into 8 BabyBear felts via
+                    // 4-bytes-per-felt little-endian packing (matches the
+                    // Custom::program_vk_hash convention).
+                    //
+                    // - topic_hash = BLAKE3(event.topic)        (32 bytes)
+                    // - payload_hash = BLAKE3(event.data ‖ ...) (32 bytes)
+                    //
+                    // The AIR's per-row PI-equality constraint pins the low 4
+                    // felts of each into params[0..8]; effects_hash absorbs
+                    // all 16 felts (cryptographic high-half binding); the
+                    // off-AIR PI-match loop double-checks against the
+                    // runtime Event encoding.
+                    let topic_bytes = *blake3::hash(&event.topic).as_bytes();
+                    let mut payload_hasher = blake3::Hasher::new();
                     for d in &event.data {
-                        hasher.update(d);
+                        payload_hasher.update(d);
                     }
-                    let event_hash_bytes = hasher.finalize();
+                    let payload_bytes = *payload_hasher.finalize().as_bytes();
+
+                    fn bytes32_to_8_felts(b: &[u8; 32]) -> [BabyBear; 8] {
+                        let mut out = [BabyBear::ZERO; 8];
+                        for i in 0..8 {
+                            let off = i * 4;
+                            let v = u32::from_le_bytes([
+                                b[off],
+                                b[off + 1],
+                                b[off + 2],
+                                b[off + 3],
+                            ]);
+                            // Reduce mod p so we always land in canonical BabyBear.
+                            out[i] = BabyBear::new(v % pyana_circuit::field::BABYBEAR_P);
+                        }
+                        out
+                    }
+
                     vm_effects.push(VmEffect::EmitEvent {
-                        event_hash: hash_to_bb(event_hash_bytes.as_bytes()),
+                        topic_hash: bytes32_to_8_felts(&topic_bytes),
+                        payload_hash: bytes32_to_8_felts(&payload_bytes),
                     });
                 }
                 Effect::SpawnWithDelegation {
