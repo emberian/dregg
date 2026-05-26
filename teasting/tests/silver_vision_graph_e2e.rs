@@ -662,21 +662,21 @@ fn silver_vision_graph_e2e() {
     // order. Swapping entries 2 and 3 must break the walk.
     let mut chain_view: Vec<ReplayEntry> = Vec::with_capacity(5);
     for (i, e) in entries.iter().enumerate() {
-        let mut e2 = e.clone();
-        if i > 0 {
-            let prev = chain_view[i - 1].receipt.receipt_hash();
-            e2.receipt.previous_receipt_hash = Some(prev);
-            // Reprove with the patched PI (PREVIOUS_RECEIPT_HASH slot
-            // changed); rebuild via build_replay_entry on the new receipt.
-            let new = build_replay_entry(
-                e2.receipt.clone(),
-                steps[i].vm_effect.clone(),
-                steps[i].agent_balance_pre,
-            );
-            chain_view.push(new);
-        } else {
-            chain_view.push(e2);
+        if i == 0 {
+            chain_view.push(e.clone());
+            continue;
         }
+        let prev = chain_view[i - 1].receipt.receipt_hash();
+        let mut e2 = e.clone();
+        e2.receipt.previous_receipt_hash = Some(prev);
+        // Reprove with the patched PI (PREVIOUS_RECEIPT_HASH slot
+        // changed); rebuild via build_replay_entry on the new receipt.
+        let rebuilt = build_replay_entry(
+            e2.receipt,
+            steps[i].vm_effect.clone(),
+            steps[i].agent_balance_pre,
+        );
+        chain_view.push(rebuilt);
     }
     let chain_verdict = replay_chain(&chain_view);
     assert!(
