@@ -1924,13 +1924,10 @@ fn test_kimchi_presentation_wrong_blinding_factor_rejected() {
 // failure mode. The audit observed it at multiple sites in derivation.rs and
 // predicates.rs; this test makes the failure mode explicit.
 //
-// The test is marked `#[ignore]` for normal CI because constructing a Kimchi
+// This stays as a documentation test because constructing an adversarial Kimchi
 // witness directly requires careful setup. The audit's recommendation is to
 // FEATURE-GATE the kimchi_native backend until proper copy constraints land,
-// not to add adversarial tests that exploit it as proof of concept.
-//
-// **Run manually** with `cargo test -p dregg-circuit kimchi_native_p0_2 --
-// --ignored` after wiring is complete to confirm the unsoundness is closed.
+// not to add proof-of-concept tests that exploit it.
 // ============================================================================
 
 /// Documentation-test: spell out the unsoundness pattern in code form so future

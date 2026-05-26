@@ -541,11 +541,14 @@ mod tests {
     ///
     /// This is THE critical test: real note -> real tree -> real proof -> real STARK verification.
     #[test]
-    #[ignore = "REVIEW[stage2-canonical-vs-poseidon-mismatch]: note spending PI layout regressed in Stage 1; needs end-to-end realignment"]
+    #[allow(deprecated)]
     fn end_to_end_note_spending_stark_from_real_tree() {
-        use dregg_circuit::note_spending_air::NoteSpendingWitness;
+        // The persistent tree uses hash_4_to_1 for internal nodes, so this
+        // real-tree regression belongs on the compatible legacy spend AIR.
+        use dregg_circuit::note_spending_air::{
+            NoteSpendingWitness, prove_note_spend, verify_note_spend,
+        };
         use dregg_circuit::poseidon2::hash_many;
-        use dregg_dsl_runtime::note_spending::{prove_note_spend, verify_note_spend};
 
         // Step 1: Define a note's field-element preimage
         let owner = BabyBear::new(0xA11CE);

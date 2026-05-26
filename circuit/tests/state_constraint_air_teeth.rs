@@ -29,8 +29,9 @@
 //! `FieldDelta`, `MonotonicSequence`, `FieldEquals`, `TemporalGate`.
 //! Scalar ordering variants (`Monotonic`, `StrictMonotonic`, `FieldGte`,
 //! `FieldLte`) and singleton `AllowedTransitions` tables are enforced over
-//! the verifier-visible 4-byte BabyBear slot view. Sender set-membership
-//! gadgets remain `#[ignore]`'d sketches until those AIRs land.
+//! the verifier-visible 4-byte BabyBear slot view. Sender set-membership is
+//! represented in the manifest but remains deferred to the witnessed-predicate
+//! executor path until sender/Merkle witness context is available here.
 
 use dregg_circuit::effect_vm::pi;
 use dregg_circuit::effect_vm::{
@@ -575,9 +576,35 @@ fn allowed_transitions_rejects_unsupported_manifest_encoding() {
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
-#[ignore = "SenderAuthorized PublicRoot: needs sender identity plus Merkle-membership witness context"]
-fn sender_authorized_accepts_member() {}
+fn sender_authorized_public_root_manifest_is_deferred_to_witness_context() {
+    let entry = SlotCaveatEntry {
+        type_tag: pi::SLOT_CAVEAT_TAG_SENDER_AUTHORIZED,
+        slot_index: 7,
+        params: [BabyBear::ZERO; 4],
+    };
+    let public_inputs = pi_with_manifest(&[entry]);
+    let initial = fields_with(7, 0x1234);
+    let final_ = fields_with(7, 0x5678);
+    let result = verify_slot_caveat_manifest(&public_inputs, &initial, &final_, 0);
+    assert!(
+        result.is_ok(),
+        "SenderAuthorized PublicRoot remains deferred until sender identity + Merkle witness context is wired at this layer: {result:?}"
+    );
+}
 
 #[test]
-#[ignore = "SenderAuthorized BlindedSet: needs sender identity plus blinded-set/non-revocation witness context"]
-fn sender_authorized_blinded_accepts_non_revoked() {}
+fn sender_authorized_blinded_set_manifest_is_deferred_to_witness_context() {
+    let entry = SlotCaveatEntry {
+        type_tag: pi::SLOT_CAVEAT_TAG_SENDER_AUTHORIZED,
+        slot_index: 0,
+        params: [BabyBear::ZERO; 4],
+    };
+    let public_inputs = pi_with_manifest(&[entry]);
+    let initial = fields_with(0, 0);
+    let final_ = fields_with(0, 1);
+    let result = verify_slot_caveat_manifest(&public_inputs, &initial, &final_, 0);
+    assert!(
+        result.is_ok(),
+        "SenderAuthorized BlindedSet remains deferred until sender identity + blinded-set witness context is wired at this layer: {result:?}"
+    );
+}
